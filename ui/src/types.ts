@@ -4,17 +4,15 @@
 
 export type Presence = 'active' | 'idle' | 'stale'
 
-export type Tier = 'TempoFast' | 'TempoDeep' | 'FT8' | 'FT4' | 'FT2' | 'FST4' | 'FST4W' | 'Q65' | 'MSK144' | 'JT65' | 'WSPR'
+export type Tier = 'TempoFast' | 'TempoDeep' | 'FT8' | 'FT4' | 'FT2' | 'FST4' | 'FST4W' | 'Q65' | 'MSK144' | 'JT65' | 'WSPR' | 'JS8'
 
 /** Tiers Nexus DECODES but will not transmit. Mirrors `Capabilities { tx: false }`
  * in the `modes` crate — the engine is the enforcement (it refuses to arm TX or
  * start a CQ run on these); this list exists so the UI does not OFFER controls the
  * engine will refuse. Keep the two in step when a mode gains a transmitter. */
-// JT65 only, and TEMPORARILY: its encoder is verified, but transmit is disabled
-// pending a Windows crash on Call CQ. See Jt65Mode::capabilities in the modes crate.
-// Every shipped tier can transmit. JT65 was listed here in 0.19.17 only, as a
-// mitigation for a Windows crash fixed in 0.19.18 (see xcor.f90).
-export const RX_ONLY_TIERS: readonly Tier[] = []
+// JS8 is receive-only in this build: the modem and message layer shipped first (B5); the
+// operator-gated transmit batch flips `Js8Mode::capabilities().tx` and removes it here.
+export const RX_ONLY_TIERS: readonly Tier[] = ['JS8']
 
 /** BEACON tiers: they transmit, but on a SCHEDULE and with no QSO sequence — the
  * payload is callsign, grid and power. Mirrors `Capabilities { beacon_only: true }`.
@@ -1445,6 +1443,120 @@ export interface PskState {
   keyerError: string | null
 }
 
+// ---- JS8 (the `get_js8_state` poll; mirrors tempo_app::dto::Js8State field for field) ----
+
+/** JS8 speed, lowercase on the wire (serde `rename_all = "lowercase"`). */
+export type Js8Speed = 'slow' | 'normal' | 'fast' | 'turbo'
+/** Who originated a queued/pending frame (serde camelCase). CQ counts as `operator`. */
+export type Js8Origin = 'operator' | 'heartbeat' | 'hbAck' | 'autoReply' | 'relay'
+/** The second act of the two-act rule: three persisted switches + the session-only HB. */
+export type Js8Switch = 'autoreply' | 'relay' | 'hback' | 'hb'
+/** Inbox row state, lowercase on the wire. */
+export type Js8InboxState = 'unread' | 'read' | 'store' | 'delivered'
+
+/** Which automatic origins may key RIGHT NOW: `switch && txEnabled && !idleTripped`. Paint
+ * "armed" from THIS, never from the persisted switch alone. */
+export interface Js8Armed {
+  autoreply: boolean
+  relay: boolean
+  hbAck: boolean
+  hb: boolean
+}
+
+/** One activity-pane row: a decoded frame (or a reassembled multi-frame message). */
+export interface Js8ActivityRow {
+  /** Unix ms of the cycle the frame was decoded in. */
+  atMs: number
+  speed: Js8Speed
+  freqHz: number
+  snrDb: number
+  dtS: number
+  /** The sending station as the frame names it (empty for a continuation data frame). */
+  from: string
+  /** JS8Call's display line, byte-exact, or the reassembled text. */
+  text: string
+  /** Addressed to my call, @ALLCALL, or a group I have joined. */
+  directedToMe: boolean
+  /** My own transmission (always false in the receive-only build). */
+  mine: boolean
+  /** False for a message the reassembler force-closed or dropped incomplete. */
+  complete: boolean
+  /** Decode quality below JS8Call's 0.17 low-confidence threshold. */
+  lowConf: boolean
+}
+
+/** A heard station (the message layer's own row, serde camelCase). */
+export interface Js8Heard {
+  call: string
+  grid: string | null
+  snrDb: number
+  freqHz: number
+  speed: Js8Speed
+  lastMs: number
+  lastHb: boolean
+  lastCq: boolean
+  storedMsgs: number
+}
+
+/** One inbox row. */
+export interface Js8InboxEntry {
+  id: number
+  from: string
+  to: string
+  text: string
+  /** Relay hops, sender first. */
+  path: string[]
+  state: Js8InboxState
+  atMs: number
+  freqHz: number
+  snrDb: number
+}
+
+/** One outbox row (empty in the receive-only build). */
+export interface Js8QueueRow {
+  origin: Js8Origin
+  display: string
+  first: boolean
+  last: boolean
+}
+
+/** An automatic reply waiting out its countdown (cancellable until `firesAtMs`). */
+export interface Js8PendingReply {
+  origin: Js8Origin
+  to: string
+  display: string
+  firesAtMs: number
+}
+
+/** The live JS8 state (poll ~500 ms while the cockpit is visible). Every field is engine
+ * truth at poll time. */
+export interface Js8State {
+  /** The TRANSMIT speed (= the slot clock). */
+  speed: Js8Speed
+  /** Bitmask of decoded speeds: slow 1 · normal 2 · fast 4 · turbo 8. */
+  rxSpeeds: number
+  txEnabled: boolean
+  sending: boolean
+  hbOn: boolean
+  hbNextAtMs: number | null
+  hbIntervalMin: number
+  /** The persisted switches (the second act), echoed so the chips render engine truth. */
+  autoreply: boolean
+  relay: boolean
+  hbAck: boolean
+  armed: Js8Armed
+  idleMinutes: number
+  idleLimitMin: number
+  idleTripped: boolean
+  activity: Js8ActivityRow[]
+  stations: Js8Heard[]
+  inbox: Js8InboxEntry[]
+  queue: Js8QueueRow[]
+  pendingReply: Js8PendingReply | null
+  /** The last refused verb's reason, cleared by the next successful verb. */
+  lastError: string | null
+}
+
 /** One saved SSTV image in the local gallery (a BMP in the sstv-gallery folder
  * of the Nexus local data dir, beside its gallery.json metadata). */
 export interface SstvGalleryEntry {
@@ -2620,6 +2732,32 @@ export interface Settings {
   beaconRrSlots: number
   /** JT65 submode 0/1/2 for A/B/C (tone spacing 1x/2x/4x). */
   jt65Submode: number
+  /** JS8 TRANSMIT speed as an index: 0 Slow (30 s) | 1 Normal (15 s) | 2 Fast (10 s) |
+   * 3 Turbo (6 s). Receive decodes every speed in `js8RxSpeeds` regardless. */
+  js8Speed: number
+  /** Bitmask of speeds the receiver decodes: Slow 1 · Normal 2 · Fast 4 · Turbo 8.
+   * Default 15 (all four — JS8Call's SubModeMultiDecode). */
+  js8RxSpeeds: number
+  /** Heartbeat repeat interval in minutes; 0 = on demand. HB on/off itself is
+   * session-only and is NOT here — the app can never launch beaconing. */
+  js8HbIntervalMin: number
+  /** Answer heard heartbeats with HEARTBEAT SNR (JS8Call default off). The persisted
+   * second act of the two-act rule; the session TX latch is the first. */
+  js8HbAck: boolean
+  /** Autoreply to directed queries addressed to me / @ALLCALL / a joined group
+   * (JS8Call default on). Second act of the two-act rule. */
+  js8Autoreply: boolean
+  /** Relay `>` traffic for other stations (third-party traffic; JS8Call default on). */
+  js8Relay: boolean
+  /** JS8Call's idle watchdog in minutes (default 60, floor 5, 0 = off): HB/autoreply/
+   * relay switch OFF after this long without an operator act. */
+  js8IdleWatchdogMin: number
+  /** Free text answered to INFO?. */
+  js8Info: string
+  /** Free text answered to STATUS?; empty = JS8Call's `IDLE <min> VERSION …`. */
+  js8Status: string
+  /** Joined @GROUP names the station answers directed traffic for. */
+  js8Groups: string[]
   /** FM repeater offset override in Hz (0 = band convention). Set by the
    * Program section's tune-now for odd-split machines. */
   rptrOffsetOverrideHz?: number

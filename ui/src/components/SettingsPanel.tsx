@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { SAT_VFO_MAPS } from '../features/satVfo'
+import { JS8_SPEED_LIST } from '../js8Vocab'
 import { confirmDialog } from '../confirm'
 import { checkRigForm, blocks, MULTI_DATA_MODE_ICOMS, NATIVE_CIV_MODELS, nativeCivBlockedReason, type RigCheck } from '../rigFormChecks'
 import {
@@ -1518,6 +1519,27 @@ export function SettingsPanel({
   const setWatchCalls = (calls: string[]) => {
     markDirty()
     setForm((prev) => (prev ? { ...prev, aprsIsWatchCalls: calls } : prev))
+  }
+
+  // JS8 @GROUP memberships, edited as one comma-separated field like the APRS-IS budlist
+  // above. Normalised on the way in — upper-case, one leading '@' — so the operator may type
+  // either form; js8::proto::callsign::GROUPS (the wire) is the authority on which names exist,
+  // and the engine's compose refuses an unknown one with a reason.
+  const setJs8Groups = (groups: string[]) => {
+    markDirty()
+    setForm((prev) => (prev ? { ...prev, js8Groups: groups } : prev))
+  }
+  const parseJs8Groups = (raw: string): string[] =>
+    raw
+      .split(',')
+      .map((g) => g.trim().toUpperCase().replace(/^@+/, ''))
+      .filter(Boolean)
+      .map((g) => `@${g}`)
+  // Whole non-negative minutes; junk leaves the stored value alone (never coerces to 0).
+  const updateMinutes = (key: 'js8HbIntervalMin' | 'js8IdleWatchdogMin', raw: string) => {
+    const n = Number(raw)
+    if (raw.trim() === '' || Number.isNaN(n)) return
+    updateNum(key, Math.max(0, Math.floor(n)))
   }
 
   // The RF digipeater path, edited as one comma-separated field for the same reason as the
@@ -7097,6 +7119,179 @@ export function SettingsPanel({
                 </button>
               </label>
               <span className="settings-hint">{t('settings.psk.rxAutoArm.hint')}</span>
+            </div>
+          </fieldset>
+          )}
+
+          {/* ---- JS8 — the JS8Call-compatible keyboard mode (2026-09). What is here is what
+               JS8Call keeps in its settings and Nexus cannot infer: the transmit speed, which
+               speeds to decode at once, the heartbeat interval, the three automatic-origin
+               switches (each is the SECOND act — nothing keys without the session TX latch
+               too), the idle watchdog, and the INFO / STATUS / group texts. HB on/off is
+               deliberately NOT here: it is session-only (the cockpit's HB chip) and never
+               persists (spec G3). Speed names are the mode's own vocabulary (js8Vocab). ---- */}
+          {tab === 'digital' && (
+          <fieldset className="settings-section" id="settings-js8">
+            <legend>{t('settings.js8.legend')}</legend>
+            <div className="settings-featgroup">
+              <span className="settings-featgroup-title">{t('settings.js8.receiving.title')}</span>
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.js8.speed.label')}</span>
+                <select
+                  className="settings-input"
+                  value={String(form.js8Speed ?? 1)}
+                  onChange={(e) => updateNum('js8Speed', Number(e.target.value))}
+                >
+                  {JS8_SPEED_LIST.map((s) => (
+                    <option key={s.key} value={s.idx}>
+                      {s.label}
+                    </option>
+                  ))}
+                </select>
+                <span className="settings-hint">{t('settings.js8.speed.hint')}</span>
+              </label>
+              <div className="settings-field">
+                <span className="settings-label">{t('settings.js8.rxSpeeds.label')}</span>
+                <div className="js8-rx-speeds">
+                  {JS8_SPEED_LIST.map((s) => {
+                    const bit = 1 << s.idx
+                    const mask = form.js8RxSpeeds ?? 15
+                    const on = (mask & bit) !== 0
+                    return (
+                      <label key={s.key} className="settings-toggle">
+                        <span className="settings-label">{s.label}</span>
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={on}
+                          aria-label={s.label}
+                          className={`toggle${on ? ' on' : ''}`}
+                          onClick={() => updateNum('js8RxSpeeds', on ? mask & ~bit : mask | bit)}
+                        >
+                          <span className="toggle-knob" />
+                        </button>
+                      </label>
+                    )
+                  })}
+                </div>
+                <span className="settings-hint">{t('settings.js8.rxSpeeds.hint')}</span>
+              </div>
+            </div>
+
+            <div className="settings-featgroup">
+              <span className="settings-featgroup-title">{t('settings.js8.automatic.title')}</span>
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.js8.hbIntervalMin.label')}</span>
+                <input
+                  className="settings-input"
+                  type="number"
+                  inputMode="numeric"
+                  min={0}
+                  value={String(form.js8HbIntervalMin ?? 0)}
+                  placeholder="0"
+                  onChange={(e) => updateMinutes('js8HbIntervalMin', e.target.value)}
+                  autoComplete="off"
+                />
+                <span className="settings-hint">{t('settings.js8.hbIntervalMin.hint')}</span>
+              </label>
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">{t('settings.js8.hbAck.label')}</span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={form.js8HbAck === true}
+                    className={`toggle${form.js8HbAck === true ? ' on' : ''}`}
+                    onClick={() => updateBool('js8HbAck', form.js8HbAck !== true)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">{t('settings.js8.hbAck.hint')}</span>
+              </div>
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">{t('settings.js8.autoreply.label')}</span>
+                  <button
+                    type="button"
+                    role="switch"
+                    // ⚠️ `!== false`, not `!!` — the default is ON (G3), so an absent key reads as on.
+                    aria-checked={form.js8Autoreply !== false}
+                    className={`toggle${form.js8Autoreply !== false ? ' on' : ''}`}
+                    onClick={() => updateBool('js8Autoreply', form.js8Autoreply === false)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">{t('settings.js8.autoreply.hint')}</span>
+              </div>
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">{t('settings.js8.relay.label')}</span>
+                  <button
+                    type="button"
+                    role="switch"
+                    // ⚠️ `!== false` — default ON (G3).
+                    aria-checked={form.js8Relay !== false}
+                    className={`toggle${form.js8Relay !== false ? ' on' : ''}`}
+                    onClick={() => updateBool('js8Relay', form.js8Relay === false)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">{t('settings.js8.relay.hint')}</span>
+              </div>
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.js8.idleWatchdogMin.label')}</span>
+                <input
+                  className="settings-input"
+                  type="number"
+                  inputMode="numeric"
+                  min={0}
+                  value={String(form.js8IdleWatchdogMin ?? 60)}
+                  placeholder="60"
+                  onChange={(e) => updateMinutes('js8IdleWatchdogMin', e.target.value)}
+                  autoComplete="off"
+                />
+                <span className="settings-hint">{t('settings.js8.idleWatchdogMin.hint')}</span>
+              </label>
+            </div>
+
+            <div className="settings-featgroup">
+              <span className="settings-featgroup-title">{t('settings.js8.station.title')}</span>
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.js8.info.label')}</span>
+                <input
+                  className="settings-input"
+                  value={form.js8Info ?? ''}
+                  onChange={(e) => update('js8Info', e.target.value.toUpperCase())}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+                <span className="settings-hint">{t('settings.js8.info.hint')}</span>
+              </label>
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.js8.status.label')}</span>
+                <input
+                  className="settings-input"
+                  value={form.js8Status ?? ''}
+                  onChange={(e) => update('js8Status', e.target.value.toUpperCase())}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+                <span className="settings-hint">{t('settings.js8.status.hint')}</span>
+              </label>
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.js8.groups.label')}</span>
+                <input
+                  className="settings-input"
+                  value={(form.js8Groups ?? []).join(', ')}
+                  onChange={(e) => setJs8Groups(parseJs8Groups(e.target.value))}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+                <span className="settings-hint">{t('settings.js8.groups.hint')}</span>
+              </label>
             </div>
           </fieldset>
           )}

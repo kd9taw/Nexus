@@ -22,8 +22,8 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use tempo_app::engine::{
-    engine_lock, DecodeApplied, DecodeJob, DecodePass, DecodeResult, Engine, PskStreamTick,
-    RttyStreamTick, SatCatBackend,
+    engine_lock, run_decode_job, run_js8_multi_job, DecodeApplied, DecodeJob, DecodePass,
+    DecodeResult, Engine, Js8MultiJob, Js8Speed, PskStreamTick, RttyStreamTick, SatCatBackend,
 };
 use tempo_app::keyboard;
 use tempo_core::tempo_fast;
@@ -2511,34 +2511,60 @@ enum ErrOwner {
 /// through a whole QSO.
 const DAX_STARVE_AFTER: Duration = Duration::from_secs(6);
 
+/// What a decode worker runs: the ordinary per-slot job, or one JS8 multi-speed job.
+enum WorkerJob {
+    Slot(DecodeJob),
+    Js8Multi(Js8MultiJob),
+}
+
+/// The one function both workers run — a slot job yields one result, a multi-speed job one
+/// per slice (`run_js8_multi_job`). Free so a test can hand it to `spawn_with`.
+fn run_worker_job(job: WorkerJob) -> Vec<DecodeResult> {
+    match job {
+        WorkerJob::Slot(j) => vec![run_decode_job(j)],
+        WorkerJob::Js8Multi(j) => run_js8_multi_job(j),
+    }
+}
+
 /// The persistent decode worker: one background thread that runs the heavy per-slot
 /// decode ([`tempo_app::engine::run_decode_job`]) OFF the radio-loop thread and OFF
 /// the engine mutex. The loop builds an owned job under the engine lock, sends it
 /// here, keeps ticking (feeding the waterfall), and drains the result on a later
 /// tick — so the ~1–2 s decode never freezes the UI or the waterfall.
 ///
+/// Two instances exist at `Tier::Js8`: the slot worker (`decode`) and the multi-speed
+/// worker (`js8_multi_worker`), so a 30 s Slow decode can never stall the boundary pass
+/// and the slot worker's in-flight latch stays single-purpose.
+///
 /// The worker touches NO engine state: everything it needs (including an `Arc` clone
 /// of the decoder) travels in the job. Created once per loop; the [`Drop`] closes the
 /// job channel (ending the worker's `for` loop) and joins the thread for a clean exit.
 struct DecodeWorker {
     /// `Option` only so [`Drop`] can drop the sender first, then join.
-    job_tx: Option<Sender<DecodeJob>>,
+    job_tx: Option<Sender<WorkerJob>>,
     result_rx: Receiver<DecodeResult>,
     handle: Option<JoinHandle<()>>,
 }
 
 impl DecodeWorker {
     fn spawn() -> Self {
-        let (job_tx, job_rx) = std::sync::mpsc::channel::<DecodeJob>();
+        Self::spawn_with("nexus-decode", run_worker_job)
+    }
+
+    /// A worker thread named `name` running `run` on every job (one job may yield several
+    /// results; each is sent in order).
+    fn spawn_with(name: &str, run: fn(WorkerJob) -> Vec<DecodeResult>) -> Self {
+        let (job_tx, job_rx) = std::sync::mpsc::channel::<WorkerJob>();
         let (result_tx, result_rx) = std::sync::mpsc::channel::<DecodeResult>();
         let handle = std::thread::Builder::new()
-            .name("nexus-decode".into())
+            .name(name.into())
             .spawn(move || {
                 // Ends when the job sender drops (loop shutdown / RadioLoop drop).
                 for job in job_rx {
-                    let result = tempo_app::engine::run_decode_job(job);
-                    if result_tx.send(result).is_err() {
-                        break; // loop went away
+                    for result in run(job) {
+                        if result_tx.send(result).is_err() {
+                            return; // loop went away
+                        }
                     }
                 }
             })
@@ -2551,7 +2577,7 @@ impl DecodeWorker {
     }
 
     /// Hand a job to the worker. Silently drops if the worker is gone (shutdown).
-    fn dispatch(&self, job: DecodeJob) {
+    fn dispatch(&self, job: WorkerJob) {
         if let Some(tx) = &self.job_tx {
             let _ = tx.send(job);
         }
@@ -2950,6 +2976,18 @@ struct RadioLoop {
     /// gone — WSJT-X decodes continuously. This schedules a cheap full-tail decode every
     /// interval instead (measured 23 ms per 15 s buffer, on the decode worker, off-loop).
     early_msk_done: Option<(u64, u32)>,
+    /// JS8 multi-speed scheduler: the last cycle index decoded per `Js8Speed::index()`, so
+    /// each enabled speed fires once per ITS wall-clock cycle (the `early_msk_done` idea,
+    /// four clocks wide). Reset on a tier/period rebuild.
+    js8_done: [Option<u64>; 4],
+    /// The second worker (`Tier::Js8` only): runs the due speeds under `std::thread::scope`
+    /// so a 30 s Slow decode can never block the slot worker's boundary pass.
+    js8_multi_worker: DecodeWorker,
+    /// Results still to come back from the multi worker; no new multi job is dispatched
+    /// while > 0 (a cycle that cannot be decoded in time is lost, never queued behind).
+    js8_multi_pending: usize,
+    /// When `Engine::js8_tick` last ran (unix ms) — once a second at `Tier::Js8`.
+    js8_last_tick_ms: u64,
     /// A slot whose boundary TX decision already ran AT the boundary (the WSJT-X
     /// key-at-boundary ordering, taken when the just-ended slot's early decode had
     /// folded): the slot, whether it actually keyed, and the pre-key dial for the
@@ -3310,6 +3348,10 @@ impl RadioLoop {
             silent_capture_since: None,
             early_done_slot: None,
             early_msk_done: None,
+            js8_done: [None; 4],
+            js8_multi_worker: DecodeWorker::spawn_with("nexus-js8-multi", run_worker_job),
+            js8_multi_pending: 0,
+            js8_last_tick_ms: 0,
             boundary_keyed: None,
             rig_asserted: false, // read-only launch: nothing asserted until a real command
             cur_dial: 0,
@@ -9253,6 +9295,7 @@ impl RadioLoop {
             // the old tier must not coincidentally match a new tier's slot.
             self.early_done_slot = None;
             self.early_msk_done = None;
+            self.js8_done = [None; 4];
             self.boundary_keyed = None;
             // Including the index THIS tick already computed, above, from the clock we
             // just replaced. `last_slot = None` makes the boundary block below fire on
@@ -9332,6 +9375,63 @@ impl RadioLoop {
             }
         }
 
+        // --- JS8: the once-a-second station tick and the MULTI-SPEED scheduler. JS8Call
+        // decodes every enabled speed from one ring as soon as `cycleStart + framesNeeded`
+        // samples exist; here each due speed's window is sliced out of the 36 s ring and the
+        // due set runs on the SECOND worker (parallel under std::thread::scope — pure Rust
+        // modem, no MODEM_LOCK). Results fold as EARLY results (rows + spots); the boundary
+        // pass still re-decodes the tier speed and `js8_dedupe` drops the duplicate. RX only
+        // while nothing is keyed: own audio never reaches a decoder (the ring is cleared at
+        // TX start — spec invariant 12 — and this block is skipped while `tx_until_ms` holds).
+        if tier_now == Tier::Js8 {
+            let now_ms = now.max(0.0) as u64;
+            if now_ms.saturating_sub(self.js8_last_tick_ms) >= 1_000 {
+                self.js8_last_tick_ms = now_ms;
+                eng.js8_tick(now_ms);
+            }
+            while let Some(result) = self.js8_multi_worker.try_recv() {
+                self.js8_multi_pending = self.js8_multi_pending.saturating_sub(1);
+                if let DecodeApplied::Early { n } = eng.apply_decode_result(result) {
+                    if n > 0 {
+                        let cur_dial = eng.settings().dial_hz();
+                        emit_rx_decodes(sinks, &eng, &mut station.psk_spots, now, cur_dial);
+                    }
+                }
+            }
+            let rx_quiet = self.tx_until_ms.is_none()
+                && !self.rx.is_empty()
+                && !is_tuning
+                && eng.source_kind() == SourceKind::Native;
+            if rx_quiet && self.js8_multi_pending == 0 {
+                // 0 would mean "decode nothing", which nobody means: treat it as all four.
+                let enabled = match eng.settings().js8_rx_speeds & 0x0F {
+                    0 => 0x0F,
+                    m => m,
+                };
+                let due = self.js8_multi_decode_due(now_ms, enabled);
+                if !due.is_empty() {
+                    let slices: Vec<(Js8Speed, Vec<f32>, u64)> = due
+                        .iter()
+                        .map(|&(speed, cycle_start_ms)| {
+                            let age = (((now_ms - cycle_start_ms) as f64 / 1000.0)
+                                * tempo_fast::SAMPLE_RATE as f64)
+                                as usize;
+                            (
+                                speed,
+                                self.rx.tail_window(age, speed.frames_needed()),
+                                cycle_start_ms,
+                            )
+                        })
+                        .collect();
+                    // `slot + 1`: the early pass's convention (boundary-slot index = audio
+                    // slot + 1), so ALL.TXT stamps the period the audio came from.
+                    let job = eng.build_js8_multi_job(slices, slot + 1);
+                    self.js8_multi_pending = due.len();
+                    self.js8_multi_worker.dispatch(WorkerJob::Js8Multi(job));
+                }
+            }
+        }
+
         // --- WSJT-X-style early decode (FT8/FT4): a few seconds before the
         // boundary, decode the partial capture so callers appear while the
         // period is still running (stock decodes ~3×/period from ~11.8 s; our
@@ -9403,7 +9503,7 @@ impl RadioLoop {
                     // slot + 1, matching the boundary ingest's parity/history). The
                     // result folds in — and publishes its spots — via the drain block.
                     let job = eng.build_decode_job(frame, slot + 1, DecodePass::Early);
-                    self.decode.dispatch(job);
+                    self.decode.dispatch(WorkerJob::Slot(job));
                     self.decode_in_flight = true;
                 }
             }
@@ -9424,7 +9524,17 @@ impl RadioLoop {
                     // Capture the just-ended slot's audio BEFORE any keying — a TX
                     // start clears the ring (own-carrier guard) and the straggler
                     // decode needs the pure RX frame.
-                    let frame = self.rx.frame();
+                    // JS8's ring is 36 s for EVERY speed (the multi-speed scheduler's window);
+                    // the boundary decode of the TIER speed wants the just-ended period at
+                    // the HEAD of its buffer, so take the latest period, tail-padded — the
+                    // early-pass slice shape. `frame()` would hand the decoder 36 s of audio
+                    // with the period at the tail and the cycle start nowhere near sample 0.
+                    let frame = if tier_now == Tier::Js8 {
+                        let period = (self.cur_slot_secs * tempo_fast::SAMPLE_RATE as f64) as usize;
+                        self.rx.frame_latest_padded(period)
+                    } else {
+                        self.rx.frame()
+                    };
                     // WSJT-X key-at-boundary (operator-approved 2026-07-21): when the
                     // just-ended RX slot's EARLY decode already folded (FT8/FT4 native —
                     // dispatched at 11.8 s / 5.5 s and drained above), the
@@ -9472,7 +9582,7 @@ impl RadioLoop {
                             .key_boundary_tx(&mut eng, rig, backend, now, slot, false, None, None);
                     }
                     let job = eng.build_decode_job(frame, slot, DecodePass::Boundary);
-                    self.decode.dispatch(job);
+                    self.decode.dispatch(WorkerJob::Slot(job));
                     self.decode_in_flight = true;
                     // TX decision (when not already keyed above) deferred until this
                     // result is drained (next ticks).
@@ -9608,6 +9718,11 @@ impl RadioLoop {
         }
 
         Ok(())
+    }
+
+    /// Which JS8 speeds are due for a decode right now (see [`js8_due_speeds`]).
+    fn js8_multi_decode_due(&mut self, now_ms: u64, enabled: u8) -> Vec<(Js8Speed, u64)> {
+        js8_due_speeds(&mut self.js8_done, now_ms, enabled)
     }
 
     /// Finish a slot boundary once its RX decode is folded in: run the deferred
@@ -10110,6 +10225,9 @@ fn tier_mode(tier: Tier) -> &'static str {
         // lie: a receiver that does not know "FT2" ignores the row, where sending
         // "FT4" would put a wrong mode in somebody else's database.
         Tier::Ft2 => "FT2",
+        // JS8Call's own UDP API is a different (JSON) protocol; on the WSJT-X-style wire the
+        // registered name is the truth a cooperating logger can act on.
+        Tier::Js8 => "JS8",
         // These feed the WSJT-X UDP Decode message and the PSK Reporter spot
         // queue, so they must be the names cooperating loggers and the reporter
         // expect — "Q65" without the submode, as in ADIF, not the "Q65-30A" the
@@ -10142,6 +10260,31 @@ fn civil_from_days(z0: i64) -> (i64, u32, u32) {
     let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
     let m = (if mp < 10 { mp + 3 } else { mp - 9 }) as u32;
     (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+/// The pure heart of the JS8 multi-speed scheduler. For each speed set in `enabled`
+/// (`Js8Speed::bit()`), the cycle is `floor(now / period)`; it is due once
+/// `frames_needed / 12` ms of that cycle have elapsed (JS8Call's exact decode moment,
+/// `mainwindow.cpp isDecodeReady`) and it has not been decoded for that cycle. Marks each
+/// returned speed done. Fastest first, JS8Call's worker order, so Turbo's 6 s budget is
+/// spent first.
+fn js8_due_speeds(done: &mut [Option<u64>; 4], now_ms: u64, enabled: u8) -> Vec<(Js8Speed, u64)> {
+    let mut due = Vec::new();
+    for speed in Js8Speed::ALL.iter().rev().copied() {
+        if enabled & speed.bit() == 0 {
+            continue;
+        }
+        let period_ms = u64::from(speed.period_s()) * 1000;
+        let cycle = now_ms / period_ms;
+        let cycle_start_ms = cycle * period_ms;
+        let needed_ms = (speed.frames_needed() as u64 * 1000) / 12_000;
+        let idx = usize::from(speed.index());
+        if now_ms - cycle_start_ms >= needed_ms && done[idx] != Some(cycle) {
+            done[idx] = Some(cycle);
+            due.push((speed, cycle_start_ms));
+        }
+    }
+    due
 }
 
 fn emit_rx_decodes(
@@ -11902,7 +12045,7 @@ mod tests {
             4,
             DecodePass::Boundary,
         );
-        worker.dispatch(job);
+        worker.dispatch(WorkerJob::Slot(job));
         // Wait (bounded) for the worker to finish — it runs on its own thread.
         let mut result = None;
         for _ in 0..500 {
@@ -11940,21 +12083,21 @@ mod tests {
         assert!(wants);
         let mut dispatched = 0;
         if wants && !in_flight {
-            worker.dispatch(eng.build_decode_job(
+            worker.dispatch(WorkerJob::Slot(eng.build_decode_job(
                 vec![0.0f32; eng.active_capture_samples()],
                 1,
                 DecodePass::Boundary,
-            ));
+            )));
             in_flight = true;
             dispatched += 1;
         }
         // A second boundary arriving before the first drains must NOT dispatch.
         if wants && !in_flight {
-            worker.dispatch(eng.build_decode_job(
+            worker.dispatch(WorkerJob::Slot(eng.build_decode_job(
                 vec![0.0f32; eng.active_capture_samples()],
                 2,
                 DecodePass::Boundary,
-            ));
+            )));
             dispatched += 1;
         }
         assert_eq!(
@@ -11975,6 +12118,106 @@ mod tests {
         }
         assert!(got, "the in-flight decode completed and drained");
         assert!(!in_flight, "the guard is cleared once the result drains");
+    }
+
+    /// The multi-speed scheduler: each ENABLED speed fires exactly once per ITS wall-clock
+    /// cycle, at JS8Call's decode moment (`frames_needed` samples after the cycle start),
+    /// never before, and never twice for the same cycle. Fastest first (JS8Call's worker
+    /// order), so Turbo's 6 s budget is spent first.
+    #[test]
+    fn js8_due_speeds_fires_each_speed_once_per_cycle_at_frames_needed() {
+        use tempo_app::engine::Js8Speed;
+        let mut done = [None; 4];
+        // t = 0 of a 30 s cycle: nothing has enough audio.
+        assert!(js8_due_speeds(&mut done, 0, 15).is_empty());
+        // 4.55 s: Turbo's 54 600 samples are in (its cycle 0); nothing else.
+        let due = js8_due_speeds(&mut done, 4_600, 15);
+        assert_eq!(due, vec![(Js8Speed::Turbo, 0)]);
+        assert!(
+            js8_due_speeds(&mut done, 4_700, 15).is_empty(),
+            "not twice for cycle 0"
+        );
+        // 8.6 s: Fast's 103 200 samples (cycle 0 of 10 s); Turbo's cycle 1 (6..12 s) needs 10.55 s.
+        assert_eq!(
+            js8_due_speeds(&mut done, 8_700, 15),
+            vec![(Js8Speed::Fast, 0)]
+        );
+        // 13.64 s: Normal (cycle 0 of 15 s) AND Turbo cycle 2 (12..18 s needs 16.55 s — NOT yet).
+        assert_eq!(
+            js8_due_speeds(&mut done, 13_700, 15),
+            vec![(Js8Speed::Normal, 0)]
+        );
+        // 26.28 s: Slow (cycle 0 of 30 s); Turbo cycle 4 (24..30 needs 28.55) not yet; Fast
+        // cycle 2 (20..30 needs 28.6) not yet; Normal cycle 1 (15..30 needs 28.64) not yet.
+        assert_eq!(
+            js8_due_speeds(&mut done, 26_300, 15),
+            vec![(Js8Speed::Slow, 0)]
+        );
+        // 28.7 s: Turbo cycle 4, Fast cycle 2, Normal cycle 1 — fastest first.
+        assert_eq!(
+            js8_due_speeds(&mut done, 28_700, 15),
+            vec![
+                (Js8Speed::Turbo, 24_000),
+                (Js8Speed::Fast, 20_000),
+                (Js8Speed::Normal, 15_000)
+            ]
+        );
+        // A mask excludes speeds outright.
+        let mut only_slow = [None; 4];
+        assert!(
+            js8_due_speeds(&mut only_slow, 20_000, Js8Speed::Slow.bit()).is_empty(),
+            "Slow needs 26.28 s; Turbo/Fast/Normal are masked out"
+        );
+        assert_eq!(
+            js8_due_speeds(&mut only_slow, 56_300, Js8Speed::Slow.bit()),
+            vec![(Js8Speed::Slow, 30_000)]
+        );
+    }
+
+    /// The second worker runs a multi-speed job and returns ONE result per slice, each
+    /// folding as an EARLY result (spots published, the boundary TX decision never reached).
+    #[test]
+    fn js8_multi_worker_returns_one_result_per_slice_and_folds_as_early() {
+        use tempo_app::engine::Js8Speed;
+        let mut eng = Engine::new("KD9TAW", "EN52", 0);
+        eng.js8_enter();
+        // The tier switch bumped the decode epoch; the loop re-syncs the capture epoch at
+        // every consumed boundary. Do that here, or the result lands Stale by design.
+        eng.begin_slot_capture();
+        let worker = DecodeWorker::spawn_with("nexus-js8-multi-test", run_worker_job);
+        let slices = vec![
+            (
+                Js8Speed::Turbo,
+                vec![0.0f32; Js8Speed::Turbo.frames_needed()],
+                0,
+            ),
+            (
+                Js8Speed::Normal,
+                vec![0.0f32; Js8Speed::Normal.frames_needed()],
+                0,
+            ),
+        ];
+        worker.dispatch(WorkerJob::Js8Multi(eng.build_js8_multi_job(slices, 5)));
+        let mut results = Vec::new();
+        for _ in 0..2_000 {
+            if let Some(r) = worker.try_recv() {
+                results.push(r);
+                if results.len() == 2 {
+                    break;
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        assert_eq!(results.len(), 2, "one DecodeResult per slice");
+        for r in results {
+            assert!(matches!(r.pass(), DecodePass::Js8Multi { .. }));
+            assert_eq!(r.slot(), 5);
+            assert!(
+                matches!(eng.apply_decode_result(r), DecodeApplied::Early { n: 0 }),
+                "silence folds as an EARLY result with no decodes — never a Boundary"
+            );
+        }
+        drop(worker);
     }
 
     #[test]

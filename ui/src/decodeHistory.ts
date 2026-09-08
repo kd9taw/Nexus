@@ -77,6 +77,10 @@ export const TIER_PERIOD_SECS: Record<Tier, number> = {
   MSK144: 15,
   JT65: 60,
   WSPR: 120,
+  // JS8's period follows the TRANSMIT speed setting (30/15/10/6 s for Slow/Normal/Fast/
+  // Turbo); this is Normal, the default. A decode row's true period rides the ModeKind the
+  // engine tagged it with, exactly as for FST4/Q65/MSK144 above.
+  JS8: 15,
   // Q65's period is an operator setting (15/30/60/120/300), so this table cannot
   // state it. 60 is the default and the EME working period; a decode row's true
   // period comes from the ModeKind the engine tagged it with.

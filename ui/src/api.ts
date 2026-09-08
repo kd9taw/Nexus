@@ -28,6 +28,9 @@ import type {
   FeedHealth,
   ImportStats,
   JourneySummary,
+  Js8State,
+  Js8InboxState,
+  Js8Switch,
   LoggedQso,
   LotwSyncResult,
   UploadReport,
@@ -2197,6 +2200,76 @@ export async function pskType(text: string): Promise<PskState> {
 /** Stop PSK now: abort the over in progress, drop the queue, unkey. */
 export async function pskStop(): Promise<PskState> {
   return invoke<PskState>('psk_stop')
+}
+
+// ---- JS8 (interfaces.md §3.6 — every command answers the whole Js8State, the PSK shape) ----
+
+/** The operator ENTERED the JS8 view: `set_tier(JS8)` + retune to the JS8 watering hole for
+ * the current band. RX ONLY by construction — it confers neither TX-enable nor any
+ * auto-reply arm; nothing keys. */
+export async function js8Enter(): Promise<Js8State> {
+  return invoke<Js8State>('js8_enter')
+}
+
+/** Live JS8 state (poll ~500 ms while the JS8 cockpit is visible). */
+export async function getJs8State(): Promise<Js8State> {
+  return invoke<Js8State>('get_js8_state')
+}
+
+/** Select the TRANSMIT speed (0 Slow | 1 Normal | 2 Fast | 3 Turbo). Persisted; the slot
+ * clock and the boundary decode window follow. Never touches the TX latch. */
+export async function js8SetSpeed(speed: number): Promise<Js8State> {
+  return invoke<Js8State>('js8_set_speed', { speed })
+}
+
+/** Select which speeds the receiver decodes (bitmask slow 1 · normal 2 · fast 4 · turbo 8).
+ * Persisted; a mask that decodes nothing is refused (the engine returns why). */
+export async function js8SetRxSpeeds(mask: number): Promise<Js8State> {
+  return invoke<Js8State>('js8_set_rx_speeds', { mask })
+}
+
+/** Queue a message to `to` (a callsign, an @GROUP, or null for @ALLCALL). An explicit
+ * operator send — the engine re-validates every gate and returns why a send was refused.
+ * Refused outright in the receive-only build. */
+export async function js8Send(to: string | null, text: string): Promise<Js8State> {
+  return invoke<Js8State>('js8_send', { to, text })
+}
+
+/** Queue a directed command (`cmd` = the 32-entry table id) with its argument. */
+export async function js8SendCommand(to: string, cmd: number, arg: string): Promise<Js8State> {
+  return invoke<Js8State>('js8_send_command', { to, cmd, arg })
+}
+
+/** Call CQ (`idx` = the CQ variant 0..7: "CQ CQ CQ" … "CQ"). */
+export async function js8CallCq(idx: number): Promise<Js8State> {
+  return invoke<Js8State>('js8_call_cq', { idx })
+}
+
+/** The SECOND act of the two-act rule: autoreply | relay | hback (persisted) or hb
+ * (session-only). Turning a switch on never keys by itself — the session TX latch is the
+ * first act, re-checked at plan time on every slot. */
+export async function js8Arm(which: Js8Switch, on: boolean): Promise<Js8State> {
+  return invoke<Js8State>('js8_arm', { which, on })
+}
+
+/** Cancel the pending automatic reply (its countdown chip's Cancel). */
+export async function js8Cancel(): Promise<Js8State> {
+  return invoke<Js8State>('js8_cancel')
+}
+
+/** Drop the outbox — a SENDER-class control, not a stop (Stop TX is haltTx). */
+export async function js8DropQueue(): Promise<Js8State> {
+  return invoke<Js8State>('js8_drop_queue')
+}
+
+/** Mark an inbox row (unread | read | store | delivered). Journaled. */
+export async function js8InboxMark(id: number, state: Js8InboxState): Promise<Js8State> {
+  return invoke<Js8State>('js8_inbox_mark', { id, state })
+}
+
+/** Delete an inbox row. Journaled. */
+export async function js8InboxDelete(id: number): Promise<Js8State> {
+  return invoke<Js8State>('js8_inbox_delete', { id })
 }
 
 /** Arm/disarm the SSTV RX decoder by an EXPLICIT operator act (session-only; RX

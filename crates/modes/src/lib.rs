@@ -18,7 +18,9 @@ pub mod mode;
 pub mod source;
 
 pub use decode::Decode;
-pub use mode::{make_mode, tx_mode, Capabilities, Ft1Mode, Ft4Mode, Ft8Mode, Mode, ModeKind};
+pub use mode::{
+    make_mode, tx_mode, Capabilities, Ft1Mode, Ft4Mode, Ft8Mode, Js8Mode, Js8Speed, Mode, ModeKind,
+};
 pub use source::{DecodeRequest, NativeSource, SignalSource, WsjtxUdpSource};
 
 /// Clear FT8's a7 cross-cycle decode table (prior-slot call pairs). The engine
@@ -72,6 +74,13 @@ mod tests {
             ModeKind::Ft4 => 0,
             // FT2 self-positions too — `Mode::gen_wave` prepends FT2_LEAD_IN_SECS.
             ModeKind::Ft2 => 0,
+            // JS8 is RECEIVE-ONLY in this build: `Mode::encode` still parses the lab text
+            // form, but the assert above fires first for "CQ KD9TAW EN52" (not the lab
+            // form). Listed explicitly, like FST4/Q65, so a TRANSMITTING JS8 later fails to
+            // compile here instead of inheriting some other mode's slot offset.
+            ModeKind::Js8 { .. } => {
+                unreachable!("JS8 is receive-only in this build; native_frame requires encode()")
+            }
             // FST4 is RECEIVE-ONLY. Mode::encode returns empty for it, so the
             // assert above fires before this match is ever reached. This harness
             // is TX-dependent by construction and cannot serve a mode that does
@@ -159,7 +168,7 @@ mod tests {
         assert_eq!(ModeKind::Ft2.capture_samples(), ft2::NMAX);
         assert!(m2.capabilities().tx);
 
-        assert_eq!(ModeKind::ALL.len(), 9) // FT8, FT4, FT2, FST4, Q65, MSK144, JT65, WSPR, TempoFast;
+        assert_eq!(ModeKind::ALL.len(), 10) // FT8, FT4, FT2, JS8, FST4, Q65, MSK144, JT65, WSPR, TempoFast;
     }
 
     /// Each native mode decodes its own clean signal through a `Box<dyn

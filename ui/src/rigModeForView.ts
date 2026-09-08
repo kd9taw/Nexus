@@ -47,12 +47,13 @@ export const RIG_MODE_BY_VIEW: Partial<Record<string, RigMode>> = {
   psk: 'keyboard', // the Keyboard Modes cockpit (PSK31) — one flat section
   operate: 'digital', // the FT8/FT4 cockpit
   chat: 'digital', // Tempo is a digital mode — but see below: it does NOT own a frequency
+  js8: 'digital', // JS8 rides FT8's waveform: DATA-USB, and it OWNS a frequency (see VIEWS_THAT_HOME)
 }
 
 /** The views that OWN a frequency, and therefore re-home the dial on entry. `chat` is
  *  deliberately absent: Tempo asserts the digital rig mode but keeps its own band picker's
  *  frequency, and that gap is what #143 was made of. */
-const VIEWS_THAT_HOME = new Set(['operate', 'cw', 'phone', 'rtty', 'psk'])
+const VIEWS_THAT_HOME = new Set(['operate', 'cw', 'phone', 'rtty', 'psk', 'js8'])
 
 export interface RigModeTransition {
   /** The mode to assert, or undefined for a view that owns none (Map, Logbook, Settings…). */

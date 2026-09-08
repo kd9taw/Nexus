@@ -11,6 +11,7 @@ members = [
     "crates/msk144",
     "crates/jt65",
     "crates/wspr",
+    "crates/js8",
     "crates/modes",
     "crates/propagation",
     "crates/tempo-core",
@@ -69,4 +70,7 @@ opt-level = 3
 [profile.test.package.ft8]
 opt-level = 3
 [profile.test.package.ft4]
+opt-level = 3
+# js8: the LDPC/BP and modulator tests loop over 174-bit codewords and 300k-sample waves.
+[profile.test.package.js8]
 opt-level = 3

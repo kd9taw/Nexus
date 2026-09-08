@@ -682,6 +682,56 @@ receive-only in this release; transmit is on the keyboard-modes roadmap.
   instance on a shared rig you monitor from. Stopping the receiver yourself is
   remembered for the rest of the session either way.
 
+### JS8
+
+JS8 is the JS8Call-compatible keyboard mode; the [JS8 chapter](js8.md) is the tour. What
+lives here is what JS8Call keeps in its own settings and Nexus cannot infer.
+
+**Speed & receiving**
+
+- **Transmit speed** — Slow (30 s periods), Normal (15 s), Fast (10 s) or Turbo (6 s).
+  The period the TX clock follows; Normal is what most of the band runs. The speed chips
+  in the JS8 header change this same setting.
+- **Decode these speeds** — all four on by default, exactly as JS8Call's multi-decode:
+  a Slow station and a Turbo station on the same band both print, each activity row
+  marked with its speed letter (E/A/B/C). Untick a speed to save CPU on a small machine.
+
+**Automatic transmissions**
+
+Every one of these is the *second* of two acts. The first is the session TX latch in the
+JS8 header, which is never remembered across launches — so a switch left on here keys
+nothing until you enable TX in the cockpit, every session.
+
+- **Heartbeat interval (minutes)** — 0 sends a heartbeat only when you press **HB**.
+  Otherwise, while the HB chip is on, one goes out every this-many minutes on a random
+  free slot between 500 and 1000 Hz. The HB chip itself is session-only.
+- **Answer heartbeats** — off by default, as in JS8Call. On, a heard heartbeat gets your
+  signal report (`HEARTBEAT SNR`), one frame per station, and a message you hold for
+  that station is offered to it.
+- **Auto-reply to queries** — on by default, as in JS8Call: `SNR?`, `GRID?`, `INFO?`,
+  `STATUS?`, `HEARING?` and `QUERY MSGS` addressed to you are answered after a
+  one-period countdown you can cancel in the cockpit. `@ALLCALL` queries are answered at
+  most once per station every 15 minutes.
+- **Relay for other stations** — on by default, as in JS8Call: a message routed through
+  your callsign is passed along, and `MSG TO:` messages are held in your inbox until the
+  addressee asks for them. This is third-party traffic; whether it is permitted where
+  you operate is your call.
+- **Idle watchdog (minutes)** — after this long with nothing typed, heartbeats,
+  auto-replies and relaying all switch off and the cockpit says so (the JS8Call rule, so
+  an unattended station goes quiet). 60 by default; 0 turns it off; anything below 5
+  counts as 5. TX enable is left as it was — this is separate from the six-minute
+  transmit watchdog in [Digital (FT8/FT4)](#digital-ft8ft4), which JS8 also obeys for
+  everything but heartbeats.
+
+**Station text**
+
+- **INFO** — what an `INFO?` query gets back: rig, antenna, power, a QTH. Upper-case
+  letters, digits and basic punctuation pack tightest.
+- **STATUS** — what a `STATUS?` query gets back. Blank sends the JS8Call form: `IDLE`,
+  the idle minutes, and the app name.
+- **Groups** — the `@GROUP` names you belong to, comma-separated; a message to one of
+  them counts as addressed to you. `@ALLCALL` is everyone and is always on.
+
 ### SSTV
 
 **Receiving**

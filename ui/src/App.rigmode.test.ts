@@ -39,7 +39,8 @@ function rigModeMap(): Record<string, string> {
   expect(start, 'RIG_MODE_BY_VIEW must exist — it is the allowlist this whole test is about').toBeGreaterThan(-1)
   const body = MODEMAP.slice(start, MODEMAP.indexOf('}', start))
   const out: Record<string, string> = {}
-  for (const m of body.matchAll(/^\s*([a-z]+):\s*'(cw|phone|rtty|keyboard|digital)'/gm)) out[m[1]] = m[2]
+  // [a-z0-9]+, not [a-z]+: JS8 is a view key with a digit in it.
+  for (const m of body.matchAll(/^\s*([a-z0-9]+):\s*'(cw|phone|rtty|keyboard|digital)'/gm)) out[m[1]] = m[2]
   return out
 }
 
@@ -53,6 +54,7 @@ describe('which views may command the rig mode', () => {
       psk: 'keyboard',
       operate: 'digital',
       chat: 'digital',
+      js8: 'digital',
     })
     // The report, stated as an assertion: opening the hunting board must not touch the rig.
     expect(map.pota, 'POTA/SOTA is a hunting board, not a mode (#80)').toBeUndefined()

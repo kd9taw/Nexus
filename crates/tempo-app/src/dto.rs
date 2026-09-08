@@ -6,6 +6,7 @@
 //! data: they carry no behavior and depend only on `serde`. [`crate::AppState`]
 //! projects the richer `tempo-core` types into these for the UI.
 
+use modes::Js8Speed;
 use modes::ModeKind;
 use serde::{Deserialize, Serialize};
 
@@ -285,13 +286,24 @@ pub enum Tier {
     /// tier, its decodes are propagation reports rather than QSO traffic.
     #[serde(rename = "WSPR")]
     Wspr,
+    /// **JS8** (JS8Call-compatible keyboard-to-keyboard, `crates/js8`). **RECEIVE-ONLY in
+    /// this build** — `Js8Mode` declares `tx: false`, so `tier_is_rx_only` refuses to arm the
+    /// latch; the operator-gated TX batch flips it. The transmit speed (and the slot clock)
+    /// comes from `Settings::js8_speed`; the receiver decodes every speed in
+    /// `Settings::js8_rx_speeds` from one 36 s ring.
+    ///
+    /// NOT a chat tier (`is_chat` unchanged): the Tempo cadence — RR73 ACKs, chunked frames,
+    /// the 120 s window — is on-air incompatible with JS8Call. JS8 has its own adapter
+    /// (`engine::js8`).
+    #[serde(rename = "JS8")]
+    Js8,
 }
 
 impl Tier {
     /// Every variant, in declaration order. The one place a tier list lives, so
     /// a test can drive them all — see `bandplan::tests::tier_all_lists_every_tier`,
     /// which fails to compile if a variant is added without being listed here.
-    pub const ALL: [Tier; 11] = [
+    pub const ALL: [Tier; 12] = [
         Tier::TempoFast,
         Tier::TempoDeep,
         Tier::Ft8,
@@ -303,6 +315,7 @@ impl Tier {
         Tier::Msk144,
         Tier::Jt65,
         Tier::Wspr,
+        Tier::Js8,
     ];
 }
 
@@ -323,6 +336,7 @@ impl Tier {
             Tier::Msk144 => "MSK144",
             Tier::Jt65 => "JT65",
             Tier::Wspr => "WSPR",
+            Tier::Js8 => "JS8",
         }
     }
 
@@ -345,7 +359,8 @@ impl Tier {
     /// to reach `ModeKind` or every buffer sized from that kind would be wrong.
     /// An out-of-range pair falls back to Q65-30A rather than refusing — settings
     /// arriving from an older file or a hand-edited JSON should degrade to a
-    /// working mode, not disable decoding.
+    /// working mode, not disable decoding. `js8_speed` is the same story for JS8:
+    /// an index into `Js8Speed::ALL` that degrades to Normal (see [`Self::js8_kind`]).
     pub fn mode_kind(
         self,
         q65_period_s: u16,
@@ -353,6 +368,7 @@ impl Tier {
         fst4_period_s: u16,
         msk144_period_s: u16,
         jt65_submode: u8,
+        js8_speed: u8,
     ) -> Option<ModeKind> {
         match self {
             Tier::TempoFast => Some(ModeKind::TempoFast),
@@ -367,6 +383,7 @@ impl Tier {
             Tier::Msk144 => Some(Self::msk144_kind(msk144_period_s)),
             Tier::Jt65 => Some(Self::jt65_kind(jt65_submode)),
             Tier::Wspr => Some(ModeKind::Wspr),
+            Tier::Js8 => Some(Self::js8_kind(js8_speed)),
             Tier::TempoDeep => None,
         }
     }
@@ -400,6 +417,16 @@ impl Tier {
         }
     }
 
+    /// A validated `ModeKind::Js8`, falling back to Normal (15 s) on an out-of-range
+    /// index. Same degrade-don't-refuse rule as [`Self::q65_kind`]: a stale settings file
+    /// must still decode.
+    pub fn js8_kind(speed_idx: u8) -> ModeKind {
+        match Js8Speed::from_index(speed_idx) {
+            Some(speed) => ModeKind::Js8 { speed },
+            None => ModeKind::JS8_NORMAL,
+        }
+    }
+
     /// A validated `ModeKind::Q65`, falling back to Q65-30A on anything unsupported.
     pub fn q65_kind(period_s: u16, submode: u8) -> ModeKind {
         let ok = ModeKind::Q65_PERIODS.contains(&period_s) && submode < ModeKind::Q65_SUBMODES;
@@ -430,8 +457,109 @@ impl Tier {
             ModeKind::Msk144 { .. } => Tier::Msk144,
             ModeKind::Jt65 { .. } => Tier::Jt65,
             ModeKind::Wspr => Tier::Wspr,
+            // Every JS8 speed maps back to the one JS8 tier, exactly as Q65's
+            // combinations do: the tier is the operator's selection, the speed a setting.
+            ModeKind::Js8 { .. } => Tier::Js8,
         }
     }
+}
+
+// ---- JS8 (the `get_js8_state` poll; serialised straight to the cockpit) ----
+
+/// The heard-station row, straight from the message layer (serde-derived there).
+pub use js8::proto::station::Heard as Js8Heard;
+/// One inbox row (UNREAD / READ / STORE / DELIVERED), straight from the message layer.
+pub use js8::proto::station::InboxEntry as Js8InboxEntry;
+/// The inbox row state — lowercase on the wire (`"unread" | "read" | "store" | "delivered"`).
+pub use js8::proto::station::InboxState as Js8InboxState;
+
+/// Which automatic origins may actually key RIGHT NOW: `switch && tx_enabled &&
+/// !idle_tripped`, per origin. The cockpit paints "armed" from THIS, never from the
+/// persisted switch alone — a switch that is on while the TX latch is off must never look
+/// armed (the AprsCockpit rule).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Js8Armed {
+    pub autoreply: bool,
+    pub relay: bool,
+    pub hb_ack: bool,
+    pub hb: bool,
+}
+
+/// One activity-pane row: a decoded frame (or a reassembled multi-frame message).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Js8ActivityRow {
+    /// Unix ms of the cycle the frame was decoded in.
+    pub at_ms: u64,
+    pub speed: Js8Speed,
+    pub freq_hz: f32,
+    pub snr_db: i32,
+    pub dt_s: f32,
+    /// The sending station as the frame names it (empty for a continuation data frame).
+    pub from: String,
+    /// JS8Call's display line, byte-exact (`Frame::render`), or the reassembled text.
+    pub text: String,
+    /// Addressed to my call, @ALLCALL, or a group I have joined.
+    pub directed_to_me: bool,
+    /// My own transmission (always false in the receive-only build).
+    pub mine: bool,
+    /// False for a message the reassembler force-closed or dropped incomplete.
+    pub complete: bool,
+    /// Decode quality below JS8Call's 0.17 low-confidence threshold.
+    pub low_conf: bool,
+}
+
+/// One outbox row (empty in the receive-only build).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Js8QueueRow {
+    pub origin: js8::Origin,
+    pub display: String,
+    pub first: bool,
+    pub last: bool,
+}
+
+/// An automatic reply waiting out its countdown (cancellable until `fires_at_ms`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Js8PendingReply {
+    pub origin: js8::Origin,
+    pub to: String,
+    pub display: String,
+    pub fires_at_ms: u64,
+}
+
+/// The live JS8 state the cockpit polls (~500 ms while visible) — `PskRxState`'s role.
+/// Every field is computed from engine truth at poll time; nothing here is cached UI state.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Js8State {
+    /// The TRANSMIT speed (= the slot clock), lowercase on the wire.
+    pub speed: Js8Speed,
+    /// Bitmask of decoded speeds (`Js8Speed::bit()`).
+    pub rx_speeds: u8,
+    pub tx_enabled: bool,
+    pub sending: bool,
+    pub hb_on: bool,
+    pub hb_next_at_ms: Option<u64>,
+    pub hb_interval_min: u16,
+    /// The persisted switches (the second act), echoed so the chips render engine truth.
+    pub autoreply: bool,
+    pub relay: bool,
+    pub hb_ack: bool,
+    pub armed: Js8Armed,
+    pub idle_minutes: u16,
+    pub idle_limit_min: u16,
+    pub idle_tripped: bool,
+    pub activity: Vec<Js8ActivityRow>,
+    pub stations: Vec<Js8Heard>,
+    pub inbox: Vec<Js8InboxEntry>,
+    pub queue: Vec<Js8QueueRow>,
+    pub pending_reply: Option<Js8PendingReply>,
+    /// The last refused verb's reason (a send that would not compose, a forbidden
+    /// destination), cleared by the next successful verb.
+    pub last_error: Option<String>,
 }
 
 /// A single chat message (inbound or outbound) within a conversation.
@@ -2474,6 +2602,109 @@ mod tests {
             AMP_REASONS,
             ["portBusy", "noAnswer", "wrongModel", "malformed"]
         );
+    }
+
+    /// `Tier::Js8`: the wire name the UI switches on, the label, the degrade-don't-refuse
+    /// speed helper, and the mode-kind round trip for every speed.
+    #[test]
+    fn js8_tier_registers_with_the_js8call_speed_table() {
+        use modes::Js8Speed;
+        assert_eq!(serde_json::to_string(&Tier::Js8).unwrap(), "\"JS8\"");
+        assert_eq!(serde_json::from_str::<Tier>("\"JS8\"").unwrap(), Tier::Js8);
+        assert_eq!(Tier::Js8.label(), "JS8");
+        assert!(
+            !Tier::Js8.is_chat(),
+            "the Tempo chat cadence is on-air incompatible with JS8Call"
+        );
+        assert_eq!(Tier::ALL.len(), 12);
+        assert!(Tier::ALL.contains(&Tier::Js8));
+        for (i, speed) in Js8Speed::ALL.into_iter().enumerate() {
+            let kind = Tier::js8_kind(i as u8);
+            assert_eq!(kind, ModeKind::Js8 { speed });
+            assert_eq!(Tier::from_mode_kind(kind), Tier::Js8);
+            assert_eq!(Tier::Js8.mode_kind(60, 0, 120, 15, 0, i as u8), Some(kind));
+        }
+        // A stale or hand-edited index degrades to Normal instead of refusing to decode.
+        assert_eq!(Tier::js8_kind(4), ModeKind::JS8_NORMAL);
+        assert_eq!(Tier::js8_kind(255), ModeKind::JS8_NORMAL);
+    }
+
+    /// `Js8State` is serialised straight to the cockpit (no src-tauri DTO copy): pin the
+    /// camelCase keys the UI reads and the lowercase speed / origin spellings.
+    #[test]
+    fn js8_state_wire_keys_are_the_ones_the_ui_reads() {
+        use modes::Js8Speed;
+        let s = Js8State {
+            speed: Js8Speed::Turbo,
+            rx_speeds: 15,
+            tx_enabled: false,
+            sending: false,
+            hb_on: false,
+            hb_next_at_ms: None,
+            hb_interval_min: 0,
+            autoreply: true,
+            relay: true,
+            hb_ack: false,
+            armed: Js8Armed {
+                autoreply: false,
+                relay: false,
+                hb_ack: false,
+                hb: false,
+            },
+            idle_minutes: 3,
+            idle_limit_min: 60,
+            idle_tripped: false,
+            activity: vec![Js8ActivityRow {
+                at_ms: 1_000,
+                speed: Js8Speed::Normal,
+                freq_hz: 1500.0,
+                snr_db: -7,
+                dt_s: 0.1,
+                from: "KD2UWR".to_string(),
+                text: "KD2UWR: @HB HEARTBEAT FN30 ".to_string(),
+                directed_to_me: false,
+                mine: false,
+                complete: true,
+                low_conf: false,
+            }],
+            stations: Vec::new(),
+            inbox: Vec::new(),
+            queue: vec![Js8QueueRow {
+                origin: js8::Origin::HbAck,
+                display: "x".to_string(),
+                first: true,
+                last: true,
+            }],
+            pending_reply: None,
+            last_error: None,
+        };
+        let json = serde_json::to_string(&s).unwrap();
+        for k in [
+            "\"speed\":\"turbo\"",
+            "\"rxSpeeds\":15",
+            "\"txEnabled\":false",
+            "\"hbOn\":false",
+            "\"hbNextAtMs\":null",
+            "\"hbIntervalMin\":0",
+            "\"hbAck\":false",
+            "\"armed\":{\"autoreply\":false,\"relay\":false,\"hbAck\":false,\"hb\":false}",
+            "\"idleMinutes\":3",
+            "\"idleLimitMin\":60",
+            "\"idleTripped\":false",
+            "\"atMs\":1000",
+            "\"freqHz\":1500.0",
+            "\"snrDb\":-7",
+            "\"dtS\":0.1",
+            "\"directedToMe\":false",
+            "\"lowConf\":false",
+            "\"origin\":\"hbAck\"",
+            "\"pendingReply\":null",
+            "\"lastError\":null",
+        ] {
+            assert!(json.contains(k), "missing {k} in {json}");
+        }
+        let back: Js8State = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, s);
     }
 }
 

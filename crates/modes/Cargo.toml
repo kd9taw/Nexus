@@ -20,4 +20,7 @@ q65 = { path = "../q65" }
 msk144 = { path = "../msk144" }
 jt65 = { path = "../jt65" }
 wspr = { path = "../wspr" }
+# JS8 (JS8Call-compatible) modem + message layer — pure Rust, no FFI. `Js8Mode` decodes
+# through `js8::phy::decode` exactly as `Ft2Mode` decodes through `ft2::decode_frame`.
+js8 = { path = "../js8" }
 tempo-net = { path = "../tempo-net" }

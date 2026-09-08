@@ -50,6 +50,8 @@ multi-monitor shack.
   a local gallery, and transmit is always an explicit **Send**.
 - **[APRS](aprs.md)** — a 2 m AFSK-1200 packet monitor with its own map, plus
   position beacons and short messages you send by hand.
+- **[JS8](js8.md)** — JS8Call-compatible keyboard chat on FT8's waveform: heartbeats,
+  directed messages, relay and a store-and-forward inbox, all four speeds decoded at once.
 - **[Memories](memories.md)** — the saved-channel bank behind the cockpit MEM
   strip: one click tunes the rig, applies the shift and tone, and opens the
   cockpit that mode belongs in.

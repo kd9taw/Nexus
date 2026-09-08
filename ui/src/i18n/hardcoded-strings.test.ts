@@ -489,6 +489,9 @@ const MIGRATED = [
  *   · RTTY and PSK both — the TX-on-air pill's tooltip, which is the wording that states
  *     what Stop TX does to an over in flight (the batch-18 ruling on Operate's TX On/Off
  *     tooltip, verbatim).
+ *   · JS8 (2026-09) — the TX-on-air pill's tooltip only (the batch-19 ruling, verbatim: the
+ *     wording that states what Stop TX does to a frame in flight). Stop TX and Tune are
+ *     drawn by CockpitHeader and deferred there.
  *
  * The TX-ENABLE LATCH is on all three cockpits' censuses and is drawn by `CockpitHeader`,
  * so it is deferred there rather than in any of these files. What DID move is everything
@@ -565,6 +568,7 @@ const PARTIAL = [
   'components/OperateQsoStrip.tsx',
   'components/RttyCockpit.tsx',
   'components/PskCockpit.tsx',
+  'components/Js8Cockpit.tsx',
   'components/SstvView.tsx',
   'components/PhoneCockpit.tsx',
   // SplitControl.tsx (2026-08-26) — extracted FROM PhoneCockpit when CW and Operate gained a

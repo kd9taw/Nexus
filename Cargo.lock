@@ -1086,6 +1086,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "js8"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "proptest",
+ "rustfft",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "jt65"
 version = "0.1.0"
 dependencies = [
@@ -1291,6 +1302,7 @@ dependencies = [
  "ft2",
  "ft4",
  "ft8",
+ "js8",
  "jt65",
  "msk144",
  "q65",
@@ -2379,6 +2391,7 @@ dependencies = [
 name = "tempo-app"
 version = "0.2.0"
 dependencies = [
+ "js8",
  "modes",
  "serde",
  "serde_json",
@@ -2415,6 +2428,7 @@ name = "tempo-core"
 version = "0.2.0"
 dependencies = [
  "fst4",
+ "js8",
  "jt65",
  "md-5",
  "microfft",

@@ -271,6 +271,7 @@ const HOSTS: Array<{ file: string; what: string; chain: Array<Set<string>> }> = 
   { file: 'components/CwCockpit.tsx', what: 'CW', chain: shellChain('cw-cockpit') },
   { file: 'components/RttyCockpit.tsx', what: 'RTTY', chain: shellChain('rtty-cockpit') },
   { file: 'components/PskCockpit.tsx', what: 'PSK', chain: shellChain('psk-cockpit') },
+  { file: 'components/Js8Cockpit.tsx', what: 'JS8', chain: shellChain('js8-cockpit') },
   { file: 'components/SstvView.tsx', what: 'SSTV', chain: shellChain('sstv-view') },
   {
     // The one the allowlist deliberately excluded: `overflow: hidden` shell, so a crushed
