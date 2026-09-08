@@ -35,4 +35,21 @@ describe('layersFromStored', () => {
     expect(layersFromStored('not json')).toBeNull()
     expect(layersFromStored('"a string"')).toBeNull()
   })
+
+  // The TX/RX path-line defaults are a PRODUCT decision, not an implementation detail:
+  // "who heard me" is a handful of paths and worth showing unasked, while the decode roster
+  // on a busy FT8 band is 100+ stations — defaulting THAT on would hand every operator a
+  // spider's web on upgrade. A silent flip is exactly the change nobody would notice in a
+  // diff, so it is pinned here rather than left to a constant.
+  it('ships TX path lines on and RX path lines off', () => {
+    expect(DEFAULT_LAYERS.txPaths.visible).toBe(true)
+    expect(DEFAULT_LAYERS.rxPaths.visible).toBe(false)
+  })
+
+  it('gives an older build’s stored layers the new path rows at their defaults', () => {
+    // The blob a 1.11 install already has on disk names neither key.
+    const out = layersFromStored(JSON.stringify({ coast: { visible: false } }))!
+    expect(out.txPaths).toEqual(DEFAULT_LAYERS.txPaths)
+    expect(out.rxPaths).toEqual(DEFAULT_LAYERS.rxPaths)
+  })
 })

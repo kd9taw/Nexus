@@ -2833,6 +2833,13 @@ button.nb-chip:hover {
   transform: translateX(-50%);
   bottom: var(--space-3);
   display: flex;
+  /* Wraps because the TX/RX path keys made this row long enough to matter: it is
+     centre-anchored with `translateX(-50%)`, so an un-wrapped overflow spills out of BOTH
+     sides of a narrow map (a tall pop-out, or the 1024 floor with the layer panel open)
+     rather than clipping at one edge. */
+  flex-wrap: wrap;
+  justify-content: center;
+  max-width: calc(100% - 2 * var(--space-3));
   align-items: center;
   gap: 6px;
   background: var(--bg-elev);
@@ -2989,6 +2996,23 @@ button.nb-chip:hover {
 .map-legend-dot.worked {
   background: var(--text-faint);
   opacity: 0.5;
+}
+/* TX/RX path swatches. The colors and the dash rhythm both MIRROR what MapView strokes on
+   the canvas (GETTING_OUT + [5,4]; PATH_RX + [1,3]) — a legend that draws a different line
+   from the map is worse than none. Theme-agnostic like the rest of the map palette. */
+.map-legend-line {
+  width: 18px;
+  height: 0;
+  display: inline-block;
+  border-top-width: 2px;
+}
+.map-legend-line.tx {
+  border-top-style: dashed;
+  border-top-color: #3ddc6a;
+}
+.map-legend-line.rx {
+  border-top-style: dotted;
+  border-top-color: #8fb8d8;
 }
 .map-empty-hint {
   position: absolute;
