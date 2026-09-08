@@ -1115,6 +1115,11 @@ rather than waiting for the spot board to refresh. A loud tone plays whether or
 not Nexus is the window you are looking at, and a banner offers one-click Work.
 Each station alerts once per band and mode.
 
+![The Pounce — new-one alert group: a paragraph of explanation above an "Alert me for" dropdown set to "New DXCC entity only".](../img/manual/settings-pounce.webp)
+
+*Pounce in Nexus 1.10.3. How rare "rare" should be depends on your own totals —
+start narrow.*
+
 - **Alert me for** — Off (default) / New DXCC entity only / New entity or CQ zone
   / New entity, zone, or US state.
 
@@ -1124,6 +1129,10 @@ talking. Start with *New DXCC entity only* once your log is far enough along tha
 a new one is genuinely an event.
 
 ### Alerts
+
+![The Alerts row: My call on, Confirmation opportunities on, CQ calls off, and New DXCC set to All bands, above a Watch list with a Call / prefix picker, an entry box and an Add button.](../img/manual/settings-alerts.webp)
+
+*Alerts in Nexus 1.10.3. New grid and Rare grid continue to the right.*
 
 - **My call** — "Beep + flash when someone directs a call at you."
 - **CQ calls** — "Alert on any decoded CQ. Off by default — CQs are constant."
@@ -1156,6 +1165,12 @@ and **Forget** removes it.
 A status grid of every connector, and a **Test** button on QRZ Logbook that
 round-trips the API without logging anything. Below it, a session **Connection
 log**: "every save, sync, push, and failure lands here."
+
+![The Connections grid, nine rows each with a coloured dot: LoTW "stored — not verified yet", QRZ callbook "lookup only", QRZ Logbook "working, last upload 9/3/2026", eQSL "no credential", ClubLog "working", HRDLog.net "no credential", World Radio League "working", Cloudlog "no credential", RepeaterBook "no credential". Below it a Connection log of timestamped lines about the rotator, APRS-IS, PSK Reporter, DX cluster and RBN connections.](../img/manual/settings-connections.webp)
+
+*Connector health in Nexus 1.10.3. The dots are one station's; read the shape,
+not the values — amber against LoTW here means a stored credential nothing has
+been pushed through yet, which is not a fault.*
 
 The dot reports the **last time Nexus actually talked to the service**, not
 whether a password is on file. That distinction is the point: a revoked ClubLog
@@ -1196,6 +1211,11 @@ way. Most awards count band slots, not band-and-mode slots, which is why off is 
 
 **Local APIs & Loggers**
 
+![The Local APIs & loggers row: WSJT-X UDP API on with UDP address 127.0.0.1:2237, and Ham Radio Deluxe logging off with HRD UDP address 127.0.0.1:2333.](../img/manual/settings-local-apis.webp)
+
+*The loopback feeds in Nexus 1.10.3, at their defaults. Companion UDP address and
+the decode-log switches continue to the right.*
+
 - **WSJT-X UDP API** + **UDP Address** — "for JTAlert / GridTracker / loggers"
   (default `127.0.0.1:2237`).
 - **Ham Radio Deluxe logging** + **HRD UDP Address** — push each QSO to HRD
@@ -1214,6 +1234,11 @@ way. Most awards count band slots, not band-and-mode slots, which is why off is 
   always-on."
 
 **Spot Sources**
+
+![The Spot sources group: PSK Reporter on, DX Cluster / RBN spots on, and a Phone/SSB cluster nodes list holding three nodes, each with a remove button, above an "Add a known node…" picker and a "+ Custom" button.](../img/manual/settings-spot-sources.webp)
+
+*Spot sources in Nexus 1.10.3. Which nodes you list is a matter of coverage, not
+correctness — Nexus connects to all of them and merges what they report.*
 
 - **PSK Reporter** — "upload spots to the global map."
 - **DX Cluster / RBN spots** — "Surface 'new ones' from the Reverse Beacon
@@ -1245,6 +1270,10 @@ way. Most awards count band slots, not band-and-mode slots, which is why off is 
 Pushes each logged QSO into DXKeeper over its TCP Network Service. Enable it in
 DXKeeper under *Configuration ▸ Defaults ▸ Network Service* first.
 
+![The DXKeeper group: an empty DXKeeper host box showing the placeholder "127.0.0.1 (empty = off)", DXLab base port 52000, and "Let DXKeeper do the uploads" switched off.](../img/manual/settings-dxkeeper.webp)
+
+*DXKeeper in Nexus 1.10.3, disabled — a blank host is off.*
+
 - **DXKeeper host** — "Usually 127.0.0.1 — same PC. Leave blank to disable."
 - **DXLab Base Port** — the *Base Port* from DXKeeper's Network Service panel
   (default 52000). DXKeeper itself listens on base + 1 and **Nexus adds the 1 for
@@ -1259,6 +1288,11 @@ DXKeeper under *Configuration ▸ Defaults ▸ Network Service* first.
 "Each FD contact lands in the club's **N3FJP Field Day Contest Log** the moment
 you log it — so the whole club's score updates in real time." Run N3FJP on the
 master computer and point Nexus at its IP and port.
+
+![The N3FJP group: an empty N3FJP host box showing the placeholder "192.168.1.10 (empty = off)", N3FJP port 1100, "Use ENTER for Field Day scoring" on, and "Report my band to N3FJP" off.](../img/manual/settings-n3fjp.webp)
+
+*N3FJP in Nexus 1.10.3, disabled — a blank host is off. Forward every QSO and the
+Test N3FJP button continue to the right.*
 
 - **N3FJP host** — IP or hostname of the master log computer. Blank = off.
 - **N3FJP port** — N3FJP's API TCP port (default 1100).
@@ -1314,6 +1348,11 @@ master computer and point Nexus at its IP and port.
 
 ### Confirmations
 
+One group per service, in the order the panel shows them. Every password, key and
+token here goes into the operating system's keychain, never to disk in the clear,
+and none of them is ever shown back to you — the boxes read their placeholder
+whether or not something is stored. **Set** saves one, **Forget** removes it.
+
 **LoTW**
 
 - **LoTW username** — "Often your callsign, but not always — use your LoTW
@@ -1356,6 +1395,11 @@ master computer and point Nexus at its IP and port.
   accept eQSL) — a separate tier."
 - **Auto-upload QSOs to eQSL** — upload each logged QSO as you log it.
 
+![The LoTW group — username, an empty password box, a Download confirmations button and a Station Location reading KD9TAW — above the eQSL group with empty username, QTH nickname and password boxes.](../img/manual/settings-confirmations-lotw.webp)
+
+*LoTW and eQSL in Nexus 1.10.3. The empty eQSL boxes are what an unconfigured
+service looks like.*
+
 **QRZ**
 
 - **QRZ username** / **QRZ password** — "this is what powers callbook lookups"
@@ -1393,6 +1437,11 @@ master computer and point Nexus at its IP and port.
   ClubLog auto-revokes published keys)."
 - **Auto-upload QSOs to ClubLog** — push each logged QSO in real time.
 
+![Three groups stacked: QRZ with a username, empty password and Logbook API key boxes and Auto-upload switched on; HamQTH with empty username and password; and ClubLog with an email, a callsign, an empty app-password and an empty application API key.](../img/manual/settings-confirmations-qrz.webp)
+
+*QRZ, HamQTH and ClubLog in Nexus 1.10.3. QRZ takes two separate credentials —
+the login that powers callbook lookups, and a Logbook API key that only uploads.*
+
 **HRDLog**
 
 - **HRDLog.net upload code** — from your HRDLog.net account (Options → your
@@ -1401,6 +1450,57 @@ master computer and point Nexus at its IP and port.
 - **Auto-upload QSOs to HRDLog.net** — "HRDLog.net is a live-logging and awards
   site — it is **not** an ARRL confirmation source, so an upload here never earns
   DXCC/WAS credit."
+
+**World Radio League**
+
+WRL is a live-logging site. Nexus pushes contacts **up** to your WRL logbook as
+you make them, one contact per QSO. Nothing comes back down — there is no
+confirmation sync and no download — and like HRDLog it is **not** an ARRL
+confirmation source, so an upload here never earns DXCC or WAS credit.
+
+You need a WRL account and a logbook on it. Everything else is one field.
+
+- **API key** — from **worldradioleague.com ▸ Integrations ▸ Developer API**. Paste
+  it and press **Set**. Nexus checks it against the live service before saving,
+  so a mistyped key fails here, with a plain message, rather than silently on
+  your first contact. The same check resolves where your contacts will land: your
+  account's default logbook if you have one, otherwise its only logbook. An
+  account with several logbooks and no default is a real ambiguity and Nexus
+  refuses to guess — set a default on the WRL site, then press **Set** again. The
+  key is stored write-only in the OS keychain and is never shown again.
+  **Forget** removes it.
+- **Auto-upload each QSO** — pushes every logged contact as it lands. Saving a
+  valid key switches this **on** for you; **Forget** switches it off, because
+  there is nothing to push with.
+- **Already have a log? ▸ Export ADIF for WRL** — writes your whole log to an
+  ADIF file in your Downloads folder, for WRL's own ADIF import on their site.
+  Use it once, when you start: auto-upload only covers contacts made from now on,
+  and WRL's API caps uploads at 5,000 a day, so for a log of any size the file is
+  much the faster path.
+
+**When an upload fails.** The **World Radio League** row under
+[Connections](#connections) carries the state and the time of the last successful
+push, and every attempt — good or bad — lands in the Connection log underneath
+it. What Nexus does next depends on what WRL said:
+
+- **accepted** or **duplicate** — done. A duplicate counts as success; re-running
+  an export or a catch-up never double-logs.
+- **key invalid** — the credential is wrong or has been revoked. This is **not**
+  retried, because retrying cannot fix it. Set the key again.
+- **busy** — a rate limit, or trouble at their end. The contact is fine, the
+  moment was not, so it goes back on the queue and retries with widening gaps
+  (4 s, 8 s, 16 s… up to five minutes) until it gets through or twenty attempts
+  are up.
+- **rejected** — WRL refused the contact itself. Not retried; the log line
+  carries their reason.
+
+Contacts waiting to go out survive with the switch off, up to the most recent
+256, so turning auto-upload on later still sends this session's recent work.
+
+![The World Radio League group: an API key box showing the placeholder "wrl_live_…" with Set and Forget buttons, an "Auto-upload each QSO" switch turned on, and an "Already have a log?" heading above an "Export ADIF for WRL" button.](../img/manual/settings-confirmations-wrl.webp)
+
+*The World Radio League connector in Nexus 1.10.3. The key box shows its
+placeholder — a stored key is never displayed back.*
 
 **RepeaterBook**
 
@@ -1423,6 +1523,11 @@ HTTP.
   per-instance token for your own server.
 - **Auto-forward QSOs** — push every logged QSO to the instance above as it's
   logged.
+
+![The RepeaterBook group with an empty API token box, above the Cloudlog / Wavelog group: a Base URL showing the placeholder https://log.example.com, Station profile id 1, and an empty API key.](../img/manual/settings-confirmations-cloudlog.webp)
+
+*RepeaterBook and Cloudlog / Wavelog in Nexus 1.10.3, both unconfigured. A blank
+Cloudlog base URL is off.*
 
 ---
 
