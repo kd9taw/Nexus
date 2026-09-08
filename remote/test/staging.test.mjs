@@ -113,7 +113,7 @@ test('denied/ambiguous reads and hostname collisions refuse writes without loggi
   assert.equal(p.calls.filter(call => call.method === 'POST').length, 1, 'an ambiguous write is not automatically repeated')
 })
 
-function uploadedProvider({ fault, denied = false } = {}) {
+function uploadedProvider({ fault, denied = false, legacy = false, observabilityAbsent = false } = {}) {
   const env = { CLOUDFLARE_ACCOUNT_ID: randomBytes(16).toString('hex'), CLOUDFLARE_API_TOKEN: randomBytes(32).toString('hex') }
   const writes = [], privateText = randomBytes(20).toString('hex')
   let tags = [], attached = false
@@ -129,6 +129,10 @@ function uploadedProvider({ fault, denied = false } = {}) {
   if (fault === 'namespace') settings.bindings.find(row => row.name === 'STATIONS').script_name = 'another-service'
   if (fault === 'extra-binding') settings.bindings.push({ name: privateText, type: 'secret_text' })
   if (fault === 'observability') settings.observability.enabled = true
+  if (fault === 'logs') settings.observability.logs = { enabled: true }
+  if (observabilityAbsent) delete settings.observability
+  const additional = Object.fromEntries(['assets/index.html', 'assets/remote-licenses.txt', 'migrations/0001_observation.sql']
+    .map(name => [name, artifact.manifest.files[name]]))
   const fetcher = async (input, options) => {
     const url = new URL(input)
     assert.equal(url.origin, 'https://api.cloudflare.com')
@@ -150,9 +154,12 @@ function uploadedProvider({ fault, denied = false } = {}) {
     else if (path === `/workers/scripts/${STAGING.name}/content/v2`) {
       const form = new FormData()
       form.set('worker.js', new File([fault === 'code' ? privateText : await readFile(join(root, 'remote/dist/index.js'))], 'worker.js', { type: 'application/javascript' }))
+      if (legacy) for (const name of Object.keys(additional)) form.set(name,
+        new File([fault === 'legacy-module' ? privateText : await readFile(join(scratch, 'remote/staging-artifact', name))], name))
       if (fault === 'extra-module') form.set('extra.js', new File([privateText], 'extra.js'))
-      return new Response(form)
+      return new Response(form, { headers: { 'cf-entrypoint': 'worker.js' } })
     } else if (path === `/workers/scripts/${STAGING.name}/script-settings`) {
+      if (options.method === 'GET') return Response.json({ success: true, result: { observability: settings.observability } })
       assert.equal(options.method, 'PATCH')
       const body = JSON.parse(options.body)
       assert.deepEqual(body, { tags: [STAGING.tag] })
@@ -160,7 +167,7 @@ function uploadedProvider({ fault, denied = false } = {}) {
     } else assert.fail('Unexpected provider request')
     return Response.json({ success: true, result })
   }
-  return { api: cloudflare(env, fetcher), config, writes, privateText }
+  return { api: cloudflare(env, fetcher), config, writes, privateText, additional }
 }
 
 test('an untagged upload is recovered only from exact artifact bytes and bindings, without replacing code', async () => {
@@ -179,7 +186,7 @@ test('an untagged upload is recovered only from exact artifact bytes and binding
 })
 
 test('mismatched upload bytes, identities, resources, runtime and domains refuse recovery before any write', async () => {
-  for (const fault of ['identity', 'revision', 'database', 'namespace', 'extra-binding', 'observability', 'code', 'extra-module', 'domain']) {
+  for (const fault of ['identity', 'revision', 'database', 'namespace', 'extra-binding', 'observability', 'logs', 'code', 'extra-module', 'domain']) {
     const p = uploadedProvider({ fault })
     await assert.rejects(p.api.recover(p.config, artifact.manifest.files['worker.js']), error => {
       assert.ok(!error.message.includes(p.privateText)); return true
@@ -189,6 +196,19 @@ test('mismatched upload bytes, identities, resources, runtime and domains refuse
   const p = uploadedProvider({ denied: true })
   await assert.rejects(p.api.recover(p.config, artifact.manifest.files['worker.js']), /HTTP 403; Cloudflare codes 10000/)
   assert.equal(p.writes.length, 0)
+})
+
+test('legacy text modules require every reviewed hash, and absent observability follows Wrangler defaults', async () => {
+  const p = uploadedProvider({ legacy: true, observabilityAbsent: true })
+  await assert.rejects(p.api.recover(p.config, artifact.manifest.files['worker.js']), /module inventory/)
+  assert.equal(p.writes.length, 0)
+  await p.api.recover(p.config, artifact.manifest.files['worker.js'], p.additional)
+  assert.equal(p.writes.length, 1)
+  const bad = uploadedProvider({ legacy: true, fault: 'legacy-module' })
+  await assert.rejects(bad.api.recover(bad.config, artifact.manifest.files['worker.js'], bad.additional), /additional module bytes/)
+  assert.equal(bad.writes.length, 0)
+  await assert.rejects(bad.api.recover(bad.config, artifact.manifest.files['worker.js'], { 'unknown.txt': 'a'.repeat(64) }), /recovery module inventory/)
+  assert.equal(bad.writes.length, 0)
 })
 
 test('provider diagnostics expose numeric error codes only, and Worker content framing is checked', async () => {
@@ -267,7 +287,7 @@ test('the configuration CLI refuses overwrites and produces a private file from 
   assert.match(second.stderr, /already exists/)
 })
 
-test('the actual pinned Wrangler accepts the packaged upload without credentials or changing its bytes', async () => {
+test('the actual pinned Wrangler emits only the verified Worker module without credentials or changing artifact bytes', async () => {
   await uploadArtifact(scratch, 'dry-run', { PATH: process.env.PATH, GITHUB_SHA: ids.revision })
   await verifyArtifact(scratch, ids.revision)
 })

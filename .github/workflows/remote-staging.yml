@@ -27,6 +27,10 @@ on:
         description: 'Recover only: existing D1 UUID from that receipt'
         type: string
         default: ''
+      recovery_additional_modules:
+        description: 'Recover only: optional JSON of the three legacy text-module hashes from the same receipt'
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -101,6 +105,7 @@ jobs:
           REMOTE_RECOVERY_REVISION: ${{ inputs.recovery_revision }}
           REMOTE_RECOVERY_WORKER_SHA256: ${{ inputs.recovery_worker_sha256 }}
           REMOTE_RECOVERY_DATABASE_ID: ${{ inputs.recovery_database_id }}
+          REMOTE_RECOVERY_ADDITIONAL_MODULES: ${{ inputs.recovery_additional_modules }}
         run: node remote/scripts/cloudflare-staging.mjs recover
 
       - name: Check public identity configuration before any deployment writes

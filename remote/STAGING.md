@@ -82,6 +82,10 @@ The workflow is dispatched explicitly from the reviewed branch. Select an operat
    from the reviewed failed deployment's retained artifact. It requires the uploaded
    module bytes, identity variables, database, namespace and runtime settings to match
    before adding the ownership tag. It neither replaces Worker code nor attaches a domain.
+   For an older upload that discovered adjacent text files, also supply the receipt's
+   SHA-256 values for `assets/index.html`, `assets/remote-licenses.txt` and
+   `migrations/0001_observation.sql` as the `recovery_additional_modules` JSON object.
+   All three must match; no unknown or unchecked additional module is accepted.
 
 Worker tags are applied through Cloudflare's script-settings API and read back;
 the pinned Wrangler does not support a top-level `tags` configuration field.
@@ -90,6 +94,10 @@ bindings are confirmed, the administrator tool attaches only the staging custom
 domain through the domain API. It does not use Wrangler's noninteractive bulk DNS
 overwrite behavior. Provider failures report numeric error codes without copying
 provider response bodies, account identifiers or credentials into public logs.
+The upload tool copies the verified Worker into an isolated temporary module directory:
+Wrangler's `--no-bundle` still discovers adjacent text/SQL files. Its actual dry-run
+output must contain exactly that Worker module with the receipt's hash. The deployed
+module inventory and non-versioned script settings are read back before domain attachment.
 
 Example administrator commands, after source publication and the required review:
 
