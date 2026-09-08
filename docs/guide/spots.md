@@ -15,8 +15,6 @@ under the other three profiles, and
 or off any time. It describes itself there as "Every cluster/RBN spot on the air
 — the raw firehose, filter by band/mode."
 
-<!-- TODO: capture screenshot — the Spots board on a busy evening: a few hundred rows sorted by Age, the filter drawer open with band chips and mode chips visible, and the header count reading a filtered "N of M" -->
-
 ## The tour
 
 **The header** holds the row count and, whenever anything is narrowing the list, a
@@ -49,6 +47,10 @@ stays fresh instead of filling the screen.
   your browser and does *not* work the spot.
 - **Entity** — the DXCC entity resolved from the callsign; `—` when it doesn't
   resolve.
+- **St** — the US state resolved for the spot, `—` when it could not be. It is a
+  hint from the FCC callsign→state index, refined by a cached grid for a station
+  you have heard before; sorting by it puts the unresolved rows last in both
+  directions.
 - **Band** — the band-plan label, `—` when the frequency is off the plan.
 - **Freq** — MHz to three decimals.
 - **Mode** — the specific mode when the RBN wire carried one (FT8, FT4, RTTY, PSK,
@@ -58,39 +60,46 @@ stays fresh instead of filling the screen.
 - **Spotter** — who reported it most recently.
 - **Comment** — the spot's comment text, verbatim.
 
-**Sorting.** Six of the eight headings are buttons — Age, Call, Entity, Band,
+**Sorting.** Seven of the nine headings are buttons — Age, Call, Entity, St, Band,
 Freq, Mode. Click to sort, click the same one again to reverse it; an arrow marks
 the active column. Band sorts by frequency, because a band column ordered by
 frequency reads the way a band map does. Ties break by age in the sort's own
 direction — newest first ascending, oldest first once you reverse it. Spotter and
 Comment don't sort.
 
-**The filter drawer** opens from the Filter button and holds four things:
+**The filter drawer** opens from the Filter button and holds five controls plus Clear. Two of
+them work in opposite directions, which is the thing to learn:
 
 - **Band chips** — 160 m through 6 m always, plus any other band present in the
-  current spots. Selected chips mean *show only these*.
+  current spots. **Selected means *show only these*.** Nothing selected shows every band.
 - **Mode chips** — the specific modes actually in the feed right now, in operating
   order (CW, Phone, then the digital submodes). These work the other way round:
   everything is shown by default and clicking a chip *hides* that mode ("Hide FT4
   spots"). Nexus stores what you hid, not what you kept, so a mode that first
   turns up mid-session shows rather than arriving silently hidden.
-- **US state chips** — the states resolved for the spots in hand (from the FCC
-  callsign→state index, refined by a cached grid for a station you have heard
-  before). Selected chips mean *show only these*, and a spot whose state didn't
-  resolve drops out while any state chip is on.
+- **US state chips** — the states resolved for the spots in hand. **Selected means *show only
+  these***, and a spot whose state didn't resolve drops out while any state chip is on.
 - **My privileges** — "Show only spots you may transmit to under your license
   class ([Settings ▸ Station](settings-reference.md#station)). Open class sees
   everything either way." The flag is computed from the same tables as the
   transmit lockout, so what survives this filter is exactly what you can key on.
-- **Clear** wipes the chips and the privileges toggle. It does not touch the
-  search box.
+- **Heard on my continent** — **this one starts ON.** It keeps only the spots somebody on your
+  continent actually heard. A station reported solely from another continent says nothing about
+  a path from your station, which is the same test the Needed board applies. The chip carries
+  the count of what it is holding back — *Heard on my continent · 326 hidden* — so the answer to
+  "where are my spots" is on the chip. Turn it off for the worldwide cluster feed.
+- **Clear** wipes the chips, the privileges toggle and the continent filter. **It does not touch
+  the search box** — that is the one thing Clear leaves alone.
 
 While any chip filter is set the drawer stays on screen — you can't end up
-looking at a short list with no visible sign of what is shortening it.
+looking at a short list with no visible sign of what is shortening it, and the Filter button
+itself reads **Filtered**.
 
 **Search** narrows on space-separated terms that AND together, each term matching
 any field: call, entity, spotter, mode, band or frequency. So `w1 20m cw` is
-W1-callsigns spotted on 20 m CW. `Esc` or the ✕ clears it. The Comment column is
+W1-callsigns spotted on 20 m CW. A term may carry a wildcard and is then matched as a whole
+word — `PA*` finds the PA prefix, the same way it does in the Tempo stations list; a term
+without one behaves as it always has. `Esc` or the ✕ clears it. The Comment column is
 displayed but not searched.
 
 Filters, search text, sort column and the drawer's open state all survive leaving
@@ -126,11 +135,41 @@ frequency and spotter.
 
 ### Cut the firehose down to what you can work
 
+![The Spots header and filter drawer. The header reads "SPOTS 1520 of 1846 · every spot on the air — single-click to work it". The drawer has three chip rows: bands 160m 80m 40m 30m 20m 17m 15m 12m 10m 6m 60m 2m 4m, none selected; modes CW, Phone, FT8, FT4, RTTY, Digital; and the US states AK through WY. At the end sit My privileges, a lit chip reading "Heard on my continent · 326 hidden", and Clear. Below, the table header AGE ▲ CALL ENTITY ST BAND FREQ MODE SPOTTER COMMENT over rows one second old: KD4MSR United States GA 40m 7.031 CW, N9PVW LA 17m 18.100 FT8, K8FN OH 30m 10.123 CW, PG7R Netherlands 80m 3.573 FT8.](../img/manual/spots-filters.webp)
+
+*Spots in Nexus 1.10.3 on a busy evening. Only one filter is on — the default one — and the
+header shows exactly what it costs: **1520 of 1846**, with the chip itself saying **326
+hidden**. The bands and states are the operator's own; nothing here is a setting to copy.*
+
+**Read the header before anything else.** The big number is what you are looking at; the "of
+*N*" beside it is what came in. They differ whenever something is narrowing the list, and the
+difference is the whole arithmetic: **1846 in the buffer − 326 held back by the continent
+filter = 1520 on screen.** No filter is silent.
+
+A worked pass, from that starting state:
+
+| Step | What you click | What happens to the count |
+|---|---|---|
+| **Start** | nothing | `1520 of 1846`. Filter reads **Filtered**, because "Heard on my continent" is on by default. |
+| **See everything** | the **Heard on my continent** chip, turning it off | The 326 come back. The header drops the "of *N*" — nothing is narrowing any more. |
+| **Include a band** | **20m** | Only 20 m rows remain. Add **40m** and you get 20 m *and* 40 m — band chips are a show-only-these set, so each one you add *widens* the result. |
+| **Exclude a mode** | **FT8** | FT8 rows go. Mode chips run the other way — everything shows until you click, and each click *narrows*. The hover says which way round you are: "Show FT8 spots" or "Hide FT8 spots". |
+| **Include a state** | **TX** | Only Texas rows survive — *and* every row whose state never resolved drops too, so this cuts harder than it looks. |
+| **Search** | type `cq` in the box | Terms AND together across call, entity, spotter, mode, band and frequency, on top of whatever the chips left. |
+| **Reset** | **Clear** | Every chip, **My privileges** and the continent filter go back to nothing selected. **The search box still says `cq`** — Clear does not touch it. Clear that with `Esc` or its own ✕. |
+
+The rule in one line: **band and state chips include, mode chips exclude, search is a separate
+narrowing on top, and Clear resets everything except the search.**
+
+For the common job — trimming to what you can actually work:
+
 1. Open **Filter** and turn on **My privileges** — everything you may not transmit
    to disappears. (An Open-class, non-US operator has every spot licensed, so the
    toggle changes nothing.)
 2. Select the band chips you have an antenna for.
 3. Hide the modes you don't operate — one click per mode chip.
+4. Leave **Heard on my continent** on unless you are deliberately looking at the worldwide
+   feed.
 
 What's left is a working list, and it stays that way while you move around the app.
 
@@ -169,8 +208,11 @@ arrive."
   rows, so a click can QSY you to a one-way transmission that will never come back
   to you.
 - **One spotter per row.** The other stations that reported the same DX are folded
-  into the row behind the scenes and not displayed; CQ zone isn't shown either, and
-  the resolved US state is filter-only — it never gets a column.
+  into the row behind the scenes and not displayed, and CQ zone isn't shown at all.
+- **One filter is on before you touch anything.** **Heard on my continent** starts on, so a
+  fresh board is already hiding spots nobody on your continent heard. It is not hidden from you
+  — the header count and the chip's own "*N* hidden" both say so — but it is the reason a
+  count here can be smaller than a cluster window's.
 - **Filters are for this run of the app.** They survive leaving the section and
   coming back, and they are gone at exit — unlike the Needed board's, which persist
   across restarts.
