@@ -23,8 +23,31 @@ or use the ⊞ menu to show and hide panes; **Reset pane sizes** in
 [Settings ▸ Appearance ▸ Workspace](settings-reference.md#workspace) restores the
 defaults.
 Decoding is **always on** — there is no Monitor toggle to forget; the decoder
-runs every RX slot regardless of TX state. Click the waterfall to set your TX/RX
-audio frequency.
+runs every RX slot regardless of TX state.
+
+![The ⊞ Panels menu open over the cockpit, six ticked entries — Waterfall, Band Activity, Tx Messages, Rx Frequency, Stations, TX Meters — with "readings appear on transmit" printed under TX Meters, and Undo last change (greyed) beside Reset layout along the bottom.](../img/manual/operate-panels.webp)
+
+*The ⊞ Panels menu in Nexus 1.10.3. Untick a pane to hide it; **Reset layout**
+puts the default arrangement back. An entry with nothing behind it right now says
+so in a line under it, as TX Meters does here.*
+
+**Waterfall gestures.** RX and TX are two separate cursors, and the click that
+moves one leaves the other where it is. The pane header prints the whole rule
+next to the word WATERFALL:
+
+| Gesture | Moves |
+|---|---|
+| **Left-click** | the **RX** cursor (green) — where the decoder listens |
+| **Right-click**, or **Shift**-click | the **TX** cursor (red) — where you will transmit |
+| **Ctrl**-click | **both** cursors together |
+
+Working split — answering a station on your own frequency rather than theirs — is
+therefore a right-click, and moving the pair together to a clear patch of band is
+a Ctrl-click. These are the same three gestures the [quick
+start](../quick-start.md#3-a-tour-of-the-digital-cockpit-about-2-minutes) uses in
+its two-minute cockpit tour.
+
+![The waterfall pane's header and the top of the waterfall below it. The header reads WATERFALL, followed by the gesture legend "left = RX · right / Shift = TX · Ctrl = both". Under it FT8 traces scroll across the passband, the frequency ruler running 500, 1000 and 1500 Hz along the bottom edge, with two cursors standing separately in the band: a green line labelled RX low in the pane, and a red line labelled TX a few hundred hertz above it.](../img/manual/operate-waterfall.webp)
 
 **Band Activity** scrolls chronologically, bottom-pinned, with a reviewing pause
 when you scroll up and period separators between T/R cycles. Every row carries
@@ -44,7 +67,12 @@ carrying your transmit controls — **TX On/Off**,
 **Tune**, **Stop TX**, **Hold Tx** — beside **Call CQ** and **S&P**. (These live
 in the QSO strip in this view; Phone and CW keep the cluster in the top bar.)
 
-<!-- TODO: capture screenshot — a decode row showing country, B4, new-DXCC tag, and L mark -->
+![Band Activity scrolling on 40 m FT8. The filter chips — All, CQ, CQ+73, To me, On RX, B4, New, −Blk, −Conf, −B4, Countries, Hide calls — run above a "300 heard" count and a column of decode rows. Each row carries the FT8 badge, the slot time, SNR and DT, the audio frequency, the decoded message, then the annotations: LoTW and L marks, blue CQ badges, green POTA chips, grey B4 chips on calls already worked, and the country name with its bearing and a QRZ button at the right.](../img/manual/operate-band-activity.webp)
+
+*Band Activity in Nexus 1.10.3, with the annotations stock WSJT-X never had.
+Rows worked before carry **B4**; **L** and **LoTW** mark calls known to upload to
+LoTW; **POTA** flags a park activation; the entity name and bearing sit at the
+right of every row.*
 
 **Classic ↔ Roster.** A single toggle switches the layout:
 
@@ -74,6 +102,18 @@ Roster when you're scanning a busy band for the one call worth working.
 4. On the final 73, TX disarms (WSJT-X default — see "Disable TX after sending
    73" in [Settings ▸ Digital](settings-reference.md#digital-ft8ft4)).
    The QSO logs automatically if Auto-log is on.
+
+![The Operate QSO strip mid-exchange, reading TRANSMITTING · AwaitRr73 · W1AW · −13 dB, with the outgoing line W1AW KD9TAW R-13 beneath it and Send and Log beside it.](../img/manual/operate-qso-sequence.webp)
+
+*The sequencer three overs in, in Nexus 1.10.3. The state word is the engine's
+own — **AwaitRr73** means your rogered report has gone out and it is waiting for
+their RR73 — and the **TX** line is what goes on the next slot.*
+
+![Three logbook rows — W1AW, VE3ABC and G0ABC, all 20 m FT8 on 14.0740 — each with its sent and received report, and a green L in the QSL column of the confirmed one.](../img/manual/operate-qso-logged.webp)
+
+*The same contact after the 73, at the top of the [Logbook](logbook-qsl.md) in
+Nexus 1.10.3. Digital reports are logged as the dB figures the mode exchanged,
+not as 59.*
 
 ### Run CQ (call and work the pileup)
 
@@ -108,6 +148,12 @@ double-clicking a spot on the [Connect map](connect.md).
 3. Multi-payload Fox frames are split and attributed safely — a bystander's "73"
    can never fabricate a confirmation in your log.
 
+![The Operate header row with Hound lit amber at the left and, further along, SPLIT lit green beside a − / +5 / + stepper and a green CAT badge.](../img/manual/operate-hound-split.webp)
+
+*Hound armed and split set in Nexus 1.10.3 — nothing in this frame is
+transmitting. The split stepper appears only once CAT is answering, because the
+offset is programmed into the radio rather than faked in audio.*
+
 Nexus implements the **Hound** side. The **Fox** role (running the DXpedition
 end) is not implemented.
 
@@ -137,13 +183,56 @@ decode stream over UDP (default :2237) instead of decoding itself — point it a
 the source in
 [Settings ▸ Logging & Connectors](settings-reference.md#integrations--feeds).
 
+![Settings ▸ Logging & Connectors: a WSJT-X UDP API toggle switched on above a UDP address field reading 127.0.0.1:2237, and at the far right a Companion UDP address field holding the same host and port.](../img/manual/operate-companion-udp.webp)
+
+*The two ends of the UDP link in Nexus 1.10.3, and they point opposite ways. The
+left pair is what Nexus **sends** — the feed GridTracker and JTAlert read. The
+right field is what Nexus **listens to** in Companion mode. Loopback here because
+both programs are on one PC; across the shack it is the other machine's address.*
+
 ## Honest limits
 
 - **Fox role is not implemented** — you can hound a DXpedition, not run one.
 - **No contest modes** in the digital cockpit beyond Field Day (no NA VHF,
   RTTY RU, WW Digi).
-- **Fox role aside, the mode list is complete**: FT8, FT4, FST4, FST4W, Q65, MSK144, JT65 and
-  WSPR all decode *and* transmit, alongside Nexus's own TempoFast/TempoDeep.
+
+### What each tier can do in 1.10.3
+
+Every tier the dial offers decodes *and* transmits. Two of them transmit on a
+schedule instead of working a QSO, and the sequencer is not offered on those.
+
+| Tier | Decode | Transmit | Auto-sequencer |
+|---|---|---|---|
+| FT8 | yes | yes | yes — plus Fox/Hound (Hound side) and contest exchanges |
+| FT4 | yes | yes | yes |
+| FT2 | yes | yes | yes |
+| Q65 | yes | yes | yes |
+| MSK144 | yes | yes | yes |
+| FST4 | yes | yes | yes |
+| FST4W | yes | yes | **no** — a beacon: callsign, grid and power on a transmit-percentage schedule |
+| JT65 | yes | yes | yes |
+| WSPR | yes | yes | **no** — a beacon, as FST4W |
+| TempoFast | yes | yes | yes |
+| TempoDeep | yes | yes | yes |
+
+The table is the code, not a promise: `Capabilities.tx` in
+`crates/modes/src/mode.rs` is what the engine reads, `modes::tx_mode` is the only
+path to a mode that may key the radio, and
+`tx_capability_is_declared_not_inherited` in that file asserts the two agree for
+every tier above. A mode that declared no transmitter could not be armed at all —
+`Engine::set_tx_enabled` refuses the arm outright.
+
+**One label in the app is wrong about this.** The JT65 pill in the top bar still
+carries an **RX** badge and a tooltip reading "Receive only in this build
+(transmit is disabled pending a fix)". That was true for 0.19.17 only, as a
+mitigation while a decoder fault crashed Windows on Call CQ; the fault was fixed
+and the restriction lifted, but the badge and the tooltip were not. **JT65
+transmits in 1.10.3** — arm TX and call CQ on it exactly as on FT8.
+
+![The top bar's tier pills, left to right: Tempo Fast, Tempo Deep, FT4, FT8 (selected), FT2, WSPR badged BCN, Q65, MSK144, JT65 badged RX, FST4, and FST4W badged BCN.](../img/manual/operate-tier-pills.webp)
+
+*The tier pills in Nexus 1.10.3. **BCN** on WSPR and FST4W is correct — those are
+beacons. **RX** on JT65 is a stale label; that mode transmits.*
 
 ---
 

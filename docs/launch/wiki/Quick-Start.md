@@ -43,16 +43,26 @@ If you would rather verify the download first, the release page publishes a
 
 ## 2. The first-run wizard (~4 min)
 
-On first launch Nexus opens a three-step wizard: **Station → Rig → Goals**. Every
-step is skippable, and everything it sets can be changed later in Settings — you
-can reopen the wizard from Settings at any time.
+On first launch Nexus opens a four-step wizard: **Station → Rig → Log → Finish**.
+Every step is skippable — *I'll set it up myself* closes it wherever you are —
+and everything it sets can be changed later in Settings.
+
+On a clean install the wizard opens by itself, with empty fields. On a machine
+that is already set up it does not reappear: reopen it with **Re-run setup
+wizard…**, under Setup health in
+[Settings ▸ Radio](https://github.com/kd9taw/Nexus/blob/main/docs/guide/settings-reference.md#setup-health). Re-running it edits
+in place — your callsign, radio and log come with you and nothing is lost — which
+is why the fields in the captures below already hold a station.
 
 ### Step 1 — Your station
 
 Enter your **callsign** and **grid square**. The grid is the anchor for
 everything location-based: the propagation map, satellite passes, DXpedition
-windows, and the range rings all compute from it. Four characters (e.g. `EN52`)
-is plenty; the field turns red if it isn't a valid Maidenhead locator.
+windows, and the range rings all compute from it. The field takes four or six
+characters and turns red on anything that isn't a valid Maidenhead locator —
+but give it **all six**, which is what the app asks for under the box: four
+(`EN52`) only pins you to the middle of a ~100-mile square, and that centre is
+where every distance and bearing is then measured from.
 
 ### Step 2 — Your rig
 
@@ -75,22 +85,56 @@ network. What you see depends on the radio:
 
 Then click **Test CAT**. Nexus saves what you've entered, starts its bundled
 `rigctld`, and reads back the dial frequency. A number like `14.074 MHz` means CAT
-is working. If it fails, [Troubleshooting → CAT](https://github.com/kd9taw/Nexus/blob/main/docs/troubleshooting.md#cat--rig-control)
-walks through the usual causes.
+is working, and the **Setup health** strip at the foot of the step turns its Rig,
+RX audio and TX indicators over to what it actually found. If it fails,
+[Troubleshooting → CAT](https://github.com/kd9taw/Nexus/blob/main/docs/troubleshooting.md#cat--rig-control) walks through the
+usual causes.
 
-### Step 3 — Your goals
+*A station that is actually working, in Nexus 1.10.3. The dB figure is this
+station's own; anything from about 15 to 70 decodes, and 0 means no audio is
+arriving at all.*
 
-Pick one or more goal cards — *Just getting started*, *DX chasing and awards*,
-*Contesting*, *POTA / SOTA*, *6m / VHF* — and Nexus turns on the matching
-features (you can toggle any of them later). Digital (FT8/FT4) is always on; check
-**Phone** or **CW** if you operate those modes.
+*The same strip with nothing connected. **Rig not answering** is CAT — wrong
+port, wrong baud, or the cable; hover the light for the radio's own reply, then
+fix it here and press **Test CAT** again. **RX audio error** is the input device
+refusing to open, usually because another program holds it. Fix the rig first:
+on a one-cable interface the audio device is part of the same radio.*
 
-Finally, declare your **license class** (Technician / General / Amateur Extra, or
-*Outside the US* for no limits). This becomes a real Part 97 transmit lockout — the
-software refuses to key outside your privileges, including the 2026 60 m rules.
-It's a safety net, not a substitute for knowing your license.
+### Step 3 — Your log
 
-Click through, and Nexus drops you into the digital cockpit.
+**Import my ADIF log…** reads any standard ADIF (`.adi` / `.adif`) export —
+WSJT-X, N1MM, Log4OM, HRD, QRZ, LoTW, ClubLog — and that history is what lights
+up **worked-before (B4)** flags, the Needed board's new-DXCC / new-state /
+new-grid calls, and your awards progress. Skip it and the app starts blind,
+treating every station on the band as new.
+
+The import is local: nothing leaves your computer, and duplicates are detected
+and skipped. The step is optional and you can import at any time from the
+[Logbook](https://github.com/kd9taw/Nexus/blob/main/docs/guide/logbook-qsl.md) — but it is the single biggest thing that makes
+the app useful on day one.
+
+### Step 4 — Finish
+
+There is nothing to unlock: **every mode and every section starts on** —
+FT8/FT4, Phone, CW, RTTY, SSTV, APRS, satellites, the maps, the lot. If you would
+rather run a leaner app, sections come off one at a time afterwards in
+[Settings ▸ Appearance ▸ Features](https://github.com/kd9taw/Nexus/blob/main/docs/guide/settings-reference.md#features), which is
+also where the goal profiles — getting started, DX/awards, contesting, POTA/SOTA,
+6m/VHF, and **Everything (expert)**, which turns the whole console back on — set
+a batch of sensible defaults in one pick. Toggle features by hand and the profile
+reads **Custom**.
+
+The one thing this step asks for is your **license class**: Technician, General,
+Amateur Extra, or *Outside the US* for no limits. This becomes a real Part 97
+transmit lockout — the app parks the dial in your licensed band segments and
+refuses to key outside your privileges, including the 2026 60 m rules. It's a
+safety net, not a substitute for knowing your license, and it is yours to
+declare: the card outlined in the capture below is the state of that station, not
+a recommendation.
+
+**Show me Getting started** queues the four-things walkthrough to open as the
+wizard closes. Click **Finish — everything on**, and Nexus drops you into the
+digital cockpit.
 
 ---
 
@@ -102,8 +146,11 @@ slot automatically — there is no Monitor toggle to forget.
 
 The three things to know:
 
-- **The waterfall** across the top shows signal energy over frequency. Click it to
-  move your RX (and TX) marker.
+- **The waterfall** across the top shows signal energy over frequency, and carries
+  two independent cursors. **Left-click** moves the green **RX** cursor,
+  **right-click** (or **Shift**-click) moves the red **TX** cursor, and
+  **Ctrl**-click moves both at once — the same legend the pane header prints. The
+  [Operate chapter](https://github.com/kd9taw/Nexus/blob/main/docs/guide/operate-digital.md#the-tour) shows it.
 - **Band Activity** is the decode list — newest at the bottom, auto-scrolled to the
   latest period. Every row carries what stock WSJT-X never showed: the country
   name, a **B4** chip if you've worked them before, **New DXCC** / **new-grid**
@@ -147,17 +194,52 @@ Two reassurances while you find your feet:
 
 ## 5. Logging, and what the Needed board starts telling you
 
-When the QSO completes it is logged automatically (auto-log is on by default) and
-pushed to PSK Reporter — and, once you configure them, to QRZ and LoTW. Your
-logbook is a standard ADIF file; importing an existing log credits your history
-immediately.
+When the QSO completes it is logged automatically (auto-log is on by default),
+and — once you configure them — pushed to QRZ and LoTW. Your logbook is a
+standard ADIF file; importing an existing log credits your history immediately.
+
+### Four different things, and only one of them is a contact
+
+These get run together everywhere in this hobby, and running them together is
+how an operator ends up believing their log says something it does not. They
+happen at different moments, and each moves a different number:
+
+1. **A decode** — you heard a station. Nexus prints it in the roster and, if
+   PSK Reporter is on, sends it up as a **reception report**: "KD9TAW heard
+   W1AW on 20 m at −14 dB". Reports go up every few minutes for **everything**
+   you decode, whether or not you ever call. **A reception report is not a
+   contact.** It changes nothing in your log — it is a note to the world that
+   your receiver was working, and it is what puts you on other people's maps.
+   The reverse direction is the same: a station's spot on PSK Reporter means
+   somebody *heard* them, not that anybody worked them.
+2. **A QSO** — you called, they came back, you exchanged reports and signed.
+   That is a contact, and it is the only one of the four that writes a record
+   in your logbook. This is what moves the **worked** counts on the Needed
+   board, in [Stats](https://github.com/kd9taw/Nexus/blob/main/docs/guide/stats.md) and in [Awards](https://github.com/kd9taw/Nexus/blob/main/docs/guide/awards-journey.md).
+3. **An upload** — Nexus sends that record to LoTW, QRZ, ClubLog, eQSL or WRL.
+   You have now told a service what you did. Nothing is confirmed yet, and the
+   contact counts toward no award. On its own an upload proves only that your
+   half arrived.
+4. **A confirmation** — the *other* operator uploaded a matching record, and
+   the service paired the two. Only now does anything move in the **confirmed**
+   column, and only LoTW and paper cards count toward ARRL awards — an eQSL or
+   a QRZ match confirms the contact without earning credit. This one is not
+   yours to hurry; it can take a day or a decade, and some contacts are never
+   confirmed at all.
+
+The short version: **decodes and reports are about your antenna, contacts are
+about your log, uploads are about your side of the paperwork, and confirmations
+are about theirs.** [Logbook & QSL](https://github.com/kd9taw/Nexus/blob/main/docs/guide/logbook-qsl.md) covers uploads and
+confirmations properly.
 
 With a callsign and grid set, the **Needed board** begins ranking every station on
 the air by what it's worth to *your* log — an all-time-new entity outranks a new
 zone, which outranks a new band, and so on. What makes it trustworthy is the
 **evidence line** on every row: *who* near you heard that station, how far away,
-and how long ago. One click there QSYs the rig to the right band, mode, and
-frequency and opens the matching cockpit.
+and how long ago. Those are other operators' reception reports — the same kind
+of thing your own decodes send up — which is what makes them evidence that a
+path is open rather than a claim that anybody worked it. One click there QSYs
+the rig to the right band, mode, and frequency and opens the matching cockpit.
 
 ---
 

@@ -366,7 +366,7 @@ function renderHead(head, labels, warn) {
     if (said < 0 || said === labels.length) continue
     warn.stale.push(
       `"${m[0]}" in the lead/screenshot alt text, but the panel now has ${count} — the capture ` +
-        `itself predates the change. Re-shoot ../img/manual/settings-radio.webp and reword its ` +
+        `itself predates the change. Re-shoot ../img/manual/settings-tabs.webp and reword its ` +
         `alt text by hand; this tool will not edit a description of a picture.`,
     )
   }

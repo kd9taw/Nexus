@@ -246,6 +246,16 @@ def md_to_html(md: str, base: pathlib.Path) -> str:
         if not ln.strip():
             close_list(); i += 1; continue
 
+        # A WRAPPED LIST ITEM continues on an indented line carrying no marker of its own. It
+        # matches none of the branches above, so without this it falls through to the paragraph
+        # branch below — which close_list()es and emits an orphan <p> in the middle of a
+        # sentence. That affected every wrapped bullet in all 22 chapters of the printed manual.
+        # A nested bullet is not this case: it matched the list branches already.
+        if lst and ln[:1] in (" ", "\t") and out and out[-1].endswith("</li>"):
+            out[-1] = out[-1][: -len("</li>")] + " " + inline(ln.strip()) + "</li>"
+            i += 1
+            continue
+
         close_list()
         para = [ln]; i += 1
         while i < n and lines[i].strip() and not re.match(r"^(#{1,6}\s|\s*[-*]\s|\s*\d+\.\s|>|\||```)", lines[i]):
@@ -381,7 +391,7 @@ def main() -> int:
         <div><h4>Chasing</h4><p>The Needed board and its evidence, spots, DXpeditions,
           propagation, satellites and the logbook.</p></div>
         <div><h4>Station</h4><p>Rig and audio setup, memories, radio programming,
-          contesting, and all eight Settings tabs.</p></div>
+          contesting, and every Settings tab.</p></div>
       </div>
       <div class="spectrum">{bars}</div>
       <div class="foot"><span>Version <b>{html.escape(args.version)}</b> · KD9TAW</span>

@@ -289,6 +289,23 @@ jobs:
       - name: docs/shipped.json is generated from the app's own lists
         run: node scripts/gen-shipped.mjs --check
 
+      # The per-commit half of scripts/release-docs.mjs: every published screenshot is mapped to
+      # the source it depicts, every image a page points at exists and carries alt text, every
+      # image in docs/img/manual/ is actually placed on a page, and every local link and heading
+      # anchor across docs/ resolves.
+      #
+      # WHY --push-gate AND NOT THE WHOLE SCRIPT. The rest of release-docs asks release questions
+      # — is there a RELEASE_NOTES for this version, is the CHANGELOG stamped, are its issue
+      # credits closed on GitHub, is the live site in sync — all legitimately unfinished on a
+      # topic branch, and two of them need the network. Those stay at release time. What is here
+      # is true of every commit and needs nothing but the checkout.
+      #
+      # WHY IT IS HERE AT ALL. release-docs.mjs ran in no workflow, so its checks fired only when
+      # somebody remembered to run it — which is the exact argument that file was written to make
+      # about gen-wiki.mjs, and it had come to apply to the file itself.
+      - name: The manual's images and cross-references resolve
+        run: node scripts/release-docs.mjs --push-gate
+
   # The downloadable manual's EPUB must stay valid — a doc change that breaks it should go
   # red here, on the push, not be discovered on a Kindle after release. Builds the EPUB only
   # (no Chrome/PDF) and runs the official W3C epubcheck, which exits non-zero on any error.

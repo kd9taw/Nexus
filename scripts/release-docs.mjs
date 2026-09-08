@@ -35,11 +35,13 @@
 // Run:   node scripts/release-docs.mjs
 //        node scripts/release-docs.mjs --version 1.3.0   (default: src-tauri/tauri.conf.json)
 //        node scripts/release-docs.mjs --no-tests        (skip the vitest doc gates)
+//        node scripts/release-docs.mjs --push-gate       (the per-commit subset CI runs)
 //
 // The order matters and is not arbitrary — see .claude/skills/release-docs/SKILL.md.
 
 import { readFileSync, readdirSync, existsSync, statSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 
@@ -177,43 +179,147 @@ function checkDocGates() {
 // The mapping has to be declared, because nothing in an image says what it shows. An image with
 // no entry FAILS rather than being skipped: an unmapped capture is a check quietly shrinking,
 // which is how the gap this whole script exists for opened in the first place.
+//
+// WHY THIS IS A PREFIX TABLE AND NOT ONE LINE PER IMAGE. It was one line per image while there
+// were eleven. The illustrated manual is going to ~90, and 33 of those are Settings tabs that
+// all show the same two files — so a per-image table would be 33 identical right-hand sides
+// maintained by hand, on eight branches at once, all editing the same object literal. That is
+// not a gate anyone keeps; it is a merge conflict with a check attached.
+//
+// So a key is a FAMILY PREFIX, and the LONGEST key that a filename starts with wins. Order in
+// this object is irrelevant — you cannot break another family's mapping by where you paste
+// yours, which is the footgun a first-match-wins list would have.
+//
+//   'settings-'        matches settings-radio.webp, settings-audio.webp, all 33 of them
+//   'operate-'         matches operate-waterfall.webp
+//   'operate-classic'  is longer, so it beats 'operate-' for operate-classic.webp
+//
+// HOW TO ADD AN IMAGE. Name it for what it shows (see scripts/build-manual-images.py). If its
+// family prefix is already here, you add NOTHING — the new capture is checked the moment it
+// lands. If it is a new family, add ONE key naming the source files whose change would make
+// the picture wrong. Do not add a key that names a whole directory or a barrel file: an owner
+// that changes every week reports staleness every week, and that is the same as reporting none.
+//
+// A key that matches no image today is NOT a failure — it is a family nobody has captured yet,
+// costs nothing, and pre-declaring it is what keeps eight branches out of each other's diffs.
+// (An exact per-image key that matched nothing WAS a failure, because it meant a real image had
+// been renamed out from under its mapping. A prefix cannot hide that: an image matching no key
+// still FAILS.) Unused keys are counted in the ok line so a dead family stays visible.
 
-const SHOTS = {
-  'settings-radio.webp': ['ui/src/components/SettingsPanel.tsx', 'ui/src/settings/registry.ts'],
-  'settings-modes.webp': ['ui/src/components/SettingsPanel.tsx', 'ui/src/settings/registry.ts'],
-  'settings-contesting.webp': ['ui/src/components/SettingsPanel.tsx', 'ui/src/settings/registry.ts'],
-  'cw-cockpit.webp': ['ui/src/components/CwCockpit.tsx'],
-  'phone-cockpit.webp': ['ui/src/components/PhoneCockpit.tsx'],
-  'rtty-cockpit.webp': ['ui/src/components/RttyCockpit.tsx'],
-  'sstv.webp': ['ui/src/components/SstvView.tsx'],
-  'operate-classic.webp': ['ui/src/components/OperateCockpit.tsx', 'ui/src/components/OperateDecodes.tsx'],
-  'operate-roster.webp': ['ui/src/components/OperateCockpit.tsx', 'ui/src/components/OperateRoster.tsx'],
-  'awards-official.webp': ['ui/src/components/AwardsView.tsx'],
-  'satellites-console.webp': ['ui/src/components/SatellitesView.tsx'],
+const SHOT_OWNERS = {
+  // Setup — the first-run wizard.
+  'wizard-': ['ui/src/components/SetupWizard.tsx'],
+  'wizard-rig': ['ui/src/components/SetupWizard.tsx', 'ui/src/components/SetupHealth.tsx'],
+  // The Setup health strip alone — it is SHARED (the wizard's rig step and Settings ▸ Radio
+  // render the same component), so the strip's own file is what makes these pictures wrong.
+  'wizard-setup-health': ['ui/src/components/SetupHealth.tsx', 'ui/src/components/SetupWizard.tsx'],
+
+  // Settings. One family, 33 captures: the panel and the registry that generates it.
+  'settings-': ['ui/src/components/SettingsPanel.tsx', 'ui/src/settings/registry.ts'],
+
+  // The FT8/FT4 cockpit and its panes.
+  'operate-': ['ui/src/components/OperateCockpit.tsx'],
+  'operate-classic': ['ui/src/components/OperateCockpit.tsx', 'ui/src/components/OperateDecodes.tsx'],
+  'operate-roster': ['ui/src/components/OperateCockpit.tsx', 'ui/src/components/OperateRoster.tsx'],
+  'operate-waterfall': ['ui/src/components/Waterfall.tsx'],
+
+  // The other mode cockpits.
+  'cw-': ['ui/src/components/CwCockpit.tsx'],
+  'phone-': ['ui/src/components/PhoneCockpit.tsx'],
+  'rtty-': ['ui/src/components/RttyCockpit.tsx'],
+  'psk-': ['ui/src/components/PskCockpit.tsx'],
+  'js8-': ['ui/src/components/Js8Cockpit.tsx'],
+  'sstv': ['ui/src/components/SstvView.tsx'],
+  'aprs-': ['ui/src/components/AprsCockpit.tsx'],
+  'tempo-': ['ui/src/components/Conversation.tsx', 'ui/src/components/Composer.tsx'],
+
+  // Hunting, spotting, events.
+  'needed-': ['ui/src/components/NeededPanel.tsx'],
+  'spots-': ['ui/src/components/SpotsPanel.tsx'],
+  'dxpeditions-': ['ui/src/components/DxpeditionsView.tsx'],
+  'pota-': ['ui/src/components/PotaSotaView.tsx'],
+  'contest-': ['ui/src/components/ContestCalendarPane.tsx'],
+  'fieldday-': ['ui/src/components/FieldDayView.tsx'],
+
+  // Log, awards, statistics.
+  'logbook': ['ui/src/components/Logbook.tsx'],
+  'logbook-': ['ui/src/components/Logbook.tsx'],
+  'logbook-entry': ['ui/src/components/Logbook.tsx', 'ui/src/components/LogEntry.tsx'],
+  'awards-': ['ui/src/components/AwardsView.tsx'],
+  'awards-official': ['ui/src/components/AwardsView.tsx'],
+  'awards-journey': ['ui/src/components/AwardsJourney.tsx'],
+  'journey': ['ui/src/components/AwardsJourney.tsx'],
+  'stats': ['ui/src/components/StatsView.tsx'],
+  'stats-': ['ui/src/components/StatsView.tsx'],
+
+  // Maps, memories, programming, satellites.
+  'satellite-': ['ui/src/components/SatellitesView.tsx'],
+  'connect-': ['ui/src/components/ConnectView.tsx'],
+  'connect-map': ['ui/src/components/ConnectView.tsx', 'ui/src/components/MapView.tsx'],
+  'memories-': ['ui/src/components/MemoriesView.tsx'],
+  'memory-': ['ui/src/components/MemoriesView.tsx'],
+  'program-': ['ui/src/components/RadioProgView.tsx'],
+  'satellites-': ['ui/src/components/SatellitesView.tsx'],
 }
 
-function checkScreenshots() {
+/** The longest family prefix this filename starts with, or null when nothing claims it. */
+function ownerKeyFor(name) {
+  let best = null
+  for (const key of Object.keys(SHOT_OWNERS)) {
+    if (name.startsWith(key) && (best === null || key.length > best.length)) best = key
+  }
+  return best
+}
+
+function checkScreenshotMapping() {
   const dir = path.join(DOCS, 'img', 'manual')
-  if (!existsSync(dir)) return SKIP('manual screenshots', `${rel(dir)} does not exist`)
-  const images = readdirSync(dir).filter((f) => !statSync(path.join(dir, f)).isDirectory())
+  if (!existsSync(dir)) {
+    SKIP('manual screenshots', `${rel(dir)} does not exist`)
+    return null
+  }
+  const entries = readdirSync(dir).filter((f) => !statSync(path.join(dir, f)).isDirectory())
+
+  // build-manual-images.py emits WEBP and only WEBP, so anything else here is a raw capture
+  // somebody committed by mistake — a 3251-px JPEG that will ship at ten times the byte cost
+  // and render unreadable. It is caught here rather than in review because 75 raw captures are
+  // sitting in a handoff bundle one `cp` away from this directory.
+  const notWebp = entries.filter((f) => !f.endsWith('.webp'))
+  const images = entries.filter((f) => f.endsWith('.webp'))
 
   // Positive control on the mapping itself, in both directions.
-  const unmapped = images.filter((f) => !SHOTS[f])
-  const phantom = Object.keys(SHOTS).filter((f) => !images.includes(f))
-  const badOwners = Object.entries(SHOTS).flatMap(([img, owners]) =>
-    owners.filter((o) => !existsSync(path.join(ROOT, o))).map((o) => `${img} -> ${o} does not exist`))
+  const SHOTS = Object.fromEntries(
+    images.map((f) => [f, SHOT_OWNERS[ownerKeyFor(f)]]).filter(([, owners]) => owners),
+  )
+  const unmapped = images.filter((f) => ownerKeyFor(f) === null)
+  const usedKeys = new Set(images.map(ownerKeyFor).filter(Boolean))
+  const unusedKeys = Object.keys(SHOT_OWNERS).filter((k) => !usedKeys.has(k))
+  const badOwners = Object.entries(SHOT_OWNERS).flatMap(([key, owners]) =>
+    owners.filter((o) => !existsSync(path.join(ROOT, o))).map((o) => `${key}* -> ${o} does not exist`))
   const mappingProblems = [
-    ...unmapped.map((f) => `docs/img/manual/${f} has no SHOTS entry — it is being checked by nobody`),
-    ...phantom.map((f) => `SHOTS names ${f}, which is not in docs/img/manual/ — a dead entry`),
+    ...unmapped.map((f) =>
+      `docs/img/manual/${f} matches no SHOT_OWNERS family — it is being checked by nobody`),
+    ...notWebp.map((f) =>
+      `docs/img/manual/${f} is not a .webp — run scripts/build-manual-images.py, do not commit the raw capture`),
     ...badOwners,
   ]
   if (mappingProblems.length) {
     FAIL('screenshot mapping', mappingProblems,
-      'Fix the SHOTS table in scripts/release-docs.mjs. Every image must name the source it shows.')
+      'Fix SHOT_OWNERS in scripts/release-docs.mjs — one key per FAMILY, not per image. Read the ' +
+        'block comment above it before adding a key.')
   } else {
-    OK('screenshot mapping', `${images.length} images, all mapped to source that exists`)
+    OK('screenshot mapping',
+      `${images.length} images mapped by ${usedKeys.size} of ${Object.keys(SHOT_OWNERS).length} ` +
+        `families, all naming source that exists` +
+        (unusedKeys.length ? ` · ${unusedKeys.length} families not captured yet: ${unusedKeys.join(', ')}` : ''))
   }
+  return { SHOTS, mappingProblems }
+}
 
+// Split from the mapping deliberately: the mapping is true of every commit and is offline, so it
+// is a push gate. THIS half reads git history, and CI checks out at depth 1 — on a shallow clone
+// `git log` answers nothing and every image would look current, which is a false green rather
+// than a missing check. So it runs at release time, where the history is there.
+function checkScreenshotFreshness(SHOTS, mappingProblems) {
   // RANKED, not just listed. A commit that touches every cockpit at once (1db7d051 did) puts
   // eight images on this list at equal weight, and a flat list of eight is a list nobody reads.
   // The commit COUNT since the capture is the closest honest proxy for how much of the frame has
@@ -222,7 +328,6 @@ function checkScreenshots() {
   const pending = []
   for (const [img, owners] of Object.entries(SHOTS)) {
     const imgPath = `docs/img/manual/${img}`
-    if (!existsSync(path.join(ROOT, imgPath))) continue // already reported as phantom
     if (isDirty(imgPath)) {
       pending.push(`${img} — recaptured but not committed yet`)
       continue
@@ -261,6 +366,212 @@ function checkScreenshots() {
 }
 
 // ---------------------------------------------------------------------------
+// 3b. The assets the pages point at — existence, alt text, orphans, duplicates
+// ---------------------------------------------------------------------------
+//
+// Section 3 asks whether an image is STALE. This asks whether it is THERE, and whether the page
+// around it is intact. Nothing did, and every one of these has a way of reaching the public in
+// silence:
+//
+//   * a page points at an image that is not in the tree — the reader gets a broken-image icon,
+//     and neither the EPUB nor the PDF build says a word about it;
+//   * an image is in the tree that no page points at — which is not a wasted 200 KB, it is a
+//     capture somebody cropped and published and then never actually placed;
+//   * an image ships with empty alt text — invisible to a sighted reviewer by construction,
+//     and the only thing a screen-reader user gets;
+//   * the same bytes ship twice under two names — one capture, presented as two things.
+//
+// This is I29's mechanical half. The judgement half (is the picture the RIGHT picture) is not
+// automatable and is not attempted here.
+
+// A local target that this repo can actually answer for. Anything remote, inline or
+// site-absolute is somebody else's to verify.
+const isLocalRef = (t) => !/^(?:[a-z][a-z0-9+.-]*:|\/\/|\/|#)/i.test(t)
+
+/** Every `![alt](src)` and `<img src alt>` in `text`, with 1-based line numbers. */
+function imageRefs(text) {
+  const out = []
+  // A fenced code block is an EXAMPLE, not a reference — docs about the docs (the style guide)
+  // show `![alt](../img/manual/....webp)` as sample markdown, and counting those as real
+  // references makes the check fail on a file that is correct.
+  let fence = null
+  text.split('\n').forEach((line, i) => {
+    const f = /^\s{0,3}(`{3,}|~{3,})/.exec(line)
+    if (f) {
+      if (fence === null) fence = f[1][0]
+      else if (f[1][0] === fence) fence = null
+      return
+    }
+    if (fence !== null) return
+    for (const m of line.matchAll(/!\[([^\]]*)\]\(\s*([^)\s]+)(?:\s+"[^"]*")?\s*\)/g))
+      out.push({ line: i + 1, alt: m[1], src: m[2] })
+    for (const m of line.matchAll(/<img\b[^>]*>/g)) {
+      const src = /\bsrc="([^"]*)"/.exec(m[0])
+      // A missing alt attribute and alt="" are the same defect to a screen reader, and both
+      // arrive here as ''.
+      out.push({ line: i + 1, alt: (/\balt="([^"]*)"/.exec(m[0]) ?? ['', ''])[1], src: src ? src[1] : '' })
+    }
+  })
+  return out
+}
+
+// An alt that says only "image" describes nothing; it is the shape of a placeholder somebody
+// meant to come back to. Kept short and literal — a length threshold would be arbitrary, and
+// "Settings ▸ Radio" is a perfectly good short alt.
+const PLACEHOLDER_ALT = new Set([
+  'image', 'images', 'img', 'screenshot', 'screen shot', 'screengrab', 'picture', 'photo',
+  'figure', 'fig', 'diagram', 'graphic', 'alt', 'alt text', 'todo', 'tbd',
+])
+
+function checkDocAssets() {
+  const manualDir = path.join(DOCS, 'img', 'manual')
+  const problems = []
+  const referenced = new Set()
+
+  for (const abs of docFiles()) {
+    for (const { line, alt, src } of imageRefs(readFileSync(abs, 'utf8'))) {
+      if (!isLocalRef(src)) continue
+      const target = path.resolve(path.dirname(abs), src)
+      referenced.add(target)
+      if (!existsSync(target)) {
+        problems.push(`${rel(abs)}:${line} points at ${src} — no such file`)
+        continue
+      }
+      const trimmed = alt.trim()
+      if (!trimmed) problems.push(`${rel(abs)}:${line} ${path.basename(src)} has empty alt text`)
+      else if (PLACEHOLDER_ALT.has(trimmed.toLowerCase()))
+        problems.push(`${rel(abs)}:${line} ${path.basename(src)} alt is the placeholder "${trimmed}"`)
+    }
+  }
+
+  // Orphans and duplicates are asked of docs/img/manual/ ONLY. The rest of docs/img/ is the
+  // site's and SourceForge's — banners, the social card, the demo GIF — referenced from repos
+  // that are not this one, so "unreferenced" there means nothing. This directory exists to
+  // serve manual pages and nothing else, so there it means everything.
+  if (existsSync(manualDir)) {
+    const files = readdirSync(manualDir)
+      .map((f) => path.join(manualDir, f))
+      .filter((p) => !statSync(p).isDirectory())
+    for (const p of files)
+      if (!referenced.has(p)) problems.push(`${rel(p)} is published but no page shows it`)
+
+    const byHash = new Map()
+    for (const p of files) {
+      const h = createHash('sha256').update(readFileSync(p)).digest('hex')
+      if (!byHash.has(h)) byHash.set(h, [])
+      byHash.get(h).push(rel(p))
+    }
+    for (const names of byHash.values())
+      if (names.length > 1) problems.push(`identical bytes under ${names.length} names: ${names.join(', ')}`)
+  }
+
+  if (problems.length) {
+    FAIL('manual assets', problems,
+      'Each is mechanical: place the image or drop the reference, write the alt text, delete the ' +
+        'duplicate. Alt text describes the PICTURE for somebody who cannot see it — it is not a ' +
+        'caption and not a repeat of the sentence above it.')
+  } else {
+    OK('manual assets', `${referenced.size} referenced images all present, alt-texted and placed once`)
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 3c. Internal links and anchors
+// ---------------------------------------------------------------------------
+//
+// The other half of I29. A cross-reference between chapters is the manual's only navigation, and
+// a heading gets reworded in every editing pass — at which point every deep link into it points
+// at the top of the page instead, silently, in the repo and on the site and in the EPUB.
+//
+// Only LOCAL links are checked. An external URL needs the network and would make this check
+// flap; the site's own copy is checked separately, against the live index.
+
+/** GitHub's heading slug: strip inline markup, lowercase, drop punctuation, spaces to hyphens. */
+function slugify(heading) {
+  return heading
+    .replace(/`([^`]*)`/g, '$1')
+    .replace(/\*\*?([^*]*)\*\*?/g, '$1')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .trim()
+    .toLowerCase()
+    .replace(/[^\w\- ]/gu, '')
+    .replace(/ /g, '-')
+}
+
+/** Non-fenced lines of a markdown file, as `[lineNumber, text]`. Fenced code is not prose. */
+function proseLines(text) {
+  const out = []
+  let fence = null
+  text.split('\n').forEach((line, i) => {
+    const m = /^\s*(```+|~~~+)/.exec(line)
+    if (m) {
+      if (fence === null) fence = m[1][0]
+      else if (m[1][0] === fence) fence = null
+      return
+    }
+    if (fence === null) out.push([i + 1, line.replace(/`[^`]*`/g, '')])
+  })
+  return out
+}
+
+/** Every heading anchor in the file, including GitHub's `-1`, `-2` suffixes for repeats. */
+function anchorsOf(abs) {
+  const seen = new Map()
+  const anchors = new Set()
+  for (const [, line] of proseLines(readFileSync(abs, 'utf8'))) {
+    const m = /^#{1,6}\s+(.*)$/.exec(line)
+    if (!m) continue
+    const base = slugify(m[1])
+    const n = seen.get(base) ?? 0
+    seen.set(base, n + 1)
+    anchors.add(n === 0 ? base : `${base}-${n}`)
+  }
+  return anchors
+}
+
+function checkDocLinks() {
+  const anchorCache = new Map()
+  const anchors = (abs) => {
+    if (!anchorCache.has(abs)) anchorCache.set(abs, anchorsOf(abs))
+    return anchorCache.get(abs)
+  }
+
+  const broken = []
+  let checked = 0
+  for (const abs of docFiles()) {
+    for (const [line, text] of proseLines(readFileSync(abs, 'utf8'))) {
+      for (const m of text.matchAll(/(?<!!)\[[^\]]*\]\(\s*([^)\s]+)(?:\s+"[^"]*")?\s*\)/g)) {
+        const target = m[1]
+        const [file, anchor] = target.split('#')
+        if (file && !isLocalRef(file)) continue
+        checked++
+        let dest = abs
+        if (file) {
+          // The wiki pages link each other extensionless (`[Install](Install)`), which is how
+          // they resolve on the GitHub and SourceForge wikis. In the repo that is Install.md.
+          const candidates = [path.resolve(path.dirname(abs), file), path.resolve(path.dirname(abs), `${file}.md`)]
+          dest = candidates.find((c) => existsSync(c))
+          if (!dest) {
+            broken.push(`${rel(abs)}:${line} → ${target} — no such file`)
+            continue
+          }
+        }
+        if (anchor && dest.endsWith('.md') && !anchors(dest).has(anchor))
+          broken.push(`${rel(abs)}:${line} → ${target} — ${rel(dest)} has no heading with that anchor`)
+      }
+    }
+  }
+
+  if (broken.length) {
+    FAIL('internal links and anchors', broken,
+      'A renamed heading breaks every link into it and nothing says so. Fix the link, or restore ' +
+        'the heading — do not delete the cross-reference to make this green.')
+  } else {
+    OK('internal links and anchors', `${checked} local links resolve, anchors included`)
+  }
+}
+
+// ---------------------------------------------------------------------------
 // 4. The release's own two doc deliverables
 // ---------------------------------------------------------------------------
 
@@ -291,6 +602,23 @@ function checkReleaseDocs() {
 // "(#2, #8)" was published in the 1.3.0 CHANGELOG as fixed. Both were open then and are open
 // now. This is the only check here that needs the network, so it degrades to a loud SKIP rather
 // than a silent pass when `gh` cannot answer.
+//
+// TWO THINGS IT USED TO GET WRONG, both found on 1.10.3 and both the sort that gets a check
+// switched off rather than obeyed:
+//
+//   * `gh issue list` cannot see DISCUSSIONS. 1.10.3 credits "(#231, #232)" — #231 is the issue
+//     and #232 is the discussion the same fault was reported in, which is a correct credit and
+//     was reported as "#232 is not an issue in kd9taw/Nexus". A number is now looked up as a
+//     discussion before it is called missing.
+//   * "cited ⇒ must be CLOSED" is not true of a fix the maintainer cannot yet prove. 1.10.3
+//     shipped two fixes marked **NEEDS-BENCH** — the project-wide flag for "the change is in,
+//     the hardware to confirm it on is not here" (#126 wants an FTDX-101D, #233 a Mac). Those
+//     issues stay open on purpose, possibly for months, and there is no repo edit that clears
+//     them: a permanent FAIL nobody can act on is exactly how the FAILs stop being read. So an
+//     open issue whose own CHANGELOG bullet carries NEEDS-BENCH is REVIEW, listed by name, and
+//     an open issue with no such marker is still a FAIL. NEEDS-BENCH is not a mute button: it
+//     is published to the operator in the release notes, so writing a false one is a public
+//     claim, not a private silencing.
 
 function versionSection(changelog, version) {
   const start = changelog.search(new RegExp(`^## \\[${version.replace(/\./g, '\\.')}\\]`, 'm'))
@@ -300,11 +628,47 @@ function versionSection(changelog, version) {
   return end < 0 ? after : after.slice(0, end)
 }
 
+/** The section's top-level bullets, each running to the next one, so a citation keeps its prose. */
+function bullets(section) {
+  const out = []
+  for (const line of section.split('\n')) {
+    if (/^- /.test(line) || !out.length) out.push(line)
+    else out[out.length - 1] += `\n${line}`
+  }
+  return out
+}
+
+/**
+ * `{ title, closed }` when `n` is a discussion, `null` when GitHub says it is definitively not
+ * one, `undefined` when the question could not be asked at all.
+ */
+function discussion(n) {
+  const query = `{repository(owner:"kd9taw",name:"Nexus"){discussion(number:${n}){title closed}}}`
+  try {
+    const out = execFileSync('gh', ['api', 'graphql', '-f', `query=${query}`], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    return JSON.parse(out)?.data?.repository?.discussion ?? null
+  } catch (e) {
+    // gh exits non-zero for a number that is not a discussion AND for a network failure. Only
+    // the first is an answer; the second must not be reported as one.
+    return /NOT_FOUND|Could not resolve to a Discussion/.test(`${e.stdout ?? ''}${e.stderr ?? ''}`)
+      ? null
+      : undefined
+  }
+}
+
 function checkIssueCredits() {
   const section = versionSection(readFileSync(path.join(ROOT, 'CHANGELOG.md'), 'utf8'), VERSION)
   if (section == null) return SKIP('CHANGELOG issue credits', `no [${VERSION}] section to read`)
   const cited = [...new Set([...section.matchAll(/#(\d{1,5})\b/g)].map((m) => m[1]))]
   if (!cited.length) return OK('CHANGELOG issue credits', `the [${VERSION}] section cites no issues`)
+
+  // Which citations sit in a bullet that already says the fix is unproven.
+  const needsBench = new Set()
+  for (const b of bullets(section))
+    if (/NEEDS-BENCH/.test(b)) for (const m of b.matchAll(/#(\d{1,5})\b/g)) needsBench.add(m[1])
 
   let json
   try {
@@ -319,11 +683,26 @@ function checkIssueCredits() {
         `section cites #${cited.join(', #')} — verify each is CLOSED by hand.`)
   }
   const byNumber = new Map(JSON.parse(json).map((i) => [String(i.number), i]))
-  const open = cited
-    .map((n) => byNumber.get(n))
-    .filter((i) => i && i.state !== 'CLOSED')
-    .map((i) => `#${i.number} "${i.title}" is ${i.state} — the CHANGELOG credits it as done in ${VERSION}`)
-  const missing = cited.filter((n) => !byNumber.has(n)).map((n) => `#${n} is not an issue in kd9taw/Nexus`)
+
+  const open = []
+  const unproven = []
+  const missing = []
+  const unknown = []
+  const discussions = []
+  for (const n of cited) {
+    const issue = byNumber.get(n)
+    if (!issue) {
+      const d = discussion(n)
+      if (d) discussions.push(`#${n} "${d.title}" (discussion${d.closed ? ', closed' : ''})`)
+      else if (d === null) missing.push(`#${n} is neither an issue nor a discussion in kd9taw/Nexus`)
+      else unknown.push(`#${n} is not in the issue list and the discussion lookup could not run — check by hand`)
+      continue
+    }
+    if (issue.state === 'CLOSED') continue
+    const line = `#${issue.number} "${issue.title}" is ${issue.state} — the CHANGELOG credits it as done in ${VERSION}`
+    if (needsBench.has(n)) unproven.push(`${line}, and its bullet says NEEDS-BENCH`)
+    else open.push(line)
+  }
 
   if (open.length || missing.length) {
     FAIL('CHANGELOG issue credits', [...open, ...missing],
@@ -331,7 +710,19 @@ function checkIssueCredits() {
         'NEXT version section and, if the issue is genuinely not fixed, say so on the issue. ' +
         'Never close an issue because the CHANGELOG claimed it.')
   } else {
-    OK('CHANGELOG issue credits', `#${cited.join(', #')} — all closed`)
+    OK('CHANGELOG issue credits',
+      `#${cited.join(', #')} — every credit resolves and none is an open claim of a fix` +
+        (discussions.length ? ` · credits a discussion: ${discussions.join(', ')}` : ''))
+  }
+  if (unproven.length) {
+    REVIEW('issues credited but still open on purpose', unproven,
+      'Each is a fix that shipped and cannot be proved without hardware the maintainer does not ' +
+        'have. Nothing in the repo closes these — they close when somebody puts the change on a ' +
+        'real radio. Check the flag still belongs before you skip past it.')
+  }
+  if (unknown.length) {
+    REVIEW('issue credits that could not be resolved', unknown,
+      'The lookup failed, which is not evidence the credit is fine.')
   }
 }
 
@@ -406,7 +797,10 @@ function checkVersionProse() {
 // This used to be a line in the BY HAND list below. A note is what let it rot: it says "go and
 // check" and nothing happens if you don't. So it is a CHECK now, and it asks the live site
 // rather than the repo, because the repo has been right the whole time — the site was wrong.
-try {
+//
+// It is skipped under --push-gate: the answer is about a deploy, not about a commit, and a
+// network call inside a per-push CI step is a gate that flaps.
+if (!flag('--push-gate')) try {
   const chapters = readdirSync(path.join(ROOT, 'docs', 'guide'))
     .filter((f) => f.endsWith('.md') && f !== 'index.md')
     .map((f) => f.replace(/\.md$/, ''))
@@ -459,15 +853,31 @@ const MANUAL = [
 // Main
 // ---------------------------------------------------------------------------
 
-console.log(`release-docs — version ${VERSION}`)
+// --push-gate is the subset that is true of EVERY COMMIT rather than only of a release: no
+// network, no `gh`, no git history, and nothing that asks a question only a release can answer
+// (is there a RELEASE_NOTES for this version, is the CHANGELOG stamped, are its issue credits
+// closed — all of which are legitimately unfinished on a topic branch and would be red on every
+// push). ci.yml runs this in the `ui` job beside the other doc gates, because a check whose only
+// trigger is somebody remembering to run release-docs is not a gate — which is the argument this
+// whole file was written to make, and it applied to the file itself.
+const PUSH_GATE = flag('--push-gate')
+
+console.log(PUSH_GATE ? 'release-docs --push-gate' : `release-docs — version ${VERSION}`)
 console.log(`repo: ${ROOT}\n`)
 
-checkGenerators()
-checkDocGates()
-checkScreenshots()
-checkReleaseDocs()
-checkIssueCredits()
-checkVersionProse()
+if (!PUSH_GATE) {
+  checkGenerators()
+  checkDocGates()
+}
+const shots = checkScreenshotMapping()
+checkDocAssets()
+checkDocLinks()
+if (!PUSH_GATE) {
+  if (shots) checkScreenshotFreshness(shots.SHOTS, shots.mappingProblems)
+  checkReleaseDocs()
+  checkIssueCredits()
+  checkVersionProse()
+}
 
 const ICON = { ok: '  ok  ', fail: ' FAIL ', review: 'REVIEW', skip: ' skip ' }
 const show = (r) => {
@@ -491,8 +901,10 @@ if (reviews.length) {
   reviews.forEach(show)
 }
 
-console.log('\n── BY HAND — nothing above can check these ' + '─'.repeat(28))
-for (const [title, body] of MANUAL) console.log(`  * ${title}\n      ${body.replace(/(.{92}) /g, '$1\n      ')}`)
+if (!PUSH_GATE) {
+  console.log('\n── BY HAND — nothing above can check these ' + '─'.repeat(28))
+  for (const [title, body] of MANUAL) console.log(`  * ${title}\n      ${body.replace(/(.{92}) /g, '$1\n      ')}`)
+}
 
 console.log(
   `\n${fails.length} fail · ${reviews.length} review · ` +
