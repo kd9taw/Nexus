@@ -26,7 +26,7 @@ import {
 } from '../aprsSymbols'
 import { MapLegend, MufLegend } from './MapLegend'
 import { geoPath, type GeoPermissibleObjects } from 'd3-geo'
-import { RotateCcw } from 'lucide-react'
+import { Layers as LayersIcon, Maximize2, Minimize2, RotateCcw } from 'lucide-react'
 import type {
   AuroraPoint,
   PcaView,
@@ -124,6 +124,12 @@ interface Props {
    * POTA map opening with Parks off). Set true to make the preset yield only to a pick made ON
    * THIS surface. Default false keeps every existing (inheriting) call site unchanged. */
   dedicatedIntent?: boolean
+  /** The map's full-screen toggle changed (the toolbar button, or Escape leaving it). The map
+   * hides its OWN chrome by itself; a host that frames it — Connect, with a header, four rail
+   * panes and a bottom strip — hides that too, so "full screen" means the whole window. Called
+   * on mount with the restored value, so a surface reopens the way it was left. Omitted = the
+   * map still goes full-screen, just inside whatever the host already gave it. */
+  onFullChange?: (full: boolean) => void
   /** Double-click-to-work a live spot / DXpedition marker: the app's atomic
    * work path (rig → band+mode+freq, cockpit opens). Omitted = gesture off.
    * `program`/`reference` carry a park identity (POTA/SOTA) when the spot is one, so the
@@ -276,6 +282,24 @@ export function layersFromStored(v: string | null): Record<LayerKey, Layer> | nu
     }
   }
   return out
+}
+
+// FULL-SCREEN (operator request): the map fills its window — on Connect that means the
+// header, the four rail panes and the bottom strip go with the Layers panel, so a map on a
+// second monitor is all map. Deliberately NOT the Fullscreen API: this is a Tauri window the
+// operator already sized and placed, and `requestFullscreen` would take over the whole
+// display, hoist the map into the top layer (out of `.app`'s `--ui-zoom` scope, and away from
+// every portaled dialog/tooltip), and route Escape through the browser instead of us. Hiding
+// the chrome inside the window is the same result with none of that.
+//
+// PER-SURFACE, AND — unlike the projection and the layer picks above — WITHOUT THE
+// INHERITANCE. Those two are content preferences a torn-off map should carry over; this is a
+// statement about ONE WINDOW's shape. Inherited, the primary surface's choice would open a
+// brand-new pop-out (the dedicated POTA map included) with its chrome already gone, which
+// reads as a rendering fault, not a restored preference. So: this surface's OWN key or off.
+const FULL_KEY = 'nexus.connect.mapfull'
+function loadFull(): boolean {
+  return surfaceHasOwn(FULL_KEY) && surfaceGet(FULL_KEY) === '1'
 }
 
 /** Grid-rarity → the dashed halo color (matches the .rarity-gem palette), or
@@ -509,6 +533,7 @@ export function MapView({
   needByCall,
   intent,
   dedicatedIntent = false,
+  onFullChange,
   onWorkSpot,
   onSelectSat,
   aprs,
@@ -561,6 +586,20 @@ export function MapView({
   const hadStoredLayers = useRef(
     !embedded && (dedicatedIntent ? surfaceHasOwn(LAYERS_KEY) : surfaceGet(LAYERS_KEY) != null),
   )
+  // Full screen: everything but the map goes. The embedded detail globe has no chrome to
+  // hide and no toolbar to hold the way back, so it is never full-screen.
+  const [full, setFull] = useState(() => !embedded && loadFull())
+  // The Layers panel, peeked while full-screen. Transient by design: full screen means the
+  // panel is away, and re-hiding it on the way in/out is what makes ONE button the whole
+  // story. It comes back as an overlay (see `.map-view.map-full .map-layers`) so peeking at
+  // a layer never re-flows the canvas — a 200 px shove would re-project and repaint the
+  // whole map twice for a checkbox.
+  const [layersPeek, setLayersPeek] = useState(false)
+  const setFullScreen = (on: boolean) => {
+    setFull(on)
+    setLayersPeek(false)
+    surfaceSet(FULL_KEY, on ? '1' : '0')
+  }
   const [size, setSize] = useState({ w: 0, h: 0 })
   const [hover, setHover] = useState<{ x: number; y: number; text: string; info?: boolean } | null>(null)
   // The hovered feature's call — drives the on-canvas hover ring (changes only
@@ -795,6 +834,27 @@ export function MapView({
     if (embedded) return
     surfaceSet(LAYERS_KEY, JSON.stringify(layers))
   }, [layers, embedded])
+
+  // Tell the host, including on mount so a surface restored as full-screen opens with the
+  // host's chrome already gone rather than flashing it away a frame later.
+  useEffect(() => {
+    onFullChange?.(full)
+  }, [full, onFullChange])
+
+  // ESCAPE LEAVES. A full-screen map on a second monitor with only a mouse way out is a
+  // trap — the toolbar button stays on screen, but the keyboard has to work too. Listener
+  // mounted only while full, and it yields to anything that already answered the key (a
+  // dialog, a menu): Escape must close that first, not tear the window's chrome down.
+  useEffect(() => {
+    if (!full) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return
+      e.preventDefault()
+      setFullScreen(false)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [full]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // The operator's real QTH — drives the "you are here" marker, and normally the
   // projection centre too.
@@ -2664,7 +2724,7 @@ export function MapView({
   const prov = prop ? prop.source : 'loading'
 
   return (
-    <div className="map-view">
+    <div className={`map-view${full ? ' map-full' : ''}`}>
       {!embedded && (
       <div className="map-toolbar">
         <div className="map-proj" role="group" aria-label={t('map.projection.aria')}>
@@ -2715,6 +2775,33 @@ export function MapView({
           title={t('map.reset.title')}
         >
           <RotateCcw size={13} /> {t('map.reset.label')}
+        </button>
+        {/* Full screen hides the Layers panel, so the way back to a layer has to live out
+            here — otherwise the operator is stuck with whatever was on when they pressed it.
+            Only while full: nothing changes about the normal toolbar. */}
+        {full && (
+          <button
+            type="button"
+            className={`map-chrome-btn map-layers-toggle${layersPeek ? ' active' : ''}`}
+            aria-pressed={layersPeek}
+            onClick={() => setLayersPeek((p) => !p)}
+            title={t('map.layers.toggle.title')}
+          >
+            <LayersIcon size={13} /> {t('map.layers.head')}
+          </button>
+        )}
+        {/* THE ONE CONTROL, both ways. The same button in the same place goes in and comes
+            back out, and it is never hidden by the mode it turns on — the toolbar is the one
+            piece of chrome full screen keeps, precisely so the exit is always on screen. */}
+        <button
+          type="button"
+          className={`map-chrome-btn map-full-toggle${full ? ' active' : ''}`}
+          aria-pressed={full}
+          onClick={() => setFullScreen(!full)}
+          title={full ? t('map.full.exit.title') : t('map.full.enter.title')}
+        >
+          {full ? <Minimize2 size={13} /> : <Maximize2 size={13} />}{' '}
+          {full ? t('map.full.exit.label') : t('map.full.enter.label')}
         </button>
       </div>
       )}
@@ -2821,8 +2908,10 @@ export function MapView({
         </div>
 
         {/* The layer panel used to be gated on Connect's Expert detail level too; that toggle
-            was removed 2026-07-26, so only the embedded/standalone distinction remains. */}
-        {!embedded && (
+            was removed 2026-07-26, so only the embedded/standalone distinction remains.
+            Full screen is the third state: the panel is away, and the toolbar's Layers
+            button brings it back over the map (never beside it — see `layersPeek`). */}
+        {!embedded && (!full || layersPeek) && (
         <aside className="map-layers">
           <h3>{t('map.layers.head')}</h3>
           {(Object.keys(layers) as LayerKey[]).map((k) => (

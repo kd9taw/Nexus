@@ -161,6 +161,16 @@ export function ConnectView({
       surfaceSet('nexus.connect.map3d', nv ? '1' : '0')
       return nv
     })
+  // FULL-SCREEN MAP (operator request): the map fills the window and everything framing it
+  // goes — this header, the four rail panes, the bottom strip, and the map's own Layers
+  // panel. MapView owns the state (it owns the button, the Escape key and the per-surface
+  // record); this mirror exists only so the frame can get out of the way, and it is reported
+  // on mount so a surface reopens the way it was left.
+  //
+  // `&& !map3d` is a structural guard, not a nicety: the button lives in MapView, so a
+  // full-screen flag left standing while the 3-D globe is mounted would hide the header —
+  // which holds the 2-D/3-D toggle — with nothing on screen able to bring it back.
+  const [mapFull, setMapFull] = useState(false)
   // Basic/Expert + the per-slot pane assignment (persisted; basic-default, remember-last).
   const { slots, assignPane } = useConnectConfig()
   // Band focus (advisor/opening row click) — the map highlights that band's heat
@@ -385,9 +395,12 @@ export function ConnectView({
     <PaneFrame key={s} slotId={s} paneId={slots[s]} ctx={ctx} onAssign={assignPane} />
   )
 
+  const chromeHidden = mapFull && !map3d
+
   return (
     <main className="layout single">
-      <div className="connect-shell">
+      <div className={`connect-shell${chromeHidden ? ' map-full' : ''}`}>
+        {!chromeHidden && (
         <div className="connect-header">
           <div
             className="map-proj connect-intent"
@@ -424,9 +437,10 @@ export function ConnectView({
             </button>
           )}
         </div>
+        )}
         <div className="connect">
-          {railFrame('left1')}
-          {railFrame('left2')}
+          {!chromeHidden && railFrame('left1')}
+          {!chromeHidden && railFrame('left2')}
           <div className="connect-map">
             {map3d ? (
               <Suspense
@@ -462,16 +476,23 @@ export function ConnectView({
               outlook={selectedCall ? pathPred : bandOutlook}
               muf={muf}
               xrayLong={xrayLong}
+              onFullChange={setMapFull}
             />
             )}
           </div>
-          {railFrame('right1')}
-          {railFrame('right2')}
-          <div className="connect-strip">
-            {stripFrame('bottom1')}
-            {stripFrame('bottom2')}
-            {stripFrame('bottom3')}
-          </div>
+          {!chromeHidden && railFrame('right1')}
+          {!chromeHidden && railFrame('right2')}
+          {/* UNMOUNTED, not hidden: the panes read everything from `ctx` (lifted here and
+              still polling), so there is no state to keep warm — and a display:none pane
+              would leave its ResizeObserver firing 0×0 into a canvas that has to be
+              re-stamped on re-show. Nothing to keep, nothing to re-stamp. */}
+          {!chromeHidden && (
+            <div className="connect-strip">
+              {stripFrame('bottom1')}
+              {stripFrame('bottom2')}
+              {stripFrame('bottom3')}
+            </div>
+          )}
         </div>
       </div>
     </main>
