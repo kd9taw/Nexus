@@ -34344,13 +34344,19 @@ mod tests {
         assert!(!e.tx_enabled(), "the FIRST act was never given");
         let st = e.js8_state();
         assert!(st.cq_on, "the switch is on…");
-        assert!(!st.armed.cq, "…and reports NOT armed, because the latch is down");
+        assert!(
+            !st.armed.cq,
+            "…and reports NOT armed, because the latch is down"
+        );
         let base = tempo_core::timing::now_unix_ms() as u64;
         let s0 = js8_slot_now();
         for min in 1..=10u64 {
             e.js8_tick(base + min * 60_000);
             for s in s0 + min * 4..s0 + min * 4 + 4 {
-                assert!(e.poll_tx(s).is_empty(), "repeat armed, latch down: slot {s} keyed");
+                assert!(
+                    e.poll_tx(s).is_empty(),
+                    "repeat armed, latch down: slot {s} keyed"
+                );
             }
         }
         assert!(
@@ -34380,7 +34386,9 @@ mod tests {
             Some(::js8::Origin::CqRepeat),
             "a SCHEDULED CQ is an automatic origin, never Operator"
         );
-        let plan = e.plan_tx(js8_slot_now() + 1).expect("the scheduled CQ plans an over");
+        let plan = e
+            .plan_tx(js8_slot_now() + 1)
+            .expect("the scheduled CQ plans an over");
         assert!(plan.beacon, "a repeating CQ rides plan.beacon");
         let TxWaveform::Js8 { f0, .. } = &plan.waveform else {
             panic!("a JS8 plan carries the typed waveform");
@@ -34420,10 +34428,19 @@ mod tests {
                 keyed += 1;
             }
         }
-        assert!(keyed >= 10, "control: the repeats really ran ({keyed} overs)");
+        assert!(
+            keyed >= 10,
+            "control: the repeats really ran ({keyed} overs)"
+        );
         let st = e.js8_state();
-        assert!(st.idle_tripped, "61 idle minutes trip the 60-minute watchdog");
-        assert!(!st.cq_on && st.cq_next_at_ms.is_none(), "the trip stops the CQ repeat");
+        assert!(
+            st.idle_tripped,
+            "61 idle minutes trip the 60-minute watchdog"
+        );
+        assert!(
+            !st.cq_on && st.cq_next_at_ms.is_none(),
+            "the trip stops the CQ repeat"
+        );
         assert!(!st.hb_on, "…and the heartbeat, as it always did");
         assert!(!st.armed.cq && !st.armed.hb);
         assert!(e.tx_enabled(), "tx_enabled untouched (JS8Call semantics)");
@@ -34455,20 +34472,33 @@ mod tests {
         let mut e = arm();
         e.halt_tx();
         let st = e.js8_state();
-        assert!(!st.cq_on && st.cq_next_at_ms.is_none(), "Stop TX cancels the schedule");
-        assert!(st.queue.is_empty(), "…and drops the frame it had already queued");
+        assert!(
+            !st.cq_on && st.cq_next_at_ms.is_none(),
+            "Stop TX cancels the schedule"
+        );
+        assert!(
+            st.queue.is_empty(),
+            "…and drops the frame it had already queued"
+        );
         e.set_tx_enabled(true);
         for s in js8_slot_now() + 1..js8_slot_now() + 6 {
-            assert!(e.poll_tx(s).is_empty(), "re-arming after a halt keys nothing (slot {s})");
+            assert!(
+                e.poll_tx(s).is_empty(),
+                "re-arming after a halt keys nothing (slot {s})"
+            );
         }
 
         let mut e = arm();
         e.set_tier(Tier::Ft8);
-        assert!(!e.js8_station.cq_on(), "leaving the tier cancels the schedule");
+        assert!(
+            !e.js8_station.cq_on(),
+            "leaving the tier cancels the schedule"
+        );
         assert!(e.js8_state().queue.is_empty());
 
         let mut e = arm();
-        e.set_mode("qso-monitor").expect("a passive spec is always accepted");
+        e.set_mode("qso-monitor")
+            .expect("a passive spec is always accepted");
         assert!(!e.js8_station.cq_on(), "a mode change cancels the schedule");
         assert!(e.js8_state().queue.is_empty());
     }
@@ -34494,16 +34524,26 @@ mod tests {
                 e.js8_state().queue.len() <= 1,
                 "minute {min}: the schedule queued more than one CQ"
             );
-            assert!(!e.poll_tx(s0 + min * 2).is_empty(), "minute {min}: the CQ goes out");
+            assert!(
+                !e.poll_tx(s0 + min * 2).is_empty(),
+                "minute {min}: the CQ goes out"
+            );
             assert!(
                 e.poll_tx(s0 + min * 2).is_empty(),
                 "minute {min}: a second poll in the same period must not key again"
             );
-            assert!(e.js8_state().queue.is_empty(), "minute {min}: the outbox drained");
+            assert!(
+                e.js8_state().queue.is_empty(),
+                "minute {min}: the outbox drained"
+            );
         }
         // An hour in one jump: one CQ, and the schedule re-bases on NOW.
         e.js8_tick(base + 70 * 60_000);
-        assert_eq!(e.js8_state().queue.len(), 1, "a missed hour is skipped, never batched");
+        assert_eq!(
+            e.js8_state().queue.len(),
+            1,
+            "a missed hour is skipped, never batched"
+        );
         while !e.poll_tx(js8_slot_now() + 40).is_empty() {}
         // A BUSY OUTBOX IS NEVER STACKED ON. While a multi-frame operator message drains,
         // the schedule waits rather than queueing CQs behind it — otherwise ten quiet
@@ -34514,7 +34554,10 @@ mod tests {
         )
         .expect("queues");
         let frames = e.js8_state().queue.len();
-        assert!(frames >= 4, "control: the operator message really is multi-frame");
+        assert!(
+            frames >= 4,
+            "control: the operator message really is multi-frame"
+        );
         for min in 71..=80u64 {
             e.js8_tick(base + min * 60_000);
             assert!(
@@ -34578,7 +34621,10 @@ mod tests {
             e.poll_tx(js8_slot_now() + 2).is_empty(),
             "control: an operator frame is still bounded by the wall clock"
         );
-        assert!(e.tx_watchdog && !e.tx_enabled(), "…and the trip is a hard kill");
+        assert!(
+            e.tx_watchdog && !e.tx_enabled(),
+            "…and the trip is a hard kill"
+        );
     }
 
     // ===== B7.7 sender-class control =====

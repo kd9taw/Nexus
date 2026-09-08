@@ -1523,8 +1523,15 @@ mod tests {
         let mut s = Station::new(c);
         s.mark_active(0);
         s.set_cq(true, 0, 0);
-        assert_eq!(s.cq_next_ms(), Some(5 * 60 * 1000), "first CQ one interval out");
-        assert!(drain(&mut s, 60_000).is_none(), "nothing before the interval");
+        assert_eq!(
+            s.cq_next_ms(),
+            Some(5 * 60 * 1000),
+            "first CQ one interval out"
+        );
+        assert!(
+            drain(&mut s, 60_000).is_none(),
+            "nothing before the interval"
+        );
         // Four intervals pass with no tick in between (a suspended laptop, a busy loop).
         s.tick(20 * 60 * 1000);
         let mut sent = 0;
@@ -1532,7 +1539,10 @@ mod tests {
             assert_eq!(f.origin, Origin::CqRepeat);
             sent += 1;
         }
-        assert_eq!(sent, 1, "one CQ for the missed window, never a burst of four");
+        assert_eq!(
+            sent, 1,
+            "one CQ for the missed window, never a burst of four"
+        );
         assert_eq!(
             s.cq_next_ms(),
             Some(25 * 60 * 1000),
@@ -1570,9 +1580,19 @@ mod tests {
                 }
             }
         }
-        assert!(cqs_sent >= 10, "control: the repeat really ran ({cqs_sent} CQs)");
-        assert_eq!(tripped_at, Some(60), "the idle watchdog still trips at 60 min");
-        assert!(!s.cq_on() && s.cq_next_ms().is_none(), "the trip stops the repeat");
+        assert!(
+            cqs_sent >= 10,
+            "control: the repeat really ran ({cqs_sent} CQs)"
+        );
+        assert_eq!(
+            tripped_at,
+            Some(60),
+            "the idle watchdog still trips at 60 min"
+        );
+        assert!(
+            !s.cq_on() && s.cq_next_ms().is_none(),
+            "the trip stops the repeat"
+        );
         assert!(
             drain(&mut s, 100 * 60 * 1000).is_none(),
             "and nothing is left to key afterwards"
@@ -1595,7 +1615,10 @@ mod tests {
             &directed("W1AW", "KD9TAW", Some(Command::SnrQuery), None, "", -7),
             60_000,
         );
-        assert!(!s.cq_on() && s.cq_next_ms().is_none(), "a reply stops the CQ repeat");
+        assert!(
+            !s.cq_on() && s.cq_next_ms().is_none(),
+            "a reply stops the CQ repeat"
+        );
         assert!(s.hb_on(), "the heartbeat is not stopped");
         assert_eq!(
             s.hb_next_ms(),
@@ -1614,7 +1637,10 @@ mod tests {
         s.mark_active(0);
         s.set_cq(true, 3, 0);
         s.tick(60_000);
-        assert!(s.cq_on() && drain(&mut s, 60_000).is_some(), "precondition: it runs");
+        assert!(
+            s.cq_on() && drain(&mut s, 60_000).is_some(),
+            "precondition: it runs"
+        );
         s.halt();
         assert!(!s.cq_on() && s.cq_next_ms().is_none());
         s.tick(10 * 60_000);

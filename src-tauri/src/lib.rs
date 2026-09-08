@@ -26659,9 +26659,19 @@ mod tests {
     ///
     /// Ages are measured relative to the FRESHEST bird in the bundle, not to
     /// the wall clock: that anchors the fixture to the SET, so it survives
-    /// both the passage of time and a regenerated seed. Today's bundle: 367
-    /// birds, 337 inside the 30 d ceiling, 30 past it, median 0.2 d, oldest
-    /// admitted 25.5 d.
+    /// both the passage of time and a regenerated seed.
+    ///
+    /// ⚠️ The held-back tail is NOT asserted, and that is deliberate. `release-prep`
+    /// re-cuts this seed from the live catalogs at every release, so whether any bird
+    /// sits past the 30 d ceiling is satellite weather, not a property of this code —
+    /// the 2026-09-08 bundle (335 birds, oldest 21.5 d) has no tail at all, which is a
+    /// HEALTHIER catalog, not a regression. Asserting a tail made a good fetch fail the
+    /// release gate. The mechanism this test was written for — a max over admitted
+    /// birds parking just under the ceiling, so the headline must not follow the tail
+    /// down — is pinned bundle-free by `the_headline_does_not_park_just_under_the_30_day_ceiling` below.
+    /// What stays asserted here is what must hold for ANY shippable bundle: enough
+    /// usable birds, and a headline that describes the set rather than its oldest
+    /// member.
     #[test]
     fn the_set_wide_readout_describes_the_set_not_its_oldest_bird() {
         let seed = tle_seed(SEED_NOW).expect("the seed must load");
@@ -26699,11 +26709,17 @@ mod tests {
             TLE_ACT_STALE_DAYS,
         );
         assert!(c.usable >= 300, "usable birds: {}", c.usable);
-        assert!(
-            c.held_back > 0,
-            "the held-back birds are counted: {}",
-            c.held_back
-        );
+        // Counted when present; a tail-free bundle is a healthy catalog, not a failure.
+        if c.held_back > 0 {
+            assert_eq!(
+                c.usable + c.held_back,
+                raw.len(),
+                "every bird is either usable or held back: {} + {} != {}",
+                c.usable,
+                c.held_back,
+                raw.len()
+            );
+        }
         let headline = c.median_age_days.expect("usable birds exist");
         assert!(
             headline <= 14.0,
