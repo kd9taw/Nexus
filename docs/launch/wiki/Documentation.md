@@ -66,7 +66,7 @@ are indexed at
 | Guide | What it covers |
 |---|---|
 | [Program](https://github.com/kd9taw/Nexus/blob/main/docs/guide/program.md) | The radio-programming workbench: the repeaters around a location become a channel list, and the list becomes a CHIRP CSV |
-| [Settings reference](https://github.com/kd9taw/Nexus/blob/main/docs/guide/settings-reference.md) | A walk through all eight Settings tabs, field by field |
+| [Settings reference](https://github.com/kd9taw/Nexus/blob/main/docs/guide/settings-reference.md) | A walk through every Settings tab, field by field |
 
 ---
 

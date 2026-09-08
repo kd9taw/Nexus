@@ -474,6 +474,55 @@ describe('settings-reference.md matches SETTINGS_TABS', () => {
     expect(badAnchors).toEqual([])
   })
 
+  // A COUNT IS A CLAIM, AND IT ROTS SILENTLY. Three surfaces published a Settings tab count
+  // that nothing compared to the panel: the guide overview said nine, the wiki link hub said
+  // eight, and the PDF cover said eight, against ten tabs shipping. The generated page's own
+  // count is rewritten by gen-settings-reference.mjs on every run; every OTHER surface is
+  // hand-written and had no guard at all. So this reads the whole doc set plus the PDF cover
+  // (published manual prose that does not live in a .md) and compares any count it finds.
+  //
+  // The fix a red here usually wants is to DELETE the number — "every Settings tab" cannot go
+  // stale — which is why this asserts nothing about how many surfaces carry one.
+  describe('no surface publishes a stale Settings tab count', () => {
+    const WORDS = [
+      'zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten',
+      'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen',
+    ]
+    // Two phrasings, because the surfaces use two: "<n> Settings tabs" (the guide overview,
+    // the wiki hub, the PDF cover) and "organized into <n> tabs" (the generated page's lead,
+    // whose wording gen-settings-reference.mjs also depends on).
+    // `\s+`, not a space: the manual hard-wraps at ~78 columns, so "all nine Settings\n  tabs"
+    // is the normal shape of the claim. A space-literal regex read the wrapped form as absent
+    // and passed the planted control — the exact "nothing found is not a result" failure.
+    const COUNTS = [/\b(\w+)\s+Settings\s+tabs\b/gi, /\borganized\s+into\s+(\w+)\s+tabs\b/gi]
+    /** The number a word says, or -1 when it is not a number at all ("the tabs", "every tab"). */
+    const said = (word: string) =>
+      /^\d+$/.test(word) ? Number(word) : WORDS.indexOf(word.toLowerCase())
+
+    /** Every surface that can carry the claim: the doc set, plus the PDF cover copy. */
+    const surfaces = () => [...docCorpus(), repo('scripts/build-manual-pdf.py')]
+
+    const scan = (src: string, where: string) =>
+      COUNTS.flatMap((re) => [...src.matchAll(re)])
+        .map((m) => ({ n: said(m[1]), line: src.slice(0, m.index).split('\n').length, text: m[0] }))
+        .filter((h) => h.n >= 0)
+        .filter((h) => h.n !== labels.length)
+        .map((h) => `${where}:${h.line} says "${h.text.trim()}", SETTINGS_TABS has ${labels.length}`)
+
+    it('control: the scan finds a wrong count when one is planted', () => {
+      // Without this, a regex that stopped matching would report every surface as correct.
+      expect(scan('Settings is organized into three tabs.', 'planted')).toHaveLength(1)
+      // Wrapped, because that is how the guide actually writes it.
+      expect(scan('a walk through all three Settings\n  tabs, field by field.', 'planted')).toHaveLength(1)
+      expect(scan(`A walk through all ${WORDS[labels.length]} Settings tabs.`, 'planted')).toEqual([])
+    })
+
+    it('every published Settings tab count matches the panel', () => {
+      const stale = surfaces().flatMap((abs) => scan(read(abs), rel(abs)))
+      expect(stale, stale.join('\n')).toEqual([])
+    })
+  })
+
   it('every link into the settings reference resolves to a section that exists', () => {
     // The dead-tab-name failure was not the headings alone: pages across the doc set link
     // INTO tab anchors, and a consolidated tab leaves those pointing at nothing.
