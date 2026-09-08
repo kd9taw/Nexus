@@ -3183,7 +3183,7 @@ export default function App() {
           {/* JS8 keep-alive host — same contract as .rtty-host/.psk-host: the engine keeps
               decoding all four speeds while the operator is on another section; `active`
               gates the display poll and fires js8_enter on the rising edge. Gated on the
-              feature toggle (JS8 ships defaultOff), so a disabled section mounts nothing.
+              feature toggle (JS8 ships ON, so this mounts unless the operator turned it off).
               `onSetTxEnabled` is the header pill — the only TX latch in this view. */}
           {isViewEnabled('js8') && (
             <div className="js8-host" hidden={effectiveView !== 'js8'}>

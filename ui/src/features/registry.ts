@@ -269,11 +269,16 @@ export const FEATURES: FeatureDef[] = [
     // Mode, not a goal — same doctrine as CW/Phone/RTTY/PSK: a goal profile never auto-enables it.
     intents: [],
     view: 'js8',
-    // STAGED (defaultOff): hidden from every profile, 'everything' included, until the operator
-    // turns it on in Settings ▸ Features. It flips on in a later release, after the on-air bench
-    // against JS8Call (spec B8). Global (no workspace): the view asserts the DIGITAL rig mode
+    // ON by default since 2026-09 (operator ruling: "new releases should have js8call on by
+    // default, so users don't have to turn it on") — the `defaultOff` staging flag spec B8 asked
+    // for is gone, and JS8 now ships exactly like RTTY/PSK/SSTV/APRS: visible, toggleable in
+    // Settings ▸ Features. What the flip did NOT prove, and the next person here should know it:
+    // the four-speed on-air bench against JS8Call has NOT happened; Fast and Turbo have only ever
+    // been decoded from SYNTHETIC audio, never off the air; and Normal measures ~2 dB less
+    // sensitive than JS8Call. VISIBILITY is the only gate that opened — transmit still needs both
+    // acts (the session TX latch, then the per-mode arm), and `plan_js8_tx` gates on the latch
+    // regardless of this flag. Global (no workspace): the view asserts the DIGITAL rig mode
     // through rigModeForView and `js8_enter` sets the tier + the JS8 watering hole — RX only.
-    defaultOff: true,
     get oneLine() {
       return t('features.js8.oneLine')
     },

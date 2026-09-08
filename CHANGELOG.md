@@ -24,7 +24,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so Nexus derives it from the band edge. That is measured, not assumed — but check it against the
   rig's own scale, and the tooltip says so.
 
-- **JS8 transmits.** The JS8 section (shipped hidden — Settings ▸ Features) now keys every
+- **JS8 is on out of the box.** The JS8 section shipped hidden behind a Settings ▸ Features
+  toggle while it was new. It now sits in the Digital group of the rail, after APRS, with no
+  toggle to find first. Nothing else about it changed: opening it tunes the rig to the band's
+  JS8 watering hole and starts decoding all four speeds, and it still transmits nothing until
+  you enable TX in the header and switch on whatever you want it to send. If you don't operate
+  JS8, turn it off in Settings ▸ Appearance ▸ Features.
+
+  Two things worth knowing, because they have not changed either: the four speeds have not been
+  run side by side with JS8Call on the air yet — Fast and Turbo have only ever been decoded from
+  generated audio, never off a real band — and at Normal, Nexus needs roughly 2 dB more signal
+  than JS8Call to print the same message. Reports from the air are welcome.
+
+- **JS8 transmits.** The JS8 section now keys every
   period like JS8Call: your messages, CQ, heartbeats on a random free 500–1000 Hz slot, and —
   behind the session TX latch plus the persisted switch — autoreplies, relay and HB-ack, each
   with a visible, cancellable countdown. Heartbeats are exempt from the 6-minute TX watchdog

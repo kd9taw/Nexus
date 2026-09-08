@@ -1,7 +1,7 @@
 // The JS8 keep-alive host — WIRING pinned at the source level, the host-hidden.test.ts way,
 // because App cannot be mounted in jsdom (it blocks on the snapshot: "Connecting to Nexus…").
-// What must be true of the block: it is gated on the feature toggle (a disabled — and JS8 ships
-// defaultOff — section mounts nothing), it is hidden by `effectiveView` (never unmounted, so the
+// What must be true of the block: it is gated on the feature toggle (a section the operator turned
+// off mounts nothing — JS8 itself now ships ON), it is hidden by `effectiveView` (never unmounted, so the
 // activity stream keeps its scroll while the operator is elsewhere), and it passes the cockpit
 // exactly the props the other cockpit hosts pass — `active` (the display poll + the js8_enter
 // edge), `onSetTxEnabled` (the header pill is the ONLY TX latch in this view, the TopBar cluster
