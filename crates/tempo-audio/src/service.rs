@@ -26,6 +26,7 @@ use tempo_app::engine::{
     DecodeResult, Engine, Js8MultiJob, Js8Speed, PskStreamTick, RttyStreamTick, SatCatBackend,
 };
 use tempo_app::keyboard;
+use tempo_app::remote_monitor::provenance::{Connection as RemoteConnection, Read as RemoteRead};
 use tempo_core::tempo_fast;
 use tempo_core::timing::{now_unix_ms, SlotClock};
 
@@ -1535,7 +1536,11 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
     let mut applied = Transport::from_cfg(&cfg);
     // ⚠️ #145'S TWO DECLARATIONS HAVE TO REACH THE **FIRST** LAUNCH, so they are overlaid onto
     // the startup seed here — see [`seed_line_declarations`].
-    seed_line_declarations(&mut applied, engine_lock(&engine).settings());
+    let remote_radio_id = {
+        let eng = engine_lock(&engine);
+        seed_line_declarations(&mut applied, eng.settings());
+        eng.settings().active_radio
+    };
     // Initial open: allow coexisting onto a pre-existing EXTERNAL rigctld (e.g. WSJT-X already sharing
     // the rig). Mid-session rig SWITCHES pass `allow_coexist=false` when they reuse their own port.
     let (mut rig, rigctld_proc, init_probe) = open_rig(&applied, true);
@@ -1598,6 +1603,7 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
     // it in tests). The wrapper owns only the device edges (sound card + rigctld)
     // and injects their re-open side-effects.
     let mut state = RadioLoop::new(applied, rigctld_proc, &cfg);
+    state.remote_radio_id = Some(remote_radio_id);
     // Station-wide sinks live OUTSIDE the per-radio loop (multi-radio Phase 1 boundary):
     // one PSK buffer and one Field Day / club-board cursor for the whole station.
     let mut station = StationSinks::new();
@@ -2275,6 +2281,7 @@ fn handoff_if_switched(
         // The new active rig is ALREADY connected + on its own frequency; reset the per-rig caches so
         // step()'s retune re-asserts the restored dial/mode and the health/capability re-probe runs.
         state.reset_for_handoff();
+        state.remote_radio_id = Some(active);
         // The old active radio joins the monitor pool (stays live); the new active leaves it.
         p.push(MonitorConn {
             id: *last_active,
@@ -2706,6 +2713,8 @@ struct RadioLoop {
     /// underran and the shortfall went out as silence). Kept at [`TUNE_LEAD_MS`]; see it.
     tune_queued_ms: f32,
     applied: Transport,
+    remote_radio_id: Option<u32>,
+    remote_connection: Option<RemoteConnection>,
     /// Set when a handoff bailed on the pool lock: step() skips ONE rig_differs rebuild
     /// tick so the handoff (not a fresh spawn racing the monitor's port) wins.
     handoff_deferred: bool,
@@ -3256,8 +3265,39 @@ struct RadioLoop {
 }
 
 impl RadioLoop {
+    /// Bind a fresh read to the actual transport, before I/O. Never infer an ID
+    /// from whichever profile happens to be active when the reply arrives.
+    fn remote_read(&mut self, engine: &Arc<Mutex<Engine>>) -> Option<RemoteRead> {
+        if self.handoff_deferred || self.cat_hold_active {
+            return None;
+        }
+        let mut eng = engine_lock(engine);
+        if self.remote_radio_id != Some(eng.settings().active_radio) {
+            return None;
+        }
+        let mut want = Transport::from_settings(eng.settings());
+        self.apply_port_alias(&mut want);
+        if want != self.applied {
+            return None;
+        }
+        let now = Instant::now();
+        if let Some(read) = self
+            .remote_connection
+            .as_ref()
+            .and_then(|c| eng.remote_radio_read(c, now))
+        {
+            return Some(read);
+        }
+        self.remote_connection = eng.remote_open_radio();
+        self.remote_connection
+            .as_ref()
+            .and_then(|c| eng.remote_radio_read(c, now))
+    }
+
     fn new(applied: Transport, rigctld_proc: Option<CatDaemon>, cfg: &RadioConfig) -> Self {
         Self {
+            remote_radio_id: None,
+            remote_connection: None,
             yaesu_wf: None,
             yaesu_wf_key: None,
             yaesu_wf_meta: std::sync::Arc::new(std::sync::Mutex::new(None)),
@@ -4673,6 +4713,7 @@ impl RadioLoop {
     }
 
     fn reset_for_handoff(&mut self) {
+        self.remote_connection = None;
         self.last_dial = 0; // != any real dial → force the retune to command the restored freq
         self.last_mode = String::new(); // force the mode re-assert
         self.rig_asserted = false; // belt-and-braces: the retune re-asserts + re-latches same tick
@@ -4917,8 +4958,10 @@ impl RadioLoop {
             // last "off" — so the guard it was written to be was answering about
             // a rig that had not been transmitting when it was asked. See
             // `RadioLoop::operator_keyed`.
+            let remote_want_radio;
             let (want, dial, md, reprobe_req, force_retune, split_req, fm, cat_hold, section_cw) = {
                 let mut eng = engine_lock(engine);
+                remote_want_radio = eng.settings().active_radio;
                 // FM repeater config (shift, band-offset magnitude, CTCSS) — applied below
                 // only when the mode policy resolves to FM. Computed first (owned) so the
                 // mutable take_* calls that follow don't fight the settings borrow. APRS forces
@@ -5065,6 +5108,7 @@ impl RadioLoop {
                         // `cat_hold_active` is therefore part of `may_key`, so no key-up runs
                         // until the transport is rebuilt.
                         eng.halt_tx_for_context_change("CAT probe hold");
+                        eng.remote_close_radio();
                     }
                     self.rigctld_proc = None; // drop kills + reaps the daemon (frees the port)
                     *rig = Rig::vox();
@@ -5124,6 +5168,9 @@ impl RadioLoop {
                 self.rigctld_proc = None; // drop kills + reaps the old daemon (frees its port)
                                           // A rig that came back under a NEW port name is followed by USB identity.
                 let open_want = self.resolve_port_alias(&want);
+                engine_lock(engine).remote_close_radio();
+                self.remote_connection = None;
+                self.remote_radio_id = Some(remote_want_radio);
                 let (new_rig, proc, probe) = reopen_rig(&open_want, allow_coexist);
                 let (ok, detail) = (probe.ok, probe.detail);
                 let detail = if suspect_rebuild && !daemon_died {
@@ -6052,8 +6099,14 @@ impl RadioLoop {
                         self.func_misses[i] = 0;
                     }
                 }
+                let remote_read = self.remote_read(engine);
                 match rig.read_freq() {
                     Ok(hz) => {
+                        {
+                            let mut eng = engine_lock(engine);
+                            eng.remote_observe_cat(remote_read.as_ref(), Some(true));
+                            eng.remote_observe_dial(remote_read.as_ref(), Some(hz));
+                        }
                         self.freq_misses = 0; // a good read clears the breaker's miss run
                                               // A tripped breaker's re-probe answered: the link is BACK. Reset the health
                                               // verdict + the backoff and re-probe the rig's capabilities, exactly like
@@ -6313,9 +6366,11 @@ impl RadioLoop {
                         // rather than being drained against a mode we did not read.
                         if self.rig_poll_ticks.is_multiple_of(4) && have_budget() {
                             // One `m` read gives BOTH the mode (mirror) and the RX passband width.
+                            let remote_mode = self.remote_read(engine);
                             let (m, pb) = rig.read_mode_passband();
                             {
                                 let mut eng = engine_lock(engine);
+                                eng.remote_observe_mode(remote_mode.as_ref(), m.as_deref());
                                 if let Some(ref mm) = m {
                                     eng.observe_rig_mode(mm.clone());
                                 }
@@ -6553,6 +6608,10 @@ impl RadioLoop {
                     // means nothing, so it must NOT trip the breaker.
                     Err(e) => {
                         // A real CAT rig tolerates a few consecutive misses before tripping — a slow
+                        engine_lock(engine).remote_observe_cat(
+                            remote_read.as_ref(),
+                            rig.has_control().then_some(false),
+                        );
                         // reply cut off by the short serial deadline must not permanently kill
                         // read-back. A VOX/serial rig errors instantly + meaninglessly: never counts.
                         if rig.has_control() {
@@ -6644,7 +6703,13 @@ impl RadioLoop {
                 && now - self.last_freq_poll >= FREQ_POLL_MS
             {
                 self.last_freq_poll = now;
+                let remote_read = self.remote_read(engine);
                 if let Ok(hz) = rig.read_freq() {
+                    {
+                        let mut eng = engine_lock(engine);
+                        eng.remote_observe_cat(remote_read.as_ref(), Some(true));
+                        eng.remote_observe_dial(remote_read.as_ref(), Some(hz));
+                    }
                     if hz != self.last_dial {
                         self.last_dial = hz;
                         {
@@ -8547,7 +8612,10 @@ impl RadioLoop {
                 };
                 if now - self.last_ptt_poll >= interval {
                     self.last_ptt_poll = now;
-                    if let Some(on) = rig.read_ptt() {
+                    let remote_read = self.remote_read(engine);
+                    let ptt_read = rig.read_ptt();
+                    engine_lock(engine).remote_observe_ptt(remote_read.as_ref(), ptt_read);
+                    if let Some(on) = ptt_read {
                         // Two different facts, two different verbs, and the
                         // difference is the whole point of the second one: the
                         // CHANGE of belief is adopted only when it changes, while
@@ -11704,6 +11772,75 @@ fn probe_cat_or_explain(rig: &mut Rig, t: &Transport) -> (Option<bool>, String) 
 #[cfg(test)]
 mod tests {
     use super::should_command_rf_power;
+
+    #[test]
+    fn remote_reads_require_the_owned_radio_transport_and_survive_only_their_generation() {
+        let engine = Arc::new(Mutex::new(Engine::with_settings(test_settings())));
+        let mut state = loop_state();
+        state.applied = Transport::from_settings(engine_lock(&engine).settings());
+        let id = engine_lock(&engine).settings().active_radio;
+        state.remote_radio_id = Some(id);
+        let blocked = state.remote_read(&engine).unwrap();
+        {
+            let mut eng = engine_lock(&engine);
+            eng.remote_observe_cat(Some(&blocked), Some(true));
+            assert_eq!(
+                eng.remote_monitor_observation().radio.cat_connected,
+                Some(true)
+            );
+            let other = eng.add_radio();
+            eng.set_active_radio(other);
+        }
+        assert!(state.remote_read(&engine).is_none());
+        {
+            let mut eng = engine_lock(&engine);
+            eng.set_active_radio(id);
+            eng.remote_observe_cat(Some(&blocked), Some(true));
+            assert_eq!(eng.remote_monitor_observation().radio.cat_connected, None);
+        }
+        // Complete the transport adoption as the real handoff/step does. Profile
+        // port repair may have changed the transport while the test switched.
+        state.applied = Transport::from_settings(engine_lock(&engine).settings());
+        let fresh = state.remote_read(&engine).unwrap();
+        engine_lock(&engine).remote_observe_cat(Some(&fresh), Some(true));
+        state.applied.serial_port = "wrong-test-port".into();
+        assert!(state.remote_read(&engine).is_none());
+        state.applied = Transport::from_settings(engine_lock(&engine).settings());
+        state.handoff_deferred = true;
+        assert!(state.remote_read(&engine).is_none());
+        state.handoff_deferred = false;
+        state.cat_hold_active = true;
+        assert!(state.remote_read(&engine).is_none());
+    }
+
+    #[test]
+    fn remote_projection_is_fed_by_the_actual_loop_read_and_clears_unsupported_ptt() {
+        let engine = atu_engine();
+        let (addr, log) = mock_rigctld_on(14_290_000, false);
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state();
+        state.applied = Transport::from_settings(engine_lock(&engine).settings());
+        state.remote_radio_id = Some(engine_lock(&engine).settings().active_radio);
+        run_heavy_polls(&engine, &mut state, &mut rig, &mut backend, 5);
+        let observation = engine_lock(&engine).remote_monitor_observation();
+        assert_eq!(observation.radio.cat_connected, Some(true));
+        assert_eq!(observation.radio.rig_dial_mhz, Some(14.290));
+        assert!(observation.radio.readings.dial.is_some());
+        assert_eq!(
+            observation.radio.rig_keyed, None,
+            "the stub never supplies a PTT reading"
+        );
+        let commands = log.lock().unwrap();
+        assert!(
+            commands.iter().any(|c| c == "f"),
+            "positive control: hardware read occurred"
+        );
+        assert!(
+            !commands.iter().any(|c| c == "T 1"),
+            "observing cannot key the radio"
+        );
+    }
 
     /// #126 (KD9WES, FTDX-101D). The load-bearing rule: the loop must NEVER command RF power
     /// while a transmission is up — WSJT-X sets power before it keys and never touches it during

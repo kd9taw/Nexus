@@ -4,7 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { MonitorApp } from './MonitorApp'
 import { nativeSource } from './nativeSource'
 import { ampCommand } from '../api'
-import fixtures from './fixtures.v1.json'
+import fixtures from './fixtures.v2.json'
 import type { MonitorSource } from './session'
 
 afterEach(() => {

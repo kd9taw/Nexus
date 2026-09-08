@@ -282,13 +282,45 @@ pub fn kpa_dto(s: &KpaStatus) -> AmpStatusDto {
     }
 }
 
+/// Capture the configured owner before I/O. A reply never acquires the identity
+/// of a profile selected while the serial operation was blocked.
+#[cfg(any(test, all(feature = "device", feature = "serial")))]
+fn remote_amp_read(
+    engine: &mut tempo_app::engine::Engine,
+    id: u32,
+    family: &str,
+    port: &str,
+    connection: &mut Option<tempo_app::remote_monitor::provenance::Connection>,
+    reopening: bool,
+) -> Option<tempo_app::remote_monitor::provenance::Read> {
+    let matches = engine.settings().active_profile().is_some_and(|p| {
+        p.id == id && p.amp_model.trim().eq_ignore_ascii_case(family) && p.amp_port.trim() == port
+    });
+    if !matches {
+        return None;
+    }
+    let now = std::time::Instant::now();
+    if !reopening {
+        if let Some(read) = connection
+            .as_ref()
+            .and_then(|c| engine.remote_amp_read(c, now))
+        {
+            return Some(read);
+        }
+    }
+    *connection = engine.remote_open_amp();
+    connection
+        .as_ref()
+        .and_then(|c| engine.remote_amp_read(c, now))
+}
+
 /// The port-owning half. Needs `serial` for the links themselves and `device` for the process
 /// shutdown flag; neither alone is enough, and src-tauri's `radio` feature turns on both.
 #[cfg(all(feature = "device", feature = "serial"))]
 mod imp {
     use super::{
-        backoff_ms, drop_pending, follow_step, kpa_dto, queue_amp_command, reason_for, spe_dto,
-        take_pending, FAMILY_KPA, FAMILY_SPE, POLL,
+        backoff_ms, drop_pending, follow_step, kpa_dto, queue_amp_command, reason_for,
+        remote_amp_read, spe_dto, take_pending, FAMILY_KPA, FAMILY_SPE, POLL,
     };
     use crate::amplifier::{KpaLink, KpaStatus, SpeLink};
     use crate::service::SHUTDOWN;
@@ -315,6 +347,7 @@ mod imp {
 
     fn run(engine: Arc<Mutex<Engine>>) {
         let mut link: Option<Link> = None;
+        let mut remote_connection = None;
         // (radio id, family, port) the link above was opened for. `None` = nothing configured.
         let mut applied: Option<Cfg> = None;
         let mut open_failures: u32 = 0;
@@ -407,6 +440,14 @@ mod imp {
                     continue;
                 }
                 // OFF THE LOCK. `KpaLink::open` sweeps four data rates at 250 ms apiece.
+                let remote_open = remote_amp_read(
+                    &mut engine_lock(&engine),
+                    id,
+                    &family,
+                    &port,
+                    &mut remote_connection,
+                    true,
+                );
                 let opened = match family.as_str() {
                     FAMILY_SPE => SpeLink::open(&port).map(Link::Spe),
                     FAMILY_KPA => KpaLink::open(&port).map(|(l, _baud)| Link::Kpa(l)),
@@ -427,7 +468,16 @@ mod imp {
                         reason = reason_for(&e);
                         retry_after = Instant::now()
                             + std::time::Duration::from_millis(backoff_ms(open_failures));
-                        engine_lock(&engine).observe_amp_miss(id, &family, reason);
+                        let mut eng = engine_lock(&engine);
+                        eng.remote_observe_amp(
+                            remote_open.as_ref(),
+                            tempo_app::dto::AmpStatusDto {
+                                family: family.clone(),
+                                reason: reason.into(),
+                                ..Default::default()
+                            },
+                        );
+                        eng.observe_amp_miss(id, &family, reason);
                         continue;
                     }
                 }
@@ -439,6 +489,14 @@ mod imp {
             // SETs name the state they want, so translating an intent needs to know which state
             // the amplifier is in. The SPE needs no such thing — its OPERATE is a flip.
             let mut kpa_now: Option<KpaStatus> = None;
+            let remote_read = remote_amp_read(
+                &mut engine_lock(&engine),
+                id,
+                &family,
+                &port,
+                &mut remote_connection,
+                false,
+            );
             let read = match link.as_mut() {
                 Some(Link::Spe(l)) => l.poll().map(|s| spe_dto(&s)),
                 Some(Link::Kpa(l)) => l.poll().map(|s| {
@@ -518,7 +576,20 @@ mod imp {
                             }
                         }
                     }
-                    engine_lock(&engine).observe_amp_status(id, dto);
+                    let mut eng = engine_lock(&engine);
+                    eng.remote_observe_amp(
+                        remote_read.as_ref(),
+                        if link.is_some() {
+                            dto.clone()
+                        } else {
+                            tempo_app::dto::AmpStatusDto {
+                                family: family.clone(),
+                                reason: "noAnswer".into(),
+                                ..Default::default()
+                            }
+                        },
+                    );
+                    eng.observe_amp_status(id, dto);
                 }
                 Err(e) => {
                     reason = reason_for(&e);
@@ -531,7 +602,16 @@ mod imp {
                     open_failures = open_failures.saturating_add(1);
                     retry_after = Instant::now()
                         + std::time::Duration::from_millis(backoff_ms(open_failures));
-                    engine_lock(&engine).observe_amp_miss(id, &family, reason);
+                    let mut eng = engine_lock(&engine);
+                    eng.remote_observe_amp(
+                        remote_read.as_ref(),
+                        tempo_app::dto::AmpStatusDto {
+                            family: family.clone(),
+                            reason: reason.into(),
+                            ..Default::default()
+                        },
+                    );
+                    eng.observe_amp_miss(id, &family, reason);
                 }
             }
         }
@@ -543,6 +623,91 @@ pub use imp::spawn_amp_poll;
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn remote_amp_binding_rejects_wrong_ports_and_delayed_replies_after_reconnect() {
+        let mut settings = tempo_app::settings::Settings {
+            amp_model: "spe".into(),
+            amp_port: "amp-test-port".into(),
+            ..Default::default()
+        };
+        settings.ensure_radio_profiles();
+        let mut engine = tempo_app::engine::Engine::with_settings(settings);
+        let id = engine.settings().active_radio;
+        let mut connection = None;
+        assert!(super::remote_amp_read(
+            &mut engine,
+            id,
+            "spe",
+            "wrong-port",
+            &mut connection,
+            false
+        )
+        .is_none());
+        let old = super::remote_amp_read(
+            &mut engine,
+            id,
+            "spe",
+            "amp-test-port",
+            &mut connection,
+            false,
+        )
+        .unwrap();
+        let fresh = super::remote_amp_read(
+            &mut engine,
+            id,
+            "spe",
+            "amp-test-port",
+            &mut connection,
+            true,
+        )
+        .unwrap();
+        let status = super::AmpStatusDto {
+            family: "spe".into(),
+            linked: true,
+            output_watts: Some(50),
+            ..Default::default()
+        };
+        engine.remote_observe_amp(Some(&old), status.clone());
+        assert_eq!(
+            engine
+                .remote_monitor_observation()
+                .amplifier
+                .unwrap()
+                .output_watts,
+            None
+        );
+        engine.remote_observe_amp(Some(&fresh), status.clone());
+        assert_eq!(
+            engine
+                .remote_monitor_observation()
+                .amplifier
+                .unwrap()
+                .output_watts,
+            Some(50)
+        );
+        let other = engine.add_radio();
+        engine.set_active_radio(other);
+        assert!(super::remote_amp_read(
+            &mut engine,
+            id,
+            "spe",
+            "amp-test-port",
+            &mut connection,
+            false
+        )
+        .is_none());
+        engine.set_active_radio(id);
+        engine.remote_observe_amp(Some(&fresh), status);
+        assert_eq!(
+            engine
+                .remote_monitor_observation()
+                .amplifier
+                .unwrap()
+                .output_watts,
+            None
+        );
+    }
+
     fn amp_on(band: Option<&str>) -> AmpStatusDto {
         AmpStatusDto {
             family: FAMILY_SPE.into(),

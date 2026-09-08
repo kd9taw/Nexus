@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use tempo_app::dto::AmpStatusDto;
 use tempo_app::engine::Engine;
-use tempo_app::remote_monitor::{Frame, Source, VERSION};
+use tempo_app::remote_monitor::{Amplifier, Frame, ReadAge, Source, VERSION};
 use tempo_app::settings::Settings;
 
 fn main() {
@@ -23,18 +23,33 @@ fn main() {
     let mut fixtures = BTreeMap::new();
     let mut capture = |name: &str, engine: &Engine| {
         let mut station = engine.remote_monitor_observation();
+        let age = ReadAge {
+            connection_generation: 1,
+            read_sequence: 1,
+            age_ms: 0,
+        };
+        if let Some(amp) = station.amplifier.as_mut() {
+            if let Some(status) = engine.amp_live(engine.settings().active_radio) {
+                *amp = Amplifier::from_status(status, amp.follow_band);
+                amp.reading = Some(age);
+            }
+        }
         // Explicit protocol examples, not claims about the legacy native CAT
         // mirrors: those lack radio/read provenance and remain unknown in IPC.
         if name != "noAmp" {
             station.radio.cat_connected = Some(name != "catLost");
             station.radio.rig_keyed = (name != "catLost").then_some(false);
+            station.radio.readings.cat = Some(age);
+            station.radio.readings.ptt = station.radio.rig_keyed.map(|_| age);
+            station.radio.rig_dial_mhz = (name != "catLost").then_some(14.074);
+            station.radio.readings.dial = station.radio.rig_dial_mhz.map(|_| age);
         }
         fixtures.insert(
             name.to_string(),
             Frame {
                 version: VERSION,
                 source: Source::Fixture,
-                epoch: "example-station-v1".into(),
+                epoch: "example-station-v2".into(),
                 sequence: 1,
                 generated_at_ms: 1_788_768_000_000,
                 station,
@@ -114,7 +129,7 @@ fn main() {
     if std::env::args().any(|arg| arg == "--check") {
         assert_eq!(
             output,
-            include_str!("../../../ui/src/remote-monitor/fixtures.v1.json"),
+            include_str!("../../../ui/src/remote-monitor/fixtures.v2.json"),
             "regenerate remote monitor fixtures with this example"
         );
     } else {

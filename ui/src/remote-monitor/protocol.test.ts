@@ -1,8 +1,38 @@
 import { describe, expect, it } from 'vitest'
-import fixtures from './fixtures.v1.json'
-import { FrameOrder, MAX_FRAME_BYTES, parseFrame } from './protocol'
+import fixtures from './fixtures.v2.json'
+import { ageFrame, FrameOrder, MAX_FRAME_BYTES, parseFrame } from './protocol'
 
-describe('Rust v1 observer boundary', () => {
+describe('Rust v2 observer boundary', () => {
+  it('requires attributable readings and rejects mixed radio connections', () => {
+    const missing = structuredClone(fixtures.spe)
+    missing.station.radio.readings.cat = null as never
+    expect(() => parseFrame(missing, 'fixture')).toThrow()
+    const mixed = structuredClone(fixtures.spe)
+    mixed.station.radio.readings.ptt!.connectionGeneration++
+    expect(() => parseFrame(mixed, 'fixture')).toThrow()
+    const legacyAmp = structuredClone(fixtures.spe)
+    legacyAmp.station.amplifier!.reading = null as never
+    expect(() => parseFrame(legacyAmp, 'fixture')).toThrow()
+    const negative = structuredClone(fixtures.spe)
+    negative.station.radio.readings.cat!.ageMs = -1
+    expect(() => parseFrame(negative, 'fixture')).toThrow()
+  })
+  it('expires measurements without changing the publication or refreshing other fields', () => {
+    const original = parseFrame(structuredClone(fixtures.spe), 'fixture')
+    original.station.radio.readings.ptt!.ageMs = 4900
+    original.station.amplifier!.reading!.ageMs = 4700
+    const first = ageFrame(original, 200)
+    expect(first.station.radio.rigKeyed).toBeNull()
+    expect(first.station.radio.catConnected).toBe(true)
+    expect(first.station.amplifier!.outputWatts).toBe(0)
+    const later = ageFrame(original, 400)
+    expect(later.station.amplifier!.outputWatts).toBeNull()
+    expect(later.station.amplifier!.operate).toBeNull()
+    expect(later.station.amplifier!.reading).toBeNull()
+    expect(later.sequence).toBe(original.sequence)
+    expect(later.generatedAtMs).toBe(original.generatedAtMs)
+    expect(original.station.radio.rigKeyed).toBe(false)
+  })
   it('consumes every Rust-serialized fixture, retaining missing readings and family semantics', () => {
     expect(Object.keys(fixtures)).toHaveLength(9)
     for (const value of Object.values(fixtures)) {
@@ -15,7 +45,7 @@ describe('Rust v1 observer boundary', () => {
     expect(fixtures.noAmp.station.amplifier).toBeNull()
   })
   it('rejects versions, wrong sources, missing/extra fields and unbounded values', () => {
-    for (const patch of [{ version: 2 }, { source: 'native' }, { sequence: 0 },
+    for (const patch of [{ version: 1 }, { source: 'native' }, { sequence: 0 },
       { sequence: Number.MAX_SAFE_INTEGER + 1 }, { epoch: 'x'.repeat(65) }, { settings: {} }]) {
       expect(() => parseFrame({ ...fixtures.spe, ...patch }, 'fixture')).toThrow()
     }

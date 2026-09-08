@@ -4,12 +4,34 @@
 use crate::dto::AmpStatusDto;
 use serde::{Deserialize, Serialize};
 
-pub const VERSION: u8 = 1;
+pub mod provenance;
+
+pub const VERSION: u8 = 2;
 pub const POLL_MS: u64 = 500;
 pub const STALE_MS: u64 = 3_000;
 pub const MAX_FRAME_BYTES: usize = 16_384;
 pub const MAX_TEXT_CHARS: usize = 64;
 pub const MAX_SEQUENCE: u64 = 9_007_199_254_740_991;
+pub const MEASUREMENT_STALE_MS: u64 = 5_000;
+pub const MODE_STALE_MS: u64 = 10_000;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReadAge {
+    pub connection_generation: u64,
+    pub read_sequence: u64,
+    /// Monotonic age since the transport read STARTED, computed at publication.
+    pub age_ms: u64,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RadioReadings {
+    pub cat: Option<ReadAge>,
+    pub dial: Option<ReadAge>,
+    pub mode: Option<ReadAge>,
+    pub ptt: Option<ReadAge>,
+}
 
 pub fn bounded(value: &str) -> String {
     value.chars().take(MAX_TEXT_CHARS).collect()
@@ -35,6 +57,46 @@ pub struct Frame {
     pub station: Observation,
 }
 
+impl Frame {
+    /// A cached publication never renews a hardware measurement. Keep its epoch,
+    /// sequence and publication time while accounting for residence in the cache.
+    pub fn aged(mut self, elapsed_ms: u64) -> Self {
+        fn advance(age: &mut Option<ReadAge>, elapsed: u64, limit: u64) -> bool {
+            *age = age.and_then(|mut a| {
+                a.age_ms = a.age_ms.saturating_add(elapsed);
+                (a.age_ms < limit).then_some(a)
+            });
+            age.is_some()
+        }
+        let radio = &mut self.station.radio;
+        if !advance(&mut radio.readings.cat, elapsed_ms, MEASUREMENT_STALE_MS) {
+            radio.cat_connected = None;
+        }
+        if !advance(&mut radio.readings.dial, elapsed_ms, MEASUREMENT_STALE_MS) {
+            radio.rig_dial_mhz = None;
+        }
+        if !advance(&mut radio.readings.mode, elapsed_ms, MODE_STALE_MS) {
+            radio.rig_mode = None;
+        }
+        if !advance(&mut radio.readings.ptt, elapsed_ms, MEASUREMENT_STALE_MS) {
+            radio.rig_keyed = None;
+        }
+        if let Some(amp) = self.station.amplifier.as_mut() {
+            if !advance(&mut amp.reading, elapsed_ms, MEASUREMENT_STALE_MS) {
+                *amp = Amplifier::from_status(
+                    &AmpStatusDto {
+                        family: amp.family.clone(),
+                        model: amp.model.clone(),
+                        ..Default::default()
+                    },
+                    amp.follow_band,
+                );
+            }
+        }
+        self
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Observation {
@@ -51,6 +113,7 @@ pub struct Radio {
     pub name: String,
     /// Nexus station dial; this is not confirmation from the physical radio.
     pub dial_mhz: Option<f64>,
+    pub rig_dial_mhz: Option<f64>,
     pub band: String,
     pub mode: String,
     pub rig_mode: Option<String>,
@@ -59,11 +122,13 @@ pub struct Radio {
     pub rig_keyed: Option<bool>,
     /// The existing transmitter arbiter owns some activity, across operating modes.
     pub nexus_busy: bool,
+    pub readings: RadioReadings,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Amplifier {
+    pub reading: Option<ReadAge>,
     pub family: String,
     pub model: String,
     pub follow_band: bool,
@@ -89,9 +154,10 @@ pub struct Amplifier {
 
 impl Amplifier {
     pub fn from_status(status: &AmpStatusDto, follow_band: bool) -> Self {
-        // Copy only the declared v1 fields. Adding a desktop DTO field cannot silently
+        // Copy only the declared fields. Adding a desktop DTO field cannot silently
         // grow this surface. Null readings survive the very first missed poll.
         Self {
+            reading: None, // only the transport provenance cache can certify a read
             family: bounded(&status.family),
             model: bounded(&status.model),
             follow_band,
@@ -125,7 +191,7 @@ mod tests {
         // The browser preview and TS boundary tests consume these exact Rust-serialized
         // frames. Requiring byte-equivalent JSON values catches either side drifting.
         let fixtures: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../ui/src/remote-monitor/fixtures.v1.json"
+            "../../../ui/src/remote-monitor/fixtures.v2.json"
         ))
         .unwrap();
         assert_eq!(fixtures.as_object().unwrap().len(), 9);

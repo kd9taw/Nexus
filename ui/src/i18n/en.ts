@@ -94,6 +94,9 @@
 import type { Message } from './types'
 
 export const EN = {
+  "monitor.measurementAge": "Measurement age",
+  "monitor.measuredAgo": "Measured {{seconds}} s ago",
+  "monitor.rigDial": "Reported radio frequency",
   'monitor.title': 'Station monitor',
   'monitor.observer': 'Monitoring only',
   'monitor.native': 'Desktop station',

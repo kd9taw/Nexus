@@ -2556,6 +2556,7 @@ pub struct Engine {
     /// `None` for VOX (no CAT), `Some(true/false)` for a CAT/serial rig. Written
     /// by the radio loop when it (re)opens or probes the rig.
     cat_status: (Option<bool>, String),
+    remote_readings: crate::remote_monitor::provenance::Observations,
     /// Dual-radio: LIVE read-back state for the NON-active radios, keyed by radio id. The monitor
     /// thread (one CAT poll per non-active radio, read-only) feeds these via `observe_radio_*`; the
     /// snapshot's `radios[]` shows each radio's live freq/mode/S-meter/CAT-health from here instead of
@@ -4317,6 +4318,7 @@ impl Engine {
             cw_stream: tempo_core::cw_decode::CwStreamDecoder::new(tempo_fast::SAMPLE_RATE, 600.0),
             qso_audio: Vec::new(),
             cat_status: (None, String::new()),
+            remote_readings: Default::default(),
             cat_probe_gen: 0,
             cat_port_hold_until: None,
             cat_port_released: false,
@@ -4558,6 +4560,7 @@ impl Engine {
     }
 
     fn apply_settings_inner(&mut self, s: Settings, keep_live_roster: bool) {
+        self.remote_readings.invalidate();
         // THE FT-710 SCOPE OPT-IN GOING OFF is the second moment the held scope state stops
         // describing anything — the first is a radio switch (`set_active_radio`). Read BEFORE the
         // new settings land, because after the assignment the old answer is gone and the edge is
@@ -5031,6 +5034,7 @@ impl Engine {
         if id == self.settings.active_radio || !self.settings.radios.iter().any(|p| p.id == id) {
             return;
         }
+        self.remote_readings.invalidate();
         // THE CONTEXT EVERY OTHER LINE IS READ AGAINST. Past the no-op guard above, so this is
         // a real transition and fires once per operator action — never on a timer.
         let from = self
@@ -5256,6 +5260,8 @@ impl Engine {
     /// re-synced from it so the running loop picks the edits up; if it isn't, the active radio (and
     /// its flat mirror) are left completely untouched. `active_radio` is never changed here.
     pub fn update_radio_profile(&mut self, id: u32, patch: crate::settings::RadioProfilePatch) {
+        // Port collision repair can also change the active profile when editing another.
+        self.remote_readings.invalidate();
         if let Some(p) = self.settings.radios.iter_mut().find(|p| p.id == id) {
             patch.apply_to(p);
         }
@@ -15518,20 +15524,93 @@ impl Engine {
         median < DT_OK_THRESHOLD
     }
 
+    /// The caller must bind the actual owned transport before starting I/O.
+    /// Reopening retires all previous measurements, even for the same radio ID.
+    pub fn remote_open_radio(&mut self) -> Option<crate::remote_monitor::provenance::Connection> {
+        self.remote_readings.open_radio(self.settings.active_radio)
+    }
+
+    pub fn remote_close_radio(&mut self) {
+        self.remote_readings.invalidate_radio();
+    }
+
+    pub fn remote_open_amp(&mut self) -> Option<crate::remote_monitor::provenance::Connection> {
+        self.remote_readings.open_amp(self.settings.active_radio)
+    }
+
+    pub fn remote_radio_read(
+        &mut self,
+        connection: &crate::remote_monitor::provenance::Connection,
+        now: std::time::Instant,
+    ) -> Option<crate::remote_monitor::provenance::Read> {
+        self.remote_readings.radio_read(connection, now)
+    }
+
+    pub fn remote_amp_read(
+        &mut self,
+        connection: &crate::remote_monitor::provenance::Connection,
+        now: std::time::Instant,
+    ) -> Option<crate::remote_monitor::provenance::Read> {
+        self.remote_readings.amp_read(connection, now)
+    }
+
+    pub fn remote_observe_cat(
+        &mut self,
+        read: Option<&crate::remote_monitor::provenance::Read>,
+        value: Option<bool>,
+    ) {
+        self.remote_readings.cat(read, value);
+    }
+
+    pub fn remote_observe_dial(
+        &mut self,
+        read: Option<&crate::remote_monitor::provenance::Read>,
+        hz: Option<u64>,
+    ) {
+        self.remote_readings.dial(read, hz);
+    }
+
+    pub fn remote_observe_mode(
+        &mut self,
+        read: Option<&crate::remote_monitor::provenance::Read>,
+        value: Option<&str>,
+    ) {
+        self.remote_readings.mode(read, value);
+    }
+
+    pub fn remote_observe_ptt(
+        &mut self,
+        read: Option<&crate::remote_monitor::provenance::Read>,
+        value: Option<bool>,
+    ) {
+        self.remote_readings.ptt(read, value);
+    }
+
+    pub fn remote_observe_amp(
+        &mut self,
+        read: Option<&crate::remote_monitor::provenance::Read>,
+        status: crate::dto::AmpStatusDto,
+    ) {
+        self.remote_readings.amp(read, status);
+    }
+
     /// Constant-size monitoring read. Never builds the full snapshot, scans the
     /// logbook or drains decode output. Radio and amp are copied in one engine borrow.
     pub fn remote_monitor_observation(&self) -> crate::remote_monitor::Observation {
-        use crate::remote_monitor::{bounded, Amplifier, Observation, Radio};
+        self.remote_monitor_observation_at(std::time::Instant::now())
+    }
+
+    pub fn remote_monitor_observation_at(
+        &self,
+        now: std::time::Instant,
+    ) -> crate::remote_monitor::Observation {
+        use crate::remote_monitor::{bounded, Observation, Radio};
         let profile = self.settings.active_profile();
         let amplifier = profile
             .filter(|p| !p.amp_model.is_empty() && !p.amp_port.is_empty())
             .map(|p| {
-                let waiting = crate::dto::AmpStatusDto {
-                    family: bounded(&p.amp_model),
-                    ..Default::default()
-                };
-                let status = self.amp_live(p.id).filter(|a| a.family == p.amp_model);
-                Amplifier::from_status(status.unwrap_or(&waiting), p.amp_follow_band)
+                self.remote_readings
+                    .project_amp(&p.amp_model, p.amp_follow_band, now)
             });
         let mode = match self.settings.operating_mode {
             crate::settings::OperatingMode::Digital => self.tier().label(),
@@ -15540,7 +15619,7 @@ impl Engine {
             crate::settings::OperatingMode::Rtty => "RTTY",
             crate::settings::OperatingMode::Keyboard => "Keyboard",
         };
-        Observation {
+        let mut observation = Observation {
             call: bounded(&self.app.mycall),
             grid: bounded(&self.app.mygrid),
             radio: Radio {
@@ -15553,17 +15632,19 @@ impl Engine {
                     .then_some(self.settings.dial_mhz),
                 band: bounded(&self.settings.band),
                 mode: bounded(mode),
-                // The legacy CAT/mode/PTT mirrors carry no radio identity or read
-                // generation. A poll can straddle a handoff, and the default PTT
-                // false is not a measurement. Do not attribute those mirrors to
-                // this radio until the producer supplies observation provenance.
+                // Only the provenance cache below may populate hardware readings.
+                rig_dial_mhz: None,
                 rig_mode: None,
                 cat_connected: None,
                 rig_keyed: None,
                 nexus_busy: self.tx_owner().is_some(),
+                readings: Default::default(),
             },
             amplifier,
-        }
+        };
+        self.remote_readings
+            .project_radio(&mut observation.radio, now);
+        observation
     }
 
     /// Full snapshot, with mode + per-mode (QSO / Field Day) status filled in.

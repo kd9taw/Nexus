@@ -18,6 +18,9 @@
 import type { PartialCatalog } from './index'
 
 export const DE: PartialCatalog = {
+  "monitor.measurementAge": "Alter der Messung",
+  "monitor.measuredAgo": "Vor {{seconds}} s gemessen",
+  "monitor.rigDial": "Gemeldete Funkgerätefrequenz",
   "monitor.title": "Stationsmonitor",
   "monitor.observer": "Nur Überwachung",
   "monitor.native": "Desktop-Station",

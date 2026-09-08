@@ -23,6 +23,9 @@
 import type { PartialCatalog } from './index'
 
 export const JA: PartialCatalog = {
+  "monitor.measurementAge": "測定からの経過時間",
+  "monitor.measuredAgo": "{{seconds}} 秒前に測定",
+  "monitor.rigDial": "無線機が報告した周波数",
   "monitor.title": "局のモニター",
   "monitor.observer": "監視のみ",
   "monitor.native": "デスクトップの局",

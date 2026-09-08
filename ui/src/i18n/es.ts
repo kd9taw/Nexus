@@ -33,6 +33,9 @@
 import type { PartialCatalog } from './index'
 
 export const ES: PartialCatalog = {
+  "monitor.measurementAge": "Antigüedad de la medición",
+  "monitor.measuredAgo": "Medido hace {{seconds}} s",
+  "monitor.rigDial": "Frecuencia indicada por el equipo",
   "monitor.title": "Monitor de estación",
   "monitor.observer": "Solo supervisión",
   "monitor.native": "Estación de escritorio",

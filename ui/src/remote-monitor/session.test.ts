@@ -1,10 +1,27 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import fixtures from './fixtures.v1.json'
+import fixtures from './fixtures.v2.json'
 import { startMonitor } from './session'
 import type { MonitorSource, MonitorState } from './session'
 
 beforeEach(() => vi.useFakeTimers())
 afterEach(() => vi.useRealTimers())
+
+it('ages real readings between cached publications and hides them while station updates remain current', async () => {
+  const frame = structuredClone(fixtures.spe)
+  frame.station.radio.readings.ptt!.ageMs = 4900
+  frame.station.amplifier!.reading!.ageMs = 4900
+  let state: MonitorState | undefined
+  const stop = startMonitor({ id: 'aging', kind: 'fixture', read: async () => frame }, next => { state = next }, () => Date.now())
+  await vi.advanceTimersByTimeAsync(0)
+  expect(state?.frame?.station.radio.rigKeyed).toBe(false)
+  expect(state?.frame?.station.amplifier?.operate).toBe(true)
+  await vi.advanceTimersByTimeAsync(500)
+  expect(state?.status).toBe('current')
+  expect(state?.frame?.station.radio.rigKeyed).toBeNull()
+  expect(state?.frame?.station.amplifier?.operate).toBeNull()
+  expect(state?.frame?.station.radio.catConnected).toBe(true)
+  stop()
+})
 
 it('duplicate cached frames do not renew freshness; a new frame restores it', async () => {
   let frame = fixtures.spe
