@@ -20,6 +20,18 @@ auto-zoom is min(w/1200, h/900) capped at 100% -- at 1920x1080 that resolves to 
 100%, so type renders un-shrunk. Captures from a HiDPI display arrive larger than 1920
 and are downscaled here; the extra source detail is what makes the downscale clean.
 Captures are never UPSCALED -- a small source stays small rather than being blurred up.
+
+THIS SCRIPT ONLY CONVERTS. It does not crop, and a whole-window capture converted at
+1920 is unreadable once the manual squeezes it to column width -- about 176 mm in the
+PDF, where 12 px of UI text lands near 3 pt. Cropping to the panel that matters is the
+fix, and it is a judgement this tool cannot make for you.
+
+*** READ docs/manual-style-guide.md BEFORE ADDING AN IMAGE. *** It carries the house
+rules this script's settings are half of: what to crop to, how to name it, the short
+alt text, the visible caption with version context, numbered legends, the privacy
+check on a real operator's station, and the rule that the instructions must still work
+with every image stripped out. It also carries the chapter template and the evidence
+marks, so it is the one page to read before editing docs/guide/ at all.
 """
 
 from __future__ import annotations
