@@ -17,6 +17,10 @@ chosen, and off only under DX chasing and contesting; it toggles either way in
 
 ## The tour
 
+![The Program source column: NEAR with My station · EN52 selected beside Grid and City, a RECENT chip reading EN52, RADIUS chips 10/25/50/100/200 mi and Auto with "= 50 mi (2m+70cm)" beside it, a Fetch repeaters button, then band chips (All, 2m, 70cm, 1.25m, 6m, 10m) with 2m and 70cm lit, FM / +Digital, On-air only, and a "Filter call / city…" box.](../img/manual/program-search.webp)
+
+*The source column in Nexus 1.10.3, before a fetch.*
+
 Two columns. The **source** column on the left is where you say where you are
 and what you want; the **Channel list** on the right is what you are building.
 They sit side by side from about 1100 px of effective width. Below that —
@@ -147,11 +151,34 @@ list is empty:
    so what you read is what the file will hold.
 4. Add machines with **＋ Add**, or **＋ Add all shown** to take the whole
    filtered list at once — it confirms first past 50 and adds at most 200.
+
+   ![Fetched repeater results: a count line reading "18 of 28 shown · nearest first" with an "+ Add all shown" button, then rows of callsign, output frequency, offset, tone and distance with compass octant, each with a star, a Tune button and a + Add button.](../img/manual/program-repeaters.webp)
+
+   *Fetched results in Nexus 1.10.3 — 18 of 28 machines showing, after the 2 m
+   and 70 cm band chips and On-air only.*
+
 5. Put the list in order with **▲ ▼**, rename anything you want to recognise on
    the radio's display, and drop the rest with **✕**.
 6. **Export for CHIRP…**, then follow the three steps the dialog gives:
    open CHIRP → **File ▸ Import** and pick the saved file → connect the
    programming cable → **Radio ▸ Upload To Radio**.
+
+⚠️ **Before you export, know what Start at does and does not do.** It renumbers
+the **preview** so you can plan around channels the radio already holds. It is
+not carried into either export: both the CHIRP CSV and the plain CSV number
+their rows from 1, every time, whatever the box says.
+
+![The channel list header: "Channel list 1", a Max name selector reading "7 — Baofeng", a Start at box holding 1, and below it one channel row numbered 1 with the name K9WNG, 440.5000, +5.0 and 88.5, and reorder and remove controls.](../img/manual/program-channel-list.webp)
+
+*One channel in the list, in Nexus 1.10.3. Set **Start at** to 21 and this row
+would read 21 on screen — and would still be written as channel 1 in the
+exported file.*
+
+So if the radio already holds twenty channels you want to keep, **Start at is
+for reading, not for the file.** Import the export as it stands and CHIRP
+overwrites from slot 1. The way to keep the existing twenty is to read them
+out of the radio with CHIRP first, then paste these rows in below them — or to
+renumber the exported CSV yourself before you import it.
 
 <!-- TODO: capture screenshot — the "Flash with CHIRP" dialog open over a built channel list, showing the three numbered steps, the Get CHIRP link, the "Don't show this again" tick and the Save the CSV button -->
 
@@ -200,7 +227,9 @@ handheld; ☆ on a result row is the one-machine version.
 - **Start at renumbers the screen, not the file.** It moves the slot numbers in
   the builder so you can plan around channels a radio already holds, but both
   exports number their rows from 1 regardless. Importing into a radio image
-  without allowing for that overwrites from slot 1.
+  without allowing for that overwrites from slot 1. Spelled out with the
+  preview beside it under
+  [Program a handheld for a trip](#program-a-handheld-for-a-trip).
 - **v1 programs analog FM only.** Digital machines are listed and badged so you
   know they exist, but they cannot be added, and a CHIRP export refuses an
   all-digital list: "No FM channels in the list — digital channels export in a
