@@ -116,7 +116,7 @@ test('denied/ambiguous reads and hostname collisions refuse writes without loggi
 function uploadedProvider({ fault, denied = false, legacy = false, observabilityAbsent = false } = {}) {
   const env = { CLOUDFLARE_ACCOUNT_ID: randomBytes(16).toString('hex'), CLOUDFLARE_API_TOKEN: randomBytes(32).toString('hex') }
   const writes = [], privateText = randomBytes(20).toString('hex')
-  let tags = [], attached = false
+  let tags = null, attached = false
   const config = stagingConfig(template, ids)
   const settings = { compatibility_date: config.compatibility_date, observability: { enabled: false }, bindings: [
     ...Object.entries(config.vars).map(([name, text]) => ({ name, type: 'plain_text', text })),

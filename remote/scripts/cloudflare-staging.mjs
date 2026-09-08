@@ -127,7 +127,7 @@ export function cloudflare(env = process.env, fetcher = fetch) {
   }
   async function markUpload(config, expectedHash, additional = {}) {
     const { worker } = await confirmUpload(config, expectedHash, additional)
-    requireValue(worker.tags === undefined || Array.isArray(worker.tags) && worker.tags.every(tag => typeof tag === 'string'),
+    requireValue(worker.tags == null || Array.isArray(worker.tags) && worker.tags.every(tag => typeof tag === 'string'),
       'Worker tags have an unexpected shape')
     if (!worker.tags?.includes(STAGING.tag)) await api(`/workers/scripts/${STAGING.name}/script-settings`,
       'Staging Worker ownership tag', { tags: [...(worker.tags ?? []), STAGING.tag] }, 'PATCH')
