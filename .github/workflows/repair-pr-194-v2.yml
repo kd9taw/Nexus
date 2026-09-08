@@ -1,0 +1,42 @@
+name: Repair PR 194 v2
+
+on:
+  push:
+    branches:
+      - fix/clublog-batch-upload-193
+    paths:
+      - .github/workflows/repair-pr-194-v2.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Rebuild and validate PR
+        shell: bash
+        run: |
+          set -euo pipefail
+          sed -n 's/^          REPAIR_SCRIPT_B64: //p' .github/workflows/repair-pr-194.yml | base64 -d > /tmp/repair-pr-194.py
+          test -s /tmp/repair-pr-194.py
+
+          git config user.name 'KR8MER'
+          git config user.email '69276965+KR8MER@users.noreply.github.com'
+          git remote add upstream https://github.com/kd9taw/Nexus.git 2>/dev/null || true
+          git fetch upstream main
+          git checkout --detach upstream/main
+          git cherry-pick -X ours 8c5dd33336a47fc9cfaddffdf6cdd17522906773
+
+          python3 /tmp/repair-pr-194.py
+          cargo fmt --all
+          cargo test -p tempo-core clublog --lib
+          cargo check -p propagation --features live
+          cargo check -p tempo-app
+
+          git add crates/propagation/Cargo.toml crates/propagation/src/live/clublog.rs crates/tempo-core/src/clublog.rs src-tauri/src/lib.rs
+          git commit --amend --no-edit --author='KR8MER <69276965+KR8MER@users.noreply.github.com>'
+          git push --force origin HEAD:refs/heads/fix/clublog-batch-upload-193
