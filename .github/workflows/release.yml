@@ -521,7 +521,12 @@ jobs:
           for f in rigctld rigctl rotctld rotctl; do
             [ -s "$hl/$f" ] || { echo "$f missing from the .app"; exit 1; }
           done
-          grep -q '\.\./Resources/resources/hamlib/' crates/tempo-audio/src/rigctld_proc.rs \
+          # Grep the CRATE, not one file: the resolver moved from rigctld_proc.rs into
+          # proc_util.rs in 1.11.0 and this gate went red on a build whose macOS CAT was
+          # perfectly good. Pinning the assertion to a filename made a refactor look like
+          # the #190 regression. The check that matters is that the shipped code somewhere
+          # searches the path the bundle actually stages to.
+          grep -rq '\.\./Resources/resources/hamlib/' crates/tempo-audio/src/ \
             || { echo "the app does not search Contents/Resources/resources/hamlib (#190)"; exit 1; }
           # It also has to RUN from where it lands — a wrong install-name or a missing dylib
           # looks identical to a working build until a user double-clicks.
