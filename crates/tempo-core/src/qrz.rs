@@ -172,7 +172,7 @@ pub fn is_qrz_xml(body: &str) -> bool {
 pub fn parse_session(xml: &str) -> QrzSession {
     QrzSession {
         key: tag(xml, "Key"),
-        sub_exp: tag(xml, "SubExp"),
+        sub_exp: subexp_field(xml),
         count: tag(xml, "Count").and_then(|c| c.parse().ok()),
         message: tag(xml, "Message"),
         error: tag(xml, "Error"),
@@ -426,6 +426,35 @@ fn callsign_has_field(body: &str, field: &str) -> bool {
         pos = child_end + close.len();
     }
     false
+}
+
+/// The text content of the first `<SubExp …>…</SubExp>`, tolerating attributes on the open tag.
+///
+/// Unlike [`tag`], which refuses an attributed open tag, SubExp drives a DISQUALIFIER, where
+/// refusing an attributed tag is fail-OPEN: an attribute would make `non-subscriber` read as absent
+/// and the row go green (round 8 F5). So the open tag is matched by prefix and read to its own `>`.
+/// A `>` inside an attribute value only starts the content EARLIER (including the rest of the tag),
+/// which can at worst over-disqualify — a false red cleared by the next real lookup — never grant
+/// entitlement. The name boundary (`>`, whitespace, `/`, or end) keeps `<subexp>` from matching a
+/// longer tag name. QRZ writes SubExp attribute-free, so a legitimate body reads exactly as before.
+fn subexp_field(xml: &str) -> Option<String> {
+    let lower = xml.to_ascii_lowercase();
+    let mut from = 0usize;
+    let open = loop {
+        let rel = lower[from..].find("<subexp")?;
+        let at = from + rel;
+        // The char after "subexp" must end the name, else this is `<subexpiry>` or similar.
+        match lower[at + 7..].chars().next() {
+            None | Some('>' | '/' | ' ' | '\t' | '\n' | '\r') => break at,
+            _ => from = at + 7,
+        }
+    };
+    let gt = lower[open..].find('>')? + open;
+    let start = gt + 1;
+    let close_rel = lower[start..].find("</subexp>")?;
+    let raw = xml[start..start + close_rel].trim();
+    let v = unescape_xml(raw);
+    (!v.is_empty()).then_some(v)
 }
 
 /// Extract the text content of the first `<name>…</name>` element (case-insensitive
@@ -1349,6 +1378,53 @@ mod tests {
         assert!(
             !proves_entitled_lookup_at(&with_grid("<SubExp>2019-12-31</SubExp>"), NOW),
             "an expired ISO-dated SubExp stamped green over a grid"
+        );
+    }
+
+    /// ⛔ **An ATTRIBUTED `<SubExp>` must still disqualify (round 8 F5).**
+    ///
+    /// The disqualifier read `<SubExp>` with [`tag`], which matches only the attribute-free form —
+    /// so `<SubExp lang="en">non-subscriber</SubExp>` read as ABSENT and a grid stamped the row
+    /// green. That is the same "the server picks the encoding" hostility the `<Callsign>` scoping was
+    /// hardened against, applied to a DISQUALIFIER, where refusing an attributed tag is fail-OPEN
+    /// rather than fail-closed. QRZ writes SubExp attribute-free, so no legitimate free/lapsed body
+    /// evades it; this closes the asymmetry so the threat model applies to every disqualifier.
+    #[test]
+    fn an_attributed_subexp_still_disqualifies() {
+        const NOW: i64 = 1_767_225_600; // 2026-01-01 UTC
+
+        let with_grid = |session: &str| {
+            format!(
+                "<QRZDatabase><Callsign><call>AA7BQ</call><grid>DM43bp</grid></Callsign>\
+<Session><Key>live</Key>{session}</Session></QRZDatabase>"
+            )
+        };
+
+        // Controls: a grid with no SubExp is green, and the attribute-free non-subscriber marker
+        // already disqualifies (round 7 F1) — so the only variable below is the attribute.
+        assert!(
+            proves_entitled_lookup_at(&with_grid(""), NOW),
+            "control: a grid with no SubExp is green"
+        );
+        assert!(
+            !proves_entitled_lookup_at(&with_grid("<SubExp>non-subscriber</SubExp>"), NOW),
+            "control: a plain non-subscriber SubExp disqualifies"
+        );
+
+        // The finding: an attribute on the tag must not make the disqualifier vanish.
+        assert!(
+            !proves_entitled_lookup_at(
+                &with_grid("<SubExp lang=\"en\">non-subscriber</SubExp>"),
+                NOW
+            ),
+            "an attributed <SubExp> bypassed the disqualifier — the row went green over a grid"
+        );
+        assert!(
+            !proves_entitled_lookup_at(
+                &with_grid("<SubExp type=\"date\">Wed Jan 1 2020</SubExp>"),
+                NOW
+            ),
+            "an attributed expired <SubExp> bypassed the disqualifier"
         );
     }
 
