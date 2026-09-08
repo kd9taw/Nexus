@@ -35,6 +35,7 @@
 // Run:   node scripts/release-docs.mjs
 //        node scripts/release-docs.mjs --version 1.3.0   (default: src-tauri/tauri.conf.json)
 //        node scripts/release-docs.mjs --no-tests        (skip the vitest doc gates)
+//        node scripts/release-docs.mjs --push-gate       (the per-commit subset CI runs)
 //
 // The order matters and is not arbitrary — see .claude/skills/release-docs/SKILL.md.
 
@@ -261,9 +262,12 @@ function ownerKeyFor(name) {
   return best
 }
 
-function checkScreenshots() {
+function checkScreenshotMapping() {
   const dir = path.join(DOCS, 'img', 'manual')
-  if (!existsSync(dir)) return SKIP('manual screenshots', `${rel(dir)} does not exist`)
+  if (!existsSync(dir)) {
+    SKIP('manual screenshots', `${rel(dir)} does not exist`)
+    return null
+  }
   const entries = readdirSync(dir).filter((f) => !statSync(path.join(dir, f)).isDirectory())
 
   // build-manual-images.py emits WEBP and only WEBP, so anything else here is a raw capture
@@ -299,7 +303,14 @@ function checkScreenshots() {
         `families, all naming source that exists` +
         (unusedKeys.length ? ` · ${unusedKeys.length} families not captured yet: ${unusedKeys.join(', ')}` : ''))
   }
+  return { SHOTS, mappingProblems }
+}
 
+// Split from the mapping deliberately: the mapping is true of every commit and is offline, so it
+// is a push gate. THIS half reads git history, and CI checks out at depth 1 — on a shallow clone
+// `git log` answers nothing and every image would look current, which is a false green rather
+// than a missing check. So it runs at release time, where the history is there.
+function checkScreenshotFreshness(SHOTS, mappingProblems) {
   // RANKED, not just listed. A commit that touches every cockpit at once (1db7d051 did) puts
   // eight images on this list at equal weight, and a flat list of eight is a list nobody reads.
   // The commit COUNT since the capture is the closest honest proxy for how much of the frame has
@@ -766,7 +777,10 @@ function checkVersionProse() {
 // This used to be a line in the BY HAND list below. A note is what let it rot: it says "go and
 // check" and nothing happens if you don't. So it is a CHECK now, and it asks the live site
 // rather than the repo, because the repo has been right the whole time — the site was wrong.
-try {
+//
+// It is skipped under --push-gate: the answer is about a deploy, not about a commit, and a
+// network call inside a per-push CI step is a gate that flaps.
+if (!flag('--push-gate')) try {
   const chapters = readdirSync(path.join(ROOT, 'docs', 'guide'))
     .filter((f) => f.endsWith('.md') && f !== 'index.md')
     .map((f) => f.replace(/\.md$/, ''))
@@ -819,17 +833,31 @@ const MANUAL = [
 // Main
 // ---------------------------------------------------------------------------
 
-console.log(`release-docs — version ${VERSION}`)
+// --push-gate is the subset that is true of EVERY COMMIT rather than only of a release: no
+// network, no `gh`, no git history, and nothing that asks a question only a release can answer
+// (is there a RELEASE_NOTES for this version, is the CHANGELOG stamped, are its issue credits
+// closed — all of which are legitimately unfinished on a topic branch and would be red on every
+// push). ci.yml runs this in the `ui` job beside the other doc gates, because a check whose only
+// trigger is somebody remembering to run release-docs is not a gate — which is the argument this
+// whole file was written to make, and it applied to the file itself.
+const PUSH_GATE = flag('--push-gate')
+
+console.log(PUSH_GATE ? 'release-docs --push-gate' : `release-docs — version ${VERSION}`)
 console.log(`repo: ${ROOT}\n`)
 
-checkGenerators()
-checkDocGates()
-checkScreenshots()
+if (!PUSH_GATE) {
+  checkGenerators()
+  checkDocGates()
+}
+const shots = checkScreenshotMapping()
 checkDocAssets()
 checkDocLinks()
-checkReleaseDocs()
-checkIssueCredits()
-checkVersionProse()
+if (!PUSH_GATE) {
+  if (shots) checkScreenshotFreshness(shots.SHOTS, shots.mappingProblems)
+  checkReleaseDocs()
+  checkIssueCredits()
+  checkVersionProse()
+}
 
 const ICON = { ok: '  ok  ', fail: ' FAIL ', review: 'REVIEW', skip: ' skip ' }
 const show = (r) => {
@@ -853,8 +881,10 @@ if (reviews.length) {
   reviews.forEach(show)
 }
 
-console.log('\n── BY HAND — nothing above can check these ' + '─'.repeat(28))
-for (const [title, body] of MANUAL) console.log(`  * ${title}\n      ${body.replace(/(.{92}) /g, '$1\n      ')}`)
+if (!PUSH_GATE) {
+  console.log('\n── BY HAND — nothing above can check these ' + '─'.repeat(28))
+  for (const [title, body] of MANUAL) console.log(`  * ${title}\n      ${body.replace(/(.{92}) /g, '$1\n      ')}`)
+}
 
 console.log(
   `\n${fails.length} fail · ${reviews.length} review · ` +
