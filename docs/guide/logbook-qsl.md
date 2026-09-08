@@ -62,6 +62,14 @@ nothing moves at any window size where the form already fits.
 
 ### Upload to LoTW
 
+![Two upload notices, one above the other: a green success and an orange rejection naming the Station Location.](../img/manual/logbook-lotw-upload-results.webp)
+
+*The two answers to **Upload to LoTW**, in Nexus 1.10.3 — **from two separate runs**, stacked
+here so you can tell them apart. Above, the batch was signed and sent and now waits on the
+other operators. Below, TQSL refused it, and the notice names the thing to go and fix rather
+than saying "failed". Both replies are mocked for this capture: nothing was signed and nothing
+reached LoTW.*
+
 1. Set your **LoTW Station Location** (and optionally the TQSL path) in
    [Settings ▸ Logging & Connectors](settings-reference.md#confirmations).
    Nexus signs through *your installed TQSL* against that named Station Location
@@ -137,6 +145,14 @@ A per-QSO **diagnostics** view explains why award credit hasn't landed yet — n
 upload sent, waiting on the partner, a date mismatch — with one-click fixes where
 they exist. Reconciliation tolerates ±1 day of midnight skew and matches by
 mode-class, so an FT4-vs-FT8 labelling difference doesn't orphan a confirmation.
+
+![The Confirmations panel listing four unconfirmed contacts, each with a reason code and a plain-language explanation.](../img/manual/logbook-confirmations.webp)
+
+*The confirmation diagnostics in Nexus 1.10.3, on a fixture log. Each row names its reason in
+code and in words — a rejected certificate, a partner who has not uploaded yet, a contact never
+sent, a state that disagrees — and a row with a fix carries it on the right (**Fix STATE**),
+with the batch actions above it. The two closing lines separate what is stuck from what is
+merely young.*
 
 ## How uploads flow
 

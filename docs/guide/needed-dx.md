@@ -146,6 +146,13 @@ The board tears off into its own OS window. A header checkbox, **"open at
 launch,"** controls whether that detached window force-opens on every start —
 untick it and it stays where you left it (the setting persists).
 
+![The Needed board in its own window, with its filter row open and its own sort and open-at-launch controls.](../img/manual/needed-detached.webp)
+
+*The detached Needed window in Nexus 1.10.3. It carries its own header count, its own
+**Filter** drawer and chips, its own column sort and its own **open at launch** tick — none of
+them shared with the docked board. The rows are documentation fixtures. The way back is the
+window's own close button, which belongs to the operating system and is outside this capture.*
+
 ## Honest limits
 
 - **The board only shows what's on the air now** — it's a real-time chase tool,

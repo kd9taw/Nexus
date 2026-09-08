@@ -91,11 +91,25 @@ Off by default: a gentle **"weeks on the air"** counter (never a daily streak,
 never a penalty for a break). Enable it under Journey in
 [Settings ▸ Digital](settings-reference.md#digital-ft8ft4).
 
+![The Journey hero card: level badge, XP bar, QSO count and a weeks-on-the-air count, with a Share button at the right.](../img/manual/journey-streak.webp)
+
+*The Journey hero in Nexus 1.10.3 with the streak switched on. **31 weeks on the air** sits
+beside the QSO count and nowhere else, and it counts weeks, never days — a quiet week ends
+nothing but the count. With the setting off the phrase is simply absent and nothing else on the
+card changes. Fixture log.*
+
 ### Share a card
 
 The **⤴ Share** control renders the hero card (and any unlocked feat) to a PNG
 **on your clipboard** — nothing is uploaded. Click it, then paste into a
 message, an email, or a post.
+
+![The share card: callsign, Level 17, a QSO and XP line, and a Journey footer over a faint waterfall strip.](../img/manual/journey-share-card.webp)
+
+*The 1200 × 630 PNG that **⤴ Share** puts on your clipboard, rendered by Nexus 1.10.3 from a
+fixture Journey. This is the card itself, not a screen in the app — there is no preview inside
+Nexus; you paste it to see it. It carries your callsign, and nothing on it leaves your computer
+until you paste it somewhere.*
 
 ## Honest limits
 

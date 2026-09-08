@@ -1785,6 +1785,13 @@ of the speakers.
 *Accessibility in Nexus 1.10.3. A screenshot cannot show what these do — each cue
 is described below.*
 
+![The Settings tab strip with the CW tab outlined by the keyboard focus ring while the Station tab stays selected.](../img/manual/settings-keyboard-focus.webp)
+
+*Keyboard focus in Nexus 1.10.3. Tab and Shift-Tab move the ring, and the outlined tab is where
+the keyboard is — separate from the coloured one, which is still the tab being shown. Every
+interactive control in Nexus carries the same ring. The speech and earcon settings above cannot
+be photographed, and were not exercised for this capture.*
+
 - **Announce decodes (screen reader)** — Off / Needed only (calling you / new /
   watched) / All (adds a per-cycle CQ summary). Silent without a reader running.
 - **TX / RX earcon** — "A rising tone when you key up, falling when you unkey —

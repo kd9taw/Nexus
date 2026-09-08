@@ -197,6 +197,14 @@ digipeat either: nothing it hears is ever repeated back onto the channel.
 
 ### Get on the channel and confirm you are hearing it
 
+![The APRS header strip with a 2 m radio in the route, the decoder running and twenty-one frames decoded.](../img/manual/aprs-rf-ready.webp)
+
+*The same strip as the capture further down, with the RF side alive, in Nexus 1.10.3. Left to
+right: the channel picker on 144.390, **Re-tune**, CAT's own dial readout `144.390 MHz · 2m ·
+FM`, the **TX Off** arm latch, **● Monitoring (auto)**, the decode chip reading **21 decoded**,
+the radio the tap is following, and **Internet off** — so nothing on this strip came from the
+internet feed. The counts are a documentation fixture, not packets pulled off the air.*
+
 1. Open APRS. The decoder arms itself, receive-only, and the rig hands off to
    your 2 m radio on the selected channel in FM simplex.
 2. Pick your region's frequency if it is not the default — the rig moves on
@@ -305,6 +313,13 @@ first — step 2 above — every time.
 Before anything else, check the dial readout beside **Re-tune** actually reads the APRS
 channel in FM. The send gate does not check it for you — see the readiness checklist above.
 
+![The position-beacon form: Lat, Lon, Symbol, Comment, Path and a Send beacon button.](../img/manual/aprs-beacon-form.webp)
+
+*The beacon form in Nexus 1.10.3, staged and not sent. **Lat** and **Lon** are prefilled from
+grid EN52 — the centre of the square, not a fix — and Symbol, Comment and Path are the three
+remembered fields. Nothing was transmitted to make this picture; the **TX Off** latch in the
+strip above holds the queue.*
+
 1. Turn **TX On**.
 2. Check the **Lat** and **Lon** in the beacon form. They are prefilled from your
    Maidenhead grid, which is the *centre of the square*, not a fix — type real
@@ -321,6 +336,14 @@ channel in FM. The send gate does not check it for you — see the readiness che
 
 ### Send a message, and answer one
 
+![The Messages list over the station table, showing an outgoing message, its ack, a reply, and one message that arrived over the internet.](../img/manual/aprs-messages.webp)
+
+*Messages and the station table in Nexus 1.10.3. Reading up: `#31` went out to KD9ABC-9,
+`ack31` came back, then the reply `#07`. The top line is from VE3XYZ-9 and arrived over
+APRS-IS. The table's **Via** column keeps the two paths apart — `RF` for what this antenna
+decoded, `net` for what the internet reported. A documentation fixture: no message was sent and
+nothing was received off the air.*
+
 1. With TX on, put a callsign in **To** and up to 67 characters in **Text** —
    the counter shows where you are, and the engine rejects an over-long message
    rather than silently truncating it. `Enter` sends.
@@ -332,6 +355,14 @@ channel in FM. The send gate does not check it for you — see the readiness che
    auto-armed decoder.
 
 ### Run the receive-only iGate
+
+![The internet panel open under the Internet chip, its first line reporting the iGate's contributed and held-back counts.](../img/manual/aprs-igate-status.webp)
+
+*The internet panel in Nexus 1.10.3 with the receive-only iGate on — click the **Internet N**
+chip to open it. The first line is the whole score: connected and verified, packets received,
+then **iGate on: 37 contributed, 12 held back (last: third-party traffic — loop guard)**. Those
+are Nexus's own counters of what it sent upstream. **No APRS-IS server confirmed receipt of
+anything**, and nothing was uploaded to make this picture — the figures are a fixture.*
 
 1. Switch **Receive-only iGate** on in
    [Settings ▸ Digital ▸ APRS](settings-reference.md#aprs) (it sits under the

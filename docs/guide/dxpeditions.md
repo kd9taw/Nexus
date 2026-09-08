@@ -100,6 +100,14 @@ To plan a chase:
 
 ### Set a wake-me alarm
 
+![One operation's row in the calendar's Details view, with the chase star, the alarm bell and a thirty-minute lead selector.](../img/manual/dxpeditions-alarm.webp)
+
+*An armed wake-me alarm in Nexus 1.10.3, staged on a fixture operation. The ★ is the chase
+toggle and the ⏰ beside it is the alarm; the lead selector reads **30 min**. The time basis is
+the strip underneath — a 24-hour band × hour grid running 00Z to 23Z — so the lead counts back
+from the window's UTC start, never from local time. No alarm was left armed on a real
+operation.*
+
 1. Switch the calendar to **Details** and click the **⏰** beside the **★** on the operation's
    entry. (The ★ is the *chase* toggle — it alerts you when your window opens and live spots
    confirm them. The ⏰ is the loud one.)
