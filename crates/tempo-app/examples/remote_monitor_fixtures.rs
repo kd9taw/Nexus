@@ -19,10 +19,16 @@ fn main() {
     };
     settings.ensure_radio_profiles();
     let mut engine = Engine::with_settings(settings);
-    engine.set_cat_status(Some(true), String::new());
     let id = engine.settings().active_radio;
     let mut fixtures = BTreeMap::new();
     let mut capture = |name: &str, engine: &Engine| {
+        let mut station = engine.remote_monitor_observation();
+        // Explicit protocol examples, not claims about the legacy native CAT
+        // mirrors: those lack radio/read provenance and remain unknown in IPC.
+        if name != "noAmp" {
+            station.radio.cat_connected = Some(name != "catLost");
+            station.radio.rig_keyed = (name != "catLost").then_some(false);
+        }
         fixtures.insert(
             name.to_string(),
             Frame {
@@ -31,7 +37,7 @@ fn main() {
                 epoch: "example-station-v1".into(),
                 sequence: 1,
                 generated_at_ms: 1_788_768_000_000,
-                station: engine.remote_monitor_observation(),
+                station,
             },
         );
     };
@@ -85,7 +91,6 @@ fn main() {
     kpa_settings.amp_model = "kpa".into();
     kpa_settings.radios[0].amp_model = "kpa".into();
     engine = Engine::with_settings(kpa_settings);
-    engine.set_cat_status(Some(true), String::new());
     engine.observe_amp_status(
         id,
         AmpStatusDto {
@@ -101,7 +106,6 @@ fn main() {
         },
     );
     capture("kpa", &engine);
-    engine.set_cat_status(Some(false), "fixture link loss".into());
     capture("catLost", &engine);
     let other = engine.add_radio();
     engine.set_active_radio(other);

@@ -10,6 +10,13 @@ Native readers share a 500 ms cache and do not queue behind a busy engine. Stale
 publication sequences cannot refresh the UI, and a hung read occupies just one slot.
 Publication time is not a hardware measurement timestamp.
 
+The native CAT link, reported mode and keyed flag currently remain unavailable.
+The existing desktop mirrors carry no producer radio/read generation and can survive
+a radio handoff; the default keyed flag also does not prove a PTT read occurred.
+The monitor does not guess their source. Selected dial/mode, Nexus transmitter activity
+and per-radio amplifier observations are available. Producer provenance is required
+before enabling those three native readbacks.
+
 ## Preview
 
 From `ui`, run `npm exec -- vite --config vite.monitor.config.ts`, then open
@@ -34,7 +41,9 @@ this native route reports unavailable data; it never substitutes example reading
 ## Contract fixtures and checks
 
 The `remote_monitor_fixtures` Rust example serializes actual engine observations after
-synthetic amp status/miss inputs. It does not connect to hardware. From the repository
+synthetic amp status/miss inputs, plus explicit example CAT/keyed states for protocol
+rendering coverage. Those CAT examples are not available native readbacks. It does
+not connect to hardware. From the repository
 root, regenerate and check the committed fixture with:
 
 ```sh

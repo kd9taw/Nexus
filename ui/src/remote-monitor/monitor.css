@@ -56,7 +56,7 @@
 .rm-preview summary { cursor: pointer; min-height: 48px; display: flex; align-items: center; }
 .rm-preview-fields { display: flex; flex-wrap: wrap; gap: 16px; }
 .rm-preview-fields label { display: grid; gap: 6px; min-width: 0; }
-.rm-preview-fields select { min-height: 48px; max-width: 100%; padding: 8px; color: var(--text); background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius-sm); font: inherit; }
+.rm-preview-fields select { min-height: 48px; min-width: 0; width: 100%; max-width: 100%; padding: 8px; color: var(--text); background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius-sm); font: inherit; }
 .rm-preview-fields button { min-height: 48px; padding: 8px 14px; color: var(--text); background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius-sm); font: inherit; cursor: pointer; }
 [data-viewport='xs'] .rm-content { padding: 16px 12px; gap: 14px; }
 [data-viewport='xs'] .rm-header { padding: 6px 12px; }

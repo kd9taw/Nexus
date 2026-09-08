@@ -70,24 +70,24 @@ function MonitorSession({ source, previewTools, scale }: Props) {
   const station = state.frame?.station
   const radio = station?.radio
   const dial = current ? radio?.dialMhz : null
-  const statusKey = {
-    connecting: 'monitor.connecting', current: 'monitor.current',
-    unavailable: 'monitor.connectionLost', invalid: 'monitor.invalid',
-  } as const
+  const statusText = {
+    connecting: t('monitor.connecting'), current: t('monitor.current'),
+    unavailable: t('monitor.connectionLost'), invalid: t('monitor.invalid'),
+  }
   return (
     <div className="app remote-monitor-app">
       <header className="rm-header">
         <div className="rm-brand"><Radio size={23} aria-hidden="true" /><strong>{BRAND}</strong><span>{t('monitor.title')}</span></div>
-        <button className="rm-theme" aria-label={t(theme === 'dark' ? 'monitor.light' : 'monitor.dark')}
+        <button className="rm-theme" aria-label={theme === 'dark' ? t('monitor.light') : t('monitor.dark')}
           onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>
           {theme === 'dark' ? <Sun aria-hidden="true" size={22} /> : <Moon aria-hidden="true" size={22} />}
         </button>
       </header>
       <main className="rm-scroll" aria-label={t('monitor.title')}>
         <div className="rm-content">
-          <div className="rm-source"><span>{t(source.kind === 'fixture' ? 'monitor.fixture' : 'monitor.native')}</span>
+          <div className="rm-source"><span>{source.kind === 'fixture' ? t('monitor.fixture') : t('monitor.native')}</span>
             <span className="rm-observer">{t('monitor.observer')}</span></div>
-          <p className={`rm-notice ${current ? '' : 'rm-warning'}`} role="status">{t(statusKey[state.status])}</p>
+          <p className={`rm-notice ${current ? '' : 'rm-warning'}`} role="status">{statusText[state.status]}</p>
           <div className="rm-station-grid">
             <section className="rm-card rm-radio" aria-label={t('monitor.stationDial')}>
               <div className="rm-identity"><strong>{station?.call || DASH}</strong><span>{station?.grid || DASH}</span></div>

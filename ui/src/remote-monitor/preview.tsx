@@ -8,6 +8,13 @@ import { t } from '../i18n'
 import './monitor.css'
 
 function Preview() {
+  const scenarioLabels: Record<Scenario, string> = {
+    spe: t('monitor.scenario.spe'), kpa: t('monitor.scenario.kpa'),
+    waiting: t('monitor.scenario.waiting'), firstMiss: t('monitor.scenario.firstMiss'),
+    ampLost: t('monitor.scenario.ampLost'), fault: t('monitor.scenario.fault'),
+    knownFault: t('monitor.scenario.knownFault'), catLost: t('monitor.scenario.catLost'),
+    noAmp: t('monitor.scenario.noAmp'),
+  }
   const [fixture] = useState(() => fixtureSource())
   const [scenario, setScenario] = useState<Scenario>('spe')
   const [paused, setPaused] = useState(false)
@@ -19,7 +26,7 @@ function Preview() {
         const next = event.target.value as Scenario
         fixture.controls.scenario = next
         setScenario(next)
-      }}>{scenarios.map((name) => <option key={name} value={name}>{t(`monitor.scenario.${name}`)}</option>)}</select></label>
+      }}>{scenarios.map((name) => <option key={name} value={name}>{scenarioLabels[name]}</option>)}</select></label>
       <label>{t('monitor.textSize')}<select value={scale} onChange={(event) => {
         const next = Number(event.target.value)
         document.documentElement.style.setProperty('--ui-zoom', String(next))
@@ -28,7 +35,7 @@ function Preview() {
       <button onClick={() => {
         fixture.controls.paused = !paused
         setPaused(!paused)
-      }}>{t(paused ? 'monitor.resume' : 'monitor.pause')}</button>
+      }}>{paused ? t('monitor.resume') : t('monitor.pause')}</button>
     </div>
   </details>
   return <MonitorApp source={fixture.source} scale={scale} previewTools={controls} />

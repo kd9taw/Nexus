@@ -99,3 +99,34 @@ fn observations_preserve_state_and_have_a_fixed_small_shape() {
     assert!(!json.contains("password"));
     assert!(json.len() < 2048);
 }
+
+#[test]
+fn unattributed_legacy_readbacks_are_unknown_including_across_radio_handoff() {
+    let mut engine = station();
+    engine.set_cat_status(Some(true), String::new());
+    engine.observe_rig_mode("USB".into());
+    engine.observe_rig_ptt(true);
+    let before = engine.remote_monitor_observation();
+    // These legacy mirrors are available to the desktop but have no producer
+    // identity. Reporting them as this radio's measurements would guess provenance.
+    assert_eq!(before.radio.cat_connected, None);
+    assert_eq!(before.radio.rig_mode, None);
+    assert_eq!(before.radio.rig_keyed, None);
+    let second = engine.add_radio();
+    engine.set_active_radio(second);
+    let changed = engine.remote_monitor_observation();
+    assert_eq!(changed.radio.id, second);
+    assert_eq!(changed.radio.cat_connected, None);
+    assert_eq!(changed.radio.rig_mode, None);
+    assert_eq!(changed.radio.rig_keyed, None);
+    engine.set_cat_status(Some(true), String::new());
+    engine.observe_rig_mode("FM".into());
+    let mode_only = engine.remote_monitor_observation();
+    assert_eq!(mode_only.radio.rig_mode, None);
+    assert_eq!(
+        mode_only.radio.rig_keyed, None,
+        "a successful CAT open is not a PTT reading"
+    );
+    engine.observe_rig_ptt(false);
+    assert_eq!(engine.remote_monitor_observation().radio.rig_keyed, None);
+}

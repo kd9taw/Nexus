@@ -279,7 +279,7 @@
         "band": "20m",
         "mode": "FT8",
         "rigMode": null,
-        "catConnected": false,
+        "catConnected": null,
         "rigKeyed": null,
         "nexusBusy": false
       },

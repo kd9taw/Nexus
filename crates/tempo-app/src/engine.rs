@@ -15553,9 +15553,13 @@ impl Engine {
                     .then_some(self.settings.dial_mhz),
                 band: bounded(&self.settings.band),
                 mode: bounded(mode),
-                rig_mode: self.rig_mode.as_deref().map(bounded),
-                cat_connected: self.cat_status.0,
-                rig_keyed: (self.cat_status.0 == Some(true)).then_some(self.rig_keyed),
+                // The legacy CAT/mode/PTT mirrors carry no radio identity or read
+                // generation. A poll can straddle a handoff, and the default PTT
+                // false is not a measurement. Do not attribute those mirrors to
+                // this radio until the producer supplies observation provenance.
+                rig_mode: None,
+                cat_connected: None,
+                rig_keyed: None,
                 nexus_busy: self.tx_owner().is_some(),
             },
             amplifier,
