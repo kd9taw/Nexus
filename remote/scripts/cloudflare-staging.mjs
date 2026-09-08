@@ -87,12 +87,16 @@ export function cloudflare(env = process.env, fetcher = fetch) {
       && bindings.get('STATIONS').class_name === 'StationRoom'
       && (!bindings.get('STATIONS').script_name || bindings.get('STATIONS').script_name === STAGING.name),
     'Uploaded Worker service bindings differ from the artifact')
-    requireValue(settings.compatibility_date === config.compatibility_date && settings.observability?.enabled === false,
-      'Uploaded Worker runtime configuration differs from the artifact')
     const content = await requestBytes(`${base}/workers/scripts/${STAGING.name}/content/v2`, {
       headers: { authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}` },
     }, fetcher, 'Worker content read')
     requireValue(await workerDigest(content) === expectedHash, 'Uploaded Worker bytes differ from the artifact')
+    const runtime = { dateMatches: settings.compatibility_date === config.compatibility_date,
+      dateTimestampMatches: settings.compatibility_date === `${config.compatibility_date}T00:00:00Z`,
+      observabilityPresent: Object.hasOwn(settings, 'observability'), observabilityNull: settings.observability === null,
+      observabilityDisabled: settings.observability?.enabled === false, observabilityEnabled: settings.observability?.enabled === true }
+    requireValue(runtime.dateMatches && runtime.observabilityDisabled,
+      `Uploaded Worker runtime configuration differs from the artifact: ${JSON.stringify(runtime)}`)
     return { worker, result }
   }
   async function markUpload(config, expectedHash) {
