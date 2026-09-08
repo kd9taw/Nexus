@@ -4,10 +4,10 @@ The RTTY cockpit is a Baudot/ITA2 teleprinter station — 45.45 baud and a 170 H
 shift out of the box, the HF standard. It gives you a live decoder with
 per-character confidence, a mark/space waterfall you click to net onto a signal,
 four F-key macros and a type-and-send bar, two keying back-ends (soundcard AFSK
-or true FSK on a serial line), and an optional QSO auto-sequencer that never
-transmits until you start it. It is deliberately not a contest station: no
-serials, no dupe check, no log strip — a contact you work by hand goes in the
-[Logbook](logbook-qsl.md) yourself.
+or true FSK on a serial line), an optional QSO auto-sequencer that never
+transmits until you start it, and a log strip for the contacts you work by hand.
+It is deliberately not a contest station: no serials and no dupe check outside
+Field Day.
 
 RTTY ships enabled — the wizard turns everything on; there is no mode picker to
 miss it in. No goal profile enables it, though, so if you pick one in
@@ -63,13 +63,19 @@ the transcript. **RTTY is the one scope in Nexus with no operator splitter**:
 there is no grip to drag, so the scope/transcript split is what the window gives
 you. On a short window the whole cockpit scrolls rather than clipping anything.
 
-**Decoded text** is the one content pane, and the only entry in this cockpit's ⊞
-menu. Its head carries, in order:
+**Decoded text** is the pane you work from. It and the waterfall are the two
+entries in this cockpit's ⊞ menu; the LOG pane below it is not removable. Its
+head carries, in order:
 
 - **Arm RX** — "start decoding RTTY from the receive audio (RX only, never keys
-  the rig)." Arming is session state and is never persisted, so the app never
-  launches with a decoder running. Once armed the button reads **RX armed** and
-  the transcript fills; disarmed, the pane reads "Arm RX to decode RTTY from the
+  the rig)." **Opening the section arms it for you**, so most of the time you
+  will find it already reading **RX armed** and never press this. It arms by hand
+  in two cases: when you have switched **Start receiving when RTTY opens** off in
+  [Settings ▸ Digital ▸ RTTY](settings-reference.md#rtty), and after you have
+  stopped the decoder yourself — that stop is remembered for the rest of the
+  session, so re-entering the section will not restart it behind you. Arming is
+  session state and is never persisted either way, so the app never launches with
+  a decoder running. Disarmed, the pane reads "Arm RX to decode RTTY from the
   receive audio."
 - **Auto** — arms the QSO sequencer. "It runs the QSO after you click CQ (run) or
   answer a heard CQ (search & pounce); it never transmits on its own." Turning it
@@ -106,6 +112,11 @@ streaming garbage. It runs
 in its own thread on a 100 ms drain and keeps decoding while you are on another
 section; the cockpit polls it twice a second while RTTY is the visible view, so
 the first tick after you come back catches the display up.
+
+**The LOG pane** sits under the transcript: call, sent and received report, name,
+QTH, state, country, a POTA reference and private notes, with a **Log** button.
+It is where a contact you work by hand is written down — see the limits below for
+what does and does not fill it in.
 
 **The TX dock** — macros, compose, and the sequencer row when Auto is on — is
 pinned below the pane and cannot be scrolled out of reach or hidden. The macro
@@ -159,8 +170,17 @@ together.
    LSB side for AFSK, the rig's own RTTY mode for FSK — and re-homes the
    frequency when you have genuinely changed mode, not when you are returning to
    a section you were already in.
-2. Click **Arm RX**. On a quiet frequency the pane reads "listening…" — the
-   squelch is holding the print closed until a real signal opens it.
+2. Check the decoder is running. The pane head reads **RX armed** already if you
+   have left **Start receiving when RTTY opens** on (the default) and have not
+   stopped the decoder yourself this session; otherwise click **Arm RX**. On a
+   quiet frequency the pane then reads "listening…" — the squelch is holding the
+   print closed until a real signal opens it.
+
+   ![The Decoded Text pane head, armed: RX with a dropdown arrow, an RX armed pill, an Auto button, an AFC pill reading −67 Hz, and Re-tune.](../img/manual/rtty-decoder-armed.webp)
+
+   *The decoded-text pane head with the receiver running, in Nexus 1.10.3. The
+   AFC pill and **Re-tune** appear only while armed; **Auto** is the QSO
+   sequencer and is off here.*
 3. Click the signal on the waterfall. The M and S cursors jump there and the
    demodulator re-acquires; the AFC walks onto the tone and freezes after eight
    consecutive clean frames, which on a diddle preamble is a handful of
@@ -230,12 +250,31 @@ extends.
    it. Callsigns are matched with one character of fuzz, forgiven only where the
    demodulator itself was unsure; `599` garbled to `TOO` by a lost FIGS shift and
    the `5NN` cut convention both normalize.
-4. 30 seconds of silence does whatever fits where the machine is: an unanswered
-   CQ goes out again, a call the runner never returned is repeated, and no-copy
-   mid-exchange asks AGN. Three fruitless cycles inside a QSO end the session — a
-   runner falls back to calling CQ, a pouncer returns to idle. A CQ run itself
-   never ends on its own.
-5. **Esc · Abort** kills the session, drops the queue and unkeys.
+4. When both exchanges validate, the contact is logged — if **Auto-log QSOs** is
+   on — your sign-off goes out, and the row reads **Confirmed** while it waits
+   for their 73. It reaches
+   **Done** on whichever comes first: their 73, your sign-off finishing keying,
+   or 30 seconds.
+5. **Done is where the run stops.** The CQ and Answer buttons come back only from
+   idle, so press **Esc · Abort** to end the session before you can start
+   another. Abort also drops the queue and unkeys, and it works from any state.
+
+**Where the machine goes, and why.** Every wait is 30 seconds; three fruitless
+cycles inside a QSO end it.
+
+| State | It advances when… | 30 s of silence does | Ends at |
+|---|---|---|---|
+| **Idle** | you click **CQ · Auto call** or **Answer** — nothing else | nothing; decoded text only accumulates | — |
+| **Calling CQ** | a station answers you → your exchange goes out | sends the CQ again, **indefinitely** | never on its own |
+| **Answering** (S&P) | the runner comes back to *you* with their exchange | calls them again while they have not come back to you, otherwise asks AGN; the third cycle aborts to **idle** | idle |
+| **Exchange sent** | running: their exchange arrives · S&P: their TU/QSL arrives → logged | asks AGN; the third cycle aborts — running falls back to **Calling CQ**, S&P to **idle** | Calling CQ, or idle |
+| **Confirmed** | their 73 arrives, or your sign-off finishes keying | goes to **Done** | Done |
+| **Done** | — | nothing | terminal — **Esc · Abort** to return to idle |
+
+"Falls back to Calling CQ" is the *timeout* path, not the finish line: a run that
+loses a station mid-exchange goes back to calling, while a run that **completes**
+a contact stops at Done like any other. A peer who asks for a repeat (`AGN`) is
+alive, so that resend does not count against the three.
 
 The exchange is table-driven: casual RST/name/QTH, taking name and QTH from your
 [Settings ▸ Station](settings-reference.md#station) operator name and state, or
@@ -283,14 +322,23 @@ wherever you are.
   click them; none of them is bound to the keyboard. (The CW cockpit does bind
   its keys; this one does not.) The two real bindings are **Enter** in the
   compose bar and **Esc**, which stops RTTY from anywhere in the cockpit.
-- **Nothing you work by hand is logged.** There is no log strip here. Only the
-  auto-sequencer writes a QSO, and only when **Auto-log QSOs** is on in
-  [Settings ▸ Digital](settings-reference.md#digital-ft8ft4) — with
-  auto-log off, even a completed auto-run contact is not written anywhere.
+- **A contact you work by hand you also log by hand.** The **LOG** pane under the
+  transcript is the strip for it — call, sent and received report, name, QTH,
+  state, country, POTA reference and notes, with a **Log** button. Nothing
+  reaches it from the transcript or from the dock's **Their call…** field — type
+  what you copied. (The PSK cockpit's strip does carry its dock's call across;
+  this one does not.) The
+  auto-sequencer is the only path that writes a QSO on its own, and only when
+  **Auto-log QSOs** is on in
+  [Settings ▸ Digital](settings-reference.md#digital-ft8ft4) — with auto-log off,
+  even a completed auto-run contact is not written anywhere. During
+  [Field Day](contesting-pota.md) the strip becomes the class/section entry and
+  routes the contact to the event log, scored as Digital.
 - **An auto run works one station and stops.** After the contact is logged and
   your closing goes out, the sequencer reaches Done and stays there. Press
   **Esc · Abort** to return it to idle before you can call CQ again — it will not
-  chain into the next QSO.
+  chain into the next QSO. See the state table under
+  [Run a QSO with the auto-sequencer](#run-a-qso-with-the-auto-sequencer).
 - **An unanswered auto CQ repeats indefinitely** — every 30 seconds, by design
   ("the operator owns stopping a run"). A bare repeat deliberately does not reset
   the transmit watchdog, so the **Tx Watchdog** in
