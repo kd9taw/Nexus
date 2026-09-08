@@ -219,6 +219,13 @@ mileage follows you.
 
 ### Track a net and get a reminder
 
+![A net memory open in the editor, with the days it meets lit and a reminder ticked.](../img/manual/memories-net-editor.webp)
+
+*The net editor in Nexus 1.10.3 on a temporary fixture memory. **Days** has Mo–Fr lit and
+**Start (UTC)** holds the meeting time; the row above prints the same schedule back as
+`MoTuWeThFr 23:30z`, and it is UTC, so it does not drift when the clocks change. **Remind me**
+is ticked with a ten-minute lead. The net is invented for this picture.*
+
 1. Set a memory's **Kind ▸ HF net** (or install the **HF Traffic & Ragchew Nets**
    pack, which arrives pre-scheduled). Net rows collect under **Nets** in the
    sidebar.

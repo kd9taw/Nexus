@@ -239,6 +239,7 @@ const SHOT_OWNERS = {
   'dxpeditions-': ['ui/src/components/DxpeditionsView.tsx'],
   'pota-': ['ui/src/components/PotaSotaView.tsx'],
   'contest-': ['ui/src/components/ContestCalendarPane.tsx'],
+  'fieldday-': ['ui/src/components/FieldDayView.tsx'],
 
   // Log, awards, statistics.
   'logbook': ['ui/src/components/Logbook.tsx'],

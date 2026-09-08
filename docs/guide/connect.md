@@ -103,6 +103,14 @@ KPA500/KPA1500** — put it on its own serial port, set it under
 slot. It shows power out, SWR at the antenna and before the tuner, supply volts and
 current, PA temperature, and the amplifier's own alarms and warnings.
 
+![The Amplifier pane showing link state, power out, SWR before and after the tuner, PA temperature, volts and current.](../img/manual/connect-amplifier-pane.webp)
+
+*The Amplifier pane in Nexus 1.10.3. Everything in it is **telemetry the amplifier reported** —
+there is no control here. Operate/Standby and the band ladder ride in the cockpit's own
+amplifier strip, where you are transmitting. The temperature prints with a degree sign and no
+scale letter because the SPE protocol does not state the unit. No amplifier was connected for
+this capture; the readings are a documentation fixture.*
+
 It has to be **its own port**. A serial port can only be opened once, so an amplifier
 typed onto the CAT port does not give you a silent amplifier — it gives you a radio
 that will not connect. Nexus checks for that and warns, naming the radio and the port.
@@ -184,6 +192,14 @@ Click a station on the map (or in a pane) and the **Selection** and **Band
 Outlook** panes switch to *that call*: the modelled path, its MUF ceiling, and
 per-band workability. With the P.533 engine selected you also get per-mode
 FT8/FT4/CW/SSB "workable now" chips.
+
+![The Band Outlook pane retitled Path to G4XYZ, listing per-band workability, windows and per-mode chips.](../img/manual/connect-path-prediction.webp)
+
+*Band Outlook in Nexus 1.10.3 with a call selected. The heading becomes **Path to G4XYZ** and
+the engine names itself on the right (**P.533**) — everything in this pane is *modelled*,
+including the FT8/CW/SSB chips. The *observed* half is a different pane: **Getting Out** lists
+the stations that actually reported hearing you. Both are documentation fixtures here — no path
+was solved for a real contact, and nobody reported this station.*
 
 ### Choose the prediction engine
 

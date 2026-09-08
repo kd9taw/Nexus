@@ -105,6 +105,12 @@ Arm an alarm on a pass and Nexus reminds you before AOS so you don't miss it.
 [DXpedition wake-me alarm](dxpeditions.md#set-a-wake-me-alarm) — the same alarm
 machinery.)
 
+![Two rows of the favourites schedule, the first with an alarm armed and a fifteen-minute lead selector.](../img/manual/satellites-pass-alarm.webp)
+
+*An armed pass alarm in Nexus 1.10.3. The ⏰ column is per bird: the FO-29 row is armed with a
+**−15m** lead, the SO-50 row under it is not. The clock beside it is the pass's own AOS.
+Fixture passes — nothing here was computed from current orbital elements.*
+
 ### Tune around the passband — and get back on the bird
 
 ![The Transponder chooser for FO-29: "None — leave the dial to me" selected, then Mode U CW Beacon (down 435.795), Mode V/U Linear Transponder badged INVERTING (down 435.800–435.900, up 145.900–146.000, LSB) and Mode U Digitalker (down 435.910). A credit line reads "frequencies & status: SatNOGS DB (CC-BY-SA 4.0)".](../img/manual/satellite-transponders.webp)
@@ -116,6 +122,15 @@ Working a linear bird means chasing a station across the transponder, so turn
 the VFO and Nexus follows: it takes your new dial as your position in the
 passband and moves your uplink to match (mirrored, if the transponder inverts).
 Doppler keeps correcting around wherever you put yourself.
+
+![The Frequencies pane during a pass: Doppler-corrected downlink and uplink, and a passband bar with the two legs marked.](../img/manual/satellites-doppler-passband.webp)
+
+*The passband readout in Nexus 1.10.3 on a **simulated** FO-29 pass. **DOPPLER** prints each
+leg's corrected dial and its shift. **PASSBAND** draws where you are sitting inside the
+transponder — downlink marker above, uplink below, on a ±50 kHz scale from the passband centre
+— and says in words which way an inverting transponder moves. The transponder chooser beside it
+is the pick the readout follows. The pass, the shifts and the marker positions are fixture
+values: no elements were propagated and no radio was tuned.*
 
 Tune *outside* the passband and that stops — you've left the transponder as far
 as Nexus can tell, which is the right call, because the alternative is dragging
@@ -132,6 +147,11 @@ state it is absent in is the one where it would have to guess: with no
 transponder picked there is nothing to put you back onto, and choosing one for
 you would be choosing your uplink.
 
+![The Dial line under the bird's name, offering a Lock on button to put the radio back on the transponder.](../img/manual/satellites-lock-on.webp)
+
+*The **Dial** line in Nexus 1.10.3 — the way back onto the bird, and the whole of it. Simulated
+pass.*
+
 ### Log the contact without leaving the pass
 
 The log strip sits in the pass column under the sky dome and the pass timeline —
@@ -139,6 +159,15 @@ the same log strip the Phone and CW cockpits use, with the same callbook lookup,
 the same recall card and the same prior-contact history. It is there whether or
 not a pass is armed, and it stays there after the bird sets, so you can catch up
 on a contact once your hands are free.
+
+![The pass log strip: call, reports, grid, name, QTH, state, country, comment and notes, above a line saying the contact is not tagged as a satellite QSO.](../img/manual/satellites-log-qso.webp)
+
+*The log strip in Nexus 1.10.3 during a simulated FO-29 pass. It takes the ordinary QSO fields
+and logs at the dial named under it (`SSB · 70cm · 435.856 MHz`). Read the line beneath the
+**Log** button, because it is the answer to the question this section raises: the contact is
+**not** tagged as a satellite QSO — Nexus does not write the ADIF `PROP_MODE`. That is the
+app's own statement, printed on the screen; no ADIF was exported and inspected for this
+capture.*
 
 **Nothing you do in the section can take a half-typed contact away from you.**
 Closing the bird with ✕ or Escape, clicking a different bird, arming a pass, AOS
@@ -284,6 +313,13 @@ pinned until you click it again, and no pick hands the bird to another rig
 meanwhile. It is the same switch as the 🔒 beside the radio selector in the top
 bar, put where you are working the pass. Pinning does not re-tune anything — it
 decides where the *next* pick lands.
+
+![The Radio line of the readiness rail naming the rig, band and mode, with a pin-this-radio button.](../img/manual/satellites-radio-pin.webp)
+
+*The readiness rail's **RADIO** line in Nexus 1.10.3 on a two-radio station: the rig the pick
+routed to, the band and mode class it routed on, both legs' dials, then **🔓 pin this radio**,
+which reads **🔒** once set. Staged configuration — neither radio exists, and nothing was
+tuned.*
 
 ### Auto-track with a rotator
 

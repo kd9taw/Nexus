@@ -46,6 +46,14 @@ runs the FD exchange autonomously, and the [CW](cw.md) and [Phone](phone.md)
 cockpits' log strips become FD entries with class/section and **shared dupe
 checking** — one laptop covers the whole operation.
 
+![The Field Day header and score panel: class and section, QSO and section counts, the score arithmetic, and the sections board.](../img/manual/fieldday-scoreboard.webp)
+
+*A Field Day **test event** in Nexus 1.10.3 — a fixture, not a submitted entry. The banner
+names the event and the rules year it is scoring against; the counters and the arithmetic line
+show the whole sum (**QSO pts 903 × power ×2 = 1806 + bonuses 400 = 2206**), and the sections
+board marks what has been worked out of 83. The per-contact exchange — class and section — is
+typed in the cockpit log strips and lists under this panel.*
+
 The one strip that does **not** switch is the log strip in the
 [Satellites](satellites.md) section: it is not wired to Field Day yet, so a
 contact typed there during FD goes into your general log and scores the club
@@ -99,6 +107,15 @@ One PC at the site turns on **Settings ▸ Contesting ▸ Field Day Club Sync �
 Host a club event**; every other position presses **Find club events** (or
 types the host's address) and joins. From then on:
 
+![The club board: a synced chip, the host callsign, club totals, and one row per operating position with band, mode, operator, QSO count and rate.](../img/manual/fieldday-club-board.webp)
+
+*The club board in Nexus 1.10.3, torn off into its own window. The chip beside **Club** is the
+sync state, the host is named next to it, and the club totals sit on the right; each row is one
+operating position, and the greyed **GOTA** row carries a ⚠ because the host has not heard from
+it inside the stale line. **This is fixture state, not two instances that actually synced** —
+no second Nexus was running, so the picture shows what the board looks like, not evidence that
+a club sync worked.*
+
 - Each logged contact streams to the host the moment it lands; the host merges
   everything into one club log and pushes the club totals back.
 - Every position gets a **club dupe warning while typing** — if another tent
@@ -150,6 +167,14 @@ chips, park names, and two ranking badges:
   the last 15 minutes.
 
 ### Hunt an activator
+
+![The POTA/SOTA panel with an activation banner across the top and a list of activators, each with a Hunt button.](../img/manual/pota-activation.webp)
+
+*POTA / SOTA in Nexus 1.10.3 with an activation of my own running — the green banner counts the
+contacts that will be stamped with the park. Under it the hunter list: **NEW PARK** on
+references never logged, **BAND OPEN** where the band is two-way now, and **HUNT** on every
+row. The tags themselves land in the logbook's **PARK** column. Fixture spots and a fixture
+activation: nothing was hunted, logged or uploaded to POTA.*
 
 1. Click **HUNT** on a spot. Nexus atomically registers the park as a pending
    hunt target, QSYs to the spot's frequency and mode, and opens the right
