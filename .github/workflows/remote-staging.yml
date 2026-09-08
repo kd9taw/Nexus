@@ -1,0 +1,144 @@
+# Manual administration of the Remote observation pilot on the existing account.
+# No release trigger, marketing Pages deployment, installer upload or paid plan change.
+name: Remote staging
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: 'Inspect access, provision the staging D1 database, or deploy the tested Remote service'
+        type: choice
+        required: true
+        default: inspect
+        options:
+          - inspect
+          - provision
+          - deploy
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nexus-remote-staging
+  cancel-in-progress: false
+
+jobs:
+  staging:
+    if: github.repository == 'kd9taw/Nexus'
+    name: Remote staging administration
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Reuse the established account reference. A separate Remote token can be
+    # supplied here if the existing Pages token lacks the required permissions.
+    environment: production
+    env:
+      WRANGLER_SEND_METRICS: 'false'
+    steps:
+      - name: Check out the exact dispatched source
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Require Remote staging source on the selected ref
+        run: |
+          set -euo pipefail
+          for script in remote/scripts/cloudflare-staging.mjs remote/scripts/staging-artifact.mjs remote/scripts/deploy-staging.mjs; do
+            if [ ! -f "$script" ]; then
+              echo '::error::Remote staging source is absent from this ref. Select the reviewed Remote branch when dispatching this workflow.'
+              exit 1
+            fi
+          done
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Validate the selected administrator operation
+        env:
+          REMOTE_STAGING_OPERATION: ${{ inputs.operation }}
+        run: |
+          case "$REMOTE_STAGING_OPERATION" in
+            inspect|provision|deploy) ;;
+            *) echo 'Unknown Remote staging operation'; exit 1 ;;
+          esac
+
+      - name: Inspect existing Cloudflare access and staging resources
+        if: inputs.operation == 'inspect'
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.REMOTE_CLOUDFLARE_API_TOKEN || secrets.CLOUDFLARE_API_TOKEN }}
+        run: node remote/scripts/cloudflare-staging.mjs inspect
+
+      - name: Create or reuse the dedicated staging D1 database
+        if: inputs.operation == 'provision'
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.REMOTE_CLOUDFLARE_API_TOKEN || secrets.CLOUDFLARE_API_TOKEN }}
+        run: node remote/scripts/cloudflare-staging.mjs provision
+
+      - name: Check public identity configuration before any deployment writes
+        if: inputs.operation == 'deploy'
+        env:
+          REMOTE_AUTH0_ISSUER: ${{ vars.REMOTE_AUTH0_ISSUER }}
+          REMOTE_AUTH0_CLIENT_ID: ${{ vars.REMOTE_AUTH0_CLIENT_ID }}
+        run: node remote/scripts/staging-artifact.mjs identity
+
+      - name: Verify anonymous access to the exact corresponding source
+        if: inputs.operation == 'deploy'
+        run: node remote/scripts/staging-artifact.mjs source
+
+      - name: Run the canonical local Remote gates before packaging
+        if: inputs.operation == 'deploy'
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/remote-gates"
+          TMPDIR="$RUNNER_TEMP/remote-gates" scripts/gates --job remote-web --allow-partial
+
+      - name: Resolve the provisioned staging database
+        if: inputs.operation == 'deploy'
+        id: database
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.REMOTE_CLOUDFLARE_API_TOKEN || secrets.CLOUDFLARE_API_TOKEN }}
+        run: node remote/scripts/cloudflare-staging.mjs resolve
+
+      - name: Package the tested bytes and their source receipt
+        if: inputs.operation == 'deploy'
+        env:
+          REMOTE_AUTH0_ISSUER: ${{ vars.REMOTE_AUTH0_ISSUER }}
+          REMOTE_AUTH0_CLIENT_ID: ${{ vars.REMOTE_AUTH0_CLIENT_ID }}
+          REMOTE_D1_DATABASE_ID: ${{ steps.database.outputs.database_id }}
+        run: node remote/scripts/staging-artifact.mjs prepare
+
+      - name: Validate the exact upload with Wrangler without deploying
+        if: inputs.operation == 'deploy'
+        run: node remote/scripts/deploy-staging.mjs dry-run
+
+      - name: Retain the tested deployment artifact
+        if: inputs.operation == 'deploy'
+        uses: actions/upload-artifact@v4
+        with:
+          name: nexus-remote-staging-${{ github.sha }}
+          path: remote/staging-artifact/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Apply staging D1 migrations
+        if: inputs.operation == 'deploy'
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.REMOTE_CLOUDFLARE_API_TOKEN || secrets.CLOUDFLARE_API_TOKEN }}
+        run: node remote/scripts/deploy-staging.mjs migrate
+
+      - name: Upload the verified Worker and browser bytes
+        if: inputs.operation == 'deploy'
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.REMOTE_CLOUDFLARE_API_TOKEN || secrets.CLOUDFLARE_API_TOKEN }}
+        run: node remote/scripts/deploy-staging.mjs deploy
+
+      - name: Verify the live Worker, browser bytes and admission refusals
+        if: inputs.operation == 'deploy'
+        run: node remote/scripts/staging-artifact.mjs verify
