@@ -212,15 +212,31 @@ digipeat either: nothing it hears is ever repeated back onto the channel.
    outside that band you are losing margin, though level alone is never why a
    checksum fails.
 
+Turning the internet feed on is not a step in this list, and it does not shorten it. The feed
+fills the map without touching the radio; the checklist under
+[A full map is not a working radio](#a-full-map-is-not-a-working-radio) is what tells you
+whether the RF side is alive.
+
 ### Read a station
 
-1. Click a row in the table or a symbol on the map — either selects both.
-2. Work the card: how it reached you and how long ago, where it is and how far
+![An APRS map hover readout under the cursor. It reads: KC0SDA · Car · reported by APRS-IS 37s ago · via W0MXW-3,KB9SCT-10,KC8RFE-3,WIDE2,QAR,W9CQO-1 · 58 kn @ 0° — then the station's comment, whose first few characters arrived as garbage before it settles into "re on the mooove".](../img/manual/aprs-map-hover.webp)
+
+*The map hover in Nexus 1.10.3. The third field is the source, and it is the whole point:
+`reported by APRS-IS` means the internet feed carried this station, not your receiver. The
+same field reads `heard on RF`, or `heard on RF + APRS-IS`, when your own antenna is in it.
+The tail is the station's own comment text, garbled characters and all — Nexus prints what
+arrived.*
+
+1. Hover a symbol for the one-line version: call, what the symbol is, how it reached you and
+   how long ago, its path, its motion, and its comment.
+2. Click a row in the table or a symbol on the map — either selects both, and opens the
+   station card.
+3. Work the card: how it reached you and how long ago, where it is and how far
    from you, whether it came in direct or through digipeaters, what it said, and
    the weather if it is a weather station.
-3. Open **Raw packet** when you want the TNC2 line itself — the path markers and
+4. Open **Raw packet** when you want the TNC2 line itself — the path markers and
    the information field exactly as they arrived.
-4. A station with no position is a normal thing to have in the list: message and
+5. A station with no position is a normal thing to have in the list: message and
    status packets carry none, and the card says *"none reported — heard, but
    nothing to plot"* rather than pretending.
 
@@ -241,7 +257,53 @@ digipeat either: nothing it hears is ever repeated back onto the channel.
 4. Changing the radius or watched calls reconnects the feed — the server does the
    filtering, so a new subscription has to be sent.
 
+#### A full map is not a working radio
+
+![The APRS section with the internet feed running. The header reads 2000 stations, 300 pkts, channel 144.390 · N. America, a dial readout of 7.070 MHz · 40m · USB, TX On, ● Monitoring (auto), the decode chip "No 2 m radio", and two internet chips reading Internet 280657 and Internet 2000. Below it the beacon and message forms, then the station table: every row's Via column reads "net". The map beside it is covered in station symbols, all drawn with dashed rings.](../img/manual/aprs-internet-feed.webp)
+
+*APRS in Nexus 1.10.3 with the internet feed on and **no VHF radio in the station**. Two
+thousand stations are plotted and 280,657 packets have come in over the internet, and none of
+it is evidence about this station's antenna. The decode chip says so in three words —
+**No 2 m radio** — and every row in the table says `net`.*
+
+This is the picture the section is designed to keep you from misreading. **Nothing the
+internet feed shows you says anything about your RF path.** Read the two chains separately:
+
+| What you are looking at | What it proves |
+|---|---|
+| Stations on the map, `net` in the Via column, dashed rings | An APRS-IS server told you about them. Nothing about your antenna, your radio or your audio. |
+| The **Internet N** chip counting up | Your network connection works. |
+| `RF` or `RF+net` in the Via column, solid or doubled rings | **Your own receiver decoded that station off the air.** This is the only APRS evidence about your station. |
+| The decode chip reading **N decoded** | A checksummed frame arrived from your radio. This is the receive path proven. |
+
+The RF-readiness checklist, in order — each line is a thing you can read off the screen:
+
+1. **A radio that covers the channel.** The decode chip reads **No 2 m radio** when the rig's
+   coverage table says it cannot receive 144.390 at all. No amount of arming, tuning or audio
+   routing fixes that; it needs a VHF radio. Everything below is moot until this clears.
+2. **The dial actually on the channel, in FM.** The dial readout beside **Re-tune** is CAT's
+   answer, not the app's intention — in the capture above it reads `7.070 MHz · 40m · USB`,
+   which is an HF SSB dial, not APRS. Press **Re-tune** and read it again.
+3. **Monitor armed.** The chip reads **Monitor off** while the decoder is stopped, and it
+   outranks a wrong dial — so arm it and read the chip a second time rather than concluding
+   the frequency is fine because nothing complained about it.
+4. **Audio arriving.** **No input** means no samples at all from the capture device. **Silent**
+   with the squelch open means the wrong input device. Open the squelch and look for hiss
+   around −30 to −25 dBFS.
+5. **A frame decoding.** **N decoded** is the finish line. Until then you have a receiver that
+   might work; after it you have one that does.
+
+Transmit is its own question and the same rule holds. **TX On** is an arm latch — it says you
+have allowed the section to key, not that a beacon will land on the APRS channel. The gate a
+beacon passes is TX enabled, the dial inside your licence privileges, and nothing else holding
+the transmitter; **it does not check that the rig is on 144.390 in FM.** With TX on and the
+dial parked on 40 m, **Send beacon** renders AFSK-1200 and keys it there. Confirm the dial
+first — step 2 above — every time.
+
 ### Send a position beacon
+
+Before anything else, check the dial readout beside **Re-tune** actually reads the APRS
+channel in FM. The send gate does not check it for you — see the readiness checklist above.
 
 1. Turn **TX On**.
 2. Check the **Lat** and **Lon** in the beacon form. They are prefilled from your
@@ -297,6 +359,12 @@ digipeat either: nothing it hears is ever repeated back onto the channel.
   keying. The burst is short — one packet at 1200 baud — and PTT drops on its own
   when it plays out. Practically, decide before you press Send; there is no
   taking it back mid-air from here.
+- **The send gate does not check the dial.** A beacon or a message is refused when TX is off,
+  when the dial is outside your licence privileges, or when something else holds the
+  transmitter — and that is the whole list. It is not checked against the APRS channel or
+  against FM, so with TX on and the rig on an HF SSB dial, **Send beacon** keys AFSK-1200
+  there. The auto-tune on entering the section *is* capability-gated and refuses a radio that
+  cannot reach the channel; the send is not. Read the dial before you press it.
 - **There is no periodic or smart beaconing, and no GPS input.** A beacon is a
   one-shot you pressed. Nexus will not beacon your position on a timer, will not
   beacon faster when you are moving, and reads no GPS receiver — the position in
