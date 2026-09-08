@@ -571,6 +571,23 @@ function checkReleaseDocs() {
 // "(#2, #8)" was published in the 1.3.0 CHANGELOG as fixed. Both were open then and are open
 // now. This is the only check here that needs the network, so it degrades to a loud SKIP rather
 // than a silent pass when `gh` cannot answer.
+//
+// TWO THINGS IT USED TO GET WRONG, both found on 1.10.3 and both the sort that gets a check
+// switched off rather than obeyed:
+//
+//   * `gh issue list` cannot see DISCUSSIONS. 1.10.3 credits "(#231, #232)" — #231 is the issue
+//     and #232 is the discussion the same fault was reported in, which is a correct credit and
+//     was reported as "#232 is not an issue in kd9taw/Nexus". A number is now looked up as a
+//     discussion before it is called missing.
+//   * "cited ⇒ must be CLOSED" is not true of a fix the maintainer cannot yet prove. 1.10.3
+//     shipped two fixes marked **NEEDS-BENCH** — the project-wide flag for "the change is in,
+//     the hardware to confirm it on is not here" (#126 wants an FTDX-101D, #233 a Mac). Those
+//     issues stay open on purpose, possibly for months, and there is no repo edit that clears
+//     them: a permanent FAIL nobody can act on is exactly how the FAILs stop being read. So an
+//     open issue whose own CHANGELOG bullet carries NEEDS-BENCH is REVIEW, listed by name, and
+//     an open issue with no such marker is still a FAIL. NEEDS-BENCH is not a mute button: it
+//     is published to the operator in the release notes, so writing a false one is a public
+//     claim, not a private silencing.
 
 function versionSection(changelog, version) {
   const start = changelog.search(new RegExp(`^## \\[${version.replace(/\./g, '\\.')}\\]`, 'm'))
@@ -580,11 +597,47 @@ function versionSection(changelog, version) {
   return end < 0 ? after : after.slice(0, end)
 }
 
+/** The section's top-level bullets, each running to the next one, so a citation keeps its prose. */
+function bullets(section) {
+  const out = []
+  for (const line of section.split('\n')) {
+    if (/^- /.test(line) || !out.length) out.push(line)
+    else out[out.length - 1] += `\n${line}`
+  }
+  return out
+}
+
+/**
+ * `{ title, closed }` when `n` is a discussion, `null` when GitHub says it is definitively not
+ * one, `undefined` when the question could not be asked at all.
+ */
+function discussion(n) {
+  const query = `{repository(owner:"kd9taw",name:"Nexus"){discussion(number:${n}){title closed}}}`
+  try {
+    const out = execFileSync('gh', ['api', 'graphql', '-f', `query=${query}`], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    return JSON.parse(out)?.data?.repository?.discussion ?? null
+  } catch (e) {
+    // gh exits non-zero for a number that is not a discussion AND for a network failure. Only
+    // the first is an answer; the second must not be reported as one.
+    return /NOT_FOUND|Could not resolve to a Discussion/.test(`${e.stdout ?? ''}${e.stderr ?? ''}`)
+      ? null
+      : undefined
+  }
+}
+
 function checkIssueCredits() {
   const section = versionSection(readFileSync(path.join(ROOT, 'CHANGELOG.md'), 'utf8'), VERSION)
   if (section == null) return SKIP('CHANGELOG issue credits', `no [${VERSION}] section to read`)
   const cited = [...new Set([...section.matchAll(/#(\d{1,5})\b/g)].map((m) => m[1]))]
   if (!cited.length) return OK('CHANGELOG issue credits', `the [${VERSION}] section cites no issues`)
+
+  // Which citations sit in a bullet that already says the fix is unproven.
+  const needsBench = new Set()
+  for (const b of bullets(section))
+    if (/NEEDS-BENCH/.test(b)) for (const m of b.matchAll(/#(\d{1,5})\b/g)) needsBench.add(m[1])
 
   let json
   try {
@@ -599,11 +652,26 @@ function checkIssueCredits() {
         `section cites #${cited.join(', #')} — verify each is CLOSED by hand.`)
   }
   const byNumber = new Map(JSON.parse(json).map((i) => [String(i.number), i]))
-  const open = cited
-    .map((n) => byNumber.get(n))
-    .filter((i) => i && i.state !== 'CLOSED')
-    .map((i) => `#${i.number} "${i.title}" is ${i.state} — the CHANGELOG credits it as done in ${VERSION}`)
-  const missing = cited.filter((n) => !byNumber.has(n)).map((n) => `#${n} is not an issue in kd9taw/Nexus`)
+
+  const open = []
+  const unproven = []
+  const missing = []
+  const unknown = []
+  const discussions = []
+  for (const n of cited) {
+    const issue = byNumber.get(n)
+    if (!issue) {
+      const d = discussion(n)
+      if (d) discussions.push(`#${n} "${d.title}" (discussion${d.closed ? ', closed' : ''})`)
+      else if (d === null) missing.push(`#${n} is neither an issue nor a discussion in kd9taw/Nexus`)
+      else unknown.push(`#${n} is not in the issue list and the discussion lookup could not run — check by hand`)
+      continue
+    }
+    if (issue.state === 'CLOSED') continue
+    const line = `#${issue.number} "${issue.title}" is ${issue.state} — the CHANGELOG credits it as done in ${VERSION}`
+    if (needsBench.has(n)) unproven.push(`${line}, and its bullet says NEEDS-BENCH`)
+    else open.push(line)
+  }
 
   if (open.length || missing.length) {
     FAIL('CHANGELOG issue credits', [...open, ...missing],
@@ -611,7 +679,19 @@ function checkIssueCredits() {
         'NEXT version section and, if the issue is genuinely not fixed, say so on the issue. ' +
         'Never close an issue because the CHANGELOG claimed it.')
   } else {
-    OK('CHANGELOG issue credits', `#${cited.join(', #')} — all closed`)
+    OK('CHANGELOG issue credits',
+      `#${cited.join(', #')} — every credit resolves and none is an open claim of a fix` +
+        (discussions.length ? ` · credits a discussion: ${discussions.join(', ')}` : ''))
+  }
+  if (unproven.length) {
+    REVIEW('issues credited but still open on purpose', unproven,
+      'Each is a fix that shipped and cannot be proved without hardware the maintainer does not ' +
+        'have. Nothing in the repo closes these — they close when somebody puts the change on a ' +
+        'real radio. Check the flag still belongs before you skip past it.')
+  }
+  if (unknown.length) {
+    REVIEW('issue credits that could not be resolved', unknown,
+      'The lookup failed, which is not evidence the credit is fine.')
   }
 }
 
