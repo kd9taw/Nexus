@@ -1,0 +1,253 @@
+name: Repair PR 194
+
+on:
+  push:
+    branches:
+      - fix/clublog-batch-upload-193
+    paths:
+      - .github/workflows/repair-pr-194.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Rebuild PR on current upstream main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git remote add upstream https://github.com/kd9taw/Nexus.git 2>/dev/null || true
+          git fetch upstream main
+          git fetch origin fix/clublog-batch-upload-193
+
+          # Rebuild from upstream/main and replay only the original PR commit.  On the
+          # upload-worker conflict, keep current main; the batch hook is reapplied below
+          # against the current worker so the newer #193 pacing code is not reverted.
+          git checkout --detach upstream/main
+          git cherry-pick -X ours 8c5dd33336a47fc9cfaddffdf6cdd17522906773
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          p = Path('src-tauri/src/lib.rs')
+          s = p.read_text()
+
+          helper_marker = '// ----- eQSL ADIF QSO upload --------------------------------------------------'
+          helper = r'''/// Send a ClubLog backlog as ONE `putlogs.php` job. The realtime helper remains
+/// the path for an ordinary single queued QSO. No engine lock is held over
+/// keychain/network I/O.
+fn clublog_push_batch_impl(
+    records: &[tempo_core::logbook::QsoRecord],
+    engine: &SharedEngine,
+) -> Result<(u16, String), String> {
+    use std::sync::atomic::Ordering;
+    if records.len() < 2 {
+        return Err("ClubLog batch upload requires at least two QSOs".to_string());
+    }
+    if CLUBLOG_SUSPENDED.load(Ordering::Relaxed) {
+        return Err("ClubLog uploads are paused after a server/credential error — fix ClubLog settings (or restart Nexus) to retry.".to_string());
+    }
+
+    let (email, callsign_setting, api_setting, mycall) = {
+        let eng = engine_lock(engine);
+        let s = eng.settings();
+        (
+            s.clublog_email.trim().to_string(),
+            s.clublog_callsign.trim().to_string(),
+            s.clublog_api_key.trim().to_string(),
+            s.mycall.trim().to_string(),
+        )
+    };
+    let api_key = effective_clublog_key(&api_setting);
+    if api_key.is_empty() {
+        return Err("This build has no ClubLog application key.".to_string());
+    }
+    if email.is_empty() {
+        return Err("Set your ClubLog email in Settings first.".to_string());
+    }
+    let callsign = if callsign_setting.is_empty() { mycall } else { callsign_setting };
+    let password = clublog_keychain()?
+        .get_password()
+        .map_err(|_| "No ClubLog app-password stored — set it in Settings.".to_string())?;
+
+    let mut adif = String::new();
+    for rec in records {
+        adif.push_str(&tempo_core::logbook::adif_record(rec));
+        adif.push('\n');
+    }
+    propagation::live::clublog::push_batch(
+        tempo_core::clublog::CLUBLOG_BATCH_URL,
+        tempo_core::clublog::ClubLogBatchQuery {
+            email,
+            password,
+            callsign,
+            api_key,
+            adif,
+        },
+    )
+}
+
+'''
+          if 'fn clublog_push_batch_impl(' not in s:
+              if helper_marker not in s:
+                  raise SystemExit('eQSL marker not found; refusing an unsafe edit')
+              s = s.replace(helper_marker, helper + helper_marker, 1)
+
+          batch_marker = '''            // How many CATCH-UP records this drain is carrying (#193). Counted before the
+'''
+          batch_code = r'''            // ClubLog's realtime endpoint is for the QSO just worked. Decide whether this
+            // drain is a backlog from the WHOLE ClubLog queue, not only records whose pacing
+            // slot is due right now. Catch-up pacing deliberately makes only one record due
+            // at a time, so a due-only count can never detect the backlog it is protecting.
+            let clublog_batch_records: Vec<tempo_core::logbook::QsoRecord> = if clublog_live {
+                recs.iter()
+                    .filter(|p| p.legs & tempo_app::engine::upload_legs::CLUBLOG != 0)
+                    .map(|p| p.rec.clone())
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            let mut clublog_batch_attempted = false;
+            let mut clublog_batch_retry = false;
+            if tempo_core::clublog::should_use_batch(clublog_batch_records.len()) {
+                clublog_batch_attempted = true;
+                match clublog_push_batch_impl(&clublog_batch_records, &push_engine) {
+                    Ok((200, response)) => {
+                        let detail = tempo_core::lotw_upload::sanitize_detail(&response);
+                        {
+                            let mut eng = push_engine.lock().unwrap_or_else(|e| e.into_inner());
+                            for rec in &clublog_batch_records {
+                                // putlogs.php accepted the FILE for processing. It has not yet
+                                // proved these individual QSOs are on file; the next sync can
+                                // promote Pending once ClubLog echoes them back.
+                                eng.stamp_clublog_upload(
+                                    rec,
+                                    tempo_core::logbook::UploadOutcome::Pending,
+                                    now_unix,
+                                    detail.clone(),
+                                );
+                            }
+                        }
+                        conn_log(
+                            "ClubLog",
+                            "ok",
+                            format!("batch accepted {} QSO(s) for processing", clublog_batch_records.len()),
+                        );
+                    }
+                    Ok((status, response)) => {
+                        CLUBLOG_SUSPENDED.store(true, std::sync::atomic::Ordering::Relaxed);
+                        let detail = tempo_core::lotw_upload::sanitize_detail(&response)
+                            .map(|d| format!(" — {d}"))
+                            .unwrap_or_default();
+                        conn_log(
+                            "ClubLog",
+                            "error",
+                            format!("batch upload returned HTTP {status}{detail}; ClubLog auto-upload paused to prevent IP blocking"),
+                        );
+                    }
+                    Err(e) => {
+                        clublog_batch_retry = true;
+                        conn_log("ClubLog", "error", format!("batch upload failed — {e}"));
+                    }
+                }
+            }
+
+'''
+          if 'let clublog_batch_records:' not in s:
+              if batch_marker not in s:
+                  raise SystemExit('current catch-up worker marker not found; refusing an unsafe edit')
+              s = s.replace(batch_marker, batch_code + batch_marker, 1)
+
+          loop_old = '''            for p in recs {
+                // BACKOFF: a record not yet due goes back on the queue untouched — no push,
+'''
+          loop_new = '''            for p in recs {
+                let clublog_batch_covered = clublog_batch_attempted
+                    && p.legs & tempo_app::engine::upload_legs::CLUBLOG != 0;
+                let owed_without_batch = if clublog_batch_covered {
+                    p.legs & !tempo_app::engine::upload_legs::CLUBLOG
+                } else {
+                    p.legs
+                };
+                // BACKOFF: a record not yet due goes back on the queue untouched — no push,
+'''
+          if 'let clublog_batch_covered = clublog_batch_attempted' not in s:
+              if loop_old not in s:
+                  raise SystemExit('worker loop marker not found; refusing an unsafe edit')
+              s = s.replace(loop_old, loop_new, 1)
+
+          backoff_old = '''                if p.retry_after_unix > now_unix {
+                    let mut eng = push_engine.lock().unwrap_or_else(|e| e.into_inner());
+                    eng.requeue_upload_at(p.rec, p.legs, p.attempts, p.retry_after_unix, p.origin);
+                    continue;
+                }
+'''
+          backoff_new = '''                if p.retry_after_unix > now_unix {
+                    // A successful/terminal batch consumes only the ClubLog leg; preserve
+                    // every other connector's original not-before time. A transport failure
+                    // keeps ClubLog owed too so normal retry/backoff can try again later.
+                    let requeue_legs = owed_without_batch
+                        | if clublog_batch_covered && clublog_batch_retry {
+                            tempo_app::engine::upload_legs::CLUBLOG
+                        } else {
+                            0
+                        };
+                    if requeue_legs != 0 {
+                        let mut eng = push_engine.lock().unwrap_or_else(|e| e.into_inner());
+                        eng.requeue_upload_at(
+                            p.rec,
+                            requeue_legs,
+                            p.attempts,
+                            p.retry_after_unix,
+                            p.origin,
+                        );
+                    }
+                    continue;
+                }
+'''
+          if backoff_old in s:
+              s = s.replace(backoff_old, backoff_new, 1)
+          elif 'let requeue_legs = owed_without_batch' not in s:
+              raise SystemExit('backoff block not found; refusing an unsafe edit')
+
+          s = s.replace(
+              '                        clublog_on: clublog_live,\n',
+              '                        clublog_on: clublog_live && !clublog_batch_covered,\n',
+              1,
+          )
+          s = s.replace(
+              '                    p.legs,\n                );\n                // Transient failures',
+              '                    owed_without_batch,\n                );\n                let failed = failed\n                    | if clublog_batch_covered && clublog_batch_retry {\n                        tempo_app::engine::upload_legs::CLUBLOG\n                    } else {\n                        0\n                    };\n                // Transient failures',
+              1,
+          )
+
+          p.write_text(s)
+
+          # Make the policy wording/tests describe queue depth rather than due-now records.
+          cp = Path('crates/tempo-core/src/clublog.rs')
+          c = cp.read_text()
+          c = c.replace(
+              'pub fn should_use_batch(ready_records: usize) -> bool {\n    ready_records > 1\n}',
+              'pub fn should_use_batch(queued_records: usize) -> bool {\n    queued_records > 1\n}',
+          )
+          c = c.replace('fn batch_policy_keeps_single_qso_realtime()', 'fn batch_policy_uses_queue_depth_and_keeps_single_qso_realtime()')
+          cp.write_text(c)
+          PY
+
+          cargo fmt --all
+          cargo test -p tempo-core clublog --lib
+          cargo check -p propagation --features live
+          cargo check -p tempo-app
+
+          git add crates/propagation/Cargo.toml crates/propagation/src/live/clublog.rs crates/tempo-core/src/clublog.rs src-tauri/src/lib.rs
+          git commit --amend --no-edit --author='KR8MER <69276965+KR8MER@users.noreply.github.com>'
+
+          # This deliberately replaces the temporary workflow commit too: the final PR
+          # branch is one contributor-authored commit directly on current upstream main.
+          git push --force origin HEAD:refs/heads/fix/clublog-batch-upload-193
