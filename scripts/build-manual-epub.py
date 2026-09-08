@@ -20,8 +20,10 @@ real defect an e-reader can trip on, all fixed here:
     is resolved against a map of those ids — a target that does not exist drops to plain
     text rather than a dangling anchor.
   • any remaining link that is not an in-book `#anchor`, an `http(s)://` URL or a `mailto:`
-    points outside the book (the old desktop `manual/` tree, `guide/`, `install.md`); those
-    drop to their text too.
+    points outside the book (the old desktop `manual/` tree, `install.md`); those drop to
+    their text too. A directory prefix does NOT put a target outside the book: `guide/x.md`
+    and `../x.md` are resolved by stem like a bare `x.md`, because the quick start and the
+    guide sit in different directories and link across that line.
   • dc:date is a real ISO date, not the version string (RSC-005 / OPF-053).
 
   ./scripts/build-manual-epub.py --version 1.10.2 --out docs/Nexus-Manual.epub
@@ -105,8 +107,15 @@ def resolve_links(md: str, stem: str, ids: dict, first: dict) -> str:
             frag = target[1:]
             dest = ids.get(stem, {}).get(frag)
             return f"[{label}](#{dest})" if dest else (label or "")
-        # cross-page: `other.md#frag` / `other.md`
-        mm = re.match(r"([a-z0-9-]+)\.md(?:#([\w-]+))?$", target)
+        # cross-page: `other.md#frag` / `other.md`, with or without a directory prefix.
+        # The book is docs/quick-start.md + docs/guide/*.md and `ids` is keyed by page STEM,
+        # so the two forms a CROSS-DIRECTORY link takes on disk and on GitHub —
+        # `guide/settings-reference.md#features` from the root page, `../quick-start.md#frag`
+        # from a guide page — resolve to the same page a bare `settings-reference.md#features`
+        # would. Without the prefix they fell through to the "outside the book" branch below
+        # and lost the link (label kept, anchor gone) even though the target page IS in the
+        # book. A prefixed path whose stem is NOT a book page still drops to plain text.
+        mm = re.match(r"(?:[a-z0-9._-]+/)*([a-z0-9-]+)\.md(?:#([\w-]+))?$", target)
         if mm:
             other, frag = mm.group(1), mm.group(2)
             if frag:

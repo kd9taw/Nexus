@@ -60,8 +60,9 @@ decodes and earcons let you operate by ear. Nothing changes for sighted operator
 
 ## Features
 
-- **On the air in minutes.** A three-step wizard finds your radio over USB or the
-  network, fills in CAT and audio, and pairs the sound device. Around fifty rigs
+- **On the air in minutes.** A four-step wizard — station, rig, log, finish —
+  finds your radio over USB or the network, fills in CAT and audio, pairs the
+  sound device, and imports your existing ADIF log. Around fifty rigs
   curated, Hamlib bundled, Digirig and RIGblaster recognised by name. Your licence
   class becomes a hard transmit lockout in every keying path. Opening the app
   never touches your rig.
