@@ -100,6 +100,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   several modes do not have. Those are fixed. Where a picture would have had to be staged to
   exist, there is no picture and the text says what is missing instead.
 
+- **The JS8 station list carries what a DX operator needs, and band activity is listed by
+  offset.** The stations pane gained distance, beam heading, a worked-before tick, the name and
+  comment from your last contact, and a pin for the stations you are watching — JS8Call's own
+  column set, and its own rule that worked-before means any band and any mode, not the
+  band/mode dupe scope. Alongside it, a new pane lists band activity ordered by audio offset
+  with its time delta, so finding a clear slot is a glance rather than a hunt. Both panes are
+  ⊞-hideable like their siblings.
+
 ### Fixed
 
 - **The JS8 screen was drawing the Tempo screen underneath it.** Opening JS8 rendered the whole
