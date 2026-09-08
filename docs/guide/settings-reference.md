@@ -1548,6 +1548,11 @@ Always visible — capability, not configuration, gates the tabs.
   time Nexus starts, with which sources were active. Kept in `assistance_journal.json` beside your settings, so
   it survives restarts. Newest first.
 
+![The Contest Category group: Unassisted entry switched off, an ASSISTED badge on a line reading that the AI CW decoder, DX cluster / RBN and PSK Reporter needs are supplying callsign identification since 23:18Z, and below it an Assistance record of eight timestamped rows.](../img/manual/settings-contest-category.webp)
+
+*Contest Category in Nexus 1.10.3. The badge states what you are entitled to
+claim right now; the record underneath is the evidence, kept across restarts.*
+
 ### Field Day Setup
 
 - **Field Day mode** — the master switch. "Turn on for Field Day weekend —
@@ -1597,11 +1602,16 @@ narrow.
 Nothing here is a second copy: change one of them anywhere and it changes
 everywhere.
 
+![The Who's who at this event group: Callsign on the air reading KD9TAW, Position name reading "Comms Trailer", and an empty Operator at the key box showing the placeholder "blank = the callsign above".](../img/manual/settings-whos-who.webp)
+
+*Who's who in Nexus 1.10.3 — three fields answering three different questions.*
+
 ### Field Day Club Sync
 
 Run the whole club on Nexus: one PC **hosts a club event** (this opens a TCP
-port on the site LAN — the only time Nexus listens beyond the local computer,
-and only while the toggle is on); every other position joins it with **Find
+port on the site LAN, and only while the toggle is on — the spectator scoreboard
+below and [Connect on a TV](#connect-on-a-tv) are the other two things that
+listen beyond the local computer); every other position joins it with **Find
 club events** or by typing the host's `host:port` into **Join event at**. Each
 position's contacts stream to the host as they're logged, and the host pushes
 back the club score, a live band board, and the club-wide dupe list that
@@ -1622,6 +1632,12 @@ UI-only preferences (applied live, not via Save) and the section toggles.
 
 ### Workspace
 
+- **Language** — the language Nexus writes in. Frequencies, signal reports,
+  callsigns, grid squares, and band and mode names are never translated or
+  reformatted: a dial reads the same in every language.
+- **Theme** — Light or Dark. Light reads best outdoors in daylight. Either way,
+  the top bar's **Field** chip boosts contrast and size on top of the theme you
+  picked.
 - **UI scale** — **Auto (fit)** scales the whole interface to the window so
   nothing is cut off, with **Max scale** cap chips so auto never overshoots on a
   big monitor. A cap this window can't reach is disabled and its tooltip says
@@ -1633,19 +1649,61 @@ UI-only preferences (applied live, not via Save) and the section toggles.
   layout itself is set in the cockpits: drag the dividers between panes to resize
   (double-click a divider to reset), and use the ⊞ menu to show or hide panes.
 
-(The theme picker — dark / light / amber night-vision — lives in the app chrome,
-not this tab.)
+![The Workspace row: Language set to English, Theme with Dark selected of Light and Dark, UI scale on Auto (fit) with max-scale chips from 100% to 175% and 125% lit, and Density set to Comfortable.](../img/manual/settings-workspace.webp)
+
+*Workspace in Nexus 1.10.3. Reset pane sizes sits to the right of Density.*
 
 ### Connect on a TV
 
-<!-- TODO(settings-reference): "Connect on a TV" (registry id `connect-web`) has no prose yet.
-     Write it here; scripts/gen-settings-reference.mjs carries it across from now on. -->
+Puts the Connect view — the propagation map with every layer, the panes, the live
+openings — on a shack TV, a tablet or a phone. Anything on your network with a
+browser can open it; there is nothing to install at the other end.
 
-_Undocumented so far._
+**To set it up.** Turn **Serve Connect on this network** on. Nexus prints the
+address under **Open this on the TV** — `http://<this computer's address>:<port>`
+— with a **Copy** link beside it. Type that address into the TV's browser. It is
+a page, not an app: bookmark it and the TV picks the display up again on its own
+after a reboot.
+
+- **Serve Connect on this network** — off by default. While it is on, Nexus
+  listens on the local network; when it is off, nothing is served and the port is
+  closed.
+- **Port** — 7374 by default. Separate from the Field Day spectator scoreboard's
+  port, so a club site can run both at once.
+
+**It is read-only, and that is structural rather than a promise.** The little
+server answers `GET` and `HEAD` and nothing else, and the only things those can
+reach are the summary snapshot, the page's own files, and a hand-written list of
+read-only weather queries. No inbound request has a path to a setting, to CAT, or
+to the transmit path. The page also loads no script, font or image from the
+internet, so it renders fully on a shack network with no route out — which is
+where a wall display usually lives.
+
+⚠️ **It does put the station on the LAN, so know what is on the screen.** The page
+carries your **callsign and grid square**, the band-by-band propagation picture,
+and the callsigns of stations heard and spotted. It deliberately does **not**
+carry your log, your needs board, or the frequency you are on — what the station
+is doing right now is a different thing from what the ionosphere is doing, and
+only the second is what a wall display is for. Anyone who can reach your network
+can read all of it, with no password, so on a shared or guest network leave this
+off.
+
+![The Connect on a TV group: "Serve Connect on this network" switched on, above two paragraphs explaining that the full Connect view is served read-only to any browser on the network, and that while it is on anyone on the network can see the callsign, grid square and propagation picture, while the log, needs board and current frequency are never sent.](../img/manual/settings-connect-tv.webp)
+
+*Connect on a TV in Nexus 1.10.3, switched on. The port and the address to type
+appear directly below; the address is omitted here because it is this station's
+own.*
 
 ### Features
 
 Turn sections on and off, and pick a goal profile.
+
+![The Features group: six profile chips — Just getting started, DX chasing & awards, Contesting, POTA / SOTA, 6m / VHF & openings, Everything (expert) — with a seventh, Custom, selected. Below, a "Core — always on" row listing Operate, Logbook, Settings and Now bar with no switches, and an Operate row with CW, Phone, RTTY and PSK each switched on.](../img/manual/settings-features.webp)
+
+*Features in Nexus 1.10.3. **Custom** is what the chip row shows once you have
+changed any individual switch — it is not a seventh profile you pick, it is the
+panel saying you are no longer on one. The core row has no switches because those
+sections cannot be turned off.*
 
 - **Profile** — a goal (getting started, DX/awards, contesting, POTA/SOTA,
   6m/VHF, or **Everything (expert)**, which turns the whole console on) sets
@@ -1674,6 +1732,11 @@ Speech and sound cues for operating by ear. The keyboard and screen-reader label
 throughout Nexus are **always on** — these settings only control what comes out
 of the speakers.
 
+![The Accessibility & eyes-free group: "Announce decodes (screen reader)" set to Needed, with TX / RX earcon and Decode-batch tick both switched off.](../img/manual/settings-accessibility.webp)
+
+*Accessibility in Nexus 1.10.3. A screenshot cannot show what these do — each cue
+is described below.*
+
 - **Announce decodes (screen reader)** — Off / Needed only (calling you / new /
   watched) / All (adds a per-cycle CQ summary). Silent without a reader running.
 - **TX / RX earcon** — "A rising tone when you key up, falling when you unkey —
@@ -1691,6 +1754,10 @@ undiscoverable: backing up a whole station has nothing to do with transmit
 limits.
 
 ### Backup & reset
+
+![The Backup & reset group: an explanation, "Back up" and "Restore…" links, a note that the file holds no passwords or API keys, and a red "Reset all settings…" link under a Start over heading.](../img/manual/settings-backup-reset.webp)
+
+*Backup & reset in Nexus 1.10.3 — the whole of the Config tab.*
 
 - **Back up** — writes your radios, operating preferences, memory channels,
   watchlist and chase sets to a single `.json`. For a new computer, or before a
