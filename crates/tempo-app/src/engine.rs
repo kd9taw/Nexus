@@ -4638,6 +4638,22 @@ impl Engine {
         // Alt-double-click gesture and the Settings editor both go through it), so a
         // stale form save can't silently un-block or re-block a call mid-QSO.
         let live_blocked = std::mem::take(&mut self.settings.blocked_calls);
+        // The Cloudlog key is a WRITE-ONLY credential, not editable state, so it is captured here and
+        // restored below UNCONDITIONALLY — on a form save AND on a restore/reset, unlike the roster
+        // fields above. `get_settings` clears it on the way OUT to the frontend (round 9), so the
+        // frontend never holds it and every form Save posts it back EMPTY; a factory reset sends
+        // `Settings::default()` (empty); and a restore's bundle has `cloudlogKey` redacted
+        // (`BACKUP_REDACTED_FIELDS`, also empty). It therefore has exactly ONE legitimate non-empty
+        // source — a legacy settings.json read at startup, held here as a pending keychain migration —
+        // and no incoming `s` can ever author it. Letting the wholesale `self.settings = s` below adopt
+        // the incoming empty value destroyed that pending key: the save that follows omits the
+        // now-empty field (`skip_serializing_if`), leaving the key in NEITHER the keychain (migration
+        // deferred) nor the file — permanently lost. This is the WRITE half of the same contract
+        // `get_settings`'s clear is the READ half of; the two must stay symmetric. `apply_settings_inner`
+        // is the ONLY session-time wholesale replace of `self.settings`, so preserving it here closes
+        // every save path — form Save, reset AND restore — at their one common point (round 10 Finding 1;
+        // three earlier partial fixes each patched only the path their author was testing).
+        let live_cloudlog_key = std::mem::take(&mut self.settings.cloudlog_key);
         // Which radio the incoming flat fields describe. A P2-aware Settings form carries the roster
         // + its edited radio in `active_radio`. A LEGACY payload with no `radios` (an old settings.json
         // or a pre-P2 saved config profile) describes the LIVE active radio — fold its flat CAT there,
@@ -4648,6 +4664,13 @@ impl Engine {
             s.active_radio
         };
         self.settings = s;
+        // Restore the engine-owned pending Cloudlog key captured above (see that comment). Prefer a
+        // NON-empty incoming value — that can only be a legacy first-load carrying its own plaintext
+        // key, never the frontend — but keep the live pending key whenever `s` carries none, which is
+        // every real path today.
+        if self.settings.cloudlog_key.is_empty() {
+            self.settings.cloudlog_key = live_cloudlog_key;
+        }
         // Implicit-ACK toggle lives app-side (the observe loop consumes it).
         self.app.set_implicit_ack(self.settings.chat_implicit_ack);
         self.settings.source = live_source;
@@ -25208,6 +25231,182 @@ mod tests {
             "a restore replaces the station, so the bundle wins"
         );
         assert_eq!(snap.radio.tx_offset_hz, 1200.0);
+    }
+
+    /// ⛔ DATA LOSS (round 10 Finding 1). A PENDING Cloudlog key must survive an ordinary Settings
+    /// form Save from the frontend.
+    ///
+    /// On a keychain-less box the `run()` migration DEFERS, leaving the plaintext key in the engine's
+    /// in-memory `Settings` for a retry next launch (round 8 F1). `get_settings` then CLEARS the key
+    /// on the copy it hands the frontend (round 9), so the frontend never holds it and posts the form
+    /// back with an EMPTY `cloudlog_key`. The bug: `apply_settings`'s wholesale `self.settings = s`
+    /// overwrote the engine's pending key with that empty value, and the save that follows omitted the
+    /// now-empty field (`skip_serializing_if`) — the key ended up in NEITHER the keychain nor the file,
+    /// on the exact box round 9 set out to protect.
+    ///
+    /// Models the real sequence — defer, get_settings-clear, edit an UNRELATED field, save, read back
+    /// — not the assignment being fixed. Control: `clublog_api_key`, an always-serialized secret the
+    /// form legitimately round-trips, must survive the SAME flow, so the detector can see persistence.
+    #[test]
+    fn a_form_save_keeps_the_pending_cloudlog_key() {
+        let dir = std::env::temp_dir().join(format!("nexus-cl-form-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let _ = std::fs::remove_file(&path);
+
+        // Migration deferred: the engine holds the plaintext key as pending, live state.
+        let mut e = Engine::with_settings(Settings {
+            cloudlog_key: "CLOUDLOG-PENDING-KEY-9999".into(),
+            clublog_api_key: "CLUBLOG-CONTROL-8888".into(),
+            cloudlog_url: "https://log.example.com".into(),
+            ..Settings::default()
+        });
+        assert_eq!(
+            e.settings.cloudlog_key, "CLOUDLOG-PENDING-KEY-9999",
+            "pre: the engine holds the pending key"
+        );
+
+        // get_settings hands the frontend a clone with the key CLEARED (round 9); the frontend never
+        // holds it, so the form it posts back carries an EMPTY cloudlog_key.
+        let mut form = e.settings().clone();
+        form.cloudlog_key.clear();
+        assert!(
+            form.cloudlog_key.is_empty(),
+            "pre: the wire the frontend gets carries no cloudlog key"
+        );
+        assert_eq!(
+            form.clublog_api_key, "CLUBLOG-CONTROL-8888",
+            "pre: but it does carry the control secret"
+        );
+        // The operator edits an UNRELATED field and clicks Save.
+        form.mygrid = "FN20".into();
+
+        e.apply_settings(form);
+        e.settings().save(&path).unwrap();
+        let back = Settings::load(&path);
+
+        // Positive control FIRST: a sibling secret that legitimately round-trips proves the
+        // save/reload path can observe persistence — a dropped key would be caught, not silently
+        // missed. The unrelated edit landing proves the form Save actually took effect.
+        println!(
+            "control: clublog after form-save round-trip = {:?}; cloudlog after = {:?}",
+            back.clublog_api_key, back.cloudlog_key
+        );
+        assert_eq!(
+            back.clublog_api_key, "CLUBLOG-CONTROL-8888",
+            "control: an always-serialized secret survives the form Save round-trip"
+        );
+        assert_eq!(
+            back.mygrid, "FN20",
+            "control: the unrelated edit the operator actually made was saved"
+        );
+        // The value under test: the pending key must have survived the SAME round-trip.
+        assert_eq!(
+            back.cloudlog_key, "CLOUDLOG-PENDING-KEY-9999",
+            "DATA LOSS: an ordinary Settings form Save destroyed the pending Cloudlog key"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⛔ DATA LOSS (round 10 Finding 1, reset arm). A factory reset must not destroy a PENDING
+    /// Cloudlog key.
+    ///
+    /// `reset_settings` routes `Settings::default()` through `apply_restored_settings`. Its own doc
+    /// promises it "keeps … stored credentials" — and a pending Cloudlog key IS a stored credential,
+    /// merely one that has not finished migrating into the keychain. Before the fix the reset's
+    /// wholesale `self.settings = s` blanked it, leaving it in neither the keychain nor the file.
+    ///
+    /// Control: the reset is proven to ACTUALLY take effect — an unrelated field the engine held is
+    /// cleared by it — so the key's survival is a real preservation, not a reset that no-opped.
+    #[test]
+    fn a_factory_reset_keeps_the_pending_cloudlog_key() {
+        let dir = std::env::temp_dir().join(format!("nexus-cl-reset-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let _ = std::fs::remove_file(&path);
+
+        let mut e = Engine::with_settings(Settings {
+            cloudlog_key: "CLOUDLOG-PENDING-KEY-9999".into(),
+            cloudlog_url: "https://log.example.com".into(),
+            ..Settings::default()
+        });
+
+        // reset_settings sends a fresh default (empty cloudlog_key), roster-normalized.
+        let mut fresh = Settings::default();
+        fresh.ensure_radio_profiles();
+        fresh.ensure_distinct_radio_ports();
+        fresh.ensure_routing_targets();
+        assert!(
+            fresh.cloudlog_key.is_empty(),
+            "pre: the reset carries no cloudlog key"
+        );
+        e.apply_restored_settings(fresh);
+
+        e.settings().save(&path).unwrap();
+        let back = Settings::load(&path);
+        // Control: the reset really replaced the struct — an unrelated field the engine held is gone.
+        assert!(
+            back.cloudlog_url.is_empty(),
+            "control: the factory reset actually took effect (cloudlog_url was cleared), so a \
+             surviving key is a real preservation and not a skipped reset"
+        );
+        // The pending credential the reset promised to keep must survive.
+        assert_eq!(
+            back.cloudlog_key, "CLOUDLOG-PENDING-KEY-9999",
+            "DATA LOSS: a factory reset destroyed the pending Cloudlog key"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⛔ DATA LOSS (round 10 Finding 1, restore arm). Restoring a settings bundle must not destroy a
+    /// locally-PENDING Cloudlog key.
+    ///
+    /// `import_settings_bundle` routes the bundle through `apply_restored_settings`. Every bundle has
+    /// `cloudlogKey` REDACTED (`BACKUP_REDACTED_FIELDS`), so a restore's incoming key is always empty
+    /// — and before the fix the wholesale `self.settings = s` blanked a locally-pending key with it,
+    /// leaving the credential in neither place.
+    ///
+    /// Control: the bundle's OWN fields are proven to be applied (a restore is authoritative for what
+    /// it carries), so the key's survival is a real preservation and not a restore that was ignored.
+    #[test]
+    fn a_settings_bundle_restore_keeps_the_pending_cloudlog_key() {
+        let dir = std::env::temp_dir().join(format!("nexus-cl-restore-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let _ = std::fs::remove_file(&path);
+
+        let mut e = Engine::with_settings(Settings {
+            cloudlog_key: "CLOUDLOG-PENDING-KEY-9999".into(),
+            mygrid: "EN37".into(),
+            ..Settings::default()
+        });
+
+        // A restored bundle: cloudlogKey is redacted out (empty), but the bundle IS authoritative for
+        // the rest — here a different grid.
+        let bundle = Settings {
+            cloudlog_key: String::new(), // redacted from every bundle (BACKUP_REDACTED_FIELDS)
+            mygrid: "FN20".into(),
+            ..Settings::default()
+        };
+        e.apply_restored_settings(bundle);
+
+        e.settings().save(&path).unwrap();
+        let back = Settings::load(&path);
+        // Control: the restore actually took effect — the bundle's grid replaced the engine's.
+        assert_eq!(
+            back.mygrid, "FN20",
+            "control: the restore actually applied the bundle (grid replaced), so a surviving key is \
+             a real preservation and not an ignored restore"
+        );
+        // The locally-pending credential the bundle could not carry must survive.
+        assert_eq!(
+            back.cloudlog_key, "CLOUDLOG-PENDING-KEY-9999",
+            "DATA LOSS: a settings-bundle restore destroyed the locally-pending Cloudlog key"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

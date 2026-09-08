@@ -8604,10 +8604,13 @@ fn export_general_log(
 ///
 /// The bundle is written to Downloads and operators mail these to themselves, so anything a
 /// third party must not end up holding cannot be in it. Most credentials are already safe —
-/// passwords and API keys live in the OS keychain, and `cloudlog_key` carries `skip_serializing`
-/// — but `clublog_api_key` is genuinely IN settings.json, and its own doc comment says why that
-/// matters: ClubLog auto-revokes a key that becomes public. A backup that silently carried it
-/// would revoke the operator's ClubLog access the first time they shared the file for help.
+/// passwords and API keys live in the OS keychain. `cloudlog_key` is `skip_serializing_if` empty
+/// (trim-aware), NOT never-serialized: while a legacy plaintext key is pending keychain migration
+/// it IS in settings.json, so a bundle built from the engine's settings can carry it — which is
+/// exactly why it is redacted here BY NAME, not left to a serde skip. And `clublog_api_key` is
+/// genuinely IN settings.json, and its own doc comment says why that matters: ClubLog auto-revokes
+/// a key that becomes public. A backup that silently carried it would revoke the operator's ClubLog
+/// access the first time they shared the file for help.
 ///
 /// A restore therefore does not put it back, and the operator re-enters it. That is the correct
 /// trade: re-typing one key beats a key that stops working for reasons nobody can see.

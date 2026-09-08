@@ -509,6 +509,16 @@ pub enum PounceThreshold {
     AtnoZoneOrState,
 }
 
+/// `skip_serializing_if` for the pending [`Settings::cloudlog_key`]. A whitespace-only value is not
+/// a real key, so it is treated as ABSENT — matching the migration gate, which skips migrating a
+/// `cloudlog_key.trim().is_empty()` value (`run()` in src-tauri `lib.rs`). A plain `String::is_empty`
+/// disagreed with that gate: a whitespace-only value serialized to settings.json forever yet was
+/// never migrated (round 10 N2). Trimming here makes the two agree — neither serializes nor migrates
+/// a blank key.
+fn cloudlog_key_absent(s: &str) -> bool {
+    s.trim().is_empty()
+}
+
 /// Everything the operator configures: identity, band/frequency, Field Day
 /// exchange, rig/PTT control, and network (WSJT-X UDP API + PSK Reporter).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -2062,9 +2072,19 @@ pub struct Settings {
     /// keychain has it the migration clears the field and the empty value is omitted, so
     /// the plaintext is never re-written. `settings.save` is 0600 (F8), so the pending key
     /// at rest is owner-only; `export_settings_bundle` strips `cloudlogKey`
-    /// (`BACKUP_REDACTED_FIELDS`); and `get_settings` clears it, keeping the "write-only,
-    /// not sent to the frontend" contract even while a pending key sits in the file.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
+    /// (`BACKUP_REDACTED_FIELDS`); `get_settings` clears it, keeping the "write-only, not sent
+    /// to the frontend" contract even while a pending key sits in the file; and
+    /// `Engine::apply_settings_inner` preserves it across the wholesale `self.settings = s` of
+    /// every form Save / reset / restore, so no such round-trip can blank it (round 10 Finding 1).
+    ///
+    /// `skip_serializing_if = cloudlog_key_absent` (trim-aware), NOT `String::is_empty`, so it
+    /// agrees with the migration gate on a whitespace-only value (round 10 N2).
+    ///
+    /// DOWNGRADE CAVEAT (round 10 N3): an OLDER build carried an unconditional
+    /// `skip_serializing`, so if the operator downgrades while a key is pending it deserializes the
+    /// key, then drops it on its first save — the pending key is lost. This build cannot prevent a
+    /// prior build's behaviour; the mitigation is simply not to downgrade with a migration pending.
+    #[serde(default, skip_serializing_if = "cloudlog_key_absent")]
     pub cloudlog_key: String,
     /// Auto-forward each logged QSO to the Cloudlog/Wavelog instance above. Off by default.
     #[serde(default)]
@@ -7061,6 +7081,36 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// round 10 N2 — the serializer skip and the migration gate must agree on a WHITESPACE-only key.
+    ///
+    /// The migration (`run()`) skips a `cloudlog_key.trim().is_empty()` value; the serializer must
+    /// too, or a blank value serializes to settings.json forever yet is never migrated. Control: a
+    /// REAL key still serializes, so the check is not simply "nothing ever serializes".
+    #[test]
+    fn a_whitespace_only_cloudlog_key_is_treated_as_absent() {
+        // A blank "key" is not migratable and must not be persisted.
+        let blank = Settings {
+            cloudlog_key: "   ".into(),
+            ..Settings::default()
+        };
+        let json = serde_json::to_string(&blank).unwrap();
+        assert!(
+            !json.contains("cloudlogKey"),
+            "a whitespace-only cloudlog key must be treated as absent (agree with the migration \
+             gate), not serialized forever: {json}"
+        );
+        // Control: a real key DOES serialize (the skip is trim-aware, not "always skip").
+        let real = Settings {
+            cloudlog_key: "REAL-KEY-1234".into(),
+            ..Settings::default()
+        };
+        let json = serde_json::to_string(&real).unwrap();
+        assert!(
+            json.contains("REAL-KEY-1234"),
+            "control: a genuine pending key must still serialize so the migration can retry: {json}"
+        );
     }
 
     #[test]
