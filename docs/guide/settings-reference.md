@@ -303,7 +303,7 @@ link.
 ### Audio
 
 With two or more radios, a banner names which radio these devices belong to:
-*"Audio devices below are for <name>. Each radio has its OWN input/output — click
+*"Audio devices below are for &lt;name&gt;. Each radio has its OWN input/output — click
 'Edit' on another radio (in Radios above) to set its audio. The live RX audio +
 waterfall follow whichever radio is active."*
 
