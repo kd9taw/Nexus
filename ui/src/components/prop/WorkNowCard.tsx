@@ -111,6 +111,17 @@ export function WorkNowCard({
       )}
       {details && win && <LikelihoodHeatmap outlook={win.outlook} />}
       <div className="wn-how">{card.howToCall}</div>
+      {/* SuperFox, said BEFORE the Work button rather than in the middle of the pileup. The
+          how-to-call line above already reads "Call anywhere incl. 0–1000 Hz (Super Fox)" —
+          true of the protocol and useless here, because this build has no SuperFox decoder,
+          so the Fox never appears in the decode list and Hound mode cannot help. Branching on
+          the structured `ft8Mode` and not on the wording of that sentence: a translator or a
+          rewrite would otherwise turn the warning off silently. */}
+      {card.ft8Mode === 'SuperFox' && (
+        <div className="wn-superfox" title={t('dxped.card.superfox.title')}>
+          {t('dxped.card.superfox')}
+        </div>
+      )}
       {onWork && (
         <button
           type="button"

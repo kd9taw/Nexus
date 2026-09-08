@@ -157,7 +157,9 @@ Split defaults to **None**; you must enable Fake-It or Rig in Settings to get WS
 
 ## Fox/Hound (Hound mode only)
 
-Enable Hound in the **Special Ops** selector in the cockpit header when working a DXpedition running Fox/Hound protocol.
+Click **Hound** in the cockpit header when working a DXpedition running Fox/Hound protocol, and click it again to leave. It is one click, in the cockpit, because Hound is a per-DXpedition mode rather than a station setting — it does not survive a restart, and leaving it on takes every ordinary contact afterwards with it.
+
+**Toggling mid-QSO is safe**: a contact already on the air keeps the rules it started under — its finish rule, its TX offset and its Fox-frame handling were all fixed when you called the station. The button governs the next contact. So leaving Hound will not strand an exchange with a Fox that is halfway done, and entering it will not change how the ordinary QSO in front of you finishes.
 
 **Initial TX spread**: your first calls to the Fox land above 1000 Hz, spread by a session-salted hash of your callsign modulo 1900. This keeps your offset below the 2900 Hz ceiling and ensures two Hounds with similar calls do not land on the same audio offset across events.
 
@@ -165,7 +167,9 @@ Enable Hound in the **Special Ops** selector in the cockpit header when working 
 
 **Multi-payload Fox frames** (e.g., `K1ABC RR73; W9XYZ <FOX> -08`) are split at ingest. The sender-less confirmation half has the Fox's callsign reattached so the standard sequencer closes your QSO correctly. A standalone bystander message with `;` is passed through untouched — no false log entry is created.
 
-**Fox role (running the DXpedition side) is not implemented.** SuperFox mode has been permanently removed — the QPC table file's license bars vendoring outside WSJT-X. A saved `superhound` setting from an older session loads and behaves as plain Hound.
+**Fox role (running the DXpedition side) is not implemented.**
+
+**SuperFox is not decoded in this version** — the QPC table file's license bars vendoring the decoder outside WSJT-X. A SuperFox operation therefore never reaches the decode list here, and Hound mode does not change that; work it in WSJT-X and log it back in Nexus. Nexus says so before you call: when the DXpedition calendar shows a SuperFox operation on the air, the Operate header names it beside the Hound button, and its card on the [DXpeditions](../guide/dxpeditions.md) board carries the same line. A saved `superhound` setting from an older session loads and behaves as plain Hound; it is not offered as a choice.
 
 ---
 
@@ -230,7 +234,7 @@ At startup Nexus reads compound calls (slashed calls such as `W1AW/7`) from your
 ## Limits / not yet
 
 - **Fox role** (running a DXpedition as the Fox) is not implemented; Hound only.
-- **SuperFox** is permanently removed — the QPC table license bars vendoring outside WSJT-X.
+- **SuperFox** is not decoded in this version — the QPC table license bars vendoring the decoder outside WSJT-X. The interface names a SuperFox operation before you call it, in the Operate header and on the DXpeditions board.
 - **Contest modes** (NA VHF, RTTY Roundup, WW Digi) and frequency calibration are not implemented. WSPR, Q65, MSK144, FST4, FST4W and JT65 all transmit and receive — they are set up under [Settings ▸ Digital](../guide/settings-reference.md#digital), not here.
 - **F6 / Decode** is native-source only; silently a no-op in Companion mode.
 - **Early decode pass** runs only for FT8 and FT4 in native source mode. TempoFast, TempoDeep, and Companion source decode at the period boundary only.

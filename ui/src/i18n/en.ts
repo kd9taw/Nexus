@@ -1915,6 +1915,11 @@ export const EN = {
   'dxped.card.details.hide': '▾ details',
   'dxped.card.work.title': 'Jump the rig to {{band}} and open the right cockpit',
   'dxped.card.work.label': '▶ Work {{band}}',
+  // Read before the Work button, not after the pileup. "In this version" is deliberate — the
+  // SuperFox decoder is out on a licence ruling that is being re-examined, not by nature.
+  'dxped.card.superfox': 'Nexus does not decode SuperFox in this version — work this one in WSJT-X.',
+  'dxped.card.superfox.title':
+    'This operation announced SuperFox. Its transmissions do not reach the decode list in this version of Nexus, and Hound mode cannot help; WSJT-X decodes them.',
 
   // The ★ chase toggle — the card and the calendar row are the same control, so one key.
   'dxped.chase.toggle.on.title':
@@ -6541,14 +6546,18 @@ export const EN = {
   'operate.header.power.label': 'Pwr',
   'operate.header.power.title': "TX drive (Pwr) — trim down until your rig's ALC is just zero",
 
-  // The DXpedition selector. `Hound` is WSJT-X's role name and stays in the code; only its
-  // explanation and the Off row are words.
-  'operate.header.dxped.label': 'DXped:',
-  'operate.header.dxped.aria': 'DXpedition mode',
-  'operate.dxped.off.label': 'Off',
-  'operate.dxped.off.title': 'No DXpedition special mode',
+  // The DXpedition Hound toggle. `Hound` is WSJT-X's role name and stays in the code (it is
+  // the button's whole label); only its explanation is words. One title serves both states —
+  // it describes what Hound IS, which is what an operator hovering it wants to know.
   'operate.dxped.hound.title':
-    "DXpedition hound: calls go out above 1000 Hz, your R+report auto-moves to the Fox's frequency, and the QSO ends on the Fox's RR73 with NO parting 73 — a 73 there is QRM in the Fox's own segment. Off again at every launch: turn it on for the DXpedition, not for the day.",
+    "DXpedition hound: calls go out above 1000 Hz, your R+report auto-moves to the Fox's frequency, and the QSO ends on the Fox's RR73 with NO parting 73 — a 73 there is QRM in the Fox's own segment. Click to turn it on and off; a QSO already running keeps the rules it started under. Off again at every launch: turn it on for the DXpedition, not for the day.",
+  // SuperFox, named before the operator calls. `{{calls}}` is a list of callsigns — data.
+  // Deliberately "in this version": the retirement is a licence ruling on the decoder, not a
+  // property of the protocol, and it is being re-examined.
+  'operate.dxped.superfox.note':
+    'SuperFox on the air: {{calls}} — Nexus does not decode SuperFox in this version. Work that one in WSJT-X.',
+  'operate.dxped.superfox.title':
+    'A SuperFox DXpedition transmits in a format this version of Nexus has no decoder for, so its transmissions do not reach the decode list here and Hound cannot help. Work it in WSJT-X and log it back in Nexus.',
 
   // The signal source. `{{active}}` is the backend's own `sourceLabel` and `{{addr}}` the
   // configured companion UDP address — both data. Two whole sentences, because the

@@ -413,6 +413,23 @@ export default function App() {
       .catch(() => {})
   }, [view])
   const [prop, setProp] = useState<PropagationSnapshot | null>(null)
+  // DXpeditions ON THE AIR NOW that announced SuperFox — a format this version of Nexus has no
+  // decoder for, so the operation never reaches the decode list and Hound mode cannot help.
+  // The Operate header names them beside the Hound button; the calendar already knew, and an
+  // operator who finds out in the middle of the pileup has found out too late. Deduped —
+  // `workableNow` carries one card per needed BAND, so a multi-band operation appears several
+  // times and would otherwise be listed several times.
+  const superFoxCalls = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          (prop?.dxpeditions.workableNow ?? [])
+            .filter((c) => c.ft8Mode === 'SuperFox')
+            .map((c) => c.call),
+        ),
+      ),
+    [prop],
+  )
   // Operate layout mode: Classic (WSJT-X — Band Activity dominant) vs Roster
   // (GridTracker — the Call Roster dominant). Persisted UI pref; Roster is the
   // default (the friendlier at-a-glance view), and die-hards can pick Classic —
@@ -3040,6 +3057,7 @@ export default function App() {
               companionAddr={settings?.companionAddr}
               fdActive={settings?.fdActive ?? false}
               fdRuleset={fdRuleset}
+              superFoxCalls={superFoxCalls}
               blockedCalls={settings?.blockedCalls ?? []}
               onToggleBlocked={handleToggleBlocked}
               snap={snap}

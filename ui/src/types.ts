@@ -223,6 +223,11 @@ export interface WorkableCard {
   /** Live PSK Reporter spots confirm this band toward the DX region. */
   liveConfirmed: boolean
   howToCall: string
+  /** The announced FT8 DXpedition protocol (propagation::Ft8DxpMode), kept structured
+   * beside the English `howToCall` sentence. `SuperFox` is the one Nexus does not decode
+   * in this version — the interface says so before the operator calls, and it branches on
+   * this field rather than on the wording of that sentence. Absent = none announced. */
+  ft8Mode?: 'FoxHound' | 'Mshv' | 'SuperFox' | null
   windowHint: string
   priority: number
   /** Announced modes (NG3K) — routes map click-to-work to the right cockpit.

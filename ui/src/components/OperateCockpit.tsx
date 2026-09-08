@@ -75,6 +75,12 @@ interface Props {
    * ⊞-removable pane; nothing is ever removed or disabled by rule). */
   fdActive?: boolean
   fdRuleset?: FdRulesetDto | null
+  /** Calls of DXpeditions that are ON THE AIR NOW and announced SuperFox (the propagation
+   * snapshot's workable-now cards, `ft8Mode === 'SuperFox'`). Nexus does not decode SuperFox
+   * in this version, so the header names them beside the Hound button — an operator has to
+   * learn that before they call, not halfway through a pileup that never answers. Empty or
+   * absent ⇒ no notice at all. */
+  superFoxCalls?: string[]
   snap: AppSnapshot
   theme: string
   /** Active mode/tier (authoritative from the snapshot's link). */
@@ -242,34 +248,15 @@ const DF_RX = 'Rx'
 const DF_TX = 'Tx'
 const HZ_UNIT = 'Hz'
 
-/** DXpedition special-op chip definitions. */
-const SPECIAL_OPS: {
-  value: NonNullable<Settings['specialOp']>
-  label: string
-  title: string
-}[] = [
-  {
-    value: 'none',
-    get label() {
-      return t('operate.dxped.off.label')
-    },
-    get title() {
-      return t('operate.dxped.off.title')
-    },
-  },
-  {
-    value: 'hound',
-    label: HOUND_LABEL,
-    get title() {
-      return t('operate.dxped.hound.title')
-    },
-  },
-  // SuperFox (superhound) retired by operator decision — the QPC table file's
-  // license bars vendoring the native decoder outside WSJT-X. A settings file
-  // that still says 'superhound' loads fine and behaves as plain Hound.
-]
+/** Is this saved special-op value Hound? `superhound` is a RETIRED alias that the engine
+ *  treats as plain Hound (settings.rs), so a settings file carrying it reads as Hound ON —
+ *  never as a third state, and never as its own choice on the button. */
+const isHound = (op: Settings['specialOp'] | undefined): boolean =>
+  op === 'hound' || op === 'superhound'
 
 const NO_MACROS: string[] = []
+/** Stable empty default — a fresh `[]` per render would re-run every memo that reads it. */
+const NO_CALLS: string[] = []
 
 /** Operator-facing names for the removable panels (the ⊞ Panels menu). Resolved when the
  *  menu is BUILT — a module constant would freeze the first locale loaded. */
@@ -359,6 +346,7 @@ export function OperateCockpit({
   companionAddr,
   fdActive = false,
   fdRuleset = null,
+  superFoxCalls = NO_CALLS,
   onOpenSettings,
   wheelSensitivity,
 }: Props) {
@@ -995,24 +983,47 @@ export function OperateCockpit({
         }}
         txState={false}
       >
-        {/* DXpedition special-op selector — one compact select (was a 3-chip group;
-            header-density pass 2026-08), always visible in both layouts. Edits
-            settings.specialOp. */}
+        {/* HOUND — ONE CLICK, in the cockpit header, always visible in both layouts.
+            Operator ask: "so users can click it on and off without having to go into the
+            settings". Hound is a per-DXpedition mode entered and left inside a session (the
+            engine drops it at every launch for exactly that reason), so a dropdown — open it,
+            read two options, pick one — was one interaction too many for something operated
+            mid-pileup. It edits the same `settings.specialOp` Settings does; this is a second
+            way in, not a second source of truth.
+
+            TWO STATES, because there are only two: `superhound` is a retired alias the engine
+            treats as plain Hound, so it renders the button ON and is never offered as a choice
+            of its own.
+
+            NOT A STOP CONTROL, and not part of the stop line: it neither starts nor stops a
+            transmission. It sits here with the other header state controls, outside every
+            ⊞-removable pane, and carries no vocabulary id.
+
+            Toggling it mid-QSO is safe by construction — a contact in flight keeps the rules it
+            started under (engine.rs `hound_split`); the toggle governs the NEXT one. */}
         <div className="cockpit-specialop">
-          <span className="cockpit-specialop-label">{t('operate.header.dxped.label')}</span>
-          <select
-            className="cockpit-specialop-select"
-            aria-label={t('operate.header.dxped.aria')}
-            value={specialOp === 'superhound' ? 'hound' : specialOp}
-            onChange={(e) => handleSpecialOp(e.target.value as NonNullable<Settings['specialOp']>)}
-            title={SPECIAL_OPS.find((op) => op.value === (specialOp === 'superhound' ? 'hound' : specialOp))?.title}
+          <button
+            type="button"
+            className={`cockpit-specialop-btn${isHound(specialOp) ? ' active' : ''}`}
+            aria-pressed={isHound(specialOp)}
+            onClick={() => handleSpecialOp(isHound(specialOp) ? 'none' : 'hound')}
+            title={t('operate.dxped.hound.title')}
           >
-            {SPECIAL_OPS.map((op) => (
-              <option key={op.value} value={op.value} title={op.title}>
-                {op.label}
-              </option>
-            ))}
-          </select>
+            {HOUND_LABEL}
+          </button>
+          {/* SuperFox, said BEFORE the call. The DXpedition calendar already knows which
+              operations announced it; what an operator could not find out until the pileup
+              was that this build has no SuperFox decoder, so the Fox never appears in the
+              decode list and Hound cannot help. Rendered only while such an operation is
+              actually on the air — a standing notice is noise, not a warning. */}
+          {superFoxCalls.length > 0 && (
+            <span
+              className="cockpit-superfox-note"
+              title={t('operate.dxped.superfox.title')}
+            >
+              {t('operate.dxped.superfox.note', { calls: superFoxCalls.join(', ') })}
+            </span>
+          )}
         </div>
 
         {/* Warn-only Field Day banned-mode chip (e.g. FT8 at WFD — this cockpit is

@@ -389,6 +389,13 @@ pub struct WorkableCard {
     /// True when live PSK Reporter spots confirm this band toward the DX region.
     pub live_confirmed: bool,
     pub how_to_call: String,
+    /// The announced FT8 DXpedition protocol, kept STRUCTURED beside the English
+    /// `how_to_call` sentence it also produces. The interface needs to branch on it —
+    /// a SuperFox operation is one Nexus cannot decode in this version, and an
+    /// operator has to learn that before they call, not in the middle of a pileup —
+    /// and branching on the wording of a prose string is how that goes stale.
+    /// `None` = the calendar announced no FT8 protocol.
+    pub ft8_mode: Option<Ft8DxpMode>,
     pub window_hint: String,
     pub priority: u32,
     /// The expedition's ANNOUNCED modes (from the NG3K listing) — routes a map
@@ -568,6 +575,7 @@ impl DxpeditionTracker {
                     likelihood_score: fused,
                     live_confirmed,
                     how_to_call,
+                    ft8_mode: p.ft8_mode,
                     window_hint,
                     priority,
                     modes: p.modes.clone(),
@@ -711,7 +719,57 @@ mod tests {
             "Africa-region 20m spots should confirm"
         );
         assert!(card.how_to_call.contains("Hound"));
+        assert_eq!(
+            card.ft8_mode,
+            Some(Ft8DxpMode::FoxHound),
+            "the announced protocol travels to the card as DATA, not only inside the sentence"
+        );
         assert!(card.distance_km > 10000.0); // WI → Mozambique
+    }
+
+    /// A SUPERFOX OPERATION MUST BE IDENTIFIABLE FROM THE CARD.
+    ///
+    /// The interface has to say, before the operator calls, that Nexus does not decode SuperFox
+    /// in this version and that one wants WSJT-X. It cannot do that by matching on the wording
+    /// of `how_to_call` — a translator, or a rewrite of that sentence, would silently turn the
+    /// warning off. The enum is the thing to branch on, so it has to reach the card.
+    #[test]
+    fn a_superfox_operation_carries_its_protocol_to_the_card() {
+        // One fixture, run three ways, so the field is shown to FOLLOW the plan rather than to
+        // be set: SuperFox, plain Fox/Hound, and an operation that announced no FT8 protocol.
+        let card_for = |mode: Option<Ft8DxpMode>| {
+            let plan = DxpeditionPlan {
+                call: "C91RU".to_string(),
+                entity: "Mozambique".to_string(),
+                grid: Some("KG43".to_string()),
+                start_unix: NOW - 3600,
+                end_unix: NOW + 3600,
+                bands: vec![Band::B20],
+                modes: vec!["FT8".into()],
+                ft8_mode: mode,
+                most_wanted_rank: Some(40),
+                website: None,
+            };
+            let mut needs = NeedsSet::default();
+            needs.atno.insert("Mozambique".to_string());
+            let advisory = PropAdvisor::new("KD9TAW", "EN52").advise(NOW, &[], &SpaceWx::default());
+            DxpeditionTracker::new("EN52")
+                .dashboard(NOW, &[plan], &needs, &advisory, &SpaceWx::default())
+                .workable_now
+                .into_iter()
+                .find(|c| c.call == "C91RU")
+                .expect("an ATNO active now is a card whatever the propagation says")
+        };
+        assert_eq!(
+            card_for(Some(Ft8DxpMode::SuperFox)).ft8_mode,
+            Some(Ft8DxpMode::SuperFox)
+        );
+        // CONTROLS: the field is not simply always SuperFox, and not simply always set.
+        assert_eq!(
+            card_for(Some(Ft8DxpMode::FoxHound)).ft8_mode,
+            Some(Ft8DxpMode::FoxHound)
+        );
+        assert_eq!(card_for(None).ft8_mode, None);
     }
 
     #[test]
