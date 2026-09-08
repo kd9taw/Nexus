@@ -23,8 +23,25 @@ or use the ⊞ menu to show and hide panes; **Reset pane sizes** in
 [Settings ▸ Appearance ▸ Workspace](settings-reference.md#workspace) restores the
 defaults.
 Decoding is **always on** — there is no Monitor toggle to forget; the decoder
-runs every RX slot regardless of TX state. Click the waterfall to set your TX/RX
-audio frequency.
+runs every RX slot regardless of TX state.
+
+**Waterfall gestures.** RX and TX are two separate cursors, and the click that
+moves one leaves the other where it is. The pane header prints the whole rule
+next to the word WATERFALL:
+
+| Gesture | Moves |
+|---|---|
+| **Left-click** | the **RX** cursor (green) — where the decoder listens |
+| **Right-click**, or **Shift**-click | the **TX** cursor (red) — where you will transmit |
+| **Ctrl**-click | **both** cursors together |
+
+Working split — answering a station on your own frequency rather than theirs — is
+therefore a right-click, and moving the pair together to a clear patch of band is
+a Ctrl-click. These are the same three gestures the [quick
+start](../quick-start.md#3-a-tour-of-the-digital-cockpit-about-2-minutes) uses in
+its two-minute cockpit tour.
+
+![The waterfall pane's header and the top of the waterfall below it. The header reads WATERFALL, followed by the gesture legend "left = RX · right / Shift = TX · Ctrl = both". Under it FT8 traces scroll across the passband, the frequency ruler running 500, 1000 and 1500 Hz along the bottom edge, with two cursors standing separately in the band: a green line labelled RX low in the pane, and a red line labelled TX a few hundred hertz above it.](../img/manual/operate-waterfall.webp)
 
 **Band Activity** scrolls chronologically, bottom-pinned, with a reviewing pause
 when you scroll up and period separators between T/R cycles. Every row carries

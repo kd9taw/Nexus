@@ -45,9 +45,16 @@ If you would rather verify the download first, the release page publishes a
 
 ## 2. The first-run wizard (about 4 minutes)
 
-On first launch Nexus opens a three-step wizard: **Station → Rig → Goals**. Every
-step is skippable, and everything it sets can be changed later in Settings — you
-can reopen the wizard from Settings at any time.
+On first launch Nexus opens a four-step wizard: **Station → Rig → Log → Finish**.
+Every step is skippable — *I'll set it up myself* closes it wherever you are —
+and everything it sets can be changed later in Settings.
+
+On a clean install the wizard opens by itself, with empty fields. On a machine
+that is already set up it does not reappear: reopen it with **Re-run setup
+wizard…**, under Setup health in
+[Settings ▸ Radio](guide/settings-reference.md#setup-health). Re-running it edits
+in place — your callsign, radio and log come with you and nothing is lost — which
+is why the fields in the captures below already hold a station.
 
 ### Step 1 — Your station
 
@@ -56,7 +63,7 @@ everything location-based: the propagation map, satellite passes, DXpedition
 windows, and the range rings all compute from it. Four characters (e.g. `EN52`)
 is plenty; the field turns red if it isn't a valid Maidenhead locator.
 
-<!-- TODO: capture screenshot — wizard step 1 "Who's on the air?" with callsign and grid filled in -->
+![Step 1 of the first-run wizard, "Who's on the air?", with the four step chips — 1 Your station, 2 Your rig, 3 Your log, 4 Finish — across the top and the first one outlined as current. Under a line explaining that the grid square anchors satellite passes, propagation, the map and DXpedition windows, a Callsign box reads KD9TAW beside a Grid square box reading EN52, with a note under it asking for all six characters because four pins you to the middle of a ~100-mile square. "I'll set it up myself" and a blue "Next →" button sit at the bottom right.](img/manual/wizard-station.webp)
 
 ### Step 2 — Your rig
 
@@ -79,26 +86,50 @@ network. What you see depends on the radio:
 
 Then click **Test CAT**. Nexus saves what you've entered, starts its bundled
 `rigctld`, and reads back the dial frequency. A number like `14.074 MHz` means CAT
-is working. If it fails, [Troubleshooting → CAT](troubleshooting.md#cat--rig-control)
-walks through the usual causes.
+is working, and the **Setup health** strip at the foot of the step turns its Rig,
+RX audio and TX indicators over to what it actually found. If it fails,
+[Troubleshooting → CAT](troubleshooting.md#cat--rig-control) walks through the
+usual causes.
 
-<!-- TODO: capture screenshot — wizard step 2 "How does the radio connect?" after Detect found a rig, with the detected row selected and Test CAT showing a frequency -->
+![Step 2, "How does the radio connect?", with the 2 Your rig chip current. A "Detect my radio" button sits above seven detected serial rows — Silicon Labs CP210x bridges on COM6 and COM4, Dual CP2105 Standard and Enhanced COM ports on COM9, COM8, COM3 and COM5, and an FTDI USB Serial Port on COM7 — each naming its chip, the CP2105 rows adding "CI-V port — use this one" or "second port, not CI-V", and the Enhanced COM3 row outlined as selected. Below them the USB / Serial and Network connection cards, Audio in set to Line (3- USB AUDIO CODEC) and Audio out to Speakers on the same codec, a Test CAT button, and a SETUP HEALTH strip reading Rig responding, RX audio 42 dB and TX on with a Prove TX button. "← Back", "I'll set it up myself" and "Next →" close the step.](img/manual/wizard-rig.webp)
 
-### Step 3 — Your goals
+### Step 3 — Your log
 
-Pick one or more goal cards — *Just getting started*, *DX chasing and awards*,
-*Contesting*, *POTA / SOTA*, *6m / VHF* — and Nexus turns on the matching
-features (you can toggle any of them later). Digital (FT8/FT4) is always on; check
-**Phone** or **CW** if you operate those modes.
+**Import my ADIF log…** reads any standard ADIF (`.adi` / `.adif`) export —
+WSJT-X, N1MM, Log4OM, HRD, QRZ, LoTW, ClubLog — and that history is what lights
+up **worked-before (B4)** flags, the Needed board's new-DXCC / new-state /
+new-grid calls, and your awards progress. Skip it and the app starts blind,
+treating every station on the band as new.
 
-Finally, declare your **license class** (Technician / General / Amateur Extra, or
-*Outside the US* for no limits). This becomes a real Part 97 transmit lockout — the
-software refuses to key outside your privileges, including the 2026 60 m rules.
-It's a safety net, not a substitute for knowing your license.
+The import is local: nothing leaves your computer, and duplicates are detected
+and skipped. The step is optional and you can import at any time from the
+[Logbook](guide/logbook-qsl.md) — but it is the single biggest thing that makes
+the app useful on day one.
 
-<!-- TODO: capture screenshot — wizard step 3 "What do you mostly want to do?" with goal cards, mode toggles, and license class -->
+![Step 3, "Bring in your existing log", with the 3 Your log chip current. The paragraph explains that importing an ADIF log is what powers worked-before flags, the Needed board's new DXCC, states and grids, and awards progress, that without it the app starts blind, and that the step is optional because you can import later from the Logbook. A blue "Import my ADIF log…" button sits under it, above a line naming WSJT-X, N1MM, Log4OM, HRD, QRZ, LoTW and ClubLog as sources of any standard ADIF export and noting that nothing leaves your computer and duplicates are detected and skipped. "← Back", "I'll set it up myself" and "Next →" run along the bottom.](img/manual/wizard-log.webp)
 
-Click through, and Nexus drops you into the digital cockpit.
+### Step 4 — Finish
+
+There is nothing to unlock: **every mode and every section starts on** —
+FT8/FT4, Phone, CW, RTTY, SSTV, APRS, satellites, the maps, the lot. If you would
+rather run a leaner app, sections come off one at a time afterwards in
+[Settings ▸ Appearance ▸ Features](guide/settings-reference.md#features), which is
+also where the goal profiles — getting started, DX/awards, contesting, POTA/SOTA,
+6m/VHF — set a batch of sensible defaults in one pick.
+
+The one thing this step asks for is your **license class**: Technician, General,
+Amateur Extra, or *Outside the US* for no limits. This becomes a real Part 97
+transmit lockout — the app parks the dial in your licensed band segments and
+refuses to key outside your privileges, including the 2026 60 m rules. It's a
+safety net, not a substitute for knowing your license, and it is yours to
+declare: the card outlined in the capture below is the state of that station, not
+a recommendation.
+
+**Show me Getting started** queues the four-things walkthrough to open as the
+wizard closes. Click **Finish — everything on**, and Nexus drops you into the
+digital cockpit.
+
+![Step 4, "You get everything", with the 4 Finish chip current. The text says every mode and every section starts ON — FT8/FT4, Phone, CW, RTTY, SSTV, APRS, satellites, the maps, the lot — that Nexus is one program instead of six with nothing to unlock, and that a leaner app means trimming sections in Settings. "What's your license?" explains that the setting parks the dial in your licensed band segments and offers four cards — Technician (US, limited HF + full VHF/UHF), General (US, most HF privileges), Amateur Extra (US, full privileges) and Outside the US (no transmit limits) — with Outside the US outlined as this station's pick. Under "Want a walkthrough of what you just set up?" a "Show me Getting started" card reads "The four things, in order — opens when this closes", and the footer carries "← Back", "I'll set it up myself" and a blue "Finish — everything on" button.](img/manual/wizard-finish.webp)
 
 ---
 
@@ -112,8 +143,11 @@ slot automatically — there is no Monitor toggle to forget.
 
 The three things to know:
 
-- **The waterfall** across the top shows signal energy over frequency. Click it to
-  move your RX (and TX) marker.
+- **The waterfall** across the top shows signal energy over frequency, and carries
+  two independent cursors. **Left-click** moves the green **RX** cursor,
+  **right-click** (or **Shift**-click) moves the red **TX** cursor, and
+  **Ctrl**-click moves both at once — the same legend the pane header prints. The
+  [Operate chapter](guide/operate-digital.md#the-tour) shows it.
 - **Band Activity** is the decode list — newest at the bottom, auto-scrolled to the
   latest period. Every row carries what stock WSJT-X never showed: the country
   name, a **B4** chip if you've worked them before, **New DXCC** / **new-grid**

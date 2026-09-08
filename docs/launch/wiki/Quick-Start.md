@@ -43,9 +43,16 @@ If you would rather verify the download first, the release page publishes a
 
 ## 2. The first-run wizard (~4 min)
 
-On first launch Nexus opens a three-step wizard: **Station → Rig → Goals**. Every
-step is skippable, and everything it sets can be changed later in Settings — you
-can reopen the wizard from Settings at any time.
+On first launch Nexus opens a four-step wizard: **Station → Rig → Log → Finish**.
+Every step is skippable — *I'll set it up myself* closes it wherever you are —
+and everything it sets can be changed later in Settings.
+
+On a clean install the wizard opens by itself, with empty fields. On a machine
+that is already set up it does not reappear: reopen it with **Re-run setup
+wizard…**, under Setup health in
+[Settings ▸ Radio](https://github.com/kd9taw/Nexus/blob/main/docs/guide/settings-reference.md#setup-health). Re-running it edits
+in place — your callsign, radio and log come with you and nothing is lost — which
+is why the fields in the captures below already hold a station.
 
 ### Step 1 — Your station
 
@@ -75,22 +82,44 @@ network. What you see depends on the radio:
 
 Then click **Test CAT**. Nexus saves what you've entered, starts its bundled
 `rigctld`, and reads back the dial frequency. A number like `14.074 MHz` means CAT
-is working. If it fails, [Troubleshooting → CAT](https://github.com/kd9taw/Nexus/blob/main/docs/troubleshooting.md#cat--rig-control)
-walks through the usual causes.
+is working, and the **Setup health** strip at the foot of the step turns its Rig,
+RX audio and TX indicators over to what it actually found. If it fails,
+[Troubleshooting → CAT](https://github.com/kd9taw/Nexus/blob/main/docs/troubleshooting.md#cat--rig-control) walks through the
+usual causes.
 
-### Step 3 — Your goals
+### Step 3 — Your log
 
-Pick one or more goal cards — *Just getting started*, *DX chasing and awards*,
-*Contesting*, *POTA / SOTA*, *6m / VHF* — and Nexus turns on the matching
-features (you can toggle any of them later). Digital (FT8/FT4) is always on; check
-**Phone** or **CW** if you operate those modes.
+**Import my ADIF log…** reads any standard ADIF (`.adi` / `.adif`) export —
+WSJT-X, N1MM, Log4OM, HRD, QRZ, LoTW, ClubLog — and that history is what lights
+up **worked-before (B4)** flags, the Needed board's new-DXCC / new-state /
+new-grid calls, and your awards progress. Skip it and the app starts blind,
+treating every station on the band as new.
 
-Finally, declare your **license class** (Technician / General / Amateur Extra, or
-*Outside the US* for no limits). This becomes a real Part 97 transmit lockout — the
-software refuses to key outside your privileges, including the 2026 60 m rules.
-It's a safety net, not a substitute for knowing your license.
+The import is local: nothing leaves your computer, and duplicates are detected
+and skipped. The step is optional and you can import at any time from the
+[Logbook](https://github.com/kd9taw/Nexus/blob/main/docs/guide/logbook-qsl.md) — but it is the single biggest thing that makes
+the app useful on day one.
 
-Click through, and Nexus drops you into the digital cockpit.
+### Step 4 — Finish
+
+There is nothing to unlock: **every mode and every section starts on** —
+FT8/FT4, Phone, CW, RTTY, SSTV, APRS, satellites, the maps, the lot. If you would
+rather run a leaner app, sections come off one at a time afterwards in
+[Settings ▸ Appearance ▸ Features](https://github.com/kd9taw/Nexus/blob/main/docs/guide/settings-reference.md#features), which is
+also where the goal profiles — getting started, DX/awards, contesting, POTA/SOTA,
+6m/VHF — set a batch of sensible defaults in one pick.
+
+The one thing this step asks for is your **license class**: Technician, General,
+Amateur Extra, or *Outside the US* for no limits. This becomes a real Part 97
+transmit lockout — the app parks the dial in your licensed band segments and
+refuses to key outside your privileges, including the 2026 60 m rules. It's a
+safety net, not a substitute for knowing your license, and it is yours to
+declare: the card outlined in the capture below is the state of that station, not
+a recommendation.
+
+**Show me Getting started** queues the four-things walkthrough to open as the
+wizard closes. Click **Finish — everything on**, and Nexus drops you into the
+digital cockpit.
 
 ---
 
@@ -102,8 +131,11 @@ slot automatically — there is no Monitor toggle to forget.
 
 The three things to know:
 
-- **The waterfall** across the top shows signal energy over frequency. Click it to
-  move your RX (and TX) marker.
+- **The waterfall** across the top shows signal energy over frequency, and carries
+  two independent cursors. **Left-click** moves the green **RX** cursor,
+  **right-click** (or **Shift**-click) moves the red **TX** cursor, and
+  **Ctrl**-click moves both at once — the same legend the pane header prints. The
+  [Operate chapter](https://github.com/kd9taw/Nexus/blob/main/docs/guide/operate-digital.md#the-tour) shows it.
 - **Band Activity** is the decode list — newest at the bottom, auto-scrolled to the
   latest period. Every row carries what stock WSJT-X never showed: the country
   name, a **B4** chip if you've worked them before, **New DXCC** / **new-grid**
