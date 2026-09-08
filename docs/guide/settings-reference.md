@@ -17,9 +17,12 @@ The tabs, in the order they appear:
 [Appearance](#appearance) · [Config](#config)
 
 The panel header carries the **build stamp** (confirm a fresh install actually
-took) and a **Check for updates** button.
+took) and a **Check for updates** button, both at the right-hand end of the same
+row as the search box.
 
-![The Settings panel with the Radio tab open on a fresh install. The ten tabs — Station, Radio, Phone, CW, Digital, Spots & Alerts, Logging & Connectors, Contesting, Appearance, Config — run across the top beside a "Find a setting" box, and the header carries the build stamp and Check for updates. Below them a Setup health strip, the Radios roster holding a single radio badged ACTIVE with an Add radio button, Profiles, and the Rig & CAT section laid out in columns across the full width of the window: PTT Method, Zero-config setup with a Detect my radio button, Rig Model, Connection, Serial Port with Refresh and Auto-test, Baud, and Antenna Rotator. Each control has its explanation printed under it.](../img/manual/settings-radio.webp)
+![The Settings header: a Find a setting box, and under it the ten tab names in a row with Station first and Radio selected.](../img/manual/settings-tabs.webp)
+
+*The ten tabs and the setting search, in Nexus 1.10.3.*
 
 ---
 
@@ -34,6 +37,14 @@ Your operator identity, license privileges, and default frequency.
   and bearing from the middle of a ~100-mile square." Drives satellite passes,
   propagation anchoring, and distance math.
 - **Operator name** — "Used by the CW `{NAME}` macro and logging."
+- **Operator at the key** — for multi-operator only: the callsign of whoever is
+  actually running the station, when that is not the station call. It is stamped
+  on every contact you log (ADIF `OPERATOR`), so a shared activation can be split
+  per operator afterwards — POTA and Field Day both want each operator to submit
+  their own. Blank means single-op and nothing is stamped. Change it when you swap
+  seats. It is the same setting as **Operator at the key** under
+  [Who's who at this event](#whos-who-at-this-event); editing either one moves
+  both.
 - **State** — "Your US state/province — the CW `{MYSTATE}` macro (ragchew QTH)."
 - **License Class** — Technician / General / Amateur Extra (US), or **Open** for
   non-US operators. "Sets your transmit privileges + the licensed-segment band
@@ -42,6 +53,12 @@ Your operator identity, license privileges, and default frequency.
   refuses to key the rig outside your segment.
 - **Band & Frequency** — "Pick a band-plan channel, or type a dial frequency in
   MHz."
+
+![Three Station fields side by side: Operator at the key, empty with the placeholder "leave blank if that is you"; State, reading IL; and License Class, set to "Open — no transmit limits".](../img/manual/settings-operator-at-key.webp)
+
+*The right-hand half of Operator & Radio in Nexus 1.10.3 — callsign, grid and
+operator name sit to the left of these. The values shown are one station's, not
+recommendations.*
 
 ---
 
@@ -62,7 +79,12 @@ live indicators, so setup stops running on faith:
 
 **Prove TX** keys a ~2-second tune carrier to verify the CAT → PTT → RF path. It
 asks for confirmation first, every time, and reminds you to have an antenna or
-dummy load connected.
+dummy load connected. The button sits at the right-hand end of the strip.
+
+![The Setup health strip: three chips reading "Rig responding", "RX audio 44 dB" and "TX off", with a "Re-run setup wizard…" link under them.](../img/manual/settings-setup-health.webp)
+
+*Setup health on a working station in Nexus 1.10.3. Prove TX is at the far right
+of the same strip, off-frame here.*
 
 ### Radios
 
@@ -79,6 +101,12 @@ Run more than one rig. Always shown — with one radio it is just a card and an
   all. Appears once you have two radios.
 - **+ Add radio** — the discovery affordance. "Run two rigs at once — e.g. an HF
   radio plus a VHF/UHF radio on a different antenna?"
+
+![Three radio cards stacked. The first, named Yeasu, is outlined and badged ACTIVE, its meta line reading Yaesu FTDX10, CAT COM3, audio Line 3, CAT helper port 4532, with band chips 160m through 6m lit. The second, 9700, has Edit, Make active and Remove buttons and lights 2m and 70cm. The third, 991a, lights 6m and 2m. An "+ Add radio" button sits below.](../img/manual/settings-radios.webp)
+
+*A three-radio roster in Nexus 1.10.3. The outlined card is the **active** radio;
+the form further down the tab edits whichever card you last pressed **Edit** on,
+which need not be the same one.*
 
 With two or more radios, three more controls appear:
 
@@ -100,6 +128,72 @@ With two or more radios, three more controls appear:
   Leave off if you only ever use one radio at a time — you can still switch
   between them from the top bar.
 
+#### How a QSY picks a radio
+
+Every retune asks the same question — *which radio owns this band and this mode?*
+— and answers it in a fixed order. The first tier that answers wins; nothing
+below it is consulted.
+
+1. **Satellite-designated rules**, but only for a tune that started from a
+   transponder pick. A rule whose mode box reads **Satellite** is invisible to
+   every terrestrial retune, and it is checked *above* the mode rules — so it
+   beats your FM & APRS rule for a packet bird no matter where the two sit in
+   the list. Order inside this tier is still first-match.
+2. **Routing rules**, top to bottom, first match wins. An empty band selector
+   means *any band*; **Any mode** means any mode class. A rule is skipped if the
+   radio it points at is removed or switched off — an unplugged rig never becomes
+   the handoff target.
+3. **Band coverage** — the **Covers bands** chips on each card. A radio that
+   lists the band explicitly beats one that covers everything, which beats one
+   that lists the band nowhere. Nexus only moves you when another radio scores
+   *strictly better* than the one you are on, so a tie leaves you where you are
+   and a fine-tune inside a shared band never bounces between rigs.
+4. **Everything else** — the fallback radio, or "Stay on the current radio".
+
+Two things this order implies, and both surprise people. A rule **outranks band
+coverage**, which is the whole reason rules exist: it is how 2 m FT8 leaves an HF
+rig that also does 2 m. And a matched rule pointing at the radio you are already
+on means *stay put* — it does not fall through to a broader tier that would then
+walk you off.
+
+The top bar's **Peg** switch turns the whole thing off: while it is on, band
+changes never move the active radio.
+
+![Four routing rules stacked and numbered. 1: Weak-signal digital to 9700 with 2m and 70cm lit. 2: Satellite to 9700, same bands. 3: FM & APRS to 991a, same bands. 4: Any mode to Yeasu with 160m through 6m lit. Each rule has up, down and remove buttons.](../img/manual/settings-radio-routing.webp)
+
+*One station's routing table in Nexus 1.10.3 — an example, not a recommendation.
+The **Everything else** selector and the **Where would this go?** button sit to
+the right of these rules and below them.*
+
+**A worked example.** Take the roster above — an FTDX10 covering 160–6 m and
+active, an IC-9700 covering 2 m and 70 cm, an FT-991A covering 6 m and 2 m — with
+those four rules and **Everything else** left on *Stay on the current radio*.
+
+| You tune to | Band, mode class | What happens |
+|---|---|---|
+| 14.074 FT8 | 20 m, weak-signal digital | Rules 1–3 name only 2 m and 70 cm, so none matches. Rule 4 matches on 20 m and names the FTDX10 — which is already active, so nothing moves. |
+| 144.174 FT8 | 2 m, weak-signal digital | Rule 1 matches. The IC-9700 becomes the active radio, with its own CAT port and its own sound card. |
+| 144.390 APRS | 2 m, FM & APRS | Rule 1 misses on mode class. Rule 2 is a Satellite rule, so a terrestrial tune cannot see it. Rule 3 matches: the FT-991A takes it. |
+| a 2 m/70 cm bird | 2 m, FM & APRS | The satellite tier runs first, so rule 2 wins and the IC-9700 takes it — even though rule 3 would also have matched. |
+| 50.313 FT8 | 6 m, weak-signal digital | Rules 1–3 miss on band. Rule 4 matches and keeps 6 m on the FTDX10, although the FT-991A also lists 6 m: a rule outranks coverage. |
+
+Delete all four rules and the same station still works, on band coverage alone:
+2 m and 70 cm would go to whichever of the two VHF rigs the tie-break picked, and
+that is exactly the ambiguity a rule exists to settle.
+
+**Test a band + mode** answers the same question without touching the rig — it
+calls the resolver the radio loop calls, so it is the configuration's own answer,
+not a second implementation of it.
+
+**Audio follows the active radio, not the routing table.** Each card carries its
+own input and output device, and the live RX audio, the waterfall and the
+decoders all follow whichever radio is active at that moment. That is why an APRS
+decoder armed by hand can report **No 2 m radio** on a station that clearly has
+one: arming **Monitor** tunes nothing, so no routing decision has been made and
+the decoder is still listening to the HF rig. Use APRS's **Tune to 144.390**
+instead — that is a retune, it runs the FM & APRS rule, and the decoder follows
+the rig that ends up active.
+
 ### Profiles
 
 - **Saved profiles** — **Load** applies a profile merged onto your current
@@ -111,6 +205,14 @@ With two or more radios, three more controls appear:
 
 ### Rig & CAT
 
+Every control here is **per radio**: it belongs to whichever card you pressed
+**Edit** on, not to the station.
+
+![The left half of the Rig & CAT row: PTT Method set to CAT (via rigctld), an unticked "Interface keys RTS on the CAT port" box, a Zero-config setup group with a "Detect my radio" button, and Rig Model with a search box above a dropdown reading Yaesu FTDX10.](../img/manual/settings-rig-cat.webp)
+
+*The first four Rig & CAT controls in Nexus 1.10.3. Connection, Serial Port and
+Baud continue across to the right.*
+
 - **PTT Method** — "How transmit is keyed": CAT (via rigctld), Serial RTS, Serial
   DTR, or VOX (no keying). PTT and CAT are independent axes — VOX PTT with full
   CAT control is a valid setup.
@@ -118,6 +220,13 @@ With two or more radios, three more controls appear:
   for an SO2R controller (u2R/MK2R) that routes PTT separately from CAT. Blank =
   keying shares the CAT port, which is how a single-cable interface like a
   Digirig Mobile is wired. Per radio.
+- **Interface keys RTS on the CAT port** — tick it when your interface keys the
+  radio from the CAT port's own RTS line, which is how a Digirig Mobile and most
+  other one-cable interfaces are wired. Nexus then holds RTS down instead of
+  leaving it up, where on some rigs it starts a transmission the moment the port
+  opens. **If your radio transmits as soon as Nexus starts, this is the setting.**
+  Leave it off when a plain serial cable runs straight to the rig: that radio may
+  be using the line for flow control, and taking it away can cost you CAT.
 - **Zero-config setup ▸ Detect my radio** — "One scan for everything: USB radios
   (fills model, port, sound device) AND FlexRadios on the network (fills the
   SmartSDR CAT config). Review, then Save." Each hit gets a **Use this** button.
@@ -191,7 +300,16 @@ link.
 
 ### Audio
 
-With two or more radios, a banner names which radio these devices belong to.
+With two or more radios, a banner names which radio these devices belong to:
+*"Audio devices below are for <name>. Each radio has its OWN input/output — click
+'Edit' on another radio (in Radios above) to set its audio. The live RX audio +
+waterfall follow whichever radio is active."*
+
+![The Audio group: Input Device (RX) set to Line (3- USB AUDIO CODEC) with a Refresh button, Output Device (TX) set to Speakers, a live input spectrum showing a moving noise floor, and TX Power, RX Level and RX Gain sliders below.](../img/manual/settings-audio.webp)
+
+*Audio for one radio in Nexus 1.10.3. Device names are whatever your computer
+calls its sound cards; the RX Level meter reading 40 dB is one station's, not a
+target to copy.*
 
 - **Input Device (RX)** — "Sound card carrying receive audio." **Refresh**
   re-scans.
@@ -214,6 +332,10 @@ This plays the audio your radio is RECEIVING out of a device on this computer �
 or speakers — so you can hear the band, or check levels and RFI, without listening on the
 rig itself.
 
+![The Receive audio on this computer group: an unticked "Play receive audio here" box, a Headphones or speakers dropdown set to System default, and a Listening level slider at 50%.](../img/manual/settings-receive-audio.webp)
+
+*Receive audio in Nexus 1.10.3, off by default.*
+
 **It is not a transmit monitor.** In amateur usage "monitor" usually means hearing your own
 transmitted audio, which is what MONI on the radio does. This never plays your voice back;
 these controls used to be called "monitor" and the word was doing real harm, so it is gone
@@ -231,6 +353,12 @@ from the labels. (The search still knows it — look for "monitor" and you will 
 Corrects both legs of a pass — the downlink you listen on and the uplink you
 transmit on. Nexus tunes only while auto-track is following a pass and you have
 picked a transponder in the Satellites section.
+
+![The Satellite Doppler group: a ticked Doppler correction box, VFO mapping set to "Main = downlink, Sub = uplink (IC-9700 full duplex)", Minimum shift 20 Hz and Update interval 1000 ms.](../img/manual/settings-satellite-doppler.webp)
+
+*Satellite Doppler in Nexus 1.10.3, set up for a full-duplex IC-9700. Pass alert
+sounds sit to the right, off-frame. The VFO mapping has to match your own wiring
+— copying this one is how you transmit on your own downlink.*
 
 - **Doppler correction** — on by default. "Retunes the radio through a pass so
   you stay on the station you are working." Clearing it stops both legs.
@@ -264,10 +392,21 @@ SatNOGS.
 The status line always shows the bird count, the band coverage, the fetch date
 and the source. A failed refresh adds a plain-language "Last refresh" line.
 
+![The Orbital elements group: Update now and Import from file buttons beside a status line reading "372 birds · 1 past 14 d · 39 sit out past 30 d · fetched 2026-09-07 · mirror".](../img/manual/settings-orbital-elements.webp)
+
+*Orbital elements in Nexus 1.10.3. The status line is the thing to read — it says
+how fresh the elements actually are.*
+
 ### Rotator
 
 The rotator itself, and its pointing manners. The manners apply to satellite
 auto-track.
+
+![The Rotator group: Rotator model set to "Dummy (testing — no hardware)", an External rotctld (advanced) box, Park position 0/0 and Ready position 0/0, with an unticked Allow flip box below.](../img/manual/settings-rotator.webp)
+
+*The first four Rotator controls in Nexus 1.10.3, on a station with no rotator
+hardware attached. After a pass, Tolerance and Calibration trim continue to the
+right.*
 
 - **Rotator model** — pick yours and "Nexus runs the control daemon (rotctld)
   for you, the same way it does CAT." Then use the Rotor pane in
@@ -312,12 +451,29 @@ Reads a linear's own status — power out, SWR, temperature, supply volts and am
 and any alarm it is raising — and shows it in the **Amplifier** pane in Connect.
 Nothing here changes how the radio transmits.
 
-**Nexus only ever READS the amplifier.** There is no standby, operate, reset or
-tune button, and none is planned. Two reasons, and both are about a kilowatt: SPE's
-control protocol is front-panel *keystrokes* — relative steps and toggles whose
-meaning depends on a state Nexus learns a poll late, so every write is a guess —
-and putting an amplifier in standby is not a way to stop a transmission anyway,
-because the exciter keeps keying and the drive passes straight through.
+**Nexus sends the amplifier three things and nothing else: standby/operate, band
+up, and band down.** They live in the amplifier strip that appears in a cockpit
+header once a model and port are set, and the same band steps are what **Follow
+the radio's band** issues on its own. There is no reset and no tune button, and
+neither is planned — SPE's control protocol is front-panel *keystrokes*, relative
+steps and toggles whose meaning depends on a state Nexus learns a poll late, so
+anything richer would be a guess.
+
+Three rules the strip holds to, and they are worth knowing because it is a
+kilowatt:
+
+- **The Operate chip reads the amplifier, never what Nexus just sent.** The
+  protocol has no idempotent "set operate" — only a toggle — so a lost or
+  duplicated frame would invert any belief we kept. Clicking changes nothing
+  locally; the next status frame (within a second) is what moves the chip.
+- **Nothing is sent while the amplifier is transmitting.** Stepping band under
+  drive pits relays. The buttons grey out, but that is only the visible half —
+  the poll thread refuses to send regardless, and that is what actually guards
+  the hardware. Only SPE reports its own transmit flag; on an Elecraft, Nexus
+  falls back to the radio's transmit state.
+- ⛔ **Standby is not a stop.** Putting the amplifier in standby does not end a
+  transmission — the exciter keeps keying and the drive passes straight through.
+  If you need to stop, use the cockpit's own **Stop TX**.
 
 - **Amplifier** — the family: SPE Expert 1.3K-FA / 1.5K-FA / 2K-FA, or Elecraft
   KPA500 / KPA1500. None is the default and the state of most stations; with None
@@ -347,6 +503,13 @@ because the exciter keeps keying and the drive passes straight through.
 Per radio, like the rotator: an SO2R station with an amplifier on each radio
 configures each one on its own radio, and the pane follows the radio you are on.
 
+![The Amplifier group: a note reading "Read-only status from a linear on its own serial port — power out, SWR, temperature and any alarm. Nexus never commands the amplifier; it only reads it", an Amplifier dropdown set to SPE Expert 1.3K-FA / 1.5K-FA / 2K-FA, an Amplifier port reading com7, and an unticked "Follow the radio's band" box.](../img/manual/settings-amplifier.webp)
+
+*The Amplifier group in Nexus 1.10.3.* ⚠️ *The grey note at the top of that group
+is out of date in this build: as its own **Follow the radio's band** control says
+two columns to the right, Nexus does send band steps and a standby/operate
+toggle. Read the section above, not the note.*
+
 > ⚠️ **The SPE side is confirmed on hardware; the Elecraft side is not.** An
 > EXPERT 1.5K-FA was linked on 2026-08-29 — it identifies itself as `15K`, and its
 > readings and controls were checked against the amplifier's own front panel. The
@@ -362,6 +525,11 @@ configures each one on its own radio, and the pane follows the radio you are on.
 
 What the rig is allowed to do, and who else may drive it. These used to sit at
 the bottom of Rig & CAT.
+
+![The Transmit limits & sharing group: Band-edge tones switched on, three empty Max power by mode boxes for Phone, CW and Digital, and a "Share this radio with other programs" switch turned off.](../img/manual/settings-transmit-limits.webp)
+
+*Transmit limits in Nexus 1.10.3, at their defaults — the power boxes blank means
+full power on every mode.*
 
 - **Band-edge tones** — "A short audio cue when the dial crosses your license
   privileges — a rising 'ding' back in band, a falling 'dong' past an edge."
