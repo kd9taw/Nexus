@@ -600,8 +600,13 @@ test('the "no fmt gate for src-tauri" trap is derived, and fires when CI drops t
 
   // CONTROL: take the gate away again and the trap must come back. Without this
   // the assertion above passes just as happily on a broken trap.
+  // NOTE: `--all`. Two branches independently added this gate on 2026-09-07 and the
+  // merge kept the `--all` form — src-tauri is a single-package workspace today, so the
+  // two are equivalent, but the bare form would silently stop covering a member if one
+  // were ever added. If the gate's wording moves again, this control must move with it;
+  // the assertion below says so out loud rather than failing cryptically.
   const gate = '      - name: cargo fmt --check src-tauri\n' +
-    '        run: cargo fmt --manifest-path src-tauri/Cargo.toml --check\n';
+    '        run: cargo fmt --manifest-path src-tauri/Cargo.toml --all --check\n';
   assert.ok(original.includes(gate), 'the src-tauri fmt gate moved; update this test');
   const stripped = original.replace(gate, '');
   const out = gates(['--list', '--workflow', scratch('fmt-dropped.yml', stripped)]).out;
