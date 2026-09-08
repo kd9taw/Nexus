@@ -140,9 +140,11 @@ below it is consulted.
    beats your FM & APRS rule for a packet bird no matter where the two sit in
    the list. Order inside this tier is still first-match.
 2. **Routing rules**, top to bottom, first match wins. An empty band selector
-   means *any band*; **Any mode** means any mode class. A rule is skipped if the
-   radio it points at is removed or switched off — an unplugged rig never becomes
-   the handoff target.
+   means *any band*; **Any mode** means any mode class. A rule aimed at a radio
+   you have switched **off** is skipped at the moment of the decision — an
+   unplugged rig never becomes the handoff target, and the rule comes back when
+   you switch the radio on. A rule aimed at a radio you **remove** is deleted
+   along with it, so no rule is ever left pointing at nothing.
 3. **Band coverage** — the **Covers bands** chips on each card. A radio that
    lists the band explicitly beats one that covers everything, which beats one
    that lists the band nowhere. Nexus only moves you when another radio scores
@@ -1459,7 +1461,8 @@ you make them, one contact per QSO. Nothing comes back down — there is no
 confirmation sync and no download — and like HRDLog it is **not** an ARRL
 confirmation source, so an upload here never earns DXCC or WAS credit.
 
-You need a WRL account and a logbook on it. Everything else is one field.
+You need a WRL account and a logbook on it. The only thing to fill in here is
+the key.
 
 - **API key** — from **worldradioleague.com ▸ Integrations ▸ Developer API**. Paste
   it and press **Set**. Nexus checks it against the live service before saving,
@@ -1484,8 +1487,9 @@ You need a WRL account and a logbook on it. Everything else is one field.
 push, and every attempt — good or bad — lands in the Connection log underneath
 it. What Nexus does next depends on what WRL said:
 
-- **accepted** or **duplicate** — done. A duplicate counts as success; re-running
-  an export or a catch-up never double-logs.
+- **accepted** or **duplicate** — done. WRL saying it already has the contact
+  counts as success: Nexus stops and marks the upload done rather than retrying
+  something that has already landed.
 - **key invalid** — the credential is wrong or has been revoked. This is **not**
   retried, because retrying cannot fix it. Set the key again.
 - **busy** — a rate limit, or trouble at their end. The contact is fine, the
