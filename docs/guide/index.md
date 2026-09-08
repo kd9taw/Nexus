@@ -11,6 +11,15 @@ close with it: where a feature is opt-in, or a number comes from simulation
 rather than the air, these pages say so, and each page ends with what its
 section does **not** do.
 
+**This guide documents Nexus 1.10.3.** These pages ship inside the app, and the same files are
+synced to the website and built into the PDF and EPUB at each release — so a copy matches the
+release it came out with. It cannot promise to match the build *you* are running. The website
+and the downloads track the latest release; your installed copy may be older, or newer than a
+PDF you saved months ago. **Check it:** the Settings panel's header carries your build stamp —
+version and build date — beside a **Check for updates** button. If that version is not the one
+named above, read the difference as a difference rather than a mistake, and prefer the app's
+own tooltips and hint text, which are generated from the shipped build.
+
 The supported window floor is **1024×768**. Everything is reachable there —
 some columns scroll to reach the bottom of themselves, and the pages that
 measure it say where the fold falls at which size.
@@ -86,7 +95,7 @@ multi-monitor shack.
 ### System
 - **[Program](program.md)** — the radio-programming workbench: the repeaters
   around a location become a channel list, and the list becomes a CHIRP CSV.
-- **[Settings reference](settings-reference.md)** — a walk through all nine
+- **[Settings reference](settings-reference.md)** — a walk through all ten
   Settings tabs, field by field.
 
 ## First run
