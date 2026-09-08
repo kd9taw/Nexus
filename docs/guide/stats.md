@@ -13,7 +13,9 @@ first-run wizard or skip it — the wizard turns everything on.
 or off any time. If Stats is off when you log your first QSO, Nexus offers it
 once as a nudge — it never switches itself on.
 
-<!-- TODO: capture screenshot — the Stats dashboard on a log of a few thousand QSOs: the four-figure headline row above the card grid, with By band, By mode, By year and Top DXCC entities visible -->
+![The Stats dashboard: a headline row reading 11373 QSOs, 7685 unique calls, 289 DXCC entities and 73% confirmed, above a row of bar cards — By band, By mode, By year, Top DXCC entities, Most-worked states (WAS), Activity by hour (UTC) with its "10,667 QSOs not shown" note, Confirmations, and By continent.](../img/manual/stats.webp)
+
+*The Stats dashboard in Nexus 1.10.3, on a log of about 11,000 contacts.*
 
 ## The tour
 
@@ -38,6 +40,11 @@ carries no continent and no CQ zone.
 - **confirmed** — the share of your QSOs confirmed by **any** channel: LoTW,
   eQSL, a paper card, or a QRZ-logbook match. Rounded to whole percent, so a
   handful of unconfirmed contacts in a large log reads as 100%.
+  **This is not the Confirmed card on [Awards](awards-journey.md).** That one
+  counts LoTW and paper only, because those are what ARRL takes. Same
+  denominator — your whole log — different numerator, so the Awards figure is
+  always the lower of the two, and the gap is your eQSL and QRZ confirmations.
+  In the screenshot above it is 73% here against 52% there.
 
 **How to read a bar.** In most cards the longest bar is the most-worked item in
 *that* card, not 100% of your log — the bars are a ranking. Two cards are
@@ -46,12 +53,26 @@ count and **DX vs domestic** against the QSOs that could be placed, so in those
 two the bar length is a real share.
 
 **By band, By mode, By year.** Band and mode are the label text **as logged** —
-nothing is normalised. An imported log that writes `USB` and `LSB` gets a bar
-each rather than folding into `SSB`, and `20M` and `20m` would be two bars.
-Both are ordered by count, most-worked first, so By band reads as a ranking and
-not as a bandplan. By year is the UTC year, oldest first; a record with a
-timestamp outside the calendar's range is dropped instead of drawing a `NaN`
-bar.
+nothing is normalised, **not even the letter case**. An imported log that
+writes `USB` and `LSB` gets a bar each rather than folding into `SSB`, and
+`20M` and `20m` are two separate bars for the same band. Both cards are
+ordered by count, most-worked first, so By band reads as a ranking and not as
+a bandplan. By year is the UTC year, oldest first; a record with a timestamp
+outside the calendar's range is dropped instead of drawing a `NaN` bar.
+
+![The By band card: 20m 1323, 20M 962, 15m 944, 10m 919, 40m 794, 17m 680, 30m 666, 40M 641, 12m 614, 80m 526, 15M 462, 160M 446, 10M 442, 160m 404, 17M 260, 80M 256, 30M 252, 12M 221, 6M 219, 6m 188, 2m 115, 2M 20, 70cm 9, 60M 6, 60m 4 — every band split into a lowercase and an uppercase bar.](../img/manual/stats-by-band.webp)
+
+*By band in Nexus 1.10.3. This log carries both cases for every band, so each
+band appears twice — 20m 1323 and 20M 962 are one band worked 2285 times.*
+
+**Two cases means two bars, and it is worth knowing why.** The entity cards
+fold case (an imported `UNITED STATES` and a resolved `United States` are one
+row); band and mode do not. A log assembled from more than one source almost
+always carries both cases, so this is the normal state of an imported log
+rather than a rare one. **Add the pair before you read a band's total**, and
+be careful with the ranking: two half-height bars can sit below a band that is
+genuinely smaller. If you want one bar per band, the fix is in the records —
+make the case consistent in the ADIF and re-import.
 
 **Top DXCC entities** is the top 12 by QSO count, on the same resolved-entity
 key as the headline. It is descriptive, not award credit — an entity counts
@@ -111,7 +132,20 @@ cards.
    band/mode, **Most-worked states (WAS)** drops anything that isn't a US-family
    entity with a valid state code, and the geographic cards drop callsigns
    cty.dat can't place.
-3. Fix the underlying records in the Logbook — the numbers here follow, because
+3. **Add case variants together before comparing.** By band and By mode split
+   `20m` from `20M`, so a band's real total is the sum of its rows. Nothing
+   else on the page does this — the entity, state and continent cards all fold
+   case.
+4. Check which denominator a percentage uses. **confirmed** in the headline is
+   any channel; **Award-grade** in the Confirmations card, and the Confirmed
+   card on [Awards](awards-journey.md), are LoTW and paper only. Both are over
+   your whole log, so the difference between them is entirely eQSL and QRZ.
+5. Read the exclusion notes, because they are per card and they are not small:
+   "*n* QSOs not shown — imported with a date but no time of day" under
+   Activity by hour, and "*n* of *m* QSOs couldn't be placed by callsign" under
+   DX vs domestic. In the screenshot above the first of those is 10,667 of
+   11,373 contacts — the histogram is describing well under a tenth of the log.
+6. Fix the underlying records in the Logbook — the numbers here follow, because
    there is nothing stored on this page to go stale.
 
 ### Find the hours you actually operate
@@ -171,6 +205,13 @@ cards.
 - **A QRZ-logbook confirmation counts in the headline but has no bar.** The
   Confirmations card shows Award-grade, LoTW, eQSL and Paper card only, so on a
   QRZ-heavy log the four bars will not add up to the **confirmed** percentage.
+  There is no way to read the QRZ figure off this page; the gap between the
+  headline and the Award-grade bar is the closest you get, and it also
+  contains eQSL.
+- **Band and mode are not normalised, and case is the usual reason a total
+  looks wrong.** `20m` and `20M` are two rows for one band. This is a
+  limitation of the page, not of your log — the records are fine, the card
+  groups on the exact string.
 - **Old records can undercount the four Confirmations bars.** The per-source QSL
   flags can be all-false on records whose sync predates the per-channel split;
   those QSOs still count as confirmed in the headline while contributing to no

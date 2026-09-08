@@ -21,6 +21,12 @@ mode-class) dupe checking, and a scoreboard.
 
 ### Set it up first
 
+![The Field Day Setup block in Settings: a Field Day mode switch turned off, then Event (ARRL Field Day selected, Winter Field Day beside it), an FD Class box, an ARRL Section box, and a Power multiplier row of ×5 QRP / battery, ×2 ≤100W (selected) and ×1 >100W. A "Check for rules updates" button sits under them beside "2026 rules · data 2026-08-29".](../img/manual/settings-field-day.webp)
+
+*Field Day Setup in Settings ▸ Contesting, Nexus 1.10.3, with Field Day mode
+off. The class, section and multiplier shown are one station's own entries —
+set yours from the rules for the event you are in.*
+
 In [Settings ▸ Contesting ▸ Field Day Setup](settings-reference.md#field-day-setup):
 
 1. **Event** — ARRL Field Day or Winter Field Day. This changes scoring labels
@@ -83,6 +89,11 @@ Configure [N3FJP](settings-reference.md#n3fjp-integration-club-master-log) and
 
 ### Run the whole club on Nexus (club sync)
 
+![The Field Day Club Sync settings block: a "Host a club event" switch turned off, an Event name box reading "N9WH Field Day 2026", a Host port box reading 42073, a "Join event at" box showing a host:port placeholder, and a "Find club events" button.](../img/manual/settings-club-sync.webp)
+
+*Field Day Club Sync in Settings ▸ Contesting, Nexus 1.10.3. Hosting is off
+here — nothing is listening on the network until you turn it on.*
+
 If every position runs Nexus, you don't need a third-party master log at all.
 One PC at the site turns on **Settings ▸ Contesting ▸ Field Day Club Sync ▸
 Host a club event**; every other position presses **Find club events** (or
@@ -124,7 +135,9 @@ want both.
 The hunter is for **finding activators, not running activations**. It polls the
 official feeds (pota.app and SOTAwatch) every 60 s.
 
-<!-- TODO: capture screenshot — the POTA/SOTA hunter — spot list with NEW PARK and BAND OPEN badges -->
+![The POTA / SOTA hunter: an "I'm activating" row with a program selector and a reference box, a line reading "94,467 parks — searchable in the log" with Update, Import CSV and Import Hunted Parks buttons, then POTA / SOTA / Both toggles, BAND and MODE filter chips, a SORT selector set to "Workable now", and spot rows — callsign, park reference, a NEW PARK badge, the park's name, frequency, band and mode, each with a HUNT button.](../img/manual/pota-hunter.webp)
+
+*The POTA / SOTA hunter in Nexus 1.10.3, showing live activators.*
 
 ### The tour
 

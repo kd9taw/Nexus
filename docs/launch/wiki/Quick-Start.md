@@ -184,17 +184,52 @@ Two reassurances while you find your feet:
 
 ## 5. Logging, and what the Needed board starts telling you
 
-When the QSO completes it is logged automatically (auto-log is on by default) and
-pushed to PSK Reporter — and, once you configure them, to QRZ and LoTW. Your
-logbook is a standard ADIF file; importing an existing log credits your history
-immediately.
+When the QSO completes it is logged automatically (auto-log is on by default),
+and — once you configure them — pushed to QRZ and LoTW. Your logbook is a
+standard ADIF file; importing an existing log credits your history immediately.
+
+### Four different things, and only one of them is a contact
+
+These get run together everywhere in this hobby, and running them together is
+how an operator ends up believing their log says something it does not. They
+happen at different moments, and each moves a different number:
+
+1. **A decode** — you heard a station. Nexus prints it in the roster and, if
+   PSK Reporter is on, sends it up as a **reception report**: "KD9TAW heard
+   W1AW on 20 m at −14 dB". Reports go up every few minutes for **everything**
+   you decode, whether or not you ever call. **A reception report is not a
+   contact.** It changes nothing in your log — it is a note to the world that
+   your receiver was working, and it is what puts you on other people's maps.
+   The reverse direction is the same: a station's spot on PSK Reporter means
+   somebody *heard* them, not that anybody worked them.
+2. **A QSO** — you called, they came back, you exchanged reports and signed.
+   That is a contact, and it is the only one of the four that writes a record
+   in your logbook. This is what moves the **worked** counts on the Needed
+   board, in [Stats](https://github.com/kd9taw/Nexus/blob/main/docs/guide/stats.md) and in [Awards](https://github.com/kd9taw/Nexus/blob/main/docs/guide/awards-journey.md).
+3. **An upload** — Nexus sends that record to LoTW, QRZ, ClubLog, eQSL or WRL.
+   You have now told a service what you did. Nothing is confirmed yet, and the
+   contact counts toward no award. On its own an upload proves only that your
+   half arrived.
+4. **A confirmation** — the *other* operator uploaded a matching record, and
+   the service paired the two. Only now does anything move in the **confirmed**
+   column, and only LoTW and paper cards count toward ARRL awards — an eQSL or
+   a QRZ match confirms the contact without earning credit. This one is not
+   yours to hurry; it can take a day or a decade, and some contacts are never
+   confirmed at all.
+
+The short version: **decodes and reports are about your antenna, contacts are
+about your log, uploads are about your side of the paperwork, and confirmations
+are about theirs.** [Logbook & QSL](https://github.com/kd9taw/Nexus/blob/main/docs/guide/logbook-qsl.md) covers uploads and
+confirmations properly.
 
 With a callsign and grid set, the **Needed board** begins ranking every station on
 the air by what it's worth to *your* log — an all-time-new entity outranks a new
 zone, which outranks a new band, and so on. What makes it trustworthy is the
 **evidence line** on every row: *who* near you heard that station, how far away,
-and how long ago. One click there QSYs the rig to the right band, mode, and
-frequency and opens the matching cockpit.
+and how long ago. Those are other operators' reception reports — the same kind
+of thing your own decodes send up — which is what makes them evidence that a
+path is open rather than a claim that anybody worked it. One click there QSYs
+the rig to the right band, mode, and frequency and opens the matching cockpit.
 
 ---
 

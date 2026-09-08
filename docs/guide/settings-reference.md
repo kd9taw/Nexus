@@ -451,31 +451,47 @@ right.*
 
 Reads a linear's own status — power out, SWR, temperature, supply volts and amps,
 and any alarm it is raising — and shows it in the **Amplifier** pane in Connect.
-Nothing here changes how the radio transmits.
+Nothing on this settings page changes how the radio transmits.
 
-**Nexus sends the amplifier three things and nothing else: standby/operate, band
-up, and band down.** They live in the amplifier strip that appears in a cockpit
-header once a model and port are set, and the same band steps are what **Follow
-the radio's band** issues on its own. There is no reset and no tune button, and
-neither is planned — SPE's control protocol is front-panel *keystrokes*, relative
-steps and toggles whose meaning depends on a state Nexus learns a poll late, so
-anything richer would be a guess.
+**Reading is most of it, but Nexus does command the amplifier — three things,
+and only these three.** Standby ↔ Operate, one band up, one band down. Nothing
+else is representable: there is no tune, no reset, and **no way to switch the
+amplifier off**. That last one is not merely unused — SPE's `SWITCH OFF`
+keycode sits immediately next to `TUNE` in the vendor's keystroke table, so the
+command set is written as a closed three-value list with no arithmetic path to
+either byte, and Hamlib's own SPE backend maps its "standby" onto the off code
+and powers amplifiers down when asked for standby. That is the failure Nexus is
+built not to have.
 
-Three rules the strip holds to, and they are worth knowing because it is a
-kilowatt:
+**Where the three controls are.** Not here. They are a compact strip in every
+cockpit header once an amplifier is configured — Standby/Operate, band ◀ ▶ and
+power out — described under
+[Connect ▸ The Amplifier pane](connect.md#the-amplifier-pane). The only control
+on *this* page that moves the amplifier is **Follow the radio's band** below,
+and it is the only one that acts without being asked.
 
-- **The Operate chip reads the amplifier, never what Nexus just sent.** The
-  protocol has no idempotent "set operate" — only a toggle — so a lost or
-  duplicated frame would invert any belief we kept. Clicking changes nothing
-  locally; the next status frame (within a second) is what moves the chip.
-- **Nothing is sent while the amplifier is transmitting.** Stepping band under
-  drive pits relays. The buttons grey out, but that is only the visible half —
-  the poll thread refuses to send regardless, and that is what actually guards
-  the hardware. Only SPE reports its own transmit flag; on an Elecraft, Nexus
-  falls back to the radio's transmit state.
-- ⛔ **Standby is not a stop.** Putting the amplifier in standby does not end a
-  transmission — the exciter keeps keying and the drive passes straight through.
-  If you need to stop, use the cockpit's own **Stop TX**.
+**Both write paths are refused while you are transmitting**, in the poll thread
+that holds the readings rather than in the button — changing band on a keyed
+amplifier can take a PA out. And **standby is not a stop**: dropping the
+amplifier out mid-over ends nothing, because the exciter keeps keying and the
+drive passes straight through. No amplifier control counts as a way to stop a
+transmission.
+
+**Which family does what on the wire**, because it decides how the controls
+behave:
+
+| | SPE Expert 1.3K-FA / 1.5K-FA / 2K-FA | Elecraft KPA500 / KPA1500 |
+|---|---|---|
+| Readings | power out, SWR (at the antenna and before the tuner), temperature, volts, amps, alarms | the same set |
+| Operate ↔ Standby | a front-panel **keystroke** that *toggles* — there is no "go to operate". The button reads the amplifier's own status, never what was last sent, so a lost frame corrects itself on the next poll | names the state it wants (`^OS`), so a resent command is harmless |
+| Band | steps **one band at a time**; the protocol has no "set band" | names the band (`^BN`), clamped to the published ladder |
+| Temperature units | shown as a bare number — the protocol does not say whether the amplifier is reporting °C or °F, and it reports whatever its own display is set to | labelled, because Elecraft documents it as Celsius |
+
+⚠️ **The line at the top of this settings block in 1.10.3 is out of date.** It
+reads "Nexus never commands the amplifier: it only reads it", which was true
+before the cockpit strip shipped and is contradicted by the **Follow the
+radio's band** switch directly beneath it. Read it as "nothing on this page
+commands the amplifier except Follow the radio's band".
 
 - **Amplifier** — the family: SPE Expert 1.3K-FA / 1.5K-FA / 2K-FA, or Elecraft
   KPA500 / KPA1500. None is the default and the state of most stations; with None
@@ -1676,44 +1692,55 @@ UI-only preferences (applied live, not via Save) and the section toggles.
 
 ### Connect on a TV
 
-Puts the Connect view — the propagation map with every layer, the panes, the live
-openings — on a shack TV, a tablet or a phone. Anything on your network with a
-browser can open it; there is nothing to install at the other end.
-
-**To set it up.** Turn **Serve Connect on this network** on. Nexus prints the
-address under **Open this on the TV** — `http://<this computer's address>:<port>`
-— with a **Copy** link beside it. Type that address into the TV's browser. It is
-a page, not an app: bookmark it and the TV picks the display up again on its own
-after a reboot.
-
-- **Serve Connect on this network** — off by default. While it is on, Nexus
-  listens on the local network; when it is off, nothing is served and the port is
-  closed.
-- **Port** — 7374 by default. Separate from the Field Day spectator scoreboard's
-  port, so a club site can run both at once.
-
-**It is read-only, and that is structural rather than a promise.** The little
-server answers `GET` and `HEAD` and nothing else, and the only things those can
-reach are the summary snapshot, the page's own files, and a hand-written list of
-read-only weather queries. No inbound request has a path to a setting, to CAT, or
-to the transmit path. The page also loads no script, font or image from the
+Serves the [Connect](connect.md) view — the map with every layer, the panes,
+live openings — as a plain web page to any browser on your own network. A shack
+TV, a tablet on the bench, a phone in the garage. Nothing is installed on the
+TV and nothing can be changed from it: the page is read-only, and the server
+answers GET and HEAD only. The page also loads no script, font or image from the
 internet, so it renders fully on a shack network with no route out — which is
 where a wall display usually lives.
 
-⚠️ **It does put the station on the LAN, so know what is on the screen.** The page
-carries your **callsign and grid square**, the band-by-band propagation picture,
-and the callsigns of stations heard and spotted. It deliberately does **not**
-carry your log, your needs board, or the frequency you are on — what the station
-is doing right now is a different thing from what the ionosphere is doing, and
-only the second is what a wall display is for. Anyone who can reach your network
-can read all of it, with no password, so on a shared or guest network leave this
-off.
+![The Connect on a TV settings block: a "Serve Connect on this network" switch turned on, with the hints "Serves the full Connect view — the map with every layer, the panes, live openings — read-only, to any browser on your network: a shack TV, a tablet, a phone. Nothing can be changed from it." and "While this is on, anyone on your network can see your callsign, grid square and the propagation picture — including the callsigns of stations heard and spotted. Your log, your needs board and the frequency you are on are never sent."](../img/manual/settings-connect-tv.webp)
 
-![The Connect on a TV group: "Serve Connect on this network" switched on, above two paragraphs explaining that the full Connect view is served read-only to any browser on the network, and that while it is on anyone on the network can see the callsign, grid square and propagation picture, while the log, needs board and current frequency are never sent.](../img/manual/settings-connect-tv.webp)
+*Connect on a TV in Settings ▸ Appearance, Nexus 1.10.3, switched on.*
 
-*Connect on a TV in Nexus 1.10.3, switched on. The port and the address to type
-appear directly below; the address is omitted here because it is this station's
-own.*
+⚠️ **This puts your station on the LAN, so read what it exposes.** The page
+carries your callsign, your grid square and the propagation picture, including
+the callsigns of stations you have heard and stations that have been spotted.
+It deliberately does **not** carry your log, your needs board, or the frequency
+you are on — what the station is doing right now is a different thing from what
+the ionosphere is doing, and only the second belongs on a wall. **Off by
+default.** Anyone who can reach the port can read the page; there is no
+password.
+
+**Put it on the TV:**
+
+1. Turn on **Serve Connect on this network** and press **Save**.
+2. Leave **Port** alone unless something else on the machine wants 7374. It is
+   deliberately not the [Field Day scoreboard's](contesting-pota.md#field-day)
+   port, so a club host can serve both at once.
+3. Read the address off **Open this on the TV**. It fills in once the server is
+   up — it says "Starting…" until then — and looks like
+   `http://192.0.2.15:7374`, with your machine's own address on the network in
+   place of that one. **Copy** puts it on the clipboard.
+4. Type that address into the TV's browser, on the same network. That is the
+   whole setup: nothing to install, no account, no pairing.
+5. To take it down, turn the switch off and save. The port closes and the TV's
+   page stops answering; refresh it there and you get a browser error rather
+   than a stale display.
+
+**If the TV cannot reach it**, work through these in order: the two devices are
+on the same network and not on separated guest and main Wi-Fi; the machine's
+firewall lets the port through — the first enable on Windows can pop a prompt,
+and denying it leaves the page unreachable with no error on the Nexus side;
+and the address is the one this row shows, not `localhost`, which on the TV
+means the TV. If the row shows an error instead of an address, the port is in
+use — change it and save.
+
+**What the page does when Nexus is busy.** It is a snapshot of the same
+propagation data the app has, fetched by the page as it refreshes. It loads no
+script, font or image from anywhere outside your machine, because a shack TV is
+often on a network with no route to the internet at all.
 
 ### Features
 
