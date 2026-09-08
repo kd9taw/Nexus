@@ -4312,14 +4312,12 @@ fn fd_rules_load_from_disk() {
                 stats.rules_year, stats.generated
             ),
         ),
-        Err(tempo_core::fd_rules::RulesInitError::AlreadyInitialized) => {
-            tempo_core::applog::error(
-                "startup",
-                "fd-rules: table was already loaded before the startup install — \
+        Err(tempo_core::fd_rules::RulesInitError::AlreadyInitialized) => tempo_core::applog::error(
+            "startup",
+            "fd-rules: table was already loaded before the startup install — \
                  something read the ruleset too early (code-ordering regression); the \
                  bundled seed is locked in for this session",
-            )
-        }
+        ),
         Err(e) => tempo_core::applog::info(
             "startup",
             &format!("fd-rules: downloaded file rejected ({e}) — bundled seed ({seed}) active"),
@@ -15485,7 +15483,11 @@ async fn set_wrl_key(key: String, state: State<'_, SharedEngine>) -> Result<(), 
     let entry = wrl_keychain()?;
     if key.is_empty() {
         clear_keychain_entry(&entry)?;
-        conn_log("World Radio League", "info", "API key cleared from the OS keychain");
+        conn_log(
+            "World Radio League",
+            "info",
+            "API key cleared from the OS keychain",
+        );
         set_upload_toggle(&state, UploadToggle::Wrl, false);
         return Ok(());
     }
@@ -15504,7 +15506,11 @@ async fn set_wrl_key(key: String, state: State<'_, SharedEngine>) -> Result<(), 
             eprintln!("tempo: couldn't persist settings: {e}");
         }
     }
-    conn_log("World Radio League", "ok", "API key verified and saved to the OS keychain");
+    conn_log(
+        "World Radio League",
+        "ok",
+        "API key verified and saved to the OS keychain",
+    );
     set_upload_toggle(&state, UploadToggle::Wrl, true);
     Ok(())
 }
@@ -15528,7 +15534,10 @@ fn wrl_resolve_logbook(key: &str) -> Result<Option<String>, String> {
                  worldradioleague.com."
                     .to_string()
             }
-            "KEY_REVOKED" => "That key has been revoked — generate a new one on worldradioleague.com.".to_string(),
+            "KEY_REVOKED" => {
+                "That key has been revoked — generate a new one on worldradioleague.com."
+                    .to_string()
+            }
             other => format!("World Radio League refused the key ({other})"),
         });
     }
@@ -15542,17 +15551,26 @@ fn wrl_resolve_logbook(key: &str) -> Result<Option<String>, String> {
         return Ok(None);
     }
     // No default: a single logbook is unambiguous; several is the operator's call.
-    let (status, body) =
-        propagation::live::wrl::get_json(tempo_core::wrl::WRL_LOGBOOKS_URL, key)?;
+    let (status, body) = propagation::live::wrl::get_json(tempo_core::wrl::WRL_LOGBOOKS_URL, key)?;
     if status != 200 {
         return Err("Couldn't list your World Radio League logbooks — try again.".to_string());
     }
     let v: serde_json::Value = serde_json::from_str(&body)
         .map_err(|_| "World Radio League answered with something unreadable".to_string())?;
-    let books = v.get("data").and_then(|d| d.as_array()).cloned().unwrap_or_default();
+    let books = v
+        .get("data")
+        .and_then(|d| d.as_array())
+        .cloned()
+        .unwrap_or_default();
     match books.len() {
-        1 => Ok(books[0].get("id").and_then(|i| i.as_str()).map(str::to_string)),
-        0 => Err("Your World Radio League account has no logbook yet — create one there first.".to_string()),
+        1 => Ok(books[0]
+            .get("id")
+            .and_then(|i| i.as_str())
+            .map(str::to_string)),
+        0 => Err(
+            "Your World Radio League account has no logbook yet — create one there first."
+                .to_string(),
+        ),
         _ => Err(
             "Your World Radio League account has several logbooks and no default — set a \
              default logbook on worldradioleague.com, then save the key again."
@@ -15567,7 +15585,11 @@ fn wrl_resolve_logbook(key: &str) -> Result<Option<String>, String> {
 fn clear_wrl_key(state: State<'_, SharedEngine>) -> Result<(), String> {
     let r = clear_keychain_entry(&wrl_keychain()?);
     if r.is_ok() {
-        conn_log("World Radio League", "info", "API key cleared from the OS keychain");
+        conn_log(
+            "World Radio League",
+            "info",
+            "API key cleared from the OS keychain",
+        );
         set_upload_toggle(&state, UploadToggle::Wrl, false);
     }
     r
@@ -16534,7 +16556,11 @@ fn tv_rpc(cmd: &str, args: &str) -> tempo_app::connect_web::RpcOutcome {
             "get_kp_forecast" => ok(get_kp_forecast(app.state()).await),
             "get_band_outlook" => ok(get_band_outlook(app.state(), app.state()).await),
             "get_path_outlook" => {
-                let grid = v.get("grid").and_then(|x| x.as_str()).unwrap_or("").to_string();
+                let grid = v
+                    .get("grid")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string();
                 ok(get_path_outlook(grid, app.state(), app.state()).await)
             }
             "get_getting_out" => ok(get_getting_out(app.state(), app.state()).await),
@@ -16649,7 +16675,10 @@ fn get_ota_map_spots(
             let (lat, lon, approx) = place_ota(&sp)?;
             Some(OtaMapSpot {
                 new_ref: !worked.contains(&sp.reference.to_uppercase()),
-                age_secs: sp.spot_time_unix.map(|t| now.saturating_sub(t)).unwrap_or(0),
+                age_secs: sp
+                    .spot_time_unix
+                    .map(|t| now.saturating_sub(t))
+                    .unwrap_or(0),
                 program: sp.program,
                 reference: sp.reference,
                 name: sp.name,
@@ -19964,12 +19993,10 @@ pub fn run() {
                             let name = e.settings().fd_event_name.clone();
                             e.fd_host_start(fd_event_journal_path(&name))
                         };
-                        let bound = started
-                            .map_err(|e| e.to_string())
-                            .and_then(|()| {
-                                std::net::TcpListener::bind(("0.0.0.0", port))
-                                    .map_err(|e| e.to_string())
-                            });
+                        let bound = started.map_err(|e| e.to_string()).and_then(|()| {
+                            std::net::TcpListener::bind(("0.0.0.0", port))
+                                .map_err(|e| e.to_string())
+                        });
                         match bound {
                             Ok(listener) => {
                                 let shutdown = Arc::new(AtomicBool::new(false));
@@ -20043,10 +20070,7 @@ pub fn run() {
                     if let Some(addr) = want_addr {
                         // No posid yet (fresh profile that never finished
                         // startup init) = don't connect; next tick retries.
-                        let ready = !engine_lock(&mgr_engine)
-                            .fd_sync_identity()
-                            .0
-                            .is_empty();
+                        let ready = !engine_lock(&mgr_engine).fd_sync_identity().0.is_empty();
                         if ready {
                             let shutdown = Arc::new(AtomicBool::new(false));
                             let backend: Arc<dyn tempo_net::fdsync::PositionSync> = Arc::new(
@@ -21468,12 +21492,22 @@ mod tests {
     fn rbn_comment_grid_takes_the_skimmer_token_and_nothing_looser() {
         // The wire shapes seen in the field report, 4- and 6-char.
         assert_eq!(super::rbn_comment_grid("FT8 -15 dB DM03 CQ"), Some("DM03"));
-        assert_eq!(super::rbn_comment_grid("FT8 5 dB EN52wc CQ"), Some("EN52wc"));
+        assert_eq!(
+            super::rbn_comment_grid("FT8 5 dB EN52wc CQ"),
+            Some("EN52wc")
+        );
         // Nothing grid-shaped: the usual RBN CW comment.
         assert_eq!(super::rbn_comment_grid("CW 21 dB 25 WPM CQ"), None);
         // Human spellings that a folded or loose pattern would swallow: lowercase field,
         // uppercase subsquare, wrong lengths, out-of-range field letter.
-        for c in ["worked dm03 earlier", "EN52WC", "DM0", "DM034", "SM03", "TU 599 73"] {
+        for c in [
+            "worked dm03 earlier",
+            "EN52WC",
+            "DM0",
+            "DM034",
+            "SM03",
+            "TU 599 73",
+        ] {
             assert_eq!(super::rbn_comment_grid(c), None, "{c:?} must not match");
         }
     }
@@ -21631,14 +21665,23 @@ mod tests {
             "WFD bans the WSJT modes: {:?}",
             wfd.banned_modes
         );
-        assert_eq!(wfd.enforcement, "warn", "warn, never remove — operator ruling");
-        assert!(wfd.spotting_allowed && wfd.cluster_allowed, "2026 seed is dormant");
+        assert_eq!(
+            wfd.enforcement, "warn",
+            "warn, never remove — operator ruling"
+        );
+        assert!(
+            wfd.spotting_allowed && wfd.cluster_allowed,
+            "2026 seed is dormant"
+        );
 
         // ARRL FD ("" = the settings default): no banned modes, same dormancy.
         let sfd = super::fd_ruleset_dto("");
         assert_eq!(sfd.event, "arrlfd");
         assert!(sfd.banned_modes.is_empty(), "ARRL FD bans no modes");
-        assert!(sfd.spotting_allowed && sfd.cluster_allowed, "2026 seed is dormant");
+        assert!(
+            sfd.spotting_allowed && sfd.cluster_allowed,
+            "2026 seed is dormant"
+        );
         assert!(sfd.rules_year >= 2026);
     }
 
@@ -25573,14 +25616,21 @@ mod tests {
             grid: Some("FN20jc".into()),
             ..base.clone()
         };
-        let (la, lo, approx) = crate::place_ota(&exact).expect("a park with coordinates was dropped");
+        let (la, lo, approx) =
+            crate::place_ota(&exact).expect("a park with coordinates was dropped");
         assert!((la - 40.1209).abs() < 1e-9 && (lo - -75.2237).abs() < 1e-9);
         assert!(!approx, "exact coordinates were reported as approximate");
 
         // No coordinates: the grid centre, flagged approximate.
-        let gridded = propagation::OtaSpot { grid: Some("FN20jc".into()), ..base.clone() };
+        let gridded = propagation::OtaSpot {
+            grid: Some("FN20jc".into()),
+            ..base.clone()
+        };
         let (gla, glo, gapprox) = crate::place_ota(&gridded).expect("a gridded park was dropped");
-        assert!(gapprox, "a grid-placed park did not admit it is approximate");
+        assert!(
+            gapprox,
+            "a grid-placed park did not admit it is approximate"
+        );
         // Same square, so within a few km of the exact fix above.
         assert!((gla - 40.1209).abs() < 0.1 && (glo - -75.2237).abs() < 0.1);
 
@@ -25591,10 +25641,12 @@ mod tests {
         );
 
         // A grid too short to resolve is also not a guess.
-        let junk = propagation::OtaSpot { grid: Some("F".into()), ..base };
+        let junk = propagation::OtaSpot {
+            grid: Some("F".into()),
+            ..base
+        };
         assert!(crate::place_ota(&junk).is_none());
     }
-
 
     /// #184 (akhepcat): "just because I'm not licensed to transmit in the US, there are no
     /// restrictions on receiving. The correct behavior should be to block transmit when
@@ -25634,7 +25686,10 @@ mod tests {
             .iter()
             .find(|c| c.band == "20m")
             .expect("20 m missing for a General");
-        assert!(twenty.tx, "20 m is a General's own band and must be keyable");
+        assert!(
+            twenty.tx,
+            "20 m is a General's own band and must be keyable"
+        );
         assert!(tempo_app::privileges::tx_allowed(
             LicenseClass::General,
             twenty.dial_mhz,
@@ -25647,7 +25702,10 @@ mod tests {
             .iter()
             .find(|c| c.band == "20m")
             .expect("20 m vanished for a Technician — they may still listen there");
-        assert!(!t20.tx, "a Technician must not be told they can key 20 m data");
+        assert!(
+            !t20.tx,
+            "a Technician must not be told they can key 20 m data"
+        );
 
         // Open (non-US / undeclared) keeps everything transmit-capable.
         let open = crate::licensed_bands(LicenseClass::Open, OperatingMode::Digital);
