@@ -30,10 +30,13 @@ const js8Fixture = (): Js8State => ({
   hbOn: false,
   hbNextAtMs: null,
   hbIntervalMin: 0,
+  cqOn: false,
+  cqNextAtMs: null,
+  cqIntervalMin: 0,
   autoreply: true,
   relay: true,
   hbAck: false,
-  armed: { autoreply: false, relay: false, hbAck: false, hb: false },
+  armed: { autoreply: false, cq: false, relay: false, hbAck: false, hb: false },
   idleMinutes: 0,
   idleLimitMin: 60,
   idleTripped: false,
@@ -291,8 +294,8 @@ describe('the two "differs from JS8Call" notes are in the UI, not only the manua
     // OFF · on-but-not-armed · ARMED — the note belongs on all three, since the chip an
     // operator reads as broken is whichever one he is looking at.
     for (const armed of [
-      { autoreply: false, relay: false, hbAck: false, hb: false },
-      { autoreply: true, relay: true, hbAck: true, hb: true },
+      { autoreply: false, cq: false, relay: false, hbAck: false, hb: false },
+      { autoreply: true, cq: true, relay: true, hbAck: true, hb: true },
     ]) {
       state.current = { ...js8Fixture(), autoreply: true, relay: true, hbAck: true, armed }
       await renderCockpit()
