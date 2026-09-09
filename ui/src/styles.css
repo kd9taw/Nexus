@@ -2577,17 +2577,35 @@ button.nb-chip:hover {
   inset: 0;
   display: block;
 }
+/* ⭐ THE MAP HOVER CARD is read at whatever distance the map is being read at, and the map is
+   the one surface an operator pops out full screen on a second monitor. At 11px with 2px of
+   padding it was a caption on a chart; this is a readable card.
+   `--map-ui-scale` is stamped inline by MapView from its own `markerScale`, so the card grows
+   with the map exactly as the icons do (fallback 1 — Globe3D shares this class and sets none).
+   NOT a size @media: that would be zoom-blind, and the scale composes with `--ui-zoom` anyway.
+   `left`/`top` come from `placeHoverCard` — off the marker, inside the map, stable. */
 .map-hover {
   position: absolute;
   pointer-events: none;
+  /* MEASURED, not guessed (headless Chrome against this sheet, 2026-09-08): the map's tooltips
+     are single logical lines of ~70-110 chars, and at 56ch they reflowed a one-line spot into
+     THREE — bigger type that is harder to read, which is the request backwards. 72ch fits the
+     common spot/park line on one line at every size; the 92% keeps a small embedded globe's
+     card inside the globe. */
+  max-width: min(72ch, 92%);
   background: var(--bg-elev-2);
   color: var(--text);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  padding: 2px var(--space-2);
+  padding: var(--space-2) var(--space-3);
   font-family: var(--font-mono);
-  font-size: var(--fs-micro);
-  box-shadow: var(--elev-2);
+  font-size: calc(var(--fs-label) * var(--map-ui-scale, 1));
+  line-height: var(--lh-normal);
+  /* A long tooltip must wrap into the card, not run off the edge of the map. */
+  overflow-wrap: anywhere;
+  /* Elevation one step up: the card floats over a busy, high-contrast picture, and --elev-2
+     is not enough separation from a starfield or a relief raster. */
+  box-shadow: var(--elev-3);
   z-index: 5;
 }
 /* Persistent selected-path readout (bearing + distance, SP/LP) — top-right so it

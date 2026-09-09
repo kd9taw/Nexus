@@ -32,6 +32,7 @@ import Globe, { type GlobeMethods } from 'react-globe.gl'
 import earthUrl from '../assets/earth-relief.webp'
 import earthNightUrl from '../assets/earth-night.webp'
 import { gridToLatLon } from '../grid'
+import { placeHoverCard } from './MapView'
 import { bandColor, openingModeColor } from '../bandColors'
 import {
   subsolarPoint,
@@ -481,6 +482,28 @@ export default function Globe3D({
   const [size, setSize] = useState({ w: 0, h: 0 })
   // Spot hover tooltip (mirrors the 2-D map's .map-hover) — text + wrap-relative position.
   const [hover, setHover] = useState<{ x: number; y: number; text: string } | null>(null)
+  // Placed by the same `placeHoverCard` the 2-D map uses, in a layout effect for the same
+  // reason: the flip and clamp need the card's MEASURED size, and correcting after paint is a
+  // visible jump. Shared because the card is literally the same element (.map-hover) — it grew
+  // for wall-display reading, and a bigger card is exactly the one that runs off an edge.
+  // Cursor-anchored here, unlike the 2-D map: a react-globe HTML spot has no projected centre
+  // to anchor to, only the pointer that entered its div.
+  const hoverRef = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    const el = hoverRef.current
+    if (!el || !hover) return
+    const { left, top } = placeHoverCard({
+      ax: hover.x,
+      ay: hover.y,
+      cw: el.offsetWidth,
+      ch: el.offsetHeight,
+      vw: size.w,
+      vh: size.h,
+      clear: 12,
+    })
+    el.style.left = `${left}px`
+    el.style.top = `${top}px`
+  }, [hover, size.w, size.h])
   const [ready, setReady] = useState(false)
   const [ok] = useState(webglOk)
   const [spin, setSpin] = useState(false) // idle auto-rotate; OFF by default (continuous 60fps
@@ -1613,7 +1636,11 @@ export default function Globe3D({
         />
       )}
       {hover && (
-        <div className="map-hover" style={{ left: hover.x + 12, top: hover.y + 12 }}>
+        <div
+          ref={hoverRef}
+          className="map-hover"
+          style={placeHoverCard({ ax: hover.x, ay: hover.y, cw: 0, ch: 0, vw: size.w, vh: size.h, clear: 12 })}
+        >
           {hover.text}
         </div>
       )}
