@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { t } from '../i18n'
 import { useViewport } from '../useViewport'
 import { MonitorApp } from '../remote-monitor/MonitorApp'
@@ -8,13 +8,15 @@ import '../remote-monitor/monitor.css'
 import './remote.css'
 
 const BRAND = 'Nexus Remote'
+function AccountViewport() { useViewport(1, true); return null }
+const BrowserApplication = lazy(() => import('./BrowserApplication').then(module => ({ default: module.BrowserApplication })))
 export function RemoteApp() {
-  useViewport(1, true)
   const [client, setClient] = useState<BrowserClient | null>(null)
   const [ready, setReady] = useState(false)
   const [configured, setConfigured] = useState(true)
   const [session, setSession] = useState<AccountSession | null>(null)
   const [connection, setConnection] = useState<HostedConnection | null>(null)
+  const [workspace, setWorkspace] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(false)
   const [code, setCode] = useState('')
@@ -54,11 +56,15 @@ export function RemoteApp() {
     try { await work() } catch { setError(true) } finally { setBusy(false) }
   }
   async function refresh() { if (client) setSession(await client.post<AccountSession>('session')) }
+  if (connection && workspace) return <Suspense fallback={<p role="status">{t('monitor.connecting')}</p>}>
+    <BrowserApplication connection={connection} disconnect={() => { connection.stop(); setConnection(null) }} />
+  </Suspense>
   if (connection) return <MonitorApp source={connection.source} navigation={
     <button className="remote-button" onClick={() => { connection.stop(); setConnection(null) }}>{t('remote.disconnect')}</button>
   } />
   const entitled = !!session?.entitlement.enabled && session.entitlement.expiresAt > Date.now()
   return <div className="app remote-monitor-app remote-service-app">
+    <AccountViewport />
     <header className="rm-header"><strong>{BRAND}</strong>
       {session && <button className="remote-button" disabled={busy} onClick={() => void act(async () => { await client?.signOut(); setSession(null) })}>{t('remote.signOut')}</button>}
     </header>
@@ -77,7 +83,10 @@ export function RemoteApp() {
           <h2>{station.name}</h2>
           {station.device?.approved === 1 ? <div className="remote-actions">
             <button className="remote-button" disabled={busy || !entitled} onClick={() => {
-              const next = new HostedConnection(client!, station.id); setConnection(next); next.start()
+              const next = new HostedConnection(client!, station.id, true); setWorkspace(true); setConnection(next); next.start()
+            }}>{t('remote.openNexus')}</button>
+            <button className="remote-button" disabled={busy || !entitled} onClick={() => {
+              const next = new HostedConnection(client!, station.id); setWorkspace(false); setConnection(next); next.start()
             }}>{t('remote.observe')}</button>
             <button className="remote-button" disabled={busy} onClick={() => void act(async () => {
               await client?.post(`stations/${station.id}/forget-device`); await refresh()

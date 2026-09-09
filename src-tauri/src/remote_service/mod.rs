@@ -1,5 +1,6 @@
-//! Local approval and the Remote background task. The only engine capability is
-//! the bounded observation Publisher; cloud input cannot name a Tauri command.
+//! Local approval and the Remote background task. Engine access is restricted to
+//! bounded observation and reviewed application reads; no operating commands.
+mod application;
 #[cfg(test)]
 mod tests;
 mod transport;
@@ -115,19 +116,37 @@ fn valid_name(name: &str) -> bool {
     !name.trim().is_empty() && name.chars().count() <= 48 && !name.chars().any(char::is_control)
 }
 impl Service {
-    pub fn new(engine: crate::SharedEngine, publisher: crate::remote_monitor::Publisher) -> Self {
-        Self::configured(
+    pub fn new(
+        engine: crate::SharedEngine,
+        publisher: crate::remote_monitor::Publisher,
+        spectrum: tempo_app::engine::SpectrumFeed,
+        meters: tempo_app::engine::MeterFeed,
+    ) -> Self {
+        Self::start(
             REMOTE_ORIGIN.to_string(),
             Box::new(SystemVault),
             engine,
             publisher,
+            Some(spectrum),
+            meters,
         )
     }
+    #[cfg(test)]
     fn configured(
         origin: String,
         vault: Box<dyn Vault>,
         engine: crate::SharedEngine,
         publisher: crate::remote_monitor::Publisher,
+    ) -> Self {
+        Self::start(origin, vault, engine, publisher, None, Default::default())
+    }
+    fn start(
+        origin: String,
+        vault: Box<dyn Vault>,
+        engine: crate::SharedEngine,
+        publisher: crate::remote_monitor::Publisher,
+        spectrum: Option<tempo_app::engine::SpectrumFeed>,
+        meters: tempo_app::engine::MeterFeed,
     ) -> Self {
         let status = Arc::new(Mutex::new(Status {
             phase: "unpaired".into(),
@@ -155,7 +174,11 @@ impl Service {
                             status: task_status,
                             control: task_control,
                             engine,
-                            publisher,
+                            feeds: transport::Feeds {
+                                monitor: publisher,
+                                spectrum,
+                                meters,
+                            },
                         }
                         .run(receiver),
                     ),
@@ -235,7 +258,7 @@ struct Controller {
     status: Arc<Mutex<Status>>,
     control: Arc<Mutex<Control>>,
     engine: crate::SharedEngine,
-    publisher: crate::remote_monitor::Publisher,
+    feeds: transport::Feeds,
 }
 impl Controller {
     async fn run(mut self, mut receiver: mpsc::Receiver<(Action, u64, Reply)>) {
@@ -485,7 +508,7 @@ impl Controller {
                     token,
                     receiver,
                     self.engine.clone(),
-                    self.publisher.clone(),
+                    self.feeds.clone(),
                     SessionStatus {
                         status: self.status.clone(),
                         control: self.control.clone(),

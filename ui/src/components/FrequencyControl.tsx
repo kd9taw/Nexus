@@ -1,3 +1,4 @@
+import { useStationControl } from '../stationAccess'
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every operator-visible
 // string comes from the catalog. What does NOT, and must not: the band-plan channel labels and
 // their dial frequencies, the HF/VHF/UHF group names, the band chip, and the USB/FM mode names —
@@ -54,6 +55,7 @@ export function FrequencyControl({
   showModeToggle = true,
   onSet,
 }: Props) {
+  const control = useStationControl()
   const active = useMemo(
     () => findActive(channels, dialMhz, mode),
     [channels, dialMhz, mode],
@@ -90,7 +92,7 @@ export function FrequencyControl({
       <span className="band-picker-dot" style={{ background: col }} aria-hidden="true" />
       <label className="freq-channel-wrap">
         {variant === 'full' && <span className="settings-label">{t('freq.channel.label')}</span>}
-        <select
+        <select disabled={!control}
           className="freq-channel"
           value={selectValue}
           onChange={(e) => selectChannel(e.target.value)}
@@ -143,7 +145,7 @@ export function FrequencyControl({
       {showModeToggle && (
         <div className="freq-mode-toggle" role="group" aria-label={t('freq.mode.aria')}>
           {MODES.map((md) => (
-            <button
+            <button disabled={!control}
               key={md}
               type="button"
               className={`freq-mode-btn${mode === md ? ' active' : ''}`}

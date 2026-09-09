@@ -18,6 +18,14 @@ libtempo/      CMake-built native cores   — vendored WSJT-X Fortran/C + FT1 mo
 Data flows down as commands, up as Tauri events. The UI holds no domain truth; snapshots are
 rebuilt from Rust state (do not assume a UI field is stale-frozen — it usually is not).
 
+The hosted Remote pilot reuses `App.tsx` through `applicationTransport.ts` beneath
+`api.ts`. `remote/` supplies the authenticated Cloudflare station room; the outbound
+native session in `src-tauri/src/remote_service/` owns a closed, versioned read
+contract. The shack remains the authority for hardware and QSO data. Login, service
+entitlement and approved browser identity are separate checks. This is currently
+an observer preview, not an arbitrary Tauri bridge or remote TX implementation.
+See [the Remote contract and limits](remote/README.md#existing-nexus-workspace).
+
 ## Crates (roles, not an exhaustive list)
 
 | Crate | Role |

@@ -3,6 +3,7 @@ import { ampCommand } from '../api'
 import { t } from '../i18n'
 import { T } from '../i18n/T'
 import type { AmpStatus } from '../types'
+import { useStationControl } from '../stationAccess'
 
 /**
  * The amplifier's own controls, in every cockpit header that has an amplifier behind it.
@@ -35,6 +36,7 @@ export function AmpStrip({
   // A command the queue refused. Shown once, cleared on the next successful click, because a
   // keystroke the operator watched themselves make and that silently vanished reads as broken.
   const [refused, setRefused] = useState(false)
+  const control = useStationControl()
 
   // Almost every station. No amplifier configured → this surface does not exist.
   if (amp == null) return null
@@ -48,7 +50,7 @@ export function AmpStrip({
   // happen on that family. When the amplifier does not say, fall back to the radio, which is
   // the exciter driving it. The backend refuses on the same rule; this is the visible half.
   const keyed = amp.transmitting ?? radioTransmitting
-  const usable = live && !keyed
+  const usable = control && live && !keyed
 
   const send = async (which: 'bandDown' | 'bandUp' | 'operate') => {
     const ok = await ampCommand(which)

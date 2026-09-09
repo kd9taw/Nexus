@@ -9,6 +9,7 @@ import { useEffect, useRef, useState } from 'react'
 import { announce } from '../announce'
 import { parseOperatorNumber } from '../numInput'
 import { t } from '../i18n'
+import { useStationControl } from '../stationAccess'
 
 /** The unit printed beside the dial. A unit symbol, not a word. */
 const MHZ = 'MHz'
@@ -108,6 +109,8 @@ export function FrequencyReadout({
   digitTune = false,
   onTuneHz,
 }: Props) {
+  const control = useStationControl()
+  disabled = disabled || !control
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
   const canEdit = editable && !disabled

@@ -111,6 +111,12 @@ impl Client {
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
 enum ServerMessage {
+    ApplicationRead {
+        #[serde(rename = "requestId")]
+        request_id: String,
+        command: super::application::Command,
+        revision: Option<u64>,
+    },
     Watch {
         enabled: bool,
         #[serde(rename = "requestId")]
@@ -125,13 +131,19 @@ struct Publication {
     frame: tempo_app::remote_monitor::Frame,
 }
 
+#[derive(Clone)]
+pub struct Feeds {
+    pub monitor: crate::remote_monitor::Publisher,
+    pub spectrum: Option<tempo_app::engine::SpectrumFeed>,
+    pub meters: tempo_app::engine::MeterFeed,
+}
 pub async fn connected(
     client: &Client,
     station_id: &str,
     token: &str,
     mut stop: watch::Receiver<bool>,
     engine: &crate::SharedEngine,
-    publisher: &crate::remote_monitor::Publisher,
+    feeds: &Feeds,
     status: &super::SessionStatus,
 ) -> Result<(), &'static str> {
     if !identifier(station_id) || !credential(token) {
@@ -150,11 +162,15 @@ pub async fn connected(
             .parse()
             .map_err(|_| "credentialStoreUnavailable")?,
     );
+    request.headers_mut().insert(
+        "x-nexus-application-version",
+        "1".parse().map_err(|_| "invalidResponse")?,
+    );
     let config = WebSocketConfig::default()
         .max_message_size(Some(512))
         .max_frame_size(Some(512))
         .write_buffer_size(0)
-        .max_write_buffer_size(tempo_app::remote_monitor::MAX_FRAME_BYTES + 1024);
+        .max_write_buffer_size(super::application::MAX_BYTES + 1024);
     let connect = tokio_tungstenite::connect_async_with_config(request, Some(config), false);
     let (mut socket, _) = tokio::select! {
         biased;
@@ -177,6 +193,8 @@ pub async fn connected(
     heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut pong_at = Instant::now();
     let mut pending = None;
+    let mut application =
+        super::application::Publisher::with_feeds(feeds.spectrum.clone(), feeds.meters.clone());
     loop {
         tokio::select! {
             biased;
@@ -185,6 +203,18 @@ pub async fn connected(
                 Some(Ok(Message::Text(text))) => {
                     let message: ServerMessage = serde_json::from_str(&text).map_err(|_| "invalidResponse")?;
                     match message {
+                        ServerMessage::ApplicationRead { request_id, command, revision } => {
+                            if !identifier(&request_id) { return Err("invalidResponse"); }
+                            let data = application.read(engine, command, &request_id, revision, Instant::now())
+                                .unwrap_or_else(|error| json!({ "type": "applicationError", "requestId": request_id, "error": error }).to_string());
+                            tokio::select! {
+                                biased;
+                                _ = stop.changed() => return Ok(()),
+                                result = tokio::time::timeout(Duration::from_secs(2), socket.send(Message::Text(data.into()))) => {
+                                    result.map_err(|_| "serviceUnavailable")?.map_err(|_| "serviceUnavailable")?;
+                                }
+                            }
+                        }
                         ServerMessage::Watch { enabled, request_id } => {
                             if enabled && !request_id.as_deref().is_some_and(identifier) { return Err("invalidResponse"); }
                             if !enabled && request_id.is_some() { return Err("invalidResponse"); }
@@ -202,7 +232,7 @@ pub async fn connected(
             },
             _ = tick.tick(), if pending.is_some() => {
                 if *stop.borrow() { return Ok(()); }
-                if let Ok(frame) = publisher.read(engine, Instant::now()) {
+                if let Ok(frame) = feeds.monitor.read(engine, Instant::now()) {
                     let data = serde_json::to_string(&Publication { r#type: "publication", request_id: pending.take().unwrap(), frame })
                         .map_err(|_| "invalidResponse")?;
                     if data.len() > tempo_app::remote_monitor::MAX_FRAME_BYTES + 256 { return Err("invalidResponse"); }
@@ -230,7 +260,7 @@ pub async fn supervise(
     token: String,
     mut stop: watch::Receiver<bool>,
     engine: crate::SharedEngine,
-    publisher: crate::remote_monitor::Publisher,
+    feeds: Feeds,
     status: super::SessionStatus,
 ) {
     let mut attempts = 0_u32;
@@ -242,7 +272,7 @@ pub async fn supervise(
             &token,
             stop.clone(),
             &engine,
-            &publisher,
+            &feeds,
             &status,
         )
         .await;

@@ -358,6 +358,19 @@ impl SpectrumFeed {
         })
     }
 
+    /// A passive observer reads the current audio picture without consuming the
+    /// desktop's averaging window. Remote viewers must not change local display
+    /// behavior merely by connecting. Freshness and TX hold remain producer-owned.
+    pub fn peek_audio_row(&self) -> Option<Spectrum> {
+        let g = self.rows.lock().ok()?;
+        let audio = g.audio.as_ref()?;
+        let mut row = audio.mean.clone();
+        if audio.at.elapsed() >= Duration::from_secs(2) {
+            row.row.clear();
+        }
+        Some(row)
+    }
+
     /// How long a scope-span request stands after the last poll that renewed it.
     ///
     /// The request rides the READ (`scope_row`), so it renews itself for as long as a scope is
@@ -31986,6 +31999,42 @@ mod tests {
             "audio",
             "clearing RF falls straight back to the audio FFT"
         );
+    }
+
+    #[test]
+    fn passive_audio_observers_preserve_desktop_averaging_and_staleness() {
+        let feed = SpectrumFeed::default();
+        assert!(feed.peek_audio_row().is_none());
+        for value in [0.1, 0.4] {
+            feed.publish_audio(Spectrum {
+                row: vec![value; 8],
+                lo_hz: 0.0,
+                hi_hz: 4000.0,
+                source: "audio".into(),
+            });
+        }
+        let current = feed.peek_audio_row().unwrap();
+        for _ in 0..10 {
+            assert_eq!(feed.peek_audio_row().unwrap().row, current.row);
+            assert_eq!(
+                feed.audio_frames_pending_for_test(),
+                2,
+                "a remote observer must not consume the local averaging window"
+            );
+        }
+        assert_eq!(feed.audio_row().unwrap().row, current.row);
+        assert_eq!(
+            feed.audio_frames_pending_for_test(),
+            0,
+            "the existing desktop reader must still close its averaging window"
+        );
+        feed.backdate_audio_for_test(Duration::from_secs(3));
+        let stale = feed.peek_audio_row().unwrap();
+        assert!(
+            stale.row.is_empty(),
+            "stale audio must not become a frozen live picture"
+        );
+        assert_eq!(stale.source, "audio");
     }
 
     /// An EMPTY native row must never win — a panadapter that streams nothing would otherwise

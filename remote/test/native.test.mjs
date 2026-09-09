@@ -90,6 +90,33 @@ test('actual native controller pairs, stores authority, publishes real DTOs, dis
     assert.equal(first.frame.station.amplifier.outputWatts, 12)
     assert.ok(first.frame.station.radio.readings.dial.ageMs < 3000)
     socket.send({ type: 'ack', epoch: first.frame.epoch, sequence: first.frame.sequence })
+    socket.send({ type: 'applicationHello' })
+    const capabilities = await socket.take(value => value.type === 'applicationCapabilities')
+    assert.equal(capabilities.version, 1)
+    assert.deepEqual(capabilities.commands, ['get_snapshot', 'get_settings', 'get_band_plan', 'get_spectrum_row', 'get_meters'])
+    for (const command of capabilities.commands) {
+      const requestId = crypto.randomUUID()
+      socket.send({ type: 'applicationRead', requestId, command, revision: null })
+      const result = await socket.take(value => value.requestId === requestId)
+      assert.equal(result.type, 'applicationResult', `${command} must return the actual native DTO`)
+      assert.equal(result.command, command)
+      assert.equal(result.baseRevision, null)
+      assert.ok(result.ageMs < 3000)
+      if (command === 'get_snapshot') {
+        assert.equal(result.data.mycall, 'N0CALL')
+        assert.equal(result.data.radio.txEnabled, false)
+        assert.ok(Array.isArray(result.data.stations))
+      } else if (command === 'get_settings') {
+        assert.equal(result.data.mycall, 'N0CALL')
+        assert.equal(result.data.mygrid, 'AA00')
+        for (const privateKey of ['radioProfiles','radios','qrzPassword','cloudlogKey','ampPort']) {
+          assert.equal(Object.hasOwn(result.data, privateKey), false, 'unreviewed settings must stay at the shack')
+        }
+      } else if (command === 'get_band_plan') assert.ok(result.data.length > 0)
+      else if (command === 'get_meters') assert.deepEqual(Object.keys(result.data).sort(), ['cwToneHz','rxLevel','smeterDb'])
+      else assert.deepEqual(Object.keys(result.data).sort(), ['hiHz','loHz','row','source'])
+      socket.send({ type: 'applicationAck', requestId })
+    }
     const second = await socket.take(value => value.type === 'observation')
     assert.ok(second.frame.sequence > first.frame.sequence)
     assert.equal((await probe.send({ type: 'disable' })).ok, true)

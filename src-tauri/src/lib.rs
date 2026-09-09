@@ -21822,7 +21822,12 @@ pub fn run() {
 /// second identical set to a retry after setting a corrupt WebView2 user-data folder aside.
 fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
     let remote_publisher = remote_monitor::Publisher::default();
-    let remote_service = remote_service::Service::new(d.engine.clone(), remote_publisher.clone());
+    let remote_service = remote_service::Service::new(
+        d.engine.clone(),
+        remote_publisher.clone(),
+        d.spectrum_feed.clone(),
+        d.meter_feed.clone(),
+    );
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())

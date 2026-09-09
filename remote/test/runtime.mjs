@@ -60,10 +60,10 @@ export async function runtime({ bindings = {} } = {}) {
         assert.equal(response.status, expected, `HTTP status for ${path}`)
         return { value: await response.json(), response }
       },
-      async open(stationId, ticket, expected = 101) {
+      async open(stationId, ticket, expected = 101, extra = {}) {
         // Exercise actual TCP/WebSocket framing, including the close handshake.
         const ws = new WebSocket(`${origin.replace('http:', 'ws:')}/api/remote/stations/${stationId}/${ticket ? 'observe' : 'connect'}`,
-          ticket ? ['nexus-observe-v1', `ticket.${ticket}`] : [], { headers: headers() })
+          ticket ? ['nexus-observe-v1', `ticket.${ticket}`] : [], { headers: { ...headers(), ...extra } })
         const peer = socket(ws)
         const status = await new Promise((resolve, reject) => {
           const timer = setTimeout(() => { ws.terminate(); reject(new Error('WebSocket handshake timeout')) }, 5000)

@@ -10,6 +10,7 @@ import { join } from 'node:path'
 import { createHash, randomBytes } from 'node:crypto'
 import WebSocket from 'ws'
 import { runtime } from './runtime.mjs'
+import { applicationFixture } from './application-fixture.mjs'
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 async function chrome() {
@@ -62,7 +63,7 @@ async function chrome() {
 
 test('compiled hosted browser completes PKCE, local device approval, observation and mobile viewport checks', { timeout: 120000 }, async () => {
   const app=await runtime(), artifacts=process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS
-  let browser, station, producing=true, producer
+  let browser, station, producing=true, producer, applicationProducer
   const results=[]
   try {
     browser=await chrome()
@@ -70,9 +71,10 @@ test('compiled hosted browser completes PKCE, local device approval, observation
     const shell = await fetch(app.origin,{signal:AbortSignal.timeout(3000)})
     assert.equal(shell.status,200)
     assert.match(await shell.text(), /Nexus Remote/)
-    station=await pair.native.open(pair.stationId)
+    station=await pair.native.open(pair.stationId, undefined, 101, { 'x-nexus-application-version': '1' })
     let code=null, oauth=null, exchanges=0, providerFailure=false, exceptions=0, acknowledgements=0, unexpectedMessages=0
-    browser.on('Runtime.exceptionThrown',()=>{exceptions++})
+    const applicationTraffic = { reads: 0, acks: 0, bytes: 0, byCommand: {}, maxResponseBytes: 0 }
+    browser.on('Runtime.exceptionThrown', event=>{exceptions++; console.error(event.exceptionDetails?.exception?.description ?? 'Browser runtime exception')})
     browser.on('Fetch.requestPaused', (event,session) => { void (async()=>{
       const url=new URL(event.request.url)
       assert.equal(url.origin,'https://identity.remote-test.invalid')
@@ -102,6 +104,9 @@ test('compiled hosted browser completes PKCE, local device approval, observation
       try {
         const message = JSON.parse(event.response.payloadData)
         if (message.type === 'ack' && Object.keys(message).sort().join(',') === 'epoch,sequence,type') acknowledgements++
+        else if (message.type === 'applicationHello' && Object.keys(message).length === 1) {}
+        else if (message.type === 'applicationRead' && Object.keys(message).length === 4) applicationTraffic.reads++
+        else if (message.type === 'applicationAck' && Object.keys(message).length === 2) applicationTraffic.acks++
         else unexpectedMessages++
       } catch { unexpectedMessages++ }
     })
@@ -110,6 +115,8 @@ test('compiled hosted browser completes PKCE, local device approval, observation
       Object.defineProperties(area,{width:{get:()=>actual.width},height:{get:()=>actual.height-window.__keyboardInset}});
       actual.addEventListener('resize',()=>area.dispatchEvent(new Event('resize')));
       Object.defineProperty(window,'visualViewport',{value:area});
+      window.__waterfallDraws=0;const draw=CanvasRenderingContext2D.prototype.putImageData;
+      CanvasRenderingContext2D.prototype.putImageData=function(...args){if(this.canvas.classList.contains('waterfall-canvas'))window.__waterfallDraws++;return draw.apply(this,args)};
     `},session)
     const evaluate=async expression=>{
       const value=await browser.call('Runtime.evaluate',{expression,returnByValue:true,awaitPromise:true},session)
@@ -154,6 +161,18 @@ test('compiled hosted browser completes PKCE, local device approval, observation
     const fixture=JSON.parse(await readFile(new URL('../../ui/src/remote-monitor/fixtures.v2.json',import.meta.url),'utf8')).spe
     let sequence=0
     producer=(async()=>{while(producing){let watch;try{watch=await station.take(value=>value.type==='watch'&&value.enabled,1000)}catch{continue}await sleep(200);if(!producing)break;station.send({type:'publication',requestId:watch.requestId,frame:{...fixture,source:'native',sequence:++sequence}})}})()
+    const applicationData = await applicationFixture()
+    let applicationRevision = 1, applicationAvailable = true
+    applicationProducer=(async()=>{while(producing){let request;try{request=await station.take(value=>value.type==='applicationRead',1000)}catch{continue}
+      if (!applicationAvailable || !producing) continue
+      assert.ok(Object.hasOwn(applicationData, request.command), 'only the closed read vocabulary may reach the station')
+      applicationTraffic.byCommand[request.command] = (applicationTraffic.byCommand[request.command] ?? 0) + 1
+      const data=applicationData[request.command], delta=request.revision===applicationRevision && !Array.isArray(data)
+      const response={type:'applicationResult',requestId:request.requestId,command:request.command,revision:applicationRevision,
+        baseRevision:delta?applicationRevision:null,ageMs:0,data:delta?{}:data,removed:[]}
+      const bytes=Buffer.byteLength(JSON.stringify(response));applicationTraffic.bytes+=bytes;applicationTraffic.maxResponseBytes=Math.max(applicationTraffic.maxResponseBytes,bytes)
+      station.send(response)
+    }})()
     await geometry(390,844)
     await click(button('Observe station'))
     await until(`document.querySelector('.rm-frequency')?.textContent.includes('14.074000')`)
@@ -173,15 +192,49 @@ test('compiled hosted browser completes PKCE, local device approval, observation
     await until(`document.querySelector('.rm-frequency')?.textContent.includes('14.074000')`)
     await click(`document.querySelector('.rm-amp-strip')`)
     if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-observer.png'),Buffer.from(shot.data,'base64'))}
+    await click(button('Disconnect and return to stations'))
+    await until(`!!${button('Open Nexus')}`)
+    await geometry(1280,800)
+    await click(button('Open Nexus'))
+    await until(`!!document.querySelector('.operate-host:not([hidden]) .amp-strip')`)
+    assert.equal(await evaluate(`!!window.__TAURI_INTERNALS__ || !!window.__TAURI__`),false,'the browser must use its explicit adapter')
+    assert.equal(await evaluate(`document.querySelectorAll('.app').length`),1,'the real workspace has one app root')
+    assert.ok(await evaluate(`document.querySelector('.amp-strip')?.textContent.includes('80m')`),'the existing amp strip must show station data')
+    assert.ok(await evaluate(`[...document.querySelectorAll('.amp-strip button')].every(button=>button.disabled)`),'observer amp controls must visibly refuse operating authority')
+    await until(`window.__waterfallDraws > 2`)
+    assert.ok(await evaluate(`[...document.querySelectorAll('.cockpit-qso button, .tuning-nudge, .cockpit-mode, .tier-btn, .cs-opt, .ph-split button')].every(button=>button.disabled)`),'station controls in the existing workspace must show observer authority')
+    const startReads=applicationTraffic.reads, startBytes=applicationTraffic.bytes, started=performance.now()
+    for(const [width,height] of [[1024,768],[1280,800],[1366,768],[1200,1390],[3440,1440]])for(const zoom of [1,1.75])for(const theme of ['dark','light']) {
+      await browser.call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false},session)
+      await evaluate(`document.documentElement.style.setProperty('--ui-zoom','${zoom}');document.documentElement.dataset.theme='${theme}';window.dispatchEvent(new Event('resize'))`)
+      await sleep(100)
+      const shape=await evaluate(`(()=>{const app=document.querySelector('.app'),header=document.querySelector('.remote-application-status'),r=app.getBoundingClientRect(),h=header.getBoundingClientRect();return{width:innerWidth,height:innerHeight,appW:r.width,appH:r.height,docW:document.documentElement.scrollWidth,docH:document.documentElement.scrollHeight,headerBottom:h.bottom,crash:!!document.querySelector('.view-crash')}})()`)
+      assert.ok(!shape.crash && shape.docW<=shape.width+1 && shape.docH<=shape.height+1 && shape.headerBottom<=shape.height,`Nexus workspace must remain bounded: ${JSON.stringify({width,height,zoom,theme,shape})}`)
+      results.push({workspace:true,width,height,zoom,theme,shape})
+    }
+    applicationTraffic.sample = { seconds: (performance.now()-started)/1000, reads: applicationTraffic.reads-startReads, bytes: applicationTraffic.bytes-startBytes }
+    assert.ok(applicationTraffic.sample.reads/applicationTraffic.sample.seconds < 24,'real panel demand must remain below the session rate bound')
+    if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-nexus-workspace.png'),Buffer.from(shot.data,'base64'))}
+    applicationAvailable=false
+    await until(`document.querySelector('.app')?.dataset.remoteStale==='true'`)
+    assert.equal(await evaluate(`getComputedStyle(document.querySelector('.operate-host')).visibility`),'hidden','stale operating values must be hidden')
+    applicationAvailable=true;applicationRevision++
+    applicationData.get_snapshot.radio.dialMhz=7.074;applicationData.get_snapshot.radio.band='40m'
+    await until(`document.querySelector('.app')?.dataset.remoteStale!=='true' && document.body.textContent.includes('7.074')`)
+    assert.equal(exceptions,0,'actual Nexus must render and reconnect without runtime exceptions')
+    await click(button('Disconnect and return to stations'))
+    await until(`!!${button('Observe station')}`)
+    await click(button('Observe station'))
+    await until(`document.querySelector('.rm-frequency')?.textContent.includes('14.074000')`)
     await pair.native.post(`stations/${pair.stationId}/native/revoke-device`,{deviceId:device.id})
     await until(`document.querySelector('.rm-frequency')?.textContent.startsWith('—')`)
     assert.equal(exceptions,0,'the compiled browser must not raise runtime exceptions')
     assert.ok(acknowledgements >= 2,'real observation ACKs must cross the browser socket')
-    assert.equal(unexpectedMessages,0,'only observation ACKs may leave the browser socket')
+    assert.equal(unexpectedMessages,0,'only reviewed read messages and observation ACKs may leave the browser socket')
     console.log(`Compiled browser: PKCE exchange, browser approval, live observation, revocation, ${results.length} geometry cases and overflow positive control passed`)
-    if(artifacts)await writeFile(join(artifacts,'remote-browser-results.json'),JSON.stringify({exchanges,exceptions,acknowledgements,unexpectedMessages,geometry:results},null,2)+'\n')
+    if(artifacts)await writeFile(join(artifacts,'remote-browser-results.json'),JSON.stringify({exchanges,exceptions,acknowledgements,unexpectedMessages,applicationTraffic,geometry:results},null,2)+'\n')
   } finally {
-    producing=false;station?.close();await producer
+    producing=false;station?.close();await Promise.all([producer,applicationProducer])
     try { await browser?.stop() } finally { await app.mf.dispose() }
   }
 })

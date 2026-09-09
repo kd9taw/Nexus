@@ -272,6 +272,18 @@ test('artifact verification rejects changed bytes, unlisted files, symlinks and 
   await verifyArtifact(scratch, ids.revision)
 })
 
+test('the hosted Nexus artifact carries its reviewed map assets and bundled dependency notices', async () => {
+  const directory = join(scratch, 'remote/staging-artifact/assets')
+  const files = Object.keys(artifact.manifest.files)
+  for (const stem of ['earth-night', 'earth-relief', 'cqzones']) {
+    assert.ok(files.some(name => name.startsWith(`assets/assets/${stem}-`)), 'existing Nexus map assets must travel in the artifact')
+  }
+  const notices = await readFile(join(directory, 'remote-licenses.txt'), 'utf8')
+  for (const name of ['react 18.3.1', '@radix-ui/react-dialog', 'three ', 'react-globe.gl', 'Copyright (c) 2024 HB9HIL', 'Copyright (c) 2022 WorkOS']) {
+    assert.ok(notices.includes(name), `bundled notice must cover ${name}`)
+  }
+})
+
 test('the configuration CLI refuses overwrites and produces a private file from public IDs only', async () => {
   const directory = join(scratch, 'remote/scripts')
   await mkdir(directory)

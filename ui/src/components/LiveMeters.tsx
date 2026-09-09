@@ -29,6 +29,7 @@ import { getMeters } from '../api'
 import type { MeterReadout } from '../types'
 import { LevelMeter, rxLevelDb } from './LevelMeter'
 import { t } from '../i18n'
+import { applicationSessionGeneration, onApplicationSessionChange } from '../applicationTransport'
 
 /** The unit symbol on the text readout — a unit, not a word. */
 const DB = 'dB'
@@ -76,13 +77,16 @@ function publish(next: MeterReadout) {
 }
 
 function tick() {
+  const generation = applicationSessionGeneration()
   try {
     getMeters()
       .then((m) => {
+        if (generation !== applicationSessionGeneration()) return
         lastOkAt = Date.now()
         publish(m)
       })
       .catch(() => {
+        if (generation !== applicationSessionGeneration()) return
         // The command stopped answering. Bounded staleness: past the window the meters
         // fall to rest — an honest empty meter, never a frozen last reading.
         if (Date.now() - lastOkAt >= METER_STALE_MS) publish(REST)
@@ -91,6 +95,10 @@ function tick() {
     /* api unavailable (piecemeal test mocks) — the widgets stay at rest */
   }
 }
+
+// No cached reading or late result from a previous station may enter a newly
+// selected station's widgets. Native operation never changes this session epoch.
+onApplicationSessionChange(() => { lastOkAt = 0; publish(REST) })
 
 /** Start/stop the single interval from the current demand: ≥1 subscriber AND a visible
  * document. Called on every subscribe/unsubscribe and visibility flip. */

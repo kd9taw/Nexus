@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { ReactNode } from 'react'
 import type { AppSnapshot, BandChannel, LoggedQso, ModeRequest, Settings, SourceKind, Tier } from './types'
 import { rigModeTransition, type RigMode } from './rigModeForView'
 import {
@@ -238,7 +239,8 @@ const OPERATE_TIERS: Tier[] = [
   'WSPR',
 ]
 
-export default function App() {
+export type BrowserWorkspace = { snapshot: AppSnapshot; settings: Settings; bandPlan: BandChannel[]; status: ReactNode; stale?: boolean }
+export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   const [theme, setTheme] = useTheme()
   // Field mode (outdoor/POTA): high contrast via data-contrast on <html>, larger auto-fit via
   // the useScale argument. Global — a fact about the station, like the theme.
@@ -262,7 +264,7 @@ export default function App() {
   const reveal = useReveals(features)
   // First-run setup wizard (goal-driven). Only on a genuinely fresh install.
   const [showWizard, setShowWizard] = useState<boolean>(
-    () => features.firstRun && storageWritable() && !wizardSeen(),
+    () => !remote && features.firstRun && storageWritable() && !wizardSeen(),
   )
   // Getting started guide — Help ▸ Getting started, and the wizard's optional
   // walkthrough offer. Pure documentation: it writes nothing and is never
@@ -271,7 +273,7 @@ export default function App() {
   // `scale` so the rail clamps re-run on zoom change (ceilings are zoom-relative).
   const { commitLeft, commitRight, resetWidths } = usePaneWidths(scale)
   const layoutRef = useRef<HTMLElement>(null)
-  const [snap, setSnap] = useState<AppSnapshot | null>(null)
+  const [snap, setSnap] = useState<AppSnapshot | null>(remote?.snapshot ?? null)
   // Two-radio launch picker: shown only when simultaneous-radios is on, ≥2 radios are configured,
   // and this window launched without a profile. `null` = not a picker launch (the common case),
   // so a single-radio station never sees any of this.
@@ -310,6 +312,10 @@ export default function App() {
   // Roam settings panel (inside the Tempo cockpit) open/closed.
   const [roamOpen, setRoamOpen] = useState(false)
   const [view, setView] = useState<View>(() => {
+    if (remote) {
+      const mode = remote.snapshot.radio.operatingMode
+      return mode === 'phone' ? 'phone' : mode === 'cw' ? 'cw' : mode === 'rtty' ? 'rtty' : mode === 'keyboard' ? 'psk' : 'operate'
+    }
     // Deeplink > legacy merged-section deeplink > persisted view > profile landing —
     // the precedence and the clamp live in resolveBootView (pure, test-pinned): a
     // deeplink or restored view is honored only if it is an enabled section of THIS
@@ -379,6 +385,9 @@ export default function App() {
 
   useEffect(() => {
     // ── LAUNCH IS A READ-ONLY ACT ──────────────────────────────────────────────────
+    // Hosted observers inspect panels without asserting a station mode. The
+    // native mount guard and native operating transitions below stay intact.
+    if (remote) return
     // This effect also runs on mount, where `view` is merely the restored/landing section —
     // NOT a statement of operator intent. Letting it fire commanded the rig into DATA at every
     // launch and PERSISTED that over the operator's real saved mode (set_operating_mode saves
@@ -469,6 +478,7 @@ export default function App() {
   // the cockpit; Connect/Map/Prop/Logbook/Awards are GLOBAL views selected from the
   // sidebar (they never retune the radio). Default FT8/FT4 (the 80% case).
   const [area, setArea] = useState<'dx' | 'msg'>(() => {
+    if (remote) return ['TempoFast', 'TempoDeep'].includes(remote.snapshot.link.tier) ? 'msg' : 'dx'
     try {
       // coerceArea (test-pinned) also migrates the retired 'connect' area to
       // FT8/FT4 (Connect is now a global view).
@@ -480,7 +490,7 @@ export default function App() {
   // Sync the engine to the persisted mode once on load (atomic tier+mode).
   const areaSyncedRef = useRef(false)
   useEffect(() => {
-    if (areaSyncedRef.current || !snap) return
+    if (remote || areaSyncedRef.current || !snap) return
     areaSyncedRef.current = true
     void apiSetArea(area).then((s) => s && setSnap(s))
     // Reconcile the cockpit view with the mode (a persisted Tempo mode must not
@@ -496,7 +506,7 @@ export default function App() {
   // toggle lives on the Needed panel header; default stays auto-open.
   const neededPoppedRef = useRef(false)
   useEffect(() => {
-    if (neededPoppedRef.current || !snap) return
+    if (remote || neededPoppedRef.current || !snap) return
     if (features.enabled.needed === false) return
     neededPoppedRef.current = true
     try {
@@ -516,6 +526,7 @@ export default function App() {
     }
     // Switching mode lands on that mode's cockpit (FT8/FT4 → Operate, Tempo → Chat).
     setView(w === 'dx' ? 'operate' : 'chat')
+    if (remote) return // browser navigation does not command the shack's mode
     void withErrorToast(() => apiSetArea(w), t('shell.error.switchMode')).then((s) => {
       if (s) setSnap(s)
     })
@@ -926,7 +937,10 @@ export default function App() {
   }, [snap?.workTick, snap?.workView, cwEnabled, phoneEnabled, rttyEnabled])
   // Declared here (rather than beside bandPlan below) because the need gate reads it: the
   // band scopes live in settings and everything derived from `needAlerts` sits right below.
-  const [settings, setSettings] = useState<Settings | null>(null)
+  const [settings, setSettings] = useState<Settings | null>(remote?.settings ?? null)
+  useEffect(() => {
+    if (remote) setSettings(remote.settings)
+  }, [remote?.settings])
   // The active FD event's ruleset FACTS (banned modes + assistance policy) for the
   // warn-only advisories. get_fd_ruleset reads settings.fd_event itself (and works with
   // the master switch off), so the fetch just re-runs when the configured event changes.
@@ -973,7 +987,10 @@ export default function App() {
   // station the board hides.
   const needByCall = useMemo(() => topNeedByCall(needAlertsByCall), [needAlertsByCall])
   const [typingTick, setTypingTick] = useState(0)
-  const [bandPlan, setBandPlan] = useState<BandChannel[]>([])
+  const [bandPlan, setBandPlan] = useState<BandChannel[]>(remote?.bandPlan ?? [])
+  useEffect(() => {
+    if (remote) setBandPlan(remote.bandPlan)
+  }, [remote?.bandPlan])
   // Operators this log has already seen (#25) — the seat-swap roster. Refreshed when the
   // operator changes, which is the moment a new name can have entered the log.
   const [opRoster, setOpRoster] = useState<string[]>([])
@@ -1062,7 +1079,8 @@ export default function App() {
   // initial load + live subscription
   useEffect(() => {
     let mounted = true
-    getSnapshot().then((s) => mounted && setSnap(s))
+    const firstSnapshot = getSnapshot().then((s) => mounted && setSnap(s))
+    if (remote) void firstSnapshot.catch(() => {}) // the hosted session owns loss/reconnect UI
     getBandPlan()
       .then((b) => mounted && setBandPlan(b))
       .catch(() => {})
@@ -2112,6 +2130,7 @@ export default function App() {
         /* ignore */
       }
       setView('operate')
+      if (remote) return
       // The codec tier (FT8/FT4) is INDEPENDENT of the rig's CAT mode — switching tiers does
       // NOT command the Yaesu into DATA-U. Assert the digital rig mode explicitly here:
       // clicking a Digital sub-mode while already on the Operate screen doesn't change `view`,
@@ -2230,6 +2249,10 @@ export default function App() {
   const fdActive = settings?.fdActive === true
   const navEnabled: Record<FeatureId, boolean> = { ...features.enabled, fieldDay: fdActive }
   const isViewEnabled = (v: View): boolean => navEnabled[v as FeatureId] !== false
+  // A visible navigation item is not evidence that its station API is connected.
+  // In particular, never mount SettingsPanel with the projected operating view:
+  // it expects complete configuration and could display absent values as defaults.
+  const isRemoteViewAvailable = (v: View): boolean => !remote || v === 'operate'
 
   // Recall card → Logbook, filtered to the call (#192, kr4fqg: "click a previous contact and
   // land in the log"). Same shape as the `onOpenMemories` handoffs below — `undefined` when the
@@ -2899,8 +2922,18 @@ export default function App() {
       break
   }
 
+  if (!isRemoteViewAvailable(effectiveView)) workspace = (
+    <main className="layout single">
+      <section className="panel remote-view-unavailable" role="status">
+        <h2>{featureById(effectiveView)?.label ?? t('features.settings.label')}</h2>
+        <p>{t('remote.viewUnavailable')}</p>
+      </section>
+    </main>
+  )
+
   return (
-    <div className="app">
+    <div className="app" data-remote-stale={remote?.stale || undefined}>
+      {remote?.status}
       <TopBar
         mycall={snap.mycall}
         mygrid={snap.mygrid}
@@ -3011,6 +3044,7 @@ export default function App() {
         feedHealth={feedHealth}
         connectEnabled={features.isOn('connect')}
         dxpedEnabled={features.isOn('dxped')}
+        needsAvailable={!remote}
         onNavigate={handleView}
         // Profile-declared chip emphasis (dangling since the profiles landed).
         // A hand-blended feature set is tagged 'custom' (no profile) → default order.
@@ -3120,7 +3154,7 @@ export default function App() {
               the backend while the operator is on another section; `active` gates only
               each view's display poll (the OperateCockpit pattern). Gated on the
               feature toggle so a disabled section mounts nothing. */}
-          {isViewEnabled('rtty') && (
+          {isRemoteViewAvailable('rtty') && isViewEnabled('rtty') && (
             <div className="rtty-host" hidden={effectiveView !== 'rtty'}>
               <RttyCockpit
                 onOpenLogbook={openLogbookFor}
@@ -3135,7 +3169,7 @@ export default function App() {
               />
             </div>
           )}
-          {isViewEnabled('psk') && (
+          {isRemoteViewAvailable('psk') && isViewEnabled('psk') && (
             <div className="psk-host" hidden={effectiveView !== 'psk'}>
               <PskCockpit
                 onOpenLogbook={openLogbookFor}
@@ -3150,7 +3184,7 @@ export default function App() {
               />
             </div>
           )}
-          {isViewEnabled('sstv') && (
+          {isRemoteViewAvailable('sstv') && isViewEnabled('sstv') && (
             <div className="sstv-host" hidden={effectiveView !== 'sstv'}>
               <SstvView
                 snap={snap}
@@ -3167,7 +3201,7 @@ export default function App() {
               />
             </div>
           )}
-          {isViewEnabled('aprs') && (
+          {isRemoteViewAvailable('aprs') && isViewEnabled('aprs') && (
             <div className="aprs-host" hidden={effectiveView !== 'aprs'}>
               <AprsCockpit
                 theme={theme}
@@ -3185,7 +3219,7 @@ export default function App() {
               gates the display poll and fires js8_enter on the rising edge. Gated on the
               feature toggle (JS8 ships ON, so this mounts unless the operator turned it off).
               `onSetTxEnabled` is the header pill — the only TX latch in this view. */}
-          {isViewEnabled('js8') && (
+          {isRemoteViewAvailable('js8') && isViewEnabled('js8') && (
             <div className="js8-host" hidden={effectiveView !== 'js8'}>
               <Js8Cockpit
                 onOpenLogbook={openLogbookFor}

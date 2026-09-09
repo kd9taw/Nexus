@@ -44,6 +44,7 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
       const row = await native(request, env, stationId)
       await rate(env, `connect:${stationId}`, now, 20)
       return room(env, stationId, 'station', { access: await access(env, row, now),
+        applicationVersion: request.headers.get('x-nexus-application-version') === '1' ? 1 : 0,
         identity: { stationId, accountId: row.account_id, generation: row.generation, expiresAt: now + 86400000 } })
     }
     browserOrigin(request, env)

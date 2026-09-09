@@ -1,7 +1,8 @@
 // Radix DropdownMenu styled with Nexus tokens — context/overflow menus (e.g.
 // per-row actions on decodes/roster in P2). Accessible roving focus for free.
 import * as RM from '@radix-ui/react-dropdown-menu'
-import type { ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
+import { useStationData } from '../../stationAccess'
 
 export interface MenuItem {
   label: string
@@ -16,8 +17,10 @@ interface MenuProps {
 }
 
 export function Menu({ trigger, items }: MenuProps) {
+  const available = useStationData()
+  const [open, setOpen] = useState(false)
   return (
-    <RM.Root>
+    <RM.Root open={open && available} onOpenChange={setOpen}>
       <RM.Trigger asChild>{trigger}</RM.Trigger>
       <RM.Portal>
         <RM.Content className="ui-menu" sideOffset={4} align="end" collisionPadding={8}>

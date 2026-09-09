@@ -549,6 +549,22 @@ The selected upstream license texts and copyright statements are retained in
 `licenses/remote/THIRD-PARTY.txt`, including the browser's React, React DOM,
 Scheduler and Lucide notices. They travel in the desktop resources and the
 hosted browser's `remote-licenses.txt`, alongside COPYING and this NOTICE.
+The hosted Nexus workspace also carries the existing UI dependencies listed below.
+Its build derives their license texts from the modules present in the browser
+chunks and includes the CQ-zone data's MIT notice. Radix's published leaf packages
+omit the monorepo LICENSE; that MIT text (© 2022 WorkOS) is retained in
+`licenses/remote/RADIX-LICENSE.txt`, from <https://github.com/radix-ui/primitives>.
+The locked Radix packages declare MIT and that repository; not all published npm
+records provide a source revision. No license terms are changed.
+`licenses/remote/RADIX-PACKAGES.json` pins the reviewed versions, upstream license
+source and text digest; a new package version cannot silently inherit this fallback.
+The locked `react-remove-scroll-bar` 2.3.8 package also declares MIT but omits
+the license file. `licenses/remote/REACT-REMOVE-SCROLL-BAR-LICENSE.txt` retains
+the upstream MIT text (© 2025 Anton Korzunov), added on May 21, 2025 at
+<https://github.com/theKashey/react-remove-scroll-bar/commit/7301c160fda44cb8cf2b9fdfde61efad35736196>.
+Its adjacent package review pins the version, repository and text digest. This
+text comes from that later upstream license addition, not a verified source
+checkout of the npm release.
 Package source files were checked for separate license/copyright declarations;
 many rely on their package license rather than repeating a grant in every file.
 

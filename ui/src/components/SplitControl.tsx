@@ -1,3 +1,4 @@
+import { useStationControl } from '../stationAccess'
 // The manual split control — SPLIT toggle, ±1 kHz steps, and the live offset readout.
 //
 // ⭐ ONE COPY, USED BY THREE COCKPITS. It shipped in Phone only, so a CW operator working a
@@ -39,6 +40,7 @@ interface Props {
 }
 
 export function SplitControl({ snap, onSnap, onError }: Props) {
+  const control = useStationControl()
   // The desired TX dial lives in the snapshot; a plain retune clears it (backend).
   // Offset is kHz off the RX dial; default +5, the common pileup.
   const [splitOffsetKhz, setSplitOffsetKhz] = useState(5)
@@ -78,7 +80,7 @@ export function SplitControl({ snap, onSnap, onError }: Props) {
 
   return (
     <div className={`ph-split ${splitOn ? 'on' : ''}`}>
-      <button
+      <button disabled={!control}
         className="ph-split-toggle"
         onClick={toggleSplit}
         title={
@@ -89,7 +91,7 @@ export function SplitControl({ snap, onSnap, onError }: Props) {
       >
         SPLIT
       </button>
-      <button
+      <button disabled={!control}
         className="ph-split-step"
         onClick={() => bumpSplit(-SPLIT_STEP_KHZ)}
         title={t('phone.split.lower.title', { step: SPLIT_STEP_KHZ })}
@@ -99,7 +101,7 @@ export function SplitControl({ snap, onSnap, onError }: Props) {
       <span className="ph-split-amt mono" title={t('phone.split.offset.title')}>
         {splitOffsetKhz >= 0 ? `+${splitOffsetKhz}` : `${splitOffsetKhz}`}
       </span>
-      <button
+      <button disabled={!control}
         className="ph-split-step"
         onClick={() => bumpSplit(SPLIT_STEP_KHZ)}
         title={t('phone.split.higher.title', { step: SPLIT_STEP_KHZ })}

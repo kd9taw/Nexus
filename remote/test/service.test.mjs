@@ -14,9 +14,9 @@ const sample = () => {
   return frame
 }
 const type = name => value => value?.type === name
-async function admitted(pair) {
+async function admitted(pair, applicationVersion = 0) {
   const deviceId = await app.approved(pair)
-  const station = await pair.native.open(pair.stationId)
+  const station = await pair.native.open(pair.stationId, undefined, 101, { 'x-nexus-application-version': String(applicationVersion) })
   await station.take(value => value.type === 'watch' && value.enabled === false)
   const { value: ticket } = await pair.browser.post(`stations/${pair.stationId}/ticket`)
   const browser = await pair.browser.open(pair.stationId, ticket.ticket)
@@ -29,6 +29,49 @@ async function publish(station, sequence) {
   station.send({ type: 'publication', requestId: request.requestId, frame })
   return frame
 }
+
+test('application reads use approved sockets, survive hibernation and retain observer-only authority', async () => {
+  const pair = await app.paired(), live = await admitted(pair, 1)
+  live.browser.send({ type: 'applicationHello' })
+  const capabilities = await live.browser.take(type('applicationCapabilities'))
+  assert.equal(capabilities.version, 1)
+  assert.deepEqual(capabilities.commands, ['get_snapshot', 'get_settings', 'get_band_plan', 'get_spectrum_row', 'get_meters'])
+  const requestId = crypto.randomUUID()
+  live.browser.send({ type: 'applicationRead', requestId, command: 'get_snapshot', revision: null })
+  const request = await live.station.take(type('applicationRead'))
+  assert.notEqual(request.requestId, requestId, 'the room owns routing IDs')
+  await app.evict(pair.stationId)
+  live.station.send({ type: 'applicationResult', requestId: request.requestId, command: 'get_snapshot',
+    revision: 1, baseRevision: null, ageMs: 0, data: { mycall: 'N0CALL', radio: { dialMhz: 3.573 } }, removed: [] })
+  const result = await live.browser.take(type('applicationResult'))
+  assert.equal(result.requestId, requestId)
+  assert.equal(result.data.radio.dialMhz, 3.573)
+  live.browser.send({ type: 'applicationAck', requestId })
+  await publish(live.station, 1)
+  const observation = await live.browser.take(type('observation'))
+  live.browser.send({ type: 'ack', epoch: observation.frame.epoch, sequence: observation.frame.sequence })
+  live.browser.send({ type: 'applicationRead', requestId: crypto.randomUUID(), command: 'set_tx_enabled', revision: null })
+  assert.equal((await live.browser.take(type('closed'))).code, 1008)
+  const namespace = await app.mf.getDurableObjectNamespace('STATIONS')
+  const status = await roomStatus(namespace.get(namespace.idFromName(pair.stationId)))
+  assert.equal(status.observers, 0, 'application rejection removes the authoritative observer immediately')
+  assert.equal(status.online, true, 'the station survives one browser refusal')
+  await assert.rejects(live.station.take(type('applicationRead'), 100), /timeout/)
+  live.station.close()
+})
+
+test('an older station advertises an update requirement and continues its valid monitor stream', async () => {
+  const pair = await app.paired(), live = await admitted(pair)
+  live.browser.send({ type: 'applicationHello' })
+  assert.deepEqual(await live.browser.take(type('applicationCapabilities')), { type: 'applicationCapabilities', version: 0, commands: [] })
+  live.browser.send({ type: 'applicationRead', requestId: crypto.randomUUID(), command: 'get_snapshot', revision: null })
+  assert.equal((await live.browser.take(type('applicationError'))).error, 'stationUpdateRequired')
+  await assert.rejects(live.station.take(type('applicationRead'), 100), /timeout/)
+  await publish(live.station, 1)
+  const frame = await live.browser.take(type('observation'))
+  assert.equal(frame.frame.sequence, 1)
+  live.browser.close(); live.station.close()
+})
 
 test('provider signatures, authorized client and exact Origin are required; account creation grants no trial', async () => {
   const account = await app.owner(false)

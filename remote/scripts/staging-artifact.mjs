@@ -45,7 +45,9 @@ export async function createArtifact(root, values) {
   requireValue(assets.includes('index.html') && assets.includes('remote-licenses.txt')
     && assets.some(name => /^assets\/.+\.js$/.test(name)), 'The compiled browser and license asset must exist')
   for (const name of assets) {
-    requireValue(name === 'index.html' || name === 'remote-licenses.txt' || /^assets\/[A-Za-z0-9_.-]+\.(js|css)$/.test(name),
+    const nexusMapAsset = /^assets\/(earth-night|earth-relief)-[A-Za-z0-9_-]+\.webp$/.test(name)
+      || /^assets\/cqzones-[A-Za-z0-9_-]+\.geojson$/.test(name)
+    requireValue(name === 'index.html' || name === 'remote-licenses.txt' || /^assets\/[A-Za-z0-9_.-]+\.(js|css)$/.test(name) || nexusMapAsset,
       'Unexpected browser asset; review it before adding it to the upload')
     const target = join(destination, 'assets', name)
     await mkdir(resolve(target, '..'), { recursive: true })

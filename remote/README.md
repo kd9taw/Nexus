@@ -1,8 +1,10 @@
-# Nexus Remote observation pilot
+# Nexus Remote browser pilot
 
 This service connects an approved browser to an outbound Nexus desktop connection.
-It displays radio and SPE/KPA amplifier observations. It has no command router,
-receive audio, QSO writes, payment collection or native mobile application.
+It displays radio and SPE/KPA amplifier observations and provides an observer
+preview of the existing Nexus Operate workspace. Remote operating commands,
+receive audio, QSO writes, payment collection and a native mobile application
+are not implemented in this pilot.
 
 The browser uses Auth0 Authorization Code + PKCE. The Worker validates RS256 tokens
 against a pinned issuer, API audience and SPA client, then maps `(issuer, subject)`
@@ -11,11 +13,52 @@ browser approval are separate local actions in Nexus. Clearing browser cookies
 requires approval again. A login or account recovery cannot approve a browser.
 
 The desktop stores its Remote pairing and credential in one atomic OS credential
-entry under `org.hamradiotools.nexus.remote`. No existing connector credential or
-settings file is accessed. Enrollment proofs remain in memory. Pairing persists,
+entry under `org.hamradiotools.nexus.remote`. The application preview shares a
+closed projection of operating settings; connector credentials and full profiles
+are excluded. Enrollment proofs remain in memory. Pairing persists,
 but observation starts disabled after every desktop restart. No inbound shack
 port or router forwarding is required. The desktop is pinned to
 `https://remote-staging.hamradiotools.io` for this pilot.
+
+## Existing Nexus workspace
+
+**Open Nexus** loads the same `ui/src/App.tsx` and Operate components as the
+desktop. The explicit adapter below `api.ts` owns one authenticated station
+session. It does not install a Tauri global or forward arbitrary command names.
+Native use still selects Tauri, and the existing LAN TV transport remains separate.
+
+The native connection advertises application protocol version 1. Its closed read
+contract contains `get_snapshot`, `get_settings`, `get_band_plan`,
+`get_spectrum_row` and `get_meters`. Each browser has one outstanding read/result
+until its exact ACK arrives. Reads of the same topic coalesce, short caches limit
+native work, and top-level deltas require an exact base revision. Replies are
+bounded to 768 KiB and three seconds; stale sessions hide station readings and
+close portaled menus/dialogs. Session changes discard cached readings and late
+meter results. An older desktop can continue the observation view and reports an
+update requirement for the workspace.
+
+The shack's engine owns the snapshot, logbook and hardware. Remote spectrum
+observation leaves the desktop averaging window intact. Encoding runs outside
+the engine lock, and busy engine reads are refused without queuing. Room socket
+attachments contain only bounded authority and routing metadata, never these
+application values or contact history. A slow or failed browser is retired
+independently of the station and other approved observers.
+
+Only Operate is connected in this preview. Other navigation destinations display
+their availability limit, and the full Settings panel is not mounted with partial
+settings. Station controls, including the existing amplifier controls, are
+disabled; all mutation names are also refused by the transport and native parser.
+Opening a workspace or navigating it never selects the shack's operating mode.
+The original **Observe station** view remains available.
+
+This read adapter is an incremental integration boundary, not paid-service
+completion. Before enabling remote operation, the protocol needs explicit station
+control leases, expiring and deduplicated commands, native authorization at
+execution, and attended transmitter/amplifier acceptance. Full read parity also
+needs bounded history queries and topic subscriptions with measured load and
+version compatibility. Audio needs its own negotiated media path. Billing must
+materialize service entitlement separately from browser trust and station control;
+payment or account recovery must never arm a radio.
 
 ## Local verification
 
@@ -116,8 +159,9 @@ ON CONFLICT(account_id) DO UPDATE SET enabled=1, expires_at=excluded.expires_at;
 The user then starts pairing in desktop Settings, enters the displayed code in the
 browser, compares account IDs and approves pairing at the shack. The browser next
 requests its own approval; its short comparison code must match the desktop list.
-Finally the user enables observation locally and selects **Observe station** in
-the browser. The initial acceptance run uses a desktop browser, then mobile web.
+Finally the user enables observation locally and selects **Open Nexus** or
+**Observe station** in the browser. The initial workspace acceptance run uses a
+desktop browser; the compact observation view also supports mobile web.
 
 ## Bounds and recovery
 

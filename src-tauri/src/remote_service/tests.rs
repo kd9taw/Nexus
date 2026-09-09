@@ -315,7 +315,7 @@ fn actual_native_socket_refuses_cloud_commands_after_a_valid_publication() {
             });
             let token = transport::random_secret().unwrap();
             let result = transport::connected(&client, "00000000-0000-4000-8000-000000000001", &token,
-                cancellation, &engine, &publisher, &status).await;
+                cancellation, &engine, &transport::Feeds { monitor: publisher.clone(), spectrum: None, meters: Default::default() }, &status).await;
             assert_eq!(result, Err("invalidResponse"));
             server.await.unwrap();
             assert_eq!(serde_json::to_value(engine.lock().unwrap().snapshot().radio).unwrap(), before);

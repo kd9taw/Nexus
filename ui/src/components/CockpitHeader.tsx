@@ -1,3 +1,4 @@
+import { useStationControl } from '../stationAccess'
 // ⚠️ THIS FILE IS **PARTIAL** ON THE i18n LIST (i18n/hardcoded-strings.test.ts), and what is
 // deferred is the whole reason this batch exists: THE TX-ENABLE LATCH, TUNE, ATU AND STOP TX
 // stay written here. This one header draws them for SIX cockpits — Phone, CW, RTTY, PSK, SSTV
@@ -156,6 +157,7 @@ export function CockpitHeader({
   onSetTxEnabled,
   catStatus,
 }: CockpitHeaderProps) {
+  const control = useStationControl()
   const radio = snap.radio
   const catOk = radio.catOk === true
   const dial = radio.dialMhz
@@ -291,7 +293,7 @@ export function CockpitHeader({
             }
           >
             <span>{power.label ?? t('cockpit.header.power.label')}</span>
-            <input
+            <input disabled={!control}
               type="range"
               min={0}
               max={power.unit === '%' ? 100 : 1}
@@ -338,7 +340,7 @@ export function CockpitHeader({
             control. It moves in the transmit-path batch — see this file's header. */}
         {txState &&
           (onSetTxEnabled && !radio.transmitting ? (
-            <button
+            <button disabled={!control}
               type="button"
               className={`cockpit-txstate cockpit-txarm${radio.txEnabled ? ' armed' : ''}`}
               aria-pressed={radio.txEnabled}
@@ -368,7 +370,7 @@ export function CockpitHeader({
             className={`cockpit-tune${radio.tuning ? ' keyed' : ''}`}
             aria-pressed={radio.tuning}
             onClick={() => onTune(!radio.tuning)}
-            disabled={!radio.txAllowed}
+            disabled={!control || (!radio.txAllowed)}
             title="Key a steady carrier to tune an ATU/amp (auto-stops on the tune watchdog). Click again to stop."
           >
             {radio.tuning ? 'TUNING…' : 'Tune'}
@@ -388,7 +390,7 @@ export function CockpitHeader({
             type="button"
             className="cockpit-tune"
             onClick={onAtuTune}
-            disabled={!radio.txAllowed}
+            disabled={!control || (!radio.txAllowed)}
             title={
               radio.atu
                 ? "Run the radio's built-in antenna tuner (it transmits its own carrier for a second or two). The tuner is switched in."
@@ -402,7 +404,7 @@ export function CockpitHeader({
         {/* ⚠️ DEFERRED (i18n): THE stop control of six cockpits. Its label is the accessible
             name every stop-line sweep looks for (/^stop tx$/i). */}
         {onStopTx && (
-          <button type="button" className="cockpit-stoptx" onClick={onStopTx} title="Stop TX (Esc)">
+          <button disabled={!control} type="button" className="cockpit-stoptx" onClick={onStopTx} title="Stop TX (Esc)">
             Stop TX
           </button>
         )}

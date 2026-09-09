@@ -1,11 +1,12 @@
 // Data layer.
 //
-// Typed functions over the shared DTO contract. EVERY call goes through the Tauri
-// IPC bridge to the Rust core — there is NO in-browser mock/demo fallback. If the
-// bridge is somehow absent the call throws loudly (surfaced as an error toast)
-// rather than silently fabricating data. Nexus runs only inside the desktop app.
+// Typed functions over the shared DTO contract. Native calls use Tauri; an
+// explicitly installed hosted session or the LAN TV entry supplies its own
+// restricted transport. An absent transport throws; there is no mock/demo fallback.
 
 import type { RemoteStationAction, RemoteStationStatus } from './remote-native/types'
+import { remoteApplicationTransport } from './applicationTransport'
+import { t } from './i18n'
 import type {
   AppSnapshot,
   AudioDevices,
@@ -149,7 +150,14 @@ async function httpInvoke<T>(base: string, cmd: string, args?: Record<string, un
  *  RPC when its entry declared one; otherwise a hard error — never fabricated data. */
 async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   const tv = typeof window !== 'undefined' ? window.__NEXUS_TV_RPC__ : undefined
+  const remote = remoteApplicationTransport()
   const out = isTauri() ? ((await bridge()(cmd, args)) as T)
+    : remote ? await remote.invoke<T>(cmd, args).catch(error => {
+      if (error instanceof Error && error.message === 'applicationUnsupported') {
+        throw new Error(t('remote.applicationObserver'))
+      }
+      throw error
+    })
     : tv ? await httpInvoke<T>(tv, cmd, args)
     : ((await bridge()(cmd, args)) as T) // throws with the bridge's own message
   if (mutatesCredentials(cmd) && typeof window !== 'undefined') {

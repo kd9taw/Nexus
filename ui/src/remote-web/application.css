@@ -1,0 +1,20 @@
+/* Session status joins the existing app's flex column; the Nexus cockpit owns
+   its layout and scroll regions. Stale data stays mounted to preserve UI state. */
+.remote-application-status {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  gap: 0.5em 1em;
+  padding: 0.45em 0.8em;
+  color: var(--text);
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+.remote-application-status span { flex: 1 1 18em; }
+.remote-application-status button { min-height: 48px; }
+.remote-view-unavailable { padding: 1em; overflow: auto; }
+.app[data-remote-stale="true"] > :not(.remote-application-status) {
+  visibility: hidden;
+  pointer-events: none;
+}

@@ -2,6 +2,8 @@ import { Auth0Client } from '@auth0/auth0-spa-js'
 import { ageFrame, MAX_FRAME_BYTES, parseFrame, STALE_MS } from '../remote-monitor/protocol'
 import type { MonitorFrame } from '../remote-monitor/protocol'
 import type { MonitorSource } from '../remote-monitor/session'
+import { ApplicationClient } from './application-client'
+import { APPLICATION_MAX_BYTES } from './application-protocol'
 
 export type AccountSession = {
   accountId: string
@@ -69,9 +71,10 @@ export class BrowserClient {
 }
 
 /** A single socket and a single latest frame. Tickets and JWTs never enter URLs,
- * storage or display text. Only observation ACKs can leave this capability. */
+ * storage or display text. Application mode adds only the reviewed read/ACK contract. */
 export class HostedConnection {
   readonly source: MonitorSource
+  readonly application: ApplicationClient
   private socket: WebSocket | null = null
   private latest: { frame: MonitorFrame; at: number } | null = null
   private disposed = false
@@ -82,7 +85,11 @@ export class HostedConnection {
   private renewing = false
   private anchor: { server: number; start: number } | null = null
 
-  constructor(private client: BrowserClient, private stationId: string) {
+  constructor(private client: BrowserClient, private stationId: string, private readonly applicationMode = false) {
+    this.application = new ApplicationClient(message => {
+      if (!this.applicationMode || this.socket?.readyState !== WebSocket.OPEN || this.socket.bufferedAmount > 2048) throw new RemoteError(503)
+      this.socket.send(message)
+    }, () => this.socket?.close(1000, 'applicationUnavailable'))
     this.source = { id: `hosted-${stationId}`, kind: 'native', read: async signal => {
       if (signal.aborted || this.disposed || this.socket?.readyState !== WebSocket.OPEN || !this.latest) throw new RemoteError(503)
       return ageFrame(this.latest.frame, performance.now() - this.latest.at)
@@ -90,11 +97,13 @@ export class HostedConnection {
   }
   start(): void { void this.connect() }
   stop(): void {
+    this.application.disconnected()
     this.disposed = true; this.abort.abort(); this.latest = null
     clearTimeout(this.reconnectTimer); clearInterval(this.renewal)
     this.socket?.close(1000, 'disconnected'); this.socket = null
   }
   private retry(): void {
+    this.application.disconnected()
     this.latest = null; clearInterval(this.renewal)
     if (this.disposed || this.reconnectTimer) return
     const delay = Math.min(30000, 1000 * 2 ** Math.min(this.attempt++, 5))
@@ -114,9 +123,14 @@ export class HostedConnection {
       socket.onmessage = event => {
         if (this.disposed || this.socket !== socket) return
         try {
-          if (typeof event.data !== 'string' || new TextEncoder().encode(event.data).length > MAX_FRAME_BYTES + 256) throw new RemoteError(403)
+          if (typeof event.data !== 'string' || new TextEncoder().encode(event.data).length > (this.applicationMode ? APPLICATION_MAX_BYTES : MAX_FRAME_BYTES + 256)) throw new RemoteError(403)
           const message = JSON.parse(event.data) as Record<string, unknown>
+          if (this.applicationMode && typeof message.type === 'string' && message.type.startsWith('application')) {
+            this.application.receive(message); return
+          }
+          if (new TextEncoder().encode(event.data).length > MAX_FRAME_BYTES + 256) throw new RemoteError(403)
           if (message.type === 'session' && Object.keys(message).length === 2 && typeof message.sessionId === 'string' && /^[0-9a-f-]{36}$/.test(message.sessionId)) {
+            if (this.applicationMode) this.application.open()
             const sessionId = message.sessionId
             clearInterval(this.renewal)
             this.renewal = setInterval(() => {
@@ -136,10 +150,10 @@ export class HostedConnection {
             if (socket.bufferedAmount > 512) throw new RemoteError(503)
             socket.send(JSON.stringify({ type: 'ack', epoch: frame.epoch, sequence: frame.sequence }))
           } else throw new RemoteError(403)
-        } catch { this.latest = null; socket.close(1000, 'invalidObservation') }
+        } catch { this.latest = null; this.application.disconnected(); socket.close(1000, 'invalidObservation') }
       }
       socket.onclose = () => { if (this.socket === socket) { this.socket = null; this.retry() } }
-      socket.onerror = () => { this.latest = null }
+      socket.onerror = () => { this.latest = null; this.application.disconnected() }
     } catch (error) {
       if (error instanceof RemoteError && [401, 403].includes(error.status)) { this.latest = null; return }
       this.retry()

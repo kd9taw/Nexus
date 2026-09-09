@@ -1,3 +1,4 @@
+import { useStationControl } from '../stationAccess'
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every reading in this
 // cockpit is DATA and stays in the code — the dial, the audio offsets in Hz, the band, the
 // tier, the decode depth, the split TX frequency, the next-slot seconds — and so does the
@@ -350,6 +351,7 @@ export function OperateCockpit({
   onOpenSettings,
   wheelSensitivity,
 }: Props) {
+  const control = useStationControl()
   // Container the waterfall-height splitter measures + writes its CSS var on.
   const bodyRef = useRef<HTMLDivElement>(null)
   // The two resizable side-rail panes in roster mode (Band Activity above, Rx Frequency
@@ -472,7 +474,7 @@ export function OperateCockpit({
   const specialOpLoaded = useRef(false)
   useEffect(() => {
     let alive = true
-    getSettings()
+    const load = () => getSettings()
       .then((s) => {
         if (alive) {
           setSpecialOp(s.specialOp ?? 'none')
@@ -480,8 +482,12 @@ export function OperateCockpit({
         }
       })
       .catch(() => {})
-    return () => { alive = false }
-  }, [])
+    void load()
+    // The observer cannot make this setting locally; reflect changes made at
+    // the shack. Its shared transport coalesces this with the workspace read.
+    const timer = !control ? setInterval(() => void load(), 2000) : undefined
+    return () => { alive = false; clearInterval(timer) }
+  }, [control])
 
   const handleSpecialOp = (val: NonNullable<Settings['specialOp']>) => {
     if (val === specialOp) return
@@ -880,7 +886,7 @@ export function OperateCockpit({
         modeIndicator={
           <div className="cockpit-modes" role="group" aria-label={t('operate.header.modes.aria')}>
             {MODES.map((m) => (
-              <button
+              <button disabled={!control}
                 key={m.tier}
                 type="button"
                 className={`cockpit-mode${tier === m.tier ? ' active' : ''}`}
@@ -897,7 +903,7 @@ export function OperateCockpit({
                  (sbTR, mainwindow.cpp:8387) — the period is an operating decision on
                  meteor scatter, not configuration, so it lives here and not only in
                  Settings. Narrow write: a full settings apply is the #54 mid-QSO reset. */
-              <select
+              <select disabled={!control}
                 className="cockpit-mode cm-trperiod"
                 aria-label={t('operate.header.msk144Period.aria')}
                 title={t('operate.header.msk144Period.title')}
@@ -1002,7 +1008,7 @@ export function OperateCockpit({
             Toggling it mid-QSO is safe by construction — a contact in flight keeps the rules it
             started under (engine.rs `hound_split`); the toggle governs the NEXT one. */}
         <div className="cockpit-specialop">
-          <button
+          <button disabled={!control}
             type="button"
             className={`cockpit-specialop-btn${isHound(specialOp) ? ' active' : ''}`}
             aria-pressed={isHound(specialOp)}
@@ -1051,7 +1057,7 @@ export function OperateCockpit({
                   })
             }
           >
-            <button
+            <button disabled={!control}
               type="button"
               className={`cs-opt${source === 'native' ? ' active' : ''}`}
               aria-pressed={source === 'native'}
@@ -1060,7 +1066,7 @@ export function OperateCockpit({
             >
               ◉ {SOURCE_NATIVE}
             </button>
-            <button
+            <button disabled={!control}
               type="button"
               className={`cs-opt${source === 'companion' ? ' active' : ''}`}
               aria-pressed={source === 'companion'}
@@ -1081,7 +1087,7 @@ export function OperateCockpit({
             <DfField label={DF_TX} hz={snap.radio.txOffsetHz} onCommit={(hz) => onTune(hz, 'tx')} />
           </div>
           {/* Decode button — re-run the decoder over the last period's audio (F6). */}
-          <button
+          <button disabled={!control}
             type="button"
             className="cockpit-decode-btn"
             onClick={handleRedecode}
@@ -1099,7 +1105,7 @@ export function OperateCockpit({
             type="button"
             className={`ph-rec${recording ? ' on' : ''}`}
             onClick={toggleRecord}
-            disabled={recBusy}
+            disabled={!control || (recBusy)}
             aria-label={
               recording
                 ? t('operate.header.record.stop.aria')
@@ -1699,6 +1705,7 @@ function DfField({
   hz: number
   onCommit: (hz: number) => void
 }) {
+  const control = useStationControl()
   const [text, setText] = useState(() => String(Math.round(hz)))
   const [editing, setEditing] = useState(false)
   const editingRef = useRef(editing)
@@ -1723,7 +1730,7 @@ function DfField({
   return (
     <label className="df-field" title={t('operate.header.df.title', { label })}>
       <span className="df-label">{label}</span>
-      <input
+      <input disabled={!control}
         type="number"
         inputMode="numeric"
         min={200}

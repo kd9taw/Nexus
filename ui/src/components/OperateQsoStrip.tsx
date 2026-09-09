@@ -1,3 +1,4 @@
+import { useStationControl } from '../stationAccess'
 // ⚠️ THIS FILE IS **PARTIAL** ON THE i18n LIST (i18n/hardcoded-strings.test.ts), and the part
 // that is deferred is deliberate: STOP TX, TUNE, ATU and the TX On/Off tooltip stay written
 // here. The first three cut or key a carrier — Stop TX and Tune are on this cockpit's
@@ -131,6 +132,7 @@ export function OperateQsoStrip({
   rotor,
   telemetry,
 }: Props) {
+  const control = useStationControl()
   // ⚠️ cqRunning, NOT qso.running. `running` is also true through a directed S&P call (the
   // engine's own comment at call_station_ctx says so) and nothing clears it after the QSO —
   // so this strip lit Call CQ solid through every S&P contact and forever after, and the
@@ -188,7 +190,7 @@ export function OperateQsoStrip({
           className={`cq-role cq-call${running ? ' active' : ''}`}
           aria-pressed={running}
           onClick={() => (onCallCq ? onCallCq() : onSetMode('qso-run'))}
-          disabled={noQso}
+          disabled={!control || (noQso)}
           title={noQso ? noQsoWhy : t('operate.strip.callCq.title')}
         >
           {t('operate.strip.callCq.label')}
@@ -198,7 +200,7 @@ export function OperateQsoStrip({
           className={`cq-role${!running ? ' active' : ''}`}
           aria-pressed={!running}
           onClick={() => onSetMode('qso-monitor')}
-          disabled={noQso}
+          disabled={!control || (noQso)}
           title={noQso ? noQsoWhy : t('operate.strip.sandp.title')}
         >
           {t('operate.strip.sandp.label')}
@@ -215,7 +217,7 @@ export function OperateQsoStrip({
             className={`op-btn monitor${radio.txEnabled ? ' on' : ''}`}
             aria-pressed={radio.txEnabled}
             onClick={() => onSetTxEnabled?.(!radio.txEnabled)}
-            disabled={noTx}
+            disabled={!control || (noTx)}
             title={
               noTx
                 ? noTxWhy
@@ -231,7 +233,7 @@ export function OperateQsoStrip({
             className={`op-btn tune${radio.tuning ? ' keyed' : ''}`}
             aria-pressed={radio.tuning}
             onClick={() => onSetTune?.(!radio.tuning)}
-            disabled={noTx}
+            disabled={!control || (noTx)}
             title={noTx ? noTxWhy : 'Key a tune carrier'}
           >
             Tune
@@ -241,7 +243,7 @@ export function OperateQsoStrip({
               type="button"
               className="op-btn atu"
               onClick={onAtuTune}
-              disabled={noTx}
+              disabled={!control || (noTx)}
               title={
                 noTx
                   ? noTxWhy
@@ -253,7 +255,7 @@ export function OperateQsoStrip({
               ATU
             </button>
           )}
-          <button
+          <button disabled={!control}
             type="button"
             className="op-btn stop"
             onClick={() => onHaltTx?.()}
@@ -261,7 +263,7 @@ export function OperateQsoStrip({
           >
             Stop TX
           </button>
-          <button
+          <button disabled={!control}
             type="button"
             className={`op-btn hold${radio.holdTxFreq ? ' on' : ''}`}
             aria-pressed={radio.holdTxFreq}
@@ -341,7 +343,7 @@ export function OperateQsoStrip({
           type="button"
           className="cq-resend"
           onClick={onResend}
-          disabled={!txNow}
+          disabled={!control || (!txNow)}
           title={t('operate.strip.resend.title')}
         >
           ↻
@@ -355,7 +357,7 @@ export function OperateQsoStrip({
           sendFree()
         }}
       >
-        <input
+        <input disabled={!control}
           type="text"
           value={free}
           maxLength={13}
@@ -365,7 +367,7 @@ export function OperateQsoStrip({
         />
         <button
           type="submit"
-          disabled={!free.trim() || noQso}
+          disabled={!control || (!free.trim() || noQso)}
           title={noQso ? noQsoWhy : t('operate.strip.send.title')}
         >
           {t('operate.strip.send.label')}
@@ -374,7 +376,7 @@ export function OperateQsoStrip({
           type="button"
           className="cq-log"
           onClick={onLog}
-          disabled={!dxcall}
+          disabled={!control || (!dxcall)}
           title={t('operate.strip.log.title')}
         >
           {t('operate.strip.log.label')}
@@ -386,7 +388,7 @@ export function OperateQsoStrip({
       {specialOpBadge}
       {rotor}
       {radio && onSetTxEven && onSetTxCycleAuto && (
-        <button
+        <button disabled={!control}
           type="button"
           className={`cq-period${radio.txCycleAuto ? ' is-auto' : ''}`}
           onClick={() => {
@@ -407,7 +409,7 @@ export function OperateQsoStrip({
         </button>
       )}
       {onSkipTx1 && (
-        <button
+        <button disabled={!control}
           type="button"
           className={`cq-skiptx1${skipTx1 ? ' on' : ''}`}
           aria-pressed={skipTx1 ?? false}
