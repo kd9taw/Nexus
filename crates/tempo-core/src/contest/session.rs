@@ -92,6 +92,14 @@ queued for upload when you merge them into your logbook. One exception, and it i
 ours to switch off: saving a ClubLog password re-queues every contact ClubLog has not \
 accepted, including these.";
 
+/// ⭐ **§3.3 ruling 3, as the message the operator reads.** A location change that
+/// resolves to a DIFFERENT role is not a move: it flips `sends`, `receives` and the
+/// multiplier universe, which is a separate entry and a separate Cabrillo file. The
+/// action refuses and offers the correct one instead of inventing a mixed-shape log
+/// no sponsor's template describes.
+pub const MOVE_CHANGES_ROLE: &str = "You've moved into a different multiplier region — \
+that's a separate entry. End this session and start a new one?";
+
 /// One run of one contest: the object BOTH logs carry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContestSession {
@@ -333,6 +341,88 @@ impl ContestSession {
     pub fn clear_in_flight(&mut self) {
         self.in_flight = None;
     }
+
+    /// ⭐ **"I moved" (§4.1) — edit the exchange this session is COMPOSING.**
+    ///
+    /// `values` names `(slot id, raw)` for the slots that changed; every other slot
+    /// keeps what it had. It takes effect on the NEXT contact and touches nothing
+    /// already written:
+    ///
+    /// * rows already logged carry their own `tx` and are not reachable from here;
+    /// * an exchange already **in flight** is left alone — it has been sent to that
+    ///   peer, and the number they copied is the number that must be logged.
+    ///
+    /// **Where the location comes from.** The role's first sent [`FieldKind::Enum`]
+    /// slot is the one a [`RoleSelector::MyLocationIn`] reads, so that slot's new
+    /// value is the new [`MyLocation::state`]. Field Day's is `SECTION`. (Batch 8's
+    /// QSO parties are where a second component — the county — joins it, and where a
+    /// role genuinely moves.)
+    ///
+    /// ⚠️ **Refuses a move that changes ROLE** — §3.3 ruling 3. Crossing a state line
+    /// flips `sends`, `receives` and the whole multiplier universe, which is a
+    /// separate entry and a separate Cabrillo file, not a move. The caller shows
+    /// [`MOVE_CHANGES_ROLE`] and offers to end the session.
+    ///
+    /// ⚠️ **This writes the SESSION only.** The other half of ruling 2 — the setting a
+    /// genuinely new session starts from — belongs to the caller, because this crate
+    /// holds no settings. `Engine::contest_i_moved` writes both or neither.
+    ///
+    /// An `Enum` slot is checked against its domain, because a section that is not a
+    /// section goes on the air and then into a submitted log. Other kinds are stored
+    /// with the same trim + uppercase [`Self::field_day`] applies and no further
+    /// check: a `Pattern` needs a matcher this crate does not carry, and
+    /// approximating one would be the thing [`FieldKind::Pattern`] forbids.
+    pub fn move_to(&mut self, values: &[(&str, &str)]) -> Result<(), String> {
+        let role = self.role();
+        let mut next = self.my_exchange.clone();
+        for (key, raw) in values {
+            if !role.sends.contains(key) {
+                return Err(format!("{key} is not a slot this role sends"));
+            }
+            let field = self
+                .exchange
+                .field(key)
+                .ok_or_else(|| format!("{key} is not a slot this exchange declares"))?;
+            let raw = raw.trim().to_ascii_uppercase();
+            if let super::FieldKind::Enum { domain } = field.kind {
+                if !domain.contains(&raw) {
+                    return Err(format!("\"{raw}\" is not a {} value", domain.id));
+                }
+            }
+            let v = self
+                .exchange
+                .value(key, &raw)
+                .expect("the slot resolved one line above");
+            match next.iter_mut().find(|x| x.key == v.key) {
+                Some(slot) => *slot = v,
+                None => next.push(v),
+            }
+        }
+        let mut where_now = self.my_location.clone();
+        if let Some(loc) = role
+            .sends
+            .iter()
+            .find(|k| {
+                matches!(
+                    self.exchange.field(k).map(|f| f.kind),
+                    Some(super::FieldKind::Enum { .. })
+                )
+            })
+            .and_then(|k| next.iter().find(|v| v.key == *k))
+        {
+            where_now.state = loc.raw.clone();
+        }
+        // Ruling 3, evaluated rather than asserted: the candidate location is what
+        // `role()` reads, so ask the candidate which role it is in.
+        let mut candidate = self.clone();
+        candidate.my_location = where_now.clone();
+        if candidate.role().id != role.id {
+            return Err(MOVE_CHANGES_ROLE.to_string());
+        }
+        self.my_exchange = next;
+        self.my_location = where_now;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -398,6 +488,150 @@ mod tests {
         assert_eq!(serial_of(&s.tx_for_row("K1ABC")), "0");
         s.clear_in_flight();
         assert_eq!(serial_of(&s.tx_for_row("W1AW")), "0");
+    }
+
+    /// §4.1: the move lands on the SESSION, and on the location the role is derived
+    /// from — together, because the exchange and the role must never disagree about
+    /// where I am.
+    #[test]
+    fn i_moved_edits_the_composing_exchange_and_the_location_together() {
+        let mut s = ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI");
+        s.move_to(&[("SECTION", " il ")]).expect("IL is a section");
+        assert_eq!(s.field("SECTION"), "IL");
+        assert_eq!(s.my_location.state, "IL");
+        // Untouched slots keep what they had — a move is not a re-declaration.
+        assert_eq!(s.field("CLASS"), "3A");
+        // …and the value still carries the domain that matched it, so the export tag
+        // and the multiplier bucket are chosen the same way as on a fresh session.
+        assert_eq!(
+            s.my_exchange
+                .iter()
+                .find(|v| v.key == "SECTION")
+                .and_then(|v| v.domain),
+            Some("fd_sections")
+        );
+    }
+
+    /// A section that is not a section would go on the air and then into a submitted
+    /// log. The domain is the check, and a refusal leaves the session where it was.
+    #[test]
+    fn i_moved_refuses_a_value_its_domain_does_not_hold() {
+        let mut s = ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI");
+        let e = s.move_to(&[("SECTION", "ZZZ")]).unwrap_err();
+        assert!(e.contains("fd_sections"), "{e}");
+        assert_eq!(s.field("SECTION"), "WI", "a refused move moves nothing");
+        assert_eq!(s.my_location.state, "WI");
+        // A slot this role does not send is refused by name rather than appended.
+        assert!(s.move_to(&[("NOPE", "X")]).is_err());
+    }
+
+    /// ⚠️ The exchange ALREADY SENT to the peer in flight is what they copied. A move
+    /// takes effect on the NEXT contact and must not rewrite this one.
+    #[test]
+    fn i_moved_does_not_touch_an_exchange_already_in_flight() {
+        let mut s = ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI");
+        s.compose_for("K1ABC", 100);
+        s.move_to(&[("SECTION", "IL")]).expect("IL is a section");
+        assert_eq!(
+            s.tx_for_row("K1ABC")
+                .iter()
+                .find(|v| v.key == "SECTION")
+                .map(|v| v.raw.clone()),
+            Some("WI".to_string()),
+            "the contact in flight was worked from WI"
+        );
+        // POSITIVE CONTROL: the very next contact does get the new section, so the
+        // assertion above is about the in-flight exchange and not about a move that
+        // silently did nothing.
+        s.clear_in_flight();
+        assert_eq!(
+            s.tx_for_row("W1AW")
+                .iter()
+                .find(|v| v.key == "SECTION")
+                .map(|v| v.raw.clone()),
+            Some("IL".to_string())
+        );
+    }
+
+    /// ⭐ §3.3 ruling 3: a move that lands in a different ROLE is refused with the
+    /// named message, and nothing changes. Field Day's one role is unconditional, so
+    /// this needs the two-role shape batch 8 ships for real.
+    #[test]
+    fn i_moved_refuses_a_move_that_changes_role() {
+        let mut s = two_role_session();
+        // Inside the in-state list: an ordinary move.
+        s.move_to(&[("QTH", "TN")])
+            .expect("TN keeps the in-state role");
+        assert_eq!(s.role().id, "in_state");
+        assert_eq!(s.my_location.state, "TN");
+        // Across the line: refused, by name, with the session untouched.
+        let e = s.move_to(&[("QTH", "CT")]).unwrap_err();
+        assert_eq!(e, MOVE_CHANGES_ROLE);
+        assert_eq!(s.field("QTH"), "TN", "a refused move moves nothing");
+        assert_eq!(s.my_location.state, "TN");
+        assert_eq!(s.role().id, "in_state");
+    }
+
+    /// A two-role exchange whose roles are selected on location — the shape every QSO
+    /// party has and no exchange this build ships does.
+    fn two_role_session() -> ContestSession {
+        use super::super::spec::{AdifTags, Domain, FieldKind, FieldSpec};
+        static STATES: Domain = Domain {
+            id: "test_states",
+            adif: AdifTags {
+                rcvd: Some("STATE"),
+                sent: Some("MY_STATE"),
+            },
+            values: &[
+                ("TN", "Tennessee"),
+                ("KY", "Kentucky"),
+                ("CT", "Connecticut"),
+            ],
+        };
+        static F: &[FieldSpec] = &[FieldSpec {
+            key: "QTH",
+            adif: AdifTags {
+                rcvd: Some("STATE"),
+                sent: Some("MY_STATE"),
+            },
+            label: None,
+            required: true,
+            kind: FieldKind::Enum { domain: &STATES },
+        }];
+        static R: &[RoleSpec] = &[
+            RoleSpec {
+                id: "in_state",
+                selector: RoleSelector::MyLocationIn(&["TN", "KY"]),
+                sends: &["QTH"],
+                receives: &["QTH"],
+                constant_sent: &[],
+            },
+            RoleSpec {
+                id: "out_of_state",
+                selector: RoleSelector::Always,
+                sends: &["QTH"],
+                receives: &["QTH"],
+                constant_sent: &[],
+            },
+        ];
+        static S: ExchangeSpec = ExchangeSpec {
+            name: "tworole",
+            fields: F,
+            roles: R,
+        };
+        let mut s = ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI");
+        s.exchange = &S;
+        s.my_location = MyLocation {
+            county: None,
+            state: "KY".into(),
+            dxcc: false,
+        };
+        s.my_exchange = vec![FieldValue {
+            key: "QTH",
+            raw: "KY".into(),
+            domain: Some("test_states"),
+        }];
+        s
     }
 
     fn serial_of(tx: &[FieldValue]) -> &str {

@@ -213,6 +213,84 @@ impl Scoring {
     }
 }
 
+/// ⭐ **One block on the multiplier display** — §9's generalisation of the Field Day
+/// worked-sections board.
+///
+/// The board is a DISPLAY object, not a scoring one: it names which slot's received
+/// values to colour in and which domain supplies the universe of cells. The scorer is
+/// untouched by it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BoardSpec {
+    /// Stable id — a [`MultiplierRule::id`] when a rule drives the board, else the
+    /// slot id. One id, one block, and the id is what the UI keys its cells by.
+    pub id: &'static str,
+    /// The received slot whose values fill the board.
+    pub slot: &'static str,
+    /// The domain supplying the cell universe, when the slot has one. `None` for a
+    /// board over a slot with no closed value set (a serial, a grid), which renders
+    /// what has been worked and nothing else.
+    pub domain: Option<&'static str>,
+    /// Once per what — carried through so a per-band board can say so rather than
+    /// being silently drawn as a per-log one.
+    pub scope: MultScope,
+}
+
+/// ⭐ **The boards a session displays, in order** (§9).
+///
+/// > CQ WW shows two boards (zone, country) and a QSO party shows one.
+///
+/// **Two sources, and the fallback is not a fudge.** A ruleset that declares
+/// [`MultiplierRule`]s gets one board per rule, filtered to the ones this role counts.
+/// A ruleset that declares NONE — which is both Field Day events, neither of which has
+/// a multiplier — gets one board per received [`FieldKind::Enum`] slot, because the
+/// shipped worked-sections board is a WORKED-STATUS board over a closed value set and
+/// that is exactly what it has always been. Deriving the FD board from the rules would
+/// have made a UI batch delete a shipped display, which is the behaviour change §11
+/// item 7 says this batch does not make.
+///
+/// A [`MultSource`] that is not a slot ([`MultSource::DxccEntity`],
+/// [`MultSource::Prefix`]) yields no board here: its universe is the country file, not
+/// a domain, and the batch that ships CQ WW is where that display is designed against
+/// a real ruleset rather than invented against none.
+pub fn boards(
+    scoring: &Scoring,
+    exchange: &super::ExchangeSpec,
+    role: &super::RoleSpec,
+) -> Vec<BoardSpec> {
+    let declared: Vec<BoardSpec> = scoring
+        .multipliers
+        .iter()
+        .filter(|m| m.roles.is_empty() || m.roles.contains(&role.id))
+        .filter_map(|m| match m.source {
+            MultSource::Field { key, domain } => Some(BoardSpec {
+                id: m.id,
+                slot: key,
+                domain: domain.or_else(|| match exchange.field(key).map(|f| f.kind) {
+                    Some(super::FieldKind::Enum { domain }) => Some(domain.id),
+                    _ => None,
+                }),
+                scope: m.scope,
+            }),
+            MultSource::DxccEntity | MultSource::Prefix => None,
+        })
+        .collect();
+    if !declared.is_empty() {
+        return declared;
+    }
+    role.receives
+        .iter()
+        .filter_map(|key| match exchange.field(key).map(|f| f.kind) {
+            Some(super::FieldKind::Enum { domain }) => Some(BoardSpec {
+                id: key,
+                slot: key,
+                domain: Some(domain.id),
+                scope: MultScope::PerLog,
+            }),
+            _ => None,
+        })
+        .collect()
+}
+
 /// Snap a stored power multiplier to the highest legal tier ≤ `v` (or the smallest
 /// tier). Replaces the engine's old `legal_fd_power` for the ARRL `{1, 2, 5}` tiers — a
 /// hand-edited settings file must never score with a ×3/×4 that isn't a real tier.
@@ -237,6 +315,105 @@ mod tests {
 
     fn rows<'a>(classes: &'a [&'a str]) -> impl Iterator<Item = ScoreRow<'a>> {
         classes.iter().map(|m| ScoreRow { mode_class: m })
+    }
+
+    /// ⭐ §9: Field Day declares NO multiplier rule, and it still shows its
+    /// worked-sections board. The fallback is what keeps a shipped display alive
+    /// through a UI batch that is not allowed to change behaviour.
+    #[test]
+    fn field_day_gets_one_board_over_its_one_enum_slot() {
+        let spec = crate::contest::field_day(crate::fieldday::FdEvent::ArrlFd);
+        let scoring = crate::fd_rules::ruleset(
+            crate::fieldday::FdEvent::ArrlFd,
+            crate::fd_rules::CURRENT_RULES_YEAR,
+        )
+        .scoring;
+        assert!(
+            scoring.multipliers.is_empty(),
+            "the premise: Field Day declares no multiplier rule"
+        );
+        let b = boards(&scoring, spec, &spec.roles[0]);
+        assert_eq!(b.len(), 1, "one board, not none and not one per slot");
+        assert_eq!(b[0].id, "SECTION");
+        assert_eq!(b[0].slot, "SECTION");
+        assert_eq!(b[0].domain, Some("fd_sections"));
+        // CLASS is a Pattern, so it is not a board — a board needs a closed universe.
+        assert!(b.iter().all(|x| x.slot != "CLASS"));
+    }
+
+    /// The declared path: one board per rule this role counts, in rule order — the
+    /// "CQ WW shows two boards" case, with the role filter doing its job.
+    #[test]
+    fn declared_rules_win_and_are_filtered_by_role() {
+        static RULES: &[MultiplierRule] = &[
+            MultiplierRule {
+                id: "zone",
+                source: MultSource::Field {
+                    key: "ZONE",
+                    domain: None,
+                },
+                scope: MultScope::PerBand,
+                excluding: &[],
+                roles: &[],
+            },
+            MultiplierRule {
+                id: "county",
+                source: MultSource::Field {
+                    key: "QTH",
+                    domain: Some("tn_counties"),
+                },
+                scope: MultScope::PerLog,
+                excluding: &[],
+                roles: &["out_of_state"],
+            },
+            // Not a slot: its universe is the country file, not a domain.
+            MultiplierRule {
+                id: "country",
+                source: MultSource::DxccEntity,
+                scope: MultScope::PerBand,
+                excluding: &[],
+                roles: &[],
+            },
+        ];
+        static POST: &[PostMultiplier] = &[];
+        let scoring = Scoring {
+            qso_points: PointsRule::ByModeClass(FD_POINTS),
+            multipliers: RULES,
+            post: POST,
+        };
+        let spec = crate::contest::field_day(crate::fieldday::FdEvent::ArrlFd);
+        // A role the county rule does not name gets the zone board only…
+        let mine = super::super::RoleSpec {
+            id: "in_state",
+            selector: super::super::RoleSelector::Always,
+            sends: &[],
+            receives: &["SECTION"],
+            constant_sent: &[],
+        };
+        let b = boards(&scoring, spec, &mine);
+        assert_eq!(
+            b.iter().map(|x| x.id).collect::<Vec<_>>(),
+            vec!["zone"],
+            "the country rule is not a slot and the county rule is another role's"
+        );
+        assert_eq!(b[0].scope, MultScope::PerBand, "a per-band board says so");
+        // …and the role that IS named gets both. POSITIVE CONTROL for the filter:
+        // without it this would be identical to the line above.
+        let theirs = super::super::RoleSpec {
+            id: "out_of_state",
+            ..mine
+        };
+        assert_eq!(
+            boards(&scoring, spec, &theirs)
+                .iter()
+                .map(|x| x.id)
+                .collect::<Vec<_>>(),
+            vec!["zone", "county"]
+        );
+        // The declared list wins outright — SECTION is received and gets no board.
+        assert!(boards(&scoring, spec, &theirs)
+            .iter()
+            .all(|x| x.slot != "SECTION"));
     }
 
     /// The ARRL tiers, and every value between and around them. Moved here with

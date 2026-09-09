@@ -8549,6 +8549,57 @@ impl Engine {
         Ok(())
     }
 
+    /// ⭐ **"I moved" (§4.1) — the operator's location changed mid-session.**
+    ///
+    /// **It writes TWO things, and that is §3.3 ruling 2, not belt-and-braces:**
+    ///
+    /// * the **live session**, so the change takes effect on the next contact —
+    ///   editing only the setting reaches nothing, because
+    ///   `restore_field_day_if_enabled` is a deliberate no-op while the mode is live
+    ///   (#100, so a settings save cannot disturb a contact in flight);
+    /// * the **setting a NEW session starts from**, so tomorrow's session starts where
+    ///   I actually am — editing only the session leaves the next fresh session in
+    ///   yesterday's county.
+    ///
+    /// A NARROW settings write, never `apply_settings` (#54): this gets pressed
+    /// mid-contest and the heavyweight path resets the mode and clears the TX queue.
+    /// Returns the updated [`Settings`] for the caller to persist, the shape
+    /// [`set_fd_operator`](Self::set_fd_operator) established.
+    ///
+    /// Refuses — with [`MOVE_CHANGES_ROLE`](tempo_core::contest::MOVE_CHANGES_ROLE) —
+    /// when the new location resolves to a different role (§3.3 ruling 3). Nothing is
+    /// written in that case, in either place.
+    ///
+    /// ⚠️ **The settings mirror is Field Day's, because that is the only one that
+    /// exists.** The general `contest_qth_*` block lands in batch 8 with the QSO
+    /// parties that need it (§11 item 8); until then a session running any other
+    /// exchange has no setting to write, and this refuses rather than stamping a
+    /// Field Day setting from a slot that is not a Field Day slot.
+    pub fn contest_i_moved(&mut self, values: Vec<(String, String)>) -> Result<Settings, String> {
+        let Mode::FieldDay { station, .. } = &mut self.mode else {
+            return Err("Field Day mode is not active".into());
+        };
+        if station.log.session.exchange.name != "fieldday" {
+            return Err(
+                "this session's exchange has no settings mirror yet (contest_qth_* is batch 8)"
+                    .into(),
+            );
+        }
+        let pairs: Vec<(&str, &str)> = values
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+        // Both halves or neither: a refused move returns before either write.
+        station.log.session.move_to(&pairs)?;
+        let (class, section) = (
+            station.log.session.field("CLASS").to_string(),
+            station.log.session.field("SECTION").to_string(),
+        );
+        self.settings.fd_class = class;
+        self.settings.fd_section = section;
+        Ok(self.settings.clone())
+    }
+
     // -----------------------------------------------------------------------
     // Field Day club sync (the Nexus↔Nexus event sync).
     //
@@ -16185,6 +16236,11 @@ impl Engine {
                     .scoring
                     .qso_and_powered(log.score_rows(), self.settings.fd_power_mult);
                 let bonus = rs.bonus_points(&self.settings.fd_bonuses);
+                // The exchange and the role this session is running — read ONCE here,
+                // so the strip's boxes, the sent display and the multiplier boards
+                // cannot disagree about which role the operator is in.
+                let spec = log.session.exchange;
+                let role = log.session.role();
                 // The running-or-next event window, from the rules data (the
                 // banner/countdown's single source — no TS date math).
                 let event_window = rs.next_or_running(now_unix_secs());
@@ -16242,6 +16298,50 @@ impl Engine {
                         available: upload_legs::IDS.iter().map(|s| s.to_string()).collect(),
                         hint: tempo_core::contest::UPLOAD_CLUBLOG_SWEEP_HINT.to_string(),
                     },
+                    // ⭐ THE DYNAMIC ENTRY STRIP'S SHAPE (§9). The strip renders Call
+                    // plus one box per slot HERE, in this order — never a hardcoded
+                    // Class/Section pair. Field Day's role receives exactly those two,
+                    // so the shipped strip is what this produces.
+                    receives: role
+                        .receives
+                        .iter()
+                        .filter_map(|k| spec.field(k))
+                        .map(|f| crate::dto::FdFieldDto {
+                            key: f.key.to_string(),
+                            kind: crate::dto::field_kind_tag(&f.kind).to_string(),
+                            required: f.required,
+                            domain: match f.kind {
+                                tempo_core::contest::FieldKind::Enum { domain } => {
+                                    Some(domain.id.to_string())
+                                }
+                                _ => None,
+                            },
+                        })
+                        .collect(),
+                    // The read-only sent display, as a VECTOR — §3.3 mechanism 2. It
+                    // describes the session, which is what is about to go on the air;
+                    // nothing that describes a row already logged may read it.
+                    composing: log
+                        .session
+                        .my_exchange
+                        .iter()
+                        .map(|v| crate::dto::FdFieldValueDto {
+                            key: v.key.to_string(),
+                            raw: v.raw.clone(),
+                            domain: v.domain.map(|d| d.to_string()),
+                        })
+                        .collect(),
+                    role: role.id.to_string(),
+                    boards: tempo_core::contest::boards(&rs.scoring, spec, role)
+                        .into_iter()
+                        .map(|b| crate::dto::FdBoardDto {
+                            id: b.id.to_string(),
+                            slot: b.slot.to_string(),
+                            domain: b.domain.map(|d| d.to_string()),
+                            scope: crate::dto::mult_scope_tag(b.scope).to_string(),
+                            worked: log.worked_values(b.slot),
+                        })
+                        .collect(),
                 });
             }
         }
@@ -29168,6 +29268,84 @@ mod tests {
                 "enabled={enabled} destinations={dests:?} must queue nothing"
             );
         }
+    }
+
+    /// ⭐ **§3.3 ruling 2, both halves in one test.** "I moved" writes the LIVE
+    /// session (so the next contact sends the new section) AND the setting a genuinely
+    /// new session starts from. Either alone is the round-3 blocker.
+    #[test]
+    fn i_moved_writes_the_session_and_the_setting() {
+        let mut e = fd_session("W9XYZ");
+        let updated = e
+            .contest_i_moved(vec![("SECTION".to_string(), "il".to_string())])
+            .expect("IL is a section");
+        // HALF ONE — the live session, which is what the next contact copies from.
+        let Mode::FieldDay { station, .. } = &e.mode else {
+            panic!("still in Field Day")
+        };
+        assert_eq!(station.log.session.field("SECTION"), "IL");
+        assert_eq!(station.log.session.my_location.state, "IL");
+        // HALF TWO — the setting, which is where a NEW session gets its location.
+        assert_eq!(updated.fd_section, "IL");
+        assert_eq!(e.settings().fd_section, "IL");
+        // Untouched: the class, and every row already logged.
+        assert_eq!(e.settings().fd_class, "3A");
+        let Mode::FieldDay { station, .. } = &e.mode else {
+            panic!("still in Field Day")
+        };
+        assert_eq!(
+            station
+                .log
+                .qsos()
+                .iter()
+                .map(|q| tempo_core::contest::sent_exchange_string(q, station.log.session.exchange))
+                .collect::<Vec<_>>(),
+            vec!["3A WI".to_string(), "3A WI".to_string()],
+            "the two rows already logged were worked from WI"
+        );
+    }
+
+    /// The next contact after a move sends the NEW section — and the two rows before
+    /// it still send the old one. That is the whole feature in one assertion pair.
+    #[test]
+    fn the_contact_after_i_moved_sends_the_new_section() {
+        let mut e = fd_session("W9XYZ");
+        e.contest_i_moved(vec![("SECTION".to_string(), "IL".to_string())])
+            .expect("IL is a section");
+        assert!(e.fd_log_manual("K2DEF", "1D", "MN", "CW").unwrap());
+        let Mode::FieldDay { station, .. } = &e.mode else {
+            panic!("still in Field Day")
+        };
+        let spec = station.log.session.exchange;
+        assert_eq!(
+            station
+                .log
+                .qsos()
+                .iter()
+                .map(|q| tempo_core::contest::sent_exchange_string(q, spec))
+                .collect::<Vec<_>>(),
+            vec![
+                "3A WI".to_string(),
+                "3A WI".to_string(),
+                "3A IL".to_string()
+            ]
+        );
+    }
+
+    /// A refused move writes NEITHER half — the property that makes "both or neither"
+    /// mean something.
+    #[test]
+    fn a_refused_move_writes_neither_half() {
+        let mut e = fd_session("W9XYZ");
+        let err = e
+            .contest_i_moved(vec![("SECTION".to_string(), "ZZZ".to_string())])
+            .unwrap_err();
+        assert!(err.contains("fd_sections"), "{err}");
+        assert_eq!(e.settings().fd_section, "WI");
+        let Mode::FieldDay { station, .. } = &e.mode else {
+            panic!("still in Field Day")
+        };
+        assert_eq!(station.log.session.field("SECTION"), "WI");
     }
 
     /// ⭐ §3.2 — the one-click merge is safe to press twice.

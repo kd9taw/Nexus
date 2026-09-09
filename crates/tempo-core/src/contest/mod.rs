@@ -78,12 +78,13 @@ pub use render::{role_for, sent_exchange, sent_exchange_string};
 pub use merge::{merge_into_general, MergeReport};
 
 pub use session::{
-    ContestSession, InFlightQso, MyLocation, UploadPolicy, UPLOAD_CLUBLOG_SWEEP_HINT,
+    ContestSession, InFlightQso, MyLocation, UploadPolicy, MOVE_CHANGES_ROLE,
+    UPLOAD_CLUBLOG_SWEEP_HINT,
 };
 
 pub use scoring::{
-    ModePoints, MultScope, MultSource, MultiplierRule, PointsRule, PostMultiplier, ScoreRow,
-    Scoring,
+    boards, BoardSpec, ModePoints, MultScope, MultSource, MultiplierRule, PointsRule,
+    PostMultiplier, ScoreRow, Scoring,
 };
 
 pub use spec::{

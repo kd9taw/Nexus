@@ -1383,6 +1383,121 @@ pub struct FieldDayStatus {
     /// rather than being a global the operator has to change back afterwards.
     #[serde(default)]
     pub upload: FdUploadDto,
+    /// ⭐ **The slots this session RECEIVES, in receive order** — the entry strip's
+    /// boxes (§9). Field Day: `CLASS`, `SECTION`.
+    #[serde(default)]
+    pub receives: Vec<FdFieldDto>,
+    /// ⭐ **What this session is COMPOSING right now** — the read-only sent exchange
+    /// beside the entry boxes, and what "I moved" edits. The source of a row's sent
+    /// side, never the record of one: a row already logged carries its own.
+    #[serde(default)]
+    pub composing: Vec<FdFieldValueDto>,
+    /// The session's current role id — `""` for a symmetric contest, which is both
+    /// Field Day events. The strip shows it beside the exchange only when it names
+    /// something, so an operator can see which role they are in before they cross a
+    /// line that would end the session (§3.3 ruling 3).
+    #[serde(default)]
+    pub role: String,
+    /// One block per [`BoardSpec`](tempo_core::contest::BoardSpec) — the generalised
+    /// multiplier display. Field Day: one board, over `SECTION`.
+    #[serde(default)]
+    pub boards: Vec<FdBoardDto>,
+}
+
+/// The [`FieldKind`](tempo_core::contest::FieldKind) discriminant as the wire tag the
+/// UI switches on.
+///
+/// A tag, not a rendering: the strip decides a box's width and its while-typing verdict
+/// from it, and an unknown tag must fall back to "a text box with no verdict" rather
+/// than approximate one — the same rule [`FieldKind::Pattern`] states for a consumer
+/// with no matcher.
+pub fn field_kind_tag(k: &tempo_core::contest::FieldKind) -> &'static str {
+    use tempo_core::contest::FieldKind as K;
+    match k {
+        K::Rst { .. } => "rst",
+        K::Serial { .. } => "serial",
+        K::Enum { .. } => "enum",
+        K::Pattern { .. } => "pattern",
+        K::Number { .. } => "number",
+        K::Grid { .. } => "grid",
+        K::Text { .. } => "text",
+        K::Call => "call",
+        K::OneOf(_) => "oneOf",
+    }
+}
+
+/// [`MultScope`](tempo_core::contest::MultScope) as the wire tag a board carries, so a
+/// per-band board can say so rather than being silently drawn as a per-log one.
+pub fn mult_scope_tag(s: tempo_core::contest::MultScope) -> &'static str {
+    use tempo_core::contest::MultScope as S;
+    match s {
+        S::PerLog => "perLog",
+        S::PerBand => "perBand",
+        S::PerMode => "perMode",
+        S::PerBandMode => "perBandMode",
+    }
+}
+
+/// ⭐ **One exchange slot, as the entry strip renders a box for it** (§9).
+///
+/// The strip is DYNAMIC: it renders Call plus one box per slot in the session role's
+/// receive order, which is this list. Field Day sends `CLASS`, `SECTION` and therefore
+/// renders exactly the two boxes it always has.
+///
+/// ⚠️ `key` is a SLOT ID and an invariant token — never translated, never shown as
+/// prose when the catalog has a caption for it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FdFieldDto {
+    /// The [`FieldSpec::key`](tempo_core::contest::FieldSpec::key).
+    pub key: String,
+    /// The [`FieldKind`](tempo_core::contest::FieldKind) discriminant, lowerCamel:
+    /// `"rst"`, `"serial"`, `"enum"`, `"pattern"`, `"number"`, `"grid"`, `"text"`,
+    /// `"call"`, `"oneOf"`. The strip sizes and validates a box from it.
+    pub kind: String,
+    /// Can a contact be logged without this slot?
+    pub required: bool,
+    /// For an `enum` slot, the [`Domain::id`](tempo_core::contest::Domain::id) whose
+    /// membership is the while-typing verdict. `None` for every other kind.
+    ///
+    /// ⚠️ The domain's VALUES do not ride here. The verdict is zero-IPC — it runs on
+    /// every keystroke against data already in hand — and 85 section codes on every
+    /// 300 ms snapshot to answer a question a static table answers is a cost with no
+    /// buyer. The UI keeps the value sets, keyed by this id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain: Option<String>,
+}
+
+/// One copied exchange value, as the read-only sent display shows it.
+///
+/// ⚠️ **A vector, never a preformatted string** (§3.3 mechanism 2). A rendered
+/// session-level exchange is the thing three emitters got wrong by stamping it on rows
+/// it did not describe; what crosses this seam is the slots, so a consumer that wants
+/// a row's exchange has to go and get the row's.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FdFieldValueDto {
+    pub key: String,
+    pub raw: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain: Option<String>,
+}
+
+/// One block of the multiplier display (§9) — the generalised worked-sections board.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FdBoardDto {
+    /// [`BoardSpec::id`](tempo_core::contest::BoardSpec::id) — one id, one block.
+    pub id: String,
+    /// The received slot this board is over.
+    pub slot: String,
+    /// The domain supplying the cell universe, when the slot has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain: Option<String>,
+    /// `"perLog"` | `"perBand"` | `"perMode"` | `"perBandMode"`.
+    pub scope: String,
+    /// The distinct values worked, sorted.
+    pub worked: Vec<String>,
 }
 
 /// The per-session upload control (§18.1).

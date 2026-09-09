@@ -6,22 +6,96 @@
 // `i18n/index.ts`.
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { AppSnapshot, FieldDayStatus, LoggedQso } from '../types'
-import { t } from '../i18n'
-import { fdLogManual, getLog, logQso, lookupPark, lookupParkLive, qrzLookup, resolveEntity, searchParks, setCwPeerInfo, type Park } from '../api'
+import type {
+  AppSnapshot,
+  ContestFieldSpec,
+  FieldDayQso,
+  FieldDayStatus,
+  LoggedQso,
+} from '../types'
+import { t, type MessageKey } from '../i18n'
+import { contestIMoved, fdLogManual, getLog, logQso, lookupPark, lookupParkLive, qrzLookup, resolveEntity, searchParks, setCwPeerInfo, type Park } from '../api'
 import { bandKey, callHistory, entitySlots, isNewEntity, modeKey } from '../features/callHistory'
-import { ARRL_SECTIONS_BY_DIVISION } from '../features/arrlSections'
+import { inDomain } from '../features/contestDomains'
 import { azimuthLabel, azimuthTo, isValidLoggedGrid } from '../grid'
 import { RecallPanel } from './RecallPanel'
 import { pushToast, withErrorToast } from '../toast'
 
-// Valid ARRL/RAC Field Day section codes, derived once from the canonical section universe —
-// the same source the Settings section picker validates against. A manual FD contact must carry
-// a REAL section: FieldDayLog::sections() scores DISTINCT section strings, so a blank logged as
-// the literal '?' would inflate the section multiplier (a fake score).
-const FD_SECTION_CODES = new Set(
-  ARRL_SECTIONS_BY_DIVISION.flatMap((d) => d.sections).map((s) => s.code),
-)
+// ---------------------------------------------------------------------------
+// THE DYNAMIC ENTRY STRIP (spec §9) — Call plus one box per slot the session's role
+// RECEIVES, in receive order.
+//
+// ⚠️ **Layout is a contract, not a preference.** The strip is a control strip:
+// `fit="content"` per the pane-grid contract, so it may never use surplus and may
+// never grow unboundedly with the field count. Budget: Call plus up to FIVE received
+// fields on one row at the 1024 px floor, wrapping to a second row below it — and the
+// rules validator refuses a role receiving more than five, so five is the ceiling in
+// both places. Sweepstakes (serial, precedence, call, check, section) is the sizing
+// case, and it is measured in the headless-Chrome harness (`ui/layout-harness/
+// entry-strip.html`), never in jsdom — jsdom lays out nothing and every rect is 0.
+// ---------------------------------------------------------------------------
+
+/** The two slots a Field Day role receives — what a snapshot from a build older than
+ *  `FieldDayStatus.receives` describes, and what this strip has always rendered. */
+const FD_RECEIVES_FALLBACK: ContestFieldSpec[] = [
+  { key: 'CLASS', kind: 'pattern', required: true },
+  { key: 'SECTION', kind: 'enum', required: true, domain: 'fd_sections' },
+]
+
+/** The catalog keys for one slot's caption and tooltip.
+ *
+ *  A slot id is an INVARIANT TOKEN; its caption is PROSE. Field Day's two slots keep
+ *  the captions and tooltips they shipped with, so a Field Day operator reads exactly
+ *  what they read before. A slot with no entry falls back to the slot id itself —
+ *  which is a token, correctly untranslated, rather than an invented English word. */
+const FD_FIELD_TEXT: Record<string, { labelKey: MessageKey; titleKey: MessageKey }> = {
+  CLASS: { labelKey: 'logEntry.fd.class.label', titleKey: 'logEntry.fd.class.title' },
+  SECTION: { labelKey: 'logEntry.fd.section.label', titleKey: 'logEntry.fd.section.title' },
+}
+
+/** The operator-facing caption for a slot. */
+function fdFieldLabel(key: string): string {
+  const m = FD_FIELD_TEXT[key]
+  return m ? t(m.labelKey) : key
+}
+
+/** One received value off a logged DTO row, by slot id.
+ *
+ *  ⚠️ A DTO row carries `class`/`section`, not a received VECTOR — the generalised row
+ *  lands with the contests that receive something else. Until then this is the whole
+ *  mapping, and an unknown slot reads back empty rather than guessing a column. */
+function fdRcvd(row: FieldDayQso, key: string): string {
+  if (key === 'CLASS') return row.class
+  if (key === 'SECTION') return row.section
+  return ''
+}
+
+/** Why this slot is not loggable yet — Field Day's own two sentences for Field Day's
+ *  two slots, and a generic pair naming the field for anything else. */
+function fdVerdict(spec: ContestFieldSpec, raw: string): string {
+  const v = raw.trim()
+  // ⚠️ Field Day's two sentences, byte for byte, INCLUDING the em-dash placeholder a
+  // blank Section has always shown. "Section \"—\" isn't a known ARRL/RAC section" reads
+  // oddly and is what shipped; a strip that started saying something better here would
+  // be a change to what a Field Day operator reads, which this batch does not make.
+  if (spec.key === 'CLASS' && v === '') return t('logEntry.fd.needClass')
+  if (spec.key === 'SECTION') return t('logEntry.fd.badSection', { section: v || '—' })
+  return v === ''
+    ? t('logEntry.fd.needField', { field: fdFieldLabel(spec.key) })
+    : t('logEntry.fd.badField', { field: fdFieldLabel(spec.key), value: v })
+}
+
+/** Is this slot's typed value good enough to log?
+ *
+ *  Byte-for-byte Field Day's shipped rule, generalised by KIND and by nothing else:
+ *  an `enum` slot must be a member of its domain (a blank is not), anything else
+ *  required must be non-blank. A kind this build has no matcher for gets the non-blank
+ *  test and no more — never an approximated verdict (the `Pattern` rule). */
+function fdFieldOk(spec: ContestFieldSpec, raw: string): boolean {
+  const v = raw.trim()
+  if (spec.kind === 'enum') return v !== '' && inDomain(spec.domain, v)
+  return !spec.required || v !== ''
+}
 
 // Manual-override band picker for logging a contact made on a radio NOT connected to Nexus
 // (V/UHF especially). One ordered table drives BOTH directions so band and freq can never
@@ -90,6 +164,13 @@ const LOG_EXAMPLES = {
  * On-the-air programs for the park/summit picker. The ADIF SIG value and the label the operator
  * reads are the SAME token here, which is why this is one list and not a value/label pair.
  */
+/** The example value shown in an empty box. An example drawn from a technical
+ *  namespace is an INVARIANT TOKEN and never a catalog string — see `LOG_EXAMPLES`. */
+const FD_FIELD_EXAMPLES: Record<string, string | undefined> = {
+  CLASS: LOG_EXAMPLES.fdClass,
+  SECTION: LOG_EXAMPLES.fdSection,
+}
+
 const PARK_PROGRAMS = ['POTA', 'SOTA'] as const
 
 /** Now, split into a UTC date (YYYY-MM-DD) + time (HH:MM) for the override's inputs. */
@@ -286,32 +367,57 @@ export function LogEntry({
   // The callsign field (FD + standard layouts share this ref — only one is mounted
   // at a time), so a completed log can snap focus back for the next contact.
   const callInputRef = useRef<HTMLInputElement>(null)
-  /** The Field Day exchange boxes, so space can walk Call → Class → Section → Call. */
-  const fdClassRef = useRef<HTMLInputElement>(null)
-  const fdSectionRef = useRef<HTMLInputElement>(null)
+  /** The exchange boxes BY SLOT ID, so space can walk Call → field₁ → … → Call.
+   *
+   *  One map rather than one ref per slot, because the box list is the session's
+   *  `receives` and a hook cannot be called per element of a list that changes. */
+  const fdBoxRefs = useRef<Record<string, HTMLInputElement | null>>({})
 
-  // FD-specific: class + section, defaulting from the last entry / fieldDay status.
-  const [fdClass, setFdClass] = useState(() => fieldDay?.myClass ?? '')
-  const [fdSection, setFdSection] = useState('')
+  // THE ENTRY STRIP'S SHAPE — the session's received slots, in receive order.
+  // Field Day receives CLASS then SECTION, so this is the two boxes the strip has
+  // always had. `FD_RECEIVES_FALLBACK` is what a snapshot from a build older than
+  // this DTO field produces, and it is the same two.
+  const fdReceives = fieldDay?.receives?.length ? fieldDay.receives : FD_RECEIVES_FALLBACK
 
-  // Pre-fill class/section from the last logged FD contact — but ONLY when the
+  // FD-specific: the received exchange being typed, by slot id. Defaults from the
+  // last entry / fieldDay status, and persists across log-and-clear so a run does
+  // not re-type them.
+  const [fdFields, setFdFields] = useState<Record<string, string>>(() => ({
+    CLASS: fieldDay?.myClass ?? '',
+  }))
+  const setFdField = (key: string, v: string) =>
+    setFdFields((prev) => ({ ...prev, [key]: v.toUpperCase() }))
+
+  // Pre-fill the exchange from the last logged FD contact — but ONLY when the
   // log actually GREW. `fieldDay` is a fresh object every 300 ms snapshot poll;
   // keying the effect on it overwrote whatever the operator was TYPING with the
   // last contact's exchange (the digital sequencer logging in the background
   // made the fields jump mid-keystroke).
+  //
+  // ⚠️ The per-row RECEIVED VECTOR does not reach the UI yet — a DTO row carries
+  // `class`/`section`, which is what this reads through `fdRcvd`. The generalised
+  // row lands with the contests that receive something else (§11 item 8); until
+  // then this prefills exactly the two slots a Field Day row has.
   const fdLogLen = fieldDay?.log?.length ?? 0
   const fdSeenLen = useRef(fdLogLen)
   useEffect(() => {
     if (fdActive && fieldDay && fdLogLen > fdSeenLen.current) {
       const lastEntry = fieldDay.log?.[fdLogLen - 1]
       if (lastEntry) {
-        setFdClass(lastEntry.class)
-        setFdSection(lastEntry.section)
+        setFdFields((prev) => {
+          const next = { ...prev }
+          for (const f of fdReceives) next[f.key] = fdRcvd(lastEntry, f.key)
+          return next
+        })
       }
     }
     fdSeenLen.current = fdLogLen
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fdActive, fdLogLen])
+
+  // "I moved" (§4.1): the read-only sent exchange becomes editable, one box per
+  // composing slot, and takes effect on the NEXT contact.
+  const [movingTo, setMovingTo] = useState<Record<string, string> | null>(null)
 
 
   // Live mirror of the typed call so a slow lookup can tell if the operator has since
@@ -737,11 +843,16 @@ export function LogEntry({
     requestAnimationFrame(() => callInputRef.current?.focus({ preventScroll: true }))
   }
 
-  // FD exchange gate: class + section are MANDATORY exchange elements. Never substitute '?' for a
+  // FD exchange gate: every REQUIRED received slot must be satisfied. Never substitute '?' for a
   // blank (it would fake a section multiplier) — the manual log is blocked until class is present
   // AND section is a real ARRL/RAC code (validated against the same universe as Settings).
-  const fdExchangeOk =
-    fdClass.trim() !== '' && FD_SECTION_CODES.has(fdSection.trim().toUpperCase())
+  //
+  // The gate is now over the session's received slots rather than a hardcoded pair, which for
+  // Field Day is the same two slots and the same two tests: CLASS non-blank, SECTION a member of
+  // `fd_sections`. `FD_SECTION_CODES` above is that domain's value set, and `contestDomains.ts`
+  // is where the strip and the board now read it from.
+  const fdBadField = fdReceives.find((f) => !fdFieldOk(f, fdFields[f.key] ?? ''))
+  const fdExchangeOk = fdBadField === undefined
 
   // GRID GATE. A blank grid is normal and logs fine — most HF contacts have none.
   // A grid that is NOT a Maidenhead locator is refused at the commit, the same
@@ -794,8 +905,14 @@ export function LogEntry({
       // a blank as the literal '?' (it would inflate the section multiplier), so bail until the
       // exchange is complete and the section is a real ARRL/RAC code.
       if (!fdExchangeOk) return
-      const cls = fdClass.trim().toUpperCase()
-      const sec = fdSection.trim().toUpperCase()
+      // ⚠️ THE TRANSPORT IS STILL FIELD DAY'S — `fd_log_manual(call, class, section, …)`,
+      // two positional slots. The strip's SHAPE is the session's receive order; its wire
+      // is the first two of those slots, which for Field Day are exactly CLASS and
+      // SECTION. A contest that receives something else needs a command that carries a
+      // field vector, and that lands with the contest that needs it (§11 item 8) rather
+      // than as an unused generalisation here.
+      const cls = (fdFields[fdReceives[0]?.key ?? ''] ?? '').trim().toUpperCase()
+      const sec = (fdFields[fdReceives[1]?.key ?? ''] ?? '').trim().toUpperCase()
       const fmode = fdMode ?? 'PH'
       // The on-air mode behind the class, for 'DIG' alone — see `fdSubmode`. Sent only with
       // that class so a CW or phone contact can never acquire one it has no meaning for.
@@ -887,11 +1004,43 @@ export function LogEntry({
    * have no space-stripping of their own, so without it a reflexive space would quietly log
    * a class of "3A " or a section of " WI".
    */
-  const onExchangeSpace = (e: React.KeyboardEvent, next: React.RefObject<HTMLInputElement>) => {
+  const onExchangeSpace = (e: React.KeyboardEvent, next: HTMLInputElement | null) => {
     if (e.key !== ' ' && e.code !== 'Space') return
     e.preventDefault()
-    next.current?.focus()
-    next.current?.select()
+    next?.focus()
+    next?.select()
+  }
+
+  // ⭐ THE SENT SIDE: what the session is composing right now, as a VECTOR. Never a
+  // preformatted string off the snapshot — the only thing that renders a row's sent
+  // exchange is `sent_exchange(row, spec)` in Rust, and this describes no row.
+  const fdComposing = fieldDay?.composing ?? []
+
+  /** "I moved" — commit the edited sent exchange (§4.1).
+   *
+   *  Writes the live session AND the setting a new session starts from, in one engine
+   *  call, because either alone is a defect: a session-only edit is reverted by the
+   *  next rebuild, and a setting-only edit reaches nothing while the mode is live.
+   *
+   *  A move into a different ROLE is refused by the engine with its own sentence —
+   *  "that's a separate entry. End this session and start a new one?" — which surfaces
+   *  through the error toast verbatim. It is deliberately NOT a catalog string: the
+   *  refusal is the engine's, and a second copy here could drift from the one the
+   *  engine actually enforces. */
+  const commitMove = async () => {
+    if (movingTo === null) return
+    const values = fdComposing
+      .filter((v) => (movingTo[v.key] ?? '').trim().toUpperCase() !== v.raw.toUpperCase())
+      .map((v) => [v.key, (movingTo[v.key] ?? '').trim().toUpperCase()] as [string, string])
+    if (values.length === 0) {
+      setMovingTo(null)
+      return
+    }
+    const r = await withErrorToast(() => contestIMoved(values), t('logEntry.sent.moved.failed'))
+    if (r) {
+      setMovingTo(null)
+      pushToast(t('logEntry.sent.moved.done'), 'success')
+    }
   }
 
   // Enter in the CALL field: on a fresh call (not yet enriched, no name typed) do the QRZ lookup
@@ -952,6 +1101,76 @@ export function LogEntry({
           <span className="le-fd-chip">{t('logEntry.fd.chip')}</span>
           <span className="le-fd-mode">{fdMode ?? 'PH'}</span>
           <span className="le-fd-hint">{t('logEntry.fd.hint', { band: snap.radio.band })}</span>
+
+          {/* ⭐ THE SENT SIDE, READ-ONLY (§9) — what is going on the air right now.
+              It is the SESSION's composing exchange, never a row's: a row already
+              logged carries its own, and `sent_exchange(row, spec)` is the only
+              thing that renders one.
+
+              ⚠️ IT IS IN THE HEADER ROW, AND §9 SAYS "beside the entry boxes". That
+              is a DEVIATION, and it is the harness's verdict rather than a
+              preference. Built in the entry row and measured there
+              (`ui/layout-harness/entry-strip.html`, headless Chrome, 2026-09-09):
+              at the 1024 px supported floor, Field Day's two boxes, the block fits
+              the line — by taking the slack out of the CALL box, 506.7 px → 207.8 px.
+              Widen it back and the row wraps instead, and this dock is
+              bottom-anchored, so the strip's extra line comes off the log feed and
+              moves the very fields the fixed-height verdict slot exists to keep
+              still. In the header row — one line above the boxes it describes, inside
+              the same strip — the whole block costs 13 px (117 → 130) at every width,
+              and Call keeps all 506.7. jsdom reports none of those numbers, because
+              every rect there is 0. */}
+          {fdComposing.length > 0 && (
+            <div className="le-fd-sent" aria-label={t('logEntry.sent.aria')}>
+              <span className="le-fd-sent-cap">
+                {t('logEntry.sent.label')}
+                {/* The ROLE, beside the exchange, so an operator can see which one
+                    they are in before they cross a line that ends the session. Blank
+                    for a symmetric contest — both Field Day events — and shown only
+                    when it names something. A role id is an invariant token. */}
+                {fieldDay?.role ? <span className="le-fd-role"> {fieldDay.role}</span> : null}
+              </span>
+              {movingTo === null ? (
+                <>
+                  <span className="mono le-fd-sent-val" title={t('logEntry.sent.title')}>
+                    {fdComposing.map((v) => v.raw).filter((r) => r !== '').join(' ')}
+                  </span>
+                  <button
+                    type="button"
+                    className="le-qrz le-fd-moved"
+                    onClick={() =>
+                      setMovingTo(Object.fromEntries(fdComposing.map((v) => [v.key, v.raw])))
+                    }
+                    title={t('logEntry.sent.moved.title')}
+                  >
+                    {t('logEntry.sent.moved.label')}
+                  </button>
+                </>
+              ) : (
+                <>
+                  {fdComposing.map((v) => (
+                    <input
+                      key={v.key}
+                      className="settings-input mono le-fd-moved-input"
+                      value={movingTo[v.key] ?? ''}
+                      onChange={(e) =>
+                        setMovingTo((prev) => ({ ...prev, [v.key]: e.target.value.toUpperCase() }))
+                      }
+                      aria-label={fdFieldLabel(v.key)}
+                      autoComplete="off"
+                      spellCheck={false}
+                    />
+                  ))}
+                  <button type="button" className="le-log-btn" onClick={commitMove}>
+                    {t('logEntry.sent.moved.save')}
+                  </button>
+                  <button type="button" className="le-qrz" onClick={() => setMovingTo(null)}>
+                    {t('logEntry.sent.moved.cancel')}
+                  </button>
+                </>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="le-fd-big">
@@ -968,7 +1187,8 @@ export function LogEntry({
               // with a stray space comes out clean).
               onChange={(e) => setLogCall(e.target.value.replace(/\s+/g, '').toUpperCase())}
               onKeyDown={(e) => {
-                onExchangeSpace(e, fdClassRef)
+                // SPACE walks Call → field₁, whatever field₁ is.
+                onExchangeSpace(e, fdBoxRefs.current[fdReceives[0]?.key ?? ''] ?? null)
                 onEnter(e)
               }}
               placeholder={LOG_EXAMPLES.call}
@@ -976,40 +1196,34 @@ export function LogEntry({
               spellCheck={false}
             />
           </label>
-          <label className="le-fd-field">
-            <span className="le-fd-cap">{t('logEntry.fd.class.label')}</span>
-            <input
-              ref={fdClassRef}
-              className="settings-input mono le-fd-input le-fd-input-code"
-              value={fdClass}
-              onChange={(e) => setFdClass(e.target.value.toUpperCase())}
-              onKeyDown={(e) => {
-                onExchangeSpace(e, fdSectionRef)
-                onEnter(e)
-              }}
-              placeholder={LOG_EXAMPLES.fdClass}
-              autoComplete="off"
-              spellCheck={false}
-              title={t('logEntry.fd.class.title')}
-            />
-          </label>
-          <label className="le-fd-field">
-            <span className="le-fd-cap">{t('logEntry.fd.section.label')}</span>
-            <input
-              ref={fdSectionRef}
-              className="settings-input mono le-fd-input le-fd-input-code"
-              value={fdSection}
-              onChange={(e) => setFdSection(e.target.value.toUpperCase())}
-              onKeyDown={(e) => {
-                onExchangeSpace(e, callInputRef)
-                onEnter(e)
-              }}
-              placeholder={LOG_EXAMPLES.fdSection}
-              autoComplete="off"
-              spellCheck={false}
-              title={t('logEntry.fd.section.title')}
-            />
-          </label>
+          {/* ONE BOX PER RECEIVED SLOT, in receive order. Space walks each to the next
+              and the last one back to Call, which is the loop the shipped strip has:
+              Call → Class → Section → Call. */}
+          {fdReceives.map((f, i) => (
+            <label className="le-fd-field" key={f.key}>
+              <span className="le-fd-cap">{fdFieldLabel(f.key)}</span>
+              <input
+                ref={(el) => {
+                  fdBoxRefs.current[f.key] = el
+                }}
+                className="settings-input mono le-fd-input le-fd-input-code"
+                value={fdFields[f.key] ?? ''}
+                onChange={(e) => setFdField(f.key, e.target.value)}
+                onKeyDown={(e) => {
+                  const next = fdReceives[i + 1]
+                  onExchangeSpace(
+                    e,
+                    next ? (fdBoxRefs.current[next.key] ?? null) : callInputRef.current,
+                  )
+                  onEnter(e)
+                }}
+                placeholder={FD_FIELD_EXAMPLES[f.key]}
+                autoComplete="off"
+                spellCheck={false}
+                title={FD_FIELD_TEXT[f.key] ? t(FD_FIELD_TEXT[f.key].titleKey) : undefined}
+              />
+            </label>
+          ))}
           {/* No `gridBlocked` term, and that is not an omission: `asksForGrid`
               is false whenever `fdActive` is, so `logIt`'s grid guard — which
               sits above the FD branch — is provably inert on this path. A layout
@@ -1030,6 +1244,7 @@ export function LogEntry({
           >
             {t('logEntry.clear.label')}
           </button>
+
         </div>
 
         {/* THE VERDICT SLOT — always present, empty or not.
@@ -1043,11 +1258,9 @@ export function LogEntry({
             strip) reserved two pixels of an eleven-pixel line — i.e. nothing. The wrapper is
             zero-height in every other host, so Phone and CW are unchanged. */}
         <div className="le-fd-verdicts">
-        {logCall.trim() !== '' && !fdExchangeOk && (
+        {logCall.trim() !== '' && fdBadField !== undefined && (
           <div className="le-fd-hint" role="alert">
-            {fdClass.trim() === ''
-              ? t('logEntry.fd.needClass')
-              : t('logEntry.fd.badSection', { section: fdSection.trim() || '—' })}
+            {fdVerdict(fdBadField, fdFields[fdBadField.key] ?? '')}
           </div>
         )}
         {fdOwnDupe && (

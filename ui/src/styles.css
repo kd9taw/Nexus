@@ -9193,6 +9193,74 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   padding: 0 var(--space-5);
   font-size: var(--fs-title);
 }
+/* THE SENT SIDE, read-only, with its one action (spec §9).
+
+   It sits at the END of the strip's HEADER row. §9 puts it beside the entry boxes;
+   it was built there, measured there, and moved here on the numbers:
+   `ui/layout-harness/entry-strip.html` (headless Chrome) says that at the 1024 px
+   floor, with Field Day's two boxes, the entry row fits it only by taking the slack
+   out of the CALL box — 506.7 px → 207.8 px — and that widening Call back wraps the
+   row onto a second line a bottom-anchored dock pays for out of the log feed. The
+   header costs 13 px (strip 117 → 130) and leaves Call at 506.7.
+
+   Its metrics are measured too: given the entry boxes' own (58 px tall, title-size
+   value) the block is half again as tall as it needs to be. No `min-height`,
+   body-size value, compact edit boxes.
+
+   `margin-left: auto` puts it at the far end of a header whose other three items are
+   left-aligned; `flex: 0 1 auto` with `min-width: 0` makes it the thing that YIELDS
+   when the header runs out of width, because the band/log hint beside it is what
+   tells the operator where their contacts are going.
+
+   Every colour here is a token defined in BOTH themes; nothing in this block reads a
+   raw hex or a size-based @media. */
+.le-fd-sent {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-left: auto;
+  padding-left: var(--space-3);
+  border-left: 1px solid var(--border-soft);
+}
+/* The "I moved" editor's boxes are NOT the big 58 px entry boxes. It is a rare,
+   deliberate action in a header row, and giving it entry-box height would grow the
+   header — the same 70 px mistake one row down, paid only while editing. */
+.le-fd-moved-input {
+  width: 88px;
+  text-align: center;
+  font-weight: 700;
+}
+.le-fd-sent-cap {
+  font-size: var(--fs-label);
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  user-select: none;
+  white-space: nowrap;
+}
+/* The ROLE, beside the exchange — an invariant token, so it is monospaced and never
+   wrapped mid-value. */
+.le-fd-role {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  color: var(--text-faint);
+}
+.le-fd-sent-val {
+  font-size: var(--fs-body);
+  font-weight: 700;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* "I moved" is a rare, deliberate action, not a hot key on the run — it reads as a
+   secondary control beside the value it edits. */
+.le-fd-moved {
+  white-space: nowrap;
+}
 
 /* ===========================================================================
    Log view (full-width screen)

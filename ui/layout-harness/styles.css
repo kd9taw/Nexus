@@ -835,6 +835,15 @@ button.nb-chip:hover {
   color: var(--text-faint);
   margin-top: 2px;
 }
+/* The SuperFox caveat, directly under the how-to-call line it qualifies. Louder than
+   `.wn-how` on purpose: it is the difference between a callable operation and one that will
+   never appear in this build's decode list. */
+.wn-superfox {
+  font-size: var(--fs-micro);
+  font-weight: 600;
+  color: var(--alert-warning, #f7c243);
+  margin-top: 2px;
+}
 /* Chase star (WorkNowCard + calendar rows) — quiet until armed. */
 .wn-chase {
   margin-left: var(--space-1);
@@ -959,8 +968,8 @@ button.nb-chip:hover {
 }
 /* Wake-me alarm: ⏰ toggle (reuses .wn-chase chrome) + lead-time select. */
 .cal-alarm.active {
-  color: var(--warn, #e8a13c);
-  border-color: var(--warn, #e8a13c);
+  color: var(--alert-warning);
+  border-color: var(--alert-warning);
 }
 .cal-lead {
   font-size: var(--fs-micro);
@@ -1032,7 +1041,7 @@ button.nb-chip:hover {
   font-weight: 500;
 }
 .rotor-slewing {
-  color: var(--warn, #e8a13c);
+  color: var(--alert-warning);
   font-family: var(--font-mono);
 }
 .rotor-entry {
@@ -1125,7 +1134,7 @@ button.nb-chip:hover {
 .sat-stale {
   margin: 0 0 var(--space-1);
   font-size: var(--fs-micro);
-  color: var(--warn, #e8a13c);
+  color: var(--alert-warning);
 }
 .sat-list {
   list-style: none;
@@ -1279,8 +1288,8 @@ button.nb-chip:hover {
 .cfeed-ends {
   font-size: var(--fs-micro);
   font-weight: 700;
-  color: var(--warn, #e8a13c);
-  border: 1px solid var(--warn, #e8a13c);
+  color: var(--alert-warning);
+  border: 1px solid var(--alert-warning);
   border-radius: 3px;
   padding: 0 var(--space-1);
   text-transform: uppercase;
@@ -1531,6 +1540,11 @@ button.nb-chip:hover {
 .connect-map > .map-view {
   flex: 1;
 }
+/* The operatemap pop-out mounts a bare MapView with no .connect-map wrapper — same
+   flex-fill rule, direct child of the detached window's own flex column instead. */
+.app.detached > .map-view {
+  flex: 1;
+}
 .connect-strip {
   grid-area: strip;
   display: grid;
@@ -1602,7 +1616,7 @@ button.nb-chip:hover {
 }
 .pane-basic {
   margin: 0;
-  font-size: var(--fs-sm);
+  font-size: var(--fs-label);
   line-height: 1.45;
 }
 /* Flatten the verbatim inner panels so we don't get card-in-card (inner JSX/CSS unchanged). */
@@ -1619,6 +1633,81 @@ button.nb-chip:hover {
    have been silently column-stripped by the global spelling (fix-round D7, 2026-07-31). */
 .connect .pane-body .swx-strip {
   grid-template-columns: repeat(2, 1fr);
+}
+/* ── The Amplifier pane ────────────────────────────────────────────────────────────────
+   A readout, never a control surface. The cells auto-fit rather than taking a fixed column
+   count, so the same markup works in the ~250px Connect rail and in the wider bottom strip
+   without a viewport rule of its own — and `minmax(0, ...)` on both the track and the cell
+   keeps a long value (a four-digit wattage, a fault line) INSIDE the pane body's scroller
+   instead of widening the frame. No @media anywhere here: raw breakpoints are zoom-blind. */
+.amp-pane {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.amp-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.amp-link {
+  font-size: var(--fs-micro);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--state-good);
+}
+/* A link that is down is stated, not merely dimmed — the reason text lives in this chip. */
+.amp-link.amp-down {
+  color: var(--alert-warning);
+  text-transform: none;
+  letter-spacing: 0;
+}
+.amp-model,
+.amp-state {
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+}
+.amp-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(5.5em, 1fr));
+  gap: var(--space-2) var(--space-3);
+  min-width: 0;
+}
+.amp-cell {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.amp-k {
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.amp-v {
+  font-family: var(--font-mono);
+  font-size: var(--fs-body);
+  font-weight: 600;
+  line-height: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+/* Faults wrap rather than clip: an alarm is the one thing on this pane that must be readable
+   in full, and the pane body is the scroller when the words run past the box. */
+.amp-fault {
+  margin: 0;
+  font-size: var(--fs-micro);
+  overflow-wrap: anywhere;
+}
+.amp-fault.amp-alarm {
+  color: var(--state-weak);
+}
+.amp-fault.amp-warn {
+  color: var(--alert-warning);
 }
 .connect .pane-body .ba-row {
   grid-template-columns: 40px 1fr 78px;
@@ -1669,7 +1758,7 @@ button.nb-chip:hover {
   gap: var(--space-2);
 }
 .connect-hero {
-  font-size: var(--text-lg, 1.05rem);
+  font-size: var(--fs-title);
   font-weight: 600;
   line-height: 1.35;
 }
@@ -1748,7 +1837,7 @@ button.nb-chip:hover {
   padding: 6px var(--space-2);
   max-height: 200px;
   overflow-y: auto;
-  background: var(--bg-elev-1, rgba(0,0,0,0.25));
+  background: var(--bg);
   border-radius: 6px;
   font-size: 0.82rem;
   font-family: ui-monospace, monospace;
@@ -1915,7 +2004,7 @@ button.nb-chip:hover {
   justify-content: space-between;
   gap: var(--space-2);
   margin: 0 0 var(--space-2);
-  font-size: var(--fs-small, 0.85rem);
+  font-size: var(--fs-label);
 }
 .connect-path .cp-engine {
   font-size: var(--fs-micro);
@@ -2106,7 +2195,7 @@ button.nb-chip:hover {
 /* "Am I getting out?" — observed who-hears-me panel. */
 .connect-getout h3 {
   margin: 0 0 var(--space-2);
-  font-size: var(--fs-small, 0.85rem);
+  font-size: var(--fs-label);
 }
 .connect-getout .cp-none {
   margin: 0;
@@ -2167,7 +2256,7 @@ button.nb-chip:hover {
   gap: var(--space-2);
   padding: 2px var(--space-1);
   border-radius: 5px;
-  font-size: var(--fs-sm);
+  font-size: var(--fs-label);
 }
 .bbt-row.is-clickable {
   cursor: pointer;
@@ -2248,10 +2337,10 @@ button.nb-chip:hover {
   gap: var(--space-2);
   padding: 1px var(--space-1);
   border-radius: 4px;
-  font-size: var(--fs-sm);
+  font-size: var(--fs-label);
 }
 .bcn-row.is-heard {
-  background: color-mix(in srgb, var(--ok, #2fbf71) 16%, transparent);
+  background: color-mix(in srgb, var(--state-good) 16%, transparent);
 }
 .bcn-band {
   flex: none;
@@ -2361,7 +2450,7 @@ button.nb-chip:hover {
   grid-template-columns: 1fr auto auto auto;
   gap: var(--space-2);
   align-items: center;
-  font-size: var(--fs-sm);
+  font-size: var(--fs-label);
 }
 .mmuf-loc {
   color: var(--text-dim);
@@ -2388,7 +2477,7 @@ button.nb-chip:hover {
 }
 .gl-next {
   margin: 0;
-  font-size: var(--fs-sm);
+  font-size: var(--fs-label);
 }
 .gl-bands,
 .gl-regions {
@@ -2833,7 +2922,7 @@ button.nb-chip:hover {
   max-height: calc(0.86 * var(--vh-eff, 100vh));
   overflow-y: auto;
   border: 1px solid var(--border);
-  border-radius: var(--radius-md, 8px);
+  border-radius: var(--radius-sm);
   box-shadow: 0 12px 40px rgb(0 0 0 / 0.45);
   background: var(--bg-elev);
 }
@@ -2968,11 +3057,25 @@ button.nb-chip:hover {
   padding: 2px 6px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
-  background: var(--surface, transparent);
+  background: transparent;
   color: var(--text);
 }
 
 /* Logbook header action buttons (Import ADIF / Log QSO). */
+/* Export date range (#98) — compact from/to beside Export ADIF. Vars only, so both themes hold. */
+.log-export-range {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-dim);
+}
+.log-export-date {
+  font-size: 12px;
+  padding: 0 var(--space-2);
+  width: 9em;
+}
 .log-actions {
   display: inline-flex;
   gap: var(--space-2);
@@ -3421,7 +3524,7 @@ h2 {
   margin: 0;
   font-size: 18px;
   font-weight: 700;
-  color: var(--danger, #e5484d);
+  color: var(--state-weak);
 }
 .view-crash-hint {
   margin: 0;
@@ -3439,7 +3542,7 @@ h2 {
   overflow: auto;
   padding: var(--space-3);
   background: var(--panel);
-  border: 1px solid var(--danger, #e5484d);
+  border: 1px solid var(--state-weak);
   border-radius: var(--radius-sm);
   font-family: var(--font-mono);
   font-size: 12px;
@@ -3588,6 +3691,30 @@ body.resizing {
    1100px measure above; Settings USED to, and the rule below is why it no longer does. */
 [data-viewport='xl'] .layout.single > .panel.log-view,
 [data-viewport='xl'] .layout.single > .panel.radioprog {
+  max-width: 1600px;
+}
+/* THE FIELD DAY DASHBOARD is a board, not prose — and it arrives here from somewhere else.
+   Until 2026-08-30 it was drawn in the three-pane operating workspace (App.tsx), which put a
+   waterfall and the stations rail on a scoreboard and left it a ~1180px centre column at
+   1920. Moving it to this shell removes the rails; inheriting the 1100px measure above would
+   have handed back a NARROWER panel than the column it left, so the fix would have answered
+   half the report and worsened the other half (the crowded header strip: class + section,
+   RUN / S&P, the cockpit toggle and four export buttons).
+
+   1600px, and not `none` like Settings: unlike a form of auto-fill grids, the widest thing
+   in here is the log's fixed column set, so past ~1600 the extra room stops buying anything
+   and only lengthens the eye's travel from the score tiles to the log. Same number the two
+   other DATA surfaces use.
+
+   md AND UP, the same scoping Settings uses below and for the same reason: md/lg/xl is
+   *exactly* the set of tiers where the 1100px cap could ever bind (classifyViewport starts md
+   at 1100 effective px), so listing them leaves the 1024x768 supported floor bit-identical
+   rather than merely "probably unchanged". **lg** is the one that matters — 1920 lands there,
+   not in xl, so the xl-only shape of the rule above would have missed the reported window
+   entirely. Computed per tier in fdDashboardShell.test.tsx. */
+[data-viewport='md'] .layout.single > .panel.fieldday,
+[data-viewport='lg'] .layout.single > .panel.fieldday,
+[data-viewport='xl'] .layout.single > .panel.fieldday {
   max-width: 1600px;
 }
 /* SETTINGS IS NOT PROSE-SHAPED, and calling it that cost it half the window.
@@ -4045,9 +4172,76 @@ body.resizing {
   border-radius: 999px;
   padding: var(--space-1) 6px var(--space-1) var(--space-2);
 }
-/* Native <select> popups render on the OS's (usually light) background, so the app's dim
+/* ── THE CLOSED <select> BOX — the one rule that owns it, on every platform ──────────────
+   On Linux the runtime is WebKitGTK, and its RenderThemeAdwaita paints its own form-control
+   chrome OVER the author's background box whenever the used `appearance` is still `auto`.
+   The cascade resolves correctly and is then overpainted: measured in webkit2gtk-4.1 2.52.3,
+   the wizard's audio pickers computed `background: rgb(19,25,37)` and PAINTED #F4F4F4, with
+   the app's near-white --text on top — 1.07:1, invisible. The setup wizard's radio and audio
+   selectors were unreadable on a stock Ubuntu 24.04 desktop (field report, 1.9.0). Blink
+   (Windows/macOS) honours the author background, which is why the same build looked fine
+   there and why this went unseen for so long. `appearance: none` is the whole fix: it takes
+   the box back from the engine, and the same measurement then reads 14.95:1.
+
+   THE ARROW IS PART OF THE FIX, NOT A GARNISH. `appearance: none` also removes the arrow the
+   engine was drawing, and a select with no arrow is a text input to look at. The engine also
+   RESERVED the width that arrow needed, so replacing it with our own is width-neutral rather
+   than a density change — measured across all 23 select surfaces, see ui/layout-harness.
+
+   ⚠️ WHY `!important`, deliberately, on exactly the chrome half. Every one of the ~20 rules
+   in this sheet that styles a select does so with the `background` and `padding` SHORTHANDS
+   (`.wizard-field select`, `.settings-input`, `.np-chip`, `.pane-pick`, …). A shorthand
+   resets `background-image` to `none` and `padding-right` to its own value, so a normal base
+   rule would have its arrow silently deleted by every one of them — and by the next select
+   rule anyone writes. The shorthands are also shared with <input> siblings, so they cannot
+   simply be unpicked. Marking the chrome important makes the arrow a property of BEING a
+   select rather than something each surface has to remember. The look half below it
+   (background-color / color / border) is deliberately NOT important: it is only a default
+   for the handful of selects that declare no styling of their own, and every surface that
+   has an opinion still wins. */
+select {
+  -webkit-appearance: none !important;
+  appearance: none !important;
+  /* Two triangles meeting into one arrowhead — gradients, not an SVG data URI, because the
+     colour has to be a theme token and a data URI cannot carry one. */
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--text-dim) 50%),
+    linear-gradient(135deg, var(--text-dim) 50%, transparent 50%) !important;
+  /* Order matters and is easy to get backwards: the 45° half is the LEFT stroke of the
+     arrowhead, so it sits FURTHER from the right edge. Swapped, the two halves render as a
+     mirrored tick instead of a triangle (caught in the harness, not in review). */
+  background-position: right 13px center, right 8px center !important;
+  background-size: 5px 5px, 5px 5px !important;
+  background-repeat: no-repeat !important;
+  /* The room the arrow needs, as a TOKEN so the narrow-viewport `--space-scale` tightening
+     reaches it like every other spacing value (styles-spacing.test.ts enforces this, and
+     caught it here). At the tightest scale, 0.86, this is 20.6px against an arrow that ends
+     18px from the edge — the text still clears it. */
+  padding-right: var(--space-6) !important;
+  cursor: pointer;
+  /* The default LOOK, overridable by every surface below. Only the five selects that style
+     themselves not at all land here (`.tuning-step`, four in SettingsPanel) — until now they
+     took the OS widget's colours, which is a white box in a dark app on every platform. */
+  background-color: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+/* The Logbook's per-row QSL menu is a 22×22 icon button, not a field: the arrow IS its whole
+   content, so it centres instead of sitting after text there is no room for. Higher
+   specificity + important is what it takes to beat the important above. */
+select.log-rowbtn {
+  background-position: center !important;
+  padding-right: 0 !important;
+}
+/* Native <select> POPUPS render on the OS's (usually light) background, so the app's dim
    text is nearly unreadable there. Force a dark popup + readable text for EVERY dropdown
-   (band pickers on each mode, settings, sorts). */
+   (band pickers on each mode, settings, sorts).
+   ⚠️ THIS HALF DOES NOT WORK ON LINUX AND CANNOT BE MADE TO. WebKitGTK draws the open popup
+   as a separate GTK toplevel (WebPopupMenuProxyGtk), not as web content, so it never sees
+   these declarations — that is issue #169, a DIFFERENT bug from the closed box above, with a
+   different fix (an in-page listbox) that is tracked separately. Keep this rule: it is what
+   makes the popup readable on Windows and macOS. */
 select option,
 select optgroup {
   background: var(--bg-elev);
@@ -4284,7 +4478,7 @@ select optgroup {
   font-weight: 800;
   font-size: 13px;
   letter-spacing: 0.06em;
-  padding: 6px var(--space-3);
+  padding: var(--space-1) var(--space-3);
   border-radius: var(--radius-sm);
   min-width: 46px;
   text-align: center;
@@ -4366,14 +4560,14 @@ select optgroup {
   font-size: 10px;
   font-weight: 800;
   letter-spacing: 0.04em;
-  border: 1px solid var(--danger, #e5484d);
+  border: 1px solid var(--tx);
   border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--danger, #e5484d);
+  color: var(--tx);
   animation: ph-rec-pulse 1.4s ease-in-out infinite;
 }
 .topbar-rec:hover {
-  background: color-mix(in srgb, var(--danger, #e5484d) 15%, transparent);
+  background: color-mix(in srgb, var(--tx) 15%, transparent);
 }
 
 /* ---- Operating (TX) controls ---- */
@@ -4603,6 +4797,70 @@ select optgroup {
   background: color-mix(in srgb, var(--accent) 18%, transparent);
   border-color: var(--accent);
   color: var(--text);
+}
+
+/* The Stations filter row: chips left, search right. `.filter-row` (shared with the
+   POTA/SOTA view) still supplies the padding and the rule; these three rules only say how
+   the row divides, and they are scoped so nothing else that uses .filter-row moves.
+   It WRAPS: at the 1024 floor with a narrow chat column the four chips and a usable box
+   do not fit on one line, and a search field squeezed to 40px is worse than a second row. */
+.station-filter-row {
+  flex-wrap: wrap;
+  align-items: center;
+}
+.station-filter-tabs {
+  display: flex;
+  gap: 6px;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.station-search {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex: 1 1 120px;
+  min-width: 0;
+  margin-left: auto;
+}
+.station-search input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text);
+  font-size: 12px;
+  /* 26px right, not 24: it clears the ✕ AND stays off the --space-* ladder, which is
+     what the spacing-token guard is checking for. The shipped .np-search input does the
+     same thing for the same reason. */
+  padding: var(--space-1) 26px var(--space-1) var(--space-2);
+  width: 100%;
+  min-width: 0;
+  min-height: 28px;
+  transition: var(--transition);
+}
+.station-search input:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+.station-search-clear {
+  position: absolute;
+  right: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 0 2px;
+}
+.station-search-clear:hover {
+  color: var(--text);
+}
+/* The total beside the on-screen count — quieter than the count itself, because the
+   number that matters is the one naming what you are looking at. */
+.count-badge-total {
+  background: transparent;
+  color: var(--text-faint);
+  font-weight: 600;
+  padding-left: 0;
 }
 
 .station-scroll {
@@ -4959,7 +5217,7 @@ select optgroup {
 }
 .recent-archive:hover,
 .recent-archive:focus-visible {
-  color: var(--state-bad, var(--alert-warning, var(--accent)));
+  color: var(--alert-warning);
 }
 .recent-call {
   font-weight: 700;
@@ -5200,7 +5458,7 @@ select optgroup {
 .bubble-incomplete {
   font-size: 10px;
   font-weight: 600;
-  color: var(--warn, #e8a33d);
+  color: var(--alert-warning);
   white-space: nowrap;
 }
 .bubble.theirs .bubble-tech {
@@ -5219,7 +5477,7 @@ select optgroup {
 /* Never transmitted and never will be — the queue didn't survive the restart. Warn-coloured
    because this one needs operator action (re-send), unlike the passive held state. */
 .delivery.abandoned {
-  color: var(--state-bad, var(--alert-warning, var(--accent)));
+  color: var(--alert-warning);
   opacity: 1;
 }
 /* Held in store-and-forward — never transmitted. Deliberately dimmer and cooler than
@@ -5245,7 +5503,7 @@ select optgroup {
 /* Terminal: sent its full cycle budget, never acknowledged — needs operator action
    (tap the bubble to re-send), so it earns the warn colour like `abandoned`. */
 .delivery.no-ack {
-  color: var(--state-bad, var(--alert-warning, var(--accent)));
+  color: var(--alert-warning);
   opacity: 1;
 }
 /* A tappable terminal bubble (no-ack / abandoned): affordance cue. */
@@ -5263,8 +5521,13 @@ select optgroup {
   padding: var(--space-2) var(--space-3);
   border-radius: var(--radius);
   border: 1px solid var(--border);
-  background: var(--surface-2);
-  color: var(--text-2);
+  /* Two tokens from a vocabulary that never existed (`--surface-2`, `--text-2`), and
+     unlike every other reference to it these carried NO fallback — so the fill silently
+     computed to `transparent` and the label inherited whatever it sat on. `.heartbeat-btn.on`
+     turning the label `--state-good` is what says the resting label was meant to be the muted
+     one: dim → green is the on/off signal, and it was reading bright → green. */
+  background: var(--bg-elev);
+  color: var(--text-dim);
   cursor: pointer;
   font-size: 13px;
 }
@@ -5278,7 +5541,7 @@ select optgroup {
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
   background: transparent;
-  color: var(--text-3);
+  color: var(--text-faint);
   cursor: pointer;
   font-size: 12px;
   white-space: nowrap;
@@ -5425,9 +5688,9 @@ select optgroup {
   max-height: calc(0.9 * var(--vh-eff, 100vh));
   overflow-y: auto;
   padding: var(--space-5);
-  border-radius: var(--radius-md, 12px);
+  border-radius: var(--radius);
   border: 1px solid var(--border);
-  background: var(--bg-elev-1);
+  background: var(--bg-elev);
   box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45);
 }
 .logconfirm-head {
@@ -5495,8 +5758,8 @@ select optgroup {
   color: var(--text-dim);
 }
 .logconfirm-discard:hover {
-  border-color: var(--state-bad, #e5484d);
-  color: var(--state-bad, #e5484d);
+  border-color: var(--state-weak);
+  color: var(--state-weak);
 }
 .logconfirm-log {
   border: 1px solid var(--accent);
@@ -6302,7 +6565,11 @@ input.cw-pitch::-webkit-inner-spin-button {
   gap: var(--space-1);
   padding: var(--space-1) var(--space-2);
   margin-bottom: var(--space-2);
-  background: var(--surface-2, rgba(0, 0, 0, 0.2));
+  /* `--bg` IS the recessed role in both themes (dark #0b0f17 under #111722 panel,
+     light #e5eaf0 under #fbfcfe). Was `var(--surface-2, rgba(0,0,0,.2))` — an
+     undefined token whose fallback is a fixed black wash, correct-looking in dark
+     and a muddy grey slab in light. */
+  background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
 }
@@ -6466,10 +6733,20 @@ input.cw-pitch::-webkit-inner-spin-button {
   margin-bottom: var(--space-2);
   padding: var(--space-1) var(--space-2);
   font-size: 12px;
-  color: var(--danger, #ff6b6b);
-  background: color-mix(in srgb, var(--danger, #ff6b6b) 12%, transparent);
-  border: 1px solid var(--danger, #ff6b6b);
+  color: var(--state-weak);
+  background: color-mix(in srgb, var(--state-weak) 12%, transparent);
+  border: 1px solid var(--state-weak);
   border-radius: var(--radius-sm);
+}
+/* The STANDING caution variant of that banner: CAT keying is unproven on this radio. Same box,
+   warning colour instead of the error colour, because `.settings-warn` versus `.settings-error`
+   draws exactly this line one screen away and for the same reason — "this stopped you" and
+   "this is worth knowing" must not look alike. This one never blocks and never disables the
+   keyer. `--alert-warning` is defined in both themes. */
+.cw-keyer-warn.caution {
+  color: var(--alert-warning);
+  background: color-mix(in srgb, var(--alert-warning) 12%, transparent);
+  border-color: var(--alert-warning);
 }
 /* CW copilot — decoded-call chips + (Guided) next-step prompt + the Guided/Expert toggle. */
 .cw-copilot {
@@ -6479,7 +6756,11 @@ input.cw-pitch::-webkit-inner-spin-button {
   gap: var(--space-2);
   padding: var(--space-1) var(--space-2);
   margin-bottom: var(--space-2);
-  background: var(--surface-2, rgba(0, 0, 0, 0.2));
+  /* `--bg` IS the recessed role in both themes (dark #0b0f17 under #111722 panel,
+     light #e5eaf0 under #fbfcfe). Was `var(--surface-2, rgba(0,0,0,.2))` — an
+     undefined token whose fallback is a fixed black wash, correct-looking in dark
+     and a muddy grey slab in light. */
+  background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
 }
@@ -6543,7 +6824,7 @@ input.cw-pitch::-webkit-inner-spin-button {
   font-size: 13px;
   padding: 2px var(--space-2);
   color: var(--text);
-  background: var(--surface-3, rgba(255, 255, 255, 0.06));
+  background: var(--bg-elev-2);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   cursor: pointer;
@@ -6758,9 +7039,9 @@ input.cw-pitch::-webkit-inner-spin-button {
   border: 1px solid var(--border-soft);
 }
 .le-hunt-chip.match {
-  color: var(--ok, #2fbf71);
-  background: color-mix(in srgb, var(--ok, #2fbf71) 12%, transparent);
-  border-color: color-mix(in srgb, var(--ok, #2fbf71) 40%, transparent);
+  color: var(--state-good);
+  background: color-mix(in srgb, var(--state-good) 12%, transparent);
+  border-color: color-mix(in srgb, var(--state-good) 40%, transparent);
 }
 .le-hunt-for {
   font-weight: 400;
@@ -6768,7 +7049,7 @@ input.cw-pitch::-webkit-inner-spin-button {
 }
 .le-hunt-warn {
   font-weight: 400;
-  color: var(--warn, #e8a33d);
+  color: var(--alert-warning);
 }
 .le-row {
   display: flex;
@@ -7112,7 +7393,7 @@ input.cw-pitch::-webkit-inner-spin-button {
 .le-ov-warn {
   flex: 1 1 100%;
   font-size: var(--fs-micro);
-  color: var(--warn, #e8a33d);
+  color: var(--alert-warning);
 }
 /* In-QSO recall panel — the prominent rag-chew "who is this + our history" card. */
 .recall-card {
@@ -7238,8 +7519,8 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   white-space: nowrap;
 }
 .recall-badge.ok {
-  color: var(--ok, #2fbf71);
-  background: color-mix(in srgb, var(--ok, #2fbf71) 14%, transparent);
+  color: var(--state-good);
+  background: color-mix(in srgb, var(--state-good) 14%, transparent);
 }
 .recall-badge.need {
   color: var(--need-entity);
@@ -7298,6 +7579,23 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 }
 .recall-log-row:nth-child(even) {
   background: color-mix(in srgb, var(--text) 4%, transparent);
+}
+/* A prior-contact row that opens the Logbook filtered to this call (#192, kr4fqg). The
+   affordance is conditional on the host having wired the handoff — a row that navigates
+   nowhere must never advertise that it does — hence `.clickable` rather than styling every
+   row. Hover beats the zebra stripe on specificity (0,3,0 over 0,2,0), which it has to: the
+   even rows carry a background of their own.
+   The focus ring goes INSIDE the row. The global `:focus-visible` sits at `outline-offset: 2px`,
+   and this list is a bounded 12em scroller, so on the first and last visible rows an outset ring
+   is clipped by the scroller edge — exactly where a keyboard operator arrives. */
+.recall-log-row.clickable {
+  cursor: pointer;
+}
+.recall-log-row.clickable:hover {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.recall-log-row.clickable:focus-visible {
+  outline-offset: -2px;
 }
 .recall-log-date {
   color: var(--text-dim);
@@ -7455,6 +7753,7 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   color: var(--text);
 }
 .ph-mode-mismatch,
+.cq-rigdiverge,
 .topbar-rig-mode {
   font-weight: 700;
   font-size: var(--fs-label);
@@ -7467,6 +7766,11 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 }
 .topbar-rig-mode {
   margin-left: var(--space-2);
+  white-space: nowrap;
+}
+/* Operate's copy of the same chip. `nowrap` only — the strip is a `fit="content"` control row,
+   so a chip must never introduce a height of its own; it rides the row's existing line box. */
+.cq-rigdiverge {
   white-space: nowrap;
 }
 .ph-split {
@@ -7621,7 +7925,7 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   font-weight: 800;
   letter-spacing: 0.03em;
   color: var(--bg);
-  background: var(--danger, #e5484d);
+  background: var(--state-weak);
   border-radius: var(--radius-sm);
   white-space: nowrap;
 }
@@ -7665,8 +7969,9 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 
    `--danger` was never defined in either theme, so all three uses below fell through to a hardcoded
    #e5484d — a red picked for the dark background, leaving the recording state washed out in light.
-   `--tx` is the app's real transmit red and is defined in both. 32 other `var(--danger, ...)` uses
-   remain in this file with the same latent bug; out of scope here. */
+   `--tx` is the app's real transmit red and is defined in both. The other 33 `var(--danger, ...)`
+   uses carried the same latent bug and are gone too (2026-08-28): the on-air/recording ones
+   followed this rule onto `--tx`, the destructive and failed-state ones onto `--state-weak`. */
 .ph-rec {
   display: inline-flex;
   align-items: center;
@@ -7750,7 +8055,7 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 /* 3D + pause toggles on the rig scope's control strip. */
 .ph-scope-btn {
   flex: 0 0 auto;
-  background: var(--bg-raised, rgba(0, 0, 0, 0.35));
+  background: var(--bg-elev);
   color: var(--text-dim);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -7825,7 +8130,7 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 .ph-scope-smeter-fill {
   height: 100%;
   width: 0%;
-  background: var(--ok, #2fbf71);
+  background: var(--state-good);
   /* Color may ease (zone change); WIDTH may not — the bar is a measurement, and easing it
      smeared every real S-meter sample by 80 ms (display-liveliness change, 2026-08-01). */
   transition: background 120ms linear;
@@ -7950,7 +8255,7 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 .ph-txmeter-fill {
   height: 100%;
   width: 0%;
-  background: var(--ok, #2fbf71);
+  background: var(--state-good);
   transition: width 80ms linear, background 120ms linear;
 }
 .ph-txmeter-value {
@@ -8146,8 +8451,8 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   color: var(--text);
 }
 .vk-stop:hover {
-  border-color: var(--danger, #e5484d);
-  color: var(--danger, #e5484d);
+  border-color: var(--state-weak);
+  color: var(--state-weak);
 }
 .vk-grid {
   display: grid;
@@ -8167,8 +8472,8 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
 }
 .vk-slot.rec {
-  border-color: var(--danger, #e5484d);
-  box-shadow: inset 0 0 0 1px var(--danger, #e5484d);
+  border-color: var(--tx);
+  box-shadow: inset 0 0 0 1px var(--tx);
 }
 .vk-play {
   display: flex;
@@ -8209,7 +8514,7 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   color: var(--text-dim);
 }
 .vk-slot.rec .vk-state {
-  color: var(--danger, #e5484d);
+  color: var(--tx);
   font-weight: 800;
 }
 .vk-tools {
@@ -8233,8 +8538,8 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 .vk-tool.stop {
   flex: 1;
   font-weight: 700;
-  color: var(--danger, #e5484d);
-  border-color: var(--danger, #e5484d);
+  color: var(--state-weak);
+  border-color: var(--state-weak);
 }
 .vk-tool:disabled {
   opacity: 0.4;
@@ -8246,16 +8551,21 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
    =========================================================================== */
 .fieldday {
   min-width: 0;
-  /* THE COLUMN'S DEFICIT VALVE — the same fix `.layout.single > .panel` got on 2026-08-04,
-     for the same reason, in the view the three-pane workspace reaches instead. This column
-     is banner + header + operator row + score tiles + sections board + the Bonuses
-     disclosure + the log, and every one of them is `flex: 0 0 auto` except the board. Once
-     the board is at its floor (FieldDayView.tsx SECTIONS_BOARD_WRAP) the residual has
-     nowhere left to go, and `.panel { overflow: hidden }` would CLIP it — the log off the
-     bottom with no scrollbar in the chain, which is what opening Bonuses at 1200×750 did.
-     Wins over `.panel` on source order alone (both are (0,1,0); `.panel` is ~4400 lines
-     earlier), which is exactly how two fixes shipped dead here before — so it is COMPUTED,
-     not asserted, in layout-single-deficit.test.tsx. overflow-x stays hidden. */
+  /* THE COLUMN'S DEFICIT VALVE. This column is banner + header + operator row + score tiles
+     + sections board + the Bonuses disclosure + the log, and every one of them is
+     `flex: 0 0 auto` except the board. Once the board is at its floor (FieldDayView.tsx
+     SECTIONS_BOARD_WRAP) the residual has nowhere left to go, and `.panel { overflow: hidden }`
+     would CLIP it — the log off the bottom with no scrollbar in the chain, which is what
+     opening Bonuses at 1200×750 did.
+
+     ⚠️ IT IS NO LONGER THIS DECLARATION THAT DELIVERS IT. Written 2026-08-04 for the view as
+     the three-pane workspace reached it, where it won over `.panel` on source order alone
+     (both (0,1,0)). Since 2026-08-30 the dashboard mounts in the single-column panel shell
+     instead (App.tsx), so `.layout.single > .panel { overflow-y: auto }` — (0,2,1) — is the
+     rule that actually resolves, and this one is a redundant restatement of the same value.
+     Kept, not deleted, because it is the only thing that would carry the valve if `.fieldday`
+     were ever mounted outside that shell; it is NOT relied on, and which rule wins is
+     COMPUTED, not asserted, in layout-single-deficit.test.tsx. overflow-x stays hidden. */
   overflow-y: auto;
 }
 .fd-header {
@@ -8309,7 +8619,7 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 }
 .log-export-error {
   font-size: 0.75rem;
-  color: var(--critical, #e05252);
+  color: var(--state-weak);
 }
 
 
@@ -8468,6 +8778,32 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* Which rules data is scoring (rules year + generated date) — quiet, end of the banner. */
+.fd-event-rules {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+/* Warn-only FD rule advisory (FdAdvisories.tsx) — a PASSIVE status line, never a
+   control, hosted by the FD event banner and the Operate cockpit header (outside
+   every ⊞-removable pane). --alert-warning exists in both themes. Ellipsizes in
+   a tight header; the title attribute carries the whole sentence. */
+.fd-advisory {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 32em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-sm);
+  color: var(--alert-warning);
+  background: color-mix(in srgb, var(--alert-warning) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--alert-warning) 45%, transparent);
+}
 
 /* Score math formula */
 .fd-score-math {
@@ -8521,9 +8857,9 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   border-color: color-mix(in srgb, var(--state-good) 30%, transparent);
 }
 .fd-mode-chip.ph {
-  color: var(--state-info, #5ba8f5);
-  background: color-mix(in srgb, var(--state-info, #5ba8f5) 16%, transparent);
-  border-color: color-mix(in srgb, var(--state-info, #5ba8f5) 30%, transparent);
+  color: var(--alert-info);
+  background: color-mix(in srgb, var(--alert-info) 16%, transparent);
+  border-color: color-mix(in srgb, var(--alert-info) 30%, transparent);
 }
 /* Log-table badge: a clear, uniform-width DIG/CW/PH pill (full base padding). */
 .fd-mode-chip.sm {
@@ -8566,9 +8902,117 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   font-size: 10px;
   color: var(--text-faint);
 }
+/* Collapsed-header echoes of the two scoring inputs: the power multiplier's current
+   value and, when the club has planned anything, what it is still chasing. Both are
+   readouts — the controls are inside. */
+.fd-scoring-power-chip {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--accent);
+  white-space: nowrap;
+}
+.fd-bonuses-planned-count {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+/* The expanded body wraps the power row, the chase strip and the (capped, scrolling)
+   list. The cap stays on `.fd-bonuses-list` alone — see the note there; the body is
+   `flex: 0 0 auto` like the section it lives in, and the column's deficit still goes to
+   `.fieldday { overflow-y: auto }`. */
+.fd-bonuses-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.fd-power-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3) 0;
+  background: var(--bg-elev);
+}
+.fd-power-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text);
+}
+.fd-power-chips {
+  display: flex;
+  gap: var(--space-1);
+}
+.fd-power-chip {
+  padding: var(--space-1) 9px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  cursor: pointer;
+  transition: var(--transition);
+}
+.fd-power-chip:hover:not(:disabled) {
+  background: var(--bg-elev-2);
+  color: var(--text);
+}
+/* The selected tier wears the same filled-accent treatment as the Settings chips it
+   mirrors (`.theme-chip.active`) — one setting, one look. */
+.fd-power-chip.active {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 700;
+}
+.fd-power-chip:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.fd-power-hint {
+  flex: 1 1 200px;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+/* THE CHASE. Earned is the real number and is the only one wearing the accent; planned is
+   deliberately quieter and says so in words, not just in colour. */
+.fd-chase {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3) 0;
+  background: var(--bg-elev);
+}
+.fd-chase-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 5px 9px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+}
+.fd-chase-tile.earned {
+  border-color: var(--accent);
+}
+.fd-chase-tile.earned .fd-chase-val {
+  color: var(--accent);
+}
+.fd-chase-val {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-dim);
+}
+.fd-chase-note {
+  font-size: 10px;
+  color: var(--text-faint);
+}
 .fd-bonuses-list {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
   gap: 2px;
   padding: var(--space-2) var(--space-3) var(--space-3);
   background: var(--bg-elev);
@@ -8607,6 +9051,33 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 }
 .fd-bonus-row.checked {
   color: var(--text);
+}
+/* Planned but not yet earned: a dashed edge and the button's own "Planned" word — the
+   state is never carried by colour alone. */
+.fd-bonus-row.planned {
+  color: var(--text);
+  border: 1px dashed var(--border);
+  padding: 6px calc(var(--space-2) - 1px);
+}
+.fd-bonus-plan {
+  flex: 0 0 auto;
+  padding: 2px 7px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 10px;
+  cursor: pointer;
+  transition: var(--transition);
+}
+.fd-bonus-plan:hover {
+  background: var(--bg-elev-2);
+  color: var(--text);
+}
+.fd-bonus-plan.on {
+  border-color: var(--text-dim);
+  color: var(--text);
+  font-weight: 700;
 }
 .fd-bonus-row input[type='checkbox'] {
   flex: 0 0 auto;
@@ -8721,6 +9192,74 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   min-height: 58px;
   padding: 0 var(--space-5);
   font-size: var(--fs-title);
+}
+/* THE SENT SIDE, read-only, with its one action (spec §9).
+
+   It sits at the END of the strip's HEADER row. §9 puts it beside the entry boxes;
+   it was built there, measured there, and moved here on the numbers:
+   `ui/layout-harness/entry-strip.html` (headless Chrome) says that at the 1024 px
+   floor, with Field Day's two boxes, the entry row fits it only by taking the slack
+   out of the CALL box — 506.7 px → 207.8 px — and that widening Call back wraps the
+   row onto a second line a bottom-anchored dock pays for out of the log feed. The
+   header costs 13 px (strip 117 → 130) and leaves Call at 506.7.
+
+   Its metrics are measured too: given the entry boxes' own (58 px tall, title-size
+   value) the block is half again as tall as it needs to be. No `min-height`,
+   body-size value, compact edit boxes.
+
+   `margin-left: auto` puts it at the far end of a header whose other three items are
+   left-aligned; `flex: 0 1 auto` with `min-width: 0` makes it the thing that YIELDS
+   when the header runs out of width, because the band/log hint beside it is what
+   tells the operator where their contacts are going.
+
+   Every colour here is a token defined in BOTH themes; nothing in this block reads a
+   raw hex or a size-based @media. */
+.le-fd-sent {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-left: auto;
+  padding-left: var(--space-3);
+  border-left: 1px solid var(--border-soft);
+}
+/* The "I moved" editor's boxes are NOT the big 58 px entry boxes. It is a rare,
+   deliberate action in a header row, and giving it entry-box height would grow the
+   header — the same 70 px mistake one row down, paid only while editing. */
+.le-fd-moved-input {
+  width: 88px;
+  text-align: center;
+  font-weight: 700;
+}
+.le-fd-sent-cap {
+  font-size: var(--fs-label);
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  user-select: none;
+  white-space: nowrap;
+}
+/* The ROLE, beside the exchange — an invariant token, so it is monospaced and never
+   wrapped mid-value. */
+.le-fd-role {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  color: var(--text-faint);
+}
+.le-fd-sent-val {
+  font-size: var(--fs-body);
+  font-weight: 700;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* "I moved" is a rare, deliberate action, not a hot key on the run — it reads as a
+   secondary control beside the value it edits. */
+.le-fd-moved {
+  white-space: nowrap;
 }
 
 /* ===========================================================================
@@ -8969,7 +9508,7 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   padding: 3px var(--space-2) 3px 22px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  background: var(--bg-input, transparent);
+  background: var(--bg);
   color: var(--text);
 }
 .settings-search-input:focus {
@@ -8988,7 +9527,7 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   margin: 0;
   padding: var(--space-1);
   list-style: none;
-  background: var(--bg-panel);
+  background: var(--panel);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
@@ -9009,7 +9548,7 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 }
 .settings-search-hit.active,
 .settings-search-hit:hover {
-  background: var(--bg-hover, var(--border));
+  background: var(--bg-elev-2);
 }
 .settings-search-hit-label {
   font-size: 12px;
@@ -9076,9 +9615,9 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 }
 .settings-tab.active {
   color: var(--accent);
-  background: var(--bg-elev-1);
+  background: var(--bg-elev);
   border-color: var(--border-soft);
-  border-bottom: 1px solid var(--bg-elev-1);
+  border-bottom: 1px solid var(--bg-elev);
 }
 .settings-scroll {
   flex: 1;
@@ -9379,7 +9918,7 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   background: var(--state-ok, #2fbf71);
 }
 .watchlist-kind-grid {
-  background: var(--state-info, #5ba8f5);
+  background: var(--alert-info);
 }
 .watchlist-value {
   font-family: var(--font-mono);
@@ -9435,11 +9974,6 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   opacity: 0.4;
   cursor: not-allowed;
 }
-select.settings-input {
-  -webkit-appearance: none;
-  appearance: none;
-  cursor: pointer;
-}
 .settings-input:disabled {
   opacity: 0.5;
   cursor: not-allowed;
@@ -9471,7 +10005,7 @@ select.settings-input {
   padding: var(--space-1) var(--space-2);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  background: var(--surface-2, transparent);
+  background: transparent;
   color: var(--text-dim);
   font-size: 0.78rem;
   cursor: pointer;
@@ -9537,11 +10071,11 @@ select.settings-input {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   padding: var(--space-3);
-  background: var(--bg-elev-1);
+  background: var(--bg-elev);
 }
 .radio-card.active {
   border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
-  background: color-mix(in srgb, var(--accent) 8%, var(--bg-elev-1));
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg-elev));
 }
 .radio-card-head {
   display: flex;
@@ -9662,7 +10196,7 @@ select.settings-input {
   color: var(--text-faint);
 }
 .settings-note code {
-  font-family: var(--mono, ui-monospace, monospace);
+  font-family: var(--font-mono);
   font-size: 0.92em;
 }
 
@@ -9863,6 +10397,14 @@ select.settings-input {
   font-size: 13px;
   font-weight: 600;
 }
+/* A pre-save check that did NOT block the save. Distinct from .settings-error in colour, because
+   the difference that matters to the operator is "this stopped you" versus "this is worth
+   knowing" — and both can be on screen at once. */
+.settings-warn {
+  color: var(--alert-warning);
+  font-size: 13px;
+  font-weight: 600;
+}
 .settings-ok {
   color: var(--state-good);
   font-size: 13px;
@@ -9923,7 +10465,7 @@ select.settings-input {
   margin-left: auto;
   font-size: 10px;
   padding: 1px var(--space-1);
-  background: var(--surface-2, transparent);
+  background: transparent;
   color: var(--text-dim);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -9945,6 +10487,19 @@ select.settings-input {
 }
 .ph-scope-title {
   margin-right: auto; /* push the Colors/palette controls to the right edge */
+  /* TRUNCATE, NEVER WRAP (2026-08-28). `.ph-scope-head` is a nowrap flex row, but the title's
+     TEXT still wrapped inside its own box under pressure, and a second head line comes
+     straight out of the scope canvas below it (the panel is `flex: 0 1 var(--cw-scope-h)`
+     with an 8em floor — the head takes its height off the picture). Measured in headless
+     Chrome at 1024x768 pinned to 175%: without this the head went 31px -> 46px the moment
+     the zero-beat indicator joined the row; with it the head height is IDENTICAL with and
+     without the indicator at 100/125/150/175% and at 1024 and 1280, the title simply
+     ellipsising 8px at the tightest of them. The full text is on its own `title` attribute
+     either way. */
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.04em;
@@ -9963,6 +10518,102 @@ select.settings-input {
   letter-spacing: 0.02em;
   text-transform: uppercase;
   color: var(--text-faint);
+}
+
+/* THE CW ZERO-BEAT INDICATOR (ZeroBeat.tsx) — lamp + needle + signed offset, riding the CW
+   scope head beside the marker it complements (the scope draws the TARGET; this is where the
+   signal actually is). CHROME ONLY, and deliberately so: it lives inside the EXISTING
+   .ph-scope-head flex row, so it adds no shell child, no pane and no ⊞ id, and the scope
+   panel's `flex: 0 1 var(--cw-scope-h)` basis and 8em floor are untouched. It must never
+   wrap — a second head line would come straight out of the canvas below it. */
+.zb {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  /* SHRINKABLE, so pressure in the row lands on this widget's own name before it lands on
+     the scope title or the palette controls — but never on the reading, which is the thing
+     the operator is looking at (`.zb-read` keeps its floor). */
+  flex: 0 1 auto;
+  min-width: 0;
+  /* A little air before the palette controls: the head's own 4px gap is right between two
+     labels and too tight between a live reading and the next control group. */
+  margin-right: var(--space-2);
+  white-space: nowrap;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-faint);
+}
+.zb-name {
+  text-transform: uppercase;
+  /* THE ONLY PART THAT GIVES. Every shrink in this widget lands on its own name, which
+     ellipsises; the lamp, the needle track and the reading are `flex: 0 0 auto` and keep
+     their size, because a clipped or overlapped READING is the one thing here that would
+     actually mislead. Measured at 1024x768 pinned to 175%: the name truncates, the reading
+     stays whole. */
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.zb-lamp {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: transparent;
+}
+.zb.on .zb-lamp {
+  background: var(--state-good);
+  border-color: var(--state-good);
+  box-shadow: 0 0 4px var(--state-good);
+}
+/* The needle track. Its full width is the backend's whole search range (±400 Hz), so every
+   reading the measurement can produce has its own position — being 80 Hz off and being
+   400 Hz off must not look the same, which is the entire request. */
+.zb-bar {
+  position: relative;
+  display: inline-block;
+  flex: 0 0 auto;
+  width: 64px;
+  height: 8px;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+}
+.zb-centre {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--border);
+}
+.zb-needle {
+  position: absolute;
+  top: -1px;
+  bottom: -1px;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--text-dim);
+}
+.zb.on .zb-needle {
+  background: var(--state-good);
+}
+.zb.on .zb-read {
+  color: var(--state-good);
+}
+/* NO SIGNAL recedes and draws no needle at all: a needle resting at centre with nothing
+   behind it is indistinguishable from a perfect tune, which is the one lie this must not
+   tell. The words say so too (ZeroBeat.tsx). */
+.zb.idle {
+  opacity: 0.55;
+}
+.zb-read {
+  flex: 0 0 auto;
+  min-width: 4.5em;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
 /* Spot band-activity strip — proportional band scale with SSB cluster spots, licensed-phone
@@ -10036,8 +10687,8 @@ select.settings-input {
   position: absolute;
   top: 0;
   bottom: 0;
-  background: color-mix(in srgb, var(--ok, #2fbf71) 12%, transparent);
-  border-inline: 1px solid color-mix(in srgb, var(--ok, #2fbf71) 40%, transparent);
+  background: color-mix(in srgb, var(--state-good) 12%, transparent);
+  border-inline: 1px solid color-mix(in srgb, var(--state-good) 40%, transparent);
   pointer-events: none;
 }
 .bandstrip-spot {
@@ -10104,7 +10755,7 @@ select.settings-input {
   bottom: -2px;
   width: 2px;
   transform: translateX(-50%);
-  background: var(--ok, #2fbf71);
+  background: var(--state-good);
   z-index: 3;
   pointer-events: none;
 }
@@ -10116,13 +10767,13 @@ select.settings-input {
   transform: translateX(-50%);
   border-left: 4px solid transparent;
   border-right: 4px solid transparent;
-  border-top: 5px solid var(--ok, #2fbf71);
+  border-top: 5px solid var(--state-good);
 }
 .bandstrip-dial.blocked {
-  background: var(--danger, #e5484d);
+  background: var(--state-weak);
 }
 .bandstrip-dial.blocked::before {
-  border-top-color: var(--danger, #e5484d);
+  border-top-color: var(--state-weak);
 }
 .bandstrip-axis {
   display: flex;
@@ -10353,8 +11004,8 @@ select.settings-input {
   position: absolute;
   left: 54px;
   right: 0;
-  background: color-mix(in srgb, var(--ok, #2fbf71) 12%, transparent);
-  border-block: 1px solid color-mix(in srgb, var(--ok, #2fbf71) 40%, transparent);
+  background: color-mix(in srgb, var(--state-good) 12%, transparent);
+  border-block: 1px solid color-mix(in srgb, var(--state-good) 40%, transparent);
   pointer-events: none;
 }
 .bandmap-tick {
@@ -10402,7 +11053,7 @@ select.settings-input {
   right: 0;
   height: 2px;
   transform: translateY(-50%);
-  background: var(--ok, #2fbf71);
+  background: var(--state-good);
   z-index: 3;
   pointer-events: none;
 }
@@ -10412,13 +11063,13 @@ select.settings-input {
   top: -13px;
   font-size: 10px;
   font-weight: 700;
-  color: var(--ok, #2fbf71);
+  color: var(--state-good);
 }
 .bandmap-dial.blocked {
-  background: var(--danger, #e5484d);
+  background: var(--state-weak);
 }
 .bandmap-dial.blocked .bandmap-dial-lbl {
-  color: var(--danger, #e5484d);
+  color: var(--state-weak);
 }
 .bandmap-empty {
   position: absolute;
@@ -10958,7 +11609,7 @@ select.settings-input {
   color: var(--band-marginal, #d8a657);
 }
 .decode-dt.bad {
-  color: var(--state-bad, #e5484d);
+  color: var(--state-weak);
   font-weight: 700;
 }
 .od-clear {
@@ -11338,7 +11989,7 @@ select.settings-input {
   user-select: none;
 }
 .decode-marker-lc {
-  color: var(--state-bad, #e5484d);
+  color: var(--state-weak);
 }
 .decode-marker-ap {
   color: var(--text-faint);
@@ -11367,6 +12018,14 @@ select.settings-input {
 .logbook-field-wide {
   grid-column: 1 / -1;
 }
+/* macOS WKWebView renders the native <input type="datetime-local"> control wider than
+   Chromium does and clips the minutes segment inside a ~140px grid cell (#233, NEEDS-BENCH
+   mac). Give this one input a floor wide enough for the mac control; Chromium's control fits
+   comfortably within it, so the desktop layout is unchanged. Scoped to this input only — never
+   the shared .settings-input. */
+.logbook-field .logbook-when {
+  min-width: 190px;
+}
 .logbook-notes {
   resize: vertical;
   min-height: 58px;
@@ -11392,7 +12051,16 @@ select.settings-input {
      fractional share shrinks below the button cluster and .log-cell{overflow:hidden} + justify-end
      clip the leading QRZ/ClubLog push buttons off the LEFT, unclickable. A deterministic px floor
      (not max-content) keeps the empty header cell aligned with the button-filled data cells. */
-  grid-template-columns: 1fr 1.3fr 0.7fr 1fr 0.7fr 0.6fr 0.6fr 1.6fr 0.9fr 0.7fr minmax(160px, 0.8fr);
+  grid-template-columns: 1fr 1.3fr 0.7fr 1fr 0.7fr 0.6fr 0.6fr 1.6fr 0.9fr 0.7fr 1.4fr minmax(160px, 0.8fr);
+}
+.log-note {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-dim);
+}
+.log-note-flag {
+  margin-right: var(--space-1);
 }
 .log-country {
   overflow: hidden;
@@ -11431,8 +12099,8 @@ select.settings-input {
   border-color: var(--accent);
 }
 .log-rowbtn.danger:hover {
-  color: var(--state-bad, #e5484d);
-  border-color: var(--state-bad, #e5484d);
+  color: var(--state-weak);
+  border-color: var(--state-weak);
 }
 .log-searchbar {
   display: flex;
@@ -11762,6 +12430,15 @@ select.settings-input {
   font-weight: 600;
   padding: 0;
   text-decoration: underline;
+}
+
+/* The destructive variant. Without this the Reset control renders IDENTICALLY to the "Back up"
+   link beside it — same accent, same weight — which is the wrong affordance for the one action
+   in this block that cannot be undone. `--state-bad` is not defined by either theme; every other
+   use in this file supplies the same literal fallback, so this one does too rather than inventing
+   a token half the tree would not resolve. */
+.settings-linkbtn.danger {
+  color: var(--state-weak);
 }
 
 /* ===========================================================================
@@ -12237,7 +12914,7 @@ select.settings-input {
 .panels-menu-tag {
   margin-left: auto;
   color: var(--text-dim);
-  font-size: var(--fs-small);
+  font-size: var(--fs-label);
 }
 .panels-menu-actions {
   display: flex;
@@ -12248,7 +12925,7 @@ select.settings-input {
 }
 .panels-menu-actions button {
   flex: 1;
-  font-size: var(--fs-small);
+  font-size: var(--fs-label);
   padding: var(--space-1);
   color: var(--text-dim);
   background: transparent;
@@ -12271,7 +12948,7 @@ select.settings-input {
   white-space: nowrap;
 }
 .cockpit-txstate.on {
-  color: var(--danger, #e5484d);
+  color: var(--tx);
 }
 /* Clickable arm variant (RTTY/SSTV cockpits — WSJT-X "Enable Tx"). Looks like the Tune
    button so it reads as an action, not a status pill. Green when armed. */
@@ -12374,33 +13051,45 @@ select.settings-input {
   flex-wrap: wrap;
 }
 
-/* DXpedition special-op selector — compact 3-chip strip in the cockpit bar. */
+/* DXpedition Hound — a ONE-CLICK toggle in the cockpit bar (was a select; before that a
+   3-chip group ~180px). It reads ON from `.active`, matching the other header state
+   chips, and warm rather than accent because Hound changes how the sequencer finishes a
+   QSO — the same amber the HOUND badge in the operating strip uses. */
 .cockpit-specialop {
   display: flex;
   align-items: center;
   gap: var(--space-1);
   flex-shrink: 0;
 }
-.cockpit-specialop-label {
-  font-size: 0.72rem;
-  color: var(--text-dim);
-  font-weight: 600;
-  white-space: nowrap;
-}
-/* One compact select (header-density pass 2026-08 — was a 3-chip group ~180px). */
-.cockpit-specialop-select {
+.cockpit-specialop-btn {
   font-size: 0.72rem;
   font-weight: 700;
-  padding: 2px var(--space-1);
+  padding: 2px var(--space-2);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--bg-elev);
   color: var(--text-dim);
   cursor: pointer;
 }
-.cockpit-specialop-select:hover {
+.cockpit-specialop-btn:hover {
   border-color: var(--accent);
   color: var(--text);
+}
+.cockpit-specialop-btn.active {
+  color: var(--alert-warning, #f7c243);
+  background: color-mix(in srgb, var(--alert-warning, #f7c243) 14%, transparent);
+  border-color: color-mix(in srgb, var(--alert-warning, #f7c243) 45%, transparent);
+}
+/* A SuperFox operation is on the air and this build cannot decode it. A STATUS line, not a
+   control: no id, nothing to click, and it only exists while such an operation is up. */
+.cockpit-superfox-note {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--alert-warning, #f7c243);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 34ch;
 }
 
 /* Active DXpedition mode badge — shown in the merged operating strip. */
@@ -12519,10 +13208,55 @@ select.settings-input {
   border-color: color-mix(in srgb, var(--state-good, #29c281) 45%, transparent);
 }
 .cockpit-cat.bad {
-  color: var(--state-bad, #e5484d);
-  background: color-mix(in srgb, var(--state-bad, #e5484d) 16%, transparent);
-  border-color: color-mix(in srgb, var(--state-bad, #e5484d) 45%, transparent);
+  color: var(--state-weak);
+  background: color-mix(in srgb, var(--state-weak) 16%, transparent);
+  border-color: color-mix(in srgb, var(--state-weak) 45%, transparent);
 }
+/* The amplifier strip in the cockpit header — Operate/Standby, band ◀▶, watts.
+   Sits with the other header controls and matches .cockpit-pwr's metrics so it reads as one
+   row. It renders only when an amplifier is configured, so it costs nothing on the vast
+   majority of stations. Nothing here is a stop control: an amplifier in standby does not end
+   a transmission. */
+.amp-strip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.72rem;
+  color: var(--text-dim);
+}
+.amp-strip button {
+  font-size: 0.72rem;
+  line-height: 1;
+  padding: 3px 6px;
+}
+/* Standby is the resting state and stays quiet. Operate means the amplifier is in line, which
+   is worth seeing at a glance from across the shack — but it is NOT an alert, so it takes the
+   good-state token rather than a warning colour. */
+.amp-op.on {
+  color: var(--state-good);
+  border-color: var(--state-good);
+}
+.amp-band {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.amp-band-label {
+  min-width: 3.2em;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.amp-watts {
+  font-variant-numeric: tabular-nums;
+  min-width: 4.5em;
+  text-align: right;
+}
+/* A keystroke the queue refused. Amber, not red: nothing broke and nothing was transmitted —
+   the operator simply needs to click again. */
+.amp-strip-refused {
+  color: var(--alert-warning);
+}
+
 .cockpit-pwr {
   display: inline-flex;
   align-items: center;
@@ -13175,6 +13909,28 @@ button.cq-skiptx1.on {
   background: var(--accent);
   color: var(--accent-ink);
 }
+/* The Map button: a sibling control next to the Classic/Roster pill, not a member of it
+ * (it opens the POTA map pop-out, it does not switch layoutMode) — so it carries its own
+ * border+radius rather than a bare `.clt-opt` fragment, which relies on
+ * `.cockpit-layout-toggle` for the border/radius/overflow that make the pill read as one
+ * piece. Same type metrics and hover treatment as `.clt-opt` so it still reads as one
+ * family in the header, just its own pill beside the first.
+ */
+.cockpit-map-btn {
+  padding: 5px 14px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev-2);
+  color: var(--text);
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.cockpit-map-btn:hover {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
 .cockpit-roster > * {
   flex: 1;
   min-width: 0;
@@ -13266,9 +14022,11 @@ button.cq-skiptx1.on {
   border-color: var(--accent);
   color: var(--accent);
 }
-/* Pop-out buttons on Connect + DXpeditions + Operate headers (multi-monitor tear-off). */
+/* Pop-out buttons on Connect + DXpeditions + POTA/SOTA + Operate headers (multi-monitor
+   tear-off). */
 .connect-popout,
 .dxped-popout,
+.pota-popout,
 .cockpit-popout {
   margin-left: auto;
   font-size: 0.75rem;
@@ -13282,7 +14040,8 @@ button.cq-skiptx1.on {
   white-space: nowrap;
 }
 .connect-popout:hover,
-.dxped-popout:hover {
+.dxped-popout:hover,
+.pota-popout:hover {
   border-color: var(--accent);
   color: var(--accent);
 }
@@ -13368,7 +14127,12 @@ button.cq-skiptx1.on {
 }
 .np-row {
   display: grid;
-  grid-template-columns: minmax(120px, 200px) minmax(72px, 1fr) minmax(90px, 1.4fr) 56px 64px 52px minmax(140px, 2fr);
+  /* need | call | entity | band | FREQ | mode | zone | why.
+     The frequency column is fixed at 66px: "14.074" is six glyphs at this size and the column
+     must not breathe, because a needs list is SCANNED down rather than read across — a ragged
+     decimal point is what makes a column of numbers slow to read. Taken from `why`, which is the
+     only flexible column with room to give at the 1024px floor. */
+  grid-template-columns: minmax(120px, 200px) minmax(72px, 1fr) minmax(90px, 1.4fr) 56px 66px 64px 52px minmax(110px, 2fr);
   align-items: center;
   gap: 10px;
   padding: 6px var(--space-3);
@@ -13399,6 +14163,14 @@ button.cq-skiptx1.on {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.np-freq {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  /* Dimmer than the call: the frequency is context for a row an operator has already picked out
+     by callsign, not the thing they are scanning for. */
+  color: var(--text-dim);
+}
+
 .np-row.np-header {
   position: sticky;
   top: 0;
@@ -13564,7 +14336,7 @@ button.cq-skiptx1.on {
   background: var(--accent);
 }
 .np-mode-phone {
-  background: var(--ok, #2fbf71);
+  background: var(--state-good);
 }
 /* Mode column cell — what you need the station on (CW / Phone / Digital), shown for
    ALL needs (digital included), not just CW/Phone tucked in the band cell. */
@@ -13691,13 +14463,13 @@ button.cq-skiptx1.on {
 }
 /* Clear all filters chip — visually distinct (danger-muted). */
 .np-chip-clear {
-  border-color: var(--warning, #e8b04b);
-  color: var(--warning, #e8b04b);
+  border-color: var(--alert-warning);
+  color: var(--alert-warning);
 }
 .np-chip-clear:hover {
-  background: color-mix(in srgb, var(--warning, #e8b04b) 12%, transparent);
-  border-color: var(--warning, #e8b04b);
-  color: var(--warning, #e8b04b);
+  background: color-mix(in srgb, var(--alert-warning) 12%, transparent);
+  border-color: var(--alert-warning);
+  color: var(--alert-warning);
 }
 /* Evidence sub-line under the headline in the Why column.
    This is the trust feature: the board shows its work. */
@@ -13928,12 +14700,19 @@ button.cq-skiptx1.on {
   color: var(--text);
   font-weight: 700;
 }
+/* A DIRECTED CQ (CQ DX, CQ NA, CQ POTA…) is not a call you can answer from just anywhere, so
+   it must not read like a plain CQ at a glance — that mistake is the whole reason the modifier
+   is shown. --alert-warning, which both themes define: noticeable while scanning a roster,
+   and already the colour this app uses for "look before you act". */
+.or-calling.cq.directed {
+  color: var(--alert-warning);
+}
 .or-snr {
   font-weight: 700;
   text-align: right;
 }
 .or-snr.snr-good {
-  color: var(--ok, #5fd38d);
+  color: var(--state-good);
 }
 .or-snr.snr-ok {
   color: var(--text);
@@ -14077,8 +14856,8 @@ button.cq-skiptx1.on {
   min-width: 0;
 }
 .cq-now.stalled {
-  border-color: var(--state-bad, #e5484d);
-  background: color-mix(in srgb, var(--state-bad, #e5484d) 10%, var(--bg-elev-2));
+  border-color: var(--state-weak);
+  background: color-mix(in srgb, var(--state-weak) 10%, var(--bg-elev-2));
 }
 .cq-now-label {
   font-size: 0.62rem;
@@ -14087,7 +14866,7 @@ button.cq-skiptx1.on {
   color: var(--text-faint);
 }
 .cq-now.stalled .cq-now-label {
-  color: var(--state-bad, #e5484d);
+  color: var(--state-weak);
 }
 .cq-now-msg {
   flex: 1;
@@ -14109,7 +14888,7 @@ button.cq-skiptx1.on {
   flex: none;
   padding: 2px 9px;
   border: 1px solid var(--border);
-  background: var(--bg-elev-1);
+  background: var(--bg-elev);
   color: var(--text-dim);
   border-radius: var(--radius-sm);
   font-size: 0.78rem;
@@ -14130,7 +14909,7 @@ button.cq-skiptx1.on {
   min-width: 0;
   padding: 3px var(--space-2);
   border: 1px solid var(--border);
-  background: var(--bg-elev-1);
+  background: var(--bg);
   color: var(--text);
   border-radius: var(--radius-sm);
   font-family: var(--font-mono);
@@ -14692,7 +15471,7 @@ button.cq-skiptx1.on {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  font-size: var(--fs-sm, 13px);
+  font-size: var(--fs-label);
 }
 .need-badge {
   flex: 0 0 auto;
@@ -15237,8 +16016,8 @@ button.cq-skiptx1.on {
   font-size: var(--fs-label);
 }
 .pota-activation.active {
-  background: color-mix(in srgb, var(--ok, #2fbf71) 12%, transparent);
-  border-color: color-mix(in srgb, var(--ok, #2fbf71) 40%, transparent);
+  background: color-mix(in srgb, var(--state-good) 12%, transparent);
+  border-color: color-mix(in srgb, var(--state-good) 40%, transparent);
 }
 .pota-act-label {
   color: var(--text-dim);
@@ -15357,7 +16136,7 @@ button.cq-skiptx1.on {
 }
 .pota-spot-v2:hover {
   border-color: var(--border);
-  background: var(--bg-raised);
+  background: var(--bg-elev);
 }
 /* Priority: bandOpen rows get a green-ish accent; newPark rows get an accent tint */
 .pota-spot-v2.pota-spot-open {
@@ -15524,7 +16303,7 @@ button.cq-skiptx1.on {
 }
 .rig-detect-nomodel {
   font-size: var(--fs-micro);
-  color: var(--warn, #e8a33d);
+  color: var(--alert-warning);
   line-height: 1.35;
 }
 .rig-detect-driver {
@@ -15584,7 +16363,7 @@ button.cq-skiptx1.on {
   padding: var(--space-1) var(--space-2);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  background: var(--bg-elev-1);
+  background: var(--bg);
   color: var(--text);
   font-size: 12px;
 }
@@ -17551,7 +18330,14 @@ button.sat-chip:disabled {
   font-size: 14px;
   padding: 6px 10px;
 }
-.wizard-field input.bad {
+/* ⚠️ BOTH ELEMENTS, and the select is the one that matters. The wizard puts `bad` on the
+   RADIO MODEL <select> (SetupWizard.tsx) to mark a model the probe GUESSED rather than
+   confirmed — an FT-991A answers the FTDX10 seed, so the guess is wrong more often than not.
+   This rule was `input.bad` only, so that border had never rendered on any platform: the one
+   moment an operator could catch a wrong radio, marked invisibly. `aria-invalid` and the red
+   hint text were doing the whole job alone. */
+.wizard-field input.bad,
+.wizard-field select.bad {
   border-color: var(--band-marginal);
 }
 .wizard-field-hint {
@@ -17613,7 +18399,7 @@ button.sat-chip:disabled {
 }
 .cw-ai-status {
   color: var(--text-dim);
-  font-size: var(--fs-small);
+  font-size: var(--fs-label);
 }
 .cw-ai-panel .toggle {
   margin-left: var(--space-2);
@@ -17626,7 +18412,7 @@ button.sat-chip:disabled {
 .cw-ai-age {
   color: var(--text-dim);
   font-variant-numeric: tabular-nums;
-  font-size: var(--fs-small);
+  font-size: var(--fs-label);
   flex: none;
 }
 
@@ -17643,7 +18429,7 @@ button.sat-chip:disabled {
 }
 .cw-ai-status {
   color: var(--text-dim);
-  font-size: var(--fs-small);
+  font-size: var(--fs-label);
 }
 .cw-ai-panel .toggle {
   margin-left: var(--space-2);
@@ -17656,7 +18442,7 @@ button.sat-chip:disabled {
 .cw-ai-age {
   color: var(--text-dim);
   font-variant-numeric: tabular-nums;
-  font-size: var(--fs-small);
+  font-size: var(--fs-label);
   flex: none;
 }
 
@@ -17668,19 +18454,24 @@ button.sat-chip:disabled {
   /* In-flow: the last control in the waterfall header row (was absolutely positioned,
      which floated it over the Zero knob). flex-shrink 0 so it keeps its size. */
   flex: 0 0 auto;
-  background: var(--bg-raised, rgba(0, 0, 0, 0.35));
+  background: var(--bg-elev);
   color: var(--text-dim);
   border: 1px solid var(--border);
   border-radius: 4px;
   padding: 0 var(--space-2);
   cursor: pointer;
-  font-size: var(--fs-small);
+  font-size: var(--fs-label);
   line-height: 1.6;
 }
-/* Waterfall pause + 3D toggles — same chrome as the pop-out button; accent when engaged. */
+/* Waterfall pause + 3D toggles — same chrome as the pop-out button; accent when engaged.
+   Pause is AMBER, and the token has to be the amber one: `var(--state-weak, #e0a030)` never
+   reached its fallback, because `--state-weak` IS defined and it is the sheet's RED. A paused
+   waterfall — an ordinary, deliberate operator action — was painting the same colour as a
+   failed CAT link. Same defect as TxMeters' warn band (see the note on its ZONE_COLOR): an
+   amber fallback parked on a red token, which reads as amber in the source and never is. */
 .wf-pause.on {
-  color: var(--state-weak, #e0a030);
-  border-color: var(--state-weak, #e0a030);
+  color: var(--alert-warning);
+  border-color: var(--alert-warning);
 }
 .wf-dss.on {
   color: var(--accent);
@@ -17703,12 +18494,12 @@ button.sat-chip:disabled {
 .wf-redock {
   width: 100%;
   padding: var(--space-1) var(--space-2);
-  background: var(--bg-raised, rgba(0, 0, 0, 0.25));
+  background: var(--bg-elev);
   color: var(--text-dim);
   border: 1px dashed var(--border);
   border-radius: 4px;
   cursor: pointer;
-  font-size: var(--fs-small);
+  font-size: var(--fs-label);
   text-align: center;
 }
 .wf-redock:hover {
@@ -17813,7 +18604,7 @@ button.sat-chip:disabled {
   display: flex;
   align-items: baseline;
   gap: var(--space-2);
-  font-size: var(--fs-small);
+  font-size: var(--fs-label);
 }
 .mini-spectrum-src {
   color: var(--accent);
@@ -17832,7 +18623,7 @@ button.sat-chip:disabled {
 }
 .mini-spectrum-idle {
   color: var(--text-dim);
-  font-size: var(--fs-small);
+  font-size: var(--fs-label);
 }
 .settings-audio-scope {
   grid-column: 1 / -1;
@@ -17852,7 +18643,7 @@ button.sat-chip:disabled {
 
 .cw-macro-role {
   color: var(--text-dim);
-  font-size: var(--fs-small);
+  font-size: var(--fs-label);
   min-width: 8.5em;
   flex: none;
 }
@@ -17861,7 +18652,7 @@ button.sat-chip:disabled {
 .fd-section-warn {
   font-size: 11px;
   font-weight: 600;
-  color: var(--warn, #e8a13c);
+  color: var(--alert-warning);
 }
 
 /* ── Program (radio programming workbench): SOURCE pane (query + results) left,
@@ -18057,11 +18848,20 @@ button.sat-chip:disabled {
   cursor: pointer;
   padding: 3px 5px;
 }
+/* The app's ONE chase gold (.wn-chase.active / .sat-star.on / .sat-fav-mark), light theme
+   overriding to the chase ink like every other gold star. Was `var(--warn, #e6b800)` — an
+   undefined token whose fallback is a second, slightly-off gold that fired in both themes,
+   so a favourite here read as a different idiom from every other ★ in the app and kept a
+   dark-tuned gold on the light theme's white panel. */
 .rp-star:hover {
-  color: var(--warn, #e6b800);
+  color: #f5a524;
 }
 .rp-star.on {
-  color: var(--warn, #e6b800);
+  color: #f5a524;
+}
+[data-theme='light'] .rp-star:hover,
+[data-theme='light'] .rp-star.on {
+  color: #9d6500;
 }
 .rp-attribution {
   padding-top: 2px;
@@ -18513,7 +19313,7 @@ button.sat-chip:disabled {
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--text-dim);
-  background: var(--bg-elev-1);
+  background: var(--bg-elev);
 }
 .mv-section-count {
   color: var(--text-dim);
@@ -18528,7 +19328,7 @@ button.sat-chip:disabled {
   background: var(--bg-elev-2);
 }
 .mv-row.invalid {
-  border-color: var(--danger, #b33);
+  border-color: var(--state-weak);
 }
 .mv-row-line {
   display: flex;
@@ -18561,8 +19361,12 @@ button.sat-chip:disabled {
   cursor: pointer;
   padding: 3px 5px;
 }
+/* The app's ONE chase gold (.rp-star.on, .sat-fav-mark) — same note as those. */
 .mv-star.on {
-  color: var(--warn, #e6b800);
+  color: #f5a524;
+}
+[data-theme='light'] .mv-star.on {
+  color: #9d6500;
 }
 .mv-row-main {
   flex: 1;
@@ -18760,7 +19564,7 @@ button.sat-chip:disabled {
   white-space: nowrap;
 }
 .mv-grid tr.invalid td {
-  background: color-mix(in srgb, var(--danger, #b33) 14%, transparent);
+  background: color-mix(in srgb, var(--state-weak) 14%, transparent);
 }
 .mv-cell {
   background: transparent;
@@ -18780,8 +19584,13 @@ button.sat-chip:disabled {
   width: 7rem;
   font-family: var(--font-mono);
 }
+/* The mode cell is a <select> (see MemoriesView's ChoiceSelect — a datalist filtered its own
+   suggestions down to the value already in the field). A select spends 24px of its right
+   padding on the arrow that the input it replaced did not, so the width grew by that much to
+   keep the same text room: measured in `layout-harness/selects.html`, 88px left 58px for the
+   text and 104px leaves 74px — what the 5.5rem input had. */
 .mv-cell-mode {
-  width: 5.5rem;
+  width: 6.5rem;
 }
 .mv-ro {
   color: var(--text-dim);
@@ -18802,6 +19611,120 @@ button.sat-chip:disabled {
 .mv-row-actions button:hover {
   color: var(--text);
   border-color: var(--accent);
+}
+
+/* ---- selection + bulk delete ----
+   The bar appears only once a row is ticked. Every number on it is the SELECTED ROWS ON
+   SCREEN (MemoriesView's `selectedShown`), so what it counts, what it highlights and what
+   Delete removes are the same rows. */
+.mv-selbar {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-elev));
+}
+.mv-selbar-all {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.mv-selbar-count {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.mv-selbar-del {
+  border-color: var(--state-weak);
+  color: var(--state-weak);
+}
+.mv-selbar-del:hover {
+  background: var(--state-weak);
+  border-color: var(--state-weak);
+  color: #fff;
+}
+.mv-pick {
+  flex: none;
+  margin: 0 2px;
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+.mv-row.picked,
+.mv-grid tr.picked td {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+/* The row ＋ New just created, while its editor is open in the pinned panel below — so the
+   list still answers "where did it go?". The grid needs it more than the list does: it is the
+   200-channel spreadsheet view. Marked with an inset bar and the existing bottom border
+   recoloured, never an added border, so the row does not change height. */
+.mv-row.adding {
+  border-color: var(--accent);
+}
+.mv-grid tr.adding td {
+  border-bottom-color: var(--accent);
+}
+.mv-grid tr.adding td:first-child {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+/* ---- the pinned add panel ----
+   ＋ New's editor, docked at the bottom of `.mv-main` instead of opening inline in the list
+   (the operator: "the add section adds inline … leading to difficulty and confusion").
+   `flex: none` keeps `.mv-scroll` the pane's one scroll owner; the cap is against --vh-eff
+   (raw vh is zoom-blind) so a tall repeater editor scrolls INSIDE the panel rather than
+   pushing the list off a 1024×768 window, and the background is opaque because a pinned
+   surface sits over scrolling content. */
+.mv-add {
+  flex: none;
+  max-height: calc(0.42 * var(--vh-eff, 100vh));
+  overflow-y: auto;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev);
+}
+.mv-add-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-elev));
+}
+.mv-add-title {
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+.mv-add-hint {
+  font-size: 0.72rem;
+  color: var(--text-faint);
+}
+.mv-add-discard {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  border-radius: var(--radius-sm);
+  padding: 1px var(--space-2);
+  font-size: 0.74rem;
+  cursor: pointer;
+}
+.mv-add-discard:hover {
+  border-color: var(--state-weak);
+  color: var(--state-weak);
+}
+/* The editor inside the panel has the head above it, so it needs no border of its own. */
+.mv-add > .mv-editor {
+  border-top: none;
 }
 
 /* Starter-packs modal — overlays the section, scrolls internally on short windows */
@@ -18961,18 +19884,26 @@ button.sat-chip:disabled {
    APRS did (operator screenshot, 0.20.5) before `.aprs-host` was added here. Every
    full-view host needs this; it is not optional chrome. */
 .rtty-host,
+.psk-host,
 .sstv-host,
-.aprs-host {
+.aprs-host,
+.js8-host {
   display: contents;
 }
 .rtty-host[hidden],
+.psk-host[hidden],
 .sstv-host[hidden],
-.aprs-host[hidden] {
+.aprs-host[hidden],
+.js8-host[hidden] {
   display: none;
 }
 /* Triple-class (0,3,0) so `.layout.single` can't collapse the flex chain — same
-   fix as `.layout.single.cw-cockpit`. */
+   fix as `.layout.single.cw-cockpit`. PSK is RTTY's region-less shape (one
+   content pane, no region), so it rides the same rule — and the same
+   `--cockpit-fill-min` knob, whose allowlist in cockpit-panes.test.ts names all
+   three shells. */
 .layout.single.rtty-cockpit,
+.layout.single.psk-cockpit,
 .layout.single.sstv-view {
   display: flex;
   flex-direction: column;
@@ -18995,6 +19926,17 @@ button.sat-chip:disabled {
      cockpit-panes.test.ts fails any other rule that sets this — inherited under a
      region's tier-2/3 `overflow: hidden` it would be the clip mechanism reborn. */
   --cockpit-fill-min: 10em;
+}
+/* JS8 is a REGION cockpit (CW's shape: a .cockpit-panes grid, not bare fill frames), so it
+   takes CW's shell rule and NOT the --cockpit-fill-min knob — cockpit-panes.test.ts fences
+   that knob to the region-less shells. Same deficit valve as .layout.single.cw-cockpit. */
+.layout.single.js8-cockpit {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  overflow-y: auto;
+  min-height: 0;
 }
 /* Pinned TX dock — mode/Send/Stop/progress. Never a panel; Stop always reachable.
    Sticky is the .cockpit-txdock discipline (cockpit-panes.css): with the composer strip
@@ -19028,7 +19970,9 @@ button.sat-chip:disabled {
    the canvas has real device pixels to draw into. A flex:1 stage collapses to 0
    in this scrolling cockpit column, and Waterfall's hidden-canvas guard would then
    skip every row. */
-.rtty-cockpit .waterfall-wrap {
+.rtty-cockpit .waterfall-wrap,
+.psk-cockpit .waterfall-wrap,
+.js8-cockpit .waterfall-wrap {
   flex: 0 0 auto;
   /* Effective viewport, matching .ph-scope-panel — raw 22vh was zoom-blind. */
   height: calc(0.22 * var(--vh-eff, 100vh));
@@ -19085,11 +20029,20 @@ button.sat-chip:disabled {
    `--cockpit-pane-flex`, so the inline fallback is already `1 1 0`.) 10em ≈ the frame head
    + the 6em transcript floor; a shorter window flows to the shell's own `overflow-y: auto`
    valve, never to a clip. */
-.rtty-stream .cw-decode-text {
+.rtty-stream .cw-decode-text,
+.psk-stream .cw-decode-text {
   /* was height:14em — let it fill the pane and scroll internally (it already has overflow-y:auto). */
   flex: 1 1 0;
   min-height: 0;
   height: auto;
+}
+/* PSK TX dock drive hint — the one operator-facing ALC/IMD sentence (the plan's
+   "modest default drive + a dock hint, no auto-ALC"). Quiet caption styling: it
+   is standing advice, not an alert, and must not compete with the Stop row. */
+.psk-drive-hint {
+  font-size: var(--fs-label);
+  color: var(--text-dim);
+  padding: 0 var(--space-1);
 }
 /* (`.rtty-cockpit > .cw-macros` / `> .cw-send { flex: 0 0 auto }` deleted with the pane
    rebuild — the child combinator stopped matching once the rows moved inside the pinned
@@ -19130,16 +20083,16 @@ button.sat-chip:disabled {
   padding: 1px var(--space-2);
 }
 .rtty-afc-pill.locked {
-  color: var(--ok, #2fbf71);
-  border-color: var(--ok, #2fbf71);
+  color: var(--state-good);
+  border-color: var(--state-good);
 }
 /* RTTY sending indicator (header, beside the backend pill) — an over is on the air. */
 .rtty-tx-pill {
   font-size: var(--fs-label);
   font-weight: 800;
   letter-spacing: 0.06em;
-  color: var(--danger, #e5484d);
-  border: 1px solid var(--danger, #e5484d);
+  color: var(--tx);
+  border: 1px solid var(--tx);
   border-radius: 999px;
   padding: 2px 10px;
   margin-left: var(--space-2);
@@ -19150,14 +20103,14 @@ button.sat-chip:disabled {
    this file's convention for the on-air red). A latched transmitter the operator cannot
    see is the whole hazard of the feature; this must never be a subtle state change. */
 .rtty-tx-latch.on {
-  color: var(--danger, #e5484d);
-  border-color: var(--danger, #e5484d);
+  color: var(--tx);
+  border-color: var(--tx);
 }
 .rtty-tx-latch.on .cw-macro-key,
 .rtty-tx-latch.on .cw-macro-label {
   /* `.cw-macro-key` sets its own color explicitly (see the note by `.cw-macro-label`),
      so the on-state has to reach the spans or only the border would change. */
-  color: var(--danger, #e5484d);
+  color: var(--tx);
 }
 
 /* Their-call field in the macro row — feeds the {CALL} macro token. */
@@ -19167,10 +20120,241 @@ button.sat-chip:disabled {
   font-family: var(--font-mono);
   text-transform: uppercase;
 }
+/* =========================================================================
+   JS8 cockpit — CONTENT styling only. Structure (the region, columns, the dock) is in
+   cockpit-panes.css; the feeds' readable minimums sit on their content wrappers here, the
+   sanctioned place. Every colour is a theme variable defined in BOTH themes.
+   ========================================================================= */
+.js8-speeds {
+  display: inline-flex;
+  gap: var(--space-1);
+}
+.js8-speed-chip {
+  padding: 0 var(--space-2);
+}
+.js8-dock-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  /* Reachability pin, like .cw-macros / .cw-send: the rows that queue frames never shrink
+     under deficit (guarded in cockpit-shells.test.ts ROWS). */
+  flex: 0 0 auto;
+}
+.js8-to {
+  flex: 0 1 14em;
+}
+.js8-compose {
+  flex: 1 1 12em;
+}
+.js8-cq-select {
+  flex: 0 0 auto;
+  width: auto;
+}
+/* Three faces for a second-act chip: off · on-but-not-armed (the switch is on, the session
+   TX latch is off — nothing keys) · ARMED (both acts agree). Auto-armed must never LOOK
+   ack-capable — the APRS rule. */
+.js8-arm.on {
+  border-color: var(--snr-marginal);
+  color: var(--snr-marginal);
+}
+.js8-arm.armed {
+  border-color: var(--state-ok);
+  color: var(--state-ok);
+}
+/* Feeds: readable minimum on the CONTENT wrapper (never on the frame). */
+.js8-activity,
+.js8-offsets,
+.js8-stations,
+.js8-inbox {
+  font-family: var(--font-mono);
+  font-size: var(--fs-label);
+  overflow-y: auto;
+  min-height: 6em;
+}
+.js8-row {
+  display: grid;
+  grid-template-columns: 4.6em 1.2em 3.4em 3em minmax(0, 1fr);
+  gap: var(--space-1);
+  padding: 1px var(--space-1);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.js8-row.mine {
+  color: var(--accent);
+}
+.js8-row.directed {
+  border-left: 3px solid var(--accent);
+}
+.js8-row.low {
+  color: var(--text-dim);
+}
+.js8-row.partial {
+  opacity: 0.7;
+  font-style: italic;
+}
+.js8-time,
+.js8-freq,
+.js8-snr,
+.js8-age,
+.js8-dt,
+.js8-dist,
+.js8-az {
+  color: var(--text-dim);
+}
+/* BAND ACTIVITY BY OFFSET — one row per offset, JS8Call's tableWidgetRXAll column order
+   (Offset · Age · SNR · Time Delta · Speed · Message). The transcript's row semantics carry
+   over so a directed or low-confidence decode reads the same in both surfaces. */
+.js8-offset-row {
+  display: grid;
+  grid-template-columns: 5.2em 2.6em 3em 4.4em 1.2em minmax(0, 1fr);
+  gap: var(--space-1);
+  padding: 1px var(--space-1);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.js8-offset-row.mine {
+  color: var(--accent);
+}
+.js8-offset-row.directed {
+  border-left: 3px solid var(--accent);
+}
+.js8-offset-row.low {
+  color: var(--text-dim);
+}
+/* ★ the operator pin: a text button, dim until it holds a row. */
+.js8-pin {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--text-dim);
+  line-height: 1;
+}
+.js8-pin.on {
+  color: var(--accent);
+}
+.js8-station.pinned {
+  background: var(--bg-elev-2);
+}
+/* Worked-before: the log's own tick, in the colour every other B4 cue uses. */
+.js8-b4 {
+  color: var(--state-ok);
+  font-weight: 700;
+}
+/* Name / Comment come out of the log and can be long — they yield before the row wraps. */
+.js8-opname,
+.js8-opcomment {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.js8-opname {
+  max-width: 8em;
+}
+.js8-opcomment {
+  max-width: 14em;
+  color: var(--text-dim);
+}
+.js8-station,
+.js8-inbox-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 2px var(--space-1);
+  border-bottom: 1px solid var(--border);
+}
+.js8-station.selected {
+  border-left: 3px solid var(--accent);
+}
+.js8-station-call {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  color: var(--accent);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+.js8-station-acts {
+  margin-left: auto;
+  display: inline-flex;
+  gap: var(--space-1);
+}
+.js8-query,
+.js8-inbox-act {
+  padding: 0 var(--space-1);
+}
+.js8-chip {
+  font-size: var(--fs-label);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0 var(--space-1);
+  color: var(--text-dim);
+}
+.js8-inbox-row.state-unread {
+  font-weight: 700;
+}
+.js8-path {
+  color: var(--text-dim);
+}
+.js8-cmd-select {
+  flex: 0 1 11em;
+}
+.js8-estimate {
+  font-family: var(--font-mono);
+  font-size: var(--fs-label);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.js8-estimate.over {
+  color: var(--snr-weak);
+  font-weight: 700;
+}
+.js8-idle.tripped {
+  border-color: var(--snr-weak);
+  color: var(--snr-weak);
+  font-weight: 700;
+}
+.js8-pending-row {
+  border: 1px dashed var(--accent);
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-2);
+}
+.js8-pending-text,
+.js8-queue-text {
+  font-family: var(--font-mono);
+  font-size: var(--fs-label);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.js8-queue-row {
+  font-size: var(--fs-label);
+}
+.js8-queue-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0 var(--space-1);
+  border-right: 1px solid var(--border);
+}
+.js8-queue-item.origin-operator .js8-queue-text {
+  color: var(--accent);
+}
+/* Settings ▸ Digital ▸ JS8: the four decode-speed switches on one row. */
+.js8-rx-speeds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+.js8-rx-speeds .settings-toggle {
+  flex: 0 0 auto;
+}
 /* Stop button in the macro row — live (red-tinted) only while sending. */
 .rtty-stop:not(:disabled) {
-  color: var(--danger, #e5484d);
-  border-color: var(--danger, #e5484d);
+  color: var(--state-weak);
+  border-color: var(--state-weak);
 }
 /* SSTV Arm toggle (header) — armed state must read at a glance. */
 .sstv-arm {
@@ -19210,7 +20394,11 @@ button.sat-chip:disabled {
   align-items: center;
   justify-content: center;
   overflow: hidden;
-  background: var(--surface-2, rgba(0, 0, 0, 0.2));
+  /* `--bg` IS the recessed role in both themes (dark #0b0f17 under #111722 panel,
+     light #e5eaf0 under #fbfcfe). Was `var(--surface-2, rgba(0,0,0,.2))` — an
+     undefined token whose fallback is a fixed black wash, correct-looking in dark
+     and a muddy grey slab in light. */
+  background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius);
 }
@@ -19396,7 +20584,11 @@ button.sat-chip:disabled {
   padding: var(--space-2) var(--space-3);
   border: 1px dashed var(--border);
   border-radius: var(--radius-sm);
-  background: var(--surface-2, rgba(0, 0, 0, 0.2));
+  /* `--bg` IS the recessed role in both themes (dark #0b0f17 under #111722 panel,
+     light #e5eaf0 under #fbfcfe). Was `var(--surface-2, rgba(0,0,0,.2))` — an
+     undefined token whose fallback is a fixed black wash, correct-looking in dark
+     and a muddy grey slab in light. */
+  background: var(--bg);
 }
 .sstv-tx-drop.loaded {
   border-style: solid;
@@ -19565,8 +20757,8 @@ button.sat-chip:disabled {
   padding: 6px var(--space-5);
 }
 .sstv-tx-stop:not(:disabled) {
-  color: var(--danger, #e5484d);
-  border-color: var(--danger, #e5484d);
+  color: var(--state-weak);
+  border-color: var(--state-weak);
 }
 .sstv-tx-stop:disabled {
   opacity: 0.4;
@@ -19581,12 +20773,16 @@ button.sat-chip:disabled {
   font-size: var(--fs-label);
   font-weight: 800;
   letter-spacing: 0.04em;
-  color: var(--danger, #e5484d);
+  color: var(--tx);
 }
 .sstv-tx-progress-track {
   height: 8px;
   border-radius: 999px;
-  background: var(--surface-2, rgba(0, 0, 0, 0.2));
+  /* `--bg` IS the recessed role in both themes (dark #0b0f17 under #111722 panel,
+     light #e5eaf0 under #fbfcfe). Was `var(--surface-2, rgba(0,0,0,.2))` — an
+     undefined token whose fallback is a fixed black wash, correct-looking in dark
+     and a muddy grey slab in light. */
+  background: var(--bg);
   border: 1px solid var(--border);
   overflow: hidden;
 }
@@ -19656,7 +20852,7 @@ button.sat-chip:disabled {
 }
 .aprs-beacon-title {
   font-weight: 700;
-  font-size: var(--fs-small);
+  font-size: var(--fs-label);
   color: var(--text-dim);
 }
 .aprs-beacon label {
@@ -19668,7 +20864,7 @@ button.sat-chip:disabled {
 }
 .aprs-beacon input,
 .aprs-beacon select {
-  background: var(--surface-2, transparent);
+  background: transparent;
   color: var(--text);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -20083,7 +21279,7 @@ tr.sel .aprs-sym {
   padding: 2px 6px;
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-sm);
-  background: var(--surface-2, transparent);
+  background: transparent;
   color: var(--text-dim);
   cursor: pointer;
 }
@@ -20121,8 +21317,8 @@ tr.sel .aprs-sym {
   padding: var(--space-2) 14px;
   margin-bottom: var(--space-2);
   border: 1px solid var(--border-soft);
-  border-radius: var(--radius-md, 8px);
-  background: var(--surface-2, transparent);
+  border-radius: var(--radius-sm);
+  background: transparent;
 }
 .setup-health-title {
   font-size: 11px;
@@ -20146,10 +21342,10 @@ tr.sel .aprs-sym {
   background: var(--text-faint);
 }
 .setup-health .health-item.ok .health-dot {
-  background: var(--ok, #35c46b);
+  background: var(--state-good);
 }
 .setup-health .health-item.bad .health-dot {
-  background: var(--danger, #e5484d);
+  background: var(--state-weak);
 }
 .setup-health .health-item.unknown .health-dot {
   background: var(--text-faint);
@@ -20707,7 +21903,7 @@ tr.sel .aprs-sym {
    spectrum was and cannot show it. */
 .sstv-tuneoff {
   font-family: var(--font-mono);
-  color: var(--warn, #e8a13c);
+  color: var(--alert-warning);
 }
 .sstv-band-caption {
   text-align: center;
@@ -21791,4 +22987,157 @@ tr.sel .aprs-sym {
 }
 :where(html[data-viewport='xs'], html[data-viewport='sm']) .gsg-hero-card {
   padding: var(--space-6) var(--space-5) 22px;
+}
+
+/* Confirmation dialog actions (src/confirm.tsx). Cancel first in the DOM so it takes focus and
+   ESC/overlay-click agree with it: for a destructive question the safe answer is the default. */
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+}
+/* The affirmative button of a DESTRUCTIVE confirm (`danger: true`). Without this the class was
+   inert — there is no `.settings-save.danger` or bare `.danger` rule — so all eleven destructive
+   confirms painted as an ordinary accent save button, and the one visual cue that this button
+   deletes something was simply absent. Filled rather than outlined, following
+   `.logconfirm-log.danger`: it IS the primary action of its dialog, just a dangerous one. */
+.settings-save.danger {
+  background: var(--state-weak);
+  color: #fff;
+}
+.settings-save.danger:hover:not(:disabled) {
+  filter: brightness(1.06);
+}
+
+/* ---- the three-day Kp outlook pane ----
+   Measured and modelled must not look alike: an observed bar is filled, a forecast
+   bar is a hollow outline of the same colour, so "this is a prediction" survives a
+   glance across the shack. The tone itself is the NOAA G-scale banding the rest of
+   the app uses, so a storm reads red here and red everywhere else. */
+.kp-outlook {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.kp-outlook.empty {
+  color: var(--text-faint);
+  font-size: 0.82rem;
+}
+.kp-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 64px;
+  /* A long forecast scrolls inside the pane rather than squeezing the bars to
+     nothing or pushing the pane wider than its grid slot. */
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+.kp-bar {
+  flex: 0 0 6px;
+  min-height: 2px;
+  border-radius: 2px 2px 0 0;
+  background: var(--kp-tone);
+}
+/* The forecast half: same colour, hollow — a prediction is not a reading. */
+.kp-bar.modelled {
+  background: transparent;
+  border: 1px solid var(--kp-tone);
+  /* Faint hatch so it still reads as "something is here" at 6 px wide. */
+  background-image: repeating-linear-gradient(
+    45deg,
+    color-mix(in srgb, var(--kp-tone) 45%, transparent) 0 2px,
+    transparent 2px 4px
+  );
+}
+.kp-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 0.78rem;
+  color: var(--text-faint);
+}
+.kp-line.warn {
+  color: var(--state-warn, #f5a524);
+}
+.kp-line.good {
+  color: var(--state-good, #30a46c);
+}
+
+/* ---- the TV page's chrome (src/tv/ConnectTv.tsx) ----
+   A thin bar over the full ConnectView; everything below it is the app's own view
+   and styles itself. The bar is fixed-height flex so ConnectView's pane grid gets an
+   honest remaining height. */
+.tv-app {
+  display: flex;
+  flex-direction: column;
+  /* --vh-eff, not raw vh: the TV entry runs useViewport() like the app, and the
+     zoom-blind-vh rule is a contract (responsive-vocab.test.ts computes it). */
+  height: var(--vh-eff, 100dvh);
+  background: var(--bg);
+}
+.tv-app > .connect-view,
+.tv-app > *:last-child {
+  flex: 1;
+  min-height: 0;
+}
+.tv-bar {
+  flex: none;
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  padding: 6px var(--space-3);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elev);
+}
+.tv-call {
+  font-weight: 700;
+  font-size: 1.05rem;
+  letter-spacing: 0.02em;
+}
+.tv-grid {
+  color: var(--text-faint);
+}
+.tv-spacer {
+  flex: 1;
+}
+.tv-clock {
+  font-variant-numeric: tabular-nums;
+  font-size: 1.05rem;
+}
+.tv-chip {
+  font-size: 0.72rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: calc(var(--space-1) / 2) var(--space-2);
+}
+.tv-chip.tv-warn {
+  color: var(--state-warn, #f5a524);
+  border-color: currentColor;
+}
+.tv-chip.tv-bad {
+  color: var(--state-bad, #e5484d);
+  border-color: currentColor;
+}
+.tv-wait {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  color: var(--text-faint);
+}
+/* Wall-display geometry: slightly narrower rails give the center cell the width the
+   room is actually looking at. */
+.tv-app {
+  --cn-rail: 264px;
+}
+/* The roster hint invites an action this page cannot take — the read-only view never
+   has decoded stations, by design (the module threat model), so "decoded stations
+   appear here" is a promise the TV cannot keep. Spots still draw; only the hint goes. */
+.tv-app .map-empty-hint {
+  display: none;
 }

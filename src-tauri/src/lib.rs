@@ -18190,6 +18190,28 @@ fn fd_set_upload(
     Ok(eng.snapshot())
 }
 
+/// ⭐ **"I moved" (§4.1)** — the operator's location changed mid-session.
+///
+/// Writes BOTH halves of §3.3 ruling 2: the live session, so the change takes effect on
+/// the next contact, and the setting a genuinely NEW session starts from. Persists like
+/// the other narrow writers (`set_fd_operator`) — never `apply_settings`, which resets
+/// the mode and clears the TX queue (#54) and this is pressed mid-contest.
+///
+/// The error string is the operator's message. A location that resolves to a different
+/// ROLE returns `contest::MOVE_CHANGES_ROLE` and writes nothing (§3.3 ruling 3).
+#[tauri::command(async)]
+fn contest_i_moved(
+    state: State<'_, SharedEngine>,
+    values: Vec<(String, String)>,
+) -> Result<AppSnapshot, String> {
+    let mut eng = engine_lock(&state);
+    let s = eng.contest_i_moved(values)?;
+    if let Err(e) = s.save(&settings_path()) {
+        eprintln!("tempo: failed to persist the moved contest location: {e}");
+    }
+    Ok(eng.snapshot())
+}
+
 /// One club event heard on the LAN by [`fd_discover_events`].
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -22146,6 +22168,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             fd_log_manual,
             fd_merge_to_general,
             fd_set_upload,
+            contest_i_moved,
             fd_discover_events,
             fd_club_export,
             fd_scoreboard_status,

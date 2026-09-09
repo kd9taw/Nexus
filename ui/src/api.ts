@@ -626,6 +626,34 @@ export async function fdLogManual(
   })
 }
 
+/** Where THIS SESSION's merged contacts go (§18.1) — per session, default OFF.
+ *
+ * `destinations` are connector ids from `fieldDay.upload.available`. Both halves are
+ * required: the switch off, or an empty destination list, queues nothing.
+ *
+ * ⚠️ It does NOT stop ClubLog's catch-up sweep, which re-queues every contact ClubLog
+ * never accepted the next time a ClubLog password is saved. That limitation travels as
+ * `fieldDay.upload.hint` and must render beside the control. */
+export async function fdSetUpload(
+  enabled: boolean,
+  destinations: string[],
+): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('fd_set_upload', { enabled, destinations })
+}
+
+/** ⭐ "I moved" — edit the exchange this session is COMPOSING (§4.1).
+ *
+ * `values` is `[slot id, value]` for the slots that changed. It takes effect on the
+ * NEXT contact: rows already logged keep what they sent, and so does the exchange
+ * already in flight to the station being worked.
+ *
+ * Writes both the live session and the setting a new session starts from. REJECTS with
+ * the operator's own message when the new location resolves to a different role — that
+ * is a separate entry, not a move. */
+export async function contestIMoved(values: [string, string][]): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('contest_i_moved', { values })
+}
+
 /** Listen ~2 s for Nexus club-event beacons on the LAN ("Find club events").
  * Empty = nothing announcing (or the Wi-Fi eats broadcast — manual entry stays). */
 export async function fdDiscoverEvents(): Promise<FdEventBeacon[]> {

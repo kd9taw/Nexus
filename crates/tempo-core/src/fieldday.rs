@@ -502,6 +502,27 @@ impl FieldDayLog {
         sections
     }
 
+    /// The distinct values RECEIVED in one exchange slot, sorted — the generalisation
+    /// of [`worked_sections`](Self::worked_sections) that one block of the multiplier
+    /// display (§9) colours in.
+    ///
+    /// Blanks are dropped. A board colours cells by code, so a blank matches nothing
+    /// either way; dropping it keeps a legacy row with no value out of a count that
+    /// would otherwise read one too high.
+    pub fn worked_values(&self, slot: &str) -> Vec<String> {
+        let mut vals: Vec<String> = self
+            .qsos
+            .iter()
+            .map(|q| q.rcvd(slot))
+            .filter(|v| !v.is_empty())
+            .map(|v| v.to_string())
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
+        vals.sort();
+        vals
+    }
+
     /// Per-mode QSO points (phone 1, CW/digital 2) — power multiplier and
     /// bonuses are applied at the score layer (engine), not here.
     pub fn qso_points(&self) -> u32 {

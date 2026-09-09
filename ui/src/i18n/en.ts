@@ -933,6 +933,19 @@ export const EN = {
   'logEntry.fd.failed': 'FD log failed',
   'logEntry.fd.dupe.own': 'Dupe: {{call}} is already in this position\'s log on {{band}} {{mode}}',
   'logEntry.fd.dupe.club': 'Club dupe: another position already worked {{call}} on {{band}} {{mode}} — logging is allowed but adds no points',
+  'logEntry.fd.needField': 'Enter their {{field}} to log.',
+  'logEntry.fd.badField': '{{field}} "{{value}}" isn\'t a known value — required to log.',
+  'logEntry.sent.aria': 'What you are sending',
+  'logEntry.sent.label': 'Sending',
+  'logEntry.sent.title':
+    'The exchange you are sending now. Contacts already logged keep what they sent.',
+  'logEntry.sent.moved.label': 'I moved',
+  'logEntry.sent.moved.title':
+    'Change what you send from here on — it takes effect on your next contact.',
+  'logEntry.sent.moved.save': 'Save',
+  'logEntry.sent.moved.cancel': 'Cancel',
+  'logEntry.sent.moved.failed': 'Could not change what you send',
+  'logEntry.sent.moved.done': 'Sending the new exchange from your next contact on',
 
   // ── Confirm-before-log prompt (WSJT-X's "Prompt me to log QSO") ─────────────────────
   // Its own area, not `logEntry.*`: this is the popup that reviews a contact the sequencer

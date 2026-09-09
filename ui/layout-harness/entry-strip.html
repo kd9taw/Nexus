@@ -1,0 +1,146 @@
+<!doctype html><html><head><meta charset="utf-8"><title>contest entry strip harness</title>
+<link rel="stylesheet" href="styles.css">
+<style>body{margin:0;background:#0b0e14}.host{border:1px dashed #334}</style></head>
+<!--
+  THE CONTEST ENTRY STRIP AT THE 1024 px FLOOR (spec §9).
+
+  ⚠️ WHY THIS FILE EXISTS. jsdom computes no layout: every getBoundingClientRect in
+  the vitest suite is 0×0, so a width assertion there is not a measurement, it is a
+  sentence. The strip's budget is geometric — "Call plus up to five received fields on
+  one row at the 1024 px supported floor, wrapping to a second row below it" — and the
+  only way to know is to lay it out in a real engine and read the rects.
+
+  It carries the REAL classes from `LogEntry.tsx`'s FD branch and links the REAL sheet.
+  Mirror any DOM-structure change here (README step 2), and re-copy styles.css.
+
+  RUN IT:  ./measure-entry-strip.sh          (headless Chrome, prints the JSON)
+  or:      python3 -m http.server 8799  →  http://localhost:8799/entry-strip.html
+           then `measure(1024)` in the console.
+
+  WHAT MUST HOLD, at 1024:
+   • `rowOverflow` == 0            — the row never scrolls horizontally; it WRAPS
+   • `boxesOnOneLine` true         — Call + every exchange box share one line
+   • `fieldsFullyVisible` true     — no box is clipped by the strip
+   • `stripH` is CONTENT height    — the strip is `fit="content"`; it takes no surplus
+   • the FIVE-field case wraps to at most TWO lines and still overflows nothing
+   • Field Day (2 fields) is 117 px — the shipped height, unchanged by the sent block
+
+  WHAT IT ALREADY DECIDED (2026-09-09, this build):
+   Where the read-only sent block lives. §9 says "beside the entry boxes", so it was
+   built in the entry row and measured there. At 1024, with Field Day's two boxes, the
+   entry row fits it only by taking the slack out of the CALL box:
+     • `sentIn: "row"`     stripH 117 px, callW 506.7 → 207.8 px
+     • `sentIn: "header"`  stripH 117 → 130 px, callW 506.7 px unchanged
+   Widen Call back and the row wraps instead, and this dock is bottom-anchored, so the
+   extra line comes off the log feed and moves the fields the fixed-height verdict slot
+   exists to keep still. 13 px of header is the cheaper of the two, so that is where it
+   ships. `sentIn: "row"` below is the rejected alternative, kept because a number
+   nobody can reproduce is not evidence.
+-->
+<body>
+<div class="app" style="display:block">
+<div class="host" style="width:1024px">
+  <div class="log-entry log-entry-fd">
+    <div class="le-fd-header">
+      <span class="le-fd-chip">FD LOG</span>
+      <span class="le-fd-mode">PH</span>
+      <span class="le-fd-hint">20m · contacts go to the Field Day log</span>
+      <div class="le-fd-sent">
+        <span class="le-fd-sent-cap">Sending<span class="le-fd-role"> in_state</span></span>
+        <span class="mono le-fd-sent-val">3A WI</span>
+        <button class="le-qrz le-fd-moved" type="button">I moved</button>
+      </div>
+    </div>
+    <div class="le-fd-big">
+      <label class="le-fd-field le-fd-field-call">
+        <span class="le-fd-cap">Call</span>
+        <input class="settings-input mono le-fd-input le-fd-input-call" placeholder="W1AW">
+      </label>
+      <div id="boxes"></div>
+      <button class="le-log-btn le-fd-log-btn" type="button">Log FD</button>
+      <button class="le-qrz" type="button">Clear</button>
+    </div>
+    <div class="le-fd-verdicts"></div>
+  </div>
+</div>
+</div>
+<pre id="out"></pre>
+<script>
+// The strip renders one box per RECEIVED slot. `fields(n)` builds n of them with the
+// real classes, so the same page measures Field Day (2) and Sweepstakes (5).
+const FD = ['Class', 'Section'];
+const SS = ['NR', 'PREC', 'CALL', 'CK', 'SEC'];
+function fields(caps) {
+  const host = document.getElementById('boxes');
+  host.replaceChildren();
+  // The boxes are siblings of Call in the real DOM, so unwrap this placeholder host.
+  host.style.display = 'contents';
+  for (const c of caps) {
+    const l = document.createElement('label');
+    l.className = 'le-fd-field';
+    l.innerHTML =
+      '<span class="le-fd-cap">' + c + '</span>' +
+      '<input class="settings-input mono le-fd-input le-fd-input-code">';
+    host.appendChild(l);
+  }
+}
+
+function measure(width, caps, where) {
+  document.querySelector('.host').style.width = width + 'px';
+  fields(caps);
+  // VARIANT: where the read-only sent block lives — in the entry row (the literal
+  // reading of §9's "beside the entry boxes") or in the strip's header row.
+  const sentEl = document.querySelector('.le-fd-sent');
+  const target = where === 'header'
+    ? document.querySelector('.le-fd-header')
+    : document.querySelector('.le-fd-big');
+  if (sentEl.parentElement !== target) target.appendChild(sentEl);
+  const strip = document.querySelector('.log-entry-fd');
+  const row = document.querySelector('.le-fd-big');
+  const call = document.querySelector('.le-fd-field-call');
+  const boxes = [...document.querySelectorAll('.le-fd-field')];
+  const sent = document.querySelector('.le-fd-sent');
+  const r = e => e.getBoundingClientRect();
+  const rowR = r(row), stripR = r(strip);
+  const tops = new Set(boxes.map(b => Math.round(r(b).top)));
+  return {
+    width,
+    fields: caps.length,
+    sentIn: where || 'row',
+    // The whole point: the row WRAPS, it never scrolls.
+    rowOverflow: +Math.max(0, row.scrollWidth - row.clientWidth).toFixed(1),
+    stripOverflow: +Math.max(0, strip.scrollWidth - strip.clientWidth).toFixed(1),
+    // Call + every exchange box on one line?
+    boxesOnOneLine: tops.size === 1,
+    rowLines: tops.size,
+    // Nothing clipped by the strip's own box.
+    fieldsFullyVisible: boxes.every(b => r(b).right <= stripR.right + 0.5),
+    callW: +r(call).width.toFixed(1),
+    boxW: +(boxes[1] ? r(boxes[1]).width : 0).toFixed(1),
+    boxesSum: +boxes.reduce((a, b) => a + r(b).width, 0).toFixed(1),
+    sentW: +r(sent).width.toFixed(1),
+    sentLeft: +(r(sent).left - stripR.left).toFixed(1),
+    rowW: +rowR.width.toFixed(1),
+    rowH: +rowR.height.toFixed(1),
+    // `fit="content"`: the strip is exactly as tall as what is in it.
+    stripH: +stripR.height.toFixed(1),
+  };
+}
+
+function run() {
+  const rows = [];
+  for (const w of [1024, 1366, 1920]) {
+    rows.push(measure(w, FD, 'row'));
+    rows.push(measure(w, SS, 'row'));
+    rows.push(measure(w, FD, 'header'));
+    rows.push(measure(w, SS, 'header'));
+  }
+  // CONTROL: one MORE field than the budget admits. If the numbers below do not move
+  // from the five-field row, the measurement is not seeing the boxes.
+  rows.push(measure(1024, SS.concat(['SIX']), 'header'));
+  document.getElementById('out').textContent = JSON.stringify(rows, null, 1);
+  return rows;
+}
+run();
+</script>
+</body></html>

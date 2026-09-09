@@ -2568,6 +2568,59 @@ export interface FieldDayStatus {
   club?: FdClubStatus | null
   /** Where THIS SESSION's merged contacts go — per session, default OFF. */
   upload?: FdUploadControl
+  /** ⭐ The slots this session RECEIVES, in receive order — the entry strip renders
+   *  Call plus one box per entry here, never a hardcoded Class/Section pair.
+   *  Field Day: CLASS, SECTION. */
+  receives?: ContestFieldSpec[]
+  /** ⭐ What the session is COMPOSING right now — the read-only sent exchange the
+   *  strip shows beside the entry boxes, and what "I moved" edits.
+   *
+   *  A VECTOR, never a preformatted string: a rendered session-level exchange is the
+   *  thing three emitters got wrong by stamping it on rows it did not describe. */
+  composing?: ContestFieldValue[]
+  /** The session's role id — `''` for a symmetric contest (both Field Day events).
+   *  Shown beside the exchange only when it names something. */
+  role?: string
+  /** One block per multiplier board — the generalised worked-sections display. */
+  boards?: ContestBoard[]
+}
+
+/** One exchange slot, as the entry strip renders a box for it.
+ *
+ *  `key` is a SLOT ID and an invariant technical token — never translated. The box's
+ *  caption is prose and comes from the catalog. */
+export interface ContestFieldSpec {
+  key: string
+  /** 'rst' | 'serial' | 'enum' | 'pattern' | 'number' | 'grid' | 'text' | 'call' |
+   *  'oneOf'. An unknown tag gets a plain box and no while-typing verdict — never an
+   *  approximated one. */
+  kind: string
+  required: boolean
+  /** For an `enum` slot, the domain id whose membership is the while-typing verdict.
+   *  The VALUES live in the UI (`features/contestDomains.ts`), because the verdict runs
+   *  on every keystroke and must cost no IPC. */
+  domain?: string
+}
+
+/** One copied exchange value. */
+export interface ContestFieldValue {
+  key: string
+  raw: string
+  domain?: string
+}
+
+/** One block of the multiplier display. */
+export interface ContestBoard {
+  /** Stable id — one id, one block. */
+  id: string
+  /** The received slot this board is over. */
+  slot: string
+  /** The domain supplying the cell universe, when the slot has one. */
+  domain?: string
+  /** 'perLog' | 'perBand' | 'perMode' | 'perBandMode'. */
+  scope: string
+  /** The distinct values worked, sorted. */
+  worked: string[]
 }
 
 /** The per-session upload control: what the end-of-contest merge queues, and where.
