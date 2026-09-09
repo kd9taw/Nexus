@@ -456,6 +456,7 @@ export function OperateDecodes({
   // Keyboard: arrow through rows, Enter selects, Shift+Enter works the station,
   // Alt+Enter toggles ignore — the pointerless equivalent of click/double-click.
   const roving = useRovingList(shown.length, (i, mods) => {
+    if (!control) return
     const d = shown[i]
     if (!d?.from) return
     if (mods.alt) onToggleIgnore?.(d.from)
@@ -683,11 +684,11 @@ export function OperateDecodes({
                 style={hlStyle}
                 onClick={() => {
                   roving.setActive(i)
-                  if (d.from) onSelectDecode?.(d.from, gridFromMessage(d.message), d.message, d.snr)
+                  if (control && d.from) onSelectDecode?.(d.from, gridFromMessage(d.message), d.message, d.snr)
                 }}
                 onDoubleClick={(e) => handleDouble(e, d)}
                 title={
-                  ignoredRow
+                  !control ? d.message : ignoredRow
                     ? t('operate.row.ignored.title')
                     : d.from
                       ? t('operate.decodes.row.title', { call: d.from, highlight: hlTip })

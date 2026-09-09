@@ -44,3 +44,24 @@ it('QRZ navigation stays in the browser and never becomes a station URL/credenti
   expect(open).toHaveBeenCalledWith('https://www.qrz.com/db/K1ABC', '_blank', 'noopener,noreferrer')
   expect(invoke).not.toHaveBeenCalled()
 })
+it('decode click and keyboard operating gestures obey station authority, with a native positive control', () => {
+  for (const control of [false, true]) {
+    const call = vi.fn(), select = vi.fn(), ignore = vi.fn(), rx = vi.fn()
+    const { container } = render(<StationControlContext.Provider value={control}>
+      <OperateDecodes decodes={[entry('W1AW', 1).row]} slot={1} rxOffsetHz={1500} band="20m" tier="FT8"
+        harqRescues={0} onCall={call} onSelectDecode={select} onToggleIgnore={ignore} onSetRx={rx} compact lockedFilter="all" />
+    </StationControlContext.Provider>)
+    const row = container.querySelector('.decode-row')!
+    expect(row.textContent).toContain('CQ W1AW FN31')
+    fireEvent.click(row)
+    fireEvent.keyDown(row, { key: 'Enter', shiftKey: true })
+    fireEvent.keyDown(row, { key: 'Enter', altKey: true })
+    fireEvent.doubleClick(row, { ctrlKey: true })
+    fireEvent.doubleClick(row)
+    expect(call).toHaveBeenCalledTimes(control ? 2 : 0)
+    expect(select).toHaveBeenCalledTimes(control ? 2 : 0)
+    expect(ignore).toHaveBeenCalledTimes(control ? 1 : 0)
+    expect(rx).toHaveBeenCalledTimes(control ? 1 : 0)
+    cleanup()
+  }
+})
