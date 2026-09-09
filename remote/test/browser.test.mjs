@@ -111,6 +111,10 @@ test('compiled hosted browser completes PKCE, local device approval, observation
       } catch { unexpectedMessages++ }
     })
     await browser.call('Page.addScriptToEvaluateOnNewDocument',{source:`
+      window.__frameDelay=0;
+      const originalRaf=window.requestAnimationFrame.bind(window),originalCancel=window.cancelAnimationFrame.bind(window),delayedFrames=new Map();
+      window.requestAnimationFrame=callback=>{const id=originalRaf(time=>{if(!window.__frameDelay){callback(time);return}delayedFrames.set(id,setTimeout(()=>{delayedFrames.delete(id);callback(performance.now())},window.__frameDelay))});return id};
+      window.cancelAnimationFrame=id=>{originalCancel(id);clearTimeout(delayedFrames.get(id));delayedFrames.delete(id)};
       window.__keyboardInset=0;const actual=visualViewport;const area=new EventTarget();
       Object.defineProperties(area,{width:{get:()=>actual.width},height:{get:()=>actual.height-window.__keyboardInset}});
       actual.addEventListener('resize',()=>area.dispatchEvent(new Event('resize')));
@@ -123,6 +127,10 @@ test('compiled hosted browser completes PKCE, local device approval, observation
       if(value.exceptionDetails)throw new Error('Browser evaluation failed')
       return value.result?.value
     }
+    // useViewport publishes dimensions on an animation frame. A fixed sleep can
+    // measure the previous viewport on a busy renderer. Wait through the update
+    // and its layout frame; all pixel/overflow assertions below stay unchanged.
+    const settledLayout=()=>evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(true))))')
     async function until(expression) { for(let i=0;i<120;i++){ if(providerFailure)throw new Error('Simulated provider failed'); if(await evaluate(expression))return;await sleep(100) } throw new Error('Expected browser state did not appear') }
     const button=name=>`[...document.querySelectorAll('button')].find(e=>e.textContent===${JSON.stringify(name)})`
     async function click(expression) {
@@ -134,9 +142,9 @@ test('compiled hosted browser completes PKCE, local device approval, observation
     async function geometry(width,height,zoom=1,theme='dark',keyboard=0) {
       await browser.call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false},session)
       await evaluate(`document.documentElement.style.setProperty('--ui-zoom','${zoom}');document.documentElement.dataset.theme='${theme}';window.__keyboardInset=${keyboard};window.dispatchEvent(new Event('resize'));visualViewport.dispatchEvent(new Event('resize'))`)
-      await sleep(75)
+      await settledLayout()
       const shape=await evaluate(`(()=>{const app=document.querySelector('.remote-monitor-app'),r=app.getBoundingClientRect(),main=document.querySelector('.rm-scroll');return{appW:r.width,appH:r.height,w:innerWidth,h:visualViewport.height,docW:document.documentElement.scrollWidth,mainW:main.clientWidth,scrollW:main.scrollWidth,scrollers:[...document.querySelectorAll('body *')].filter(e=>/auto|scroll/.test(getComputedStyle(e).overflowY)&&e.scrollHeight>e.clientHeight+1).map(e=>e.className)}})()`)
-      assert.ok(shape.docW<=shape.w+1 && shape.scrollW<=shape.mainW+1 && Math.abs(shape.appW-shape.w)<=1 && Math.abs(shape.appH-shape.h)<=1 && shape.scrollers.every(name=>name==='rm-scroll'),'one bounded scroll owner must fit the effective viewport')
+      assert.ok(shape.docW<=shape.w+1 && shape.scrollW<=shape.mainW+1 && Math.abs(shape.appW-shape.w)<=1 && Math.abs(shape.appH-shape.h)<=1 && shape.scrollers.every(name=>name==='rm-scroll'),'one bounded scroll owner must fit the effective viewport: '+JSON.stringify({width,height,zoom,theme,keyboard,shape}))
       results.push({width,height,zoom,theme,keyboard,shape})
     }
     await browser.call('Page.navigate',{url:app.origin},session)
@@ -153,7 +161,10 @@ test('compiled hosted browser completes PKCE, local device approval, observation
     await until(`document.body.textContent.includes('Approve this browser') || document.body.textContent.includes('Waiting for approval') || !document.querySelector('input')`)
     const device=await app.db.prepare('SELECT id FROM devices WHERE station_id=?').bind(pair.stationId).first()
     assert.ok(device,'the browser must enroll through its own HTTP-only cookie')
+    // Deterministically exercise a frame that arrives after the former sleep.
+    await evaluate('window.__frameDelay=120')
     await geometry(360,740,1.75,'light',260)
+    await evaluate('window.__frameDelay=0')
     await pair.native.post(`stations/${pair.stationId}/native/approve-device`,{deviceId:device.id})
     await until(`!!${button('Observe station')}`)
     for(const [w,h] of [[360,740],[390,844],[844,390],[1024,768],[1280,800],[1366,768],[3440,1440]])for(const theme of ['dark','light'])await geometry(w,h,1,theme)
@@ -207,13 +218,16 @@ test('compiled hosted browser completes PKCE, local device approval, observation
     for(const [width,height] of [[1024,768],[1280,800],[1366,768],[1200,1390],[3440,1440]])for(const zoom of [1,1.75])for(const theme of ['dark','light']) {
       await browser.call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false},session)
       await evaluate(`document.documentElement.style.setProperty('--ui-zoom','${zoom}');document.documentElement.dataset.theme='${theme}';window.dispatchEvent(new Event('resize'))`)
-      await sleep(100)
+      await settledLayout()
       const shape=await evaluate(`(()=>{const app=document.querySelector('.app'),header=document.querySelector('.remote-application-status'),r=app.getBoundingClientRect(),h=header.getBoundingClientRect();return{width:innerWidth,height:innerHeight,appW:r.width,appH:r.height,docW:document.documentElement.scrollWidth,docH:document.documentElement.scrollHeight,headerBottom:h.bottom,crash:!!document.querySelector('.view-crash')}})()`)
       assert.ok(!shape.crash && shape.docW<=shape.width+1 && shape.docH<=shape.height+1 && shape.headerBottom<=shape.height,`Nexus workspace must remain bounded: ${JSON.stringify({width,height,zoom,theme,shape})}`)
       results.push({workspace:true,width,height,zoom,theme,shape})
     }
     applicationTraffic.sample = { seconds: (performance.now()-started)/1000, reads: applicationTraffic.reads-startReads, bytes: applicationTraffic.bytes-startBytes }
     assert.ok(applicationTraffic.sample.reads/applicationTraffic.sample.seconds < 24,'real panel demand must remain below the session rate bound')
+    // A resize/rebuild can also call putImageData. Confirm that actual station
+    // spectrum values have produced a visible signal in the spectrum canvas.
+    await until(`(()=>{const c=document.querySelector('.waterfall-canvas'),a=c.getContext('2d').getImageData(0,0,c.width,c.height).data;let colored=0;for(let i=0;i<a.length;i+=4)if(a[i]>30||a[i+1]>30||a[i+2]>30)colored++;return colored>50})()`)
     if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-nexus-workspace.png'),Buffer.from(shot.data,'base64'))}
     applicationAvailable=false
     await until(`document.querySelector('.app')?.dataset.remoteStale==='true'`)
