@@ -14,6 +14,8 @@ const sample = () => {
   return frame
 }
 const type = name => value => value?.type === name
+const applicationSample = (requestId, command = 'get_snapshot') => ({ type: 'applicationResult', requestId, command,
+  revision: 1, baseRevision: null, ageMs: 0, data: { mycall: 'N0CALL' }, removed: [] })
 async function admitted(pair, applicationVersion = 0) {
   const deviceId = await app.approved(pair)
   const station = await pair.native.open(pair.stationId, undefined, 101, { 'x-nexus-application-version': String(applicationVersion) })
@@ -71,6 +73,49 @@ test('an older station advertises an update requirement and continues its valid 
   const frame = await live.browser.take(type('observation'))
   assert.equal(frame.frame.sequence, 1)
   live.browser.close(); live.station.close()
+})
+
+test('v2 subscriptions share native samples across approved browsers and recover full bases after hibernation', async () => {
+  const pair = await app.paired(), live = await admitted(pair, 2)
+  const { value: ticket } = await pair.browser.post(`stations/${pair.stationId}/ticket`)
+  const second = await pair.browser.open(pair.stationId, ticket.ticket)
+  await second.take(type('session'))
+  for (const browser of [live.browser, second]) {
+    browser.send({ type: 'applicationHello', version: 2 })
+    const capabilities = await browser.take(type('applicationCapabilities'))
+    assert.equal(capabilities.version, 2)
+    assert.ok(capabilities.commands.includes('get_cw_state'))
+    browser.send({ type: 'applicationSubscribe', topics: ['get_snapshot', 'get_scope_snapshot', 'get_cw_state'], requestId: crypto.randomUUID() })
+  }
+  let watch = await live.station.take(type('applicationWatch'))
+  assert.deepEqual(watch.topics, ['get_snapshot', 'get_scope_snapshot', 'get_cw_state'])
+  await assert.rejects(live.station.take(type('applicationWatch'), 100), /timeout/, 'second browser reuses the same native watch')
+  live.station.send({ type: 'applicationBatch', watchId: watch.watchId, requestId: watch.requestId,
+    updates: watch.topics.map(command => applicationSample(watch.requestId, command)) })
+  const frames = await Promise.all([live.browser, second].map(browser => browser.take(type('applicationFrame'))))
+  assert.notEqual(frames[0].requestId, frames[1].requestId)
+  for (const frame of frames) {
+    assert.equal(frame.updates.length, 3)
+    assert.equal(frame.updates[0].data.mycall, 'N0CALL')
+  }
+  const old = await live.station.take(type('applicationCredit'))
+  await app.evict(pair.stationId)
+  live.browser.send({ type: 'applicationFrameAck', requestId: frames[0].requestId, nextRequestId: crypto.randomUUID() })
+  second.send({ type: 'applicationFrameAck', requestId: frames[1].requestId, nextRequestId: crypto.randomUUID() })
+  watch = await live.station.take(type('applicationWatch'))
+  assert.notEqual(watch.watchId, old.watchId)
+  live.station.send({ type: 'applicationBatch', watchId: old.watchId, requestId: old.requestId, updates: [applicationSample(old.requestId)] })
+  await assert.rejects(live.browser.take(type('applicationFrame'), 100), /timeout/, 'retired epoch cannot refresh data')
+  live.station.send({ type: 'applicationBatch', watchId: watch.watchId, requestId: watch.requestId,
+    updates: watch.topics.map(command => applicationSample(watch.requestId, command)) })
+  for (const browser of [live.browser, second]) {
+    const frame = await browser.take(type('applicationFrame'))
+    assert.equal(frame.updates[0].baseRevision, null)
+    browser.send({ type: 'applicationSubscribe', topics: [], requestId: null })
+  }
+  const idle = await live.station.take(value => value.type === 'applicationWatch' && value.topics.length === 0)
+  assert.equal(idle.requestId, null)
+  live.browser.close(); second.close(); live.station.close()
 })
 
 test('provider signatures, authorized client and exact Origin are required; account creation grants no trial', async () => {

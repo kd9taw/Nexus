@@ -1,3 +1,4 @@
+import { useStationControl } from '../stationAccess'
 // ⚠️ THIS FILE IS ON THE **PARTIAL** LIST (i18n/hardcoded-strings.test.ts), and for one
 // reason only: THE PTT ROW, the pinned dock row this cockpit's stop line rests on, is still
 // written in English here — the button's four labels (which ARE the accessible name
@@ -372,6 +373,7 @@ const FLEX_SPANS = [
 ] as const
 
 export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, fieldDay, phoneMode, wheelSensitivity, spots, needByCall, typeByCall, onWorkSpot, onRecallMemory, onOpenMemories, onOpenSettings, onOpenLogbook, panels }: Props) {
+  const control = useStationControl()
   // Live S-meter (shared 100 ms poll, lock-free backend) — used to arrive via the 300 ms
   // snapshot on top of the backend's own sampling, which read as a laggy needle. smeterDb-only
   // subscription: the cockpit re-renders when the S-meter changes, never on RX-level churn.
@@ -397,6 +399,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
     }
   }, [snap.radio.micGain])
   const changeMic = (pct: number) => {
+    if (!control) return
     setMic(pct)
     void setMicGain(pct / 100)
   }
@@ -421,6 +424,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
     }
   }, [snap.radio.compLevel])
   const changeComp = (pct: number) => {
+    if (!control) return
     setComp(pct)
     void setCompLevel(pct / 100)
   }
@@ -437,10 +441,12 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
     }
   }, [snap.radio.notchFreqHz])
   const changeNotch = (hz: number) => {
+    if (!control) return
     setNotchHz(hz)
     void setNotchFreq(hz)
   }
   const changeNr = (pct: number) => {
+    if (!control) return
     setNr(pct)
     void setNrLevel(pct / 100)
   }
@@ -454,6 +460,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   const agc =
     agcPick != null && agcPick !== snap.radio.refusedAgc ? agcPick : (snap.radio.agc ?? null)
   const changeAgc = (sp: 'auto' | 'fast' | 'mid' | 'slow' | 'off') => {
+    if (!control) return
     setAgcPick(sp)
     void setAgc(sp)
       .then((s) => onSnap?.(s))
@@ -462,6 +469,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   // Native Icom scope reference level, in tenths of a dB (−200..+200 = −20.0..+20.0 dB).
   const [scopeRefTenths, setScopeRefTenths] = useState(0)
   const changeScopeRef = (tenths: number) => {
+    if (!control) return
     setScopeRefTenths(tenths)
     void setScopeRef(tenths)
   }
@@ -532,6 +540,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   const flexScope = scopeFeed?.source === 'flex'
   const [flexRefDbm, setFlexRefDbm] = useState(-80)
   const changeFlexRef = (dbm: number) => {
+    if (!control) return
     setFlexRefDbm(dbm)
     void setFlexPanRef(dbm)
       .then((s) => onSnap?.(s))
@@ -570,7 +579,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   useWheelTune(scopeRef, {
     dialMhz: snap.radio.dialMhz,
     sideband: snap.radio.sideband || 'USB',
-    enabled: snap.radio.catOk === true && !snap.radio.txBusyReason && !snap.radio.transmitting,
+    enabled: control && snap.radio.catOk === true && !snap.radio.txBusyReason && !snap.radio.transmitting,
     stepHz: tuneStep,
     sensitivity: wheelSensitivity,
     onSnap,
@@ -587,10 +596,12 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   // comment on the picker's filter below.
   const amBandOk = snap.radio.dialMhz > 0 && (snap.radio.dialMhz < 10 || snap.radio.dialMhz >= 28)
   const commandedMode = modeOverride ?? sidebandAuto
-  const pickMode = (m: 'USB' | 'LSB' | 'FM' | 'AM' | null) =>
+  const pickMode = (m: 'USB' | 'LSB' | 'FM' | 'AM' | null) => {
+    if (!control) return
     void setSidebandOverride(m)
       .then((s) => onSnap?.(s))
       .catch(() => pushToast(t('phone.mode.failed'), 'error'))
+  }
   // Whether the app can actually control the rig. Without CAT (VOX/serial PTT) the dial +
   // mode can't be set or read back — surface that so it's clear, not silently broken.
   const catOk = snap.radio.catOk === true
@@ -600,7 +611,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   // and reports the final dial; this hook just commands it.
   const onScopeTune = useScopeTune({
     sideband: commandedMode,
-    enabled: catOk && !snap.radio.txBusyReason && !snap.radio.transmitting,
+    enabled: control && catOk && !snap.radio.txBusyReason && !snap.radio.transmitting,
     onSnap,
   })
 
@@ -608,6 +619,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   // nudges it 100 Hz within a sane SSB/CW span, seeded from the current value or a 2.4 kHz default.
   const filterHz = snap.radio.filterWidthHz ?? null
   const bumpFilter = (deltaHz: number) => {
+    if (!control) return
     const base = filterHz ?? 2400
     const next = Math.min(4000, Math.max(300, base + deltaHz))
     // Never let the clamp invert the direction ("wider" must not narrow at the rails).
@@ -643,6 +655,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   const snapRef = useRef(snap)
   snapRef.current = snap
   const key = (on: boolean) => {
+    if (!control) return
     // Don't key (or show ON-AIR) outside license privileges — the engine blocks it anyway.
     if (on && !snapRef.current.radio.txAllowed) {
       pushToast(t('phone.tx.locked'), 'info', 3500)
@@ -681,6 +694,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
     void setPtt(on)
   }
   const onPttDown = () => {
+    if (!control) return
     if (lock) {
       key(!keyed) // hands-free: toggle
     } else {
@@ -688,9 +702,11 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
     }
   }
   const onPttUp = () => {
+    if (!control) return
     if (!lock) key(false)
   }
   const changePower = (pct: number) => {
+    if (!control) return
     setPower(pct)
     void setRfPower(pct / 100)
   }
@@ -698,6 +714,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   // TuningStrip nudge/wheel (keeps the current sideband so an in-band entry
   // never flips the mode); rejects out-of-plan frequencies with a toast.
   const commitDial = (mhz: number) => {
+    if (!control) return
     // An EMPTY band label is not a refusal: listening off the ham bands is first-class (operator,
     // 2026-08-13), so a typed WWV/shortwave/inter-band frequency tunes there. This used to toast
     // "outside the band plan" and discard the entry.
@@ -712,6 +729,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   // poll lag) and guard re-entry so a rapid double-click can't double-fire.
   const recording = snap.radio.qsoRecording
   const toggleRecord = () => {
+    if (!control) return
     if (recBusy) return
     setRecBusy(true)
     const fn = recording ? stopQsoRecording : startQsoRecording
@@ -725,6 +743,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
 
   // Spacebar = push-to-talk (hold), unless typing in a field.
   useEffect(() => {
+    if (!control) return // observation owns no PTT; mounting/leaving it cannot unkey the station
     const isField = (t: EventTarget | null) =>
       t instanceof HTMLElement && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')
     const down = (e: KeyboardEvent) => {
@@ -880,7 +899,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   const bandPane =
     hasBandPane && onWorkSpot ? (
       <CockpitPaneFrame title={t('phone.pane.bandActivity.title')} paneId="bandActivity" fit="content">
-        <BandStrip
+        {control ? <BandStrip
           band={snap.radio.band}
           dialMhz={snap.radio.dialMhz}
           txAllowed={snap.radio.txAllowed}
@@ -897,7 +916,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
           stepHz={tuneStep}
           wheelSensitivity={wheelSensitivity}
           onSnap={onSnap}
-        />
+        /> : <p className="dim" role="status">{t('remote.spotsUnavailable')}</p>}
       </CockpitPaneFrame>
     ) : null
 
@@ -928,12 +947,12 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   // of other panels, and the restore back to stock).
   const keyerPane = hasKeyerPane ? (
     <CockpitPaneFrame title={t('phone.pane.voiceKeyer.title')} paneId="voiceKeyer" fit="content">
-      <VoiceKeyer
+      {control ? <VoiceKeyer
         txEnabled={snap.radio.txEnabled}
         keyed={keyed}
         transmitting={snap.radio.transmitting}
         fdExchange={fdExchange}
-      />
+      /> : <p className="dim" role="status">{t('remote.voiceKeyerUnavailable')}</p>}
     </CockpitPaneFrame>
   ) : null
 
@@ -954,7 +973,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
             </span>
             <div className="ph-span">
               {RIG_SPANS.map((sp) => (
-                <button
+                <button disabled={!control}
                   key={sp.label}
                   type="button"
                   className="theme-chip"
@@ -967,16 +986,17 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
             </div>
             <label className="ph-rigscope-ref" title={t('phone.rigScope.ref.title')}>
               <span>{t('phone.scope.ref.label')}</span>
-              <input
+              <input disabled={!control}
                 type="range"
                 min={-200}
                 max={200}
                 step={5}
                 value={scopeRefTenths}
+                style={{ visibility: control ? undefined : 'hidden' }}
                 onChange={(e) => changeScopeRef(Number(e.target.value))}
                 aria-label={t('phone.rigScope.ref.aria')}
               />
-              <span className="ph-power-val">{(scopeRefTenths / 10).toFixed(1)} {DB}</span>
+              <span className="ph-power-val">{control ? (scopeRefTenths / 10).toFixed(1) : '—'} {DB}</span>
             </label>
           </div>
         </CockpitPaneFrame>
@@ -991,7 +1011,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
             </span>
             <div className="ph-span">
               {FLEX_SPANS.map((sp) => (
-                <button
+                <button disabled={!control}
                   key={sp.label}
                   type="button"
                   className="theme-chip"
@@ -1004,16 +1024,17 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
             </div>
             <label className="ph-rigscope-ref" title={t('phone.flexPan.ref.title')}>
               <span>{t('phone.scope.ref.label')}</span>
-              <input
+              <input disabled={!control}
                 type="range"
                 min={-140}
                 max={-20}
                 step={5}
                 value={flexRefDbm}
+                style={{ visibility: control ? undefined : 'hidden' }}
                 onChange={(e) => changeFlexRef(Number(e.target.value))}
                 aria-label={t('phone.flexPan.ref.aria')}
               />
-              <span className="ph-power-val">{flexRefDbm} {DBM}</span>
+              <span className="ph-power-val">{control ? flexRefDbm : '—'} {DBM}</span>
             </label>
           </div>
         </CockpitPaneFrame>
@@ -1026,7 +1047,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
             {dspFuncs.map((f) => {
               const on = snap.radio[f.key] === true
               return (
-                <button
+                <button disabled={!control}
                   key={f.key}
                   type="button"
                   className={`ph-dsp-btn${on ? ' on' : ''}`}
@@ -1053,7 +1074,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
             {snap.radio.nrLevel != null && (
               <label className="ph-dsplev" title={t('phone.rxDsp.nr.title')}>
                 <span>{NR}</span>
-                <input
+                <input disabled={!control}
                   type="range"
                   min={0}
                   max={100}
@@ -1075,7 +1096,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
             {snap.radio.compLevel != null && (
               <label className="ph-dsplev" title={t('phone.rxDsp.comp.title')}>
                 <span>{COMP}</span>
-                <input
+                <input disabled={!control}
                   type="range"
                   min={0}
                   max={100}
@@ -1098,7 +1119,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
             {snap.radio.notchFreqHz != null && (
               <label className="ph-dsplev" title={t('phone.rxDsp.notchFreq.title')}>
                 <span>{NOTCH}</span>
-                <input
+                <input disabled={!control}
                   type="range"
                   min={300}
                   max={3400}
@@ -1120,7 +1141,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
               <div className="ph-agc" role="group" aria-label={t('phone.rxDsp.agc.aria')} title={t('phone.rxDsp.agc.title')}>
                 <span className="ph-dsplev-lbl">{AGC}</span>
                 {AGC_CHIPS.map(({ id, labelKey }) => (
-                  <button
+                  <button disabled={!control}
                     key={id}
                     type="button"
                     className={`theme-chip${agc === id ? ' active' : ''}`}
@@ -1145,7 +1166,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
           directly. This pane is now a FILL pane whose .pane-body scrolls internally, so a tall
           card scrolls inside the log column and can never squeeze the cockpit — the operator
           gets the QRZ photo / bearing / history back while operating. */}
-      <LogEntry
+      {control ? <LogEntry
         onOpenLogbook={onOpenLogbook}
         snap={snap}
         mode={commandedMode === 'FM' ? 'FM' : 'SSB'}
@@ -1161,7 +1182,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
         onConsumeWork={onConsumeWork}
         fieldDay={fieldDay}
         fdMode="PH"
-      />
+      /> : <p className="dim" role="status">{t('remote.loggingUnavailable')}</p>}
     </CockpitPaneFrame>
   )
 
@@ -1194,7 +1215,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
                   type="button"
                   className={`ph-mode-btn${active ? ' active' : ''}`}
                   aria-pressed={active}
-                  disabled={!catOk}
+                  disabled={!control || (!catOk)}
                   title={
                     m === 'AUTO'
                       ? t('phone.mode.auto.title', { sideband: sidebandAuto })
@@ -1242,7 +1263,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
           />
         }
         power={{
-          value: power,
+          value: control ? power : snap.radio.rfPower == null ? null : Math.round(snap.radio.rfPower * 100),
           unit: '%',
           onChange: changePower,
           label: t('phone.header.power.label'),
@@ -1297,7 +1318,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
         {snap.radio.micGain != null && (
           <label className="ph-power" title={t('phone.mic.title')}>
             <span>{t('phone.mic.label')}</span>
-            <input
+            <input disabled={!control}
               type="range"
               min={0}
               max={100}
@@ -1317,7 +1338,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
         {catOk && commandedMode !== 'FM' && (
           <div className="ph-filter" title={t('phone.filter.title')}>
             <span className="ph-filter-lbl">{BW}</span>
-            <button
+            <button disabled={!control}
               type="button"
               className="ph-filter-step"
               onClick={() => bumpFilter(-FILTER_STEP_HZ)}
@@ -1328,7 +1349,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
             <span className="ph-filter-val mono">
               {filterHz ? `${(filterHz / 1000).toFixed(1)}k` : '—'}
             </span>
-            <button
+            <button disabled={!control}
               type="button"
               className="ph-filter-step"
               onClick={() => bumpFilter(FILTER_STEP_HZ)}
@@ -1342,14 +1363,14 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
           // The ★-favorites quick-recall strip (bounded + wrapping — the old
           // MemoryBank list grew the header unbounded). Recall is App-owned
           // (recallMemory): settings patch + retune + cockpit auto-switch.
-          <MemoryStrip
+          control ? <MemoryStrip
             dialMhz={snap.radio.dialMhz}
             mode={commandedMode}
             onRecall={onRecallMemory}
             onManage={onOpenMemories}
-          />
+          /> : <span className="mem-strip" role="status" aria-label={t('remote.memoriesUnavailable')} title={t('remote.memoriesUnavailable')}>{t('memories.strip.label')} —</span>
         )}
-        <RotorStrip onOpenSettings={onOpenSettings} />
+        {control ? <RotorStrip onOpenSettings={onOpenSettings} /> : <span className="dim" role="status" aria-label={t('remote.rotatorUnavailable')} title={t('remote.rotatorUnavailable')}>{t('rotor.strip.aria')} —</span>}
         {/* Glyph only (density pass 2026-08-04, the same move the FT cockpit's header made):
             '● Record QSO' spent ~95px of a header region that WRAPS, and the word said what
             the glyph and the tooltip already say. The accessible name is explicit here rather
@@ -1358,7 +1379,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
           type="button"
           className={`ph-rec${recording ? ' on' : ''}`}
           onClick={toggleRecord}
-          disabled={recBusy}
+          disabled={!control || (recBusy)}
           aria-label={recording ? t('phone.record.stop.aria') : t('phone.record.start.aria')}
           title={recording ? t('phone.record.on.title') : t('phone.record.off.title')}
         >
@@ -1427,7 +1448,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
             // rig has ten span rungs and three positions, and a chip row that long crowds the scope it
             // is supposed to serve.
             <div className="ph-span" role="group" aria-label={t('phone.scope.yaesu.aria')}>
-              <select
+              <select disabled={!control}
                 className="theme-chip"
                 aria-label={t('phone.scope.yaesu.span.aria')}
                 title={t('phone.scope.yaesu.span.title')}
@@ -1443,7 +1464,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
                   </option>
                 ))}
               </select>
-              <select
+              <select disabled={!control}
                 className="theme-chip"
                 aria-label={t('phone.scope.yaesu.pos.aria')}
                 title={t('phone.scope.yaesu.pos.title')}
@@ -1503,7 +1524,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
             onFeed={(source, loHz, hiHz) => setScopeFeed({ source, loHz, hiHz })}
             onTune={onScopeTune}
             filterWidthHz={filterHz ?? 2400}
-            interactive={catOk && !snap.radio.txBusyReason && !snap.radio.transmitting && snap.radio.dialMhz > 0}
+            interactive={control && catOk && !snap.radio.txBusyReason && !snap.radio.transmitting && snap.radio.dialMhz > 0}
           />
         </div>
       </section>
@@ -1623,7 +1644,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
               key(!keyed)
             }
           }}
-          disabled={!snap.radio.txAllowed}
+          disabled={!control || (!snap.radio.txAllowed)}
           // The last clause was a `.ph-ptt-hint` span below this row until 2026-08-04.
           // `flex-basis: 100%` made it a whole line of the PINNED dock, so it cost its ~19px
           // at every window size and no scroller could take it back — and its first half
@@ -1648,7 +1669,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
                 : 'PUSH TO TALK'}
         </button>
         <label className="ph-lock" title="Hands-free: click PTT once to key, again to unkey">
-          <input type="checkbox" checked={lock} onChange={(e) => setLock(e.target.checked)} />
+          <input disabled={!control} type="checkbox" checked={lock} onChange={(e) => setLock(e.target.checked)} />
           <span>Lock</span>
         </label>
       </div>

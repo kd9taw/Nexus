@@ -111,6 +111,21 @@ impl Client {
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
 enum ServerMessage {
+    ApplicationWatch {
+        #[serde(rename = "watchId")]
+        watch_id: String,
+        topics: Vec<super::application::Command>,
+        #[serde(rename = "requestId")]
+        request_id: Option<String>,
+    },
+    ApplicationCredit {
+        #[serde(rename = "watchId")]
+        watch_id: String,
+        #[serde(rename = "previousRequestId")]
+        previous_request_id: String,
+        #[serde(rename = "requestId")]
+        request_id: String,
+    },
     ApplicationRead {
         #[serde(rename = "requestId")]
         request_id: String,
@@ -166,6 +181,12 @@ pub async fn connected(
         "x-nexus-application-version",
         "1".parse().map_err(|_| "invalidResponse")?,
     );
+    // Old services still recognize the legacy contract during rollback. Only a
+    // stream-aware service consumes the separate v2 capability advertisement.
+    request.headers_mut().insert(
+        "x-nexus-application-stream-version",
+        "2".parse().map_err(|_| "invalidResponse")?,
+    );
     let config = WebSocketConfig::default()
         .max_message_size(Some(512))
         .max_frame_size(Some(512))
@@ -195,6 +216,9 @@ pub async fn connected(
     let mut pending = None;
     let mut application =
         super::application::Publisher::with_feeds(feeds.spectrum.clone(), feeds.meters.clone());
+    let mut stream = super::application::Stream::default();
+    let mut application_tick = tokio::time::interval(Duration::from_millis(100));
+    application_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         tokio::select! {
             biased;
@@ -203,8 +227,10 @@ pub async fn connected(
                 Some(Ok(Message::Text(text))) => {
                     let message: ServerMessage = serde_json::from_str(&text).map_err(|_| "invalidResponse")?;
                     match message {
+                        ServerMessage::ApplicationWatch { watch_id, topics, request_id } => stream.watch(watch_id, topics, request_id)?,
+                        ServerMessage::ApplicationCredit { watch_id, previous_request_id, request_id } => stream.credit(&watch_id, &previous_request_id, request_id)?,
                         ServerMessage::ApplicationRead { request_id, command, revision } => {
-                            if !identifier(&request_id) { return Err("invalidResponse"); }
+                            if !identifier(&request_id) || !command.legacy() { return Err("invalidResponse"); }
                             let data = application.read(engine, command, &request_id, revision, Instant::now())
                                 .unwrap_or_else(|error| json!({ "type": "applicationError", "requestId": request_id, "error": error }).to_string());
                             tokio::select! {
@@ -229,6 +255,17 @@ pub async fn connected(
                 },
                 Some(Ok(Message::Close(_))) | None => return Err("serviceUnavailable"),
                 _ => return Err("invalidResponse"),
+            },
+            _ = application_tick.tick(), if stream.active() => {
+                if let Some(data) = stream.next(&mut application, engine, Instant::now())? {
+                    tokio::select! {
+                        biased;
+                        _ = stop.changed() => return Ok(()),
+                        result = tokio::time::timeout(Duration::from_secs(2), socket.send(Message::Text(data.into()))) => {
+                            result.map_err(|_| "serviceUnavailable")?.map_err(|_| "serviceUnavailable")?;
+                        }
+                    }
+                }
             },
             _ = tick.tick(), if pending.is_some() => {
                 if *stop.borrow() { return Ok(()); }

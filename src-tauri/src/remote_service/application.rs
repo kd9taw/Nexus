@@ -21,15 +21,22 @@ pub enum Command {
     Spectrum,
     #[serde(rename = "get_meters")]
     Meters,
+    #[serde(rename = "get_scope_snapshot")]
+    Scope,
+    #[serde(rename = "get_cw_state")]
+    Cw,
 }
 impl Command {
-    fn interval(self) -> Duration {
+    pub(super) fn interval(self) -> Duration {
         Duration::from_millis(match self {
             Self::Snapshot => 500,
-            Self::Spectrum => 100,
-            Self::Meters => 200,
+            Self::Spectrum | Self::Scope => 100,
+            Self::Meters | Self::Cw => 200,
             Self::Settings | Self::BandPlan => 1000,
         })
+    }
+    pub(super) fn legacy(self) -> bool {
+        !matches!(self, Self::Scope | Self::Cw)
     }
 }
 struct Entry {
@@ -95,6 +102,7 @@ const SETTINGS_KEYS: &[&str] = &[
     "fst4PeriodS",
     "ampFollowBand",
     "ampModel",
+    "rigModel",
     "alertDxccBands",
     "alertGridBands",
     "alertRareGridBands",
@@ -185,12 +193,14 @@ impl Publisher {
                 )?;
                 return self.reply(command, request_id, base, now);
             }
-            if command == Command::Spectrum {
-                if let Some(row) = self
-                    .spectrum
-                    .as_ref()
-                    .and_then(|feed| feed.peek_audio_row())
-                {
+            if matches!(command, Command::Spectrum | Command::Scope) {
+                if let Some(row) = self.spectrum.as_ref().and_then(|feed| {
+                    if command == Command::Scope {
+                        feed.peek_scope_row()
+                    } else {
+                        feed.peek_audio_row()
+                    }
+                }) {
                     self.insert(
                         command,
                         serde_json::to_value(row).map_err(|_| "applicationUnavailable")?,
@@ -206,6 +216,12 @@ impl Publisher {
             // outside the engine lock, independently of the radio loop.
             let value = match command {
                 Command::Meters => return Err("applicationUnavailable"), // handled without the engine above
+                Command::Scope => return Err("applicationUnavailable"), // no active scope request for observers
+                Command::Cw => {
+                    let value = crate::read_cw_state(&eng);
+                    drop(eng);
+                    serde_json::to_value(value)
+                }
                 Command::Snapshot => {
                     let value = eng.snapshot();
                     drop(eng);
@@ -307,11 +323,227 @@ impl Publisher {
     }
 }
 
+/// One shared publisher for the room's union of topics. A batch spends exactly
+/// one room-issued credit; the next credit acknowledges its revision bases.
+#[derive(Default)]
+pub(super) struct Stream {
+    watch: String,
+    topics: Vec<Command>,
+    credit: Option<String>,
+    awaiting: Option<(String, Instant)>,
+    bases: HashMap<Command, u64>,
+    offered: HashMap<Command, u64>,
+    sent: HashMap<Command, Instant>,
+}
+impl Stream {
+    pub fn watch(
+        &mut self,
+        watch: String,
+        topics: Vec<Command>,
+        request: Option<String>,
+    ) -> Result<(), &'static str> {
+        if !super::transport::identifier(&watch)
+            || topics.len() > 7
+            || topics
+                .iter()
+                .enumerate()
+                .any(|(i, topic)| topics[..i].contains(topic))
+            || (topics.is_empty() != request.is_none())
+            || request
+                .as_deref()
+                .is_some_and(|id| !super::transport::identifier(id))
+        {
+            return Err("invalidResponse");
+        }
+        *self = Self {
+            watch,
+            topics,
+            credit: request,
+            ..Self::default()
+        };
+        Ok(())
+    }
+    pub fn credit(
+        &mut self,
+        watch: &str,
+        previous: &str,
+        request: String,
+    ) -> Result<(), &'static str> {
+        if !super::transport::identifier(watch)
+            || !super::transport::identifier(previous)
+            || !super::transport::identifier(&request)
+            || previous == request
+        {
+            return Err("invalidResponse");
+        }
+        if watch != self.watch {
+            return Ok(());
+        } // an old watch cannot replenish this one
+        if self.awaiting.as_ref().map(|(id, _)| id.as_str()) != Some(previous)
+            || self.credit.is_some()
+            || self
+                .awaiting
+                .as_ref()
+                .is_some_and(|(_, at)| at.elapsed() >= Duration::from_secs(3))
+        {
+            return Err("invalidResponse");
+        }
+        self.awaiting = None;
+        self.bases = std::mem::take(&mut self.offered);
+        self.credit = Some(request);
+        Ok(())
+    }
+    pub fn active(&self) -> bool {
+        !self.topics.is_empty()
+    }
+    pub fn next(
+        &mut self,
+        publisher: &mut Publisher,
+        engine: &crate::SharedEngine,
+        now: Instant,
+    ) -> Result<Option<String>, &'static str> {
+        if self
+            .awaiting
+            .as_ref()
+            .is_some_and(|(_, at)| now.saturating_duration_since(*at) >= Duration::from_secs(3))
+        {
+            return Err("serviceUnavailable");
+        }
+        let Some(request) = &self.credit else {
+            return Ok(None);
+        };
+        let mut updates = Vec::new();
+        let mut bytes = 256;
+        self.offered = self.bases.clone();
+        for &topic in &self.topics {
+            if self
+                .sent
+                .get(&topic)
+                .is_some_and(|at| now.saturating_duration_since(*at) < topic.interval())
+            {
+                continue;
+            }
+            let sample = publisher
+                .read(engine, topic, request, self.bases.get(&topic).copied(), now)
+                .and_then(|data| {
+                    if bytes + data.len() > MAX_BYTES - 1024 {
+                        return Err("applicationTooLarge");
+                    }
+                    serde_json::from_str::<Value>(&data).map_err(|_| "applicationUnavailable")
+                });
+            let update = match sample {
+                Ok(value) => {
+                    self.offered
+                        .insert(topic, value["revision"].as_u64().ok_or("invalidResponse")?);
+                    value
+                }
+                Err(error) => {
+                    self.offered.remove(&topic);
+                    serde_json::json!({"type":"applicationError", "requestId":request, "command":topic, "error":error})
+                }
+            };
+            bytes += serde_json::to_vec(&update)
+                .map_err(|_| "invalidResponse")?
+                .len();
+            updates.push(update);
+            self.sent.insert(topic, now);
+        }
+        if updates.is_empty() {
+            return Ok(None);
+        }
+        let data = serde_json::json!({"type":"applicationBatch", "watchId":self.watch, "requestId":request, "updates":updates}).to_string();
+        if data.len() > MAX_BYTES {
+            return Err("invalidResponse");
+        }
+        self.awaiting = Some((self.credit.take().ok_or("invalidResponse")?, now));
+        Ok(Some(data))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
     const REQUEST: &str = "8aa041cb-c642-459c-83f3-11a5b720647d";
+    #[test]
+    fn stream_is_credited_paced_and_restarts_without_old_delta_bases() {
+        use std::sync::{Arc, Mutex};
+        let engine = Arc::new(Mutex::new(tempo_app::engine::Engine::with_settings(
+            Default::default(),
+        )));
+        let mut publisher = Publisher::default();
+        let mut stream = Stream::default();
+        let now = Instant::now();
+        let watch = "bbe7d95a-6fbd-47aa-95a7-ab1e4c083dd6";
+        let next = "056c07c9-65c3-48fc-a188-957de3338a4a";
+        assert!(stream.next(&mut publisher, &engine, now).unwrap().is_none());
+        stream
+            .watch(
+                watch.into(),
+                vec![Command::Meters, Command::Cw],
+                Some(REQUEST.into()),
+            )
+            .unwrap();
+        let first: Value =
+            serde_json::from_str(&stream.next(&mut publisher, &engine, now).unwrap().unwrap())
+                .unwrap();
+        assert_eq!(first["updates"].as_array().unwrap().len(), 2);
+        assert!(first["updates"][0]["baseRevision"].is_null());
+        assert_eq!(first["updates"][1]["command"], "get_cw_state");
+        assert!(first["updates"][1]["data"]["sent"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+        assert!(stream
+            .next(&mut publisher, &engine, now + Duration::from_millis(200))
+            .unwrap()
+            .is_none());
+        stream.credit(watch, REQUEST, next.into()).unwrap();
+        assert!(
+            stream.credit(watch, REQUEST, next.into()).is_err(),
+            "a batch can be acknowledged only once"
+        );
+        assert!(stream
+            .next(&mut publisher, &engine, now + Duration::from_millis(100))
+            .unwrap()
+            .is_none());
+        let second: Value = serde_json::from_str(
+            &stream
+                .next(&mut publisher, &engine, now + Duration::from_millis(200))
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(second["updates"][0]["baseRevision"].is_number());
+        stream
+            .watch(next.into(), vec![Command::Meters], Some(REQUEST.into()))
+            .unwrap();
+        let restarted: Value = serde_json::from_str(
+            &stream
+                .next(&mut publisher, &engine, now + Duration::from_millis(300))
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(restarted["updates"][0]["baseRevision"].is_null());
+        stream.watch(watch.into(), vec![], None).unwrap();
+        assert!(!stream.active());
+        assert!(stream
+            .next(&mut publisher, &engine, now + Duration::from_secs(10))
+            .unwrap()
+            .is_none());
+        stream
+            .watch(watch.into(), vec![Command::Meters], Some(REQUEST.into()))
+            .unwrap();
+        stream
+            .next(&mut publisher, &engine, Instant::now())
+            .unwrap();
+        stream.awaiting.as_mut().unwrap().1 = Instant::now() - Duration::from_secs(4);
+        assert!(
+            stream.credit(watch, REQUEST, next.into()).is_err(),
+            "a late ACK cannot replenish an expired credit before the next tick"
+        );
+    }
     #[test]
     fn exact_revision_delta_and_missing_base_full_response() {
         let mut publisher = Publisher::default();

@@ -45,8 +45,8 @@ const TX_OFF = '■ TX off'
  * nothing clips off-screen at a non-maximized width or 110–125% UI zoom.
  */
 export interface CockpitHeaderPower {
-  /** 0..1 when unit='drive' (FT8 TX drive), 0..100 when unit='%' (Phone RF power). */
-  value: number
+  /** 0..1 for drive, 0..100 for RF power; null means the station has not reported it. */
+  value: number | null
   unit: '%' | 'drive'
   onChange: (v: number) => void
   label?: string
@@ -293,7 +293,7 @@ export function CockpitHeader({
             }
           >
             <span>{power.label ?? t('cockpit.header.power.label')}</span>
-            <input disabled={!control}
+            <input disabled={!control || power.value == null}
               type="range"
               min={0}
               max={power.unit === '%' ? 100 : 1}
@@ -310,9 +310,10 @@ export function CockpitHeader({
               // value fails HTML5 constraint validation.
               value={
                 power.unit === 'drive'
-                  ? Math.round(Math.sqrt(power.value) * 100) / 100
-                  : power.value
+                  ? Math.round(Math.sqrt(power.value ?? 0) * 100) / 100
+                  : power.value ?? 0
               }
+              style={{ visibility: power.value == null ? 'hidden' : undefined }}
               onChange={(e) => {
                 const raw = Number(e.target.value)
                 power.onChange(power.unit === 'drive' ? raw ** 2 : raw)
@@ -322,7 +323,7 @@ export function CockpitHeader({
               aria-label={power.label ?? t('cockpit.header.power.label')}
             />
             <span className="cockpit-pwr-val">
-              {power.unit === '%' ? `${Math.round(power.value)}%` : `${Math.round(power.value * 100)}%`}
+              {power.value == null ? '—' : power.unit === '%' ? `${Math.round(power.value)}%` : `${Math.round(power.value * 100)}%`}
             </span>
           </label>
         )}

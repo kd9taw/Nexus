@@ -9625,6 +9625,12 @@ struct CwDecodeResult {
 fn cw_decode(state: State<'_, SharedEngine>, sensitivity: f32) -> Result<CwDecodeResult, String> {
     let mut eng = engine_lock(&state);
     eng.set_cw_sensitivity(sensitivity); // operator slider; scales the decode gates
+    Ok(read_cw_state(&eng))
+}
+
+/// Passive half of the local decoder command. Remote observation must never
+/// apply a browser's decoder sensitivity to the station.
+fn read_cw_state(eng: &tempo_app::engine::Engine) -> CwDecodeResult {
     let d = eng.cw_decode();
     let sent = eng.cw_sent();
     let worked = eng.active_peer();
@@ -9634,7 +9640,7 @@ fn cw_decode(state: State<'_, SharedEngine>, sensitivity: f32) -> Result<CwDecod
     let assist = tempo_core::cw_parse::analyze(&d.text, &sent, &mycall, worked.as_deref(), |b| {
         propagation::dxcc::resolve(b).is_some()
     });
-    Ok(CwDecodeResult {
+    CwDecodeResult {
         text: d.text,
         wpm: d.wpm,
         sent,
@@ -9654,7 +9660,7 @@ fn cw_decode(state: State<'_, SharedEngine>, sensitivity: f32) -> Result<CwDecod
         prompt: assist.guidance.prompt,
         recommended: assist.guidance.recommended,
         worked_call: worked,
-    })
+    }
 }
 
 /// Toggle the AI CW decoder (beta) — persisted; the decode thread + audio ring follow it.

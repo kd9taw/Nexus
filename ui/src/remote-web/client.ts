@@ -28,9 +28,9 @@ async function boundedJson<T>(path: string, options: RequestInit): Promise<T> {
   finally { clearTimeout(timer); options.signal?.removeEventListener('abort', cancel) }
 }
 export class BrowserClient {
-  constructor(private readonly auth: Auth0Client) {}
+  constructor(private readonly auth: Auth0Client, readonly applicationVersion = 1) {}
   static async load(): Promise<BrowserClient | null> {
-    const config = await boundedJson<{ issuer: string; audience: string; clientId: string; ready: boolean }>(
+    const config = await boundedJson<{ issuer: string; audience: string; clientId: string; ready: boolean; applicationVersion?: number }>(
       '/api/remote/config', { cache: 'no-store', credentials: 'omit' })
     if (!config.ready) return null
     const issuer = new URL(config.issuer)
@@ -45,7 +45,7 @@ export class BrowserClient {
     } else {
       try { await auth.checkSession() } catch { /* interactive login stays available */ }
     }
-    return new BrowserClient(auth)
+    return new BrowserClient(auth, config.applicationVersion === 2 ? 2 : 1)
   }
   authenticated(): Promise<boolean> { return this.auth.isAuthenticated() }
   signIn(): Promise<void> { return this.auth.loginWithRedirect() }
@@ -89,7 +89,7 @@ export class HostedConnection {
     this.application = new ApplicationClient(message => {
       if (!this.applicationMode || this.socket?.readyState !== WebSocket.OPEN || this.socket.bufferedAmount > 2048) throw new RemoteError(503)
       this.socket.send(message)
-    }, () => this.socket?.close(1000, 'applicationUnavailable'))
+    }, () => this.socket?.close(1000, 'applicationUnavailable'), client.applicationVersion)
     this.source = { id: `hosted-${stationId}`, kind: 'native', read: async signal => {
       if (signal.aborted || this.disposed || this.socket?.readyState !== WebSocket.OPEN || !this.latest) throw new RemoteError(503)
       return ageFrame(this.latest.frame, performance.now() - this.latest.at)

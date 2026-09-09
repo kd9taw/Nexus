@@ -10,7 +10,7 @@ import type { HostedConnection } from './client'
 import '../cockpit-panes.css'
 import './application.css'
 
-type Bootstrap = { snapshot: AppSnapshot; settings: Settings; bandPlan: BandChannel[] }
+type Bootstrap = { snapshot: AppSnapshot; settings: Settings; bandPlan: BandChannel[]; cwPhone: boolean }
 export function BrowserApplication({ connection, disconnect }: { connection: HostedConnection; disconnect: () => void }) {
   const client = connection.application
   const phase = useSyncExternalStore(client.subscribe, client.getPhase)
@@ -30,7 +30,10 @@ export function BrowserApplication({ connection, disconnect }: { connection: Hos
         const [snapshot, settings, bandPlan] = await Promise.all([
           client.invoke<AppSnapshot>('get_snapshot'), client.invoke<Settings>('get_settings'), client.invoke<BandChannel[]>('get_band_plan'),
         ])
-        if (live) { setBoot({ snapshot, settings, bandPlan }); setError(false); timer = setTimeout(() => void load(), 2000) }
+        if (live) {
+          setBoot({ snapshot, settings, bandPlan, cwPhone: client.supports('get_cw_state') && client.supports('get_scope_snapshot') })
+          setError(false); timer = setTimeout(() => void load(), 2000)
+        }
       } catch {
         if (live) { setError(true); timer = setTimeout(() => void load(), 1000) }
       }

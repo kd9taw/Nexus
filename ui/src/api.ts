@@ -1795,6 +1795,7 @@ export async function readRotator(): Promise<number | null> {
 /** Single-signal CW decode of the recent RX audio (live readout: text + estimated WPM).
  * `sensitivity` (0..1, 0.5 = default gates) scales the decoder's presence + SNR gates. */
 export async function cwDecode(sensitivity: number): Promise<CwDecodeResult> {
+  if (remoteApplicationTransport()) return invoke<CwDecodeResult>('get_cw_state')
   return invoke<CwDecodeResult>('cw_decode', { sensitivity })
 }
 
@@ -2685,6 +2686,7 @@ export async function getScopeRow(
   hiHz: number,
   window?: ScopeWindow,
 ): Promise<Spectrum> {
+  if (remoteApplicationTransport()) return invoke<Spectrum>('get_scope_snapshot')
   return invoke<Spectrum>('get_scope_row', { loHz, hiHz, window })
 }
 

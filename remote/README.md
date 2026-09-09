@@ -22,29 +22,49 @@ port or router forwarding is required. The desktop is pinned to
 
 ## Existing Nexus workspace
 
-**Open Nexus** loads the same `ui/src/App.tsx` and Operate components as the
+**Open Nexus** loads the same `ui/src/App.tsx`, Operate, CW and Phone components as the
 desktop. The explicit adapter below `api.ts` owns one authenticated station
 session. It does not install a Tauri global or forward arbitrary command names.
 Native use still selects Tauri, and the existing LAN TV transport remains separate.
 
-The native connection advertises application protocol version 1. Its closed read
-contract contains `get_snapshot`, `get_settings`, `get_band_plan`,
-`get_spectrum_row` and `get_meters`. Each browser has one outstanding read/result
-until its exact ACK arrives. Reads of the same topic coalesce, short caches limit
-native work, and top-level deltas require an exact base revision. Replies are
-bounded to 768 KiB and three seconds; stale sessions hide station readings and
-close portaled menus/dialogs. Session changes discard cached readings and late
-meter results. An older desktop can continue the observation view and reports an
-update requirement for the workspace.
+The native connection retains protocol version 1 for older services and advertises
+the version 2 stream extension separately. The public service configuration and
+browser hello negotiate the supported version. Version 1 keeps its original five
+reads: `get_snapshot`, `get_settings`, `get_band_plan`, `get_spectrum_row` and
+`get_meters`. Version 2 adds the passive `get_scope_snapshot` and `get_cw_state`.
+An older pilot keeps its existing FT observation; an older monitor-only installer
+reports the workspace update requirement without losing compact observation.
+
+In version 2, existing panel polling renews local interest. Interest changes cross
+the socket; the room combines the interests of approved browsers into one native
+watch. The station batches due topics at 100 ms (spectra), 200 ms (meters/CW),
+500 ms (snapshot) and 1,000 ms (settings/band plan). Interest expires after 2,500 ms
+without a consumer read. No interested browsers means no native application data.
+Top-level deltas require an exact acknowledged base; a joining observer receives a
+full value. The legacy contract retains one outstanding read/result per browser.
+
+Each native batch spends one room-issued credit; each browser frame spends one
+browser-issued credit. The next credit acknowledges the previous response exactly
+once. Each receiver counts its request's full round trip toward measurement age,
+so delayed packets cannot appear fresh by arrival time or clock synchronization.
+Batches are bounded to 768 KiB, seven topics and three seconds. Stale sessions hide
+station readings and close portaled menus/dialogs. Unavailable scope/CW data clears
+that readout independently. Session changes discard cached readings and late results.
 
 The shack's engine owns the snapshot, logbook and hardware. Remote spectrum
-observation leaves the desktop averaging window intact. Encoding runs outside
+observation leaves the desktop averaging window and analysis requests intact. The
+CW getter observes decoder state without changing sensitivity. Encoding runs outside
 the engine lock, and busy engine reads are refused without queuing. Room socket
 attachments contain only bounded authority and routing metadata, never these
-application values or contact history. A slow or failed browser is retired
+application values or contact history. After hibernation, a new watch epoch requests
+full samples; old epochs cannot refresh a restored session. A slow or failed browser is retired
 independently of the station and other approved observers.
 
-Only Operate is connected in this preview. Other navigation destinations display
+Operate, CW and Phone have partial observation support in this preview. CW includes
+the decoder transcript, sent-text history and callsign candidates. CW/Phone share
+the station scope, meters, settings and amplifier status. Remote logging/history,
+spots/needs, memories, rotator and voice-keyer/audio data remain unavailable and
+are identified in their existing panes. Other navigation destinations display
 their availability limit, and the full Settings panel is not mounted with partial
 settings. Station controls, including the existing amplifier controls, are
 disabled; all mutation names are also refused by the transport and native parser.
@@ -55,8 +75,9 @@ This read adapter is an incremental integration boundary, not paid-service
 completion. Before enabling remote operation, the protocol needs explicit station
 control leases, expiring and deduplicated commands, native authorization at
 execution, and attended transmitter/amplifier acceptance. Full read parity also
-needs bounded history queries and topic subscriptions with measured load and
-version compatibility. Audio needs its own negotiated media path. Billing must
+needs bounded history queries and remaining per-feature data contracts. Shared
+subscriptions require measured load and WAN acceptance before commercial capacity
+claims. Audio needs its own negotiated media path. Billing must
 materialize service entitlement separately from browser trust and station control;
 payment or account recovery must never arm a radio.
 

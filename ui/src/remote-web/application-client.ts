@@ -5,6 +5,9 @@ import type { ApplicationTransport } from '../applicationTransport'
 import { APPLICATION_COMMANDS, APPLICATION_ERRORS, APPLICATION_TIMEOUT_MS, applicationCommand,
   applicationReply, applyApplicationReply } from './application-protocol'
 import type { ApplicationCommand, ApplicationValue } from './application-protocol'
+import { ApplicationStreamClient } from './application-stream-client'
+import { STREAM_TOPICS, streamTopic } from './application-stream-protocol'
+import type { StreamTopic } from './application-stream-protocol'
 
 export type ApplicationPhase = 'connecting' | 'ready' | 'updateRequired' | 'unavailable'
 type Job = { command: ApplicationCommand; resolve: (value: unknown) => void; reject: (reason: Error) => void }
@@ -18,17 +21,27 @@ export class ApplicationClient implements ApplicationTransport {
   private jobs = new Map<ApplicationCommand, Promise<unknown>>()
   private queue: Job[] = []
   private current: Current | null = null
-  constructor(private readonly send: (message: string) => void, private readonly close: () => void) {}
+  private version = 0
+  private stream: ApplicationStreamClient
+  constructor(private readonly send: (message: string) => void, private readonly close: () => void, private readonly serviceVersion = 1) {
+    this.stream = new ApplicationStreamClient(send, () => { this.disconnected(); close() })
+  }
+  supports(command: string): boolean { return this.phase === 'ready' && (this.version === 2 ? streamTopic(command) : applicationCommand(command)) }
   getPhase = (): ApplicationPhase => this.phase
-  age(command: ApplicationCommand): number { const value = this.values.get(command); return value ? performance.now() - value.at : Infinity }
+  age(command: StreamTopic): number {
+    if (this.version === 2) return this.stream.age(command)
+    const value = applicationCommand(command) ? this.values.get(command) : null
+    return value ? performance.now() - value.at : Infinity
+  }
   subscribe = (listener: () => void): (() => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener) } }
   private setPhase(phase: ApplicationPhase): void { this.phase = phase; for (const listener of this.listeners) listener() }
   open(): void {
     this.disconnected()
     this.setPhase('connecting')
-    this.send(JSON.stringify({ type: 'applicationHello' }))
+    this.send(JSON.stringify(this.serviceVersion === 2 ? { type: 'applicationHello', version: 2 } : { type: 'applicationHello' }))
   }
   disconnected(): void {
+    this.stream.disconnected(); this.version = 0
     this.values.clear()
     const pending = this.current
     this.current = null
@@ -38,6 +51,10 @@ export class ApplicationClient implements ApplicationTransport {
     this.setPhase('unavailable')
   }
   invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+    if (this.phase === 'ready' && this.version === 2) {
+      if (!streamTopic(command) || (args && Object.keys(args).length)) return Promise.reject(new Error('applicationUnsupported'))
+      return this.stream.invoke<T>(command)
+    }
     if (!applicationCommand(command) || (args && Object.keys(args).length)) return Promise.reject(new Error('applicationUnsupported'))
     if (this.phase !== 'ready') return Promise.reject(new Error(this.phase === 'updateRequired' ? 'stationUpdateRequired' : 'applicationUnavailable'))
     const previous = this.values.get(command)
@@ -53,14 +70,17 @@ export class ApplicationClient implements ApplicationTransport {
   }
   receive(message: Record<string, unknown>): void {
     if (message.type === 'applicationCapabilities') {
-      if (this.phase !== 'connecting' || Object.keys(message).length !== 3 || ![0, 1].includes(message.version as number) ||
+      const commands = message.version === 2 ? STREAM_TOPICS : APPLICATION_COMMANDS
+      if (this.phase !== 'connecting' || Object.keys(message).length !== 3 || !(this.serviceVersion === 2 ? [0, 1, 2] : [0, 1]).includes(message.version as number) ||
         !Array.isArray(message.commands) || (message.version === 0 ? message.commands.length !== 0 :
-          message.commands.length !== APPLICATION_COMMANDS.length || !APPLICATION_COMMANDS.every(command => (message.commands as unknown[]).includes(command)))) {
+          message.commands.length !== commands.length || !commands.every(command => (message.commands as unknown[]).includes(command)))) {
         throw new Error('invalidApplicationCapabilities')
       }
-      this.setPhase(message.version === 1 ? 'ready' : 'updateRequired')
+      this.version = message.version as number
+      this.setPhase(this.version > 0 ? 'ready' : 'updateRequired')
       return
     }
+    if (this.version === 2) { this.stream.receive(message); return }
     const pending = this.current
     if (!pending || pending.requestId !== message.requestId) throw new Error('unexpectedApplicationResult')
     if (message.type === 'applicationError' && Object.keys(message).length === 3 && APPLICATION_ERRORS.includes(message.error as never)) {

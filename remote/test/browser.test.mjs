@@ -61,8 +61,8 @@ async function chrome() {
   } catch(error) { ws?.close(); if(!exited)process.kill(-child.pid,'SIGTERM'); await rm(profile,{recursive:true,force:true,maxRetries:8,retryDelay:100}); throw error }
 }
 
-test('compiled hosted browser completes PKCE, local device approval, observation and mobile viewport checks', { timeout: 120000 }, async () => {
-  const app=await runtime(), artifacts=process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS
+for (const applicationVersion of [1, 2]) test(`compiled hosted browser v${applicationVersion} completes PKCE, local device approval, observation and viewport checks`, { timeout: 120000 }, async () => {
+  const app=await runtime(), artifacts=process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS ? join(process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS, `v${applicationVersion}`) : undefined
   let browser, station, producing=true, producer, applicationProducer
   const results=[]
   try {
@@ -71,9 +71,9 @@ test('compiled hosted browser completes PKCE, local device approval, observation
     const shell = await fetch(app.origin,{signal:AbortSignal.timeout(3000)})
     assert.equal(shell.status,200)
     assert.match(await shell.text(), /Nexus Remote/)
-    station=await pair.native.open(pair.stationId, undefined, 101, { 'x-nexus-application-version': '1' })
+    station=await pair.native.open(pair.stationId, undefined, 101, { 'x-nexus-application-version': String(applicationVersion) })
     let code=null, oauth=null, exchanges=0, providerFailure=false, exceptions=0, acknowledgements=0, unexpectedMessages=0
-    const applicationTraffic = { reads: 0, acks: 0, bytes: 0, byCommand: {}, maxResponseBytes: 0 }
+    const applicationTraffic = { reads: 0, acks: 0, subscriptions: 0, batches: 0, bytes: 0, byCommand: {}, maxResponseBytes: 0 }
     browser.on('Runtime.exceptionThrown', event=>{exceptions++; console.error(event.exceptionDetails?.exception?.description ?? 'Browser runtime exception')})
     browser.on('Fetch.requestPaused', (event,session) => { void (async()=>{
       const url=new URL(event.request.url)
@@ -104,9 +104,11 @@ test('compiled hosted browser completes PKCE, local device approval, observation
       try {
         const message = JSON.parse(event.response.payloadData)
         if (message.type === 'ack' && Object.keys(message).sort().join(',') === 'epoch,sequence,type') acknowledgements++
-        else if (message.type === 'applicationHello' && Object.keys(message).length === 1) {}
+        else if (message.type === 'applicationHello' && (Object.keys(message).length === 1 || (Object.keys(message).length === 2 && message.version === 2))) {}
         else if (message.type === 'applicationRead' && Object.keys(message).length === 4) applicationTraffic.reads++
         else if (message.type === 'applicationAck' && Object.keys(message).length === 2) applicationTraffic.acks++
+        else if (message.type === 'applicationSubscribe' && Object.keys(message).length === 3) applicationTraffic.subscriptions++
+        else if (message.type === 'applicationFrameAck' && Object.keys(message).length === 3) applicationTraffic.acks++
         else unexpectedMessages++
       } catch { unexpectedMessages++ }
     })
@@ -174,8 +176,37 @@ test('compiled hosted browser completes PKCE, local device approval, observation
     producer=(async()=>{while(producing){let watch;try{watch=await station.take(value=>value.type==='watch'&&value.enabled,1000)}catch{continue}await sleep(200);if(!producing)break;station.send({type:'publication',requestId:watch.requestId,frame:{...fixture,source:'native',sequence:++sequence}})}})()
     const applicationData = await applicationFixture()
     let applicationRevision = 1, applicationAvailable = true
-    applicationProducer=(async()=>{while(producing){let request;try{request=await station.take(value=>value.type==='applicationRead',1000)}catch{continue}
+    let streamWatch = null
+    const sentAt = new Map(), bases = new Map()
+    const intervals = { get_snapshot:500, get_settings:1000, get_band_plan:1000, get_spectrum_row:100, get_meters:200, get_scope_snapshot:100, get_cw_state:200 }
+    applicationProducer=(async()=>{while(producing){let request;try{request=await station.take(value=>['applicationRead','applicationWatch','applicationCredit'].includes(value.type),1000)}catch{continue}
       if (!applicationAvailable || !producing) continue
+      if (request.type !== 'applicationRead') {
+        assert.equal(applicationVersion, 2, 'legacy native contract must never receive stream messages')
+        if (request.type === 'applicationWatch') { streamWatch=request; sentAt.clear(); bases.clear() }
+        else { if (request.watchId !== streamWatch?.watchId) continue; await sleep(100) }
+        if (!streamWatch?.topics.length || !producing) continue
+        const updates=[]
+        while (!updates.length && producing) {
+          const now=performance.now()
+          for (const command of streamWatch.topics) {
+          assert.ok(Object.hasOwn(applicationData, command), 'only reviewed topics may reach the station')
+          if (now-(sentAt.get(command)??-Infinity)<intervals[command]) continue
+          const data=applicationData[command], delta=bases.get(command)===applicationRevision && !Array.isArray(data)
+          updates.push({type:'applicationResult', requestId:request.requestId, command, revision:applicationRevision,
+            baseRevision:delta?applicationRevision:null, ageMs:0, data:delta?{}:data, removed:[]})
+          sentAt.set(command,now);bases.set(command,applicationRevision)
+          applicationTraffic.byCommand[command]=(applicationTraffic.byCommand[command]??0)+1
+          }
+          // Retain the one credit until a topic is due, as the native tick does.
+          if (!updates.length) await sleep(100)
+        }
+        if (!producing) break
+        const response={type:'applicationBatch',watchId:streamWatch.watchId,requestId:request.requestId,updates}
+        const bytes=Buffer.byteLength(JSON.stringify(response));applicationTraffic.bytes+=bytes;applicationTraffic.batches++
+        applicationTraffic.maxResponseBytes=Math.max(applicationTraffic.maxResponseBytes,bytes)
+        station.send(response);continue
+      }
       assert.ok(Object.hasOwn(applicationData, request.command), 'only the closed read vocabulary may reach the station')
       applicationTraffic.byCommand[request.command] = (applicationTraffic.byCommand[request.command] ?? 0) + 1
       const data=applicationData[request.command], delta=request.revision===applicationRevision && !Array.isArray(data)
@@ -229,6 +260,40 @@ test('compiled hosted browser completes PKCE, local device approval, observation
     // spectrum values have produced a visible signal in the spectrum canvas.
     await until(`(()=>{const c=document.querySelector('.waterfall-canvas'),a=c.getContext('2d').getImageData(0,0,c.width,c.height).data;let colored=0;for(let i=0;i<a.length;i+=4)if(a[i]>30||a[i+1]>30||a[i+2]>30)colored++;return colored>50})()`)
     if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-nexus-workspace.png'),Buffer.from(shot.data,'base64'))}
+    if (applicationVersion === 2) {
+      for (const [label, mode] of [['CW','cw'], ['Phone','phone']]) {
+        applicationData.get_snapshot.radio.operatingMode=mode
+        applicationData.get_snapshot.radio.cwWpm=23
+        applicationRevision++
+        await click(button(label))
+        await until(`!!document.querySelector('.${mode}-cockpit')`)
+        if (mode === 'cw') await until(`document.querySelector('.cw-cockpit [role="log"]')?.textContent.includes('W1AW')`)
+        await until(`document.querySelector('.ph-scope canvas')?.width>0 || document.querySelector('.ph-scope-canvas')?.width>0`)
+        for (const [width,height] of [[390,844],[1024,768],[1280,800],[3440,1440]]) {
+          await browser.call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false},session)
+          await evaluate(`document.documentElement.style.setProperty('--ui-zoom','1');window.dispatchEvent(new Event('resize'))`)
+          await settledLayout()
+          const shape=await evaluate(`(()=>{const root=document.querySelector('.${mode}-cockpit'),r=root.getBoundingClientRect();return{width:innerWidth,height:innerHeight,docW:document.documentElement.scrollWidth,docH:document.documentElement.scrollHeight,cockpitW:r.width,cockpitH:r.height,crash:!!document.querySelector('.view-crash')}})()`)
+          assert.ok(!shape.crash && shape.docW<=width+1 && shape.docH<=height+1, `${mode} cockpit must remain bounded: ${JSON.stringify(shape)}`)
+          results.push({workspace:true,mode,width,height,shape})
+        }
+        const controls=await evaluate(`Array.from(document.querySelectorAll('.${mode}-cockpit ${mode==='cw'?'.cw-macro, .cw-cockpit .cw-send-btn':'.ph-ptt, .phone-cockpit .ph-mode-btn'}')).map(e=>e.disabled)`)
+        assert.ok(controls.length>2 && controls.every(Boolean),'actual operating controls must be disabled')
+        const scopeRow=applicationData.get_scope_snapshot.row
+        applicationData.get_scope_snapshot.row=[];applicationRevision++
+        await until(`getComputedStyle(document.querySelector('.ph-scope canvas')).visibility==='hidden' && document.querySelector('.ph-scope').textContent.includes('Scope data unavailable.')`)
+        assert.equal(await evaluate(`document.querySelector('.app')?.dataset.remoteStale==='true'`),false,'scope absence is distinct from station/session loss')
+        applicationData.get_scope_snapshot.row=scopeRow;applicationRevision++
+        await until(`getComputedStyle(document.querySelector('.ph-scope canvas')).visibility==='visible'`)
+        await browser.call('Emulation.setDeviceMetricsOverride',{width:1280,height:800,deviceScaleFactor:1,mobile:false},session)
+        await settledLayout()
+        if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,`remote-nexus-${mode}.png`),Buffer.from(shot.data,'base64'))}
+      }
+      await click(button('FT'))
+      await until(`!!document.querySelector('.operate-host:not([hidden])')`)
+      assert.ok(applicationTraffic.subscriptions>0 && applicationTraffic.batches>0 && applicationTraffic.acks>0, 'positive control: real subscriptions, native batches and browser ACKs flowed')
+      assert.equal(applicationTraffic.reads,0, 'v2 panel polling stays within the browser')
+    }
     applicationAvailable=false
     await until(`document.querySelector('.app')?.dataset.remoteStale==='true'`)
     assert.equal(await evaluate(`getComputedStyle(document.querySelector('.operate-host')).visibility`),'hidden','stale operating values must be hidden')

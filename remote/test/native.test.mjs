@@ -117,6 +117,41 @@ test('actual native controller pairs, stores authority, publishes real DTOs, dis
       else assert.deepEqual(Object.keys(result.data).sort(), ['hiHz','loHz','row','source'])
       socket.send({ type: 'applicationAck', requestId })
     }
+    const { value: streamTicket } = await browser.post(`stations/${stationId}/ticket`)
+    const stream = await browser.open(stationId, streamTicket.ticket)
+    await stream.take(value => value.type === 'session')
+    stream.send({ type: 'applicationHello', version: 2 })
+    const streaming = await stream.take(value => value.type === 'applicationCapabilities')
+    assert.equal(streaming.version, 2, 'the real native handshake advertises the stream extension')
+    assert.equal(streaming.commands.length, 7)
+    let requestId = crypto.randomUUID()
+    stream.send({ type: 'applicationSubscribe', topics: streaming.commands, requestId })
+    const received = new Set(), values = new Map()
+    for (let batch = 0; batch < 25 && (batch < 3 || received.size < streaming.commands.length); batch++) {
+      const frame = await stream.take(value => value.type === 'applicationFrame')
+      assert.equal(frame.requestId, requestId)
+      for (const update of frame.updates) {
+        if (update.type === 'applicationError') { assert.equal(update.error, 'applicationBusy'); continue }
+        assert.equal(update.type, 'applicationResult', `${update.command} returns a real native sample`)
+        assert.ok(update.ageMs < 3000)
+        const previous = values.get(update.command)
+        if (update.baseRevision !== null) assert.equal(previous?.revision, update.baseRevision)
+        const data = update.baseRevision === null ? update.data : { ...previous.data, ...update.data }
+        for (const key of update.removed) delete data[key]
+        values.set(update.command, { revision: update.revision, data })
+        received.add(update.command)
+        if (update.command === 'get_scope_snapshot') assert.deepEqual(Object.keys(data).sort(), ['hiHz', 'loHz', 'row', 'source'])
+        if (update.command === 'get_cw_state') {
+          assert.equal(typeof data.text, 'string'); assert.ok(Array.isArray(data.sent))
+        }
+      }
+      const nextRequestId = crypto.randomUUID()
+      stream.send({ type: 'applicationFrameAck', requestId, nextRequestId })
+      requestId = nextRequestId
+    }
+    assert.deepEqual([...received].sort(), [...streaming.commands].sort())
+    stream.send({ type: 'applicationSubscribe', topics: [], requestId: null })
+    stream.close()
     const second = await socket.take(value => value.type === 'observation')
     assert.ok(second.frame.sequence > first.frame.sequence)
     assert.equal((await probe.send({ type: 'disable' })).ok, true)

@@ -371,6 +371,34 @@ impl SpectrumFeed {
         Some(row)
     }
 
+    /// Observe the station's current scope without requesting a DSP span/window
+    /// or consuming the local averaging window. A remote observer follows the
+    /// producer; it cannot keep a local scope request alive after that pane closes.
+    pub fn peek_scope_row(&self) -> Option<Spectrum> {
+        let g = self.rows.lock().ok()?;
+        if let Some((row, at)) = &g.rf {
+            if at.elapsed() < Duration::from_secs(1) && !row.row.is_empty() {
+                return Some(row.clone());
+            }
+        }
+        if let (Some(req), Some(avg)) = (&g.scope_req, &g.scope) {
+            if req.at.elapsed() < Self::SCOPE_REQ_TTL
+                && avg.at.elapsed() < Duration::from_secs(2)
+                && f64::from(req.lo) == avg.mean.lo_hz
+                && f64::from(req.hi) == avg.mean.hi_hz
+                && !avg.mean.row.is_empty()
+            {
+                return Some(avg.mean.clone());
+            }
+        }
+        let audio = g.audio.as_ref()?;
+        let mut row = audio.mean.clone();
+        if audio.at.elapsed() >= Duration::from_secs(2) {
+            row.row.clear();
+        }
+        Some(row)
+    }
+
     /// How long a scope-span request stands after the last poll that renewed it.
     ///
     /// The request rides the READ (`scope_row`), so it renews itself for as long as a scope is
@@ -32035,6 +32063,67 @@ mod tests {
             "stale audio must not become a frozen live picture"
         );
         assert_eq!(stale.source, "audio");
+    }
+
+    #[test]
+    fn passive_scope_observers_preserve_span_window_averaging_and_request_expiry() {
+        let feed = SpectrumFeed::default();
+        feed.publish_audio(Spectrum {
+            row: vec![0.2; 8],
+            lo_hz: 0.0,
+            hi_hz: 4000.0,
+            source: "audio".into(),
+        });
+        assert_eq!(feed.peek_scope_row().unwrap().hi_hz, 4000.0);
+        assert!(
+            feed.scope_request().is_none(),
+            "observation cannot create DSP demand"
+        );
+        feed.scope_row(300.0, 1100.0, spectrum::WindowN::Sharp);
+        for value in [0.2, 0.6] {
+            feed.publish_scope(Spectrum {
+                row: vec![value; 8],
+                lo_hz: 300.0,
+                hi_hz: 1100.0,
+                source: "audio".into(),
+            });
+        }
+        let before = feed.scope_request();
+        let row = feed.peek_scope_row().unwrap();
+        for _ in 0..10 {
+            assert_eq!(feed.peek_scope_row().unwrap().row, row.row);
+        }
+        assert_eq!(feed.scope_request(), before);
+        feed.publish_scope(Spectrum {
+            row: vec![1.0; 8],
+            lo_hz: 300.0,
+            hi_hz: 1100.0,
+            source: "audio".into(),
+        });
+        let averaged = feed
+            .scope_row(300.0, 1100.0, spectrum::WindowN::Sharp)
+            .unwrap();
+        assert!(
+            averaged.row.iter().all(|value| (*value - 0.6).abs() < 1e-6),
+            "all three producer frames must reach the local averaging window"
+        );
+        feed.backdate_scope_req_for_test(Duration::from_secs(3));
+        assert_eq!(
+            feed.peek_scope_row().unwrap().hi_hz,
+            4000.0,
+            "expired station request falls back to audio"
+        );
+        assert!(feed.scope_request().is_none());
+        feed.publish_rf(Spectrum {
+            row: vec![0.9; 8],
+            lo_hz: 14_000_000.0,
+            hi_hz: 14_100_000.0,
+            source: "yaesu".into(),
+        });
+        assert_eq!(feed.peek_scope_row().unwrap().source, "yaesu");
+        feed.clear_rf();
+        feed.backdate_audio_for_test(Duration::from_secs(3));
+        assert!(feed.peek_scope_row().unwrap().row.is_empty());
     }
 
     /// An EMPTY native row must never win — a panadapter that streams nothing would otherwise

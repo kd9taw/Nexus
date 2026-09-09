@@ -9,7 +9,7 @@ export const APPLICATION_COMMANDS = ['get_snapshot', 'get_settings', 'get_band_p
 export type ApplicationCommand = typeof APPLICATION_COMMANDS[number]
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json }
 export type ApplicationRequest = { type: 'applicationRead'; requestId: string; command: ApplicationCommand; revision: number | null }
-export type ApplicationReply = { type: 'applicationResult'; requestId: string; command: ApplicationCommand;
+export type ApplicationReply<C extends string = ApplicationCommand> = { type: 'applicationResult'; requestId: string; command: C;
   revision: number; baseRevision: number | null; ageMs: number; data: Json; removed: string[] }
 export type ApplicationValue = { revision: number; value: Json }
 export const APPLICATION_ERRORS = ['stationUpdateRequired', 'applicationBusy', 'applicationUnavailable', 'applicationTooLarge', 'applicationUnsupported'] as const
@@ -37,9 +37,12 @@ export function applicationRequest(value: unknown): ApplicationRequest {
   return value as ApplicationRequest
 }
 export function applicationReply(value: unknown): ApplicationReply {
+  return readApplicationReply(value, applicationCommand)
+}
+export function readApplicationReply<C extends string>(value: unknown, command: (value: unknown) => value is C): ApplicationReply<C> {
   exact(value, ['type', 'requestId', 'command', 'revision', 'baseRevision', 'ageMs', 'data', 'removed'])
   if (value.type !== 'applicationResult' || typeof value.requestId !== 'string' || !uuid.test(value.requestId) ||
-    !applicationCommand(value.command) || !positive(value.revision) ||
+    !command(value.command) || !positive(value.revision) ||
     (value.baseRevision !== null && (!positive(value.baseRevision) || value.baseRevision > value.revision)) ||
     !Number.isSafeInteger(value.ageMs) || Number(value.ageMs) < 0 || Number(value.ageMs) >= APPLICATION_TIMEOUT_MS ||
     !Array.isArray(value.removed) || value.removed.length > 512 ||
@@ -47,9 +50,9 @@ export function applicationReply(value: unknown): ApplicationReply {
     (value.baseRevision === null && value.removed.length !== 0) || (value.baseRevision !== null && !record(value.data))) {
     throw new Error('invalidApplicationReply')
   }
-  return value as ApplicationReply
+  return value as ApplicationReply<C>
 }
-export function applyApplicationReply(previous: ApplicationValue | null, reply: ApplicationReply): ApplicationValue {
+export function applyApplicationReply(previous: ApplicationValue | null, reply: ApplicationReply<string>): ApplicationValue {
   if (reply.baseRevision === null) return { revision: reply.revision, value: reply.data }
   if (!previous || previous.revision !== reply.baseRevision || !record(previous.value) || !record(reply.data)) throw new Error('applicationBaseMissing')
   const next = { ...previous.value, ...reply.data }

@@ -5,6 +5,7 @@
 // The 🔒 chip is a READOUT of `txAllowed`, not a transmit control: it says the engine is already
 // blocking transmit here. Nothing on this surface keys, unkeys or stops a transmission.
 import { useEffect, useState } from 'react'
+import { useStationControl } from '../stationAccess'
 import type { AppSnapshot, BandChannel } from '../types'
 import { getLicensedBandPlan, pickBand } from '../api'
 import { bandColor } from '../bandColors'
@@ -31,12 +32,15 @@ interface Props {
  * and never the lock.
  */
 export function BandPicker({ snap, mode, onSnap }: Props) {
+  const control = useStationControl()
   const [plan, setPlan] = useState<BandChannel[]>([])
   useEffect(() => {
+    if (!control) return
     void getLicensedBandPlan(mode).then(setPlan).catch(() => {})
-  }, [mode])
+  }, [mode, control])
 
   const onPick = (band: string) => {
+    if (!control) return
     if (!plan.some((c) => c.band === band)) return
     void pickBand(band, mode)
       .then((s) => onSnap?.(s))
@@ -62,6 +66,7 @@ export function BandPicker({ snap, mode, onSnap }: Props) {
     <div className="band-picker">
       <span className="band-picker-dot" style={{ background: col }} aria-hidden="true" />
       <select
+        disabled={!control}
         className="band-picker-select"
         value={snap.radio.band}
         onChange={(e) => onPick(e.target.value)}

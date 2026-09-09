@@ -10,6 +10,7 @@
 // instrument mark placed by canvas arithmetic rather than a sentence.
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { getScopeRow, type ScopeWindow } from '../api'
+import { useStationControl } from '../stationAccess'
 import { sampleLut } from '../colormaps'
 import {
   applyGainZero,
@@ -204,6 +205,8 @@ export function PhoneScope({
   interactive = false,
   traceHoldMs = TRACE_HOLD_MS.normal,
 }: Props) {
+  const control = useStationControl()
+  const [scopeAvailable, setScopeAvailable] = useState(control)
   // Master palette shared with the FT8 waterfall + all scopes ('auto' = theme-driven).
   const [palette] = useWaterfallPalette()
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -493,13 +496,18 @@ export function PhoneScope({
         // row's own loHz/hiHz below is what everything downstream reads anyway.
         spec = await getScopeRow(txRef.current, viewLoRef.current, viewHiRef.current, scopeWinRef.current)
       } catch {
+        if (!control && latch.owns(myGen)) setScopeAvailable(false)
         return
       }
       // Superseded while awaiting — the watchdog gave this call up. Drawing now would put a
       // stale trace and a stale waterfall row on screen out of order.
       if (!latch.owns(myGen)) return
       const row = spec.row
-      if (!row || row.length === 0) return
+      if (!row || row.length === 0) {
+        if (!control) setScopeAvailable(false)
+        return
+      }
+      if (!control) setScopeAvailable(true)
       // Surface which feed is live (only re-render on a change, not every 30 Hz frame).
       const src = spec.source ?? ''
       if (src !== sourceRef.current) {
@@ -1305,9 +1313,11 @@ export function PhoneScope({
         <button
           type="button"
           className={`ph-scope-btn${scopeWin !== 'balanced' ? ' on' : ''}`}
-          aria-label={t('scope.resolution.aria', { width: win?.label ?? '' })}
-          title={win ? t(win.titleKey) : undefined}
+          disabled={!control}
+          aria-label={control ? t('scope.resolution.aria', { width: win?.label ?? '' }) : t('remote.scopeFollowsStation')}
+          title={!control ? t('remote.scopeFollowsStation') : win ? t(win.titleKey) : undefined}
           onClick={() => {
+            if (!control) return
             const i = SCOPE_WINDOWS.findIndex((w) => w.id === scopeWin)
             const next = SCOPE_WINDOWS[(i + 1) % SCOPE_WINDOWS.length].id
             setScopeWin(next)
@@ -1315,7 +1325,7 @@ export function PhoneScope({
             surfaceSet(PHSCOPE_WIN_KEY, next)
           }}
         >
-          {win?.label}
+          {control ? win?.label : t('remote.stationScope')}
         </button>
         <button
           type="button"
@@ -1367,6 +1377,7 @@ export function PhoneScope({
         <canvas
           ref={canvasRef}
           className={`ph-scope-canvas${tunable ? ' tunable' : ''}`}
+          style={{ visibility: scopeAvailable ? undefined : 'hidden' }}
           title={tunable ? t('scope.canvas.title') : undefined}
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
@@ -1387,6 +1398,7 @@ export function PhoneScope({
             }
           }}
         />
+        {!scopeAvailable && <div className="ph-scope-paused" role="status">{t('remote.scopeUnavailable')}</div>}
         {paused && <div className="ph-scope-paused">{t('scope.paused.badge')}</div>}
         {/* The drag passband box — imperatively positioned (60 fps), never intercepts events. */}
         <div ref={boxRef} className="ph-scope-box" aria-hidden="true" />

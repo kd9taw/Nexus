@@ -239,7 +239,7 @@ const OPERATE_TIERS: Tier[] = [
   'WSPR',
 ]
 
-export type BrowserWorkspace = { snapshot: AppSnapshot; settings: Settings; bandPlan: BandChannel[]; status: ReactNode; stale?: boolean }
+export type BrowserWorkspace = { snapshot: AppSnapshot; settings: Settings; bandPlan: BandChannel[]; status: ReactNode; stale?: boolean; cwPhone?: boolean }
 export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   const [theme, setTheme] = useTheme()
   // Field mode (outdoor/POTA): high contrast via data-contrast on <html>, larger auto-fit via
@@ -2252,7 +2252,7 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // A visible navigation item is not evidence that its station API is connected.
   // In particular, never mount SettingsPanel with the projected operating view:
   // it expects complete configuration and could display absent values as defaults.
-  const isRemoteViewAvailable = (v: View): boolean => !remote || v === 'operate'
+  const isRemoteViewAvailable = (v: View): boolean => !remote || v === 'operate' || (!!remote.cwPhone && (v === 'cw' || v === 'phone'))
 
   // Recall card → Logbook, filtered to the call (#192, kr4fqg: "click a previous contact and
   // land in the log"). Same shape as the `onOpenMemories` handoffs below — `undefined` when the

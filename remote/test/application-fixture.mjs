@@ -23,5 +23,8 @@ export async function applicationFixture() {
     get_band_plan: [{ band: '80m', dialMhz: 3.573, mode: 'USB', label: '80m FT8', group: 'HF', tx: true, note: '' }],
     get_spectrum_row: { row: Array.from({ length: 512 }, (_, i) => i > 190 && i < 195 ? 0.8 : 0.01), loHz: 0, hiHz: 4000, source: 'audio' },
     get_meters: { rxLevel: 0.05, smeterDb: -12, cwToneHz: null },
+    get_scope_snapshot: { row: Array.from({ length: 512 }, (_, i) => i > 74 && i < 79 ? 0.8 : 0.01), loHz: 0, hiHz: 4000, source: 'audio' },
+    get_cw_state: { text: 'CQ TEST DE W1AW', wpm: 22, sent: ['DE N0CALL'], keyerError: null,
+      candidates: [{ call: 'W1AW', best: true }], rst: null, name: null, state: 'cq', headline: '', prompt: '', recommended: null, workedCall: null },
   }
 }

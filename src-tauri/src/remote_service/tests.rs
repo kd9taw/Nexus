@@ -170,6 +170,8 @@ fn cloud_runtime_probe() {
     settings.ensure_radio_profiles();
     let engine = Arc::new(Mutex::new(Engine::with_settings(settings)));
     let read_engine = engine.clone();
+    let scope_feed = tempo_app::engine::SpectrumFeed::default();
+    let read_scope = scope_feed.clone();
     let readings_stop = Arc::new(AtomicBool::new(false));
     let stop = readings_stop.clone();
     let readings = std::thread::spawn(move || {
@@ -197,15 +199,23 @@ fn cloud_runtime_probe() {
                 },
             );
             drop(e);
+            read_scope.publish_audio(tempo_app::dto::Spectrum {
+                row: vec![0.25; 8],
+                lo_hz: 0.0,
+                hi_hz: 4000.0,
+                source: "audio".into(),
+            });
             std::thread::sleep(Duration::from_millis(100));
         }
     });
     let vault = MemoryVault::default();
-    let mut service = Service::configured(
+    let mut service = Service::start(
         origin.clone(),
         Box::new(vault.clone()),
         engine.clone(),
         crate::remote_monitor::Publisher::default(),
+        Some(scope_feed.clone()),
+        Default::default(),
     );
     let runtime = tokio::runtime::Runtime::new().unwrap();
     println!("REMOTE_TEST:{{\"ready\":true}}");
@@ -222,11 +232,13 @@ fn cloud_runtime_probe() {
             }
             Some("restart") => {
                 drop(service);
-                service = Service::configured(
+                service = Service::start(
                     origin.clone(),
                     Box::new(vault.clone()),
                     engine.clone(),
                     crate::remote_monitor::Publisher::default(),
+                    Some(scope_feed.clone()),
+                    Default::default(),
                 );
                 std::thread::sleep(Duration::from_millis(100));
                 service.status()
