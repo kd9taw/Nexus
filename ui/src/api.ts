@@ -23,6 +23,7 @@ import type {
   Activation,
   DetectedRig,
   FdEventBeacon,
+  FdMergeReport,
   OtaSpot,
   DiagnosticsReport,
   FeedHealth,
@@ -639,6 +640,26 @@ export async function fdSetUpload(
   destinations: string[],
 ): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('fd_set_upload', { enabled, destinations })
+}
+
+/** ⭐ Merge this contest session's contacts into the general logbook — the one-click
+ *  end-of-contest action (§3.2, §11 item 5).
+ *
+ *  IDEMPOTENT: every row carries its own merge identity, so a row already in the logbook
+ *  is skipped rather than duplicated — safe to press twice, and safe after a restart.
+ *  The report says which happened, so a second press reads as a no-op instead of looking
+ *  like one that quietly did nothing.
+ *
+ *  Whether the merged rows are ALSO queued for connector upload is the session's own
+ *  control (`fdSetUpload`), off unless the operator turned it on; `queued` reports what
+ *  that control was at merge time. It does not override ClubLog's catch-up sweep — see
+ *  `fieldDay.upload.hint`.
+ *
+ *  The command answers with the snapshot too (one engine lock, one logbook sweep); the
+ *  poll delivers that anyway, so only the report is handed back. */
+export async function fdMergeToGeneral(): Promise<FdMergeReport> {
+  const [report] = await invoke<[FdMergeReport, AppSnapshot]>('fd_merge_to_general')
+  return report
 }
 
 /** ⭐ "I moved" — edit the exchange this session is COMPOSING (§4.1).

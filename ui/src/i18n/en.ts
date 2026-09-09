@@ -2550,6 +2550,20 @@ export const EN = {
   'fieldDay.board.count': '{{worked}}/{{total}} worked',
   'fieldDay.board.cell.worked.title': '{{code}} — {{name}} — worked',
   'fieldDay.board.cell.notWorked.title': '{{code}} — {{name}} — not worked yet',
+  // The end-of-contest merge. The label carries the count so the button says what it
+  // will do BEFORE it does it, and the report says what it did — which is the only thing
+  // that tells a second (idempotent, no-op) press apart from a button that did nothing.
+  'fieldDay.merge.label': {
+    one: 'Merge {{count}} contact into my logbook',
+    other: 'Merge {{count}} contacts into my logbook',
+  },
+  'fieldDay.merge.busy': 'Merging…',
+  'fieldDay.merge.title':
+    "Add this session's contacts to your general logbook. Safe to press twice — a contact already there is skipped, never duplicated.",
+  'fieldDay.merge.added': 'Added {{count}}',
+  'fieldDay.merge.already': '{{count}} already in your logbook',
+  'fieldDay.merge.refused': '{{count}} refused — no stable id',
+  'fieldDay.merge.queued': 'queued for upload',
   'fieldDay.upload.label': 'Send merged contacts to my logbook',
   'fieldDay.upload.aria': 'Upload this session\'s merged contacts',
 

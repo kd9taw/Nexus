@@ -2652,6 +2652,24 @@ export interface FdUploadControl {
   hint: string
 }
 
+/** What one merge into the general logbook did (§3.2).
+ *
+ *  The merge is IDEMPOTENT — a row already in the logbook is skipped, not duplicated —
+ *  so a second press is a real no-op, and this is what lets the operator SEE that
+ *  instead of wondering whether the button worked. */
+export interface FdMergeReport {
+  /** Rows written to the general logbook by this run. */
+  added: number
+  /** Rows already there. On a second press of the same merge, all of them. */
+  already: number
+  /** Rows with no stable identity, refused rather than duplicated. Reported so a count
+   *  that does not add up is visible instead of silent. */
+  refused: number
+  /** Whether those rows were also QUEUED for upload — this session's own control,
+   *  off unless the operator turned it on. */
+  queued: boolean
+}
+
 /** One club band-board row (host-computed, pushed to every position). */
 export interface FdClubBoardRow {
   /** Stable identity — the row key, never shown to an operator. */
