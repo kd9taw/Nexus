@@ -45,6 +45,12 @@ export const FD_EVENT_NAMES: Record<FdKind, string> = {
 export const CONTESTS: { id: string; name: string }[] = [
   { id: 'arrlfd', name: FD_EVENT_NAMES.arrlfd },
   { id: 'wfd', name: FD_EVENT_NAMES.wfd },
+  // ⚠️ Sweepstakes is TWO contests, not one with two modes: ARRL runs the CW weekend
+  // and the Phone weekend separately, scores them separately and gives each its own
+  // Cabrillo token. The sponsor's own names, so an operator reads the same words here
+  // and on arrl.org.
+  { id: 'arrlss_cw', name: 'ARRL November Sweepstakes (CW)' },
+  { id: 'arrlss_ssb', name: 'ARRL November Sweepstakes (Phone)' },
   { id: 'cqp', name: 'California QSO Party' },
   { id: 'ohqp', name: 'Ohio QSO Party' },
   { id: 'tnqp', name: 'Tennessee QSO Party' },

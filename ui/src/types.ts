@@ -3199,6 +3199,12 @@ export interface Settings {
    *  claimed more than one operator was at the station. A new SESSION reads it; the
    *  exporter reads the session, because one run under one callsign IS the entry. */
   contestCategoryOperator?: string
+  /** Cabrillo `CATEGORY-POWER` — 'HIGH' | 'LOW' | 'QRP', '' = undeclared. */
+  contestCategoryPower?: string
+  /** Cabrillo `CATEGORY-ASSISTED` — 'ASSISTED' | 'NON-ASSISTED', '' = undeclared. */
+  contestCategoryAssisted?: string
+  /** Cabrillo `CATEGORY-STATION` — 'SCHOOL', '' = the ordinary entry. */
+  contestCategoryStation?: string
   /** ⭐ The station data a SENT exchange needs (spec §3.4) — added BESIDE the frozen
    *  `fd*` names, never replacing them (§8c). Every one of these is what a rules file
    *  may name as the SOURCE of a slot its role sends; a ruleset naming anything else
