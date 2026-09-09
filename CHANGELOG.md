@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Contest support beyond Field Day — four state QSO parties.** Tennessee, Ohio, California and
+  Texas are selectable in Settings ▸ Contesting, and the whole operating path follows the one you
+  pick: the entry strip shows that contest's exchange fields, dupe checking uses that sponsor's own
+  rule, the scoreboard counts its multipliers, and the Cabrillo and ADIF exports carry its
+  identifiers. Every rule was read from the sponsor's current page rather than inferred, and where a
+  sponsor's own wording is ambiguous the ruleset records the ambiguity instead of guessing at it.
+
+  Two consequences worth knowing. Ohio has three roles — in-state, W/VE and DX — and which one you
+  send follows your station data rather than being typed each time. And Tennessee and Texas both
+  have computed bonus terms that this scoring model cannot express, so their scoreboards say plainly
+  that the total excludes bonuses: the log is submittable, the number on screen is not your final
+  claimed score.
+
+- **Full-screen map.** One button on the map toolbar hides the surrounding chrome and gives the map
+  the window; the same button and Escape both bring it back. The choice is remembered per surface,
+  so a popped-out map does not inherit what you hid on the main window.
+
 - **The map draws your transmit and receive paths.** A dashed green great circle runs from your
   QTH out to every station that reported hearing you, and a dotted blue one out to every station
   you decoded — the picture GridTracker operators know, on both the 2-D map and the 3-D globe, and
@@ -28,6 +45,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Pop-out panels scroll again.** A torn-off POTA/SOTA board could not be scrolled — content below
+  the fold was simply unreachable. The pop-out window had no scrolling container at all, an omission
+  since pop-outs were introduced; every other pop-out was checked and only this one was affected.
+
+- **A solo Field Day entry no longer claims to be multi-operator.** The Cabrillo header hardcoded
+  `CATEGORY-OPERATOR: MULTI-OP`, so every single-operator log Nexus has ever exported submitted a
+  false claim about the station. It now follows your entry category, and a club host's merged export
+  still says MULTI-OP, because that one genuinely is.
+
+- **Three Cabrillo contest names were wrong.** Field Day, Ohio and Texas were submitting headers
+  under names their sponsors do not use — `ARRL-FD`, `MRRC-OHQP` and `TXQP` are the correct ones.
+  The ADIF `CONTEST_ID` tag keeps its own separate values, which were right all along; the two are
+  different registries that happen to agree for most contests and disagree for these three.
+
+- **The beta-updates switch could silently turn itself off.** Turning it on and then touching any
+  APRS control wrote a stale copy of your settings back over it, so you would quietly stop being
+  offered betas with nothing to indicate why. The stale write is fixed at its source, which protects
+  every other setting that surface could have reverted.
+
+- **Interop broadcasts carried the wrong exchange for earlier contacts.** The WSJT-X and N1MM feeds
+  stamped your *current* exchange on every contact in the batch, so a mobile station that changed
+  county mislabelled everything it had already worked. Each contact now carries the exchange it was
+  actually sent with. Field Day operators see no change — their exchange never moves.
+
+- **N1MM broadcasts named the wrong contest.** Anything that was not Winter Field Day was announced
+  as ARRL Field Day, which was harmless while those were the only two contests and wrong the moment
+  a QSO party could be selected.
+
+- **Map icons are sharp again at UI scales above 100%.** The map canvas was sized in layout pixels
+  while being painted in device pixels, so any zoom above 100% upscaled a too-small bitmap. Station
+  and spot markers also scale with the map surface now, with a dark outline behind each dot and
+  label so they stay legible over coastlines, and the hover card is anchored to the marker instead
+  of chasing the cursor.
+
 - **Correcting a busted callsign now re-sends the QSO to the logging services.** Fixing a call
   in the Logbook's edit form has always cleared that contact's upload stamps — the point being
   that QRZ, ClubLog, eQSL and the rest hold the *old* call and need to hear the correction. But
@@ -41,6 +92,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   six-character call read back as if its last letter had been dropped. The value was never
   short — what you saved was always what you typed — but you could not see it. The button now
   steps down to its own line when the field gets tight.
+
+### Changed
+
+- **Field Day refuses a section its own rules do not list.** Entering an unrecognised section used
+  to start the mode anyway and let you transmit it; it now declines, the way a blank section already
+  did. If you operate a section Nexus does not know, this will stop you where it previously did not.
 
 ## [1.11.1] — 2026-09-08
 
