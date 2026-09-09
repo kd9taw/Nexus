@@ -17,6 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   were the only sign anything was owed now erased. A callsign correction goes back out to every
   connector you have switched on. Other edits (name, grid, RST, a park reference) still don't
   re-upload — the services already have that contact under that call.
+- **The Logbook edit form's CALL box shows the whole callsign.** It shares its row with the QRZ
+  lookup button, and in a normal-width window that left it about five characters wide, so a
+  six-character call read back as if its last letter had been dropped. The value was never
+  short — what you saved was always what you typed — but you could not see it. The button now
+  steps down to its own line when the field gets tight.
 
 ## [1.11.1] — 2026-09-08
 
