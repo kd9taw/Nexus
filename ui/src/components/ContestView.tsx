@@ -16,6 +16,7 @@ import { usePinnedScroll } from '../usePinnedScroll'
 import { ARRL_SECTIONS_BY_DIVISION, ARRL_SECTION_TOTAL } from '../features/arrlSections'
 import { contestDomain, type DomainGroup } from '../features/contestDomains'
 import { composingSlot } from '../features/contestExchange'
+import { contestRate, RATE_WINDOWS } from '../features/contestRate'
 import { t } from '../i18n'
 import type { MessageKey } from '../i18n'
 import { T } from '../i18n/T'
@@ -1132,6 +1133,87 @@ const POPOUT_BTN: CSSProperties = {
   whiteSpace: 'nowrap',
 }
 
+// ---------------------------------------------------------------------------
+// THE RATE METER — the tiles. The arithmetic and its provenance are in
+// `features/contestRate.ts`; this is only how it reads on the scoreboard.
+// ---------------------------------------------------------------------------
+
+/** No reading yet. An em dash, not a zero: "0/h" is a rate an operator has been shown to
+ *  be running, and one contact is not a rate at all. A named constant because it is a
+ *  symbol rather than prose — the same escape hatch the invariant tokens above use. */
+const RATE_NONE = '—'
+
+/**
+ * The meter's own clock.
+ *
+ * Every window is measured TO NOW, so the reading has to move when nothing is logged —
+ * a meter that only updates when a contact lands is the frozen rate the module was
+ * written to avoid, and it would sit at the run rate all through a two-hour break. Five
+ * seconds is finer than the numbers it feeds and far cheaper than the snapshot poll
+ * already re-rendering this view; it does not depend on that poll, because the torn-off
+ * scoreboard must decay too.
+ */
+function useNowUnix(): number {
+  const [now, setNow] = useState(() => Math.floor(Date.now() / 1000))
+  useEffect(() => {
+    const id = setInterval(() => setNow(Math.floor(Date.now() / 1000)), 5000)
+    return () => clearInterval(id)
+  }, [])
+  return now
+}
+
+/**
+ * ⭐ **THE RATE METER (batch 12)** — contacts per hour, on the scoreboard beside the
+ * score tiles, for every contest the picker offers including both Field Day events. A
+ * Field Day operator watches rate as closely as a contester does.
+ *
+ * Three `.fd-score` tiles in the scoreboard's own wrap row — the shipped tile idiom, no
+ * new structure and no new CSS, so the pane grid is untouched.
+ *
+ * ⚠️ **THE LABEL NAMES THE REAL SAMPLE, NOT THE NOMINAL WINDOW.** With three contacts
+ * logged the tile reads "Last 3", because "Last 10" over three contacts is a claim about
+ * seven contacts that do not exist. And two windows over the SAME contacts are one
+ * reading, not two: below eleven contacts the 100-window can only repeat the 10-window's
+ * answer, so it is not drawn at all rather than drawn as a second identical tile.
+ */
+export function RateTiles({ log, nowUnix }: { log: FieldDayQso[]; nowUnix: number }) {
+  const { windows, lastHour } = useMemo(() => contestRate(log, nowUnix), [log, nowUnix])
+  const shown = windows
+    .map((w, i) => ({ w, size: RATE_WINDOWS[i] }))
+    .filter((e, i, all) => i === 0 || e.w.sample > all[i - 1].w.sample)
+  return (
+    <>
+      {shown.map(({ w, size }) => (
+        <div
+          className="fd-score"
+          key={size}
+          /* `role="group"` is what makes the aria-label authoritative: an aria-label on a
+             bare <div> with no role is ignored by screen readers, and "60" alone is not a
+             reading of anything. */
+          role="group"
+          title={t('fieldDay.rate.window.title', { n: w.sample })}
+          aria-label={t('fieldDay.rate.window.aria', { n: w.sample })}
+        >
+          <span className="fd-score-val">
+            {w.perHour === null ? RATE_NONE : Math.round(w.perHour)}
+          </span>
+          <span className="fd-score-label">{t('fieldDay.rate.lastN', { n: w.sample })}</span>
+        </div>
+      ))}
+      {/* The rolling hour is a COUNT, so 0 is a real answer and never an em dash. */}
+      <div
+        className="fd-score"
+        role="group"
+        title={t('fieldDay.rate.hour.title')}
+        aria-label={t('fieldDay.rate.hour.aria')}
+      >
+        <span className="fd-score-val">{lastHour}</span>
+        <span className="fd-score-label">{t('fieldDay.rate.hour')}</span>
+      </div>
+    </>
+  )
+}
+
 /**
  * The reusable Field Day scoreboard: the settable operator, the score tiles, and the
  * worked-sections board. `onSaveOperator` persists the operator (optimistic, parent-
@@ -1151,6 +1233,7 @@ export function FieldDayScoreboard({
 }) {
   const log = fieldDay?.log ?? []
   const isWfd = (fieldDay?.event ?? '') === 'wfd'
+  const nowUnix = useNowUnix()
   const modes = useMemo(() => modeCounts(log), [log])
   const workedSet = useMemo(() => workedSectionSet(fieldDay), [fieldDay])
   const { fdPowerMult, qsoPts, poweredPoints, bonusPoints, totalScore, multCount } = computeFdScore(
@@ -1238,6 +1321,10 @@ export function FieldDayScoreboard({
             <span className="fd-score-label">{t('fieldDay.score.sections')}</span>
           </div>
         )}
+        {/* ⭐ THE RATE METER — beside the counts it is read against, so "how many" and
+            "how fast" are one glance. Every contest gets it; the data is the log's own
+            timestamps and nothing about the score touches it. */}
+        <RateTiles log={log} nowUnix={nowUnix} />
         {/* Per-mode chips — a count and a mode code, both invariant. */}
         <div className="fd-mode-chips">
           {modes.dig > 0 && <span className="fd-mode-chip dig">{modes.dig} {FD_MODE_CODES.dig}</span>}

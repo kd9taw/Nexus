@@ -1,0 +1,138 @@
+<!doctype html><html><head><meta charset="utf-8"><title>contest scoreboard harness</title>
+<link rel="stylesheet" href="styles.css">
+<style>body{margin:0;background:#0b0e14}.host{border:1px dashed #334}</style></head>
+<!--
+  THE CONTEST SCOREBOARD ROW AT THE 1024 px FLOOR — batch 12, the rate meter.
+
+  ⚠️ WHY THIS FILE EXISTS. Batch 12 adds up to three tiles to `.fd-scoreboard`, a
+  `flex-wrap: wrap` row that already carries the QSO tile, the Mults/Sections tile, the
+  per-mode chips, the score-math block and the state chip. Whether that row still wraps
+  instead of scrolling at the supported floor is a GEOMETRIC question, and jsdom computes
+  no layout — every getBoundingClientRect in the vitest suite is 0×0, so the whole
+  vitest suite is silent about it. This lays the real classes out in a real engine.
+
+  It carries the REAL classes from `ContestView.tsx`'s `FieldDayScoreboard` and links the
+  REAL sheet. Mirror any DOM change here (README step 1: `cp ../src/styles.css .`).
+
+  RUN IT:  ./measure-scoreboard.sh          (headless Chrome, prints the JSON)
+  or:      python3 -m http.server 8799  →  http://localhost:8799/scoreboard.html
+           then `measure(1024, 3)` in the console.
+
+  WHAT MUST HOLD, at 1024 and up:
+   • `rowOverflow` == 0        — the row WRAPS, it never scrolls horizontally
+   • `tilesFullyVisible` true  — no tile clipped by the scoreboard's own box
+   • adding the meter costs at most ONE extra line at the floor
+
+  WHAT IT MEASURED (2026-09-09, this build — `./measure-scoreboard.sh`):
+      w    rate  lines  rowH  rowOverflow  tileW  mathW   tilesFullyVisible
+     1024    0     1      90       0       123.1  483.3   true
+     1024    2     2     133       0        90.0  406.9   true
+     1024    3     2     136       0       147.6  937.6   true
+     1366    0     1      90       0       208.6  654.3   true
+     1366    2     1      90       0       134.7  506.6   true
+     1366    3     1      90       0       110.6  458.4   true
+     1920    0     1      90       0       347.1  931.3   true
+     1920    2     1      90       0       227.0  691.3   true
+     1920    3     1      90       0       189.8  616.7   true
+
+   AT 1366 AND ABOVE THE METER IS FREE: one line before, one line after, and the tiles
+   absorb it out of their own `flex: 1 1 auto` share (208.6 → 110.6 px at 1366), still
+   above the 90 px min-width the sheet sets.
+
+   AT THE 1024 FLOOR IT COSTS ONE LINE: 90 → 136 px of scoreboard, the row wrapping the
+   score-math block (its own 160 px min-width) onto a second line. That is the budgeted
+   cost — the row is `flex-wrap: wrap` and this is the wrap doing its job — and
+   `rowOverflow` stays 0 and `tilesFullyVisible` stays true at every width, so nothing
+   scrolls sideways and no tile is clipped. It is 46 px off the log feed below it, which
+   is a scrolling feed, not a fixed slot.
+
+   THE CONTROL TRIPS: `measure(1024, 12)` reports `lines: 3`, `rowH: 209` and
+   `tileW: 90` — the tiles hit their min-width and the row takes a third line. The page
+   is really laying out; the zeros above are a measurement, not a page that stopped.
+-->
+<body>
+<div class="app" style="display:block">
+<div class="host" style="width:1024px">
+  <div class="fd-scoreboard" id="board">
+    <div class="fd-score"><span class="fd-score-val">128</span><span class="fd-score-label">QSOs</span></div>
+    <div class="fd-score"><span class="fd-score-val">37</span><span class="fd-score-label">Sections</span></div>
+    <span id="rate"></span>
+    <div class="fd-mode-chips">
+      <span class="fd-mode-chip dig">61 DIG</span>
+      <span class="fd-mode-chip cw">44 CW</span>
+      <span class="fd-mode-chip ph">23 PH</span>
+    </div>
+    <div class="fd-score-math"><span class="fd-score-math-line">QSO pts <strong>212</strong> &times; power &times;<strong>2</strong> = <strong>424</strong> + bonuses <strong>300</strong> = <strong class="fd-score-total">724</strong></span></div>
+    <div class="fd-state-chip">sp</div>
+  </div>
+</div>
+</div>
+<pre id="out"></pre>
+<script>
+// The meter renders THREE tiles at full sample (Last 10, Last 100, Last 60 min) and TWO
+// below eleven contacts, when the 100-window can only repeat the 10-window's answer.
+// `n` is how many to draw, so the same page measures before (0), the short-log case (2),
+// the shipped case (3) and a control that must overflow the row (12).
+const LABELS = ['Last 10', 'Last 100', 'Last 60 min'];
+function rateTiles(n) {
+  const host = document.getElementById('rate');
+  host.replaceChildren();
+  // The tiles are siblings of the score tiles in the real DOM — unwrap the placeholder.
+  host.style.display = 'contents';
+  for (let i = 0; i < n; i++) {
+    const d = document.createElement('div');
+    d.className = 'fd-score';
+    d.innerHTML =
+      '<span class="fd-score-val">' + (60 + i) + '</span>' +
+      '<span class="fd-score-label">' + (LABELS[i] || LABELS[2]) + '</span>';
+    host.appendChild(d);
+  }
+}
+
+function measure(width, n) {
+  document.querySelector('.host').style.width = width + 'px';
+  rateTiles(n);
+  const board = document.getElementById('board');
+  const r = e => e.getBoundingClientRect();
+  const boardR = r(board);
+  const tiles = [...board.querySelectorAll('.fd-score')];
+  const kids = [...board.children].filter(e => e.getClientRects().length);
+  // ⚠️ NOT a set of `top`s: the row is `align-items: center`, so children of different
+  // heights on the SAME flex line have different tops. Group by vertical OVERLAP —
+  // a child starts a new line only when its top clears everything before it.
+  const boxes = kids.map(e => r(e)).sort((a, b) => a.top - b.top);
+  let lines = 0, edge = -Infinity;
+  for (const b of boxes) {
+    if (b.top >= edge - 0.5) { lines++; edge = b.bottom; }
+    else edge = Math.max(edge, b.bottom);
+  }
+  return {
+    width,
+    rate: n,
+    tiles: tiles.length,
+    // The whole point: the row WRAPS, it never scrolls.
+    rowOverflow: +Math.max(0, board.scrollWidth - board.clientWidth).toFixed(1),
+    lines,
+    // Nothing clipped by the scoreboard's own box.
+    tilesFullyVisible: tiles.every(t => r(t).right <= boardR.right + 0.5),
+    tileW: +(tiles[0] ? r(tiles[0]).width : 0).toFixed(1),
+    tilesSum: +tiles.reduce((a, t) => a + r(t).width, 0).toFixed(1),
+    mathW: +r(board.querySelector('.fd-score-math')).width.toFixed(1),
+    rowW: +boardR.width.toFixed(1),
+    rowH: +boardR.height.toFixed(1),
+  };
+}
+
+function run() {
+  const rows = [];
+  for (const w of [1024, 1366, 1920]) for (const n of [0, 2, 3]) rows.push(measure(w, n));
+  // THE CONTROL — twelve tiles must trip the verdict the zeros above report. If this
+  // row looks like the three-tile one, the page is not laying out and none of the
+  // numbers above mean anything.
+  rows.push(measure(1024, 12));
+  return rows;
+}
+
+document.getElementById('out').textContent = JSON.stringify(run(), null, 1);
+</script>
+</body></html>

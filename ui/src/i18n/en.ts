@@ -2552,6 +2552,20 @@ export const EN = {
   // reordered, and every language puts "power" and "bonuses" somewhere of its own.
   'fieldDay.score.math':
     'QSO pts <b>{{qsoPts}}</b> × power ×<b>{{powerMult}}</b> = <b>{{poweredPoints}}</b> + bonuses <b>{{bonusPoints}}</b> = <total>{{totalScore}}</total>',
+  // ⭐ THE RATE METER. `{{n}}` is the REAL number of contacts behind the reading, not the
+  // nominal window — the tile says "Last 3" over three contacts, because "Last 10" there
+  // would be a claim about seven contacts that were never made. Every value on these
+  // tiles is contacts per hour, which is why the rolling-hour tile needs no unit either.
+  'fieldDay.rate.lastN': 'Last {{n}}',
+  'fieldDay.rate.window.title':
+    'Contacts per hour over your last {{n}} contacts, measured up to now — it falls while nothing is logged.',
+  'fieldDay.rate.window.aria': 'Rate over the last {{n}} contacts',
+  // A ROLLING 60 minutes, not the clock hour: five minutes past the hour, a clock-hour
+  // count reads 7 for an operator running 90 an hour.
+  'fieldDay.rate.hour': 'Last 60 min',
+  'fieldDay.rate.hour.title':
+    'Contacts logged in the last 60 minutes — a rolling hour, not the clock hour.',
+  'fieldDay.rate.hour.aria': 'Contacts in the last 60 minutes',
   'fieldDay.state.title': 'Sequencer state',
   // The stand-in when the engine has not named a sequencer state yet; the states themselves
   // are the backend's own words, printed as they arrive.
