@@ -256,7 +256,7 @@ impl FieldDayLog {
     /// shipped engine unusable for a QSO party. Both Field Day events key on these
     /// three and nothing else, so for them this is the whole key, not a prefix of it.
     pub fn is_dupe_mode(&self, call: &str, mode: &str) -> bool {
-        self.worked_key(call, &self.band.clone(), mode)
+        self.worked_key(call, &self.band, mode)
     }
 
     /// Whether an EXPLICIT `(call, band, mode class)` key is in the dupe
@@ -348,11 +348,11 @@ impl FieldDayLog {
         let rx = self.received(class, section);
         let tx = self.session.tx_for_row(call);
         let band = self.band.clone();
-        if self.is_dupe_row(call, &band, &mode, &rx, &tx) {
+        let key = self.dupe_rule().key_of(call, &band, &mode, &rx, &tx);
+        if self.worked.contains(&key) {
             return false;
         }
-        self.worked
-            .insert(self.dupe_rule().key_of(call, &band, &mode, &rx, &tx));
+        self.worked.insert(key);
         let seq = self.next_seq;
         self.next_seq += 1;
         self.qsos.push(LoggedQso {
@@ -507,9 +507,8 @@ impl FieldDayLog {
             // to, so "the fallback is exact" and "no tag is written" are one fact and
             // cannot drift. For Field Day both fallbacks are exact (class and section
             // ARE the received exchange; the sent exchange does not move), so nothing
-            // is written and the §8(a) ADIF golden does not move. The moment a sent
-            // exchange differs from the session's — a mobile that has changed county —
-            // that row gets its own <APP_NEXUS_MYEX> and a restart reads it back.
+            // is written and the §8(a) ADIF golden does not move. `sent_moved` above is
+            // the same test for the other direction, taken over the whole log.
             if rx_from_standard(spec, role, |tag| {
                 standard
                     .iter()
