@@ -563,6 +563,28 @@ impl ClubLog {
         log
     }
 
+    /// ⭐ **FIRING SITE 3 of 3 (§6.3): the club host, over the MERGED rows' own
+    /// `mex`.**
+    ///
+    /// ⚠️ **The rule is per-LOG, so no per-position guard can see this one.** Two
+    /// positions configured with different Sweepstakes checks under one club callsign
+    /// each send a value that is perfectly constant *within that position's log*, and
+    /// the entry the host submits is invalid. The host is the only place both halves
+    /// are in the same collection, which is why this site exists and is named here
+    /// rather than discovered when a club's entry is rejected.
+    ///
+    /// It runs the SAME scan the position's own export runs
+    /// ([`FieldDayLog::constant_sent_scan`]) over the merged log, so the two cannot
+    /// come to disagree about what "constant" means.
+    pub fn constant_sent_mismatch(
+        &self,
+        mycall: &str,
+        class: &str,
+        section: &str,
+    ) -> Option<tempo_core::contest::ConstantSentMismatch> {
+        self.unique_log(mycall, class, section).constant_sent_scan()
+    }
+
     /// Unique (scoring) rows count.
     pub fn qsos_unique(&self) -> u64 {
         self.dkeys_list.len() as u64

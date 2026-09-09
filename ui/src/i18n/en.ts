@@ -2741,6 +2741,15 @@ export const EN = {
   'settings.contestPick.category.aria': 'How many operators are at this station',
   'settings.contestPick.category.hint':
     'What your Cabrillo log declares about the station. Pick CHECKLOG if you are sending the log to help the sponsor check others rather than to be scored.',
+  'settings.contestPick.power.label': 'Power category',
+  'settings.contestPick.power.aria': 'Which power category you are entering',
+  'settings.contestPick.assisted.label': 'Spotting assistance',
+  'settings.contestPick.assisted.aria': 'Whether your entry uses spotting assistance',
+  'settings.contestPick.station.label': 'Station type',
+  'settings.contestPick.station.aria': 'Whether this is a school club station',
+  'settings.contestPick.entryAxes.unset': 'Not set',
+  'settings.contestPick.entryAxes.hint':
+    'The rest of what your Cabrillo log declares about the entry. Sweepstakes also sends these on the air, as the precedence letter, so it will not start until you have picked one of each: ARRL counts 5 watts or less as QRP, 100 watts or less as low power, and anything above that as high power, and an entry using spots, a skimmer or a cluster is Single Operator Unlimited.',
   'settings.contestStation.legend': 'Your station data',
   'settings.contestStation.note': 'What your station sends when a contest asks for it. Fill in the ones your contest uses — a QSO party wants your county or your state, Sweepstakes wants your check. Nothing here is guessed: an exchange that goes on the air has to be one you typed.',
   'settings.contestStation.county.label': 'County',

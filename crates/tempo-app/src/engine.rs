@@ -8552,6 +8552,14 @@ impl Engine {
                 z => z.to_string(),
             },
             contest_power: self.settings.contest_power.clone(),
+            // Sweepstakes sends the operator's own call INSIDE the exchange (§4.3) and
+            // its precedence letter is the entry's declared category (§4.2), so both
+            // are sent-slot sources like any other.
+            mycall: self.settings.mycall.clone(),
+            contest_category_operator: self.settings.contest_category_operator.clone(),
+            contest_category_power: self.settings.contest_category_power.clone(),
+            contest_category_assisted: self.settings.contest_category_assisted.clone(),
+            contest_category_station: self.settings.contest_category_station.clone(),
             mygrid: self.settings.mygrid.clone(),
             dxcc: st.eq_ignore_ascii_case("DX"),
         }

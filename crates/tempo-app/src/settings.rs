@@ -700,6 +700,36 @@ pub struct Settings {
     /// [`OperatorCategory`]: tempo_core::contest::OperatorCategory
     #[serde(default)]
     pub contest_category_operator: String,
+    /// Cabrillo `CATEGORY-POWER` — `"HIGH"` | `"LOW"` | `"QRP"`, or empty for
+    /// undeclared (§6.1).
+    ///
+    /// ⭐ **Sweepstakes sends this axis ON THE AIR**, as the precedence letter
+    /// (`Q`/`A`/`B` — SS-Rules v2.1 §4.2), which is why it is not merely a
+    /// header. Empty REFUSES a Sweepstakes session with a sentence naming the
+    /// sponsor's thresholds, rather than defaulting to a category the operator
+    /// never claimed.
+    ///
+    /// ⚠️ **Not [`Self::fd_power_mult`]**, which is Field Day's scoring TIER
+    /// picked from a legal set. §6.1 rules that neither is derived from the
+    /// other: the thresholds differ (SS: 5 W / 100 W / 1500 W; FD's tier: 150 W)
+    /// and one is a claim about the entry while the other multiplies a score.
+    #[serde(default)]
+    pub contest_category_power: String,
+    /// Cabrillo `CATEGORY-ASSISTED` — `"ASSISTED"` | `"NON-ASSISTED"`, or empty
+    /// for undeclared.
+    ///
+    /// ⚠️ **Not [`Self::unassisted_mode`]**, and the difference is not a
+    /// technicality. That switch SILENCES this build's own spotting sources and
+    /// is off by default, so an operator who has simply never touched it has
+    /// declared nothing; reading it as `ASSISTED` would enter most operators in
+    /// Single Operator Unlimited. This is the operator's own statement about
+    /// their entry, and it is asked rather than inferred.
+    #[serde(default)]
+    pub contest_category_assisted: String,
+    /// Cabrillo `CATEGORY-STATION` — `"SCHOOL"` for ARRL's School Club category,
+    /// empty for the ordinary entry. The only arm anything in this build reads.
+    #[serde(default)]
+    pub contest_category_station: String,
     // ---- The station data a SENT exchange needs (spec §3.4) -----------------
     //
     // ⭐ **These land BESIDE the frozen `fd_*` names, never replacing them**
@@ -3428,6 +3458,12 @@ impl Default for Settings {
             fd_class: String::new(),
             fd_event: String::new(),                  // "" = arrlfd
             contest_category_operator: String::new(), // "" = SINGLE-OP, the honest default
+            // "" = UNDECLARED for all three, and undeclared is not a default: a
+            // Sweepstakes session refuses until the operator answers, because these
+            // three axes are transmitted as the precedence letter.
+            contest_category_power: String::new(),
+            contest_category_assisted: String::new(),
+            contest_category_station: String::new(),
             // §3.4's station-data block. Every one of these is empty/0 on a fresh
             // install: none of them can be guessed, and a guessed exchange goes on
             // the air. The Contesting tab asks for the ones the picked contest sends.
@@ -4839,6 +4875,11 @@ mod tests {
             "contest_cq_zone",
             "contest_itu_zone",
             "contest_power",
+            "contest_category_operator",
+            "contest_category_power",
+            "contest_category_assisted",
+            "contest_category_station",
+            "mycall",
         ] {
             assert!(
                 tempo_core::fd_rules::SENT_SLOT_SETTINGS.contains(&name),

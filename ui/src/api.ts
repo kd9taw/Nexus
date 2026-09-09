@@ -409,7 +409,10 @@ export async function fetchFdRules(): Promise<FdRulesStatus> {
  * in the catalogs, computed UI-side. `enforcement` ships `'warn'`: nothing is
  * ever removed or disabled by rule (operator ruling). */
 export interface FdRulesetDto {
-  /** The rules-file event id — 'arrlfd' | 'wfd' | 'tnqp' | 'ohqp' | 'cqp' | 'txqp'. */
+  /**
+   * The rules-file event id — 'arrlfd' | 'wfd' | 'tnqp' | 'ohqp' | 'cqp' | 'txqp' |
+   * 'arrlss_cw' | 'arrlss_ssb'.
+   */
   event: string
   rulesYear: number
   /** On-air modes this event's rules ban outright (uppercase ADIF-style). */

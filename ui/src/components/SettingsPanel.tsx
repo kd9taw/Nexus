@@ -105,6 +105,23 @@ import { CONTESTS, isFieldDay } from '../fdEvent'
  *  list gains that Rust does not know is refused there rather than defaulted, because
  *  the header is a CLAIM about the entry. */
 const CABRILLO_OPERATOR_CATEGORIES = ['SINGLE-OP', 'MULTI-OP', 'CHECKLOG'] as const
+/**
+ * ⭐ The other three `CATEGORY-*` axes, as Cabrillo's own tokens.
+ *
+ * ⚠️ **Sweepstakes sends these ON THE AIR.** Its PRECEDENCE letter is the entry's
+ * category restated (SS-Rules v2.1 §4.2 — Q/A/B by power, U when assisted, M multi-op,
+ * S school club), so an undeclared axis is not a blank header, it is a session Nexus
+ * refuses to start rather than transmit a category nobody claimed.
+ *
+ * `''` leads each list and means UNDECLARED. It is not a default: for the two Field Day
+ * events nothing reads these, and for Sweepstakes the refusal names what to pick.
+ *
+ * ⚠️ INVARIANT — the tokens are never translated. They go into the Cabrillo file
+ * verbatim, exactly like the operator categories above.
+ */
+const CABRILLO_POWER_CATEGORIES = ['', 'HIGH', 'LOW', 'QRP'] as const
+const CABRILLO_ASSISTED_CATEGORIES = ['', 'NON-ASSISTED', 'ASSISTED'] as const
+const CABRILLO_STATION_CATEGORIES = ['', 'SCHOOL'] as const
 import { loadProfiles, mergeProfile, saveProfile, deleteProfile, type Profile } from '../profiles'
 import {
   getAssistanceJournal,
@@ -10266,6 +10283,53 @@ export function SettingsPanel({
                 </div>
                 <span className="settings-hint">{t('settings.contestPick.category.hint')}</span>
               </div>
+
+              {/* ⭐ The three axes Sweepstakes turns into its precedence letter. They are
+                  here rather than under "Your station data" because they describe the
+                  ENTRY, which is what the other Cabrillo CATEGORY-* headers describe —
+                  and because leaving one blank is what refuses an SS session. */}
+              {/* ⚠️ The message keys are LITERALS, not built from the field name: the
+                  orphan-entry guard scans the source for `t('…')` calls, and a template
+                  literal is invisible to it — six catalog entries would read as
+                  translated-for-nobody. */}
+              {([
+                [
+                  'contestCategoryPower',
+                  CABRILLO_POWER_CATEGORIES,
+                  t('settings.contestPick.power.label'),
+                  t('settings.contestPick.power.aria'),
+                ],
+                [
+                  'contestCategoryAssisted',
+                  CABRILLO_ASSISTED_CATEGORIES,
+                  t('settings.contestPick.assisted.label'),
+                  t('settings.contestPick.assisted.aria'),
+                ],
+                [
+                  'contestCategoryStation',
+                  CABRILLO_STATION_CATEGORIES,
+                  t('settings.contestPick.station.label'),
+                  t('settings.contestPick.station.aria'),
+                ],
+              ] as const).map(([field, tokens, label, aria]) => (
+                <div className="settings-field" key={field}>
+                  <span className="settings-label">{label}</span>
+                  <div className="theme-switcher" role="group" aria-label={aria}>
+                    {tokens.map((c) => (
+                      <button
+                        key={c || 'unset'}
+                        type="button"
+                        className={`theme-chip${(form[field] || '') === c ? ' active' : ''}`}
+                        aria-pressed={(form[field] || '') === c}
+                        onClick={() => update(field, c)}
+                      >
+                        {c || t('settings.contestPick.entryAxes.unset')}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+              <span className="settings-hint">{t('settings.contestPick.entryAxes.hint')}</span>
             </fieldset>
           )}
 

@@ -57,6 +57,7 @@ pub fn mode_class(adif_mode: &str) -> &'static str {
 pub mod adif;
 pub mod cabrillo;
 pub mod carrier;
+pub mod constant_sent;
 pub mod dupe;
 pub mod exchanges;
 pub mod merge;
@@ -64,15 +65,18 @@ pub mod render;
 pub mod scoring;
 pub mod session;
 pub mod spec;
+pub mod sweepstakes;
 
 pub use exchanges::{casual, field_day};
 
 pub use adif::directed_columns;
 
 pub use cabrillo::{
-    cabrillo_contest_token, resolve_contest_id, side_declares_call, CabrilloHeaders,
+    cabrillo_contest_token, is_call_slot, resolve_contest_id, side_declares_call, CabrilloHeaders,
     OperatorCategory,
 };
+
+pub use constant_sent::ConstantSentMismatch;
 
 pub use dupe::{DupeRule, KEY_SEP};
 

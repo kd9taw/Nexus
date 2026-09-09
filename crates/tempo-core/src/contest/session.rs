@@ -120,6 +120,30 @@ pub struct StationData {
     pub contest_cq_zone: String,
     pub contest_itu_zone: String,
     pub contest_power: String,
+    /// My own callsign — Sweepstakes is the one contest that sends it INSIDE the
+    /// exchange (SS-Rules v2.1 §4.3: *"Your call sign (the call sign must be included
+    /// during the exchange)"*), so it is a sent-slot source like any other.
+    ///
+    /// ⚠️ It is read per SESSION, not per export: a 1×1 special-event call can change
+    /// mid-contest, and the rows already logged carry the call they actually sent.
+    pub mycall: String,
+    /// Cabrillo `CATEGORY-OPERATOR` — `SINGLE-OP` / `MULTI-OP` / `CHECKLOG`.
+    ///
+    /// ⭐ It is here as well as on [`ContestSession::entry_category`] because
+    /// Sweepstakes' PRECEDENCE is derived from it, and a sent slot's value is resolved
+    /// from [`StationData`] alone. Both are filled from the one settings field, and
+    /// [`ContestSession::for_ruleset`] sets the session's copy from THIS one, so there
+    /// is no second reader that can drift.
+    pub contest_category_operator: String,
+    /// Cabrillo `CATEGORY-POWER` — `HIGH` / `LOW` / `QRP`. Empty = undeclared, which
+    /// REFUSES a Sweepstakes session rather than claiming a category.
+    pub contest_category_power: String,
+    /// Cabrillo `CATEGORY-ASSISTED` — `ASSISTED` / `NON-ASSISTED`. It is what separates
+    /// Single Operator from Single Operator Unlimited, and therefore `A` from `U`.
+    pub contest_category_assisted: String,
+    /// Cabrillo `CATEGORY-STATION` — only `SCHOOL` is read by anything in this build
+    /// (ARRL's School Club category, precedence `S`). Empty is the ordinary entry.
+    pub contest_category_station: String,
     pub mygrid: String,
     /// I am outside the W/VE role space entirely — the `dx` role of a QSO party.
     /// Declared, never inferred from a blank state: an operator who has simply not
@@ -141,6 +165,11 @@ impl StationData {
             "contest_cq_zone" => &self.contest_cq_zone,
             "contest_itu_zone" => &self.contest_itu_zone,
             "contest_power" => &self.contest_power,
+            "mycall" => &self.mycall,
+            "contest_category_operator" => &self.contest_category_operator,
+            "contest_category_power" => &self.contest_category_power,
+            "contest_category_assisted" => &self.contest_category_assisted,
+            "contest_category_station" => &self.contest_category_station,
             "mygrid" => &self.mygrid,
             _ => return None,
         })
@@ -338,7 +367,14 @@ impl ContestSession {
             end_unix: 0,
             next_serial: 1,
             label: rs.exchange.name.to_string(),
-            entry_category: super::cabrillo::OperatorCategory::default(),
+            // ⭐ The ENTRY DECLARATION, read from the same field Sweepstakes'
+            // PRECEDENCE derives from — so the header and the letter on every QSO line
+            // are one fact. A token this build does not understand keeps the default
+            // (`SINGLE-OP`) rather than becoming a claim nobody made.
+            entry_category: super::cabrillo::OperatorCategory::from_token(
+                &station.contest_category_operator,
+            )
+            .unwrap_or_default(),
             contest_id_by_mode: Vec::new(),
             transmitter_id: None,
             upload: UploadPolicy::default(),
@@ -687,6 +723,18 @@ an RST slot",
         // shipped QSO-party ruleset uses; anything else sends the state, which is the
         // safe half — a state that is not in the slot's domains is REFUSED below,
         // while a county silently accepted is a wrong exchange nobody sees.
+        // ⭐ §6.3's `PREC`: the entry category, restated as a letter. It is DERIVED
+        // rather than typed so the letter on 400 QSO lines and the `CATEGORY-*` headers
+        // of the same entry cannot disagree — see `contest::sweepstakes` for the
+        // sponsor's own table and for why an undeclared axis refuses.
+        "derived:precedence" => super::sweepstakes::precedence(
+            super::cabrillo::OperatorCategory::from_token(&station.contest_category_operator)
+                .unwrap_or_default(),
+            &station.contest_category_power,
+            &station.contest_category_assisted,
+            &station.contest_category_station,
+        )
+        .map(str::to_string),
         "derived:my_location" => Ok(match role.id {
             "in_state" => my_location.county.clone().unwrap_or_default(),
             "dx" => "DX".to_string(),
