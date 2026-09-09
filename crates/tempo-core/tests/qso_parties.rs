@@ -64,7 +64,12 @@ fn fields(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
 }
 
 /// `(qso_points, powered, multipliers, total)` for a log, through the ruleset it runs.
-fn score(log: &FieldDayLog) -> (u32, u32, u32, u32) {
+///
+/// The multiplier count is an `Option` because `None` ("this contest has no multiplier
+/// concept") and `Some(0)` ("it has one and none has been worked") are different facts.
+/// Every party here is in the `Some` arm; Field Day is the `None` arm, asserted in
+/// `tempo-app`'s snapshot test.
+fn score(log: &FieldDayLog) -> (u32, u32, Option<u32>, u32) {
     log.ruleset().scoring.score(log.score_rows(), 1)
 }
 
@@ -146,7 +151,7 @@ fn tnqp_from_tennessee_works_anyone_and_scores_per_band_multipliers() {
     // — this build resolves no entity, which `LoggedQso::entity` states.)
     let (qso, powered, mults, total) = score(&log);
     assert_eq!((qso, powered), (9, 9), "3 points per QSO, no power tier");
-    assert_eq!(mults, 2, "CT and DAVI, both on 20m");
+    assert_eq!(mults, Some(2), "CT and DAVI, both on 20m");
     assert_eq!(total, 18);
 
     // THE CABRILLO the operator submits.
@@ -215,7 +220,11 @@ fn tnqp_from_out_of_state_sends_its_state_and_counts_tennessee_counties() {
 
     let (qso, _, mults, total) = score(&log);
     assert_eq!(qso, 9);
-    assert_eq!(mults, 2, "WILL and DAVI — a county counts once per band");
+    assert_eq!(
+        mults,
+        Some(2),
+        "WILL and DAVI — a county counts once per band"
+    );
     assert_eq!(total, 18);
     // The out-of-state role counts COUNTIES only: the `qth` and `dxcc` universes are
     // in-state rules, and a row worked under `out_of_state` must not reach them.
@@ -317,7 +326,7 @@ fn ohqp_counts_multipliers_once_per_mode() {
         log.ruleset().scoring.mult_counts(log.score_rows()),
         vec![("county", 2), ("mult", 1)]
     );
-    assert_eq!(mults, 3);
+    assert_eq!(mults, Some(3));
     assert_eq!(total, 15);
     // OhQP's score is COMPLETE — no note, unlike TNQP and TXQP.
     assert_eq!(log.ruleset().score_note_key, "");
@@ -422,7 +431,7 @@ fn cqp_issues_serials_dupes_once_per_mode_per_band_and_scores_per_log() {
     // counted ONCE FOR THE LOG — CT and AZ, however many bands and modes they appear on.
     let (qso, _, mults, total) = score(&log);
     assert_eq!(qso, 12, "phone is 3 points too, NEW IN 2026");
-    assert_eq!(mults, 2, "per LOG: CT and AZ, not once per band");
+    assert_eq!(mults, Some(2), "per LOG: CT and AZ, not once per band");
     assert_eq!(total, 24);
 
     let cab = log.cabrillo(14_030).expect("one entry");
@@ -482,7 +491,11 @@ fn txqp_from_texas_scores_per_log_and_shows_its_score_note() {
 
     let (qso, _, mults, total) = score(&log);
     assert_eq!(qso, 3 + 2 + 3, "CW/digital 3, phone 2");
-    assert_eq!(mults, 3, "CT, NY and BEE — counted once for the party");
+    assert_eq!(
+        mults,
+        Some(3),
+        "CT, NY and BEE — counted once for the party"
+    );
     assert_eq!(total, 24);
 
     // ⭐ THE SCORE NOTE. TXQP's mobile bonuses are computed from the log and are
