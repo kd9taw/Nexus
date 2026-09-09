@@ -1696,6 +1696,12 @@ export interface RadioProfilePatch {
   sstvHoldDataSubmode: boolean
   audioIn: string
   audioOut: string
+  /** The LIVE MICROPHONE this radio transmits with, or '' for the rig's own mic. Per radio, so
+   *  it must ride the patch — a per-radio field missing here is silently dropped on Save, which
+   *  is the 2026-08-17 Flex-three data loss exactly. The pill writes it through the narrow
+   *  `setLiveMic` setter, but the Settings form's Save rebuilds the WHOLE patch, so an absence
+   *  here blanks whatever the pill stored. */
+  liveMicDevice: string
   txLevel: number
   rxGain: number
   rotatorModel: number
