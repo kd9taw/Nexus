@@ -1636,6 +1636,7 @@ mod tests {
                 },
                 label: None,
                 required: true,
+                source: "setting:fd_class",
                 kind: FieldKind::Rst { digits: 3 },
             },
             FieldSpec {
@@ -1646,6 +1647,7 @@ mod tests {
                 },
                 label: None,
                 required: true,
+                source: "setting:fd_section",
                 kind: FieldKind::Serial {
                     scope: SerialScope::PerContest,
                 },
@@ -1768,6 +1770,7 @@ mod tests {
             },
             label: None,
             required: true,
+            source: "",
             kind: FieldKind::Rst { digits: 3 },
         }];
         static R: &[RoleSpec] = &[RoleSpec {

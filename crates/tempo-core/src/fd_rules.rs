@@ -1603,6 +1603,10 @@ fn build_exchange(
                 Some(leak_str(f.label))
             },
             required: f.required,
+            // The validated source travels onto the spec — the session constructor
+            // fills one value per sent slot and reads it from here, so the declaration
+            // the loader checked is the declaration that is honoured.
+            source: leak_str(f.source),
             kind: build_kind(f.kind, domains, reserved),
         })
         .collect();

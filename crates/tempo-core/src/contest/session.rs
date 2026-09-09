@@ -100,11 +100,68 @@ accepted, including these.";
 pub const MOVE_CHANGES_ROLE: &str = "You've moved into a different multiplier region — \
 that's a separate entry. End this session and start a new one?";
 
+/// ⭐ **The station data §3.4 names as the source of a sent slot** — the operator's
+/// answers, as one value object, so a session constructor reads them by the SAME names
+/// the rules file declares.
+///
+/// It is a struct rather than a `&Settings` because this crate holds no settings and
+/// must not learn to: the chain the loader validates is *rules file names a source →
+/// `SENT_SLOT_SETTINGS` says this build can supply it → `tempo-app` proves every name
+/// in that list is a real serde field*. This type is the third link's shape. Adding a
+/// field here without adding it to `SENT_SLOT_SETTINGS` reaches nothing; adding it
+/// there without adding it here is a `Err` naming the slot, which is the loud half.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StationData {
+    pub fd_class: String,
+    pub fd_section: String,
+    pub contest_qth_county: String,
+    pub contest_qth_state: String,
+    pub contest_check: String,
+    pub contest_cq_zone: String,
+    pub contest_itu_zone: String,
+    pub contest_power: String,
+    pub mygrid: String,
+    /// I am outside the W/VE role space entirely — the `dx` role of a QSO party.
+    /// Declared, never inferred from a blank state: an operator who has simply not
+    /// filled the form in is not a DX entrant, and treating them as one would send
+    /// `DX` on the air from Ohio.
+    pub dxcc: bool,
+}
+
+impl StationData {
+    /// The value a `"setting:<name>"` source names, or `None` for a name this build
+    /// does not carry — which the caller turns into a refusal naming the slot.
+    fn setting(&self, name: &str) -> Option<&str> {
+        Some(match name {
+            "fd_class" => &self.fd_class,
+            "fd_section" => &self.fd_section,
+            "contest_qth_county" => &self.contest_qth_county,
+            "contest_qth_state" => &self.contest_qth_state,
+            "contest_check" => &self.contest_check,
+            "contest_cq_zone" => &self.contest_cq_zone,
+            "contest_itu_zone" => &self.contest_itu_zone,
+            "contest_power" => &self.contest_power,
+            "mygrid" => &self.mygrid,
+            _ => return None,
+        })
+    }
+}
+
 /// One run of one contest: the object BOTH logs carry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContestSession {
     /// Stable across restart; stamped on every row it owns.
     pub id: String,
+    /// ⭐ **The RULES-FILE event id** (`"arrlfd"`, `"wfd"`, `"tnqp"`, …) — how every
+    /// reader of this session finds the ruleset that governs it.
+    ///
+    /// It is not [`contest_id`](Self::contest_id): that is the Cabrillo token, which is
+    /// the sponsor's vocabulary and not a key into the rules table. Until this field
+    /// existed the log looked its ruleset up through `FdEvent::from_contest_id`, whose
+    /// two arms are ARRL and Winter Field Day and whose else-branch is ARRL — so a
+    /// Tennessee QSO Party session would have been duped, scored and headed under ARRL
+    /// Field Day's rules without anything saying so.
+    pub event_id: String,
     /// The Cabrillo `CONTEST` token — `"ARRL-FIELD-DAY"`, `"WFD"`, `"CQP"`.
     pub contest_id: String,
     pub rules_year: u16,
@@ -187,6 +244,7 @@ impl ContestSession {
             .collect();
         Self {
             id: format!("{}:{}", event.contest_id(), section),
+            event_id: event.code().to_string(),
             contest_id: event.contest_id().to_string(),
             rules_year: crate::fd_rules::CURRENT_RULES_YEAR,
             exchange,
@@ -213,6 +271,136 @@ impl ContestSession {
             // a setting — a global default is the thing this control replaces.
             upload: UploadPolicy::default(),
         }
+    }
+
+    /// ⭐ **A session for ANY shipped ruleset** — the constructor that makes a contest
+    /// other than Field Day reachable at all.
+    ///
+    /// Field Day had [`field_day`](Self::field_day) and nothing else had anything, so
+    /// batch 8's four QSO-party rulesets, their county domains and their station-data
+    /// settings were all present and none of them could be entered. This is that gap,
+    /// and it is deliberately ONE function: a per-contest constructor is how two
+    /// contests come to disagree about which slot a county goes in.
+    ///
+    /// **Everything comes off the ruleset.** The exchange, the roles, the Cabrillo
+    /// token, the rules year — all read from `rs`, so a rules-file edit moves the
+    /// session and a code edit is not needed to add a fifth contest.
+    ///
+    /// ⭐ **The role is DERIVED, never passed in.** [`MyLocation`] is built from the
+    /// operator's station data and [`role`](Self::role) evaluates the ruleset's own
+    /// [`RoleSelector`]s against it. A `role` parameter would let the caller name a
+    /// role the location contradicts — and a wrong role sends a wrong exchange, on the
+    /// air, for the whole contest.
+    ///
+    /// ⚠️ **It is fallible, and every `Err` is a sentence for the operator**, because
+    /// the alternative to refusing here is transmitting a blank or an out-of-domain
+    /// value. Refused when: a sent slot's source is one no session can supply; a
+    /// `"setting:"` source names a field [`StationData`] does not carry; a required
+    /// sent slot resolves empty (the operator has not said where they are); or a
+    /// resolved value is in none of the slot's declared domains (an Ohio county typed
+    /// into a Tennessee party).
+    ///
+    /// ⚠️ Reads the rules table through `rs`, so it carries
+    /// [`fd_rules::ruleset`](crate::fd_rules::ruleset)'s ordering rule — never call it
+    /// before the startup `fd_rules::install_from`.
+    pub fn for_ruleset(
+        rs: &'static crate::fd_rules::FdRuleset,
+        station: &StationData,
+    ) -> Result<Self, String> {
+        let my_location = MyLocation {
+            county: Some(station.contest_qth_county.trim().to_ascii_uppercase())
+                .filter(|c| !c.is_empty()),
+            state: station.contest_qth_state.trim().to_ascii_uppercase(),
+            dxcc: station.dxcc,
+        };
+        // The role is evaluated by asking a session, not by re-implementing the
+        // selector walk beside `role()` — one evaluation, one answer, and an "I moved"
+        // that lands in a different role is detected by the same code path.
+        let mut s = Self {
+            id: String::new(),
+            event_id: rs.event.to_string(),
+            contest_id: rs.contest_id.to_string(),
+            rules_year: rs.rules_year,
+            exchange: rs.exchange,
+            my_location,
+            my_exchange: Vec::new(),
+            in_flight: None,
+            start_unix: 0,
+            end_unix: 0,
+            next_serial: 1,
+            label: rs.exchange.name.to_string(),
+            entry_category: super::cabrillo::OperatorCategory::default(),
+            contest_id_by_mode: Vec::new(),
+            transmitter_id: None,
+            upload: UploadPolicy::default(),
+        };
+        let role = s.role();
+        let mut my_exchange = Vec::new();
+        for key in role.sends {
+            let field = s
+                .exchange
+                .field(key)
+                .ok_or_else(|| format!("{key} is not a slot this exchange declares"))?;
+            let raw = sent_value(field, role, station, &s.my_location)?;
+            if raw.is_empty() {
+                if field.required {
+                    return Err(format!(
+                        "Your {key} is empty — it is part of the exchange you transmit. \
+Fill it in on the Contesting tab in Settings."
+                    ));
+                }
+                continue;
+            }
+            // The value is CONFIRMED against the slot's domains here, at the one moment
+            // it is decided, so the recorded arm is a fact rather than a later guess
+            // (§2.4) — and so an out-of-domain value is refused before it goes on the
+            // air rather than after it is in a submitted log.
+            let v = s
+                .exchange
+                .copied(key, &raw)
+                .expect("the slot resolved one line above");
+            if !accepts(field, &raw, role) {
+                return Err(format!(
+                    "\"{raw}\" is not a value the {key} slot of this contest accepts."
+                ));
+            }
+            my_exchange.push(v);
+        }
+        s.my_exchange = my_exchange;
+        // ⭐ **Where the entry says it is, derived the SAME way `move_to` derives it** —
+        // the role's first sent `Enum` slot — so a session that is built and then moved
+        // cannot disagree with itself about the operator's location.
+        //
+        // It matters for Field Day and for nothing else in this build: FD's `SECTION`
+        // is a plain `Enum` and IS the entry's location (Cabrillo's `LOCATION` header
+        // means the section for that event, §6.1), while a QSO party's `QTH` is a
+        // `OneOf` and is therefore left alone — the county an in-state operator sends
+        // is not the state their role is selected on.
+        if let Some(loc) = role
+            .sends
+            .iter()
+            .find(|k| {
+                matches!(
+                    s.exchange.field(k).map(|f| f.kind),
+                    Some(super::FieldKind::Enum { .. })
+                )
+            })
+            .and_then(|k| s.my_exchange.iter().find(|v| v.key == *k))
+        {
+            s.my_location.state = loc.raw.clone();
+        }
+        // The id names the entry: one contest, from one place. `role()` is stable while
+        // the location is, and a location change that would move it ends the session
+        // (§3.3 ruling 3) rather than renaming this.
+        s.id = format!(
+            "{}:{}",
+            rs.contest_id,
+            s.my_location
+                .county
+                .clone()
+                .unwrap_or_else(|| s.my_location.state.clone())
+        );
+        Ok(s)
     }
 
     /// The connector destinations this session's merge may enqueue to — **empty
@@ -330,11 +518,32 @@ impl ContestSession {
     /// one, else the session's current sent exchange.
     ///
     /// This is the ONLY place `my_exchange` is copied, and it copies it onto a row.
-    pub fn tx_for_row(&self, peer: &str) -> Vec<FieldValue> {
-        match &self.in_flight {
+    pub fn tx_for_row(&self, peer: &str, mode_class: &str) -> Vec<FieldValue> {
+        let mut tx = match &self.in_flight {
             Some(f) if f.peer.eq_ignore_ascii_case(peer.trim()) => f.tx.clone(),
             _ => self.my_exchange.clone(),
+        };
+        // ⭐ **The one thing on a sent exchange that is a property of the ROW, not of
+        // the session: an RST's digit count.** §2.2's own definition of the field is
+        // "2 digits on phone, 3 on CW and digital", and the session has no mode — it is
+        // one session across CW and phone — so the constant it holds is the 3-digit
+        // form and the row is where the phone case becomes true. A `599` on a phone
+        // line of a submitted log is a report the operator never sent.
+        //
+        // It touches only a slot the ruleset declares `Rst` AND sources as a
+        // `"constant"`: an RST the operator typed or a modem copied is a value somebody
+        // actually exchanged, and rewriting one is what `FieldSpec`'s own header
+        // forbids.
+        if mode_class.eq_ignore_ascii_case("PH") {
+            for v in &mut tx {
+                if let Some(f) = self.exchange.field(v.key) {
+                    if f.source == "constant" && matches!(f.kind, super::FieldKind::Rst { .. }) {
+                        v.raw = "59".to_string();
+                    }
+                }
+            }
         }
+        tx
     }
 
     /// The contact is logged (or abandoned): nothing is in flight any more.
@@ -425,6 +634,112 @@ impl ContestSession {
     }
 }
 
+/// The value ONE sent slot takes, from the source the ruleset declares for it (§3.4).
+///
+/// ⚠️ **It switches on `FieldSpec::source`, never on `FieldSpec::kind`.** Kind says
+/// what a slot IS; source says where its value comes from, and the two are genuinely
+/// independent — a QSO party's `QTH` and Sweepstakes' `SEC` are both enum-shaped and
+/// one is derived from the operator's location while the other is read straight out of
+/// `fd_section`. Deriving the source from the kind would be a second mapping that the
+/// loader's validator does not check.
+fn sent_value(
+    field: &'static super::FieldSpec,
+    role: &'static RoleSpec,
+    station: &StationData,
+    my_location: &MyLocation,
+) -> Result<String, String> {
+    match field.source {
+        // An RST is the only constant in the researched set, and its DIGIT COUNT is the
+        // ruleset's own declaration — `599` for the 3-digit slot all four QSO parties
+        // declare, `59` for a 2-digit one. ⚠️ It does NOT vary with the on-air mode
+        // here: the session has no mode, and a mode-aware constant is applied where the
+        // mode is known (`FieldDayLog::log_submode_at`, which is per row).
+        "constant" => match field.kind {
+            super::FieldKind::Rst { digits } if digits <= 2 => Ok("59".to_string()),
+            super::FieldKind::Rst { .. } => Ok("599".to_string()),
+            _ => Err(format!(
+                "{} declares a constant source, but this build has a constant only for \
+an RST slot",
+                field.key
+            )),
+        },
+        // The PLACEHOLDER, not the number. A serial is issued at compose time, onto
+        // `in_flight`, and the row copies it from there (§2.6, batch 3) — this is the
+        // template's shape, and the one thing it must not be is the live counter.
+        "serial" => Ok("0".to_string()),
+        // ⭐ §3.4's `QTH`: one slot, county or state or DX, chosen by ROLE.
+        //
+        // The role decides rather than the value being probed against each domain in
+        // turn, and the difference is not academic: Ohio and Michigan both have a Wayne
+        // county, so a Michigan operator whose `contest_qth_county` happens to hold an
+        // Ohio abbreviation would be sent out as an Ohio station by a probe and is sent
+        // out as `MI` by this. The ids are §2.3's own role vocabulary, which every
+        // shipped QSO-party ruleset uses; anything else sends the state, which is the
+        // safe half — a state that is not in the slot's domains is REFUSED below,
+        // while a county silently accepted is a wrong exchange nobody sees.
+        "derived:my_location" => Ok(match role.id {
+            "in_state" => my_location.county.clone().unwrap_or_default(),
+            "dx" => "DX".to_string(),
+            _ => my_location.state.clone(),
+        }),
+        other => match other.split_once(':') {
+            Some(("setting", name)) => station
+                .setting(name)
+                .map(|v| v.trim().to_ascii_uppercase())
+                .ok_or_else(|| {
+                    format!(
+                        "{} is sourced from the setting {name:?}, which this build does \
+not carry",
+                        field.key
+                    )
+                }),
+            _ => Err(format!(
+                "{} declares source {other:?}, which a session cannot supply",
+                field.key
+            )),
+        },
+    }
+}
+
+/// Is `raw` a value this slot's declared shape holds, FOR THIS ROLE?
+///
+/// Only the shapes whose universe this crate CAN state are checked — an `Enum`'s domain
+/// and a `OneOf`'s arms. A `Pattern` needs a matcher this crate does not carry and a
+/// `Number`'s bounds are checked by whatever parsed it; approximating either is exactly
+/// what [`FieldKind::Pattern`](super::FieldKind::Pattern) forbids, so both pass.
+///
+/// ⭐ **The role is a parameter because a `OneOf`'s catch-all arm belongs to ONE role,
+/// not to the slot.** TNQP and TXQP express "or a U.S. state, Canadian province or DXCC
+/// entity" as a free-text arm, because neither sponsor publishes a list of those — so
+/// the slot accepts anything and the OUT-OF-STATE role is right to. The IN-STATE role
+/// is not: its value is a county, the sponsor publishes exactly which counties, and a
+/// county that is not one goes on the air and then into a submitted log. So for
+/// `in_state` a slot that declares any `Enum` arm must match one of them.
+fn accepts(field: &'static super::FieldSpec, raw: &str, role: &'static RoleSpec) -> bool {
+    let in_any_enum_arm = |arms: &'static [super::FieldKind]| {
+        arms.iter().any(|a| match a {
+            super::FieldKind::Enum { domain } => domain.contains(raw),
+            _ => false,
+        })
+    };
+    match field.kind {
+        super::FieldKind::Enum { domain } => domain.contains(raw),
+        super::FieldKind::OneOf(arms) => {
+            let has_enum_arm = arms
+                .iter()
+                .any(|a| matches!(a, super::FieldKind::Enum { .. }));
+            if role.id == "in_state" && has_enum_arm {
+                return in_any_enum_arm(arms);
+            }
+            arms.iter().any(|a| match a {
+                super::FieldKind::Enum { domain } => domain.contains(raw),
+                _ => true,
+            })
+        }
+        _ => true,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -483,11 +798,11 @@ mod tests {
     fn a_row_takes_the_issued_exchange_for_its_own_peer_and_the_live_one_otherwise() {
         let mut s = serial_session();
         s.compose_for("W1AW", 10);
-        assert_eq!(serial_of(&s.tx_for_row("W1AW")), "1");
+        assert_eq!(serial_of(&s.tx_for_row("W1AW", "DIG")), "1");
         // A row for somebody else is not described by W1AW's issue.
-        assert_eq!(serial_of(&s.tx_for_row("K1ABC")), "0");
+        assert_eq!(serial_of(&s.tx_for_row("K1ABC", "DIG")), "0");
         s.clear_in_flight();
-        assert_eq!(serial_of(&s.tx_for_row("W1AW")), "0");
+        assert_eq!(serial_of(&s.tx_for_row("W1AW", "DIG")), "0");
     }
 
     /// §4.1: the move lands on the SESSION, and on the location the role is derived
@@ -533,7 +848,7 @@ mod tests {
         s.compose_for("K1ABC", 100);
         s.move_to(&[("SECTION", "IL")]).expect("IL is a section");
         assert_eq!(
-            s.tx_for_row("K1ABC")
+            s.tx_for_row("K1ABC", "DIG")
                 .iter()
                 .find(|v| v.key == "SECTION")
                 .map(|v| v.raw.clone()),
@@ -545,7 +860,7 @@ mod tests {
         // silently did nothing.
         s.clear_in_flight();
         assert_eq!(
-            s.tx_for_row("W1AW")
+            s.tx_for_row("W1AW", "DIG")
                 .iter()
                 .find(|v| v.key == "SECTION")
                 .map(|v| v.raw.clone()),
@@ -596,6 +911,7 @@ mod tests {
             },
             label: None,
             required: true,
+            source: "derived:my_location",
             kind: FieldKind::Enum { domain: &STATES },
         }];
         static R: &[RoleSpec] = &[
@@ -653,6 +969,7 @@ mod tests {
             },
             label: None,
             required: true,
+            source: "serial",
             kind: FieldKind::Serial {
                 scope: SerialScope::PerContest,
             },

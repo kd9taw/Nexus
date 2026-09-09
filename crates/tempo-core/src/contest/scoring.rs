@@ -17,13 +17,14 @@
 //! and their six score numbers against output captured before any of this existed. If a
 //! golden moves, this file is what is wrong.
 //!
-//! ⚠️ **[`MultiplierRule`] has no evaluator here and that is deliberate.** No shipped
-//! ruleset declares one (the seed writes `"multipliers": []` for both events, and
-//! `fd_rules`'s tests pin that), and counting distinct received values needs the
-//! per-row field vectors that arrive with the generalised contest log. A multiplier
-//! evaluator written now would be untested code on the scoring path of a live contest.
-//! What lands here is the TYPE: it deserialises from a rules file, the loader validates
-//! it against the exchange (§2.5), and a ruleset that declares none still loads.
+//! ⚠️ **[`MultiplierRule`] gained its evaluator with the batch that made a ruleset
+//! declaring one reachable**, and not before: while the only shipped rulesets were the
+//! two Field Day events — both of which write `"multipliers": []`, which `fd_rules`'s
+//! tests pin — an evaluator would have been untested code on the scoring path of a live
+//! contest. The four state QSO parties are what a score without it gets wrong, by the
+//! size of a multiplier total. [`Scoring::mult_counts`] counts, [`Scoring::score`]
+//! applies, and an event that declares NO rule keeps exactly the total it had (the
+//! count is not treated as a ×0).
 
 /// Per-mode-class QSO points (the `points_by_mode_class` table in the rules data).
 /// The seed matches the historical hardcoded map (phone 1, CW/digital 2); a data edit
@@ -69,6 +70,24 @@ impl ModePoints {
 pub struct ScoreRow<'a> {
     /// `"PH"` | `"CW"` | `"DIG"` — the class scoring buckets by, never the on-air mode.
     pub mode_class: &'a str,
+    /// The band label (`"20m"`). Read by [`MultScope::PerBand`] and
+    /// [`MultScope::PerBandMode`].
+    pub band: &'a str,
+    /// The [`RoleSpec::id`](super::RoleSpec::id) this contact was worked under — what
+    /// [`MultiplierRule::roles`] filters on. An Ohio station counts four multiplier
+    /// universes and a Michigan station counts one, out of the same log shape.
+    pub role: &'a str,
+    /// ⭐ **The exchange THEY sent me**, which is where a multiplier value comes from.
+    /// Each value carries the domain arm that matched it, so `MultSource::Field`'s
+    /// `domain` selects the county bucket or the state bucket out of one `QTH` slot
+    /// without re-parsing (§2.4).
+    pub rx: &'a [super::FieldValue],
+    /// The resolved DXCC entity of the worked callsign, for
+    /// [`MultSource::DxccEntity`]. `None` — which counts nothing — everywhere this
+    /// build does not resolve one (`LoggedQso::entity`'s own note).
+    pub entity: Option<&'a str>,
+    /// The resolved callsign prefix, for [`MultSource::Prefix`]. `None` in this build.
+    pub prefix: Option<&'a str>,
 }
 
 /// How a contact becomes points.
@@ -202,6 +221,93 @@ impl Scoring {
         (qso_pts, powered)
     }
 
+    /// ⭐ **The multiplier total: how many distinct values these rows count, summed
+    /// over every universe this ruleset declares.**
+    ///
+    /// The QSO parties' whole score depends on it — CQP is *"the total number of QSO
+    /// Points multiplied by the total number of scored multipliers"* — and until it
+    /// existed the type shipped with no evaluator at all, which was correct while no
+    /// shipped ruleset declared a multiplier and is a wrong score the moment one does.
+    ///
+    /// **Distinct at the rule's own SCOPE.** A value counts once per log (CQP, TXQP),
+    /// once per band (TNQP), or once per mode (OhQP: *"working the same multiplier on
+    /// both CW and SSB counts as two multipliers"*) — so the key counted is the value
+    /// plus whatever the scope adds to it, and the scopes are summed across rules
+    /// rather than intersected.
+    ///
+    /// **A row counts only for the rules its own ROLE counts** ([`MultiplierRule::roles`]),
+    /// and a value in [`MultiplierRule::excluding`] counts for none.
+    ///
+    /// ⚠️ **A `Field` rule with a `domain` counts only values that MATCHED that
+    /// domain** — not every value in the slot. That is the whole reason the matched arm
+    /// travels on the value: an Ohio operator's `QTH` slot holds counties and states
+    /// and provinces and `DX`, and the county board must count the counties. A value
+    /// whose arm is `None` (out of every declared universe, or a free-text arm with no
+    /// domain to name) counts for a rule that names no domain and for no other.
+    pub fn mult_counts<'a, I>(&self, rows: I) -> Vec<(&'static str, usize)>
+    where
+        I: IntoIterator<Item = ScoreRow<'a>>,
+    {
+        use std::collections::HashSet;
+        let mut seen: Vec<HashSet<(String, String)>> = vec![HashSet::new(); self.multipliers.len()];
+        for row in rows {
+            for (i, m) in self.multipliers.iter().enumerate() {
+                if !(m.roles.is_empty() || m.roles.contains(&row.role)) {
+                    continue;
+                }
+                let value = match m.source {
+                    MultSource::Field { key, domain } => row
+                        .rx
+                        .iter()
+                        .find(|v| v.key == key && (domain.is_none() || v.domain == domain))
+                        .map(|v| v.raw.trim().to_ascii_uppercase()),
+                    MultSource::DxccEntity => row.entity.map(|e| e.to_string()),
+                    MultSource::Prefix => row.prefix.map(|p| p.to_string()),
+                };
+                let Some(value) = value.filter(|v| !v.is_empty()) else {
+                    continue;
+                };
+                if m.excluding.iter().any(|e| *e == value) {
+                    continue;
+                }
+                let bucket = match m.scope {
+                    MultScope::PerLog => String::new(),
+                    MultScope::PerBand => row.band.to_ascii_uppercase(),
+                    MultScope::PerMode => row.mode_class.to_ascii_uppercase(),
+                    MultScope::PerBandMode => {
+                        format!("{}/{}", row.band.to_ascii_uppercase(), row.mode_class)
+                    }
+                };
+                seen[i].insert((bucket, value));
+            }
+        }
+        self.multipliers
+            .iter()
+            .zip(seen)
+            .map(|(m, set)| (m.id, set.len()))
+            .collect()
+    }
+
+    /// The claimed total: `(qso_points, powered, multipliers, total)`.
+    ///
+    /// ⚠️ **A ruleset with NO multiplier is not a ruleset with zero multipliers.** Both
+    /// Field Day events declare none, and multiplying their powered total by 0 would
+    /// zero a shipped score — so the multiplier count is applied only when the ruleset
+    /// declares at least one rule, and the reported count is 0 for an event that has no
+    /// such concept. `bonuses` stay outside this: they are CLAIMED by the operator, not
+    /// derived from the log, and `FdRuleset::bonus_points` is where they are added.
+    pub fn score<'a, I>(&self, rows: I, power_mult: u32) -> (u32, u32, u32, u32)
+    where
+        I: IntoIterator<Item = ScoreRow<'a>> + Clone,
+    {
+        let (qso_pts, powered) = self.qso_and_powered(rows.clone(), power_mult);
+        if self.multipliers.is_empty() {
+            return (qso_pts, powered, 0, powered);
+        }
+        let mults: u32 = self.mult_counts(rows).iter().map(|(_, n)| *n as u32).sum();
+        (qso_pts, powered, mults, powered * mults)
+    }
+
     /// This event's legal power tiers, or `None` when it applies no power multiplier —
     /// the successor to matching on `ScoringModel::PoweredMultiplier`, and what the
     /// scoreboard reads to decide whether a payload carries power fields at all.
@@ -314,7 +420,14 @@ mod tests {
     };
 
     fn rows<'a>(classes: &'a [&'a str]) -> impl Iterator<Item = ScoreRow<'a>> {
-        classes.iter().map(|m| ScoreRow { mode_class: m })
+        classes.iter().map(|m| ScoreRow {
+            mode_class: m,
+            band: "20m",
+            role: "",
+            rx: &[],
+            entity: None,
+            prefix: None,
+        })
     }
 
     /// ⭐ §9: Field Day declares NO multiplier rule, and it still shows its

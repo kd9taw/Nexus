@@ -46,6 +46,19 @@ pub struct FieldSpec {
     pub label: Option<&'static str>,
     /// Whether a QSO can be logged without this field.
     pub required: bool,
+    /// ⭐ **Where the value this slot SENDS comes from** (§3.4) — `"constant"`,
+    /// `"serial"`, `"setting:<name>"`, `"derived:<what>"`, or `""` for a slot no role
+    /// sends.
+    ///
+    /// It is carried on the SPEC rather than left in the rules file because the
+    /// session constructor has to fill one value per sent slot, and the only other way
+    /// to know which value is to re-derive the source from the `kind` — a second
+    /// mapping, in a second place, that the loader's validator does not check. The
+    /// loader already refuses a sent slot with no source or an unreadable one
+    /// (`fd_rules::is_sent_source`), so what reaches here is a source this build
+    /// declared it can supply; carrying it means the constructor honours that
+    /// declaration instead of guessing at it.
+    pub source: &'static str,
     /// What kind of value the slot holds — the SHAPE, never a modem's tolerance.
     pub kind: FieldKind,
 }
@@ -212,6 +225,41 @@ impl ExchangeSpec {
             },
         })
     }
+
+    /// A COPIED value for one slot, with the [`FieldKind::OneOf`] arm that matched it
+    /// resolved.
+    ///
+    /// ⚠️ **The difference from [`value`](Self::value) is which side of the parse this
+    /// is on, and it is the whole of §2.4.** `value` names the domain a spec can state
+    /// WITHOUT a parse — the sole arm of an `Enum` — and deliberately gives a `OneOf`
+    /// `None`, because re-deriving an arm downstream picks the first arm that matches
+    /// rather than the arm that was actually confirmed. This is the function that DOES
+    /// the confirming: it is called where the value is copied (the operator typed it
+    /// into the entry strip, a frame carried it), which is the one moment the arm is a
+    /// fact rather than a guess. Everything downstream then reads the recorded arm.
+    ///
+    /// A `OneOf` whose arms are all `Enum` and none of which holds `raw` yields a value
+    /// with `domain: None` — the value is out of every declared universe, and saying so
+    /// is what lets a multiplier bucket refuse to count it. A non-`Enum` arm (a `Text`
+    /// catch-all, which is how TNQP and TXQP express "or anything else") also yields
+    /// `None`: it has no domain to name.
+    pub fn copied(&self, key: &str, raw: &str) -> Option<FieldValue> {
+        let f = self.field(key)?;
+        let up = raw.trim().to_ascii_uppercase();
+        let domain = match f.kind {
+            FieldKind::Enum { domain } => Some(domain.id),
+            FieldKind::OneOf(arms) => arms.iter().find_map(|a| match a {
+                FieldKind::Enum { domain } if domain.contains(&up) => Some(domain.id),
+                _ => None,
+            }),
+            _ => None,
+        };
+        Some(FieldValue {
+            key: f.key,
+            raw: raw.to_string(),
+            domain,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -250,6 +298,7 @@ mod tests {
             },
             label: None,
             required: true,
+            source: "constant",
             kind: FieldKind::Rst { digits: 3 },
         }];
         static R: &[RoleSpec] = &[RoleSpec {

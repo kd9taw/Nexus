@@ -23,6 +23,7 @@ static CASUAL_FIELDS: &[FieldSpec] = &[
         },
         label: None,
         required: true,
+        source: "constant",
         kind: FieldKind::Rst { digits: 3 },
     },
     FieldSpec {
@@ -39,6 +40,7 @@ static CASUAL_FIELDS: &[FieldSpec] = &[
         },
         label: Some("NAME"),
         required: false,
+        source: "",
         kind: FieldKind::Text { max_len: 16 },
     },
     FieldSpec {
@@ -55,6 +57,7 @@ static CASUAL_FIELDS: &[FieldSpec] = &[
         },
         label: Some("QTH"),
         required: false,
+        source: "",
         kind: FieldKind::Text { max_len: 16 },
     },
 ];
@@ -148,6 +151,7 @@ pub fn field_day(event: FdEvent) -> &'static ExchangeSpec {
                 },
                 label: None,
                 required: true,
+                source: "setting:fd_class",
                 kind: FieldKind::Pattern {
                     re: class_pattern(event),
                 },
@@ -159,6 +163,7 @@ pub fn field_day(event: FdEvent) -> &'static ExchangeSpec {
                 adif: section_domain.adif,
                 label: None,
                 required: true,
+                source: "setting:fd_section",
                 kind: FieldKind::Enum {
                     domain: section_domain,
                 },
@@ -201,6 +206,7 @@ pub(crate) fn sweepstakes_shaped() -> &'static ExchangeSpec {
             },
             label: None,
             required: true,
+            source: "serial",
             kind: FieldKind::Serial {
                 scope: super::spec::SerialScope::PerContest,
             },
@@ -213,6 +219,7 @@ pub(crate) fn sweepstakes_shaped() -> &'static ExchangeSpec {
             },
             label: None,
             required: true,
+            source: "stub",
             kind: FieldKind::Pattern { re: "^[QABUMS]$" },
         },
         FieldSpec {
@@ -223,6 +230,7 @@ pub(crate) fn sweepstakes_shaped() -> &'static ExchangeSpec {
             },
             label: None,
             required: true,
+            source: "",
             kind: FieldKind::Call,
         },
         FieldSpec {
@@ -233,6 +241,7 @@ pub(crate) fn sweepstakes_shaped() -> &'static ExchangeSpec {
             },
             label: None,
             required: true,
+            source: "setting:contest_check",
             kind: FieldKind::Pattern { re: "^[0-9]{2}$" },
         },
         FieldSpec {
@@ -240,6 +249,7 @@ pub(crate) fn sweepstakes_shaped() -> &'static ExchangeSpec {
             adif: SECTIONS.adif,
             label: None,
             required: true,
+            source: "setting:fd_section",
             kind: FieldKind::Enum { domain: &SECTIONS },
         },
     ];
@@ -306,6 +316,7 @@ pub(crate) fn qso_party_shaped() -> &'static ExchangeSpec {
             },
             label: None,
             required: true,
+            source: "constant",
             kind: FieldKind::Rst { digits: 3 },
         },
         FieldSpec {
@@ -319,6 +330,7 @@ pub(crate) fn qso_party_shaped() -> &'static ExchangeSpec {
             },
             label: None,
             required: true,
+            source: "derived:my_location",
             kind: FieldKind::OneOf(QTH_ARMS),
         },
     ];

@@ -78,7 +78,7 @@ pub use render::{role_for, sent_exchange, sent_exchange_string};
 pub use merge::{merge_into_general, MergeReport};
 
 pub use session::{
-    ContestSession, InFlightQso, MyLocation, UploadPolicy, MOVE_CHANGES_ROLE,
+    ContestSession, InFlightQso, MyLocation, StationData, UploadPolicy, MOVE_CHANGES_ROLE,
     UPLOAD_CLUBLOG_SWEEP_HINT,
 };
 

@@ -263,13 +263,49 @@ impl FieldDayLog {
         }
     }
 
-    /// The dupe key this log's event declares, as data.
+    /// ⭐ **The ruleset governing this log — found through the SESSION's rules-file
+    /// event id**, which is the only key that can name a contest that is not one of the
+    /// two Field Day events.
+    ///
+    /// [`event`](Self::event) cannot: it is an [`FdEvent`], a two-arm enum, and
+    /// `FdEvent::from_contest_id` maps everything that is not `WFD` onto ARRL Field
+    /// Day. A Tennessee QSO Party log read through it would take ARRL Field Day's dupe
+    /// rule (no exchange slots — so a mobile in a new county would read as a dupe), its
+    /// points table and its Cabrillo id, and nothing anywhere would say so.
+    ///
+    /// The `unwrap_or_else` is not a fallback in the "and if not, guess" sense: the id
+    /// came out of the rules table, which is a set-once `OnceLock`, so the lookup that
+    /// found it cannot stop finding it. It keeps Field Day answering rather than
+    /// panicking if that ever became false.
+    pub fn ruleset(&self) -> &'static crate::fd_rules::FdRuleset {
+        crate::fd_rules::ruleset_by_id(&self.session.event_id, self.session.rules_year)
+            .unwrap_or_else(|| {
+                crate::fd_rules::ruleset(self.event, crate::fd_rules::CURRENT_RULES_YEAR)
+            })
+    }
+
+    /// The dupe key this log's ruleset declares, as data.
     ///
     /// Read from the ruleset each time rather than cached at construction, because
     /// [`event`](Self::event) is public and is assigned after `new` on several paths; a
     /// cached copy would silently answer for the wrong event.
     pub fn dupe_rule(&self) -> crate::contest::DupeRule {
-        crate::fd_rules::ruleset(self.event, crate::fd_rules::CURRENT_RULES_YEAR).dupe_rule
+        self.ruleset().dupe_rule
+    }
+
+    /// Point this log at a Field Day event, keeping [`event`](Self::event) and the
+    /// SESSION in step.
+    ///
+    /// The two are one fact — `new` derives the first from the second — and assigning
+    /// the public field alone is exactly the disagreement `new`'s own doc warns about:
+    /// since the exports read the session, an `event` set by itself would flip the
+    /// class letters and nothing else. Field Day only; a QSO party's session is built
+    /// by [`ContestSession::for_ruleset`](crate::contest::ContestSession::for_ruleset)
+    /// and never re-pointed.
+    pub fn set_event(&mut self, event: FdEvent) {
+        self.event = event;
+        self.session.event_id = event.code().to_string();
+        self.session.contest_id = event.contest_id().to_string();
     }
 
     /// This log's dupe index, as the ruleset's own ordered keys.
@@ -395,7 +431,7 @@ impl FieldDayLog {
         // a new county is a new station, in both directions), so a check that ran first
         // would be judging a different contact from the one about to be logged.
         let rx = self.received(class, section);
-        let tx = self.session.tx_for_row(call);
+        let tx = self.session.tx_for_row(call, mode);
         self.log_exchange_at(call, rx, tx, mode, submode, slot, when_unix)
     }
 
@@ -448,6 +484,39 @@ impl FieldDayLog {
         true
     }
 
+    /// ⭐ **Log a contact whose received exchange is a FIELD VECTOR** — the path a
+    /// contest that receives something other than `(class, section)` logs through.
+    ///
+    /// `fields` is `(slot id, raw)` in the role's receive order, exactly as the entry
+    /// strip renders its boxes. Values are resolved through
+    /// [`ExchangeSpec::copied`](crate::contest::ExchangeSpec::copied), so a
+    /// [`FieldKind::OneOf`](crate::contest::FieldKind::OneOf) slot records the arm that
+    /// actually matched — which is what the multiplier bucket and the ADIF column are
+    /// later chosen by (§2.4). A pair naming a slot this exchange does not declare is
+    /// DROPPED rather than invented: a value with no slot is not a value.
+    ///
+    /// [`log_submode_at`](Self::log_submode_at) is the Field Day shape of this call and
+    /// stays, because the FT sequencer and the club host both hand it exactly two
+    /// positional values off the air.
+    #[allow(clippy::too_many_arguments)] // the field vector plus log_mode_at's own
+    pub fn log_fields_at(
+        &mut self,
+        call: &str,
+        fields: &[(String, String)],
+        mode: &str,
+        submode: &str,
+        slot: u64,
+        when_unix: u64,
+    ) -> bool {
+        let spec = self.session.exchange;
+        let rx: Vec<crate::contest::FieldValue> = fields
+            .iter()
+            .filter_map(|(k, v)| spec.copied(k, v))
+            .collect();
+        let tx = self.session.tx_for_row(call, mode);
+        self.log_exchange_at(call, rx, tx, mode, submode, slot, when_unix)
+    }
+
     /// A received Field Day exchange as a field vector, resolved against the exchange
     /// this session runs.
     ///
@@ -489,9 +558,17 @@ impl FieldDayLog {
     /// take a `&FieldDayLog`, which is what welded the scoring math to Field Day's
     /// own log. Borrowed and lazy, because the score is recomputed on every
     /// snapshot tick and must stay O(rows) with no allocation.
-    pub fn score_rows(&self) -> impl Iterator<Item = crate::contest::ScoreRow<'_>> {
+    /// ⚠️ `+ Clone` is load-bearing: [`Scoring::score`](crate::contest::Scoring::score)
+    /// walks these rows TWICE — once for points, once for multipliers — and a
+    /// once-through iterator would force it to collect a `Vec` on every snapshot tick.
+    pub fn score_rows(&self) -> impl Iterator<Item = crate::contest::ScoreRow<'_>> + Clone {
         self.qsos.iter().map(|q| crate::contest::ScoreRow {
             mode_class: &q.mode,
+            band: &q.band,
+            role: &q.role,
+            rx: &q.rx,
+            entity: q.entity.as_deref(),
+            prefix: q.prefix.as_deref(),
         })
     }
 
@@ -587,7 +664,9 @@ impl FieldDayLog {
                 s.push_str(&adif_field("QSO_DATE", &date));
                 s.push_str(&adif_field("TIME_ON", &time));
             }
-            s.push_str(&adif_field("CONTEST_ID", self.event.contest_id()));
+            // The SESSION's Cabrillo token, not the `FdEvent`'s: a QSO party has no
+            // `FdEvent` arm, and reading one would export every party as Field Day.
+            s.push_str(&adif_field("CONTEST_ID", &self.session.contest_id));
             // The RECEIVED exchange under its own slots' ADIF tags, in the role's
             // receive order — for Field Day exactly the <CLASS> and <ARRL_SECT> this
             // has always written, from the row instead of from two named columns.
@@ -792,15 +871,15 @@ impl FieldDayLog {
         // ⭐ The `CONTEST` token, resolved against the mode classes this log actually
         // holds. A mode-split contest submits a separate entry per mode, so one file
         // holding both is refused BY NAME rather than filed under whichever id came
-        // first (§6.2). Neither Field Day event is split, so this is always the
-        // event's own id — read from `self.event`, which is where the header has read
-        // it since before the session existed and which the WFD/ARRL flip still sets.
+        // first (§6.2). Nothing this build ships is split, so this is always the
+        // session's own id — read from the SESSION, which is the only place that can
+        // name a contest `FdEvent` has no arm for (see [`Self::ruleset`]).
         let mut classes: Vec<&str> = self.qsos.iter().map(|q| q.mode.as_str()).collect();
         classes.sort_unstable();
         classes.dedup();
         let headers = crate::contest::CabrilloHeaders {
             contest: crate::contest::resolve_contest_id(
-                self.event.contest_id(),
+                &self.session.contest_id,
                 &self.session.contest_id_by_mode,
                 &classes,
             )?,
@@ -819,9 +898,7 @@ impl FieldDayLog {
             // is visible on the artifact an operator actually submits.
             x_headers: vec![(
                 "X-NEXUS-RULES-YEAR".to_string(),
-                crate::fd_rules::ruleset(self.event, crate::fd_rules::CURRENT_RULES_YEAR)
-                    .rules_year
-                    .to_string(),
+                self.ruleset().rules_year.to_string(),
             )],
         };
         let mut s = headers.render();
@@ -1385,7 +1462,7 @@ mod tests {
         // The rules-data stamp (Cabrillo-legal X- header, robots ignore it).
         assert!(cab.contains("X-NEXUS-RULES-YEAR: 2026\n"));
         // WFD event flips the contest ids in both exports.
-        log.event = FdEvent::WinterFd;
+        log.set_event(FdEvent::WinterFd);
         assert!(log
             .cabrillo(14074)
             .expect("a single-mode event exports one entry")
@@ -1582,7 +1659,7 @@ mod tests {
             ContestSession::field_day(FdEvent::ArrlFd, "2M", "EPA"),
             "20m",
         );
-        log.event = FdEvent::WinterFd;
+        log.set_event(FdEvent::WinterFd);
         assert!(log.log_submode_at("K1ABC", "1H", "CT", "DIG", " rtty ", 0, 1_782_583_500));
         assert!(log.log_mode_at("K2DEF", "1O", "EMA", "DIG", 0, 1_782_583_560));
         let adif = log.adif();
@@ -1612,14 +1689,14 @@ mod tests {
             ContestSession::field_day(FdEvent::ArrlFd, "2M", "EPA"),
             "20m",
         );
-        log.event = FdEvent::WinterFd;
+        log.set_event(FdEvent::WinterFd);
         assert!(log.log_submode_at("K1ABC", "1H", "CT", "DIG", "RTTY", 0, 1_782_583_500));
         let mut restored = FieldDayLog::new(
             "W9XYZ",
             ContestSession::field_day(FdEvent::ArrlFd, "2M", "EPA"),
             "20m",
         );
-        restored.event = FdEvent::WinterFd;
+        restored.set_event(FdEvent::WinterFd);
         restored.merge_adif(&log.adif(), 0);
         assert_eq!(restored.qso_count(), 1);
         let q = &restored.qsos()[0];
