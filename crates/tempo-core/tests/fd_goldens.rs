@@ -20,6 +20,25 @@
 //! (`fdevent::ClubHost::unique_log`), which is why the 1.x club-Cabrillo fixture in
 //! `fdevent.rs` did NOT move. Nothing else moved: not one QSO line, not one other
 //! header, and none of the three `.adi` files.
+//!
+//! ⚠️ **A second deliberate movement, the Cabrillo-token correction.** Line 2 of
+//! `arrlfd.cbr` alone changed from
+//!
+//! ```text
+//! CONTEST: ARRL-FIELD-DAY
+//! ```
+//!
+//! to `CONTEST: ARRL-FD` — 535 bytes to 528. `ARRL-FIELD-DAY` is an ADIF
+//! `CONTEST_ID` enumeration value, not a Cabrillo one: the Cabrillo V3 header
+//! specification defines no contest names of its own and points at the WA7BNM
+//! "Master List of Cabrillo Names", which calls ARRL Field Day `ARRL-FD` (id 57).
+//! `FieldDayLog::cabrillo` now translates between the two registries through
+//! `contest::cabrillo::cabrillo_contest_token`, at the last step before the header.
+//! **Nothing else moved, and that is the point of doing it there**: not one QSO
+//! line, not one other header, and — because the ADIF export reads the id directly
+//! and must keep doing so — not one byte of any `.adi` file. `wfd.cbr` and
+//! `wfd-classes.cbr` did not move either: `WFD` is the same string in both
+//! registries, and is the one token of the six that its sponsor actually publishes.
 // The fixture builder lives in the capture arm so the bytes and the builder can never
 // drift apart. `main` — the capture arm's own entry point — is dead here by
 // construction, and re-exporting it would be worse than allowing it.
@@ -47,6 +66,50 @@ fn arrl_field_day_cabrillo_and_adif_are_byte_identical() {
         "ARRL FD Cabrillo moved"
     );
     assert_eq!(log.adif(), ARRLFD_ADI, "ARRL FD ADIF moved");
+}
+
+/// ⭐ **The two registries must not CROSS.** `contest::cabrillo`'s six-token test stops
+/// them DRIFTING apart; this stops them being UNIFIED, which is the opposite failure and
+/// the more likely one.
+///
+/// `ARRL-FD` is a Cabrillo name and is NOT in ADIF's `Contest_ID` enumeration. A later
+/// refactor that "tidies away" the two ids into one — by pointing the ADIF export at
+/// `cabrillo_contest_token`, which is the obvious way anyone would do it — writes a token
+/// no importer can resolve into every logbook that reads a Nexus ADIF, and **nothing in
+/// the app looks wrong**: the header is still right, the export still succeeds, and the
+/// Cabrillo goldens still pass. It surfaces when somebody else's software chokes.
+///
+/// So both exports are taken from ONE log in one breath, and each is asserted to carry
+/// its own registry's value **and not the other's** — the two strings visibly different
+/// in the same test.
+#[test]
+fn the_cabrillo_token_never_reaches_the_adif_contest_id() {
+    let log = capture::golden_log(FdEvent::ArrlFd);
+    let cbr = log
+        .cabrillo(14_074)
+        .expect("a single-mode event exports one entry");
+    let adi = log.adif();
+
+    // Cabrillo carries the master-list name, and only that.
+    assert!(
+        cbr.contains("CONTEST: ARRL-FD\n"),
+        "the Cabrillo header must carry the master-list name: {cbr}"
+    );
+    assert!(
+        !cbr.contains("ARRL-FIELD-DAY"),
+        "the ADIF id must not appear anywhere in a Cabrillo entry: {cbr}"
+    );
+
+    // ADIF carries the enumeration value, on every row, and only that.
+    assert_eq!(
+        adi.matches("<CONTEST_ID:14>ARRL-FIELD-DAY").count(),
+        7,
+        "every one of the seven rows must carry the ADIF enumeration value: {adi}"
+    );
+    assert!(
+        !adi.contains("ARRL-FD"),
+        "the Cabrillo token must never reach CONTEST_ID: {adi}"
+    );
 }
 
 #[test]

@@ -70,7 +70,8 @@ impl OperatorCategory {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CabrilloHeaders {
     /// `CONTEST` — the sponsor's token, already resolved through
-    /// [`resolve_contest_id`] for a mode-split contest.
+    /// [`resolve_contest_id`] for a mode-split contest and translated out of ADIF's
+    /// namespace by [`cabrillo_contest_token`].
     pub contest: String,
     /// `CALLSIGN` — the station callsign the entry is submitted under.
     pub callsign: String,
@@ -166,6 +167,51 @@ pub fn resolve_contest_id(
     }
 }
 
+/// The Cabrillo `CONTEST:` token for a contest whose ADIF `CONTEST_ID` is `adif_id`.
+///
+/// ⭐ **These are two registries, not one, and for three shipped contests they
+/// disagree.** A ruleset's `contest_id` is an ADIF value — ADIF 3.1.7's
+/// `CONTEST_ID` row says "use enumeration values for interoperability", and every
+/// id this build ships is verbatim from that enumeration (`ARRL-FIELD-DAY`,
+/// `OH-QSO-PARTY`, `TX-QSO-PARTY`, `TN-QSO-PARTY`, `CA-QSO-PARTY`, `WFD`;
+/// <https://adif.org/317/ADIF_317.htm> §III.B.5, read 2026-09-09). Cabrillo has no
+/// such enumeration: the V3 header specification states that "Contest text values
+/// are not an official part of the specification. Contest sponsors may define their
+/// own contest values", and points at the WA7BNM Contest Calendar "Master List of
+/// Cabrillo Names" (<https://www.contestcalendar.com/cabnames.php>, Revision Date
+/// February 23, 2026, read 2026-09-09) as the extension of its own 31-name list.
+/// That list names Field Day `ARRL-FD`, the Ohio QSO Party `MRRC-OHQP` (for the Mad
+/// River Radio Club) and the Texas QSO Party `TXQP` — none of which is an ADIF
+/// value, and none of which could be inferred: the list's state-party names are
+/// irregular (`7QP`, `COQP`, `FCG-FQP`, `IAQP`, `KYQP`, `MRRC-OHQP`, `NEQP`,
+/// `NJQP`, `SDQSOP`, `TXQP`, `WIQP`, `WVQP` sit alongside the `XX-QSO-PARTY`
+/// forms).
+///
+/// So this maps ONE namespace to the other, at the last step before the header, and
+/// the three divergences are its whole body. **It must never run the other way:**
+/// `ARRL-FD`, `MRRC-OHQP` and `TXQP` are not ADIF enumeration values, and writing
+/// one into `CONTEST_ID` ships an unresolvable token into other people's logbooks.
+///
+/// ⚠️ **`CQP` is the Collegiate QSO Party** (master list id 122), not California —
+/// California is `CA-QSO-PARTY` in both registries. Nexus's internal event key for
+/// the California QSO Party is `cqp`, so the shortening looks natural and files the
+/// log under a different contest.
+///
+/// An id with no entry is its own Cabrillo token, which is the answer for the other
+/// three shipped contests and for every contest the master list agrees with ADIF
+/// about.
+pub fn cabrillo_contest_token(adif_id: &str) -> &str {
+    match adif_id {
+        // master list id 57, "ARRL Field Day"
+        "ARRL-FIELD-DAY" => "ARRL-FD",
+        // master list id 100, "Ohio QSO Party" — the Mad River Radio Club
+        "OH-QSO-PARTY" => "MRRC-OHQP",
+        // master list id 133, "Texas QSO Party"
+        "TX-QSO-PARTY" => "TXQP",
+        other => other,
+    }
+}
+
 /// Does this side of the QSO line supply its own callsign from the exchange?
 ///
 /// ⭐ **§6.2's derived exception, and the reason it is derived.** A Cabrillo QSO line
@@ -200,6 +246,55 @@ mod tests {
     use crate::contest::exchanges::sweepstakes_shaped;
     use crate::contest::field_day;
     use crate::fieldday::FdEvent;
+
+    /// ⭐ **Every shipped contest's Cabrillo `CONTEST:` token, pinned to the value
+    /// verified against the master list on 2026-09-09** — so a later edit that
+    /// "tidies" one back to a regular-looking `XX-QSO-PARTY` form goes red instead
+    /// of shipping.
+    ///
+    /// Each id comes through `ruleset_by_id`, the fallible lookup the app itself
+    /// uses, so this is the token a real export would carry and not a literal
+    /// nobody reads. The ADIF half is pinned in the same breath: those six values
+    /// are the ADIF 3.1.7 `CONTEST_ID` enumeration, and the Cabrillo correction
+    /// must never be applied to them.
+    #[test]
+    fn every_shipped_contest_emits_its_verified_cabrillo_token() {
+        // POSITIVE CONTROL: an id the two registries agree about passes through
+        // untouched, so the six answers below are a MAP and not a rewriter that
+        // returns whatever it is handed.
+        assert_eq!(cabrillo_contest_token("CQ-WW-CW"), "CQ-WW-CW");
+        // ⚠️ California must never shorten to CQP — on the master list that is the
+        // Collegiate QSO Party (id 122), a different contest, and Nexus's own
+        // internal event key for California is `cqp`.
+        assert_ne!(cabrillo_contest_token("CA-QSO-PARTY"), "CQP");
+        let mut wrong: Vec<String> = Vec::new();
+        for (event, adif_id, cabrillo) in [
+            ("arrlfd", "ARRL-FIELD-DAY", "ARRL-FD"),
+            ("wfd", "WFD", "WFD"),
+            ("tnqp", "TN-QSO-PARTY", "TN-QSO-PARTY"),
+            ("ohqp", "OH-QSO-PARTY", "MRRC-OHQP"),
+            ("cqp", "CA-QSO-PARTY", "CA-QSO-PARTY"),
+            ("txqp", "TX-QSO-PARTY", "TXQP"),
+        ] {
+            let rs = crate::fd_rules::ruleset_by_id(event, crate::fd_rules::CURRENT_RULES_YEAR)
+                .unwrap_or_else(|| panic!("the seed must carry {event}"));
+            if rs.contest_id != adif_id {
+                wrong.push(format!(
+                    "{event} ADIF CONTEST_ID is {:?}, want {adif_id:?}",
+                    rs.contest_id
+                ));
+            }
+            let got = cabrillo_contest_token(rs.contest_id);
+            if got != cabrillo {
+                wrong.push(format!(
+                    "{event} Cabrillo CONTEST: token is {got:?}, want {cabrillo:?}"
+                ));
+            }
+        }
+        // Every mismatch at once: three of these six were wrong together, and a
+        // run that names only the first hides the other two.
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    }
 
     /// ⭐ §6.2 — the exception is READ OFF the slot list. Field Day's sides declare no
     /// `Call` slot, so both callsign columns are structural; the Sweepstakes shape's
@@ -248,7 +343,7 @@ mod tests {
     #[test]
     fn the_header_block_is_the_seven_cabrillo_lines_in_order() {
         let h = CabrilloHeaders {
-            contest: "ARRL-FIELD-DAY".into(),
+            contest: "ARRL-FD".into(),
             callsign: "W9XYZ".into(),
             category_operator: OperatorCategory::MultiOp,
             location: "WI".into(),
@@ -258,7 +353,7 @@ mod tests {
         assert_eq!(
             h.render(),
             "START-OF-LOG: 3.0\n\
-             CONTEST: ARRL-FIELD-DAY\n\
+             CONTEST: ARRL-FD\n\
              CALLSIGN: W9XYZ\n\
              CATEGORY-OPERATOR: MULTI-OP\n\
              LOCATION: WI\n\
@@ -269,6 +364,11 @@ mod tests {
 
     /// A contest with one id answers with it for every log, including one that spans
     /// every mode — which is what keeps both Field Day events out of the refusal.
+    ///
+    /// The id here is the contest's DECLARED id, which is what the caller passes:
+    /// this resolver only picks between mode arms, and the translation to Cabrillo's
+    /// namespace happens after it ([`cabrillo_contest_token`]). So `ARRL-FIELD-DAY`
+    /// is the right literal below and must not be "corrected" to `ARRL-FD`.
     #[test]
     fn an_unsplit_contest_resolves_to_its_one_id() {
         assert_eq!(
