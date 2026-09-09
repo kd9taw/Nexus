@@ -14150,6 +14150,28 @@ button.cq-skiptx1.on {
   flex: 1;
   min-height: 0;
 }
+/* A `.panel`-rooted view torn off on its own: the panel IS the window, so it takes the height
+   and owns its own deficit — the SAME fate `.layout.single > .panel` gives it docked, in the
+   host that has no `.layout.single` to give it. Without this the only overflow declaration
+   reaching it is `.panel { overflow: hidden }`, a clip with nothing interposed: the operator
+   reported the torn-off POTA/SOTA board (the one view in this shape today) as having "no
+   ability to scroll down", with every spot below the fold unreachable.
+
+   It is the docked rule's own history one host over. `.pota-view` used to carry a private
+   `overflow-y: auto` to escape that clip; ed50c50e retired it as dead because
+   `.layout.single > .panel` had just declared the identical value at (0,2,0) — true when
+   written, and its comment says why ("POTA renders nowhere else"). Then the pop-out shipped.
+   Written on the HOST rather than back on `.pota-view` for the reason that fix was: a private
+   escape per view is what let five of them drift, and a second `.panel` pop-out would arrive
+   trapped in exactly this way. (0,2,0) with the child combinator, so it beats `.panel` (0,1,0)
+   and reaches only a panel that is the whole window — never a cockpit pane, which is always
+   nested. overflow-x stays hidden, as it does docked. Computed in
+   DetachedPanel.scroll.test.tsx. */
+.app.detached > .panel {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
 /* The torn-off Needed window used to bump its root font + --space-scale 25% here, because
    it is read from across the shack and every pop-out was pinned to the 65% zoom floor
    (0.65 × 1.25 ≈ 0.81 effective). That floor was the per-surface-natural bug in
