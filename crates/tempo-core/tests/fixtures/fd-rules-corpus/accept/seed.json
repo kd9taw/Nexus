@@ -49,8 +49,10 @@
           2,
           5
         ],
-        "multipliers": []
+        "multipliers": [],
+        "relation_points": []
       },
+      "transmitter_column": false,
       "dupe": {
         "by_call": true,
         "by_band": true,
@@ -219,8 +221,10 @@
           2,
           5
         ],
-        "multipliers": []
+        "multipliers": [],
+        "relation_points": []
       },
+      "transmitter_column": false,
       "dupe": {
         "by_call": true,
         "by_band": true,
@@ -436,8 +440,10 @@
               "out_of_state"
             ]
           }
-        ]
+        ],
+        "relation_points": []
       },
+      "transmitter_column": false,
       "dupe": {
         "by_call": true,
         "by_band": true,
@@ -974,8 +980,10 @@
               "in_state"
             ]
           }
-        ]
+        ],
+        "relation_points": []
       },
+      "transmitter_column": false,
       "dupe": {
         "by_call": true,
         "by_band": true,
@@ -1818,8 +1826,10 @@
               "in_state"
             ]
           }
-        ]
+        ],
+        "relation_points": []
       },
+      "transmitter_column": false,
       "dupe": {
         "by_call": true,
         "by_band": true,
@@ -2498,8 +2508,10 @@
               "out_of_state"
             ]
           }
-        ]
+        ],
+        "relation_points": []
       },
+      "transmitter_column": false,
       "dupe": {
         "by_call": true,
         "by_band": true,

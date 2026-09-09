@@ -86,31 +86,128 @@ pub struct ScoreRow<'a> {
     /// [`MultSource::DxccEntity`]. `None` — which counts nothing — everywhere this
     /// build does not resolve one (`LoggedQso::entity`'s own note).
     pub entity: Option<&'a str>,
-    /// The resolved callsign prefix, for [`MultSource::Prefix`]. `None` in this build.
+    /// The resolved callsign prefix, for [`MultSource::Prefix`] — CQ WPX's whole
+    /// multiplier. `None` for a row whose call could not be read as one
+    /// ([`wpx_prefix`](super::callsign::wpx_prefix)).
     pub prefix: Option<&'a str>,
+    /// ⭐ **How this contact relates to MY station** — the axis [`PointsRule::ByRelation`]
+    /// prices a contact on.
+    ///
+    /// It is computed where BOTH sides are known (the log knows my call; the row knows
+    /// theirs) and carried here rather than recomputed by the scorer, which knows neither.
+    /// `None` for every contest that does not price by it, and for a contact whose
+    /// callsign the country file cannot place.
+    pub relation: Option<super::callsign::Relation>,
+}
+
+/// ⭐ **One row of a [`PointsRule::ByRelation`] table**: what a contact of this relation
+/// is worth, on these bands.
+///
+/// CQ WW's four arms are flat; CQ WPX prices the same four arms differently on the low
+/// bands, which is why the band list is here rather than in a second rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RelationPoints {
+    pub relation: super::callsign::Relation,
+    /// Band labels (`"20m"`) this row applies to. **Empty = every band** — CQ WPX's
+    /// *"1 point regardless of band"* arm, and every one of CQ WW's four.
+    pub bands: &'static [&'static str],
+    pub points: u32,
 }
 
 /// How a contact becomes points.
 ///
-/// One arm today, and the enum is the point: ARRL FD and Winter FD both score by mode
-/// class, and every other researched contest scores by something this arm cannot say
-/// (a flat 2 for Sweepstakes, a band group for ARRL VHF, the relation between my
-/// station and theirs for CQ WW and WPX). Those arms land with the contests that need
-/// them and the rows those contests put on [`ScoreRow`]; landing them now would mean
-/// shipping arms the scorer cannot evaluate.
+/// ARRL FD and Winter FD score by mode class; CQ WW and CQ WPX score by the relation
+/// between my station and theirs. The remaining researched shapes (a flat 2 for
+/// Sweepstakes, a band group for ARRL VHF) are expressible as one of these two — a flat
+/// table is a mode-class table with three equal entries — and land as new arms only if a
+/// contest arrives that neither can say.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PointsRule {
-    /// Points from the per-mode-class table (ARRL FD, Winter FD).
+    /// Points from the per-mode-class table (ARRL FD, Winter FD, Sweepstakes).
     ByModeClass(ModePoints),
+    /// ⭐ Points from the relation between my station and the station worked, per band
+    /// group (CQ WW, CQ WPX).
+    ///
+    /// The table is a LOOKUP, not an ordered rule list: exactly one
+    /// [`Relation`](super::callsign::Relation) is true of a contact, so no ordering can
+    /// change the answer and no row can shadow another.
+    ByRelation(&'static [RelationPoints]),
 }
 
 impl PointsRule {
     /// Points for one row.
+    ///
+    /// ⚠️ **A `ByRelation` row with no relation scores zero**, and it can only be one of
+    /// two things: a contest running with no country file (which
+    /// [`ContestSession::for_ruleset`](super::ContestSession::for_ruleset) refuses before
+    /// the first contact) or a callsign the country file cannot place. The alternative —
+    /// picking an arm — would price a contact by a relation nobody established.
     pub fn points_for(&self, row: &ScoreRow<'_>) -> u32 {
         match self {
             PointsRule::ByModeClass(p) => p.for_mode(row.mode_class),
+            PointsRule::ByRelation(table) => {
+                let Some(rel) = row.relation else {
+                    return 0;
+                };
+                relation_points(table, rel, row.band)
+                    // The North American exception is an exception TO the plain
+                    // same-continent arm, so a table that declares no NA row falls back
+                    // to the arm it would have overridden rather than scoring zero.
+                    .or_else(|| {
+                        (rel == super::callsign::Relation::WithinNorthAmerica).then(|| {
+                            relation_points(
+                                table,
+                                super::callsign::Relation::SameContinent,
+                                row.band,
+                            )
+                        })?
+                    })
+                    .unwrap_or(0)
+            }
         }
     }
+}
+
+/// One received value as a multiplier BUCKET KEY.
+///
+/// Trimmed and upper-cased, which is what a section or a county code needs — and then,
+/// ⭐ **for an all-digit value, read as its number**, so a CQ zone copied as `05` and one
+/// copied as `5` are one multiplier and not two.
+///
+/// ⚠️ This is the one normalisation applied anywhere to a copied exchange value, and it
+/// is applied HERE rather than at copy time on purpose: `FieldSpec`'s own header forbids
+/// rewriting what a station actually sent, and `05` is what the operator logged and what
+/// the Cabrillo line must carry. What a bucket is keyed by is a different question from
+/// what was copied. It touches nothing but digits, so no county or section code
+/// (`SB`/`SBEN`, `BEE`, `4U`) is affected — the closest thing to a hazard would be a
+/// domain whose codes are numeric and leading-zero-significant, and no researched
+/// contest has one.
+fn canonical_mult_value(raw: &str) -> String {
+    let v = raw.trim().to_ascii_uppercase();
+    if v.len() > 1 && v.bytes().all(|b| b.is_ascii_digit()) {
+        let stripped = v.trim_start_matches('0');
+        return if stripped.is_empty() {
+            "0".to_string()
+        } else {
+            stripped.to_string()
+        };
+    }
+    v
+}
+
+/// The points a table gives one relation on one band: a row naming the band wins over a
+/// row naming every band, so a `bands: []` arm can be a floor under band-specific ones.
+fn relation_points(
+    table: &[RelationPoints],
+    rel: super::callsign::Relation,
+    band: &str,
+) -> Option<u32> {
+    let matches = |r: &&RelationPoints| r.relation == rel;
+    table
+        .iter()
+        .find(|r| matches(r) && r.bands.iter().any(|b| b.eq_ignore_ascii_case(band)))
+        .or_else(|| table.iter().find(|r| matches(r) && r.bands.is_empty()))
+        .map(|r| r.points)
 }
 
 /// Where a multiplier's value comes from.
@@ -260,7 +357,7 @@ impl Scoring {
                         .rx
                         .iter()
                         .find(|v| v.key == key && (domain.is_none() || v.domain == domain))
-                        .map(|v| v.raw.trim().to_ascii_uppercase()),
+                        .map(|v| canonical_mult_value(&v.raw)),
                     MultSource::DxccEntity => row.entity.map(|e| e.to_string()),
                     MultSource::Prefix => row.prefix.map(|p| p.to_string()),
                 };
@@ -357,8 +454,16 @@ pub struct BoardSpec {
 ///
 /// A [`MultSource`] that is not a slot ([`MultSource::DxccEntity`],
 /// [`MultSource::Prefix`]) yields no board here: its universe is the country file, not
-/// a domain, and the batch that ships CQ WW is where that display is designed against
-/// a real ruleset rather than invented against none.
+/// a domain.
+///
+/// ⚠️ **CQ WW and CQ WPX have now shipped and this is unchanged, deliberately.** CQ WW
+/// gets one board — its ZONE, off the `ZN` slot, with `domain: None` because a `Number`
+/// slot has no closed value set to colour in — and its COUNTRY board and CQ WPX's PREFIX
+/// board are both absent, because a board over 340 DXCC entities or over an unbounded
+/// prefix universe is a display design, not a rules-file derivation, and inventing one
+/// here would ship a surface nobody drew. Both multipliers are COUNTED
+/// ([`Scoring::mult_counts`] names them `country` and `prefix`); what is missing is a
+/// worked-status grid for them, which is a UI batch's to design.
 pub fn boards(
     scoring: &Scoring,
     exchange: &super::ExchangeSpec,
@@ -428,7 +533,172 @@ mod tests {
             rx: &[],
             entity: None,
             prefix: None,
+            relation: None,
         })
+    }
+
+    /// One relation-scored row on a named band.
+    fn rel_row(rel: super::super::callsign::Relation, band: &'static str) -> ScoreRow<'static> {
+        ScoreRow {
+            mode_class: "CW",
+            band,
+            role: "",
+            rx: &[],
+            entity: None,
+            prefix: None,
+            relation: Some(rel),
+        }
+    }
+
+    /// ⭐ **CQ WW's four point arms**, from cqww.com/rules §IV.B (read 2026-09-09):
+    /// *"Contacts between stations on different continents count three (3) points.
+    /// Contacts between stations on the same continent but in different countries count
+    /// one (1) point. Exception: Contacts between stations in different countries within
+    /// the North American boundaries count two (2) points. Contacts between stations in
+    /// the same country have zero (0) QSO point value…"* — flat across all six bands.
+    #[test]
+    fn cq_wws_four_arms_are_flat_across_every_band() {
+        use super::super::callsign::Relation;
+        static T: &[RelationPoints] = &[
+            RelationPoints {
+                relation: Relation::DifferentContinent,
+                bands: &[],
+                points: 3,
+            },
+            RelationPoints {
+                relation: Relation::WithinNorthAmerica,
+                bands: &[],
+                points: 2,
+            },
+            RelationPoints {
+                relation: Relation::SameContinent,
+                bands: &[],
+                points: 1,
+            },
+            RelationPoints {
+                relation: Relation::SameCountry,
+                bands: &[],
+                points: 0,
+            },
+        ];
+        let r = PointsRule::ByRelation(T);
+        for band in ["160m", "80m", "40m", "20m", "15m", "10m"] {
+            assert_eq!(
+                r.points_for(&rel_row(Relation::DifferentContinent, band)),
+                3
+            );
+            assert_eq!(
+                r.points_for(&rel_row(Relation::WithinNorthAmerica, band)),
+                2
+            );
+            assert_eq!(r.points_for(&rel_row(Relation::SameContinent, band)), 1);
+            assert_eq!(r.points_for(&rel_row(Relation::SameCountry, band)), 0);
+        }
+    }
+
+    /// ⭐ **CQ WPX's band groups**, from cqwpx.com/rules §V.B (read 2026-09-09) — the
+    /// same four relations, priced by band, including the arm §14 of the design spec was
+    /// missing: *"Contacts between stations in the same country are worth 1 point
+    /// regardless of band."*
+    #[test]
+    fn cq_wpx_doubles_the_low_bands_and_prices_same_country_at_one_everywhere() {
+        use super::super::callsign::Relation;
+        static HIGH: &[&str] = &["10m", "15m", "20m"];
+        static LOW: &[&str] = &["40m", "80m", "160m"];
+        static T: &[RelationPoints] = &[
+            RelationPoints {
+                relation: Relation::DifferentContinent,
+                bands: HIGH,
+                points: 3,
+            },
+            RelationPoints {
+                relation: Relation::DifferentContinent,
+                bands: LOW,
+                points: 6,
+            },
+            RelationPoints {
+                relation: Relation::WithinNorthAmerica,
+                bands: HIGH,
+                points: 2,
+            },
+            RelationPoints {
+                relation: Relation::WithinNorthAmerica,
+                bands: LOW,
+                points: 4,
+            },
+            RelationPoints {
+                relation: Relation::SameContinent,
+                bands: HIGH,
+                points: 1,
+            },
+            RelationPoints {
+                relation: Relation::SameContinent,
+                bands: LOW,
+                points: 2,
+            },
+            RelationPoints {
+                relation: Relation::SameCountry,
+                bands: &[],
+                points: 1,
+            },
+        ];
+        let r = PointsRule::ByRelation(T);
+        for b in HIGH {
+            assert_eq!(r.points_for(&rel_row(Relation::DifferentContinent, b)), 3);
+            assert_eq!(r.points_for(&rel_row(Relation::WithinNorthAmerica, b)), 2);
+            assert_eq!(r.points_for(&rel_row(Relation::SameContinent, b)), 1);
+        }
+        for b in LOW {
+            assert_eq!(r.points_for(&rel_row(Relation::DifferentContinent, b)), 6);
+            assert_eq!(r.points_for(&rel_row(Relation::WithinNorthAmerica, b)), 4);
+            assert_eq!(r.points_for(&rel_row(Relation::SameContinent, b)), 2);
+        }
+        // ⭐ The arm the source verification found missing: 1 point on EVERY band, where
+        // CQ WW gives the same relation zero.
+        for b in HIGH.iter().chain(LOW) {
+            assert_eq!(
+                r.points_for(&rel_row(Relation::SameCountry, b)),
+                1,
+                "same country is 1 point on {b}"
+            );
+        }
+    }
+
+    /// A table with no North American row falls back to the plain same-continent arm the
+    /// exception exists to override — not to zero.
+    #[test]
+    fn a_table_with_no_north_american_row_falls_back_to_same_continent() {
+        use super::super::callsign::Relation;
+        static T: &[RelationPoints] = &[RelationPoints {
+            relation: Relation::SameContinent,
+            bands: &[],
+            points: 1,
+        }];
+        let r = PointsRule::ByRelation(T);
+        assert_eq!(
+            r.points_for(&rel_row(Relation::WithinNorthAmerica, "20m")),
+            1
+        );
+        // NEGATIVE CONTROL: a relation the table names nothing for at all is zero, and
+        // that is the honest answer — nothing declared a price.
+        assert_eq!(r.points_for(&rel_row(Relation::SameCountry, "20m")), 0);
+    }
+
+    /// A row the country file could not place scores nothing rather than being priced by
+    /// an arm nobody established.
+    #[test]
+    fn an_unplaced_contact_scores_zero_under_a_relation_table() {
+        use super::super::callsign::Relation;
+        static T: &[RelationPoints] = &[RelationPoints {
+            relation: Relation::DifferentContinent,
+            bands: &[],
+            points: 3,
+        }];
+        let r = PointsRule::ByRelation(T);
+        let mut row = rel_row(Relation::DifferentContinent, "20m");
+        assert_eq!(r.points_for(&row), 3, "positive control");
+        row.relation = None;
+        assert_eq!(r.points_for(&row), 0);
     }
 
     /// ⭐ §9: Field Day declares NO multiplier rule, and it still shows its

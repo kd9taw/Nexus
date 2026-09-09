@@ -254,6 +254,17 @@ pub struct ContestSession {
     /// declare it in the batch that reads each sponsor's own template (§6.2 — the
     /// per-contest column order is never taken from a compilation).
     pub transmitter_id: Option<u8>,
+    /// ⭐ **Where MY station is**, as the country file places my callsign — the `me` half
+    /// of every [`Relation`](super::Relation) this session's log computes.
+    ///
+    /// It is resolved ONCE, here, from [`StationData::mycall`], for the same reason a
+    /// row's own entity is resolved once: a country-file update must not rescore a
+    /// session already running. `None` for every contest that does not price by the
+    /// relation — [`field_day`](Self::field_day) has no callsign to resolve and needs
+    /// none — and a `None` under a
+    /// [`PointsRule::ByRelation`](super::PointsRule::ByRelation) ruleset is refused by
+    /// [`for_ruleset`](Self::for_ruleset) rather than scoring a 48-hour contest at zero.
+    pub my_call_location: Option<super::CallLocation>,
     /// Where this session's merged contacts go — **default OFF** (§18.1). See
     /// [`UploadPolicy`].
     pub upload: UploadPolicy,
@@ -305,6 +316,8 @@ impl ContestSession {
             contest_id_by_mode: Vec::new(),
             // …and neither sponsor's QSO template carries a transmitter column.
             transmitter_id: None,
+            // Neither Field Day event prices a contact by where the other station is.
+            my_call_location: None,
             // §18.1: OFF, on every new session, without exception. It is not read from
             // a setting — a global default is the thing this control replaces.
             upload: UploadPolicy::default(),
@@ -376,9 +389,39 @@ impl ContestSession {
             )
             .unwrap_or_default(),
             contest_id_by_mode: Vec::new(),
-            transmitter_id: None,
+            // ⭐ The trailing transmitter column, declared by the RULES FILE because it is
+            // a fact about the sponsor's own QSO template, not about this operator. CQ WW
+            // and CQ WPX publish it; every other shipped contest does not, and OhQP
+            // forbids it outright. `0` is the single-transmitter id — the sponsor's own
+            // sample lines carry it on every row, and both pages state the column is
+            // required only for their MULTI-ONE / MULTI-TWO categories, so writing it for
+            // a one-position entry is legal under the template and never a claim.
+            transmitter_id: rs.transmitter_column.then_some(0),
+            my_call_location: super::resolve_call(&station.mycall),
             upload: UploadPolicy::default(),
         };
+        // ⭐ **A contest priced by the RELATION between two stations cannot run without a
+        // country file**, and it must say so on the way in rather than scoring 48 hours of
+        // contacts at zero and letting the operator find out at submission. Two ways it
+        // can be missing, and the message names which.
+        if matches!(rs.scoring.qso_points, super::PointsRule::ByRelation(_)) {
+            if !super::call_resolver_installed() {
+                return Err(format!(
+                    "{} scores every contact by where the other station is, and this \
+                     build has no country file loaded. It cannot be scored here.",
+                    rs.contest_id
+                ));
+            }
+            if s.my_call_location.is_none() {
+                return Err(format!(
+                    "The country file cannot place your own callsign {:?}, and {} scores \
+                     every contact by where you are relative to the station you work. \
+                     Check your callsign on the Station tab in Settings.",
+                    station.mycall.trim(),
+                    rs.contest_id
+                ));
+            }
+        }
         let role = s.role();
         let mut my_exchange = Vec::new();
         for key in role.sends {
@@ -802,6 +845,65 @@ fn accepts(field: &'static super::FieldSpec, raw: &str, role: &'static RoleSpec)
 mod tests {
     use super::*;
     use crate::fieldday::FdEvent;
+
+    /// ⭐ **A contest priced by the relation between two stations REFUSES to start in a
+    /// build with no country file** — the half of the guard that can only be seen where no
+    /// resolver is installed, which is this binary (`contest::callsign`'s own test asserts
+    /// that premise).
+    ///
+    /// The alternative it replaces is the silent one: every contact of a 48-hour contest
+    /// scoring zero because nothing could say where the other station was.
+    #[test]
+    fn a_relation_priced_contest_refuses_a_build_with_no_country_file() {
+        assert!(
+            !super::super::call_resolver_installed(),
+            "the premise: this test binary installs no resolver"
+        );
+        let rs = crate::fd_rules::ruleset_by_id("cqww_cw", crate::fd_rules::CURRENT_RULES_YEAR)
+            .expect("cqww_cw is a shipped ruleset");
+        let station = StationData {
+            mycall: "W9XYZ".to_string(),
+            contest_cq_zone: "4".to_string(),
+            ..Default::default()
+        };
+        let err = ContestSession::for_ruleset(rs, &station)
+            .expect_err("no country file, no relation, no score");
+        assert!(err.contains("country file"), "{err}");
+        assert!(err.contains("CQ-WW-CW"), "{err}");
+        // ⭐ POSITIVE CONTROL, and it is the one that matters: a contest that does NOT
+        // price by relation builds fine in the same binary. The refusal is the points
+        // rule, not a session constructor that has stopped working.
+        let oh = crate::fd_rules::ruleset_by_id("ohqp", crate::fd_rules::CURRENT_RULES_YEAR)
+            .expect("ohqp is a shipped ruleset");
+        assert!(ContestSession::for_ruleset(
+            oh,
+            &StationData {
+                contest_qth_state: "OH".to_string(),
+                contest_qth_county: "FRAN".to_string(),
+                ..Default::default()
+            }
+        )
+        .is_ok());
+        // …including TNQP, which declares a `DxccEntity` multiplier and is deliberately
+        // NOT refused: it shipped counting nothing, and taking the contest away over one
+        // term of its multiplier total would be a worse answer than an honest short one.
+        let tn = crate::fd_rules::ruleset_by_id("tnqp", crate::fd_rules::CURRENT_RULES_YEAR)
+            .expect("tnqp is a shipped ruleset");
+        assert!(tn
+            .scoring
+            .multipliers
+            .iter()
+            .any(|m| matches!(m.source, super::super::MultSource::DxccEntity)));
+        assert!(ContestSession::for_ruleset(
+            tn,
+            &StationData {
+                contest_qth_state: "TN".to_string(),
+                contest_qth_county: "WILL".to_string(),
+                ..Default::default()
+            }
+        )
+        .is_ok());
+    }
 
     #[test]
     fn a_field_day_session_declares_its_section_as_its_location() {

@@ -56,6 +56,7 @@ pub fn mode_class(adif_mode: &str) -> &'static str {
 
 pub mod adif;
 pub mod cabrillo;
+pub mod callsign;
 pub mod carrier;
 pub mod constant_sent;
 pub mod dupe;
@@ -76,6 +77,11 @@ pub use cabrillo::{
     OperatorCategory,
 };
 
+pub use callsign::{
+    call_resolver_installed, install_call_resolver, resolve_call, wpx_prefix, CallLocation,
+    CallResolver, Relation,
+};
+
 pub use constant_sent::ConstantSentMismatch;
 
 pub use dupe::{DupeRule, KEY_SEP};
@@ -91,7 +97,7 @@ pub use session::{
 
 pub use scoring::{
     boards, BoardSpec, ModePoints, MultScope, MultSource, MultiplierRule, PointsRule,
-    PostMultiplier, ScoreRow, Scoring,
+    PostMultiplier, RelationPoints, ScoreRow, Scoring,
 };
 
 pub use spec::{

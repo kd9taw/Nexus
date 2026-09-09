@@ -205,6 +205,22 @@ pub struct FdRuleset {
     /// The algorithmic event-window rule, as data (spec §2.3 — the parameters
     /// are never hand-edited in code anymore; they ride the rules file).
     pub window: WindowRule,
+    /// ⭐ **Does this sponsor's Cabrillo QSO template carry the trailing transmitter-id
+    /// column?**
+    ///
+    /// A per-contest fact about the sponsor's own published template, so it belongs in
+    /// the rules file beside the rest of them — and `false` is the explicit answer for
+    /// the eight contests that shipped before it, one of which (OhQP) publishes the
+    /// column as *"not permitted"* rather than merely absent.
+    ///
+    /// CQ WW and CQ WPX publish it: *"Note for Column 81 (transmitter number): For the
+    /// MULTI-ONE and MULTI-TWO categories, the last column in the log indicates which
+    /// transmitter made the QSO. It must be a 0 or a 1. This column is not required for
+    /// other categories."* (<https://cqww.com/cabrillo.htm>, read 2026-09-09; the WPX
+    /// page says the same for MULTI-TWO). Every sample QSO line on both pages carries
+    /// the column, which is why a single-position entry writes `0` rather than omitting
+    /// it — see [`ContestSession::transmitter_id`](crate::contest::ContestSession::transmitter_id).
+    pub transmitter_column: bool,
 }
 
 impl FdRuleset {
@@ -706,6 +722,11 @@ struct RulesetSpec {
     contest_id: String,
     window: WindowSpec,
     scoring: ScoringSpec,
+    /// Does the sponsor's Cabrillo QSO template carry the trailing transmitter-id
+    /// column? Required, and `false` for every contest that shipped before it — a
+    /// `#[serde(default)]` here would let a file that forgot the answer emit a column
+    /// OhQP's own sponsor calls *"not permitted"*.
+    transmitter_column: bool,
     dupe: DupeSpec,
     domains: Vec<DomainSpec>,
     exchange: ExchangeBlockSpec,
@@ -1011,6 +1032,36 @@ struct ScoringSpec {
     /// load and score a log at a fraction of its real total (spec §8c: absent
     /// must be loud).
     multipliers: Vec<MultiplierSpec>,
+    /// ⭐ **The QSO-point table for a contest priced by the RELATION between my station
+    /// and the station worked** — CQ WW and CQ WPX.
+    ///
+    /// **`[]` is the explicit "this event prices by mode class"**, the same statement
+    /// `multipliers: []` makes about multipliers, and the key is REQUIRED for the same
+    /// reason: a file that simply forgot CQ WW's table must not load and score every
+    /// contact off a `points_by_mode_class` that means nothing for it.
+    ///
+    /// ⚠️ **Exactly one of the two is populated.** A non-empty table here requires
+    /// `points_by_mode_class` to be EMPTY, and vice versa — two live point tables would
+    /// leave a reader to guess which one scored the log, and there is no honest
+    /// per-mode-class number to write for a contest that has none.
+    ///
+    /// ⚠️ This is an ADDITION to schema 2, not a reshape: an already-shipped build
+    /// ignores an unknown key, so it keeps receiving rules updates. What it cannot do is
+    /// SCORE a relation-priced contest, and the first build that can is the one that
+    /// introduced the key.
+    relation_points: Vec<RelationPointsSpec>,
+}
+
+/// One row of [`ScoringSpec::relation_points`].
+#[derive(Debug, serde::Deserialize)]
+struct RelationPointsSpec {
+    /// `same_country` | `within_north_america` | `same_continent` | `different_continent`
+    /// — a CLOSED vocabulary, refused by name, so `same_zone` cannot load as something.
+    relation: String,
+    /// Band labels this row prices. `[]` = every band (CQ WW's four arms, and CQ WPX's
+    /// same-country arm: *"1 point regardless of band"*).
+    bands: Vec<String>,
+    points: u32,
 }
 
 /// One [`MultiplierRule`] in the rules file.
@@ -1253,9 +1304,56 @@ fn parse_spec(text: &str) -> Result<FileSpec, String> {
                 r.scoring.model
             ));
         }
-        for k in ["PH", "CW", "DIG"] {
-            if !r.scoring.points_by_mode_class.contains_key(k) {
-                return Err(format!("{tag}: points_by_mode_class misses {k}"));
+        // ⭐ EXACTLY ONE point table is live. `relation_points: []` is the explicit "this
+        // event prices by mode class" and is what every contest before CQ WW writes; a
+        // populated table means the mode-class map must be empty, because there is no
+        // honest per-mode-class number for a contest whose points depend on where the
+        // other station is.
+        if r.scoring.relation_points.is_empty() {
+            for k in ["PH", "CW", "DIG"] {
+                if !r.scoring.points_by_mode_class.contains_key(k) {
+                    return Err(format!("{tag}: points_by_mode_class misses {k}"));
+                }
+            }
+        } else {
+            if !r.scoring.points_by_mode_class.is_empty() {
+                return Err(format!(
+                    "{tag}: both relation_points and points_by_mode_class are populated \
+                     (a contest has ONE point table)"
+                ));
+            }
+            // ⚠️ The VOCABULARY first, then the coverage. A misspelt relation is also a
+            // missing one, and reporting the coverage failure for a row that is simply
+            // typed wrong sends the reader to the wrong half of the file.
+            for x in &r.scoring.relation_points {
+                if !matches!(
+                    x.relation.as_str(),
+                    "same_country"
+                        | "within_north_america"
+                        | "same_continent"
+                        | "different_continent"
+                ) {
+                    return Err(format!("{tag}: unknown relation {:?}", x.relation));
+                }
+            }
+            // ⭐ The guard the source verification earned. §14 of the design spec carried
+            // CQ WPX's two band groups and its North American exception and MISSED the
+            // third arm — *"Contacts between stations in the same country are worth 1
+            // point regardless of band"* — which would have scored every domestic contact
+            // at zero, silently, on a 48-hour contest. A relation the table names nothing
+            // for is exactly that defect, so the loader refuses it BY NAME.
+            //
+            // `within_north_america` is deliberately NOT required: it is an exception to
+            // `same_continent`, and a contest that does not grant it falls back to the arm
+            // it would have overridden (`PointsRule::points_for`).
+            for want in ["same_country", "same_continent", "different_continent"] {
+                if !r.scoring.relation_points.iter().any(|x| x.relation == want) {
+                    return Err(format!(
+                        "{tag}: relation_points declares no {want} row (every contact has \
+                         exactly one relation, so a missing arm scores those contacts at \
+                         zero without saying so)"
+                    ));
+                }
             }
         }
         // `none` is the state QSO parties: QSO points × geographic multipliers and
@@ -1777,10 +1875,22 @@ fn build(spec: FileSpec) -> RulesTable {
         .rulesets
         .into_iter()
         .map(|r| {
-            let points = ModePoints {
-                ph: r.scoring.points_by_mode_class["PH"],
-                cw: r.scoring.points_by_mode_class["CW"],
-                dig: r.scoring.points_by_mode_class["DIG"],
+            // ⚠️ Indexed, not `.get().unwrap_or(0)`: the validator has already proved all
+            // three keys are present whenever this map is the live table. A relation-priced
+            // contest writes `{}` here and the map is never read — a silent `0` would be a
+            // per-mode-class table nobody declared.
+            let points = if r.scoring.points_by_mode_class.is_empty() {
+                ModePoints {
+                    ph: 0,
+                    cw: 0,
+                    dig: 0,
+                }
+            } else {
+                ModePoints {
+                    ph: r.scoring.points_by_mode_class["PH"],
+                    cw: r.scoring.points_by_mode_class["CW"],
+                    dig: r.scoring.points_by_mode_class["DIG"],
+                }
             };
             let power_tiers: &'static [u32] = Box::leak(r.scoring.power_tiers.into_boxed_slice());
             // The file's `model` string names a POST-multiplier profile; both
@@ -1840,8 +1950,37 @@ fn build(spec: FileSpec) -> RulesTable {
                     .collect::<Vec<_>>()
                     .into_boxed_slice(),
             );
+            // The two point tables the validator has already proved are mutually
+            // exclusive: a populated `relation_points` is the relation-priced contest,
+            // and an empty one is the per-mode-class map every earlier contest writes.
+            let qso_points = if r.scoring.relation_points.is_empty() {
+                PointsRule::ByModeClass(points)
+            } else {
+                PointsRule::ByRelation(Box::leak(
+                    r.scoring
+                        .relation_points
+                        .into_iter()
+                        .map(|x| crate::contest::RelationPoints {
+                            relation: match x.relation.as_str() {
+                                "same_country" => crate::contest::Relation::SameCountry,
+                                "within_north_america" => {
+                                    crate::contest::Relation::WithinNorthAmerica
+                                }
+                                "different_continent" => {
+                                    crate::contest::Relation::DifferentContinent
+                                }
+                                // Validated to be one of the four.
+                                _ => crate::contest::Relation::SameContinent,
+                            },
+                            bands: leak_keys(x.bands),
+                            points: x.points,
+                        })
+                        .collect::<Vec<_>>()
+                        .into_boxed_slice(),
+                ))
+            };
             let scoring = crate::contest::Scoring {
-                qso_points: PointsRule::ByModeClass(points),
+                qso_points,
                 multipliers,
                 post,
             };
@@ -1918,6 +2057,7 @@ fn build(spec: FileSpec) -> RulesTable {
                 },
                 enforcement: leak_str(r.enforcement),
                 score_note_key: leak_str(r.score_note_key),
+                transmitter_column: r.transmitter_column,
                 window: WindowRule {
                     month: r.window.month,
                     weekend: match r.window.weekend.as_str() {
@@ -3486,7 +3626,9 @@ mod tests {
                 assert_eq!(r.sends, slots, "{event} role {} sends", r.id);
                 assert_eq!(r.receives, slots, "{event} role {} receives", r.id);
             }
-            let PointsRule::ByModeClass(p) = rs.scoring.qso_points;
+            let PointsRule::ByModeClass(p) = rs.scoring.qso_points else {
+                panic!("{event} prices by mode class, not by relation");
+            };
             assert_eq!([p.ph, p.cw, p.dig], pts, "{event} QSO points");
             assert!(
                 !rs.scoring.multipliers.is_empty(),
@@ -3765,8 +3907,9 @@ mod tests {
         let b = build(parse_spec(&twice).expect("and parses again after a round trip"));
         assert_eq!(
             a.rulesets.len(),
-            8,
-            "two Field Day events + four QSO parties + both Sweepstakes weekends"
+            12,
+            "two Field Day events + four QSO parties + both Sweepstakes weekends + \
+             CQ WW's two and CQ WPX's two"
         );
         assert_eq!(a.rulesets.len(), b.rulesets.len());
         for (x, y) in a.rulesets.iter().zip(b.rulesets) {

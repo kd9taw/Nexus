@@ -411,7 +411,7 @@ export async function fetchFdRules(): Promise<FdRulesStatus> {
 export interface FdRulesetDto {
   /**
    * The rules-file event id — 'arrlfd' | 'wfd' | 'tnqp' | 'ohqp' | 'cqp' | 'txqp' |
-   * 'arrlss_cw' | 'arrlss_ssb'.
+   * 'arrlss_cw' | 'arrlss_ssb' | 'cqww_cw' | 'cqww_ssb' | 'cqwpx_cw' | 'cqwpx_ssb'.
    */
   event: string
   rulesYear: number
