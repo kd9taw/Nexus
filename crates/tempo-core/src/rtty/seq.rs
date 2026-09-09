@@ -565,10 +565,29 @@ pub struct RttySeq {
     last_sent: String,
     wait_since: u64,
     repeats: u32,
-    /// Next contest serial. Present per the blueprint but unexposed — no
-    /// shipped schema sends it; `{SERIAL}` in a template reads it and each
-    /// logged QSO advances it.
+    /// The next serial to ISSUE — state, not history. The value a contact was
+    /// actually given lives in [`issued`](Self::issued) until the contact ends.
     next_serial: u32,
+    /// ⭐ **The serial ISSUED to the peer in flight, and the whole of the fix.**
+    ///
+    /// A serial is issued when an exchange is composed **for a peer that does not
+    /// already have one**. A repeat, an AGN, a re-call and a CQ all render from
+    /// this and advance nothing.
+    ///
+    /// Until 2026-09-08 `{SERIAL}` rendered the live counter and `log_and_close`
+    /// advanced it, which is the OPPOSITE rule: the counter moved at LOG time, so a
+    /// serial went out of date only after the contact, and the sign-off — rendered
+    /// after the increment — already carried the NEXT contact's number. The naive
+    /// repair (advance on every render) is worse: three of this machine's render
+    /// sites repeat the same exchange to the same station, so sending your exchange
+    /// twice would send two different numbers and the second is the one the other
+    /// operator copies — the cross-check error the not-reused ruling exists to
+    /// prevent, inverted.
+    ///
+    /// A serial sent into a FAILED contact is not reused: an abort drops this and
+    /// the counter has already moved past it. A gap is invisible to every log
+    /// checker; the same serial sent to two stations is an error against both.
+    issued: Option<(String, u32)>,
 }
 
 impl RttySeq {
@@ -608,6 +627,7 @@ impl RttySeq {
             wait_since: 0,
             repeats: 0,
             next_serial: 1,
+            issued: None,
         }
     }
 
@@ -642,6 +662,10 @@ impl RttySeq {
         self.peer_fields.clear();
         self.window.clear();
         self.repeats = 0;
+        // A CQ has no peer, so it renders the next number to be issued and issues
+        // nothing. Reached from an abort too: that contact's number is already spent
+        // and is deliberately skipped rather than handed to the next station.
+        self.issued = None;
         let tpl = self.templates.cq.clone();
         let text = self.render(&tpl);
         self.send(text, now_ms);
@@ -655,6 +679,8 @@ impl RttySeq {
         self.peer_fields.clear();
         self.window.clear();
         self.repeats = 0;
+        // Composing FOR a peer — this is one of the two places a serial is issued.
+        self.issue_serial();
         let tpl = self.templates.answer.clone();
         let text = self.render(&tpl);
         self.send(text, now_ms);
@@ -668,6 +694,7 @@ impl RttySeq {
         self.peer_fields.clear();
         self.window.clear();
         self.repeats = 0;
+        self.issued = None;
     }
 
     // -- Engine hooks --
@@ -787,13 +814,36 @@ impl RttySeq {
         parts.join(" ")
     }
 
+    /// The serial to RENDER right now: the one issued to the peer in flight, or —
+    /// with nothing in flight, which is what a CQ is — the next one to be issued,
+    /// without issuing it.
+    fn serial_now(&self) -> u32 {
+        self.issued.as_ref().map_or(self.next_serial, |(_, n)| *n)
+    }
+
+    /// Issue a serial to [`peer`](Self::peer), unless they already have one.
+    ///
+    /// Called exactly where an exchange is COMPOSED FOR a peer — `answer` and the
+    /// detect-answer step of a run. The repeat paths do not call it, which is why a
+    /// repeat sends the number the other operator has already copied.
+    fn issue_serial(&mut self) {
+        let Some(peer) = self.peer.clone() else {
+            return;
+        };
+        if self.issued.as_ref().is_some_and(|(p, _)| *p == peer) {
+            return;
+        }
+        self.issued = Some((peer, self.next_serial));
+        self.next_serial += 1;
+    }
+
     fn render(&self, tpl: &str) -> String {
         let mut s = tpl.to_string();
         s = s.replace("{MYCALL}", &self.mycall);
         s = s.replace("{CALL}", self.peer.as_deref().unwrap_or("?"));
         s = s.replace("{RST}", self.my_field("RST").unwrap_or("599"));
         s = s.replace("{EXCH}", &self.my_exch_string());
-        s = s.replace("{SERIAL}", &format!("{:03}", self.next_serial));
+        s = s.replace("{SERIAL}", &format!("{:03}", self.serial_now()));
         for (k, v) in &self.my_exchange {
             s = s.replace(&format!("{{{k}}}"), v);
         }
@@ -810,6 +860,9 @@ impl RttySeq {
                     self.peer = Some(call);
                     self.window.clear();
                     self.repeats = 0;
+                    // The other place a serial is issued: a run composing its
+                    // exchange for the station that came back.
+                    self.issue_serial();
                     let tpl = self.templates.exchange.clone();
                     let text = self.render(&tpl);
                     self.send(text, now_ms);
@@ -874,12 +927,15 @@ impl RttySeq {
             call,
             exchange: self.peer_fields.clone(),
         });
-        self.next_serial += 1;
         self.window.clear();
         self.repeats = 0;
+        // The sign-off describes THIS contact, so it renders BEFORE the issued value
+        // is dropped. The counter is not touched here at all: it moved when the
+        // exchange was composed, which is what "issued, not logged" means.
         let tpl = self.templates.sign_off.clone();
         let text = self.render(&tpl);
         self.send(text, now_ms);
+        self.issued = None;
         self.state = SeqState::Confirmed;
     }
 
@@ -1617,6 +1673,124 @@ mod tests {
         let l = logs(&seq.take_actions());
         assert_eq!(field(&l[0].1, "RST"), Some("599"));
         assert_eq!(field(&l[0].1, "SERIAL"), Some("001"));
+    }
+
+    /// ⭐ **A serial is issued once per CONTACT, not once per render.**
+    ///
+    /// A run renders its exchange three times to one station — the exchange itself and
+    /// two AGN repeats — and all three must carry the SAME number. Under the naive
+    /// "every render advances it" rule the second over sends a different serial from
+    /// the first, and the second is the one the other operator copies: exactly the
+    /// cross-check error the not-reused ruling exists to prevent, inverted.
+    #[test]
+    fn a_serial_is_issued_once_per_contact_not_once_per_render() {
+        let mut seq = serial_seq();
+        seq.start_cq(0);
+        // A CQ has no peer: it shows the next number to be issued and issues nothing.
+        assert_eq!(serials(&seq.take_actions()), vec!["001"], "the CQ");
+        seq.feed_text("KD9TAW DE W1AW W1AW K\n", 10_000);
+        assert_eq!(serials(&seq.take_actions()), vec!["001"], "the exchange");
+        seq.tick(70_000);
+        assert_eq!(serials(&seq.take_actions()), vec!["001"], "the first AGN");
+        seq.tick(140_000);
+        assert_eq!(serials(&seq.take_actions()), vec!["001"], "the second AGN");
+        // POSITIVE CONTROL — a counter that never moved would pass all of the above.
+        // The contact completes, and the NEXT station gets the next number.
+        seq.feed_text("KD9TAW DE W1AW 599 599 K\n", 150_000);
+        seq.take_actions();
+        seq.start_cq(200_000);
+        // The next CQ already shows 002 — the completed contact's number is spent.
+        assert_eq!(serials(&seq.take_actions()), vec!["002"], "the next CQ");
+        seq.feed_text("KD9TAW DE K1ABC K1ABC K\n", 210_000);
+        assert_eq!(
+            serials(&seq.take_actions()),
+            vec!["002"],
+            "a second contact reused the first one's serial"
+        );
+    }
+
+    /// The other half of "issued, not logged": the sign-off describes THIS contact.
+    ///
+    /// The shipped code incremented inside `log_and_close` and rendered the sign-off
+    /// afterwards, so a `{SERIAL}` in a sign-off template already signed off with the
+    /// next contact's number — 002 for the contact that sent 001.
+    #[test]
+    fn the_sign_off_carries_this_contacts_serial_not_the_next_ones() {
+        let mut seq = serial_seq();
+        seq.start_cq(0);
+        seq.feed_text("KD9TAW DE W1AW W1AW K\n", 10_000);
+        seq.take_actions();
+        seq.feed_text("KD9TAW DE W1AW 599 599 K\n", 30_000);
+        assert_eq!(seq.state(), SeqState::Confirmed);
+        assert_eq!(
+            serials(&seq.take_actions()),
+            vec!["001"],
+            "the sign-off did not carry the serial this contact was issued"
+        );
+    }
+
+    /// A serial sent into a FAILED contact is not reused: a gap is invisible to every
+    /// log checker, while the same number sent to two stations is an error against
+    /// both.
+    #[test]
+    fn an_aborted_contacts_serial_is_skipped_rather_than_reused() {
+        let mut seq = serial_seq();
+        seq.answer("W1AW", 0);
+        assert_eq!(serials(&seq.take_actions()), vec!["001"]);
+        seq.abort();
+        seq.answer("K1ABC", 10_000);
+        assert_eq!(
+            serials(&seq.take_actions()),
+            vec!["002"],
+            "the next contact took the abandoned contact's number"
+        );
+    }
+
+    /// The `{SERIAL}` token out of every send, in order — the whole of what these
+    /// three tests assert about.
+    fn serials(actions: &[Action]) -> Vec<String> {
+        sends(actions)
+            .iter()
+            .filter_map(|t| t.split("NR ").nth(1))
+            .map(|t| t.chars().take(3).collect())
+            .collect()
+    }
+
+    /// A one-slot exchange whose every template carries `{SERIAL}` — the shape
+    /// Sweepstakes and CQ WPX have and neither Field Day event does.
+    fn serial_seq() -> RttySeq {
+        use crate::contest::{AdifTags, FieldSpec, RoleSelector, RoleSpec};
+        static F: &[FieldSpec] = &[FieldSpec {
+            key: "RST",
+            adif: AdifTags {
+                rcvd: Some("RST_RCVD"),
+                sent: Some("RST_SENT"),
+            },
+            label: None,
+            required: true,
+            kind: FieldKind::Rst { digits: 3 },
+        }];
+        static R: &[RoleSpec] = &[RoleSpec {
+            id: "",
+            selector: RoleSelector::Always,
+            sends: &["RST"],
+            receives: &["RST"],
+            constant_sent: &[],
+        }];
+        static S: ExchangeSpec = ExchangeSpec {
+            name: "serial-repeat",
+            fields: F,
+            roles: R,
+        };
+        let mut seq = RttySeq::new(MYCALL, &S, &[("RST", "599")]);
+        seq.templates = Templates {
+            cq: "CQ TEST DE {MYCALL} NR {SERIAL} K".into(),
+            answer: "{CALL} DE {MYCALL} NR {SERIAL} K".into(),
+            exchange: "{CALL} DE {MYCALL} {RST} NR {SERIAL} K".into(),
+            agn: "{CALL} DE {MYCALL} AGN NR {SERIAL} K".into(),
+            sign_off: "{CALL} TU DE {MYCALL} NR {SERIAL} K".into(),
+        };
+        seq
     }
 
     // -- Pattern helpers --
