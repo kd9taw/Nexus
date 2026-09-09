@@ -22,7 +22,8 @@
     "objectives": "WFD reuses the ARRL bonus menu today (the pre-data modelling); a real WFD objectives table flows through this field later.",
     "exchange": "Class letters are PER EVENT and the two sets are disjoint. arrlfd uses ^[0-9]{1,2}[ABCDEF]$ (ARRL Field Day classes A-F). wfd uses ^[0-9]{1,2}[HIOM]$, from winterfieldday.org/downloads/2026-rules-v3.pdf (the sponsor's own 2026 rules, stamped \"V3 9.8.25\"), read in full 2026-09-07: \"Class Options: H - Home station... I - Indoor station... O - Outdoor station... M - Mobile / Mobile Stationary\", with the worked example \"If you have two stations and you are mobile in East Pennsylvania, you are 2M EPA.\" This CORRECTS a real shipped bug: both events previously used ABCDEF, so no legal WFD class satisfied the required CLASS slot and the RTTY auto-sequencer could not complete a single Winter Field Day contact. The earlier guess of HIOM lived only in a code comment, which is not a source; the sponsor page was unreachable on 2026-08-29 (see the assistance entry) and the PDF is the first-party text that was missing then. Do not change these letters without a verbatim quote + URL + read-date recorded here.",
     "exchange_section_domain": "Both events' SECTION slot uses the derived `fd_sections` domain (the 83 ARRL/RAC sections plus MX and DX). Corroborated for WFD by the same PDF, \"Location Identifier\": \"US and Canadian stations will use the ARRL / RAC Section as designated by those organizations. Mexico stations will use MX, and all other stations outside of the US will use DX.\"",
-    "adif_sent_tags": "Every exchange field's adif.sent was \"\" through batch 5 because a grep of crates/, src-tauri/ and ui/src found MY_CNTY / MY_STATE / MY_ARRL_SECT nowhere (positive control: MY_GRIDSQUARE returns hits, so the grep worked and the zeros were real) — but an absence from OUR tree is not an absence from ADIF. Batch 6 read the source: ADIF Specification V 3.1.7, https://adif.org/317/ADIF_317.htm, stamped \"Released ADIF Version 3.1.7, updated 2026-03-22\", fetched and searched in full 2026-09-09. MY_ARRL_SECT IS a QSO field there - \"the logging station's ARRL section\" - so SECTION's adif.sent is now MY_ARRL_SECT. CLASS's stays \"\": CLASS is a real ADIF field (\"contest class (e.g. for ARRL Field Day)\") but it is the CONTACTED station's, and MY_CLASS does not exist in the field list (zero anchors, alongside MY_CHECK, MY_PRECEDENCE, MY_QTH and the invented control names MY_COUNTY and MY_SECTION), so the class I send rides the private carrier (spec §3.5). A name that does not check out stays \"\" - an invented ADIF field ships into other people's logbooks and cannot be recalled."
+    "adif_sent_tags": "Every exchange field's adif.sent was \"\" through batch 5 because a grep of crates/, src-tauri/ and ui/src found MY_CNTY / MY_STATE / MY_ARRL_SECT nowhere (positive control: MY_GRIDSQUARE returns hits, so the grep worked and the zeros were real) — but an absence from OUR tree is not an absence from ADIF. Batch 6 read the source: ADIF Specification V 3.1.7, https://adif.org/317/ADIF_317.htm, stamped \"Released ADIF Version 3.1.7, updated 2026-03-22\", fetched and searched in full 2026-09-09. MY_ARRL_SECT IS a QSO field there - \"the logging station's ARRL section\" - so SECTION's adif.sent is now MY_ARRL_SECT. CLASS's stays \"\": CLASS is a real ADIF field (\"contest class (e.g. for ARRL Field Day)\") but it is the CONTACTED station's, and MY_CLASS does not exist in the field list (zero anchors, alongside MY_CHECK, MY_PRECEDENCE, MY_QTH and the invented control names MY_COUNTY and MY_SECTION), so the class I send rides the private carrier (spec §3.5). A name that does not check out stays \"\" - an invented ADIF field ships into other people's logbooks and cannot be recalled.",
+    "sweepstakes": "ARRL November Sweepstakes ships as TWO rulesets, arrlss_cw and arrlss_ssb, written from https://contests.arrl.org/ContestRules/SS-Rules.pdf, Version 2.1, all 10 pages extracted and read 2026-09-09. TWO RULESETS AND NOT ONE MODE-SPLIT ROW: the sponsor runs them as separate contests on separate weekends (\"CW: First full weekend in November / Phone: Third full weekend in November\"; §2.4 \"Use only CW during the CW weekend and Phone during the Phone weekend\"), with separate certificates, separate Clean Sweep mugs and separate CONTEST tokens — and a WindowRule holds one weekend, so one row could not carry both dates whatever the token did. EXCHANGE (§4, verbatim): \"4.1 Serial Number - a consecutive contact number starting with 1; 4.2 Precedence “Q” for Single Operator, QRP / “A” for Single Operator, Low Power / “B” for Single Operator, High Power / “U” for Single Operator Unlimited, High Power, Single Operator Unlimited, Low Power and Single Operator Unlimited, QRP / “M” for Multioperator, High Power or Multioperator, Low Power / “S” for School Club; 4.3 Your call sign (the call sign must be included during the exchange); 4.4 Check — 4.4.1 The last two digits of the year the operator or the station was first licensed. 4.4.2 The same Check must be sent throughout the contest; 4.5 Section – send and log the abbreviations in the ARRL Contest Multipliers List.\" ⚠️ The narrative on p.2 says \"The following SIX pieces of information must be sent\" and then enumerates FIVE, the same five §4.1–§4.5 lists; five ship and the count is a sponsor slip. \"It is highly recommended that you send the information in this order\" — RECOMMENDED, not mandatory, so the send order below is the sponsor's and a parser must not require it. SCORING (§5): \"5.1 QSO points: Each contact counts for two (2) points. 5.2 Multipliers: ARRL/RAC Sections plus Northern Territories. 5.3 Final score equals the total QSO points times the total multipliers contacted.\" Two points is written here as points_by_mode_class PH/CW/DIG all 2 rather than a new flat-points model, because the sponsor's rule carries no mode qualification and widening the file's scoring vocabulary would strand every shipped build's rules updates on its bundled seed (§8d). DUPE (§2.2): \"Each station may be contacted only once, regardless of band.\" — by_call true, by_band FALSE, by_mode_class FALSE. SECTIONS: the domain is ss_sections, 85 codes parsed off https://contests.arrl.org/contestmultipliers.php?a=wve (read 2026-09-09), which states \"These are the names of the 85 W/VE sections used in ARRL contests, along with their standard abbreviations.\" ⚠️ THE TERRITORIES ABBREVIATION IS TER, NOT NT. §5.2's phrase \"plus Northern Territories\" is prose, not an abbreviation; NT does not appear anywhere in the sponsor's list. ⚠️ ss_sections IS NOT fd_sections, and the difference is a live defect in the OTHER list, recorded here and deliberately not fixed in this batch: the top-level sections array this file has always carried holds 83 codes from an older ARRL era — MAR (Maritime, since split into NB/NS/PE), GTA (since renamed GH, Ontario Golden Horseshoe) and NT (since TER). Correcting it moves Field Day's section domain, the TypeScript section mirror and the §8(a) goldens, which is its own change. Sweepstakes therefore declares its own domain from the sponsor's current list. CABRILLO: the tokens are ARRL-SS-CW and ARRL-SS-SSB and BOTH REGISTRIES AGREE for once — ADIF 3.1.7's CONTEST_ID enumeration (https://adif.org/317/ADIF_317.htm, \"updated 2026-03-22\", read 2026-09-09) lists ARRL-SS-CW = \"ARRL November Sweepstakes (CW)\" and ARRL-SS-SSB = \"ARRL November Sweepstakes (Phone)\" and carries no unsplit ARRL-SS; the WA7BNM master list the Cabrillo V3 specification points at (https://www.contestcalendar.com/cabnames.php, Revision Date February 23, 2026, read 2026-09-09) carries the same two strings at ids 177 and 178; and ARRL's OWN page https://www.arrl.org/cabrillo-format-tutorial (read 2026-09-09) prints complete worked headers containing the literal lines \"CONTEST: ARRL-SS-CW\" and \"CONTEST: ARRL-SS-SSB\". So cabrillo_contest_token passes both through unchanged, and the crossing guard covers them. QSO-LINE COLUMN ORDER: the rules PDF publishes none (\"ELOG.1. The official ARRL format for electronic logs is the Cabrillo format\"), but the same arrl.org tutorial page publishes a QSO DATA TEMPLATE for Sweepstakes with a lettered legend — \"E= Your call. F= Your QSO #. G= Your precedence. H= Your check … I= Your ARRL Section. J= The call of the station you worked. K= Their QSO number to you. L= Their precedence. M= Their check. N = Their ARRL Section.\" — over the sample line \"QSO: 14000 CW 2009-11-07 2100 W1AW 1 M 38 CT K8MM 1 Q 92 MI\". ⚠️ THE CALLSIGN IS THE STRUCTURAL COLUMN, FIRST OF EACH SIDE, AND THE EXCHANGE COLUMNS ARE SERIAL/PRECEDENCE/CHECK/SECTION WITH NO CALLSIGN AMONG THEM. The design sketch (§6.2) assumed the reverse and reserved the question for the batch that read the sponsor; the reading corrects it. PRECEDENCE: derived from the entry's declared category (contest_category_operator / _power / _assisted / _station), never typed, so the letter on every QSO line and the CATEGORY-* headers of the same entry are one fact; the power thresholds are the same PDF's Entry Categories table (\"Version 1.6 – 20 Sep 2023\"): QRP \"5 watts PEP output or less\", Low Power \"100 watts PEP output or less\", High Power \"1500 watts PEP output or the maximum allowable power level established by the national licensing authority\". An undeclared axis REFUSES the session with a sentence rather than defaulting — a default here is a category claim transmitted on every contact of a 24-hour contest. WINDOW: \"Contest Period: Begins 2100 UTC Saturday and runs through 0259 UTC Monday\" = start_hour_utc 21, duration_hours 30, month 11, nth_full weekend 1 (CW) and 3 (Phone). §1.1's 24-of-30-hour operating limit and §1.2's after-24-hours rule are NOT modelled: nothing in this build tracks off times, and a score that silently dropped contacts would be worse than one that does not know about the limit. UNESTABLISHED: whether ARRL's log robot validates the CONTEST token at all — the rules say only that electronic logs go to contest-log-submission.arrl.org, whose web form selects the contest."
   },
   "rulesets": [
     {
@@ -3626,6 +3627,1010 @@
       "enforcement": "warn",
       "objectives": [],
       "score_note_key": "settings.contestScore.incomplete"
+    },
+    {
+      "event": "arrlss_cw",
+      "rules_year": 2026,
+      "contest_id": "ARRL-SS-CW",
+      "window": {
+        "month": 11,
+        "weekend": "nth_full",
+        "n": 1,
+        "start_hour_utc": 21,
+        "duration_hours": 30,
+        "overrides": {}
+      },
+      "scoring": {
+        "model": "none",
+        "points_by_mode_class": {
+          "PH": 2,
+          "CW": 2,
+          "DIG": 2
+        },
+        "power_tiers": [],
+        "multipliers": [
+          {
+            "id": "section",
+            "source": {
+              "type": "field",
+              "key": "SEC",
+              "domain": "ss_sections"
+            },
+            "scope": "per_log",
+            "excluding": [],
+            "roles": []
+          }
+        ]
+      },
+      "dupe": {
+        "by_call": true,
+        "by_band": false,
+        "by_mode_class": false,
+        "by_fields": [],
+        "by_sent_fields": []
+      },
+      "domains": [
+        {
+          "id": "ss_sections",
+          "adif": {
+            "rcvd": "ARRL_SECT",
+            "sent": "MY_ARRL_SECT"
+          },
+          "values": [
+            {
+              "code": "CO",
+              "label": "Colorado"
+            },
+            {
+              "code": "IA",
+              "label": "Iowa"
+            },
+            {
+              "code": "KS",
+              "label": "Kansas"
+            },
+            {
+              "code": "MN",
+              "label": "Minnesota"
+            },
+            {
+              "code": "MO",
+              "label": "Missouri"
+            },
+            {
+              "code": "ND",
+              "label": "North Dakota"
+            },
+            {
+              "code": "NE",
+              "label": "Nebraska"
+            },
+            {
+              "code": "SD",
+              "label": "South Dakota"
+            },
+            {
+              "code": "CT",
+              "label": "Connecticut"
+            },
+            {
+              "code": "EMA",
+              "label": "Eastern Massachusetts"
+            },
+            {
+              "code": "ME",
+              "label": "Maine"
+            },
+            {
+              "code": "NH",
+              "label": "New Hampshire"
+            },
+            {
+              "code": "RI",
+              "label": "Rhode Island"
+            },
+            {
+              "code": "VT",
+              "label": "Vermont"
+            },
+            {
+              "code": "WMA",
+              "label": "Western Massachusetts"
+            },
+            {
+              "code": "ENY",
+              "label": "Eastern New York"
+            },
+            {
+              "code": "NLI",
+              "label": "New York City-Long Island"
+            },
+            {
+              "code": "NNJ",
+              "label": "Northern New Jersey"
+            },
+            {
+              "code": "NNY",
+              "label": "Northern New York"
+            },
+            {
+              "code": "SNJ",
+              "label": "Southern New Jersey"
+            },
+            {
+              "code": "WNY",
+              "label": "Western New York"
+            },
+            {
+              "code": "DE",
+              "label": "Delaware"
+            },
+            {
+              "code": "EPA",
+              "label": "Eastern Pennsylvania"
+            },
+            {
+              "code": "MDC",
+              "label": "Maryland-DC"
+            },
+            {
+              "code": "WPA",
+              "label": "Western Pennsylvania"
+            },
+            {
+              "code": "AL",
+              "label": "Alabama"
+            },
+            {
+              "code": "GA",
+              "label": "Georgia"
+            },
+            {
+              "code": "KY",
+              "label": "Kentucky"
+            },
+            {
+              "code": "NC",
+              "label": "North Carolina"
+            },
+            {
+              "code": "NFL",
+              "label": "Northern Florida"
+            },
+            {
+              "code": "PR",
+              "label": "Puerto Rico"
+            },
+            {
+              "code": "SC",
+              "label": "South Carolina"
+            },
+            {
+              "code": "SFL",
+              "label": "Southern Florida"
+            },
+            {
+              "code": "TN",
+              "label": "Tennessee"
+            },
+            {
+              "code": "VA",
+              "label": "Virginia"
+            },
+            {
+              "code": "VI",
+              "label": "US Virgin Islands"
+            },
+            {
+              "code": "WCF",
+              "label": "West Central Florida"
+            },
+            {
+              "code": "AR",
+              "label": "Arkansas"
+            },
+            {
+              "code": "LA",
+              "label": "Louisiana"
+            },
+            {
+              "code": "MS",
+              "label": "Mississippi"
+            },
+            {
+              "code": "NM",
+              "label": "New Mexico"
+            },
+            {
+              "code": "NTX",
+              "label": "North Texas"
+            },
+            {
+              "code": "OK",
+              "label": "Oklahoma"
+            },
+            {
+              "code": "STX",
+              "label": "South Texas"
+            },
+            {
+              "code": "WTX",
+              "label": "West Texas"
+            },
+            {
+              "code": "EB",
+              "label": "East Bay"
+            },
+            {
+              "code": "LAX",
+              "label": "Los Angeles"
+            },
+            {
+              "code": "ORG",
+              "label": "Orange"
+            },
+            {
+              "code": "PAC",
+              "label": "Pacific"
+            },
+            {
+              "code": "SB",
+              "label": "Santa Barbara"
+            },
+            {
+              "code": "SCV",
+              "label": "Santa Clara Valley"
+            },
+            {
+              "code": "SDG",
+              "label": "San Diego"
+            },
+            {
+              "code": "SF",
+              "label": "San Francisco"
+            },
+            {
+              "code": "SJV",
+              "label": "San Joaquin Valley"
+            },
+            {
+              "code": "SV",
+              "label": "Sacramento Valley"
+            },
+            {
+              "code": "AK",
+              "label": "Alaska"
+            },
+            {
+              "code": "AZ",
+              "label": "Arizona"
+            },
+            {
+              "code": "EWA",
+              "label": "Eastern Washington"
+            },
+            {
+              "code": "ID",
+              "label": "Idaho"
+            },
+            {
+              "code": "MT",
+              "label": "Montana"
+            },
+            {
+              "code": "NV",
+              "label": "Nevada"
+            },
+            {
+              "code": "OR",
+              "label": "Oregon"
+            },
+            {
+              "code": "UT",
+              "label": "Utah"
+            },
+            {
+              "code": "WWA",
+              "label": "Western Washington"
+            },
+            {
+              "code": "WY",
+              "label": "Wyoming"
+            },
+            {
+              "code": "MI",
+              "label": "Michigan"
+            },
+            {
+              "code": "OH",
+              "label": "Ohio"
+            },
+            {
+              "code": "WV",
+              "label": "West Virginia"
+            },
+            {
+              "code": "IL",
+              "label": "Illinois"
+            },
+            {
+              "code": "IN",
+              "label": "Indiana"
+            },
+            {
+              "code": "WI",
+              "label": "Wisconsin"
+            },
+            {
+              "code": "AB",
+              "label": "Alberta"
+            },
+            {
+              "code": "BC",
+              "label": "British Columbia"
+            },
+            {
+              "code": "GH",
+              "label": "Ontario Golden Horseshoe"
+            },
+            {
+              "code": "MB",
+              "label": "Manitoba"
+            },
+            {
+              "code": "NB",
+              "label": "New Brunswick"
+            },
+            {
+              "code": "NL",
+              "label": "Newfoundland and Labrador"
+            },
+            {
+              "code": "NS",
+              "label": "Nova Scotia"
+            },
+            {
+              "code": "ONE",
+              "label": "Ontario East"
+            },
+            {
+              "code": "ONN",
+              "label": "Ontario North"
+            },
+            {
+              "code": "ONS",
+              "label": "Ontario South"
+            },
+            {
+              "code": "PE",
+              "label": "Prince Edward Island"
+            },
+            {
+              "code": "QC",
+              "label": "Quebec"
+            },
+            {
+              "code": "SK",
+              "label": "Saskatchewan"
+            },
+            {
+              "code": "TER",
+              "label": "Territories"
+            }
+          ]
+        }
+      ],
+      "exchange": {
+        "name": "sweepstakes",
+        "fields": [
+          {
+            "key": "NR",
+            "label": "",
+            "required": true,
+            "adif": {
+              "rcvd": "SRX",
+              "sent": "STX"
+            },
+            "source": "serial",
+            "kind": {
+              "type": "serial",
+              "scope": "per_contest"
+            }
+          },
+          {
+            "key": "PREC",
+            "label": "",
+            "required": true,
+            "adif": {
+              "rcvd": "",
+              "sent": ""
+            },
+            "source": "derived:precedence",
+            "kind": {
+              "type": "pattern",
+              "re": "^[QABUMS]$"
+            }
+          },
+          {
+            "key": "CALL",
+            "label": "",
+            "required": true,
+            "adif": {
+              "rcvd": "",
+              "sent": ""
+            },
+            "source": "setting:mycall",
+            "kind": {
+              "type": "call"
+            }
+          },
+          {
+            "key": "CK",
+            "label": "",
+            "required": true,
+            "adif": {
+              "rcvd": "",
+              "sent": ""
+            },
+            "source": "setting:contest_check",
+            "kind": {
+              "type": "pattern",
+              "re": "^[0-9]{2}$"
+            }
+          },
+          {
+            "key": "SEC",
+            "label": "",
+            "required": true,
+            "adif": {
+              "rcvd": "ARRL_SECT",
+              "sent": "MY_ARRL_SECT"
+            },
+            "source": "setting:fd_section",
+            "kind": {
+              "type": "enum",
+              "domain": "ss_sections"
+            }
+          }
+        ],
+        "roles": [
+          {
+            "id": "",
+            "selector": {
+              "type": "always"
+            },
+            "sends": [
+              "NR",
+              "PREC",
+              "CALL",
+              "CK",
+              "SEC"
+            ],
+            "receives": [
+              "NR",
+              "PREC",
+              "CALL",
+              "CK",
+              "SEC"
+            ],
+            "constant_sent": [
+              "CK"
+            ]
+          }
+        ]
+      },
+      "bonuses": [],
+      "banned_modes": [],
+      "tempo_fd": false,
+      "assistance": {
+        "spotting_allowed": true,
+        "cluster_allowed": true,
+        "assistance_note_key": ""
+      },
+      "enforcement": "warn",
+      "objectives": []
+    },
+    {
+      "event": "arrlss_ssb",
+      "rules_year": 2026,
+      "contest_id": "ARRL-SS-SSB",
+      "window": {
+        "month": 11,
+        "weekend": "nth_full",
+        "n": 3,
+        "start_hour_utc": 21,
+        "duration_hours": 30,
+        "overrides": {}
+      },
+      "scoring": {
+        "model": "none",
+        "points_by_mode_class": {
+          "PH": 2,
+          "CW": 2,
+          "DIG": 2
+        },
+        "power_tiers": [],
+        "multipliers": [
+          {
+            "id": "section",
+            "source": {
+              "type": "field",
+              "key": "SEC",
+              "domain": "ss_sections"
+            },
+            "scope": "per_log",
+            "excluding": [],
+            "roles": []
+          }
+        ]
+      },
+      "dupe": {
+        "by_call": true,
+        "by_band": false,
+        "by_mode_class": false,
+        "by_fields": [],
+        "by_sent_fields": []
+      },
+      "domains": [
+        {
+          "id": "ss_sections",
+          "adif": {
+            "rcvd": "ARRL_SECT",
+            "sent": "MY_ARRL_SECT"
+          },
+          "values": [
+            {
+              "code": "CO",
+              "label": "Colorado"
+            },
+            {
+              "code": "IA",
+              "label": "Iowa"
+            },
+            {
+              "code": "KS",
+              "label": "Kansas"
+            },
+            {
+              "code": "MN",
+              "label": "Minnesota"
+            },
+            {
+              "code": "MO",
+              "label": "Missouri"
+            },
+            {
+              "code": "ND",
+              "label": "North Dakota"
+            },
+            {
+              "code": "NE",
+              "label": "Nebraska"
+            },
+            {
+              "code": "SD",
+              "label": "South Dakota"
+            },
+            {
+              "code": "CT",
+              "label": "Connecticut"
+            },
+            {
+              "code": "EMA",
+              "label": "Eastern Massachusetts"
+            },
+            {
+              "code": "ME",
+              "label": "Maine"
+            },
+            {
+              "code": "NH",
+              "label": "New Hampshire"
+            },
+            {
+              "code": "RI",
+              "label": "Rhode Island"
+            },
+            {
+              "code": "VT",
+              "label": "Vermont"
+            },
+            {
+              "code": "WMA",
+              "label": "Western Massachusetts"
+            },
+            {
+              "code": "ENY",
+              "label": "Eastern New York"
+            },
+            {
+              "code": "NLI",
+              "label": "New York City-Long Island"
+            },
+            {
+              "code": "NNJ",
+              "label": "Northern New Jersey"
+            },
+            {
+              "code": "NNY",
+              "label": "Northern New York"
+            },
+            {
+              "code": "SNJ",
+              "label": "Southern New Jersey"
+            },
+            {
+              "code": "WNY",
+              "label": "Western New York"
+            },
+            {
+              "code": "DE",
+              "label": "Delaware"
+            },
+            {
+              "code": "EPA",
+              "label": "Eastern Pennsylvania"
+            },
+            {
+              "code": "MDC",
+              "label": "Maryland-DC"
+            },
+            {
+              "code": "WPA",
+              "label": "Western Pennsylvania"
+            },
+            {
+              "code": "AL",
+              "label": "Alabama"
+            },
+            {
+              "code": "GA",
+              "label": "Georgia"
+            },
+            {
+              "code": "KY",
+              "label": "Kentucky"
+            },
+            {
+              "code": "NC",
+              "label": "North Carolina"
+            },
+            {
+              "code": "NFL",
+              "label": "Northern Florida"
+            },
+            {
+              "code": "PR",
+              "label": "Puerto Rico"
+            },
+            {
+              "code": "SC",
+              "label": "South Carolina"
+            },
+            {
+              "code": "SFL",
+              "label": "Southern Florida"
+            },
+            {
+              "code": "TN",
+              "label": "Tennessee"
+            },
+            {
+              "code": "VA",
+              "label": "Virginia"
+            },
+            {
+              "code": "VI",
+              "label": "US Virgin Islands"
+            },
+            {
+              "code": "WCF",
+              "label": "West Central Florida"
+            },
+            {
+              "code": "AR",
+              "label": "Arkansas"
+            },
+            {
+              "code": "LA",
+              "label": "Louisiana"
+            },
+            {
+              "code": "MS",
+              "label": "Mississippi"
+            },
+            {
+              "code": "NM",
+              "label": "New Mexico"
+            },
+            {
+              "code": "NTX",
+              "label": "North Texas"
+            },
+            {
+              "code": "OK",
+              "label": "Oklahoma"
+            },
+            {
+              "code": "STX",
+              "label": "South Texas"
+            },
+            {
+              "code": "WTX",
+              "label": "West Texas"
+            },
+            {
+              "code": "EB",
+              "label": "East Bay"
+            },
+            {
+              "code": "LAX",
+              "label": "Los Angeles"
+            },
+            {
+              "code": "ORG",
+              "label": "Orange"
+            },
+            {
+              "code": "PAC",
+              "label": "Pacific"
+            },
+            {
+              "code": "SB",
+              "label": "Santa Barbara"
+            },
+            {
+              "code": "SCV",
+              "label": "Santa Clara Valley"
+            },
+            {
+              "code": "SDG",
+              "label": "San Diego"
+            },
+            {
+              "code": "SF",
+              "label": "San Francisco"
+            },
+            {
+              "code": "SJV",
+              "label": "San Joaquin Valley"
+            },
+            {
+              "code": "SV",
+              "label": "Sacramento Valley"
+            },
+            {
+              "code": "AK",
+              "label": "Alaska"
+            },
+            {
+              "code": "AZ",
+              "label": "Arizona"
+            },
+            {
+              "code": "EWA",
+              "label": "Eastern Washington"
+            },
+            {
+              "code": "ID",
+              "label": "Idaho"
+            },
+            {
+              "code": "MT",
+              "label": "Montana"
+            },
+            {
+              "code": "NV",
+              "label": "Nevada"
+            },
+            {
+              "code": "OR",
+              "label": "Oregon"
+            },
+            {
+              "code": "UT",
+              "label": "Utah"
+            },
+            {
+              "code": "WWA",
+              "label": "Western Washington"
+            },
+            {
+              "code": "WY",
+              "label": "Wyoming"
+            },
+            {
+              "code": "MI",
+              "label": "Michigan"
+            },
+            {
+              "code": "OH",
+              "label": "Ohio"
+            },
+            {
+              "code": "WV",
+              "label": "West Virginia"
+            },
+            {
+              "code": "IL",
+              "label": "Illinois"
+            },
+            {
+              "code": "IN",
+              "label": "Indiana"
+            },
+            {
+              "code": "WI",
+              "label": "Wisconsin"
+            },
+            {
+              "code": "AB",
+              "label": "Alberta"
+            },
+            {
+              "code": "BC",
+              "label": "British Columbia"
+            },
+            {
+              "code": "GH",
+              "label": "Ontario Golden Horseshoe"
+            },
+            {
+              "code": "MB",
+              "label": "Manitoba"
+            },
+            {
+              "code": "NB",
+              "label": "New Brunswick"
+            },
+            {
+              "code": "NL",
+              "label": "Newfoundland and Labrador"
+            },
+            {
+              "code": "NS",
+              "label": "Nova Scotia"
+            },
+            {
+              "code": "ONE",
+              "label": "Ontario East"
+            },
+            {
+              "code": "ONN",
+              "label": "Ontario North"
+            },
+            {
+              "code": "ONS",
+              "label": "Ontario South"
+            },
+            {
+              "code": "PE",
+              "label": "Prince Edward Island"
+            },
+            {
+              "code": "QC",
+              "label": "Quebec"
+            },
+            {
+              "code": "SK",
+              "label": "Saskatchewan"
+            },
+            {
+              "code": "TER",
+              "label": "Territories"
+            }
+          ]
+        }
+      ],
+      "exchange": {
+        "name": "sweepstakes",
+        "fields": [
+          {
+            "key": "NR",
+            "label": "",
+            "required": true,
+            "adif": {
+              "rcvd": "SRX",
+              "sent": "STX"
+            },
+            "source": "serial",
+            "kind": {
+              "type": "serial",
+              "scope": "per_contest"
+            }
+          },
+          {
+            "key": "PREC",
+            "label": "",
+            "required": true,
+            "adif": {
+              "rcvd": "",
+              "sent": ""
+            },
+            "source": "derived:precedence",
+            "kind": {
+              "type": "pattern",
+              "re": "^[QABUMS]$"
+            }
+          },
+          {
+            "key": "CALL",
+            "label": "",
+            "required": true,
+            "adif": {
+              "rcvd": "",
+              "sent": ""
+            },
+            "source": "setting:mycall",
+            "kind": {
+              "type": "call"
+            }
+          },
+          {
+            "key": "CK",
+            "label": "",
+            "required": true,
+            "adif": {
+              "rcvd": "",
+              "sent": ""
+            },
+            "source": "setting:contest_check",
+            "kind": {
+              "type": "pattern",
+              "re": "^[0-9]{2}$"
+            }
+          },
+          {
+            "key": "SEC",
+            "label": "",
+            "required": true,
+            "adif": {
+              "rcvd": "ARRL_SECT",
+              "sent": "MY_ARRL_SECT"
+            },
+            "source": "setting:fd_section",
+            "kind": {
+              "type": "enum",
+              "domain": "ss_sections"
+            }
+          }
+        ],
+        "roles": [
+          {
+            "id": "",
+            "selector": {
+              "type": "always"
+            },
+            "sends": [
+              "NR",
+              "PREC",
+              "CALL",
+              "CK",
+              "SEC"
+            ],
+            "receives": [
+              "NR",
+              "PREC",
+              "CALL",
+              "CK",
+              "SEC"
+            ],
+            "constant_sent": [
+              "CK"
+            ]
+          }
+        ]
+      },
+      "bonuses": [],
+      "banned_modes": [],
+      "tempo_fd": false,
+      "assistance": {
+        "spotting_allowed": true,
+        "cluster_allowed": true,
+        "assistance_note_key": ""
+      },
+      "enforcement": "warn",
+      "objectives": []
     }
   ],
   "sections": [

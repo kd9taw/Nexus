@@ -212,32 +212,67 @@ pub fn cabrillo_contest_token(adif_id: &str) -> &str {
     }
 }
 
-/// Does this side of the QSO line supply its own callsign from the exchange?
+/// Does this side's slot list declare a [`Call`](super::spec::FieldKind::Call) slot —
+/// i.e. is this side's callsign ALREADY the QSO line's own callsign column?
 ///
-/// ⭐ **§6.2's derived exception, and the reason it is derived.** A Cabrillo QSO line
-/// is
+/// ⭐ **§6.2's derived exception, with the direction the sponsor's own template gives
+/// it.** A Cabrillo QSO line is
 ///
 /// ```text
 /// QSO: <freq> <mo> <date> <time> <mycall> <my fields…> <theircall> <their fields…> [t]
 /// ```
 ///
 /// — the two callsign columns sit OUTSIDE the exchange and are structural: a writer
-/// that emits only exchange slots loses both callsigns on every contest but
-/// Sweepstakes, and an unsubmittable line is the failure mode. Sweepstakes is the
-/// exception because its exchange CONTAINS a callsign: `sends` is
-/// `[NR, PREC, CALL, CK, SEC]`, so the call is the third column, not the first, and
-/// "the `Call` slot occupies the structural column" would put it in the wrong place.
+/// that emits only exchange slots loses both callsigns on every contest, and an
+/// unsubmittable line is the failure mode. Sweepstakes is the one contest whose ON-AIR
+/// exchange also contains a callsign (SS-Rules v2.1 §4.3: *"Your call sign (the call
+/// sign must be included during the exchange)"*), so without an exception its line
+/// would carry each callsign TWICE — four callsigns on a line that admits two.
 ///
-/// So the exception is read off the slot list rather than declared by a flag: there is
-/// one source of truth and no ruleset can say `Call` in `sends` and `structural
+/// ⚠️ **The exception suppresses the SLOT, not the structural column, and that is a
+/// correction to the design sketch made against ARRL's own published template.** §6.2
+/// assumed the reverse — that the structural column is dropped and the `Call` slot
+/// supplies the callsign "at its own declared position", third of five — and reserved
+/// the question for the batch that read the sponsor. It is read.
+/// <https://www.arrl.org/cabrillo-format-tutorial> (ARRL's own Cabrillo Format &
+/// Tutorial page, read 2026-09-09) publishes a **QSO DATA TEMPLATE** for Sweepstakes
+/// with a lettered legend:
+///
+/// ```text
+/// Guide:A        B     C          D     E     F G H  I  J     K L M  N
+/// QSO: 14000 CW 2009-11-07 2100 W1AW   1 M 38 CT K8MM  1 Q 92 MI
+/// ```
+///
+/// > *"E= Your call. F= Your QSO #. G= Your precedence. H= Your check … I= Your ARRL
+/// > Section. J= The call of the station you worked. K= Their QSO number to you.
+/// > L= Their precedence. M= Their check. N = Their ARRL Section."*
+///
+/// The callsign is column **E**, first of the side — the structural position every
+/// other contest uses — and the exchange columns that follow are serial, precedence,
+/// check, section, with **no callsign among them**. So the `Call` slot's Cabrillo home
+/// IS the structural column, and what the exception removes is the slot's second
+/// appearance. Written the other way round, a Nexus SS entry would read
+/// `… 1 M W1AW 38 CT …` against a template that says `… W1AW 1 M 38 CT …` — the same
+/// two callsigns, in columns the sponsor's parser reads as something else.
+///
+/// The exception is still read off the slot list rather than declared by a flag: there
+/// is one source of truth and no ruleset can say `Call` in `sends` and `structural
 /// callsign` in the same breath.
 pub fn side_declares_call(spec: &super::spec::ExchangeSpec, slots: &[&'static str]) -> bool {
-    slots.iter().any(|k| {
-        matches!(
-            spec.field(k).map(|f| f.kind),
-            Some(super::spec::FieldKind::Call)
-        )
-    })
+    slots.iter().any(|k| is_call_slot(spec, k))
+}
+
+/// Is this ONE slot the exchange's callsign — the slot the QSO line's structural
+/// column already carries, and which must therefore not be written a second time?
+///
+/// The per-slot half of [`side_declares_call`], and the predicate the QSO-line writer
+/// filters on. Both read the same `FieldKind`, so "this side declares a call" and
+/// "this is the column that carries it" cannot come to mean different things.
+pub fn is_call_slot(spec: &super::spec::ExchangeSpec, key: &str) -> bool {
+    matches!(
+        spec.field(key).map(|f| f.kind),
+        Some(super::spec::FieldKind::Call)
+    )
 }
 
 #[cfg(test)]
@@ -248,7 +283,8 @@ mod tests {
     use crate::fieldday::FdEvent;
 
     /// ⭐ **Every shipped contest's Cabrillo `CONTEST:` token, pinned to the value
-    /// verified against the master list on 2026-09-09** — so a later edit that
+    /// verified against the master list on 2026-09-09 (Sweepstakes' two against ARRL's
+    /// own published headers as well)** — so a later edit that
     /// "tidies" one back to a regular-looking `XX-QSO-PARTY` form goes red instead
     /// of shipping.
     ///
@@ -275,6 +311,18 @@ mod tests {
             ("ohqp", "OH-QSO-PARTY", "MRRC-OHQP"),
             ("cqp", "CA-QSO-PARTY", "CA-QSO-PARTY"),
             ("txqp", "TX-QSO-PARTY", "TXQP"),
+            // ⭐ Sweepstakes is the contest where the two registries AGREE, and it is
+            // pinned for that reason: ADIF 3.1.7's CONTEST_ID enumeration lists
+            // ARRL-SS-CW = "ARRL November Sweepstakes (CW)" and ARRL-SS-SSB = "ARRL
+            // November Sweepstakes (Phone)" (adif.org/317/ADIF_317.htm, "updated
+            // 2026-03-22", read 2026-09-09); the WA7BNM master list carries the same
+            // two strings at ids 177 and 178; and ARRL's own cabrillo-format-tutorial
+            // page prints the literal lines "CONTEST: ARRL-SS-CW" and "CONTEST:
+            // ARRL-SS-SSB". So the map must leave both ALONE — a future "tidy" that
+            // added an ARRL-SS-* row here would break the one contest whose two
+            // registries already match.
+            ("arrlss_cw", "ARRL-SS-CW", "ARRL-SS-CW"),
+            ("arrlss_ssb", "ARRL-SS-SSB", "ARRL-SS-SSB"),
         ] {
             let rs = crate::fd_rules::ruleset_by_id(event, crate::fd_rules::CURRENT_RULES_YEAR)
                 .unwrap_or_else(|| panic!("the seed must carry {event}"));

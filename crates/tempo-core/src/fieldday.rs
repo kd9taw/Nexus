@@ -235,6 +235,16 @@ pub struct FieldDayLog {
     /// as an ordered `Vec<String>` rather than by a `(call, band, mode)` tuple — a
     /// mobile in a new county is a new station, and a tuple cannot say so.
     worked: HashSet<Vec<String>>,
+    /// ⭐ **The `constant_sent` warning raised at LOG time** (§6.3) — `Some` once a
+    /// contact has been logged whose sent value for a slot the role declares constant
+    /// disagrees with the log's first row.
+    ///
+    /// It is stored rather than returned because the log path's answer is already
+    /// "logged / dupe" and the guard **warns, never refuses**: the software cannot
+    /// know whether the old rows or the new one carry the typo, so it must not throw
+    /// away a real contact on a guess. The surface reads it and shows it; clearing it
+    /// is the surface's business ([`clear_constant_sent_warning`](Self::clear_constant_sent_warning)).
+    constant_sent_warning: Option<crate::contest::ConstantSentMismatch>,
     /// The next [`LoggedQso::seq`] to stamp. Starts at 1; a journal restore
     /// advances it past every restored seq so a fresh session's rows continue
     /// the per-position monotonic sequence instead of colliding with rows the
@@ -259,6 +269,7 @@ impl FieldDayLog {
             current_submode: String::new(),
             qsos: Vec::new(),
             worked: HashSet::new(),
+            constant_sent_warning: None,
             next_seq: 1,
         }
     }
@@ -306,6 +317,32 @@ impl FieldDayLog {
         self.event = event;
         self.session.event_id = event.code().to_string();
         self.session.contest_id = event.contest_id().to_string();
+    }
+
+    /// The `constant_sent` warning raised at log time, if any (§6.3). `None` until a
+    /// contact contradicts the log's first row.
+    pub fn constant_sent_warning(&self) -> Option<&crate::contest::ConstantSentMismatch> {
+        self.constant_sent_warning.as_ref()
+    }
+
+    /// Dismiss the log-time warning — the surface has shown it.
+    pub fn clear_constant_sent_warning(&mut self) {
+        self.constant_sent_warning = None;
+    }
+
+    /// ⭐ **FIRING SITE 2 of 3 (§6.3): the thorough scan, over the whole log**, with
+    /// the row counts on each side. `None` = this log sends one value per constant slot
+    /// and is one entry as far as that rule goes.
+    ///
+    /// Public because the club host runs it over its own merged rows (site 3) through
+    /// the same function rather than a second walk that could disagree.
+    pub fn constant_sent_scan(&self) -> Option<crate::contest::ConstantSentMismatch> {
+        let spec = self.session.exchange;
+        let first = self.qsos.first()?;
+        crate::contest::constant_sent::scan(
+            crate::contest::role_for(first, spec),
+            self.qsos.iter().map(|q| q.tx.as_slice()),
+        )
     }
 
     /// This log's dupe index, as the ruleset's own ordered keys.
@@ -462,6 +499,19 @@ impl FieldDayLog {
             return false;
         }
         self.worked.insert(key);
+        // ⭐ FIRING SITE 1 of 3 (§6.3): the cheap one, at the moment the operator can
+        // still fix it. O(1) — a rule that says "every row carries the same value" is
+        // fully checked by comparing this row against the first. It WARNS: the contact
+        // below is logged either way.
+        if let Some(first) = self.qsos.first() {
+            if let Some(m) = crate::contest::constant_sent::against_first(
+                crate::contest::role_for(first, self.session.exchange),
+                &first.tx,
+                &tx,
+            ) {
+                self.constant_sent_warning = Some(m);
+            }
+        }
         let seq = self.next_seq;
         self.next_seq += 1;
         self.qsos.push(LoggedQso {
@@ -874,6 +924,17 @@ impl FieldDayLog {
         // first (§6.2). Nothing this build ships is split, so this is always the
         // session's own id — read from the SESSION, which is the only place that can
         // name a contest `FdEvent` has no arm for (see [`Self::ruleset`]).
+        // ⭐ FIRING SITE 2 of 3, at the point of use (§6.3): a log whose rows send two
+        // different values for a slot the sponsor says is constant is NOT one
+        // submittable entry — SS-Rules v2.1 §4.4.2, *"The same Check must be sent
+        // throughout the contest"* — which is the same class of refusal this function
+        // already makes for a mode-split log holding both modes. It refuses to export
+        // SILENTLY; the message names both values and the row counts so the export
+        // dialog can say what to fix. (Logging a contact is never blocked: that is
+        // site 1, which warns.)
+        if let Some(m) = self.constant_sent_scan() {
+            return Err(m.message());
+        }
         let mut classes: Vec<&str> = self.qsos.iter().map(|q| q.mode.as_str()).collect();
         classes.sort_unstable();
         classes.dedup();
@@ -953,29 +1014,33 @@ impl FieldDayLog {
             // every contact made before the change — silently, in the file they submit.
             //
             // ⭐ **The callsign columns are STRUCTURAL — they sit outside the
-            // exchange — with one derived exception per side.** A template of exchange
-            // slots alone loses both callsigns on every contest but Sweepstakes, whose
-            // exchange contains a `Call` slot; that side's structural column is
-            // suppressed and the call rides at its own declared position instead
-            // (§6.2, [`contest::cabrillo::side_declares_call`]). Read off the slot
-            // list, so there is nothing a ruleset can declare inconsistently.
+            // exchange — and a side whose exchange ALSO declares a `Call` slot does not
+            // repeat it.** A template of exchange slots alone loses both callsigns on
+            // every contest, and an unsubmittable line is the failure mode; Sweepstakes
+            // is the one contest whose on-air exchange carries a callsign too, so
+            // without the exception its line would show four. ARRL's own published SS
+            // template puts the callsign in the structural column (`E= Your call`,
+            // `J= The call of the station you worked`) with serial/precedence/check/
+            // section after it, so the slot's Cabrillo home IS that column — see
+            // [`contest::cabrillo::side_declares_call`] for the template and the legend.
+            // Read off the slot list, so there is nothing a ruleset can declare
+            // inconsistently.
             let role = crate::contest::role_for(q, spec);
             let mut cols: Vec<String> = vec![freq, mo.to_string(), date, time];
-            if !crate::contest::side_declares_call(spec, role.sends) {
-                cols.push(self.mycall.clone());
-            }
+            let is_call = |k: &str| crate::contest::is_call_slot(spec, k);
+            cols.push(self.mycall.clone());
             cols.extend(
                 crate::contest::sent_exchange(q, spec)
                     .into_iter()
+                    .filter(|v| !is_call(v.key))
                     .map(|v| v.raw)
                     .filter(|r| !r.is_empty()),
             );
-            if !crate::contest::side_declares_call(spec, role.receives) {
-                cols.push(q.call.clone());
-            }
+            cols.push(q.call.clone());
             cols.extend(
                 role.receives
                     .iter()
+                    .filter(|k| !is_call(k))
                     .map(|k| q.rcvd(k))
                     .filter(|v| !v.is_empty())
                     .map(str::to_string),
@@ -2277,11 +2342,30 @@ mod cabrillo_header_tests {
     /// exactly two, not four.**
     ///
     /// The template a previous draft carried was exchange slots only, which loses
-    /// both callsigns on every contest but Sweepstakes and produces an unsubmittable
-    /// line. Field Day's golden pins the structural columns; this pins the derived
-    /// exception — a side whose slot list declares a `Call` slot supplies the
-    /// callsign from the exchange, at its own declared position, and the structural
-    /// column is suppressed for that side only.
+    /// both callsigns on every contest and produces an unsubmittable line. Field Day's
+    /// golden pins the structural columns; this pins the derived exception — a side
+    /// whose slot list declares a `Call` slot does not write that slot a SECOND time
+    /// among the exchange columns, because the structural column already is it.
+    ///
+    /// ⚠️ **The expected line is ARRL's own published template, and it corrects §6.2.**
+    /// The design sketch assumed the opposite exception (structural column suppressed,
+    /// call third of five) and explicitly reserved the question — *"the one thing this
+    /// walk does not settle is the column order, and it must not"* — for the batch that
+    /// read the sponsor. <https://www.arrl.org/cabrillo-format-tutorial>, ARRL's own
+    /// Cabrillo Format & Tutorial page, read 2026-09-09, publishes a **QSO DATA
+    /// TEMPLATE** for Sweepstakes with a lettered legend:
+    ///
+    /// ```text
+    /// QSO: 14000 CW 2009-11-07 2100 W1AW   1 M 38 CT K8MM   1 Q 92 MI
+    /// ```
+    /// > *"E= Your call. F= Your QSO #. G= Your precedence. H= Your check (the last two
+    /// > numbers of the year you were first licensed). I= Your ARRL Section. J= The call
+    /// > of the station you worked. K= Their QSO number to you. L= Their precedence.
+    /// > M= Their check. N = Their ARRL Section."*
+    ///
+    /// The callsign is column **E** — first of the side, the structural position every
+    /// other contest uses — and serial, precedence, check and section follow it with no
+    /// callsign among them. The line below is that shape, contact for contact.
     #[test]
     fn a_sweepstakes_line_carries_each_callsign_exactly_once() {
         let mut session = ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI");
@@ -2314,9 +2398,10 @@ mod cabrillo_header_tests {
             .find(|l| l.starts_with("QSO:"))
             .expect("one QSO line");
         assert_eq!(
-            line, "QSO: 14000 CW 2026-06-27 1805 1 A W9XYZ 74 WI 12 A K2DEF 71 CT",
-            "the call is the THIRD column of each side, not a structural column \
-             hoisted in front of it"
+            line, "QSO: 14000 CW 2026-06-27 1805 W9XYZ 1 A 74 WI K2DEF 12 A 71 CT",
+            "ARRL's own template: <your call> <NR> <PREC> <CK> <SEC> <their call> \
+             <NR> <PREC> <CK> <SEC> — the CALL slot is the structural column and is \
+             not repeated inside the exchange"
         );
         // §6.2's own control, in its own words: exactly two callsign occurrences.
         assert_eq!(line.matches("W9XYZ").count(), 1, "{line}");

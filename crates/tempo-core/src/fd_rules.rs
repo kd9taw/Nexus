@@ -765,7 +765,22 @@ pub const SENT_SLOT_SETTINGS: &[&str] = &[
     "contest_cq_zone",
     "contest_itu_zone",
     "contest_power",
-    // Identity, long shipped: ARRL VHF sends the operator's own grid.
+    // New in batch 9. ⚠️ §11.9 said Sweepstakes needed NO new settings; that held for
+    // the STATION data (`contest_check` and the `fd_section` ruling landed in batch 8)
+    // and not for the entry category. §6.1's header table sources `PREC` from "the
+    // `CATEGORY-*` picker", and batch 8 shipped exactly one of the four
+    // (`contest_category_operator`); the other three are what separate Q from A from B
+    // from U from S, and without them a Sweepstakes entrant transmits a category
+    // nobody declared on every contact of a 24-hour contest.
+    "contest_category_operator",
+    "contest_category_power",
+    "contest_category_assisted",
+    "contest_category_station",
+    // Identity, long shipped: ARRL VHF sends the operator's own grid, and Sweepstakes
+    // sends the operator's own CALL — SS-Rules v2.1 §4.3, *"the call sign must be
+    // included during the exchange"*, the one contest in the researched set where the
+    // callsign is an exchange slot rather than only the QSO line's own column.
+    "mycall",
     "mygrid",
 ];
 
@@ -782,6 +797,19 @@ const SENT_SLOT_DERIVATIONS: &[(&str, &[&str])] = &[
     // §3.4: "QTH (county / state / DX) → contest_qth_county, contest_qth_state —
     // this is `my_location` (§3)". One slot, two settings, chosen by role.
     ("my_location", &["contest_qth_county", "contest_qth_state"]),
+    // §6.3's `PREC`: Sweepstakes' precedence letter is the entry's declared category
+    // restated (SS-Rules v2.1 §4.2), so it is derived from the four `CATEGORY-*` axes
+    // and never typed into the exchange. All four inputs are settings this build
+    // carries, which is what keeps `derived:` from being a place to hide a missing one.
+    (
+        "precedence",
+        &[
+            "contest_category_operator",
+            "contest_category_power",
+            "contest_category_assisted",
+            "contest_category_station",
+        ],
+    ),
 ];
 
 /// Is `s` a source this build can honour for a slot some role sends?
@@ -3593,8 +3621,8 @@ mod tests {
         let b = build(parse_spec(&twice).expect("and parses again after a round trip"));
         assert_eq!(
             a.rulesets.len(),
-            6,
-            "two Field Day events + four QSO parties"
+            8,
+            "two Field Day events + four QSO parties + both Sweepstakes weekends"
         );
         assert_eq!(a.rulesets.len(), b.rulesets.len());
         for (x, y) in a.rulesets.iter().zip(b.rulesets) {
