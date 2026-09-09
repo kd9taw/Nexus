@@ -142,6 +142,59 @@ pub fn want_voice_mic(recording_active: bool, voice_mic_device: &str) -> bool {
     recording_active && !voice_mic_device.trim().is_empty()
 }
 
+/// Does a LIVE MIC want the second input stream this tick?
+///
+/// `may_stream` is [`tempo_app::Engine::live_mic_may_stream`] — already the whole safety
+/// question (PTT held, TX enabled, in privilege, under the hard ceiling), recomputed every
+/// tick. This adds only the configuration half: a live mic must actually be chosen. The rig's
+/// own mic is the default and streams nothing from this computer.
+///
+/// Split out as a pure function for the same reason as [`want_voice_mic`]: the decision is
+/// then testable without a device, a rig, or a running loop.
+pub fn want_live_mic(may_stream: bool, live_mic_device: &str) -> bool {
+    may_stream && !live_mic_device.trim().is_empty()
+}
+
+/// WHO OWNS THE SINGLE SECOND-INPUT-STREAM SLOT this tick.
+///
+/// There is one transient capture stream ([`AudioBackend::set_voice_mic`]) and two claimants:
+/// a voice-message RECORDING, and a LIVE MIC that is on the air. They cannot both have it.
+///
+/// **The live mic wins, and the asymmetry is deliberate.** If a recording took the slot in the
+/// middle of an over, the operator's voice would stop reaching the air while PTT stayed keyed —
+/// a dead carrier, which is the one failure the operator cannot hear happening. A spoiled
+/// recording is noticed immediately and can simply be made again. Losing the recording is
+/// recoverable; transmitting silence without knowing is not.
+///
+/// In practice the two do not overlap: recording a voice message is offline preparation and
+/// holding PTT is not. This function exists so that the case is DECIDED rather than left to
+/// whichever block happens to run first in the loop.
+pub fn second_mic_owner(
+    recording_active: bool,
+    voice_mic_device: &str,
+    live_may_stream: bool,
+    live_mic_device: &str,
+) -> SecondMic {
+    if want_live_mic(live_may_stream, live_mic_device) {
+        SecondMic::Live
+    } else if want_voice_mic(recording_active, voice_mic_device) {
+        SecondMic::Recording
+    } else {
+        SecondMic::None
+    }
+}
+
+/// The claimant on the one transient capture stream. See [`second_mic_owner`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SecondMic {
+    /// Nobody: the slot stays closed and the shared tap is the only input.
+    None,
+    /// A voice-message recording is capturing the operator, off the air.
+    Recording,
+    /// A live mic is on the air right now.
+    Live,
+}
+
 /// In-memory backend for tests: serves scripted capture chunks and records every
 /// sample handed to `play`.
 #[derive(Default)]
@@ -251,5 +304,75 @@ mod tests {
             "whitespace-only device → shared input"
         );
         assert!(!want_voice_mic(false, ""));
+    }
+}
+
+#[cfg(test)]
+mod second_mic_tests {
+    use super::{second_mic_owner, want_live_mic, SecondMic};
+
+    // THE CONTROL FOR EVERY CASE BELOW. `want_live_mic` is an AND of two independent
+    // conditions, so a test that only ever passes both cannot tell a working gate from
+    // `fn want_live_mic(..) -> bool { true }`. Each half is shown to refuse on its own.
+    #[test]
+    fn a_live_mic_needs_both_the_safety_gate_and_a_chosen_device() {
+        assert!(
+            want_live_mic(true, "USB Mic"),
+            "both satisfied — must stream"
+        );
+        assert!(
+            !want_live_mic(false, "USB Mic"),
+            "the engine gate said no (PTT up / TX off / out of privilege / over the ceiling); \
+             a chosen device must not override it"
+        );
+        assert!(
+            !want_live_mic(true, ""),
+            "no live mic chosen — the rig's own mic is the default and streams nothing"
+        );
+        assert!(
+            !want_live_mic(true, "   "),
+            "whitespace is not a device name; it must read as 'not chosen', not as a device"
+        );
+    }
+
+    #[test]
+    fn nobody_wants_the_slot_when_neither_is_configured() {
+        assert_eq!(
+            second_mic_owner(false, "", false, ""),
+            SecondMic::None,
+            "idle: the slot stays closed and the shared tap is the only input"
+        );
+    }
+
+    #[test]
+    fn a_recording_takes_the_slot_when_no_live_mic_is_on_the_air() {
+        assert_eq!(
+            second_mic_owner(true, "USB Mic", false, "USB Mic"),
+            SecondMic::Recording,
+            "PTT is up, so the live mic is not streaming and the recording may have the slot"
+        );
+    }
+
+    #[test]
+    fn the_live_mic_takes_the_slot_from_a_recording_while_it_is_on_the_air() {
+        // The asymmetry this whole enum exists for. Losing the recording is recoverable;
+        // a dead carrier — PTT keyed with the operator's voice going nowhere — is the one
+        // failure the operator cannot hear, so the on-air claimant wins.
+        assert_eq!(
+            second_mic_owner(true, "Rec Mic", true, "Live Mic"),
+            SecondMic::Live,
+            "both claim it while transmitting: the on-air path must win"
+        );
+    }
+
+    #[test]
+    fn a_recording_does_not_lose_the_slot_to_a_live_mic_that_is_only_configured() {
+        // Configured but not keying is the ordinary state of a station with a live mic set
+        // up. It must not starve recordings for the rest of time.
+        assert_eq!(
+            second_mic_owner(true, "Rec Mic", false, "Live Mic"),
+            SecondMic::Recording,
+            "a live mic that is not on the air has no claim at all"
+        );
     }
 }

@@ -654,6 +654,11 @@ export function radioPatch(s: Partial<RadioProfilePatch>): RadioProfilePatch {
     sstvHoldDataSubmode: s.sstvHoldDataSubmode ?? false,
     audioIn: s.audioIn ?? '',
     audioOut: s.audioOut ?? '',
+    // ⚠️ PER-RADIO, and seeded here for the same reason `sstvHoldDataSubmode` above is. The mic
+    // pill persists this through the narrow `setLiveMic` setter, but Save rebuilds the whole
+    // patch from this form: leaving it out blanks the operator's chosen microphone the next
+    // time they touch Settings, silently. Default '' is the rig's own mic.
+    liveMicDevice: s.liveMicDevice ?? '',
     txLevel: s.txLevel ?? 1,
     rxGain: s.rxGain ?? 1,
     rotatorModel: s.rotatorModel ?? 0,

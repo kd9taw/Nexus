@@ -173,6 +173,14 @@ describe('the Phone PTT button tells the operator WHICH gate stopped him (#81)',
     })
   })
 
+  // NOT TESTED HERE, DELIBERATELY: the button going on being styled as keyed after the rig has
+  // unkeyed itself (TX off mid-over, the dial leaving privilege, the watchdog, Stop TX, HaltTx).
+  // Two tests for it existed on 2026-08-28 and went with the fix they pinned: reconciling from
+  // `txEnabled`/`txAllowed` clears `keyed` on a transient bad CAT read, which made hands-free
+  // Lock look like it dropped the key after a few seconds. The cockpit comment records why the
+  // real fix needs the engine's manual-PTT state on the snapshot, which is a surface decision
+  // rather than something to patch here. A test pinning the wrong fix is worse than no test.
+
   it('state 3 — not permitted: the licence lock is unchanged and stays distinct', () => {
     renderPhone({ txAllowed: false })
     const b = ptt()

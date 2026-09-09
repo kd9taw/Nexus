@@ -3372,6 +3372,11 @@ export interface RoutingRule {
 export interface RadioProfile {
   id: number
   name: string
+  /** Live microphone device NAME for this radio. "" (default) = the rig's own mic, which is
+   *  what ships and what most stations want. Per radio, exactly like `audioIn`/`audioOut`: a
+   *  boom mic on one rig and a headset on another are different answers. A name, never an
+   *  index — indices move when a device is replugged. */
+  liveMicDevice?: string
   enabled: boolean
   pttMethod: string
   rigModel: number

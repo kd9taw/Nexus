@@ -5,6 +5,36 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Phone: talk through a computer microphone, beside the rig's own mic.** Pick the microphone
+  Nexus transmits with from the mic pill in the PTT row — a headset, a desk condenser, whatever is
+  on the machine — and it is streamed to the transmitter for exactly as long as you hold PTT. It is
+  **opt-in and per radio**: the rig's own microphone stays the default and stays selected until you
+  choose otherwise, and each radio remembers its own answer, so a shack with two rigs does not have
+  to agree.
+
+  On some radios this is not a convenience but the only way to work phone through Nexus at all. An
+  FT-847 wires the rear-port PTT and the front fist mic to be mutually exclusive: key it over CAT
+  and the mic goes dead, and the CAT keying has to be released before the mic works again. Any rig
+  wired that way had no path here before.
+
+  Every transmit guard the app already had still holds, and it keys nothing on its own. Audio flows
+  only while the gate says it may, and the gate is asked BEFORE any audio moves, never after — a
+  stop path that is trusted to end a transmission is how room audio reaches the air. Releasing PTT
+  closes the stream and flushes the output ring in the same breath, so nothing tails off after the
+  unkey. The hard ceiling is the same number RTTY's continuous transmit uses, deliberately, so the
+  two open-ended transmissions in the app cannot drift apart, and nothing you do at the keyboard can
+  extend it: a jammed foot switch or a pointer capture that never released is indistinguishable
+  from a long over except by the clock. The receive monitor already goes silent while you are keyed,
+  which is what makes a computer mic and computer speakers safe in the same room. The rig's own
+  receive codec is not offered in the picker at all.
+
+  One capture stream, two possible claimants — this and QSO recording. The live mic wins, because a
+  recording spoiled is recoverable and a dead carrier the operator cannot hear is not.
+
 ## [1.11.1] — 2026-09-08
 
 > **There is no 1.11.0 release.** The first beta of this work shipped as `v1.11.0-beta.2`

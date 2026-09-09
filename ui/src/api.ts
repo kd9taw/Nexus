@@ -1594,6 +1594,26 @@ export async function setTxLevel(level: number): Promise<AppSnapshot> {
 }
 
 /** Set the RX capture gain (≥1.0 multiplier on received audio before decode). Returns the snapshot. */
+/**
+ * Set the headphone monitor: whether receive audio plays on this computer, on which device, and
+ * how loud. `enabled: false` = listening on the RIG, which is the default and how Nexus ships.
+ *
+ * One call for the trio because the PTT row's output pill changes them together, and because a
+ * cockpit control must not push a whole Settings back over the engine's copy.
+ */
+/** Choose the live microphone for the ACTIVE radio. `""` = the rig's own mic (the default). */
+export async function setLiveMic(device: string): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_live_mic', { device })
+}
+
+export async function setMonitor(
+  enabled: boolean,
+  device: string,
+  level: number,
+): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_monitor', { enabled, device, level })
+}
+
 export async function setRxGain(gain: number): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_rx_gain', { gain })
 }
@@ -1676,6 +1696,12 @@ export interface RadioProfilePatch {
   sstvHoldDataSubmode: boolean
   audioIn: string
   audioOut: string
+  /** The LIVE MICROPHONE this radio transmits with, or '' for the rig's own mic. Per radio, so
+   *  it must ride the patch — a per-radio field missing here is silently dropped on Save, which
+   *  is the 2026-08-17 Flex-three data loss exactly. The pill writes it through the narrow
+   *  `setLiveMic` setter, but the Settings form's Save rebuilds the WHOLE patch, so an absence
+   *  here blanks whatever the pill stored. */
+  liveMicDevice: string
   txLevel: number
   rxGain: number
   rotatorModel: number

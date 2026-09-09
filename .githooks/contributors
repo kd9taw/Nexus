@@ -43,3 +43,19 @@ g0fqb1@gmail.com
 # PR #177 — the eQSL InBox preamble check (#176): found the failing payload, diagnosed the
 # prefix test, and wrote the fix
 69276965+KR8MER@users.noreply.github.com
+
+# GitHub's own web-UI identity. NOT a person: this is the COMMITTER git stamps on a merge made
+# from the browser's "Merge pull request" button, so it is on every one of this repo's own merge
+# commits — including the merges of #147, #186, #256 and #257.
+#
+# WHY A FORK NEEDS IT. Check 3 ranges over `$lsha --not --remotes=origin`, so any commit not yet
+# on the fork's remote counts as outgoing — upstream's merge commits included, the moment a
+# topic branch merges upstream/main forward. Without this line a fork can never push a branch
+# that has been brought up to date, and syncing the fork's own main hits the identical wall,
+# so there is no route around it.
+#
+# WHAT IT DOES NOT ADMIT. Author and committer are checked SEPARATELY against this list, so this
+# buys nothing for an author line: a commit authored by an unlisted identity still refuses the
+# push, and the maintainer's private identity is still denied first, before this file is read.
+# The address is already public in this repo's commit metadata.
+noreply@github.com

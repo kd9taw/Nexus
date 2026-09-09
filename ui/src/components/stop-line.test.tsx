@@ -234,6 +234,10 @@ vi.mock('../api', async (importOriginal) => {
     // Hand-kept mock: an export CwCockpit calls but this list omits makes it THROW ON MOUNT,
     // which reads as a behaviour regression rather than the stale mock it actually is.
     getCatCwUnprovenRigModels: vi.fn(async () => []),
+    // The PTT row's audio pills read this ON MOUNT and index .input/.output; the auto-stub
+    // above returns {} for every function, so without this override the pills throw inside
+    // an effect and take the row carrying PTT down with them.
+    getAudioDevices: vi.fn(async () => ({ input: [], output: [] })),
     setPtt: vi.fn(async () => {}),
     setRfPower: vi.fn(async () => {}),
     setMicGain: vi.fn(async () => {}),

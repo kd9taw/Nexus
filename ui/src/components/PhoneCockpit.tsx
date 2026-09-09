@@ -9,10 +9,11 @@
 // reading, split offset, filter and scope width, reference level, percentage, band and mode
 // name and the rig's own group plates (DSP, NR, AGC, BW, REC, SPLIT) are invariant tokens
 // and stay in the code.
+import { PttAudioPills } from './PttAudioPills'
 import { useEffect, useState, useRef } from 'react'
 import { PHONE_PANEL_IDS, type PhonePanelId, type PanelLayoutApi } from '../features/panelState'
 import { panelHost, NO_DSP_FUNCS_REASON, NO_DSP_LEVELS_REASON } from '../features/panelHost'
-import type { AppSnapshot, FieldDayStatus, NeedTag, SpotRow } from '../types'
+import type { AppSnapshot, AudioDevices, FieldDayStatus, NeedTag, Settings, SpotRow } from '../types'
 import { PhoneScope } from './PhoneScope'
 import { TxMeters, TX_METERS_WHEN } from './TxMeters'
 import { BandStrip } from './BandStrip'
@@ -30,7 +31,11 @@ import { LogEntry } from './LogEntry'
 import {
   setPtt,
   setRfPower,
+  setLiveMic,
   setMicGain,
+  setMonitor,
+  getSettings,
+  getAudioDevices,
   setNrLevel,
   setCompLevel,
   setNotchFreq,
@@ -466,6 +471,27 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
     void setScopeRef(tenths)
   }
   const [keyed, setKeyed] = useState(false)
+
+  // ⚠️ THE STALE "ON AIR" BUTTON IS A KNOWN, UNFIXED BUG — and the obvious fix is WRONG.
+  //
+  // `keyed` is local state set on the click; the engine re-reads `on && tx_enabled &&
+  // tx_allowed()` every tick, so TX off, the dial leaving privilege, the watchdog, Stop TX and a
+  // UDP HaltTx all unkey the rig without telling this cockpit, and the button goes on being
+  // styled as transmitting. Reported from the bench 2026-08-28.
+  //
+  // Reconciling it from `snap.radio.txEnabled && snap.radio.txAllowed` was tried and REVERTED the
+  // same day: `tx_allowed()` is recomputed from the dial, the dial comes from CAT polling, and a
+  // momentary bad read makes it briefly false. The effect took that transient as authoritative
+  // and cleared `keyed` mid-over, so hands-free Lock appeared to drop the key after a few
+  // seconds. Trading a cosmetic lie for a transmit control that looks like it failed is the
+  // wrong trade.
+  //
+  // What it actually needs is the engine's OWN manual-PTT state, which the snapshot does not
+  // carry — deliberately (see `dto.rs`, "manual PTT is DELIBERATELY not" surfaced). So the fix is
+  // a snapshot-surface decision, not a cockpit patch, and it is left undone rather than done
+  // badly. The engine-side half of the same bench finding IS fixed: disarming TX now drops a
+  // held PTT instead of letting a re-arm re-key it.
+
   /** Mirrors `keyed` for the window key handlers, which capture their closure once per
    *  effect run — the release must act on what is TRUE when it fires, not on what was true
    *  when it was bound. See the space-release comment below. */
@@ -537,6 +563,41 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
       .then((s) => onSnap?.(s))
       .catch(() => {})
   }
+  // The PTT row's audio pills need the SETTINGS (the monitor trio, and the rig's TX device so the
+  // picker can refuse it) and the DEVICE LISTS. Fetched here rather than threaded through App:
+  // this is the only cockpit that shows them today, and it remounts on nav anyway.
+  const [audioSettings, setAudioSettings] = useState<Settings | null>(null)
+  const [audioDevices, setAudioDevices] = useState<AudioDevices | null>(null)
+  useEffect(() => {
+    let alive = true
+    // WRAPPED, and this is not defensive habit. This effect runs inside the cockpit that owns
+    // Phone's stop line: a throw here unmounts the row carrying PTT, so the operator loses the
+    // control that stops a transmission because a device enumeration failed. The pills are worth
+    // having and they are not worth that, so every failure here degrades to "no pills" and the
+    // rest of the cockpit is untouched. (`.catch` alone is not enough — a verb that is missing
+    // entirely throws synchronously, which is how this was found.)
+    const load = async () => {
+      try {
+        const v = await getSettings()
+        if (alive) setAudioSettings(v)
+      } catch {
+        /* pills stay inert */
+      }
+      try {
+        // Enumerated once on mount. A stale list costs the operator one reopen; polling it costs
+        // every operator a CoreAudio round trip on a timer.
+        const d = await getAudioDevices()
+        if (alive) setAudioDevices(d)
+      } catch {
+        /* pills stay inert */
+      }
+    }
+    void load()
+    return () => {
+      alive = false
+    }
+  }, [])
+
   const [lock, setLock] = useState(false) // hands-free PTT (toggle instead of hold)
   const [recBusy, setRecBusy] = useState(false) // in-flight guard for the record toggle
   const [spotOpen, setSpotOpen] = useState(false) // spot-to-cluster popup
@@ -1583,7 +1644,8 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
           i18n PARTIAL list. PTT is Phone's stop-line census (features/panelState.ts) and
           components/stop-line.test.tsx finds it by ACCESSIBLE NAME, matching all four of the
           labels below; its tooltip IS that control's description, naming the switch that is
-          down and the mic the operator talks on. The Lock toggle beside it decides whether
+          down and the mic the operator talks on (the audio pills sit to its RIGHT, before Lock).
+          The Lock toggle decides whether
           the window's Space keyup is a PTT release at all — the census's fourth holder — and
           the Field Day chip shares the row. All of it moves in the transmit-path batch, with
           the stop-line sweeps re-run. The TOASTS this row's handler raises did move (see
@@ -1647,6 +1709,59 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
                 ? 'ON AIR — release to stop'
                 : 'PUSH TO TALK'}
         </button>
+        <PttAudioPills
+          settings={audioSettings}
+          devices={audioDevices}
+          micGain={snap.radio.micGain ?? null}
+          onMicGain={(g) => {
+            void setMicGain(g)
+              .then((sn) => onSnap?.(sn))
+              .catch((e) => pushToast(String(e), 'error'))
+          }}
+          onMicSource={(device) => {
+            // Narrow setter (#54): the pill persists ONE per-radio field. It must never push a
+            // whole Settings — a control in the PTT row that round-trips the form can revert
+            // anything changed elsewhere since that form was read.
+            void setLiveMic(device)
+              .then((sn) => {
+                onSnap?.(sn)
+                // Mirror it locally so the tag updates on the click rather than on the next
+                // snapshot: `audioSettings` is what `micSourceOf` reads.
+                setAudioSettings((prev) =>
+                  prev
+                    ? {
+                        ...prev,
+                        radios: (prev.radios ?? []).map((r) =>
+                          r.id === prev.activeRadio ? { ...r, liveMicDevice: device } : r,
+                        ),
+                      }
+                    : prev,
+                )
+              })
+              .catch((e) => pushToast(String(e), 'error'))
+          }}
+          onOutput={(enabled, device) => {
+            void setMonitor(enabled, device, audioSettings?.monitorLevel ?? 0.5)
+              .then((sn) => {
+                onSnap?.(sn)
+                setAudioSettings((p) =>
+                  p ? { ...p, monitorEnabled: enabled, monitorDevice: device } : p,
+                )
+              })
+              .catch((e) => pushToast(String(e), 'error'))
+          }}
+          onVolume={(level) => {
+            // Optimistic locally so the slider tracks the drag; the engine remains the record.
+            setAudioSettings((p) => (p ? { ...p, monitorLevel: level } : p))
+            void setMonitor(
+              audioSettings?.monitorEnabled ?? false,
+              audioSettings?.monitorDevice ?? '',
+              level,
+            )
+              .then((sn) => onSnap?.(sn))
+              .catch((e) => pushToast(String(e), 'error'))
+          }}
+        />
         <label className="ph-lock" title="Hands-free: click PTT once to key, again to unkey">
           <input type="checkbox" checked={lock} onChange={(e) => setLock(e.target.checked)} />
           <span>Lock</span>

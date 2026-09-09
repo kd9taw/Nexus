@@ -2744,6 +2744,17 @@ pub struct RadioProfile {
     /// [`Settings::flex_native_audio`]). Per-radio, as above.
     #[serde(default)]
     pub flex_native_audio: bool,
+    /// Which microphone THIS radio transmits with on phone. Empty = the rig's own mic, which is
+    /// the default and what every station does today.
+    ///
+    /// PER RADIO because it is a wiring fact about a station position, exactly as `audio_in` and
+    /// `audio_out` are: a boom mic on one rig and a headset on another are different answers, and
+    /// one global setting forces one of them to be wrong.
+    ///
+    /// A NAME, not an index — indices are assigned by enumeration order and move when anything is
+    /// replugged, which is the trap `usbtopo` exists to work around elsewhere.
+    #[serde(default)]
+    pub live_mic_device: String,
 }
 
 /// The editable CAT/audio/PTT/rotator/native subset of a [`RadioProfile`], sent from the Settings
@@ -2821,6 +2832,11 @@ pub struct RadioProfilePatch {
     /// See `RadioProfile::flex_native_audio`.
     #[serde(default)]
     pub flex_native_audio: bool,
+    /// See [`RadioProfile::live_mic_device`]. Carried on the patch because it is a per-radio
+    /// choice the settings form edits, and `apply_to` must copy it or the edit saves nothing —
+    /// which `radio_profile_patch_assigns_every_field_it_carries` enforces.
+    #[serde(default)]
+    pub live_mic_device: String,
 }
 
 impl Settings {
@@ -2879,6 +2895,7 @@ impl RadioProfilePatch {
             p.yaesu_fix_starts = v.clone();
         }
         p.flex_native_audio = self.flex_native_audio;
+        p.live_mic_device = self.live_mic_device;
     }
 }
 
@@ -2977,6 +2994,7 @@ impl Default for RadioProfile {
             yaesu_rf_scope: false,
             yaesu_fix_starts: Default::default(),
             flex_native_audio: false,
+            live_mic_device: String::new(),
         }
     }
 }
@@ -3739,6 +3757,7 @@ impl Settings {
             yaesu_rf_scope: false,
             yaesu_fix_starts: Default::default(),
             flex_native_audio: self.flex_native_audio,
+            live_mic_device: String::new(),
         }
     }
 
@@ -4744,6 +4763,7 @@ mod tests {
                 14.150_f64,
             )])),
             flex_native_audio: true,
+            live_mic_device: String::new(),
         };
 
         let sent = serde_json::to_value(&patch).expect("patch serializes");
@@ -4876,6 +4896,7 @@ mod tests {
             yaesu_rf_scope: Some(false),
             yaesu_fix_starts: None,
             flex_native_audio: false,
+            live_mic_device: String::new(),
         })
         .expect("patch serializes");
         let patch_keys: Vec<&str> = patch
@@ -5028,6 +5049,9 @@ mod tests {
             // and calls wiring a writer a follow-up. This guard exists to force exactly that look.
             yaesu_rf_scope: None,
             yaesu_fix_starts: Default::default(),
+            // Added by the live-mic branch. Its UI counterpart is `liveMicDevice?` in types.ts —
+            // checked when this line was added, which is what this guard is for.
+            live_mic_device: String::new(),
         })
         .expect("patch serializes");
         let rust_keys: Vec<&str> = rust
@@ -5273,6 +5297,7 @@ mod tests {
             yaesu_rf_scope: Some(p.yaesu_rf_scope),
             yaesu_fix_starts: Some(p.yaesu_fix_starts.clone()),
             flex_native_audio: p.flex_native_audio,
+            live_mic_device: String::new(),
         }
     }
 
