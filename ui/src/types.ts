@@ -1839,6 +1839,28 @@ export interface Ota {
   iota?: string | null
 }
 
+/**
+ * One activation offered by the per-activation export (mirror of the Rust `ActivationDto`).
+ *
+ * The unit is (your park) × (UTC day) × (the callsign you signed) — what POTA credits, and what
+ * its submission filename `CALL@REF-YYYYMMDD.adi` names. `qsos` rides along because POTA needs
+ * ten for a day to count and the operator should see that before uploading, not after.
+ */
+export interface LoggedActivation {
+  /** "POTA" | "SOTA", or null on a record that carried a reference with no program. */
+  program?: string | null
+  /** Your park/summit reference, uppercased ("US-1234"). */
+  reference: string
+  /** 00:00:00 UTC of the activation day, Unix seconds — the export's day selector. */
+  dayStartUnix: number
+  /** The same day as YYYY-MM-DD. */
+  date: string
+  /** The callsign it was worked under, or null when the records carry none. */
+  callsign?: string | null
+  /** Contacts in this activation. */
+  qsos: number
+}
+
 /** Per-source upload status (mirror of the Rust UploadStatusDto). */
 export interface UploadStatus {
   /** "pending" | "accepted" | "duplicate" | "rejected" | "authfail". */

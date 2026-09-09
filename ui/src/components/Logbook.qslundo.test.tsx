@@ -22,6 +22,7 @@ vi.mock('../api', () => {
     getLog: vi.fn(),
     deleteQso: noop(), editQso: noop(), exportGeneralLog: noop(), importAdif: noop(),
     logOperators: vi.fn(() => Promise.resolve([] as string[])), exportLogForOperator: noop(),
+    logActivations: vi.fn(() => Promise.resolve([])), exportLogForActivation: noop(),
     logQso: noop(), purgeLog: noop(), qrzLookup: noop(),
     markQslSent: vi.fn(() => Promise.resolve({})),
     markQslCard: vi.fn(() => Promise.resolve({})),

@@ -21,6 +21,7 @@ import type {
   SstvState,
   ClubLogPushResult,
   Activation,
+  LoggedActivation,
   DetectedRig,
   FdEventBeacon,
   FdMergeReport,
@@ -2914,6 +2915,24 @@ export async function logOperators(): Promise<string[]> {
  *  submit their own log. */
 export async function exportLogForOperator(operator: string): Promise<string> {
   return invoke<string>('export_log_for_operator', { operator })
+}
+
+/** Activations present in the log — your park × UTC day × the callsign you signed, newest
+ *  first. Empty for a station that has never activated, which is how the Logbook decides
+ *  whether to offer the per-activation export at all. */
+export async function logActivations(): Promise<LoggedActivation[]> {
+  return invoke<LoggedActivation[]>('log_activations')
+}
+
+/** ADIF for ONE activation — the file POTA wants: one park, one UTC day, one callsign.
+ *  Takes NO date range on purpose; see the Logbook export area for why an activation
+ *  SUPERSEDES the range instead of intersecting with it. */
+export async function exportLogForActivation(
+  reference: string,
+  dayStartUnix: number,
+  callsign: string | null,
+): Promise<string> {
+  return invoke<string>('export_log_for_activation', { reference, dayStartUnix, callsign })
 }
 
 /** Everything that makes this station THIS station, as one JSON file (#28) — settings plus the

@@ -28,6 +28,9 @@ vi.mock('../api', () => {
     // so a bare vi.fn returning undefined blows up on .then — and mockResolvedValue can still
     // override it per test.
     logOperators: vi.fn(() => Promise.resolve([] as string[])), exportLogForOperator: noop(),
+    // Same contract for the per-activation export: asked for on mount, so it must answer.
+    logActivations: vi.fn(() => Promise.resolve([])), exportLogForActivation: noop(),
+    saveTextToDownloads: noop(),
     logQso: noop(), markQslSent: noop(), purgeLog: noop(), qrzLookup: noop(),
     syncLotwReport: noop(), uploadLotwReport: noop(), qrzPushQso: noop(),
     clublogPushQso: noop(), hrdlogPushQso: noop(),
@@ -428,5 +431,154 @@ describe('the edit form carries a whole callsign', () => {
       await waitFor(() => expect(editQso).toHaveBeenCalled())
       expect(editQso.mock.calls[0][1].call).toBe(call)
     }
+  })
+})
+
+// ⭐ PER-ACTIVATION EXPORT — the file POTA actually asks for.
+//
+// From a real activation (2026-09-09): 17 SSB contacts from one park, all uploaded fine, but the
+// operator could not get an ADIF holding only those 17 — a date range of "today to today" swept
+// in his own non-POTA contacts from earlier the same UTC day, and a second park later the same
+// day had no answer at all. The unit here is (your park) × (UTC day) × (the callsign you signed).
+//
+// These render the REAL Logbook with the five props App.tsx passes it — nothing stubbed but the
+// api/toast module boundaries — because the defect being fixed lives in the wiring between the
+// picker, the export call and the filename, and a stubbed component proves none of it.
+describe('per-activation export', () => {
+  const DAY = Date.UTC(2026, 8, 9) / 1000
+  const MORNING = {
+    program: 'POTA',
+    reference: 'US-1234',
+    dayStartUnix: DAY,
+    date: '2026-09-09',
+    callsign: 'KD9TAW',
+    qsos: 17,
+  }
+  const AFTERNOON = { ...MORNING, reference: 'US-5678', qsos: 4 }
+
+  function mountWith(activations: unknown[]) {
+    ;(api.getLog as ReturnType<typeof vi.fn>).mockResolvedValue(fakeLog(3))
+    ;(api.logOperators as ReturnType<typeof vi.fn>).mockResolvedValue([])
+    ;(api.logActivations as ReturnType<typeof vi.fn>).mockResolvedValue(activations)
+    return render(
+      <Logbook
+        focusCall={null}
+        onConsumeFocusCall={() => {}}
+        defaultBand="20m"
+        defaultFreqMhz={14.074}
+        defaultMode="SSB"
+      />,
+    )
+  }
+
+  const picker = (c: HTMLElement) =>
+    c.querySelector('.log-export-activation') as HTMLSelectElement | null
+  const exportBtn = (c: HTMLElement) =>
+    [...c.querySelectorAll('button')].find((b) =>
+      b.textContent?.includes('Export activation'),
+    ) as HTMLButtonElement | undefined
+
+  it('is not offered to a station that has never activated', async () => {
+    const { container } = mountWith([])
+    await waitFor(() => expect(container.querySelector('.log-scroll > div')).not.toBeNull())
+    expect(picker(container), 'a hunter-only log has no activation to pick').toBeNull()
+    expect(exportBtn(container)).toBeUndefined()
+  })
+
+  it('lists two parks worked in one UTC day as two separate activations', async () => {
+    const { container } = mountWith([MORNING, AFTERNOON])
+    const sel = await waitFor(() => {
+      const s = picker(container)
+      expect(s).not.toBeNull()
+      return s as HTMLSelectElement
+    })
+    // The empty "none" option plus one row per activation — his second question, answered by
+    // the shape of the list rather than by date arithmetic.
+    const options = [...sel.querySelectorAll('option')].map((o) => o.textContent ?? '')
+    expect(options).toHaveLength(3)
+    expect(options[1]).toContain('US-1234')
+    expect(options[1]).toContain('KD9TAW')
+    expect(options[1]).toContain('2026-09-09')
+    expect(options[1]).toContain('17')
+    expect(options[2]).toContain('US-5678')
+  })
+
+  it("shows the count, and flags a park-day short of POTA's ten", async () => {
+    const { container } = mountWith([MORNING, AFTERNOON])
+    const sel = await waitFor(() => {
+      const s = picker(container)
+      expect(s).not.toBeNull()
+      return s as HTMLSelectElement
+    })
+    const options = [...sel.querySelectorAll('option')].map((o) => o.textContent ?? '')
+    // The four-QSO afternoon did not qualify. Not an error — but the operator must see it here,
+    // not discover it after uploading.
+    expect(options[2], 'a short activation is not flagged').toMatch(/under 10/)
+    expect(options[1], 'a qualifying activation must not be flagged').not.toMatch(/under 10/)
+  })
+
+  it("exports the chosen activation under POTA's filename and ignores the date range", async () => {
+    ;(toast.withErrorToast as ReturnType<typeof vi.fn>).mockImplementation((fn: () => unknown) =>
+      fn(),
+    )
+    ;(api.exportLogForActivation as ReturnType<typeof vi.fn>).mockResolvedValue(
+      'Nexus logbook\n<EOH>\n<CALL:5>W9AAA<EOR>\n',
+    )
+    ;(api.saveTextToDownloads as ReturnType<typeof vi.fn>).mockResolvedValue('/dl/x.adi')
+    const { container } = mountWith([MORNING, AFTERNOON])
+    const sel = await waitFor(() => {
+      const s = picker(container)
+      expect(s).not.toBeNull()
+      return s as HTMLSelectElement
+    })
+    // A date range left over from a previous export — the state that produced the bug.
+    const dates = [...container.querySelectorAll('.log-export-date')] as HTMLInputElement[]
+    fireEvent.change(dates[0], { target: { value: '2026-01-01' } })
+    fireEvent.change(dates[1], { target: { value: '2026-12-31' } })
+
+    fireEvent.change(sel, { target: { value: `US-5678|${DAY}|KD9TAW` } })
+    const btn = exportBtn(container) as HTMLButtonElement
+    expect(btn.disabled, 'an activation is chosen; the button must arm').toBe(false)
+    fireEvent.click(btn)
+
+    await waitFor(() =>
+      expect(api.exportLogForActivation).toHaveBeenCalledWith('US-5678', DAY, 'KD9TAW'),
+    )
+    // The range is SUPERSEDED, not intersected: nothing about those two dates reached the call,
+    // and the ranged export was not the path taken.
+    expect(api.exportGeneralLog).not.toHaveBeenCalled()
+    // `callsign@parkNumber-activationDate.adi` — POTA's own convention, so the file is already
+    // named for submission (docs.pota.app submitting_logs, read 2026-09-09).
+    expect(api.saveTextToDownloads).toHaveBeenCalledWith(
+      'KD9TAW@US-5678-20260909.adi',
+      expect.stringContaining('W9AAA'),
+    )
+  })
+
+  it('a portable callsign cannot put a slash in the filename', async () => {
+    ;(toast.withErrorToast as ReturnType<typeof vi.fn>).mockImplementation((fn: () => unknown) =>
+      fn(),
+    )
+    ;(api.exportLogForActivation as ReturnType<typeof vi.fn>).mockResolvedValue('<EOH>\n')
+    ;(api.saveTextToDownloads as ReturnType<typeof vi.fn>).mockResolvedValue('/dl/x.adi')
+    const portable = { ...MORNING, callsign: 'KD9TAW/P' }
+    const { container } = mountWith([portable])
+    const sel = await waitFor(() => {
+      const s = picker(container)
+      expect(s).not.toBeNull()
+      return s as HTMLSelectElement
+    })
+    fireEvent.change(sel, { target: { value: `US-1234|${DAY}|KD9TAW/P` } })
+    fireEvent.click(exportBtn(container) as HTMLButtonElement)
+    // The ADIF still carries the call exactly as logged; only the FILENAME folds the slash,
+    // because no filesystem holds one — and `saveTextToDownloads` reduces to a bare name, so an
+    // unfolded slash would silently truncate the callsign off the front of the file.
+    await waitFor(() =>
+      expect(api.exportLogForActivation).toHaveBeenCalledWith('US-1234', DAY, 'KD9TAW/P'),
+    )
+    expect(api.saveTextToDownloads).toHaveBeenCalledWith(
+      'KD9TAW-P@US-1234-20260909.adi',
+      expect.any(String),
+    )
   })
 })

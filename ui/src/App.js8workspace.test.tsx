@@ -114,6 +114,7 @@ vi.mock('./api', async (importOriginal) => {
     getLicensedBandPlan: vi.fn(async () => []),
     getFdRuleset: vi.fn(async () => null),
     logOperators: vi.fn(async () => []),
+    logActivations: vi.fn(async () => []),
     radioLaunchInfo: vi.fn(async () => ({ showPicker: false })),
     uiStateLoad: vi.fn(async () => ({})),
     uiStateSave: vi.fn(async () => ({})),

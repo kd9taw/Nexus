@@ -603,6 +603,24 @@ export const EN = {
   'logbook.export.perOperator.title': 'One ADIF per operator ({{operators}}) plus the combined log',
   'logbook.export.perOperator.done': 'Exported {{count}} files → Downloads',
 
+  // Per-ACTIVATION export — POTA's unit is a park on a UTC day, not a date range.
+  'logbook.export.activation.label': 'activation',
+  'logbook.export.activation.title':
+    'Pick a park-day to export as the file POTA asks for — one park, one UTC day, one callsign',
+  'logbook.export.activation.none': 'none',
+  // `{{activation}}` is CALLSIGN · PARK REFERENCE · DATE, already joined — wire values, never
+  // translated and never re-punctuated.
+  'logbook.export.activation.option': {
+    one: '{{activation}} · {{count}} QSO',
+    other: '{{activation}} · {{count}} QSOs',
+  },
+  // Appended to the option above when that park-day fell short of what POTA needs to credit an
+  // activation. `{{min}}` is that minimum as a number, interpolated so the rule lives in one place.
+  'logbook.export.activation.short': ' · under {{min}}',
+  'logbook.export.activation.button': 'Export activation',
+  'logbook.export.activation.buttonTitle':
+    'Save the selected activation as an ADIF named the way POTA asks. Ignores the date range — an activation is already one park on one UTC day',
+
   'logbook.lotw.upload.label': 'Upload to LoTW',
   'logbook.lotw.upload.labelCount': 'Upload to LoTW ({{count}})',
   'logbook.lotw.upload.busy': 'Uploading…',

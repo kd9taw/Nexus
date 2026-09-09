@@ -3169,6 +3169,13 @@ button.nb-chip:hover {
   padding: 0 var(--space-2);
   width: 9em;
 }
+/* The per-activation picker sits in the same row. Wider than a date because each option carries
+   callsign · park · date · count, but capped so it can never push its Export button off the row. */
+.log-export-activation {
+  font-size: 12px;
+  padding: 0 var(--space-2);
+  max-width: 22em;
+}
 .log-actions {
   display: inline-flex;
   gap: var(--space-2);

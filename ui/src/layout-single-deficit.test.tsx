@@ -60,6 +60,7 @@ vi.mock('./api', () => {
     setSettings: fn(), exportLog: fn(), openPanelWindow: fn(),
     deleteQso: fn(), editQso: fn(), exportGeneralLog: fn(), importAdif: fn(),
     logOperators: () => Promise.resolve([]), exportLogForOperator: fn(),
+    logActivations: () => Promise.resolve([]), exportLogForActivation: fn(),
     logQso: fn(), markQslSent: fn(), purgeLog: fn(), qrzLookup: fn(),
     syncLotwReport: fn(), uploadLotwReport: fn(), qrzPushQso: fn(),
     clublogPushQso: fn(), hrdlogPushQso: fn(),

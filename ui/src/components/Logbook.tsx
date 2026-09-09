@@ -9,7 +9,7 @@ import { confirmDialog } from '../confirm'
 import { t } from '../i18n'
 import { T } from '../i18n/T'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import type { LoggedQso } from '../types'
+import type { LoggedActivation, LoggedQso } from '../types'
 import { gpuCapableForGlobe } from '../gpu'
 import { SpotDialog } from './SpotDialog'
 
@@ -23,7 +23,9 @@ import {
   editQso,
   exportGeneralLog,
   exportLogForOperator,
+  exportLogForActivation,
   logOperators,
+  logActivations,
   getLog,
   importAdif,
   logQso,
@@ -106,6 +108,46 @@ const LOG_EXAMPLES = {
   parkTheirRef: 'US-1234',
   parkMyRef: 'US-5678',
 } as const
+
+/**
+ * Contacts POTA requires before a park-day counts as an activation: "A successful activation
+ * requires a minimum of 10 QSOs from a park in the designated list within a single UTC day (Zulu
+ * day)" — docs.pota.app/docs/rules.html, read 2026-09-09. Shown, never enforced: a four-contact
+ * afternoon is a real day at a park, and POTA accepts the log either way.
+ */
+const POTA_MIN_QSOS = 10
+
+/** The three fields that identify an activation, as one `<select>` value. */
+function activationKeyOf(a: LoggedActivation): string {
+  return `${a.reference}|${a.dayStartUnix}|${a.callsign ?? ''}`
+}
+
+/**
+ * POTA's own submission filename: `callsign@parkNumber-activationDate.adi`
+ * (docs.pota.app/docs/activator_reference/submitting_logs.html, read 2026-09-09 — their example
+ * is `KA8H@US-1515-20201127.adi`). A correctly named file is half the submission, so this writes
+ * the name POTA documents rather than a Nexus-shaped one.
+ *
+ * Two departures, both forced:
+ * - A portable callsign carries a `/`, and no filesystem holds one — `KD9TAW/P` becomes
+ *   `KD9TAW-P` IN THE FILENAME ONLY. The ADIF inside still carries the call exactly as logged,
+ *   and that copy is the one POTA reads. POTA's documentation does not address portable suffixes
+ *   anywhere (checked 2026-09-09), so nothing here is a guess at a convention that exists.
+ * - A SOTA summit is not a POTA submission, so it gets a plain name instead of POTA's `@` form.
+ *   Naming a summit file under POTA's convention would be a claim about a program POTA does not
+ *   run.
+ */
+function activationFilename(a: LoggedActivation): string {
+  const safe = (v: string) => v.replace(/[^A-Za-z0-9._-]+/g, '-')
+  const call = safe(a.callsign ?? '')
+  const ref = safe(a.reference)
+  const ymd = a.date.replace(/-/g, '')
+  const isPota = (a.program ?? 'POTA').toUpperCase() === 'POTA'
+  if (isPota && call) return `${call}@${ref}-${ymd}.adi`
+  // No callsign stamped on the records (a log imported from before Nexus stamped one), or a
+  // program that is not POTA: name it plainly rather than half-filling POTA's convention.
+  return ['nexus-log', call, ref, ymd].filter(Boolean).join('-') + '.adi'
+}
 
 /** Q-codes and service names printed as labels. Proper nouns and shorthand, not words. */
 const QRZ_LABEL = 'QRZ'
@@ -260,6 +302,26 @@ export function Logbook({
         ),
       )
       .catch(() => {}) // no bridge / older core — just don't offer the split
+  }, [log.length])
+  // Activations present in the log: (your park) × (UTC day) × (the callsign you signed). Same
+  // shape as the operator list above, and loaded the same way — a new activation can only first
+  // appear when the log grows.
+  const [activations, setActivations] = useState<LoggedActivation[]>([])
+  const [activationKey, setActivationKey] = useState('')
+  useEffect(() => {
+    if (log.length === 0) {
+      setActivations((prev) => (prev.length === 0 ? prev : []))
+      return
+    }
+    void logActivations()
+      .then((next) =>
+        setActivations((prev) =>
+          prev.length === next.length && prev.every((v, i) => activationKeyOf(v) === activationKeyOf(next[i]) && v.qsos === next[i].qsos)
+            ? prev
+            : next,
+        ),
+      )
+      .catch(() => {}) // no bridge / older core — just don't offer the per-activation export
   }, [log.length])
   const [qrzBusy, setQrzBusy] = useState(false)
   const [uploading, setUploading] = useState(false)
@@ -973,6 +1035,69 @@ export function Logbook({
           >
             {t('logbook.export.adif.label')}
           </button>
+          {/* Per-activation export — the file POTA actually asks for. The date range above
+              cannot produce it: an activator who worked a park in the afternoon and ragchewed
+              from home in the morning has both in one UTC day, and "today to today" exports
+              both (2026-09-09 report). The unit here is (your park) × (UTC day) × (the callsign
+              you signed), which is what POTA credits and what its filename names — so two parks
+              in one day are simply two rows and two files.
+
+              ⚠️ Choosing an activation SUPERSEDES the date range; it does not intersect with it.
+              An activation is already a bounded thing, so an intersection could only ever make
+              the file SHORTER than the activation — silently, and after upload. That is the same
+              ruling the per-operator export below already carries, for the same reason. Shown
+              only when the log holds an activation at all: for a hunter-only station this button
+              has nothing to offer. */}
+          {activations.length > 0 && (
+            <>
+              <label className="log-export-range" title={t('logbook.export.activation.title')}>
+                <span>{t('logbook.export.activation.label')}</span>
+                <select
+                  className="settings-input log-export-activation"
+                  value={activationKey}
+                  onChange={(e) => setActivationKey(e.target.value)}
+                >
+                  <option value="">{t('logbook.export.activation.none')}</option>
+                  {activations.map((a) => (
+                    <option key={activationKeyOf(a)} value={activationKeyOf(a)}>
+                      {t('logbook.export.activation.option', {
+                        // Callsign · park · date — the filename's own three fields, in the order
+                        // POTA writes them, so the operator can see which file they will get.
+                        activation: [a.callsign, a.reference, a.date].filter(Boolean).join(' · '),
+                        count: a.qsos,
+                      }) +
+                        (a.qsos < POTA_MIN_QSOS
+                          ? t('logbook.export.activation.short', { min: POTA_MIN_QSOS })
+                          : '')}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button
+                type="button"
+                className="export-btn"
+                disabled={!activationKey}
+                onClick={() =>
+                  withErrorToast(async () => {
+                    const a = activations.find((x) => activationKeyOf(x) === activationKey)
+                    if (!a) return
+                    const text = await exportLogForActivation(
+                      a.reference,
+                      a.dayStartUnix,
+                      a.callsign ?? null,
+                    )
+                    // Count what the file actually holds, as the ranged export does.
+                    const n = (text.match(/<eor>/gi) ?? []).length
+                    const path = await saveTextToDownloads(activationFilename(a), text)
+                    pushToast(t('logbook.export.done', { count: n, path }), 'success')
+                  }, t('logbook.export.failed'))
+                }
+                title={t('logbook.export.activation.buttonTitle')}
+              >
+                {t('logbook.export.activation.button')}
+              </button>
+            </>
+          )}
           {/* Per-operator export (#25). Shown only when the log actually HAS more than one
               operator in it — for the single-op station that is nearly everyone, a button that
               would produce exactly one file identical to Export ADIF is noise. POTA and Field
