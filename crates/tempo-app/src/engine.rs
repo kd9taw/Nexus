@@ -17,7 +17,8 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use tempo_core::fieldday::{Exchange, FieldDayStation};
+use tempo_core::contest::ContestSession;
+use tempo_core::fieldday::FieldDayStation;
 use tempo_core::logbook::QsoRecord;
 use tempo_core::qso::{State as QsoState, Station as QsoStation};
 use tempo_core::qsy::{Directive, Roamer};
@@ -8692,8 +8693,8 @@ impl Engine {
                 pos: posid.clone(),
                 seq: q.seq,
                 call: q.call.clone(),
-                class: q.class.clone(),
-                sect: q.section.clone(),
+                class: q.class().to_string(),
+                sect: q.section().to_string(),
                 band: q.band.clone(),
                 mode: q.mode.clone(),
                 sub: q.submode.clone(),
@@ -9276,7 +9277,44 @@ impl Engine {
                     .to_string(),
             );
         }
-        let exch = Exchange::new(&self.settings.fd_class, &self.settings.fd_section);
+        // ⭐ THE SESSION IS RESTORED, NOT REBUILT — and this line is where the bug was.
+        //
+        // It read `Exchange::new(&settings.fd_class, &settings.fd_section)` and handed
+        // the result to a FRESH station on EVERY entry to `fieldday-run` /
+        // `fieldday-sp`, so a **Run↔S&P toggle silently reverted the operator's live
+        // exchange**: rows logged after the toggle went back to sending the settings
+        // value, on the air, and the next Cabrillo export said so. The journal restore
+        // three blocks below already learned this lesson for the ROWS (its own comment:
+        // "entering Field Day used to build an EMPTY log, so a restart — or a run↔S&P
+        // toggle — mid-event dropped every contact"); the session gets the same
+        // treatment, in the same place. There is nothing to re-apply, because the
+        // session is never discarded.
+        //
+        // ⚠️ **The boundary, stated rather than left to be discovered:** the session
+        // survives every transition BETWEEN Field Day modes and is rebuilt from
+        // Settings when Field Day is entered from another mode. That is deliberate
+        // while there is no "end this session" action — a session that outlived
+        // leaving the mode entirely could not be corrected from Settings at all, since
+        // `restore_field_day_if_enabled` is a deliberate no-op while the mode is live.
+        let session = match &self.mode {
+            Mode::FieldDay { station, .. } => station.log.session.clone(),
+            _ => ContestSession::field_day(
+                tempo_core::fieldday::FdEvent::from_code(&self.settings.fd_event),
+                &self.settings.fd_class,
+                &self.settings.fd_section,
+            ),
+        };
+        // ⚠️ **FLUSH BEFORE THE REBUILD, and this is a mechanism rather than a rule to
+        // remember.** The station below is fresh and re-reads its rows from the journal
+        // three blocks down, so anything the live log knows that the journal does not
+        // is lost right here. A journaled row falls back to the session's sent exchange
+        // when it carries none of its own, and "carries none of its own" was decided
+        // the last time the journal was written — so a session whose sent exchange
+        // moved since the last contact would re-label those rows on the way back in.
+        // One flush closes it for every future "I moved" action without that action
+        // having to know it exists. A no-op outside Field Day, and when no journal path
+        // is set.
+        self.persist_fd_log();
         let band = self.settings.band.clone();
         self.mode = match spec {
             "chat" => Mode::Chat,
@@ -9302,9 +9340,11 @@ impl Engine {
             },
             "fieldday-run" => Mode::FieldDay {
                 station: Box::new({
-                    let mut st = FieldDayStation::running(&mycall, &mygrid, exch, &band);
-                    st.log.event =
-                        tempo_core::fieldday::FdEvent::from_code(&self.settings.fd_event);
+                    // `log.event` comes from the SESSION (`FieldDayLog::new`), not from
+                    // settings: which sponsor's rules are running is part of what a
+                    // restored session already decided, and re-reading it here would
+                    // revert an event change the same way the exchange used to revert.
+                    let mut st = FieldDayStation::running(&mycall, &mygrid, session, &band);
                     // The submode funnel: the sequencer's log() calls record
                     // the tier actually keyed (set_tier re-stamps on a change).
                     st.log.current_submode = self.adif_mode_for_tier().to_string();
@@ -9314,9 +9354,8 @@ impl Engine {
             },
             "fieldday-sp" => Mode::FieldDay {
                 station: Box::new({
-                    let mut st = FieldDayStation::search_and_pounce(&mycall, &mygrid, exch, &band);
-                    st.log.event =
-                        tempo_core::fieldday::FdEvent::from_code(&self.settings.fd_event);
+                    let mut st =
+                        FieldDayStation::search_and_pounce(&mycall, &mygrid, session, &band);
                     st.log.current_submode = self.adif_mode_for_tier().to_string();
                     st
                 }),
@@ -15905,8 +15944,11 @@ impl Engine {
                 // banner/countdown's single source — no TS date math).
                 let event_window = rs.next_or_running(now_unix_secs());
                 s.field_day = Some(FieldDayStatus {
-                    my_class: log.myexch.class.clone(),
-                    my_section: log.myexch.section.clone(),
+                    // What the session is composing RIGHT NOW. Each DTO row still
+                    // carries its own received exchange; the per-row SENT exchange
+                    // reaches the UI when `FieldDayQso` gains `mex` (the DTO batch).
+                    my_class: log.session.field("CLASS").to_string(),
+                    my_section: log.session.field("SECTION").to_string(),
                     running: *running,
                     state: format!("{:?}", station.state),
                     dxcall: station.dxcall.clone(),
@@ -15940,8 +15982,8 @@ impl Engine {
                         .iter()
                         .map(|q| FieldDayQso {
                             call: q.call.clone(),
-                            class: q.class.clone(),
-                            section: q.section.clone(),
+                            class: q.class().to_string(),
+                            section: q.section().to_string(),
                             band: q.band.clone(),
                             mode: q.mode.clone(),
                             submode: q.submode.clone(),
@@ -29734,6 +29776,79 @@ mod tests {
             "the digital QSO snapshots the tier actually keyed, not a class map"
         );
         assert_eq!(fd.log[1].submode, "", "CW carries no submode");
+    }
+
+    /// ⭐ **§10's future-not-rewritten test — the one round 3 showed was missing.**
+    ///
+    /// The mobile-history test asserts only about rows ALREADY WRITTEN, so it stays
+    /// green while the live sent exchange silently reverts. This is the other half:
+    /// move, toggle Run↔S&P, log again, and the SECOND row must carry the NEW value.
+    ///
+    /// Until batch 3 `set_mode` built `Exchange::new(&settings.fd_class,
+    /// &settings.fd_section)` and handed it to a fresh station on every entry, so the
+    /// toggle — which the operator uses constantly — silently put the old exchange back
+    /// on the air.
+    #[test]
+    fn a_run_to_sp_toggle_does_not_revert_the_live_sent_exchange() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_class = "3A".into();
+            s.fd_section = "WI".into();
+            e.apply_settings(s);
+        }
+        // The durable journal is what carries the ROWS across the toggle (the log is
+        // rebuilt and re-merged from it); the session is what this test is about.
+        let dir = std::env::temp_dir().join(format!("fd-toggle-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        e.set_fd_log_path(dir.join("fieldday_backup_test.adi"));
+        e.set_mode("fieldday-sp").unwrap();
+        assert!(e.fd_log_manual("K1ABC", "2A", "EMA", "CW").unwrap());
+        // — "I moved" — on the LIVE session, which is all an operator action can
+        // reach: `restore_field_day_if_enabled` is a deliberate no-op while the mode
+        // is live, so a settings write reaches nothing until the next fresh session.
+        {
+            let Mode::FieldDay { station, .. } = &mut e.mode else {
+                panic!("in Field Day mode");
+            };
+            let spec = station.log.session.exchange;
+            station.log.session.my_location.state = "IL".into();
+            station.log.session.my_exchange = vec![
+                spec.value("CLASS", "3A").unwrap(),
+                spec.value("SECTION", "IL").unwrap(),
+            ];
+        }
+        // The toggle that used to revert it.
+        e.set_mode("fieldday-run").unwrap();
+        assert!(e.fd_log_manual("W1AW", "1D", "CT", "CW").unwrap());
+
+        let Mode::FieldDay { station, .. } = &e.mode else {
+            panic!("in Field Day mode");
+        };
+        let rows = station.log.qsos();
+        assert_eq!(rows.len(), 2, "the journal restore lost a row");
+        assert_eq!(
+            rows[1].sent("SECTION"),
+            "IL",
+            "the toggle reverted the live sent exchange — rows after it went back \
+             to the settings value, on the air"
+        );
+        // …and the row logged BEFORE the move still carries what it sent.
+        assert_eq!(rows[0].sent("SECTION"), "WI");
+
+        // ⭐ POSITIVE CONTROL, and it is what makes the green mean anything: the
+        // settings this build would have rebuilt from still say WI, and a session
+        // freshly built from them still sends WI. So `rows[1]` can only say IL
+        // because the session SURVIVED the toggle — not because the two agree.
+        assert_eq!(e.settings().fd_section, "WI");
+        assert_eq!(
+            ContestSession::field_day(tempo_core::fieldday::FdEvent::ArrlFd, "3A", "WI")
+                .field("SECTION"),
+            "WI",
+            "a session rebuilt from settings would have reverted the exchange"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Master switch OFF (spec §1.3): even when the engine is still in

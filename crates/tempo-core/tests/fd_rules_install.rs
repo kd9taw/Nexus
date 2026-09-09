@@ -9,14 +9,19 @@
 //! install (that would seed-lock the table — see fd_rules_too_late.rs for that
 //! path, and for the proof that THIS test could tell the difference).
 
+use tempo_core::contest::ContestSession;
 use tempo_core::fd_rules::{self, RulesInitError};
-use tempo_core::fieldday::{Exchange, FdEvent, FieldDayLog};
+use tempo_core::fieldday::{FdEvent, FieldDayLog};
 
 const SEED: &str = include_str!("../src/fd_rules.seed.json");
 
 fn pinned_log() -> FieldDayLog {
     // The in-crate pinned fixture's shape: 4 PH + 3 CW + 3 DIG, distinct calls.
-    let mut log = FieldDayLog::new("W9XYZ", Exchange::new("3A", "WI"), "20m");
+    let mut log = FieldDayLog::new(
+        "W9XYZ",
+        ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI"),
+        "20m",
+    );
     for (i, (call, mode)) in [
         ("PH1AA", "PH"),
         ("PH2AA", "PH"),

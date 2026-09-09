@@ -41,8 +41,9 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
+use tempo_core::contest::ContestSession;
 use tempo_core::fd_rules;
-use tempo_core::fieldday::{Exchange, FdEvent, FieldDayLog};
+use tempo_core::fieldday::{FdEvent, FieldDayLog};
 
 /// The whole spectator page — one self-contained HTML file (inline CSS + JS,
 /// no framework, no external reference; a test proves the zero-internet claim).
@@ -459,8 +460,11 @@ pub fn build_data_core(d: &FdBoardData, now_unix: u64) -> String {
     // Replay through THE FieldDayLog — its (call, band, modeclass) worked-set
     // is the scoring dedupe; fd_rules then scores the surviving log. Never
     // re-derive either.
-    let mut log = FieldDayLog::new(&d.call, Exchange::new(&d.class, &d.section), "");
-    log.event = d.event;
+    let mut log = FieldDayLog::new(
+        &d.call,
+        ContestSession::field_day(d.event, &d.class, &d.section),
+        "",
+    );
     let mut unique = vec![false; d.rows.len()];
     for &i in &order {
         let r = &d.rows[i];

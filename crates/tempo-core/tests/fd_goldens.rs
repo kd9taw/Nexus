@@ -136,3 +136,79 @@ fn the_goldens_discriminate() {
         "empty WFD class golden file"
     );
 }
+
+/// §8(b) — **a real operator's 1.x log still loads.**
+///
+/// `arrlfd.adi` is not a round-trip of this build's own output: it was written by the
+/// SHIPPED exporter and checked in before batch 0 moved a line, so it carries `CLASS`
+/// and `ARRL_SECT` and no `APP_NEXUS_EX`/`MYEX` at all. Restoring it exercises exactly
+/// the two fallbacks §8(b) specifies — the standard columns for the received side, the
+/// session's current sent exchange for the sent side — and both are exact for Field
+/// Day, which is why the Cabrillo comes back byte for byte.
+#[test]
+fn a_1x_journal_restores_to_an_identical_cabrillo_and_score() {
+    let head = capture::golden_log(FdEvent::ArrlFd);
+    let mut restored = capture::empty_log(FdEvent::ArrlFd);
+    restored.merge_adif(ARRLFD_ADI, 0);
+    assert_eq!(
+        restored.qso_count(),
+        head.qso_count(),
+        "a 1.x journal lost rows on restore"
+    );
+    assert_eq!(
+        restored.cabrillo(14_074),
+        ARRLFD_CBR,
+        "a restored 1.x log exports different bytes"
+    );
+    let rs = ruleset(FdEvent::ArrlFd, CURRENT_RULES_YEAR);
+    assert_eq!(
+        rs.scoring.qso_and_powered(restored.score_rows(), 5),
+        rs.scoring.qso_and_powered(head.score_rows(), 5),
+        "a restored 1.x log scores differently"
+    );
+}
+
+/// POSITIVE CONTROL for the test above — a restore that silently dropped rows would
+/// pass it only if the assertions could not tell. Strip one row's `CALL` (the one field
+/// `restore_row` refuses on) and the count MUST come back one short and the bytes MUST
+/// differ; if they do not, the green above is not evidence.
+#[test]
+fn the_1x_journal_restore_discriminates() {
+    let damaged = ARRLFD_ADI.replacen("<CALL:5>K1ABC", "<CALL:0>", 1);
+    assert_ne!(damaged, ARRLFD_ADI, "the fixture was not actually damaged");
+    let mut restored = capture::empty_log(FdEvent::ArrlFd);
+    restored.merge_adif(&damaged, 0);
+    assert_eq!(
+        restored.qso_count(),
+        capture::golden_log(FdEvent::ArrlFd).qso_count() - 1,
+        "a row with no callsign was restored anyway"
+    );
+    assert_ne!(
+        restored.cabrillo(14_074),
+        ARRLFD_CBR,
+        "the Cabrillo comparison cannot see a missing row"
+    );
+}
+
+/// ⭐ **A Field Day journal carries NO private carrier**, and that is what keeps the
+/// golden above byte-identical rather than a coincidence.
+///
+/// The writer emits `APP_NEXUS_EX`/`MYEX` exactly when the declared fallback would not
+/// give the row back — for Field Day it always would, because class + section ARE the
+/// received exchange and the sent exchange does not move. Asserted directly, because
+/// "the golden did not move" and "no tag is written" are the same fact and a reader
+/// should not have to infer one from the other.
+#[test]
+fn field_days_journal_carries_no_private_carrier() {
+    for event in [FdEvent::ArrlFd, FdEvent::WinterFd] {
+        let adi = capture::golden_log(event).adif();
+        for tag in ["APP_NEXUS_EX", "APP_NEXUS_MYEX", "APP_NEXUS_ROLE"] {
+            assert!(
+                !adi.contains(tag),
+                "{event:?}: {tag} is written for a row the standard columns already carry"
+            );
+        }
+        // POSITIVE CONTROL: the matcher can see a tag that IS there.
+        assert!(adi.contains("APP_NEXUS_QSEQ"), "{event:?}: no tag at all?");
+    }
+}

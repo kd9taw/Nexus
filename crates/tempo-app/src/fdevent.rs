@@ -27,7 +27,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Write;
 use std::path::PathBuf;
-use tempo_core::fieldday::{Exchange, FdEvent, FieldDayLog};
+use tempo_core::contest::ContestSession;
+use tempo_core::fieldday::{FdEvent, FieldDayLog};
 use tempo_net::fdsync::{ClubState, PosReport, WireBoardRow, WireQso};
 
 /// One merged club-log row — the design's reconciled shape (also what the
@@ -358,8 +359,16 @@ impl ClubLog {
     /// HOST's station identity — the one artifact both exports and the score
     /// derive from, so they can never disagree with each other.
     pub fn unique_log(&self, mycall: &str, class: &str, section: &str) -> FieldDayLog {
-        let mut log = FieldDayLog::new(mycall, Exchange::new(class, section), "");
-        log.event = self.event;
+        // ⚠️ Every merged row is rebuilt under the HOST's class and section, so two
+        // positions in different counties both export the host's. That is the same
+        // defect `cabrillo()` carried until batch 3, one layer up, and it closes when
+        // `MergedRow` gains the row's own sent exchange over the wire — the wire batch.
+        // Field Day is unaffected: one club, one class, one section.
+        let mut log = FieldDayLog::new(
+            mycall,
+            ContestSession::field_day(self.event, class, section),
+            "",
+        );
         for i in self.earliest_unique_indices() {
             let r = &self.rows[i];
             log.band = r.band.clone();

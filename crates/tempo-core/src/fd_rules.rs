@@ -86,15 +86,13 @@ pub struct Section {
     pub division: &'static str,
 }
 
-/// The dupe key both events use today: a station counts once per (call, band,
-/// mode-class). Descriptive metadata — the check itself is enforced in
-/// [`FieldDayLog`](crate::fieldday::FieldDayLog).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DupeRule {
-    pub by_call: bool,
-    pub by_band: bool,
-    pub by_mode_class: bool,
-}
+/// When a station counts again — re-exported from [`crate::contest`], where the key
+/// BUILDER lives beside it.
+///
+/// Both Field Day events declare `(call, band, mode class)` and no exchange slots,
+/// which is the shipped rule unchanged. The two slot lists are what a QSO party needs:
+/// `by_fields` for working someone else's mobile, `by_sent_fields` for being one.
+pub use crate::contest::DupeRule;
 
 /// A time window for one occurrence of an event (Unix seconds, UTC).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -689,6 +687,18 @@ struct DupeSpec {
     by_band: bool,
     /// …and separately per mode class (PH / CW / DIG).
     by_mode_class: bool,
+    /// RECEIVED slot ids — working someone else's mobile: same call, same band,
+    /// same mode, a DIFFERENT county is a new contact.
+    ///
+    /// ⚠️ **Required, not serde-defaulted.** A defaulted list means a rules file
+    /// that forgot a sponsor's mobile rule loads and silently refuses legal
+    /// contacts; the version number is where a loud failure belongs.
+    by_fields: Vec<String>,
+    /// SENT slot ids — BEING the mobile. Needed for the same sponsor's rule as
+    /// `by_fields`: when I move and work the same station again THEIR exchange is
+    /// unchanged, so a key built from the received side alone refuses my own
+    /// legal contact.
+    by_sent_fields: Vec<String>,
 }
 
 /// The whole scoring model for one ruleset, as one block.
@@ -1140,6 +1150,26 @@ fn parse_spec(text: &str) -> Result<FileSpec, String> {
         // counts nothing on contest Saturday. They are validated on the way in
         // for the same reason the exchange is: the loader is the only place
         // that sees the file and the exchange in the same breath.
+        // ⭐ A dupe key that names a slot nobody exchanges is a rule that can never
+        // fire, and the way it fails is silent: every contact keys on the empty string
+        // in that position, so the mobile rule the sponsor wrote simply does not
+        // happen. Read against the wrong direction it is worse — `by_fields` against
+        // `sends` would key my own constant exchange and refuse legal contacts — so the
+        // two lists are checked against the two directions separately.
+        for key in &r.dupe.by_fields {
+            if !x.roles.iter().any(|role| role.receives.contains(key)) {
+                return Err(format!(
+                    "{tag}: dupe.by_fields names slot {key:?}, which no role receives"
+                ));
+            }
+        }
+        for key in &r.dupe.by_sent_fields {
+            if !x.roles.iter().any(|role| role.sends.contains(key)) {
+                return Err(format!(
+                    "{tag}: dupe.by_sent_fields names slot {key:?}, which no role sends"
+                ));
+            }
+        }
         let mut mult_ids: Vec<&str> = Vec::new();
         for m in &r.scoring.multipliers {
             if m.id.is_empty() {
@@ -1526,6 +1556,8 @@ fn build(spec: FileSpec) -> RulesTable {
                     by_call: r.dupe.by_call,
                     by_band: r.dupe.by_band,
                     by_mode_class: r.dupe.by_mode_class,
+                    by_fields: leak_keys(r.dupe.by_fields),
+                    by_sent_fields: leak_keys(r.dupe.by_sent_fields),
                 },
                 tempo_fd: r.tempo_fd,
                 banned_modes: Box::leak(
@@ -1620,7 +1652,8 @@ fn civil_year_of_unix(unix: u64) -> u16 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fieldday::{Exchange, FieldDayLog};
+    use crate::contest::ContestSession;
+    use crate::fieldday::FieldDayLog;
 
     /// The RTTY parser accepted `valid_section(t) || t == "MX" || t == "DX"`
     /// (rtty/seq.rs at 82eb3112). Batch 0 replaces that inline test with a domain
@@ -1658,7 +1691,11 @@ mod tests {
     /// Build a log from `(call, mode-class)` pairs — distinct calls so nothing
     /// dupes; class/section are constant (irrelevant to the point math).
     fn log_with(contacts: &[(&str, &str)]) -> FieldDayLog {
-        let mut log = FieldDayLog::new("W9XYZ", Exchange::new("3A", "WI"), "20m");
+        let mut log = FieldDayLog::new(
+            "W9XYZ",
+            ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI"),
+            "20m",
+        );
         for (i, (call, mode)) in contacts.iter().enumerate() {
             assert!(log.log_mode_at(call, "2A", "IL", mode, 0, 100 + i as u64));
         }

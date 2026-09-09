@@ -29,15 +29,23 @@
 //! sent exchange.** What a given contact sent lives on that contact's own row. There is
 //! deliberately no function anywhere that produces a sent exchange from a session or a
 //! log, because that is the shape that relabelled every row already logged the moment a
-//! mobile changed county. [`carrier`] is how a field vector rides one ADIF tag.
+//! mobile changed county. The one function that renders a sent exchange is
+//! [`render::sent_exchange`], and it takes a ROW. [`carrier`] is how a field vector
+//! rides one ADIF tag, and [`dupe`] is the ordered key those vectors feed.
 
 pub mod carrier;
+pub mod dupe;
 pub mod exchanges;
+pub mod render;
 pub mod scoring;
 pub mod session;
 pub mod spec;
 
 pub use exchanges::{casual, field_day};
+
+pub use dupe::{DupeRule, KEY_SEP};
+
+pub use render::{role_for, sent_exchange, sent_exchange_string};
 
 pub use session::{ContestSession, InFlightQso, MyLocation};
 

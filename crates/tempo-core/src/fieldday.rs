@@ -44,6 +44,15 @@ impl FdEvent {
             FdEvent::ArrlFd
         }
     }
+    /// The inverse of [`contest_id`](Self::contest_id) — how a log recovers its event
+    /// from the session it was opened with, so the two can never disagree.
+    pub fn from_contest_id(s: &str) -> Self {
+        if s.trim().eq_ignore_ascii_case("WFD") {
+            FdEvent::WinterFd
+        } else {
+            FdEvent::ArrlFd
+        }
+    }
 }
 
 /// Per-QSO points by operating mode class (both events: phone 1, CW/digital 2 —
@@ -56,28 +65,48 @@ pub fn qso_points_for_mode(mode: &str) -> u32 {
     }
 }
 
-/// A Field Day exchange: transmitter class (e.g. `3A`) + ARRL/RAC section (`WI`).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Exchange {
-    pub class: String,
-    pub section: String,
-}
-
-impl Exchange {
-    pub fn new(class: &str, section: &str) -> Self {
-        Self {
-            class: class.to_string(),
-            section: section.to_string(),
-        }
-    }
-}
-
-/// A logged Field Day contact.
+/// A logged contest contact.
+///
+/// ⭐ **Both sides of the exchange live HERE, per row, and that is the whole of the
+/// mobile fix.** `class`/`section` used to be the received half and there was no sent
+/// half at all: the log carried ONE `Exchange` and `cabrillo()` wrote it on every QSO
+/// line, so an operator who changed county re-labelled every contact made before the
+/// change. A datum belongs on the row if it can change while a session is open, and the
+/// sent exchange, the issued serial and the role all can.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LoggedQso {
     pub call: String,
-    pub class: String,
-    pub section: String,
+    /// The exchange THEY sent me. For Field Day this is class + section, which is
+    /// exactly what the `class`/`section` pair held.
+    pub rx: Vec<crate::contest::FieldValue>,
+    /// The exchange I sent THEM, **as sent on this contact** — including the serial
+    /// that was issued to it. Copied from the session at log time and never re-read
+    /// from it afterwards.
+    pub tx: Vec<crate::contest::FieldValue>,
+    /// The [`RoleSpec`](crate::contest::RoleSpec) id this contact was worked under
+    /// (`""` for a symmetric contest, which is both Field Day events).
+    ///
+    /// Carried per row because crossing a state line changes which role I am, and a
+    /// row worked before the crossing must keep the one it was worked under. A session
+    /// refuses that transition rather than mixing two roles in one log (§3.3 ruling 3);
+    /// this field is what makes a mixed log DETECTABLE instead of aspirational.
+    pub role: String,
+    /// The DXCC entity for [`call`](Self::call), resolved once at log time rather than
+    /// at export time.
+    ///
+    /// ⚠️ Always `None` in this build, and deliberately: the cty.dat resolver lives in
+    /// `crates/propagation`, which neither this crate nor `tempo-app` depends on (the
+    /// dependency runs the other way), and no shipped ruleset reads an entity —
+    /// neither Field Day event has a DXCC multiplier. The slot is here so the row, and
+    /// not a per-snapshot re-resolution, is where the answer will live.
+    pub entity: Option<String>,
+    /// The WPX prefix for [`call`](Self::call), resolved once at log time.
+    ///
+    /// ⚠️ Always `None` in this build. CQ WPX's prefix rule is not implemented anywhere
+    /// in this tree and its wording has not been read from cqwpx.com; deriving one here
+    /// would be an invented rule with no source, which is worse than a `None` the batch
+    /// that reads the rule fills in.
+    pub prefix: Option<String>,
     pub band: String,
     /// Mode class for scoring + per-band-mode dupes: "DIG" | "CW" | "PH".
     pub mode: String,
@@ -102,11 +131,56 @@ pub struct LoggedQso {
     pub seq: u64,
 }
 
-/// A dupe-checked Field Day log with scoring.
+impl LoggedQso {
+    /// One slot of what THEY sent me (`""` when the row does not carry it).
+    pub fn rcvd(&self, key: &str) -> &str {
+        field_raw(&self.rx, key)
+    }
+
+    /// One slot of what I sent THEM (`""` when the row does not carry it).
+    ///
+    /// A single slot, from the ROW — never an exchange rendered from a session. An
+    /// emitter that wants the whole sent exchange calls
+    /// [`contest::sent_exchange`](crate::contest::sent_exchange), which also takes a row.
+    pub fn sent(&self, key: &str) -> &str {
+        field_raw(&self.tx, key)
+    }
+
+    /// The class they sent — Field Day's name for [`rcvd("CLASS")`](Self::rcvd).
+    ///
+    /// A convenience for the Field Day consumers that have not been generalised yet
+    /// (the club sync, the scoreboard, the interop emitters). It reads the ROW, which
+    /// is the direction that matters; the batch that generalises those surfaces reads
+    /// `rx` by slot id instead and this goes away with the last caller.
+    pub fn class(&self) -> &str {
+        self.rcvd("CLASS")
+    }
+
+    /// The section they sent — Field Day's name for [`rcvd("SECTION")`](Self::rcvd).
+    pub fn section(&self) -> &str {
+        self.rcvd("SECTION")
+    }
+}
+
+fn field_raw<'a>(vals: &'a [crate::contest::FieldValue], key: &str) -> &'a str {
+    vals.iter()
+        .find(|v| v.key == key)
+        .map(|v| v.raw.as_str())
+        .unwrap_or("")
+}
+
+/// A dupe-checked contest log with scoring — and **the log IS the session**: its
+/// lifetime is the session's, so its rows need no per-row session id.
 #[derive(Debug)]
 pub struct FieldDayLog {
     pub mycall: String,
-    pub myexch: Exchange,
+    /// The run of the contest this log belongs to.
+    ///
+    /// ⭐ **Replaces `myexch: Exchange`, which was one sent exchange for the whole
+    /// log.** The session holds the exchange being sent RIGHT NOW; what a given contact
+    /// sent is on that contact's row. `cabrillo()` reads the row, and nothing
+    /// downstream reads this to describe a past contact.
+    pub session: crate::contest::ContestSession,
     pub band: String,
     pub event: FdEvent,
     /// The ACTUAL on-air digital mode currently keyed (ADIF-style name, e.g.
@@ -117,7 +191,10 @@ pub struct FieldDayLog {
     /// CW/PH manual entries ARE their on-air mode and keep an empty submode.
     pub current_submode: String,
     qsos: Vec<LoggedQso>,
-    worked: HashSet<(String, String, String)>, // (call, band, mode class)
+    /// The dupe index, keyed by the ruleset's own [`DupeRule`](crate::contest::DupeRule)
+    /// as an ordered `Vec<String>` rather than by a `(call, band, mode)` tuple — a
+    /// mobile in a new county is a new station, and a tuple cannot say so.
+    worked: HashSet<Vec<String>>,
     /// The next [`LoggedQso::seq`] to stamp. Starts at 1; a journal restore
     /// advances it past every restored seq so a fresh session's rows continue
     /// the per-position monotonic sequence instead of colliding with rows the
@@ -126,17 +203,33 @@ pub struct FieldDayLog {
 }
 
 impl FieldDayLog {
-    pub fn new(mycall: &str, myexch: Exchange, band: &str) -> Self {
+    /// A log for one run of one contest.
+    ///
+    /// [`event`](Self::event) is taken from the session rather than defaulted, so the
+    /// two cannot disagree about which sponsor's rules are running — the class letter
+    /// sets are disjoint, and a log whose event says ARRL while its exchange says
+    /// Winter would validate `2O` against `ABCDEF`.
+    pub fn new(mycall: &str, session: crate::contest::ContestSession, band: &str) -> Self {
+        let event = FdEvent::from_contest_id(&session.contest_id);
         Self {
             mycall: mycall.to_string(),
-            myexch,
+            session,
             band: band.to_string(),
-            event: FdEvent::ArrlFd,
+            event,
             current_submode: String::new(),
             qsos: Vec::new(),
             worked: HashSet::new(),
             next_seq: 1,
         }
+    }
+
+    /// The dupe key this log's event declares, as data.
+    ///
+    /// Read from the ruleset each time rather than cached at construction, because
+    /// [`event`](Self::event) is public and is assigned after `new` on several paths; a
+    /// cached copy would silently answer for the wrong event.
+    pub fn dupe_rule(&self) -> crate::contest::DupeRule {
+        crate::fd_rules::ruleset(self.event, crate::fd_rules::CURRENT_RULES_YEAR).dupe_rule
     }
 
     /// The highest [`LoggedQso::seq`] this log has stamped or restored — the
@@ -153,24 +246,45 @@ impl FieldDayLog {
         self.is_dupe_mode(call, "DIG")
     }
 
+    /// The verdict BEFORE the exchange has been copied — call, band and mode class
+    /// only. The sequencers ask this on hearing a bare CQ, when nothing else is known.
+    ///
+    /// ⚠️ **A rule that keys on exchange slots cannot be judged from these three, so it
+    /// answers `false` rather than guessing.** That is the safe direction and it is not
+    /// symmetric: under-reporting costs one duplicate contact that scores zero, while
+    /// over-reporting REFUSES a legal one — which is the exact defect that makes the
+    /// shipped engine unusable for a QSO party. Both Field Day events key on these
+    /// three and nothing else, so for them this is the whole key, not a prefix of it.
     pub fn is_dupe_mode(&self, call: &str, mode: &str) -> bool {
-        self.worked.contains(&(
-            call.to_uppercase(),
-            self.band.clone(),
-            mode.to_ascii_uppercase(),
-        ))
+        self.worked_key(call, &self.band.clone(), mode)
     }
 
     /// Whether an EXPLICIT `(call, band, mode class)` key is in the dupe
     /// index — unlike [`is_dupe_mode`](Self::is_dupe_mode) it does not assume
     /// the log's current band. The club sync uses it to subtract own-log keys
-    /// from the club dupe set (only club-ONLY keys ship to the UI).
+    /// from the club dupe set (only club-ONLY keys ship to the UI). It carries
+    /// `is_dupe_mode`'s exchange-slot caveat for the same reason.
     pub fn worked_key(&self, call: &str, band: &str, mode: &str) -> bool {
-        self.worked.contains(&(
-            call.to_uppercase(),
-            band.to_string(),
-            mode.to_ascii_uppercase(),
-        ))
+        let rule = self.dupe_rule();
+        if !rule.by_fields.is_empty() || !rule.by_sent_fields.is_empty() {
+            return false;
+        }
+        self.worked
+            .contains(&rule.key_of(call, band, mode, &[], &[]))
+    }
+
+    /// The exact verdict, over a whole candidate contact — the check `log_submode_at`
+    /// itself makes, exposed so a caller can ask before it commits.
+    pub fn is_dupe_row(
+        &self,
+        call: &str,
+        band: &str,
+        mode: &str,
+        rx: &[crate::contest::FieldValue],
+        tx: &[crate::contest::FieldValue],
+    ) -> bool {
+        self.worked
+            .contains(&self.dupe_rule().key_of(call, band, mode, rx, tx))
     }
 
     /// Log a contact. Returns false (and logs nothing) if it's a dupe.
@@ -228,25 +342,52 @@ impl FieldDayLog {
         when_unix: u64,
     ) -> bool {
         let mode = mode.to_ascii_uppercase();
-        if self.is_dupe_mode(call, &mode) {
+        // Both sides, as data, BEFORE the dupe check — the key reads them (a mobile in
+        // a new county is a new station, in both directions), so a check that ran first
+        // would be judging a different contact from the one about to be logged.
+        let rx = self.received(class, section);
+        let tx = self.session.tx_for_row(call);
+        let band = self.band.clone();
+        if self.is_dupe_row(call, &band, &mode, &rx, &tx) {
             return false;
         }
         self.worked
-            .insert((call.to_uppercase(), self.band.clone(), mode.clone()));
+            .insert(self.dupe_rule().key_of(call, &band, &mode, &rx, &tx));
         let seq = self.next_seq;
         self.next_seq += 1;
         self.qsos.push(LoggedQso {
             call: call.to_string(),
-            class: class.to_string(),
-            section: section.to_string(),
-            band: self.band.clone(),
+            rx,
+            tx,
+            role: self.session.role().id.to_string(),
+            entity: None,
+            prefix: None,
+            band,
             mode,
             submode: submode.trim().to_ascii_uppercase(),
             slot,
             when_unix,
             seq,
         });
+        // The contact is logged, so nothing is in flight any more: the next exchange
+        // composed issues its own serial instead of re-sending this one's.
+        self.session.clear_in_flight();
         true
+    }
+
+    /// A received Field Day exchange as a field vector, resolved against the exchange
+    /// this session runs.
+    ///
+    /// ⚠️ The raw values are stored VERBATIM. Uppercasing here would rewrite what a
+    /// shipped log holds and move the §8(a) goldens; normalisation belongs to whatever
+    /// copied the value off the air.
+    fn received(&self, class: &str, section: &str) -> Vec<crate::contest::FieldValue> {
+        let spec = self.session.exchange;
+        ["CLASS", "SECTION"]
+            .iter()
+            .zip([class, section])
+            .filter_map(|(k, v)| spec.value(k, v))
+            .collect()
     }
 
     pub fn qso_count(&self) -> usize {
@@ -276,7 +417,7 @@ impl FieldDayLog {
     pub fn sections(&self) -> usize {
         self.qsos
             .iter()
-            .map(|q| q.section.as_str())
+            .map(|q| q.section())
             .collect::<HashSet<_>>()
             .len()
     }
@@ -288,7 +429,7 @@ impl FieldDayLog {
         let mut sections: Vec<String> = self
             .qsos
             .iter()
-            .map(|q| q.section.clone())
+            .map(|q| q.section().to_string())
             .collect::<HashSet<_>>()
             .into_iter()
             .collect();
@@ -305,6 +446,13 @@ impl FieldDayLog {
     /// Export the log as ADIF records (one `<EOR>` per QSO).
     pub fn adif(&self) -> String {
         let mut s = String::from("ADIF Export from Nexus\n<PROGRAMID:5>Nexus\n<EOH>\n");
+        // ⭐ Has the sent exchange moved at any point in this log? If not — and it has
+        // not, for either Field Day event, which send one exchange all weekend — the
+        // session fallback gives every row back exactly and no row needs a carrier.
+        // The moment ONE row disagrees, EVERY row gets its own `APP_NEXUS_MYEX`, not
+        // just the ones that differ: a later move must not be able to re-label the rows
+        // that happen to match the session today.
+        let sent_moved = self.qsos.iter().any(|q| q.tx != self.session.my_exchange);
         for q in &self.qsos {
             s.push_str(&adif_field("CALL", &q.call));
             // ⚠️ A MODE OUTSIDE ADIF'S ENUMERATION IS A DROPPED RECORD, NOT A COSMETIC ONE.
@@ -342,8 +490,49 @@ impl FieldDayLog {
                 s.push_str(&adif_field("TIME_ON", &time));
             }
             s.push_str(&adif_field("CONTEST_ID", self.event.contest_id()));
-            s.push_str(&adif_field("CLASS", &q.class));
-            s.push_str(&adif_field("ARRL_SECT", &q.section));
+            // The RECEIVED exchange under its own slots' ADIF tags, in the role's
+            // receive order — for Field Day exactly the <CLASS> and <ARRL_SECT> this
+            // has always written, from the row instead of from two named columns.
+            let spec = self.session.exchange;
+            let role = crate::contest::role_for(q, spec);
+            let standard: Vec<(&'static str, String)> = standard_rcvd_slots(spec, role)
+                .map(|(key, tag)| (tag, q.rcvd(key).to_string()))
+                .collect();
+            for (tag, val) in &standard {
+                s.push_str(&adif_field(tag, val));
+            }
+            // ⭐ The private carrier rides ONLY when the standard tags cannot give the
+            // row back — and that condition is not a guess, it is the restore run
+            // forward: `rx_from_standard` is the SAME function `restore_row` falls back
+            // to, so "the fallback is exact" and "no tag is written" are one fact and
+            // cannot drift. For Field Day both fallbacks are exact (class and section
+            // ARE the received exchange; the sent exchange does not move), so nothing
+            // is written and the §8(a) ADIF golden does not move. The moment a sent
+            // exchange differs from the session's — a mobile that has changed county —
+            // that row gets its own <APP_NEXUS_MYEX> and a restart reads it back.
+            if rx_from_standard(spec, role, |tag| {
+                standard
+                    .iter()
+                    .find(|(t, _)| *t == tag)
+                    .map(|(_, v)| v.clone())
+            }) != q.rx
+            {
+                s.push_str(&adif_field(
+                    "APP_NEXUS_EX",
+                    &crate::contest::carrier::encode(&q.rx),
+                ));
+            }
+            if sent_moved {
+                s.push_str(&adif_field(
+                    "APP_NEXUS_MYEX",
+                    &crate::contest::carrier::encode(&q.tx),
+                ));
+            }
+            // Same rule for the role: written only when it is not the session's own,
+            // which for a symmetric contest (both Field Day events) is never.
+            if q.role != self.session.role().id {
+                s.push_str(&adif_field("APP_NEXUS_ROLE", &q.role));
+            }
             // The per-position sync sequence (APP_-namespaced per the ADIF
             // spec, so every other consumer ignores it). Legacy 0 rows omit
             // the tag — restore backfills them in row order.
@@ -438,7 +627,31 @@ impl FieldDayLog {
         // The ROW's band, not the log's current one — a restored dupe key must
         // keep its original band across a mid-event QSY.
         let band = f.get("BAND").cloned().unwrap_or_default();
-        let key = (call.to_uppercase(), band.clone(), mode.to_string());
+        let spec = self.session.exchange;
+        // ⭐ The row's ROLE, then its two exchange sides. A 1.x journal carries none of
+        // the three tags, and each falls back to what that build meant by its absence:
+        // the session's role, the standard <CLASS>/<ARRL_SECT> columns, and the
+        // session's current sent exchange. For Field Day all three fallbacks are exact
+        // — which is why the writer above emits no tag at all for a Field Day row, and
+        // why a 1.x journal restores to a byte-identical log.
+        let role = f
+            .get("APP_NEXUS_ROLE")
+            .cloned()
+            .unwrap_or_else(|| self.session.role().id.to_string());
+        let role_spec = spec
+            .roles
+            .iter()
+            .find(|r| r.id == role)
+            .unwrap_or(self.session.role());
+        let rx = match f.get("APP_NEXUS_EX") {
+            Some(v) => crate::contest::carrier::decode(v, spec),
+            None => rx_from_standard(spec, role_spec, |tag| f.get(tag).cloned()),
+        };
+        let tx = match f.get("APP_NEXUS_MYEX") {
+            Some(v) => crate::contest::carrier::decode(v, spec),
+            None => self.session.my_exchange.clone(),
+        };
+        let key = self.dupe_rule().key_of(call, &band, mode, &rx, &tx);
         if self.worked.contains(&key) {
             return;
         }
@@ -454,8 +667,11 @@ impl FieldDayLog {
         self.next_seq = self.next_seq.max(seq + 1);
         self.qsos.push(LoggedQso {
             call: call.clone(),
-            class: f.get("CLASS").cloned().unwrap_or_default(),
-            section: f.get("ARRL_SECT").cloned().unwrap_or_default(),
+            rx,
+            tx,
+            role,
+            entity: None,
+            prefix: None,
             band,
             mode: mode.to_string(),
             submode,
@@ -471,9 +687,12 @@ impl FieldDayLog {
         s.push_str("START-OF-LOG: 3.0\n");
         s.push_str(&format!("CONTEST: {}\n", self.event.contest_id()));
         s.push_str(&format!("CALLSIGN: {}\n", self.mycall));
+        // LOCATION is a per-ENTRY value, so it reads the session's declared location
+        // and not a row: Cabrillo puts it in a header, once, for exactly that reason.
+        // The per-contact truth is on the QSO lines below.
         s.push_str(&format!(
             "CATEGORY-OPERATOR: MULTI-OP\nLOCATION: {}\nCREATED-BY: Nexus\n",
-            self.myexch.section
+            self.session.my_location.state
         ));
         // Which rules data scored this log (X- headers are Cabrillo-legal and
         // ignored by robots) — a fetched rules file with different parameters
@@ -515,14 +734,59 @@ impl FieldDayLog {
                 (None, false) => raw.to_string(),
                 (None, true) => freq_khz.to_string(),
             };
+            // ⭐ THE EXCHANGE COLUMNS COME FROM THIS ROW, never from the log or the
+            // session. `self.myexch.class`/`.section` sat here until batch 3 and were
+            // written on EVERY line, so an operator who changed county re-labelled
+            // every contact made before the change — silently, in the file they submit.
+            // The callsign columns are structural (they sit outside the exchange) and
+            // are unchanged.
+            let spec = self.session.exchange;
+            let mine = crate::contest::sent_exchange_string(q, spec);
+            let theirs = crate::contest::role_for(q, spec)
+                .receives
+                .iter()
+                .map(|k| q.rcvd(k))
+                .filter(|v| !v.is_empty())
+                .collect::<Vec<_>>()
+                .join(" ");
             s.push_str(&format!(
-                "QSO: {freq} {mo} {date} {time} {} {} {} {} {} {}\n",
-                self.mycall, self.myexch.class, self.myexch.section, q.call, q.class, q.section
+                "QSO: {freq} {mo} {date} {time} {} {mine} {} {theirs}\n",
+                self.mycall, q.call
             ));
         }
         s.push_str("END-OF-LOG:\n");
         s
     }
+}
+
+/// The received slots that have a standard ADIF column, as `(slot id, tag)`, in the
+/// role's receive order.
+///
+/// ⭐ **ONE list, read by the ADIF writer and by the restore.** The write direction and
+/// the read direction being the same function is what makes "the standard columns are
+/// enough for this row" and "no private carrier was written" the same fact rather than
+/// two claims that can drift apart. A slot with no `rcvd` tag has no standard column
+/// either way round, and rides [`carrier`](crate::contest::carrier) instead.
+fn standard_rcvd_slots(
+    spec: &'static crate::contest::ExchangeSpec,
+    role: &'static crate::contest::RoleSpec,
+) -> impl Iterator<Item = (&'static str, &'static str)> {
+    role.receives
+        .iter()
+        .filter_map(move |key| Some((*key, spec.field(key)?.adif.rcvd?)))
+}
+
+/// The received exchange as the standard ADIF columns carry it — the restore FALLBACK
+/// for a journal with no `APP_NEXUS_EX`, and the writer's test for whether that tag is
+/// needed at all. `get` resolves an ADIF tag to its value.
+fn rx_from_standard(
+    spec: &'static crate::contest::ExchangeSpec,
+    role: &'static crate::contest::RoleSpec,
+    get: impl Fn(&str) -> Option<String>,
+) -> Vec<crate::contest::FieldValue> {
+    standard_rcvd_slots(spec, role)
+        .filter_map(|(key, tag)| spec.value(key, &get(tag)?))
+        .collect()
 }
 
 fn now_unix() -> u64 {
@@ -662,7 +926,12 @@ impl FieldDayStation {
     }
 
     /// A running station (calls CQ FD).
-    pub fn running(mycall: &str, mygrid: &str, exch: Exchange, band: &str) -> Self {
+    pub fn running(
+        mycall: &str,
+        mygrid: &str,
+        session: crate::contest::ContestSession,
+        band: &str,
+    ) -> Self {
         Self {
             mygrid: mygrid.to_string(),
             state: FdState::CallingCq,
@@ -676,20 +945,25 @@ impl FieldDayStation {
             }),
             dxcall: None,
             peer_exch: None,
-            log: FieldDayLog::new(mycall, exch, band),
+            log: FieldDayLog::new(mycall, session, band),
             transcript: Vec::new(),
         }
     }
 
     /// A search-and-pounce station (answers CQs).
-    pub fn search_and_pounce(mycall: &str, mygrid: &str, exch: Exchange, band: &str) -> Self {
+    pub fn search_and_pounce(
+        mycall: &str,
+        mygrid: &str,
+        session: crate::contest::ContestSession,
+        band: &str,
+    ) -> Self {
         Self {
             mygrid: mygrid.to_string(),
             state: FdState::Listening,
             pending: None,
             dxcall: None,
             peer_exch: None,
-            log: FieldDayLog::new(mycall, exch, band),
+            log: FieldDayLog::new(mycall, session, band),
             transcript: Vec::new(),
         }
     }
@@ -733,8 +1007,13 @@ impl FieldDayStation {
             to: to.to_string(),
             de: self.mycall().to_string(),
             roger,
-            class: self.log.myexch.class.clone(),
-            section: self.log.myexch.section.clone(),
+            // What is going on the air RIGHT NOW is exactly what the session holds,
+            // so this reads the session — and it is the one reader that legitimately
+            // does. `Msg::FieldDay` has typed class and section fields of its own, so
+            // no exchange is rendered here; a reader DESCRIBING a past contact reads
+            // that contact's row instead (`contest::sent_exchange`).
+            class: self.log.session.field("CLASS").to_string(),
+            section: self.log.session.field("SECTION").to_string(),
         }
     }
 
@@ -910,10 +1189,7 @@ mod tests {
     fn every_contact_carries_a_band_and_it_is_always_the_logs_own() {
         let mut log = FieldDayLog::new(
             "W9XYZ",
-            Exchange {
-                class: "3A".into(),
-                section: "WI".into(),
-            },
+            ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI"),
             "70cm",
         );
         assert!(log.log_mode_at("W1AW", "1D", "IL", "PH", 0, 100));
@@ -936,10 +1212,7 @@ mod tests {
         // K1ABC on 20m CW and 20m FT8 are two legal contacts).
         let mut log = FieldDayLog::new(
             "W9XYZ",
-            Exchange {
-                class: "3A".into(),
-                section: "WI".into(),
-            },
+            ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI"),
             "20m",
         );
         assert!(log.log_mode_at("K1ABC", "2A", "CT", "DIG", 0, 100));
@@ -978,10 +1251,7 @@ mod tests {
         assert_eq!((d.as_str(), t.as_str()), ("2026-06-27", "1805"));
         let mut log = FieldDayLog::new(
             "W9XYZ",
-            Exchange {
-                class: "3A".into(),
-                section: "WI".into(),
-            },
+            ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI"),
             "20m",
         );
         assert!(log.log_at("K1ABC", "2A", "CT", 4, 1_782_583_500));
@@ -1005,10 +1275,7 @@ mod tests {
         // tier vanished on upload while an FT8 one beside it went through.
         let mut log = FieldDayLog::new(
             "W9XYZ",
-            Exchange {
-                class: "3A".into(),
-                section: "WI".into(),
-            },
+            ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI"),
             "20m",
         );
         assert!(log.log_submode_at("K1ABC", "2A", "CT", "DIG", "TempoFast", 4, 1_782_583_500));
@@ -1027,10 +1294,7 @@ mod tests {
         // wrapped everything.
         let mut plain = FieldDayLog::new(
             "W9XYZ",
-            Exchange {
-                class: "3A".into(),
-                section: "WI".into(),
-            },
+            ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI"),
             "20m",
         );
         assert!(plain.log_submode_at("K2DEF", "2A", "CT", "DIG", "RTTY", 4, 1_782_583_500));
@@ -1062,10 +1326,7 @@ mod tests {
         //    BAND — so this corrupted the one artifact they actually use.
         let mut log = FieldDayLog::new(
             "W9XYZ",
-            Exchange {
-                class: "3A".into(),
-                section: "WI".into(),
-            },
+            ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI"),
             "20m",
         );
         for (band, call) in [
@@ -1123,13 +1384,21 @@ mod tests {
         // its sole durable copy — merging it back into a fresh log (a restart
         // mid-event) must restore the QSOs, the dupe index, the sections and
         // real timestamps (not the '----------' Cabrillo placeholder).
-        let mut log = FieldDayLog::new("W9XYZ", Exchange::new("3A", "WI"), "20m");
+        let mut log = FieldDayLog::new(
+            "W9XYZ",
+            ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI"),
+            "20m",
+        );
         assert!(log.log_mode_at("K1ABC", "2A", "CT", "DIG", 0, 1_782_583_500));
         assert!(log.log_mode_at("K2DEF", "1D", "EMA", "CW", 0, 1_782_583_560));
         assert!(log.log_mode_at("N0GHI", "5A", "MN", "PH", 0, 1_782_583_620));
         let adif = log.adif();
 
-        let mut restored = FieldDayLog::new("W9XYZ", Exchange::new("3A", "WI"), "20m");
+        let mut restored = FieldDayLog::new(
+            "W9XYZ",
+            ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI"),
+            "20m",
+        );
         restored.merge_adif(&adif, 0);
         assert_eq!(restored.qso_count(), 3, "all three contacts restored");
         for (call, mode) in [("K1ABC", "DIG"), ("K2DEF", "CW"), ("N0GHI", "PH")] {
@@ -1153,7 +1422,11 @@ mod tests {
         // An RTTY WFD QSO must never export MODE=FT8 (a banned mode there) —
         // the recorded actual mode wins; rows without one keep the legacy
         // FT8/DG fallback so old logs export unchanged.
-        let mut log = FieldDayLog::new("W9XYZ", Exchange::new("2M", "EPA"), "20m");
+        let mut log = FieldDayLog::new(
+            "W9XYZ",
+            ContestSession::field_day(FdEvent::ArrlFd, "2M", "EPA"),
+            "20m",
+        );
         log.event = FdEvent::WinterFd;
         assert!(log.log_submode_at("K1ABC", "1H", "CT", "DIG", " rtty ", 0, 1_782_583_500));
         assert!(log.log_mode_at("K2DEF", "1O", "EMA", "DIG", 0, 1_782_583_560));
@@ -1177,10 +1450,18 @@ mod tests {
 
     #[test]
     fn actual_mode_survives_the_adif_round_trip() {
-        let mut log = FieldDayLog::new("W9XYZ", Exchange::new("2M", "EPA"), "20m");
+        let mut log = FieldDayLog::new(
+            "W9XYZ",
+            ContestSession::field_day(FdEvent::ArrlFd, "2M", "EPA"),
+            "20m",
+        );
         log.event = FdEvent::WinterFd;
         assert!(log.log_submode_at("K1ABC", "1H", "CT", "DIG", "RTTY", 0, 1_782_583_500));
-        let mut restored = FieldDayLog::new("W9XYZ", Exchange::new("2M", "EPA"), "20m");
+        let mut restored = FieldDayLog::new(
+            "W9XYZ",
+            ContestSession::field_day(FdEvent::ArrlFd, "2M", "EPA"),
+            "20m",
+        );
         restored.event = FdEvent::WinterFd;
         restored.merge_adif(&log.adif(), 0);
         assert_eq!(restored.qso_count(), 1);
@@ -1201,7 +1482,11 @@ mod tests {
     fn seq_is_stamped_monotonic_and_round_trips_as_app_nexus_qseq() {
         // Every entry point funnels into log_submode_at, so seqs are 1..n in
         // log order regardless of mode/path.
-        let mut log = FieldDayLog::new("W9XYZ", Exchange::new("3A", "WI"), "20m");
+        let mut log = FieldDayLog::new(
+            "W9XYZ",
+            ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI"),
+            "20m",
+        );
         assert!(log.log_mode_at("K1ABC", "2A", "CT", "DIG", 0, 1_782_583_500));
         assert!(log.log_mode_at("K2DEF", "1D", "EMA", "CW", 0, 1_782_583_560));
         assert_eq!(log.qsos().iter().map(|q| q.seq).collect::<Vec<_>>(), [1, 2]);
@@ -1215,7 +1500,11 @@ mod tests {
         // Restore keeps each row's seq and the NEXT log entry continues past
         // the restored high-water — the property that makes a restart safe
         // against re-issuing an id the club host already merged.
-        let mut restored = FieldDayLog::new("W9XYZ", Exchange::new("3A", "WI"), "20m");
+        let mut restored = FieldDayLog::new(
+            "W9XYZ",
+            ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI"),
+            "20m",
+        );
         restored.merge_adif(&adif, 0);
         assert_eq!(
             restored.qsos().iter().map(|q| q.seq).collect::<Vec<_>>(),
@@ -1240,7 +1529,11 @@ mod tests {
             <CLASS:2>2A <ARRL_SECT:2>CT <EOR>\n\
             <CALL:5>K2DEF <MODE:2>CW <BAND:3>20m <QSO_DATE:8>20260627 <TIME_ON:6>180600 \
             <CLASS:2>1D <ARRL_SECT:3>EMA <EOR>\n";
-        let mut log = FieldDayLog::new("W9XYZ", Exchange::new("3A", "WI"), "20m");
+        let mut log = FieldDayLog::new(
+            "W9XYZ",
+            ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI"),
+            "20m",
+        );
         log.merge_adif(legacy, 0);
         assert_eq!(
             log.qsos().iter().map(|q| q.seq).collect::<Vec<_>>(),
@@ -1256,7 +1549,11 @@ mod tests {
             <CLASS:2>2A <ARRL_SECT:2>CT <APP_NEXUS_QSEQ:1>5 <EOR>\n\
             <CALL:5>K2DEF <MODE:2>CW <BAND:3>20m <QSO_DATE:8>20260627 <TIME_ON:6>180600 \
             <CLASS:2>1D <ARRL_SECT:3>EMA <EOR>\n";
-        let mut log = FieldDayLog::new("W9XYZ", Exchange::new("3A", "WI"), "20m");
+        let mut log = FieldDayLog::new(
+            "W9XYZ",
+            ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI"),
+            "20m",
+        );
         log.merge_adif(mixed, 0);
         assert_eq!(
             log.qsos().iter().map(|q| q.seq).collect::<Vec<_>>(),
@@ -1268,13 +1565,21 @@ mod tests {
 
     #[test]
     fn merge_adif_age_gate_and_garbage_merge_nothing() {
-        let mut log = FieldDayLog::new("W9XYZ", Exchange::new("3A", "WI"), "20m");
+        let mut log = FieldDayLog::new(
+            "W9XYZ",
+            ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI"),
+            "20m",
+        );
         assert!(log.log_mode_at("K1ABC", "2A", "CT", "DIG", 0, 1_782_583_500));
         let adif = log.adif();
 
         // A min_when_unix newer than every row (a previous event's journal)
         // restores nothing — the backup self-expires.
-        let mut restored = FieldDayLog::new("W9XYZ", Exchange::new("3A", "WI"), "20m");
+        let mut restored = FieldDayLog::new(
+            "W9XYZ",
+            ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI"),
+            "20m",
+        );
         restored.merge_adif(&adif, 1_782_583_501);
         assert_eq!(restored.qso_count(), 0, "expired journal merges nothing");
 
@@ -1284,6 +1589,7 @@ mod tests {
     }
 
     use super::*;
+    use crate::contest::ContestSession;
 
     fn dec(msg: &str) -> Decode {
         Decode {
@@ -1302,7 +1608,11 @@ mod tests {
 
     #[test]
     fn dupe_check_and_scoring() {
-        let mut log = FieldDayLog::new("W9XYZ", Exchange::new("3A", "WI"), "20M");
+        let mut log = FieldDayLog::new(
+            "W9XYZ",
+            ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI"),
+            "20M",
+        );
         assert!(log.log("K2DEF", "3A", "IL", 1));
         assert!(log.log("N0ABC", "1D", "MN", 2));
         assert!(!log.log("K2DEF", "3A", "IL", 3)); // dupe on same band
@@ -1319,7 +1629,11 @@ mod tests {
     fn cabrillo_frequency_is_per_qso_band_not_the_export_dial() {
         // Each row's frequency comes from the QSO's own band, not the single dial
         // the export happened to pass (which stamped every row before the fix).
-        let mut log = FieldDayLog::new("W9XYZ", Exchange::new("3A", "WI"), "20m");
+        let mut log = FieldDayLog::new(
+            "W9XYZ",
+            ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI"),
+            "20m",
+        );
         assert!(log.log_at("K1ABC", "2A", "CT", 1, 1_782_583_500)); // 20m
         let cab = log.cabrillo(99999); // dial fallback must NOT appear for a known band
         assert!(
@@ -1334,7 +1648,11 @@ mod tests {
 
     #[test]
     fn worked_sections_returns_the_distinct_set_sorted() {
-        let mut log = FieldDayLog::new("W9XYZ", Exchange::new("3A", "WI"), "20M");
+        let mut log = FieldDayLog::new(
+            "W9XYZ",
+            ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI"),
+            "20M",
+        );
         assert!(log.log("K2DEF", "3A", "IL", 1));
         assert!(log.log("N0ABC", "1D", "MN", 2));
         assert!(log.log_mode_at("W1AW", "2A", "IL", "CW", 0, 100)); // IL again, new mode
@@ -1347,28 +1665,41 @@ mod tests {
     #[test]
     fn observe_runs_sp_side() {
         // S&P station hears a CQ, sends exchange, then the runner's rogered exch.
-        let mut sp =
-            FieldDayStation::search_and_pounce("K2DEF", "FN31", Exchange::new("2A", "IL"), "20M");
+        let mut sp = FieldDayStation::search_and_pounce(
+            "K2DEF",
+            "FN31",
+            ContestSession::field_day(FdEvent::ArrlFd, "2A", "IL"),
+            "20M",
+        );
         sp.observe(&[dec("CQ W9XYZ EN37")], 0);
         assert_eq!(sp.state, FdState::AwaitExchange);
         assert_eq!(sp.outgoing().unwrap().to_text(), "W9XYZ K2DEF 2A IL");
         sp.observe(&[dec("K2DEF W9XYZ R 3A WI")], 1);
         assert_eq!(sp.state, FdState::Done);
         assert_eq!(sp.log.qso_count(), 1);
-        assert_eq!(sp.log.qsos()[0].class, "3A");
-        assert_eq!(sp.log.qsos()[0].section, "WI");
+        assert_eq!(sp.log.qsos()[0].class(), "3A");
+        assert_eq!(sp.log.qsos()[0].section(), "WI");
     }
 
     #[test]
     fn running_station_calls_directed_cq_fd() {
         // The running station advertises a DIRECTED Field Day CQ so it reads as
         // "CQ FD" on the air — and an S&P station still answers it.
-        let run = FieldDayStation::running("W9XYZ", "EN37", Exchange::new("3A", "WI"), "20M");
+        let run = FieldDayStation::running(
+            "W9XYZ",
+            "EN37",
+            ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI"),
+            "20M",
+        );
         let cq = run.outgoing().unwrap().to_text();
         assert!(cq.contains("CQ FD"), "directed FD CQ: {cq}");
         assert_eq!(cq, "CQ FD W9XYZ EN37");
-        let mut sp =
-            FieldDayStation::search_and_pounce("K2DEF", "FN31", Exchange::new("2A", "IL"), "20M");
+        let mut sp = FieldDayStation::search_and_pounce(
+            "K2DEF",
+            "FN31",
+            ContestSession::field_day(FdEvent::ArrlFd, "2A", "IL"),
+            "20M",
+        );
         sp.observe(&[dec(&cq)], 0);
         assert_eq!(
             sp.state,
@@ -1381,7 +1712,12 @@ mod tests {
     fn running_station_rearms_and_works_a_second_caller() {
         // Regression for the RUN dead-end: a running station worked exactly one
         // contact and then went silent (Done, no return to CQ). It must re-arm.
-        let mut run = FieldDayStation::running("W9XYZ", "EN37", Exchange::new("3A", "WI"), "20M");
+        let mut run = FieldDayStation::running(
+            "W9XYZ",
+            "EN37",
+            ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI"),
+            "20M",
+        );
         run.observe(&[dec("W9XYZ K2DEF 2A IL")], 0); // caller's exchange
         assert_eq!(run.state, FdState::AwaitConfirm);
         run.observe(&[dec("W9XYZ K2DEF RR73")], 1); // caller confirms → we log
@@ -1410,10 +1746,18 @@ mod tests {
     fn loopback_completes_the_exchange_on_the_happy_path() {
         // The full round-trip over the real modem still completes unchanged after
         // the directed-CQ-FD switch: both stations log the OTHER's exchange.
-        let mut running =
-            FieldDayStation::running("W9XYZ", "EN37", Exchange::new("3A", "WI"), "20M");
-        let mut sp =
-            FieldDayStation::search_and_pounce("K2DEF", "FN31", Exchange::new("2A", "IL"), "20M");
+        let mut running = FieldDayStation::running(
+            "W9XYZ",
+            "EN37",
+            ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI"),
+            "20M",
+        );
+        let mut sp = FieldDayStation::search_and_pounce(
+            "K2DEF",
+            "FN31",
+            ContestSession::field_day(FdEvent::ArrlFd, "2A", "IL"),
+            "20M",
+        );
         run_loopback_fieldday(&mut running, &mut sp, 15.0, 40);
         assert_eq!(
             running.log.qso_count(),
@@ -1423,11 +1767,11 @@ mod tests {
         );
         assert_eq!(sp.log.qso_count(), 1, "sp: {:?}", sp.transcript);
         assert_eq!(
-            running.log.qsos()[0].section,
+            running.log.qsos()[0].section(),
             "IL",
             "running logged the caller"
         );
-        assert_eq!(sp.log.qsos()[0].section, "WI", "S&P logged the runner");
+        assert_eq!(sp.log.qsos()[0].section(), "WI", "S&P logged the runner");
     }
 
     #[test]
@@ -1435,7 +1779,12 @@ mod tests {
         // Caller closes with a bare `73` instead of RR73/RRR: the contact must
         // still complete + log (the caller's exchange was captured at CallingCq),
         // not stall in AwaitConfirm.
-        let mut run = FieldDayStation::running("W9XYZ", "EN37", Exchange::new("3A", "WI"), "20M");
+        let mut run = FieldDayStation::running(
+            "W9XYZ",
+            "EN37",
+            ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI"),
+            "20M",
+        );
         run.observe(&[dec("W9XYZ K2DEF 2A IL")], 0); // caller's exchange
         assert_eq!(run.state, FdState::AwaitConfirm);
         run.observe(&[dec("W9XYZ K2DEF 73")], 1); // bare 73, not RR73
@@ -1443,7 +1792,7 @@ mod tests {
         assert_eq!(run.log.qso_count(), 1);
         let q = &run.log.qsos()[0];
         assert_eq!(
-            (q.call.as_str(), q.class.as_str(), q.section.as_str()),
+            (q.call.as_str(), q.class(), q.section()),
             ("K2DEF", "2A", "IL")
         );
     }
@@ -1454,20 +1803,165 @@ mod tests {
         // plain exchange dropped, or the caller pre-rogered): the class + section
         // are in the rogered frame, so skip straight to logging + close with RR73
         // instead of stalling on CQ.
-        let mut run = FieldDayStation::running("W9XYZ", "EN37", Exchange::new("3A", "WI"), "20M");
+        let mut run = FieldDayStation::running(
+            "W9XYZ",
+            "EN37",
+            ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI"),
+            "20M",
+        );
         assert_eq!(run.state, FdState::CallingCq);
         run.observe(&[dec("W9XYZ K2DEF R 2A IL")], 0); // rogered, skipping the plain form
         assert_eq!(run.state, FdState::Done);
         assert_eq!(run.log.qso_count(), 1);
         let q = &run.log.qsos()[0];
         assert_eq!(
-            (q.call.as_str(), q.class.as_str(), q.section.as_str()),
+            (q.call.as_str(), q.class(), q.section()),
             ("K2DEF", "2A", "IL")
         );
         assert_eq!(
             run.outgoing().unwrap().to_text(),
             "K2DEF W9XYZ RR73",
             "closes with RR73 to the caller"
+        );
+    }
+
+    // -- §3.3: the sent exchange is a per-ROW value ---------------------------
+
+    /// The log a mobile makes: two rows either side of a move, and the move must not
+    /// reach backwards.
+    ///
+    /// Field Day has no county, so the move here is a SECTION change. That is the same
+    /// mechanism (`session.my_exchange` is edited between contacts) on the exchange
+    /// this build actually ships, which is the only exchange there is to test it on.
+    fn moved_log() -> FieldDayLog {
+        let mut log = FieldDayLog::new(
+            "W9XYZ",
+            ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI"),
+            "20m",
+        );
+        assert!(log.log_mode_at("K1ABC", "2A", "EMA", "CW", 0, 1_782_000_000));
+        // — "I moved": the declared location AND the exchange derived from it, which
+        // is one action and not two. The Cabrillo `LOCATION` header follows the
+        // session (it is a per-ENTRY value); the QSO lines follow their own rows.
+        log.session.my_location.state = "IL".into();
+        log.session.my_exchange = vec![
+            log.session.exchange.value("CLASS", "3A").unwrap(),
+            log.session.exchange.value("SECTION", "IL").unwrap(),
+        ];
+        assert!(log.log_mode_at("W1AW", "1D", "CT", "CW", 0, 1_782_000_060));
+        log
+    }
+
+    /// ⭐ **§10's mobile-history test.** Log either side of a move, export, and the
+    /// first row still carries what it actually sent.
+    #[test]
+    fn moving_the_session_does_not_relabel_a_row_already_logged() {
+        let log = moved_log();
+        let cbr = log.cabrillo(14_074);
+        let lines: Vec<&str> = cbr.lines().filter(|l| l.starts_with("QSO:")).collect();
+        assert_eq!(lines.len(), 2);
+        assert!(
+            lines[0].contains("W9XYZ 3A WI K1ABC 2A EMA"),
+            "row 1 was relabelled by a move that happened after it: {}",
+            lines[0]
+        );
+        assert!(
+            lines[1].contains("W9XYZ 3A IL W1AW 1D CT"),
+            "row 2 does not carry the exchange it sent: {}",
+            lines[1]
+        );
+        // The header is the ENTRY's declared location — the session's, deliberately
+        // not row 1's. Cabrillo puts it in a header, once, for exactly that reason.
+        assert!(cbr.contains("\nLOCATION: IL\n"), "{cbr}");
+    }
+
+    /// POSITIVE CONTROL for the test above, and it is the whole reason that green is
+    /// evidence. The same fixture written the way `cabrillo()` used to write it — the
+    /// LOG's one sent exchange on every line — MUST produce different bytes. If it does
+    /// not, the assertions pass because the two values happen to agree rather than
+    /// because the writer reads the row.
+    #[test]
+    fn the_mobile_history_assertion_discriminates() {
+        let log = moved_log();
+        let from_the_row = log.cabrillo(14_074);
+        let from_the_session: String = from_the_row
+            .lines()
+            .map(|l| {
+                if l.starts_with("QSO:") {
+                    // The defect, reconstructed: every line takes the session's
+                    // CURRENT sent exchange instead of its own row's.
+                    l.replace("W9XYZ 3A WI", "W9XYZ 3A IL")
+                } else {
+                    l.to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_ne!(
+            from_the_row.trim_end(),
+            from_the_session.trim_end(),
+            "the byte comparison cannot see a relabelled row"
+        );
+    }
+
+    /// ⭐ **A moved sent exchange survives a restart**, which is what makes the test
+    /// above hold across the journal rather than only in memory.
+    ///
+    /// The pre-move row's `tx` differs from the session's current one, so the writer
+    /// stamps it with `APP_NEXUS_MYEX`; the post-move row matches and falls back. Both
+    /// come back, which is why the exported bytes are unchanged.
+    #[test]
+    fn a_moved_sent_exchange_survives_the_journal() {
+        let log = moved_log();
+        let journal = log.adif();
+        assert!(
+            journal.contains("APP_NEXUS_MYEX"),
+            "the row that no longer matches the session was journaled with no sent side"
+        );
+        let mut restored = FieldDayLog::new(
+            "W9XYZ",
+            ContestSession::field_day(FdEvent::ArrlFd, "3A", "IL"),
+            "20m",
+        );
+        restored.merge_adif(&journal, 0);
+        assert_eq!(restored.qso_count(), 2);
+        assert_eq!(restored.cabrillo(14_074), log.cabrillo(14_074));
+        // POSITIVE CONTROL: strip the carrier and the pre-move row falls back to the
+        // session's current exchange, which is the WRONG section — so the tag is what
+        // is carrying the answer, not the fallback happening to be right.
+        let stripped: String = journal
+            .lines()
+            .map(|l| match l.find("<APP_NEXUS_MYEX:") {
+                Some(i) => format!("{}{}", &l[..i], &l[l.rfind("<EOR>").unwrap_or(l.len())..]),
+                None => l.to_string(),
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut blind = FieldDayLog::new(
+            "W9XYZ",
+            ContestSession::field_day(FdEvent::ArrlFd, "3A", "IL"),
+            "20m",
+        );
+        blind.merge_adif(&stripped, 0);
+        assert_ne!(
+            blind.cabrillo(14_074),
+            log.cabrillo(14_074),
+            "APP_NEXUS_MYEX is not what restores the pre-move row"
+        );
+    }
+
+    /// §4, direction 2: being the mobile is what `by_sent_fields` is for, and Field
+    /// Day declares neither list — so the same station on the same band and mode is a
+    /// dupe whatever the session is sending, and the key is exactly the shipped tuple.
+    #[test]
+    fn field_days_key_ignores_the_sent_side_because_its_rule_names_no_slots() {
+        let mut log = moved_log();
+        let rule = log.dupe_rule();
+        assert_eq!(rule.by_fields, &[] as &[&str]);
+        assert_eq!(rule.by_sent_fields, &[] as &[&str]);
+        assert!(
+            !log.log_mode_at("K1ABC", "2A", "EMA", "CW", 0, 1_782_000_120),
+            "a move must not un-dupe a station under a rule that names no sent slot"
         );
     }
 }

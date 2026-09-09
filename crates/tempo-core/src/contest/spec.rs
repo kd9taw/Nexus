@@ -188,6 +188,30 @@ impl ExchangeSpec {
     pub fn field(&self, key: &str) -> Option<&'static FieldSpec> {
         self.fields.iter().find(|f| f.key == key)
     }
+
+    /// A copied value for one slot, carrying the domain the spec can name **without a
+    /// parse** — the sole arm of an [`FieldKind::Enum`], and nothing else.
+    ///
+    /// `None` for a slot this exchange does not declare: a value with no slot is not a
+    /// value, and inventing a `&'static str` key for it is how a garbage journal would
+    /// leak one leaked string per garbage tag.
+    ///
+    /// ⚠️ **`raw` is stored verbatim.** Normalisation belongs to whatever COPIED the
+    /// value — `rtty::seq` uppercases as it parses, an FT frame arrives uppercase — and
+    /// doing it again here would silently rewrite what a shipped log already holds.
+    /// A [`FieldKind::OneOf`] gets `None`: which arm matched is a fact the parse
+    /// establishes, and re-deriving it here would be a guess (see [`FieldValue`]).
+    pub fn value(&self, key: &str, raw: &str) -> Option<FieldValue> {
+        let f = self.field(key)?;
+        Some(FieldValue {
+            key: f.key,
+            raw: raw.to_string(),
+            domain: match f.kind {
+                FieldKind::Enum { domain } => Some(domain.id),
+                _ => None,
+            },
+        })
+    }
 }
 
 #[cfg(test)]

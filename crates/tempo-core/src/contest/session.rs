@@ -103,25 +103,14 @@ impl ContestSession {
     pub fn field_day(event: crate::fieldday::FdEvent, class: &str, section: &str) -> Self {
         let exchange = super::field_day(event);
         let section = section.trim().to_ascii_uppercase();
-        let my_exchange = vec![
-            FieldValue {
-                key: "CLASS",
-                raw: class.trim().to_ascii_uppercase(),
-                domain: None,
-            },
-            FieldValue {
-                key: "SECTION",
-                raw: section.clone(),
-                // The SECTION slot is an `Enum`, so the value carries the domain that
-                // matched it — which is what a `OneOf` slot's export tag and
-                // multiplier bucket are later chosen by. Field Day's slot has one arm,
-                // so the arm is known without a parse.
-                domain: match exchange.field("SECTION").map(|f| f.kind) {
-                    Some(super::FieldKind::Enum { domain }) => Some(domain.id),
-                    _ => None,
-                },
-            },
-        ];
+        // The SECTION slot is an `Enum`, so its value carries the domain that matched
+        // it — which is what an export tag and a multiplier bucket are later chosen by.
+        // `ExchangeSpec::value` is the one place that resolution lives.
+        let my_exchange = ["CLASS", "SECTION"]
+            .iter()
+            .zip([class.trim().to_ascii_uppercase(), section.clone()])
+            .filter_map(|(k, v)| exchange.value(k, &v))
+            .collect();
         Self {
             id: format!("{}:{}", event.contest_id(), section),
             contest_id: event.contest_id().to_string(),
@@ -173,6 +162,24 @@ impl ContestSession {
             // catch-all role rather than claiming a category the operator never set.
             RoleSelector::MyCategoryIs(_) => false,
         }
+    }
+
+    /// ONE slot of the exchange I am sending right now, by key (`""` when the session
+    /// does not carry that slot).
+    ///
+    /// ⚠️ **This is not the renderer §3.3 makes unrepresentable, and the difference is
+    /// the direction of time.** The forbidden thing turns a session into a STRING that
+    /// then describes a contact already logged; this reads one slot of what is about to
+    /// go on the air, for a frame with typed fields of its own (`Msg::FieldDay` carries
+    /// `class` and `section`, not a rendered exchange). Nothing that describes a past
+    /// row may call it — those read the ROW, through
+    /// [`sent_exchange`](super::render::sent_exchange).
+    pub fn field(&self, key: &str) -> &str {
+        self.my_exchange
+            .iter()
+            .find(|v| v.key == key)
+            .map(|v| v.raw.as_str())
+            .unwrap_or("")
     }
 
     /// Issue the sent exchange for `peer`, or return the one already in flight for

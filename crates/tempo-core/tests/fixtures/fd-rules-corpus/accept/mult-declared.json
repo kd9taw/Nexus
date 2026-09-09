@@ -57,7 +57,9 @@
       "dupe": {
         "by_call": true,
         "by_band": true,
-        "by_mode_class": true
+        "by_mode_class": true,
+        "by_fields": [],
+        "by_sent_fields": []
       },
       "domains": [],
       "exchange": {
@@ -223,7 +225,9 @@
       "dupe": {
         "by_call": true,
         "by_band": true,
-        "by_mode_class": true
+        "by_mode_class": true,
+        "by_fields": [],
+        "by_sent_fields": []
       },
       "domains": [],
       "exchange": {

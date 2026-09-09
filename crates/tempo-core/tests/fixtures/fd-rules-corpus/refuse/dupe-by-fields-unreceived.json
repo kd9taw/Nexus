@@ -43,7 +43,7 @@
         "by_call": true,
         "by_band": true,
         "by_mode_class": true,
-        "by_fields": [],
+        "by_fields": ["POWER"],
         "by_sent_fields": []
       },
       "domains": [],
@@ -58,7 +58,10 @@
               "rcvd": "CLASS",
               "sent": ""
             },
-            "kind": {"type":"one_of","of":[{"type":"call"},{"type":"one_of","of":[{"type":"call"},{"type":"one_of","of":[{"type":"call"},{"type":"one_of","of":[{"type":"call"},{"type":"one_of","of":[{"type":"call"},{"type":"one_of","of":[{"type":"call"},{"type":"one_of","of":[{"type":"call"},{"type":"one_of","of":[{"type":"call"},{"type":"one_of","of":[{"type":"call"},{"type":"one_of","of":[{"type":"call"},{"type":"one_of","of":[{"type":"call"},{"type":"one_of","of":[{"type":"call"},{"type":"one_of","of":[{"type":"call"},{"type":"one_of","of":[{"type":"call"},{"type":"one_of","of":[{"type":"call"},{"type":"one_of","of":[{"type":"call"},{"type":"one_of","of":[{"type":"call"},{"type":"one_of","of":[{"type":"call"},{"type":"one_of","of":[{"type":"call"},{"type":"one_of","of":[{"type":"call"},{"type":"one_of","of":[{"type":"call"},{"type":"one_of","of":[{"type":"call"},{"type":"one_of","of":[{"type":"call"},{"type":"one_of","of":[{"type":"call"},{"type":"one_of","of":[{"type":"call"},{"type":"one_of","of":[{"type":"call"},{"type":"one_of","of":[{"type":"call"},{"type":"one_of","of":[{"type":"call"},{"type":"one_of","of":[{"type":"call"},{"type":"one_of","of":[{"type":"call"},{"type":"one_of","of":[{"type":"call"},{"type":"one_of","of":[{"type":"call"},{"type":"one_of","of":[{"type":"call"},{"type":"one_of","of":[{"type":"call"},{"type":"one_of","of":[{"type":"call"},{"type":"one_of","of":[{"type":"call"},{"type":"one_of","of":[{"type":"call"},{"type":"one_of","of":[{"type":"call"},{"type":"one_of","of":[{"type":"call"},{"type":"one_of","of":[{"type":"call"},{"type":"one_of","of":[{"type":"call"},{"type":"one_of","of":[{"type":"call"},{"type":"one_of","of":[{"type":"call"},{"type":"one_of","of":[{"type":"call"},{"type":"one_of","of":[{"type":"call"},{"type":"one_of","of":[{"type":"call"},{"type":"one_of","of":[{"type":"call"},{"type":"one_of","of":[{"type":"call"},{"type":"one_of","of":[{"type":"call"},{"type":"one_of","of":[{"type":"call"},{"type":"one_of","of":[{"type":"call"},{"type":"one_of","of":[{"type":"call"},{"type":"one_of","of":[{"type":"call"},{"type":"one_of","of":[{"type":"call"},{"type":"one_of","of":[{"type":"call"},{"type":"one_of","of":[{"type":"call"},{"type":"one_of","of":[{"type":"call"},{"type":"one_of","of":[{"type":"call"},{"type":"one_of","of":[{"type":"call"},{"type":"one_of","of":[{"type":"call"},{"type":"one_of","of":[{"type":"call"},{"type":"text","max_len":10}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}
+            "kind": {
+              "type": "pattern",
+              "re": "^[0-9]{1,2}[ABCDEF]$"
+            }
           },
           {
             "key": "SECTION",

@@ -13,9 +13,10 @@
 //! nothing. Re-running it after a behaviour change is how a migration bug gets
 //! blessed — if the goldens move, the change is what is wrong, not the fixture.
 use std::path::Path;
+use tempo_core::contest::ContestSession;
 use tempo_core::contest::{field_day, FieldKind};
 use tempo_core::fd_rules::{ruleset, CURRENT_RULES_YEAR};
-use tempo_core::fieldday::{Exchange, FdEvent, FieldDayLog};
+use tempo_core::fieldday::{FdEvent, FieldDayLog};
 
 /// The fixture rows, in log order. Every timestamp is a literal; nothing here reads a
 /// clock, so the bytes are reproducible on any machine at any time.
@@ -77,8 +78,11 @@ fn assert_classes_are_the_shipped_winter_set() {
 /// itself and one fewer for the discrimination control, exactly like [`golden_log_n`].
 pub fn wfd_class_log_n(rows: usize) -> FieldDayLog {
     assert_classes_are_the_shipped_winter_set();
-    let mut log = FieldDayLog::new("W9XYZ", Exchange::new("2O", "WI"), "80m");
-    log.event = FdEvent::WinterFd;
+    let mut log = FieldDayLog::new(
+        "W9XYZ",
+        ContestSession::field_day(FdEvent::WinterFd, "2O", "WI"),
+        "80m",
+    );
     for (i, (call, class, sect, mode, submode, when, band)) in
         WFD_CLASS_ROWS.iter().take(rows).enumerate()
     {
@@ -102,6 +106,13 @@ pub fn wfd_class_row_count() -> usize {
     WFD_CLASS_ROWS.len()
 }
 
+/// An EMPTY log for an event, with the same station identity and sent exchange as
+/// [`golden_log`] — the restore side of the §8(b) journal fixture, which must be built
+/// the same way the log that wrote the journal was.
+pub fn empty_log(event: FdEvent) -> FieldDayLog {
+    FieldDayLog::new("W9XYZ", ContestSession::field_day(event, "3A", "WI"), "20m")
+}
+
 /// The fixed synthetic log, identical for both events (only `event` differs).
 pub fn golden_log(event: FdEvent) -> FieldDayLog {
     golden_log_n(event, ROWS.len())
@@ -113,8 +124,11 @@ pub fn golden_log(event: FdEvent) -> FieldDayLog {
 /// It exists here rather than as a `FieldDayLog::truncate` because production code does
 /// not grow a row-removal API to serve a test.
 pub fn golden_log_n(event: FdEvent, rows: usize) -> FieldDayLog {
-    let mut log = FieldDayLog::new("W9XYZ", Exchange::new("3A", "WI"), "20m");
-    log.event = event;
+    // The session carries the event, so the log's `event` and the exchange it
+    // validates against cannot disagree. The sent class stays `3A` for BOTH events —
+    // deliberately, because these bytes are frozen; the Winter-legal sent class lives
+    // in `WFD_CLASS_ROWS`, which is why that second fixture exists.
+    let mut log = FieldDayLog::new("W9XYZ", ContestSession::field_day(event, "3A", "WI"), "20m");
     for (i, (call, class, sect, mode, submode, when, band)) in ROWS.iter().take(rows).enumerate() {
         log.band = (*band).to_string();
         assert!(
