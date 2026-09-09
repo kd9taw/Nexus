@@ -2562,9 +2562,12 @@ export interface FieldDayStatus {
    *  short of the sponsor's — and an operator must not read a claimed score off a
    *  number that silently omits their bonuses. */
   /** ⭐ How many multipliers this log has earned, by the ruleset's own rules and scopes.
-   *  `0` for a contest with no multiplier concept (both Field Day events) — which is why
-   *  the score line only shows the multiplier arithmetic when this is above zero. */
-  multCount?: number
+   *
+   *  **Absent means this contest has no multiplier concept** (both Field Day events);
+   *  `0` means it has one and none has been worked yet. The score line and the tile
+   *  switch on which of the two it is, so a Field Day log never shows "0 Mults" and a
+   *  QSO party with no contacts yet never shows Field Day's "Sections". */
+  multCount?: number | null
   scoreNoteKey?: string
   /** The active ruleset's rules year + the rules data's `generated` stamp. */
   rulesYear?: number

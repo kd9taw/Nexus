@@ -627,8 +627,9 @@ interface FdScore {
   claimedBonusIds: string[]
   bonusPoints: number
   totalScore: number
-  /** ⭐ How many multipliers the ruleset counted — 0 when it declares none. */
-  multCount: number
+  /** ⭐ How many multipliers the ruleset counted — `null` when it declares none, which
+   *  is not the same as having counted zero of them. */
+  multCount: number | null
 }
 
 /** Score components from the snapshot (new fields); fall back to computed if absent. */
@@ -641,10 +642,11 @@ function computeFdScore(fieldDay: FieldDayStatus | null, settings: Settings | nu
     .filter((b) => claimedBonusIds.includes(b.id))
     .reduce((sum, b) => sum + b.points, 0)
   const totalScore = fieldDay?.totalScore ?? poweredPoints + bonusPoints
-  // ⭐ The multiplier count off the ruleset — 0 for a contest that declares none, which
-  // is what switches the tile and the score line between Field Day's arithmetic and a
-  // QSO party's.
-  const multCount = fieldDay?.multCount ?? 0
+  // ⭐ The multiplier count off the ruleset — `null` for a contest that declares none,
+  // which is what switches the tile and the score line between Field Day's arithmetic
+  // and a QSO party's. A contest that HAS multipliers and has worked none is `0`, and
+  // must still get the QSO-party display.
+  const multCount = fieldDay?.multCount ?? null
   return {
     fdPowerMult,
     qsoPts,
@@ -1223,7 +1225,7 @@ export function FieldDayScoreboard({
             and not a multiplier (neither FD event has one); a QSO party's multiplier
             total IS its score's other factor, so the tile shows the number that is doing
             the work rather than one that means nothing for the contest on screen. */}
-        {multCount > 0 ? (
+        {multCount !== null ? (
           <div className="fd-score">
             <span className="fd-score-val">{multCount}</span>
             <span className="fd-score-label">{t('fieldDay.score.mults')}</span>
@@ -1241,7 +1243,7 @@ export function FieldDayScoreboard({
           {modes.ph > 0 && <span className="fd-mode-chip ph">{modes.ph} {FD_MODE_CODES.ph}</span>}
         </div>
         {/* Score math */}
-        {multCount > 0 ? (
+        {multCount !== null ? (
           /* ⭐ A CONTEST WITH MULTIPLIERS scores points × mults. Showing Field Day's
              power×+bonus line here would print `× power ×1` for a contest that has no
              power multiplier and omit the factor that actually decides the total. */

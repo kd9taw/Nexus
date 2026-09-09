@@ -30402,7 +30402,7 @@ mod tests {
         let fd = e.snapshot().field_day.expect("still in the contest");
         assert_eq!(fd.qso_count, 3);
         assert_eq!(fd.points, 9, "TNQP: 3 points per QSO, every mode");
-        assert_eq!(fd.mult_count, 2, "CT and DAVI, per band");
+        assert_eq!(fd.mult_count, Some(2), "CT and DAVI, per band");
         assert_eq!(fd.total_score, 18);
         // ⭐ …and the note saying what that number LEAVES OUT. TNQP's bonuses are
         // computed from the log and are deliberately not modelled.
@@ -30482,10 +30482,10 @@ mod tests {
         assert_eq!(fd.my_section, "WI");
         assert!(e.fd_log_manual("K1ABC", "2A", "EMA", "CW").unwrap());
         let fd = e.snapshot().field_day.expect("FD chrome");
-        // ⚠️ ZERO multipliers is NOT a zero multiplier: `Scoring::score` applies the
-        // count only when the ruleset declares a rule, so the powered total is the
-        // power-tier total it has always been (2 CW points × tier 5).
-        assert_eq!(fd.mult_count, 0);
+        // ⚠️ NO multiplier concept, which is not a multiplier of zero: `Scoring::score`
+        // applies the count only when the ruleset declares a rule, so the powered total
+        // is the power-tier total it has always been (2 CW points × tier 5).
+        assert_eq!(fd.mult_count, None);
         assert_eq!((fd.points, fd.powered_points, fd.total_score), (2, 10, 10));
         assert_eq!(fd.score_note_key, "");
     }

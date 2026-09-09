@@ -290,22 +290,23 @@ impl Scoring {
 
     /// The claimed total: `(qso_points, powered, multipliers, total)`.
     ///
-    /// ⚠️ **A ruleset with NO multiplier is not a ruleset with zero multipliers.** Both
-    /// Field Day events declare none, and multiplying their powered total by 0 would
-    /// zero a shipped score — so the multiplier count is applied only when the ruleset
-    /// declares at least one rule, and the reported count is 0 for an event that has no
-    /// such concept. `bonuses` stay outside this: they are CLAIMED by the operator, not
-    /// derived from the log, and `FdRuleset::bonus_points` is where they are added.
-    pub fn score<'a, I>(&self, rows: I, power_mult: u32) -> (u32, u32, u32, u32)
+    /// ⚠️ **A ruleset with NO multiplier is not a ruleset with zero multipliers, and the
+    /// count says which it is.** `None` = this contest has no multiplier concept (both
+    /// Field Day events); `Some(0)` = it has one and none has been worked yet. A `0`
+    /// standing for both would leave every consumer to guess, and multiplying a shipped
+    /// Field Day total by it would zero the score. `bonuses` stay outside this: they are
+    /// CLAIMED by the operator, not derived from the log, and
+    /// `FdRuleset::bonus_points` is where they are added.
+    pub fn score<'a, I>(&self, rows: I, power_mult: u32) -> (u32, u32, Option<u32>, u32)
     where
         I: IntoIterator<Item = ScoreRow<'a>> + Clone,
     {
         let (qso_pts, powered) = self.qso_and_powered(rows.clone(), power_mult);
         if self.multipliers.is_empty() {
-            return (qso_pts, powered, 0, powered);
+            return (qso_pts, powered, None, powered);
         }
         let mults: u32 = self.mult_counts(rows).iter().map(|(_, n)| *n as u32).sum();
-        (qso_pts, powered, mults, powered * mults)
+        (qso_pts, powered, Some(mults), powered * mults)
     }
 
     /// This event's legal power tiers, or `None` when it applies no power multiplier —

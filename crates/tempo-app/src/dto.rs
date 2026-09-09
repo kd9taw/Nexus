@@ -1362,11 +1362,14 @@ pub struct FieldDayStatus {
     /// ⭐ **How many multipliers this log has earned** — the count the score is
     /// multiplied by, summed over every universe the ruleset declares.
     ///
-    /// `0` for an event with no multiplier concept (both Field Day events), which is
-    /// NOT the same as a zero multiplier: `Scoring::score` applies the count only when
-    /// the ruleset declares at least one rule, so a Field Day total is untouched.
-    #[serde(default)]
-    pub mult_count: u32,
+    /// **`None` means this contest has no multiplier concept** (both Field Day events);
+    /// `Some(0)` means it has one and none has been worked yet. A `0` standing for both
+    /// would make the scoreboard show a Field Day log a "0 Mults" tile and a QSO party
+    /// with no contacts yet a "Sections" one, which is each contest wearing the other's
+    /// display. `Scoring::score` applies the count only in the `Some` case, so a Field
+    /// Day total is untouched.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mult_count: Option<u32>,
     /// ⭐ **An i18n key naming what this contest's computed score LEAVES OUT**, or
     /// empty when the score is complete (both Field Day events, OhQP, CQP).
     ///
