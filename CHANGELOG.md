@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Sweepstakes, CQ WW and CQ WPX.** ARRL November Sweepstakes ships as two contests (the CW and
+  Phone weekends are separately run), and CQ WW and CQ WPX as four. These are the hard ones: unlike a
+  QSO party, their multipliers come from the *callsign* rather than the exchange — DXCC entity, CQ
+  zone, and WPX's prefix rule — so Nexus now resolves each contact's country and zone as you log it.
+  A relation-scored contest refuses to start without a country file rather than quietly scoring a
+  whole weekend at zero.
+
+  Sweepstakes' exchange is the awkward one in amateur radio — serial, precedence, callsign, check and
+  section, with the callsign *inside* the exchange and the check constant across your whole log. Both
+  are handled, and the check is watched: change it mid-contest and Nexus tells you at log time and
+  refuses the export naming both values.
+
 - **Contest support beyond Field Day — four state QSO parties.** Tennessee, Ohio, California and
   Texas are selectable in Settings ▸ Contesting, and the whole operating path follows the one you
   pick: the entry strip shows that contest's exchange fields, dupe checking uses that sponsor's own
@@ -44,6 +56,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   capped the same way; they never were.
 
 ### Fixed
+
+- **Your ARRL section list was eight years out of date.** Nexus carried 83 sections including
+  `MAR`, `GTA` and `NT`. ARRL now publishes 85: the Maritime section split into `NB`, `NS` and `PE`,
+  `GTA` became `GH` and `NT` became `TER`. So Field Day offered three sections ARRL does not
+  recognise and was missing five it does — and a log submitted under a retired code is not a log
+  ARRL can score.
+
+  `GTA` and `NT` are renamed for you, because ARRL publishes those transitions itself. `MAR` is not:
+  it split three ways and only you know which one you operate from, so Nexus keeps what you had,
+  says what changed, and asks. It does not guess, and it does not blank the setting — that would
+  destroy the only record of where you were.
 
 - **Your transmit timing was being steered by a single unchecked network packet.** Nexus measures
   the PC clock against a time server every ten minutes and shifts its own transmit and decode
