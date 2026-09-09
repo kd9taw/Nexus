@@ -51,6 +51,14 @@ export const CONTESTS: { id: string; name: string }[] = [
   // and on arrl.org.
   { id: 'arrlss_cw', name: 'ARRL November Sweepstakes (CW)' },
   { id: 'arrlss_ssb', name: 'ARRL November Sweepstakes (Phone)' },
+  // CQ WW and CQ WPX are likewise two contests each, on separate weekends with separate
+  // Cabrillo tokens. The sponsors' own names, from cqww.com and cqwpx.com.
+  // NB the RTTY runnings of both are a DIFFERENT sponsor's contests (CQ/RJ, with the RTTY
+  // Journal) and have their own rules, so they are not arms of these rows.
+  { id: 'cqww_cw', name: 'CQ World-Wide DX Contest (CW)' },
+  { id: 'cqww_ssb', name: 'CQ World-Wide DX Contest (SSB)' },
+  { id: 'cqwpx_cw', name: 'CQ World-Wide WPX Contest (CW)' },
+  { id: 'cqwpx_ssb', name: 'CQ World-Wide WPX Contest (SSB)' },
   { id: 'cqp', name: 'California QSO Party' },
   { id: 'ohqp', name: 'Ohio QSO Party' },
   { id: 'tnqp', name: 'Tennessee QSO Party' },
