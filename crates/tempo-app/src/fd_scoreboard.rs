@@ -1276,7 +1276,7 @@ mod tests {
         let v = parse(&build_meta(&d, now));
         let secs = v["sections"].as_array().unwrap();
         assert_eq!(secs.len(), fd_rules::sections().len());
-        assert_eq!(secs.len(), 83); // 71 US ARRL + 12 RAC
+        assert_eq!(secs.len(), 85); // 71 US ARRL + 14 RAC
         assert!(secs[0]["code"].is_string() && secs[0]["division"].is_string());
         let menu = v["bonuses"].as_array().unwrap();
         let rs = fd_rules::ruleset(FdEvent::ArrlFd, fd_rules::CURRENT_RULES_YEAR);

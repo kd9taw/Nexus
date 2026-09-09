@@ -2148,8 +2148,8 @@ mod tests {
         }
         // Spot-check the tricky split-state + RAC entries the spec calls out.
         for code in [
-            "EMA", "WMA", "STX", "NTX", "WTX", "SDG", "ORG", "SCV", "NNY", "GH", "TER", "NB",
-            "NS", "PE",
+            "EMA", "WMA", "STX", "NTX", "WTX", "SDG", "ORG", "SCV", "NNY", "GH", "TER", "NB", "NS",
+            "PE",
         ] {
             assert!(codes.contains(code), "missing section {code}");
         }

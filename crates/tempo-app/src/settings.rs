@@ -4405,8 +4405,8 @@ impl Settings {
         // picker and `Engine::set_mode` use it to say what changed. See
         // `fd_rules::RetiredSection::rename_target` — one method, and it is the whole
         // rename-versus-split policy.
-        if let Some(current) = tempo_core::fd_rules::retired_section(&s.fd_section)
-            .and_then(|r| r.rename_target())
+        if let Some(current) =
+            tempo_core::fd_rules::retired_section(&s.fd_section).and_then(|r| r.rename_target())
         {
             s.fd_section = current.to_string();
         }

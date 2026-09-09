@@ -56,8 +56,7 @@ const ARRL_85: [&str; 85] = [
     "AR", "LA", "MS", "NM", "NTX", "OK", "STX", "WTX", // Call Sign Area 6
     "EB", "LAX", "ORG", "SB", "SCV", "SDG", "SF", "SJV", "SV", "PAC",
     // Call Sign Area 7
-    "AZ", "EWA", "ID", "MT", "NV", "OR", "UT", "WWA", "WY", "AK",
-    // Call Sign Area 8
+    "AZ", "EWA", "ID", "MT", "NV", "OR", "UT", "WWA", "WY", "AK", // Call Sign Area 8
     "MI", "OH", "WV", // Call Sign Area 9
     "IL", "IN", "WI", // Call Sign Area 0
     "CO", "IA", "KS", "MN", "MO", "NE", "ND", "SD", // Canada (RAC)
@@ -132,7 +131,10 @@ fn every_section_carries_a_name_and_a_division_and_no_code_repeats() {
 #[test]
 fn the_field_day_and_sweepstakes_section_lists_agree() {
     let rs = fd_rules::ruleset_by_id("arrlss_cw", CURRENT_RULES_YEAR).expect("Sweepstakes ships");
-    let sec = rs.exchange.field("SEC").expect("Sweepstakes sends a SEC slot");
+    let sec = rs
+        .exchange
+        .field("SEC")
+        .expect("Sweepstakes sends a SEC slot");
     let tempo_core::contest::FieldKind::Enum { domain } = sec.kind else {
         panic!("SEC is an enum over the section list")
     };
@@ -173,7 +175,10 @@ fn the_retired_codes_map_to_what_arrl_published_and_a_split_maps_to_nothing() {
         );
     }
     // Normalised like `valid_section`, so a hand-edited settings.json migrates too.
-    assert_eq!(fd_rules::retired_section(" gta ").map(|r| r.code), Some("GTA"));
+    assert_eq!(
+        fd_rules::retired_section(" gta ").map(|r| r.code),
+        Some("GTA")
+    );
 }
 
 /// The two lists must not overlap, in either direction.
