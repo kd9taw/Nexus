@@ -3417,7 +3417,7 @@ impl Default for Settings {
             contest_qth_county: String::new(),
             contest_qth_state: String::new(),
             contest_check: String::new(),
-            contest_cq_zone: 0, // 0 = not set; CQ zones are 1..=40
+            contest_cq_zone: 0,  // 0 = not set; CQ zones are 1..=40
             contest_itu_zone: 0, // 0 = not set; ITU zones are 1..=90
             contest_power: String::new(),
             fd_power_mult: 2,
