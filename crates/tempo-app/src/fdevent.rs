@@ -539,11 +539,15 @@ impl ClubLog {
         // carries no `mex`, and what a 1.x host meant by its absence is "the club's
         // sent exchange", which is exactly right for Field Day.
         let spec = self.exchange();
-        let mut log = FieldDayLog::new(
-            mycall,
-            ContestSession::field_day(self.event, class, section),
-            "",
-        );
+        let mut session = ContestSession::field_day(self.event, class, section);
+        // ⭐ A CLUB log IS a multi-operator entry, and this is the ONE place that is
+        // true by construction: these rows were worked at several positions under one
+        // callsign, which is exactly what `CATEGORY-OPERATOR: MULTI-OP` declares. The
+        // session's default is `SINGLE-OP` because a lone operator is the default
+        // user; a host merging positions is not that operator, and it says so here
+        // rather than leaving the header to a picker nobody at a field site touched.
+        session.entry_category = tempo_core::contest::OperatorCategory::MultiOp;
+        let mut log = FieldDayLog::new(mycall, session, "");
         for i in self.earliest_unique_indices() {
             let r = &self.rows[i];
             log.band = r.band.clone();
@@ -672,7 +676,17 @@ impl ClubLog {
     /// `0` reaches the exporter only for a row that recorded no band at all, and a zero in
     /// that field reads as missing rather than as a confident wrong answer. Every row that
     /// HAS a band now carries its own, mapped or verbatim.
-    pub fn export_cabrillo(&self, mycall: &str, class: &str, section: &str) -> String {
+    ///
+    /// `Err` carries the reason the log is not one submittable entry — today only a
+    /// mode-split contest whose rows span both modes (§6.2), which neither Field Day
+    /// event is. The message is the operator's, so it is passed up rather than
+    /// collapsed into a missing file.
+    pub fn export_cabrillo(
+        &self,
+        mycall: &str,
+        class: &str,
+        section: &str,
+    ) -> Result<String, String> {
         self.unique_log(mycall, class, section).cabrillo(0)
     }
 }
@@ -950,7 +964,9 @@ mod tests {
         let mut earlier = wq("bbbb", 1, "W1AW", "20m", "DIG", "CT", 100);
         earlier.class = "5A".into(); // distinguishable in the export
         club.merge(&earlier, 11);
-        let cab = club.export_cabrillo("W9ABC", "3A", "WI");
+        let cab = club
+            .export_cabrillo("W9ABC", "3A", "WI")
+            .expect("a single-mode event exports one entry");
         assert_eq!(cab.matches("QSO:").count(), 1, "deduped to one line");
         assert!(
             cab.contains("W1AW 5A CT"),
@@ -962,6 +978,7 @@ mod tests {
         club.merge(&wq("aaaa", 2, "K1ABC", "40m", "CW", "EMA", 700), 12);
         assert_eq!(
             club.export_cabrillo("W9ABC", "3A", "WI")
+                .expect("a single-mode event exports one entry")
                 .matches("QSO:")
                 .count(),
             2
@@ -1310,7 +1327,8 @@ mod tests {
             "the same score the 1.x build computed from these bytes"
         );
         assert_eq!(
-            host.export_cabrillo("W9ABC", "3A", "WI"),
+            host.export_cabrillo("W9ABC", "3A", "WI")
+                .expect("a single-mode event exports one entry"),
             J1X_CBR,
             "the club Cabrillo is byte-identical to what 1.x exported"
         );
@@ -1424,8 +1442,11 @@ mod tests {
         let all_v2 = build(0);
         for (label, club) in [("mixed", &mixed), ("all-v2", &all_v2)] {
             assert_eq!(
-                club.export_cabrillo("W9ABC", "3A", "WI"),
-                all_v1.export_cabrillo("W9ABC", "3A", "WI"),
+                club.export_cabrillo("W9ABC", "3A", "WI")
+                    .expect("a single-mode event exports one entry"),
+                all_v1
+                    .export_cabrillo("W9ABC", "3A", "WI")
+                    .expect("a single-mode event exports one entry"),
                 "{label} club's Cabrillo moved"
             );
             assert_eq!(
@@ -1466,7 +1487,9 @@ mod tests {
             ),
             200,
         );
-        let cab = club.export_cabrillo("W9ABC", "3A", "WI");
+        let cab = club
+            .export_cabrillo("W9ABC", "3A", "WI")
+            .expect("a single-mode event exports one entry");
         assert!(
             cab.contains("W9ABC 3A WI W1AW 2A CT"),
             "the first tent's own sent exchange: {cab}"
@@ -1483,7 +1506,9 @@ mod tests {
         let mut legacy = ClubLog::new(FdEvent::ArrlFd, "TWO-SITE FD");
         legacy.merge(&wq("aaaa", 1, "W1AW", "20m", "PH", "CT", 100), 100);
         legacy.merge(&wq("bbbb", 1, "K1ABC", "40m", "CW", "EMA", 200), 200);
-        let legacy_cab = legacy.export_cabrillo("W9ABC", "3A", "WI");
+        let legacy_cab = legacy
+            .export_cabrillo("W9ABC", "3A", "WI")
+            .expect("a single-mode event exports one entry");
         assert!(
             legacy_cab.contains("W9ABC 3A WI K1ABC 2A EMA"),
             "control: a legacy row falls back to the host's sent exchange: {legacy_cab}"

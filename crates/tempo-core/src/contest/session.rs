@@ -126,6 +126,31 @@ pub struct ContestSession {
     pub next_serial: u32,
     /// Operator-facing (`"TNQP 2026"`).
     pub label: String,
+    /// ⭐ **The entry declaration Cabrillo's `CATEGORY-OPERATOR` header states.**
+    ///
+    /// It lives on the SESSION because the session IS the entry: one run of one
+    /// contest under one callsign is exactly the thing a sponsor scores as an entry.
+    /// Until this field existed the header was the string literal `MULTI-OP`, so
+    /// every solo Field Day entry Nexus exported claimed more than one operator was
+    /// at the station.
+    pub entry_category: super::cabrillo::OperatorCategory,
+    /// The mode-split `CONTEST` tokens, `(mode class, id)` — `[("CW",
+    /// "ARRL-SS-CW"), ("PH", "ARRL-SS-SSB")]`.
+    ///
+    /// **Empty for a contest whose entry is one file**, which is both Field Day
+    /// events and everything else pass one ships. When it is not empty, a log
+    /// spanning two ids is refused rather than submitted under one of them
+    /// ([`contest_id_for`](Self::contest_id_for)).
+    pub contest_id_by_mode: Vec<(String, String)>,
+    /// Cabrillo's trailing transmitter-id column, and the id THIS position writes in
+    /// it — `None` when the sponsor's QSO template has no such column.
+    ///
+    /// One field rather than a flag beside a number, so "the template has the column"
+    /// and "this is my id" cannot disagree. `None` for both Field Day events and for
+    /// everything else pass one ships; ARRL DX, CQ WW and CQ WPX carry the column and
+    /// declare it in the batch that reads each sponsor's own template (§6.2 — the
+    /// per-contest column order is never taken from a compilation).
+    pub transmitter_id: Option<u8>,
     /// Where this session's merged contacts go — **default OFF** (§18.1). See
     /// [`UploadPolicy`].
     pub upload: UploadPolicy,
@@ -168,6 +193,14 @@ impl ContestSession {
             end_unix: 0,
             next_serial: 1,
             label: exchange.name.to_string(),
+            // ⭐ SINGLE-OP, not the `MULTI-OP` this header was hardcoded to. A lone
+            // operator is the case the literal was wrong about, and a club running a
+            // multi-operator entry is already configuring positions.
+            entry_category: super::cabrillo::OperatorCategory::default(),
+            // Neither Field Day event splits its entry by mode.
+            contest_id_by_mode: Vec::new(),
+            // …and neither sponsor's QSO template carries a transmitter column.
+            transmitter_id: None,
             // §18.1: OFF, on every new session, without exception. It is not read from
             // a setting — a global default is the thing this control replaces.
             upload: UploadPolicy::default(),
@@ -183,6 +216,20 @@ impl ContestSession {
         } else {
             &[]
         }
+    }
+
+    /// The Cabrillo `CONTEST` token for a log holding these mode classes.
+    ///
+    /// One method rather than a field read plus a lookup, so no caller can resolve a
+    /// mode-split id one way while another resolves it a second way. See
+    /// [`resolve_contest_id`](super::cabrillo::resolve_contest_id) for why a log
+    /// spanning two ids is refused instead of submitted under the first.
+    pub fn contest_id_for(&self, mode_classes: &[&str]) -> Result<String, String> {
+        super::cabrillo::resolve_contest_id(
+            &self.contest_id,
+            &self.contest_id_by_mode,
+            mode_classes,
+        )
     }
 
     /// **`role` is not a field.** It is evaluated from [`Self::my_location`] every
@@ -210,11 +257,14 @@ impl ContestSession {
                         .iter()
                         .any(|s| s.eq_ignore_ascii_case(&self.my_location.state))
             }
-            // The entry category is a `CATEGORY-*` header value, and the picker that
-            // supplies it is batch 6. No exchange in pass one selects on it; when one
-            // does, the category joins the session beside `my_location` and this arm
-            // reads it. Never matching is the safe half: it falls through to the
-            // catch-all role rather than claiming a category the operator never set.
+            // The only `CATEGORY-*` value this session declares is
+            // [`Self::entry_category`] (`CATEGORY-OPERATOR`), and no exchange in pass
+            // one selects a role on it — the QSO parties select on location. Which
+            // AXIS a selector names is therefore still undetermined, and answering it
+            // here would be guessing; the batch that ships an exchange selecting on a
+            // category decides, and reads the field it names. Never matching is the
+            // safe half: it falls through to the catch-all role rather than claiming
+            // a category the operator never set.
             RoleSelector::MyCategoryIs(_) => false,
         }
     }

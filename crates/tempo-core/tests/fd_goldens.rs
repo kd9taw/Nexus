@@ -4,6 +4,22 @@
 //!
 //! If one of these goes red, the batch that reddened it changed shipped Field Day
 //! behaviour. Re-capturing the golden is never the fix.
+//!
+//! ⚠️ **One deliberate movement, batch 6, and it is the whole of it.** Line 4 of each
+//! of the three `.cbr` files changed from
+//!
+//! ```text
+//! CATEGORY-OPERATOR: MULTI-OP
+//! ```
+//!
+//! to `CATEGORY-OPERATOR: SINGLE-OP`, because that line was a string literal in
+//! `FieldDayLog::cabrillo` and `MULTI-OP` is a CLAIM — that more than one operator was
+//! at the station. Every solo Field Day entry Nexus has ever exported submitted a false
+//! one. The header now reads `ContestSession::entry_category`, whose default is
+//! `SINGLE-OP`; a club host's merged export sets `MULTI-OP` explicitly
+//! (`fdevent::ClubHost::unique_log`), which is why the 1.x club-Cabrillo fixture in
+//! `fdevent.rs` did NOT move. Nothing else moved: not one QSO line, not one other
+//! header, and none of the three `.adi` files.
 // The fixture builder lives in the capture arm so the bytes and the builder can never
 // drift apart. `main` — the capture arm's own entry point — is dead here by
 // construction, and re-exporting it would be worse than allowing it.
@@ -24,14 +40,24 @@ const WFD_CLASSES_ADI: &str = include_str!("fixtures/fd-goldens/wfd-classes.adi"
 #[test]
 fn arrl_field_day_cabrillo_and_adif_are_byte_identical() {
     let log = capture::golden_log(FdEvent::ArrlFd);
-    assert_eq!(log.cabrillo(14_074), ARRLFD_CBR, "ARRL FD Cabrillo moved");
+    assert_eq!(
+        log.cabrillo(14_074)
+            .expect("a single-mode event exports one entry"),
+        ARRLFD_CBR,
+        "ARRL FD Cabrillo moved"
+    );
     assert_eq!(log.adif(), ARRLFD_ADI, "ARRL FD ADIF moved");
 }
 
 #[test]
 fn winter_field_day_cabrillo_and_adif_are_byte_identical() {
     let log = capture::golden_log(FdEvent::WinterFd);
-    assert_eq!(log.cabrillo(14_074), WFD_CBR, "Winter FD Cabrillo moved");
+    assert_eq!(
+        log.cabrillo(14_074)
+            .expect("a single-mode event exports one entry"),
+        WFD_CBR,
+        "Winter FD Cabrillo moved"
+    );
     assert_eq!(log.adif(), WFD_ADI, "Winter FD ADIF moved");
 }
 
@@ -45,7 +71,8 @@ fn winter_field_day_cabrillo_and_adif_are_byte_identical() {
 fn the_winter_class_log_exports_byte_identically() {
     let log = capture::wfd_class_log();
     assert_eq!(
-        log.cabrillo(3_570),
+        log.cabrillo(3_570)
+            .expect("a single-mode event exports one entry"),
         WFD_CLASSES_CBR,
         "WFD class Cabrillo moved"
     );
@@ -110,7 +137,9 @@ fn the_goldens_discriminate() {
     ] {
         let short = capture::golden_log_n(event, 6);
         assert_ne!(
-            short.cabrillo(14_074),
+            short
+                .cabrillo(14_074)
+                .expect("a single-mode event exports one entry"),
             cbr,
             "{event:?}: Cabrillo golden is vacuous"
         );
@@ -122,7 +151,9 @@ fn the_goldens_discriminate() {
     }
     let short = capture::wfd_class_log_n(capture::wfd_class_row_count() - 1);
     assert_ne!(
-        short.cabrillo(3_570),
+        short
+            .cabrillo(3_570)
+            .expect("a single-mode event exports one entry"),
         WFD_CLASSES_CBR,
         "WFD class Cabrillo golden is vacuous"
     );
@@ -156,7 +187,9 @@ fn a_1x_journal_restores_to_an_identical_cabrillo_and_score() {
         "a 1.x journal lost rows on restore"
     );
     assert_eq!(
-        restored.cabrillo(14_074),
+        restored
+            .cabrillo(14_074)
+            .expect("a single-mode event exports one entry"),
         ARRLFD_CBR,
         "a restored 1.x log exports different bytes"
     );
@@ -184,7 +217,9 @@ fn the_1x_journal_restore_discriminates() {
         "a row with no callsign was restored anyway"
     );
     assert_ne!(
-        restored.cabrillo(14_074),
+        restored
+            .cabrillo(14_074)
+            .expect("a single-mode event exports one entry"),
         ARRLFD_CBR,
         "the Cabrillo comparison cannot see a missing row"
     );

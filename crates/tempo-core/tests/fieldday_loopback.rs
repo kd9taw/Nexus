@@ -46,7 +46,10 @@ fn two_stations_complete_field_day_exchange() {
     );
 
     // Exports are well-formed.
-    let cab = running.log.cabrillo(14_074);
+    let cab = running
+        .log
+        .cabrillo(14_074)
+        .expect("a single-mode event exports one entry");
     assert_eq!(cab.matches("QSO:").count(), 1);
     assert!(cab.contains("W9XYZ 3A WI K2DEF 2A IL"), "cabrillo: {cab}");
     assert!(running.log.adif().contains("K2DEF") && running.log.adif().contains("ARRL_SECT"));

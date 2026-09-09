@@ -8707,19 +8707,23 @@ impl Engine {
     }
 
     /// Club export from the host, deduped earliest-wins by `(call, band,
-    /// mode class)` — the submittable club artifact. `None` = not hosting.
-    pub fn fd_club_export(&self, cabrillo: bool) -> Option<String> {
-        let club = self.fd_club.as_ref()?;
+    /// mode class)` — the submittable club artifact. `Err` = not hosting, or the log
+    /// is not one submittable Cabrillo entry (§6.2); both reasons are named.
+    pub fn fd_club_export(&self, cabrillo: bool) -> Result<String, String> {
+        let club = self
+            .fd_club
+            .as_ref()
+            .ok_or_else(|| "this station is not hosting a club event".to_string())?;
         let (mycall, class, section) = (
             self.settings.mycall.as_str(),
             self.settings.fd_class.as_str(),
             self.settings.fd_section.as_str(),
         );
-        Some(if cabrillo {
+        if cabrillo {
             club.export_cabrillo(mycall, class, section)
         } else {
-            club.export_adif(mycall, class, section)
-        })
+            Ok(club.export_adif(mycall, class, section))
+        }
     }
 
     /// THE SCOREBOARD SEAM: the bounded clone the scoreboard server renders.
@@ -18828,18 +18832,21 @@ impl Engine {
         self.last_decodes = decodes.to_vec();
     }
 
-    /// Export the Field Day log in `format` ("cabrillo" or "adif"). Returns
-    /// `None` unless currently in Field Day mode.
-    pub fn export_log(&self, format: &str) -> Option<String> {
+    /// Export the Field Day log in `format` ("cabrillo" or "adif"). `Err` unless
+    /// currently in Field Day mode, or when the log is not one submittable Cabrillo
+    /// entry — a mode-split contest holding both modes (§6.2). Both reasons are
+    /// **named**: an export dialog that says only "nothing to export" cannot tell an
+    /// operator which of the two happened.
+    pub fn export_log(&self, format: &str) -> Result<String, String> {
         match &self.mode {
             Mode::FieldDay { station, .. } => {
                 let freq_khz = (self.settings.dial_mhz * 1000.0).round() as u32;
                 match format.to_ascii_lowercase().as_str() {
-                    "adif" => Some(station.log.adif()),
-                    _ => Some(station.log.cabrillo(freq_khz)),
+                    "adif" => Ok(station.log.adif()),
+                    _ => station.log.cabrillo(freq_khz),
                 }
             }
-            _ => None,
+            _ => Err("nothing to export (enter Field Day mode first)".to_string()),
         }
     }
 

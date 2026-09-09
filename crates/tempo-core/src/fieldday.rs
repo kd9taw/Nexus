@@ -737,26 +737,53 @@ impl FieldDayLog {
         });
     }
 
-    /// Export the log in Cabrillo QSO-line form for the given band frequency (kHz).
-    pub fn cabrillo(&self, freq_khz: u32) -> String {
-        let mut s = String::new();
-        s.push_str("START-OF-LOG: 3.0\n");
-        s.push_str(&format!("CONTEST: {}\n", self.event.contest_id()));
-        s.push_str(&format!("CALLSIGN: {}\n", self.mycall));
-        // LOCATION is a per-ENTRY value, so it reads the session's declared location
-        // and not a row: Cabrillo puts it in a header, once, for exactly that reason.
-        // The per-contact truth is on the QSO lines below.
-        s.push_str(&format!(
-            "CATEGORY-OPERATOR: MULTI-OP\nLOCATION: {}\nCREATED-BY: Nexus\n",
-            self.session.my_location.state
-        ));
-        // Which rules data scored this log (X- headers are Cabrillo-legal and
-        // ignored by robots) — a fetched rules file with different parameters
-        // is visible on the artifact an operator actually submits.
-        s.push_str(&format!(
-            "X-NEXUS-RULES-YEAR: {}\n",
-            crate::fd_rules::ruleset(self.event, crate::fd_rules::CURRENT_RULES_YEAR).rules_year
-        ));
+    /// Export the log as a Cabrillo entry — headers (§6.1) then one QSO line per
+    /// contact (§6.2) — for the given band frequency (kHz).
+    ///
+    /// `Err` carries the reason this log is not ONE submittable entry, in words meant
+    /// for the export dialog. Today there is exactly one such reason and no shipped
+    /// contest can reach it: a mode-split contest whose rows span both modes submits
+    /// as two entries, and a file cannot be both. It is fallible rather than
+    /// best-effort because the alternative is writing a file that looks right and is
+    /// scored under the wrong id.
+    pub fn cabrillo(&self, freq_khz: u32) -> Result<String, String> {
+        let spec = self.session.exchange;
+        // ⭐ The `CONTEST` token, resolved against the mode classes this log actually
+        // holds. A mode-split contest submits a separate entry per mode, so one file
+        // holding both is refused BY NAME rather than filed under whichever id came
+        // first (§6.2). Neither Field Day event is split, so this is always the
+        // event's own id — read from `self.event`, which is where the header has read
+        // it since before the session existed and which the WFD/ARRL flip still sets.
+        let mut classes: Vec<&str> = self.qsos.iter().map(|q| q.mode.as_str()).collect();
+        classes.sort_unstable();
+        classes.dedup();
+        let headers = crate::contest::CabrilloHeaders {
+            contest: crate::contest::resolve_contest_id(
+                self.event.contest_id(),
+                &self.session.contest_id_by_mode,
+                &classes,
+            )?,
+            callsign: self.mycall.clone(),
+            // ⭐ The declaration, not a literal. `CATEGORY-OPERATOR: MULTI-OP` was
+            // hardcoded here, so every solo entry submitted a claim that more than
+            // one operator was at the station.
+            category_operator: self.session.entry_category,
+            // LOCATION is a per-ENTRY value, so it reads the session's declared
+            // location and not a row: Cabrillo puts it in a header, once, for exactly
+            // that reason. The per-contact truth is on the QSO lines below.
+            location: self.session.my_location.state.clone(),
+            created_by: "Nexus".to_string(),
+            // Which rules data scored this log (X- headers are Cabrillo-legal and
+            // ignored by robots) — a fetched rules file with different parameters
+            // is visible on the artifact an operator actually submits.
+            x_headers: vec![(
+                "X-NEXUS-RULES-YEAR".to_string(),
+                crate::fd_rules::ruleset(self.event, crate::fd_rules::CURRENT_RULES_YEAR)
+                    .rules_year
+                    .to_string(),
+            )],
+        };
+        let mut s = headers.render();
         for q in &self.qsos {
             // QSO: freq mo date time mycall myexch call exch — ARRL requires a
             // REAL `yyyy-mm-dd hhmm`; the old `----------` placeholder failed
@@ -794,24 +821,44 @@ impl FieldDayLog {
             // session. `self.myexch.class`/`.section` sat here until batch 3 and were
             // written on EVERY line, so an operator who changed county re-labelled
             // every contact made before the change — silently, in the file they submit.
-            // The callsign columns are structural (they sit outside the exchange) and
-            // are unchanged.
-            let spec = self.session.exchange;
-            let mine = crate::contest::sent_exchange_string(q, spec);
-            let theirs = crate::contest::role_for(q, spec)
-                .receives
-                .iter()
-                .map(|k| q.rcvd(k))
-                .filter(|v| !v.is_empty())
-                .collect::<Vec<_>>()
-                .join(" ");
-            s.push_str(&format!(
-                "QSO: {freq} {mo} {date} {time} {} {mine} {} {theirs}\n",
-                self.mycall, q.call
-            ));
+            //
+            // ⭐ **The callsign columns are STRUCTURAL — they sit outside the
+            // exchange — with one derived exception per side.** A template of exchange
+            // slots alone loses both callsigns on every contest but Sweepstakes, whose
+            // exchange contains a `Call` slot; that side's structural column is
+            // suppressed and the call rides at its own declared position instead
+            // (§6.2, [`contest::cabrillo::side_declares_call`]). Read off the slot
+            // list, so there is nothing a ruleset can declare inconsistently.
+            let role = crate::contest::role_for(q, spec);
+            let mut cols: Vec<String> = vec![freq, mo.to_string(), date, time];
+            if !crate::contest::side_declares_call(spec, role.sends) {
+                cols.push(self.mycall.clone());
+            }
+            cols.extend(
+                crate::contest::sent_exchange(q, spec)
+                    .into_iter()
+                    .map(|v| v.raw)
+                    .filter(|r| !r.is_empty()),
+            );
+            if !crate::contest::side_declares_call(spec, role.receives) {
+                cols.push(q.call.clone());
+            }
+            cols.extend(
+                role.receives
+                    .iter()
+                    .map(|k| q.rcvd(k))
+                    .filter(|v| !v.is_empty())
+                    .map(str::to_string),
+            );
+            // The trailing transmitter-id column, present only where the sponsor's own
+            // template has one — never for either Field Day event.
+            if let Some(t) = self.session.transmitter_id {
+                cols.push(t.to_string());
+            }
+            s.push_str(&format!("QSO: {}\n", cols.join(" ")));
         }
         s.push_str("END-OF-LOG:\n");
-        s
+        Ok(s)
     }
 }
 
@@ -1288,7 +1335,9 @@ mod tests {
         assert_eq!(log.qso_count(), 3);
         assert_eq!(log.qso_points(), 2 + 2 + 1, "DIG 2 + CW 2 + PH 1");
         // Cabrillo mode tokens per row.
-        let cab = log.cabrillo(14074);
+        let cab = log
+            .cabrillo(14074)
+            .expect("a single-mode event exports one entry");
         assert!(cab.contains(" DG "));
         assert!(cab.contains(" CW "));
         assert!(cab.contains(" PH "));
@@ -1296,7 +1345,10 @@ mod tests {
         assert!(cab.contains("X-NEXUS-RULES-YEAR: 2026\n"));
         // WFD event flips the contest ids in both exports.
         log.event = FdEvent::WinterFd;
-        assert!(log.cabrillo(14074).contains("CONTEST: WFD"));
+        assert!(log
+            .cabrillo(14074)
+            .expect("a single-mode event exports one entry")
+            .contains("CONTEST: WFD"));
         assert!(log.adif().contains("WFD"));
     }
 
@@ -1311,7 +1363,9 @@ mod tests {
             "20m",
         );
         assert!(log.log_at("K1ABC", "2A", "CT", 4, 1_782_583_500));
-        let cab = log.cabrillo(14074);
+        let cab = log
+            .cabrillo(14074)
+            .expect("a single-mode event exports one entry");
         // Frequency is band-derived (20m → 14000 kHz), not the passed dial.
         assert!(
             cab.contains("QSO: 14000 DG 2026-06-27 1805 W9XYZ 3A WI K1ABC 2A CT"),
@@ -1399,7 +1453,9 @@ mod tests {
                 "{band} logged"
             );
         }
-        let cab = log.cabrillo(14_000);
+        let cab = log
+            .cabrillo(14_000)
+            .expect("a single-mode event exports one entry");
 
         // HF stays kHz.
         assert!(
@@ -1465,7 +1521,9 @@ mod tests {
         }
         assert_eq!(restored.sections(), 3, "sections survive the round-trip");
         assert_eq!(restored.qso_points(), 2 + 2 + 1, "DIG 2 + CW 2 + PH 1");
-        let cab = restored.cabrillo(14_074);
+        let cab = restored
+            .cabrillo(14_074)
+            .expect("a single-mode event exports one entry");
         assert!(
             cab.contains("2026-06-27"),
             "restored rows keep their real timestamp: {cab}"
@@ -1492,7 +1550,9 @@ mod tests {
             "RTTY row exports its real (normalized) mode: {adif}"
         );
         assert!(adif.contains("<MODE:3>FT8"), "unrecorded row falls back");
-        let cab = log.cabrillo(14_080);
+        let cab = log
+            .cabrillo(14_080)
+            .expect("a single-mode event exports one entry");
         assert!(cab.contains(" RY "), "Cabrillo RY for the RTTY row: {cab}");
         assert!(cab.contains(" DG "), "DG fallback for the unrecorded row");
         // FD/WFD digital is ONE mode class: an RTTY try after the same-band
@@ -1531,7 +1591,10 @@ mod tests {
             restored.adif().contains("<MODE:4>RTTY"),
             "re-export keeps RTTY"
         );
-        assert!(restored.cabrillo(14_080).contains(" RY "));
+        assert!(restored
+            .cabrillo(14_080)
+            .expect("a single-mode event exports one entry")
+            .contains(" RY "));
     }
 
     #[test]
@@ -1676,7 +1739,9 @@ mod tests {
         assert_eq!(log.sections(), 2); // IL, MN
         assert_eq!(log.qso_points(), 4); // 2 pts each
         assert!(log.adif().contains("ARRL_SECT") && log.adif().contains("K2DEF"));
-        let cab = log.cabrillo(14_074);
+        let cab = log
+            .cabrillo(14_074)
+            .expect("a single-mode event exports one entry");
         assert_eq!(cab.matches("QSO:").count(), 2);
         assert!(cab.contains("W9XYZ 3A WI K2DEF 3A IL"));
     }
@@ -1691,7 +1756,9 @@ mod tests {
             "20m",
         );
         assert!(log.log_at("K1ABC", "2A", "CT", 1, 1_782_583_500)); // 20m
-        let cab = log.cabrillo(99999); // dial fallback must NOT appear for a known band
+        let cab = log
+            .cabrillo(99999)
+            .expect("a single-mode event exports one entry"); // dial fallback must NOT appear for a known band
         assert!(
             cab.contains("QSO: 14000 "),
             "20m QSO stamped 14000 kHz: {cab}"
@@ -1913,7 +1980,9 @@ mod tests {
     #[test]
     fn moving_the_session_does_not_relabel_a_row_already_logged() {
         let log = moved_log();
-        let cbr = log.cabrillo(14_074);
+        let cbr = log
+            .cabrillo(14_074)
+            .expect("a single-mode event exports one entry");
         let lines: Vec<&str> = cbr.lines().filter(|l| l.starts_with("QSO:")).collect();
         assert_eq!(lines.len(), 2);
         assert!(
@@ -1939,7 +2008,9 @@ mod tests {
     #[test]
     fn the_mobile_history_assertion_discriminates() {
         let log = moved_log();
-        let from_the_row = log.cabrillo(14_074);
+        let from_the_row = log
+            .cabrillo(14_074)
+            .expect("a single-mode event exports one entry");
         let from_the_session: String = from_the_row
             .lines()
             .map(|l| {
@@ -1981,7 +2052,13 @@ mod tests {
         );
         restored.merge_adif(&journal, 0);
         assert_eq!(restored.qso_count(), 2);
-        assert_eq!(restored.cabrillo(14_074), log.cabrillo(14_074));
+        assert_eq!(
+            restored
+                .cabrillo(14_074)
+                .expect("a single-mode event exports one entry"),
+            log.cabrillo(14_074)
+                .expect("a single-mode event exports one entry")
+        );
         // POSITIVE CONTROL: strip the carrier and the pre-move row falls back to the
         // session's current exchange, which is the WRONG section — so the tag is what
         // is carrying the answer, not the fallback happening to be right.
@@ -2000,8 +2077,11 @@ mod tests {
         );
         blind.merge_adif(&stripped, 0);
         assert_ne!(
-            blind.cabrillo(14_074),
-            log.cabrillo(14_074),
+            blind
+                .cabrillo(14_074)
+                .expect("a single-mode event exports one entry"),
+            log.cabrillo(14_074)
+                .expect("a single-mode event exports one entry"),
             "APP_NEXUS_MYEX is not what restores the pre-move row"
         );
     }
@@ -2019,5 +2099,143 @@ mod tests {
             !log.log_mode_at("K1ABC", "2A", "EMA", "CW", 0, 1_782_000_120),
             "a move must not un-dupe a station under a rule that names no sent slot"
         );
+    }
+}
+
+#[cfg(test)]
+mod cabrillo_header_tests {
+    use super::*;
+    use crate::contest::{ContestSession, OperatorCategory};
+
+    fn one_qso_log(entry: OperatorCategory) -> FieldDayLog {
+        let mut session = ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI");
+        session.entry_category = entry;
+        let mut log = FieldDayLog::new("W9XYZ", session, "20m");
+        assert!(log.log_mode_at("K1ABC", "2A", "EMA", "CW", 0, 1_782_583_500));
+        log
+    }
+
+    /// ⭐ THE SHIPPED BUG. `cabrillo()` wrote `CATEGORY-OPERATOR: MULTI-OP` as a
+    /// string literal, so every solo Field Day entry Nexus has ever exported claimed
+    /// more than one operator was at the station — in the file ARRL scores.
+    #[test]
+    fn a_single_operator_entry_declares_single_op() {
+        let cab = one_qso_log(OperatorCategory::SingleOp)
+            .cabrillo(14_074)
+            .expect("a single-mode event exports");
+        assert!(
+            cab.contains("CATEGORY-OPERATOR: SINGLE-OP\n"),
+            "a single-op entry still submits a MULTI-OP header:\n{cab}"
+        );
+        assert!(
+            !cab.contains("MULTI-OP"),
+            "the literal survived somewhere:\n{cab}"
+        );
+    }
+
+    /// POSITIVE CONTROL: a club entry still declares `MULTI-OP`, so the test above is
+    /// the declaration being read and not the token being renamed.
+    #[test]
+    fn a_club_entry_still_declares_multi_op() {
+        let cab = one_qso_log(OperatorCategory::MultiOp)
+            .cabrillo(14_074)
+            .expect("a single-mode event exports");
+        assert!(cab.contains("CATEGORY-OPERATOR: MULTI-OP\n"), "{cab}");
+    }
+
+    /// ⭐ §6.2 — **both callsign columns are on the line, and Sweepstakes gets
+    /// exactly two, not four.**
+    ///
+    /// The template a previous draft carried was exchange slots only, which loses
+    /// both callsigns on every contest but Sweepstakes and produces an unsubmittable
+    /// line. Field Day's golden pins the structural columns; this pins the derived
+    /// exception — a side whose slot list declares a `Call` slot supplies the
+    /// callsign from the exchange, at its own declared position, and the structural
+    /// column is suppressed for that side only.
+    #[test]
+    fn a_sweepstakes_line_carries_each_callsign_exactly_once() {
+        let mut session = ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI");
+        session.exchange = crate::contest::exchanges::sweepstakes_shaped();
+        let mut log = FieldDayLog::new("W9XYZ", session, "20m");
+        let spec = log.session.exchange;
+        let v = |key: &'static str, raw: &str| crate::contest::FieldValue {
+            key: spec.field(key).expect("declared slot").key,
+            raw: raw.to_string(),
+            domain: None,
+        };
+        // "1 A W9XYZ 74 WI" sent; K2DEF answers with "12 A K2DEF 71 CT".
+        let tx = ["1", "A", "W9XYZ", "74", "WI"];
+        let rx = ["12", "A", "K2DEF", "71", "CT"];
+        let slots = ["NR", "PREC", "CALL", "CK", "SEC"];
+        assert!(log.log_exchange_at(
+            "K2DEF",
+            slots.iter().zip(rx).map(|(k, r)| v(k, r)).collect(),
+            slots.iter().zip(tx).map(|(k, r)| v(k, r)).collect(),
+            "CW",
+            "",
+            0,
+            1_782_583_500,
+        ));
+        let cab = log
+            .cabrillo(14_074)
+            .expect("a single-mode event exports one entry");
+        let line = cab
+            .lines()
+            .find(|l| l.starts_with("QSO:"))
+            .expect("one QSO line");
+        assert_eq!(
+            line, "QSO: 14000 CW 2026-06-27 1805 1 A W9XYZ 74 WI 12 A K2DEF 71 CT",
+            "the call is the THIRD column of each side, not a structural column \
+             hoisted in front of it"
+        );
+        // §6.2's own control, in its own words: exactly two callsign occurrences.
+        assert_eq!(line.matches("W9XYZ").count(), 1, "{line}");
+        assert_eq!(line.matches("K2DEF").count(), 1, "{line}");
+    }
+
+    /// POSITIVE CONTROL for the line above: Field Day declares no `Call` slot, so
+    /// both structural columns ARE written — a writer that suppressed them for
+    /// everyone would pass the "exactly once" assertions above by losing them.
+    #[test]
+    fn a_field_day_line_still_carries_both_structural_callsigns() {
+        let cab = one_qso_log(OperatorCategory::SingleOp)
+            .cabrillo(14_074)
+            .expect("a single-mode event exports one entry");
+        let line = cab
+            .lines()
+            .find(|l| l.starts_with("QSO:"))
+            .expect("one QSO line");
+        assert_eq!(
+            line, "QSO: 14000 CW 2026-06-27 1805 W9XYZ 3A WI K1ABC 2A EMA",
+            "my call, my exchange, their call, their exchange"
+        );
+    }
+
+    /// The trailing transmitter column, and its absence. Neither Field Day sponsor's
+    /// template has one, so a Field Day line must not grow a column; a session that
+    /// declares one gets it, last.
+    #[test]
+    fn the_transmitter_column_rides_only_where_a_template_declares_it() {
+        let mut log = one_qso_log(OperatorCategory::SingleOp);
+        let without = log.cabrillo(14_074).expect("exports");
+        assert!(
+            without.ends_with("K1ABC 2A EMA\nEND-OF-LOG:\n"),
+            "Field Day's line ends with their exchange:\n{without}"
+        );
+        log.session.transmitter_id = Some(1);
+        let with = log.cabrillo(14_074).expect("exports");
+        assert!(
+            with.ends_with("K1ABC 2A EMA 1\nEND-OF-LOG:\n"),
+            "the transmitter id is the LAST column:\n{with}"
+        );
+    }
+
+    /// …and a checklog, which is neither.
+    #[test]
+    fn a_checklog_entry_declares_checklog() {
+        let cab = one_qso_log(OperatorCategory::Checklog)
+            .cabrillo(14_074)
+            .expect("a single-mode event exports");
+        assert!(cab.contains("CATEGORY-OPERATOR: CHECKLOG\n"), "{cab}");
     }
 }

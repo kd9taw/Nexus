@@ -106,13 +106,25 @@ fn record_for(log: &FieldDayLog, q: &LoggedQso, qid: String) -> QsoRecord {
     let sent = sent_exchange(q, spec);
     let contest = ContestFields {
         session: log.session.id.clone(),
-        contest_id: log.session.contest_id.clone(),
+        // A mode-split contest has a distinct id per mode, and a general-log record
+        // is one row, so it resolves against ITS OWN class. `Err` is unreachable for
+        // an unsplit contest and, for a split one, means the ruleset declares no id
+        // for this row's mode — which `cabrillo()` refuses loudly at export, where
+        // the operator can see it. A merge must not drop a contact over it.
+        contest_id: log
+            .session
+            .contest_id_for(&[q.mode.as_str()])
+            .unwrap_or_else(|_| log.session.contest_id.clone()),
         stx: serial_of(&sent, spec),
         stx_string: joined(sent.iter().map(|v| v.raw.as_str())),
         srx: serial_of(&q.rx, spec),
         srx_string: joined(q.rx.iter().map(|v| v.raw.as_str())),
         sent: pairs(&sent),
         rcvd: pairs(&q.rx),
+        // ⭐ The DIRECTED standard columns, resolved here because this is the only
+        // place the exchange spec is in hand (§2.1.1). Downstream sees `(tag, value)`
+        // and never has to decide which way round a slot exports.
+        adif: super::adif::directed_columns(q, spec),
         qid,
     };
     QsoRecord {
@@ -420,5 +432,127 @@ mod tests {
         // …and the cutoff really bounds it.
         let none = lb.worked_keys_since(1_900_000_000, &FD_RULE);
         assert!(none.exact.is_empty() && none.worked_this_session.is_empty());
+    }
+
+    /// ⭐ §10 — **the sent side has a DIRECTED ADIF home**, all the way to the bytes
+    /// the general log writes. Before batch 6 a merged Field Day row carried no
+    /// standard exchange column at all: only `APP_NEXUS_MYEX`/`EX`, which no other
+    /// logger reads.
+    #[test]
+    fn a_merged_row_writes_the_exchange_under_its_directed_adif_tags() {
+        let log = fd_log();
+        let mut lb = Logbook::new();
+        merge_into_general(&log, "pos", &mut lb);
+        let out = crate::logbook::adif_record(&lb.records()[0]);
+        assert!(
+            out.contains("<MY_ARRL_SECT:2>WI"),
+            "the section I SENT is mine: {out}"
+        );
+        assert!(
+            out.contains("<ARRL_SECT:3>EMA"),
+            "the section they sent is theirs: {out}"
+        );
+        assert!(out.contains("<CLASS:2>2A"), "their class: {out}");
+        // ⭐ THE FALLBACK, on a shipped exchange. `MY_CLASS` is not an ADIF field
+        // (checked 2026-09-09), so the class I sent gets no column — and its value is
+        // still recoverable, on the private carrier.
+        assert!(
+            !out.contains("MY_CLASS"),
+            "an uncorroborated tag must not be invented: {out}"
+        );
+        assert!(
+            !out.contains("<CLASS:2>3A"),
+            "…and it must not ride the CONTACTED station's column either: {out}"
+        );
+        assert!(
+            out.contains("<APP_NEXUS_MYEX:21>CLASS::3A;SECTION::WI"),
+            "the sent class rides the private carrier: {out}"
+        );
+    }
+
+    /// ⭐ §10's own control — a row where the OTHER station sent a county exports
+    /// `CNTY`, and one where I am the mobile exports `MY_CNTY` and no `CNTY` at all.
+    /// The two together are what prove the assertion is about DIRECTION rather than
+    /// about a tag that happens to be absent everywhere.
+    #[test]
+    fn a_mobiles_county_and_a_worked_states_state_land_in_different_columns() {
+        let mut lb = Logbook::new();
+        let rec = merged_party_row(&mut lb, ("WIL", "tn_counties"), ("CT", "us_ca"));
+        let out = crate::logbook::adif_record(&rec);
+        assert!(out.contains("<MY_CNTY:3>WIL"), "the county I was in: {out}");
+        assert!(out.contains("<STATE:2>CT"), "the state they sent: {out}");
+        assert!(
+            !out.contains("<CNTY:"),
+            "the contacted station is in Connecticut and has no county: {out}"
+        );
+        // POSITIVE CONTROL: worked from inside the state, they DO send a county.
+        let mut lb2 = Logbook::new();
+        let rec = merged_party_row(&mut lb2, ("WIL", "tn_counties"), ("DAV", "tn_counties"));
+        let out = crate::logbook::adif_record(&rec);
+        assert!(out.contains("<CNTY:3>DAV"), "{out}");
+        assert!(out.contains("<MY_CNTY:3>WIL"), "{out}");
+    }
+
+    /// ⭐ §2.1.1 ruling 3 — **two writers, one tag, and the EXCHANGE WINS.**
+    /// `QsoRecord::state` is the DXCC/callbook resolver's guess; a received `QTH`
+    /// matched from `us_ca` is what the other operator told me on the air. Exactly one
+    /// `<STATE>` reaches the file, and it is theirs.
+    #[test]
+    fn a_resolved_state_and_a_received_one_emit_exactly_one_state_field() {
+        let mut lb = Logbook::new();
+        let mut rec = merged_party_row(&mut lb, ("WIL", "tn_counties"), ("CT", "us_ca"));
+        // The resolver ran and guessed something else entirely.
+        rec.state = Some("NY".to_string());
+        let out = crate::logbook::adif_record(&rec);
+        assert_eq!(
+            out.matches("<STATE:").count(),
+            1,
+            "a duplicate hands TQSL undefined territory: {out}"
+        );
+        assert!(out.contains("<STATE:2>CT"), "the exchange wins: {out}");
+        assert!(
+            !out.contains("NY"),
+            "the resolver's guess is dropped: {out}"
+        );
+
+        // POSITIVE CONTROL: with no contest-sourced STATE, the resolver's value IS
+        // written — so the guard is the collision and not a writer that lost `state`.
+        let mut plain = rec.clone();
+        plain.contest = None;
+        let out = crate::logbook::adif_record(&plain);
+        assert_eq!(out.matches("<STATE:").count(), 1, "{out}");
+        assert!(out.contains("<STATE:2>NY"), "{out}");
+    }
+
+    /// One merged row of the QSO-party shape: `(raw, domain)` for what I sent and for
+    /// what they sent. Returns the record, which is also in `lb`.
+    fn merged_party_row(
+        lb: &mut Logbook,
+        sent: (&str, &'static str),
+        rcvd: (&str, &'static str),
+    ) -> QsoRecord {
+        let spec = crate::contest::exchanges::qso_party_shaped();
+        let mut session = ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI");
+        session.exchange = spec;
+        let mut log = FieldDayLog::new("W4TN", session, "20m");
+        let v = |key: &'static str, raw: &str, domain: Option<&'static str>| {
+            crate::contest::FieldValue {
+                key: spec.field(key).expect("declared slot").key,
+                raw: raw.to_string(),
+                domain,
+            }
+        };
+        assert!(log.log_exchange_at(
+            "W1AW",
+            vec![v("RST", "599", None), v("QTH", rcvd.0, Some(rcvd.1))],
+            vec![v("RST", "599", None), v("QTH", sent.0, Some(sent.1))],
+            "CW",
+            "",
+            0,
+            1_782_583_500,
+        ));
+        let r = merge_into_general(&log, "pos", lb);
+        assert_eq!(r.added(), 1);
+        r.written[0].clone()
     }
 }

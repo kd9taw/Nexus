@@ -258,6 +258,23 @@ pub struct ContestFields {
     pub sent: Vec<(String, String)>,
     /// The row's `rx`, slot → raw (`APP_NEXUS_EX`).
     pub rcvd: Vec<(String, String)>,
+    /// ⭐ **The exchange's own STANDARD ADIF columns, `(tag, value)`, already
+    /// directed** — `MY_ARRL_SECT` for the section I sent, `ARRL_SECT` for the one
+    /// they sent (§2.1.1).
+    ///
+    /// **Resolved at merge time, not here, because a tag is a property of the
+    /// EXCHANGE and this struct has no exchange.** `sent`/`rcvd` above are slot ids;
+    /// nothing downstream can turn `SECTION` into the right one of two tags without
+    /// the spec, so [`contest::adif::directed_columns`](crate::contest::directed_columns)
+    /// does it where the spec is in hand and this carries the answer.
+    ///
+    /// ⚠️ **Deliberately not repopulated on read, and this is the honest shape rather
+    /// than a gap.** These are ORDINARY ADIF columns: on re-import `STATE` lands in
+    /// [`QsoRecord::state`] and `MY_ARRL_SECT` and friends land in
+    /// [`QsoRecord::extra`], and a re-export writes each exactly once from there. A
+    /// reader here would have to guess the tag vocabulary of an exchange the file does
+    /// not carry, and would then emit the same column twice.
+    pub adif: Vec<(String, String)>,
     /// `APP_NEXUS_QID` — `"<session>:<posid>:<seq>"`, the MERGE IDENTITY.
     ///
     /// ⭐ **The merge is idempotent only because this comes back on read.** The general
@@ -1900,7 +1917,20 @@ pub fn adif_record(r: &QsoRecord) -> String {
     if let Some(c) = &r.country {
         out.push_str(&field("COUNTRY", c));
     }
-    if let Some(st) = &r.state {
+    // ⭐ **The duplicate-`STATE` guard, and the ruling behind it: the EXCHANGE WINS,
+    // and it writes once** (§2.1.1). `r.state` is the DXCC/callbook resolver's guess;
+    // a received QSO-party `QTH` that matched the `us_ca` domain is what the other
+    // operator actually TOLD me on the air, which is the contest's own datum and what
+    // a log checker compares. Two writers, one tag — and a duplicate hands TQSL the
+    // "undefined territory" the `MY_GRIDSQUARE` guard below already names. Same shape
+    // as that one: the contest column is written and the resolver's is skipped.
+    let contest_adif: &[(String, String)] = r
+        .contest
+        .as_deref()
+        .map(|c| c.adif.as_slice())
+        .unwrap_or(&[]);
+    let contest_wrote = |tag: &str| contest_adif.iter().any(|(t, _)| t == tag);
+    if let Some(st) = r.state.as_ref().filter(|_| !contest_wrote("STATE")) {
         out.push_str(&field("STATE", st));
     }
     // BAND only when we have one: a record made on an off-band-table dial (a 47 GHz
@@ -2136,6 +2166,12 @@ fn contest_fields(c: Option<&ContestFields>) -> String {
     if let Some(s) = &c.srx_string {
         text("SRX_STRING", s);
     }
+    // The exchange's own standard columns, already directed (§2.1.1). Written before
+    // the `APP_NEXUS_*` carrier so a reader that stops at the modelled fields still
+    // gets the section, the county and the state under the tags every logger knows.
+    for (tag, val) in &c.adif {
+        text(tag, val);
+    }
     text("APP_NEXUS_SESSION", &c.session);
     text("APP_NEXUS_QID", &c.qid);
     text(
@@ -2189,6 +2225,10 @@ fn parse_contest(f: &mut std::collections::HashMap<String, String>) -> Option<Bo
             srx_string,
             sent,
             rcvd,
+            // Not read back: these are ordinary ADIF columns and the parser has
+            // already put each where this build models it — `STATE` in `state`, the
+            // rest in `extra`. See the field's own doc comment.
+            adif: Vec::new(),
             qid,
         })
     })

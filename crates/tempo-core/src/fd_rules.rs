@@ -312,13 +312,24 @@ fn derive_fd_sections(secs: &'static [Section]) -> crate::contest::Domain {
         values.push(("DX", "DX"));
         crate::contest::Domain {
             id: "fd_sections",
-            // Received: <ARRL_SECT>, which the Field Day ADIF exporter already writes.
-            // Sent: absent — MY_ARRL_SECT is not corroborated anywhere in this tree
-            // (§2.1.1), and batch 6 checks the name against adif.org's field list
-            // before any writer emits it.
+            // Received: <ARRL_SECT>, the CONTACTED station's section, which the Field
+            // Day ADIF exporter already writes. Sent: <MY_ARRL_SECT>, the LOGGING
+            // station's — checked against adif.org's own field list before it shipped
+            // (ADIF 3.1.7, "updated 2026-03-22", read 2026-09-09; see
+            // `contest::adif`'s header for the citation and the negative controls),
+            // because nothing in this tree corroborated the name and an invented ADIF
+            // field ships into other people's logbooks.
+            //
+            // ⚠️ This domain is the sections PLUS `MX`/`DX`, and neither is a member
+            // of ADIF's ARRL Section enumeration (90 entries in 3.1.7; both absent).
+            // A DX station's own `MY_ARRL_SECT: DX` is therefore an out-of-enumeration
+            // value — exactly as the RECEIVED `<ARRL_SECT:2>DX` this build has shipped
+            // since before the contest model existed. Kept symmetric deliberately: one
+            // rule for both directions beats a sent side that silently drops what the
+            // received side writes.
             adif: crate::contest::AdifTags {
                 rcvd: Some("ARRL_SECT"),
-                sent: None,
+                sent: Some("MY_ARRL_SECT"),
             },
             values: Box::leak(values.into_boxed_slice()),
         }
@@ -355,12 +366,15 @@ fn derive_arrl_sections(secs: &'static [Section]) -> crate::contest::Domain {
             secs.iter().map(|s| (s.code, s.name)).collect();
         crate::contest::Domain {
             id: "arrl_sections",
-            // Received: <ARRL_SECT>. Sent: absent — MY_ARRL_SECT is not
-            // corroborated anywhere in this tree (§2.1.1), and batch 6 checks
-            // the name against adif.org's field list before any writer emits it.
+            // Received: <ARRL_SECT>, the CONTACTED station's. Sent:
+            // <MY_ARRL_SECT>, the LOGGING station's — verified against ADIF
+            // 3.1.7 ("updated 2026-03-22", read 2026-09-09); see
+            // [`derive_fd_sections`] and `contest::adif`'s header. The two
+            // section domains keep the same tags deliberately: they are the same
+            // universe, one of them with Field Day's MX/DX extensions.
             adif: crate::contest::AdifTags {
                 rcvd: Some("ARRL_SECT"),
-                sent: None,
+                sent: Some("MY_ARRL_SECT"),
             },
             values: Box::leak(values.into_boxed_slice()),
         }
@@ -1680,12 +1694,17 @@ mod tests {
             !valid_section("MX"),
             "MX is NOT a section — it is an FD extension"
         );
-        // The received-side ADIF tag is corroborated in-tree (fieldday.rs writes
-        // <ARRL_SECT>); the sent-side MY_ARRL_SECT is NOT (grepped: zero hits, with
-        // MY_GRIDSQUARE's seven as the positive control), so it ships absent per §2.1.1
-        // and batch 6 checks the name against adif.org before any writer uses it.
+        // ⭐ **Both directions, and the sent side is a SOURCE CLAIM that was checked.**
+        // Through batch 5 the sent half shipped absent because a grep of this tree
+        // found `MY_ARRL_SECT` nowhere — but an absence from our code is not an
+        // absence from ADIF. Batch 6 read the document: ADIF Specification V 3.1.7,
+        // `https://adif.org/317/ADIF_317.htm`, "Released ADIF Version 3.1.7, updated
+        // 2026-03-22", fetched and searched in full 2026-09-09. `MY_ARRL_SECT` is a
+        // QSO field there — "the logging station's ARRL section" — with `MY_COUNTY`,
+        // `MY_SECTION`, `MY_CLASS` and two invented names as the negative controls
+        // that returned nothing.
         assert_eq!(d.adif.rcvd, Some("ARRL_SECT"));
-        assert_eq!(d.adif.sent, None);
+        assert_eq!(d.adif.sent, Some("MY_ARRL_SECT"));
     }
 
     /// Build a log from `(call, mode-class)` pairs — distinct calls so nothing
@@ -2495,9 +2514,10 @@ mod tests {
         assert_eq!(d.id, "arrl_sections");
         assert_eq!(d.values.len(), 83);
         assert_eq!(d.adif.rcvd, Some("ARRL_SECT"));
-        // MY_ARRL_SECT is uncorroborated in this tree (§2.1.1); batch 6 checks
-        // the name against adif.org before any writer emits it.
-        assert_eq!(d.adif.sent, None);
+        // Verified against ADIF 3.1.7 in batch 6 — see
+        // `the_fd_section_domain_is_the_83_sections_plus_mx_and_dx` for the
+        // citation and the negative controls.
+        assert_eq!(d.adif.sent, Some("MY_ARRL_SECT"));
         assert!(!d.contains("MX"), "MX is an FD extension, not a section");
         assert!(!d.contains("DX"), "…and so is DX");
         assert!(d.contains("WI") && d.contains(" wi "));

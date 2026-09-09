@@ -145,7 +145,12 @@ fn main() {
     std::fs::create_dir_all(dir).expect("fixture dir");
     for (event, stem) in [(FdEvent::ArrlFd, "arrlfd"), (FdEvent::WinterFd, "wfd")] {
         let log = golden_log(event);
-        std::fs::write(dir.join(format!("{stem}.cbr")), log.cabrillo(14_074)).unwrap();
+        std::fs::write(
+            dir.join(format!("{stem}.cbr")),
+            log.cabrillo(14_074)
+                .expect("a single-mode event exports one entry"),
+        )
+        .unwrap();
         std::fs::write(dir.join(format!("{stem}.adi")), log.adif()).unwrap();
         let rs = ruleset(event, CURRENT_RULES_YEAR);
         let (qso, powered) = rs.scoring.qso_and_powered(log.score_rows(), 5);
@@ -158,6 +163,11 @@ fn main() {
     // a tree whose §8(a) goldens were already green — which is what makes it a
     // capture and not a re-bless: writing it moved none of their bytes.
     let wfd = wfd_class_log();
-    std::fs::write(dir.join("wfd-classes.cbr"), wfd.cabrillo(3_570)).unwrap();
+    std::fs::write(
+        dir.join("wfd-classes.cbr"),
+        wfd.cabrillo(3_570)
+            .expect("a single-mode event exports one entry"),
+    )
+    .unwrap();
     std::fs::write(dir.join("wfd-classes.adi"), wfd.adif()).unwrap();
 }

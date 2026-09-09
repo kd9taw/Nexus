@@ -27,12 +27,15 @@ static CASUAL_FIELDS: &[FieldSpec] = &[
     },
     FieldSpec {
         key: "NAME",
-        // ADIF <NAME> is the CONTACTED station's name, so it is a received-side tag
-        // only, and logbook.rs writes it. There is no corroborated sent-side name tag
-        // anywhere in this tree (§2.1.1), so the sent half ships absent.
+        // ADIF 3.1.7: `NAME` is *"the contacted station's operator's name"* and
+        // `MY_NAME` is *"the logging operator's name"* — the two halves of this slot,
+        // exactly. Nothing in this TREE writes `MY_NAME`, which is what the batch-0
+        // comment here recorded; batch 6 checked the name itself against adif.org's
+        // field list (3.1.7, "updated 2026-03-22", read 2026-09-09) rather than
+        // leaving the sent half absent on the strength of a grep over our own code.
         adif: AdifTags {
             rcvd: Some("NAME"),
-            sent: None,
+            sent: Some("MY_NAME"),
         },
         label: Some("NAME"),
         required: false,
@@ -40,11 +43,15 @@ static CASUAL_FIELDS: &[FieldSpec] = &[
     },
     FieldSpec {
         key: "QTH",
-        // Same shape as NAME: logbook.rs writes <QTH>, and there is no corroborated
-        // sent-side QTH tag in this tree.
+        // Same shape as NAME, and the sent-side tag is NOT called `MY_QTH` — that
+        // name does not exist in the field list (checked 2026-09-09, zero anchors).
+        // ADIF 3.1.7 spells the pair `QTH` = *"the contacted station's city"* and
+        // `MY_CITY` = *"the logging station's city"*. Guessing `MY_QTH` from the
+        // received name is exactly the invention §2.1.1 forbids; reading the document
+        // is what turned it up.
         adif: AdifTags {
             rcvd: Some("QTH"),
-            sent: None,
+            sent: Some("MY_CITY"),
         },
         label: Some("QTH"),
         required: false,
@@ -163,6 +170,171 @@ pub fn field_day(event: FdEvent) -> &'static ExchangeSpec {
             roles: FD_ROLES,
         }
     })
+}
+
+/// A Sweepstakes-SHAPED exchange, for the tests that need the two properties no
+/// shipped exchange has: a `Call` slot inside the send order (§6.2's derived
+/// exception) and a sent-side ADIF tag on a section domain.
+///
+/// ⚠️ **A test fixture, not a ruleset.** The real Sweepstakes row ships in batch 9,
+/// after ARRL's own Cabrillo template or a published sample log has been read for the
+/// column order — §6.2 refuses to take that from a third-party compilation, and this
+/// static is not a shortcut past it. Nothing outside `#[cfg(test)]` can reach it.
+#[cfg(test)]
+pub(crate) fn sweepstakes_shaped() -> &'static ExchangeSpec {
+    use super::spec::Domain;
+
+    static SECTIONS: Domain = Domain {
+        id: "ss_sections",
+        adif: AdifTags {
+            rcvd: Some("ARRL_SECT"),
+            sent: Some("MY_ARRL_SECT"),
+        },
+        values: &[("WI", "Wisconsin"), ("CT", "Connecticut")],
+    };
+    static FIELDS: &[FieldSpec] = &[
+        FieldSpec {
+            key: "NR",
+            adif: AdifTags {
+                rcvd: Some("SRX"),
+                sent: Some("STX"),
+            },
+            label: None,
+            required: true,
+            kind: FieldKind::Serial {
+                scope: super::spec::SerialScope::PerContest,
+            },
+        },
+        FieldSpec {
+            key: "PREC",
+            adif: AdifTags {
+                rcvd: None,
+                sent: None,
+            },
+            label: None,
+            required: true,
+            kind: FieldKind::Pattern { re: "^[QABUMS]$" },
+        },
+        FieldSpec {
+            key: "CALL",
+            adif: AdifTags {
+                rcvd: None,
+                sent: None,
+            },
+            label: None,
+            required: true,
+            kind: FieldKind::Call,
+        },
+        FieldSpec {
+            key: "CK",
+            adif: AdifTags {
+                rcvd: None,
+                sent: None,
+            },
+            label: None,
+            required: true,
+            kind: FieldKind::Pattern { re: "^[0-9]{2}$" },
+        },
+        FieldSpec {
+            key: "SEC",
+            adif: SECTIONS.adif,
+            label: None,
+            required: true,
+            kind: FieldKind::Enum { domain: &SECTIONS },
+        },
+    ];
+    static ROLES: &[RoleSpec] = &[RoleSpec {
+        id: "",
+        selector: RoleSelector::Always,
+        sends: &["NR", "PREC", "CALL", "CK", "SEC"],
+        receives: &["NR", "PREC", "CALL", "CK", "SEC"],
+        constant_sent: &["CK"],
+    }];
+    static SS: ExchangeSpec = ExchangeSpec {
+        name: "sweepstakes_shaped",
+        fields: FIELDS,
+        roles: ROLES,
+    };
+    &SS
+}
+
+/// A QSO-party-SHAPED exchange, for the tests that need the one property no shipped
+/// exchange has: a [`FieldKind::OneOf`] slot whose arms carry DIFFERENT ADIF tags per
+/// direction, so a value matched from one arm cannot export under the other's column.
+///
+/// `RST` here deliberately declares **no** ADIF tag either way — the shape a slot
+/// takes when its tag did not check out against adif.org and its value falls back to
+/// the private carrier (§2.1.1). It is the fallback path under test, not an oversight.
+///
+/// ⚠️ **A test fixture, not a ruleset.** The real county lists and abbreviation
+/// schemes come from each party's own page, in batch 8.
+#[cfg(test)]
+pub(crate) fn qso_party_shaped() -> &'static ExchangeSpec {
+    use super::spec::Domain;
+
+    // MY_CNTY / CNTY and MY_STATE / STATE: all four verified against ADIF 3.1.7
+    // (adif.org/317/ADIF_317.htm, "updated 2026-03-22", read 2026-09-09) — see
+    // `contest::adif`'s module header for the citations and the negative controls.
+    static TN_COUNTIES: Domain = Domain {
+        id: "tn_counties",
+        adif: AdifTags {
+            rcvd: Some("CNTY"),
+            sent: Some("MY_CNTY"),
+        },
+        values: &[("WIL", "Williamson"), ("DAV", "Davidson")],
+    };
+    static US_CA: Domain = Domain {
+        id: "us_ca",
+        adif: AdifTags {
+            rcvd: Some("STATE"),
+            sent: Some("MY_STATE"),
+        },
+        values: &[("CT", "Connecticut"), ("TN", "Tennessee")],
+    };
+    static QTH_ARMS: &[FieldKind] = &[
+        FieldKind::Enum {
+            domain: &TN_COUNTIES,
+        },
+        FieldKind::Enum { domain: &US_CA },
+    ];
+    static FIELDS: &[FieldSpec] = &[
+        FieldSpec {
+            key: "RST",
+            adif: AdifTags {
+                rcvd: None,
+                sent: None,
+            },
+            label: None,
+            required: true,
+            kind: FieldKind::Rst { digits: 3 },
+        },
+        FieldSpec {
+            key: "QTH",
+            // A `OneOf` slot's own tags are overridden by the MATCHED arm's domain,
+            // which is the whole point of the shape — one slot, two meanings, two
+            // columns per direction.
+            adif: AdifTags {
+                rcvd: None,
+                sent: None,
+            },
+            label: None,
+            required: true,
+            kind: FieldKind::OneOf(QTH_ARMS),
+        },
+    ];
+    static ROLES: &[RoleSpec] = &[RoleSpec {
+        id: "",
+        selector: RoleSelector::Always,
+        sends: &["RST", "QTH"],
+        receives: &["RST", "QTH"],
+        constant_sent: &[],
+    }];
+    static PARTY: ExchangeSpec = ExchangeSpec {
+        name: "qso_party_shaped",
+        fields: FIELDS,
+        roles: ROLES,
+    };
+    &PARTY
 }
 
 #[cfg(test)]

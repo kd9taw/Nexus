@@ -8562,12 +8562,13 @@ fn restart_live_feeds(
 }
 
 /// Export the Field Day log as text in `format` ("cabrillo" | "adif"). Errors if
-/// not in Field Day mode.
+/// not in Field Day mode, or if the log is not one submittable Cabrillo entry — a
+/// mode-split contest holding both modes. The engine names which, so the dialog can
+/// show it rather than saying only that nothing came back.
 #[tauri::command(async)]
 fn export_log(state: State<'_, SharedEngine>, format: String) -> Result<String, String> {
     let eng = engine_lock(&state);
     eng.export_log(&format)
-        .ok_or_else(|| "nothing to export (enter Field Day mode first)".to_string())
 }
 
 /// Export the **general** logbook (all Chat/QSO contacts, any mode) as
@@ -18220,12 +18221,12 @@ fn fd_discover_events() -> Result<Vec<FdEventBeacon>, String> {
 
 /// Export the merged CLUB log from the host, deduped earliest-wins by
 /// `(call, band, mode class)`. `format` = "cabrillo" | "adif". Err when this
-/// instance is not hosting (positions export their own log as before).
+/// instance is not hosting (positions export their own log as before), or when the
+/// merged log is not one submittable Cabrillo entry; the engine names which.
 #[tauri::command(async)]
 fn fd_club_export(state: State<'_, SharedEngine>, format: String) -> Result<String, String> {
     let eng = engine_lock(&state);
     eng.fd_club_export(format == "cabrillo")
-        .ok_or_else(|| "this station is not hosting a club event".to_string())
 }
 
 /// Best-effort LAN IP via the UDP-connect trick: no packet is sent — connect()
