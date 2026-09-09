@@ -1660,6 +1660,14 @@ claim right now; the record underneath is the evidence, kept across restarts.*
   the code or a state name and pick from the list." Every entry is validated
   against the full ARRL/RAC list and an unknown one is flagged inline, so it
   never silently reaches the Cabrillo log.
+  *If ARRL has retired the section you had saved, the flag says so and names what
+  replaced it. Two of them are renames and Nexus applies them for you on upgrade:
+  `GTA` becomes `GH` (Golden Horseshoe) and `NT` becomes `TER` (Territories).
+  The third cannot be: the Maritime section (`MAR`) was split into New Brunswick
+  (`NB`), Nova Scotia (`NS`) and Prince Edward Island (`PE`), and only you know
+  which one you operate from — so Nexus keeps your old value, asks, and won't
+  start Field Day until you've picked, rather than sending a section you never
+  chose for a whole contest.*
 - **Power multiplier** — ×5 (QRP/battery, ≤5 W on natural power), ×2 (≤100 W),
   ×1 (>100 W). "Multiplies your QSO points. Choose before the event."
 

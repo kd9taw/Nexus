@@ -320,6 +320,83 @@ pub fn valid_section(code: &str) -> bool {
     sections().iter().any(|s| s.code == up)
 }
 
+/// A section code ARRL used to publish and does not any more, with what replaced it.
+///
+/// This exists for ONE reason: an operator's `fd_section` was saved under the old list,
+/// and correcting the list must not be the thing that stops them transmitting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RetiredSection {
+    /// The retired code, canonical (uppercase).
+    pub code: &'static str,
+    /// What the section was called while it existed — the operator recognises this even
+    /// when they no longer recognise the code.
+    pub name: &'static str,
+    /// The current section code(s) that took its place. Exactly one = a RENAME the
+    /// sponsor published; more than one = a SPLIT, which nothing here can resolve.
+    pub successors: &'static [&'static str],
+}
+
+impl RetiredSection {
+    /// The single successor when ARRL published a **rename**, `None` for a **split**.
+    ///
+    /// ⭐ This distinction is the entire migration policy, in one method. A rename is the
+    /// sponsor's own alias and can be applied silently, because the operator's section did
+    /// not move — only its abbreviation did. A split cannot: it would put a section the
+    /// operator never chose into the exchange they transmit for a whole contest, and a
+    /// wrong section makes the log unsubmittable. So a split is ASKED, never guessed.
+    pub fn rename_target(&self) -> Option<&'static str> {
+        match self.successors {
+            [only] => Some(only),
+            _ => None,
+        }
+    }
+}
+
+/// The three codes the pre-2017 list carried that ARRL's current one does not.
+///
+/// **Read from the sponsor, not inferred.** The generic Field Day section package
+/// (<https://www.arrl.org/files/file/Field-Day/Generic/ARRL-RAC%20Section%20List.pdf>,
+/// footer *"Revised 2025"*, read 2026-09-09) prints two of the three transitions inline,
+/// which is what makes them safe to apply without asking:
+///
+/// ```text
+/// Golden Horseshoe  GH (formerly GTA)
+/// Territories       TER (formerly NT)
+/// ```
+///
+/// `MAR` gets no such line, and that absence is the fact: it is on neither the PDF nor
+/// <https://www.arrl.org/section-abbreviations>, while `NB`, `NS` and `PE` are on both as
+/// three separate entries. The Maritime section SPLIT, so there is no alias to publish
+/// and none is invented here.
+const RETIRED_SECTIONS: [RetiredSection; 3] = [
+    RetiredSection {
+        code: "MAR",
+        name: "Maritime",
+        successors: &["NB", "NS", "PE"],
+    },
+    RetiredSection {
+        code: "GTA",
+        name: "Greater Toronto Area",
+        successors: &["GH"],
+    },
+    RetiredSection {
+        code: "NT",
+        name: "Northern Territories",
+        successors: &["TER"],
+    },
+];
+
+/// What became of `code`, if ARRL retired it — `None` for a current section, and `None`
+/// for junk. Normalised exactly like [`valid_section`], so the two agree on any input.
+///
+/// ⚠️ A code is either current or retired, never both — a code in both lists would
+/// migrate an operator off a section that still exists. `tests/arrl_sections.rs` pins it,
+/// along with the rule that every successor named here IS a current section.
+pub fn retired_section(code: &str) -> Option<&'static RetiredSection> {
+    let up = code.trim().to_ascii_uppercase();
+    RETIRED_SECTIONS.iter().find(|r| r.code == up)
+}
+
 /// The Field Day SECTION slot's domain: the 85 ARRL/RAC section codes plus the `MX`
 /// and `DX` extensions DX stations send — exactly the set the RTTY parser accepted
 /// inline as `valid_section(t) || t == "MX" || t == "DX"`. Derived from the same
@@ -2192,6 +2269,63 @@ mod tests {
             rust_divs, ts_divs,
             "the division block order drifted between the two lists"
         );
+    }
+
+    /// SAME GUARD for the RETIRED list: [`RETIRED_SECTIONS`] vs `RETIRED_SECTIONS`
+    /// in ui/src/features/arrlSections.ts.
+    ///
+    /// The two halves say the same thing to the operator at two different moments —
+    /// the Settings picker explains a stored `MAR` while they are looking at the
+    /// field, and `Engine::set_mode` explains it again if they try to operate
+    /// anyway. Drift here is a section named one thing in Settings and another in
+    /// the refusal, or a successor offered on one screen and not the other. Reads
+    /// the TS source itself, both directions, naming the entry that moved.
+    #[test]
+    fn the_typescript_retired_section_mirror_matches_rust_exactly() {
+        let ts_src = include_str!("../../../ui/src/features/arrlSections.ts");
+        // Rows are one per line: `MAR: { name: 'Maritime', successors: ['NB', 'NS', 'PE'] },`
+        // Keying on `successors: [` skips the doc comment and every other declaration
+        // in the file (the section table's rows carry `code:`, not `successors:`).
+        let ts: Vec<(String, String, Vec<String>)> = ts_src
+            .lines()
+            .filter(|l| l.contains("successors: ["))
+            .map(|l| {
+                let code = l.trim().split(':').next().unwrap().trim().to_string();
+                let name = ts_str_field(l, "name").expect("row names the section");
+                let list = {
+                    let i = l.find("successors: [").unwrap() + "successors: [".len();
+                    let rest = &l[i..];
+                    let end = rest.find(']').expect("the successor list closes");
+                    rest[..end]
+                        .split(',')
+                        .map(|s| s.trim().trim_matches('\'').to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect::<Vec<_>>()
+                };
+                (code, name.to_string(), list)
+            })
+            .collect();
+        assert_eq!(
+            ts.len(),
+            RETIRED_SECTIONS.len(),
+            "the retired-section tables are different sizes — TS has {:?}, Rust has {:?}",
+            ts.iter().map(|(c, _, _)| c).collect::<Vec<_>>(),
+            RETIRED_SECTIONS.iter().map(|r| r.code).collect::<Vec<_>>()
+        );
+        // The control: the parse must actually have found rows, or every compare
+        // below is vacuous.
+        assert!(!ts.is_empty(), "parsed no rows out of arrlSections.ts");
+        for (code, name, successors) in &ts {
+            let rust = RETIRED_SECTIONS
+                .iter()
+                .find(|r| r.code == code)
+                .unwrap_or_else(|| panic!("arrlSections.ts retires {code}, Rust does not"));
+            assert_eq!(rust.name, name, "{code}: the section's name drifted");
+            assert_eq!(
+                rust.successors, successors,
+                "{code}: the replacement codes drifted"
+            );
+        }
     }
 
     /// SAME GUARD for the hand-mirrored bonus menu: the seed's bonus menu vs

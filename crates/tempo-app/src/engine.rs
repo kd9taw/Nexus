@@ -9595,6 +9595,34 @@ impl Engine {
                     .to_string(),
             );
         }
+        // ⭐ **A section ARRL has RETIRED, caught here and named.**
+        //
+        // `Settings::load` already migrated the two the sponsor publishes an alias for
+        // (`GTA` → `GH`, `NT` → `TER`), so what reaches this line is a code that SPLIT —
+        // `MAR`, whose operator is in exactly one of `NB`/`NS`/`PE` and only they know
+        // which. The exchange goes on the air and a wrong section makes the log
+        // unsubmittable, so the mode is refused; but it is refused with the section's
+        // NAME and the codes that replaced it, because to that operator `MAR` was valid
+        // the last time they operated and a bare "not a value this contest accepts" would
+        // be a puzzle rather than an answer.
+        //
+        // ⚠️ **It sits HERE, beside the blank check, and not in the ruleset path, because
+        // the two event paths do not share a validator.** With `fd_event` at its default
+        // `""` — a plain Field Day install — `ruleset_by_id` finds nothing and the session
+        // falls back to `ContestSession::field_day`, which performs no domain check at
+        // all. A retired section would have gone on the air unrefused on exactly the
+        // configuration most operators run. Every `fieldday*` spec reaches this line.
+        if spec.starts_with("fieldday") {
+            if let Some(r) = tempo_core::fd_rules::retired_section(&self.settings.fd_section) {
+                return Err(format!(
+                    "{} is no longer an ARRL/RAC section — {} was replaced by {}. \
+Pick the one you operate from on the Contesting tab in Settings.",
+                    r.code,
+                    r.name,
+                    r.successors.join(", ")
+                ));
+            }
+        }
         // ⭐ THE SESSION IS RESTORED, NOT REBUILT — and this line is where the bug was.
         //
         // It read `Exchange::new(&settings.fd_class, &settings.fd_section)` and handed
@@ -29498,6 +29526,80 @@ mod tests {
         assert_eq!(log.len(), 1, "the QSO auto-logged: {log:?}");
         assert_eq!(log[0].rst_sent.as_deref(), Some("+03"));
         assert_eq!(log[0].rst_rcvd.as_deref(), Some("+03"));
+    }
+
+    /// ⭐ **What a stored `MAR` does the first time its operator tries to operate.**
+    ///
+    /// The Maritime section split into `NB` / `NS` / `PE` and ARRL publishes no alias, so
+    /// `Settings::load` leaves the stored value alone — nothing can know which of three
+    /// provinces the operator is in. That means the value reaches here, and the exchange
+    /// goes ON THE AIR, so the mode is refused.
+    ///
+    /// ⚠️ **The refusal has to say what changed, or it is worse than the defect it fixes.**
+    /// Left to the generic domain refusal an operator would read *"MAR" is not a value the
+    /// SECTION slot of this contest accepts* about a section that was valid the last time
+    /// they operated. This sentence names the section, says it was replaced, and lists the
+    /// three codes that replaced it — which is the whole of what they need to fix it.
+    ///
+    /// ⚠️ **Both event paths, because they do NOT share a validator.** With `fd_event` at
+    /// its default `""`, `ruleset_by_id("")` finds nothing and `set_mode` falls back to
+    /// `ContestSession::field_day`, which does no domain check at all — so a retired
+    /// section would have gone on the air unrefused on a default install. The check
+    /// therefore sits beside the blank-exchange refusal, which every `fieldday*` spec
+    /// reaches, rather than inside the ruleset path only.
+    #[test]
+    fn a_retired_section_refuses_field_day_with_a_sentence_naming_what_replaced_it() {
+        for event in ["", "arrlfd"] {
+            let mut e = Engine::new("W9XYZ", "EN61", 0);
+            {
+                let mut s = e.settings().clone();
+                s.fd_event = event.into();
+                s.fd_class = "3A".into();
+                s.fd_section = "MAR".into();
+                e.apply_settings(s);
+            }
+            // Not `expect_err`: its argument is a literal, so the event that failed would
+            // not reach the message — and this loop's whole point is that the two event
+            // paths are separately reachable.
+            let err = match e.set_mode("fieldday-sp") {
+                Err(err) => err,
+                Ok(()) => {
+                    panic!("a retired section reached the air with fd_event {event:?}")
+                }
+            };
+            assert!(err.contains("MAR"), "names the stored code: {err}");
+            assert!(err.contains("Maritime"), "names the section: {err}");
+            for successor in ["NB", "NS", "PE"] {
+                assert!(
+                    err.contains(successor),
+                    "lists {successor} as a replacement: {err}"
+                );
+            }
+        }
+
+        // ⭐ THE POSITIVE CONTROL. An unaffected section still enters the mode — the
+        // refusal above is the retired code being caught, not Field Day being broken.
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        {
+            let mut s = e.settings().clone();
+            s.fd_class = "3A".into();
+            s.fd_section = "WI".into();
+            e.apply_settings(s);
+        }
+        e.set_mode("fieldday-sp")
+            .expect("an unaffected section still operates");
+
+        // …and so does one of the codes that REPLACED a retired one, which is what the
+        // operator will pick next.
+        let mut e = Engine::new("VE9XYZ", "FN65", 0);
+        {
+            let mut s = e.settings().clone();
+            s.fd_class = "1D".into();
+            s.fd_section = "NB".into();
+            e.apply_settings(s);
+        }
+        e.set_mode("fieldday-sp")
+            .expect("New Brunswick is a current section");
     }
 
     #[test]

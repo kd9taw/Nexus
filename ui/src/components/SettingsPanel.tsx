@@ -168,7 +168,7 @@ import type { FeaturesApi } from '../useFeatures'
 import { FEATURES, featureById, featureCategoryLabel, type FeatureCategory, type FeatureDef, type FeatureId } from '../features/registry'
 import { PROFILE_LIST } from '../features/profiles'
 import { checkForUpdateManual } from '../features/updateCheck'
-import { ARRL_SECTIONS_BY_DIVISION } from '../features/arrlSections'
+import { ARRL_SECTIONS_BY_DIVISION, RETIRED_SECTIONS } from '../features/arrlSections'
 
 // Serial-port examples and walkthroughs are platform prose: a Mac's ports are /dev/cu.* and
 // there is no Device Manager, so a "COM16" placeholder or a CP210x "Enhanced" label is a dead
@@ -2956,6 +2956,14 @@ export function SettingsPanel({
   const civBlocked = nativeCivBlockedReason(form.rigModel, form.rigConn)
   const fdSectionInvalid =
     form.fdSection.trim() !== '' && !FD_SECTION_CODES.has(form.fdSection.trim().toUpperCase())
+  // …and WHY it isn't known, when the reason is that ARRL retired it. A saved `MAR`
+  // was a valid section the last time its operator ran Field Day, so "isn't a known
+  // section" reads as the app being wrong rather than as something to fix. This says
+  // what the section was and which codes replaced it. Renames (GTA→GH, NT→TER) are
+  // migrated at settings load, so in practice this is the Maritime split.
+  const fdSectionRetired = fdSectionInvalid
+    ? RETIRED_SECTIONS[form.fdSection.trim().toUpperCase()]
+    : undefined
 
   return (
     <SettingsOpenTarget.Provider value={openTarget}>
@@ -10597,7 +10605,13 @@ export function SettingsPanel({
                 </datalist>
                 {fdSectionInvalid && (
                   <span className="fd-section-warn" role="alert">
-                    {t('settings.fieldDay.section.invalid', { section: form.fdSection })}
+                    {fdSectionRetired
+                      ? t('settings.fieldDay.section.retired', {
+                          section: form.fdSection.trim().toUpperCase(),
+                          name: fdSectionRetired.name,
+                          successors: fdSectionRetired.successors.join(', '),
+                        })
+                      : t('settings.fieldDay.section.invalid', { section: form.fdSection })}
                   </span>
                 )}
                 <span className="settings-hint">

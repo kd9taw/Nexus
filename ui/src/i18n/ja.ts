@@ -1737,6 +1737,7 @@ export const JA: PartialCatalog = {
   "settings.fieldDay.category.hint": "送信機の数 + 運用場所: H=自宅、I=屋内、M=モービル、O=屋外（例: 2O = 送信機2台・屋外）。",
   "settings.fieldDay.section.label": "ARRLセクション",
   "settings.fieldDay.section.invalid": "「{{section}}」は既知のARRL/RACセクションではありません。リストから選択してください。",
+  "settings.fieldDay.section.retired": "「{{section}}」({{name}}) は現在のARRL/RACセクションではありません。{{successors}} に置き換えられました。運用地のセクションを選択してください。",
   "settings.fieldDay.section.hint": "自局のARRL／RACセクションです（例: WI、ENY、ONN）。コードまたは州名を入力し始めてリストから選択してください — 全{{count}}セクションと照合されます。Cabrilloログに必須です。",
   "settings.fieldDay.power.label": "電力倍率",
   "settings.fieldDay.power.aria": "Field Day電力倍率",

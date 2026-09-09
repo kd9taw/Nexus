@@ -146,6 +146,7 @@ export const DE: PartialCatalog = {
   "settings.fieldDay.category.hint": "Sender + Standort: H=Home (zu Hause), I=Indoor (drinnen), M=Mobile (mobil), O=Outdoor (draußen) — z. B. 2O = 2 Sender, draußen.",
   "settings.fieldDay.section.label": "ARRL-Section",
   "settings.fieldDay.section.invalid": "„{{section}}“ ist keine bekannte ARRL-/RAC-Section — bitte eine aus der Liste wählen.",
+  "settings.fieldDay.section.retired": "„{{section}}“ ({{name}}) ist keine ARRL-/RAC-Section mehr — sie wurde durch {{successors}} ersetzt. Bitte die wählen, aus der Sie funken.",
   "settings.fieldDay.section.hint": "Ihre ARRL-/RAC-Section (z. B. WI, ENY, ONN). Code oder Namen eines Bundesstaats eintippen und aus der Liste wählen — geprüft gegen alle {{count}} Sections. Für das Cabrillo-Log erforderlich.",
   "settings.fieldDay.power.label": "Leistungsmultiplikator",
   "settings.fieldDay.power.aria": "Field-Day-Leistungsmultiplikator",

@@ -4044,6 +4044,7 @@ export const FR: PartialCatalog = {
   "settings.fieldDay.power.qrp.label": "×5 QRP / batterie",
   "settings.fieldDay.section.hint": "Votre section ARRL / RAC (ex. WI, ENY, ONN). Tapez le code ou un nom d'État et choisissez dans la liste — validé sur les {{count}} sections. Obligatoire pour le journal Cabrillo.",
   "settings.fieldDay.section.invalid": "« {{section}} » n'est pas une section ARRL/RAC connue — choisissez-en une dans la liste.",
+  "settings.fieldDay.section.retired": "« {{section}} » ({{name}}) n'est plus une section ARRL/RAC — elle a été remplacée par {{successors}}. Choisissez celle depuis laquelle vous opérez.",
   "settings.fieldDay.section.label": "Section ARRL",
   "settings.fst4.hint": "<b>FST4</b> est le mode QSO ; <b>FST4W</b> est le mode balise façon WSPR — le choix se fait sur le sélecteur de tier. Nexus décode les deux et n'émet ni l'un ni l'autre. Les indicatifs hachés FST4W s'affichent en <code><...></code> : en amont, la table de correspondance se remplit depuis un fichier que cette version n'embarque pas.",
   "settings.fst4.legend": "FST4 (QSO) / FST4W (balise)",

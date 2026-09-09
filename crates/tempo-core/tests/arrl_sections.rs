@@ -146,3 +146,64 @@ fn the_field_day_and_sweepstakes_section_lists_agree() {
          the sections array alone has {only_fd:?}"
     );
 }
+
+/// ⭐ **Rename versus split — the distinction the whole migration rests on.**
+///
+/// `GTA` and `NT` carry ARRL's own published alias (*"GH (formerly GTA)"*, *"TER
+/// (formerly NT)"*), so `rename_target` answers and `Settings::load` applies it without
+/// asking. `MAR` carries three successors and therefore answers `None`: the Maritime
+/// section split, and choosing one of three provinces for an operator would put a section
+/// they never picked into the exchange they transmit.
+#[test]
+fn the_retired_codes_map_to_what_arrl_published_and_a_split_maps_to_nothing() {
+    let want: [(&str, &str, &[&str], Option<&str>); 3] = [
+        ("GTA", "Greater Toronto Area", &["GH"], Some("GH")),
+        ("NT", "Northern Territories", &["TER"], Some("TER")),
+        ("MAR", "Maritime", &["NB", "NS", "PE"], None),
+    ];
+    for (code, name, successors, rename) in want {
+        let r = fd_rules::retired_section(code)
+            .unwrap_or_else(|| panic!("{code} was retired by ARRL and must be recognised"));
+        assert_eq!(r.name, name, "{code}");
+        assert_eq!(r.successors, successors, "{code}");
+        assert_eq!(
+            r.rename_target(),
+            rename,
+            "{code}: a rename is applied silently, a split must be asked"
+        );
+    }
+    // Normalised like `valid_section`, so a hand-edited settings.json migrates too.
+    assert_eq!(fd_rules::retired_section(" gta ").map(|r| r.code), Some("GTA"));
+}
+
+/// The two lists must not overlap, in either direction.
+///
+/// A code that is both current and retired would migrate an operator off a section that
+/// still exists; a successor that is not a current section would migrate them onto one
+/// that does not. Both are silent, and both end in an unsubmittable log.
+#[test]
+fn retired_codes_are_not_current_and_every_successor_is() {
+    let current = seed_codes();
+    for code in RETIRED {
+        let r = fd_rules::retired_section(code).expect("listed above");
+        assert!(
+            !current.contains(code),
+            "{code} is offered as a section AND marked retired"
+        );
+        for s in r.successors {
+            assert!(
+                current.contains(s),
+                "{code} migrates to {s}, which is not a section this build offers"
+            );
+        }
+    }
+    // The control, both ways: a live section is not retired, and neither is junk.
+    for live in ["WI", "EMA", "GH", "TER", "NB", "NS", "PE"] {
+        assert!(
+            fd_rules::retired_section(live).is_none(),
+            "{live} is current, not retired"
+        );
+    }
+    assert!(fd_rules::retired_section("ZZ").is_none());
+    assert!(fd_rules::retired_section("").is_none());
+}

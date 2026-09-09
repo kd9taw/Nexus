@@ -4044,6 +4044,7 @@ export const ES: PartialCatalog = {
   "settings.fieldDay.power.qrp.label": "×5 QRP / batería",
   "settings.fieldDay.section.hint": "Tu sección ARRL / RAC (ej. WI, ENY, ONN). Empieza a escribir el código o el nombre de un estado y elige de la lista — validado contra las {{count}} secciones. Necesario para el log Cabrillo.",
   "settings.fieldDay.section.invalid": "“{{section}}” no es una sección ARRL/RAC conocida — elige una de la lista.",
+  "settings.fieldDay.section.retired": "“{{section}}” ({{name}}) ya no es una sección ARRL/RAC — fue reemplazada por {{successors}}. Elige aquella desde la que operas.",
   "settings.fieldDay.section.label": "Sección ARRL",
   "settings.fst4.hint": "<b>FST4</b> es el modo de QSO; <b>FST4W</b> es el modo baliza tipo WSPR — elige cuál en el selector de nivel. Nexus decodifica ambos y no transmite ninguno. Ten en cuenta que los indicativos con hash de FST4W se muestran como <code><...></code>: la tabla de consulta original se rellena desde un archivo que esta build no incluye.",
   "settings.fst4.legend": "FST4 (QSO) / FST4W (baliza)",

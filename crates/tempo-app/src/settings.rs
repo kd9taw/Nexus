@@ -4392,6 +4392,24 @@ impl Settings {
         // macro PROFILES — an old settings.json comes back as one "Default" profile with
         // the same macros. Idempotent, and clamps the active-profile index in range.
         s.macros.migrate_cw_profiles();
+        // Migration: an ARRL/RAC section code the sponsor has since RENAMED comes back as
+        // its current code — `GTA` → `GH`, `NT` → `TER`. Both aliases are ARRL's own
+        // published words ("Golden Horseshoe GH (formerly GTA)"), so this reads the
+        // sponsor rather than guessing: the operator's section did not move, only its
+        // abbreviation, and the alternative is a saved section that no longer validates.
+        //
+        // ⚠️ **`MAR` is deliberately left alone.** The Maritime section SPLIT into
+        // `NB`/`NS`/`PE`, ARRL publishes no alias, and picking one would put a section the
+        // operator never chose into the exchange they transmit. It is not blanked either:
+        // the stored value is the only evidence of what they had, and both the Settings
+        // picker and `Engine::set_mode` use it to say what changed. See
+        // `fd_rules::RetiredSection::rename_target` — one method, and it is the whole
+        // rename-versus-split policy.
+        if let Some(current) = tempo_core::fd_rules::retired_section(&s.fd_section)
+            .and_then(|r| r.rename_target())
+        {
+            s.fd_section = current.to_string();
+        }
         // Migration: cluster_host used to BE the RBN endpoint (digital-only, port 7001),
         // which is why CW/Phone needs never appeared; a later build wrongly defaulted it to
         // NC7J's SKIMMER port (dxc.nc7j.com:7373), which just duplicates the RBN we pull.
@@ -7233,6 +7251,58 @@ mod tests {
         };
         off.save(&path).unwrap();
         assert!(!Settings::load(&path).beta_updates);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **A saved `fdSection` that ARRL has since RENAMED comes back as the new code.**
+    ///
+    /// The section list moved from a pre-2017 83 to the sponsor's current 85, and two of
+    /// the three codes that went are renames ARRL publishes as such — *"Golden Horseshoe
+    /// GH (formerly GTA)"*, *"Territories TER (formerly NT)"*. An operator in either one
+    /// did not move; only the abbreviation did, so migrating them is reading the
+    /// sponsor's own alias, not guessing on the operator's behalf.
+    ///
+    /// ⚠️ **`MAR` is deliberately NOT migrated, and that is the point of this test.**
+    /// The Maritime section SPLIT into `NB` / `NS` / `PE`. There is no alias to read and
+    /// no way to tell which of three provinces the operator is in, so the stored value
+    /// is left exactly as it is — the evidence the picker and the mode-entry refusal
+    /// both need to tell them what happened. Blanking it here would destroy that and
+    /// leave them the generic "set your section" message instead.
+    #[test]
+    fn load_migrates_renamed_sections_and_leaves_the_split_one_for_the_operator() {
+        let dir = std::env::temp_dir().join(format!("tempo_sect_mig_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+
+        let load_section = |stored: &str| {
+            std::fs::write(
+                &path,
+                format!(r#"{{"mycall":"KD9TAW","fdSection":"{stored}"}}"#),
+            )
+            .unwrap();
+            Settings::load(&path).fd_section
+        };
+
+        // The two ARRL publishes an alias for.
+        assert_eq!(load_section("GTA"), "GH", "GTA was renamed GH");
+        assert_eq!(load_section("NT"), "TER", "NT was renamed TER");
+        // Case and whitespace are not what decides it: a hand-edited file still migrates,
+        // and the value it lands on is the canonical code.
+        assert_eq!(load_section(" gta "), "GH", "normalised before matching");
+
+        // The split. Untouched, because nothing can know the answer.
+        assert_eq!(
+            load_section("MAR"),
+            "MAR",
+            "MAR must not be guessed into one of NB/NS/PE"
+        );
+
+        // The controls: a current section and an empty one are not touched either — the
+        // migration must fire on the retired codes and on nothing else.
+        assert_eq!(load_section("WI"), "WI");
+        assert_eq!(load_section("GH"), "GH", "idempotent");
+        assert_eq!(load_section(""), "");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

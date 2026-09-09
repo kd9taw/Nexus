@@ -2801,6 +2801,12 @@ export const EN = {
   // `{{section}}` is what the operator typed and `{{count}}` the size of the section list.
   'settings.fieldDay.section.invalid':
     '“{{section}}” isn\'t a known ARRL/RAC section — pick one from the list.',
+  // A section ARRL RETIRED, as opposed to one that never existed. `{{section}}` is the stored
+  // code, `{{name}}` what the section was called, `{{successors}}` the current code(s) that
+  // replaced it. Renames (GTA→GH, NT→TER) migrate at settings load, so what an operator
+  // actually meets here is MAR, the Maritime section that split into three.
+  'settings.fieldDay.section.retired':
+    '“{{section}}” ({{name}}) is no longer an ARRL/RAC section — it was replaced by {{successors}}. Pick the one you operate from.',
   'settings.fieldDay.section.hint':
     'Your ARRL / RAC section (e.g. WI, ENY, ONN). Start typing the code or a state name and pick from the list — validated against all {{count}} sections. Required for the Cabrillo log.',
   // The power multiplier. The ×5/×2/×1 factors and the watt figures are technical quantities

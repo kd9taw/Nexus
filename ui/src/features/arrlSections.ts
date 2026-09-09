@@ -205,3 +205,23 @@ export const ARRL_SECTION_TOTAL: number = ARRL_SECTIONS_BY_DIVISION.reduce(
   (n, d) => n + d.sections.length,
   0,
 )
+
+/**
+ * Section codes ARRL has RETIRED, and what replaced them — the TS half of
+ * `RETIRED_SECTIONS` in crates/tempo-core/src/fd_rules.rs, guard-tested against it
+ * by `the_typescript_retired_section_mirror_matches_rust_exactly`.
+ *
+ * It exists so the Settings picker can tell an operator whose saved section is one of
+ * these WHAT CHANGED, rather than flagging it as an unknown code. To them it was valid
+ * the last time they operated.
+ *
+ * `successors.length === 1` is a rename ARRL publishes as such ("Golden Horseshoe GH
+ * (formerly GTA)"), and `Settings::load` applies it before the UI ever sees it — so in
+ * practice only `MAR`, the Maritime section that SPLIT into three, reaches the picker.
+ * The other two are kept here anyway: a hand-edited settings.json can still carry one.
+ */
+export const RETIRED_SECTIONS: Record<string, { name: string; successors: string[] }> = {
+  MAR: { name: 'Maritime', successors: ['NB', 'NS', 'PE'] },
+  GTA: { name: 'Greater Toronto Area', successors: ['GH'] },
+  NT: { name: 'Northern Territories', successors: ['TER'] },
+}
