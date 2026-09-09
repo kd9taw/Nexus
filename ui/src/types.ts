@@ -3217,7 +3217,10 @@ export interface Settings {
   /** Serve Connect as a read-only page on the LAN. The toggle IS the opt-in. */
   connectWeb?: boolean
   connectWebPort?: number
-  /** Opt in to auto-update through beta (pre-release) builds; off = stable channel only. */
+  /** Opt in to auto-update through beta (pre-release) builds; off = stable channel only.
+   * READ-ONLY through this struct: the backend keeps the live value across every settings
+   * save, so putting it in a `setSettings` payload does nothing. Write it with `setBetaUpdates`
+   * (api.ts), which is the ONE writer — see that function for why. */
   betaUpdates?: boolean
   /** N3FJP real-time push (club master log). Empty host = off. */
   n3fjpHost?: string

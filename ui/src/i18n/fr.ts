@@ -4541,6 +4541,7 @@ export const FR: PartialCatalog = {
   "settings.satelliteDoppler.vfoMap.hint": "Quel VFO porte votre montée. À faire correspondre au câblage de votre radio. <b>Une affectation erronée émet sur votre propre descente</b> — dans la bande de sortie du satellite, par-dessus tous ceux qui travaillent le satellite. Le choix s'applique aussitôt et vaut confirmation pour la radio active ; une seconde radio a sa propre confirmation sur le bandeau de passage. Toutes les affectations sauf Montée seule gardent la descente corrigée.",
   "settings.satelliteDoppler.vfoMap.label": "Affectation des VFO",
   "settings.satelliteDoppler.vfoMap.otherRadio": "L'affectation de la montée se confirme par radio, pour la radio active. Confirmez-la pour cette radio depuis le bandeau de passage pendant un passage, ou rendez-la d'abord active.",
+  "settings.betaUpdates.failed": "Impossible de changer le canal de mise à jour",
   "settings.satellites.vfoMap.failed": "Impossible de confirmer l'affectation des VFO",
   "settings.save.callsignFirst": "Saisissez votre indicatif dans l'onglet Station avant d'enregistrer.",
   "settings.save.fdPositionName": "Nommez cette position dans l'onglet Concours avant d'héberger un événement de club ou d'en rejoindre un : le tableau des bandes du club affiche ce nom.",

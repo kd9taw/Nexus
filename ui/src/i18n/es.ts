@@ -4541,6 +4541,7 @@ export const ES: PartialCatalog = {
   "settings.satelliteDoppler.vfoMap.hint": "Qué VFO lleva tu subida. Ajústalo a cómo está cableado tu equipo. <b>Una asignación equivocada transmite sobre tu propia bajada</b> — dentro de la banda de paso de salida del satélite, encima de todos los que trabajan el satélite. Al elegir una se aplica al momento y queda confirmada para el equipo con el que operas; un segundo equipo tiene su propia confirmación en la barra de pasada. Todas las asignaciones salvo Solo subida mantienen la bajada corregida.",
   "settings.satelliteDoppler.vfoMap.label": "Asignación de VFO",
   "settings.satelliteDoppler.vfoMap.otherRadio": "La asignación de la subida se confirma por equipo, para el equipo con el que operas. Confírmala para este equipo en la barra de pasada durante una pasada, o actívalo primero.",
+  "settings.betaUpdates.failed": "No se pudo cambiar el canal de actualizaciones",
   "settings.satellites.vfoMap.failed": "No se pudo confirmar la asignación de VFO",
   "settings.save.callsignFirst": "Introduce tu indicativo en la pestaña Estación antes de guardar.",
   "settings.save.fdPositionName": "Pon un nombre a esta posición en la pestaña Concursos antes de alojar un evento de club o unirte a uno: el tablero de bandas del club muestra ese nombre.",

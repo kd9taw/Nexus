@@ -174,3 +174,27 @@ describe('mergeProfile — the satellite uplink pair never imports', () => {
     expect(merged.satUplinkRadios).toEqual([0])
   })
 })
+
+// A config profile is a whole-station snapshot, and the update channel is not part of a
+// station: it is a per-machine, per-operator preference about which builds this box installs.
+// A beta tester who loads a profile saved before they opted in would be returned to the
+// stable channel with no error, no log line and no way to notice — the betas simply stop
+// arriving. Same family as `mycall` and `licenseClass`: it describes the operator, not the rig.
+describe('mergeProfile — the beta-channel opt-in never imports', () => {
+  const current = { mycall: 'KD9TAW', betaUpdates: true, band: '20m' } as unknown as Settings
+
+  it('a profile saved before the operator opted in cannot switch the channel back', () => {
+    const old = { betaUpdates: false, band: '40m' } as unknown as Settings
+    const merged = mergeProfile(current, old) as unknown as Record<string, unknown>
+    expect(merged.betaUpdates).toBe(true)
+    expect(merged.band).toBe('40m') // control: the profile's real settings still apply
+  })
+
+  it('nor can a profile opt a stable-channel operator IN', () => {
+    const stable = { mycall: 'KD9TAW', betaUpdates: false, band: '20m' } as unknown as Settings
+    const beta = { betaUpdates: true, band: '40m' } as unknown as Settings
+    const merged = mergeProfile(stable, beta) as unknown as Record<string, unknown>
+    expect(merged.betaUpdates).toBe(false)
+    expect(merged.band).toBe('40m')
+  })
+})

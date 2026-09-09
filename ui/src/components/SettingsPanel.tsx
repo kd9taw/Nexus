@@ -112,6 +112,7 @@ import {
   getCredentialsStatus,
   CREDENTIALS_CHANGED,
   setUnassistedMode,
+  setBetaUpdates,
 } from '../api'
 import { AssistanceNote } from './AssistanceNote'
 import { fetchLotwUsers, getLotwUsersStatus, type LotwUsersStatus } from '../api'
@@ -1919,6 +1920,30 @@ export function SettingsPanel({
       (s) => s && reloadRadios(),
     )
   }
+  // --- App updates: the beta-channel opt-in. A LIVE verb like the roster and routing rules
+  // above, and for the sharpest version of the same reason. `set_settings` payloads no longer
+  // carry this field at all (the backend keeps the live value), because a payload is a snapshot
+  // from whenever its sender last read the settings and some senders hold theirs for the life of
+  // the window. Reverting this one is invisible — no error, no toast, no log line; the betas
+  // just stop arriving — so it gets the writer that a stale form cannot reach. Optimistic, then
+  // reconciled from the backend, so the switch does not lag a round-trip; `savedRef` moves with
+  // it because this is already persisted and must not read as an unsaved edit.
+  const toggleBetaUpdates = (on: boolean) => {
+    setForm((prev) => (prev ? { ...prev, betaUpdates: on } : prev))
+    if (savedRef.current) savedRef.current = { ...savedRef.current, betaUpdates: on }
+    void withErrorToast(() => setBetaUpdates(on), t('settings.betaUpdates.failed')).then((s) => {
+      if (!s) {
+        // The write failed and the toast said so — put the switch back where it was, rather
+        // than leave it showing a channel the backend is not on.
+        setForm((prev) => (prev ? { ...prev, betaUpdates: !on } : prev))
+        if (savedRef.current) savedRef.current = { ...savedRef.current, betaUpdates: !on }
+        return
+      }
+      // Re-pulls settings into App, which is what `useSelfUpdate` reads — so the channel
+      // takes effect on the next check rather than at the next launch.
+      onSaved?.()
+    })
+  }
   const handleAddRule = () => {
     const first = form?.radios?.[0]?.id ?? 0
     mutateRules([...(form?.routingRules ?? []), { bands: [], mode: null, radio: first }])
@@ -3410,7 +3435,7 @@ export function SettingsPanel({
                 role="switch"
                 aria-checked={!!form.betaUpdates}
                 className={`toggle${form.betaUpdates ? ' on' : ''}`}
-                onClick={() => updateBool('betaUpdates', !form.betaUpdates)}
+                onClick={() => toggleBetaUpdates(!form.betaUpdates)}
                 aria-label={
                   form.betaUpdates
                     ? t('settings.betaUpdates.aria.disable')

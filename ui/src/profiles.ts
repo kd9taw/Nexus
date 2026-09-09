@@ -56,6 +56,14 @@ const NEVER_IMPORT: readonly string[] = [
   'lotwLastAutoUploadUnix',
   'satVfoMap',
   'satUplinkRadios',
+  // The BETA-CHANNEL opt-in. A profile is a whole-STATION snapshot — rig, antenna, CAT, bands
+  // — and which builds this box installs is not part of a station: it is a per-machine, per-
+  // operator choice, the same family as `mycall` and `licenseClass`. Left importable, loading a
+  // profile saved before the operator opted in returned them to the stable channel, and that
+  // loss is invisible in a way no other setting's is — no error, no toast, no log line; the
+  // betas simply stop arriving and nobody finds out. (The backend keeps the same value across a
+  // payload that omits the key; this is the other half — a payload that carries a STALE one.)
+  'betaUpdates',
 ]
 
 /** Merge a stored profile onto the CURRENT settings — the load contract.
