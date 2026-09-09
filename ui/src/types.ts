@@ -2566,6 +2566,28 @@ export interface FieldDayStatus {
   /** Club-sync state (the Nexus↔Nexus event sync). Absent while neither
    *  hosting nor joined — a solo Field Day pays nothing for the feature. */
   club?: FdClubStatus | null
+  /** Where THIS SESSION's merged contacts go — per session, default OFF. */
+  upload?: FdUploadControl
+}
+
+/** The per-session upload control: what the end-of-contest merge queues, and where.
+ *
+ *  Session state, not a setting. The answer to "how do I stop the QSO party going to
+ *  my general logbook?" is a property of the run, and it ends with the run instead of
+ *  being a global the operator has to remember to change back. */
+export interface FdUploadControl {
+  /** The switch. False on every new session. */
+  enabled: boolean
+  /** Destination logbooks, by connector id. */
+  destinations: string[]
+  /** Every connector id the merge understands — the picker's options, from the one
+   *  place the backend builds the mask. */
+  available: string[]
+  /** ⚠️ The limitation this control does NOT close: ClubLog's catch-up sweep re-queues
+   *  every logged QSO it never accepted the next time a ClubLog password is saved,
+   *  regardless of this switch. Show it beside the switch — an operator who reads
+   *  "upload: off" and gets a ClubLog upload anyway has been misled by us. */
+  hint: string
 }
 
 /** One club band-board row (host-computed, pushed to every position). */

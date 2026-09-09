@@ -84,6 +84,51 @@ pub fn resolve(key: &str, domain: &str, raw: &str, spec: &ExchangeSpec) -> Optio
     })
 }
 
+/// A PAIR vector as one ADIF value — the general log's shape.
+///
+/// ⭐ **Why there are two encoders and only one format.** The contest log keeps the
+/// matched domain because it is the scoring and export surface (§2.4); the general log
+/// does not score, and a matched domain has no ADIF representation to round-trip
+/// through, so `ContestFields.sent`/`rcvd` are `(slot, raw)` PAIRS. Rather than invent
+/// a second wire shape for them, a pair rides the SAME `key:domain:raw` slot with the
+/// domain component **empty** — so one reader can read both, and a value written by
+/// either side is legible to the other. The asymmetry is in what is CARRIED, never in
+/// how it is spelled.
+pub fn encode_pairs(pairs: &[(String, String)]) -> String {
+    pairs
+        .iter()
+        .map(|(k, raw)| format!("{}::{}", esc(k), esc(raw)))
+        .collect::<Vec<_>>()
+        .join(";")
+}
+
+/// One ADIF value back into a pair vector.
+///
+/// Unlike [`decode`] there is no [`ExchangeSpec`] to resolve against — the general log
+/// does not know which contest a foreign row belonged to, and a row merged from an
+/// earlier session of the same contest must still give its slots back. So the key is
+/// carried verbatim (trimmed and uppercased, which is the shape every slot id already
+/// has) and a slot with a domain is read as its pair, discarding the domain rather
+/// than refusing the row.
+pub fn decode_pairs(s: &str) -> Vec<(String, String)> {
+    if s.trim().is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for slot in s.split(';') {
+        let mut parts = slot.splitn(3, ':');
+        let (Some(k), Some(_domain), Some(raw)) = (parts.next(), parts.next(), parts.next()) else {
+            continue;
+        };
+        let key = unesc(k).trim().to_ascii_uppercase();
+        if key.is_empty() {
+            continue;
+        }
+        out.push((key, unesc(raw)));
+    }
+    out
+}
+
 /// Every domain id a slot's kind can match — one for an `Enum`, one per `Enum` arm for
 /// a `OneOf`, none otherwise.
 fn domain_ids(kind: &FieldKind) -> Vec<&'static str> {
@@ -210,6 +255,36 @@ mod tests {
         assert_eq!(decode(";;;", spec), Vec::<FieldValue>::new());
     }
 
+    /// The general log's half of the codec: a pair rides the same slot with an empty
+    /// domain, so the two encoders produce one format and not two.
+    #[test]
+    fn a_pair_vector_rides_the_same_slot_with_no_domain() {
+        let pairs = vec![
+            ("CLASS".to_string(), "3A".to_string()),
+            ("SECTION".to_string(), "WI".to_string()),
+        ];
+        assert_eq!(encode_pairs(&pairs), "CLASS::3A;SECTION::WI");
+        assert_eq!(decode_pairs("CLASS::3A;SECTION::WI"), pairs);
+        // …and the triple encoder's output is legible to the pair reader, minus the
+        // domain it deliberately does not carry.
+        let triples = vec![fv("SECTION", "WI", Some("fd_sections"))];
+        assert_eq!(
+            decode_pairs(&encode(&triples)),
+            vec![("SECTION".to_string(), "WI".to_string())]
+        );
+    }
+
+    #[test]
+    fn pair_garbage_decodes_to_nothing_rather_than_panicking() {
+        for junk in [
+            "", ";;;", ":", "QTH", "QTH:", "%", "%3", "%%%", "::x", " :: ",
+        ] {
+            let _ = decode_pairs(junk);
+        }
+        assert_eq!(decode_pairs(";;;"), Vec::<(String, String)>::new());
+        assert_eq!(decode_pairs("::x"), Vec::<(String, String)>::new());
+    }
+
     proptest::proptest! {
         /// §10's codec property: any value round-trips, including the empty string, a
         /// maximum-length one, and one made entirely of separators.
@@ -218,6 +293,14 @@ mod tests {
             let spec = casual();
             let v = vec![fv("QTH", &raw, None)];
             proptest::prop_assert_eq!(decode(&encode(&v), spec), v);
+        }
+
+        /// The same property for the general log's pairs — the half §10's
+        /// "the ADIF round-trip of `ContestFields` is lossless" rests on.
+        #[test]
+        fn every_pair_round_trips(raw in proptest::string::string_regex("[%;:A-Za-z0-9 ]{0,64}").unwrap()) {
+            let pairs = vec![("QTH".to_string(), raw)];
+            proptest::prop_assert_eq!(decode_pairs(&encode_pairs(&pairs)), pairs);
         }
     }
 }

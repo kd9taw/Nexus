@@ -18128,6 +18128,67 @@ fn fd_log_manual(
     Ok(eng.snapshot())
 }
 
+/// What one merge into the general logbook did (§3.2).
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FdMergeReportDto {
+    /// Rows written to the general log by this run.
+    added: usize,
+    /// Rows already there — on a second run of the same merge, all of them.
+    already: usize,
+    /// Rows with no stable identity, refused rather than duplicated. Reported so a
+    /// count that does not add up is visible instead of silent.
+    refused: usize,
+    /// Whether those rows were also QUEUED for upload — the session's own control
+    /// (§18.1), off unless the operator turned it on for this session.
+    queued: bool,
+}
+
+/// ⭐ Merge this contest session's contacts into the general logbook — the one-click
+/// end-of-contest action.
+///
+/// Safe to press twice, and safe to press again after a restart: each row carries its
+/// own merge identity, and a row already in the logbook is skipped rather than
+/// duplicated. Whether the merged rows are also queued for connector upload is the
+/// SESSION's control (`fd_set_upload`), which is off unless the operator turned it on.
+#[tauri::command(async)]
+fn fd_merge_to_general(
+    state: State<'_, SharedEngine>,
+) -> Result<(FdMergeReportDto, AppSnapshot), String> {
+    let mut eng = engine_lock(&state);
+    let report = eng.fd_merge_to_general()?;
+    // ONE snapshot, taken after the merge and read for both answers. Two would be two
+    // full logbook sweeps under the engine mutex — the shape that stalled the
+    // waterfall — and the policy cannot change across the merge anyway.
+    let snap = eng.snapshot();
+    let queued = snap
+        .field_day
+        .as_ref()
+        .map(|f| f.upload.enabled && !f.upload.destinations.is_empty())
+        .unwrap_or(false);
+    Ok((
+        FdMergeReportDto {
+            added: report.added(),
+            already: report.already,
+            refused: report.refused,
+            queued,
+        },
+        snap,
+    ))
+}
+
+/// Set this session's upload destination (§18.1) — per session, default OFF.
+#[tauri::command(async)]
+fn fd_set_upload(
+    state: State<'_, SharedEngine>,
+    enabled: bool,
+    destinations: Vec<String>,
+) -> Result<AppSnapshot, String> {
+    let mut eng = engine_lock(&state);
+    eng.fd_set_upload(enabled, destinations)?;
+    Ok(eng.snapshot())
+}
+
 /// One club event heard on the LAN by [`fd_discover_events`].
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -22082,6 +22143,8 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             set_hunt_target,
             clear_hunt_target,
             fd_log_manual,
+            fd_merge_to_general,
+            fd_set_upload,
             fd_discover_events,
             fd_club_export,
             fd_scoreboard_status,
@@ -25604,6 +25667,7 @@ mod tests {
             operator: None,
             station_callsign: None,
             extra: Vec::new(),
+            contest: None,
         }
     }
 

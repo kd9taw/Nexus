@@ -1484,6 +1484,72 @@ pub mod upload_legs {
     pub const CLOUDLOG: u8 = 1 << 5;
     pub const WRL: u8 = 1 << 6;
     pub const ALL: u8 = QRZ | CLUBLOG | EQSL | HRDLOG | N3FJP | CLOUDLOG | WRL;
+
+    /// The leg mask for a list of connector ids — a contest session's DESTINATION
+    /// logbooks (§18.1).
+    ///
+    /// An id this build does not know contributes nothing, which is the safe
+    /// direction: a session naming a connector we cannot reach uploads nowhere rather
+    /// than everywhere.
+    pub fn mask_for(ids: &[String]) -> u8 {
+        ids.iter().fold(0u8, |m, id| {
+            m | match id.trim().to_ascii_lowercase().as_str() {
+                "qrz" => QRZ,
+                "clublog" => CLUBLOG,
+                "eqsl" => EQSL,
+                "hrdlog" => HRDLOG,
+                "n3fjp" => N3FJP,
+                "cloudlog" => CLOUDLOG,
+                "wrl" => WRL,
+                _ => 0,
+            }
+        })
+    }
+
+    /// Every id [`mask_for`] understands — the destination list the session control
+    /// offers, so the picker and the mask cannot come to disagree about what exists.
+    pub const IDS: &[&str] = &[
+        "qrz", "clublog", "eqsl", "hrdlog", "n3fjp", "cloudlog", "wrl",
+    ];
+}
+
+/// The session-scoped B4 index (§3.1) — see [`Engine::session_b4`].
+///
+/// ⭐ **`is_dupe` is a refusal and `worked_this_session` is not**, and the asymmetry is
+/// the whole design: under-reporting a dupe costs one duplicate contact that scores
+/// zero, while over-reporting REFUSES a legal contact.
+struct SessionB4 {
+    /// Exact ruleset keys, both halves.
+    exact: std::collections::HashSet<Vec<String>>,
+    /// Every call worked this session, exact key or not.
+    calls: std::collections::HashSet<String>,
+    rule: tempo_core::contest::DupeRule,
+    band: String,
+    mode_class: String,
+}
+
+impl SessionB4 {
+    /// The DUPE verdict for a station heard NOW, on the band and mode class in force.
+    ///
+    /// ⚠️ **A rule keyed on exchange slots answers `false`, never a guess.** The
+    /// exchange is not known before the contact, so the key cannot be built — the same
+    /// caveat, for the same reason, as `FieldDayLog::worked_key`, whose half of this
+    /// union it must agree with.
+    fn is_dupe(&self, call_upper: &str) -> bool {
+        if !self.rule.by_fields.is_empty() || !self.rule.by_sent_fields.is_empty() {
+            return false;
+        }
+        self.exact.contains(
+            &self
+                .rule
+                .key_of(call_upper, &self.band, &self.mode_class, &[], &[]),
+        )
+    }
+
+    /// Worked at all in this session — the advisory badge, never a refusal.
+    fn worked_this_session(&self, call_upper: &str) -> bool {
+        self.calls.contains(call_upper)
+    }
 }
 
 /// Where a queued upload CAME FROM — the fact the transport could not previously
@@ -8410,6 +8476,79 @@ impl Engine {
         Some((qso_pts, powered, bonus))
     }
 
+    // ----- the general-log seam (§3.2, §18.1) --------------------------------
+
+    /// ⭐ **Merge this contest session's log into the general logbook — the one-click
+    /// end-of-contest action, and the ONLY path by which a contest contact becomes a
+    /// `QsoRecord`.**
+    ///
+    /// Safe to run twice, and safe to run again after a restart: every row carries
+    /// `APP_NEXUS_QID`, and a row whose qid is already in the general log is skipped.
+    /// An operator who is not sure whether they already merged can simply merge again.
+    ///
+    /// ⚠️ **It does NOT go through [`log_qso`](Self::log_qso), and that is the whole of
+    /// §12(A).** `log_qso` enqueues every record it writes with `legs: ALL`, which is
+    /// exactly the behaviour `a_field_day_contact_never_enters_the_general_upload_queue`
+    /// was written to prevent, moved from log time to merge time — and both queues are
+    /// bounded ring buffers, so an 800-row merge through it would enqueue the last 256
+    /// and silently discard the first two-thirds of the contest. What is queued here is
+    /// the session's own [`UploadPolicy`](tempo_core::contest::UploadPolicy): **off by
+    /// default**, on only when the operator turned it on for this session, and only to
+    /// the destinations that session names. Queued as `CatchUp`, because a weekend's
+    /// contacts arriving at once are history, not news.
+    pub fn fd_merge_to_general(&mut self) -> Result<tempo_core::contest::MergeReport, String> {
+        let Mode::FieldDay { station, .. } = &self.mode else {
+            return Err("Field Day mode is not active".into());
+        };
+        // Read the destinations through the session's own accessor, which answers
+        // EMPTY whenever the switch is off — so "default OFF" is one function's
+        // property and not a flag every caller has to remember to check.
+        let legs = upload_legs::mask_for(station.log.session.upload_destinations());
+        let report = tempo_core::contest::merge_into_general(
+            &station.log,
+            &self.settings.fd_position_id,
+            &mut self.station.logbook,
+        );
+        if !report.written.is_empty() {
+            // MEMORY FIRST, then the append that stamps the shared log's freshness
+            // fingerprint — the same order and the same reason as `log_qso`.
+            self.station.append_to_log(&report.written);
+            for rec in &report.written {
+                self.station
+                    .requeue_upload_at(rec.clone(), legs, 0, 0, UploadOrigin::CatchUp);
+            }
+            self.station.refresh_worked_index();
+        }
+        tempo_core::applog::info(
+            "contest",
+            &format!(
+                "merged {} contest QSOs into the logbook ({} already there, {} refused); \
+                 upload legs {legs:#04b}",
+                report.added(),
+                report.already,
+                report.refused
+            ),
+        );
+        Ok(report)
+    }
+
+    /// Set this session's upload policy — the §18.1 control. `enabled: false` is the
+    /// state a session starts in and the state it returns to when the session ends,
+    /// which is the point: the destination is a property of the run, not a global
+    /// setting the operator must remember to change back.
+    pub fn fd_set_upload(
+        &mut self,
+        enabled: bool,
+        destinations: Vec<String>,
+    ) -> Result<(), String> {
+        let Mode::FieldDay { station, .. } = &mut self.mode else {
+            return Err("Field Day mode is not active".into());
+        };
+        station.log.session.upload.enabled = enabled;
+        station.log.session.upload.destinations = destinations;
+        Ok(())
+    }
+
     // -----------------------------------------------------------------------
     // Field Day club sync (the Nexus↔Nexus event sync).
     //
@@ -8728,11 +8867,7 @@ impl Engine {
     /// join line) so renaming this position in Settings reaches the board on
     /// the next tick instead of waiting for the connection to be rebuilt.
     pub fn fd_position_report(&self) -> tempo_net::fdsync::PosReport {
-        let mode = match self.settings.operating_mode {
-            crate::settings::OperatingMode::Phone => "PH",
-            crate::settings::OperatingMode::Cw => "CW",
-            _ => "DIG",
-        };
+        let mode = self.contest_mode_class();
         let op = if self.settings.fd_operator.trim().is_empty() {
             self.settings.mycall.clone()
         } else {
@@ -9310,11 +9445,20 @@ impl Engine {
         // `restore_field_day_if_enabled` is a deliberate no-op while the mode is live.
         let session = match &self.mode {
             Mode::FieldDay { station, .. } => station.log.session.clone(),
-            _ => ContestSession::field_day(
-                tempo_core::fieldday::FdEvent::from_code(&self.settings.fd_event),
-                &self.settings.fd_class,
-                &self.settings.fd_section,
-            ),
+            _ => {
+                let mut s = ContestSession::field_day(
+                    tempo_core::fieldday::FdEvent::from_code(&self.settings.fd_event),
+                    &self.settings.fd_class,
+                    &self.settings.fd_section,
+                );
+                // ⭐ WHEN THIS SESSION BEGAN — the bound the session-scoped B4 sweep
+                // reads (§3.1). A session left at `start_unix: 0` is not bounded at
+                // all, and the DUPE badge silently reverts to the lifetime B4 it
+                // exists to replace: a station worked at last year's Field Day would
+                // read as a dupe this year.
+                s.start_unix = now_unix_secs();
+                s
+            }
         };
         // ⚠️ **FLUSH BEFORE THE REBUILD, and this is a mechanism rather than a rule to
         // remember.** The station below is fresh and re-reads its rows from the journal
@@ -9390,6 +9534,23 @@ impl Engine {
                     &std::fs::read_to_string(path).unwrap_or_default(),
                     now_unix_secs().saturating_sub(4 * 86_400),
                 );
+            }
+            // ⚠️ A RESTART MUST NOT SHORTEN THE SESSION. The session above starts at
+            // "now" when it is genuinely new, but a restart mid-event restores rows
+            // logged hours ago — and rows merged from them are outside a window that
+            // starts now, so they would drop out of the session's dupe index. Take the
+            // earliest restored contact as the start when it is earlier, never later:
+            // widening the window can only under-report a dupe, which is the safe
+            // direction, while narrowing it refuses nothing but hides real ones.
+            if let Some(first) = station
+                .log
+                .qsos()
+                .iter()
+                .map(|q| q.when_unix)
+                .filter(|&w| w > 0)
+                .min()
+            {
+                station.log.session.start_unix = station.log.session.start_unix.min(first);
             }
         }
         // Mode↔tier invariant: free-text Chat needs an FT1/DX1 waveform — its
@@ -14677,6 +14838,7 @@ impl Engine {
             // later read would be the call in force at the click, not at the contact.
             station_callsign: self.station_callsign_now(),
             extra: Vec::new(),
+            contest: None,
         }
     }
 
@@ -15668,6 +15830,59 @@ impl Engine {
         }
     }
 
+    /// The session-scoped B4 index (§3.1), or `None` when no contest session is open.
+    ///
+    /// The union of two halves built by the SAME [`DupeRule`](tempo_core::contest::DupeRule):
+    /// the contest log's own dupe index (already exact, already club-synced) and the
+    /// general log's rows since the session started. A fixed key shape could not be
+    /// unioned with a ruleset-chosen one — under a rule with `by_band: false` the
+    /// contest half would key on the call alone while the general half stayed
+    /// band-scoped, and the same station on a second band would read as new.
+    fn session_b4(&self) -> Option<SessionB4> {
+        let Mode::FieldDay { station, .. } = &self.mode else {
+            return None;
+        };
+        if !self.settings.fd_active {
+            return None;
+        }
+        let rule = station.log.dupe_rule();
+        let since = self
+            .station
+            .logbook
+            .worked_keys_since(station.log.session.start_unix, &rule);
+        let mut exact = since.exact;
+        exact.extend(station.log.worked_keys().iter().cloned());
+        let mut calls = since.worked_this_session;
+        calls.extend(
+            station
+                .log
+                .qsos()
+                .iter()
+                .map(|q| q.call.to_ascii_uppercase()),
+        );
+        Some(SessionB4 {
+            exact,
+            calls,
+            rule,
+            band: self.settings.band.clone(),
+            mode_class: self.contest_mode_class().to_string(),
+        })
+    }
+
+    /// The contest scoring class of what the operator is running right now.
+    ///
+    /// One function, because the club band board and the DUPE badge must not disagree
+    /// about which class a contact would be logged under — a station that reads "not a
+    /// dupe" on the badge and lands on an already-worked band/mode row is a wrong
+    /// answer wherever the two come apart.
+    fn contest_mode_class(&self) -> &'static str {
+        match self.settings.operating_mode {
+            crate::settings::OperatingMode::Phone => "PH",
+            crate::settings::OperatingMode::Cw => "CW",
+            _ => "DIG",
+        }
+    }
+
     /// Full snapshot, with mode + per-mode (QSO / Field Day) status filled in.
     pub fn snapshot(&self) -> AppSnapshot {
         let mut s = self.app.snapshot();
@@ -15694,10 +15909,24 @@ impl Engine {
             self.adif_mode_for_tier(),
             fold_mode,
         );
+        // ⭐ §3.1 — while a contest session is open, B4 answers the WRONG QUESTION.
+        // The lifetime index says "you worked this station once, some year"; during a
+        // contest the operator needs "is this a dupe in THIS session, under THIS
+        // sponsor's rule", and a station worked at last year's Field Day is not one.
+        // One extra sweep, bounded by the session start, beside the two above.
+        let session_b4 = self.session_b4();
         for st in &mut s.stations {
-            st.worked = worked.contains(&st.call.to_ascii_uppercase());
-            st.worked_band =
-                worked_band_set.contains(&(st.call.to_ascii_uppercase(), cur_band_key.clone()));
+            let up = st.call.to_ascii_uppercase();
+            match &session_b4 {
+                Some(b4) => {
+                    st.worked = b4.worked_this_session(&up);
+                    st.worked_band = b4.is_dupe(&up);
+                }
+                None => {
+                    st.worked = worked.contains(&up);
+                    st.worked_band = worked_band_set.contains(&(up.clone(), cur_band_key.clone()));
+                }
+            }
             if let Some(resolve) = &self.station.dxcc_resolve {
                 st.country = resolve(&st.call);
             }
@@ -16003,6 +16232,12 @@ impl Engine {
                         })
                         .collect(),
                     club: self.fd_club_dto(log),
+                    upload: crate::dto::FdUploadDto {
+                        enabled: log.session.upload.enabled,
+                        destinations: log.session.upload.destinations.clone(),
+                        available: upload_legs::IDS.iter().map(|s| s.to_string()).collect(),
+                        hint: tempo_core::contest::UPLOAD_CLUBLOG_SWEEP_HINT.to_string(),
+                    },
                 });
             }
         }
@@ -18516,6 +18751,7 @@ impl Engine {
             // as the operator takes to confirm, so the call is captured now.
             station_callsign: self.station_callsign_now(),
             extra: Vec::new(),
+            contest: None,
         }
     }
 
@@ -28642,6 +28878,7 @@ mod tests {
             operator: None,
             station_callsign: None,
             extra: Vec::new(),
+            contest: None,
         });
         let pending = e.take_pending_uploads();
         assert_eq!(pending.len(), 1, "manual log_qso queues for upload");
@@ -28837,6 +29074,149 @@ mod tests {
         let pending = e.take_pending_uploads();
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].rec.call, "N0CALL");
+    }
+
+    // ---- §18.1: the end-of-contest merge, and where it may send -----------------
+
+    /// A Field Day session with two contacts logged, ready to merge.
+    fn fd_session(mycall: &str) -> Engine {
+        let mut e = Engine::new(mycall, "EN61", 0);
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_class = "3A".into();
+            s.fd_section = "WI".into();
+            s.fd_position_id = "a1b2c3d4".into();
+            e.apply_settings(s);
+        }
+        e.set_mode("fieldday-run").unwrap();
+        assert!(e.fd_log_manual("K1ABC", "2A", "EMA", "CW").unwrap());
+        assert!(e.fd_log_manual("W1AW", "1D", "CT", "PH").unwrap());
+        e.take_pending_uploads(); // the FD contacts queued nothing; start from empty
+        e
+    }
+
+    /// ⭐ **The ruling, both directions.** The merge writes the contacts into the
+    /// general logbook whatever the control says; it QUEUES them only when the
+    /// operator turned this session's control on, and only then.
+    #[test]
+    fn the_merge_queues_nothing_unless_this_session_says_so() {
+        let mut e = fd_session("W9XYZ");
+        // DEFAULT: off. Two contacts land in the logbook and nothing is queued.
+        let report = e.fd_merge_to_general().expect("in Field Day");
+        assert_eq!((report.added(), report.already, report.refused), (2, 0, 0));
+        assert_eq!(
+            e.station.logbook.len(),
+            2,
+            "the contacts DID reach the logbook"
+        );
+        assert!(
+            e.take_pending_uploads().is_empty(),
+            "default OFF — a merge must not queue this session's contacts for upload"
+        );
+
+        // POSITIVE CONTROL, and it is the whole proof: turn the session's control on,
+        // name a destination, merge a SECOND session's worth — and the same code path
+        // queues. Without this the assertion above would also pass in a build where
+        // the enqueue was simply deleted.
+        let mut on = fd_session("W9XYZ");
+        on.fd_set_upload(true, vec!["wrl".into()]).unwrap();
+        let r2 = on.fd_merge_to_general().expect("in Field Day");
+        assert_eq!(r2.added(), 2);
+        let queued = on.take_pending_uploads();
+        assert_eq!(queued.len(), 2, "the control is on — these go out");
+        assert_eq!(
+            queued[0].legs,
+            upload_legs::WRL,
+            "…to WRL, and nowhere else"
+        );
+        assert_ne!(
+            queued[0].legs,
+            upload_legs::ALL,
+            "the destination is the session's, not every connector the operator owns"
+        );
+        assert!(
+            queued.iter().all(|p| p.origin == UploadOrigin::CatchUp),
+            "a weekend's contacts arriving at once are history, and are paced"
+        );
+    }
+
+    /// Both halves of the control are required. A switch with nowhere to send is off,
+    /// and a destination with the switch off is off — the shape the standing N1MM
+    /// broadcast already uses.
+    #[test]
+    fn the_session_upload_control_needs_the_switch_and_a_destination() {
+        for (enabled, dests) in [
+            (true, vec![]),
+            (false, vec!["wrl".to_string()]),
+            // …and a destination this build does not know uploads NOWHERE rather than
+            // everywhere, which is the safe direction for a typo.
+            (true, vec!["not-a-logbook".to_string()]),
+        ] {
+            let mut e = fd_session("W9XYZ");
+            e.fd_set_upload(enabled, dests.clone()).unwrap();
+            assert_eq!(e.fd_merge_to_general().unwrap().added(), 2);
+            assert!(
+                e.take_pending_uploads().is_empty(),
+                "enabled={enabled} destinations={dests:?} must queue nothing"
+            );
+        }
+    }
+
+    /// ⭐ §3.2 — the one-click merge is safe to press twice.
+    #[test]
+    fn merging_twice_does_not_duplicate_the_contacts() {
+        let mut e = fd_session("W9XYZ");
+        assert_eq!(e.fd_merge_to_general().unwrap().added(), 2);
+        let again = e.fd_merge_to_general().unwrap();
+        assert_eq!((again.added(), again.already), (0, 2));
+        assert_eq!(e.station.logbook.len(), 2, "the logbook did not grow");
+    }
+
+    /// ⭐ §3.1 — during a session, B4 means DUPE and it is bounded by the session.
+    ///
+    /// The failure this removes: a station worked at LAST year's Field Day used to
+    /// light the B4 badge this year, because the lifetime index has no time bound.
+    #[test]
+    fn a_contest_session_marks_dupes_from_the_session_not_from_a_lifetime() {
+        let mut e = fd_session("W9XYZ");
+        // A general-log contact from long before this session started.
+        let mut old = qrec("N0OLD", "20m");
+        old.mode = "CW".into();
+        old.when_unix = 1_600_000_000;
+        e.log_qso(old);
+        let b4 = e.session_b4().expect("a session is open");
+        assert!(
+            !b4.worked_this_session("N0OLD") && !b4.is_dupe("N0OLD"),
+            "a contact from another year is not a dupe in this session"
+        );
+        // …while this session's own contest contacts are.
+        assert!(b4.worked_this_session("K1ABC"));
+        // POSITIVE CONTROL: the LIFETIME index still knows N0OLD, so the negative
+        // above is the session bound and not an empty index.
+        assert!(e.station.logbook.worked_call_set().contains("N0OLD"));
+    }
+
+    /// A contest snapshot's sweep count is bounded — the §3.1 sweep is ONE more beside
+    /// the two the snapshot already performs, not a multiplicative one.
+    #[test]
+    #[cfg(debug_assertions)]
+    fn a_contest_snapshot_performs_a_bounded_number_of_logbook_sweeps() {
+        let mut e = fd_session("W9XYZ");
+        for i in 0..25 {
+            e.log_qso(qrec(&format!("W{i}ABC"), "20m"));
+        }
+        let rows: Vec<modes::Decode> = (0..40)
+            .map(|i| dec_snr(&format!("CQ K{}AA FN3{}", i % 10, i % 10), -8))
+            .collect();
+        e.ingest_decodes_for_test(&rows, 2);
+        tempo_core::logbook::LOG_SWEEPS.with(|c| c.set(0));
+        let _ = e.snapshot();
+        let sweeps = tempo_core::logbook::LOG_SWEEPS.with(|c| c.get());
+        assert!(
+            sweeps <= 3,
+            "a contest snapshot swept the logbook {sweeps} times for 40 decode rows"
+        );
     }
 
     // ---- N1MM+ standing broadcast (every logged QSO, event or not) ------------
@@ -29240,6 +29620,7 @@ mod tests {
             operator: None,
             station_callsign: None,
             extra: Vec::new(),
+            contest: None,
         }
     }
 
@@ -30585,6 +30966,7 @@ mod tests {
             operator: None,
             station_callsign: None,
             extra: Vec::new(),
+            contest: None,
         });
 
         // A CQ from a same-entity station in a NEW grid → new_grid, not new_dxcc.

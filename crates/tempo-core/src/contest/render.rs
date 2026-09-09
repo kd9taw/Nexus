@@ -121,6 +121,7 @@ mod tests {
             ("spec.rs", include_str!("spec.rs")),
             ("carrier.rs", include_str!("carrier.rs")),
             ("dupe.rs", include_str!("dupe.rs")),
+            ("merge.rs", include_str!("merge.rs")),
             ("mod.rs", include_str!("mod.rs")),
         ];
         const FORBIDDEN: &[&str] = &[

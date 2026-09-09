@@ -940,6 +940,7 @@ mod tests {
             operator: None,
             station_callsign: None,
             extra: Vec::new(),
+            contest: None,
         }
     }
     fn orphan(call: &str, band: &str, mode_cls: &str, day: u64) -> OrphanConfirmation {

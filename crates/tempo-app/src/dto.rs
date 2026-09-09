@@ -1376,6 +1376,33 @@ pub struct FieldDayStatus {
     /// hosting nor joined, so a solo Field Day pays nothing for the feature.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub club: Option<FdClubDto>,
+    /// ⭐ **Where THIS SESSION's merged contacts go — the §18.1 control, default OFF.**
+    ///
+    /// Session state, not a setting: the answer to "how do I stop the QSO party going
+    /// to my general logbook?" is a property of the run, and it goes away with the run
+    /// rather than being a global the operator has to change back afterwards.
+    #[serde(default)]
+    pub upload: FdUploadDto,
+}
+
+/// The per-session upload control (§18.1).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FdUploadDto {
+    /// The switch. **False on every new session.**
+    pub enabled: bool,
+    /// The destination logbooks, by connector id.
+    pub destinations: Vec<String>,
+    /// Every connector id the merge understands — the picker's options, from the one
+    /// place the mask is built, so a picker cannot offer a destination that uploads
+    /// nowhere.
+    pub available: Vec<String>,
+    /// ⚠️ **The limitation this control does NOT close, in the operator's own words.**
+    /// ClubLog's catch-up sweep re-queues every logged QSO ClubLog never accepted the
+    /// next time a ClubLog password is saved — regardless of this switch. An operator
+    /// who reads "upload: off" and gets a ClubLog upload anyway has been misled by us,
+    /// not surprised by ClubLog.
+    pub hint: String,
 }
 
 /// One club band-board row — where a position is and how it is doing.
@@ -1792,6 +1819,7 @@ impl From<LoggedQso> for tempo_core::logbook::QsoRecord {
             operator: q.operator,
             station_callsign: q.station_callsign,
             extra: q.extra,
+            contest: None,
         }
     }
 }

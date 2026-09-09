@@ -132,6 +132,26 @@ pub struct LoggedQso {
 }
 
 impl LoggedQso {
+    /// The ADIF mode name behind this row's scoring class — the actual on-air submode
+    /// when one was recorded, and the historical class map for a legacy row that has
+    /// none.
+    ///
+    /// One function because **two emitters must not disagree about what mode a contact
+    /// was worked on**: the contest ADIF journal and the general-log merge both answer
+    /// this question, and a row exported as RTTY in one and FT8 in the other is a
+    /// contact the operator cannot reconcile afterwards.
+    pub fn recorded_mode(&self) -> &str {
+        if self.submode.is_empty() {
+            match self.mode.as_str() {
+                "CW" => "CW",
+                "PH" => "SSB",
+                _ => "FT8",
+            }
+        } else {
+            self.submode.as_str()
+        }
+    }
+
     /// One slot of what THEY sent me (`""` when the row does not carry it).
     pub fn rcvd(&self, key: &str) -> &str {
         field_raw(&self.rx, key)
@@ -230,6 +250,16 @@ impl FieldDayLog {
     /// cached copy would silently answer for the wrong event.
     pub fn dupe_rule(&self) -> crate::contest::DupeRule {
         crate::fd_rules::ruleset(self.event, crate::fd_rules::CURRENT_RULES_YEAR).dupe_rule
+    }
+
+    /// This log's dupe index, as the ruleset's own ordered keys.
+    ///
+    /// Exposed so the session-scoped B4 (§3.1) can UNION it with the general log's
+    /// [`worked_keys_since`](crate::logbook::Logbook::worked_keys_since) instead of
+    /// rebuilding it per snapshot — one index, one key shape, both halves built by the
+    /// same [`DupeRule`](crate::contest::DupeRule).
+    pub fn worked_keys(&self) -> &HashSet<Vec<String>> {
+        &self.worked
     }
 
     /// The highest [`LoggedQso::seq`] this log has stamped or restored — the
@@ -421,6 +451,18 @@ impl FieldDayLog {
         &self.qsos
     }
 
+    /// Mutable rows — **tests only**, and deliberately not a public API.
+    ///
+    /// Every production path into this log stamps a club-sync sequence (log time
+    /// stamps one; a journal restore backfills one, and `filter(|&v| v > 0)` means even
+    /// a journaled zero backfills). That is exactly why the merge's defence against an
+    /// unstamped row cannot be reached from outside: the shape it refuses has to be
+    /// built by hand.
+    #[cfg(test)]
+    pub(crate) fn qsos_mut(&mut self) -> &mut [LoggedQso] {
+        &mut self.qsos
+    }
+
     /// This log's rows as the scorer reads them.
     ///
     /// The seam that took scoring off this type: `Scoring::qso_and_powered` used to
@@ -486,15 +528,7 @@ impl FieldDayLog {
             // cascade and the record is DROPPED with "Invalid MODE". The Field Day exporter
             // simply never called it, so a Field Day contact worked on a Tempo tier was lost
             // on upload. Same cascade now, so the two exports cannot disagree.
-            let recorded = if q.submode.is_empty() {
-                match q.mode.as_str() {
-                    "CW" => "CW",
-                    "PH" => "SSB",
-                    _ => "FT8",
-                }
-            } else {
-                q.submode.as_str()
-            };
+            let recorded = q.recorded_mode();
             match crate::logbook::adif_submode(recorded) {
                 Some((parent, sub)) => {
                     s.push_str(&adif_field("MODE", parent));

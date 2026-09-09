@@ -82,6 +82,7 @@ fn qso(call: &str, band: &str, mode: &str, when: u64) -> QsoRecord {
         operator: None,
         station_callsign: None,
         extra: Vec::new(),
+        contest: None,
     }
 }
 

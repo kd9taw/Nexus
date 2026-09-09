@@ -33,9 +33,31 @@
 //! [`render::sent_exchange`], and it takes a ROW. [`carrier`] is how a field vector
 //! rides one ADIF tag, and [`dupe`] is the ordered key those vectors feed.
 
+/// The contest scoring class — `"CW"` | `"PH"` | `"DIG"` — of an ADIF mode name.
+///
+/// The contest log stores the CLASS (`LoggedQso::mode`); the general log stores the
+/// on-air ADIF mode. A dupe key built over both halves needs one vocabulary, and this
+/// is the map between them — built on [`reconcile::mode_class`](crate::reconcile::mode_class)
+/// rather than beside it, so the voice vocabulary cannot come to mean one thing for a
+/// LoTW match and another for a contest dupe.
+///
+/// ⚠️ A record with no mode maps to `""`, not to `"DIG"`. A mode-less row must not
+/// silently take on the class the operator happens to be running: that would make it a
+/// dupe against a contact it may have nothing to do with, and over-reporting a dupe
+/// refuses a legal contact.
+pub fn mode_class(adif_mode: &str) -> &'static str {
+    match crate::reconcile::mode_class(adif_mode) {
+        "CW" => "CW",
+        "Phone" => "PH",
+        "Other" => "",
+        _ => "DIG",
+    }
+}
+
 pub mod carrier;
 pub mod dupe;
 pub mod exchanges;
+pub mod merge;
 pub mod render;
 pub mod scoring;
 pub mod session;
@@ -47,7 +69,11 @@ pub use dupe::{DupeRule, KEY_SEP};
 
 pub use render::{role_for, sent_exchange, sent_exchange_string};
 
-pub use session::{ContestSession, InFlightQso, MyLocation};
+pub use merge::{merge_into_general, MergeReport};
+
+pub use session::{
+    ContestSession, InFlightQso, MyLocation, UploadPolicy, UPLOAD_CLUBLOG_SWEEP_HINT,
+};
 
 pub use scoring::{
     ModePoints, MultScope, MultSource, MultiplierRule, PointsRule, PostMultiplier, ScoreRow,

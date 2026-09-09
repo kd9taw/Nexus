@@ -1412,6 +1412,7 @@ mod grid_tests {
             operator: None,
             station_callsign: None,
             extra: Vec::new(),
+            contest: None,
         }
     }
 

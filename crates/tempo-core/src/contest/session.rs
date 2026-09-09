@@ -54,6 +54,44 @@ pub struct InFlightQso {
     pub since_unix: u64,
 }
 
+/// ⭐ **Where this session's merged contacts go — per session, default OFF (§18.1).**
+///
+/// The merge (`super::merge`) is the only path by which a contest contact becomes a
+/// `QsoRecord`, and the general log path enqueues every record it writes to every
+/// connector. That is exactly the behaviour the Field-Day upload invariant was written
+/// to prevent, moved from log time to merge time — so the merge may enqueue, but only
+/// when the operator has turned it on **for this session**, and the session carries its
+/// own destination.
+///
+/// **Why a property of the session and not a setting.** The operator report this
+/// answers is *"Nexus sends my contacts to my general logbook on WRL — how do I change
+/// it for the QSO party?"* A global toggle is one the operator must remember to change
+/// back, and then back again; a session that ends takes its answer with it.
+///
+/// **Both halves are required, and neither alone opts anybody in** — the shape the
+/// standing N1MM broadcast already uses: a switch with nowhere to send is off, and a
+/// destination alone must not enqueue.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UploadPolicy {
+    /// The switch. **`false` on every new session**, which is the ruling.
+    pub enabled: bool,
+    /// The destination logbooks, by connector id (`"qrz"`, `"clublog"`, `"wrl"`, …).
+    /// Empty means nowhere, so an enabled policy with no destination enqueues nothing.
+    pub destinations: Vec<String>,
+}
+
+/// ⚠️ **What the per-session control does NOT close, stated where the operator reads
+/// it.** ClubLog's catch-up sweep re-queues every logged QSO ClubLog never accepted,
+/// regardless of this control — so merged contest contacts WILL reach ClubLog the next
+/// time a ClubLog password is saved. An operator who reads "upload: off" and gets a
+/// ClubLog upload anyway has been misled by us, not surprised by ClubLog. Permanent
+/// per-connector exclusion needs a per-record connector mask at merge time, which is
+/// not in this pass.
+pub const UPLOAD_CLUBLOG_SWEEP_HINT: &str = "Off means this session's contacts are not \
+queued for upload when you merge them into your logbook. One exception, and it is not \
+ours to switch off: saving a ClubLog password re-queues every contact ClubLog has not \
+accepted, including these.";
+
 /// One run of one contest: the object BOTH logs carry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContestSession {
@@ -88,6 +126,9 @@ pub struct ContestSession {
     pub next_serial: u32,
     /// Operator-facing (`"TNQP 2026"`).
     pub label: String,
+    /// Where this session's merged contacts go — **default OFF** (§18.1). See
+    /// [`UploadPolicy`].
+    pub upload: UploadPolicy,
 }
 
 impl ContestSession {
@@ -127,6 +168,20 @@ impl ContestSession {
             end_unix: 0,
             next_serial: 1,
             label: exchange.name.to_string(),
+            // §18.1: OFF, on every new session, without exception. It is not read from
+            // a setting — a global default is the thing this control replaces.
+            upload: UploadPolicy::default(),
+        }
+    }
+
+    /// The connector destinations this session's merge may enqueue to — **empty
+    /// whenever the control is off**, which is what makes "default OFF" a property of
+    /// one function rather than of every caller that remembers to check the flag.
+    pub fn upload_destinations(&self) -> &[String] {
+        if self.upload.enabled {
+            &self.upload.destinations
+        } else {
+            &[]
         }
     }
 

@@ -69,6 +69,50 @@ impl DupeRule {
         rx: &[FieldValue],
         tx: &[FieldValue],
     ) -> Vec<String> {
+        self.build(
+            call,
+            band,
+            mode_class,
+            &|k| Some(field(rx, k).to_string()),
+            &|k| Some(field(tx, k).to_string()),
+        )
+        .expect("a contest-log lookup never declines")
+    }
+
+    /// The key for a GENERAL-LOG row, whose exchange is `(slot, raw)` pairs rather
+    /// than the contest log's triples — `None` when the row cannot supply every slot
+    /// the rule names.
+    ///
+    /// ⭐ **The `None` is the §3.1 advisory rule, and its direction is the whole
+    /// point.** A record that cannot supply a named component does not enter the
+    /// exact-key set at all; the caller puts it in a worked-this-session set keyed on
+    /// the call alone, which the UI shows as an advisory and never as a DUPE refusal.
+    /// **Under-reporting a dupe costs one duplicate contact that scores zero;
+    /// over-reporting refuses a legal contact.**
+    pub fn key_of_pairs(
+        &self,
+        call: &str,
+        band: &str,
+        mode_class: &str,
+        rcvd: &[(String, String)],
+        sent: &[(String, String)],
+    ) -> Option<Vec<String>> {
+        self.build(call, band, mode_class, &|k| pair(rcvd, k), &|k| {
+            pair(sent, k)
+        })
+    }
+
+    /// The ONE key builder. Both public builders funnel through it with different
+    /// missing-slot policies, because two builders is how the contest half and the
+    /// general half come to disagree about the shape of a key they must union.
+    fn build(
+        &self,
+        call: &str,
+        band: &str,
+        mode_class: &str,
+        rx: &dyn Fn(&str) -> Option<String>,
+        tx: &dyn Fn(&str) -> Option<String>,
+    ) -> Option<Vec<String>> {
         let mut k = Vec::with_capacity(3 + self.by_fields.len() + self.by_sent_fields.len());
         if self.by_call {
             k.push(norm(call));
@@ -80,12 +124,12 @@ impl DupeRule {
             k.push(norm(mode_class));
         }
         for key in self.by_fields {
-            k.push(norm(field(rx, key)));
+            k.push(norm(&rx(key)?));
         }
         for key in self.by_sent_fields {
-            k.push(norm(field(tx, key)));
+            k.push(norm(&tx(key)?));
         }
-        k
+        Some(k)
     }
 
     /// The key as one string, for a wire or a DTO that cannot carry a vector.
@@ -109,6 +153,16 @@ fn field<'a>(vals: &'a [FieldValue], key: &str) -> &'a str {
         .find(|v| v.key == key)
         .map(|v| v.raw.as_str())
         .unwrap_or("")
+}
+
+/// One slot of a general-log pair vector. An absent slot AND a present-but-empty one
+/// are both `None`: a blank county is not a county, and treating it as one would put
+/// every blank row on the same key and refuse the second of them.
+fn pair(vals: &[(String, String)], key: &str) -> Option<String> {
+    vals.iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case(key))
+        .map(|(_, raw)| raw.trim().to_string())
+        .filter(|raw| !raw.is_empty())
 }
 
 #[cfg(test)]
@@ -191,6 +245,49 @@ mod tests {
             r.key_of("W1AW", "", "", &[fv("B", "bee")], &[fv("C", "see")]),
             vec!["W1AW", "", "BEE", "SEE"]
         );
+    }
+
+    /// ⭐ §3.1 — the two halves of the session B4 index are built by the SAME builder,
+    /// so a general-log row and a contest-log row with the same exchange produce the
+    /// same key and the union means something.
+    #[test]
+    fn a_general_log_row_builds_the_identical_key_as_a_contest_row() {
+        let rx = [fv("QTH", "FRAN")];
+        let tx = [fv("QTH", "DAVI")];
+        let pairs_rx = [("QTH".to_string(), "fran".to_string())];
+        let pairs_tx = [("QTH".to_string(), "davi".to_string())];
+        assert_eq!(
+            QSO_PARTY.key_of_pairs("w8xyz", "40m", "CW", &pairs_rx, &pairs_tx),
+            Some(QSO_PARTY.key_of("W8XYZ", "40M", "cw", &rx, &tx)),
+        );
+    }
+
+    /// …and a row that cannot supply a named slot DECLINES rather than keying on a
+    /// blank, which is what keeps an ordinary contact out of the exact set instead of
+    /// colliding every blank row onto one key.
+    #[test]
+    fn a_row_that_cannot_supply_a_named_slot_declines() {
+        let tx = [("QTH".to_string(), "DAVI".to_string())];
+        assert_eq!(
+            QSO_PARTY.key_of_pairs("W8XYZ", "40m", "CW", &[], &tx),
+            None,
+            "no received county — no exact key"
+        );
+        assert_eq!(
+            QSO_PARTY.key_of_pairs(
+                "W8XYZ",
+                "40m",
+                "CW",
+                &[("QTH".to_string(), "   ".to_string())],
+                &tx
+            ),
+            None,
+            "a blank county is not a county"
+        );
+        // POSITIVE CONTROL: a rule naming no exchange slot — Field Day's — always
+        // keys, so the decline above is about the missing slot and not about a
+        // builder that never answers.
+        assert!(FD.key_of_pairs("W8XYZ", "40m", "CW", &[], &[]).is_some());
     }
 
     /// §4.1 direction 1 — I work somebody else's mobile.

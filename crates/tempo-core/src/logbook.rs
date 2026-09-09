@@ -75,6 +75,30 @@ fn note_log_sweep() {
     LOG_SWEEPS.with(|c| c.set(c.get() + 1));
 }
 
+/// What one [`Logbook::worked_keys_since`] sweep found — the two sets §3.1 specifies,
+/// and the asymmetry between them is deliberate.
+///
+/// ⭐ **[`exact`](Self::exact) is a DUPE refusal; [`worked_this_session`](Self::worked_this_session)
+/// never is.** A record that cannot supply every component the rule names is not in
+/// `exact` — because keying it on a blank would collide every such row onto one key and
+/// refuse the second of them. **Under-reporting a dupe costs one duplicate contact that
+/// scores zero; over-reporting refuses a legal contact**, and a wrong DUPE is the defect
+/// this whole programme exists for.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WorkedSince {
+    /// Rows that could supply the rule's every component, as the rule's own ordered
+    /// key — the shape the contest log's index uses, so the two union.
+    pub exact: std::collections::HashSet<Vec<String>>,
+    /// Every call worked in the window, whether or not it produced an exact key. The
+    /// UI shows this as an advisory "worked this session", never as a refusal.
+    ///
+    /// ⚠️ A call with an exact key is in BOTH sets, and that is the intended reading of
+    /// §3.1's "a separate worked-this-session set": it is true of that row too, and a
+    /// set that omitted the rows we know most about would make the advisory badge wrong
+    /// exactly where it is best informed.
+    pub worked_this_session: std::collections::HashSet<String>,
+}
+
 /// One logged contact.
 #[derive(Debug, Clone, PartialEq)]
 pub struct QsoRecord {
@@ -185,6 +209,64 @@ pub struct QsoRecord {
     /// here), so the preserved set can never drift from the code. Sorted for a
     /// deterministic write order.
     pub extra: Vec<(String, String)>,
+    /// Contest provenance — present on a row the contest merge wrote, and on any
+    /// imported row that carries a contest field this build models. `None` on an
+    /// ordinary contact, which is nearly every record in a lifetime log.
+    ///
+    /// ⭐ **Boxed, and the unit of the ruling is the POINTER, not the field count.**
+    /// `Option<Box<_>>` is 8 bytes on a non-contest record under the null-pointer
+    /// optimisation, and it is 8 bytes whether [`ContestFields`] carries seven fields
+    /// or nine. Inlining nine fields would cost ≈184 bytes on **every** record in the
+    /// log against 8 — and `log.adi` has no index, so every dupe check is a full
+    /// linear pass whose cost is the record's inline size. `size_of::<QsoRecord>()` is
+    /// pinned in a test either way.
+    ///
+    /// ⚠️ The box IS dereferenced in one sweep, and the claim that it never was is
+    /// corrected here rather than left standing: [`Logbook::worked_keys_since`] reads
+    /// `rcvd`/`sent` per record for any ruleset naming exchange slots. The cost is one
+    /// pointer chase per record that is *both* inside the session window *and* carries
+    /// `Some(_)` — a contest's own rows, not the lifetime log.
+    pub contest: Option<Box<ContestFields>>,
+}
+
+/// The contest provenance of one general-log row (§3).
+///
+/// ⭐ **`sent`/`rcvd` are PAIRS, not the contest log's `FieldValue` triples, and that
+/// asymmetry is a decision rather than an oversight.** The general log does not score,
+/// and a matched domain has no ADIF representation to round-trip through; the contest
+/// log keeps the domain because it is the scoring and export surface.
+///
+/// Unlike [`QsoRecord`] this DOES derive `Default` — every field of it is genuinely
+/// optional on a foreign import (a third-party log carrying only `CONTEST_ID` is a real
+/// record, not a half-empty one), and the parser builds it field by field from whatever
+/// the file happened to carry.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ContestFields {
+    /// `APP_NEXUS_SESSION` — the session that owns the row. Empty on a foreign import.
+    pub session: String,
+    /// `CONTEST_ID` — the standard ADIF contest token ("ARRL-FIELD-DAY").
+    pub contest_id: String,
+    /// `STX` — the serial THIS row sent.
+    pub stx: Option<u32>,
+    /// `STX_STRING` — the sent exchange, for a contest whose exchange is not a serial.
+    pub stx_string: Option<String>,
+    /// `SRX` — the serial they sent me.
+    pub srx: Option<u32>,
+    /// `SRX_STRING` — the received exchange.
+    pub srx_string: Option<String>,
+    /// The row's `tx`, slot → raw (`APP_NEXUS_MYEX`; carrier: `contest::carrier`).
+    pub sent: Vec<(String, String)>,
+    /// The row's `rx`, slot → raw (`APP_NEXUS_EX`).
+    pub rcvd: Vec<(String, String)>,
+    /// `APP_NEXUS_QID` — `"<session>:<posid>:<seq>"`, the MERGE IDENTITY.
+    ///
+    /// ⭐ **The merge is idempotent only because this comes back on read.** The general
+    /// log is re-read from `log.adi` at every restart, so "a row whose `qid` already
+    /// appears is skipped" is true across restarts only when the parser repopulates it.
+    /// A test that merges, drops the `Logbook`, re-reads and merges again is what
+    /// proves the reader exists; the in-memory leg alone would pass with no reader at
+    /// all.
+    pub qid: String,
 }
 
 /// Per-channel INBOUND confirmation state — which source(s) actually confirmed
@@ -1009,6 +1091,53 @@ impl Logbook {
         } else {
             band.to_ascii_uppercase()
         }
+    }
+
+    /// ⭐ **The session-scoped B4 sweep (§3.1) — the general log's half of a contest's
+    /// dupe index.**
+    ///
+    /// Today's [`worked_call_set`](Self::worked_call_set) and
+    /// [`worked_band_set`](Self::worked_band_set) sweep every record ever logged with
+    /// no time bound. During a contest that answers the wrong question and suppresses
+    /// legitimate contacts: a station worked at last year's Field Day is not a dupe
+    /// this year. This one is bounded at `cutoff` (the session start) and keyed by the
+    /// ruleset's own [`DupeRule`](crate::contest::DupeRule), so the caller can union it
+    /// with the contest log's index and get one key shape rather than two.
+    ///
+    /// ⚠️ **A fixed key shape could not be unioned with a ruleset-chosen one, and that
+    /// is why this takes the rule rather than a `fold_mode` flag.** `worked_band_set`
+    /// returns `(CALL, BAND)`; under a ruleset with `by_band: false` the contest half
+    /// keys on the call alone while the general half stays band-scoped, so the same
+    /// station on a second band reads as new and the DUPE badge under-reports. Same
+    /// builder, both halves.
+    ///
+    /// **ONE sweep**, counted once by the `LOG_SWEEPS` instrument — the number that
+    /// moved the waterfall stall. The per-record dereference of the contest box is
+    /// inside this sweep, not another one.
+    pub fn worked_keys_since(&self, cutoff: u64, rule: &crate::contest::DupeRule) -> WorkedSince {
+        note_log_sweep();
+        let mut out = WorkedSince::default();
+        for r in self.records.iter().filter(|r| r.when_unix >= cutoff) {
+            out.worked_this_session
+                .insert(r.call.trim().to_ascii_uppercase());
+            let (rcvd, sent) = match r.contest.as_deref() {
+                Some(c) => (c.rcvd.as_slice(), c.sent.as_slice()),
+                // An ordinary contact carries no exchange at all. It still keys
+                // exactly under a rule that names no exchange slot — which is Field
+                // Day's rule, and the reason this is not a QSO-party-only path.
+                None => (&[][..], &[][..]),
+            };
+            if let Some(k) = rule.key_of_pairs(
+                &r.call,
+                &r.band,
+                crate::contest::mode_class(&r.mode),
+                rcvd,
+                sent,
+            ) {
+                out.exact.insert(k);
+            }
+        }
+        out
     }
 
     pub fn worked_before(&self, call: &str) -> bool {
@@ -1965,6 +2094,13 @@ pub fn adif_record(r: &QsoRecord) -> String {
     {
         out.push_str(&field("IOTA", iota));
     }
+    // Contest provenance — the standard ADIF contest fields under their real names,
+    // and the exchange vectors under the four `APP_NEXUS_*` tags (ADIF's
+    // application-defined namespace). ⭐ The write list and the READ list are the same
+    // list, kept in one function each and next to each other, so they cannot drift:
+    // whatever is emitted here is consumed by `parse_record`'s contest block, which is
+    // what keeps `extra` free of a tag this build models.
+    out.push_str(&contest_fields(r.contest.as_deref()));
     // Fields this build does not model, preserved from import verbatim — see
     // [`QsoRecord::extra`]. Emitted last so modelled fields always lead.
     for (k, v) in &r.extra {
@@ -1972,6 +2108,90 @@ pub fn adif_record(r: &QsoRecord) -> String {
     }
     out.push_str("<EOR>\n");
     out
+}
+
+/// The contest half of [`adif_record`] — every tag omitted when it has nothing to say,
+/// so a record with `contest: None` (and one whose contest block is empty) writes
+/// exactly the bytes it wrote before this existed.
+fn contest_fields(c: Option<&ContestFields>) -> String {
+    let Some(c) = c else {
+        return String::new();
+    };
+    let mut out = String::new();
+    let mut text = |name: &str, val: &str| {
+        if !val.is_empty() {
+            out.push_str(&field(name, val));
+        }
+    };
+    text("CONTEST_ID", &c.contest_id);
+    if let Some(n) = c.stx {
+        text("STX", &n.to_string());
+    }
+    if let Some(s) = &c.stx_string {
+        text("STX_STRING", s);
+    }
+    if let Some(n) = c.srx {
+        text("SRX", &n.to_string());
+    }
+    if let Some(s) = &c.srx_string {
+        text("SRX_STRING", s);
+    }
+    text("APP_NEXUS_SESSION", &c.session);
+    text("APP_NEXUS_QID", &c.qid);
+    text(
+        "APP_NEXUS_MYEX",
+        &crate::contest::carrier::encode_pairs(&c.sent),
+    );
+    text(
+        "APP_NEXUS_EX",
+        &crate::contest::carrier::encode_pairs(&c.rcvd),
+    );
+    out
+}
+
+/// The read direction of [`contest_fields`], and deliberately the same list in the
+/// same order — `remove` for every tag it writes, so none of them can reach `extra`.
+///
+/// `None` when the record carried not one of them, which is nearly every record in a
+/// lifetime log: a `Some` here is a claim that this contact belonged to a contest, and
+/// an empty block would make that claim of every ordinary QSO.
+fn parse_contest(f: &mut std::collections::HashMap<String, String>) -> Option<Box<ContestFields>> {
+    let text = |f: &mut std::collections::HashMap<String, String>, name: &str| -> String {
+        f.remove(name)
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default()
+    };
+    let contest_id = text(f, "CONTEST_ID");
+    let stx = f.remove("STX").and_then(|s| s.trim().parse().ok());
+    let stx_string = Some(text(f, "STX_STRING")).filter(|s| !s.is_empty());
+    let srx = f.remove("SRX").and_then(|s| s.trim().parse().ok());
+    let srx_string = Some(text(f, "SRX_STRING")).filter(|s| !s.is_empty());
+    let session = text(f, "APP_NEXUS_SESSION");
+    let qid = text(f, "APP_NEXUS_QID");
+    let sent = crate::contest::carrier::decode_pairs(&text(f, "APP_NEXUS_MYEX"));
+    let rcvd = crate::contest::carrier::decode_pairs(&text(f, "APP_NEXUS_EX"));
+    let empty = contest_id.is_empty()
+        && stx.is_none()
+        && stx_string.is_none()
+        && srx.is_none()
+        && srx_string.is_none()
+        && session.is_empty()
+        && qid.is_empty()
+        && sent.is_empty()
+        && rcvd.is_empty();
+    (!empty).then(|| {
+        Box::new(ContestFields {
+            session,
+            contest_id,
+            stx,
+            stx_string,
+            srx,
+            srx_string,
+            sent,
+            rcvd,
+            qid,
+        })
+    })
 }
 
 /// Normalize + validate an ADIF `IOTA` reference ("NA-001") — a two-letter continent
@@ -2926,6 +3146,14 @@ fn record_from(mut f: std::collections::HashMap<String, String>) -> Option<QsoRe
             .remove("STATION_CALLSIGN")
             .map(|s| s.trim().to_ascii_uppercase())
             .filter(|s| !s.is_empty()),
+        // ⭐ The contest block is CONSUMED, exactly as OPERATOR and STATION_CALLSIGN
+        // above are — `remove` before the `drain` that fills `extra`. Three things
+        // follow, and the third is why this is not cosmetic: the write direction and
+        // the read direction are one list; `extra` never carries a tag this build
+        // models, which is the by-construction property its own doc comment claims;
+        // and the merge's idempotence survives a restart, because `APP_NEXUS_QID`
+        // comes back on read.
+        contest: parse_contest(f),
         // Whatever the parser did not consume is a field it does not model —
         // preserved verbatim, by construction. Sorted: deterministic writes.
         extra: {
@@ -3105,6 +3333,7 @@ mod tests {
             operator: None,
             station_callsign: None,
             extra: Vec::new(),
+            contest: None,
         }
     }
 
@@ -3676,12 +3905,19 @@ mod tests {
         assert_eq!(r.sat_name.as_deref(), Some("RS-44"));
         assert_eq!(r.operator.as_deref(), Some("KD9TAW"));
         assert_eq!(r.station_callsign.as_deref(), Some("KD9TAW"));
-        // The unmodelled remainder is preserved BY CONSTRUCTION (whatever the
-        // parser didn't consume), not by a hand-kept list that drifts.
+        // ⚠️ CONTEST_ID and SRX used to be asserted HERE, in `extra` — and they
+        // survived precisely because this build did not model them. It models them
+        // now, which removes them from `extra` and from this test's reach, so the
+        // proof moved rather than being left standing (see the contest round-trip
+        // test below). What stays here is the mechanism itself, on a field that is
+        // still unmodelled.
         let extra: std::collections::HashMap<_, _> = r.extra.iter().cloned().collect();
-        assert_eq!(extra.get("CONTEST_ID").map(String::as_str), Some("ARRL-B"));
-        assert_eq!(extra.get("SRX").map(String::as_str), Some("042"));
         assert_eq!(extra.get("QSL_VIA").map(String::as_str), Some("BUREAU"));
+        assert!(
+            !extra.contains_key("CONTEST_ID") && !extra.contains_key("SRX"),
+            "a tag this build models must never reach `extra`: {:?}",
+            r.extra
+        );
         // And the writer re-emits all of it, exactly once.
         let out = adif_header() + &adif_record(r);
         let back = &parse_adif(&out)[0];
@@ -3689,6 +3925,75 @@ mod tests {
         assert_eq!(back.extra, r.extra, "foreign fields survive the round trip");
         assert_eq!(out.matches("CONTEST_ID").count(), 1, "no duplication");
     }
+
+    /// ⭐ The REPLACEMENT proof the modelled contest fields owe (§3): the tags
+    /// `foreign_adif_fields_survive_a_round_trip_verbatim` used to cover from `extra`
+    /// now round-trip through [`QsoRecord::contest`], named explicitly.
+    ///
+    /// A foreign row that carries only the STANDARD contest fields is a real record —
+    /// this build reads them, and re-emits them, without ever having seen the session
+    /// that made them.
+    #[test]
+    fn the_modelled_contest_fields_round_trip_through_the_record() {
+        let text = "<CALL:5>K1ABC<QSO_DATE:8>20260627<TIME_ON:6>180500<BAND:3>20m<MODE:2>CW\
+                    <CONTEST_ID:14>ARRL-FIELD-DAY<STX:1>7<STX_STRING:5>3A WI\
+                    <SRX:2>12<SRX_STRING:6>2A EMA\
+                    <APP_NEXUS_SESSION:5>sess1<APP_NEXUS_QID:11>sess1:pos:3\
+                    <APP_NEXUS_MYEX:21>CLASS::3A;SECTION::WI\
+                    <APP_NEXUS_EX:22>CLASS::2A;SECTION::EMA<EOR>";
+        let r = &parse_adif(text)[0];
+        let c = r.contest.as_deref().expect("the contest block is modelled");
+        assert_eq!(c.contest_id, "ARRL-FIELD-DAY");
+        assert_eq!((c.stx, c.srx), (Some(7), Some(12)));
+        assert_eq!(c.stx_string.as_deref(), Some("3A WI"));
+        assert_eq!(c.srx_string.as_deref(), Some("2A EMA"));
+        assert_eq!(c.session, "sess1");
+        assert_eq!(c.qid, "sess1:pos:3");
+        assert_eq!(
+            c.sent,
+            vec![
+                ("CLASS".to_string(), "3A".to_string()),
+                ("SECTION".to_string(), "WI".to_string())
+            ]
+        );
+        assert_eq!(
+            c.rcvd,
+            vec![
+                ("CLASS".to_string(), "2A".to_string()),
+                ("SECTION".to_string(), "EMA".to_string())
+            ]
+        );
+        assert!(r.extra.is_empty(), "nothing modelled leaked: {:?}", r.extra);
+        // Lossless through the writer as well as the reader.
+        let back = &parse_adif(&(adif_header() + &adif_record(r)))[0];
+        assert_eq!(back.contest, r.contest);
+        // POSITIVE CONTROL — an ordinary contact must NOT acquire a contest block, or
+        // the assertions above would be true of every record in the log.
+        let plain = &parse_adif("<CALL:4>W1AW<BAND:3>20m<MODE:3>FT8<EOR>")[0];
+        assert!(plain.contest.is_none());
+        assert!(!adif_record(plain).contains("APP_NEXUS"));
+    }
+
+    /// The cost ruling, pinned: the contest block costs ONE POINTER on a record that
+    /// does not carry one. If this number moves, somebody inlined the fields — which
+    /// is ≈184 bytes on every record in a lifetime log, against 8.
+    #[test]
+    fn the_contest_block_costs_one_pointer_per_record() {
+        assert_eq!(
+            std::mem::size_of::<Option<Box<ContestFields>>>(),
+            std::mem::size_of::<usize>(),
+            "the null-pointer optimisation is what makes the box free on a non-contest row"
+        );
+        assert_eq!(
+            std::mem::size_of::<QsoRecord>(),
+            QSO_RECORD_SIZE,
+            "QsoRecord's inline size is what every dupe sweep pays, per record"
+        );
+    }
+
+    /// `size_of::<QsoRecord>()` as of this batch. A deliberate change updates it in
+    /// one place, with the diff saying so; an accidental one is a red test.
+    const QSO_RECORD_SIZE: usize = 768;
 
     #[test]
     fn tempodeep_gets_its_own_submode_not_tempofasts() {
@@ -5852,6 +6157,94 @@ mod tests {
         assert!(!lb.worked_before("N0ABC"));
     }
 
+    /// ⭐ §3.1 — the session-scoped sweep is BOUNDED, and a record that cannot supply
+    /// a slot the rule names is advisory, never a DUPE refusal.
+    #[test]
+    fn the_session_sweep_is_bounded_and_an_ordinary_contact_is_only_advisory() {
+        const QSO_PARTY: crate::contest::DupeRule = crate::contest::DupeRule {
+            by_call: true,
+            by_band: true,
+            by_mode_class: true,
+            by_fields: &["QTH"],
+            by_sent_fields: &[],
+        };
+        let mut lb = Logbook::new();
+        // Last year's contact — outside the window.
+        lb.add(rec("K1OLD", "20m", 1_700_000_000));
+        // This session: an ordinary contact, carrying no exchange at all.
+        lb.add(rec("W1AW", "20m", 1_782_583_500));
+        // …and one merged from an earlier session of the same contest, which can.
+        let mut merged = rec("K1ABC", "20m", 1_782_583_600);
+        merged.contest = Some(Box::new(ContestFields {
+            rcvd: vec![("QTH".into(), "FRAN".into())],
+            ..ContestFields::default()
+        }));
+        lb.add(merged);
+
+        let w = lb.worked_keys_since(1_782_000_000, &QSO_PARTY);
+        assert!(
+            !w.worked_this_session.contains("K1OLD"),
+            "the cutoff bounds the sweep — last year is not a dupe this year"
+        );
+        assert!(w.worked_this_session.contains("W1AW"));
+        assert!(
+            !w.exact.iter().any(|k| k[0] == "W1AW"),
+            "an ordinary contact cannot supply the county, so it is advisory only"
+        );
+        assert!(w.exact.contains(&vec![
+            "K1ABC".to_string(),
+            "20M".to_string(),
+            // `rec` logs FT8, whose contest class is DIG.
+            "DIG".to_string(),
+            "FRAN".to_string(),
+        ]));
+        // …and the LIFETIME index still sees every one of them, which is the half a
+        // session-scoped sweep must not quietly replace.
+        let lifetime = lb.worked_call_set();
+        for call in ["K1OLD", "W1AW", "K1ABC"] {
+            assert!(
+                lifetime.contains(call),
+                "{call} missing from the lifetime B4"
+            );
+        }
+        // POSITIVE CONTROL: under FIELD DAY's rule, which names no exchange slot, the
+        // very same ordinary contact DOES key exactly — so the exclusion above is the
+        // missing county and not a sweep that never keys anything.
+        const FD: crate::contest::DupeRule = crate::contest::DupeRule {
+            by_fields: &[],
+            ..QSO_PARTY
+        };
+        assert!(lb
+            .worked_keys_since(1_782_000_000, &FD)
+            .exact
+            .contains(&vec![
+                "W1AW".to_string(),
+                "20M".to_string(),
+                "DIG".to_string()
+            ]));
+    }
+
+    /// One sweep, counted by the instrument that caught the waterfall stall — the
+    /// per-record dereference of the contest box is INSIDE it, not another one.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn the_session_sweep_costs_exactly_one_pass() {
+        const FD: crate::contest::DupeRule = crate::contest::DupeRule {
+            by_call: true,
+            by_band: true,
+            by_mode_class: true,
+            by_fields: &[],
+            by_sent_fields: &[],
+        };
+        let mut lb = Logbook::new();
+        for i in 0..50 {
+            lb.add(rec("W1AW", "20m", 1_782_583_500 + i));
+        }
+        LOG_SWEEPS.with(|c| c.set(0));
+        let _ = lb.worked_keys_since(0, &FD);
+        assert_eq!(LOG_SWEEPS.with(|c| c.get()), 1);
+    }
+
     #[test]
     fn adif_round_trips() {
         let mut lb = Logbook::new();
@@ -6616,6 +7009,7 @@ mod operator_split_tests {
             operator: operator.map(|o| o.to_string()),
             station_callsign: None,
             extra: Vec::new(),
+            contest: None,
         }
     }
 
@@ -6735,6 +7129,7 @@ mod qsl_card_tests {
             operator: None,
             station_callsign: None,
             extra: Vec::new(),
+            contest: None,
         }
     }
 
