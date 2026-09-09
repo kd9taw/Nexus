@@ -8485,9 +8485,12 @@ impl Engine {
 
     // --- host half (the ClubBackend impl calls these) ----------------------
 
-    /// A position joined. Err when not hosting (a race with the toggle).
+    /// A position joined. Err when not hosting (a race with the toggle), and Err
+    /// with §18.2's refusal when an OLDER position cannot run this club's contest
+    /// — the wording lives on `ClubLog` because only it knows the contest to name.
     pub fn fd_club_join(
         &mut self,
+        v: u32,
         pos: &str,
         name: &str,
         call: &str,
@@ -8496,6 +8499,9 @@ impl Engine {
         let Some(club) = self.fd_club.as_mut() else {
             return Err("this station is not hosting a club event".into());
         };
+        if let Some(msg) = club.version_refusal(v) {
+            return Err(msg);
+        }
         let acked = club.join(pos, name, call, now);
         Ok(tempo_net::fdsync::JoinAccept {
             event: club.event_name.clone(),
@@ -8693,8 +8699,14 @@ impl Engine {
                 pos: posid.clone(),
                 seq: q.seq,
                 call: q.call.clone(),
+                // The legacy pair still travels: it is what a v1 HOST reads, and
+                // it costs two short strings. The exchange as data travels beside
+                // it — both sides, from the ROW, because a mobile's county moves
+                // and the row that sent the old one must keep it.
                 class: q.class().to_string(),
                 sect: q.section().to_string(),
+                ex: crate::fdevent::to_wire_fields(&q.rx),
+                mex: crate::fdevent::to_wire_fields(&q.tx),
                 band: q.band.clone(),
                 mode: q.mode.clone(),
                 sub: q.submode.clone(),
@@ -29369,13 +29381,20 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("fd-board-seam-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         e.fd_host_start(dir.join("fd_event_test.jsonl")).unwrap();
-        let _ = e.fd_club_join("aaaa0001", "CW tent", "KD9TAW");
+        let _ = e.fd_club_join(
+            tempo_net::fdsync::PROTO_VERSION,
+            "aaaa0001",
+            "CW tent",
+            "KD9TAW",
+        );
         e.fd_club_merge(&tempo_net::fdsync::WireQso {
             pos: "aaaa0001".into(),
             seq: 1,
             call: "W1AW".into(),
             class: "1D".into(),
             sect: "CT".into(),
+            ex: vec![],
+            mex: vec![],
             band: "20m".into(),
             mode: "DIG".into(),
             sub: "FT8".into(),
@@ -29427,8 +29446,9 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("fd-board-presence-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         e.fd_host_start(dir.join("fd_event_test.jsonl")).unwrap();
-        let _ = e.fd_club_join("aaaa0001", "CW tent", "KD9TAW");
-        let _ = e.fd_club_join("bbbb0002", "GOTA tent", "KD9TAW");
+        let v = tempo_net::fdsync::PROTO_VERSION;
+        let _ = e.fd_club_join(v, "aaaa0001", "CW tent", "KD9TAW");
+        let _ = e.fd_club_join(v, "bbbb0002", "GOTA tent", "KD9TAW");
         e.fd_club_pos_status(
             "aaaa0001",
             &tempo_net::fdsync::PosReport {
@@ -29512,6 +29532,10 @@ mod tests {
                 dupes: vec![
                     ("K1ABC".into(), "20m".into(), "CW".into()),  // own too
                     ("N0XYZ".into(), "40m".into(), "DIG".into()), // club-only
+                ],
+                dkeys: vec![
+                    vec!["K1ABC".into(), "20M".into(), "CW".into()],
+                    vec!["N0XYZ".into(), "40M".into(), "DIG".into()],
                 ],
                 sections: vec!["EMA".into(), "MN".into()],
                 score: 42,

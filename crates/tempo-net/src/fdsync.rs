@@ -40,7 +40,16 @@ use std::time::{Duration, Instant};
 /// Protocol version, carried in `join`/`welcome`/`beacon`. A host refuses a
 /// JOIN with a higher version (the joiner is newer — it knows things we
 /// don't); same-or-lower joins are served, with unknown fields ignored.
-pub const PROTO_VERSION: u32 = 1;
+///
+/// **v2 carries the exchange as data** ([`WireQso::ex`]/[`WireQso::mex`],
+/// [`ClubState::dkeys`]). It went to 2 so the new→old direction stays loud: a v2
+/// position joining a v1 host is refused there, verbatim, at hour zero. The
+/// old→new direction is served — every v2 field is `#[serde(default)]` and the
+/// legacy `class`/`sect` pair is still read — EXCEPT when the host is running a
+/// contest a v1 position cannot enter, show or send, which the host refuses at
+/// JOIN naming the version and the contest (`ClubBackend::join` takes the
+/// joiner's `v` for exactly that decision).
+pub const PROTO_VERSION: u32 = 2;
 /// Default host TCP port. Arbitrary but conflict-checked against the ham
 /// ecosystem's squatters: 2237 (WSJT-X UDP), 2242 (JS8Call), 1100 (N3FJP),
 /// 12060 (N1MM) are all avoided. A setting, not a constant, at the caller.
@@ -52,9 +61,12 @@ pub const BEACON_PORT: u16 = 42074;
 /// the sender instead ([`SNAP_DUPES_PER_LINE`]).
 pub const MAX_LINE_BYTES: usize = 8 * 1024;
 /// Dupe keys per `snap`/`club` line — keeps every line under
-/// [`MAX_LINE_BYTES`] (a key is ≤ ~40 bytes on the wire; 100 ≈ 4 KB worst
-/// case). The mirror unions chunks, so chunking is invisible to state.
-pub const SNAP_DUPES_PER_LINE: usize = 100;
+/// [`MAX_LINE_BYTES`]. Halved from 100 for v2: a line now carries the legacy
+/// triple AND the generalised key for the same entry, and a generalised key is
+/// longer than a triple (a QSO party's is five components, one of them a county
+/// name). 50 × (a triple + a key) is the same ~4 KB budget 100 × a triple was.
+/// The mirror unions chunks, so chunking is invisible to state.
+pub const SNAP_DUPES_PER_LINE: usize = 50;
 /// Host connection cap — bounds a SYN-happy peer. A real club runs ~25
 /// positions; 64 leaves room for reconnect races.
 pub const MAX_CONNECTIONS: usize = 64;
@@ -66,17 +78,62 @@ pub const DEAD_SECS: u64 = 15;
 /// is not speaking this protocol at all).
 const MAX_GARBAGE_LINES: u32 = 32;
 
+/// One slot of an exchange on the wire: the `(key, domain, raw)` triple, not a
+/// pair. `d` is the domain that matched an `Enum` value (`""` for every other
+/// kind) and it travels because a multiplier bucket and an export tag are later
+/// chosen by it — a receiver that had to re-resolve it would be guessing with
+/// its own rules file, not the sender's.
+///
+/// Short field names because a `snap` line is capped at [`MAX_LINE_BYTES`] and a
+/// club's rows are the bulk of the traffic.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct WireField {
+    /// Slot id (`"CLASS"`, `"SECTION"`, `"NR"`…).
+    pub k: String,
+    /// Domain id that matched, `""` for a non-`Enum` kind.
+    #[serde(default)]
+    pub d: String,
+    /// The value as sent/copied, verbatim.
+    #[serde(default)]
+    pub r: String,
+}
+
 /// One Field Day QSO on the wire — the `(pos, seq)` pair is its identity;
 /// everything else is the row the club log stores.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+///
+/// ⚠️ **`class`/`sect` are LEGACY and defaulted, and removing them would be the
+/// field failure §12(B) exists to design out.** A v1 position streams them and
+/// nothing else; a required field it does not send makes every one of its rows
+/// undecodable, and after [`MAX_GARBAGE_LINES`] the host drops that tent's
+/// connection — silently, mid-event. They stay, the host synthesises `ex` from
+/// them, and both sides keep working.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 pub struct WireQso {
     /// Position id (8-hex, per machine).
     pub pos: String,
     /// Per-position monotonic sequence (`LoggedQso::seq`). Never 0.
     pub seq: u64,
     pub call: String,
+    /// LEGACY (v1): the Field Day class they sent. Defaulted — see the type docs.
+    #[serde(default)]
     pub class: String,
+    /// LEGACY (v1): the ARRL/RAC section they sent. Defaulted — see the type docs.
+    #[serde(default)]
     pub sect: String,
+    /// The exchange THEY sent, as data. Empty from a v1 position, and the host
+    /// synthesises it from `class`/`sect`.
+    #[serde(default)]
+    pub ex: Vec<WireField>,
+    /// The exchange the LOGGING POSITION sent on this contact.
+    ///
+    /// ⭐ Without it the host has only its own, and `ClubLog::unique_log` rebuilt
+    /// every position's rows under the HOST's class and section — harmless for one
+    /// Field Day club, wrong the moment two positions send different exchanges,
+    /// which is every QSO party with a mobile. Empty from a v1 position, which
+    /// falls back to the club session's sent exchange: exactly what a Field Day
+    /// host means today.
+    #[serde(default)]
+    pub mex: Vec<WireField>,
     pub band: String,
     /// Scoring mode class: "DIG" | "CW" | "PH".
     pub mode: String,
@@ -120,10 +177,23 @@ pub struct ClubState {
     /// event) cannot union a dead event's keys. Deltas never set it.
     #[serde(default)]
     pub reset: bool,
-    /// Club dupe keys `(call, band, mode class)` — the position's while-typing
-    /// dupe verdict unions these with its own log.
+    /// LEGACY (v1) club dupe keys `(call, band, mode class)` — the position's
+    /// while-typing dupe verdict unions these with its own log.
+    ///
+    /// ⚠️ **Sent only while the club is running Field Day, and EMPTY otherwise.**
+    /// A v1 position keeps receiving exactly what it has always received for the
+    /// event it can actually run; for any other contest the triple is not the
+    /// dupe rule, so sending one would give that position a WRONG warning. Empty
+    /// degrades it to no club warning at all, which is the honest failure.
     #[serde(default)]
     pub dupes: Vec<(String, String, String)>,
+    /// The club dupe keys under the ruleset's own `DupeRule` (`tempo_core::contest`
+    /// — not a dependency of this crate, which owns only the wire) — the
+    /// generalised shape, in the same first-seen order and past the same cursor as
+    /// [`dupes`](Self::dupes), so the two can never disagree about what has been
+    /// worked. `dupes` is this list projected back to its first three components.
+    #[serde(default)]
+    pub dkeys: Vec<Vec<String>>,
     /// ARRL/RAC sections newly worked club-wide.
     #[serde(default)]
     pub sections: Vec<String>,
@@ -277,9 +347,23 @@ pub struct JoinAccept {
 /// or writes a setting, so no inbound byte can reach any of those (the
 /// data-plane-only property in the module header).
 pub trait ClubBackend: Send + Sync {
-    /// A version-accepted JOIN. `Err(msg)` refuses it (sent verbatim, then
-    /// the connection closes).
-    fn join(&self, pos: &str, name: &str, call: &str, max_seq: u64) -> Result<JoinAccept, String>;
+    /// A JOIN whose version is not NEWER than ours. `Err(msg)` refuses it (sent
+    /// verbatim, then the connection closes).
+    ///
+    /// ⭐ `v` is the joiner's protocol version, and it reaches the backend because
+    /// whether an OLDER position may be served is a question about the CONTEST, not
+    /// about the wire: a v1 position can run Field Day perfectly and cannot enter,
+    /// show or send a QSO-party exchange. The wire layer owns "newer than us is
+    /// refused"; the policy layer owns "older than us, and this contest", and it
+    /// owns the wording too, because only it knows the contest to name.
+    fn join(
+        &self,
+        v: u32,
+        pos: &str,
+        name: &str,
+        call: &str,
+        max_seq: u64,
+    ) -> Result<JoinAccept, String>;
     /// Merge one row into the club log (idempotent on `(pos, seq)`); returns
     /// the new high-water ack for `row.pos`.
     fn merge(&self, row: &WireQso) -> u64;
@@ -305,25 +389,33 @@ fn now_unix() -> u64 {
         .unwrap_or(0)
 }
 
-/// Send a `ClubState` as one or more lines, chunking the dupe list so every
+/// Send a `ClubState` as one or more lines, chunking the dupe lists so every
 /// line stays under the cap. Only the FIRST chunk carries sections/score/
 /// board (the mirror overwrites scalars, unions lists).
+///
+/// ⚠️ The two key lists are chunked by the SAME index range, because the host
+/// builds them index-parallel — entry `n` of `dupes` and entry `n` of `dkeys`
+/// are the same worked station under two rules. `dupes` is empty for a non-Field-Day
+/// club (see [`ClubState::dupes`]), so the range is taken over `dkeys`, which is
+/// the list that is always there.
 fn write_club_state(w: &mut impl Write, st: ClubState, snap: bool) -> std::io::Result<()> {
     let ClubState {
         reset: _,
         dupes,
+        dkeys,
         sections,
         score,
         qsos,
         board,
     } = st;
     let mut first = true;
-    let mut chunks = dupes.chunks(SNAP_DUPES_PER_LINE);
+    let mut start = 0usize;
     loop {
-        let chunk: Vec<_> = chunks.next().unwrap_or(&[]).to_vec();
+        let end = (start + SNAP_DUPES_PER_LINE).min(dkeys.len());
         let part = ClubState {
             reset: snap && first,
-            dupes: chunk,
+            dupes: dupes.get(start..end).unwrap_or(&[]).to_vec(),
+            dkeys: dkeys[start..end].to_vec(),
             sections: if first { sections.clone() } else { Vec::new() },
             score,
             qsos,
@@ -336,9 +428,10 @@ fn write_club_state(w: &mut impl Write, st: ClubState, snap: bool) -> std::io::R
         };
         w.write_all(encode_line(&msg).as_bytes())?;
         first = false;
-        if chunks.len() == 0 {
+        if end >= dkeys.len() {
             return Ok(());
         }
+        start = end;
     }
 }
 
@@ -404,7 +497,7 @@ fn serve_club_connection(
                             );
                             break;
                         }
-                        let accept = match backend.join(&pos, &name, &call, max_seq) {
+                        let accept = match backend.join(v, &pos, &name, &call, max_seq) {
                             Ok(a) => a,
                             Err(msg) => {
                                 let _ =
@@ -875,6 +968,8 @@ mod tests {
                 call: "W1AW".into(),
                 class: "2A".into(),
                 sect: "CT".into(),
+                ex: vec![],
+                mex: vec![],
                 band: "20m".into(),
                 mode: "DIG".into(),
                 sub: "FT8".into(),
@@ -892,6 +987,7 @@ mod tests {
             Msg::Snap(ClubState {
                 reset: true,
                 dupes: vec![("W1AW".into(), "20m".into(), "DIG".into())],
+                dkeys: vec![vec!["W1AW".into(), "20M".into(), "DIG".into()]],
                 sections: vec!["CT".into()],
                 score: 1234,
                 qsos: 312,
@@ -1021,6 +1117,9 @@ mod tests {
         calls: Mutex<Vec<String>>,
         merged: Mutex<std::collections::HashMap<(String, u64), WireQso>>,
         acked: Mutex<std::collections::HashMap<String, u64>>,
+        /// What the POLICY layer answers an older position with, if anything —
+        /// the seam §18.2's refusal comes down.
+        refuse_below_v2: Mutex<Option<String>>,
     }
     impl FakeClub {
         fn log(&self, s: impl Into<String>) {
@@ -1030,12 +1129,22 @@ mod tests {
     impl ClubBackend for FakeClub {
         fn join(
             &self,
+            v: u32,
             pos: &str,
             _name: &str,
             _call: &str,
             _max_seq: u64,
         ) -> Result<JoinAccept, String> {
-            self.log(format!("join {pos}"));
+            self.log(format!("join v{v} {pos}"));
+            // The guard is dropped before the branch, not held across it: an
+            // `if let` scrutinee lives until the end of the body, which is how a
+            // lock taken here would still be held while the arm runs.
+            let refusal = self.refuse_below_v2.lock().unwrap().clone();
+            if v < PROTO_VERSION {
+                if let Some(msg) = refusal {
+                    return Err(msg);
+                }
+            }
             Ok(JoinAccept {
                 event: "TEST FD".into(),
                 host_call: "W9ABC".into(),
@@ -1067,9 +1176,14 @@ mod tests {
                 .map(|r| (r.call.clone(), r.band.clone(), r.mode.clone()))
                 .collect();
             dupes.sort();
+            let dkeys: Vec<Vec<String>> = dupes
+                .iter()
+                .map(|(c, b, m)| vec![c.to_uppercase(), b.to_uppercase(), m.to_uppercase()])
+                .collect();
             ClubState {
                 reset: false,
                 dupes: dupes.into_iter().skip(dupes_from).collect(),
+                dkeys: dkeys.into_iter().skip(dupes_from).collect(),
                 sections: Vec::new(),
                 score: 0,
                 qsos: m.len() as u64,
@@ -1118,6 +1232,35 @@ mod tests {
         got
     }
 
+    /// [`talk`] over RAW lines — the bytes an older build writes, rather than
+    /// this build's encoder round-tripping its own types. A compatibility test
+    /// that encodes with today's `Msg` proves nothing about yesterday's bytes.
+    fn talk_raw(addr: std::net::SocketAddr, lines: &[&str], read_for_ms: u64) -> Vec<Msg> {
+        let s = TcpStream::connect(addr).unwrap();
+        s.set_read_timeout(Some(Duration::from_millis(100)))
+            .unwrap();
+        let mut w = s.try_clone().unwrap();
+        let mut r = BufReader::new(s);
+        for l in lines {
+            w.write_all(l.as_bytes()).unwrap();
+            w.write_all(b"\n").unwrap();
+        }
+        let mut got = Vec::new();
+        let deadline = Instant::now() + Duration::from_millis(read_for_ms);
+        while Instant::now() < deadline {
+            match read_capped_line(&mut r) {
+                Ok(Some(line)) => {
+                    if let Some(m) = decode_line(&line) {
+                        got.push(m);
+                    }
+                }
+                Ok(None) => break,
+                Err(_) => {}
+            }
+        }
+        got
+    }
+
     fn join_msg(pos: &str, max_seq: u64) -> Msg {
         Msg::Join {
             v: PROTO_VERSION,
@@ -1135,6 +1278,8 @@ mod tests {
             call: call.into(),
             class: "2A".into(),
             sect: "CT".into(),
+            ex: vec![],
+            mex: vec![],
             band: "20m".into(),
             mode: "DIG".into(),
             sub: "FT8".into(),
@@ -1203,6 +1348,189 @@ mod tests {
         );
     }
 
+    /// ⭐ THE old→new direction, at the byte level. These are the exact lines a
+    /// shipped 1.x build writes — no `ex`, no `mex`, no `dkeys`. If any v2 field
+    /// were required, `decode_line` would return `None`, every row from that tent
+    /// would count as garbage, and after [`MAX_GARBAGE_LINES`] the host would drop
+    /// the connection SILENTLY, mid-event. So this asserts `Some`, not just the
+    /// contents.
+    #[test]
+    fn a_literal_v1_line_still_decodes_on_a_v2_build() {
+        let join =
+            r#"{"t":"join","v":1,"pos":"aaaa0001","name":"CW tent","call":"KD9TAW","max_seq":7}"#;
+        assert!(
+            matches!(
+                decode_line(join),
+                Some(Msg::Join {
+                    v: 1,
+                    max_seq: 7,
+                    ..
+                })
+            ),
+            "a v1 join line must decode, not count as garbage"
+        );
+
+        let row = r#"{"t":"qso","pos":"aaaa0001","seq":8,"call":"W1AW","class":"2A","sect":"CT","band":"20m","mode":"DIG","sub":"FT8","when":1782583500,"op":"KD9TAW"}"#;
+        let Some(Msg::Qso(q)) = decode_line(row) else {
+            panic!("a v1 QSO line must decode: {row}");
+        };
+        assert_eq!((q.class.as_str(), q.sect.as_str()), ("2A", "CT"));
+        assert!(
+            q.ex.is_empty() && q.mex.is_empty(),
+            "the v2 fields default to empty rather than failing the decode"
+        );
+
+        let snap = r#"{"t":"snap","reset":true,"dupes":[["W1AW","20m","DIG"]],"sections":["CT"],"score":10,"qsos":1,"board":[]}"#;
+        let Some(Msg::Snap(st)) = decode_line(snap) else {
+            panic!("a v1 snap line must decode: {snap}");
+        };
+        assert_eq!(st.dupes.len(), 1);
+        assert!(st.dkeys.is_empty(), "a v1 host sends no generalised keys");
+
+        // POSITIVE CONTROL — the decoder really can tell the shapes apart, so the
+        // assertions above are about compatibility and not about everything
+        // parsing to empty.
+        let v2 = r#"{"t":"qso","pos":"aaaa0001","seq":9,"call":"K1ABC","class":"","sect":"","ex":[{"k":"SECTION","d":"fd_sections","r":"EMA"}],"mex":[{"k":"CLASS","d":"","r":"3A"}],"band":"20m","mode":"CW","sub":"","when":1782583600,"op":"KD9TAW"}"#;
+        let Some(Msg::Qso(q2)) = decode_line(v2) else {
+            panic!("control: a v2 QSO line must decode too");
+        };
+        assert_eq!(q2.ex.len(), 1);
+        assert_eq!(q2.ex[0].d, "fd_sections");
+        assert_eq!(q2.mex.len(), 1);
+    }
+
+    /// A v1 position joins a v2 host over a real socket, is welcomed, and its
+    /// legacy-shaped rows merge — and the JOINER'S VERSION reaches the policy
+    /// layer, which is what §18.2's ruling is decided on.
+    #[test]
+    fn a_v1_position_joins_a_v2_host_and_its_legacy_rows_merge() {
+        let club = Arc::new(FakeClub::default());
+        let (addr, sd) = start_host(club.clone());
+        let got = talk_raw(
+            addr,
+            &[
+                r#"{"t":"join","v":1,"pos":"aaaa0001","name":"CW tent","call":"KD9TAW","max_seq":0}"#,
+                r#"{"t":"qso","pos":"aaaa0001","seq":1,"call":"W1AW","class":"2A","sect":"CT","band":"20m","mode":"PH","sub":"","when":1782583500,"op":"KD9TAW"}"#,
+            ],
+            700,
+        );
+        sd.store(true, Ordering::Relaxed);
+        assert!(
+            got.iter()
+                .any(|m| matches!(m, Msg::Welcome { v, .. } if *v == PROTO_VERSION)),
+            "the v1 position is welcomed, and told the host's version: {got:?}"
+        );
+        let calls = club.calls.lock().unwrap().clone();
+        assert!(
+            calls.contains(&"join v1 aaaa0001".to_string()),
+            "the joiner's version reached the policy layer: {calls:?}"
+        );
+        assert!(
+            calls.contains(&"merge aaaa0001 1".to_string()),
+            "…and its row merged: {calls:?}"
+        );
+        let merged = club.merged.lock().unwrap();
+        let row = &merged[&("aaaa0001".to_string(), 1)];
+        assert_eq!((row.class.as_str(), row.sect.as_str()), ("2A", "CT"));
+    }
+
+    /// §18.2 at the wire: the host sends the policy layer's refusal VERBATIM and
+    /// closes, so the position shows the operator a message naming the version and
+    /// the contest instead of a bare failure.
+    #[test]
+    fn the_host_sends_the_policy_layers_version_refusal_verbatim() {
+        let club = Arc::new(FakeClub::default());
+        *club.refuse_below_v2.lock().unwrap() = Some(
+            "this club is running TN-QSO-PARTY and needs club sync v2 — this Nexus \
+             speaks v1, which cannot enter, show or send the TN-QSO-PARTY exchange."
+                .into(),
+        );
+        let (addr, sd) = start_host(club.clone());
+        let got = talk_raw(
+            addr,
+            &[r#"{"t":"join","v":1,"pos":"aaaa0001","name":"","call":"","max_seq":0}"#],
+            500,
+        );
+        sd.store(true, Ordering::Relaxed);
+        assert!(
+            matches!(got.first(), Some(Msg::Error { msg })
+                if msg == &club.refuse_below_v2.lock().unwrap().clone().unwrap()),
+            "the refusal reaches the operator unaltered: {got:?}"
+        );
+        // POSITIVE CONTROL: the SAME host serves a current position. A gate that
+        // refused everybody would pass the assertion above.
+        let (addr2, sd2) = start_host(club.clone());
+        let ok = talk_raw(
+            addr2,
+            &[r#"{"t":"join","v":2,"pos":"bbbb0002","name":"","call":"","max_seq":0}"#],
+            500,
+        );
+        sd2.store(true, Ordering::Relaxed);
+        assert!(
+            ok.iter().any(|m| matches!(m, Msg::Welcome { .. })),
+            "control: a v2 position is welcomed by the same host: {ok:?}"
+        );
+    }
+
+    /// ⭐ THE new→old direction, and the reason `PROTO_VERSION` went to 2 at all:
+    /// a v2 position joining a SHIPPED v1 host is refused there, loudly, at hour
+    /// zero — and shows the operator that host's own words.
+    ///
+    /// The v1 host is a socket speaking v1's rule, because the shipped build
+    /// cannot be linked in here; the bytes it answers with are `fdsync.rs`'s v1
+    /// error text, which is what a 1.x host actually writes.
+    #[test]
+    fn a_v2_position_joining_a_v1_host_gets_that_hosts_refusal_verbatim() {
+        const V1_ERROR: &str =
+            "this host speaks Field Day sync v1, you sent v2 — update the host's Nexus";
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let seen_v = Arc::new(Mutex::new(0u32));
+        let seen_v2 = seen_v.clone();
+        std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut w = stream.try_clone().unwrap();
+            let mut r = BufReader::new(stream);
+            let line = read_capped_line(&mut r).unwrap().unwrap();
+            if let Some(Msg::Join { v, .. }) = decode_line(&line) {
+                *seen_v2.lock().unwrap() = v;
+                // v1's rule, verbatim: refuse a higher version and close.
+                if v > 1 {
+                    let _ = w.write_all(
+                        encode_line(&Msg::Error {
+                            msg: V1_ERROR.into(),
+                        })
+                        .as_bytes(),
+                    );
+                }
+            }
+        });
+
+        let pos = Arc::new(FakePosition::default());
+        let sd = Arc::new(AtomicBool::new(false));
+        let p: Arc<dyn PositionSync> = pos.clone();
+        let sd2 = sd.clone();
+        let a = addr.to_string();
+        let h = std::thread::spawn(move || run_position_until(&a, p, sd2));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline && pos.errors.lock().unwrap().is_empty() {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        sd.store(true, Ordering::Relaxed);
+        let _ = h.join();
+
+        assert_eq!(
+            *seen_v.lock().unwrap(),
+            2,
+            "this build's position announces v2, which is what makes the old host refuse it"
+        );
+        assert_eq!(
+            pos.errors.lock().unwrap().as_slice(),
+            [V1_ERROR.to_string()],
+            "the old host's own words reach the operator unaltered"
+        );
+    }
+
     #[test]
     fn host_refuses_a_newer_protocol_with_a_verbatim_error() {
         let club = Arc::new(FakeClub::default());
@@ -1222,6 +1550,14 @@ mod tests {
         assert!(
             matches!(got.first(), Some(Msg::Error { msg }) if msg.contains("update the host")),
             "a newer joiner is refused with a human-readable error: {got:?}"
+        );
+        // …and the numbers in it are this build's, not a frozen "v1": the message
+        // is the ONLY thing that tells the operator which side is behind, and it
+        // moved when PROTO_VERSION did.
+        assert!(
+            matches!(got.first(), Some(Msg::Error { msg })
+                if msg == "this host speaks Field Day sync v2, you sent v3 — update the host's Nexus"),
+            "the refusal names both versions: {got:?}"
         );
         // Control: the backend never even saw the join.
         assert!(club.calls.lock().unwrap().is_empty());
@@ -1343,6 +1679,8 @@ mod tests {
                     call: format!("W{seq}AW"),
                     class: "2A".into(),
                     sect: "CT".into(),
+                    ex: vec![],
+                    mex: vec![],
                     band: "20m".into(),
                     mode: "PH".into(),
                     sub: String::new(),
@@ -1389,6 +1727,8 @@ mod tests {
             call: "W1AW".into(),
             class: "2A".into(),
             sect: "CT".into(),
+            ex: vec![],
+            mex: vec![],
             band: "20m".into(),
             mode: "PH".into(),
             sub: String::new(),

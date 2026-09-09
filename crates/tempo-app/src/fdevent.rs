@@ -27,22 +27,65 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Write;
 use std::path::PathBuf;
-use tempo_core::contest::ContestSession;
+use tempo_core::contest::{carrier, ContestSession, DupeRule, ExchangeSpec, FieldValue};
 use tempo_core::fieldday::{FdEvent, FieldDayLog};
-use tempo_net::fdsync::{ClubState, PosReport, WireBoardRow, WireQso};
+use tempo_net::fdsync::{ClubState, PosReport, WireBoardRow, WireField, WireQso};
+
+/// A field vector as it travels — the wire's and the journal's one shape.
+pub fn to_wire_fields(vs: &[FieldValue]) -> Vec<WireField> {
+    vs.iter()
+        .map(|v| WireField {
+            k: v.key.to_string(),
+            d: v.domain.unwrap_or("").to_string(),
+            r: v.raw.clone(),
+        })
+        .collect()
+}
+
+/// …and back, resolved against the exchange this club is running. Slots the
+/// running exchange does not declare are dropped, which is
+/// [`carrier::resolve`]'s rule and deliberately the same one: a wire triple and
+/// a journal triple are the same triple.
+pub fn from_wire_fields(ws: &[WireField], spec: &ExchangeSpec) -> Vec<FieldValue> {
+    ws.iter()
+        .filter_map(|w| carrier::resolve(&w.k, &w.d, &w.r, spec))
+        .collect()
+}
 
 /// One merged club-log row — the design's reconciled shape (also what the
 /// scoreboard seam's `FdBoardRow` mirrors). Serialized one-per-line into the
 /// host's event journal.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+///
+/// ⚠️ **EVERY field added here after 1.x is `#[serde(default)]`, and the legacy
+/// `class`/`section` pair became defaulted with them.** The journal replay is a
+/// tolerant loop — `if let Ok(row) = serde_json::from_str::<MergedRow>(line)` —
+/// which SKIPS what it cannot decode and reports nothing. One required field
+/// added here and the whole pre-upgrade journal decodes as nothing: the host
+/// comes up clean and empty, every position's ack watermark resets to 0, and a
+/// position that has gone off the air is simply gone. Silently — the sync chip
+/// reads Synced either way. `a_1x_host_journal_survives_the_v2_upgrade` is the
+/// test that goes red if this rule is ever broken.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 pub struct MergedRow {
     /// Position id (8-hex, per MACHINE, not per seat).
     pub posid: String,
     /// Per-position monotonic seq — `(posid, seq)` is the row's identity.
     pub seq: u64,
     pub call: String,
+    /// LEGACY (1.x): the Field Day class they sent. `ex` is synthesised from it.
+    #[serde(default)]
     pub class: String,
+    /// LEGACY (1.x): the ARRL/RAC section they sent. `ex` is synthesised from it.
+    #[serde(default)]
     pub section: String,
+    /// The exchange THEY sent, as data — synthesised from `class`/`section` when
+    /// a legacy row carries none.
+    #[serde(default)]
+    pub ex: Vec<WireField>,
+    /// The exchange the LOGGING POSITION sent on this contact. Empty on a legacy
+    /// row, which falls back to the club session's — what a Field Day host means.
+    #[serde(default)]
+    pub mex: Vec<WireField>,
     pub band: String,
     /// Scoring class: "DIG" | "CW" | "PH".
     pub mode_class: String,
@@ -67,6 +110,8 @@ impl MergedRow {
             call: q.call.clone(),
             class: q.class.clone(),
             section: q.sect.clone(),
+            ex: q.ex.clone(),
+            mex: q.mex.clone(),
             band: q.band.clone(),
             mode_class: q.mode.clone(),
             submode: q.sub.clone(),
@@ -75,14 +120,60 @@ impl MergedRow {
         }
     }
 
-    /// The club dupe key — EXACTLY `FieldDayLog.worked`'s
-    /// `(CALL, band, MODE CLASS)` shape, so the position-side union check
-    /// agrees with the own-log one byte for byte.
+    /// ⭐ **THE one synthesis, and it is called from one place.** A row that
+    /// carries the legacy `class`/`section` pair and no `ex` gets `ex` built from
+    /// it, resolved through the running exchange so a synthesised slot is
+    /// indistinguishable from one a v2 position sent (a `SECTION` value carries
+    /// the domain that matched it, and an export tag and a multiplier bucket are
+    /// chosen by that domain — dropping it would make a legacy row's exchange
+    /// subtly unlike a native one).
+    ///
+    /// Both paths that produce a `MergedRow` — the wire decoder and the journal
+    /// replay — funnel through [`ClubLog::merge_row`], which is the single call
+    /// site. Two synthesis sites would drift; there is one, and it is not
+    /// reachable any other way.
+    fn synthesize_legacy_ex(&mut self, spec: &ExchangeSpec) {
+        if !self.ex.is_empty() {
+            return;
+        }
+        if self.class.trim().is_empty() && self.section.trim().is_empty() {
+            return;
+        }
+        self.ex = to_wire_fields(
+            &["CLASS", "SECTION"]
+                .iter()
+                .zip([self.class.as_str(), self.section.as_str()])
+                .filter_map(|(k, v)| spec.value(k, v))
+                .collect::<Vec<_>>(),
+        );
+    }
+
+    /// The LEGACY club dupe key — `(CALL, band, MODE CLASS)`, the shape a v1
+    /// position's while-typing check reads. Band travels verbatim (the DTO and
+    /// the UI compare it against `snap.radio.band`, which is lower case), which
+    /// is why this is not `dkey`'s first three components.
     pub fn dupe_key(&self) -> (String, String, String) {
         (
             self.call.to_uppercase(),
             self.band.clone(),
             self.mode_class.to_ascii_uppercase(),
+        )
+    }
+
+    /// The club dupe key under the ruleset's own rule, built by the SAME
+    /// `DupeRule::key_of` the position's own log and the while-typing verdict use
+    /// — four sites in two languages must build the identical key, so there is
+    /// one builder.
+    ///
+    /// For Field Day the rule is `(call, band, mode class)` with both field lists
+    /// empty, so this is exactly the triple `dupe_key` returned before.
+    pub fn dkey(&self, rule: &DupeRule, spec: &ExchangeSpec) -> Vec<String> {
+        rule.key_of(
+            &self.call,
+            &self.band,
+            &self.mode_class,
+            &from_wire_fields(&self.ex, spec),
+            &from_wire_fields(&self.mex, spec),
         )
     }
 }
@@ -116,6 +207,14 @@ pub struct ClubPosition {
 pub struct ClubLog {
     /// Which event this club is running (scoring + export ids).
     pub event: FdEvent,
+    /// The Cabrillo token of the contest this club is running.
+    ///
+    /// It reads [`FdEvent::contest_id`] today, because a club can only run a Field
+    /// Day event in this build — the session that will set it independently is
+    /// batch 5's. It is here now because the JOIN gate needs it: whether an older
+    /// position may be served is a question about the CONTEST, and the refusal has
+    /// to name it.
+    pub contest_id: String,
     /// The operator-facing event name (beacon + welcome).
     pub event_name: String,
     rows: Vec<MergedRow>,
@@ -123,8 +222,15 @@ pub struct ClubLog {
     ids: HashSet<(String, u64)>,
     /// Club dupe keys in FIRST-SEEN ORDER — append-only, so a down-flow delta
     /// is "everything past your cursor" and cursors never invalidate.
+    ///
+    /// `dupes_list` is the LEGACY `(call, band, mode class)` triple and is
+    /// **index-parallel** to this one: both grow by exactly one entry per new key,
+    /// so one cursor addresses both and the two can never disagree about what has
+    /// been worked. Whether the legacy list reaches the wire is decided once, in
+    /// [`club_state`](Self::club_state).
+    dkeys_list: Vec<Vec<String>>,
+    dkeys_set: HashSet<Vec<String>>,
     dupes_list: Vec<(String, String, String)>,
-    dupes_set: HashSet<(String, String, String)>,
     /// Sections in first-seen order (same append-only contract).
     sections_list: Vec<String>,
     sections_set: HashSet<String>,
@@ -152,9 +258,59 @@ impl ClubLog {
     pub fn new(event: FdEvent, event_name: &str) -> Self {
         ClubLog {
             event,
+            contest_id: event.contest_id().to_string(),
             event_name: event_name.to_string(),
             ..Default::default()
         }
+    }
+
+    /// The exchange this club's rows are read against, and the rule its dupe keys
+    /// are built by. Both come from the event because a club can only run a Field
+    /// Day event in this build (see [`contest_id`](Self::contest_id)).
+    fn exchange(&self) -> &'static ExchangeSpec {
+        tempo_core::contest::field_day(self.event)
+    }
+
+    fn dupe_rule(&self) -> DupeRule {
+        tempo_core::fd_rules::ruleset(self.event, tempo_core::fd_rules::CURRENT_RULES_YEAR)
+            .dupe_rule
+    }
+
+    /// Is this club running one of the two Field Day events — the contests a v1
+    /// position can enter, display and transmit?
+    pub fn is_field_day(&self) -> bool {
+        self.contest_id == FdEvent::ArrlFd.contest_id()
+            || self.contest_id == FdEvent::WinterFd.contest_id()
+    }
+
+    /// ⭐ **§18.2 — why a joining position of protocol version `v` cannot be
+    /// served, or `None` to serve it.**
+    ///
+    /// A v1 position running Field Day is served exactly as it always was, so a
+    /// mixed-version Field Day club is unaffected. Running anything else, it is
+    /// refused AT JOIN: it cannot enter, display or transmit that contest's
+    /// exchange, so its rows would arrive with an empty exchange and score as
+    /// zero-multiplier ones. A club discovering at hour six that one tent's 300
+    /// contacts carry no county is worse than that tent knowing at hour zero.
+    ///
+    /// The message names the version AND the contest because it is the only thing
+    /// its reader has: a bare "incompatible" leaves an operator on a field at 0200
+    /// with no idea what to do. It also says what happens to the contacts they log
+    /// meanwhile, which is true — the position journals them, and its outbox is
+    /// "every own row past the host's ack", so they all go up on the first join
+    /// that succeeds.
+    pub fn version_refusal(&self, v: u32) -> Option<String> {
+        if v >= tempo_net::fdsync::PROTO_VERSION || self.is_field_day() {
+            return None;
+        }
+        Some(format!(
+            "this club is running {contest} and needs club sync v{need} — this Nexus \
+             speaks v{v}, which cannot enter, show or send the {contest} exchange. \
+             Update this Nexus and rejoin: contacts you log meanwhile stay in your own \
+             log and go up when you do.",
+            contest = self.contest_id,
+            need = tempo_net::fdsync::PROTO_VERSION,
+        ))
     }
 
     /// Open (creating if absent) the append-only journal at `path`, replaying
@@ -227,14 +383,20 @@ impl ClubLog {
 
     /// [`merge`](Self::merge) minus the wire type; `now == 0` = a journal
     /// replay (no arrival stamped, nothing re-journaled).
-    fn merge_row(&mut self, row: MergedRow, now: u64) -> bool {
+    fn merge_row(&mut self, mut row: MergedRow, now: u64) -> bool {
         let id = (row.posid.clone(), row.seq);
         if row.seq == 0 || !self.ids.insert(id) {
             return false; // seq 0 is "never assigned" — refuse, don't guess
         }
-        let key = row.dupe_key();
-        if self.dupes_set.insert(key.clone()) {
-            self.dupes_list.push(key);
+        // THE synthesis point, and the only one: both producers of a MergedRow —
+        // the wire decoder and the journal replay — reach the club log through
+        // here, so a legacy row's exchange is reconstructed once or never.
+        row.synthesize_legacy_ex(self.exchange());
+        let dkey = row.dkey(&self.dupe_rule(), self.exchange());
+        if self.dkeys_set.insert(dkey.clone()) {
+            self.dkeys_list.push(dkey);
+            // Index-parallel, always built, sent only for a Field Day club.
+            self.dupes_list.push(row.dupe_key());
         }
         let sect = row.section.trim().to_uppercase();
         if !sect.is_empty() && self.sections_set.insert(sect.clone()) {
@@ -312,9 +474,10 @@ impl ClubLog {
         }
     }
 
-    /// The append-only cursors: (dupe keys, sections) totals.
+    /// The append-only cursors: (dupe keys, sections) totals. The dupe cursor
+    /// addresses both key lists — they are index-parallel by construction.
     pub fn counts(&self) -> (usize, usize) {
-        (self.dupes_list.len(), self.sections_list.len())
+        (self.dkeys_list.len(), self.sections_list.len())
     }
 
     pub fn rows(&self) -> &[MergedRow] {
@@ -333,6 +496,11 @@ impl ClubLog {
         &self.dupes_list
     }
 
+    /// The same keys under the ruleset's own rule — the generalised shape.
+    pub fn dkeys(&self) -> &[Vec<String>] {
+        &self.dkeys_list
+    }
+
     pub fn sections(&self) -> &[String] {
         &self.sections_list
     }
@@ -344,10 +512,12 @@ impl ClubLog {
     fn earliest_unique_indices(&self) -> Vec<usize> {
         let mut order: Vec<usize> = (0..self.rows.len()).collect();
         order.sort_by_key(|&i| (self.rows[i].when_unix, i));
-        let mut seen: HashSet<(String, String, String)> = HashSet::new();
+        let rule = self.dupe_rule();
+        let spec = self.exchange();
+        let mut seen: HashSet<Vec<String>> = HashSet::new();
         let mut keep: Vec<usize> = Vec::new();
         for i in order {
-            if seen.insert(self.rows[i].dupe_key()) {
+            if seen.insert(self.rows[i].dkey(&rule, spec)) {
                 keep.push(i);
             }
         }
@@ -359,11 +529,16 @@ impl ClubLog {
     /// HOST's station identity — the one artifact both exports and the score
     /// derive from, so they can never disagree with each other.
     pub fn unique_log(&self, mycall: &str, class: &str, section: &str) -> FieldDayLog {
-        // ⚠️ Every merged row is rebuilt under the HOST's class and section, so two
-        // positions in different counties both export the host's. That is the same
-        // defect `cabrillo()` carried until batch 3, one layer up, and it closes when
-        // `MergedRow` gains the row's own sent exchange over the wire — the wire batch.
-        // Field Day is unaffected: one club, one class, one section.
+        // ⭐ BOTH sides come from the ROW. Every merged row used to be rebuilt under
+        // the HOST's class and section — the same defect `cabrillo()` carried until
+        // batch 3, one layer up — which is harmless for one Field Day club and wrong
+        // the moment two positions send different exchanges, which is every QSO party
+        // with a mobile. `mex` is what closes it.
+        //
+        // The host's own session is still the FALLBACK, and only that: a legacy row
+        // carries no `mex`, and what a 1.x host meant by its absence is "the club's
+        // sent exchange", which is exactly right for Field Day.
+        let spec = self.exchange();
         let mut log = FieldDayLog::new(
             mycall,
             ContestSession::field_day(self.event, class, section),
@@ -372,23 +547,21 @@ impl ClubLog {
         for i in self.earliest_unique_indices() {
             let r = &self.rows[i];
             log.band = r.band.clone();
+            let rx = from_wire_fields(&r.ex, spec);
+            let tx = if r.mex.is_empty() {
+                log.session.my_exchange.clone()
+            } else {
+                from_wire_fields(&r.mex, spec)
+            };
             // Never refused: the indices are already key-unique.
-            log.log_submode_at(
-                &r.call,
-                &r.class,
-                &r.section,
-                &r.mode_class,
-                &r.submode,
-                0,
-                r.when_unix,
-            );
+            log.log_exchange_at(&r.call, rx, tx, &r.mode_class, &r.submode, 0, r.when_unix);
         }
         log
     }
 
     /// Unique (scoring) rows count.
     pub fn qsos_unique(&self) -> u64 {
-        self.dupes_list.len() as u64
+        self.dkeys_list.len() as u64
     }
 
     /// Club score under the HOST's power multiplier + claimed bonuses (the
@@ -464,7 +637,16 @@ impl ClubLog {
     ) -> ClubState {
         ClubState {
             reset: false, // the wire layer stamps the snap's first chunk
-            dupes: self.dupes_list.get(dupes_from..).unwrap_or(&[]).to_vec(),
+            // The legacy triple ships ONLY for a Field Day club: for any other
+            // contest it is not the dupe rule, and a v1 position given one would
+            // show a WRONG while-typing warning rather than none. Empty is the
+            // honest failure. `dkeys` always ships — a v2 position reads that.
+            dupes: if self.is_field_day() {
+                self.dupes_list.get(dupes_from..).unwrap_or(&[]).to_vec()
+            } else {
+                Vec::new()
+            },
+            dkeys: self.dkeys_list.get(dupes_from..).unwrap_or(&[]).to_vec(),
             sections: self
                 .sections_list
                 .get(sections_from..)
@@ -506,8 +688,13 @@ impl ClubLog {
 pub struct ClubMirror {
     pub event: String,
     pub host_call: String,
-    /// Club dupe keys — the while-typing verdict unions these with own log.
+    /// LEGACY club dupe keys — the while-typing verdict unions these with own
+    /// log. EMPTY when the host is running anything but Field Day: the triple is
+    /// not that contest's dupe rule, and no club warning is honest where a wrong
+    /// one is not.
     pub dupes: HashSet<(String, String, String)>,
+    /// The same keys under the ruleset's own rule — what a v2 position reads.
+    pub dkeys: HashSet<Vec<String>>,
     pub sections: HashSet<String>,
     pub score: u32,
     pub qsos: u64,
@@ -529,10 +716,14 @@ impl ClubMirror {
     pub fn apply(&mut self, st: &ClubState) {
         if st.reset {
             self.dupes.clear();
+            self.dkeys.clear();
             self.sections.clear();
         }
         for k in &st.dupes {
             self.dupes.insert(k.clone());
+        }
+        for k in &st.dkeys {
+            self.dkeys.insert(k.clone());
         }
         for s in &st.sections {
             self.sections.insert(s.clone());
@@ -634,8 +825,13 @@ mod tests {
             pos: pos.into(),
             seq,
             call: call.into(),
+            // A v1 position's shape exactly: the legacy pair, and no `ex`/`mex`.
+            // Every test below that uses this helper is therefore also a test that
+            // a v1 position's rows still reach a v2 host's club log intact.
             class: "2A".into(),
             sect: sect.into(),
+            ex: vec![],
+            mex: vec![],
             band: band.into(),
             mode: mode.into(),
             sub: if mode == "DIG" {
@@ -840,6 +1036,8 @@ mod tests {
                         call: format!("W1OLD{seq}"),
                         class: "2A".into(),
                         section: "CT".into(),
+                        ex: vec![],
+                        mex: vec![],
                         band: "20m".into(),
                         mode_class: "PH".into(),
                         submode: String::new(),
@@ -871,6 +1069,8 @@ mod tests {
                     call: format!("W2NEW{seq}"),
                     class: "2A".into(),
                     section: "WI".into(),
+                    ex: vec![],
+                    mex: vec![],
                     band: "40m".into(),
                     mode_class: "CW".into(),
                     submode: String::new(),
@@ -902,6 +1102,8 @@ mod tests {
                 call: "W2NEW1".into(),
                 class: "2A".into(),
                 section: "WI".into(),
+                ex: vec![],
+                mex: vec![],
                 band: "40m".into(),
                 mode_class: "CW".into(),
                 submode: String::new(),
@@ -953,6 +1155,7 @@ mod tests {
         m.apply(&ClubState {
             reset: true,
             dupes: vec![("W1AW".into(), "20m".into(), "DIG".into())],
+            dkeys: vec![vec!["W1AW".into(), "20M".into(), "DIG".into()]],
             sections: vec!["CT".into()],
             score: 10,
             qsos: 1,
@@ -961,17 +1164,20 @@ mod tests {
         m.apply(&ClubState {
             reset: false,
             dupes: vec![("K1ABC".into(), "40m".into(), "CW".into())],
+            dkeys: vec![vec!["K1ABC".into(), "40M".into(), "CW".into()]],
             sections: vec!["EMA".into()],
             score: 14,
             qsos: 2,
             board: vec![],
         });
         assert_eq!(m.dupes.len(), 2, "deltas union");
+        assert_eq!(m.dkeys.len(), 2, "…and the generalised keys with them");
         assert_eq!((m.score, m.qsos), (14, 2), "scalars overwrite");
         // A rejoin snap (host restarted into a new event) CLEARS before applying.
         m.apply(&ClubState {
             reset: true,
             dupes: vec![("N0XYZ".into(), "20m".into(), "PH".into())],
+            dkeys: vec![vec!["N0XYZ".into(), "20M".into(), "PH".into()]],
             sections: vec!["MN".into()],
             score: 1,
             qsos: 1,
@@ -985,6 +1191,10 @@ mod tests {
         assert!(m
             .dupes
             .contains(&("N0XYZ".into(), "20m".into(), "PH".into())));
+        assert_eq!(m.dkeys.len(), 1, "the generalised set is reset too");
+        assert!(m
+            .dkeys
+            .contains(&vec!["N0XYZ".to_string(), "20M".into(), "PH".into()]));
     }
 
     #[test]
@@ -1002,5 +1212,362 @@ mod tests {
         assert_eq!(SyncState::derive(true, true, 0, 0), Synced);
         assert_eq!(SyncState::Synced.code(), "synced");
         assert_eq!(SyncState::derive(true, false, 0, 7).code(), "offline");
+    }
+
+    // ---- v2: the wire, the journal, and both compatibility directions -----
+
+    /// A REAL 1.x host journal — twelve NDJSON rows written by the shipped
+    /// `MergedRow` (byte-identical between `main` and this branch's base), three
+    /// positions, all three mode classes, two digital submodes, one unrecorded
+    /// operator and one cross-position dupe — with the Cabrillo and ADIF that
+    /// build exported from it.
+    const J1X: &str = include_str!("../tests/fixtures/fd-1x-journal/fd_event_1x.jsonl");
+    const J1X_CBR: &str = include_str!("../tests/fixtures/fd-1x-journal/fd_event_1x.cbr");
+    const J1X_ADI: &str = include_str!("../tests/fixtures/fd-1x-journal/fd_event_1x.adi");
+
+    fn scratch(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("fdevent-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// A field vector for the Field Day exchange, resolved the way a position does.
+    fn fd_fields(event: FdEvent, class: &str, section: &str) -> Vec<WireField> {
+        let spec = tempo_core::contest::field_day(event);
+        to_wire_fields(
+            &["CLASS", "SECTION"]
+                .iter()
+                .zip([class, section])
+                .filter_map(|(k, v)| spec.value(k, v))
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    /// [`wq`]'s row in its v2 shape: the same contact, with the exchange as data
+    /// on both sides instead of only the legacy pair. `my` is the class and
+    /// section the LOGGING POSITION sent.
+    fn with_sent(mut q: WireQso, my: (&str, &str)) -> WireQso {
+        q.ex = fd_fields(FdEvent::ArrlFd, &q.class.clone(), &q.sect.clone());
+        q.mex = fd_fields(FdEvent::ArrlFd, my.0, my.1);
+        q
+    }
+
+    /// ⭐ §8g — THE test that fails if the host journal is dropped by the upgrade.
+    ///
+    /// Add one REQUIRED field to `MergedRow` and every pre-upgrade line decodes as
+    /// nothing: the replay loop is `if let Ok(row) = …`, which skips silently. The
+    /// host comes up clean, every position's ack watermark resets to 0, and a tent
+    /// that has gone off the air is simply gone — with the sync chip still reading
+    /// Synced. So this asserts on a real 1.x journal that ALL twelve rows come
+    /// back, the dupe keys rebuild, each position's high-water ack is restored, and
+    /// the score and both exports are the bytes that build produced.
+    #[test]
+    fn a_1x_host_journal_survives_the_v2_upgrade() {
+        // The fixture is only evidence while it is still a 1.x journal: a
+        // regenerated one carrying `ex`/`mex` would pass every assertion below
+        // without proving anything about legacy decoding.
+        for line in J1X.lines() {
+            let v: serde_json::Value = serde_json::from_str(line).expect("fixture line is JSON");
+            let obj = v.as_object().unwrap();
+            assert!(
+                !obj.contains_key("ex") && !obj.contains_key("mex"),
+                "the fixture must stay a 1.x journal — this line carries v2 fields: {line}"
+            );
+            assert!(obj.contains_key("class") && obj.contains_key("section"));
+        }
+
+        let dir = scratch("j1x");
+        let path = dir.join("fd_event_granite.jsonl");
+        std::fs::write(&path, J1X).unwrap();
+
+        let mut host = ClubLog::new(FdEvent::ArrlFd, "GRANITE ARC FD");
+        host.attach_journal_since(&path, 0).unwrap();
+
+        assert_eq!(
+            host.qsos_raw(),
+            12,
+            "every row of the 1.x journal came back"
+        );
+        assert_eq!(
+            host.qsos_unique(),
+            10,
+            "the dupe-key set rebuilt identically"
+        );
+        assert_eq!(
+            host.sections(),
+            ["CT", "EMA", "MN", "STX", "ONS", "AZ", "PR", "WI", "NLI"],
+            "sections rebuilt, in first-seen order"
+        );
+        // The high-water ack per position — the value whose loss made a position
+        // restart at seq 1 into a host that then refused every contact as a dupe.
+        for pos in ["aaaa0001", "bbbb0002", "cccc0003"] {
+            assert_eq!(host.join(pos, "", "", 0), 4, "{pos} ack watermark restored");
+        }
+        assert_eq!(
+            host.scored("W9ABC", "3A", "WI", 2, &[]),
+            (16, 32, 0, 32),
+            "the same score the 1.x build computed from these bytes"
+        );
+        assert_eq!(
+            host.export_cabrillo("W9ABC", "3A", "WI"),
+            J1X_CBR,
+            "the club Cabrillo is byte-identical to what 1.x exported"
+        );
+        assert_eq!(
+            host.export_adif("W9ABC", "3A", "WI"),
+            J1X_ADI,
+            "…and so is the club ADIF"
+        );
+
+        // POSITIVE CONTROL — a green that cannot go red is not a result. Corrupt
+        // ONE line: exactly that row is lost and the other eleven are untouched,
+        // which proves the assertions above discriminate rather than pass vacuously.
+        let mut lines: Vec<&str> = J1X.lines().collect();
+        let torn = &lines[4][..30];
+        lines[4] = torn;
+        let corrupt = dir.join("fd_event_torn.jsonl");
+        std::fs::write(&corrupt, lines.join("\n")).unwrap();
+        let mut torn_host = ClubLog::new(FdEvent::ArrlFd, "GRANITE ARC FD");
+        torn_host.attach_journal_since(&corrupt, 0).unwrap();
+        assert_eq!(
+            torn_host.qsos_raw(),
+            11,
+            "control: one corrupted line costs exactly one row"
+        );
+        assert!(
+            !torn_host.rows().iter().any(|r| r.call == "VE3GHI"),
+            "control: it is the corrupted row that is missing"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A v1 position's row reaches a v2 host with its exchange intact — the
+    /// old→new direction, which is the one that fails SILENTLY if it fails.
+    #[test]
+    fn a_v1_rows_exchange_is_synthesised_and_carries_its_domain() {
+        let mut club = ClubLog::new(FdEvent::ArrlFd, "TEST FD");
+        club.merge(&wq("aaaa", 1, "W1AW", "20m", "PH", "CT", 100), 100);
+        let row = &club.rows()[0];
+        assert_eq!(
+            row.ex,
+            vec![
+                WireField {
+                    k: "CLASS".into(),
+                    d: String::new(),
+                    r: "2A".into()
+                },
+                WireField {
+                    // The domain travels: an export tag and a multiplier bucket are
+                    // chosen by it, so a synthesised slot that dropped it would be
+                    // subtly unlike one a v2 position sent.
+                    k: "SECTION".into(),
+                    d: "fd_sections".into(),
+                    r: "CT".into()
+                },
+            ],
+            "the legacy pair was synthesised into the exchange, with its domain"
+        );
+        assert!(row.mex.is_empty(), "a v1 row sends no sent side");
+        assert_eq!(
+            row.dkey(
+                &tempo_core::fd_rules::ruleset(
+                    FdEvent::ArrlFd,
+                    tempo_core::fd_rules::CURRENT_RULES_YEAR
+                )
+                .dupe_rule,
+                tempo_core::contest::field_day(FdEvent::ArrlFd)
+            ),
+            vec!["W1AW", "20M", "PH"],
+            "and the generalised key is Field Day's own rule"
+        );
+        // A row with neither an exchange nor the legacy pair synthesises nothing
+        // rather than inventing two empty slots.
+        let mut bare = wq("bbbb", 1, "K1ABC", "20m", "CW", "", 200);
+        bare.class = String::new();
+        club.merge(&bare, 200);
+        assert!(
+            club.rows()[1].ex.is_empty(),
+            "nothing to synthesise from, so nothing synthesised"
+        );
+    }
+
+    /// ⭐ §11 batch 4's own shippability test: an all-v2 club and a MIXED club run
+    /// ARRL Field Day identically. Field Day is shipped, with users; if these three
+    /// clubs disagree by one byte, a real club's submission moved.
+    #[test]
+    fn an_all_v2_club_and_a_mixed_club_run_field_day_identically() {
+        let rows: &[(&str, u64, &str, &str, &str, &str, u64)] = &[
+            ("aaaa", 1, "W1AW", "20m", "PH", "CT", 100),
+            ("bbbb", 1, "K1ABC", "40m", "CW", "EMA", 200),
+            ("aaaa", 2, "N0XYZ", "20m", "DIG", "MN", 300),
+            ("bbbb", 2, "W1AW", "20m", "PH", "CT", 400), // cross-position dupe
+            ("cccc", 1, "W5DEF", "15m", "CW", "STX", 500),
+        ];
+        let build = |v2_from: usize| {
+            let mut club = ClubLog::new(FdEvent::ArrlFd, "TEST FD");
+            for (i, (p, s, c, b, m, sect, w)) in rows.iter().enumerate() {
+                // Every position of a Field Day club sends the club's own class and
+                // section, so a v2 row's `mex` is the host's — which is exactly what
+                // a v1 row falls back to.
+                if i >= v2_from {
+                    club.merge(&with_sent(wq(p, *s, c, b, m, sect, *w), ("3A", "WI")), *w);
+                } else {
+                    club.merge(&wq(p, *s, c, b, m, sect, *w), *w);
+                }
+            }
+            club
+        };
+        let all_v1 = build(rows.len()); // every row legacy-shaped
+        let mixed = build(2); // two v1 tents, three v2 tents
+        let all_v2 = build(0);
+        for (label, club) in [("mixed", &mixed), ("all-v2", &all_v2)] {
+            assert_eq!(
+                club.export_cabrillo("W9ABC", "3A", "WI"),
+                all_v1.export_cabrillo("W9ABC", "3A", "WI"),
+                "{label} club's Cabrillo moved"
+            );
+            assert_eq!(
+                club.export_adif("W9ABC", "3A", "WI"),
+                all_v1.export_adif("W9ABC", "3A", "WI"),
+                "{label} club's ADIF moved"
+            );
+            assert_eq!(
+                club.scored("W9ABC", "3A", "WI", 2, &[]),
+                all_v1.scored("W9ABC", "3A", "WI", 2, &[]),
+                "{label} club's score moved"
+            );
+            assert_eq!(club.dupe_keys(), all_v1.dupe_keys(), "{label} dupe keys");
+            assert_eq!(club.dkeys(), all_v1.dkeys(), "{label} generalised keys");
+        }
+        // The harness is not vacuous: these clubs really did carry both shapes.
+        assert!(all_v2.rows().iter().all(|r| !r.mex.is_empty()));
+        assert!(all_v1.rows().iter().all(|r| r.mex.is_empty()));
+        assert!(mixed.rows().iter().any(|r| r.mex.is_empty()));
+        assert!(mixed.rows().iter().any(|r| !r.mex.is_empty()));
+    }
+
+    /// ⭐ The defect `mex` exists to close: the host rebuilt EVERY position's rows
+    /// under its OWN class and section. Harmless for one Field Day club, wrong the
+    /// moment two positions send different exchanges — a club spanning a section
+    /// line, and every QSO party with a mobile.
+    #[test]
+    fn the_host_exports_each_rows_own_sent_exchange_not_its_own() {
+        let mut club = ClubLog::new(FdEvent::ArrlFd, "TWO-SITE FD");
+        club.merge(
+            &with_sent(wq("aaaa", 1, "W1AW", "20m", "PH", "CT", 100), ("3A", "WI")),
+            100,
+        );
+        club.merge(
+            &with_sent(
+                wq("bbbb", 1, "K1ABC", "40m", "CW", "EMA", 200),
+                ("5A", "EMA"),
+            ),
+            200,
+        );
+        let cab = club.export_cabrillo("W9ABC", "3A", "WI");
+        assert!(
+            cab.contains("W9ABC 3A WI W1AW 2A CT"),
+            "the first tent's own sent exchange: {cab}"
+        );
+        assert!(
+            cab.contains("W9ABC 5A EMA K1ABC 2A EMA"),
+            "the second tent sent 5A EMA and the line must say so: {cab}"
+        );
+
+        // POSITIVE CONTROL: the same two contacts as v1 rows, which carry no sent
+        // side, both fall back to the host's — a DIFFERENT byte string. Without
+        // this the test above would pass against a build that ignored `mex` and
+        // happened to agree with the host on tent one.
+        let mut legacy = ClubLog::new(FdEvent::ArrlFd, "TWO-SITE FD");
+        legacy.merge(&wq("aaaa", 1, "W1AW", "20m", "PH", "CT", 100), 100);
+        legacy.merge(&wq("bbbb", 1, "K1ABC", "40m", "CW", "EMA", 200), 200);
+        let legacy_cab = legacy.export_cabrillo("W9ABC", "3A", "WI");
+        assert!(
+            legacy_cab.contains("W9ABC 3A WI K1ABC 2A EMA"),
+            "control: a legacy row falls back to the host's sent exchange: {legacy_cab}"
+        );
+        assert_ne!(
+            cab, legacy_cab,
+            "control: the fixture discriminates — reading `mex` changes the bytes"
+        );
+    }
+
+    /// ⭐ §18.2 — the operator's ruling. A v1 position is refused at JOIN when the
+    /// club is running a contest it cannot enter, show or send, and the message
+    /// names BOTH the required version and the contest.
+    #[test]
+    fn a_v1_position_is_refused_only_when_the_club_is_not_running_field_day() {
+        // Field Day keeps today's behaviour: a same-or-lower join is served, so a
+        // mixed-version Field Day club is unaffected.
+        for event in [FdEvent::ArrlFd, FdEvent::WinterFd] {
+            let club = ClubLog::new(event, "TEST FD");
+            assert!(club.is_field_day());
+            assert_eq!(
+                club.version_refusal(1),
+                None,
+                "a v1 tent may still join a Field Day club"
+            );
+        }
+
+        // Anything else refuses a v1 position.
+        let mut qp = ClubLog::new(FdEvent::ArrlFd, "TNQP 2026");
+        qp.contest_id = "TN-QSO-PARTY".into();
+        assert!(!qp.is_field_day());
+        let msg = qp.version_refusal(1).expect("a v1 tent is refused");
+        assert_eq!(
+            msg,
+            "this club is running TN-QSO-PARTY and needs club sync v2 — this Nexus \
+             speaks v1, which cannot enter, show or send the TN-QSO-PARTY exchange. \
+             Update this Nexus and rejoin: contacts you log meanwhile stay in your own \
+             log and go up when you do.",
+            "the refusal names the version AND the contest — it is all its reader has"
+        );
+        // POSITIVE CONTROL for the "names both" claim: neither half is incidental.
+        assert!(msg.contains("TN-QSO-PARTY") && msg.contains("v2") && msg.contains("v1"));
+
+        // …and a CURRENT position is served by the same club. Refusing on version
+        // when the version is fine would lock every tent out of the QSO party.
+        assert_eq!(qp.version_refusal(tempo_net::fdsync::PROTO_VERSION), None);
+    }
+
+    /// The legacy triple ships only for Field Day; the generalised key always
+    /// does. A v1 position given a triple that is not the running dupe rule would
+    /// show a WRONG while-typing warning, which is worse than none.
+    #[test]
+    fn the_legacy_dupe_triple_ships_only_for_a_field_day_club() {
+        let mut club = ClubLog::new(FdEvent::ArrlFd, "TEST FD");
+        club.merge(&wq("aaaa", 1, "W1AW", "20m", "PH", "CT", 100), 100);
+        club.merge(&wq("aaaa", 2, "K1ABC", "40m", "CW", "EMA", 200), 200);
+        let st = club.club_state(0, 0, 0, 300);
+        assert_eq!(
+            st.dupes,
+            vec![
+                ("W1AW".to_string(), "20m".into(), "PH".into()),
+                ("K1ABC".to_string(), "40m".into(), "CW".into()),
+            ],
+            "a Field Day club ships the triple a v1 position understands, band verbatim"
+        );
+        assert_eq!(
+            st.dkeys,
+            vec![
+                vec!["W1AW".to_string(), "20M".into(), "PH".into()],
+                vec!["K1ABC".to_string(), "40M".into(), "CW".into()],
+            ],
+            "…and the generalised key beside it, index-parallel"
+        );
+        // The cursor addresses both lists.
+        let delta = club.club_state(1, 0, 0, 300);
+        assert_eq!(delta.dupes.len(), 1);
+        assert_eq!(delta.dkeys.len(), 1);
+
+        club.contest_id = "TN-QSO-PARTY".into();
+        let st = club.club_state(0, 0, 0, 300);
+        assert!(
+            st.dupes.is_empty(),
+            "no club warning beats a wrong one when the triple is not the rule"
+        );
+        assert_eq!(st.dkeys.len(), 2, "the generalised keys still ship");
     }
 }

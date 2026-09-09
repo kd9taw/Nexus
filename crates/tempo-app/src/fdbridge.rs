@@ -27,8 +27,15 @@ fn now_unix() -> u64 {
 pub struct EngineClubBackend(pub Arc<Mutex<Engine>>);
 
 impl ClubBackend for EngineClubBackend {
-    fn join(&self, pos: &str, name: &str, call: &str, _max_seq: u64) -> Result<JoinAccept, String> {
-        engine_lock(&self.0).fd_club_join(pos, name, call)
+    fn join(
+        &self,
+        v: u32,
+        pos: &str,
+        name: &str,
+        call: &str,
+        _max_seq: u64,
+    ) -> Result<JoinAccept, String> {
+        engine_lock(&self.0).fd_club_join(v, pos, name, call)
     }
 
     fn merge(&self, row: &WireQso) -> u64 {

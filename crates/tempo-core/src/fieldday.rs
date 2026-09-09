@@ -341,12 +341,35 @@ impl FieldDayLog {
         slot: u64,
         when_unix: u64,
     ) -> bool {
-        let mode = mode.to_ascii_uppercase();
         // Both sides, as data, BEFORE the dupe check — the key reads them (a mobile in
         // a new county is a new station, in both directions), so a check that ran first
         // would be judging a different contact from the one about to be logged.
         let rx = self.received(class, section);
         let tx = self.session.tx_for_row(call);
+        self.log_exchange_at(call, rx, tx, mode, submode, slot, when_unix)
+    }
+
+    /// [`log_submode_at`](Self::log_submode_at) with BOTH sides of the exchange given
+    /// rather than derived — the club host's path.
+    ///
+    /// ⭐ The host merges rows from every position, and each of them sent its OWN
+    /// exchange. Deriving the sent side here would stamp the host's on all of them,
+    /// which is harmless for one Field Day club and wrong the moment two positions send
+    /// different exchanges. So the caller that HAS the row's own sides passes them, and
+    /// [`log_submode_at`](Self::log_submode_at) — the position's own logging path,
+    /// where the session IS the source — is one call into this.
+    #[allow(clippy::too_many_arguments)] // both exchange sides plus log_mode_at's own
+    pub fn log_exchange_at(
+        &mut self,
+        call: &str,
+        rx: Vec<crate::contest::FieldValue>,
+        tx: Vec<crate::contest::FieldValue>,
+        mode: &str,
+        submode: &str,
+        slot: u64,
+        when_unix: u64,
+    ) -> bool {
+        let mode = mode.to_ascii_uppercase();
         let band = self.band.clone();
         let key = self.dupe_rule().key_of(call, &band, &mode, &rx, &tx);
         if self.worked.contains(&key) {

@@ -1,0 +1,12 @@
+{"posid":"aaaa0001","seq":1,"call":"W1AW","class":"2A","section":"CT","band":"20m","mode_class":"PH","submode":"","when_unix":1782579600,"operator":"KD9TAW"}
+{"posid":"aaaa0001","seq":2,"call":"K1ABC","class":"3A","section":"EMA","band":"20m","mode_class":"PH","submode":"","when_unix":1782579720,"operator":"KD9TAW"}
+{"posid":"bbbb0002","seq":1,"call":"N0XYZ","class":"1D","section":"MN","band":"40m","mode_class":"CW","submode":"","when_unix":1782579840,"operator":"W9OP1"}
+{"posid":"bbbb0002","seq":2,"call":"W5DEF","class":"1E","section":"STX","band":"40m","mode_class":"CW","submode":"","when_unix":1782580020,"operator":"W9OP1"}
+{"posid":"cccc0003","seq":1,"call":"VE3GHI","class":"4A","section":"ONS","band":"15m","mode_class":"DIG","submode":"FT8","when_unix":1782580200,"operator":"W9OP2"}
+{"posid":"cccc0003","seq":2,"call":"K7JKL","class":"2A","section":"AZ","band":"15m","mode_class":"DIG","submode":"RTTY","when_unix":1782580380,"operator":"W9OP2"}
+{"posid":"aaaa0001","seq":3,"call":"W1AW","class":"2A","section":"CT","band":"40m","mode_class":"PH","submode":"","when_unix":1782580560,"operator":"KD9TAW"}
+{"posid":"bbbb0002","seq":3,"call":"N0XYZ","class":"1D","section":"MN","band":"40m","mode_class":"CW","submode":"","when_unix":1782580740,"operator":""}
+{"posid":"cccc0003","seq":3,"call":"W1AW","class":"2A","section":"CT","band":"20m","mode_class":"PH","submode":"","when_unix":1782580920,"operator":"W9OP2"}
+{"posid":"aaaa0001","seq":4,"call":"KP4MNO","class":"1B","section":"PR","band":"20m","mode_class":"CW","submode":"","when_unix":1782581100,"operator":"KD9TAW"}
+{"posid":"bbbb0002","seq":4,"call":"W9PQR","class":"5A","section":"WI","band":"80m","mode_class":"PH","submode":"","when_unix":1782581280,"operator":"W9OP1"}
+{"posid":"cccc0003","seq":4,"call":"N2STU","class":"2A","section":"NLI","band":"15m","mode_class":"DIG","submode":"RTTY","when_unix":1782581460,"operator":"W9OP2"}

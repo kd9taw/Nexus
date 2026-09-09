@@ -58,21 +58,30 @@ pub fn decode(s: &str, spec: &ExchangeSpec) -> Vec<FieldValue> {
         let (Some(k), Some(d), Some(raw)) = (parts.next(), parts.next(), parts.next()) else {
             continue;
         };
-        let Some(f) = spec.field(&unesc(k)) else {
-            continue;
-        };
-        let want = unesc(d);
-        out.push(FieldValue {
-            key: f.key,
-            raw: unesc(raw),
-            domain: if want.is_empty() {
-                None
-            } else {
-                domain_ids(&f.kind).into_iter().find(|id| *id == want)
-            },
-        });
+        if let Some(v) = resolve(&unesc(k), &unesc(d), &unesc(raw), spec) {
+            out.push(v);
+        }
     }
     out
+}
+
+/// One `(key, domain, raw)` triple resolved against the running exchange — the whole
+/// of what [`decode`] does per slot, factored out because the club wire and the host
+/// journal carry the same triple in a struct instead of in a string. Two resolvers is
+/// how the carrier and the wire come to disagree about what a domain means.
+///
+/// `None` = the running exchange declares no such slot.
+pub fn resolve(key: &str, domain: &str, raw: &str, spec: &ExchangeSpec) -> Option<FieldValue> {
+    let f = spec.field(key)?;
+    Some(FieldValue {
+        key: f.key,
+        raw: raw.to_string(),
+        domain: if domain.is_empty() {
+            None
+        } else {
+            domain_ids(&f.kind).into_iter().find(|id| *id == domain)
+        },
+    })
 }
 
 /// Every domain id a slot's kind can match — one for an `Enum`, one per `Enum` arm for
