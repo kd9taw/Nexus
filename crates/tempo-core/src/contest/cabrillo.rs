@@ -347,6 +347,27 @@ mod tests {
             ("cqww_ssb", "CQ-WW-SSB", "CQ-WW-SSB"),
             ("cqwpx_cw", "CQ-WPX-CW", "CQ-WPX-CW"),
             ("cqwpx_ssb", "CQ-WPX-SSB", "CQ-WPX-SSB"),
+            // ⭐ ARRL VHF's three runnings — three more rows where the two registries
+            // AGREE, each verified against its OWN source on 2026-09-09. ADIF 3.1.7's
+            // CONTEST_ID enumeration (https://adif.org/317/ADIF_317.htm, "updated
+            // 2026-03-22") lists ARRL-VHF-JAN = "ARRL January VHF Sweepstakes",
+            // ARRL-VHF-JUN = "ARRL June VHF QSO Party" and ARRL-VHF-SEP = "ARRL
+            // September VHF QSO Party"; the WA7BNM master list
+            // (contestcalendar.com/cabnames.php, Revision Date February 23, 2026)
+            // carries the same three strings at ids 231, 43 and 113, under ARRL's
+            // current names ("ARRL January VHF Contest" and so on — the NAMES differ
+            // between the registries and the TOKENS do not, which is the distinction
+            // this table exists to hold).
+            //
+            // ⚠️ The sponsor publishes NEITHER: the rules PDF says only ELOG.1 "The
+            // official ARRL format for electronic logs is the Cabrillo format", and
+            // arrl.org/cabrillo-format-tutorial — the page that DID settle Sweepstakes'
+            // column order — carries zero occurrences of "VHF" (read 2026-09-09). So
+            // these three rows are the registries and nothing else, and they are what
+            // stops an ARRL-VHF-* arm being added to `cabrillo_contest_token`.
+            ("arrlvhf_jan", "ARRL-VHF-JAN", "ARRL-VHF-JAN"),
+            ("arrlvhf_jun", "ARRL-VHF-JUN", "ARRL-VHF-JUN"),
+            ("arrlvhf_sep", "ARRL-VHF-SEP", "ARRL-VHF-SEP"),
         ] {
             let rs = crate::fd_rules::ruleset_by_id(event, crate::fd_rules::CURRENT_RULES_YEAR)
                 .unwrap_or_else(|| panic!("the seed must carry {event}"));

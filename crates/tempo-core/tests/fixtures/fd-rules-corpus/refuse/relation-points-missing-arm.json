@@ -62,7 +62,8 @@
             "bands": [],
             "points": 1
           }
-        ]
+        ],
+        "band_points": []
       },
       "transmitter_column": false,
       "dupe": {
@@ -234,7 +235,8 @@
           5
         ],
         "multipliers": [],
-        "relation_points": []
+        "relation_points": [],
+        "band_points": []
       },
       "transmitter_column": false,
       "dupe": {
@@ -453,7 +455,8 @@
             ]
           }
         ],
-        "relation_points": []
+        "relation_points": [],
+        "band_points": []
       },
       "transmitter_column": false,
       "dupe": {
@@ -993,7 +996,8 @@
             ]
           }
         ],
-        "relation_points": []
+        "relation_points": [],
+        "band_points": []
       },
       "transmitter_column": false,
       "dupe": {
@@ -1839,7 +1843,8 @@
             ]
           }
         ],
-        "relation_points": []
+        "relation_points": [],
+        "band_points": []
       },
       "transmitter_column": false,
       "dupe": {
@@ -2521,7 +2526,8 @@
             ]
           }
         ],
-        "relation_points": []
+        "relation_points": [],
+        "band_points": []
       },
       "transmitter_column": false,
       "dupe": {

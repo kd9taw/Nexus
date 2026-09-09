@@ -46,29 +46,39 @@
           5
         ],
         "multipliers": [],
-        "relation_points": [
+        "relation_points": [],
+        "band_points": [
           {
-            "relation": "different_continent",
-            "bands": [],
-            "points": 3
-          },
-          {
-            "relation": "within_north_america",
-            "bands": [],
-            "points": 2
-          },
-          {
-            "relation": "same_zone",
-            "bands": [],
+            "bands": [
+              "6m",
+              "2m"
+            ],
             "points": 1
           },
           {
-            "relation": "same_country",
-            "bands": [],
-            "points": 0
+            "bands": [
+              "1.25m",
+              "70cm"
+            ],
+            "points": 2
+          },
+          {
+            "bands": [
+              "33cm",
+              "23cm"
+            ],
+            "points": 4
+          },
+          {
+            "bands": [
+              "13cm",
+              "9cm",
+              "6cm",
+              "3cm"
+            ],
+            "points": 8
           }
-        ],
-        "band_points": []
+        ]
       },
       "transmitter_column": false,
       "dupe": {
@@ -4020,13 +4030,23 @@
       "division": "West Gulf"
     },
     {
-      "code": "MAR",
-      "name": "Maritime",
+      "code": "NL",
+      "name": "Newfoundland/Labrador",
       "division": "RAC"
     },
     {
-      "code": "NL",
-      "name": "Newfoundland/Labrador",
+      "code": "NB",
+      "name": "New Brunswick",
+      "division": "RAC"
+    },
+    {
+      "code": "NS",
+      "name": "Nova Scotia",
+      "division": "RAC"
+    },
+    {
+      "code": "PE",
+      "name": "Prince Edward Island",
       "division": "RAC"
     },
     {
@@ -4050,8 +4070,8 @@
       "division": "RAC"
     },
     {
-      "code": "GTA",
-      "name": "Greater Toronto Area",
+      "code": "GH",
+      "name": "Golden Horseshoe",
       "division": "RAC"
     },
     {
@@ -4075,8 +4095,8 @@
       "division": "RAC"
     },
     {
-      "code": "NT",
-      "name": "Northern Territories",
+      "code": "TER",
+      "name": "Territories",
       "division": "RAC"
     }
   ]

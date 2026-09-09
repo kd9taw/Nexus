@@ -34,15 +34,19 @@
 //! reports the FIRST fault it meets, so a fixture carrying two defects pins
 //! whichever one is met first — not the one it was written for.
 //!
-//! ⚠️ **There is a SECOND accept base, and it exists because "one mutation" could not be
-//! honoured otherwise.** `accept/relation-priced.json` is `accept/seed.json` with one
-//! ruleset converted to CQ WW's point model — an empty `points_by_mode_class` and a
-//! populated `relation_points` — which is a coordinated pair of edits by construction: a
-//! contest has ONE point table, and the loader refuses a file with both populated (that
-//! refusal is its own fixture, one mutation off `seed.json`). The two relation-table
-//! fixtures — a missing arm, an unknown relation name — are each one mutation off
-//! `relation-priced.json`, which is itself an accept fixture and therefore proved clean by
-//! the walk above before either refusal is read.
+//! ⚠️ **There are TWO FURTHER accept bases, and they exist because "one mutation" could
+//! not be honoured otherwise.** `accept/relation-priced.json` is `accept/seed.json` with
+//! one ruleset converted to CQ WW's point model — an empty `points_by_mode_class` and a
+//! populated `relation_points` — and `accept/band-priced.json` is the same ruleset
+//! converted to ARRL VHF's, an empty `points_by_mode_class` and a populated
+//! `band_points`. Each is a coordinated pair of edits by construction: a contest has ONE
+//! point table, and the loader refuses a file with two populated (each of those refusals
+//! is its own fixture, one mutation off `seed.json`). The two relation-table fixtures —
+//! a missing arm, an unknown relation name — are each one mutation off
+//! `relation-priced.json`, and the two band-table fixtures — a row naming no bands, a
+//! band priced by two rows — are each one mutation off `band-priced.json`. Both bases are
+//! themselves accept fixtures and are therefore proved clean by the walk above before any
+//! refusal that sits on them is read.
 //!
 //! ⚠️ **Some of these mutations are invisible to `JSON.parse`** — `2.0` where `2`
 //! belongs, a repeated key, an integer past `u64`, an unpaired `\u` surrogate. A

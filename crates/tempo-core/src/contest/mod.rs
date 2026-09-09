@@ -96,7 +96,7 @@ pub use session::{
 };
 
 pub use scoring::{
-    boards, BoardSpec, ModePoints, MultScope, MultSource, MultiplierRule, PointsRule,
+    boards, BandPoints, BoardSpec, ModePoints, MultScope, MultSource, MultiplierRule, PointsRule,
     PostMultiplier, RelationPoints, ScoreRow, Scoring,
 };
 

@@ -25,7 +25,8 @@
     "adif_sent_tags": "Every exchange field's adif.sent was \"\" through batch 5 because a grep of crates/, src-tauri/ and ui/src found MY_CNTY / MY_STATE / MY_ARRL_SECT nowhere (positive control: MY_GRIDSQUARE returns hits, so the grep worked and the zeros were real) — but an absence from OUR tree is not an absence from ADIF. Batch 6 read the source: ADIF Specification V 3.1.7, https://adif.org/317/ADIF_317.htm, stamped \"Released ADIF Version 3.1.7, updated 2026-03-22\", fetched and searched in full 2026-09-09. MY_ARRL_SECT IS a QSO field there - \"the logging station's ARRL section\" - so SECTION's adif.sent is now MY_ARRL_SECT. CLASS's stays \"\": CLASS is a real ADIF field (\"contest class (e.g. for ARRL Field Day)\") but it is the CONTACTED station's, and MY_CLASS does not exist in the field list (zero anchors, alongside MY_CHECK, MY_PRECEDENCE, MY_QTH and the invented control names MY_COUNTY and MY_SECTION), so the class I send rides the private carrier (spec §3.5). A name that does not check out stays \"\" - an invented ADIF field ships into other people's logbooks and cannot be recalled.",
     "sections": "⚠️ THE TOP-LEVEL sections ARRAY IS 85, NOT THE 83 THIS FILE CARRIED UNTIL 2026-09-09, and the correction is a shipped-defect fix rather than a data refresh: operators in five current sections could not select their own section at all, and three retired codes were offered instead. SOURCE: two ARRL-published lists, both read 2026-09-09 and identical in content — https://www.arrl.org/section-abbreviations (ARRL's own section table, US call-sign areas 1–0 plus a Canadian block) and https://www.arrl.org/files/file/Field-Day/Generic/ARRL-RAC%20Section%20List.pdf (the generic Field Day section package, footer \"Revised 2025\"). Both state 71 US + 14 RAC = 85, which is also the count in contestmultipliers.php?a=wve's own sentence \"These are the names of the 85 W/VE sections used in ARRL contests\" that batch 9 read for ss_sections. THE THREE RETIREMENTS, IN THE SPONSOR'S OWN WORDS: the Field Day PDF prints \"Golden Horseshoe GH (formerly GTA)\" and \"Territories TER (formerly NT)\" — two RENAMES, published as such, which is why a stored GTA or NT is migrated to its successor without asking anybody. MAR (Maritime) is different, and the difference is the whole migration question: it appears on NEITHER list, and NB / NS / PE appear on both as three separate entries, because the section SPLIT. ARRL publishes no MAR alias and there is nothing to infer one from — a Maritime operator is in exactly one of three provinces and this file cannot know which. So MAR is NOT auto-mapped: fd_rules::retired_section reports it as a split with three successors, the operator is asked, and until they answer the session is refused by name rather than transmitting a guessed section for a whole contest. ORDERING: the RAC block follows the sponsor's own Canadian order (NL NB NS PE QC ONE ONN ONS GH MB SK AB BC TER); GH sits where GTA sat and TER where NT sat, so the two renames move no other section's board position. ⚠️ parse_spec pins the count at 85 and the shipped app enforces the same floor, so this array cannot be moved by a data push alone — a rules file with a different count is refused by every build that predates the change. tests/arrl_sections.rs transcribes the sponsor's 85 independently and holds this array equal to ss_sections, so the two lists in this file can no longer disagree.",
     "sweepstakes": "ARRL November Sweepstakes ships as TWO rulesets, arrlss_cw and arrlss_ssb, written from https://contests.arrl.org/ContestRules/SS-Rules.pdf, Version 2.1, all 10 pages extracted and read 2026-09-09. TWO RULESETS AND NOT ONE MODE-SPLIT ROW: the sponsor runs them as separate contests on separate weekends (\"CW: First full weekend in November / Phone: Third full weekend in November\"; §2.4 \"Use only CW during the CW weekend and Phone during the Phone weekend\"), with separate certificates, separate Clean Sweep mugs and separate CONTEST tokens — and a WindowRule holds one weekend, so one row could not carry both dates whatever the token did. EXCHANGE (§4, verbatim): \"4.1 Serial Number - a consecutive contact number starting with 1; 4.2 Precedence “Q” for Single Operator, QRP / “A” for Single Operator, Low Power / “B” for Single Operator, High Power / “U” for Single Operator Unlimited, High Power, Single Operator Unlimited, Low Power and Single Operator Unlimited, QRP / “M” for Multioperator, High Power or Multioperator, Low Power / “S” for School Club; 4.3 Your call sign (the call sign must be included during the exchange); 4.4 Check — 4.4.1 The last two digits of the year the operator or the station was first licensed. 4.4.2 The same Check must be sent throughout the contest; 4.5 Section – send and log the abbreviations in the ARRL Contest Multipliers List.\" ⚠️ The narrative on p.2 says \"The following SIX pieces of information must be sent\" and then enumerates FIVE, the same five §4.1–§4.5 lists; five ship and the count is a sponsor slip. \"It is highly recommended that you send the information in this order\" — RECOMMENDED, not mandatory, so the send order below is the sponsor's and a parser must not require it. SCORING (§5): \"5.1 QSO points: Each contact counts for two (2) points. 5.2 Multipliers: ARRL/RAC Sections plus Northern Territories. 5.3 Final score equals the total QSO points times the total multipliers contacted.\" Two points is written here as points_by_mode_class PH/CW/DIG all 2 rather than a new flat-points model, because the sponsor's rule carries no mode qualification and widening the file's scoring vocabulary would strand every shipped build's rules updates on its bundled seed (§8d). DUPE (§2.2): \"Each station may be contacted only once, regardless of band.\" — by_call true, by_band FALSE, by_mode_class FALSE. SECTIONS: the domain is ss_sections, 85 codes parsed off https://contests.arrl.org/contestmultipliers.php?a=wve (read 2026-09-09), which states \"These are the names of the 85 W/VE sections used in ARRL contests, along with their standard abbreviations.\" ⚠️ THE TERRITORIES ABBREVIATION IS TER, NOT NT. §5.2's phrase \"plus Northern Territories\" is prose, not an abbreviation; NT does not appear anywhere in the sponsor's list. ⚠️ ss_sections IS NOT fd_sections, and the difference is a live defect in the OTHER list, recorded here and deliberately not fixed in this batch: the top-level sections array this file has always carried holds 83 codes from an older ARRL era — MAR (Maritime, since split into NB/NS/PE), GTA (since renamed GH, Ontario Golden Horseshoe) and NT (since TER). Correcting it moves Field Day's section domain, the TypeScript section mirror and the §8(a) goldens, which is its own change. Sweepstakes therefore declares its own domain from the sponsor's current list. CABRILLO: the tokens are ARRL-SS-CW and ARRL-SS-SSB and BOTH REGISTRIES AGREE for once — ADIF 3.1.7's CONTEST_ID enumeration (https://adif.org/317/ADIF_317.htm, \"updated 2026-03-22\", read 2026-09-09) lists ARRL-SS-CW = \"ARRL November Sweepstakes (CW)\" and ARRL-SS-SSB = \"ARRL November Sweepstakes (Phone)\" and carries no unsplit ARRL-SS; the WA7BNM master list the Cabrillo V3 specification points at (https://www.contestcalendar.com/cabnames.php, Revision Date February 23, 2026, read 2026-09-09) carries the same two strings at ids 177 and 178; and ARRL's OWN page https://www.arrl.org/cabrillo-format-tutorial (read 2026-09-09) prints complete worked headers containing the literal lines \"CONTEST: ARRL-SS-CW\" and \"CONTEST: ARRL-SS-SSB\". So cabrillo_contest_token passes both through unchanged, and the crossing guard covers them. QSO-LINE COLUMN ORDER: the rules PDF publishes none (\"ELOG.1. The official ARRL format for electronic logs is the Cabrillo format\"), but the same arrl.org tutorial page publishes a QSO DATA TEMPLATE for Sweepstakes with a lettered legend — \"E= Your call. F= Your QSO #. G= Your precedence. H= Your check … I= Your ARRL Section. J= The call of the station you worked. K= Their QSO number to you. L= Their precedence. M= Their check. N = Their ARRL Section.\" — over the sample line \"QSO: 14000 CW 2009-11-07 2100 W1AW 1 M 38 CT K8MM 1 Q 92 MI\". ⚠️ THE CALLSIGN IS THE STRUCTURAL COLUMN, FIRST OF EACH SIDE, AND THE EXCHANGE COLUMNS ARE SERIAL/PRECEDENCE/CHECK/SECTION WITH NO CALLSIGN AMONG THEM. The design sketch (§6.2) assumed the reverse and reserved the question for the batch that read the sponsor; the reading corrects it. PRECEDENCE: derived from the entry's declared category (contest_category_operator / _power / _assisted / _station), never typed, so the letter on every QSO line and the CATEGORY-* headers of the same entry are one fact; the power thresholds are the same PDF's Entry Categories table (\"Version 1.6 – 20 Sep 2023\"): QRP \"5 watts PEP output or less\", Low Power \"100 watts PEP output or less\", High Power \"1500 watts PEP output or the maximum allowable power level established by the national licensing authority\". An undeclared axis REFUSES the session with a sentence rather than defaulting — a default here is a category claim transmitted on every contact of a 24-hour contest. WINDOW: \"Contest Period: Begins 2100 UTC Saturday and runs through 0259 UTC Monday\" = start_hour_utc 21, duration_hours 30, month 11, nth_full weekend 1 (CW) and 3 (Phone). §1.1's 24-of-30-hour operating limit and §1.2's after-24-hours rule are NOT modelled: nothing in this build tracks off times, and a score that silently dropped contacts would be worse than one that does not know about the limit. UNESTABLISHED: whether ARRL's log robot validates the CONTEST token at all — the rules say only that electronic logs go to contest-log-submission.arrl.org, whose web form selects the contest.",
-    "cqww_wpx": "CQ WW DX and CQ WPX ship as FOUR rulesets — cqww_cw, cqww_ssb, cqwpx_cw, cqwpx_ssb — written from the sponsors' own current pages, all read 2026-09-09: https://www.cqww.com/rules/ (\"The 2026 CQ World-Wide DX Contest\"), https://cqwpx.com/rules/ (\"2026 CQ World-Wide WPX Contest\"), https://cqwpx.com/rules_faq.htm, https://cqww.com/cabrillo.htm and https://cqwpx.com/cabrillo.htm. FOUR AND NOT SIX: the team brief listed CQ-WW-RTTY and CQ-WPX-RTTY as further mode arms of these contests and they are NOT. Each sponsor's own cabrillo.htm says \"The contest-name must be one of the following\" over exactly TWO names, and ADIF 3.1.7's own labels name the other two as somebody else's contests — CQ-WW-RTTY = \"CQ/RJ WW RTTY DX Contest\" and CQ-WPX-RTTY = \"CQ/RJ WW RTTY WPX Contest\" (CQ/RJ = CQ + RTTY Journal), which have their own rules, their own exchanges (the RTTY events add a US state / Canadian province to the exchange and count it as a multiplier) and their own multiplier sets. Shipping either token on these rulesets would file a log under a contest whose rules it was not scored by. TWO RULESETS PER CONTEST rather than one mode-split row, for the reason Sweepstakes needed: a WindowRule holds ONE weekend and each mode is a different weekend. EXCHANGE. CQ WW (§III): \"SSB: RS report plus CQ Zone number of the station transmitter location (e.g., 59 05). CW: RST report plus CQ Zone of the station transmitter location (e.g., 599 05).\" — so the ZN slot is a Number 1..40 sourced from the contest_cq_zone setting, exported under ADIF's CQZ / MY_CQ_ZONE (both \"PositiveInteger … in the range 1 to 40\", adif.org/317, read 2026-09-09). CQ WPX (§IV): \"RS(T) report plus a progressive contact serial number starting with 001 for the first contact.\" ⚠️ The same rule adds \"Multi-Two, Multi-Unlimited, and Multi-Distributed entrants use separate serial number sequences on each band\"; SerialScope::PerBand exists only to be REFUSED by name in this build, so these rulesets declare per_contest, which is right for every single-operator entry and wrong for those three multi categories. DUPE. CQ WW §IV.B \"Stations may be contacted once on each band.\"; CQ WPX §V.B \"A station may be worked once on each band for QSO point credit\". by_call true, by_band true, by_mode_class FALSE — each ruleset is a single-mode weekend, so a mode axis inside one log has nothing to separate. POINTS — the first contest in this build priced by the RELATION between the two stations, not by mode class. CQ WW §IV.B: \"Contacts between stations on different continents count three (3) points. Contacts between stations on the same continent but in different countries count one (1) point. Exception: Contacts between stations in different countries within the North American boundaries count two (2) points. Contacts between stations in the same country have zero (0) QSO point value, but count for zone and country multiplier credit.\" CQ WPX §V.B: \"1. Contacts between stations on different continents are worth three (3) points on 28, 21, and 14 MHz and six (6) points on 7, 3.5, and 1.8 MHz. 2. Contacts between stations on the same continent, but different countries, are worth one (1) point on 28, 21, and 14 MHz and two (2) points on 7, 3.5, and 1.8 MHz. Exception: For North American stations only—contacts between stations within the North American boundaries (both stations must be located in North America) are worth two (2) points on 28, 21, and 14 MHz and four (4) points on 7, 3.5, and 1.8 MHz. 3. Contacts between stations in the same country are worth 1 point regardless of band.\" ⚠️ ARM 3 IS THE ONE THE DESIGN SPEC'S §14 WAS MISSING, and it is where the two contests diverge on the SAME relation: CQ WW gives a same-country contact ZERO and CQ WPX gives it ONE. That is exactly why relation_points is a table in this file and not a function in the code. The loader refuses a relation_points table that names no same_country, same_continent or different_continent row, because a missing arm scores those contacts at zero silently — which is the defect §14 had. MULTIPLIERS. CQ WW §IV.C: \"There are two types of multipliers. Zone: A multiplier of one (1) for each different CQ Zone contacted on each band. The CQ Worked All Zones rules are the standard. Country: A multiplier of one (1) for each different country contacted on each band. The DXCC entity list, Worked All Europe (WAE) multiplier list plus IG9/IH9, and continental boundaries are the standards for defining country multipliers.\" — two INDEPENDENT per-band universes, one off the exchange (the zone) and one off the callsign (the entity), summed: \"the sum of zone and country multipliers\". CQ WPX §V.C: \"Each PREFIX is counted only once regardless of the band or number of times the same prefix is worked.\" — per_log, off the callsign. THE PREFIX RULE. §V.C.1 verbatim: \"A PREFIX is the letter/numeral combination which forms the first part of the amateur call. Examples: N8, W8, WD8, HG1, HG19, KC2, OE2, OE25, LY1000, etc. Any difference in the numbering, lettering, or order of same shall count as a separate prefix. In cases of portable operation, the portable designator will then become the prefix. The portable prefix must be an authorized prefix of the country/call area of operation. Portable designators without numbers will be assigned a zero (Ø) after the second letter of the portable designator to form the prefix. Example: PA/N8BJQ would become PAØ. All calls without numbers will be assigned a zero (Ø) after the first two letters to form the prefix. Example: XEFTJW would count as XEØ. Maritime mobile, mobile, /A, /E, /J, /P, or other license class identifiers do not count as prefixes.\" — plus the sponsor's own FAQ, which is where WHERE THE PREFIX ENDS is actually answered: \"The prefix includes everything up to the end of the first numbers in the call. … OL25LP = OL25 / DL60CHILD = DL60 / 9A800VZ = 9A800 / DR2006Q = DR2006 / LY1000CW = LY1000 / KL7RA/WK9 = WK9 / OE/K5ZD = OEØ\". ⚠️ \"the first numbers\" means the first digit run AFTER A LETTER, not the first digit: 9A800VZ is the sponsor's own counterexample (stopping at the leading 9 would give \"9\"), and 4U1ITU is the same shape and counts as 4U1. ⚠️ ONE ARM HAS NO SPONSOR WORKED EXAMPLE: a portable designator that is BARE DIGITS (W1AW/4). It is implemented as digit substitution on the base prefix (W1AW/4 = W4) from \"the portable designator will then become the prefix\" plus \"must be an authorized prefix of the country/call area of operation\" — a bare 4 is not an authorized prefix on its own. That reading is this build's, not the sponsor's. The whole rule is contest::callsign::wpx_prefix and every example above is a literal in its tests. CABRILLO. Tokens CQ-WW-CW / CQ-WW-SSB / CQ-WPX-CW / CQ-WPX-SSB, and for these four THE TWO REGISTRIES AGREE — verified separately, because a token confirmed in one says nothing about the other. ADIF 3.1.7's CONTEST_ID enumeration (https://adif.org/317/ADIF_317.htm, \"updated 2026-03-22\") carries all four; the WA7BNM master list (https://www.contestcalendar.com/cabnames.php, Revision Date February 23, 2026) carries the same four at ids 192, 172, 29 and 291; and both sponsors publish them directly with \"Be sure to use hyphens as shown. DO NOT PUT THE YEAR OR USE PH INSTEAD OF SSB.\" So cabrillo_contest_token gets NO arm for any of them and the token test pins all four. QSO LINE: both sponsors publish the same template, \"QSO: freq mo date time call rst exch call rst exch t\", with samples \"QSO: 3799 PH 2000-11-26 0711 N6TW 59 03 JT1Z 59 23 0\" (CQ WW) and \"QSO: 3799 PH 1999-03-06 0711 HC8N 59 001 W1AW 59 001 0\" (CQ WPX) — which is §6.2's structural shape exactly. TRANSMITTER COLUMN: \"Note for Column 81 (transmitter number): For the MULTI-ONE and MULTI-TWO categories, the last column in the log indicates which transmitter made the QSO. It must be a 0 or a 1. This column is not required for other categories.\" (WPX says the same for MULTI-TWO.) These four rulesets are the only ones that declare transmitter_column true; a single-position entry writes 0, which every sample line on both pages carries. ⚠️ A real MULTI-TWO entry's second transmitter must write 1 and this build has no second position to write it — the column is honest for one position and incomplete for two. WINDOWS. \"SSB: October 24-25  CW: November 28-29 / Starts 00:00:00 UTC Saturday  Ends 23:59:59 UTC Sunday\" (CQ WW) and \"SSB: March 28-29  CW: May 30-31 / Starts: 0000 UTC Saturday Ends: 2359 UTC Sunday\" (CQ WPX) — each the LAST FULL WEEKEND of its month, 0000Z Saturday, 48 hours. ⚠️ The WPX page prints \"SSB: March 28-29, 2025\" while its own log deadline says \"SSB logs no later than 2359 UTC 31 March 2026\": a sponsor typo in the year, and March 28-29 IS the last full weekend of March 2026. ⚠️ CQ WW's II and CQ WPX's III both restrict operation to six bands (1.8/3.5/7/14/21/28 MHz) and a ruleset has no band field, so that is not expressed; no score or dupe here depends on it, but a contact on 30 m would find no relation_points band row and score zero rather than being refused. ⚠️ CQ WPX's II (\"Single Operator stations may operate 36 of the 48 hours\") and CQ WW's off-time rules are not modelled — nothing in this build tracks off times, and a score that silently dropped contacts would be worse than one that does not know about the limit. WHAT IS DELIBERATELY NOT MODELLED. (1) \"Maritime mobile stations count only for a zone multiplier\" (CQ WW §IV.C). The country file places a /MM call by its home call, so a /MM contact counts a COUNTRY multiplier it should not — an over-count of one per distinct /MM entity worked, in a contest where a /MM contact is rare. The sponsor states no points rule for /MM at all, so the alternative (refusing to place a /MM call) would score its QSO points at zero, which is a bigger error in the other direction. (2) The MULTI-TWO transmitter id, above. (3) Overlay categories, off-time limits and the log-checking penalties, none of which a logger computes."
+    "cqww_wpx": "CQ WW DX and CQ WPX ship as FOUR rulesets — cqww_cw, cqww_ssb, cqwpx_cw, cqwpx_ssb — written from the sponsors' own current pages, all read 2026-09-09: https://www.cqww.com/rules/ (\"The 2026 CQ World-Wide DX Contest\"), https://cqwpx.com/rules/ (\"2026 CQ World-Wide WPX Contest\"), https://cqwpx.com/rules_faq.htm, https://cqww.com/cabrillo.htm and https://cqwpx.com/cabrillo.htm. FOUR AND NOT SIX: the team brief listed CQ-WW-RTTY and CQ-WPX-RTTY as further mode arms of these contests and they are NOT. Each sponsor's own cabrillo.htm says \"The contest-name must be one of the following\" over exactly TWO names, and ADIF 3.1.7's own labels name the other two as somebody else's contests — CQ-WW-RTTY = \"CQ/RJ WW RTTY DX Contest\" and CQ-WPX-RTTY = \"CQ/RJ WW RTTY WPX Contest\" (CQ/RJ = CQ + RTTY Journal), which have their own rules, their own exchanges (the RTTY events add a US state / Canadian province to the exchange and count it as a multiplier) and their own multiplier sets. Shipping either token on these rulesets would file a log under a contest whose rules it was not scored by. TWO RULESETS PER CONTEST rather than one mode-split row, for the reason Sweepstakes needed: a WindowRule holds ONE weekend and each mode is a different weekend. EXCHANGE. CQ WW (§III): \"SSB: RS report plus CQ Zone number of the station transmitter location (e.g., 59 05). CW: RST report plus CQ Zone of the station transmitter location (e.g., 599 05).\" — so the ZN slot is a Number 1..40 sourced from the contest_cq_zone setting, exported under ADIF's CQZ / MY_CQ_ZONE (both \"PositiveInteger … in the range 1 to 40\", adif.org/317, read 2026-09-09). CQ WPX (§IV): \"RS(T) report plus a progressive contact serial number starting with 001 for the first contact.\" ⚠️ The same rule adds \"Multi-Two, Multi-Unlimited, and Multi-Distributed entrants use separate serial number sequences on each band\"; SerialScope::PerBand exists only to be REFUSED by name in this build, so these rulesets declare per_contest, which is right for every single-operator entry and wrong for those three multi categories. DUPE. CQ WW §IV.B \"Stations may be contacted once on each band.\"; CQ WPX §V.B \"A station may be worked once on each band for QSO point credit\". by_call true, by_band true, by_mode_class FALSE — each ruleset is a single-mode weekend, so a mode axis inside one log has nothing to separate. POINTS — the first contest in this build priced by the RELATION between the two stations, not by mode class. CQ WW §IV.B: \"Contacts between stations on different continents count three (3) points. Contacts between stations on the same continent but in different countries count one (1) point. Exception: Contacts between stations in different countries within the North American boundaries count two (2) points. Contacts between stations in the same country have zero (0) QSO point value, but count for zone and country multiplier credit.\" CQ WPX §V.B: \"1. Contacts between stations on different continents are worth three (3) points on 28, 21, and 14 MHz and six (6) points on 7, 3.5, and 1.8 MHz. 2. Contacts between stations on the same continent, but different countries, are worth one (1) point on 28, 21, and 14 MHz and two (2) points on 7, 3.5, and 1.8 MHz. Exception: For North American stations only—contacts between stations within the North American boundaries (both stations must be located in North America) are worth two (2) points on 28, 21, and 14 MHz and four (4) points on 7, 3.5, and 1.8 MHz. 3. Contacts between stations in the same country are worth 1 point regardless of band.\" ⚠️ ARM 3 IS THE ONE THE DESIGN SPEC'S §14 WAS MISSING, and it is where the two contests diverge on the SAME relation: CQ WW gives a same-country contact ZERO and CQ WPX gives it ONE. That is exactly why relation_points is a table in this file and not a function in the code. The loader refuses a relation_points table that names no same_country, same_continent or different_continent row, because a missing arm scores those contacts at zero silently — which is the defect §14 had. MULTIPLIERS. CQ WW §IV.C: \"There are two types of multipliers. Zone: A multiplier of one (1) for each different CQ Zone contacted on each band. The CQ Worked All Zones rules are the standard. Country: A multiplier of one (1) for each different country contacted on each band. The DXCC entity list, Worked All Europe (WAE) multiplier list plus IG9/IH9, and continental boundaries are the standards for defining country multipliers.\" — two INDEPENDENT per-band universes, one off the exchange (the zone) and one off the callsign (the entity), summed: \"the sum of zone and country multipliers\". CQ WPX §V.C: \"Each PREFIX is counted only once regardless of the band or number of times the same prefix is worked.\" — per_log, off the callsign. THE PREFIX RULE. §V.C.1 verbatim: \"A PREFIX is the letter/numeral combination which forms the first part of the amateur call. Examples: N8, W8, WD8, HG1, HG19, KC2, OE2, OE25, LY1000, etc. Any difference in the numbering, lettering, or order of same shall count as a separate prefix. In cases of portable operation, the portable designator will then become the prefix. The portable prefix must be an authorized prefix of the country/call area of operation. Portable designators without numbers will be assigned a zero (Ø) after the second letter of the portable designator to form the prefix. Example: PA/N8BJQ would become PAØ. All calls without numbers will be assigned a zero (Ø) after the first two letters to form the prefix. Example: XEFTJW would count as XEØ. Maritime mobile, mobile, /A, /E, /J, /P, or other license class identifiers do not count as prefixes.\" — plus the sponsor's own FAQ, which is where WHERE THE PREFIX ENDS is actually answered: \"The prefix includes everything up to the end of the first numbers in the call. … OL25LP = OL25 / DL60CHILD = DL60 / 9A800VZ = 9A800 / DR2006Q = DR2006 / LY1000CW = LY1000 / KL7RA/WK9 = WK9 / OE/K5ZD = OEØ\". ⚠️ \"the first numbers\" means the first digit run AFTER A LETTER, not the first digit: 9A800VZ is the sponsor's own counterexample (stopping at the leading 9 would give \"9\"), and 4U1ITU is the same shape and counts as 4U1. ⚠️ ONE ARM HAS NO SPONSOR WORKED EXAMPLE: a portable designator that is BARE DIGITS (W1AW/4). It is implemented as digit substitution on the base prefix (W1AW/4 = W4) from \"the portable designator will then become the prefix\" plus \"must be an authorized prefix of the country/call area of operation\" — a bare 4 is not an authorized prefix on its own. That reading is this build's, not the sponsor's. The whole rule is contest::callsign::wpx_prefix and every example above is a literal in its tests. CABRILLO. Tokens CQ-WW-CW / CQ-WW-SSB / CQ-WPX-CW / CQ-WPX-SSB, and for these four THE TWO REGISTRIES AGREE — verified separately, because a token confirmed in one says nothing about the other. ADIF 3.1.7's CONTEST_ID enumeration (https://adif.org/317/ADIF_317.htm, \"updated 2026-03-22\") carries all four; the WA7BNM master list (https://www.contestcalendar.com/cabnames.php, Revision Date February 23, 2026) carries the same four at ids 192, 172, 29 and 291; and both sponsors publish them directly with \"Be sure to use hyphens as shown. DO NOT PUT THE YEAR OR USE PH INSTEAD OF SSB.\" So cabrillo_contest_token gets NO arm for any of them and the token test pins all four. QSO LINE: both sponsors publish the same template, \"QSO: freq mo date time call rst exch call rst exch t\", with samples \"QSO: 3799 PH 2000-11-26 0711 N6TW 59 03 JT1Z 59 23 0\" (CQ WW) and \"QSO: 3799 PH 1999-03-06 0711 HC8N 59 001 W1AW 59 001 0\" (CQ WPX) — which is §6.2's structural shape exactly. TRANSMITTER COLUMN: \"Note for Column 81 (transmitter number): For the MULTI-ONE and MULTI-TWO categories, the last column in the log indicates which transmitter made the QSO. It must be a 0 or a 1. This column is not required for other categories.\" (WPX says the same for MULTI-TWO.) These four rulesets are the only ones that declare transmitter_column true; a single-position entry writes 0, which every sample line on both pages carries. ⚠️ A real MULTI-TWO entry's second transmitter must write 1 and this build has no second position to write it — the column is honest for one position and incomplete for two. WINDOWS. \"SSB: October 24-25  CW: November 28-29 / Starts 00:00:00 UTC Saturday  Ends 23:59:59 UTC Sunday\" (CQ WW) and \"SSB: March 28-29  CW: May 30-31 / Starts: 0000 UTC Saturday Ends: 2359 UTC Sunday\" (CQ WPX) — each the LAST FULL WEEKEND of its month, 0000Z Saturday, 48 hours. ⚠️ The WPX page prints \"SSB: March 28-29, 2025\" while its own log deadline says \"SSB logs no later than 2359 UTC 31 March 2026\": a sponsor typo in the year, and March 28-29 IS the last full weekend of March 2026. ⚠️ CQ WW's II and CQ WPX's III both restrict operation to six bands (1.8/3.5/7/14/21/28 MHz) and a ruleset has no band field, so that is not expressed; no score or dupe here depends on it, but a contact on 30 m would find no relation_points band row and score zero rather than being refused. ⚠️ CQ WPX's II (\"Single Operator stations may operate 36 of the 48 hours\") and CQ WW's off-time rules are not modelled — nothing in this build tracks off times, and a score that silently dropped contacts would be worse than one that does not know about the limit. WHAT IS DELIBERATELY NOT MODELLED. (1) \"Maritime mobile stations count only for a zone multiplier\" (CQ WW §IV.C). The country file places a /MM call by its home call, so a /MM contact counts a COUNTRY multiplier it should not — an over-count of one per distinct /MM entity worked, in a contest where a /MM contact is rare. The sponsor states no points rule for /MM at all, so the alternative (refusing to place a /MM call) would score its QSO points at zero, which is a bigger error in the other direction. (2) The MULTI-TWO transmitter id, above. (3) Overlay categories, off-time limits and the log-checking penalties, none of which a logger computes.",
+    "arrlvhf": "ARRL January / June / September VHF, all three runnings, written from the sponsor's own https://contests.arrl.org/ContestRules/JanJunSep-VHF-Rules.pdf, Version 1.2, ALL 14 PAGES extracted (29,345 characters), read 2026-09-09. ⚠️ THREE RULESETS, NOT ONE, AND THE POINT TABLE IS ONLY HALF THE REASON. (a) The points differ: §5.1 \"QSO points for January contest: … 5.1.3 Count four points for each 902- or 1296-MHz QSO. 5.1.4 Count eight points for each 2.3 GHz (or higher) QSO\" against §5.2 \"QSO points for June and September contests: … 5.2.3 Count three points for each 902- or 1296-MHz QSO. 5.2.4 Count four points for each 2.3 GHz (or higher) QSO\" — a 2× divergence on 2.3 GHz and up that no single band_points table can carry. (b) A WindowRule holds ONE month and these are January, June and September, so even the two runnings that SHARE a table cannot share a row. (c) The two registries each name three, independently verified 2026-09-09: ADIF 3.1.7's Contest_ID enumeration (https://adif.org/317/ADIF_317.htm, page states \"updated 2026-03-22\") gives ARRL-VHF-JAN = \"ARRL January VHF Sweepstakes\", ARRL-VHF-JUN = \"ARRL June VHF QSO Party\", ARRL-VHF-SEP = \"ARRL September VHF QSO Party\"; the WA7BNM master list (https://www.contestcalendar.com/cabnames.php, \"Revision Date: February 23, 2026\") gives the same three strings at ids 231, 43 and 113. The two registries AGREE, so cabrillo_contest_token gets no arm for any of them. EXCHANGE: §4.1 \"4-character Maidenhead grid-square locator (www.arrl.org/grid-squares)\", §4.2 \"A signal report is optional.\" The report is NOT modelled as a slot: the sponsor's own worked example on page 1 carries none (\"CQer: W9SZ EM48 / Answer: EN50\"), and a constant-sourced RST slot would put 599 on every line of a file the sponsor's example has no report in. GRID exports as GRIDSQUARE received / MY_GRIDSQUARE sent — both verified in the ADIF 3.1.7 field list on 2026-09-09 (\"the contacted station's … Maidenhead Grid Square\" / \"the logging station's … Maidenhead Grid Square\"), with GRID, MY_GRID and THEIR_GRIDSQUARE as absent negative controls. DUPE: page 1 \"Contact stations only once per band\" and §2.2 \"Stations may be contacted for contest credit once per band from any specific grid square\" — so by_band is true and by_mode_class is FALSE, the mode being no part of the sponsor's sentence. Both field lists name GRID, from the two halves of the rover rule: §2.2.1 \"Rover stations using the same call sign may be contacted from more than one grid square\" (the received half) and VCAT.5.1.4 \"If more than one contact on a given band is made between stations in a specific four-character grid locator, only one contact is counted for scoring purposes\" (which is symmetric in the two stations' grids, and is the sent half — a rover working the same station again after moving). MULTIPLIER: §5.3.1 \"The number of different grid squares contacted from each band. Each grid square counts as a multiplier on each band.\" → one rule, source the received GRID slot, scope per_band. SCORE: §5.4.1 \"Fixed stations: total QSO points from all bands times the total multipliers.\" → model \"none\", no power tiers, no post-multiplier. ⚠️ WHAT IS NOT MODELLED, and why score_note_key is empty anyway. §5.4.2 gives ROVERS a second multiplier term: \"total QSO points from all bands times the sum of unique grid squares worked per band (regardless of the grid square in which the contact was made) plus one additional multiplier for every grid square from which a contact was successfully completed.\" That term is a SENT-side multiplier (the grids I operated from), and MultSource has no sent-side arm and ScoreRow carries no tx vector — but adding one would not be enough, because the term belongs to a ROVER ENTRY and §5.4.1 gives a fixed station no such term, while MultiplierRule::roles filters on the exchange ROLE and this contest has exactly one. This build declares no rover category (contest_category_* carries operator/power/assisted/station, and only SCHOOL is read from the last), so §5.4.2 is unreachable rather than wrong: every entry this build can declare is scored by §5.4.1, which IS computed. A score note would therefore tell every fixed entrant their complete score is incomplete. The gap becomes real the moment a rover category is declarable, and that batch owns it. WINDOWS: §1.1 \"January: 1900 UTC Saturday through 0359 UTC Monday\", §1.2 \"June and September: 1800 UTC Saturday through 0259 UTC Monday\" — 33 hours from the anchor Saturday in each case, rounded up to the whole hour exactly as Sweepstakes' 30 is. ⚠️ JANUARY'S WEEKEND IS AMBIGUOUS IN THE RULES AND RESOLVED BY THE SPONSOR'S OWN CALENDAR. Page 1 says \"Third or fourth full weekend in January as announced\" and arrl.org/contest-calendar says \"The third or fourth weekend in January. See the current rules for this year's exact date.\" ARRL's contest calendar (https://contests.arrl.org/calendar.php, read 2026-09-09) announces Jan 17-19 (2026), Jan 16-18 (2027), Jan 15-17 (2028), Jan 20-22 (2029), Jan 19-21 (2030) and Jan 18-20 (2031) — every one of which is the THIRD full weekend, so nth_full 3 reproduces all six announced dates and no override is needed. If ARRL ever announces a fourth-weekend January, that year gets a window override; do not change the rule. June and September are unambiguous (\"Second full weekend\"), and the calendar's six announced dates for each are the second full weekend in every year. BANDS: the four band_points groups are the sponsor's own four rows mapped onto this build's band labels — 50 MHz = 6m, 144 MHz = 2m, 222 MHz = 1.25m, 432 MHz = 70cm, 902 MHz = 33cm, 1296 MHz = 23cm, and \"2.3 GHz (or higher)\" = 13cm, 9cm, 6cm, 3cm, which are every band above 2.3 GHz this build has a label for. ⚠️ A band no row names scores zero, which is right for an HF band and is also what a contact above 10 GHz would get: §2.1 permits \"any band above 50 MHz\" and STTN.5 contemplates operation above 300 GHz, so an entrant working 24 GHz would be scored short until this build has a label for that band. ASSISTANCE: spotting and cluster are BOTH allowed and this is the sponsor saying so rather than the dormant default — OPRG.8.1 \"All entrants, regardless of category, are permitted to use spotting assistance or nets including but not limited to DX-alerting nets, internet chat rooms, APRS and other packet, reverse beacon networks and repeaters to identify stations available for contacts and to announce their availability for contacts.\" CABRILLO: ARRL publishes NO CONTEST: token and NO QSO-line template for these contests. The rules say only ELOG.1 \"The official ARRL format for electronic logs is the Cabrillo format (wwrof.org/cabrillo)\", and ARRL's own Cabrillo Format & Tutorial page (https://www.arrl.org/cabrillo-format-tutorial, read 2026-09-09) carries zero occurrences of \"VHF\" — the only worked templates on it are Sweepstakes'. So the token is taken from the two registries above and the column order is the STRUCTURAL one §6.2 states (callsign column, then that side's exchange slots, per side), which for this exchange is one grid per side and nothing else. transmitter_column is false: nothing sponsor-side publishes such a column for these contests, and §3.3's multioperator categories are Unlimited and Limited — there is no two-transmitter category for ELOG.5 to apply to. ⚠️ STTN.4 IS THE VHF FORM OF THE COUNTY-LINE RULE AND IT IS WHY THE SENT GRID IS A PER-ROW FACT: \"A station located precisely on a dividing line between grid squares must select only one as the location for exchange purposes. A different grid-square location cannot be given without moving the complete station (including antennas) at least 100 meters.\" §6.3 forbids a FIXED station changing location at all; a rover is the category the move exists for, and every row keeps the grid it actually sent."
   },
   "rulesets": [
     {
@@ -53,7 +54,8 @@
           5
         ],
         "multipliers": [],
-        "relation_points": []
+        "relation_points": [],
+        "band_points": []
       },
       "transmitter_column": false,
       "dupe": {
@@ -225,7 +227,8 @@
           5
         ],
         "multipliers": [],
-        "relation_points": []
+        "relation_points": [],
+        "band_points": []
       },
       "transmitter_column": false,
       "dupe": {
@@ -449,7 +452,8 @@
             ]
           }
         ],
-        "relation_points": []
+        "relation_points": [],
+        "band_points": []
       },
       "transmitter_column": false,
       "dupe": {
@@ -989,7 +993,8 @@
             ]
           }
         ],
-        "relation_points": []
+        "relation_points": [],
+        "band_points": []
       },
       "transmitter_column": false,
       "dupe": {
@@ -1835,7 +1840,8 @@
             ]
           }
         ],
-        "relation_points": []
+        "relation_points": [],
+        "band_points": []
       },
       "transmitter_column": false,
       "dupe": {
@@ -2522,7 +2528,8 @@
             ]
           }
         ],
-        "relation_points": []
+        "relation_points": [],
+        "band_points": []
       },
       "transmitter_column": false,
       "dupe": {
@@ -3685,7 +3692,8 @@
             "roles": []
           }
         ],
-        "relation_points": []
+        "relation_points": [],
+        "band_points": []
       },
       "transmitter_column": false,
       "dupe": {
@@ -4189,7 +4197,8 @@
             "roles": []
           }
         ],
-        "relation_points": []
+        "relation_points": [],
+        "band_points": []
       },
       "transmitter_column": false,
       "dupe": {
@@ -4719,7 +4728,8 @@
             "bands": [],
             "points": 0
           }
-        ]
+        ],
+        "band_points": []
       },
       "transmitter_column": true,
       "dupe": {
@@ -4851,7 +4861,8 @@
             "bands": [],
             "points": 0
           }
-        ]
+        ],
+        "band_points": []
       },
       "transmitter_column": true,
       "dupe": {
@@ -5011,7 +5022,8 @@
             "bands": [],
             "points": 1
           }
-        ]
+        ],
+        "band_points": []
       },
       "transmitter_column": true,
       "dupe": {
@@ -5170,7 +5182,8 @@
             "bands": [],
             "points": 1
           }
-        ]
+        ],
+        "band_points": []
       },
       "transmitter_column": true,
       "dupe": {
@@ -5226,6 +5239,369 @@
             "receives": [
               "RST",
               "NR"
+            ],
+            "constant_sent": []
+          }
+        ]
+      },
+      "bonuses": [],
+      "banned_modes": [],
+      "tempo_fd": false,
+      "assistance": {
+        "spotting_allowed": true,
+        "cluster_allowed": true,
+        "assistance_note_key": ""
+      },
+      "enforcement": "warn",
+      "objectives": []
+    },
+    {
+      "event": "arrlvhf_jan",
+      "rules_year": 2026,
+      "contest_id": "ARRL-VHF-JAN",
+      "window": {
+        "month": 1,
+        "weekend": "nth_full",
+        "n": 3,
+        "start_hour_utc": 19,
+        "duration_hours": 33,
+        "overrides": {}
+      },
+      "scoring": {
+        "model": "none",
+        "points_by_mode_class": {},
+        "power_tiers": [],
+        "multipliers": [
+          {
+            "id": "grid",
+            "source": {
+              "type": "field",
+              "key": "GRID",
+              "domain": ""
+            },
+            "scope": "per_band",
+            "excluding": [],
+            "roles": []
+          }
+        ],
+        "relation_points": [],
+        "band_points": [
+          {
+            "bands": [
+              "6m",
+              "2m"
+            ],
+            "points": 1
+          },
+          {
+            "bands": [
+              "1.25m",
+              "70cm"
+            ],
+            "points": 2
+          },
+          {
+            "bands": [
+              "33cm",
+              "23cm"
+            ],
+            "points": 4
+          },
+          {
+            "bands": [
+              "13cm",
+              "9cm",
+              "6cm",
+              "3cm"
+            ],
+            "points": 8
+          }
+        ]
+      },
+      "transmitter_column": false,
+      "dupe": {
+        "by_call": true,
+        "by_band": true,
+        "by_mode_class": false,
+        "by_fields": [
+          "GRID"
+        ],
+        "by_sent_fields": [
+          "GRID"
+        ]
+      },
+      "domains": [],
+      "exchange": {
+        "name": "arrlvhf",
+        "fields": [
+          {
+            "key": "GRID",
+            "label": "",
+            "required": true,
+            "adif": {
+              "rcvd": "GRIDSQUARE",
+              "sent": "MY_GRIDSQUARE"
+            },
+            "source": "setting:mygrid",
+            "kind": {
+              "type": "grid",
+              "chars": 4
+            }
+          }
+        ],
+        "roles": [
+          {
+            "id": "",
+            "selector": {
+              "type": "always"
+            },
+            "sends": [
+              "GRID"
+            ],
+            "receives": [
+              "GRID"
+            ],
+            "constant_sent": []
+          }
+        ]
+      },
+      "bonuses": [],
+      "banned_modes": [],
+      "tempo_fd": false,
+      "assistance": {
+        "spotting_allowed": true,
+        "cluster_allowed": true,
+        "assistance_note_key": ""
+      },
+      "enforcement": "warn",
+      "objectives": []
+    },
+    {
+      "event": "arrlvhf_jun",
+      "rules_year": 2026,
+      "contest_id": "ARRL-VHF-JUN",
+      "window": {
+        "month": 6,
+        "weekend": "nth_full",
+        "n": 2,
+        "start_hour_utc": 18,
+        "duration_hours": 33,
+        "overrides": {}
+      },
+      "scoring": {
+        "model": "none",
+        "points_by_mode_class": {},
+        "power_tiers": [],
+        "multipliers": [
+          {
+            "id": "grid",
+            "source": {
+              "type": "field",
+              "key": "GRID",
+              "domain": ""
+            },
+            "scope": "per_band",
+            "excluding": [],
+            "roles": []
+          }
+        ],
+        "relation_points": [],
+        "band_points": [
+          {
+            "bands": [
+              "6m",
+              "2m"
+            ],
+            "points": 1
+          },
+          {
+            "bands": [
+              "1.25m",
+              "70cm"
+            ],
+            "points": 2
+          },
+          {
+            "bands": [
+              "33cm",
+              "23cm"
+            ],
+            "points": 3
+          },
+          {
+            "bands": [
+              "13cm",
+              "9cm",
+              "6cm",
+              "3cm"
+            ],
+            "points": 4
+          }
+        ]
+      },
+      "transmitter_column": false,
+      "dupe": {
+        "by_call": true,
+        "by_band": true,
+        "by_mode_class": false,
+        "by_fields": [
+          "GRID"
+        ],
+        "by_sent_fields": [
+          "GRID"
+        ]
+      },
+      "domains": [],
+      "exchange": {
+        "name": "arrlvhf",
+        "fields": [
+          {
+            "key": "GRID",
+            "label": "",
+            "required": true,
+            "adif": {
+              "rcvd": "GRIDSQUARE",
+              "sent": "MY_GRIDSQUARE"
+            },
+            "source": "setting:mygrid",
+            "kind": {
+              "type": "grid",
+              "chars": 4
+            }
+          }
+        ],
+        "roles": [
+          {
+            "id": "",
+            "selector": {
+              "type": "always"
+            },
+            "sends": [
+              "GRID"
+            ],
+            "receives": [
+              "GRID"
+            ],
+            "constant_sent": []
+          }
+        ]
+      },
+      "bonuses": [],
+      "banned_modes": [],
+      "tempo_fd": false,
+      "assistance": {
+        "spotting_allowed": true,
+        "cluster_allowed": true,
+        "assistance_note_key": ""
+      },
+      "enforcement": "warn",
+      "objectives": []
+    },
+    {
+      "event": "arrlvhf_sep",
+      "rules_year": 2026,
+      "contest_id": "ARRL-VHF-SEP",
+      "window": {
+        "month": 9,
+        "weekend": "nth_full",
+        "n": 2,
+        "start_hour_utc": 18,
+        "duration_hours": 33,
+        "overrides": {}
+      },
+      "scoring": {
+        "model": "none",
+        "points_by_mode_class": {},
+        "power_tiers": [],
+        "multipliers": [
+          {
+            "id": "grid",
+            "source": {
+              "type": "field",
+              "key": "GRID",
+              "domain": ""
+            },
+            "scope": "per_band",
+            "excluding": [],
+            "roles": []
+          }
+        ],
+        "relation_points": [],
+        "band_points": [
+          {
+            "bands": [
+              "6m",
+              "2m"
+            ],
+            "points": 1
+          },
+          {
+            "bands": [
+              "1.25m",
+              "70cm"
+            ],
+            "points": 2
+          },
+          {
+            "bands": [
+              "33cm",
+              "23cm"
+            ],
+            "points": 3
+          },
+          {
+            "bands": [
+              "13cm",
+              "9cm",
+              "6cm",
+              "3cm"
+            ],
+            "points": 4
+          }
+        ]
+      },
+      "transmitter_column": false,
+      "dupe": {
+        "by_call": true,
+        "by_band": true,
+        "by_mode_class": false,
+        "by_fields": [
+          "GRID"
+        ],
+        "by_sent_fields": [
+          "GRID"
+        ]
+      },
+      "domains": [],
+      "exchange": {
+        "name": "arrlvhf",
+        "fields": [
+          {
+            "key": "GRID",
+            "label": "",
+            "required": true,
+            "adif": {
+              "rcvd": "GRIDSQUARE",
+              "sent": "MY_GRIDSQUARE"
+            },
+            "source": "setting:mygrid",
+            "kind": {
+              "type": "grid",
+              "chars": 4
+            }
+          }
+        ],
+        "roles": [
+          {
+            "id": "",
+            "selector": {
+              "type": "always"
+            },
+            "sends": [
+              "GRID"
+            ],
+            "receives": [
+              "GRID"
             ],
             "constant_sent": []
           }

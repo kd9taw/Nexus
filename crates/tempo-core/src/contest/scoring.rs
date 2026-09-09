@@ -114,13 +114,32 @@ pub struct RelationPoints {
     pub points: u32,
 }
 
+/// ⭐ **One row of a [`PointsRule::ByBandGroup`] table**: what a contact on any of
+/// these bands is worth.
+///
+/// ARRL VHF's table is four such rows — *"one point for each complete 50- or 144-MHz
+/// QSO"*, two for 222/432, and then the two rows whose values are NOT the same in all
+/// three runnings (VHF-Rules.pdf v1.2 §5.1 vs §5.2). The band list is the whole key:
+/// unlike a mode class or a relation, a band is not a closed set this crate can
+/// enumerate, so a row names the bands it prices and nothing else.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BandPoints {
+    /// Band labels (`"6m"`, `"23cm"`) this row prices, matched case-insensitively.
+    ///
+    /// ⚠️ **Never empty, and never overlapping another row** — both are refused by the
+    /// loader. An empty list would be a catch-all that priced 30 m in a VHF contest, and
+    /// an overlap would make the table an ORDERED rule list, where this is a lookup.
+    pub bands: &'static [&'static str],
+    pub points: u32,
+}
+
 /// How a contact becomes points.
 ///
 /// ARRL FD and Winter FD score by mode class; CQ WW and CQ WPX score by the relation
-/// between my station and theirs. The remaining researched shapes (a flat 2 for
-/// Sweepstakes, a band group for ARRL VHF) are expressible as one of these two — a flat
-/// table is a mode-class table with three equal entries — and land as new arms only if a
-/// contest arrives that neither can say.
+/// between my station and theirs; ARRL VHF scores by BAND GROUP. A flat table (a
+/// Sweepstakes contact is two points whatever it is) stays a mode-class table with three
+/// equal entries; a fourth arm lands only if a contest arrives that none of these can
+/// say.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PointsRule {
     /// Points from the per-mode-class table (ARRL FD, Winter FD, Sweepstakes).
@@ -132,6 +151,19 @@ pub enum PointsRule {
     /// [`Relation`](super::callsign::Relation) is true of a contact, so no ordering can
     /// change the answer and no row can shadow another.
     ByRelation(&'static [RelationPoints]),
+    /// ⭐ Points from the BAND alone (ARRL January / June / September VHF).
+    ///
+    /// Also a lookup and not an ordered list: the loader refuses a band that appears in
+    /// two rows, so at most one row matches and no row can shadow another.
+    ///
+    /// ⚠️ **A band no row names scores zero, and that is the honest answer here** —
+    /// unlike a missing relation arm, which is a hole in a table that must cover every
+    /// contact. ARRL VHF is *"any amateur band above 50 MHz"* and its table names every
+    /// band it scores; a 30 m contact in a VHF contest is not a contact the sponsor
+    /// prices at all. The loader's guard is on the SHAPE of the table (no empty band
+    /// list, no band in two rows), because a coverage rule would have to enumerate the
+    /// bands, which no rules file does.
+    ByBandGroup(&'static [BandPoints]),
 }
 
 impl PointsRule {
@@ -164,6 +196,10 @@ impl PointsRule {
                     })
                     .unwrap_or(0)
             }
+            PointsRule::ByBandGroup(table) => table
+                .iter()
+                .find(|g| g.bands.iter().any(|b| b.eq_ignore_ascii_case(row.band)))
+                .map_or(0, |g| g.points),
         }
     }
 }
@@ -594,6 +630,123 @@ mod tests {
             assert_eq!(r.points_for(&rel_row(Relation::SameContinent, band)), 1);
             assert_eq!(r.points_for(&rel_row(Relation::SameCountry, band)), 0);
         }
+    }
+
+    /// One band-group-scored row on a named band.
+    fn band_row(band: &'static str) -> ScoreRow<'static> {
+        ScoreRow {
+            mode_class: "CW",
+            band,
+            role: "",
+            rx: &[],
+            entity: None,
+            prefix: None,
+            relation: None,
+        }
+    }
+
+    /// ⭐ **ARRL VHF's two point tables, driven side by side over the same bands.**
+    ///
+    /// VHF-Rules.pdf v1.2 (read 2026-09-09):
+    /// > *"5.1 QSO points for January contest: 5.1.1 Count one point for each complete
+    /// > 50- or 144-MHz QSO. 5.1.2 Count two points for each 222- or 432-MHz QSO. 5.1.3
+    /// > Count four points for each 902- or 1296-MHz QSO. 5.1.4 Count eight points for
+    /// > each 2.3 GHz (or higher) QSO."*
+    /// > *"5.2 QSO points for June and September contests: … 5.2.3 Count three points
+    /// > for each 902- or 1296-MHz QSO. 5.2.4 Count four points for each 2.3 GHz (or
+    /// > higher) QSO."*
+    ///
+    /// The two lower groups agree and the two upper groups do not, so the assertion that
+    /// matters is the `assert_ne!`: a table that quietly served the other running would
+    /// satisfy every equality on 50–432 MHz and fail only above it.
+    #[test]
+    fn arrl_vhfs_january_table_and_its_june_september_table_diverge_above_432_mhz() {
+        static LOW: &[&str] = &["6m", "2m"];
+        static MID: &[&str] = &["1.25m", "70cm"];
+        static UHF: &[&str] = &["33cm", "23cm"];
+        static SHF: &[&str] = &["13cm", "9cm", "6cm", "3cm"];
+        static JAN: &[BandPoints] = &[
+            BandPoints {
+                bands: LOW,
+                points: 1,
+            },
+            BandPoints {
+                bands: MID,
+                points: 2,
+            },
+            BandPoints {
+                bands: UHF,
+                points: 4,
+            },
+            BandPoints {
+                bands: SHF,
+                points: 8,
+            },
+        ];
+        static JUNSEP: &[BandPoints] = &[
+            BandPoints {
+                bands: LOW,
+                points: 1,
+            },
+            BandPoints {
+                bands: MID,
+                points: 2,
+            },
+            BandPoints {
+                bands: UHF,
+                points: 3,
+            },
+            BandPoints {
+                bands: SHF,
+                points: 4,
+            },
+        ];
+        let jan = PointsRule::ByBandGroup(JAN);
+        let jun = PointsRule::ByBandGroup(JUNSEP);
+
+        for b in ["6m", "2m"] {
+            assert_eq!(jan.points_for(&band_row(b)), 1);
+            assert_eq!(jun.points_for(&band_row(b)), 1);
+        }
+        for b in ["1.25m", "70cm"] {
+            assert_eq!(jan.points_for(&band_row(b)), 2);
+            assert_eq!(jun.points_for(&band_row(b)), 2);
+        }
+        for b in ["33cm", "23cm"] {
+            assert_eq!(jan.points_for(&band_row(b)), 4);
+            assert_eq!(jun.points_for(&band_row(b)), 3);
+            assert_ne!(jan.points_for(&band_row(b)), jun.points_for(&band_row(b)));
+        }
+        for b in ["13cm", "9cm", "6cm", "3cm"] {
+            assert_eq!(jan.points_for(&band_row(b)), 8);
+            assert_eq!(jun.points_for(&band_row(b)), 4);
+            assert_ne!(jan.points_for(&band_row(b)), jun.points_for(&band_row(b)));
+        }
+    }
+
+    /// ⭐ **A band the table does not name scores zero, and the label match is
+    /// case-insensitive** — the same normalisation `relation_points` applies, because a
+    /// log row carries whatever label the radio surface stored.
+    #[test]
+    fn a_band_group_table_prices_only_the_bands_it_names() {
+        static LOW: &[&str] = &["6m", "2m"];
+        static T: &[BandPoints] = &[BandPoints {
+            bands: LOW,
+            points: 1,
+        }];
+        let r = PointsRule::ByBandGroup(T);
+        assert_eq!(r.points_for(&band_row("6M")), 1, "case-insensitive");
+        assert_eq!(
+            r.points_for(&band_row(" 2m")),
+            0,
+            "no trim, and none is done"
+        );
+        // ⚠️ A band above 50 MHz that this table does not price, and an HF band that a
+        // VHF contest never scores, are the same answer: zero. A `ByBandGroup` table
+        // states what it prices and nothing else.
+        assert_eq!(r.points_for(&band_row("70cm")), 0);
+        assert_eq!(r.points_for(&band_row("20m")), 0);
+        assert_eq!(r.points_for(&band_row("")), 0);
     }
 
     /// ⭐ **CQ WPX's band groups**, from cqwpx.com/rules §V.B (read 2026-09-09) — the
