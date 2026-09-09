@@ -10042,17 +10042,16 @@ impl RadioLoop {
                                 op.to_string()
                             }
                         };
-                        let contest = if fd.event == "wfd" {
-                            "WFD"
-                        } else {
-                            "ARRL-FIELD-DAY"
-                        };
+                        // The contest, off the RULESET the session is running — never a
+                        // match on the event id, whose `else` branch reported every
+                        // contest that was not Winter Field Day as ARRL Field Day.
+                        let contest = fd_contest_name(&fd.event, fd.rules_year);
                         let dial_mhz = cur_dial as f64 / 1e6;
                         let fallback_unix = (now / 1000.0) as u64;
                         let n1_ctx = FdN1mmCtx {
                             mycall: mycall.clone(),
                             operator: operator.clone(),
-                            contest: contest.to_string(),
+                            contest,
                             dial_mhz,
                             radionr: n1mm_radio_nr,
                             fallback_unix,
@@ -10238,7 +10237,11 @@ fn fd_wsjtx_qso(q: &FieldDayQso, ctx: &FdWsjtxCtx) -> FdWsjtxQso {
 struct FdN1mmCtx {
     mycall: String,
     operator: String,
-    /// "ARRL-FIELD-DAY" | "WFD".
+    /// N1MM's `<contestname>` — the ADIF `CONTEST_ID` off the running ruleset, via
+    /// [`fd_contest_name`], or [`GENERAL_LOG`](tempo_net::n1mm::GENERAL_LOG) when the
+    /// contest cannot be named. **Not a two-value field**: it was
+    /// `"ARRL-FIELD-DAY" | "WFD"` while those were the only two contests, and every
+    /// other contest fell into the `else`.
     contest: String,
     dial_mhz: f64,
     /// Which radio N1MM attributes the batch to, 1-based (#33).
@@ -10289,6 +10292,49 @@ fn fd_n1mm_contact(
         // 32-hex dedup id: time + batch index + call hash.
         id: tempo_net::n1mm::dedup_id(when, &q.call, batch_index as u64),
     }
+}
+
+/// The contest this session is running, as N1MM's `<contestname>`.
+///
+/// ⭐ **The value comes from the RULESET, not from a match on the event id.** It used to
+/// be `if event == "wfd" { "WFD" } else { "ARRL-FIELD-DAY" }`, which was right only
+/// while those were the only two contests: every other event id fell into the `else`, so
+/// a Tennessee QSO Party contact would have gone onto the wire carrying its correct
+/// per-row exchange under ARRL Field Day's name. `ruleset_by_id` is the same rules row
+/// the session was opened from, so this cannot disagree with what the log exports as.
+///
+/// **Which vocabulary this field wants — what was established, and what was not.**
+/// N1MM's `<contestname>` is N1MM's OWN identifier, not an ADIF or Cabrillo one: its
+/// official page (linked from `tempo_net::n1mm`'s module header) documents no vocabulary
+/// and its examples show `CWOPS` beside `ARRL-FIELD-DAY`, and this tree already relies
+/// on that by sending [`GENERAL_LOG`](tempo_net::n1mm::GENERAL_LOG) — `"DX"`, N1MM's
+/// name for its non-contest log, and not an ADIF value — for an ordinary QSO.
+///
+/// * **For Field Day the two vocabularies COINCIDE.** `ARRL-FIELD-DAY` is both the ADIF
+///   `CONTEST_ID` and the literal string in N1MM's own documented example, so the
+///   datagram that has been on the air since 0.8.0 is right under either reading and
+///   does not move.
+/// * **For the state QSO parties they DIVERGE, and N1MM's side is not per-party.** N1MM
+///   has no Tennessee/Ohio/California/Texas contest: all four are the single log type
+///   `QSOPARTY` with the state chosen separately in its UI. What its `<contestname>`
+///   actually emits for one is **not documented anywhere I could read**, and the only
+///   candidate — `QSOPARTY` for all four — is a mapping no source states, collapses four
+///   contests into one bucket, and throws away the identity a dashboard buckets on.
+///
+/// So this sends the **ADIF id**: it is a registry already in the tree
+/// (`FdRuleset::contest_id`) rather than a third one invented here, it keeps Field Day
+/// byte-identical, and it names the contest rather than a category. It is deliberately
+/// NOT the Cabrillo token (`ARRL-FD`, `MRRC-OHQP`, `TXQP`) — that is a submission-file
+/// vocabulary, and using it would change the shipped Field Day wire.
+///
+/// `GENERAL_LOG` is the fallback because an unnameable contest must not be labelled as
+/// some other contest — that is the whole defect — and `<contestname>` is not omitted
+/// when empty (an empty one reads as malformed to consumers that bucket by it).
+fn fd_contest_name(event_id: &str, rules_year: u16) -> String {
+    tempo_core::fd_rules::ruleset_by_id(event_id, rules_year)
+        .map(|rs| rs.contest_id)
+        .unwrap_or(tempo_net::n1mm::GENERAL_LOG)
+        .to_string()
 }
 
 /// The mode token one Field Day QSO is pushed to N3FJP / N1MM with, from its
@@ -11942,6 +11988,9 @@ mod tests {
     const N1MM_FD_ROW0: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?><contactinfo><app>NEXUS</app><contestname>ARRL-FIELD-DAY</contestname><contestnr>1</contestnr><timestamp>2025-06-15 15:06:40</timestamp><mycall>W9XYZ</mycall><band>20</band><rxfreq>1407400</rxfreq><txfreq>1407400</txfreq><operator>W9XYZ</operator><mode>FT8</mode><call>W1AW</call><section>CT</section><points>2</points><radionr>1</radionr><IsRunQSO>0</IsRunQSO><StationName>NEXUS</StationName><ID>0000000ca18d4e80000000000bb55600</ID><IsClaimedQso>1</IsClaimedQso><SentExchange>3A WI</SentExchange></contactinfo>";
     const N1MM_FD_ROW1: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?><contactinfo><app>NEXUS</app><contestname>ARRL-FIELD-DAY</contestname><contestnr>1</contestnr><timestamp>2025-06-15 15:07:40</timestamp><mycall>W9XYZ</mycall><band>20</band><rxfreq>1407400</rxfreq><txfreq>1407400</txfreq><operator>W9XYZ</operator><mode>FT8</mode><call>K9ABC</call><section>IL</section><points>2</points><radionr>1</radionr><IsRunQSO>0</IsRunQSO><StationName>NEXUS</StationName><ID>0000000ca18d55c5000000052c38d890</ID><IsClaimedQso>1</IsClaimedQso><SentExchange>3A WI</SentExchange></contactinfo>";
 
+    const N1MM_WFD_ROW0: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?><contactinfo><app>NEXUS</app><contestname>WFD</contestname><contestnr>1</contestnr><timestamp>2025-06-15 15:06:40</timestamp><mycall>W9XYZ</mycall><band>20</band><rxfreq>1407400</rxfreq><txfreq>1407400</txfreq><operator>W9XYZ</operator><mode>FT8</mode><call>W1AW</call><section>CT</section><points>2</points><radionr>1</radionr><IsRunQSO>0</IsRunQSO><StationName>NEXUS</StationName><ID>0000000ca18d4e80000000000bb55600</ID><IsClaimedQso>1</IsClaimedQso><SentExchange>3A WI</SentExchange></contactinfo>";
+    const N1MM_WFD_ROW1: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?><contactinfo><app>NEXUS</app><contestname>WFD</contestname><contestnr>1</contestnr><timestamp>2025-06-15 15:07:40</timestamp><mycall>W9XYZ</mycall><band>20</band><rxfreq>1407400</rxfreq><txfreq>1407400</txfreq><operator>W9XYZ</operator><mode>FT8</mode><call>K9ABC</call><section>IL</section><points>2</points><radionr>1</radionr><IsRunQSO>0</IsRunQSO><StationName>NEXUS</StationName><ID>0000000ca18d55c5000000052c38d890</ID><IsClaimedQso>1</IsClaimedQso><SentExchange>3A WI</SentExchange></contactinfo>";
+
     /// One DTO log row, as the snapshot hands it to the emitters.
     fn fd_row(call: &str, class: &str, section: &str, mex: &str, when_unix: u64) -> FieldDayQso {
         FieldDayQso {
@@ -11985,11 +12034,17 @@ mod tests {
         }
     }
 
-    fn n1mm_ctx() -> FdN1mmCtx {
+    /// The N1MM context for a session running `event_id`.
+    ///
+    /// ⚠️ The contest name is RESOLVED, not hardcoded — it goes through the same
+    /// [`fd_contest_name`] the emitter calls. A fixture that hardcoded
+    /// `"ARRL-FIELD-DAY"` would pin the byte string while proving nothing about the
+    /// code that produces it.
+    fn n1mm_ctx(event_id: &str) -> FdN1mmCtx {
         FdN1mmCtx {
             mycall: "W9XYZ".into(),
             operator: "W9XYZ".into(),
-            contest: "ARRL-FIELD-DAY".into(),
+            contest: fd_contest_name(event_id, tempo_core::fd_rules::CURRENT_RULES_YEAR),
             dial_mhz: 14.074,
             radionr: 1,
             fallback_unix: 1_750_000_100,
@@ -12019,13 +12074,125 @@ mod tests {
         assert_eq!(wsjtx, vec![WSJTX_FD_ROW0_HEX, WSJTX_FD_ROW1_HEX]);
 
         // N1MM `<contactinfo>` is XML, so its bytes are readable and pinned as text.
-        let nctx = n1mm_ctx();
+        let nctx = n1mm_ctx("arrlfd");
         let n1mm: Vec<String> = fd_rows()
             .iter()
             .enumerate()
             .map(|(i, q)| tempo_net::n1mm::build_contactinfo(&fd_n1mm_contact(q, i, &nctx)))
             .collect();
         assert_eq!(n1mm, vec![N1MM_FD_ROW0, N1MM_FD_ROW1]);
+    }
+
+    /// ⭐ **AND WINTER FIELD DAY, PINNED THE SAME WAY.**
+    ///
+    /// The other shipped contest, and the one the old `if event == "wfd"` branch got
+    /// right — so it is exactly the case a resolver rewrite could quietly break while
+    /// the ARRL pin above stayed green.
+    #[test]
+    fn winter_field_day_contactinfo_is_byte_pinned() {
+        let nctx = n1mm_ctx("wfd");
+        let n1mm: Vec<String> = fd_rows()
+            .iter()
+            .enumerate()
+            .map(|(i, q)| tempo_net::n1mm::build_contactinfo(&fd_n1mm_contact(q, i, &nctx)))
+            .collect();
+        assert_eq!(n1mm, vec![N1MM_WFD_ROW0, N1MM_WFD_ROW1]);
+    }
+
+    /// ⭐ **THE DIFFERENTIAL ORACLE — the replaced expression, quoted, as the control.**
+    ///
+    /// The ARRL Field Day pin above was captured from the emitter BEFORE this change and
+    /// still passes, so that wire is a measured before/after. Winter Field Day had no
+    /// such fixture to capture from, so its identity rests on this instead: the literal
+    /// expression that was deleted, run beside its replacement, over the two contests it
+    /// was ever correct for. `fd_n1mm_contact` puts `ctx.contest` on the wire verbatim
+    /// (the byte pins hold that down), so agreement here IS datagram identity.
+    #[test]
+    fn the_resolver_agrees_with_the_expression_it_replaced() {
+        // Exactly what `service.rs` did before this change, character for character.
+        fn old_expression(event: &str) -> &str {
+            if event == "wfd" {
+                "WFD"
+            } else {
+                "ARRL-FIELD-DAY"
+            }
+        }
+        let year = tempo_core::fd_rules::CURRENT_RULES_YEAR;
+        for id in ["arrlfd", "wfd"] {
+            assert_eq!(
+                fd_contest_name(id, year),
+                old_expression(id),
+                "{id} must reach the wire exactly as it always has"
+            );
+        }
+        // And the control that makes that mean something: the two DISAGREE for every
+        // other contest, which is the whole reason the expression was replaced.
+        for id in ["tnqp", "ohqp", "cqp", "txqp"] {
+            assert_eq!(old_expression(id), "ARRL-FIELD-DAY");
+            assert_ne!(fd_contest_name(id, year), old_expression(id));
+        }
+    }
+
+    /// ⭐ **NO CONTEST REACHES THE N1MM WIRE UNDER ANOTHER CONTEST'S NAME.**
+    ///
+    /// The defect this replaces: `if event == "wfd" { "WFD" } else { "ARRL-FIELD-DAY" }`
+    /// was a two-value match on a field that now holds a rules-file event id, so every
+    /// contest that was not Winter Field Day — the four state QSO parties included —
+    /// went onto the wire labelled ARRL Field Day, carrying its own correct per-row
+    /// exchange under someone else's contest. A dashboard bucketing by `<contestname>`
+    /// has no way to tell that from a real Field Day contact.
+    ///
+    /// The invariant holds **whether or not a ruleset for the id is installed**, which
+    /// is what makes it testable here, one merge before the QSO-party rulesets land:
+    /// with a ruleset the name is that contest's, without one it is
+    /// [`GENERAL_LOG`](tempo_net::n1mm::GENERAL_LOG) — and never ARRL Field Day's.
+    #[test]
+    fn a_contest_that_is_not_field_day_is_never_labelled_field_day() {
+        // The two shipped contests resolve to their own ADIF ids, which is also what
+        // the byte pins above hold to the wire.
+        let year = tempo_core::fd_rules::CURRENT_RULES_YEAR;
+        assert_eq!(fd_contest_name("arrlfd", year), "ARRL-FIELD-DAY");
+        assert_eq!(fd_contest_name("wfd", year), "WFD");
+
+        // Every event id that is not ARRL Field Day — the four state QSO parties this
+        // build is one merge away from running, plus a junk id standing for a rules
+        // file that lost a row.
+        for id in ["tnqp", "ohqp", "cqp", "txqp", "not-a-contest", ""] {
+            let name = fd_contest_name(id, year);
+            assert_ne!(
+                name, "ARRL-FIELD-DAY",
+                "event id {id:?} reached the N1MM wire labelled ARRL Field Day"
+            );
+            // …and it reaches the wire as whatever was resolved, not as a default
+            // buried in the emitter.
+            let nctx = n1mm_ctx(id);
+            let xml = tempo_net::n1mm::build_contactinfo(&fd_n1mm_contact(&fd_rows()[0], 0, &nctx));
+            assert!(
+                xml.contains(&format!("<contestname>{name}</contestname>")),
+                "{xml}"
+            );
+        }
+    }
+
+    /// The positive control for the guard above: it can only mean something if
+    /// `ARRL-FIELD-DAY` is a string this resolver really can produce, and if the wire
+    /// really does carry the name it is given.
+    #[test]
+    fn the_contest_name_guard_discriminates() {
+        let year = tempo_core::fd_rules::CURRENT_RULES_YEAR;
+        // The value the guard forbids for every other id IS what ARRL Field Day
+        // produces — so the assertion is discriminating, not vacuous.
+        assert_eq!(fd_contest_name("arrlfd", year), "ARRL-FIELD-DAY");
+        // And the emitter puts the ctx's name on the wire verbatim: hand it Field Day's
+        // name under a QSO party's id and the datagram says Field Day. That is exactly
+        // what the old code did, and what the guard above now catches.
+        let mut nctx = n1mm_ctx("tnqp");
+        nctx.contest = "ARRL-FIELD-DAY".into();
+        let xml = tempo_net::n1mm::build_contactinfo(&fd_n1mm_contact(&fd_rows()[0], 0, &nctx));
+        assert!(
+            xml.contains("<contestname>ARRL-FIELD-DAY</contestname>"),
+            "{xml}"
+        );
     }
 
     /// ⭐ **THE MOBILE DEFECT — a session-level exchange stamped on every row.**
@@ -12037,7 +12204,7 @@ mod tests {
     fn a_mobile_session_puts_each_rows_own_exchange_on_both_wires() {
         let rows = mobile_rows();
         let ctx = wsjtx_ctx();
-        let nctx = n1mm_ctx();
+        let nctx = n1mm_ctx("arrlfd");
 
         // What the session is composing NOW — the value the deleted DTO pair carried,
         // and the wrong answer for row 0. Nothing below can reach it: it exists here
