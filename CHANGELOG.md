@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Export one POTA activation, not a date range.** The Logbook's export area now lists your
+  activations — park, UTC date and contact count — and exports exactly that one. Previously the only
+  filter was a date range, so an activation shared a day with any ordinary contacts you made and they
+  came out in the same file.
+
+  Two parks in a day is simply two rows and two files. The file is named the way POTA asks
+  (`KD9TAW@US-1234-20260909.adi`), and an activation that crosses UTC midnight gives you two files
+  rather than one — POTA would accept the combined file, but credit is per Zulu day, so six contacts
+  either side of midnight is twelve contacts and *no* valid activation. Two rows saying "6 QSOs ·
+  under 10" tell you that before you submit; one file does not.
+
+  Hunter contacts — where the other station was in the park — can never appear in an activator file.
+  Choosing an activation supersedes the date range rather than combining with it, so a leftover date
+  cannot silently shorten a log you are about to upload.
+
+  Not handled: a park spanning two states needs a fourth part in the filename that Nexus cannot fill,
+  and a two-fer is not modelled — one QSO carries one park reference.
+
 - **Sweepstakes, CQ WW and CQ WPX.** ARRL November Sweepstakes ships as two contests (the CW and
   Phone weekends are separately run), and CQ WW and CQ WPX as four. These are the hard ones: unlike a
   QSO party, their multipliers come from the *callsign* rather than the exchange — DXCC entity, CQ
