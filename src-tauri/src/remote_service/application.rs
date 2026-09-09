@@ -47,6 +47,7 @@ struct Entry {
 }
 #[derive(Default)]
 pub struct Publisher {
+    pub(super) journal: Option<std::sync::Arc<std::sync::Mutex<super::query::Journal>>>,
     entries: HashMap<Command, Entry>,
     revision: u64,
     spectrum: Option<tempo_app::engine::SpectrumFeed>,
@@ -250,6 +251,13 @@ impl Publisher {
         self.reply(command, request_id, base, now)
     }
     fn insert(&mut self, command: Command, value: Value, now: Instant) -> Result<(), &'static str> {
+        if command == Command::Snapshot {
+            if let Some(journal) = &self.journal {
+                if let Ok(mut journal) = journal.try_lock() {
+                    journal.observe(&value);
+                }
+            }
+        }
         if serde_json::to_vec(&value)
             .map_err(|_| "applicationUnavailable")?
             .len()

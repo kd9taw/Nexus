@@ -1,3 +1,4 @@
+import { useStationControl } from '../stationAccess'
 // The raw "Spots" board — every recent cluster/RBN spot (CW/Phone/Digital, all sources),
 // NOT needs-gated. This is the SpotCollector/DXHeat-style firehose view: see everything,
 // filter client-side. The Needed board stays the curated "what to work" list; this is the
@@ -69,6 +70,7 @@ function useSessionState<T>(key: string, init: T): [T, React.Dispatch<React.SetS
 }
 
 export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, onPopOut, myGrid = '' }: Props) {
+  const control = useStationControl()
   // Entity centres — the only geometry the firehose carries (a spot has no grid).
   const centroids = useEntityCentroids()
   // ONE flat mode filter: the SPECIFIC modes present (CW/Phone/FT8/FT4/RTTY/Digital…), each a
@@ -220,7 +222,7 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, on
         <h2>{t('spots.title')}</h2>
         <span className="np-count">{rows.length}</span>
         {spots.length !== rows.length && <span className="np-count np-count-filtered">{t('spots.countFiltered', { count: spots.length })}</span>}
-        <span className="np-hint">{t('spots.hint')}</span>
+        <span className="np-hint">{control ? t('spots.hint') : t('remote.collectionObserver')}</span>
         <span className="np-search">
           <input
             type="search"
@@ -250,7 +252,7 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, on
           </svg>{' '}
           {hasActiveFilters ? t('spots.filter.toggle.active') : t('spots.filter.toggle.idle')}
         </button>
-        {onPopOut && (
+        {control && onPopOut && (
           <button type="button" className="np-popout" onClick={onPopOut} title={t('spots.popOut.title')}>
             {t('spots.popOut.label')}
           </button>
@@ -377,7 +379,7 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, on
           </div>
         ) : (
           rows.map((s) => {
-            const canQsy = knownBands.has(s.band)
+            const canQsy = control && knownBands.has(s.band)
             return (
               <div
                 key={`${s.call}|${s.freqMhz}|${s.spotter}`}
@@ -399,7 +401,7 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, on
                 }
                 onClick={() => {
                   onSelect(s.call)
-                  onWork(s)
+                  if (control) onWork(s)
                 }}
               >
                 <span className="np-age">{ageLabel(s.ageSecs)}</span>

@@ -1,3 +1,4 @@
+import { useStationControl } from '../stationAccess'
 // The N1MM-style "what's needed now" board: every needed station the engine sees
 // (from the log — new DXCC/ATNO, new band-slot, new mode, new zone, needs-confirm),
 // ranked by priority and boldly colored by the shared need palette. Single-click a
@@ -299,6 +300,7 @@ export function NeededPanel({
   phoneSource,
   onOpenSettings,
 }: Props) {
+  const control = useStationControl()
   const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' }>({
     key: 'priority',
     dir: 'desc',
@@ -425,6 +427,7 @@ export function NeededPanel({
     const a = rows[i]
     if (!a) return
     onSelect(a.call)
+    if (!control) return
     if (onWork) onWork(a)
     else onQsy(a)
   })
@@ -456,7 +459,7 @@ export function NeededPanel({
             {t('needed.countFiltered', { count: alerts.length })}
           </span>
         )}
-        <span className="np-hint">{t('needed.hint')}</span>
+        <span className="np-hint">{control ? t('needed.hint') : t('remote.collectionObserver')}</span>
         {/* Filter toggle button */}
         <button
           type="button"
@@ -471,8 +474,8 @@ export function NeededPanel({
           </svg>{' '}
           {hasActiveFilters ? t('needed.filter.toggle.active') : t('needed.filter.toggle.idle')}
         </button>
-        {onPoint && <RotatorWidget />}
-        {onPopOut && (
+        {control && onPoint && <RotatorWidget />}
+        {control && onPopOut && (
           <button
             type="button"
             className="np-popout"
@@ -482,7 +485,7 @@ export function NeededPanel({
             {t('needed.popOut.label')}
           </button>
         )}
-        <label className="np-autopop" title={t('needed.autoPop.title')}>
+        {control && <label className="np-autopop" title={t('needed.autoPop.title')}>
           <input
             type="checkbox"
             checked={autopop}
@@ -496,7 +499,7 @@ export function NeededPanel({
             }}
           />
           <span>{t('needed.autoPop.label')}</span>
-        </label>
+        </label>}
       </div>
 
       {/* Phone-source liveness — Phone needs come ONLY from the human DX-cluster node, so a
@@ -639,14 +642,14 @@ export function NeededPanel({
           </div>
         ) : (
           rows.map((a, i) => {
-            const canQsy = knownBands.has(a.band)
+            const canQsy = control && knownBands.has(a.band)
             const isVoiceCw = a.mode === 'CW' || a.mode === 'Phone'
             // Every mode is click-to-work when the host wires onWork (main window):
             // the work path QSYs the rig AND opens the matching cockpit — a Digital
             // need must land in the FT8 cockpit, not just move the dial (the
             // "radio switched but the app didn't" bug). The pop-out has no onWork,
             // so its rows fall back to the QSY-only branch below.
-            const workable = !!onWork
+            const workable = control && !!onWork
             const age = ageLabel(a.admittedAt)
             const evidenceLine = a.evidence
               ? (age ? `${a.evidence} · ${age}` : a.evidence)
@@ -733,7 +736,7 @@ export function NeededPanel({
                     {a.call}
                   </button>
                   <RarityChip rarity={a.gridRarity} />
-                  {onPoint && (
+                  {control && onPoint && (
                     <button
                       type="button"
                       className="np-point"

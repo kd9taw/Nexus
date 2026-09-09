@@ -1197,6 +1197,10 @@ fn summarize_hosts(hosts: &[String]) -> Option<String> {
 /// feed problem — the UI tooltip says so). Disabled feeds are hidden by the UI.
 #[tauri::command]
 fn get_feed_health(health: State<'_, SharedHealth>) -> FeedHealth {
+    read_feed_health(&health)
+}
+
+fn read_feed_health(health: &SharedHealth) -> FeedHealth {
     use std::sync::atomic::Ordering::Relaxed;
     let now = now_unix();
     // The human DX-cluster nodes (the SSB/phone aggregator): the spawned host list drives the
@@ -13150,21 +13154,33 @@ struct SpotRow {
 /// retention (≈20 min) bounds the set; the UI applies band/mode/age filters client-side.
 #[tauri::command(async)]
 fn get_all_spots(spots: State<'_, SharedSpots>, state: State<'_, SharedEngine>) -> Vec<SpotRow> {
+    read_all_spots(&spots, &state, false).unwrap_or_default()
+}
+
+fn read_all_spots(
+    spots: &SharedSpots,
+    state: &SharedEngine,
+    nonblocking: bool,
+) -> Result<Vec<SpotRow>, String> {
     use tempo_app::settings::{LicenseClass, OperatingMode};
     // UNASSISTED mode: no spot may be DISPLAYED either. Ingestion is already gated at the
     // feed callbacks, so the buffer should be empty — this is the belt-and-braces read gate,
     // so the guarantee never depends on a buffer clear having succeeded, and any spot
     // received before the switch flipped is invisible immediately.
     if unassisted() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     let now = now_unix();
-    let recent = match spots.lock() {
+    let recent = match if nonblocking {
+        spots.try_lock().map_err(|_| ())
+    } else {
+        spots.lock().map_err(|_| ())
+    } {
         Ok(buf) => buf.recent_within(
             std::time::Instant::now(),
             std::time::Duration::from_secs(1200),
         ),
-        Err(_) => return Vec::new(),
+        Err(_) => return Err("applicationBusy".into()),
     };
     // Take the engine lock ONLY long enough to snapshot what the rows need: the license class,
     // and the roster's cached grid for each spotted call (a station heard before → its grid →
@@ -13180,7 +13196,11 @@ fn get_all_spots(spots: State<'_, SharedSpots>, state: State<'_, SharedEngine>) 
     // Poison recovers (engine_lock), so the gate always sees real state; the Option
     // shape is kept for the chains below.
     let (class, my_call, roster_grids) = {
-        let eng = Some(engine_lock(&state));
+        let eng = Some(if nonblocking {
+            state.try_lock().map_err(|_| "applicationBusy")?
+        } else {
+            engine_lock(state)
+        });
         let class = eng
             .as_ref()
             .map(|e| e.settings().license_class)
@@ -13271,7 +13291,7 @@ fn get_all_spots(spots: State<'_, SharedSpots>, state: State<'_, SharedEngine>) 
         .collect();
     // Newest first; unknown-age spots sort last.
     rows.sort_by_key(|r| if r.age_secs < 0 { i64::MAX } else { r.age_secs });
-    rows
+    Ok(rows)
 }
 
 /// The Needed board's DX-cluster / RBN evidence arm: every buffered spot that is
@@ -13462,18 +13482,35 @@ async fn get_need_alerts(
     // flag a DXCC/state/grid as needed that the other one already worked. Mtime-gated, so this is
     // a cheap `stat` whenever the file is unchanged.
     eng.sync_shared_log_if_changed();
-    let mut needs = propagation::LogNeeds::new();
-    for q in eng.get_log() {
-        needs.add_qso(
-            &q.call,
-            &q.band,
-            &q.mode,
-            q.grid.as_deref(),
-            q.state.as_deref(),
-            q.award_confirmed,
-            qso_is_sat(q.prop_mode.as_deref()),
-        );
-    }
+    read_need_alerts(eng, &live_paths, &region_paths, &spots, &ota_cache)
+}
+
+// Shared calculation, with an immutable engine guard. Remote never invokes the
+// native command's shared-log reconciliation or any logbook write/recovery path.
+fn read_need_alerts(
+    eng: std::sync::MutexGuard<'_, tempo_app::engine::Engine>,
+    live_paths: &SharedLivePaths,
+    region_paths: &SharedRegionPaths,
+    spots: &SharedSpots,
+    ota_cache: &SharedOtaSpots,
+) -> Result<Vec<propagation::NeedAlert>, String> {
+    // Copy only the scoring fields while locked. DXCC resolution, indexing and
+    // ranking then run outside the engine lock for both native and Remote readers.
+    let contacts: Vec<_> = eng
+        .log_records()
+        .iter()
+        .map(|q| {
+            (
+                q.call.clone(),
+                q.band.clone(),
+                q.mode.clone(),
+                q.grid.clone(),
+                q.state.clone(),
+                q.award_confirmed,
+                qso_is_sat(q.prop_mode.as_deref()),
+            )
+        })
+        .collect();
     let snap = eng.snapshot();
     // Operator "wanted" watch list (W1.5) — captured before the lock drops.
     let wanted_calls = eng.settings().wanted_calls.clone();
@@ -13482,6 +13519,18 @@ async fn get_need_alerts(
     // transmit to is not a "need". Open (non-US) short-circuits tx_allowed to true, so no gate.
     let license_class = eng.settings().license_class;
     drop(eng); // nothing below needs the engine — don't hold the hot lock
+    let mut needs = propagation::LogNeeds::new();
+    for (call, band, mode, grid, state, confirmed, satellite) in contacts {
+        needs.add_qso(
+            &call,
+            &band,
+            &mode,
+            grid.as_deref(),
+            state.as_deref(),
+            confirmed,
+            satellite,
+        );
+    }
     let band = snap.radio.band.clone();
     // Your own radio's decodes on the CURRENT band (you are the receiver). These come
     // from the digital modem, so the truthful mode label is the active TIER (FT8/FT4/
@@ -21833,6 +21882,13 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
         remote_publisher.clone(),
         d.spectrum_feed.clone(),
         d.meter_feed.clone(),
+        Some(remote_service::query::Sources {
+            spots: d.spots.clone(),
+            live_paths: d.live_paths.clone(),
+            region_paths: d.region_paths.clone(),
+            ota: d.ota_spots.clone(),
+            health: d.health.clone(),
+        }),
     );
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())

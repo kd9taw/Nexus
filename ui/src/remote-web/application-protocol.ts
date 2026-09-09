@@ -23,12 +23,12 @@ export const applicationCommand = (value: unknown): value is ApplicationCommand 
 function exact(value: unknown, keys: string[]): asserts value is Record<string, unknown> {
   if (!record(value) || Object.keys(value).length !== keys.length || keys.some(key => !Object.prototype.hasOwnProperty.call(value, key))) throw new Error('invalidApplicationMessage')
 }
-function json(value: unknown, depth = 0): value is Json {
+export function validApplicationJson(value: unknown, depth = 0): value is Json {
   if (depth > 32) return false
   if (value === null || typeof value === 'string' || typeof value === 'boolean') return true
   if (typeof value === 'number') return Number.isFinite(value)
-  if (Array.isArray(value)) return value.every(item => json(item, depth + 1))
-  return record(value) && Object.entries(value).every(([key, item]) => safeKey(key) && json(item, depth + 1))
+  if (Array.isArray(value)) return value.every(item => validApplicationJson(item, depth + 1))
+  return record(value) && Object.entries(value).every(([key, item]) => safeKey(key) && validApplicationJson(item, depth + 1))
 }
 export function applicationRequest(value: unknown): ApplicationRequest {
   exact(value, ['type', 'requestId', 'command', 'revision'])
@@ -46,7 +46,7 @@ export function readApplicationReply<C extends string>(value: unknown, command: 
     (value.baseRevision !== null && (!positive(value.baseRevision) || value.baseRevision > value.revision)) ||
     !Number.isSafeInteger(value.ageMs) || Number(value.ageMs) < 0 || Number(value.ageMs) >= APPLICATION_TIMEOUT_MS ||
     !Array.isArray(value.removed) || value.removed.length > 512 ||
-    !value.removed.every(key => typeof key === 'string' && safeKey(key)) || !json(value.data) ||
+    !value.removed.every(key => typeof key === 'string' && safeKey(key)) || !validApplicationJson(value.data) ||
     (value.baseRevision === null && value.removed.length !== 0) || (value.baseRevision !== null && !record(value.data))) {
     throw new Error('invalidApplicationReply')
   }

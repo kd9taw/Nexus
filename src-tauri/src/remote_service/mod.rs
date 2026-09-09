@@ -1,6 +1,7 @@
 //! Local approval and the Remote background task. Engine access is restricted to
 //! bounded observation and reviewed application reads; no operating commands.
 mod application;
+pub(crate) mod query;
 #[cfg(test)]
 mod tests;
 mod transport;
@@ -121,6 +122,7 @@ impl Service {
         publisher: crate::remote_monitor::Publisher,
         spectrum: tempo_app::engine::SpectrumFeed,
         meters: tempo_app::engine::MeterFeed,
+        sources: Option<query::Sources>,
     ) -> Self {
         Self::start(
             REMOTE_ORIGIN.to_string(),
@@ -129,6 +131,7 @@ impl Service {
             publisher,
             Some(spectrum),
             meters,
+            sources,
         )
     }
     #[cfg(test)]
@@ -138,7 +141,15 @@ impl Service {
         engine: crate::SharedEngine,
         publisher: crate::remote_monitor::Publisher,
     ) -> Self {
-        Self::start(origin, vault, engine, publisher, None, Default::default())
+        Self::start(
+            origin,
+            vault,
+            engine,
+            publisher,
+            None,
+            Default::default(),
+            None,
+        )
     }
     fn start(
         origin: String,
@@ -147,6 +158,7 @@ impl Service {
         publisher: crate::remote_monitor::Publisher,
         spectrum: Option<tempo_app::engine::SpectrumFeed>,
         meters: tempo_app::engine::MeterFeed,
+        sources: Option<query::Sources>,
     ) -> Self {
         let status = Arc::new(Mutex::new(Status {
             phase: "unpaired".into(),
@@ -178,6 +190,7 @@ impl Service {
                                 monitor: publisher,
                                 spectrum,
                                 meters,
+                                sources,
                             },
                         }
                         .run(receiver),

@@ -207,6 +207,12 @@ export class DecodeHistory {
     return true
   }
 
+  /** A new transport observation session cannot inherit rows or an erase watermark. */
+  reset(): void {
+    this.map.clear()
+    this.erasedThroughSec = null
+  }
+
   /** Ingest one snapshot poll's decode list for the given slot. */
   ingest(decodes: DecodeRow[], slot: number, now: number = Date.now()): void {
     const m = this.map

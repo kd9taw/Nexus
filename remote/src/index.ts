@@ -35,7 +35,7 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
     issuer: env.AUTH0_ISSUER, audience: env.AUTH0_AUDIENCE, clientId: env.AUTH0_CLIENT_ID,
     ready: env.AUTH0_CLIENT_ID !== 'unconfigured',
     revision: env.REMOTE_BUILD_REVISION ?? 'local',
-    applicationVersion: 2,
+    applicationVersion: 3,
   })
   const match = /^stations\/([0-9a-f-]{36})\/(.+)$/.exec(path)
   if (request.method === 'GET' && match && ['connect', 'observe'].includes(match[2])) {
@@ -45,7 +45,8 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
       const row = await native(request, env, stationId)
       await rate(env, `connect:${stationId}`, now, 20)
       return room(env, stationId, 'station', { access: await access(env, row, now),
-        applicationVersion: request.headers.get('x-nexus-application-stream-version') === '2' ? 2
+        applicationVersion: request.headers.get('x-nexus-application-query-version') === '1' && request.headers.get('x-nexus-application-stream-version') === '2' ? 3
+          : request.headers.get('x-nexus-application-stream-version') === '2' ? 2
           : ['1', '2'].includes(request.headers.get('x-nexus-application-version') ?? '') ? Number(request.headers.get('x-nexus-application-version')) : 0,
         identity: { stationId, accountId: row.account_id, generation: row.generation, expiresAt: now + 86400000 } })
     }

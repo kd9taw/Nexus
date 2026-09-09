@@ -61,7 +61,7 @@ it.each(['cw', 'phone'])('opens the actual %s cockpit as an observer without key
     <App remote={{ snapshot: current, settings, bandPlan: [], cwPhone: true, status: <div>Observer</div> }} />
   </StationControlContext.Provider>)
   await waitFor(() => expect(container.querySelector(`.${mode}-cockpit`)).not.toBeNull())
-  expect(container.textContent).toContain('Remote logging and logbook history are not connected yet.')
+  expect(container.textContent).toContain('Remote QSO entry and cockpit recall are not connected yet.')
   const root = container.querySelector(`.${mode}-cockpit`)!
   if (mode === 'phone') {
     expect(root.querySelector('.cockpit-pwr-val')?.textContent).toBe('—')

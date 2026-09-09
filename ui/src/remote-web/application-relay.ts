@@ -9,16 +9,20 @@ import type { Peer } from '../remote-monitor/relay'
 import { ApplicationStreamRelay } from './application-stream-relay'
 import type { StreamCheckpoint } from './application-stream-relay'
 import { STREAM_TOPICS } from './application-stream-protocol'
+import { ApplicationQueryRelay } from './application-query-relay'
+import type { QueryCheckpoint } from './application-query-relay'
+import { QUERY_COMMAND } from './application-query-protocol'
 
 type Pending = { requestId: string; forwardId: string; command: ApplicationCommand; at: number; delivered: boolean }
 type LegacyCheckpoint = { version: 1; ready: boolean; windowAt: number; count: number; pending: Pending | null }
-export type ApplicationCheckpoint = LegacyCheckpoint | StreamCheckpoint
+export type ApplicationCheckpoint = LegacyCheckpoint | StreamCheckpoint | { version: 3; stream: StreamCheckpoint; query: QueryCheckpoint }
 type Browser = LegacyCheckpoint & { peer: Peer }
 export class ApplicationRelay {
   private station: { peer: Peer; version: number } | null = null
   private browsers = new Map<string, Browser>()
   private stream: ApplicationStreamRelay
-  constructor(private readonly id = () => crypto.randomUUID()) { this.stream = new ApplicationStreamRelay(id) }
+  private query: ApplicationQueryRelay
+  constructor(private readonly id = () => crypto.randomUUID()) { this.stream = new ApplicationStreamRelay(id); this.query = new ApplicationQueryRelay(id) }
   sync(station: { peer: Peer; version: number } | null, observers: { sessionId: string; peer: Peer }[], now: number): void {
     if (this.station?.peer !== station?.peer) {
       for (const browser of this.browsers.values()) {
@@ -32,9 +36,11 @@ export class ApplicationRelay {
       this.browsers.set(sessionId, { peer, version: 1, ready: false, windowAt: now, count: 0, pending: null })
     }
     this.expire(now)
-    this.stream.sync(station?.version === 2 ? station.peer : null, observers, now)
+    this.stream.sync(station && station.version >= 2 ? station.peer : null, observers, now)
+    this.query.sync(station?.version === 3 ? station.peer : null, observers, now)
   }
   restore(sessionId: string, saved: ApplicationCheckpoint): void {
+    if (saved.version === 3) { this.stream.restore(sessionId, saved.stream); this.query.restore(sessionId, saved.query); return }
     if (saved.version === 2) { this.stream.restore(sessionId, saved); return }
     const browser = this.browsers.get(sessionId)
     if (!browser || saved.version !== 1) throw new Error('invalidApplicationCheckpoint')
@@ -42,6 +48,8 @@ export class ApplicationRelay {
   }
   checkpoint(sessionId: string): ApplicationCheckpoint | undefined {
     const stream = this.stream.checkpoint(sessionId)
+    const query = this.query.checkpoint(sessionId)
+    if (stream && query) return { version: 3, stream, query }
     if (stream) return stream
     const browser = this.browsers.get(sessionId)
     if (!browser) return
@@ -49,18 +57,20 @@ export class ApplicationRelay {
     return saved
   }
   receiveBrowser(sessionId: string, message: Record<string, unknown>, now: number): void {
+    if (['applicationQuery', 'applicationQueryAck'].includes(String(message.type))) { this.query.receiveBrowser(sessionId, message, now); return }
     if (this.stream.has(sessionId)) { this.stream.receiveBrowser(sessionId, message, now); return }
     const browser = this.browsers.get(sessionId)
     if (!browser) return
     try {
       if (new TextEncoder().encode(JSON.stringify(message)).length > APPLICATION_REQUEST_BYTES) throw new Error('invalidApplicationRequest')
-      if (message.type === 'applicationHello' && (Object.keys(message).length === 1 || (Object.keys(message).length === 2 && message.version === 2))) {
+      if (message.type === 'applicationHello' && (Object.keys(message).length === 1 || (Object.keys(message).length === 2 && [2, 3].includes(message.version as number)))) {
         if (browser.ready) throw new Error('applicationAlreadyNegotiated')
         browser.ready = true
-        const version = message.version === 2 && this.station?.version === 2 ? 2 : this.station && this.station.version >= 1 ? 1 : 0
-        if (version === 2) this.stream.add(sessionId, now)
+        const version = message.version === 3 && this.station?.version === 3 ? 3 : Number(message.version) >= 2 && this.station && this.station.version >= 2 ? 2 : this.station && this.station.version >= 1 ? 1 : 0
+        if (version >= 2) this.stream.add(sessionId, now)
+        if (version === 3) this.query.add(sessionId, now)
         browser.peer.send(JSON.stringify({ type: 'applicationCapabilities', version,
-          commands: version === 2 ? STREAM_TOPICS : version === 1 ? APPLICATION_COMMANDS : [] }))
+          commands: version === 3 ? [...STREAM_TOPICS, QUERY_COMMAND] : version === 2 ? STREAM_TOPICS : version === 1 ? APPLICATION_COMMANDS : [] }))
         return
       }
       if (message.type === 'applicationAck' && Object.keys(message).length === 2 && typeof message.requestId === 'string') {
@@ -77,7 +87,8 @@ export class ApplicationRelay {
     } catch { this.closeBrowser(browser, 1008, 'invalidApplicationRequest') }
   }
   receiveStation(message: Record<string, unknown>, now: number): void {
-    if (message.type === 'applicationBatch' && this.station?.version === 2) { this.stream.receiveStation(message, now); return }
+    if (['applicationPage', 'applicationQueryError'].includes(String(message.type))) { this.query.receiveStation(message, now); return }
+    if (message.type === 'applicationBatch' && this.station && this.station.version >= 2) { this.stream.receiveStation(message, now); return }
     if (!this.station) return
     try {
       if (new TextEncoder().encode(JSON.stringify(message)).length > APPLICATION_MAX_BYTES) throw new Error('applicationLimit')
@@ -101,6 +112,7 @@ export class ApplicationRelay {
   }
   expire(now: number): void {
     this.stream.expire(now)
+    this.query.expire(now)
     for (const browser of this.browsers.values()) {
       if (browser.pending && now - browser.pending.at >= APPLICATION_TIMEOUT_MS) {
         this.closeBrowser(browser, 1008, 'applicationTimeout')
@@ -111,6 +123,8 @@ export class ApplicationRelay {
     const times = [...this.browsers.values()].flatMap(b => b.pending ? [b.pending.at + APPLICATION_TIMEOUT_MS] : [])
     const streamDeadline = this.stream.nextDeadline()
     if (streamDeadline !== null) times.push(streamDeadline)
+    const queryDeadline = this.query.nextDeadline()
+    if (queryDeadline !== null) times.push(queryDeadline)
     return times.length ? Math.min(...times) : null
   }
   private closeBrowser(browser: Browser, code: number, reason: string): void {

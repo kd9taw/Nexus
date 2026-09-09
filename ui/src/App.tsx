@@ -239,8 +239,13 @@ const OPERATE_TIERS: Tier[] = [
   'WSPR',
 ]
 
-export type BrowserWorkspace = { snapshot: AppSnapshot; settings: Settings; bandPlan: BandChannel[]; status: ReactNode; stale?: boolean; cwPhone?: boolean }
+export type BrowserWorkspace = { snapshot: AppSnapshot; settings: Settings; bandPlan: BandChannel[]; status: ReactNode; stale?: boolean; cwPhone?: boolean; collections?: boolean }
+import { CollectionStatus, useRemoteCollection } from './remote-web/collections'
+
 export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
+  const needsRead = useRemoteCollection('needs')
+  const spotsRead = useRemoteCollection('spots')
+  const [remoteSelection, setRemoteSelection] = useState<string | null>(null)
   const [theme, setTheme] = useTheme()
   // Field mode (outdoor/POTA): high contrast via data-contrast on <html>, larger auto-fit via
   // the useScale argument. Global — a fact about the station, like the theme.
@@ -862,31 +867,33 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   const refreshNeeds = useCallback(() => {
     getNeedAlerts()
       .then((alerts) => setNeedAlerts(alerts))
-      .catch(() => {})
+      .catch(() => { if (remote) setNeedAlerts([]) })
   }, [])
   useEffect(() => {
+    if (remote?.stale) { setNeedAlerts([]); return }
     refreshNeeds()
     const id = setInterval(refreshNeeds, 30_000)
     return () => clearInterval(id)
-  }, [refreshNeeds])
+  }, [refreshNeeds, remote?.stale])
   // Raw spot firehose for the Spots panel (ungated, all modes). Polled faster than needs
   // since it's a live "what's on the air" view; the backend command just reads the buffer.
   const [allSpots, setAllSpots] = useState<SpotRow[]>([])
   useEffect(() => {
+    if (remote?.stale) { setAllSpots([]); return }
     let live = true
     const load = () =>
       getAllSpots()
         .then((s) => {
           if (live) setAllSpots(s)
         })
-        .catch(() => {})
+        .catch(() => { if (live && remote) setAllSpots([]) })
     load()
     const id = setInterval(load, 15_000)
     return () => {
       live = false
       clearInterval(id)
     }
-  }, [])
+  }, [remote?.stale])
   // Gate CW/Phone needs by the operator's enabled modes — the backend emits voice/CW
   // needs unconditionally, visibility is the frontend's call. A pure-digital op's board,
   // roster colouring, and map highlight all derive from THIS gated set, so they stay
@@ -1118,7 +1125,7 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   }, [])
 
 
-  const activePeer = snap?.activePeer ?? null
+  const activePeer = remote ? remoteSelection ?? snap?.activePeer ?? null : snap?.activePeer ?? null
 
   // mark the active conversation as read whenever it updates
   useEffect(() => {
@@ -1165,10 +1172,11 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   }, [snap, activePeer, typingTick])
 
   const handleSelect = useCallback((call: string) => {
+    if (remote) { setRemoteSelection(call); return }
     void withErrorToast(() => apiSelectPeer(call), t('shell.error.selectStation')).then(
       (s) => s && setSnap(s),
     )
-  }, [])
+  }, [!!remote])
 
   // Confirm here rather than in StationList so every host (cockpit, detached panel) gets
   // the same guard. Unconditional is right: the recents list only renders threads that
@@ -2252,7 +2260,7 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // A visible navigation item is not evidence that its station API is connected.
   // In particular, never mount SettingsPanel with the projected operating view:
   // it expects complete configuration and could display absent values as defaults.
-  const isRemoteViewAvailable = (v: View): boolean => !remote || v === 'operate' || (!!remote.cwPhone && (v === 'cw' || v === 'phone'))
+  const isRemoteViewAvailable = (v: View): boolean => !remote || v === 'operate' || (!!remote.collections && ['needed', 'spots', 'logbook'].includes(v)) || (!!remote.cwPhone && (v === 'cw' || v === 'phone'))
 
   // Recall card → Logbook, filtered to the call (#192, kr4fqg: "click a previous contact and
   // land in the log"). Same shape as the `onOpenMemories` handoffs below — `undefined` when the
@@ -2566,11 +2574,11 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
           onSelect={handleSelect}
           onWork={handleWorkNeeded}
           onPoint={
-              (settings?.rotatorModel ?? 0) > 0 || settings?.rotatorHost?.trim()
+              !remote && ((settings?.rotatorModel ?? 0) > 0 || settings?.rotatorHost?.trim())
                 ? handlePointAntenna
                 : undefined
             }
-          onPopOut={() => void openPanelWindow('needed')}
+          onPopOut={remote ? undefined : () => void openPanelWindow('needed')}
           onOpenSettings={openSettingsAt}
           phoneSource={
             feedHealth
@@ -2931,9 +2939,15 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     </main>
   )
 
+  if (remote?.collections && ((effectiveView === 'needed' && needsRead?.phase !== 'ready') || (effectiveView === 'spots' && spotsRead?.phase !== 'ready'))) {
+    const unavailable = remote.stale || (effectiveView === 'needed' ? needsRead : spotsRead)?.phase === 'unavailable'
+    workspace = <main className="layout single"><p role="status">{unavailable ? t('remote.collectionUnavailable') : t('remote.collectionLoading')}</p></main>
+  }
+
   return (
     <div className="app" data-remote-stale={remote?.stale || undefined}>
       {remote?.status}
+      {remote?.collections && (effectiveView === 'needed' || effectiveView === 'spots') && <div className="remote-application-status"><CollectionStatus name={effectiveView === 'needed' ? 'needs' : 'spots'} /></div>}
       <TopBar
         mycall={snap.mycall}
         mygrid={snap.mygrid}
@@ -3044,7 +3058,7 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
         feedHealth={feedHealth}
         connectEnabled={features.isOn('connect')}
         dxpedEnabled={features.isOn('dxped')}
-        needsAvailable={!remote}
+        needsAvailable={!remote || (needsRead?.phase === 'ready' && !remote.stale)}
         onNavigate={handleView}
         // Profile-declared chip emphasis (dangling since the profiles landed).
         // A hand-blended feature set is tagged 'custom' (no profile) → default order.

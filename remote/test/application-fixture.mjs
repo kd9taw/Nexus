@@ -28,3 +28,21 @@ export async function applicationFixture() {
       candidates: [{ call: 'W1AW', best: true }], rst: null, name: null, state: 'cq', headline: '', prompt: '', recommended: null, workedCall: null },
   }
 }
+
+export function collectionFixture() {
+  const spot = { call: 'W1AW', entity: 'United States', zone: 5, band: '20m', freqMhz: 14.025,
+    mode: 'CW', spotter: 'K3LR', corroborators: [], ageSecs: 2, comment: '', licensed: true, spotterLocal: true }
+  return {
+    spots: { rows: [spot], meta: { unassisted: false } },
+    needs: { rows: [{ ...spot, tags: ['NewEntity'], priority: 100, headline: 'New entity', evidence: 'Local receiver', admittedAt: Math.floor(Date.now()/1000) }], meta: { unassisted: false } },
+    log: { rows: Array.from({length:130},(_,i)=>({ call:`K1T${String(129-i).padStart(3,'0')}`, band:'20m', freqMhz:14.074,
+      mode:'FT8', whenUnix:1788940800+129-i, country:'United States', grid:'FN31', confirmed:false, awardConfirmed:false,
+      rstSent:'-10', rstRcvd:'-12', timeKnown:true })), meta: { order:'newestFirst', limit:2000 } },
+    entities: { rows: [['United States', 38, -97]], meta:{} },
+    health: { rows: [], meta: { cluster:{enabled:true,state:'live',lastEventSecs:2}, pskr:{enabled:false,state:'off',lastEventSecs:null},
+      phoneCluster:{enabled:true,state:'connected',lastEventSecs:null},phoneClusterHost:'Test cluster',phoneSpotsSeen:1 } },
+    decodes: { rows: [{ sequence:1,firstSequence:1,slot:0,at:Date.now(),row:{message:'CQ ZL1HIST RF72',from:'ZL1HIST',freqHz:1500,snr:-12,dtSec:0.1,
+      tier:'FT8',isCq:true,directedToMe:false,worked:false,workedBand:false,newDxcc:true,newBand:false,newGrid:true,confirmedBand:false,
+      grid:'RF72',country:'New Zealand',rv:-1,mine:false,ap:false,lowConf:false} }], meta:{generation:'fixture:1',band:'80m',tier:'FT8',dropped:0,latestSequence:1} },
+  }
+}

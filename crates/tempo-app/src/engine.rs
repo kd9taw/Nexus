@@ -19046,6 +19046,11 @@ impl Engine {
         self.station.merge_qrz_report(text)
     }
 
+    /// Immutable log view for bounded read models. Does not sync, recover or write a file.
+    pub fn log_records(&self) -> &[QsoRecord] {
+        self.station.logbook.records()
+    }
+
     /// See [`StationCore::get_log`].
     pub fn get_log(&self) -> Vec<QsoRecord> {
         self.station.get_log()

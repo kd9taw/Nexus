@@ -3,8 +3,10 @@
 // DT in seconds, the audio offset in Hz, the UTC stamp, the band, the tier and the country.
 // So do the TOKENS the pane is built out of — gathered in DECODE_TOKENS below so a translator
 // can see the whole set at once. What moved is the prose around them.
-import { Fragment, useEffect, useRef, useState } from 'react'
+import { Fragment, useContext, useEffect, useRef, useState } from 'react'
 import { t } from '../i18n'
+import { RemoteHistoryContext, RemoteCollectionsContext } from '../remote-web/collections'
+import { useStationControl } from '../stationAccess'
 import { useRovingList } from '../useRovingList'
 import { usePinnedScroll } from '../usePinnedScroll'
 import type { DecodeRow, NeedAlert, Tier } from '../types'
@@ -234,6 +236,11 @@ export function OperateDecodes({
   hideExcludedCountries = true,
   myGrid = '',
 }: Props) {
+  const control = useStationControl()
+  const remoteHistory = useContext(RemoteHistoryContext)
+  const remoteCollections = useContext(RemoteCollectionsContext)
+  const historySeen = useRef({ generation: '', sequence: 0 })
+  const historyErased = useRef(0)
   // Cockpit-owned history when provided (survives layout remounts); private otherwise.
   const localHistRef = useRef<DecodeHistory | null>(null)
   if (history == null && localHistRef.current == null) {
@@ -309,9 +316,23 @@ export function OperateDecodes({
 
   // Ingest this poll's decode list into the rolling history.
   useEffect(() => {
-    histRef.current.ingest(decodes, slot)
+    if (remoteCollections) {
+      if (!remoteHistory) return
+      if (historySeen.current.generation !== remoteHistory.generation) {
+        histRef.current.reset()
+        historyErased.current = 0
+        historySeen.current = { generation: remoteHistory.generation, sequence: 0 }
+      }
+      if (remoteHistory.tier !== tier || (band && remoteHistory.band !== band)) return
+      for (const entry of [...remoteHistory.rows].sort((a, b) => a.sequence - b.sequence)) {
+        if (entry.sequence > historySeen.current.sequence) {
+          if (entry.firstSequence > historyErased.current) histRef.current.ingest([entry.row], entry.slot, entry.at)
+          historySeen.current.sequence = entry.sequence
+        }
+      }
+    } else histRef.current.ingest(decodes, slot)
     setTick((t) => t + 1)
-  }, [decodes, slot])
+  }, [decodes, slot, remoteHistory, remoteCollections, band, tier])
 
   // Inbound UDP Clear: when clearTick changes (skip mount), wipe without
   // calling onErase (no echo loop back to the logger).
@@ -319,6 +340,7 @@ export function OperateDecodes({
   useEffect(() => {
     if (clearTick !== clearTickSeen.current) {
       clearTickSeen.current = clearTick
+      historyErased.current = historySeen.current.sequence
       histRef.current.erase()
       repin()
       setTick((t) => t + 1)
@@ -405,10 +427,11 @@ export function OperateDecodes({
   // Wipe this pane (WSJT-X "Erase") and re-pin to the bottom.
   // Also calls onErase so the cockpit can mirror the gesture to loggers.
   const erase = () => {
+    historyErased.current = historySeen.current.sequence
     histRef.current.erase()
     repin()
     setTick((t) => t + 1)
-    onErase?.()
+    if (control) onErase?.()
   }
 
   const selectedUp = selectedCall?.trim().toUpperCase() || null
@@ -416,6 +439,7 @@ export function OperateDecodes({
   // WSJT-X double-click dispatch: Alt = toggle session ignore; Ctrl = populate
   // DX fields + move RX onto the signal (no QSO start, no TX arm); plain = work.
   const handleDouble = (e: React.MouseEvent, d: DecodeRow) => {
+    if (!control) return
     if (!d.from) return
     if (e.altKey) {
       onToggleIgnore?.(d.from)
@@ -452,6 +476,7 @@ export function OperateDecodes({
 
   return (
     <section className={`operate-decodes${compact ? ' compact' : ''}`}>
+      {remoteCollections && <span className="dim" role="status">{!remoteHistory ? t('remote.historyUnavailable') : remoteHistory.dropped ? t('remote.historyGap', { count: remoteHistory.dropped }) : t('remote.historySession')}</span>}
       <div className="od-head">
         <h2>{title}</h2>
         {compact ? (

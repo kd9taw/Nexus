@@ -152,6 +152,29 @@ test('actual native controller pairs, stores authority, publishes real DTOs, dis
     assert.deepEqual([...received].sort(), [...streaming.commands].sort())
     stream.send({ type: 'applicationSubscribe', topics: [], requestId: null })
     stream.close()
+    const { value: queryTicket } = await browser.post(`stations/${stationId}/ticket`)
+    const query = await browser.open(stationId, queryTicket.ticket)
+    await query.take(value => value.type === 'session')
+    query.send({ type: 'applicationHello', version: 3 })
+    const queryCapabilities = await query.take(value => value.type === 'applicationCapabilities')
+    assert.equal(queryCapabilities.version, 3)
+    assert.ok(queryCapabilities.commands.includes('get_remote_page'))
+    for (const collection of ['entities', 'log', 'decodes']) {
+      let cursor = null, count = 0, snapshotId = null
+      do {
+        const requestId = crypto.randomUUID()
+        query.send({ type: 'applicationQuery', requestId, collection, cursor, search: '', unconfirmed: false, after: null })
+        const page = await query.take(value => value.requestId === requestId)
+        assert.equal(page.type, 'applicationPage', 'real native producer must decode and answer the closed query envelope')
+        assert.equal(page.offset, count)
+        if (snapshotId) assert.equal(page.snapshotId, snapshotId)
+        snapshotId = page.snapshotId; count += page.rows.length; cursor = page.nextCursor
+        assert.ok(page.rows.length <= 128 && page.retained <= 3000)
+        query.send({ type: 'applicationQueryAck', requestId })
+      } while (cursor)
+      if (collection === 'entities') assert.ok(count > 300, 'positive control: actual station DXCC table crossed multiple pages')
+    }
+    query.close()
     const second = await socket.take(value => value.type === 'observation')
     assert.ok(second.frame.sequence > first.frame.sequence)
     assert.equal((await probe.send({ type: 'disable' })).ok, true)

@@ -111,6 +111,10 @@ impl Client {
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
 enum ServerMessage {
+    ApplicationQuery {
+        #[serde(flatten)]
+        request: super::query::Request,
+    },
     ApplicationWatch {
         #[serde(rename = "watchId")]
         watch_id: String,
@@ -151,6 +155,7 @@ pub struct Feeds {
     pub monitor: crate::remote_monitor::Publisher,
     pub spectrum: Option<tempo_app::engine::SpectrumFeed>,
     pub meters: tempo_app::engine::MeterFeed,
+    pub sources: Option<super::query::Sources>,
 }
 pub async fn connected(
     client: &Client,
@@ -187,6 +192,10 @@ pub async fn connected(
         "x-nexus-application-stream-version",
         "2".parse().map_err(|_| "invalidResponse")?,
     );
+    request.headers_mut().insert(
+        "x-nexus-application-query-version",
+        "1".parse().map_err(|_| "invalidResponse")?,
+    );
     let config = WebSocketConfig::default()
         .max_message_size(Some(512))
         .max_frame_size(Some(512))
@@ -216,6 +225,15 @@ pub async fn connected(
     let mut pending = None;
     let mut application =
         super::application::Publisher::with_feeds(feeds.spectrum.clone(), feeds.meters.clone());
+    let queries = std::sync::Arc::new(std::sync::Mutex::new(super::query::Publisher::default()));
+    application.journal = Some(
+        queries
+            .lock()
+            .map_err(|_| "applicationUnavailable")?
+            .journal
+            .clone(),
+    );
+    let mut query_task: Option<tokio::task::JoinHandle<String>> = None;
     let mut stream = super::application::Stream::default();
     let mut application_tick = tokio::time::interval(Duration::from_millis(100));
     application_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -227,6 +245,20 @@ pub async fn connected(
                 Some(Ok(Message::Text(text))) => {
                     let message: ServerMessage = serde_json::from_str(&text).map_err(|_| "invalidResponse")?;
                     match message {
+                        ServerMessage::ApplicationQuery { request } => {
+                            if !request.valid() { return Err("invalidResponse"); }
+                            if query_task.is_some() {
+                                let data = json!({ "type": "applicationQueryError", "requestId": request.request_id, "error": "applicationBusy" }).to_string();
+                                tokio::time::timeout(Duration::from_secs(2), socket.send(Message::Text(data.into()))).await.map_err(|_| "serviceUnavailable")?.map_err(|_| "serviceUnavailable")?;
+                            } else {
+                                let engine = engine.clone(); let queries = queries.clone(); let sources = feeds.sources.clone();
+                                query_task = Some(tokio::task::spawn_blocking(move || {
+                                    let now = Instant::now();
+                                    queries.lock().map_err(|_| "applicationUnavailable").and_then(|mut q| q.read(&request, &engine, sources.as_ref(), now))
+                                        .unwrap_or_else(|error| json!({ "type": "applicationQueryError", "requestId": request.request_id, "error": error }).to_string())
+                                }));
+                            }
+                        }
                         ServerMessage::ApplicationWatch { watch_id, topics, request_id } => stream.watch(watch_id, topics, request_id)?,
                         ServerMessage::ApplicationCredit { watch_id, previous_request_id, request_id } => stream.credit(&watch_id, &previous_request_id, request_id)?,
                         ServerMessage::ApplicationRead { request_id, command, revision } => {
@@ -255,6 +287,17 @@ pub async fn connected(
                 },
                 Some(Ok(Message::Close(_))) | None => return Err("serviceUnavailable"),
                 _ => return Err("invalidResponse"),
+            },
+            result = async { match query_task.as_mut() { Some(task) => task.await, None => std::future::pending().await } }, if query_task.is_some() => {
+                query_task = None;
+                let data = result.map_err(|_| "applicationUnavailable")?;
+                tokio::select! {
+                    biased;
+                    _ = stop.changed() => return Ok(()),
+                    result = tokio::time::timeout(Duration::from_secs(2), socket.send(Message::Text(data.into()))) => {
+                        result.map_err(|_| "serviceUnavailable")?.map_err(|_| "serviceUnavailable")?;
+                    }
+                }
             },
             _ = application_tick.tick(), if stream.active() => {
                 if let Some(data) = stream.next(&mut application, engine, Instant::now())? {

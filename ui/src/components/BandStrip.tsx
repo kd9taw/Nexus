@@ -1,3 +1,4 @@
+import { useStationControl } from '../stationAccess'
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every operator-visible
 // string comes from the catalog. What does NOT: the band and mode names (`modeLabel` is CW or
 // SSB), the scale's edge frequencies, the dial reading, and every value in a spot's tooltip —
@@ -95,6 +96,7 @@ export function BandStrip({
   wheelSensitivity,
   onSnap,
 }: Props) {
+  const control = useStationControl()
   // Legend is opt-in but remembered — it answers "what do the colours mean?" once, then
   // stays out of the way. Default ON the first time so the key is discoverable.
   const [showLegend, setShowLegend] = useState(
@@ -115,7 +117,7 @@ export function BandStrip({
   useWheelTune(trackEl, {
     dialMhz,
     sideband: sideband || 'USB',
-    enabled: tuneEnabled === true,
+    enabled: control && tuneEnabled === true,
     stepHz: stepHz ?? 1000,
     sensitivity: wheelSensitivity,
     onSnap,
@@ -141,7 +143,7 @@ export function BandStrip({
       <div className="bandstrip">
         <div className="bandstrip-head">
           <span className="bandstrip-count">{t('bandStrip.offPlan', { band: band || '—' })}</span>
-          {onPopOut && (
+          {control && onPopOut && (
             <button
               type="button"
               className="bandstrip-popout"
@@ -199,7 +201,7 @@ export function BandStrip({
         >
           {t('bandStrip.legend.label')}
         </button>
-        {onPopOut && (
+        {control && onPopOut && (
           <button
             type="button"
             className="bandstrip-popout"
@@ -215,7 +217,7 @@ export function BandStrip({
         ref={trackEl}
         className="bandstrip-track"
         title={
-          tuneEnabled === true
+          control && tuneEnabled === true
             ? t('bandStrip.track.title.tunable', { band, lo: lo.toFixed(3), hi: hi.toFixed(3) })
             : t('bandStrip.track.title', { band, lo: lo.toFixed(3), hi: hi.toFixed(3) })
         }
@@ -262,8 +264,9 @@ export function BandStrip({
               type="button"
               className="bandstrip-spot"
               style={{ left: `${pct(s.freqMhz)}%`, opacity }}
-              title={t('bandStrip.spot.title', { detail })}
-              onClick={() => onWorkSpot(s)}
+              title={control ? t('bandStrip.spot.title', { detail }) : detail}
+              disabled={!control}
+              onClick={() => { if (control) onWorkSpot(s) }}
             >
               {beacon && (
                 <span className={`bandstrip-type spot-type-badge ${beacon.cls}`}>{beacon.ch}</span>

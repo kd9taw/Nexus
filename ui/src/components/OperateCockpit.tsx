@@ -874,7 +874,7 @@ export function OperateCockpit({
   })
     ? (snap.qso?.dxcall ?? null)
     : null
-  const recallCard = shownRecallCall ? (
+  const recallCard = control && shownRecallCall ? (
     <OperateRecall snap={snap} call={shownRecallCall} mode={tier} onOpenLog={onOpenLogbook} />
   ) : null
 

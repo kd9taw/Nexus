@@ -22,7 +22,7 @@ port or router forwarding is required. The desktop is pinned to
 
 ## Existing Nexus workspace
 
-**Open Nexus** loads the same `ui/src/App.tsx`, Operate, CW and Phone components as the
+**Open Nexus** loads the same `ui/src/App.tsx`, Operate, CW, Phone, Needed, Spots and Logbook components as the
 desktop. The explicit adapter below `api.ts` owns one authenticated station
 session. It does not install a Tauri global or forward arbitrary command names.
 Native use still selects Tauri, and the existing LAN TV transport remains separate.
@@ -32,6 +32,9 @@ the version 2 stream extension separately. The public service configuration and
 browser hello negotiate the supported version. Version 1 keeps its original five
 reads: `get_snapshot`, `get_settings`, `get_band_plan`, `get_spectrum_row` and
 `get_meters`. Version 2 adds the passive `get_scope_snapshot` and `get_cw_state`.
+Version 3 adds `get_remote_page`, negotiated only when the station also advertises
+`x-nexus-application-query-version: 1`. Its collection channel is independent of
+the unchanged seven stream topics. Older browsers still negotiate versions 1/2.
 An older pilot keeps its existing FT observation; an older monitor-only installer
 reports the workspace update requirement without losing compact observation.
 
@@ -60,11 +63,37 @@ application values or contact history. After hibernation, a new watch epoch requ
 full samples; old epochs cannot refresh a restored session. A slow or failed browser is retired
 independently of the station and other approved observers.
 
+Collection queries address only decodes, needs, spots, logbook, DXCC locations and
+feed health. Pages contain at most 128 rows and 256 KiB. Each browser has one
+outstanding query/result, a three-second deadline and a 16-request/second ceiling;
+the room also caps the aggregate at 32/second using persisted per-browser counters.
+The station runs one collection worker separately from the live socket loop.
+Sealed snapshots expire after 60 seconds; their cursors bind collection, search,
+filter and offset. An expired cursor requires a fresh snapshot. At most eight
+captures and 16 MiB of encoded collection payload are retained at the station;
+object overhead is additional. The cloud retains routing metadata only.
+
+Logbook search covers the station's in-memory log, retaining the newest 2,000
+matches before the byte cap. The existing table shows page and match counts and
+identifies the retained window. Needs/spots retain up to 3,000 rows, with visible
+counts when capped. Award/privilege/source calculations are shared with native
+Nexus. Needs scoring runs after releasing the engine lock. Reads do not invoke
+shared-log recovery, write QSOs, import, confirm, export or upload contacts.
+
+The independent decode display journal retains up to 3,000 rows from the current
+Remote connection, with a unique session/context identifier and monotonic sequence.
+It samples existing snapshot publications; it is not an offline or lossless decode
+archive. Queries fetch new/updated rows when snapshot decode context changes.
+Reconnect, band/tier context changes and retention limits are explicit in the UI.
+It does not access or change the FT control history or start decoding/DSP work.
+
 Operate, CW and Phone have partial observation support in this preview. CW includes
 the decoder transcript, sent-text history and callsign candidates. CW/Phone share
-the station scope, meters, settings and amplifier status. Remote logging/history,
-spots/needs, memories, rotator and voice-keyer/audio data remain unavailable and
-are identified in their existing panes. Other navigation destinations display
+the station scope, meters, settings, amplifier status and observed band activity.
+Needed, Spots and the paged Logbook now support read-only browsing. Existing QRZ
+profile links open in the browser, without contacting the station or its vault.
+QSO entry, cockpit recall, memories, rotator and voice-keyer/audio data remain
+unavailable and are identified in their existing panes. Other navigation destinations display
 their availability limit, and the full Settings panel is not mounted with partial
 settings. Station controls, including the existing amplifier controls, are
 disabled; all mutation names are also refused by the transport and native parser.
@@ -75,7 +104,7 @@ This read adapter is an incremental integration boundary, not paid-service
 completion. Before enabling remote operation, the protocol needs explicit station
 control leases, expiring and deduplicated commands, native authorization at
 execution, and attended transmitter/amplifier acceptance. Full read parity also
-needs bounded history queries and remaining per-feature data contracts. Shared
+needs cockpit recall, additional history sources and remaining per-feature data contracts. Shared
 subscriptions require measured load and WAN acceptance before commercial capacity
 claims. Audio needs its own negotiated media path. Billing must
 materialize service entitlement separately from browser trust and station control;

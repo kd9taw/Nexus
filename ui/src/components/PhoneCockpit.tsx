@@ -1,3 +1,4 @@
+import { CollectionStatus, useRemoteCollection } from '../remote-web/collections'
 import { useStationControl } from '../stationAccess'
 // ⚠️ THIS FILE IS ON THE **PARTIAL** LIST (i18n/hardcoded-strings.test.ts), and for one
 // reason only: THE PTT ROW, the pinned dock row this cockpit's stop line rests on, is still
@@ -374,6 +375,7 @@ const FLEX_SPANS = [
 
 export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, fieldDay, phoneMode, wheelSensitivity, spots, needByCall, typeByCall, onWorkSpot, onRecallMemory, onOpenMemories, onOpenSettings, onOpenLogbook, panels }: Props) {
   const control = useStationControl()
+  const spotsRead = useRemoteCollection('spots')
   // Live S-meter (shared 100 ms poll, lock-free backend) — used to arrive via the 300 ms
   // snapshot on top of the backend's own sampling, which read as a laggy needle. smeterDb-only
   // subscription: the cockpit re-renders when the S-meter changes, never on RX-level churn.
@@ -899,7 +901,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   const bandPane =
     hasBandPane && onWorkSpot ? (
       <CockpitPaneFrame title={t('phone.pane.bandActivity.title')} paneId="bandActivity" fit="content">
-        {control ? <BandStrip
+        {control || spotsRead?.phase === 'ready' ? <BandStrip
           band={snap.radio.band}
           dialMhz={snap.radio.dialMhz}
           txAllowed={snap.radio.txAllowed}
@@ -917,6 +919,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
           wheelSensitivity={wheelSensitivity}
           onSnap={onSnap}
         /> : <p className="dim" role="status">{t('remote.spotsUnavailable')}</p>}
+          {!control && <CollectionStatus name="spots" />}
       </CockpitPaneFrame>
     ) : null
 
