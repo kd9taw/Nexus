@@ -70,7 +70,6 @@ export const JA: PartialCatalog = {
   "remote.historySession": "このリモートセッションの履歴",
   "remote.historyGap": "セッション履歴：古い {{count}} 行の保持期限が切れました。",
   "remote.historyUnavailable": "リモート履歴を取得できません。再接続すると新しい履歴が始まります。",
-  "remote.loggingUnavailable": "リモートQSO入力とコックピットの交信履歴照会はまだ接続されていません。",
   "remote.voiceKeyerUnavailable": "リモート音声とボイスキーヤーの録音・再生はまだ接続されていません。",
   "remote.spotsUnavailable": "リモートスポットデータを取得できません。",
   "remote.memoriesUnavailable": "メモリーはまだRemoteに接続されていません。",

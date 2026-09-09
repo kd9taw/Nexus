@@ -80,7 +80,6 @@ export const FR: PartialCatalog = {
   "remote.historySession": "Historique de cette session distante",
   "remote.historyGap": "Historique de session : {{count}} anciennes lignes ont expiré.",
   "remote.historyUnavailable": "Historique distant indisponible ; une reconnexion démarre un nouvel historique.",
-  "remote.loggingUnavailable": "La saisie de QSO et le rappel des contacts dans le cockpit ne sont pas encore connectés.",
   "remote.voiceKeyerUnavailable": "L’audio distant ainsi que l’enregistrement et la lecture du manipulateur vocal ne sont pas encore reliés.",
   "remote.spotsUnavailable": "Données de spots distants indisponibles.",
   "remote.memoriesUnavailable": "Les mémoires ne sont pas encore reliées à Remote.",

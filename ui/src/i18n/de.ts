@@ -65,7 +65,6 @@ export const DE: PartialCatalog = {
   "remote.historySession": "Verlauf dieser Remote-Sitzung",
   "remote.historyGap": "Sitzungsverlauf: {{count}} ältere Zeilen sind abgelaufen.",
   "remote.historyUnavailable": "Remote-Verlauf nicht verfügbar; eine neue Verbindung beginnt einen neuen Verlauf.",
-  "remote.loggingUnavailable": "Remote-QSO-Eingabe und Rückblick im Cockpit sind noch nicht angebunden.",
   "remote.voiceKeyerUnavailable": "Remote-Audio sowie Aufnahme und Wiedergabe des Sprachkeyers sind noch nicht angebunden.",
   "remote.spotsUnavailable": "Remote-Spotdaten nicht verfügbar.",
   "remote.memoriesUnavailable": "Remote-Speicher sind noch nicht angebunden.",

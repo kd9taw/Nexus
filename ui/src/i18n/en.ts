@@ -144,7 +144,6 @@ export const EN = {
   "remote.historySession": "History from this Remote session",
   "remote.historyGap": "Older rows removed from session history: {{count}}.",
   "remote.historyUnavailable": "Remote history unavailable; reconnect starts a new history window.",
-  "remote.loggingUnavailable": "Remote QSO entry and cockpit recall are not connected yet.",
   "remote.voiceKeyerUnavailable": "Remote audio and voice-keyer recordings and playback are not connected yet.",
   "remote.spotsUnavailable": "Remote spot data unavailable.",
   "remote.memoriesUnavailable": "Remote memories are not connected yet.",
