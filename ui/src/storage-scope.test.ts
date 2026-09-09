@@ -32,6 +32,11 @@ export const PER_SURFACE = [
   'nexus.connect.intent',
   'nexus.connect.layers',
   'nexus.connect.map3d',
+  // The map's full-screen chrome-hide. Per-surface for the same reason map3d is — it is a
+  // statement about ONE window — and the one per-surface key here that is deliberately read
+  // WITHOUT `surfaceGet`'s inheritance (MapView's `loadFull`): a window shape carried into a
+  // brand-new pop-out opens it with chrome the operator never hid.
+  'nexus.connect.mapfull',
   'nexus.connect.projection',
   'nexus.decodes.filter',
   'nexus.decodes.hideB4',

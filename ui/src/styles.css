@@ -1751,6 +1751,22 @@ button.nb-chip:hover {
 [data-viewport='xs'] .connect-strip {
   grid-template-columns: 1fr;
 }
+/* FULL-SCREEN MAP — one cell, no frame. The header, the four rail panes and the bottom
+   strip are UNMOUNTED by ConnectView, so this only has to collapse the grid they were laid
+   out in; the padding and gap go too, or the "full screen" map would sit in a 12px border.
+   ⚠️ SPECIFICITY, NOT SOURCE ORDER: `[data-viewport='xs'] .connect` is (0,2,0) and rewrites
+   all three template properties for the stacked layout, so the two-class descendant form
+   (0,3,0) is what makes this hold at EVERY viewport class. A bare `.connect.map-full` would
+   tie at (0,2,0) and win only by sitting later in the file — one reordering from silently
+   restacking a full-screen map on a small window. Grower stays minmax(0,1fr): the canvas is
+   100%-width/height and a bare 1fr lets it run away. */
+.connect-shell.map-full .connect {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  grid-template-areas: 'center';
+  padding: 0;
+  gap: 0;
+}
 .connect-hero-row {
   display: flex;
   align-items: flex-start;
@@ -2534,8 +2550,12 @@ button.nb-chip:hover {
   color: var(--alert-warning);
   border-color: var(--alert-warning);
 }
-.map-reset {
-  margin-left: auto;
+/* Toolbar buttons that stand alone (not in a .map-proj segmented group): Reset, and the
+   full-screen / Layers pair beside it. One look, one rule; only Reset takes the auto margin
+   that pushes the trailing group to the right edge — repeating it on each of the three would
+   split the free space BETWEEN them instead of grouping them. */
+.map-reset,
+.map-chrome-btn {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
@@ -2546,6 +2566,16 @@ button.nb-chip:hover {
   padding: var(--space-1) var(--space-2);
   font-size: var(--fs-label);
   cursor: pointer;
+  white-space: nowrap;
+}
+.map-reset {
+  margin-left: auto;
+}
+/* Pressed state, matching the segmented groups' `.map-proj button.active`. */
+.map-chrome-btn.active {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-color: var(--accent);
 }
 .map-body {
   display: flex;
@@ -3077,6 +3107,27 @@ button.nb-chip:hover {
   border: 1px solid var(--border);
   background: transparent;
   color: var(--text);
+}
+
+/* FULL-SCREEN MAP — the Layers panel PEEKED over the map instead of beside it.
+   In flow it is a 200px column, so opening it to flip one checkbox would narrow the canvas,
+   re-fire the ResizeObserver and re-project the whole map, twice per peek. Out of flow the
+   map's geometry never moves. Opaque background because it sits over live pixels (the
+   sticky/pinned-surface rule); it keeps its own `overflow:auto` from the base rule, so it is
+   still the only scroller in this corner. `.map-body` is only made a containing block here —
+   every existing overlay (hover, path, legends, insight rail) hangs off `.map-canvas-wrap`,
+   which is already relative, so nothing else moves. */
+.map-view.map-full .map-body {
+  position: relative;
+}
+.map-view.map-full .map-layers {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 6;
+  background: var(--bg-elev);
+  box-shadow: var(--elev-2);
 }
 
 /* Logbook header action buttons (Import ADIF / Log QSO). */

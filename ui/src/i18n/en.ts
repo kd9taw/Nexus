@@ -1528,6 +1528,13 @@ export const EN = {
   'map.reset.label': 'Reset',
   'map.reset.title': 'Reset view + layers',
 
+  // Full screen: the map fills the window and everything framing it is hidden. The SAME
+  // button comes back out, so the label states what pressing it does now.
+  'map.full.enter.label': 'Full screen',
+  'map.full.enter.title': 'Fill the window with the map — hide the panels',
+  'map.full.exit.label': 'Exit full screen',
+  'map.full.exit.title': 'Bring the panels back (Esc)',
+
   // `SP` / `LP` are the ham abbreviations for the two great-circle paths and stay in the
   // component as named constants, exactly as the Q-codes on the logbook row do.
   'map.path.aria': 'Path',
@@ -1570,6 +1577,9 @@ export const EN = {
 
   // The layer panel. The layer IDS are code; only these names are read.
   'map.layers.head': 'Layers',
+  // The full-screen toolbar's way back to the panel it hid (it reuses the heading above as
+  // its label, so only the tooltip is new).
+  'map.layers.toggle.title': 'Show or hide the Layers panel',
   'map.layer.opacity.aria': '{{layer}} opacity',
   'map.layer.daynight.label': 'Day / night (greyline)',
   'map.layer.relief.label': 'Relief (World view)',
