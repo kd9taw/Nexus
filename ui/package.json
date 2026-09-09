@@ -1,9 +1,9 @@
 {
   "name": "tempo-ui",
   "private": true,
-  "version": "1.11.1",
+  "version": "1.11.1-beta.2",
   "type": "module",
-  "description": "Nexus web UI — unified ham digital-ops nerve center",
+  "description": "Nexus web UI \u2014 unified ham digital-ops nerve center",
   "author": "KD9TAW <kd9taw@protonmail.com>",
   "license": "GPL-3.0-only",
   "repository": {
