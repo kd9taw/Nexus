@@ -1,11 +1,19 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
-import type { FdClubStatus, FieldDayQso, FieldDayStatus, ModeRequest, Settings } from '../types'
-import { exportLog, fdClubExport, getSettings, setSettings, setFdOperator, openPanelWindow, saveTextToDownloads, type FdRulesetDto } from '../api'
+import type {
+  ContestBoard,
+  FdClubStatus,
+  FieldDayQso,
+  FieldDayStatus,
+  ModeRequest,
+  Settings,
+} from '../types'
+import { exportLog, fdClubExport, fdSetUpload, getSettings, setSettings, setFdOperator, openPanelWindow, saveTextToDownloads, type FdRulesetDto } from '../api'
 import { FdAdvisories } from './FdAdvisories'
 import { pushToast } from '../toast'
 import { fdEventFromWindow, fdHeaderSubtitle, FD_EVENT_NAMES, type FdKind } from '../fdEvent'
 import { usePinnedScroll } from '../usePinnedScroll'
 import { ARRL_SECTIONS_BY_DIVISION, ARRL_SECTION_TOTAL } from '../features/arrlSections'
+import { contestDomain, type DomainGroup } from '../features/contestDomains'
 import { t } from '../i18n'
 import { T } from '../i18n/T'
 import { bandColor } from '../bandColors'
@@ -464,6 +472,111 @@ export function SectionsBoard({ workedSet }: { workedSet: Set<string> }) {
                   >
                     {worked && <span aria-hidden="true">✓</span>}
                     {s.code}
+                  </span>
+                )
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+/**
+ * ⭐ **THE MULTIPLIER DISPLAY (spec §9) — one block per board the session declares.**
+ *
+ * The generalisation of [`SectionsBoard`] above: CQ WW shows two blocks (zone,
+ * country), a QSO party shows one, and Field Day shows the one it has always shown.
+ *
+ * The board LIST comes from the engine (`FieldDayStatus.boards`), which builds it from
+ * the ruleset's `MultiplierRule`s or — for a ruleset that declares none, which is both
+ * Field Day events — from the received slots that have a closed value set. The UI
+ * never re-derives what counts as a multiplier.
+ *
+ * The CELL UNIVERSE comes from `features/contestDomains.ts`, keyed by the domain id on
+ * the board. It is not on the wire: 85 section codes on every 300 ms snapshot to draw
+ * a static grid is a cost with no buyer.
+ *
+ * ⚠️ A board whose domain this build has no value set for renders WHAT WAS WORKED and
+ * says nothing about a total — an honest empty universe, not a fabricated one.
+ */
+export function MultiplierBoards({ boards }: { boards: ContestBoard[] }) {
+  return (
+    <>
+      {boards.map((b) => (
+        <MultiplierBoard board={b} key={b.id} />
+      ))}
+    </>
+  )
+}
+
+function MultiplierBoard({ board }: { board: ContestBoard }) {
+  const domain = contestDomain(board.domain)
+  const workedSet = useMemo(
+    () => new Set(board.worked.map((v) => v.trim().toUpperCase())),
+    [board.worked],
+  )
+  // Field Day's board IS the sections board, down to its strings — the block an
+  // operator has been reading for releases. Nothing about it moves here.
+  const isSections = board.domain === 'fd_sections' || board.domain === 'arrl_sections'
+  const groups: DomainGroup[] = domain
+    ? domain.groups
+    : // No value set for this domain: the universe is what has been worked.
+      [{ label: '', values: [...workedSet].sort().map((c) => ({ code: c, name: c })) }]
+  const total = domain ? domain.total : workedSet.size
+  const workedCount = groups.reduce(
+    (n, g) => n + g.values.filter((v) => workedSet.has(v.code)).length,
+    0,
+  )
+  return (
+    <div
+      style={SECTIONS_BOARD_WRAP}
+      aria-label={
+        isSections ? t('fieldDay.sections.aria') : t('fieldDay.board.aria', { name: board.id })
+      }
+    >
+      <div style={SECTIONS_HEADER}>
+        <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text)' }}>
+          {/* A board id that is not Field Day's is a SLOT ID — an invariant token, shown
+              as itself rather than run through a catalog that has no word for it. */}
+          {isSections ? t('fieldDay.sections.head') : board.id}
+        </span>
+        <span style={{ fontSize: 13, color: 'var(--text-dim)' }}>
+          {isSections
+            ? t('fieldDay.sections.count', { worked: workedCount, total })
+            : t('fieldDay.board.count', { worked: workedCount, total })}
+        </span>
+      </div>
+      <div style={SECTIONS_GRID}>
+        {groups.map((g) => (
+          <div style={DIVISION_BLOCK} key={g.label}>
+            {g.label !== '' && <span style={DIVISION_LABEL}>{g.label}</span>}
+            <div style={DIVISION_CELLS}>
+              {g.values.map((v) => {
+                const worked = workedSet.has(v.code)
+                const vals = { code: v.code, name: v.name, division: g.label }
+                return (
+                  <span
+                    key={v.code}
+                    style={worked ? CELL_WORKED : CELL_UNWORKED}
+                    title={
+                      g.label !== ''
+                        ? worked
+                          ? t('fieldDay.sections.cell.worked.title', vals)
+                          : t('fieldDay.sections.cell.notWorked.title', vals)
+                        : worked
+                          ? t('fieldDay.board.cell.worked.title', vals)
+                          : t('fieldDay.board.cell.notWorked.title', vals)
+                    }
+                    aria-label={
+                      worked
+                        ? t('fieldDay.sections.cell.worked.aria', { name: v.name })
+                        : t('fieldDay.sections.cell.notWorked.aria', { name: v.name })
+                    }
+                  >
+                    {worked && <span aria-hidden="true">✓</span>}
+                    {v.code}
                   </span>
                 )
               })}
@@ -1104,7 +1217,14 @@ export function FieldDayScoreboard({
       </div>
 
       {/* SECTIONS BOARD */}
-      <SectionsBoard workedSet={workedSet} />
+      {/* THE MULTIPLIER DISPLAY — one block per board the session declares. A snapshot
+          from a build older than `boards` still has its sections board: the fallback is
+          the shipped component, not an empty screen. */}
+      {fieldDay?.boards?.length ? (
+        <MultiplierBoards boards={fieldDay.boards} />
+      ) : (
+        <SectionsBoard workedSet={workedSet} />
+      )}
     </>
   )
 }
@@ -1147,6 +1267,28 @@ export function FieldDayView({ fieldDay, onSetMode, fdActive = false, fdRuleset 
   // Worked-section set for the summary/dupe exports (the board derives its own
   // inside FieldDayScoreboard).
   const workedSet = useMemo(() => workedSectionSet(fieldDay), [fieldDay])
+
+  // The §18.1 upload control. The DESTINATIONS are mirrored locally so a click reads
+  // back instantly — the snapshot that carries the engine's answer arrives on the next
+  // poll — and re-synced from the snapshot whenever it moves, so the mirror can never
+  // outlive the session it describes.
+  const uploadFromSnap = (fieldDay?.upload?.destinations ?? []).join(',')
+  const [uploadDests, setUploadDests] = useState<string[]>(
+    fieldDay?.upload?.destinations ?? [],
+  )
+  useEffect(() => {
+    setUploadDests(uploadFromSnap === '' ? [] : uploadFromSnap.split(','))
+  }, [uploadFromSnap])
+  const saveUpload = async (enabled: boolean, destinations: string[]) => {
+    setUploadDests(destinations)
+    try {
+      await fdSetUpload(enabled, destinations)
+    } catch (e) {
+      // Put the mirror back where the engine still has it, then say so.
+      setUploadDests(uploadFromSnap === '' ? [] : uploadFromSnap.split(','))
+      pushToast(String(e), 'error')
+    }
+  }
 
   // One optimistic writer for every scoring field on this panel (earned list, plan list,
   // power multiplier) — the shape the single bonus checkbox already used. Each patches ONE
@@ -1368,6 +1510,60 @@ export function FieldDayView({ fieldDay, onSetMode, fdActive = false, fdRuleset 
             {busy === 'dupesheet' ? t('fieldDay.export.busy') : t('fieldDay.export.dupeSheet.label')}
           </button>
         </div>
+
+        {/* ⭐ WHERE THIS SESSION'S MERGED CONTACTS GO — §18.1, per session, default OFF.
+            It answers "Nexus sends my contacts to my general logbook — how do I change
+            it for the QSO party?" as a property of the RUN, so it ends with the run
+            instead of being a global the operator has to remember to change back.
+
+            ⚠️ THE HINT RENDERS BESIDE THE SWITCH, ALWAYS, AND IT IS THE ENGINE'S OWN
+            WORDS. ClubLog's catch-up sweep re-queues every contact ClubLog never
+            accepted the next time a ClubLog password is saved — regardless of this
+            switch. An operator who reads "upload: off" and gets a ClubLog upload anyway
+            has been misled by us, not surprised by ClubLog. The text travels on
+            `upload.hint`, attached to the control it qualifies, so a renderer cannot
+            show one without the other; it is deliberately NOT a catalog string, because
+            a second copy here could drift from the limitation the engine actually has.
+            Connector ids (`clublog`, `qrz`, `wrl`) are invariant tokens. */}
+        {fieldDay?.upload && (
+          <div className="fd-upload">
+            <div className="fd-upload-row">
+              <button
+                type="button"
+                role="switch"
+                aria-checked={fieldDay.upload.enabled}
+                className={`toggle${fieldDay.upload.enabled ? ' on' : ''}`}
+                onClick={() => void saveUpload(!fieldDay.upload!.enabled, uploadDests)}
+                aria-label={t('fieldDay.upload.aria')}
+              >
+                <span className="toggle-knob" />
+              </button>
+              <span className="fd-upload-label">{t('fieldDay.upload.label')}</span>
+              {/* Both halves are required: a switch with nowhere to send is off, and a
+                  destination alone must not enqueue. */}
+              {fieldDay.upload.available.map((id) => (
+                <label className="fd-upload-dest" key={id}>
+                  <input
+                    type="checkbox"
+                    checked={uploadDests.includes(id)}
+                    onChange={(e) =>
+                      void saveUpload(
+                        fieldDay.upload!.enabled,
+                        e.target.checked
+                          ? [...uploadDests, id]
+                          : uploadDests.filter((d) => d !== id),
+                      )
+                    }
+                  />
+                  <span className="mono">{id}</span>
+                </label>
+              ))}
+            </div>
+            <p className="fd-upload-hint" role="note">
+              {fieldDay.upload.hint}
+            </p>
+          </div>
+        )}
       </div>
 
       {/* CLUB SYNC (chip + counters + band board) — only while hosting/joined */}

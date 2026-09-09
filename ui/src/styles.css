@@ -8617,6 +8617,45 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   margin-left: auto;
   flex-wrap: wrap;
 }
+/* WHERE THIS SESSION'S MERGED CONTACTS GO (§18.1) — the switch, its destinations, and
+   the limitation it does NOT close, which renders directly beneath it and is never
+   collapsed behind a disclosure. A limitation the operator cannot see is one that will
+   surprise them in the field. Tokens only, defined in both themes; the block takes the
+   full row so the hint reads as a sentence rather than as a squeezed column. */
+.fd-upload {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  flex: 1 0 100%;
+  margin-top: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border-soft);
+}
+.fd-upload-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.fd-upload-label {
+  font-size: var(--fs-body);
+  color: var(--text);
+}
+.fd-upload-dest {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--fs-label);
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.fd-upload-hint {
+  margin: 0;
+  max-width: 72ch;
+  font-size: var(--fs-label);
+  line-height: 1.45;
+  color: var(--text-faint);
+}
 .log-export-error {
   font-size: 0.75rem;
   color: var(--state-weak);

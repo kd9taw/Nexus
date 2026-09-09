@@ -2546,6 +2546,12 @@ export const EN = {
   'fieldDay.sections.cell.notWorked.title': '{{code}} — {{name}} ({{division}}) — not worked yet',
   'fieldDay.sections.cell.worked.aria': '{{name}}, worked',
   'fieldDay.sections.cell.notWorked.aria': '{{name}}, not worked',
+  'fieldDay.board.aria': '{{name}} multiplier board',
+  'fieldDay.board.count': '{{worked}}/{{total}} worked',
+  'fieldDay.board.cell.worked.title': '{{code}} — {{name}} — worked',
+  'fieldDay.board.cell.notWorked.title': '{{code}} — {{name}} — not worked yet',
+  'fieldDay.upload.label': 'Send merged contacts to my logbook',
+  'fieldDay.upload.aria': 'Upload this session\'s merged contacts',
 
   // Run vs search-and-pounce. Stored as plain text with a real `&` — React escapes text
   // children itself, so an entity here would render as the literal characters.
