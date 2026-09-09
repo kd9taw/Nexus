@@ -65,7 +65,7 @@ function angularDeg(a: LatLon, b: LatLon): number {
   return Math.acos(Math.max(-1, Math.min(1, c))) / D
 }
 
-/** Every code in the canonical 83-section universe (the globe's pin table is
+/** Every code in the canonical 85-section universe (the globe's pin table is
  *  checked against THIS, not against itself). */
 const ALL_SECTION_CODES = ARRL_SECTIONS_BY_DIVISION.flatMap((d) =>
   d.sections.map((sec) => sec.code),
@@ -85,12 +85,12 @@ function boot(): Board {
   return window.__fdboard!
 }
 
-// A meta fixture shaped like /scoreboard/meta.json: a full 83-code section
+// A meta fixture shaped like /scoreboard/meta.json: a full 85-code section
 // universe (the page must build one chip per code, grouped by division).
 const DIVISIONS = ['Atlantic', 'Central', 'New England', 'Pacific', 'RAC']
 function makeMeta(scoringModel: 'powered' | 'objectives') {
   const sections = []
-  for (let i = 0; i < 83; i++) {
+  for (let i = 0; i < 85; i++) {
     sections.push({
       code: `S${String(i).padStart(2, '0')}`,
       name: `Section ${i}`,
@@ -259,9 +259,9 @@ describe('fd scoreboard page', () => {
     expect(Object.keys(b.STRINGS).length).toBeGreaterThanOrEqual(30)
   })
 
-  it('has a pin for every one of the 83 sections in the rules universe', () => {
+  it('has a pin for every one of the 85 sections in the rules universe', () => {
     const b = boot()
-    expect(ALL_SECTION_CODES.length).toBe(83)
+    expect(ALL_SECTION_CODES.length).toBe(85)
     const missing = ALL_SECTION_CODES.filter((c) => b.globe.sectionLatLon(c) === null)
     expect(missing).toEqual([])
     // POSITIVE CONTROL: the same lookup DOES come back null for a non-section,
@@ -283,14 +283,14 @@ describe('fd scoreboard page', () => {
     )
   })
 
-  it('lights exactly the worked sections and shows the n-of-83 count', () => {
+  it('lights exactly the worked sections and shows the n-of-85 count', () => {
     const b = boot()
     b.render(makeData('powered'), makeMeta('powered'))
     // The lit set is the PAYLOAD's, not the pin table's — a code with no pin
     // still counts on the header, it just has nowhere to be drawn.
     expect(b.globe.snapshot().lit).toEqual(['S01', 'S05'])
     expect(document.getElementById('sec-count')!.textContent).toContain('2')
-    expect(document.getElementById('sec-count')!.textContent).toContain('83')
+    expect(document.getElementById('sec-count')!.textContent).toContain('85')
     // Real codes light real pins.
     const b2 = boot()
     b2.render(realData(), realMeta())
@@ -429,7 +429,7 @@ describe('fd scoreboard page', () => {
       expect(b.globe.snapshot().arcs).toBe(0)
       // The board is still a board: the pins are lit and the count is right.
       expect(b.globe.snapshot().lit).toEqual(['EMA', 'ONE'])
-      expect(document.getElementById('sec-count')!.textContent).toContain('83')
+      expect(document.getElementById('sec-count')!.textContent).toContain('85')
     } finally {
       delete w.matchMedia
     }

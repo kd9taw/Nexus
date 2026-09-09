@@ -303,7 +303,11 @@ pub fn ruleset_by_id(event_id: &str, year: u16) -> Option<&'static FdRuleset> {
 /// board (spec §5) and setup validation read from. Ordered and grouped by ARRL
 /// division so the board renders one tidy block per division; the ordering is
 /// mirrored (and guard-tested) in ui/src/features/arrlSections.ts. 71 US ARRL
-/// sections + 12 RAC (Canada) = 83, carried by the rules data.
+/// sections + 14 RAC (Canada) = 85, carried by the rules data.
+///
+/// ⚠️ The list is ARRL's CURRENT one (arrl.org/section-abbreviations and the generic
+/// Field Day section PDF, both read 2026-09-09). It shipped as 83 from a pre-2017 era
+/// until then; [`retired_section`] carries what became of the three codes that went.
 pub fn sections() -> &'static [Section] {
     table().sections
 }
@@ -316,7 +320,7 @@ pub fn valid_section(code: &str) -> bool {
     sections().iter().any(|s| s.code == up)
 }
 
-/// The Field Day SECTION slot's domain: the 83 ARRL/RAC section codes plus the `MX`
+/// The Field Day SECTION slot's domain: the 85 ARRL/RAC section codes plus the `MX`
 /// and `DX` extensions DX stations send — exactly the set the RTTY parser accepted
 /// inline as `valid_section(t) || t == "MX" || t == "DX"`. Derived from the same
 /// validated [`sections`] table, so the two can never disagree; nothing here
@@ -375,11 +379,11 @@ fn derive_fd_sections(secs: &'static [Section]) -> crate::contest::Domain {
     }
 }
 
-/// The 83 ARRL/RAC section codes as a [`contest::Domain`](crate::contest::Domain)
+/// The 85 ARRL/RAC section codes as a [`contest::Domain`](crate::contest::Domain)
 /// — the plain section universe, with none of Field Day's `MX`/`DX`
 /// extensions.
 ///
-/// This is where §8(d)'s "exactly 83" assertion now lives as a property of a
+/// This is where §8(d)'s "exactly 85" assertion now lives as a property of a
 /// DOMAIN rather than of the file. Derived from the same validated [`sections`]
 /// table as [`fd_sections_domain`], so the two can never disagree and neither
 /// can drift from the list the worked-sections board renders.
@@ -1492,11 +1496,16 @@ fn parse_spec(text: &str) -> Result<FileSpec, String> {
             }
         }
     }
-    // The section universe is pinned (71 US + 12 RAC): the TS mirror guard and
+    // The section universe is pinned (71 US + 14 RAC): the TS mirror guard and
     // the board layout both assume it, so a file that grows or shrinks it must
     // land in lockstep with a code release, not as a data push.
-    if spec.sections.len() != 83 {
-        return Err(format!("{} sections (expected 83)", spec.sections.len()));
+    //
+    // ⚠️ 85 since the pre-2017 list was corrected (see [`sections`]). Moving this
+    // number is not a data push either: the shipped app enforces the same floor, so a
+    // rules file with a different count is refused by every build that predates the
+    // change — which is exactly the lockstep this line exists to force.
+    if spec.sections.len() != 85 {
+        return Err(format!("{} sections (expected 85)", spec.sections.len()));
     }
     let mut codes: Vec<&str> = Vec::new();
     for s in &spec.sections {
@@ -1915,13 +1924,13 @@ mod tests {
 
     /// The RTTY parser accepted `valid_section(t) || t == "MX" || t == "DX"`
     /// (rtty/seq.rs at 82eb3112). Batch 0 replaces that inline test with a domain
-    /// membership test, so the domain must be EXACTLY that set — 83 sections plus
+    /// membership test, so the domain must be EXACTLY that set — 85 sections plus
     /// the two literals a DX station sends — or a legal contact stops being loggable.
     #[test]
-    fn the_fd_section_domain_is_the_83_sections_plus_mx_and_dx() {
+    fn the_fd_section_domain_is_the_85_sections_plus_mx_and_dx() {
         let d = fd_sections_domain();
         assert_eq!(d.id, "fd_sections");
-        assert_eq!(d.values.len(), 85, "83 ARRL/RAC sections + MX + DX");
+        assert_eq!(d.values.len(), 87, "85 ARRL/RAC sections + MX + DX");
         for s in sections() {
             assert!(
                 d.contains(s.code),
@@ -2049,8 +2058,8 @@ mod tests {
     #[test]
     fn arrl_sections_are_complete_and_unique() {
         use std::collections::HashSet;
-        // 71 US ARRL sections + 12 RAC = the full ~85-section universe.
-        assert_eq!(sections().len(), 83, "the ARRL/RAC section master list");
+        // 71 US ARRL sections + 14 RAC = the full 85-section universe.
+        assert_eq!(sections().len(), 85, "the ARRL/RAC section master list");
         // No duplicate codes (a copy-paste slip would double-count a section).
         let codes: HashSet<&str> = sections().iter().map(|s| s.code).collect();
         assert_eq!(codes.len(), sections().len(), "section codes are unique");
@@ -2062,7 +2071,8 @@ mod tests {
         }
         // Spot-check the tricky split-state + RAC entries the spec calls out.
         for code in [
-            "EMA", "WMA", "STX", "NTX", "WTX", "SDG", "ORG", "SCV", "NNY", "GTA", "NT",
+            "EMA", "WMA", "STX", "NTX", "WTX", "SDG", "ORG", "SCV", "NNY", "GH", "TER", "NB",
+            "NS", "PE",
         ] {
             assert!(codes.contains(code), "missing section {code}");
         }
@@ -2151,7 +2161,7 @@ mod tests {
              but NOT in the seed's sections — the board shows a section \
              valid_section() rejects"
         );
-        assert_eq!(ts.len(), 83, "83 = 71 US ARRL + 12 RAC, both sides");
+        assert_eq!(ts.len(), 85, "85 = 71 US ARRL + 14 RAC, both sides");
 
         // Same entry at every index: order (the board layout), name and
         // division per code.
@@ -2390,7 +2400,7 @@ mod tests {
             v["sections"].as_array_mut().unwrap().pop();
         })
         .unwrap_err()
-        .contains("82 sections"),);
+        .contains("84 sections"),);
         assert!(
             corrupt(&|v| v["rulesets"][0]["window"]["month"] = 13.into())
                 .unwrap_err()
@@ -2790,15 +2800,15 @@ mod tests {
         );
     }
 
-    /// §8(d): the 83-section assertion, expressed on the domain (Ruling B0-C).
+    /// §8(d): the 85-section assertion, expressed on the domain (Ruling B0-C).
     #[test]
-    fn the_arrl_sections_domain_is_exactly_the_83() {
+    fn the_arrl_sections_domain_is_exactly_the_85() {
         let d = arrl_sections_domain();
         assert_eq!(d.id, "arrl_sections");
-        assert_eq!(d.values.len(), 83);
+        assert_eq!(d.values.len(), 85);
         assert_eq!(d.adif.rcvd, Some("ARRL_SECT"));
         // Verified against ADIF 3.1.7 in batch 6 — see
-        // `the_fd_section_domain_is_the_83_sections_plus_mx_and_dx` for the
+        // `the_fd_section_domain_is_the_85_sections_plus_mx_and_dx` for the
         // citation and the negative controls.
         assert_eq!(d.adif.sent, Some("MY_ARRL_SECT"));
         assert!(!d.contains("MX"), "MX is an FD extension, not a section");
@@ -2806,8 +2816,8 @@ mod tests {
         assert!(d.contains("WI") && d.contains(" wi "));
         assert_eq!(
             fd_sections_domain().values.len(),
-            85,
-            "…which fd_sections carries, being the 83 plus MX and DX"
+            87,
+            "…which fd_sections carries, being the 85 plus MX and DX"
         );
     }
 

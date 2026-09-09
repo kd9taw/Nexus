@@ -9,8 +9,15 @@
 // universe. Worked-state still comes from the log / DTO `workedSections`.
 //
 // If the Rust list ever changes, update this table to match (71 US ARRL
-// sections + 12 RAC = 83). Grouped by ARRL division so the board renders one
+// sections + 14 RAC = 85). Grouped by ARRL division so the board renders one
 // tidy block per division, preserving the Rust ordering.
+//
+// The list is ARRL's CURRENT one, read 2026-09-09 from
+// https://www.arrl.org/section-abbreviations and the generic Field Day section
+// PDF. It carried a pre-2017 83 until then: MAR (Maritime) has since split into
+// NB/NS/PE, GTA is now GH (Golden Horseshoe) and NT is now TER (Territories).
+// `RETIRED_SECTIONS` below is what the Settings picker tells an operator whose
+// saved section is one of the three.
 // ---------------------------------------------------------------------------
 
 export interface ArrlSection {
@@ -175,18 +182,20 @@ export const ARRL_SECTIONS_BY_DIVISION: SectionDivision[] = [
   {
     division: 'RAC',
     sections: [
-      { code: 'MAR', name: 'Maritime', division: 'RAC' },
       { code: 'NL', name: 'Newfoundland/Labrador', division: 'RAC' },
+      { code: 'NB', name: 'New Brunswick', division: 'RAC' },
+      { code: 'NS', name: 'Nova Scotia', division: 'RAC' },
+      { code: 'PE', name: 'Prince Edward Island', division: 'RAC' },
       { code: 'QC', name: 'Quebec', division: 'RAC' },
       { code: 'ONE', name: 'Ontario East', division: 'RAC' },
       { code: 'ONN', name: 'Ontario North', division: 'RAC' },
       { code: 'ONS', name: 'Ontario South', division: 'RAC' },
-      { code: 'GTA', name: 'Greater Toronto Area', division: 'RAC' },
+      { code: 'GH', name: 'Golden Horseshoe', division: 'RAC' },
       { code: 'MB', name: 'Manitoba', division: 'RAC' },
       { code: 'SK', name: 'Saskatchewan', division: 'RAC' },
       { code: 'AB', name: 'Alberta', division: 'RAC' },
       { code: 'BC', name: 'British Columbia', division: 'RAC' },
-      { code: 'NT', name: 'Northern Territories', division: 'RAC' },
+      { code: 'TER', name: 'Territories', division: 'RAC' },
     ],
   },
 ]

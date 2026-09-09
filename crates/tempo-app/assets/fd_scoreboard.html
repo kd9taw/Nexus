@@ -455,7 +455,7 @@ function renderQsos(qsos) {
 /* THE GLOBE — the sections display.
    Hand-rolled Canvas 2D orthographic globe: no library, no texture, no
    external reference of any kind (this page must render on a Field Day
-   site with no route to the internet). It replaces the 83-chip section
+   site with no route to the internet). It replaces the 85-chip section
    board and says the same thing — a lit pin is a section reached — but
    readable from the far side of a tent.
    Geometry below (projection, great-circle interpolation, the section
@@ -494,9 +494,9 @@ function bandColor(b) {
 }
 
 /* ARRL/RAC section -> a representative lat/lon for the globe pin. The code
-   universe is the canonical 83 from crates/tempo-core/src/fd_rules.seed.json
+   universe is the canonical 85 from crates/tempo-core/src/fd_rules.seed.json
    (mirrored in ui/src/features/arrlSections.ts); the jsdom suite pins that
-   every one of those 83 codes has an entry here.
+   every one of those 85 codes has an entry here.
 
    A SECTION IS A REGION, NOT A POINT. Each pair is an APPROXIMATE CENTRE of
    the POPULATED part of that region, good to roughly a degree. It is a TV
@@ -520,7 +520,7 @@ var SECTION_LATLON = {
   'EPA': [40.6, -75.9],
   'EWA': [47.3, -118.6],
   'GA': [32.8, -83.5],
-  'GTA': [43.7, -79.4],
+  'GH': [43.4, -79.7],
   'IA': [42.0, -93.5],
   'ID': [44.2, -114.5],
   'IL': [40.0, -89.2],
@@ -529,7 +529,6 @@ var SECTION_LATLON = {
   'KY': [37.6, -85.3],
   'LA': [30.7, -91.9],
   'LAX': [34.1, -118.2],
-  'MAR': [45.6, -63.6],
   'MB': [50.0, -97.5],
   'MDC': [39.1, -76.9],
   'ME': [44.9, -69.3],
@@ -538,6 +537,7 @@ var SECTION_LATLON = {
   'MO': [38.5, -92.5],
   'MS': [32.7, -89.7],
   'MT': [47.0, -109.6],
+  'NB': [46.5, -66.0],
   'NC': [35.5, -79.4],
   'ND': [47.5, -100.5],
   'NE': [41.2, -98.0],
@@ -548,7 +548,7 @@ var SECTION_LATLON = {
   'NM': [34.4, -106.1],
   'NNJ': [40.8, -74.4],
   'NNY': [44.3, -74.7],
-  'NT': [62.5, -114.4],
+  'NS': [45.0, -63.0],
   'NTX': [32.8, -97.0],
   'NV': [39.0, -117.0],
   'OH': [40.3, -82.8],
@@ -559,6 +559,7 @@ var SECTION_LATLON = {
   'OR': [44.0, -120.5],
   'ORG': [33.7, -117.8],
   'PAC': [21.3, -157.9],
+  'PE': [46.4, -63.2],
   'PR': [18.2, -66.4],
   'QC': [46.5, -72.0],
   'RI': [41.7, -71.5],
@@ -574,6 +575,7 @@ var SECTION_LATLON = {
   'SNJ': [39.6, -74.8],
   'STX': [29.5, -97.5],
   'SV': [38.9, -121.6],
+  'TER': [62.5, -114.4],
   'TN': [35.9, -86.4],
   'UT': [39.6, -111.6],
   'VA': [37.5, -78.5],
@@ -752,7 +754,7 @@ function decodeLand(raw) {
 /* Everything the frame loop touches is precomputed ONCE into unit vectors:
    a frame is then two trig calls (the rotation) plus a handful of multiplies
    per point. Nothing here grows with the QSO count — the coastline is 1360
-   points and the pin set is 83, at hour 1 and at hour 24 alike. */
+   points and the pin set is 85, at hour 1 and at hour 24 alike. */
 function toXyz(flatLonLat) {
   var out = new Array((flatLonLat.length / 2) * 3), k = 0, i;
   for (i = 0; i + 1 < flatLonLat.length; i += 2) {
@@ -1038,7 +1040,7 @@ function paintGreyline(cx, cy, R, nowMs) {
   gCtx.stroke();
 }
 
-/* 83 pins a frame — never the QSO list. Lit is worked, dim is not yet. */
+/* 85 pins a frame — never the QSO list. Lit is worked, dim is not yet. */
 function paintPins(cx, cy, R) {
   var dim = Math.max(1.3, R * 0.009);
   var big = Math.max(2.2, R * 0.017);

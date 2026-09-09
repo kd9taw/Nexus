@@ -101,7 +101,7 @@ fn an_installed_file_with_changed_points_changes_the_computed_score() {
     spec["generated"] = "2026-12-31T00:00:00Z".into();
     let stats = fd_rules::install_from(&spec.to_string()).expect("valid file installs");
     assert_eq!(stats.generated, "2026-12-31T00:00:00Z");
-    assert_eq!(stats.sections, 83);
+    assert_eq!(stats.sections, 85);
 
     // -- The proof: the fetched data reaches the scoring math. -------------
     // Seed scores this log 16 QSO pts (4×1 + 6×2, the in-crate pinned

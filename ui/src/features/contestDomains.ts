@@ -49,9 +49,9 @@ export interface ContestDomain {
 
 /**
  * ⚠️ **`fd_sections` is the ARRL/RAC section list AS THE UI HAS ALWAYS HELD IT** —
- * the 83 codes of `arrlSections.ts`, grouped by division.
+ * the 85 codes of `arrlSections.ts`, grouped by division.
  *
- * Rust's `fd_sections` domain is those 83 **plus `MX` and `DX`** (Winter Field Day's
+ * Rust's `fd_sections` domain is those 85 **plus `MX` and `DX`** (Winter Field Day's
  * "Location Identifier" rule). The divergence predates this module: the shipped strip
  * validated against exactly this set, so a strip that suddenly accepted `DX` would be a
  * behaviour change in a batch whose whole contract is that Field Day behaviour does not
@@ -68,7 +68,7 @@ const FD_SECTIONS: ContestDomain = {
 
 const DOMAINS: Record<string, ContestDomain> = {
   fd_sections: FD_SECTIONS,
-  // The plain 83-section universe under its own Rust id, same table.
+  // The plain 85-section universe under its own Rust id, same table.
   arrl_sections: FD_SECTIONS,
 }
 

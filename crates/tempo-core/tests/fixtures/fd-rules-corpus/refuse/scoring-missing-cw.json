@@ -723,13 +723,23 @@
       "division": "West Gulf"
     },
     {
-      "code": "MAR",
-      "name": "Maritime",
+      "code": "NL",
+      "name": "Newfoundland/Labrador",
       "division": "RAC"
     },
     {
-      "code": "NL",
-      "name": "Newfoundland/Labrador",
+      "code": "NB",
+      "name": "New Brunswick",
+      "division": "RAC"
+    },
+    {
+      "code": "NS",
+      "name": "Nova Scotia",
+      "division": "RAC"
+    },
+    {
+      "code": "PE",
+      "name": "Prince Edward Island",
       "division": "RAC"
     },
     {
@@ -753,8 +763,8 @@
       "division": "RAC"
     },
     {
-      "code": "GTA",
-      "name": "Greater Toronto Area",
+      "code": "GH",
+      "name": "Golden Horseshoe",
       "division": "RAC"
     },
     {
@@ -778,8 +788,8 @@
       "division": "RAC"
     },
     {
-      "code": "NT",
-      "name": "Northern Territories",
+      "code": "TER",
+      "name": "Territories",
       "division": "RAC"
     }
   ]
