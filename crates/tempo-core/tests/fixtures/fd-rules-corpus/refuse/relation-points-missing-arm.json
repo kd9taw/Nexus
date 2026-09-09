@@ -39,18 +39,30 @@
       },
       "scoring": {
         "model": "powered_multiplier",
-        "points_by_mode_class": {
-          "PH": 1,
-          "CW": 2,
-          "DIG": 2
-        },
+        "points_by_mode_class": {},
         "power_tiers": [
           1,
           2,
           5
         ],
         "multipliers": [],
-        "relation_points": []
+        "relation_points": [
+          {
+            "relation": "different_continent",
+            "bands": [],
+            "points": 3
+          },
+          {
+            "relation": "within_north_america",
+            "bands": [],
+            "points": 2
+          },
+          {
+            "relation": "same_continent",
+            "bands": [],
+            "points": 1
+          }
+        ]
       },
       "transmitter_column": false,
       "dupe": {

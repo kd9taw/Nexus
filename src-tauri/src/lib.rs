@@ -4278,6 +4278,43 @@ async fn fetch_cty() -> Result<CtyStatus, String> {
 // engine builds (fd_score runs in its very first snapshot), and `fetch_fd_rules` only
 // stages bytes on disk. See tempo_core::fd_rules::install_from for the seed-floor rule. ---
 
+/// ⭐ **Place a callsign for the contest scorer, out of the country file.**
+///
+/// The adapter between `propagation::dxcc` (which owns AD1C's `cty.dat`) and
+/// `tempo_core::contest`, which needs the entity and the continent for CQ WW's country
+/// multiplier and for both CQ contests' relation-priced QSO points. It lives here because
+/// `propagation` depends on `tempo-core`, so the arrow can only be drawn from the crate
+/// that holds both.
+///
+/// ⚠️ **Both halves come from ONE resolve.** Reading the entity from one call and the
+/// continent from another would let a portable call be placed twice, two ways.
+fn contest_place_call(call: &str) -> Option<tempo_core::contest::CallLocation> {
+    let info = propagation::dxcc::resolve(call)?;
+    // A continent-less row cannot answer the question a relation asks, and `""` would
+    // compare equal to another `""` and read as "same continent". Unplaced is the honest
+    // answer.
+    if info.cont.is_empty() {
+        return None;
+    }
+    Some(tempo_core::contest::CallLocation {
+        entity: info.entity,
+        continent: info.cont,
+    })
+}
+
+/// Install [`contest_place_call`] once, at startup. Logged either way; a second install is
+/// an ordering regression rather than a state to accept, exactly as for cty and the rules
+/// table.
+fn contest_call_resolver_install() {
+    match tempo_core::contest::install_call_resolver(contest_place_call) {
+        Ok(()) => tempo_core::applog::info(
+            "startup",
+            "contest: cty.dat country file wired to the contest scorer",
+        ),
+        Err(e) => tempo_core::applog::error("startup", &format!("contest: {e}")),
+    }
+}
+
 #[derive(serde::Serialize, serde::Deserialize, Default, Clone)]
 struct FdRulesMeta {
     /// The installed file's `generated` ISO stamp — the freshness key.
@@ -20441,6 +20478,14 @@ pub fn run() {
     // snapshot and whoever touches the table first locks the data in for the session.
     fd_rules_load_from_disk();
 
+    // ⭐ Hand the contest scorer the country file. CQ WW's country multiplier and both CQ
+    // contests' QSO points are functions of WHERE a callsign is, and `tempo-core` cannot
+    // ask `propagation` (that dependency runs the other way, so calling it would be a
+    // cycle). This crate holds both, so it is where the two meet — and it must run AFTER
+    // `cty_load_from_disk`, which decides which cty.dat the session uses, and before the
+    // engine builds a contest session.
+    contest_call_resolver_install();
+
     let bound_radio = bound_radio_id();
 
     // Union in any radio the BASE config has that this window's config doesn't, and adopt base's
@@ -23083,6 +23128,51 @@ fn winlink_disconnect() -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+
+    /// ⭐ **The country file the CONTEST SCORER actually gets** — the one assertion that
+    /// cannot be made in `tempo-core`, because the crate that owns `cty.dat` depends on it.
+    ///
+    /// `crates/tempo-core/tests/cqww.rs` drives CQ WW's and CQ WPX's arms through a STUB
+    /// table, which proves the scoring and proves nothing about the data. This proves the
+    /// data: the vendored AD1C file places the callsign shapes those arms turn on, with the
+    /// entity spellings the rules file's `excluding` lists are written against and the
+    /// continent codes the relation compares.
+    #[test]
+    fn the_vendored_country_file_places_the_calls_the_cq_contests_score_by() {
+        for (call, entity, cont) in [
+            ("W1AW", "United States", "NA"),
+            ("K2DEF", "United States", "NA"),
+            ("VE3XYZ", "Canada", "NA"),
+            // ⚠️ Hawaii is OCEANIA and Alaska is North America. CQ WW prices a US-to-KH6
+            // contact at three points and a US-to-KL7 contact at two, and this is the fact
+            // that decides it — a CQ-zone-derived continent gets it wrong.
+            ("KH6ABC", "Hawaii", "OC"),
+            ("KL7ABC", "Alaska", "NA"),
+            ("DL1ABC", "Fed. Rep. of Germany", "EU"),
+            ("JA1ABC", "Japan", "AS"),
+            ("PY2ABC", "Brazil", "SA"),
+            ("ZS6ABC", "South Africa", "AF"),
+            ("VK3ABC", "Australia", "OC"),
+        ] {
+            let got =
+                super::contest_place_call(call).unwrap_or_else(|| panic!("cty.dat places {call}"));
+            assert_eq!((got.entity, got.continent), (entity, cont), "{call}");
+        }
+        // ⭐ THE FOUR ENTITY SPELLINGS `fd_rules.seed.json` EXCLUDES BY NAME. TNQP and
+        // TXQP both say "less USA, Canada, Alaska & Hawaii", and their `excluding` lists
+        // hold these strings — a rename in a refreshed cty.dat would silently start
+        // counting a multiplier the sponsor excludes, and this is what goes red first.
+        for want in ["United States", "Canada", "Alaska", "Hawaii"] {
+            assert!(
+                propagation::dxcc::dxcc_entity_names().contains(&want),
+                "cty.dat still spells the entity {want:?}"
+            );
+        }
+        // NEGATIVE CONTROL: something that is not a callsign is not placed, so the ten
+        // answers above are the country file and not a resolver that always answers.
+        assert!(super::contest_place_call("").is_none());
+        assert!(super::contest_place_call("...").is_none());
+    }
 
     /// ⛔ QRZ'S `FETCH REASON` IS NOT A THING THAT MAY BE PRINTED.
     ///

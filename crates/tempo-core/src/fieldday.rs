@@ -111,21 +111,25 @@ pub struct LoggedQso {
     /// refuses that transition rather than mixing two roles in one log (§3.3 ruling 3);
     /// this field is what makes a mixed log DETECTABLE instead of aspirational.
     pub role: String,
-    /// The DXCC entity for [`call`](Self::call), resolved once at log time rather than
-    /// at export time.
+    /// The DXCC/WAE entity for [`call`](Self::call), resolved once at log time rather
+    /// than at export time.
     ///
-    /// ⚠️ Always `None` in this build, and deliberately: the cty.dat resolver lives in
-    /// `crates/propagation`, which neither this crate nor `tempo-app` depends on (the
-    /// dependency runs the other way), and no shipped ruleset reads an entity —
-    /// neither Field Day event has a DXCC multiplier. The slot is here so the row, and
-    /// not a per-snapshot re-resolution, is where the answer will live.
+    /// ⭐ Filled from [`contest::resolve_call`](crate::contest::resolve_call), which the
+    /// composition root installs over the cty.dat resolver in `crates/propagation` — a
+    /// crate that depends on this one, so this crate can never call it directly. `None`
+    /// in a build with no resolver installed, and for a call the country file cannot
+    /// place. Read by [`MultSource::DxccEntity`](crate::contest::MultSource::DxccEntity)
+    /// (CQ WW's country multiplier) and, with [`continent`](Self::continent), by
+    /// [`PointsRule::ByRelation`](crate::contest::PointsRule::ByRelation).
     pub entity: Option<String>,
-    /// The WPX prefix for [`call`](Self::call), resolved once at log time.
-    ///
-    /// ⚠️ Always `None` in this build. CQ WPX's prefix rule is not implemented anywhere
-    /// in this tree and its wording has not been read from cqwpx.com; deriving one here
-    /// would be an invented rule with no source, which is worse than a `None` the batch
-    /// that reads the rule fills in.
+    /// The continent code for [`call`](Self::call) — `AF`/`AS`/`EU`/`NA`/`OC`/`SA` —
+    /// resolved with [`entity`](Self::entity) and from the same answer, so the two can
+    /// never come from different readings of the same call.
+    pub continent: Option<String>,
+    /// The CQ WPX prefix for [`call`](Self::call), resolved once at log time by
+    /// [`wpx_prefix`](crate::contest::wpx_prefix) — the sponsor's own §V.C.1 rule, not a
+    /// country-file lookup, so it is filled in every build. `None` for a row whose call
+    /// cannot be read as one.
     pub prefix: Option<String>,
     pub band: String,
     /// Mode class for scoring + per-band-mode dupes: "DIG" | "CW" | "PH".
@@ -514,13 +518,18 @@ impl FieldDayLog {
         }
         let seq = self.next_seq;
         self.next_seq += 1;
+        // ⭐ RESOLVED ONCE, HERE, and never again: what a row counts for is a fact about
+        // the moment it was logged. A per-snapshot re-resolution would let a country-file
+        // update silently rescore contacts already in a submitted log.
+        let placed = crate::contest::resolve_call(call);
         self.qsos.push(LoggedQso {
             call: call.to_string(),
             rx,
             tx,
             role: self.session.role().id.to_string(),
-            entity: None,
-            prefix: None,
+            entity: placed.map(|p| p.entity.to_string()),
+            continent: placed.map(|p| p.continent.to_string()),
+            prefix: crate::contest::wpx_prefix(call),
             band,
             mode,
             submode: submode.trim().to_ascii_uppercase(),
@@ -612,13 +621,22 @@ impl FieldDayLog {
     /// walks these rows TWICE — once for points, once for multipliers — and a
     /// once-through iterator would force it to collect a `Vec` on every snapshot tick.
     pub fn score_rows(&self) -> impl Iterator<Item = crate::contest::ScoreRow<'_>> + Clone {
-        self.qsos.iter().map(|q| crate::contest::ScoreRow {
+        let mine = self.session.my_call_location;
+        self.qsos.iter().map(move |q| crate::contest::ScoreRow {
             mode_class: &q.mode,
             band: &q.band,
             role: &q.role,
             rx: &q.rx,
             entity: q.entity.as_deref(),
             prefix: q.prefix.as_deref(),
+            // ⭐ The relation is computed HERE because this is the one place both sides
+            // are in hand: the session knows where I am, the row knows where they were.
+            // Neither the scorer (which has no session) nor the row (which has no `me`)
+            // can answer it alone.
+            relation: crate::contest::Relation::between(
+                mine.as_ref().map(|l| l.as_pair()),
+                q.entity.as_deref().zip(q.continent.as_deref()),
+            ),
         })
     }
 
@@ -891,13 +909,19 @@ impl FieldDayLog {
             .filter(|&v| v > 0)
             .unwrap_or(self.next_seq);
         self.next_seq = self.next_seq.max(seq + 1);
+        // Resolved on the RESTORE path too, and from the call the row carries — a
+        // journal reload or an ADIF merge must score identically to the live log, and a
+        // row restored with no entity would drop a country multiplier the operator
+        // already worked.
+        let placed = crate::contest::resolve_call(call);
         self.qsos.push(LoggedQso {
             call: call.clone(),
             rx,
             tx,
             role,
-            entity: None,
-            prefix: None,
+            entity: placed.map(|p| p.entity.to_string()),
+            continent: placed.map(|p| p.continent.to_string()),
+            prefix: crate::contest::wpx_prefix(call),
             band,
             mode: mode.to_string(),
             submode,

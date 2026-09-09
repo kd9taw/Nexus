@@ -403,9 +403,25 @@ fn model_tag(s: &tempo_core::contest::Scoring) -> &'static str {
     }
 }
 
+/// The per-mode-class point table this event's score block renders, or ZEROES for an
+/// event that has none.
+///
+/// ⚠️ **The zeroes are honest, not a fallback.** CQ WW and CQ WPX price a contact by the
+/// RELATION between two stations, so there is no per-mode-class number to show for them —
+/// a phone contact is worth 1, 2, 3 or 0 points depending on who was worked, and this
+/// page's per-mode row cannot say that. The club scoreboard is Field Day's surface
+/// (`FdBoardData::event` is an `FdEvent`, a two-arm enum), so no relation-priced ruleset
+/// reaches here today; the arm exists so that when one does it shows nothing rather than
+/// a number it made up.
 fn mode_points_of(s: &tempo_core::contest::Scoring) -> tempo_core::contest::ModePoints {
-    let tempo_core::contest::PointsRule::ByModeClass(points) = s.qso_points;
-    points
+    match s.qso_points {
+        tempo_core::contest::PointsRule::ByModeClass(points) => points,
+        tempo_core::contest::PointsRule::ByRelation(_) => tempo_core::contest::ModePoints {
+            ph: 0,
+            cw: 0,
+            dig: 0,
+        },
+    }
 }
 
 /// The civil (UTC) year containing a Unix timestamp — Howard Hinnant's civil

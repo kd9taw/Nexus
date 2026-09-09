@@ -50,7 +50,28 @@
           5
         ],
         "multipliers": [],
-        "relation_points": []
+        "relation_points": [
+          {
+            "relation": "different_continent",
+            "bands": [],
+            "points": 3
+          },
+          {
+            "relation": "within_north_america",
+            "bands": [],
+            "points": 2
+          },
+          {
+            "relation": "same_continent",
+            "bands": [],
+            "points": 1
+          },
+          {
+            "relation": "same_country",
+            "bands": [],
+            "points": 0
+          }
+        ]
       },
       "transmitter_column": false,
       "dupe": {

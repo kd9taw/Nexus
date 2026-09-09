@@ -37,8 +37,10 @@
           2,
           5
         ],
-        "multipliers": []
+        "multipliers": [],
+        "relation_points": []
       },
+      "transmitter_column": false,
       "domains": [],
       "exchange": {
         "name": "fieldday",
@@ -200,8 +202,10 @@
           2,
           5
         ],
-        "multipliers": []
+        "multipliers": [],
+        "relation_points": []
       },
+      "transmitter_column": false,
       "dupe": {
         "by_call": true,
         "by_band": true,

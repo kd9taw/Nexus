@@ -52,7 +52,6 @@
         "multipliers": [],
         "relation_points": []
       },
-      "transmitter_column": false,
       "dupe": {
         "by_call": true,
         "by_band": true,

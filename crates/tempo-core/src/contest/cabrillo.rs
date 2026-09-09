@@ -284,7 +284,8 @@ mod tests {
 
     /// ⭐ **Every shipped contest's Cabrillo `CONTEST:` token, pinned to the value
     /// verified against the master list on 2026-09-09 (Sweepstakes' two against ARRL's
-    /// own published headers as well)** — so a later edit that
+    /// own published headers as well, and CQ WW's and CQ WPX's four against the
+    /// sponsors' own `cabrillo.htm` pages)** — so a later edit that
     /// "tidies" one back to a regular-looking `XX-QSO-PARTY` form goes red instead
     /// of shipping.
     ///
@@ -323,6 +324,29 @@ mod tests {
             // registries already match.
             ("arrlss_cw", "ARRL-SS-CW", "ARRL-SS-CW"),
             ("arrlss_ssb", "ARRL-SS-SSB", "ARRL-SS-SSB"),
+            // ⭐ CQ WW and CQ WPX — four more rows where the two registries AGREE, each
+            // verified against its OWN source on 2026-09-09 because a token confirmed in
+            // one registry says nothing about the other. ADIF 3.1.7's CONTEST_ID
+            // enumeration (https://adif.org/317/ADIF_317.htm, "updated 2026-03-22") lists
+            // CQ-WW-CW = "CQ WW DX Contest (CW)", CQ-WW-SSB = "CQ WW DX Contest (SSB)",
+            // CQ-WPX-CW = "CQ WW WPX Contest (CW)" and CQ-WPX-SSB = "CQ WW WPX Contest
+            // (SSB)". The WA7BNM master list (contestcalendar.com/cabnames.php, Revision
+            // Date February 23, 2026) carries the same four strings at ids 192, 172, 29
+            // and 291. And the SPONSORS publish them directly: cqww.com/cabrillo.htm and
+            // cqwpx.com/cabrillo.htm each say "The contest-name must be one of the
+            // following" over exactly two names, with "Be sure to use hyphens as shown. DO
+            // NOT PUT THE YEAR OR USE PH INSTEAD OF SSB."
+            //
+            // ⚠️ So `cabrillo_contest_token` gets NO arm for any of them, and these four
+            // rows are what stops one being added. ⚠️ Neither sponsor publishes an RTTY
+            // token: ADIF's own labels for CQ-WW-RTTY and CQ-WPX-RTTY are "CQ/RJ WW RTTY
+            // DX Contest" and "CQ/RJ WW RTTY WPX Contest" — a different sponsor's contests
+            // with their own rules — so no RTTY ruleset ships here and neither string may
+            // be attached to these rulesets.
+            ("cqww_cw", "CQ-WW-CW", "CQ-WW-CW"),
+            ("cqww_ssb", "CQ-WW-SSB", "CQ-WW-SSB"),
+            ("cqwpx_cw", "CQ-WPX-CW", "CQ-WPX-CW"),
+            ("cqwpx_ssb", "CQ-WPX-SSB", "CQ-WPX-SSB"),
         ] {
             let rs = crate::fd_rules::ruleset_by_id(event, crate::fd_rules::CURRENT_RULES_YEAR)
                 .unwrap_or_else(|| panic!("the seed must carry {event}"));
