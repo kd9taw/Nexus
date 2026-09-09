@@ -3108,6 +3108,44 @@ mod tests {
         }
     }
 
+    /// The BOUNDARY control for the busted-call report: a callsign reaches the wire whole, at
+    /// every length an amateur call actually takes — 4 up to a full slash-prefixed DX call
+    /// with a portable suffix. Written because the report ("the last character is missing")
+    /// pointed at a truncation here; it measures that there is none, so the serializer is
+    /// ruled out by evidence rather than by reading. Both directions and both consumers: the
+    /// ADIF the export writes, the record a re-load parses back, and the QRZ INSERT body the
+    /// Logbook push actually POSTs (percent-encoded, so the call is asserted in that form).
+    #[test]
+    fn a_call_of_any_length_reaches_adif_and_the_qrz_payload_whole() {
+        for call in [
+            "AD9BX",        // 5
+            "WW9WTF",       // 6 — the reported call
+            "KD9TAW/P",     // 8, portable suffix
+            "WW9WTF/M",     // 8
+            "VP2E/K5WAF",   // 10, slash prefix
+            "SV9/KD9TAW/P", // 12, prefix AND suffix
+        ] {
+            let r = rec(call, "20m", 1_700_000_000);
+            let adif = adif_record(&r);
+            assert!(
+                adif.contains(&format!("<CALL:{}>{call}<", call.len())),
+                "ADIF CALL field is whole for {call}: {adif}"
+            );
+            let back = parse_adif(&format!("Nexus\n<EOH>\n{adif}"));
+            assert_eq!(back.len(), 1, "one record parses back for {call}");
+            assert_eq!(back[0].call, call, "{call} survives the ADIF round trip");
+
+            let body = crate::qrz::build_insert_body("KEY", &adif, false);
+            // `<CALL:n>` percent-encoded is `%3CCALL%3A{n}%3E`; the call itself is
+            // alphanumeric plus `/` (`%2F`), so it appears verbatim apart from the slashes.
+            let wire = call.replace('/', "%2F");
+            assert!(
+                body.contains(&format!("%3CCALL%3A{}%3E{wire}%3C", call.len())),
+                "the QRZ INSERT body carries {call} whole: {body}"
+            );
+        }
+    }
+
     // #98 — the date-range export. Three QSOs on three UTC days: the range keeps exactly the
     // in-range ones (bounds inclusive, whole-day), and NO range is byte-identical to the
     // unbounded export — the pre-#98 behavior, which callers with no dates must still get.

@@ -381,3 +381,52 @@ describe('recall-card handoff (#192)', () => {
     expect(container.querySelectorAll('.logbook-row:not(.head)').length).toBe(3)
   })
 })
+
+// OPERATOR REPORT (2026-09-08): editing a QSO with WW9WTF, the CALL box read "WW9WT" — the
+// trailing F gone — and QRZ held the short call. These two pin the DATA half of that report:
+// the form loads the whole call, and a save writes the whole call back, so nothing on this
+// path corrupts the stored record. What the operator saw is the input CLIPPING its value (the
+// CALL cell shares a 140px grid track with the QRZ button — styles.css `.logbook-form-grid`);
+// a clip is invisible to jsdom, which lays nothing out, so it is guarded in styles-*.test.ts.
+describe('the edit form carries a whole callsign', () => {
+  const oneCall = (call: string) => [{ ...fakeLog(1)[0], call }]
+
+  const openEdit = async (call: string) => {
+    ;(api.getLog as ReturnType<typeof vi.fn>).mockResolvedValue(oneCall(call))
+    ;(toast.withErrorToast as ReturnType<typeof vi.fn>).mockImplementation((fn: () => unknown) =>
+      fn(),
+    )
+    const { container } = render(
+      <Logbook defaultBand="20m" defaultFreqMhz={14.074} defaultMode="FT8" />,
+    )
+    await waitFor(() => expect(container.querySelector('.log-scroll > div')).not.toBeNull())
+    fireEvent.click(
+      container.querySelector(`button[aria-label="Edit ${call}"]`) as HTMLButtonElement,
+    )
+    await waitFor(() => expect(container.querySelector('.logbook-form')).not.toBeNull())
+    return container
+  }
+
+  const callInput = (c: HTMLElement) =>
+    c.querySelector('.logbook-form .settings-input-row input') as HTMLInputElement
+
+  it('prefills CALL with every character of the reported callsign', async () => {
+    const container = await openEdit('WW9WTF')
+    expect(callInput(container).value).toBe('WW9WTF')
+  })
+
+  it('saves the whole call back, at and past the reported boundary', async () => {
+    for (const call of ['WW9WTF', 'KD9TAW/P', 'SV9/KD9TAW/P']) {
+      const editQso = api.editQso as ReturnType<typeof vi.fn>
+      editQso.mockReset()
+      editQso.mockResolvedValue({})
+      const container = await openEdit(call)
+      expect(callInput(container).value).toBe(call)
+      fireEvent.click(
+        container.querySelector('.logbook-form button[type="submit"]') as HTMLButtonElement,
+      )
+      await waitFor(() => expect(editQso).toHaveBeenCalled())
+      expect(editQso.mock.calls[0][1].call).toBe(call)
+    }
+  })
+})

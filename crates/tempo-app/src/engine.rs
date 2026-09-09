@@ -27490,6 +27490,85 @@ mod tests {
     }
 
     #[test]
+    fn a_callsign_correction_re_uploads_the_corrected_contact() {
+        // THE BUSTED-CALL GAP. A call is logged wrong, auto-upload sends it, and the
+        // operator then fixes it in the Logbook edit form. `Logbook::update_record` clears
+        // the upload stamps on a callsign correction and says why: "the services hold the
+        // OLD call, so clearing the upload stamps re-queues the corrected QSO to every one
+        // of them". Nothing put it back on the queue. The local log shows the corrected
+        // call and QRZ/ClubLog/eQSL keep the busted one — permanently, because the stamps
+        // are the only record that anything was ever owed and they have just been erased.
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        let rec = e.qso_record("WW9WT".into(), None, None);
+        e.log_qso(rec);
+        e.take_pending_uploads(); // the first-attempt queue; this is about the CORRECTION
+        assert!(e.take_pending_uploads().is_empty(), "queue drained");
+        // That first upload landed at QRZ — under the BUSTED call.
+        let sent = e.get_log()[0].clone();
+        e.stamp_qrz_upload(
+            &sent,
+            tempo_core::logbook::UploadOutcome::Accepted,
+            now_unix_secs() as i64,
+            None,
+        );
+
+        // The operator corrects the call in the edit form.
+        let mut fixed = e.get_log()[0].clone();
+        fixed.call = "WW9WTF".into();
+        assert!(e.update_qso(0, fixed), "the edit applies");
+        assert_eq!(e.get_log()[0].call, "WW9WTF", "the log holds the fix");
+        assert!(
+            e.get_log()[0].upload.qrz.is_none(),
+            "the busted call's QRZ stamp is cleared — that is what makes it owed again"
+        );
+
+        let queued = e.take_pending_uploads();
+        assert_eq!(
+            queued.len(),
+            1,
+            "a corrected callsign must go back out to the connectors — otherwise every \
+             service keeps the busted call and the operator has no way to know"
+        );
+        assert_eq!(queued[0].rec.call, "WW9WTF", "the CORRECTED call is sent");
+        assert_eq!(
+            queued[0].legs,
+            upload_legs::ALL,
+            "every stamp was cleared, so every leg is owed"
+        );
+    }
+
+    #[test]
+    fn an_ordinary_edit_does_not_re_upload_the_contact() {
+        // The other side of the correction re-queue: only a CALLSIGN change re-sends. An
+        // ordinary field fix (name, grid, RST, a park ref) keeps its upload stamps — the
+        // services already hold this contact under this call — so re-pushing on every save
+        // would turn a typo fix into a duplicate insert at four services.
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        let rec = e.qso_record("WW9WTF".into(), None, None);
+        e.log_qso(rec);
+        e.take_pending_uploads();
+
+        let mut edited = e.get_log()[0].clone();
+        edited.name = Some("Dave".into());
+        assert!(e.update_qso(0, edited));
+        assert!(
+            e.take_pending_uploads().is_empty(),
+            "a non-callsign edit must not re-push the contact"
+        );
+
+        // Nor does re-typing the SAME call in a different case or with padding — that is
+        // the rule `update_record` uses to decide whether confirmations survive, and the
+        // re-queue has to read the edit the same way or the two disagree on every save.
+        let mut same = e.get_log()[0].clone();
+        same.call = " ww9wtf ".into();
+        assert!(e.update_qso(0, same));
+        assert!(
+            e.take_pending_uploads().is_empty(),
+            "the same call in another case is not a correction"
+        );
+    }
+
+    #[test]
     fn a_credential_fix_requeues_the_clublog_qsos_that_never_uploaded() {
         // THE F4MQS GAP: QSOs logged before the app-password was stored stayed
         // un-uploaded with nothing flagging them, and fixing the password retried

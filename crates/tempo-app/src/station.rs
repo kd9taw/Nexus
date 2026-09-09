@@ -930,10 +930,35 @@ impl StationCore {
         // full-log rewrite below can't drop them (and so the pre-edit record is
         // still present to dedup against — no stale copy is re-added).
         self.recover_external_appends();
+        // A CALLSIGN correction is the one edit the services have to hear about again.
+        // `Logbook::update_record` clears the upload stamps for exactly that reason — "the
+        // services hold the OLD call, so clearing the upload stamps re-queues the corrected
+        // QSO to every one of them" — but clearing a stamp queues nothing, and nothing else
+        // ever re-scans for an unstamped record. So a busted call fixed in the log stayed
+        // busted at QRZ/ClubLog/eQSL/… for good, with the stamps that were the only evidence
+        // anything was owed now erased. Read the stored call BEFORE the update, under
+        // `update_record`'s own trimmed, case-insensitive rule, so the two can never disagree
+        // about what counts as a correction.
+        let call_changed = self
+            .logbook
+            .records()
+            .get(index)
+            .is_some_and(|old| !rec.call.trim().eq_ignore_ascii_case(old.call.trim()));
         let ok = self.logbook.update_record(index, rec);
         if ok {
             self.save_log("update_qso");
             self.refresh_worked_index();
+            if call_changed {
+                // The STORED record, not the incoming payload: `update_record` merges the
+                // fields the edit form does not carry (park refs, TIME_OFF, the split leg),
+                // and the connectors must send the whole contact, not the form's half of it.
+                if let Some(fixed) = self.logbook.records().get(index).cloned() {
+                    // Every leg: every stamp was just cleared, so every connector is owed.
+                    // The disabled ones are dropped by the worker's own toggle check, the
+                    // same way a freshly logged contact's are.
+                    self.requeue_upload(fixed, crate::engine::upload_legs::ALL, 0);
+                }
+            }
         }
         ok
     }
