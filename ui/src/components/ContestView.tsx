@@ -14,6 +14,7 @@ import { fdEventFromWindow, fdHeaderSubtitle, FD_EVENT_NAMES, type FdKind } from
 import { usePinnedScroll } from '../usePinnedScroll'
 import { ARRL_SECTIONS_BY_DIVISION, ARRL_SECTION_TOTAL } from '../features/arrlSections'
 import { contestDomain, type DomainGroup } from '../features/contestDomains'
+import { composingSlot } from '../features/contestExchange'
 import { t } from '../i18n'
 import { T } from '../i18n/T'
 import { bandColor } from '../bandColors'
@@ -1375,8 +1376,8 @@ export function ContestView({ fieldDay, onSetMode, fdActive = false, fdRuleset =
           isWfd,
           rulesYear: fieldDay?.rulesYear ?? 0,
           rulesGenerated: fieldDay?.rulesGenerated ?? '',
-          myClass: fieldDay?.myClass ?? '',
-          mySection: fieldDay?.mySection ?? '',
+          myClass: composingSlot(fieldDay?.composing, 'CLASS'),
+          mySection: composingSlot(fieldDay?.composing, 'SECTION'),
           log,
           modes,
           workedSet,
@@ -1445,9 +1446,14 @@ export function ContestView({ fieldDay, onSetMode, fdActive = false, fdRuleset =
       <div className="panel-header fd-header">
         <div className="fd-ident">
           <h2 className="conv-peer">{isWfd ? FD_SHORT_NAMES.wfd : FD_SHORT_NAMES.arrlfd}</h2>
+          {/* What the SESSION is composing — the exchange the next contact will get.
+              A logged row's own exchange is in the log table below, off `mex`. */}
           <span className="fd-class">
-            {fieldDay?.myClass ?? '—'}
-            <span className="fd-section"> {fieldDay?.mySection ?? '—'}</span>
+            {composingSlot(fieldDay?.composing, 'CLASS') || '—'}
+            <span className="fd-section">
+              {' '}
+              {composingSlot(fieldDay?.composing, 'SECTION') || '—'}
+            </span>
           </span>
         </div>
         <div className="fd-role-toggle" role="group" aria-label={t('fieldDay.role.aria')}>

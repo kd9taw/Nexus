@@ -632,7 +632,7 @@ fn foreign_cat_port_message(addr: &str, reply: &str, rig_model: u32) -> String {
     )
 }
 
-use tempo_app::dto::{SourceKind, Tier};
+use tempo_app::dto::{FieldDayQso, SourceKind, Tier};
 use tempo_app::settings::{RadioProfile, Settings};
 use tempo_core::message::Msg;
 // Band label → club-log meter string. Lives in `tempo_net` beside the two
@@ -9998,28 +9998,15 @@ impl RadioLoop {
                 });
                 if let Some(fd) = snap.field_day.as_ref() {
                     if fd.qso_count > station.last_fd_qsos {
-                        let sent = format!("{} {}", fd.my_class, fd.my_section);
+                        let ctx = FdWsjtxCtx {
+                            when_secs: now_secs,
+                            dial_hz: sinks.cfg_dial_hz,
+                            tier: tier.to_string(),
+                            mycall: snap.mycall.clone(),
+                            mygrid: snap.mygrid.clone(),
+                        };
                         for q in &fd.log[station.last_fd_qsos.min(fd.log.len())..] {
-                            let recvd = format!("{} {}", q.class, q.section);
-                            let _ = server.send_qso_logged(&WsjtxQso {
-                                time_off: now_secs,
-                                dx_call: &q.call,
-                                dx_grid: "",
-                                tx_freq: sinks.cfg_dial_hz,
-                                mode: tier,
-                                report_sent: "",
-                                report_recvd: "",
-                                tx_power: "",
-                                comments: "",
-                                name: "",
-                                time_on: now_secs,
-                                op_call: &snap.mycall,
-                                my_call: &snap.mycall,
-                                my_grid: &snap.mygrid,
-                                exchange_sent: &sent,
-                                exchange_recvd: &recvd,
-                                adif_propmode: "",
-                            });
+                            let _ = server.send_qso_logged(&fd_wsjtx_qso(q, &ctx).as_datagram());
                         }
                     }
                 }
@@ -10055,7 +10042,6 @@ impl RadioLoop {
                                 op.to_string()
                             }
                         };
-                        let myexch = format!("{} {}", fd.my_class, fd.my_section);
                         let contest = if fd.event == "wfd" {
                             "WFD"
                         } else {
@@ -10063,6 +10049,14 @@ impl RadioLoop {
                         };
                         let dial_mhz = cur_dial as f64 / 1e6;
                         let fallback_unix = (now / 1000.0) as u64;
+                        let n1_ctx = FdN1mmCtx {
+                            mycall: mycall.clone(),
+                            operator: operator.clone(),
+                            contest: contest.to_string(),
+                            dial_mhz,
+                            radionr: n1mm_radio_nr,
+                            fallback_unix,
+                        };
                         std::thread::spawn(move || {
                             for (i, q) in new_qsos.iter().enumerate() {
                                 let mode_str = fd_interop_mode(&q.mode, &q.submode);
@@ -10102,34 +10096,7 @@ impl RadioLoop {
                                     }
                                 }
                                 if !n1_addr.is_empty() {
-                                    let c = tempo_net::n1mm::N1mmContact {
-                                        // Field Day IS the multi-op case #33 is about, so this
-                                        // emitter carries the active radio's number too — the
-                                        // dashboards bucket by it and a whole station reading
-                                        // as radio 1 is exactly the wrong answer here.
-                                        radionr: n1mm_radio_nr,
-                                        mycall: mycall.clone(),
-                                        call: q.call.clone(),
-                                        band: band_for_interop(&q.band),
-                                        mode: mode_str.to_string(),
-                                        timestamp: tempo_net::n1mm::utc_timestamp(when),
-                                        section: q.section.clone(),
-                                        // A contest exchange carries no grid.
-                                        gridsquare: String::new(),
-                                        points: tempo_core::fieldday::qso_points_for_mode(&q.mode),
-                                        contestname: contest.to_string(),
-                                        freq_10hz: (dial_mhz * 1e5) as u64,
-                                        sent_exchange: myexch.clone(),
-                                        // Field Day's exchange IS class+section — no RST is
-                                        // passed on the air, so both stay empty and the
-                                        // omit-when-empty rule keeps this datagram byte-identical
-                                        // to the one that has been on the air since 0.8.0.
-                                        rst_sent: String::new(),
-                                        rst_rcvd: String::new(),
-                                        operator: operator.clone(),
-                                        // 32-hex dedup id: time + batch index + call hash.
-                                        id: tempo_net::n1mm::dedup_id(when, &q.call, i as u64),
-                                    };
+                                    let c = fd_n1mm_contact(q, i, &n1_ctx);
                                     if let Err(e) = tempo_net::n1mm::send_contact(&n1_addr, &c) {
                                         eprintln!("tempo: N1MM broadcast failed: {e}");
                                     }
@@ -10190,6 +10157,139 @@ impl RadioLoop {
 // provable without a sound card, rig, or live socket. The loop calls these and
 // sends the result; the math (audio-offset → RF frequency) and the
 // callsign-gating live here where they can be tested.
+
+/// What the WSJT-X type-5 emitter knows about the STATION rather than the contact.
+///
+/// Split out so the per-row half below is a function that can be called — and its bytes
+/// asserted — without a socket, a sound card or the slot loop around it.
+struct FdWsjtxCtx {
+    /// The slot boundary this batch is emitted on (both `time_on` and `time_off`).
+    when_secs: i64,
+    dial_hz: u64,
+    /// The link tier's WSJT-X mode token.
+    tier: String,
+    mycall: String,
+    mygrid: String,
+}
+
+/// Every WSJT-X type-5 field a Field Day contact fills in, OWNED.
+///
+/// [`QsoLogged`](WsjtxQso) borrows, so the datagram itself cannot be returned from a
+/// builder; this is the owned half, and [`as_datagram`](Self::as_datagram) is the
+/// borrow the server encodes.
+struct FdWsjtxQso {
+    when_secs: i64,
+    dx_call: String,
+    dial_hz: u64,
+    tier: String,
+    mycall: String,
+    mygrid: String,
+    exchange_sent: String,
+    exchange_recvd: String,
+}
+
+impl FdWsjtxQso {
+    /// The datagram struct, with the fields this contest wire has never carried left
+    /// empty exactly as they have been since 0.8.0.
+    fn as_datagram(&self) -> WsjtxQso<'_> {
+        WsjtxQso {
+            time_off: self.when_secs,
+            dx_call: &self.dx_call,
+            dx_grid: "",
+            tx_freq: self.dial_hz,
+            mode: &self.tier,
+            report_sent: "",
+            report_recvd: "",
+            tx_power: "",
+            comments: "",
+            name: "",
+            time_on: self.when_secs,
+            op_call: &self.mycall,
+            my_call: &self.mycall,
+            my_grid: &self.mygrid,
+            exchange_sent: &self.exchange_sent,
+            exchange_recvd: &self.exchange_recvd,
+            adif_propmode: "",
+        }
+    }
+}
+
+/// The type-5 `QSOLogged` datagram for ONE logged contest contact.
+///
+/// ⭐ **Both exchanges come from `q` — the ROW — and from nowhere else** (spec §3.3).
+/// The sent side used to be one session-level `format!` hoisted out of the caller's
+/// loop, which relabelled every contact already logged the moment a mobile station
+/// changed county.
+fn fd_wsjtx_qso(q: &FieldDayQso, ctx: &FdWsjtxCtx) -> FdWsjtxQso {
+    FdWsjtxQso {
+        when_secs: ctx.when_secs,
+        dx_call: q.call.clone(),
+        dial_hz: ctx.dial_hz,
+        tier: ctx.tier.clone(),
+        mycall: ctx.mycall.clone(),
+        mygrid: ctx.mygrid.clone(),
+        exchange_sent: q.mex.clone(),
+        exchange_recvd: format!("{} {}", q.class, q.section),
+    }
+}
+
+/// What the N1MM `<contactinfo>` emitter knows about the STATION rather than the
+/// contact. Built before the push thread is spawned and moved into it.
+struct FdN1mmCtx {
+    mycall: String,
+    operator: String,
+    /// "ARRL-FIELD-DAY" | "WFD".
+    contest: String,
+    dial_mhz: f64,
+    /// Which radio N1MM attributes the batch to, 1-based (#33).
+    radionr: u32,
+    /// Log time for a row that carries none (legacy rows).
+    fallback_unix: u64,
+}
+
+/// The `<contactinfo>` datagram for ONE logged contest contact. `batch_index` is this
+/// row's place in the push batch — the third component of the 32-hex dedup id.
+///
+/// ⭐ **The sent exchange comes from `q`, the ROW** (spec §3.3), for the same reason as
+/// [`fd_wsjtx_qso`]: this emitter hoisted its own copy of the same `format!`.
+fn fd_n1mm_contact(
+    q: &FieldDayQso,
+    batch_index: usize,
+    ctx: &FdN1mmCtx,
+) -> tempo_net::n1mm::N1mmContact {
+    // Per-QSO log time (a multi-contact batch must not collapse onto one wall clock).
+    let when = if q.when_unix > 0 {
+        q.when_unix
+    } else {
+        ctx.fallback_unix
+    };
+    tempo_net::n1mm::N1mmContact {
+        // Field Day IS the multi-op case #33 is about, so this emitter carries the
+        // active radio's number too — the dashboards bucket by it and a whole station
+        // reading as radio 1 is exactly the wrong answer here.
+        radionr: ctx.radionr,
+        mycall: ctx.mycall.clone(),
+        call: q.call.clone(),
+        band: band_for_interop(&q.band),
+        mode: fd_interop_mode(&q.mode, &q.submode),
+        timestamp: tempo_net::n1mm::utc_timestamp(when),
+        section: q.section.clone(),
+        // A contest exchange carries no grid.
+        gridsquare: String::new(),
+        points: tempo_core::fieldday::qso_points_for_mode(&q.mode),
+        contestname: ctx.contest.clone(),
+        freq_10hz: (ctx.dial_mhz * 1e5) as u64,
+        sent_exchange: q.mex.clone(),
+        // Field Day's exchange IS class+section — no RST is passed on the air, so both
+        // stay empty and the omit-when-empty rule keeps this datagram byte-identical to
+        // the one that has been on the air since 0.8.0.
+        rst_sent: String::new(),
+        rst_rcvd: String::new(),
+        operator: ctx.operator.clone(),
+        // 32-hex dedup id: time + batch index + call hash.
+        id: tempo_net::n1mm::dedup_id(when, &q.call, batch_index as u64),
+    }
+}
 
 /// The mode token one Field Day QSO is pushed to N3FJP / N1MM with, from its
 /// scoring class (`FieldDayQso::mode`, "DIG" | "CW" | "PH") and recorded
@@ -11817,6 +11917,164 @@ mod tests {
         assert_eq!(fd_interop_mode("DIG", ""), "FT8");
         assert_eq!(fd_interop_mode("CW", ""), "CW");
         assert_eq!(fd_interop_mode("PH", ""), "SSB");
+    }
+
+    // ── THE INTEROP PROVENANCE FIXTURES (spec §3.3) ───────────────────────────────
+    //
+    // Two emitters put a SENT exchange on a wire: the WSJT-X type-5 `QSOLogged`
+    // datagram and the N1MM `<contactinfo>` broadcast. Both used to read one
+    // session-level string hoisted out of their own per-QSO loops, so a mobile station
+    // that changed county relabelled every contact already logged — on both wires, and
+    // silently, because the receiving logger cannot tell a wrong exchange from a right
+    // one.
+    //
+    // The fixtures below are the pair §3.3 mechanism 4 asks for. `fd_rows` is the
+    // control: Field Day's exchange never moves, so every row carries what the session
+    // composes and NOTHING on that wire may change. `mobile_rows` is the discriminator:
+    // its rows carry exchanges the session no longer composes, so an emitter reading the
+    // session instead of the row produces visibly different bytes.
+
+    // The pinned Field Day datagrams. Captured from these same encoders BEFORE the
+    // provenance change, which is what makes them a before/after measurement rather
+    // than a restatement of what the code now does.
+    const WSJTX_FD_ROW0_HEX: &str = "adbccbda000000030000000500000007544553542d49440000000000258caa033f9aa0010000000457314157000000000000000000d6c0900000000346543800000000000000000000000000000000000000000000000000258caa033f9aa00100000005573958595a00000005573958595a00000004454e353300000005334120574900000005324120435400000000";
+    const WSJTX_FD_ROW1_HEX: &str = "adbccbda000000030000000500000007544553542d49440000000000258caa033f9aa001000000054b39414243000000000000000000d6c0900000000346543800000000000000000000000000000000000000000000000000258caa033f9aa00100000005573958595a00000005573958595a00000004454e353300000005334120574900000005314420494c00000000";
+    const N1MM_FD_ROW0: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?><contactinfo><app>NEXUS</app><contestname>ARRL-FIELD-DAY</contestname><contestnr>1</contestnr><timestamp>2025-06-15 15:06:40</timestamp><mycall>W9XYZ</mycall><band>20</band><rxfreq>1407400</rxfreq><txfreq>1407400</txfreq><operator>W9XYZ</operator><mode>FT8</mode><call>W1AW</call><section>CT</section><points>2</points><radionr>1</radionr><IsRunQSO>0</IsRunQSO><StationName>NEXUS</StationName><ID>0000000ca18d4e80000000000bb55600</ID><IsClaimedQso>1</IsClaimedQso><SentExchange>3A WI</SentExchange></contactinfo>";
+    const N1MM_FD_ROW1: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?><contactinfo><app>NEXUS</app><contestname>ARRL-FIELD-DAY</contestname><contestnr>1</contestnr><timestamp>2025-06-15 15:07:40</timestamp><mycall>W9XYZ</mycall><band>20</band><rxfreq>1407400</rxfreq><txfreq>1407400</txfreq><operator>W9XYZ</operator><mode>FT8</mode><call>K9ABC</call><section>IL</section><points>2</points><radionr>1</radionr><IsRunQSO>0</IsRunQSO><StationName>NEXUS</StationName><ID>0000000ca18d55c5000000052c38d890</ID><IsClaimedQso>1</IsClaimedQso><SentExchange>3A WI</SentExchange></contactinfo>";
+
+    /// One DTO log row, as the snapshot hands it to the emitters.
+    fn fd_row(call: &str, class: &str, section: &str, mex: &str, when_unix: u64) -> FieldDayQso {
+        FieldDayQso {
+            call: call.into(),
+            class: class.into(),
+            section: section.into(),
+            band: "20m".into(),
+            mode: "DIG".into(),
+            submode: "FT8".into(),
+            when_unix,
+            mex: mex.into(),
+        }
+    }
+
+    /// A Field Day session: the exchange never moves, so every row's sent exchange is
+    /// the one the session is composing.
+    fn fd_rows() -> Vec<FieldDayQso> {
+        vec![
+            fd_row("W1AW", "2A", "CT", "3A WI", 1_750_000_000),
+            fd_row("K9ABC", "1D", "IL", "3A WI", 1_750_000_060),
+        ]
+    }
+
+    /// A mobile session that has CHANGED COUNTY. Row 0 was worked from Wilson, row 1
+    /// from Davidson, and the session is now composing `3A DAV` — so a session-level
+    /// read stamps `3A DAV` on row 0, which was never sent from Davidson.
+    fn mobile_rows() -> Vec<FieldDayQso> {
+        vec![
+            fd_row("W1AW", "2A", "CT", "3A WIL", 1_750_000_000),
+            fd_row("K9ABC", "1D", "IL", "3A DAV", 1_750_000_060),
+        ]
+    }
+
+    fn wsjtx_ctx() -> FdWsjtxCtx {
+        FdWsjtxCtx {
+            when_secs: 1_750_000_100,
+            dial_hz: 14_074_000,
+            tier: "FT8".into(),
+            mycall: "W9XYZ".into(),
+            mygrid: "EN53".into(),
+        }
+    }
+
+    fn n1mm_ctx() -> FdN1mmCtx {
+        FdN1mmCtx {
+            mycall: "W9XYZ".into(),
+            operator: "W9XYZ".into(),
+            contest: "ARRL-FIELD-DAY".into(),
+            dial_mhz: 14.074,
+            radionr: 1,
+            fallback_unix: 1_750_000_100,
+        }
+    }
+
+    /// ⭐ **THE FIELD DAY WIRE, PINNED TO ITS BYTES.**
+    ///
+    /// Field Day's exchange never moves, so a Field Day operator's two interop wires
+    /// must stay byte-for-byte what they have been since 0.8.0 — the provenance change
+    /// is only allowed to matter where the exchange actually moves. These are the WHOLE
+    /// encoded datagrams from the real encoders, captured before the change and
+    /// unchanged by it, not a description of the part that was expected to move.
+    #[test]
+    fn field_day_interop_datagrams_are_byte_pinned() {
+        let ctx = wsjtx_ctx();
+        let wsjtx: Vec<String> = fd_rows()
+            .iter()
+            .map(|q| {
+                let b = tempo_net::wsjtx::encode_qso_logged(
+                    "TEST-ID",
+                    &fd_wsjtx_qso(q, &ctx).as_datagram(),
+                );
+                b.iter().map(|x| format!("{x:02x}")).collect::<String>()
+            })
+            .collect();
+        assert_eq!(wsjtx, vec![WSJTX_FD_ROW0_HEX, WSJTX_FD_ROW1_HEX]);
+
+        // N1MM `<contactinfo>` is XML, so its bytes are readable and pinned as text.
+        let nctx = n1mm_ctx();
+        let n1mm: Vec<String> = fd_rows()
+            .iter()
+            .enumerate()
+            .map(|(i, q)| tempo_net::n1mm::build_contactinfo(&fd_n1mm_contact(q, i, &nctx)))
+            .collect();
+        assert_eq!(n1mm, vec![N1MM_FD_ROW0, N1MM_FD_ROW1]);
+    }
+
+    /// ⭐ **THE MOBILE DEFECT — a session-level exchange stamped on every row.**
+    ///
+    /// Both wires must describe row 0 with what row 0 actually sent. The failing-first
+    /// control is the same fixture read the old way: the session composes `3A DAV`, so
+    /// an emitter that reads the session puts `3A DAV` on a contact worked from Wilson.
+    #[test]
+    fn a_mobile_session_puts_each_rows_own_exchange_on_both_wires() {
+        let rows = mobile_rows();
+        let ctx = wsjtx_ctx();
+        let nctx = n1mm_ctx();
+
+        // What the session is composing NOW — the value the deleted DTO pair carried,
+        // and the wrong answer for row 0. Nothing below can reach it: it exists here
+        // only as the discriminator this fixture is checked against.
+        let session_now = "3A DAV";
+
+        for (i, q) in rows.iter().enumerate() {
+            let dg = tempo_net::wsjtx::encode_qso_logged(
+                "TEST-ID",
+                &fd_wsjtx_qso(q, &ctx).as_datagram(),
+            );
+            let hay = String::from_utf8_lossy(&dg).to_string();
+            assert!(
+                hay.contains(q.mex.as_str()),
+                "row {i} ({}) must reach the WSJT-X wire with its OWN exchange {:?}: {hay:?}",
+                q.call,
+                q.mex
+            );
+
+            let xml = tempo_net::n1mm::build_contactinfo(&fd_n1mm_contact(q, i, &nctx));
+            assert!(
+                xml.contains(&format!("<SentExchange>{}</SentExchange>", q.mex)),
+                "row {i} ({}) must reach the N1MM wire with its OWN exchange {:?}: {xml}",
+                q.call,
+                q.mex
+            );
+        }
+
+        // The positive control §3.3 mechanism 4 requires: this fixture DISCRIMINATES.
+        // Row 0's exchange differs from what the session composes, so a session-level
+        // read is a different byte string — which is what makes the assertions above
+        // capable of failing.
+        assert_ne!(
+            rows[0].mex, session_now,
+            "the fixture must discriminate: row 0's exchange has to differ from the \
+             session's, or a session-level read would pass this test"
+        );
     }
 
     /// AUTO and OFF must survive the round trip, and must NEVER come back as "mid".

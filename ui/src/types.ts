@@ -2527,12 +2527,21 @@ export interface FieldDayQso {
    *  their class IS the mode — and for rows logged before submode was recorded. */
   submode?: string
   whenUnix?: number
+  /** ⭐ The exchange THIS CONTACT SENT, rendered in Rust from the row itself.
+   *
+   *  It is on the row because it MOVES: a mobile station changes county mid-session, and
+   *  a contact worked before the move sent the old one. Absent on a snapshot from a
+   *  build older than this field. */
+  mex?: string
 }
 
 /** Field Day operating + scoring status. */
 export interface FieldDayStatus {
-  myClass: string
-  mySection: string
+  /* ⛔ NO SESSION-LEVEL SENT EXCHANGE LIVES HERE. The `myClass`/`mySection` pair that
+     used to head this interface was DELETED, not renamed: two interop emitters read it
+     inside their per-QSO loops, so a mobile station that changed county relabelled every
+     contact already logged. What the session composes is `composing` below (a vector);
+     a row's own sent exchange is `FieldDayQso.mex`. */
   running: boolean
   state: string
   /** The station currently being worked (quiets decode popups about them). */

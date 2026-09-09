@@ -37,8 +37,10 @@ const snap = {
 } as unknown as AppSnapshot
 
 const fieldDay = {
-  myClass: '3A',
-  mySection: 'WI',
+  composing: [
+    { key: 'CLASS', raw: '3A' },
+    { key: 'SECTION', raw: 'WI', domain: 'fd_sections' },
+  ],
   running: true,
   state: '',
   qsoCount: 0,

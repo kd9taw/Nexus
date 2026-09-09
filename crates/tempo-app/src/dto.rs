@@ -1317,14 +1317,31 @@ pub struct FieldDayQso {
     /// Unix seconds when logged (drives interop-push timestamps).
     #[serde(default)]
     pub when_unix: u64,
+    /// ⭐ **The exchange THIS CONTACT SENT** — rendered from the row by
+    /// [`sent_exchange_string`](tempo_core::contest::sent_exchange_string) and from
+    /// nothing else (spec §3.3).
+    ///
+    /// It is on the row because it MOVES: a mobile station changes county mid-session,
+    /// and a contact worked before the move sent the old one. Two interop emitters used
+    /// to read one session-level pair off [`FieldDayStatus`] instead — hoisted outside
+    /// their own per-QSO loops — so a move relabelled every contact already logged, on
+    /// both the WSJT-X type-5 datagram and the N1MM `<contactinfo>` broadcast. That pair
+    /// is deleted; this is what replaced it.
+    #[serde(default)]
+    pub mex: String,
 }
 
 /// Field Day mode status: my exchange, the log, score and multipliers.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FieldDayStatus {
-    pub my_class: String,
-    pub my_section: String,
+    // ⛔ **NO SESSION-LEVEL SENT EXCHANGE LIVES HERE** (spec §3.3 mechanism 2). The
+    // `my_class`/`my_section` pair that used to sit at the top of this struct was
+    // deleted rather than renamed: two interop emitters read it inside their per-QSO
+    // loops and stamped one session-level exchange onto every row. What the session is
+    // composing reaches the UI as `composing` below — a VECTOR, never a preformatted
+    // string — and a row's own sent exchange is `FieldDayQso::mex`. An emitter looping
+    // over rows therefore has the right value in hand and no reason to reach out here.
     pub running: bool,
     pub state: String,
     /// The station currently being worked (the FD sequencer's partner) — lets
