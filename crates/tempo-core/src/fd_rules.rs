@@ -1941,7 +1941,7 @@ mod tests {
     }
 
     /// SAME GUARD for the hand-mirrored bonus menu: the seed's bonus menu vs
-    /// the `FD_BONUSES` table in ui/src/components/FieldDayView.tsx. Ids and
+    /// the `FD_BONUSES` table in ui/src/components/ContestView.tsx. Ids and
     /// points only — the LABELS deliberately differ (the seed labels are the
     /// moved tuple-table strings; the TS labels are the invariant display
     /// strings the checklist renders), so comparing them would pin an
@@ -1950,12 +1950,12 @@ mod tests {
     #[test]
     fn the_typescript_bonus_mirror_matches_fd_bonuses_exactly() {
         let bonuses = ruleset(FdEvent::ArrlFd, CURRENT_RULES_YEAR).bonuses;
-        let ts_src = include_str!("../../../ui/src/components/FieldDayView.tsx");
+        let ts_src = include_str!("../../../ui/src/components/ContestView.tsx");
         // Pull just the FD_BONUSES table body (the file declares other objects).
         let head = "export const FD_BONUSES";
         let start = ts_src
             .find(head)
-            .expect("FieldDayView.tsx declares FD_BONUSES");
+            .expect("ContestView.tsx declares FD_BONUSES");
         // Slice from the initializer's `= [`, not the declaration (whose
         // `FdBonus[]` type annotation carries the file's first `]`).
         let body = &ts_src[start..];
@@ -1970,7 +1970,7 @@ mod tests {
             .collect();
         assert!(
             ts.len() > 10,
-            "parsed only {} bonus rows out of FieldDayView.tsx — the parser is \
+            "parsed only {} bonus rows out of ContestView.tsx — the parser is \
              broken, not the mirror",
             ts.len()
         );
@@ -1981,12 +1981,12 @@ mod tests {
         assert!(
             missing_in_ts.is_empty(),
             "bonus id(s) {missing_in_ts:?} exist in the seed's bonus menu but NOT in \
-             FieldDayView.tsx — the checklist can never claim them"
+             ContestView.tsx — the checklist can never claim them"
         );
         let missing_in_rust: Vec<&&str> = ts_ids.iter().filter(|c| !rust_ids.contains(c)).collect();
         assert!(
             missing_in_rust.is_empty(),
-            "bonus id(s) {missing_in_rust:?} exist in FieldDayView.tsx but NOT in \
+            "bonus id(s) {missing_in_rust:?} exist in ContestView.tsx but NOT in \
              the seed's bonus menu — a claimed checkbox that scores nothing"
         );
         assert_eq!(ts.len(), 15, "the full ARRL bonus menu, both sides");
@@ -1995,7 +1995,7 @@ mod tests {
                 (rust.id, rust.points),
                 *ts_row,
                 "bonus #{i} diverged (id or points) between the seed's bonus menu \
-                 and FieldDayView.tsx"
+                 and ContestView.tsx"
             );
         }
     }
