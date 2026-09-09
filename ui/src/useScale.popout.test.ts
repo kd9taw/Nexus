@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { act, renderHook } from '@testing-library/react'
+import { act, cleanup, renderHook } from '@testing-library/react'
 import { useScale } from './useScale'
 
 // Pin policy per surface (census item 2): in the MAIN window an explicit pin is an
@@ -16,7 +16,10 @@ function setWin(w: number, h: number) {
 }
 
 beforeEach(() => localStorage.clear())
-afterEach(() => window.history.replaceState(null, '', '/'))
+afterEach(() => {
+  cleanup() // Unmount resize listeners and pending animation frames before jsdom is torn down.
+  window.history.replaceState(null, '', '/')
+})
 
 describe('useScale pinned-scale surface policy', () => {
   it('main window: an explicit pin applies verbatim even when it does not fit', () => {
