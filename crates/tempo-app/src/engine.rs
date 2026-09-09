@@ -30544,6 +30544,73 @@ mod tests {
         assert_eq!(out[0].op, "W9XYZ", "operator falls back to mycall");
     }
 
+    /// ⭐ §18.2's refusal has to REACH the operator, and this is the only test that
+    /// runs the whole path it travels: the `ClubBackend` trait object the socket
+    /// loop holds → `EngineClubBackend` → `Engine::fd_club_join` → `ClubLog`.
+    ///
+    /// `version_refusal`'s own test asserts the wording. A correct message that
+    /// never arrives is exactly the failure this ruling exists to prevent — the
+    /// point of naming the version and the contest is that somebody on a Field Day
+    /// site reads it — so the wording being right is only half of it.
+    #[test]
+    fn a_v1_positions_join_refusal_reaches_the_wire_through_the_bridge() {
+        use std::sync::{Arc, Mutex};
+        use tempo_net::fdsync::{ClubBackend, PROTO_VERSION};
+
+        let dir = std::env::temp_dir().join(format!("fd-join-gate-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let shared = Arc::new(Mutex::new(Engine::new("W9ABC", "EN37", 0)));
+        {
+            let mut e = engine_lock(&shared);
+            let mut s = e.settings.clone();
+            s.mycall = "W9ABC".into();
+            s.fd_class = "3A".into();
+            s.fd_section = "WI".into();
+            e.apply_settings(s);
+            e.fd_host_start(dir.join("fd_event_test.jsonl")).unwrap();
+        }
+        // The trait object is all the socket loop can reach — so this is the call
+        // the accept loop makes, not a shortcut past it.
+        let backend: Arc<dyn ClubBackend> =
+            Arc::new(crate::fdbridge::EngineClubBackend(shared.clone()));
+
+        // A Field Day club serves a v1 tent exactly as it always did.
+        assert!(
+            backend.join(1, "aaaa0001", "CW tent", "KD9TAW", 0).is_ok(),
+            "a mixed-version FIELD DAY club must be unaffected by the gate"
+        );
+
+        // The same club running a QSO party refuses it, naming both.
+        engine_lock(&shared).fd_club.as_mut().unwrap().contest_id = "TN-QSO-PARTY".into();
+        let msg = backend
+            .join(1, "bbbb0002", "GOTA tent", "KD9TAW", 0)
+            .expect_err("a v1 tent cannot run a QSO party");
+        assert!(
+            msg.contains("TN-QSO-PARTY") && msg.contains("v2") && msg.contains("v1"),
+            "the refusal that reaches the wire names the contest AND both versions: {msg}"
+        );
+        assert_eq!(
+            msg,
+            engine_lock(&shared)
+                .fd_club
+                .as_ref()
+                .unwrap()
+                .version_refusal(1)
+                .unwrap(),
+            "and it is the policy layer's own wording, not a summary of it"
+        );
+
+        // POSITIVE CONTROL: the same refusing club welcomes a CURRENT position. A
+        // gate that refused everybody would satisfy every assertion above while
+        // locking every tent out of the QSO party.
+        let accept = backend
+            .join(PROTO_VERSION, "cccc0003", "SSB tent", "KD9TAW", 0)
+            .expect("a v2 tent joins the QSO party");
+        assert_eq!(accept.host_call, "W9ABC");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn a_lone_rr73_seed_never_auto_logs_a_phantom_qso() {
         // The root-cause guard for the phantom bug: double-clicking (or a companion
