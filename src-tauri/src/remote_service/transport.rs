@@ -201,6 +201,12 @@ pub async fn connected(
         "x-nexus-application-recall-version",
         "1".parse().map_err(|_| "invalidResponse")?,
     );
+    // Keyboard samples are separately advertised; older services keep their
+    // exact v1/v2/v3/v4 contracts when rolling back the hosted deployment.
+    request.headers_mut().insert(
+        "x-nexus-application-keyboard-version",
+        "1".parse().map_err(|_| "invalidResponse")?,
+    );
     let config = WebSocketConfig::default()
         .max_message_size(Some(512))
         .max_frame_size(Some(512))

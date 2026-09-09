@@ -169,6 +169,22 @@ fn cloud_runtime_probe() {
     };
     settings.ensure_radio_profiles();
     let engine = Arc::new(Mutex::new(Engine::with_settings(settings)));
+    {
+        let mut e = engine.lock().unwrap();
+        let chars: Vec<_> = "CQ W1AW"
+            .chars()
+            .map(|ch| tempo_core::textmode::DecodedChar {
+                ch,
+                confidence: 0.3,
+            })
+            .collect();
+        e.set_rtty_armed(true);
+        e.set_psk_armed(true);
+        e.set_psk_mode(tempo_core::psk::PskModeKind::Qpsk31, true)
+            .unwrap();
+        e.push_rtty_decode(&chars, -12.5, true);
+        e.push_psk_decode(&chars, 7.5, true);
+    }
     let read_engine = engine.clone();
     let scope_feed = tempo_app::engine::SpectrumFeed::default();
     let read_scope = scope_feed.clone();
@@ -223,6 +239,16 @@ fn cloud_runtime_probe() {
     std::io::stdout().flush().unwrap();
     for line in lines {
         let value: serde_json::Value = serde_json::from_str(&line.unwrap()).unwrap();
+        if value["type"] == "keyboardState" {
+            let e = engine.lock().unwrap();
+            println!(
+                "REMOTE_TEST:{}",
+                json!({ "rtty": crate::rtty_state_dto(&e), "psk": crate::psk_state_dto(&e),
+                "txEnabled": e.snapshot().radio.tx_enabled, "logCount": e.get_log().len() })
+            );
+            std::io::stdout().flush().unwrap();
+            continue;
+        }
         // Test-only input to the in-memory engine. The production controller has
         // no import action; the response supplies desktop truth for parity checks.
         if value["type"] == "seedRecallLog" {

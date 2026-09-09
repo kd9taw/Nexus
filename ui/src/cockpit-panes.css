@@ -374,6 +374,14 @@
   background: var(--panel);
 }
 
+/* The keyboard observer's disabled controls can fill the entire remaining
+   viewport at 175% zoom, covering both text and recall at every scroll position.
+   Let that inactive dock scroll with its cockpit. Only observers attach this
+   class; native transmit controls keep the pinned stop surface above. */
+.remote-observer-dock {
+  position: static;
+}
+
 /* Action cluster in a pane head (pop-out / remove / pane-supplied buttons). The head is
    `justify-content: space-between`, so grouping the buttons keeps them together at the
    right edge instead of spreading across the title row. */

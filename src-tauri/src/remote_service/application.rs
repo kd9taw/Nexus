@@ -25,18 +25,22 @@ pub enum Command {
     Scope,
     #[serde(rename = "get_cw_state")]
     Cw,
+    #[serde(rename = "get_rtty_state")]
+    Rtty,
+    #[serde(rename = "get_psk_state")]
+    Psk,
 }
 impl Command {
     pub(super) fn interval(self) -> Duration {
         Duration::from_millis(match self {
             Self::Snapshot => 500,
             Self::Spectrum | Self::Scope => 100,
-            Self::Meters | Self::Cw => 200,
+            Self::Meters | Self::Cw | Self::Rtty | Self::Psk => 200,
             Self::Settings | Self::BandPlan => 1000,
         })
     }
     pub(super) fn legacy(self) -> bool {
-        !matches!(self, Self::Scope | Self::Cw)
+        !matches!(self, Self::Scope | Self::Cw | Self::Rtty | Self::Psk)
     }
 }
 struct Entry {
@@ -223,6 +227,16 @@ impl Publisher {
                     drop(eng);
                     serde_json::to_value(value)
                 }
+                Command::Rtty => {
+                    let value = crate::rtty_state_dto(&eng);
+                    drop(eng);
+                    serde_json::to_value(value)
+                }
+                Command::Psk => {
+                    let value = crate::psk_state_dto(&eng);
+                    drop(eng);
+                    serde_json::to_value(value)
+                }
                 Command::Snapshot => {
                     let value = eng.snapshot();
                     drop(eng);
@@ -351,7 +365,7 @@ impl Stream {
         request: Option<String>,
     ) -> Result<(), &'static str> {
         if !super::transport::identifier(&watch)
-            || topics.len() > 7
+            || topics.len() > 9
             || topics
                 .iter()
                 .enumerate()
@@ -474,6 +488,77 @@ mod tests {
     use serde_json::json;
     const REQUEST: &str = "8aa041cb-c642-459c-83f3-11a5b720647d";
     #[test]
+    fn keyboard_observer_reads_preserve_native_state_and_refuse_busy_engine() {
+        use std::sync::{Arc, Mutex};
+        let mut engine = tempo_app::engine::Engine::with_settings(Default::default());
+        engine.set_rtty_armed(true);
+        engine.set_psk_armed(true);
+        let chars = vec![
+            tempo_core::textmode::DecodedChar {
+                ch: 'C',
+                confidence: 0.3
+            };
+            4500
+        ];
+        engine.push_rtty_decode(&chars, -12.5, true);
+        engine.push_psk_decode(&chars, 7.5, true);
+        let before_rtty = serde_json::to_value(crate::rtty_state_dto(&engine)).unwrap();
+        let before_psk = serde_json::to_value(crate::psk_state_dto(&engine)).unwrap();
+        let before_settings = serde_json::to_value(engine.settings()).unwrap();
+        assert_eq!(before_rtty["text"].as_str().unwrap().len(), 4000);
+        assert_eq!(before_psk["charConf"].as_array().unwrap().len(), 4000);
+        assert_eq!(before_psk["charConf"][0], 30);
+        let shared = Arc::new(Mutex::new(engine));
+        let mut publisher = Publisher::default();
+        let now = Instant::now();
+        for (name, expected) in [
+            ("get_rtty_state", &before_rtty),
+            ("get_psk_state", &before_psk),
+        ] {
+            let command: Command = serde_json::from_value(json!(name)).unwrap();
+            assert!(
+                !command.legacy(),
+                "keyboard reads require an explicit stream capability"
+            );
+            for offset in [0, 250] {
+                let result = publisher
+                    .read(
+                        &shared,
+                        command,
+                        REQUEST,
+                        None,
+                        now + Duration::from_millis(offset),
+                    )
+                    .unwrap();
+                assert!(result.len() < MAX_BYTES);
+                let value: Value = serde_json::from_str(&result).unwrap();
+                assert_eq!(value["data"], *expected);
+            }
+            let _held = shared.lock().unwrap();
+            assert_eq!(
+                Publisher::default()
+                    .read(&shared, command, REQUEST, None, now)
+                    .unwrap_err(),
+                "applicationBusy"
+            );
+        }
+        let engine = shared.lock().unwrap();
+        assert_eq!(
+            serde_json::to_value(crate::rtty_state_dto(&engine)).unwrap(),
+            before_rtty
+        );
+        assert_eq!(
+            serde_json::to_value(crate::psk_state_dto(&engine)).unwrap(),
+            before_psk
+        );
+        assert_eq!(
+            serde_json::to_value(engine.settings()).unwrap(),
+            before_settings
+        );
+        assert!(!engine.snapshot().radio.tx_enabled);
+        assert!(engine.get_log().is_empty());
+    }
+    #[test]
     fn stream_is_credited_paced_and_restarts_without_old_delta_bases() {
         use std::sync::{Arc, Mutex};
         let engine = Arc::new(Mutex::new(tempo_app::engine::Engine::with_settings(
@@ -488,20 +573,22 @@ mod tests {
         stream
             .watch(
                 watch.into(),
-                vec![Command::Meters, Command::Cw],
+                vec![Command::Meters, Command::Cw, Command::Rtty, Command::Psk],
                 Some(REQUEST.into()),
             )
             .unwrap();
         let first: Value =
             serde_json::from_str(&stream.next(&mut publisher, &engine, now).unwrap().unwrap())
                 .unwrap();
-        assert_eq!(first["updates"].as_array().unwrap().len(), 2);
+        assert_eq!(first["updates"].as_array().unwrap().len(), 4);
         assert!(first["updates"][0]["baseRevision"].is_null());
         assert_eq!(first["updates"][1]["command"], "get_cw_state");
         assert!(first["updates"][1]["data"]["sent"]
             .as_array()
             .unwrap()
             .is_empty());
+        assert_eq!(first["updates"][2]["command"], "get_rtty_state");
+        assert_eq!(first["updates"][3]["command"], "get_psk_state");
         assert!(stream
             .next(&mut publisher, &engine, now + Duration::from_millis(200))
             .unwrap()

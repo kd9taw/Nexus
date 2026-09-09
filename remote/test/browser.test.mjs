@@ -61,7 +61,7 @@ async function chrome() {
   } catch(error) { ws?.close(); if(!exited)process.kill(-child.pid,'SIGTERM'); await rm(profile,{recursive:true,force:true,maxRetries:8,retryDelay:100}); throw error }
 }
 
-for (const applicationVersion of [1, 2, 3, 4]) test(`compiled hosted browser v${applicationVersion} completes PKCE, local device approval, observation and viewport checks`, { timeout: 120000 }, async () => {
+for (const applicationVersion of [1, 2, 3, 4, 5]) test(`compiled hosted browser v${applicationVersion} completes PKCE, local device approval, observation and viewport checks`, { timeout: 120000 }, async () => {
   const app=await runtime(), artifacts=process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS ? join(process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS, `v${applicationVersion}`) : undefined
   let browser, station, producing=true, producer, applicationProducer
   const results=[]
@@ -71,7 +71,7 @@ for (const applicationVersion of [1, 2, 3, 4]) test(`compiled hosted browser v${
     const shell = await fetch(app.origin,{signal:AbortSignal.timeout(3000)})
     assert.equal(shell.status,200)
     assert.match(await shell.text(), /Nexus Remote/)
-    const stationHeaders = { 'x-nexus-application-version': '1', ...(applicationVersion >= 2 ? { 'x-nexus-application-stream-version': '2' } : {}), ...(applicationVersion >= 3 ? { 'x-nexus-application-query-version': '1' } : {}), ...(applicationVersion === 4 ? { 'x-nexus-application-recall-version': '1' } : {}) }
+    const stationHeaders = { 'x-nexus-application-version': '1', ...(applicationVersion >= 2 ? { 'x-nexus-application-stream-version': '2' } : {}), ...(applicationVersion >= 3 ? { 'x-nexus-application-query-version': '1' } : {}), ...(applicationVersion >= 4 ? { 'x-nexus-application-recall-version': '1' } : {}), ...(applicationVersion === 5 ? { 'x-nexus-application-keyboard-version': '1' } : {}) }
     station=await pair.native.open(pair.stationId, undefined, 101, stationHeaders)
     let code=null, oauth=null, exchanges=0, providerFailure=false, exceptions=0, acknowledgements=0, unexpectedMessages=0
     const applicationTraffic = { reads: 0, acks: 0, subscriptions: 0, batches: 0, bytes: 0, byCommand: {}, maxResponseBytes: 0 }
@@ -105,7 +105,7 @@ for (const applicationVersion of [1, 2, 3, 4]) test(`compiled hosted browser v${
       try {
         const message = JSON.parse(event.response.payloadData)
         if (message.type === 'ack' && Object.keys(message).sort().join(',') === 'epoch,sequence,type') acknowledgements++
-        else if (message.type === 'applicationHello' && (Object.keys(message).length === 1 || (Object.keys(message).length === 2 && [2,3,4].includes(message.version)))) {}
+        else if (message.type === 'applicationHello' && (Object.keys(message).length === 1 || (Object.keys(message).length === 2 && [2,3,4,5].includes(message.version)))) {}
         else if (message.type === 'applicationRead' && Object.keys(message).length === 4) applicationTraffic.reads++
         else if (message.type === 'applicationQuery' && Object.keys(message).length === 7) applicationTraffic.queries=(applicationTraffic.queries??0)+1
         else if (message.type === 'applicationQueryAck' && Object.keys(message).length === 2) {}
@@ -181,20 +181,21 @@ for (const applicationVersion of [1, 2, 3, 4]) test(`compiled hosted browser v${
     producer=(async()=>{while(producing){const source=station;let watch;try{watch=await source.take(value=>value.type==='watch'&&value.enabled,1000)}catch{continue}await sleep(200);if(!producing)break;if(source!==station||source.closed)continue;source.send({type:'publication',requestId:watch.requestId,frame:{...fixture,source:'native',sequence:++sequence}})}})()
     const applicationData = await applicationFixture()
     const collections = collectionFixture()
-    if (applicationVersion === 4) applicationData.get_snapshot.stations = [{ call:'W1AW', grid:'FN31', snr:-8, lastHeardSlot:0,
+    if (applicationVersion >= 4) applicationData.get_snapshot.stations = [{ call:'W1AW', grid:'FN31', snr:-8, lastHeardSlot:0,
       heardCount:2, presence:'heard', worked:true, workedBand:false, country:'United States', tier:'FT8', freqHz:1500 }]
     const querySnapshots = new Map()
     let applicationRevision = 1, applicationAvailable = true
+    const unavailableTopics = new Set()
     const withheld = []
     let streamWatch = null
     const sentAt = new Map(), bases = new Map()
-    const intervals = { get_snapshot:500, get_settings:1000, get_band_plan:1000, get_spectrum_row:100, get_meters:200, get_scope_snapshot:100, get_cw_state:200 }
+    const intervals = { get_snapshot:500, get_settings:1000, get_band_plan:1000, get_spectrum_row:100, get_meters:200, get_scope_snapshot:100, get_cw_state:200, get_rtty_state:200, get_psk_state:200 }
     applicationProducer=(async()=>{while(producing){const source=station;let request;try{request=await source.take(value=>['applicationRead','applicationWatch','applicationCredit','applicationQuery'].includes(value.type),1000)}catch{continue}
       if(source!==station||source.closed)continue
       if (!applicationAvailable || !producing) { withheld.push({type:request.type,collection:request.collection});continue }
       if (request.type === 'applicationQuery') {
         assert.ok(applicationVersion >= 3)
-        if (request.collection === 'recall') assert.equal(applicationVersion, 4)
+        if (request.collection === 'recall') assert.ok(applicationVersion >= 4)
         const [givenId, offsetText] = (request.cursor??'').split(':')
         const offset = Number(offsetText??0), snapshotId=givenId||crypto.randomUUID()
         if (!givenId) {
@@ -224,6 +225,10 @@ for (const applicationVersion of [1, 2, 3, 4]) test(`compiled hosted browser v${
           for (const command of streamWatch.topics) {
           assert.ok(Object.hasOwn(applicationData, command), 'only reviewed topics may reach the station')
           if (now-(sentAt.get(command)??-Infinity)<intervals[command]) continue
+          if (unavailableTopics.has(command)) {
+            updates.push({type:'applicationError',requestId:request.requestId,command,error:'applicationUnavailable'})
+            sentAt.set(command,now);bases.delete(command);continue
+          }
           const data=applicationData[command], delta=bases.get(command)===applicationRevision && !Array.isArray(data)
           updates.push({type:'applicationResult', requestId:request.requestId, command, revision:applicationRevision,
             baseRevision:delta?applicationRevision:null, ageMs:0, data:delta?{}:data, removed:[]})
@@ -301,7 +306,7 @@ for (const applicationVersion of [1, 2, 3, 4]) test(`compiled hosted browser v${
         await click(button(label))
         await until(`!!document.querySelector('.${mode}-cockpit')`)
         if (mode === 'cw') await until(`document.querySelector('.cw-cockpit [role="log"]')?.textContent.includes('W1AW')`)
-        if (applicationVersion === 4) {
+        if (applicationVersion >= 4) {
           await click(`document.querySelector('.${mode}-cockpit .le-call')`)
           await browser.call('Input.insertText',{text:'W1AW'},session)
           await until(`document.querySelector('.${mode}-cockpit .recall-card')?.textContent.includes('Recall browser note')`)
@@ -333,6 +338,60 @@ for (const applicationVersion of [1, 2, 3, 4]) test(`compiled hosted browser v${
       assert.ok(applicationTraffic.subscriptions>0 && applicationTraffic.batches>0 && applicationTraffic.acks>0, 'positive control: real subscriptions, native batches and browser ACKs flowed')
       assert.equal(applicationTraffic.reads,0, 'v2 panel polling stays within the browser')
     }
+    for (const [label, mode] of [['RTTY', 'rtty'], ['PSK', 'psk']]) {
+      applicationData.get_snapshot.radio.operatingMode = mode === 'rtty' ? 'rtty' : 'keyboard'
+      applicationRevision++
+      await click(button(label))
+      if (applicationVersion < 5) {
+        await until(`!!document.querySelector('.remote-view-unavailable')`)
+        assert.equal(applicationTraffic.byCommand[`get_${mode}_state`] ?? 0, 0, 'older stations keep their closed read contract')
+        continue
+      }
+      await until(`document.querySelector('.${mode}-cockpit .cw-decode-text')?.textContent==='CQ W1AW'`)
+      assert.ok(await evaluate(`document.querySelector('.${mode}-cockpit .amp-strip')?.textContent.includes('80m')`))
+      const controls = await evaluate(`Array.from(document.querySelectorAll('.${mode}-cockpit .rtty-arm, .${mode}-cockpit .cw-macro, .${mode}-cockpit .cw-type, .${mode}-cockpit .cw-decode-clear')).map(e=>e.disabled)`)
+      assert.ok(controls.length > 8 && controls.every(Boolean))
+      await evaluate(`document.querySelector('.${mode}-cockpit .cw-type').dispatchEvent(new InputEvent('beforeinput',{data:'X',inputType:'insertText',bubbles:true,cancelable:true}));window.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))`)
+      await click(`document.querySelector('.${mode}-cockpit .le-call')`)
+      await browser.call('Input.insertText', { text: 'W1AW' }, session)
+      await until(`document.querySelector('.${mode}-cockpit .recall-card')?.textContent.includes('Recall browser note')`)
+      for (const [width,height,zoom] of [[390,844,1],[1024,768,1],[1280,800,1],[1366,768,1],
+        [1200,750,0.8],[1200,1390,1],[3440,1440,1],[1024,768,1.75],[1280,800,1.75],[3440,1440,1.75]]) {
+        for (const theme of ['dark','light']) {
+          await browser.call('Emulation.setDeviceMetricsOverride', { width,height,deviceScaleFactor:1,mobile:false }, session)
+          await evaluate(`document.documentElement.style.setProperty('--ui-zoom','${zoom}');document.documentElement.dataset.theme='${theme}';window.dispatchEvent(new Event('resize'))`)
+          await settledLayout()
+          const shape = await evaluate(`(()=>{const root=document.querySelector('.${mode}-cockpit');return{docW:document.documentElement.scrollWidth,docH:document.documentElement.scrollHeight,crash:!!root.querySelector('.view-crash'),frames:root.querySelectorAll(':scope > .pane-frame').length,docks:root.querySelectorAll(':scope > .cockpit-txdock').length}})()`)
+          assert.ok(!shape.crash && shape.docW <= width+1 && shape.docH <= height+1, `${mode} is bounded: ${JSON.stringify({width,height,zoom,shape})}`)
+          assert.equal(shape.frames, 2); assert.equal(shape.docks, 1)
+          for (const selector of ['.cw-decode-text span', '.le-call', '.cockpit-txdock .rtty-stop']) {
+            // Scroll above the sticky TX dock, as an operator would. "Nearest"
+            // counts text covered by that dock as already in the viewport.
+            const reachable = await evaluate(`(()=>{const e=document.querySelector('.${mode}-cockpit ${selector}');e.scrollIntoView({block:'start',inline:'nearest'});const r=e.getBoundingClientRect();return r.width>0 && r.height>0 && e.contains(document.elementFromPoint(r.left+r.width/2,r.top+r.height/2))})()`)
+            if (!reachable) {
+              console.log('Keyboard geometry diagnostic', await evaluate(`(()=>{const e=document.querySelector('.${mode}-cockpit ${selector}'),r=e.getBoundingClientRect(),chain=[];for(let p=e;p;p=p.parentElement){const c=getComputedStyle(p),b=p.getBoundingClientRect();chain.push({class:p.className,top:b.top,bottom:b.bottom,height:b.height,scroll:p.scrollHeight,client:p.clientHeight,y:c.overflowY})}return{chain,hit:document.elementFromPoint(r.left+r.width/2,r.top+r.height/2)?.className}})()`))
+              if (artifacts) { const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,`remote-nexus-${mode}-failure.png`),Buffer.from(shot.data,'base64')) }
+            }
+            assert.ok(reachable, `${mode} ${selector} is reachable at ${width}x${height}, zoom ${zoom}`)
+          }
+          results.push({ workspace:true, mode, width, height, zoom, theme, shape })
+        }
+      }
+      const state = applicationData[`get_${mode}_state`]
+      state.armed = false; applicationRevision++
+      await until(`document.querySelector('.${mode}-cockpit')?.textContent.includes('Start the decoder in Nexus at the shack')`)
+      unavailableTopics.add(`get_${mode}_state`)
+      await until(`document.querySelector('.${mode}-cockpit')?.textContent.includes('Station decoder data unavailable.')`)
+      assert.equal(await evaluate(`document.querySelector('.app')?.dataset.remoteStale==='true'`), false)
+      assert.ok(!await evaluate(`document.querySelector('.${mode}-cockpit .cw-decode-text')?.textContent.includes('CQ W1AW')`))
+      unavailableTopics.delete(`get_${mode}_state`); state.armed = true; applicationRevision++
+      await until(`document.querySelector('.${mode}-cockpit .cw-decode-text')?.textContent==='CQ W1AW'`)
+      await browser.call('Emulation.setDeviceMetricsOverride', { width:1280,height:800,deviceScaleFactor:1,mobile:false }, session)
+      await evaluate(`document.documentElement.style.setProperty('--ui-zoom','1');window.dispatchEvent(new Event('resize'))`)
+      await settledLayout()
+      if (artifacts) { const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,`remote-nexus-${mode}.png`),Buffer.from(shot.data,'base64')) }
+    }
+    await click(button('FT'))
     if (applicationVersion >= 3) {
       await until(`document.querySelector('.operate-host:not([hidden])')?.textContent.includes('CQ ZL1HIST RF72')`)
       for(const [label,selector,call] of [['Needed','.needed-panel','W1AW'],['Spots','.spots-panel','W1AW'],['Logbook','.logbook','K1T129']]) {
@@ -359,7 +418,7 @@ for (const applicationVersion of [1, 2, 3, 4]) test(`compiled hosted browser v${
       await click(button('FT'))
       await until(`!!document.querySelector('.operate-host:not([hidden])')`)
     }
-    if (applicationVersion === 4) {
+    if (applicationVersion >= 4) {
       await click(`document.querySelectorAll('.cockpit-layout-toggle button')[1]`)
       await until(`!!document.querySelector('.or-row[aria-selected]')`)
       await click(`document.querySelector('.or-row[aria-selected]')`)

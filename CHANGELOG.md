@@ -21,6 +21,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   card displays the newest 20 contacts and links to the existing Logbook. Reads
   release the station engine between small chunks and refuse a changing log.
   This requires the updated station pilot; operating controls remain disabled.
+- **Remote RTTY and PSK observation:** Open the existing Nexus cockpits in the
+  browser to follow decoded text, character confidence, AFC, waterfall and
+  amplifier status, and review prior contacts in the callsign card. Start the
+  decoder in Nexus at the shack; browser decoder, radio and transmit controls
+  remain disabled. This requires the updated station pilot.
 
 ## [1.11.1] — 2026-09-08
 

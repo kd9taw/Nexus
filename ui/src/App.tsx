@@ -239,7 +239,7 @@ const OPERATE_TIERS: Tier[] = [
   'WSPR',
 ]
 
-export type BrowserWorkspace = { snapshot: AppSnapshot; settings: Settings; bandPlan: BandChannel[]; status: ReactNode; stale?: boolean; cwPhone?: boolean; collections?: boolean }
+export type BrowserWorkspace = { snapshot: AppSnapshot; settings: Settings; bandPlan: BandChannel[]; status: ReactNode; stale?: boolean; cwPhone?: boolean; keyboard?: boolean; collections?: boolean }
 import { CollectionStatus, useRemoteCollection } from './remote-web/collections'
 
 export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
@@ -2260,7 +2260,7 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // A visible navigation item is not evidence that its station API is connected.
   // In particular, never mount SettingsPanel with the projected operating view:
   // it expects complete configuration and could display absent values as defaults.
-  const isRemoteViewAvailable = (v: View): boolean => !remote || v === 'operate' || (!!remote.collections && ['needed', 'spots', 'logbook'].includes(v)) || (!!remote.cwPhone && (v === 'cw' || v === 'phone'))
+  const isRemoteViewAvailable = (v: View): boolean => !remote || v === 'operate' || (!!remote.collections && ['needed', 'spots', 'logbook'].includes(v)) || (!!remote.cwPhone && (v === 'cw' || v === 'phone')) || (!!remote.keyboard && (v === 'rtty' || v === 'psk'))
 
   // Recall card → Logbook, filtered to the call (#192, kr4fqg: "click a previous contact and
   // land in the log"). Same shape as the `onOpenMemories` handoffs below — `undefined` when the
@@ -3175,8 +3175,8 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
                 snap={snap}
                 onSnap={setSnap}
                 active={effectiveView === 'rtty'}
-                onSetFrequency={handleSetFrequency}
-                onSetTxEnabled={handleSetTxEnabled}
+                onSetFrequency={remote ? undefined : handleSetFrequency}
+                onSetTxEnabled={remote ? undefined : handleSetTxEnabled}
                 theme={theme}
                 wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
                 panels={rttyPanels}
@@ -3190,8 +3190,8 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
                 snap={snap}
                 onSnap={setSnap}
                 active={effectiveView === 'psk'}
-                onSetFrequency={handleSetFrequency}
-                onSetTxEnabled={handleSetTxEnabled}
+                onSetFrequency={remote ? undefined : handleSetFrequency}
+                onSetTxEnabled={remote ? undefined : handleSetTxEnabled}
                 theme={theme}
                 wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
                 panels={pskPanels}

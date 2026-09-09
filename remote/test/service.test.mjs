@@ -16,9 +16,9 @@ const sample = () => {
 const type = name => value => value?.type === name
 const applicationSample = (requestId, command = 'get_snapshot') => ({ type: 'applicationResult', requestId, command,
   revision: 1, baseRevision: null, ageMs: 0, data: { mycall: 'N0CALL' }, removed: [] })
-async function admitted(pair, applicationVersion = 0) {
+async function admitted(pair, applicationVersion = 0, extensions = {}) {
   const deviceId = await app.approved(pair)
-  const station = await pair.native.open(pair.stationId, undefined, 101, { 'x-nexus-application-version': String(applicationVersion) })
+  const station = await pair.native.open(pair.stationId, undefined, 101, { 'x-nexus-application-version': String(applicationVersion), ...extensions })
   await station.take(value => value.type === 'watch' && value.enabled === false)
   const { value: ticket } = await pair.browser.post(`stations/${pair.stationId}/ticket`)
   const browser = await pair.browser.open(pair.stationId, ticket.ticket)
@@ -116,6 +116,51 @@ test('v2 subscriptions share native samples across approved browsers and recover
   const idle = await live.station.take(value => value.type === 'applicationWatch' && value.topics.length === 0)
   assert.equal(idle.requestId, null)
   live.browser.close(); second.close(); live.station.close()
+})
+
+test('keyboard observation needs the complete native advertisement and survives room hibernation', async () => {
+  const config = await (await fetch(`${app.origin}/api/remote/config`)).json()
+  assert.equal(config.applicationVersion, 5)
+  const headers = { 'x-nexus-application-stream-version': '2', 'x-nexus-application-query-version': '1',
+    'x-nexus-application-recall-version': '1', 'x-nexus-application-keyboard-version': '1' }
+  for (const [missing, expected] of [[null, 5], ['keyboard', 4], ['recall', 3], ['query', 2], ['stream', 1]]) {
+    const advertisement = { ...headers }
+    if (missing) delete advertisement[`x-nexus-application-${missing}-version`]
+    const pair = await app.paired(), live = await admitted(pair, 1, advertisement)
+    live.browser.send({ type: 'applicationHello', version: 5 })
+    const capabilities = await live.browser.take(type('applicationCapabilities'))
+    assert.equal(capabilities.version, expected)
+    assert.equal(capabilities.commands.includes('get_rtty_state'), expected === 5)
+    assert.equal(capabilities.commands.includes('get_psk_state'), expected === 5)
+    if (expected === 5) {
+      const topics = capabilities.commands.filter(command => !['get_remote_page', 'get_remote_recall'].includes(command))
+      assert.equal(topics.length, 9)
+      const requestId = crypto.randomUUID()
+      live.browser.send({ type: 'applicationSubscribe', topics, requestId })
+      let watch = await live.station.take(type('applicationWatch'))
+      assert.deepEqual(watch.topics, topics)
+      live.station.send({ type: 'applicationBatch', watchId: watch.watchId, requestId: watch.requestId,
+        updates: topics.map(command => applicationSample(watch.requestId, command)) })
+      const first = await live.browser.take(type('applicationFrame'))
+      assert.equal(first.updates.length, 9)
+      await app.evict(pair.stationId)
+      live.browser.send({ type: 'applicationFrameAck', requestId, nextRequestId: crypto.randomUUID() })
+      const prior = watch
+      watch = await live.station.take(type('applicationWatch'))
+      assert.notEqual(watch.watchId, prior.watchId)
+      assert.deepEqual(watch.topics, topics)
+      live.station.send({ type: 'applicationBatch', watchId: watch.watchId, requestId: watch.requestId,
+        updates: topics.map(command => applicationSample(watch.requestId, command)) })
+      const resumed = await live.browser.take(type('applicationFrame'))
+      assert.equal(resumed.updates.length, 9)
+      assert.ok(resumed.updates.every(update => update.baseRevision === null))
+      live.browser.send({ type: 'applicationSubscribe', topics: ['psk_type'], requestId: crypto.randomUUID() })
+      assert.equal((await live.browser.take(type('closed'))).code, 1008)
+      const namespace = await app.mf.getDurableObjectNamespace('STATIONS')
+      assert.equal((await roomStatus(namespace.get(namespace.idFromName(pair.stationId)))).online, true)
+    }
+    live.browser.close(); live.station.close()
+  }
 })
 
 test('provider signatures, authorized client and exact Origin are required; account creation grants no trial', async () => {

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import App from '../App'
@@ -10,6 +10,8 @@ import settingsFixture from '../components/__fixtures__/defaultSettings.json'
 import { StationControlContext, StationDataContext } from '../stationAccess'
 import { Dialog } from '../components/ui/Dialog'
 import { cwDecode, getScopeRow } from '../api'
+import { RttyCockpit } from '../components/RttyCockpit'
+import { PskCockpit } from '../components/PskCockpit'
 
 const snapshot = {
   mycall: 'N0CALL', mygrid: 'AA00', mode: 'Normal',
@@ -35,6 +37,142 @@ beforeEach(() => {
     addListener() {}, removeListener() {} })) as unknown as typeof window.matchMedia
 })
 afterEach(() => { cleanup(); dispose?.(); vi.unstubAllGlobals() })
+
+function keyboardSample(mode: string) {
+  const text = 'CQ W1AW'
+  return { armed: true, text, charConf: [...text].map((_, i) => i ? 100 : 30), afcHz: -12.5,
+    sending: true, latched: true, keyerError: null,
+    ...(mode === 'rtty' ? { afcLocked: true, markHz: 915, spaceHz: 1085, baud: 45.45, shiftHz: 170,
+      backend: 'afsk', auto: true, seqState: 'idle', peer: null, peerExchange: [], heardCq: 'W1AW' }
+      : { signal: true, centerHz: 1000, mode: 'qpsk31', reverse: true }) }
+}
+
+it.each(['rtty', 'psk'])('observes the actual %s cockpit without decoder, keyboard, radio or log mutations', async mode => {
+  const current = structuredClone(snapshot)
+  current.radio.operatingMode = mode === 'rtty' ? 'rtty' : 'keyboard'
+  current.radio.txEnabled = true
+  const settings = projectedSettings(), calls: string[] = []
+  let available = true
+  const data = keyboardSample(mode)
+  dispose = installApplicationTransport({ kind: 'remote', invoke: async <T,>(command: string): Promise<T> => {
+    calls.push(command)
+    if (command === 'get_snapshot') return structuredClone(current) as T
+    if (command === 'get_settings') return structuredClone(settings) as T
+    if (command === 'get_band_plan') return [] as T
+    if (command === 'get_spectrum_row' || command === 'get_scope_snapshot') return { row: [], loHz: 0, hiHz: 4000, source: 'audio' } as T
+    if (command === 'get_meters') return { rxLevel: 0.2, smeterDb: -12, cwToneHz: null } as T
+    if (command === `get_${mode}_state` && available) return structuredClone(data) as T
+    throw new Error('applicationUnsupported')
+  } })
+  const workspace = (fresh = true) => <StationControlContext.Provider value={false}>
+    <StationDataContext.Provider value={fresh}>
+      <App remote={{ snapshot: current, settings, bandPlan: [], cwPhone: true, keyboard: true,
+        stale: !fresh, status: <div>Observer</div> }} />
+    </StationDataContext.Provider>
+  </StationControlContext.Provider>
+  const { container, rerender, unmount } = render(workspace())
+  await waitFor(() => expect(container.querySelector(`.${mode}-cockpit .cw-decode-text`)?.textContent).toBe(data.text))
+  const root = container.querySelector(`.${mode}-cockpit`)!
+  expect(root.querySelector('.pane-frame[data-pane="log"]')).not.toBeNull()
+  expect(root.textContent).toContain('Remote QSO entry is not connected yet.')
+  expect(root.querySelector('.cw-decode-text span')?.getAttribute('style')).toContain('opacity:')
+  expect(root.querySelector('.cockpit-pwr-val')?.textContent).toBe('—')
+  const controls = root.querySelectorAll<HTMLInputElement | HTMLButtonElement | HTMLSelectElement>(
+    '.rtty-arm, .cw-decode-clear, .cw-macro, .cw-type, .cw-send-btn, .rtty-hiscall, .psk-mode-select')
+  expect(controls.length).toBeGreaterThan(10)
+  for (const control of controls) {
+    expect(control.disabled, control.textContent ?? control.className).toBe(true)
+    fireEvent.click(control)
+  }
+  const compose = root.querySelector<HTMLInputElement>('.cw-type')!
+  fireEvent.change(compose, { target: { value: 'TEST' } })
+  fireEvent.keyDown(compose, { key: 'Enter' })
+  compose.dispatchEvent(new InputEvent('beforeinput', { data: 'X', inputType: 'insertText', bubbles: true, cancelable: true }))
+  for (const key of ['F1', 'F2', 'F3', 'F4', 'Escape', ' ']) {
+    fireEvent.keyDown(window, { key }); fireEvent.keyUp(window, { key })
+  }
+  current.radio.rfPower = 0.42
+  await waitFor(() => expect(root.querySelector('.cockpit-pwr-val')?.textContent).toBe('42%'))
+  available = false
+  await waitFor(() => expect(root.textContent).toContain('Station decoder data unavailable.'))
+  expect(root.querySelector('.cw-decode-text')?.textContent).not.toContain(data.text)
+  available = true
+  data.armed = false; data.text = ''
+  await waitFor(() => expect(root.textContent).toContain('Start the decoder in Nexus at the shack to receive text.'))
+  data.armed = true; data.text = 'RETURNED'
+  await waitFor(() => expect(root.querySelector('.cw-decode-text')?.textContent).toBe('RETURNED'))
+  rerender(workspace(false))
+  expect(root.querySelector('.cw-decode-text')?.textContent).not.toContain('RETURNED')
+  expect(root.querySelector('.cockpit-pwr-val')?.textContent).toBe('—')
+  unmount()
+  await new Promise(resolve => setTimeout(resolve, 50))
+  const reads = ['get_snapshot', 'get_settings', 'get_band_plan', 'get_spectrum_row', 'get_scope_snapshot',
+    'get_meters', 'get_cw_state', 'get_rtty_state', 'get_psk_state',
+    // The real App also attempts these startup reads. This fake records calls
+    // before ApplicationClient's allowlist refuses the unsupported reads.
+    'app_version', 'dxcc_entity_locations', 'get_declination', 'get_awards', 'get_journey',
+    'radio_launch_info', 'check_for_update', 'get_propagation', 'sat_track_status', 'get_tle_status',
+    'get_kp_forecast', 'get_xray_now', 'get_dxped_windows', 'get_feed_health', 'get_need_alerts',
+    'get_all_spots', 'get_fd_ruleset', 'log_operators']
+  expect(calls.filter(command => !reads.includes(command))).toEqual([])
+})
+
+it.each(['rtty', 'psk'])('discards late %s reads after station loss or navigation and reads again on return', async mode => {
+  const pending: ((value: unknown) => void)[] = [], calls: string[] = []
+  dispose = installApplicationTransport({ kind: 'remote', invoke: <T,>(command: string): Promise<T> => {
+    calls.push(command)
+    if (command === `get_${mode}_state`) return new Promise<T>(resolve => pending.push(value => resolve(value as T)))
+    return Promise.reject(new Error('applicationUnsupported'))
+  } })
+  const Cockpit = mode === 'rtty' ? RttyCockpit : PskCockpit
+  const workspace = (active: boolean, fresh: boolean) => <StationControlContext.Provider value={false}>
+    <StationDataContext.Provider value={fresh}><Cockpit snap={snapshot} active={active} /></StationDataContext.Provider>
+  </StationControlContext.Provider>
+  const { container, rerender, unmount } = render(workspace(true, true))
+  const transcript = () => container.querySelector('.cw-decode-text')?.textContent
+  for (const [active, fresh] of [[true, false], [false, true]]) {
+    await waitFor(() => expect(pending.length).toBeGreaterThan(0))
+    rerender(workspace(active, fresh))
+    await act(async () => { for (const resolve of pending.splice(0)) resolve(keyboardSample(mode)) })
+    expect(transcript()).not.toContain('CQ W1AW')
+    rerender(workspace(true, true))
+    expect(transcript()).not.toContain('CQ W1AW')
+  }
+  await waitFor(() => expect(pending.length).toBeGreaterThan(0))
+  await act(async () => { for (const resolve of pending.splice(0)) resolve({ ...keyboardSample(mode), text: 'FRESH' }) })
+  expect(transcript()).toBe('FRESH')
+  unmount()
+  expect(calls).not.toContain(`${mode}_auto_arm`)
+  expect(calls.filter(command => !['get_meters', 'get_spectrum_row', `get_${mode}_state`].includes(command))).toEqual([])
+})
+
+it.each(['rtty', 'psk'])('retains native %s decoder entry and keyboard stop behavior', async mode => {
+  const current = structuredClone(snapshot)
+  current.radio.operatingMode = mode === 'rtty' ? 'rtty' : 'keyboard'
+  current.radio.txEnabled = true
+  const data = keyboardSample(mode), calls: string[] = []
+  dispose = installApplicationTransport({ kind: 'remote', invoke: async <T,>(command: string): Promise<T> => {
+    calls.push(command)
+    if (command === 'get_settings') return structuredClone(settingsFixture) as T
+    if (command === 'get_licensed_band_plan' || command === 'get_log' || command === 'log_operators') return [] as T
+    if (command.startsWith(`${mode}_`) || command === `get_${mode}_state`) return structuredClone(data) as T
+    if (command === 'halt_tx') return current as T
+    throw new Error('applicationUnsupported')
+  } })
+  const Cockpit = mode === 'rtty' ? RttyCockpit : PskCockpit
+  const { container, unmount } = render(<Cockpit snap={current} />)
+  await waitFor(() => expect(calls).toContain(`${mode}_auto_arm`))
+  expect(container.querySelector('.remote-observer-dock')).toBeNull()
+  await waitFor(() => expect(container.querySelector('.cw-decode-text')?.textContent).toBe(data.text))
+  const compose = container.querySelector<HTMLInputElement>('.cw-type')!
+  expect(compose.disabled).toBe(false)
+  compose.dispatchEvent(new InputEvent('beforeinput', { data: 'X', inputType: 'insertText', bubbles: true, cancelable: true }))
+  await waitFor(() => expect(calls).toContain(`${mode}_type`))
+  fireEvent.keyDown(window, { key: 'Escape' })
+  expect(calls).toContain(`${mode}_stop`)
+  expect(calls).toContain('halt_tx')
+  unmount()
+})
 
 it.each(['cw', 'phone'])('opens the actual %s cockpit as an observer without keyboard or unmount commands', async mode => {
   const current = structuredClone(snapshot)

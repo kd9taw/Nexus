@@ -22,7 +22,7 @@ port or router forwarding is required. The desktop is pinned to
 
 ## Existing Nexus workspace
 
-**Open Nexus** loads the same `ui/src/App.tsx`, Operate, CW, Phone, Needed, Spots and Logbook components as the
+**Open Nexus** loads the same `ui/src/App.tsx`, Operate, CW, Phone, RTTY, PSK, Needed, Spots and Logbook components as the
 desktop. The explicit adapter below `api.ts` owns one authenticated station
 session. It does not install a Tauri global or forward arbitrary command names.
 Native use still selects Tauri, and the existing LAN TV transport remains separate.
@@ -36,14 +36,17 @@ Version 3 adds `get_remote_page`, negotiated only when the station also advertis
 `x-nexus-application-query-version: 1`. Its collection channel is independent of
 the unchanged seven stream topics. Version 4 adds `get_remote_recall` when the
 station also advertises `x-nexus-application-recall-version: 1`. The original six
-collections remain closed in version 3; only version 4 accepts `recall`.
-Older browsers and stations still negotiate versions 1/2/3.
+collections remain closed in version 3; versions 4 and later accept `recall`.
+Version 5 adds the passive `get_rtty_state` and `get_psk_state` stream topics when
+the station also advertises `x-nexus-application-keyboard-version: 1`. It retains
+version 4's collection grammar. Each browser keeps its negotiated topic set;
+older browsers and stations still negotiate versions 1/2/3/4.
 An older pilot keeps its existing FT observation; an older monitor-only installer
 reports the workspace update requirement without losing compact observation.
 
 In version 2, existing panel polling renews local interest. Interest changes cross
 the socket; the room combines the interests of approved browsers into one native
-watch. The station batches due topics at 100 ms (spectra), 200 ms (meters/CW),
+watch. The station batches due topics at 100 ms (spectra), 200 ms (meters/CW/RTTY/PSK),
 500 ms (snapshot) and 1,000 ms (settings/band plan). Interest expires after 2,500 ms
 without a consumer read. No interested browsers means no native application data.
 Top-level deltas require an exact acknowledged base; a joining observer receives a
@@ -53,13 +56,18 @@ Each native batch spends one room-issued credit; each browser frame spends one
 browser-issued credit. The next credit acknowledges the previous response exactly
 once. Each receiver counts its request's full round trip toward measurement age,
 so delayed packets cannot appear fresh by arrival time or clock synchronization.
-Batches are bounded to 768 KiB, seven topics and three seconds. Stale sessions hide
-station readings and close portaled menus/dialogs. Unavailable scope/CW data clears
+Batches are bounded to 768 KiB, seven topics (nine in version 5) and three seconds. Stale sessions hide
+station readings and close portaled menus/dialogs. Unavailable scope/decoder data clears
 that readout independently. Session changes discard cached readings and late results.
 
 The shack's engine owns the snapshot, logbook and hardware. Remote spectrum
 observation leaves the desktop averaging window and analysis requests intact. The
-CW getter observes decoder state without changing sensitivity. Encoding runs outside
+CW getter observes decoder state without changing sensitivity. RTTY/PSK getters
+copy the existing native DTOs and 4,000-character text rings, including character
+confidence, AFC and reported TX state. These sampled rings are not lossless text
+history. Browsing never arms a decoder, clears text, changes tuning or sends text;
+start the decoder locally in Nexus. A stopped decoder and unavailable data have
+separate messages. Reported TX activity does not confirm RF output. Encoding runs outside
 the engine lock, and busy engine reads are refused without queuing. Room socket
 attachments contain only bounded authority and routing metadata, never these
 application values or contact history. After hibernation, a new watch epoch requests
@@ -101,12 +109,14 @@ archive. Queries fetch new/updated rows when snapshot decode context changes.
 Reconnect, band/tier context changes and retention limits are explicit in the UI.
 It does not access or change the FT control history or start decoding/DSP work.
 
-Operate, CW and Phone have partial observation support in this preview. CW includes
+Operate, CW, Phone, RTTY and PSK have partial observation support in this preview. CW includes
 the decoder transcript, sent-text history and callsign candidates. CW/Phone share
 the station scope, meters, settings, amplifier status and observed band activity.
+RTTY/PSK retain their existing cockpit, waterfall, decoder transcript and amplifier
+strip, with station-local decoder and transmit controls disabled.
 Needed, Spots and the paged Logbook now support read-only browsing. Existing QRZ
 profile links open in the browser, without contacting the station or its vault.
-FT selection and CW/Phone callsign entry now use the existing Nexus recall card;
+FT selection and CW/Phone/RTTY/PSK callsign entry use the existing Nexus recall card;
 its contact rows open the existing filtered Logbook. Stale sessions and changed
 callsigns discard old results. QSO entry, memories, rotator and voice-keyer/audio data remain
 unavailable and are identified in their existing panes. Other navigation destinations display

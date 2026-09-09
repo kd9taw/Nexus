@@ -13,7 +13,7 @@ import type { HostedConnection } from './client'
 import '../cockpit-panes.css'
 import './application.css'
 
-type Bootstrap = { snapshot: AppSnapshot; settings: Settings; bandPlan: BandChannel[]; cwPhone: boolean; collections: boolean }
+type Bootstrap = { snapshot: AppSnapshot; settings: Settings; bandPlan: BandChannel[]; cwPhone: boolean; keyboard: boolean; collections: boolean }
 export function BrowserApplication({ connection, disconnect }: { connection: HostedConnection; disconnect: () => void }) {
   const client = connection.application
   const collections = useMemo(() => new RemoteCollections(client), [client])
@@ -66,7 +66,8 @@ export function BrowserApplication({ connection, disconnect }: { connection: Hos
           client.invoke<AppSnapshot>('get_snapshot'), client.invoke<Settings>('get_settings'), client.invoke<BandChannel[]>('get_band_plan'),
         ])
         if (live) {
-          setBoot({ snapshot, settings, bandPlan, cwPhone: client.supports('get_cw_state') && client.supports('get_scope_snapshot'), collections: client.supports(QUERY_COMMAND) })
+          setBoot({ snapshot, settings, bandPlan, cwPhone: client.supports('get_cw_state') && client.supports('get_scope_snapshot'),
+            keyboard: client.supports('get_rtty_state') && client.supports('get_psk_state'), collections: client.supports(QUERY_COMMAND) })
           setError(false); timer = setTimeout(() => void load(), 2000)
         }
       } catch {

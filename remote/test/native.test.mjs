@@ -176,13 +176,52 @@ test('actual native controller pairs, stores authority, publishes real DTOs, dis
       if (collection === 'entities') assert.ok(count > 300, 'positive control: actual station DXCC table crossed multiple pages')
     }
     query.close()
+    const keyboardBefore = await probe.send({ type: 'keyboardState' })
+    const { value: keyboardTicket } = await browser.post(`stations/${stationId}/ticket`)
+    const keyboard = await browser.open(stationId, keyboardTicket.ticket)
+    await keyboard.take(value => value.type === 'session')
+    keyboard.send({ type: 'applicationHello', version: 5 })
+    const keyboardCapabilities = await keyboard.take(value => value.type === 'applicationCapabilities')
+    assert.equal(keyboardCapabilities.version, 5, 'actual native headers and room admission negotiate keyboard samples')
+    assert.equal(keyboardCapabilities.commands.length, 11)
+    let keyboardCredit = crypto.randomUUID()
+    keyboard.send({ type: 'applicationSubscribe', topics: ['get_rtty_state', 'get_psk_state'], requestId: keyboardCredit })
+    const keyboardReceived = new Set()
+    for (let batch = 0; batch < 10 && keyboardReceived.size < 2; batch++) {
+      const frame = await keyboard.take(value => value.type === 'applicationFrame')
+      assert.equal(frame.requestId, keyboardCredit)
+      for (const update of frame.updates) {
+        if (update.type === 'applicationError') { assert.equal(update.error, 'applicationBusy'); continue }
+        assert.equal(update.type, 'applicationResult')
+        assert.ok(['get_rtty_state', 'get_psk_state'].includes(update.command))
+        if (keyboardReceived.has(update.command)) continue
+        assert.equal(update.baseRevision, null)
+        const mode = update.command === 'get_rtty_state' ? 'rtty' : 'psk'
+        assert.deepEqual(update.data, keyboardBefore[mode], 'wire result equals the native cockpit DTO')
+        assert.equal(update.data.text, 'CQ W1AW')
+        assert.deepEqual(update.data.charConf, [30, 30, 30, 30, 30, 30, 30])
+        assert.equal(update.data.armed, true)
+        assert.equal(update.data.sending, false)
+        assert.equal(update.data.latched, false)
+        keyboardReceived.add(update.command)
+      }
+      const nextRequestId = crypto.randomUUID()
+      keyboard.send({ type: 'applicationFrameAck', requestId: keyboardCredit, nextRequestId })
+      keyboardCredit = nextRequestId
+    }
+    assert.equal(keyboardReceived.size, 2)
+    assert.equal(keyboardBefore.psk.mode, 'qpsk31')
+    assert.equal(keyboardBefore.psk.reverse, true)
+    keyboard.send({ type: 'applicationSubscribe', topics: [], requestId: null })
+    assert.deepEqual(await probe.send({ type: 'keyboardState' }), keyboardBefore, 'remote reads do not alter decoder state, TX or contacts')
+    keyboard.close()
     const { log } = await probe.send({ type: 'seedRecallLog', adif: recallAdif() })
     assert.ok(log.length > 40, 'the independent desktop reference must receive the seeded log')
     const reference = await recallReference()
     const { value: recallTicket } = await browser.post(`stations/${stationId}/ticket`)
     const recall = await browser.open(stationId, recallTicket.ticket)
     await recall.take(value => value.type === 'session')
-    recall.send({ type: 'applicationHello', version: 4 })
+    recall.send({ type: 'applicationHello', version: 5 })
     assert.ok((await recall.take(value => value.type === 'applicationCapabilities')).commands.includes('get_remote_recall'))
     for (const call of ['W1AW', 'W1AW/P', 'DL2ABC', 'JA1ABC', '000']) {
       const requestId = crypto.randomUUID()
