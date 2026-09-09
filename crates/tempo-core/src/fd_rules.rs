@@ -3572,4 +3572,58 @@ mod tests {
         assert!(at(47).is_ok());
         assert!(at(48).unwrap_err().contains("start_hour_utc 48"));
     }
+
+    /// ⭐ **Each ruleset round-trips.** The seed is parsed, re-serialised through serde,
+    /// and parsed again; the table built from the second pass must be the same table.
+    ///
+    /// This is not ceremony. `build` LEAKS its way to `&'static` and the exchange block
+    /// is the one part of a ruleset with nested, recursive shape (`one_of` arms inside a
+    /// slot kind inside a field inside an exchange) — a `KindSpec` arm that serialised
+    /// under a name `KindSpec` does not deserialise would be invisible until a rules
+    /// PUSH, which is the one path where nothing in this repo would catch it.
+    #[test]
+    fn every_ruleset_survives_a_serde_round_trip_unchanged() {
+        let once: serde_json::Value = serde_json::from_str(SEED).unwrap();
+        let twice = serde_json::to_string(&once).expect("the seed re-serialises");
+        let a = build(parse_spec(SEED).expect("the seed parses"));
+        let b = build(parse_spec(&twice).expect("and parses again after a round trip"));
+        assert_eq!(
+            a.rulesets.len(),
+            6,
+            "two Field Day events + four QSO parties"
+        );
+        assert_eq!(a.rulesets.len(), b.rulesets.len());
+        for (x, y) in a.rulesets.iter().zip(b.rulesets) {
+            assert_eq!(x.event, y.event);
+            assert_eq!(x.contest_id, y.contest_id);
+            assert_eq!(x.rules_year, y.rules_year);
+            assert_eq!(x.scoring, y.scoring, "{}: scoring", x.event);
+            assert_eq!(x.dupe_rule, y.dupe_rule, "{}: dupe", x.event);
+            assert_eq!(x.window, y.window, "{}: window", x.event);
+            assert_eq!(x.score_note_key, y.score_note_key);
+            // The exchange, in full: slots (keys, kinds, adif tags, labels) and roles
+            // (ids, selectors, send/receive order). `ExchangeSpec` is `PartialEq` all
+            // the way down, so this compares the recursive `one_of` arms too.
+            assert_eq!(x.exchange, y.exchange, "{}: exchange", x.event);
+            assert_eq!(
+                x.domains.len(),
+                y.domains.len(),
+                "{}: domain count",
+                x.event
+            );
+            for (dx, dy) in x.domains.iter().zip(y.domains) {
+                assert_eq!(dx, dy, "{}: domain {}", x.event, dx.id);
+            }
+        }
+        // POSITIVE CONTROL. Comparing two builds of the same bytes would pass even if
+        // `build` dropped a field entirely, so prove the comparison DISCRIMINATES: a
+        // ruleset whose exchange really is different must not compare equal.
+        let mut altered = once.clone();
+        altered["rulesets"][0]["exchange"]["fields"][0]["required"] = false.into();
+        let c = build(parse_spec(&altered.to_string()).expect("still valid"));
+        assert_ne!(
+            a.rulesets[0].exchange, c.rulesets[0].exchange,
+            "the exchange comparison must be able to fail"
+        );
+    }
 }
