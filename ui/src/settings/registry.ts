@@ -430,6 +430,20 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
   },
 
   // ---- Contesting --------------------------------------------------------------
+  // The contest itself comes FIRST on this tab: it decides the exchange, the dupe rule,
+  // the multiplier universe and the Cabrillo headers, so every section under it belongs
+  // to whichever contest is picked. `Field Day Setup` is the setup for the two Field Day
+  // events, and the families in later batches land in this picker rather than beside it.
+  {
+    id: 'contest-pick',
+    label: 'Contest',
+    tab: 'contesting',
+    neededInHourOne: true,
+    keywords: ['contest', 'field day', 'winter field day', 'arrl', 'wfd', 'event',
+      'which contest', 'role', 'in state', 'out of state', 'category', 'entry category',
+      'cabrillo', 'category-operator', 'single-op', 'multi-op', 'checklog', 'single op',
+      'multi op', 'check log', 'operators'],
+  },
   {
     id: 'contest-category',
     label: 'Contest Category',

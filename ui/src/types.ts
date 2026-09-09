@@ -3152,6 +3152,12 @@ export interface Settings {
   tuneTimeoutSecs?: number
   /** Field Day event: 'arrlfd' (default when empty) | 'wfd'. */
   fdEvent?: string
+  /** ⭐ The entry declaration Cabrillo's `CATEGORY-OPERATOR` header states:
+   *  'SINGLE-OP' | 'MULTI-OP' | 'CHECKLOG'. Empty = SINGLE-OP, which is the honest
+   *  default — the header used to be the literal 'MULTI-OP', so every solo entry
+   *  claimed more than one operator was at the station. A new SESSION reads it; the
+   *  exporter reads the session, because one run under one callsign IS the entry. */
+  contestCategoryOperator?: string
   /** FD power multiplier tier: 5 QRP-battery, 2 <=100W, 1 >100W. */
   fdPowerMult?: number
   /** Claimed FD bonus ids (the checklist). */

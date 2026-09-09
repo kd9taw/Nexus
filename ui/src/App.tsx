@@ -2647,6 +2647,7 @@ export default function App() {
       workspace = (
         <main className="layout single">
           <SettingsPanel
+            fieldDay={snap.fieldDay}
             key={`sp-wiz${wizardGen}`}
             onSaved={handleSettingsSaved}
             target={settingsTarget}

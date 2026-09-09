@@ -1569,6 +1569,26 @@ Cloudlog base URL is off.*
 
 Always visible — capability, not configuration, gates the tabs.
 
+### Contest
+
+The first thing on this tab, because the contest decides everything under it: the
+exchange you pass, what counts as a duplicate, how the log is scored, and what goes in
+the Cabrillo headers.
+
+- **Contest** — ARRL Field Day or Winter Field Day. Field Day Setup below is the setup
+  for whichever of the two you pick. (This is the same setting the Event chips used to
+  carry inside Field Day Setup; it moved up one level so there is one contest picker
+  rather than a setting buried inside one contest's own section.)
+- **Your role** — read-only, and derived rather than chosen. A role is decided by where
+  you are: in a QSO party the in-state and out-of-state stations send different things,
+  and crossing the line changes which one you are. Both Field Day events work the same
+  way for everyone, so there is no role to show yet.
+- **Entry category** — what your Cabrillo log declares about the station:
+  `SINGLE-OP`, `MULTI-OP` or `CHECKLOG`. It is a claim, so you make it rather than
+  Nexus guessing: pick `CHECKLOG` when you are sending the log to help the sponsor
+  check other people's rather than to be scored yourself. New sessions read this;
+  a session already running keeps the declaration it started with.
+
 ### Contest Category
 
 - **Unassisted entry** — "Turns off the AI CW decoder, DX cluster / RBN spots and
@@ -1594,8 +1614,8 @@ claim right now; the record underneath is the evidence, kept across restarts.*
   [Appearance ▸ Features](#features) under Contesting — Field Day visibility is
   owned by this persisted setting, not by a feature flag, so the Features group
   hosts the master rather than a separate toggle.
-- **Event** — ARRL Field Day or Winter Field Day. "Affects scoring labels and
-  export headers."
+- **Event** — moved up to [Contest](#contest) at the top of this tab, where it is now
+  the contest picker. Same setting, one level up.
 - **FD Class** / **WFD Category** (the label follows the Event) — "Number of
   transmitters + class letter: A=club/group portable, B=1–2 person portable,
   C=mobile, D=home (mains power), E=home (emergency power), F=EOC. E.g. 3A."

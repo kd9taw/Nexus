@@ -2693,6 +2693,19 @@ export const EN = {
   // ⚠️ Invariant and staying in the panel: the class/category placeholders (1D, 2O), the
   // section placeholder (WI) and the section list itself, which is data.
   'settings.contestCategory.legend': 'Contest Category',
+  'settings.contestPick.legend': 'Contest',
+  'settings.contestPick.contest.label': 'Contest',
+  'settings.contestPick.contest.aria': 'Which contest you are entering',
+  'settings.contestPick.contest.hint':
+    'Which contest you are entering. It decides the exchange, what counts as a duplicate, and how the log is scored — so the setup below belongs to the one you pick.',
+  'settings.contestPick.role.label': 'Your role',
+  'settings.contestPick.role.value': 'Running as {{role}}. Your location decides this, so moving across the line changes it.',
+  'settings.contestPick.role.symmetric':
+    'This contest works the same way for everyone, so there is no role to choose. Contests with an in-state and an out-of-state side will show yours here.',
+  'settings.contestPick.category.label': 'Entry category',
+  'settings.contestPick.category.aria': 'How many operators are at this station',
+  'settings.contestPick.category.hint':
+    'What your Cabrillo log declares about the station. Pick CHECKLOG if you are sending the log to help the sponsor check others rather than to be scored.',
   'settings.contestCategory.unassisted.label': 'Unassisted entry',
   // Two whole accessible names — the switch does one of two different things, and neither is
   // the other with a word swapped.
@@ -2717,10 +2730,6 @@ export const EN = {
     'Turn on for Field Day weekend — reveals the Field Day workspace and the Class/Section exchange across all modes. Off the rest of the year. Fill in Class + Section below to start operating. Save to apply.',
   'settings.fieldDay.needExchange':
     "<b>Set your Class + Section to start operating.</b> Field Day mode is on, but the station won't enter Field Day until both are filled in below.",
-  'settings.fieldDay.event.label': 'Event',
-  'settings.fieldDay.event.aria': 'Field Day event',
-  'settings.fieldDay.event.hint':
-    "Which event you're operating in — affects scoring labels and export headers.",
   // The exchange field, named as its own event names it. The letters quoted in the hints are
   // the codes an operator sends — a translator leaves every one of them.
   'settings.fieldDay.class.label': 'FD Class',

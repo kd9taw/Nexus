@@ -98,6 +98,13 @@ import { setLocale, t, type MessageKey } from '../i18n'
 import { LOCALE_NATIVE_NAME, localeChoices, useLocale } from '../i18n/useLocale'
 import { T } from '../i18n/T'
 import { FD_EVENT_NAMES } from '../fdEvent'
+
+/** The Cabrillo `CATEGORY-OPERATOR` tokens, in the order a sponsor's template lists
+ *  them. INVARIANT: each goes into the file verbatim, so none is ever translated and
+ *  none is ever locale-formatted. Mirrors `contest::OperatorCategory`; a token this
+ *  list gains that Rust does not know is refused there rather than defaulted, because
+ *  the header is a CLAIM about the entry. */
+const CABRILLO_OPERATOR_CATEGORIES = ['SINGLE-OP', 'MULTI-OP', 'CHECKLOG'] as const
 import { loadProfiles, mergeProfile, saveProfile, deleteProfile, type Profile } from '../profiles'
 import {
   getAssistanceJournal,
@@ -118,7 +125,7 @@ import { discoverFlex } from '../api'
 import { civDiagnosticLog, civDiagnosticStatus } from '../api'
 import { allTxtLocation, diagLogLocation, recordingsLocation, revealAllTxt, revealDiagLog, revealRecordings } from '../api'
 import { findDaxDevices, isDaxPaired } from '../features/dax'
-import type { AssistanceEvent, ConnEvent, CredStatus } from '../types'
+import type { AssistanceEvent, ConnEvent, CredStatus, FieldDayStatus } from '../types'
 import { connState, dotClass, stateLabel, whenText } from '../settings/connHealth'
 import { SettingsStation } from './SettingsStation'
 import { SetupHealth } from './SetupHealth'
@@ -151,6 +158,11 @@ import { ARRL_SECTIONS_BY_DIVISION } from '../features/arrlSections'
 import { IS_MAC, IS_WINDOWS } from '../platform'
 
 interface Props {
+  /** The live contest session, for the READ-ONLY role read-out on the Contesting tab.
+   *  Optional: this panel is rendered by tests and by the setup wizard with no
+   *  snapshot in hand, and a missing session reads as "no role", never as a blank
+   *  chip claiming one. */
+  fieldDay?: FieldDayStatus | null
   /** Called after a successful save so the shell can refresh its snapshot. */
   onSaved?: () => void
   /** Where to land. Accepts a section id (`'audio'`), a tab id, a tab label, a legacy tab name
@@ -842,6 +854,7 @@ const SERIAL_LINE_RTS = 'RTS'
 const UNIT_HZ = 'Hz'
 
 export function SettingsPanel({
+  fieldDay,
   onSaved,
   target,
   radio,
@@ -10095,6 +10108,86 @@ export function SettingsPanel({
                (1D, 2O, WI), the section list itself, and the event names, which are the
                events' own (FD_EVENT_NAMES). The rest of this file is NOT migrated — see the
                guard's scope note. */
+            <fieldset className="settings-section" id="settings-contest-pick">
+              <legend>{t('settings.contestPick.legend')}</legend>
+              {/* ⭐ THE CONTEST PICKER (§9). It is the event chips, one level up: the
+                  contest is what decides the exchange, the dupe rule, the multiplier
+                  universe and the Cabrillo headers, so it is the first thing on this
+                  tab and Field Day Setup below is shown for the contests it describes.
+                  Two shipped contests today; the picker is what the families in later
+                  batches land in, rather than a second control beside this one.
+
+                  The contest NAMES are the events' own — invariant tokens, shared with
+                  the header, never translated. */}
+              <div className="settings-field">
+                <span className="settings-label">{t('settings.contestPick.contest.label')}</span>
+                <div className="theme-switcher" role="group" aria-label={t('settings.contestPick.contest.aria')}>
+                  {([
+                    { value: 'arrlfd', label: FD_EVENT_NAMES.arrlfd },
+                    { value: 'wfd',    label: FD_EVENT_NAMES.wfd },
+                  ] as { value: string; label: string }[]).map((ev) => (
+                    <button
+                      key={ev.value}
+                      type="button"
+                      className={`theme-chip${(form.fdEvent ?? 'arrlfd') === ev.value ? ' active' : ''}`}
+                      aria-pressed={(form.fdEvent ?? 'arrlfd') === ev.value}
+                      onClick={() => {
+                        markDirty()
+                        setForm((prev) => prev ? { ...prev, fdEvent: ev.value } : prev)
+                      }}
+                    >
+                      {ev.label}
+                    </button>
+                  ))}
+                </div>
+                <span className="settings-hint">{t('settings.contestPick.contest.hint')}</span>
+              </div>
+
+              {/* ⭐ THE ROLE / CATEGORY BLOCK.
+
+                  ROLE is READ-ONLY and comes from the live session, because a role is
+                  DERIVED from where the operator is, never typed: crossing a state line
+                  changes it, and a role the operator could set independently of their
+                  location would let the two disagree. Both Field Day events are
+                  symmetric — one unconditional role, an empty id — so there is nothing
+                  to show yet, and the block says so rather than showing a blank chip.
+
+                  CATEGORY-OPERATOR is a DECLARATION, so the operator makes it. It is
+                  the header that shipped as the string literal `MULTI-OP`: every solo
+                  Field Day entry Nexus exported claimed more than one operator was at
+                  the station. A new session reads this; the exporter reads the session,
+                  because one run of one contest under one callsign IS the entry. */}
+              <div className="settings-field">
+                <span className="settings-label">{t('settings.contestPick.role.label')}</span>
+                <span className="settings-hint">
+                  {fieldDay?.role
+                    ? t('settings.contestPick.role.value', { role: fieldDay.role })
+                    : t('settings.contestPick.role.symmetric')}
+                </span>
+              </div>
+
+              <div className="settings-field">
+                <span className="settings-label">{t('settings.contestPick.category.label')}</span>
+                <div className="theme-switcher" role="group" aria-label={t('settings.contestPick.category.aria')}>
+                  {/* The Cabrillo TOKENS are invariant — they go in the file verbatim. */}
+                  {CABRILLO_OPERATOR_CATEGORIES.map((c) => (
+                    <button
+                      key={c}
+                      type="button"
+                      className={`theme-chip${(form.contestCategoryOperator || 'SINGLE-OP') === c ? ' active' : ''}`}
+                      aria-pressed={(form.contestCategoryOperator || 'SINGLE-OP') === c}
+                      onClick={() => update('contestCategoryOperator', c)}
+                    >
+                      {c}
+                    </button>
+                  ))}
+                </div>
+                <span className="settings-hint">{t('settings.contestPick.category.hint')}</span>
+              </div>
+            </fieldset>
+          )}
+
+          {tab === 'contesting' && (
             <fieldset className="settings-section" id="settings-contest-category">
               <legend>{t('settings.contestCategory.legend')}</legend>
               {/* ONE switch for every QSO-finding assistance source. It takes effect IMMEDIATELY
@@ -10192,31 +10285,6 @@ export function SettingsPanel({
               </p>
             )}
             <div className="settings-grid">
-              <div className="settings-field">
-                <span className="settings-label">{t('settings.fieldDay.event.label')}</span>
-                <div className="theme-switcher" role="group" aria-label={t('settings.fieldDay.event.aria')}>
-                  {/* The event NAMES are the events' own — invariant, shared with the header. */}
-                  {([
-                    { value: 'arrlfd', label: FD_EVENT_NAMES.arrlfd },
-                    { value: 'wfd',    label: FD_EVENT_NAMES.wfd },
-                  ] as { value: string; label: string }[]).map((ev) => (
-                    <button
-                      key={ev.value}
-                      type="button"
-                      className={`theme-chip${(form.fdEvent ?? 'arrlfd') === ev.value ? ' active' : ''}`}
-                      aria-pressed={(form.fdEvent ?? 'arrlfd') === ev.value}
-                      onClick={() => {
-                        markDirty()
-                        setForm((prev) => prev ? { ...prev, fdEvent: ev.value } : prev)
-                      }}
-                    >
-                      {ev.label}
-                    </button>
-                  ))}
-                </div>
-                <span className="settings-hint">{t('settings.fieldDay.event.hint')}</span>
-              </div>
-
               <label className="settings-field">
                 <span className="settings-label">
                   {(form.fdEvent ?? 'arrlfd') === 'wfd'

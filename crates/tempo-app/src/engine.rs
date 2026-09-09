@@ -9512,6 +9512,17 @@ impl Engine {
                 // exists to replace: a station worked at last year's Field Day would
                 // read as a dupe this year.
                 s.start_unix = now_unix_secs();
+                // ⭐ THE ENTRY DECLARATION Cabrillo's `CATEGORY-OPERATOR` states
+                // (§6.1). A value this build does not understand is NOT silently
+                // read as `SINGLE-OP` — `from_token` returns `None` and the session
+                // keeps its default, which is `SINGLE-OP`, because the header is a
+                // CLAIM about the entry and a hand-edited settings file must not
+                // make one on the operator's behalf.
+                if let Some(cat) = tempo_core::contest::OperatorCategory::from_token(
+                    &self.settings.contest_category_operator,
+                ) {
+                    s.entry_category = cat;
+                }
                 s
             }
         };
@@ -29346,6 +29357,55 @@ mod tests {
             panic!("still in Field Day")
         };
         assert_eq!(station.log.session.field("SECTION"), "WI");
+    }
+
+    /// ⭐ **The `CATEGORY-OPERATOR` declaration reaches the entry, both ways.**
+    ///
+    /// The header shipped as the string literal `MULTI-OP`, so every solo Field Day
+    /// entry Nexus exported claimed more than one operator was at the station. Batch 6
+    /// made the default honest; this is the half that lets a club that IS multi-op say
+    /// so. The exporter reads the SESSION, and a new session reads the setting.
+    #[test]
+    fn the_entry_category_setting_reaches_the_session_and_the_cabrillo_header() {
+        for (setting, want_token) in [
+            ("MULTI-OP", "MULTI-OP"),
+            ("multi-op", "MULTI-OP"), // the picker's token, however it is cased
+            ("CHECKLOG", "CHECKLOG"),
+            ("", "SINGLE-OP"), // unset: the honest default
+            // ⚠️ NEGATIVE CONTROL. A token this build does not understand must NOT be
+            // read as SINGLE-OP by accident — `from_token` returns None and the
+            // session keeps its own default, which happens to BE SingleOp. The value
+            // of the case is that a hand-edited settings file cannot make some OTHER
+            // claim on the operator's behalf.
+            ("MULTI-TWO", "SINGLE-OP"),
+        ] {
+            let mut e = Engine::new("W9XYZ", "EN61", 0);
+            {
+                let mut s = e.settings().clone();
+                s.fd_active = true;
+                s.fd_class = "3A".into();
+                s.fd_section = "WI".into();
+                s.contest_category_operator = setting.into();
+                e.apply_settings(s);
+            }
+            e.set_mode("fieldday-run").unwrap();
+            let Mode::FieldDay { station, .. } = &e.mode else {
+                panic!("in Field Day")
+            };
+            assert_eq!(
+                station.log.session.entry_category.token(),
+                want_token,
+                "setting {setting:?}"
+            );
+            let cbr = station
+                .log
+                .cabrillo(14_074)
+                .expect("a single-mode event exports one entry");
+            assert!(
+                cbr.contains(&format!("CATEGORY-OPERATOR: {want_token}")),
+                "setting {setting:?} — header line missing from:\n{cbr}"
+            );
+        }
     }
 
     /// ⭐ §3.2 — the one-click merge is safe to press twice.

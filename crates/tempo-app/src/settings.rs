@@ -686,6 +686,20 @@ pub struct Settings {
     /// Which Field Day event: "arrlfd" (June) | "wfd" (Winter Field Day).
     #[serde(default)]
     pub fd_event: String,
+    /// ⭐ **The entry declaration Cabrillo's `CATEGORY-OPERATOR` header states** —
+    /// `"SINGLE-OP"`, `"MULTI-OP"` or `"CHECKLOG"` (§6.1). Empty or unrecognised
+    /// means `SINGLE-OP`, which is the [`OperatorCategory`] default and the honest
+    /// one: until this setting existed the header was the string literal `MULTI-OP`,
+    /// so every solo Field Day entry Nexus exported claimed more than one operator
+    /// was at the station.
+    ///
+    /// The SESSION is what the exporter reads (one run of one contest under one
+    /// callsign IS the entry); this is where a new session gets its value, exactly
+    /// as `fd_class`/`fd_section` are for the exchange.
+    ///
+    /// [`OperatorCategory`]: tempo_core::contest::OperatorCategory
+    #[serde(default)]
+    pub contest_category_operator: String,
     /// Power multiplier tier: 5 = QRP battery/natural, 2 = <=150 W, 1 = >150 W.
     #[serde(default = "default_fd_power")]
     pub fd_power_mult: u32,
@@ -3343,7 +3357,8 @@ impl Default for Settings {
             rptr_offset_override_hz: 0, // 0 = band-convention offset
             fd_active: false,           // never auto-enabled — only the operator's toggle sets this
             fd_class: String::new(),
-            fd_event: String::new(), // "" = arrlfd
+            fd_event: String::new(),                  // "" = arrlfd
+            contest_category_operator: String::new(), // "" = SINGLE-OP, the honest default
             fd_power_mult: 2,
             fd_bonuses: Vec::new(),
             fd_bonuses_planned: Vec::new(),
