@@ -32103,8 +32103,12 @@ mod tests {
         let averaged = feed
             .scope_row(300.0, 1100.0, spectrum::WindowN::Sharp)
             .unwrap();
+        let expected = power_mean(&[0.2, 0.6, 1.0]);
         assert!(
-            averaged.row.iter().all(|value| (*value - 0.6).abs() < 1e-6),
+            averaged
+                .row
+                .iter()
+                .all(|value| (*value - expected).abs() < 1e-6),
             "all three producer frames must reach the local averaging window"
         );
         feed.backdate_scope_req_for_test(Duration::from_secs(3));

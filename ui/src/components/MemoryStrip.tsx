@@ -44,6 +44,15 @@ export interface MemoryStripProps {
 // Dial-match tolerance for the active-chip highlight (mirrors FrequencyControl).
 const MATCH_EPS = 0.0005
 
+/** Remote has no station memory subscription yet; keep the shared strip's geometry. */
+export function MemoryStripUnavailable() {
+  return (
+    <span className="mem-strip" role="status" aria-label={t('remote.memoriesUnavailable')} title={t('remote.memoriesUnavailable')}>
+      {t('memories.strip.label')} —
+    </span>
+  )
+}
+
 /** A sensible kind for a channel saved straight off the dial. */
 function kindForMode(mode: string): MemoryKind {
   const u = mode.toUpperCase()

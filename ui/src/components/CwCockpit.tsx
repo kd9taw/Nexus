@@ -19,7 +19,7 @@ import { TuningStrip } from './TuningStrip'
 import { CockpitHeader } from './CockpitHeader'
 import { ZeroBeat } from './ZeroBeat'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
-import { MemoryStrip } from './MemoryStrip'
+import { MemoryStrip, MemoryStripUnavailable } from './MemoryStrip'
 import { IS_MAC, FN_KEY_HINT } from '../platform'
 import type { Memory } from '../features/memories'
 import { Splitter, SCOPE_SPLIT_MAX, SCOPE_SPLIT_MIN } from './Splitter'
@@ -1486,7 +1486,7 @@ export function CwCockpit({
             mode="CW"
             onRecall={onRecallMemory}
             onManage={onOpenMemories}
-          /> : <span className="mem-strip" role="status" aria-label={t('remote.memoriesUnavailable')} title={t('remote.memoriesUnavailable')}>{t('memories.strip.label')} —</span>
+          /> : <MemoryStripUnavailable />
         )}
         {control ? <RotorStrip
           onOpenSettings={onOpenSettings}

@@ -50,7 +50,7 @@ import {
 } from '../api'
 import { pushToast } from '../toast'
 import { RotorStrip } from './RotorStrip'
-import { MemoryStrip } from './MemoryStrip'
+import { MemoryStrip, MemoryStripUnavailable } from './MemoryStrip'
 import type { Memory } from '../features/memories'
 import { setFrequency, setRigFunc, setSidebandOverride, setFilterWidth, openPanelWindow } from '../api'
 import { bandLabelForMhz, sidebandForQsy } from '../band'
@@ -1368,7 +1368,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
             mode={commandedMode}
             onRecall={onRecallMemory}
             onManage={onOpenMemories}
-          /> : <span className="mem-strip" role="status" aria-label={t('remote.memoriesUnavailable')} title={t('remote.memoriesUnavailable')}>{t('memories.strip.label')} —</span>
+          /> : <MemoryStripUnavailable />
         )}
         {control ? <RotorStrip onOpenSettings={onOpenSettings} /> : <span className="dim" role="status" aria-label={t('remote.rotatorUnavailable')} title={t('remote.rotatorUnavailable')}>{t('rotor.strip.aria')} —</span>}
         {/* Glyph only (density pass 2026-08-04, the same move the FT cockpit's header made):
