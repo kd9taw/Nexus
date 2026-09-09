@@ -208,7 +208,10 @@ All four exports are available at any time during or after the event from the Fi
 
 - Each QSO line carries a real `yyyy-mm-dd hhmm` UTC timestamp derived from the logged Unix timestamp.
 - Mode tokens follow Cabrillo 3.0: `CW`, `PH`, `RY` for RTTY contacts, `DG` for other (or unrecorded) digital.
-- `CONTEST:` header is `ARRL-FIELD-DAY` or `WFD` based on the event switch.
+- `CONTEST:` header is `ARRL-FD` or `WFD` based on the event switch. These are Cabrillo names,
+  from the WA7BNM Master List of Cabrillo Names that the Cabrillo V3 specification points to;
+  they are not always the same string as the ADIF `CONTEST_ID` below (ARRL Field Day's ADIF id
+  is `ARRL-FIELD-DAY`).
 - `CATEGORY-OPERATOR: MULTI-OP` is hardcoded; single-op categories are not selectable in this version.
 - Legacy contacts without a timestamp fall back to the `----------` placeholder rather than inventing a time.
 

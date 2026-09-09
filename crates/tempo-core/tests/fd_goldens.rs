@@ -20,6 +20,25 @@
 //! (`fdevent::ClubHost::unique_log`), which is why the 1.x club-Cabrillo fixture in
 //! `fdevent.rs` did NOT move. Nothing else moved: not one QSO line, not one other
 //! header, and none of the three `.adi` files.
+//!
+//! ⚠️ **A second deliberate movement, the Cabrillo-token correction.** Line 2 of
+//! `arrlfd.cbr` alone changed from
+//!
+//! ```text
+//! CONTEST: ARRL-FIELD-DAY
+//! ```
+//!
+//! to `CONTEST: ARRL-FD` — 535 bytes to 528. `ARRL-FIELD-DAY` is an ADIF
+//! `CONTEST_ID` enumeration value, not a Cabrillo one: the Cabrillo V3 header
+//! specification defines no contest names of its own and points at the WA7BNM
+//! "Master List of Cabrillo Names", which calls ARRL Field Day `ARRL-FD` (id 57).
+//! `FieldDayLog::cabrillo` now translates between the two registries through
+//! `contest::cabrillo::cabrillo_contest_token`, at the last step before the header.
+//! **Nothing else moved, and that is the point of doing it there**: not one QSO
+//! line, not one other header, and — because the ADIF export reads the id directly
+//! and must keep doing so — not one byte of any `.adi` file. `wfd.cbr` and
+//! `wfd-classes.cbr` did not move either: `WFD` is the same string in both
+//! registries, and is the one token of the six that its sponsor actually publishes.
 // The fixture builder lives in the capture arm so the bytes and the builder can never
 // drift apart. `main` — the capture arm's own entry point — is dead here by
 // construction, and re-exporting it would be worse than allowing it.

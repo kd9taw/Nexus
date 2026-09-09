@@ -105,7 +105,15 @@ that's a separate entry. End this session and start a new one?";
 pub struct ContestSession {
     /// Stable across restart; stamped on every row it owns.
     pub id: String,
-    /// The Cabrillo `CONTEST` token — `"ARRL-FIELD-DAY"`, `"WFD"`, `"CQP"`.
+    /// The contest's declared id — `"ARRL-FIELD-DAY"`, `"WFD"`, `"CA-QSO-PARTY"`.
+    ///
+    /// ⚠️ **This is the ADIF `CONTEST_ID` value, NOT the Cabrillo `CONTEST:` token**,
+    /// and for three shipped contests those differ; the header runs it through
+    /// [`cabrillo_contest_token`](crate::contest::cabrillo_contest_token) first.
+    /// It is also the prefix of [`id`](Self::id) and of every row's `qid`, so it is
+    /// an identity as well as an export value. (The earlier `"CQP"` example here was
+    /// wrong twice over: on the Cabrillo master list `CQP` is the COLLEGIATE QSO
+    /// Party, not California.)
     pub contest_id: String,
     pub rules_year: u16,
     /// The exchange this session runs.

@@ -1238,6 +1238,12 @@ mod tests {
     /// positions, all three mode classes, two digital submodes, one unrecorded
     /// operator and one cross-position dupe — with the Cabrillo and ADIF that
     /// build exported from it.
+    ///
+    /// ⚠️ The `.cbr`'s line 2 moved once since capture, deliberately:
+    /// `CONTEST: ARRL-FIELD-DAY` → `CONTEST: ARRL-FD` (694 bytes to 687), because
+    /// that header is a Cabrillo token and `ARRL-FIELD-DAY` is the ADIF one. See
+    /// the module header of `tempo-core/tests/fd_goldens.rs`. The `.adi` did NOT
+    /// move — its `CONTEST_ID` is the ADIF value and stays that way.
     const J1X: &str = include_str!("../tests/fixtures/fd-1x-journal/fd_event_1x.jsonl");
     const J1X_CBR: &str = include_str!("../tests/fixtures/fd-1x-journal/fd_event_1x.cbr");
     const J1X_ADI: &str = include_str!("../tests/fixtures/fd-1x-journal/fd_event_1x.adi");
