@@ -15,8 +15,23 @@ import { usePinnedScroll } from '../usePinnedScroll'
 import { ARRL_SECTIONS_BY_DIVISION, ARRL_SECTION_TOTAL } from '../features/arrlSections'
 import { contestDomain, type DomainGroup } from '../features/contestDomains'
 import { t } from '../i18n'
+import type { MessageKey } from '../i18n'
 import { T } from '../i18n/T'
 import { bandColor } from '../bandColors'
+
+/** ⭐ The score-note keys a RULESET may name (`score_note_key`), and the reason this set
+ *  exists rather than the render trusting whatever the rules file says.
+ *
+ *  Two things at once. A rules file is DOWNLOADED data, so a key this build has no
+ *  catalog entry for would render as the raw key string on the operator's scoreboard —
+ *  the set makes an unknown key render nothing instead. And the catalog's own
+ *  "leaves no orphan entry behind" guard scans SOURCE for key literals: a key reached
+ *  only through data looks unreferenced to it, and would be deleted as dead by the next
+ *  person who trusted that guard. Naming it here is what keeps it alive and translated —
+ *  in the `…Key` property-table shape that guard's extractor reads, which is why this is
+ *  a table of one rather than a bare array of strings. */
+const SCORE_NOTES: { noteKey: MessageKey }[] = [{ noteKey: 'settings.contestScore.incomplete' }]
+const SCORE_NOTE_KEYS: ReadonlySet<string> = new Set(SCORE_NOTES.map((n) => n.noteKey))
 import { modeClassOf } from '../features/needs'
 
 /**
@@ -1169,6 +1184,19 @@ export function FieldDayScoreboard({
           </button>
         )}
       </div>
+
+      {/* ⭐ WHAT THIS SCORE LEAVES OUT, when the ruleset says it leaves something out.
+          It sits ABOVE the tiles, because a caveat under a total is read after the
+          number has already been believed. TNQP and TXQP both award bonus points the
+          sponsor works out FROM THE LOG, and this build does not compute them; the
+          key comes off the ruleset so the UI never has to hold a second copy of which
+          contests are affected. Empty for both Field Day events and for OhQP and CQP,
+          whose scores are complete. */}
+      {fieldDay?.scoreNoteKey && SCORE_NOTE_KEYS.has(fieldDay.scoreNoteKey) && (
+        <p className="fd-score-note" role="note">
+          {t(fieldDay.scoreNoteKey as MessageKey)}
+        </p>
+      )}
 
       {/* SCORE TILES */}
       <div className="fd-scoreboard">

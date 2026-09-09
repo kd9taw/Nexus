@@ -250,7 +250,20 @@ const CTCSS_TONES = [
   167.9, 173.8, 179.9, 186.2, 192.8, 203.5, 210.7, 218.1, 225.7, 233.6, 241.8, 250.3,
 ]
 
-const NUMERIC_KEYS: FieldKey[] = ['dialMhz', 'baud', 'rigctldPort', 'rigModel', 'txWatchdogMin', 'catBrokerPort', 'tuneTimeoutSecs', 'aprsIsPort', 'aprsIsRadiusKm', 'aprsStationTtlMin']
+const NUMERIC_KEYS: FieldKey[] = ['dialMhz', 'baud', 'rigctldPort', 'rigModel', 'txWatchdogMin', 'catBrokerPort', 'tuneTimeoutSecs', 'aprsIsPort', 'aprsIsRadiusKm', 'aprsStationTtlMin', 'contestCqZone', 'contestItuZone']
+
+/** Clamp a typed zone to `0..=max`, as the STRING `update` takes (0 = not set).
+ *
+ *  A zone is a small closed range — CQ 1–40, ITU 1–90 — and a number outside it is not a
+ *  zone the operator meant, it is a typo that would go on the air inside an exchange.
+ *  `<input type="number" max>` is advisory in every browser (typing past it is allowed;
+ *  only the spinner respects it), so the clamp has to be here to exist at all. */
+const clampZone = (raw: string, max: number): string => {
+  if (raw.trim() === '') return '0'
+  const n = Math.trunc(Number(raw))
+  if (!Number.isFinite(n)) return '0'
+  return String(Math.min(Math.max(n, 0), max))
+}
 
 /** The APRS SSID conventions (APRS spec appendix / the de-facto community list). Not enforced
  *  anywhere — an SSID is free-form 0..15 — but naming them is the difference between a number
@@ -10183,6 +10196,119 @@ export function SettingsPanel({
                   ))}
                 </div>
                 <span className="settings-hint">{t('settings.contestPick.category.hint')}</span>
+              </div>
+            </fieldset>
+          )}
+
+          {tab === 'contesting' && (
+            <fieldset className="settings-section" id="settings-contest-station">
+              <legend>{t('settings.contestStation.legend')}</legend>
+              {/* ⭐ THE STATION DATA A SENT EXCHANGE NEEDS (§3.4).
+
+                  Until this block existed, `mycall`/`mygrid` plus `fdClass`/`fdSection`
+                  were the whole of "where I am" — so a QSO party's in-state role, which
+                  sends the operator's COUNTY, had nothing to send. The rules loader now
+                  refuses any ruleset naming a sent slot whose source is not one of these
+                  fields, which is what makes a contest that ships without its setting a
+                  red gate rather than an operator who cannot fill their own exchange at
+                  1400 on contest Saturday.
+
+                  Every field is optional and empty by default: none of them can be
+                  guessed, and a guessed exchange goes on the air. The hints say which
+                  contest each one is for, because most operators will fill in one. */}
+              <p className="settings-note">{t('settings.contestStation.note')}</p>
+              <div className="settings-grid">
+                <label className="settings-field">
+                  <span className="settings-label">{t('settings.contestStation.county.label')}</span>
+                  <input
+                    className="settings-input mono"
+                    type="text"
+                    value={form.contestQthCounty ?? ''}
+                    placeholder="FRAN"
+                    onChange={(e) => update('contestQthCounty', e.target.value.toUpperCase())}
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                  <span className="settings-hint">{t('settings.contestStation.county.hint')}</span>
+                </label>
+
+                <label className="settings-field">
+                  <span className="settings-label">{t('settings.contestStation.state.label')}</span>
+                  <input
+                    className="settings-input mono"
+                    type="text"
+                    value={form.contestQthState ?? ''}
+                    placeholder="WI"
+                    onChange={(e) => update('contestQthState', e.target.value.toUpperCase())}
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                  {/* ⚠️ The one confusion worth spending a line on: a section is not a
+                      state. An operator in WNY who types WNY here sends a section into a
+                      QSO party's state slot, and no validator downstream can tell. */}
+                  <span className="settings-hint">{t('settings.contestStation.state.hint')}</span>
+                </label>
+
+                <label className="settings-field">
+                  <span className="settings-label">{t('settings.contestStation.check.label')}</span>
+                  <input
+                    className="settings-input mono"
+                    type="text"
+                    inputMode="numeric"
+                    maxLength={2}
+                    value={form.contestCheck ?? ''}
+                    placeholder="74"
+                    onChange={(e) => update('contestCheck', e.target.value.replace(/\D/g, ''))}
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                  <span className="settings-hint">{t('settings.contestStation.check.hint')}</span>
+                </label>
+
+                <label className="settings-field">
+                  <span className="settings-label">{t('settings.contestStation.cqZone.label')}</span>
+                  <input
+                    className="settings-input mono"
+                    type="number"
+                    min={0}
+                    max={40}
+                    value={form.contestCqZone || ''}
+                    placeholder="4"
+                    onChange={(e) => update('contestCqZone', clampZone(e.target.value, 40))}
+                    autoComplete="off"
+                  />
+                  <span className="settings-hint">{t('settings.contestStation.cqZone.hint')}</span>
+                </label>
+
+                <label className="settings-field">
+                  <span className="settings-label">{t('settings.contestStation.ituZone.label')}</span>
+                  <input
+                    className="settings-input mono"
+                    type="number"
+                    min={0}
+                    max={90}
+                    value={form.contestItuZone || ''}
+                    placeholder="8"
+                    onChange={(e) => update('contestItuZone', clampZone(e.target.value, 90))}
+                    autoComplete="off"
+                  />
+                  <span className="settings-hint">{t('settings.contestStation.ituZone.hint')}</span>
+                </label>
+
+                <label className="settings-field">
+                  <span className="settings-label">{t('settings.contestStation.power.label')}</span>
+                  <input
+                    className="settings-input mono"
+                    type="text"
+                    value={form.contestPower ?? ''}
+                    placeholder="KW"
+                    onChange={(e) => update('contestPower', e.target.value.toUpperCase())}
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                  {/* ⚠️ Not the power MULTIPLIER below: this one goes on the air verbatim. */}
+                  <span className="settings-hint">{t('settings.contestStation.power.hint')}</span>
+                </label>
               </div>
             </fieldset>
           )}

@@ -2555,6 +2555,13 @@ export interface FieldDayStatus {
    *  date math hardcoded 24 h and dropped WFD's final six hours). */
   eventStartUnix?: number
   eventEndUnix?: number
+  /** ⭐ An i18n key naming what this contest's computed score LEAVES OUT, or empty
+   *  when the score is complete (both Field Day events, OhQP, CQP). It comes off the
+   *  RULESET rather than a table here: TNQP and TXQP award bonus points computed from
+   *  the log, which the claimed-bonus model cannot express, so their total is honestly
+   *  short of the sponsor's — and an operator must not read a claimed score off a
+   *  number that silently omits their bonuses. */
+  scoreNoteKey?: string
   /** The active ruleset's rules year + the rules data's `generated` stamp. */
   rulesYear?: number
   rulesGenerated?: string
@@ -3158,6 +3165,28 @@ export interface Settings {
    *  claimed more than one operator was at the station. A new SESSION reads it; the
    *  exporter reads the session, because one run under one callsign IS the entry. */
   contestCategoryOperator?: string
+  /** ⭐ The station data a SENT exchange needs (spec §3.4) — added BESIDE the frozen
+   *  `fd*` names, never replacing them (§8c). Every one of these is what a rules file
+   *  may name as the SOURCE of a slot its role sends; a ruleset naming anything else
+   *  is refused by the loader, which is what stops a contest shipping with an exchange
+   *  the operator cannot fill. */
+  /** The county I am in, as the sponsor abbreviates it (`FRAN`, `DAVI`, `BEE`) — a QSO
+   *  party's in-state role. Half of the session's location; `contestQthState` is the
+   *  other half, and the role decides which one goes on the air. */
+  contestQthCounty?: string
+  /** My state / province / territory, as the sponsor abbreviates it (`WI`, `ON`, `DX`).
+   *  ⚠️ NOT `fdSection`: an ARRL/RAC section is not a state (`WNY` is not `NY`). */
+  contestQthState?: string
+  /** Sweepstakes' CHECK — the last two digits of the year I was first licensed, and the
+   *  same two on every row of my log. */
+  contestCheck?: string
+  /** My CQ zone, 1–40 (CQ WW). 0 = not set. */
+  contestCqZone?: number
+  /** My ITU zone, 1–90 (IARU). 0 = not set. */
+  contestItuZone?: number
+  /** The power I SEND as an exchange field (ARRL DX: `KW`, `500`, `5`) — free text, and
+   *  ⚠️ not `fdPowerMult`, which is a scoring tier picked from a legal set. */
+  contestPower?: string
   /** FD power multiplier tier: 5 QRP-battery, 2 <=100W, 1 >100W. */
   fdPowerMult?: number
   /** Claimed FD bonus ids (the checklist). */

@@ -1359,6 +1359,16 @@ pub struct FieldDayStatus {
     pub event_start_unix: u64,
     #[serde(default)]
     pub event_end_unix: u64,
+    /// ⭐ **An i18n key naming what this contest's computed score LEAVES OUT**, or
+    /// empty when the score is complete (both Field Day events, OhQP, CQP).
+    ///
+    /// It comes off the ruleset, not from a table in the UI: TNQP and TXQP award
+    /// bonus points COMPUTED from the log, which `PostMultiplier::Bonuses` (a menu
+    /// the operator ticks) cannot express, so the total shown is honestly short of
+    /// the sponsor's. **An operator must not read a claimed score off a number that
+    /// silently omits their bonuses** — so the omission travels with the score.
+    #[serde(default)]
+    pub score_note_key: String,
     /// The active ruleset's rules year + the rules data's `generated` stamp —
     /// which parameters are scoring this log (the banner shows both).
     #[serde(default)]

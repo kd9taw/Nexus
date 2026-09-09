@@ -1589,6 +1589,33 @@ the Cabrillo headers.
   check other people's rather than to be scored yourself. New sessions read this;
   a session already running keeps the declaration it started with.
 
+### Your station data
+
+What your station sends when a contest asks for it. Fill in the ones your contest
+uses and leave the rest alone — nothing here is guessed, because an exchange that
+goes on the air has to be one you typed.
+
+- **County** — your county, abbreviated the way the QSO party abbreviates it
+  (Franklin is `FRAN`, Bee is `BEE`). Only in-state entries send this. Use the
+  sponsor's own list: the abbreviations are irregular, and a code you worked out
+  from the county name will often be the wrong one.
+- **State or province** — your state, province or territory, two letters. This is
+  **not** your ARRL section. Western New York is `WNY` as a section and `NY` as a
+  state, and a QSO party wants the state; Field Day Setup below is where the
+  section lives.
+- **Check** — the last two digits of the year you were first licensed. Sweepstakes
+  asks for it, and you send the same two digits all contest.
+- **CQ zone** — 1 to 40, for CQ WW. Leave it at 0 if you do not know it yet.
+- **ITU zone** — 1 to 90, for IARU. Leave it at 0 if you do not know it yet.
+- **Power sent** — the power you send *as part of the exchange*, in the sponsor's
+  own words (`KW`, `500`, `5`). This is not the Field Day power multiplier below,
+  which is a scoring tier you pick from a list; this one goes on the air exactly as
+  you type it.
+
+If a contest needs something your station has not filled in, Nexus refuses the
+contest's rules rather than sending a blank — you find out while setting up, not at
+1400 on contest Saturday.
+
 ### Contest Category
 
 - **Unassisted entry** — "Turns off the AI CW decoder, DX cluster / RBN spots and

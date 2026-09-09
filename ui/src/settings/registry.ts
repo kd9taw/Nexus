@@ -444,6 +444,20 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'cabrillo', 'category-operator', 'single-op', 'multi-op', 'checklog', 'single op',
       'multi op', 'check log', 'operators'],
   },
+  // The station data a SENT exchange needs (spec §3.4). It sits under the contest
+  // picker because WHICH of these fields goes on the air is the contest's business —
+  // a QSO party sends the county or the state, Sweepstakes sends the check — and
+  // above Field Day Setup, which is the setup for one pair of contests rather than
+  // for the station.
+  {
+    id: 'contest-station',
+    label: 'Your station data',
+    tab: 'contesting',
+    neededInHourOne: true,
+    keywords: ['county', 'state', 'province', 'qth', 'check', 'first licensed',
+      'cq zone', 'itu zone', 'zone', 'power sent', 'exchange', 'qso party',
+      'sweepstakes', 'my county', 'my state', 'station data', 'what i send'],
+  },
   {
     id: 'contest-category',
     label: 'Contest Category',

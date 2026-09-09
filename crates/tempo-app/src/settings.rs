@@ -700,6 +700,58 @@ pub struct Settings {
     /// [`OperatorCategory`]: tempo_core::contest::OperatorCategory
     #[serde(default)]
     pub contest_category_operator: String,
+    // ---- The station data a SENT exchange needs (spec §3.4) -----------------
+    //
+    // ⭐ **These land BESIDE the frozen `fd_*` names, never replacing them**
+    // (§8c). Renaming a persisted serde field is a silent-reset hazard, and a
+    // `#[serde(default)]` turns the loud failure into a quiet one — a
+    // settings.json from 1.x must load and run ARRL Field Day identically.
+    //
+    // ⚠️ **Every name here is also in `fd_rules::SENT_SLOT_SETTINGS`**, which is
+    // what a ruleset names as the source of a slot it sends, and
+    // `the_sent_slot_settings_are_real_fields_of_this_struct` below is what
+    // keeps the two in step. That chain is the whole point: round 3's
+    // Sweepstakes blocker was not that a setting was hard to add, it was that
+    // NOTHING CHECKED, so a contest shipped whose exchange the operator could
+    // not fill.
+    /// The county I am in, for a QSO party's in-state role — the sponsor's own
+    /// abbreviation (`FRAN`, `DAVI`, `BEE`), not the county name.
+    ///
+    /// Half of the session's `MyLocation`; the other half is
+    /// [`Self::contest_qth_state`], and which one a role sends is the role's
+    /// business. Empty is the normal state for anyone not operating a QSO party
+    /// from inside the sponsoring state.
+    #[serde(default)]
+    pub contest_qth_county: String,
+    /// My state, province or territory, for a QSO party's out-of-state role —
+    /// the sponsor's own abbreviation (`WI`, `ON`, `DX`).
+    ///
+    /// ⚠️ **Not the same field as [`Self::fd_section`]**, which is an ARRL/RAC
+    /// SECTION and can differ from the state (`WNY` is not `NY`). Field Day
+    /// sends the section; a QSO party sends the state.
+    #[serde(default)]
+    pub contest_qth_state: String,
+    /// Sweepstakes' CHECK: the last two digits of the year I was first licensed.
+    ///
+    /// Nothing in this struct held it — it is not the licence CLASS, and there
+    /// was no first-licensed year anywhere. Two digits, and the SAME two on
+    /// every row of my log (SS-Rules §4.4.2), which the exchange expresses as
+    /// `RoleSpec::constant_sent`.
+    #[serde(default)]
+    pub contest_check: String,
+    /// My CQ zone, 1–40 (CQ WW). `0` = not set.
+    #[serde(default)]
+    pub contest_cq_zone: u32,
+    /// My ITU zone, 1–90 (IARU). `0` = not set.
+    #[serde(default)]
+    pub contest_itu_zone: u32,
+    /// The power I send as an exchange field — ARRL DX's `KW` / `500` / `5`.
+    ///
+    /// ⚠️ **Not [`Self::fd_power_mult`]**, which is a scoring TIER the operator
+    /// picks from a legal set. This one is free text that goes on the air
+    /// verbatim, because the sponsor's own examples are not a closed set.
+    #[serde(default)]
+    pub contest_power: String,
     /// Power multiplier tier: 5 = QRP battery/natural, 2 = <=150 W, 1 = >150 W.
     #[serde(default = "default_fd_power")]
     pub fd_power_mult: u32,
@@ -3359,6 +3411,15 @@ impl Default for Settings {
             fd_class: String::new(),
             fd_event: String::new(),                  // "" = arrlfd
             contest_category_operator: String::new(), // "" = SINGLE-OP, the honest default
+            // §3.4's station-data block. Every one of these is empty/0 on a fresh
+            // install: none of them can be guessed, and a guessed exchange goes on
+            // the air. The Contesting tab asks for the ones the picked contest sends.
+            contest_qth_county: String::new(),
+            contest_qth_state: String::new(),
+            contest_check: String::new(),
+            contest_cq_zone: 0, // 0 = not set; CQ zones are 1..=40
+            contest_itu_zone: 0, // 0 = not set; ITU zones are 1..=90
+            contest_power: String::new(),
             fd_power_mult: 2,
             fd_bonuses: Vec::new(),
             fd_bonuses_planned: Vec::new(),
@@ -4703,6 +4764,75 @@ impl Settings {
 mod tests {
     #![allow(clippy::field_reassign_with_default)]
     use super::*;
+
+    /// ⭐⭐ **The link that makes §2.5's every-sent-slot-has-a-source rule real.**
+    ///
+    /// A rules file names the source of a slot it sends; the loader refuses any name
+    /// outside `fd_rules::SENT_SLOT_SETTINGS`; and this is where that list is bound to
+    /// fields that actually exist on this struct. Without this test the chain has an
+    /// unchecked link — the loader would happily accept `setting:contest_check` while
+    /// nothing in the build could read one, which is EXACTLY round 3's Sweepstakes
+    /// blocker with a validator bolted on top of it.
+    ///
+    /// Driven by serde rather than a hand-written field list, for the same reason
+    /// `every_patch_field_lands_on_the_radio` is: a hand-written list is what fails.
+    ///
+    /// ⚠️ The list holds RUST names; `Settings` serialises `camelCase`, so the test
+    /// converts. That conversion is also why the list cannot be compared by eye.
+    #[test]
+    fn the_sent_slot_settings_are_real_fields_of_this_struct() {
+        let json = serde_json::to_value(Settings::default()).expect("Settings serialises");
+        let obj = json.as_object().expect("a struct is an object");
+        let camel = |s: &str| {
+            let mut out = String::new();
+            let mut up = false;
+            for c in s.chars() {
+                match c {
+                    '_' => up = true,
+                    _ if up => {
+                        out.extend(c.to_uppercase());
+                        up = false;
+                    }
+                    _ => out.push(c),
+                }
+            }
+            out
+        };
+        for name in tempo_core::fd_rules::SENT_SLOT_SETTINGS {
+            assert!(
+                obj.contains_key(&camel(name)),
+                "fd_rules::SENT_SLOT_SETTINGS names {name:?} ({}), which is not a field of \
+                 Settings — a ruleset could declare it as a sent slot's source and no code \
+                 could read it",
+                camel(name)
+            );
+        }
+        // POSITIVE CONTROL. A list this test could not fail is not a test: a name that
+        // is NOT a field must be seen as one.
+        assert!(
+            !obj.contains_key(&camel("first_licensed_year")),
+            "the control name must be absent, or the check proves nothing"
+        );
+        // …and the §3.4 block is present under the names the list uses, which is the
+        // half a `contains_key` sweep alone would not say out loud.
+        for name in [
+            "contest_qth_county",
+            "contest_qth_state",
+            "contest_check",
+            "contest_cq_zone",
+            "contest_itu_zone",
+            "contest_power",
+        ] {
+            assert!(
+                tempo_core::fd_rules::SENT_SLOT_SETTINGS.contains(&name),
+                "{name} is in the struct but not offerable as a rules-file source"
+            );
+        }
+        // ⚠️ §8(c): the frozen names are still here, under their own names.
+        for frozen in ["fdClass", "fdSection", "fdEvent", "fdActive", "fdPowerMult"] {
+            assert!(obj.contains_key(frozen), "{frozen} must not be renamed");
+        }
+    }
 
     /// REGRESSION (shipped 0.18.0, found 2026-07-26): `apply_to` assigned 19 sibling fields and
     /// silently skipped `ptt_serial_port`, so editing the dedicated RTS/DTR keying port of a

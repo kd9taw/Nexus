@@ -2706,6 +2706,21 @@ export const EN = {
   'settings.contestPick.category.aria': 'How many operators are at this station',
   'settings.contestPick.category.hint':
     'What your Cabrillo log declares about the station. Pick CHECKLOG if you are sending the log to help the sponsor check others rather than to be scored.',
+  'settings.contestStation.legend': 'Your station data',
+  'settings.contestStation.note': 'What your station sends when a contest asks for it. Fill in the ones your contest uses — a QSO party wants your county or your state, Sweepstakes wants your check. Nothing here is guessed: an exchange that goes on the air has to be one you typed.',
+  'settings.contestStation.county.label': 'County',
+  'settings.contestStation.county.hint': 'Your county, abbreviated the way the QSO party abbreviates it (Franklin is FRAN). Only in-state entries send this.',
+  'settings.contestStation.state.label': 'State or province',
+  'settings.contestStation.state.hint': 'Your state, province or territory, two letters. This is not your ARRL section — Western New York is WNY as a section and NY as a state, and a QSO party wants the state.',
+  'settings.contestStation.check.label': 'Check',
+  'settings.contestStation.check.hint': 'The last two digits of the year you were first licensed. Sweepstakes asks for it, and you send the same two digits all contest.',
+  'settings.contestStation.cqZone.label': 'CQ zone',
+  'settings.contestStation.cqZone.hint': 'Your CQ zone, 1 to 40. CQ WW asks for it. Leave it at 0 if you do not know it yet.',
+  'settings.contestStation.ituZone.label': 'ITU zone',
+  'settings.contestStation.ituZone.hint': 'Your ITU zone, 1 to 90. IARU asks for it. Leave it at 0 if you do not know it yet.',
+  'settings.contestStation.power.label': 'Power sent',
+  'settings.contestStation.power.hint': 'The power you send as part of the exchange, in the sponsor’s own words (KW, 500, 5). This is not the Field Day power multiplier below — this one goes on the air exactly as you type it.',
+  'settings.contestScore.incomplete': 'This score leaves out the bonus points this contest works out from your log — this build does not compute them, so what the sponsor credits you will be higher. Everything the log needs to be accepted is here; the number is not your claimed score.',
   'settings.contestCategory.unassisted.label': 'Unassisted entry',
   // Two whole accessible names — the switch does one of two different things, and neither is
   // the other with a word swapped.

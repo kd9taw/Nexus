@@ -927,7 +927,7 @@
       },
       "enforcement": "warn",
       "objectives": [],
-      "score_note_key": "contest.score.incompleteTnqp"
+      "score_note_key": "settings.contestScore.incomplete"
     },
     {
       "event": "ohqp",
@@ -3625,7 +3625,7 @@
       },
       "enforcement": "warn",
       "objectives": [],
-      "score_note_key": "contest.score.incompleteTxqp"
+      "score_note_key": "settings.contestScore.incomplete"
     }
   ],
   "sections": [

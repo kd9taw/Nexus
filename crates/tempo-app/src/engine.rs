@@ -16279,6 +16279,9 @@ impl Engine {
                     event_start_unix: event_window.start_unix,
                     event_end_unix: event_window.end_unix,
                     rules_year: rs.rules_year,
+                    // The ruleset says what its own score leaves out; the UI renders
+                    // it beside the total. Empty for both Field Day events.
+                    score_note_key: rs.score_note_key.to_string(),
                     rules_generated: tempo_core::fd_rules::active_generated().to_string(),
                     // The effectively-ON assistance sources, by their display
                     // labels — the advisory UI's single source (never re-derived).
