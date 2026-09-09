@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import { runtime, roomStatus } from './runtime.mjs'
 import { recallReference, recallAdif } from './recall-reference.mjs'
+import { insightsReference, insightsAdif } from './insights-reference.mjs'
 
 function nativeProbe(binary, origin) {
   const child = spawn(binary, ['--ignored', '--exact', 'remote_service::tests::cloud_runtime_probe', '--nocapture'], { stdio: ['pipe', 'pipe', 'pipe'] })
@@ -240,6 +241,31 @@ test('actual native controller pairs, stores authority, publishes real DTOs, dis
       recall.send({ type: 'applicationQueryAck', requestId })
     }
     recall.close()
+    const desktop = await probe.send({ type: 'seedRecallLog', adif: insightsAdif() })
+    assert.ok(desktop.log.length > 2000, 'summary must cover contacts beyond the browser log window')
+    assert.ok(desktop.awards.vucc.satWorked > 0 && desktop.awards.iota.cardConfirmed > 0, 'the independent award reference exercises satellite and card-only IOTA credit')
+    const statsReference = await insightsReference()
+    const { value: summaryTicket } = await browser.post(`stations/${stationId}/ticket`)
+    const summaries = await browser.open(stationId, summaryTicket.ticket)
+    await summaries.take(value => value.type === 'session')
+    summaries.send({ type: 'applicationHello', version: 6 })
+    assert.ok((await summaries.take(value => value.type === 'applicationCapabilities')).commands.includes('get_remote_insights'))
+    for (const collection of ['awards', 'statistics']) {
+      const requestId = crypto.randomUUID()
+      summaries.send({ type: 'applicationQuery', requestId, collection, cursor: null, search: '', unconfirmed: false, after: null })
+      const page = await summaries.take(value => value.requestId === requestId)
+      assert.equal(page.type, 'applicationPage')
+      const value = statsReference.parseInsights(page, collection)
+      assert.equal(value.logCount, desktop.log.length)
+      if (collection === 'awards') assert.deepEqual(value.awards, desktop.awards, 'same native award inputs, credits and satellite split')
+      else {
+        assert.deepEqual(value.statistics, statsReference.computeLogStats(desktop.log), 'existing desktop Statistics roll-up, including locale tie ordering')
+        assert.deepEqual(value.geography, desktop.geography, 'existing geographic result')
+      }
+      assert.ok(!JSON.stringify(page).includes('synthetic note'), 'the summary carries no contact notes')
+      summaries.send({ type: 'applicationQueryAck', requestId })
+    }
+    summaries.close()
     const second = await socket.take(value => value.type === 'observation')
     assert.ok(second.frame.sequence > first.frame.sequence)
     assert.equal((await probe.send({ type: 'disable' })).ok, true)

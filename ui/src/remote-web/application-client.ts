@@ -10,7 +10,7 @@ import { streamTopic } from './application-stream-protocol'
 import { APPLICATION_VERSIONS, applicationCommands } from './application-capabilities'
 import type { StreamTopic } from './application-stream-protocol'
 import { ApplicationQueryClient } from './application-query-client'
-import { QUERY_COMMAND, RECALL_COMMAND } from './application-query-protocol'
+import { INSIGHTS_COMMAND, QUERY_COMMAND, RECALL_COMMAND, insightCollection } from './application-query-protocol'
 
 export type ApplicationPhase = 'connecting' | 'ready' | 'updateRequired' | 'unavailable'
 type Job = { command: ApplicationCommand; resolve: (value: unknown) => void; reject: (reason: Error) => void }
@@ -56,6 +56,10 @@ export class ApplicationClient implements ApplicationTransport {
     this.setPhase('unavailable')
   }
   invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+    if (this.phase === 'ready' && this.version >= 6 && command === INSIGHTS_COMMAND) {
+      if (!insightCollection(args?.collection)) return Promise.reject(new Error('applicationUnsupported'))
+      return this.query.read(args!, 6) as Promise<T>
+    }
     if (this.phase === 'ready' && this.version >= 3 && command === QUERY_COMMAND) return this.query.read(args ?? {}, 3) as Promise<T>
     if (this.phase === 'ready' && this.version >= 4 && command === RECALL_COMMAND) {
       if (args?.collection !== 'recall') return Promise.reject(new Error('applicationUnsupported'))
@@ -87,7 +91,7 @@ export class ApplicationClient implements ApplicationTransport {
         throw new Error('invalidApplicationCapabilities')
       }
       this.version = message.version as number
-      this.stream.negotiate(this.version === 5 ? 5 : 2)
+      this.stream.negotiate(this.version >= 5 ? 5 : 2)
       this.setPhase(this.version > 0 ? 'ready' : 'updateRequired')
       return
     }

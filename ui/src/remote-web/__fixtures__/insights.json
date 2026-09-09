@@ -1,0 +1,202 @@
+{
+  "awards": {
+    "qsos": 2301,
+    "confirmedQsos": 1001,
+    "dxccWorked": 3,
+    "dxccConfirmed": 2,
+    "dxccCredited": 1,
+    "readyToSubmit": 1,
+    "slotsWorked": 5,
+    "slotsConfirmed": 3,
+    "bands": [
+      {
+        "band": "20m",
+        "worked": 3,
+        "confirmed": 2
+      }
+    ],
+    "modes": [
+      {
+        "mode": "Digital",
+        "worked": 3,
+        "confirmed": 2
+      }
+    ],
+    "needed": [
+      {
+        "entity": "Japan",
+        "bands": [
+          "20m"
+        ]
+      }
+    ],
+    "slotNeeded": [],
+    "achievements": [],
+    "fiveBandWorked": 0,
+    "fiveBandConfirmed": 0,
+    "satDxccWorked": 0,
+    "satDxccConfirmed": 0,
+    "wazWorked": 3,
+    "wazConfirmed": 2,
+    "honorRoll": {
+      "currentTotal": 340,
+      "confirmed": 2,
+      "threshold": 331,
+      "achieved": false,
+      "needed": 329,
+      "numberOne": false,
+      "numberOneNeeded": 338
+    },
+    "was": {
+      "worked": 2,
+      "confirmed": 1,
+      "needed": [
+        "CA"
+      ],
+      "fiveBandWorked": 0,
+      "fiveBandConfirmed": 0
+    },
+    "vucc": {
+      "worked": 2,
+      "confirmed": 1,
+      "bands": [
+        {
+          "band": "6m",
+          "worked": 2,
+          "confirmed": 1
+        }
+      ],
+      "satWorked": 0,
+      "satConfirmed": 0,
+      "awards": [
+        {
+          "band": "6m",
+          "worked": 2,
+          "confirmed": 1,
+          "threshold": 100,
+          "achieved": false
+        }
+      ]
+    },
+    "iota": {
+      "worked": 0,
+      "confirmed": 0,
+      "cardConfirmed": 0
+    },
+    "bandTargets": []
+  },
+  "statistics": {
+    "total": 2301,
+    "uniqueCalls": 2012,
+    "confirmed": 1001,
+    "awardConfirmed": 1000,
+    "dxccEntities": 3,
+    "byBand": [
+      {
+        "label": "20m",
+        "count": 2301
+      }
+    ],
+    "byMode": [
+      {
+        "label": "FT8",
+        "count": 2301
+      }
+    ],
+    "byYear": [
+      {
+        "label": "2026",
+        "count": 2301
+      }
+    ],
+    "byState": [
+      {
+        "label": "CT",
+        "count": 1
+      }
+    ],
+    "topEntities": [
+      {
+        "label": "United States",
+        "count": 1200
+      },
+      {
+        "label": "Japan",
+        "count": 601
+      },
+      {
+        "label": "Fed. Rep. of Germany",
+        "count": 500
+      }
+    ],
+    "hourUtc": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      2300,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "hourUnknown": 1,
+    "qsl": {
+      "card": 100,
+      "lotw": 1000,
+      "eqsl": 1
+    }
+  },
+  "geography": {
+    "total": 2301,
+    "resolved": 2301,
+    "dx": 1101,
+    "domestic": 1200,
+    "byContinent": [
+      {
+        "continent": "NA",
+        "qsos": 1200,
+        "entities": 1
+      },
+      {
+        "continent": "EU",
+        "qsos": 500,
+        "entities": 1
+      },
+      {
+        "continent": "AS",
+        "qsos": 601,
+        "entities": 1
+      }
+    ],
+    "byZone": [
+      {
+        "zone": 5,
+        "qsos": 1200
+      },
+      {
+        "zone": 14,
+        "qsos": 500
+      },
+      {
+        "zone": 25,
+        "qsos": 601
+      }
+    ]
+  }
+}

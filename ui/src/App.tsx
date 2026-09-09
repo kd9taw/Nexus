@@ -239,8 +239,9 @@ const OPERATE_TIERS: Tier[] = [
   'WSPR',
 ]
 
-export type BrowserWorkspace = { snapshot: AppSnapshot; settings: Settings; bandPlan: BandChannel[]; status: ReactNode; stale?: boolean; cwPhone?: boolean; keyboard?: boolean; collections?: boolean }
+export type BrowserWorkspace = { snapshot: AppSnapshot; settings: Settings; bandPlan: BandChannel[]; status: ReactNode; stale?: boolean; cwPhone?: boolean; keyboard?: boolean; collections?: boolean; insights?: boolean }
 import { CollectionStatus, useRemoteCollection } from './remote-web/collections'
+import { RemoteInsights } from './remote-web/RemoteInsights'
 
 export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   const needsRead = useRemoteCollection('needs')
@@ -2260,7 +2261,7 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // A visible navigation item is not evidence that its station API is connected.
   // In particular, never mount SettingsPanel with the projected operating view:
   // it expects complete configuration and could display absent values as defaults.
-  const isRemoteViewAvailable = (v: View): boolean => !remote || v === 'operate' || (!!remote.collections && ['needed', 'spots', 'logbook'].includes(v)) || (!!remote.cwPhone && (v === 'cw' || v === 'phone')) || (!!remote.keyboard && (v === 'rtty' || v === 'psk'))
+  const isRemoteViewAvailable = (v: View): boolean => !remote || v === 'operate' || (!!remote.collections && ['needed', 'spots', 'logbook'].includes(v)) || (!!remote.cwPhone && (v === 'cw' || v === 'phone')) || (!!remote.keyboard && (v === 'rtty' || v === 'psk')) || (!!remote.insights && (v === 'awards' || v === 'stats'))
 
   // Recall card → Logbook, filtered to the call (#192, kr4fqg: "click a previous contact and
   // land in the log"). Same shape as the `onOpenMemories` handoffs below — `undefined` when the
@@ -2606,7 +2607,7 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       break
     case 'awards':
       // Awards + Journey combined: one section, tabbed (Journey + Official Awards).
-      workspace = (
+      workspace = remote ? <RemoteInsights kind="awards" showGamification={features.isOn('gamification')} /> : (
         <AwardsJourney
           showGamification={features.isOn('gamification')}
           onOpenSettings={openSettingsAt}
@@ -2615,7 +2616,7 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       break
     case 'stats':
       // Descriptive logbook analytics — the log sliced by band/mode/year/hour/entity.
-      workspace = <StatsView />
+      workspace = remote ? <RemoteInsights kind="statistics" /> : <StatsView />
       break
     case 'cw':
       workspace = (

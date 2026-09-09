@@ -45,7 +45,7 @@ export class BrowserClient {
     } else {
       try { await auth.checkSession() } catch { /* interactive login stays available */ }
     }
-    return new BrowserClient(auth, config.applicationVersion === 5 ? 5 : config.applicationVersion === 4 ? 4 : config.applicationVersion === 3 ? 3 : config.applicationVersion === 2 ? 2 : 1)
+    return new BrowserClient(auth, config.applicationVersion === 6 ? 6 : config.applicationVersion === 5 ? 5 : config.applicationVersion === 4 ? 4 : config.applicationVersion === 3 ? 3 : config.applicationVersion === 2 ? 2 : 1)
   }
   authenticated(): Promise<boolean> { return this.auth.isAuthenticated() }
   signIn(): Promise<void> { return this.auth.loginWithRedirect() }

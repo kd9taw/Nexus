@@ -61,7 +61,7 @@ async function chrome() {
   } catch(error) { ws?.close(); if(!exited)process.kill(-child.pid,'SIGTERM'); await rm(profile,{recursive:true,force:true,maxRetries:8,retryDelay:100}); throw error }
 }
 
-for (const applicationVersion of [1, 2, 3, 4, 5]) test(`compiled hosted browser v${applicationVersion} completes PKCE, local device approval, observation and viewport checks`, { timeout: 120000 }, async () => {
+for (const applicationVersion of [1, 2, 3, 4, 5, 6]) test(`compiled hosted browser v${applicationVersion} completes PKCE, local device approval, observation and viewport checks`, { timeout: 120000 }, async () => {
   const app=await runtime(), artifacts=process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS ? join(process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS, `v${applicationVersion}`) : undefined
   let browser, station, producing=true, producer, applicationProducer
   const results=[]
@@ -71,7 +71,7 @@ for (const applicationVersion of [1, 2, 3, 4, 5]) test(`compiled hosted browser 
     const shell = await fetch(app.origin,{signal:AbortSignal.timeout(3000)})
     assert.equal(shell.status,200)
     assert.match(await shell.text(), /Nexus Remote/)
-    const stationHeaders = { 'x-nexus-application-version': '1', ...(applicationVersion >= 2 ? { 'x-nexus-application-stream-version': '2' } : {}), ...(applicationVersion >= 3 ? { 'x-nexus-application-query-version': '1' } : {}), ...(applicationVersion >= 4 ? { 'x-nexus-application-recall-version': '1' } : {}), ...(applicationVersion === 5 ? { 'x-nexus-application-keyboard-version': '1' } : {}) }
+    const stationHeaders = { 'x-nexus-application-version': '1', ...(applicationVersion >= 2 ? { 'x-nexus-application-stream-version': '2' } : {}), ...(applicationVersion >= 3 ? { 'x-nexus-application-query-version': '1' } : {}), ...(applicationVersion >= 4 ? { 'x-nexus-application-recall-version': '1' } : {}), ...(applicationVersion >= 5 ? { 'x-nexus-application-keyboard-version': '1' } : {}), ...(applicationVersion >= 6 ? { 'x-nexus-application-insights-version': '1' } : {}) }
     station=await pair.native.open(pair.stationId, undefined, 101, stationHeaders)
     let code=null, oauth=null, exchanges=0, providerFailure=false, exceptions=0, acknowledgements=0, unexpectedMessages=0
     const applicationTraffic = { reads: 0, acks: 0, subscriptions: 0, batches: 0, bytes: 0, byCommand: {}, maxResponseBytes: 0 }
@@ -105,7 +105,7 @@ for (const applicationVersion of [1, 2, 3, 4, 5]) test(`compiled hosted browser 
       try {
         const message = JSON.parse(event.response.payloadData)
         if (message.type === 'ack' && Object.keys(message).sort().join(',') === 'epoch,sequence,type') acknowledgements++
-        else if (message.type === 'applicationHello' && (Object.keys(message).length === 1 || (Object.keys(message).length === 2 && [2,3,4,5].includes(message.version)))) {}
+        else if (message.type === 'applicationHello' && (Object.keys(message).length === 1 || (Object.keys(message).length === 2 && [2,3,4,5,6].includes(message.version)))) {}
         else if (message.type === 'applicationRead' && Object.keys(message).length === 4) applicationTraffic.reads++
         else if (message.type === 'applicationQuery' && Object.keys(message).length === 7) applicationTraffic.queries=(applicationTraffic.queries??0)+1
         else if (message.type === 'applicationQueryAck' && Object.keys(message).length === 2) {}
@@ -181,11 +181,15 @@ for (const applicationVersion of [1, 2, 3, 4, 5]) test(`compiled hosted browser 
     producer=(async()=>{while(producing){const source=station;let watch;try{watch=await source.take(value=>value.type==='watch'&&value.enabled,1000)}catch{continue}await sleep(200);if(!producing)break;if(source!==station||source.closed)continue;source.send({type:'publication',requestId:watch.requestId,frame:{...fixture,source:'native',sequence:++sequence}})}})()
     const applicationData = await applicationFixture()
     const collections = collectionFixture()
+    const insights = JSON.parse(await readFile(new URL('../../ui/src/remote-web/__fixtures__/insights.json', import.meta.url), 'utf8'))
+    collections.awards = { rows: [], meta: { logCount: 2301, awards: insights.awards } }
+    collections.statistics = { rows: [], meta: { logCount: 2301, statistics: insights.statistics, geography: insights.geography } }
     if (applicationVersion >= 4) applicationData.get_snapshot.stations = [{ call:'W1AW', grid:'FN31', snr:-8, lastHeardSlot:0,
       heardCount:2, presence:'heard', worked:true, workedBand:false, country:'United States', tier:'FT8', freqHz:1500 }]
     const querySnapshots = new Map()
     let applicationRevision = 1, applicationAvailable = true
     const unavailableTopics = new Set()
+    const unavailableCollections = new Set(), insightQueries = []
     const withheld = []
     let streamWatch = null
     const sentAt = new Map(), bases = new Map()
@@ -196,6 +200,14 @@ for (const applicationVersion of [1, 2, 3, 4, 5]) test(`compiled hosted browser 
       if (request.type === 'applicationQuery') {
         assert.ok(applicationVersion >= 3)
         if (request.collection === 'recall') assert.ok(applicationVersion >= 4)
+        if (['awards', 'statistics'].includes(request.collection)) {
+          assert.ok(applicationVersion >= 6, 'older stations must never receive summary queries')
+          insightQueries.push(request.collection)
+        }
+        if (unavailableCollections.has(request.collection)) {
+          source.send({ type: 'applicationQueryError', requestId: request.requestId, error: 'applicationUnavailable' })
+          continue
+        }
         const [givenId, offsetText] = (request.cursor??'').split(':')
         const offset = Number(offsetText??0), snapshotId=givenId||crypto.randomUUID()
         if (!givenId) {
@@ -454,9 +466,63 @@ for (const applicationVersion of [1, 2, 3, 4, 5]) test(`compiled hosted browser 
       assert.ok(await evaluate(`[...document.querySelectorAll('.logbook input')].some(e=>e.value==='W1AW')`),'recall navigates to the existing filtered Logbook')
       await click(button('FT'))
     }
+    for (const [label, selector, scroller, first, last] of [
+      ['Awards', '.awards-journey', '.aj-scroll', '.aw-card', '.aw-achievements'],
+      ['Stats', '.stats-view', '.stats-view', '.stats-summary', '.stats-card:last-child'],
+    ]) {
+      await click(button(label))
+      if (applicationVersion < 6) {
+        await until(`!!document.querySelector('.remote-view-unavailable')`)
+        assert.equal(insightQueries.length, 0)
+        continue
+      }
+      try { await until(`document.querySelector('.remote-insights-status')?.textContent.includes('All 2301 station contacts.') && !!document.querySelector('${selector}')`) }
+      catch (error) { console.log('Summary diagnostic', { label, insightQueries }, await evaluate(`({status:document.querySelector('.remote-insights-status')?.textContent,unavailable:document.querySelector('.remote-view-unavailable')?.textContent,root:document.querySelector('.remote-application-status')?.textContent,summary:document.querySelector('${selector}')?.textContent.slice(0,250)})`));throw error }
+      assert.equal(await evaluate(`document.querySelectorAll('.conf-btn, .conf-panel').length`), 0, 'observation never mounts confirmation uploads')
+      if (label === 'Awards') {
+        assert.ok(await evaluate(`[...document.querySelectorAll('.aj-tab')].some(e=>e.disabled && e.textContent==='Journey')`))
+        assert.ok(await evaluate(`document.querySelector('.awards-journey').textContent.includes('Japan')`))
+      } else {
+        assert.ok(await evaluate(`document.querySelector('.stats-summary').textContent.includes('2012')`))
+        assert.ok(await evaluate(`document.querySelectorAll('.stats-bar-fill').length>5`))
+      }
+      for (const [width,height,zoom] of [[390,844,1],[844,390,1],[1024,768,1],[1280,800,1],[1366,768,1],
+        [1200,1390,1],[3440,1440,1],[1024,768,0.8],[1280,800,1.75],[390,844,1.75]]) for (const theme of ['dark','light']) {
+        await browser.call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false},session)
+        await evaluate(`document.documentElement.style.setProperty('--ui-zoom','${zoom}');document.documentElement.dataset.theme='${theme}';window.dispatchEvent(new Event('resize'))`)
+        await settledLayout()
+        for (const target of ['.remote-insights-status button', `${selector} ${first}`, `${selector} ${last}`]) {
+          await evaluate(`document.querySelector('${target}').scrollIntoView({block:'nearest',inline:'nearest'})`)
+          await settledLayout()
+          const shape = await evaluate(`(()=>{const e=document.querySelector('${target}'),r=e.getBoundingClientRect(),s=document.querySelector('${scroller}');return {docW:document.documentElement.scrollWidth,docH:document.documentElement.scrollHeight,top:r.top,bottom:r.bottom,height:r.height,scrollerHeight:s.clientHeight,reachable:e.contains(document.elementFromPoint(r.left+r.width/2,Math.min(r.bottom,innerHeight-1)-Math.min(r.height/2,20)))}})()`)
+          const reachable = shape.docW<=width+1 && shape.docH<=height+1 && shape.height>0 && shape.scrollerHeight>0 && shape.top<height && shape.bottom>0 && shape.reachable
+          if (!reachable) console.log('Summary geometry diagnostic',await evaluate(`(()=>{const chain=[];for(let e=document.querySelector('${target}');e;e=e.parentElement){const c=getComputedStyle(e),r=e.getBoundingClientRect();chain.push({class:e.className,top:r.top,bottom:r.bottom,width:r.width,height:r.height,scroll:e.scrollHeight,client:e.clientHeight,x:c.overflowX,y:c.overflowY})}return chain})()`))
+          if (!reachable && artifacts) { const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,`remote-nexus-${label.toLowerCase()}-failure.png`),Buffer.from(shot.data,'base64')) }
+          assert.ok(reachable, `summary content remains reachable: ${JSON.stringify({label,target,width,height,zoom,theme,shape})}`)
+          results.push({insights:label,target,width,height,zoom,theme,shape})
+        }
+      }
+      await browser.call('Emulation.setDeviceMetricsOverride',{width:1280,height:800,deviceScaleFactor:1,mobile:false},session)
+      await evaluate(`document.documentElement.style.setProperty('--ui-zoom','1');window.dispatchEvent(new Event('resize'));document.querySelector('${scroller}').scrollTop=0`)
+      await settledLayout()
+      if (artifacts) { const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,`remote-nexus-${label.toLowerCase()}.png`),Buffer.from(shot.data,'base64')) }
+    }
+    if (applicationVersion >= 6) {
+      insights.statistics.uniqueCalls = 2013
+      await click(button('Refresh summary'))
+      await until(`document.querySelector('.stats-summary')?.textContent.includes('2013')`)
+      unavailableCollections.add('statistics')
+      await click(button('Refresh summary'))
+      await until(`!document.querySelector('.stats-view') && document.querySelector('.remote-insights-status')?.textContent.includes('unavailable')`)
+      assert.equal(await evaluate(`document.querySelector('.app').dataset.remoteStale==='true'`), false, 'a summary failure must not mark live station readings stale')
+      unavailableCollections.delete('statistics')
+      await click(button('Refresh summary'))
+      await until(`document.querySelector('.stats-summary')?.textContent.includes('2013')`)
+    } else await click(button('FT'))
     applicationAvailable=false
     await until(`document.querySelector('.app')?.dataset.remoteStale==='true'`)
     assert.equal(await evaluate(`getComputedStyle(document.querySelector('.operate-host')).visibility`),'hidden','stale operating values must be hidden')
+    if (applicationVersion >= 6) assert.equal(await evaluate(`!!document.querySelector('.stats-summary')`), false, 'lost station data removes the summary')
     applicationAvailable=true;applicationRevision++
     applicationData.get_snapshot.radio.dialMhz=7.074;applicationData.get_snapshot.radio.band='40m'
     // Withholding a station credit can legitimately expire BOTH sockets. The
@@ -466,6 +532,7 @@ for (const applicationVersion of [1, 2, 3, 4, 5]) test(`compiled hosted browser 
     station=await pair.native.open(pair.stationId, undefined, 101, stationHeaders)
     try { await until(`document.querySelector('.app')?.dataset.remoteStale!=='true' && document.body.textContent.includes('7.074')`) }
     catch (error) { console.log('Station recovery diagnostic',withheld,await evaluate(`({closures:window.__socketClosures,stale:document.querySelector('.app')?.dataset.remoteStale,status:document.querySelector('.remote-application-status')?.textContent})`));throw error }
+    if (applicationVersion >= 6) await until(`document.querySelector('.stats-summary')?.textContent.includes('2013')`)
     assert.equal(exceptions,0,'actual Nexus must render and reconnect without runtime exceptions')
     await click(button('Disconnect and return to stations'))
     await until(`!!${button('Observe station')}`)

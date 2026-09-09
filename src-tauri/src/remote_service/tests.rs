@@ -254,8 +254,14 @@ fn cloud_runtime_probe() {
         if value["type"] == "seedRecallLog" {
             let mut e = engine.lock().unwrap();
             e.import_adif(value["adif"].as_str().unwrap());
+            let my_call = e.settings().mycall.clone();
             let records = e.get_log();
             drop(e);
+            let awards = crate::awards_for_records(&records, &my_call);
+            let geography = propagation::compute_log_stats(
+                &records.iter().map(|q| &q.call).collect::<Vec<_>>(),
+                &my_call,
+            );
             let mut log: Vec<_> = records
                 .into_iter()
                 .map(tempo_app::dto::LoggedQso::from)
@@ -263,7 +269,10 @@ fn cloud_runtime_probe() {
             for q in &mut log {
                 q.entity = propagation::dxcc::resolve(&q.call).map(|i| i.entity.to_string());
             }
-            println!("REMOTE_TEST:{}", json!({ "log": log }));
+            println!(
+                "REMOTE_TEST:{}",
+                json!({ "log": log, "awards": awards, "geography": geography })
+            );
             std::io::stdout().flush().unwrap();
             continue;
         }

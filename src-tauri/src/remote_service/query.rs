@@ -5,6 +5,7 @@ use serde_json::{json, Value};
 use std::collections::{BinaryHeap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+mod insights;
 mod recall;
 
 const PAGE_BYTES: usize = 256 * 1024;
@@ -22,6 +23,8 @@ pub enum Collection {
     Entities,
     Health,
     Recall,
+    Awards,
+    Statistics,
 }
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -52,6 +55,8 @@ impl Request {
             && self.after.is_none_or(|n| {
                 self.collection == Collection::Decodes && n <= 9_007_199_254_740_991
             })
+            && (!matches!(self.collection, Collection::Awards | Collection::Statistics)
+                || self.cursor.is_none())
             && self
                 .cursor
                 .as_deref()
@@ -236,7 +241,10 @@ impl Publisher {
         } else {
             // Share one recent capture across observers. A fresh page-zero request
             // eventually sees local log changes; an existing cursor stays sealed.
-            let reuse = if request.collection == Collection::Recall {
+            let reuse = if matches!(
+                request.collection,
+                Collection::Recall | Collection::Awards | Collection::Statistics
+            ) {
                 0 // Explicit selection/Refresh must see intervening local log changes.
             } else if request.collection == Collection::Decodes {
                 500
@@ -331,6 +339,13 @@ impl Publisher {
             _ => Err("applicationUnavailable"),
         };
         let rows = match request.collection {
+            Collection::Awards | Collection::Statistics => {
+                return Ok((
+                    Vec::new(),
+                    0,
+                    insights::read_engine(engine, request.collection)?,
+                ));
+            }
             Collection::Recall => {
                 return recall::read_engine(engine, &request.search)?.encode();
             }
@@ -483,6 +498,34 @@ mod tests {
             "<CALL:{}>{call}<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20260909<TIME_ON:6>{time}<EOR>\n",
             call.len()
         )
+    }
+    #[test]
+    fn full_log_insights_are_separate_argument_free_reads() {
+        for collection in ["awards", "statistics"] {
+            let value = json!({ "requestId": ID, "collection": collection,
+                "cursor": null, "search": "", "unconfirmed": false, "after": null });
+            let query: Request =
+                serde_json::from_value(value.clone()).expect("insight read supported");
+            assert!(query.valid());
+            for (field, bad) in [
+                ("search", json!("W1AW")),
+                ("unconfirmed", json!(true)),
+                ("after", json!(1)),
+                ("cursor", json!(format!("{ID}:1"))),
+            ] {
+                let mut invalid = value.clone();
+                invalid[field] = bad;
+                assert!(!serde_json::from_value::<Request>(invalid).unwrap().valid());
+            }
+            let result = Publisher::default()
+                .read(&query, &engine(), None, Instant::now())
+                .unwrap();
+            let page: Value = serde_json::from_str(&result).unwrap();
+            assert_eq!(page["collection"], collection);
+            assert_eq!(page["total"], 0);
+            assert_eq!(page["rows"], json!([]));
+            assert_eq!(page["meta"]["source"]["logCount"], 0);
+        }
     }
     #[test]
     fn pages_remain_sealed_across_local_log_changes_and_expire_without_guessing() {

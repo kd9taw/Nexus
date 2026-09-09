@@ -100,7 +100,8 @@ pub(crate) fn valid_province(s: &str) -> Option<&'static str> {
 
 /// Canonicalize an ADIF state code to one of the 50 WAS states, or `None` for a
 /// junk/territory/empty code (which never advances WAS).
-pub(crate) fn valid_state(s: &str) -> Option<&'static str> {
+/// Canonical US postal code used by the WAS and descriptive-statistics folds.
+pub fn valid_state(s: &str) -> Option<&'static str> {
     let up = s.trim().to_ascii_uppercase();
     WAS_STATES.iter().copied().find(|st| *st == up)
 }

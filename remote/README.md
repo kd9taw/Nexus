@@ -41,6 +41,10 @@ Version 5 adds the passive `get_rtty_state` and `get_psk_state` stream topics wh
 the station also advertises `x-nexus-application-keyboard-version: 1`. It retains
 version 4's collection grammar. Each browser keeps its negotiated topic set;
 older browsers and stations still negotiate versions 1/2/3/4.
+Version 6 adds `get_remote_insights` when the station also advertises
+`x-nexus-application-insights-version: 1`, alongside every preceding extension.
+It adds only the argument-free `awards` and `statistics` collections. The nine
+stream topics remain unchanged, and each older version retains its vocabulary.
 An older pilot keeps its existing FT observation; an older monitor-only installer
 reports the workspace update requirement without losing compact observation.
 
@@ -56,7 +60,7 @@ Each native batch spends one room-issued credit; each browser frame spends one
 browser-issued credit. The next credit acknowledges the previous response exactly
 once. Each receiver counts its request's full round trip toward measurement age,
 so delayed packets cannot appear fresh by arrival time or clock synchronization.
-Batches are bounded to 768 KiB, seven topics (nine in version 5) and three seconds. Stale sessions hide
+Batches are bounded to 768 KiB, seven topics (nine from version 5) and three seconds. Stale sessions hide
 station readings and close portaled menus/dialogs. Unavailable scope/decoder data clears
 that readout independently. Session changes discard cached readings and late results.
 
@@ -75,7 +79,7 @@ full samples; old epochs cannot refresh a restored session. A slow or failed bro
 independently of the station and other approved observers.
 
 Collection queries address only decodes, needs, spots, logbook, DXCC locations,
-feed health and exact-call recall. Pages contain at most 128 rows and 256 KiB. Each browser has one
+feed health, exact-call recall and full-log award/statistics summaries. Pages contain at most 128 rows and 256 KiB. Each browser has one
 outstanding query/result, a three-second deadline and a 16-request/second ceiling;
 the room also caps the aggregate at 32/second using persisted per-browser counters.
 The station runs one collection worker separately from the live socket loop.
@@ -101,6 +105,20 @@ deadline and bounded summaries, and never reports a truncated summary as a new
 entity/band/mode. Recall bypasses capture reuse: selection or **Refresh** reads
 the current log. It does not poll. Names, locations and notes come from prior
 contacts; this is not a station callbook lookup.
+
+Official Awards and Statistics use the complete station log, independently of the
+Logbook's 2,000-contact display window. Each summary copies only relevant fields,
+128 records per lock acquisition, and refuses a changed log or station identity.
+Award and geographic calculations reuse the native folds; descriptive statistics
+match the existing desktop roll-up and browser label ordering. The bounded query
+worker allows two seconds, one million rows, 256 bytes per relevant text field,
+32 MiB of cumulative copied text, 100,000 distinct calls and 2,048 tally groups.
+These are refusal limits, not commercial capacity claims; heap overhead is additional.
+An indivisible summary contains no contact rows and at most 128 KiB of metadata.
+The existing views display capture age, remove expired results after 60 seconds,
+and offer **Refresh summary**. Reads occur on entry, refresh and station recovery,
+without background summary polling. Unavailable or inconsistent results clear the
+old totals. Journey, confirmation diagnostics and uploads are not connected.
 
 The independent decode display journal retains up to 3,000 rows from the current
 Remote connection, with a unique session/context identifier and monotonic sequence.

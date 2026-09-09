@@ -12949,10 +12949,18 @@ fn qso_is_sat(prop_mode: Option<&str>) -> bool {
 #[tauri::command(async)]
 fn get_awards(state: State<'_, SharedEngine>) -> Result<propagation::AwardSummary, String> {
     let eng = engine_lock(&state);
+    Ok(awards_for_records(&eng.get_log(), &eng.settings().mycall))
+}
+
+/// The native award fold, also used as the reference for Remote read conformance.
+fn awards_for_records(
+    records: &[tempo_core::logbook::QsoRecord],
+    my_call: &str,
+) -> propagation::AwardSummary {
     let mut awards = propagation::Awards::new();
     // Tell the accumulator our own entity so "First DX" counts only foreign ones.
-    awards.set_home_call(&eng.settings().mycall);
-    for q in eng.get_log() {
+    awards.set_home_call(my_call);
+    for q in records {
         // Award-eligible confirmation only (LoTW/paper) — eQSL doesn't count; plus
         // whether ARRL has granted DXCC-family credit (DXCC / DXCC_BAND /
         // DXCC_MODE / … — real LoTW exports use the granular codes).
@@ -12972,7 +12980,7 @@ fn get_awards(state: State<'_, SharedEngine>) -> Result<propagation::AwardSummar
             qso_is_sat(q.prop_mode.as_deref()),
         );
     }
-    Ok(awards.summary())
+    awards.summary()
 }
 
 /// The geographic slice of the logbook — QSOs by WAC continent, by CQ zone, and a DX-vs-domestic

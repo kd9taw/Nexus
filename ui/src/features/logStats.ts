@@ -98,10 +98,11 @@ function wasState(q: LoggedQso): string | null {
 }
 
 /** Map → Tally[] sorted by count descending (ties broken by label for stability). */
+export const compareTallies = (a: Tally, b: Tally): number => b.count - a.count || a.label.localeCompare(b.label)
 function byCountDesc(m: Map<string, number>): Tally[] {
   return [...m.entries()]
     .map(([label, count]) => ({ label, count }))
-    .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label))
+    .sort(compareTallies)
 }
 
 /** Roll a logbook up into the descriptive-stats dashboard shape. Pure. */

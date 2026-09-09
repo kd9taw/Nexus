@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Remote Awards and Statistics observation:** The browser now uses Nexus's
+  existing Official Awards cards, chase lists and Stats charts with totals from
+  the complete station log. Capture age and **Refresh summary** make the result's
+  freshness visible. An updated Remote station pilot is required; Journey,
+  confirmation diagnostics and uploads remain unavailable remotely.
+
 - **Remote observation pilot:** Settings → Station → Remote access can pair a
   station with a pilot account and approve individual browsers. The hosted web
   view shows radio and SPE/KPA amplifier readings, hides stale measurements, and
