@@ -11,7 +11,7 @@ export const STREAM_TOPICS = [...APPLICATION_COMMANDS, 'get_scope_snapshot', 'ge
 export const KEYBOARD_STREAM_TOPICS = [...STREAM_TOPICS, 'get_rtty_state', 'get_psk_state'] as const
 export type StreamTopic = typeof KEYBOARD_STREAM_TOPICS[number]
 export type StreamVersion = 2 | 5
-export const streamVocabulary = (version = 2): readonly StreamTopic[] => version === 5 || version === 6 ? KEYBOARD_STREAM_TOPICS : STREAM_TOPICS
+export const streamVocabulary = (version = 2): readonly StreamTopic[] => [5, 6, 7].includes(version) ? KEYBOARD_STREAM_TOPICS : STREAM_TOPICS
 export type StreamSample = ApplicationReply<StreamTopic>
 export type StreamError = { type: 'applicationError'; requestId: string; command: StreamTopic; error: ApplicationErrorCode }
 export type StreamUpdate = StreamSample | StreamError

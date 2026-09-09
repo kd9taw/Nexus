@@ -35,7 +35,7 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
     issuer: env.AUTH0_ISSUER, audience: env.AUTH0_AUDIENCE, clientId: env.AUTH0_CLIENT_ID,
     ready: env.AUTH0_CLIENT_ID !== 'unconfigured',
     revision: env.REMOTE_BUILD_REVISION ?? 'local',
-    applicationVersion: 6,
+    applicationVersion: 7,
   })
   const match = /^stations\/([0-9a-f-]{36})\/(.+)$/.exec(path)
   if (request.method === 'GET' && match && ['connect', 'observe'].includes(match[2])) {
@@ -48,7 +48,9 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
         applicationVersion: request.headers.get('x-nexus-application-query-version') === '1' && request.headers.get('x-nexus-application-stream-version') === '2'
           ? request.headers.get('x-nexus-application-recall-version') === '1'
             ? request.headers.get('x-nexus-application-keyboard-version') === '1'
-              ? request.headers.get('x-nexus-application-insights-version') === '1' ? 6 : 5
+              ? request.headers.get('x-nexus-application-insights-version') === '1'
+                ? request.headers.get('x-nexus-application-dxpeditions-version') === '1' ? 7 : 6
+                : 5
               : 4
             : 3
           : request.headers.get('x-nexus-application-stream-version') === '2' ? 2

@@ -45,6 +45,10 @@ Version 6 adds `get_remote_insights` when the station also advertises
 `x-nexus-application-insights-version: 1`, alongside every preceding extension.
 It adds only the argument-free `awards` and `statistics` collections. The nine
 stream topics remain unchanged, and each older version retains its vocabulary.
+Version 7 adds only `get_remote_dxpeditions` and the argument-free `dxpeditions`
+collection, requiring `x-nexus-application-dxpeditions-version: 1` and all preceding
+advertisements. It preserves every v1–v6 vocabulary, including mixed browsers and
+hibernation recovery.
 An older pilot keeps its existing FT observation; an older monitor-only installer
 reports the workspace update requirement without losing compact observation.
 
@@ -134,6 +138,23 @@ RTTY/PSK retain their existing cockpit, waterfall, decoder transcript and amplif
 strip, with station-local decoder and transmit controls disabled.
 Needed, Spots and the paged Logbook now support read-only browsing. Existing QRZ
 profile links open in the browser, without contacting the station or its vault.
+DXpeditions reuses the existing station board, work-now cards, calendar and
+per-band heatmaps. Its reader only projects the station's cached board and matching
+seven-day prediction cache; it never fetches a feed or starts a predictor. The base
+cache records callsign, grid and log revision; changed context or data at least five
+minutes old is unavailable until the native producer refreshes. Lock acquisition
+is nonblocking. Each board list has at most 256 entries, outlooks at most 16 bands
+of 24 hours, text at most 1,024 bytes (website 2,048), and serialized projection at
+most 192 KiB. Excess refuses the whole board. The forecast reader examines at most
+32 native cache entries and uses the same key as the producer: UTC day, horizon,
+grid, model, power/gain, rounded measured SSN and sorted target calls.
+Missing/busy forecasts remain explicitly unavailable. Available forecasts carry
+their age and remaining six-hour/UTC-day lifetime. The browser also expires a read
+after 60 seconds, clears it on loss/failure, and offers explicit Refresh. Work, map
+routing, popout, Chase and alarms are unavailable remotely; website gestures open
+the existing HTTP(S)/QRZ destination in the user's browser. A compatible station
+build is required. Automated synthetic-data checks do not establish DSP/WAN load
+capacity or live expedition/shack acceptance.
 FT selection and CW/Phone/RTTY/PSK callsign entry use the existing Nexus recall card;
 its contact rows open the existing filtered Logbook. Stale sessions and changed
 callsigns discard old results. QSO entry, memories, rotator and voice-keyer/audio data remain

@@ -1,0 +1,144 @@
+{
+  "dxpeditions": {
+    "workableNow": [
+      {
+        "call": "3Y0TEST",
+        "entity": "Bouvet Island",
+        "need": "Atno",
+        "band": "20m",
+        "bearingDeg": 145,
+        "octant": "SE",
+        "distanceKm": 12500,
+        "status": "WorkNow",
+        "likelihood": "Good",
+        "likelihoodScore": 0.8,
+        "liveConfirmed": true,
+        "howToCall": "Synthetic test advice",
+        "ft8Mode": null,
+        "windowHint": "1400–1700Z",
+        "priority": 100,
+        "modes": [
+          "CW"
+        ]
+      }
+    ],
+    "active": [
+      "3Y0TEST"
+    ],
+    "upcoming": [
+      {
+        "call": "T33TEST",
+        "entity": "Banaba Island",
+        "region": "OC",
+        "startUnix": 1788969600,
+        "endUnix": 1790179200,
+        "bands": [
+          "20m"
+        ],
+        "modes": [
+          "CW"
+        ],
+        "octant": "SW",
+        "bearingDeg": 240,
+        "distanceKm": 12000,
+        "outlook": [
+          {
+            "band": "20m",
+            "workability": "Good",
+            "score": 0.8,
+            "window": "1400–1700Z",
+            "grayline": false,
+            "hourly": [
+              0.8,
+              0.8,
+              0.8,
+              0.8,
+              0.8,
+              0.8,
+              0.8,
+              0.8,
+              0.8,
+              0.8,
+              0.8,
+              0.8,
+              0.8,
+              0.8,
+              0.8,
+              0.8,
+              0.8,
+              0.8,
+              0.8,
+              0.8,
+              0.8,
+              0.8,
+              0.8,
+              0.8
+            ],
+            "reliability": 100,
+            "modeNow": []
+          }
+        ],
+        "best": "20m Good",
+        "website": "https://example.com/expedition"
+      }
+    ]
+  },
+  "source": "live",
+  "asOf": 1788969600,
+  "sourceAgeMs": 2000,
+  "windows": [
+    {
+      "call": "3Y0TEST",
+      "engine": "p533",
+      "best": "20m Good",
+      "outlook": [
+        {
+          "band": "20m",
+          "workability": "Good",
+          "score": 0.8,
+          "window": "1400–1700Z",
+          "grayline": false,
+          "hourly": [
+            0.8,
+            0.8,
+            0.8,
+            0.8,
+            0.8,
+            0.8,
+            0.8,
+            0.8,
+            0.8,
+            0.8,
+            0.8,
+            0.8,
+            0.8,
+            0.8,
+            0.8,
+            0.8,
+            0.8,
+            0.8,
+            0.8,
+            0.8,
+            0.8,
+            0.8,
+            0.8,
+            0.8
+          ],
+          "reliability": 100,
+          "modeNow": []
+        }
+      ],
+      "days": [
+        {
+          "dayUnix": 1788912000,
+          "best": "20m Good",
+          "score": 0.8
+        }
+      ],
+      "startUnix": null,
+      "endUnix": null
+    }
+  ],
+  "windowAgeMs": 90000,
+  "windowValidForMs": 21510000
+}

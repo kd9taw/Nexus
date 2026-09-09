@@ -5,6 +5,7 @@ use serde_json::{json, Value};
 use std::collections::{BinaryHeap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+mod dxpeditions;
 mod insights;
 mod recall;
 
@@ -25,6 +26,7 @@ pub enum Collection {
     Recall,
     Awards,
     Statistics,
+    Dxpeditions,
 }
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -55,8 +57,10 @@ impl Request {
             && self.after.is_none_or(|n| {
                 self.collection == Collection::Decodes && n <= 9_007_199_254_740_991
             })
-            && (!matches!(self.collection, Collection::Awards | Collection::Statistics)
-                || self.cursor.is_none())
+            && (!matches!(
+                self.collection,
+                Collection::Awards | Collection::Statistics | Collection::Dxpeditions
+            ) || self.cursor.is_none())
             && self
                 .cursor
                 .as_deref()
@@ -87,6 +91,7 @@ pub struct Sources {
     pub region_paths: crate::SharedRegionPaths,
     pub ota: crate::SharedOtaSpots,
     pub health: crate::SharedHealth,
+    pub propagation: crate::PropCache,
 }
 
 // Display-only journal from the existing Remote snapshot producer. The engine's
@@ -229,8 +234,12 @@ impl Publisher {
         }
         let unassisted = crate::unassisted();
         if self.unassisted != unassisted {
-            self.snapshots
-                .retain(|s| !matches!(s.collection, Collection::Needs | Collection::Spots));
+            self.snapshots.retain(|s| {
+                !matches!(
+                    s.collection,
+                    Collection::Needs | Collection::Spots | Collection::Dxpeditions
+                )
+            });
             self.unassisted = unassisted;
         }
         self.snapshots
@@ -243,7 +252,10 @@ impl Publisher {
             // eventually sees local log changes; an existing cursor stays sealed.
             let reuse = if matches!(
                 request.collection,
-                Collection::Recall | Collection::Awards | Collection::Statistics
+                Collection::Recall
+                    | Collection::Awards
+                    | Collection::Statistics
+                    | Collection::Dxpeditions
             ) {
                 0 // Explicit selection/Refresh must see intervening local log changes.
             } else if request.collection == Collection::Decodes {
@@ -339,6 +351,16 @@ impl Publisher {
             _ => Err("applicationUnavailable"),
         };
         let rows = match request.collection {
+            Collection::Dxpeditions => {
+                return Ok((
+                    Vec::new(),
+                    0,
+                    dxpeditions::read_engine(
+                        engine,
+                        &sources.ok_or("applicationUnavailable")?.propagation,
+                    )?,
+                ));
+            }
             Collection::Awards | Collection::Statistics => {
                 return Ok((
                     Vec::new(),

@@ -49,7 +49,7 @@ export class StationRoom extends DurableObject<RemoteEnv> {
           if (attachment.role === 'station') {
             if (station) throw new Error('invalidCheckpoint')
             station = { peer, identity: attachment.identity }; order = attachment.order
-            this.applicationVersions.set(ws, [1, 2, 3, 4, 5, 6].includes(attachment.applicationVersion ?? 0) ? attachment.applicationVersion! : 0)
+            this.applicationVersions.set(ws, [1, 2, 3, 4, 5, 6, 7].includes(attachment.applicationVersion ?? 0) ? attachment.applicationVersion! : 0)
           } else if (attachment.role === 'browser') {
             observers.push({ ...attachment, peer })
             if (attachment.application) applicationSaved.push({ sessionId: attachment.sessionId, value: attachment.application })
@@ -139,7 +139,7 @@ export class StationRoom extends DurableObject<RemoteEnv> {
       const pair = new WebSocketPair(), server = pair[1]
       const buffered = { pending: true, messages: [] as string[] }
       const peer = this.peer(server, path === '/station' ? 'station' : 'browser', buffered)
-      if (path === '/station') this.applicationVersions.set(server, [1, 2, 3, 4, 5, 6].includes(input.applicationVersion ?? 0) ? input.applicationVersion! : 0)
+      if (path === '/station') this.applicationVersions.set(server, [1, 2, 3, 4, 5, 6, 7].includes(input.applicationVersion ?? 0) ? input.applicationVersion! : 0)
       try {
         if (path === '/station') relay.connectStation(input.identity, peer, now)
         else relay.connectObserver(input.sessionId, input.identity, input.entitlement, peer, now)
@@ -166,7 +166,7 @@ export class StationRoom extends DurableObject<RemoteEnv> {
     this.syncApplication(Date.now())
     // Bounds apply before parsing. The larger envelope is available only to an
     // authenticated station that advertised this application protocol version.
-    const limit = attachment.role === 'station' && [1, 2, 3, 4, 5, 6].includes(this.applicationVersions.get(ws) ?? 0)
+    const limit = attachment.role === 'station' && [1, 2, 3, 4, 5, 6, 7].includes(this.applicationVersions.get(ws) ?? 0)
       ? APPLICATION_MAX_BYTES : attachment.role === 'station' ? MAX_FRAME_BYTES + 256 : APPLICATION_REQUEST_BYTES
     if (new TextEncoder().encode(message).length > limit) {
       ws.close(1008, 'invalidMessage'); await this.disconnected(ws); return

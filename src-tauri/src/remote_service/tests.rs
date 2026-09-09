@@ -225,6 +225,15 @@ fn cloud_runtime_probe() {
         }
     });
     let vault = MemoryVault::default();
+    let prop_cache: crate::PropCache = Default::default();
+    let sources = query::Sources {
+        spots: Default::default(),
+        live_paths: Default::default(),
+        region_paths: crate::SharedRegionPaths(Default::default()),
+        ota: Default::default(),
+        health: Default::default(),
+        propagation: prop_cache.clone(),
+    };
     let mut service = Service::start(
         origin.clone(),
         Box::new(vault.clone()),
@@ -232,13 +241,57 @@ fn cloud_runtime_probe() {
         crate::remote_monitor::Publisher::default(),
         Some(scope_feed.clone()),
         Default::default(),
-        None,
+        Some(sources.clone()),
     );
     let runtime = tokio::runtime::Runtime::new().unwrap();
     println!("REMOTE_TEST:{{\"ready\":true}}");
     std::io::stdout().flush().unwrap();
     for line in lines {
         let value: serde_json::Value = serde_json::from_str(&line.unwrap()).unwrap();
+        if value["type"] == "seedDxpeditions" {
+            let mut e = engine.lock().unwrap();
+            let mut settings = e.settings().clone();
+            settings.mycall = "W1AW".into();
+            e.apply_settings(settings);
+            let mut snapshot = propagation::offline(
+                crate::now_unix(),
+                &e.settings().mycall,
+                &e.settings().mygrid,
+            );
+            snapshot.source = "live".into();
+            snapshot
+                .dxpeditions
+                .workable_now
+                .push(propagation::WorkableCard {
+                    call: "3Y0TEST".into(),
+                    entity: "Bouvet Island".into(),
+                    need: propagation::NeedKind::Atno,
+                    band: "20m".into(),
+                    bearing_deg: 145.,
+                    octant: "SE".into(),
+                    distance_km: 12500.,
+                    status: propagation::WorkStatus::WorkNow,
+                    likelihood: "Good".into(),
+                    likelihood_score: 0.8,
+                    live_confirmed: true,
+                    how_to_call: "Synthetic test advice".into(),
+                    ft8_mode: None,
+                    window_hint: "1400–1700Z".into(),
+                    priority: 100,
+                    modes: vec!["CW".into()],
+                });
+            snapshot.dxpeditions.active.push("3Y0TEST".into());
+            let context = crate::PropContext {
+                call: e.settings().mycall.clone(),
+                grid: e.settings().mygrid.clone(),
+                log: e.log_read_token(),
+            };
+            let result = json!({ "boardJson": serde_json::to_string(&snapshot.dxpeditions).unwrap(), "source": snapshot.source, "asOf": snapshot.as_of });
+            *prop_cache.lock().unwrap() = Some((Instant::now(), snapshot, context));
+            println!("REMOTE_TEST:{result}");
+            std::io::stdout().flush().unwrap();
+            continue;
+        }
         if value["type"] == "keyboardState" {
             let e = engine.lock().unwrap();
             println!(
@@ -293,7 +346,7 @@ fn cloud_runtime_probe() {
                     crate::remote_monitor::Publisher::default(),
                     Some(scope_feed.clone()),
                     Default::default(),
-                    None,
+                    Some(sources.clone()),
                 );
                 std::thread::sleep(Duration::from_millis(100));
                 service.status()

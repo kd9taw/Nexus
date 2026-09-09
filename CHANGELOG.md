@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Remote DXpeditions observation:** The browser uses Nexus's existing expedition
+  cards, calendar and cached station prediction windows, with data age and Refresh.
+  Reads preserve the station's need/live-evidence distinctions and refuse expired
+  or changed profile/log context. A compatible station pilot is required; Work,
+  map navigation, Chase and alarms remain unavailable remotely.
+
 - **Remote Awards and Statistics observation:** The browser now uses Nexus's
   existing Official Awards cards, chase lists and Stats charts with totals from
   the complete station log. Capture age and **Refresh summary** make the result's

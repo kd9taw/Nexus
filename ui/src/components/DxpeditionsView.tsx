@@ -6,8 +6,8 @@
 // "Your Window": the get_dxped_windows sweep (configured engine — P.533 when
 // selected) feeds each card's Best-shot line + expandable 24h×band grid, and the
 // ★ chase toggle arms the window-open alert (features/dxpedChase).
-import { useEffect, useState } from 'react'
-import type { DxpedWindow, PropagationSnapshot, WorkableCard } from '../types'
+import { useEffect, useMemo, useState } from 'react'
+import type { CalendarEntry, DxpedWindow, PropagationSnapshot, WorkableCard } from '../types'
 import { StateBlock } from './StateBlock'
 import { WorkNowCard } from './prop/WorkNowCard'
 import { DxpedCalendar } from './prop/DxpedCalendar'
@@ -18,11 +18,14 @@ import { alarmMap, setAlarmLead, toggleAlarm } from '../features/dxpedAlarm'
 import { t } from '../i18n'
 
 interface Props {
-  snap: PropagationSnapshot | null
+  snap: Pick<PropagationSnapshot, 'dxpeditions' | 'source' | 'asOf'> | null
+  /** Passive station data. Native polling, station actions and local alarms are
+   * omitted; the hosted adapter owns freshness and user-gesture website links. */
+  observation?: { windows: DxpedWindow[] | null; openPage: (entry: CalendarEntry) => void }
   /** One-click Work — the app's atomic path (rig → band+mode+freq, cockpit opens). */
   onWorkSpot?: (t: { call: string; band: string; mode: string | null; freqMhz: number | null }) => void
   /** "Show on map" — navigate to Connect with this call selected. */
-  onShowOnMap: (call: string) => void
+  onShowOnMap?: (call: string) => void
   /** Open DXpeditions in its own window (omit when already standalone). */
   onPopOut?: () => void
 }
@@ -48,10 +51,14 @@ function provenance(source: PropagationSnapshot['source'], asOf: number): { labe
   return { label: t('dxped.prov.none'), cls: 'offline' }
 }
 
-export function DxpeditionsView({ snap, onWorkSpot, onShowOnMap, onPopOut }: Props) {
+export function DxpeditionsView({ snap, observation, onWorkSpot, onShowOnMap, onPopOut }: Props) {
   // "Your Window" data: server-cached climatology — a 10-min poll is generous.
-  const [windows, setWindows] = useState<Map<string, DxpedWindow>>(new Map())
+  const [nativeWindows, setWindows] = useState<Map<string, DxpedWindow>>(new Map())
+  const observedWindows = observation?.windows
+  const windows = useMemo(() => observation ? new Map((observedWindows ?? []).map(w => [w.call.toUpperCase(), w])) : nativeWindows,
+    [observation, observedWindows, nativeWindows])
   useEffect(() => {
+    if (observation) return
     let live = true
     let retry = 0
     const load = () =>
@@ -72,17 +79,17 @@ export function DxpeditionsView({ snap, onWorkSpot, onShowOnMap, onPopOut }: Pro
       window.clearInterval(id)
       window.clearTimeout(retry)
     }
-  }, [])
+  }, [observation])
   // Chase set — re-read after each toggle (localStorage is the source of truth
   // so the flag survives restarts and is shared with the App-level alerter).
-  const [chased, setChased] = useState<Set<string>>(() => chasingSet())
+  const [chased, setChased] = useState<Set<string>>(() => observation ? new Set() : chasingSet())
   const onToggleChase = (call: string) => {
     toggleChasing(call)
     setChased(chasingSet())
   }
   // Wake-me alarms — localStorage is the source of truth (shared with the
   // App-level scheduler); mirror it into state after each edit, like `chased`.
-  const [alarms, setAlarms] = useState(() => alarmMap())
+  const [alarms, setAlarms] = useState(() => observation ? {} : alarmMap())
   const onToggleAlarm = (call: string) => {
     toggleAlarm(call)
     setAlarms(alarmMap())
@@ -126,7 +133,7 @@ export function DxpeditionsView({ snap, onWorkSpot, onShowOnMap, onPopOut }: Pro
         <span className={`prop-prov prov-${prov.cls}`} title={t('dxped.prov.title')}>
           {prov.label}
         </span>
-        {onPopOut && (
+        {!observation && onPopOut && (
           <button
             type="button"
             className="dxped-popout"
@@ -149,10 +156,10 @@ export function DxpeditionsView({ snap, onWorkSpot, onShowOnMap, onPopOut }: Pro
                 <WorkNowCard
                   card={c}
                   window={windows.get(c.call.toUpperCase())}
-                  chasing={chased.has(c.call.toUpperCase())}
-                  onToggleChase={onToggleChase}
+                  chasing={!observation && chased.has(c.call.toUpperCase())}
+                  onToggleChase={observation ? undefined : onToggleChase}
                   onWork={
-                    onWorkSpot
+                    !observation && onWorkSpot
                       ? (card) =>
                           onWorkSpot({
                             call: card.call,
@@ -163,14 +170,14 @@ export function DxpeditionsView({ snap, onWorkSpot, onShowOnMap, onPopOut }: Pro
                       : undefined
                   }
                 />
-                <button
+                {!observation && onShowOnMap && <button
                   type="button"
                   className="dx-map-link"
                   onClick={() => onShowOnMap(c.call)}
                   title={t('dxped.showOnMap.title')}
                 >
                   {t('dxped.showOnMap.label')}
-                </button>
+                </button>}
               </div>
             ))}
           </div>
@@ -180,11 +187,12 @@ export function DxpeditionsView({ snap, onWorkSpot, onShowOnMap, onPopOut }: Pro
       <DxpedCalendar
         entries={dxpeditions.upcoming}
         windows={windows}
-        chasing={chased}
-        onToggleChase={onToggleChase}
-        alarms={alarms}
-        onToggleAlarm={onToggleAlarm}
-        onAlarmLead={onAlarmLead}
+        chasing={observation ? undefined : chased}
+        onToggleChase={observation ? undefined : onToggleChase}
+        alarms={observation ? undefined : alarms}
+        onToggleAlarm={observation ? undefined : onToggleAlarm}
+        onAlarmLead={observation ? undefined : onAlarmLead}
+        openPage={observation?.openPage}
       />
       {dxpeditions.upcoming.length === 0 && (
         <p className="dx-none">{t('dxped.calendar.empty')}</p>

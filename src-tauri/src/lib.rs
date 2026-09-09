@@ -79,9 +79,24 @@ struct ConnectWebState {
 }
 type SharedConnectWebState = Arc<Mutex<ConnectWebState>>;
 
-/// Cached propagation nowcast: `(fetched_at, snapshot)`. Caching enforces PSK
+/// Cached propagation nowcast: `(fetched_at, snapshot, context)`. Caching enforces PSK
 /// Reporter's ≥5-minute-per-dataset query limit across UI polls.
-type PropCache = Arc<Mutex<Option<(std::time::Instant, propagation::PropagationSnapshot)>>>;
+type PropCache = Arc<
+    Mutex<
+        Option<(
+            std::time::Instant,
+            propagation::PropagationSnapshot,
+            PropContext,
+        )>,
+    >,
+>;
+/// Context of the base DX board, captured alongside the log needs. Remote readers
+/// must not relabel a cache built for a previous identity or log revision.
+struct PropContext {
+    call: String,
+    grid: String,
+    log: Arc<()>,
+}
 /// TTL cache for the OVATION aurora oval (distinct payload type from PropCache, so
 /// a distinct TypeId for `.manage()`).
 type AuroraCache = Arc<
@@ -2818,7 +2833,7 @@ async fn get_propagation(
     spots: State<'_, SharedSpots>,
     wx_history: State<'_, SharedWxHistory>,
 ) -> Result<propagation::PropagationSnapshot, String> {
-    let (mycall, mygrid, needs, local_spots) = {
+    let (mycall, mygrid, needs, local_spots, context) = {
         let eng = engine_lock(&state);
         let s = eng.settings();
         let (mycall, mygrid) = (s.mycall.clone(), s.mygrid.clone());
@@ -2858,7 +2873,12 @@ async fn get_propagation(
                 );
             }
         }
-        (mycall, mygrid, needs, local_spots)
+        let context = PropContext {
+            call: mycall.clone(),
+            grid: mygrid.clone(),
+            log: eng.log_read_token(),
+        };
+        (mycall, mygrid, needs, local_spots, context)
     };
 
     let now = now_unix();
@@ -2877,8 +2897,8 @@ async fn get_propagation(
         let guard = cache.lock().map_err(|e| e.to_string())?;
         guard
             .as_ref()
-            .filter(|(when, _)| when.elapsed().as_secs() < PROP_TTL_SECS)
-            .map(|(_, snap)| snap.clone())
+            .filter(|(when, _, _)| when.elapsed().as_secs() < PROP_TTL_SECS)
+            .map(|(_, snap, _)| snap.clone())
     };
 
     // Track whether THIS poll fetched fresh space weather — only then do we push a
@@ -2927,7 +2947,7 @@ async fn get_propagation(
         match live {
             Ok(snap) => {
                 if let Ok(mut guard) = cache.lock() {
-                    *guard = Some((std::time::Instant::now(), snap.clone()));
+                    *guard = Some((std::time::Instant::now(), snap.clone(), context));
                 }
                 fetched_fresh = true;
                 snap
@@ -2938,7 +2958,7 @@ async fn get_propagation(
                 let guard = cache.lock().map_err(|e| e.to_string())?;
                 guard
                     .as_ref()
-                    .map(|(_, s)| {
+                    .map(|(_, s, _)| {
                         let mut s = s.clone();
                         s.source = "cached".to_string();
                         s
@@ -3209,7 +3229,7 @@ async fn get_path_outlook(
         let guard = cache.lock().map_err(|e| e.to_string())?;
         guard
             .as_ref()
-            .map(|(_, s)| propagation::SpaceWx {
+            .map(|(_, s, _)| propagation::SpaceWx {
                 sfi: s.space_wx.sfi,
                 ssn: LAST_SSN.lock().ok().and_then(|g| *g),
                 kp: s.space_wx.kp,
@@ -3269,7 +3289,7 @@ async fn get_band_outlook(
         let guard = cache.lock().map_err(|e| e.to_string())?;
         guard
             .as_ref()
-            .map(|(_, s)| propagation::SpaceWx {
+            .map(|(_, s, _)| propagation::SpaceWx {
                 // R12 only matters to p533; withholding it from the heuristic keeps
                 // that path byte-identical to its pre-engine-seam behavior.
                 ssn: if p533 {
@@ -3369,8 +3389,30 @@ struct DxpedDayBest {
 /// the DXpeditions board polls the 7-day planner; a single slot would thrash and
 /// re-run the p533 sweep on every alternating call. Expired entries are pruned on
 /// insert, so the map stays at the handful of live param shapes.
-static DXPED_WINDOWS: Mutex<Vec<(std::time::Instant, String, Vec<DxpedWindow>)>> =
-    Mutex::new(Vec::new());
+type DxpedWindowsCache = Mutex<Vec<(std::time::Instant, String, Vec<DxpedWindow>)>>;
+static DXPED_WINDOWS: DxpedWindowsCache = Mutex::new(Vec::new());
+const DXPED_WINDOWS_TTL_SECS: u64 = 6 * 3600;
+
+/// Identical cache identity for the native producer and passive Remote reader.
+#[allow(clippy::too_many_arguments)]
+fn dxped_windows_key(
+    day: i64,
+    days: u32,
+    mygrid: &str,
+    prop_engine: &str,
+    station_power_w: Option<f64>,
+    ant_gain_dbi: f64,
+    ssn: Option<f32>,
+    mut calls: Vec<&str>,
+) -> String {
+    calls.sort_unstable();
+    format!(
+        "{day}|{days}|{mygrid}|{prop_engine}|{ant_gain_dbi}|{:?}|{:?}|{}",
+        station_power_w,
+        ssn.map(|v| v.round() as i32),
+        calls.join(",")
+    )
+}
 
 /// Modelled best-contact windows for every active + upcoming DXpedition, from
 /// the operator's grid, using the CONFIGURED prediction engine (Settings ▸
@@ -3386,7 +3428,6 @@ async fn get_dxped_windows(
     cache: State<'_, PropCache>,
     days: Option<u32>,
 ) -> Result<Vec<DxpedWindow>, String> {
-    const WINDOWS_TTL_SECS: u64 = 6 * 3600;
     // 1 = today only (Connect's default); the DXpeditions board asks for 7 (the
     // week planner). Clamped so a bad caller can't request an unbounded sweep.
     let days = days.unwrap_or(1).clamp(1, 10);
@@ -3407,7 +3448,7 @@ async fn get_dxped_windows(
     // cached snapshot (the same values the dashboard itself was built from).
     let (targets, wx) = {
         let guard = cache.lock().map_err(|e| e.to_string())?;
-        let Some((_, s)) = guard.as_ref() else {
+        let Some((_, s, _)) = guard.as_ref() else {
             return Ok(Vec::new()); // no snapshot yet — the board is empty too
         };
         let mut seen = std::collections::HashSet::new();
@@ -3454,18 +3495,20 @@ async fn get_dxped_windows(
         return Ok(Vec::new());
     }
     let day = now_unix() / 86_400;
-    let mut calls: Vec<&str> = targets.iter().map(|(c, ..)| c.as_str()).collect();
-    calls.sort_unstable();
-    let key = format!(
-        "{day}|{days}|{mygrid}|{prop_engine}|{ant_gain_dbi}|{:?}|{:?}|{}",
+    let key = dxped_windows_key(
+        day,
+        days,
+        &mygrid,
+        &prop_engine,
         station_power_w,
-        wx.ssn.map(|v| v.round() as i32),
-        calls.join(",")
+        ant_gain_dbi,
+        wx.ssn,
+        targets.iter().map(|(c, ..)| c.as_str()).collect(),
     );
     if let Ok(g) = DXPED_WINDOWS.lock() {
         if let Some((_, _, v)) = g
             .iter()
-            .find(|(when, k, _)| *k == key && when.elapsed().as_secs() < WINDOWS_TTL_SECS)
+            .find(|(when, k, _)| *k == key && when.elapsed().as_secs() < DXPED_WINDOWS_TTL_SECS)
         {
             return Ok(v.clone());
         }
@@ -3554,7 +3597,7 @@ async fn get_dxped_windows(
     .await
     .map_err(|e| e.to_string())?;
     if let Ok(mut g) = DXPED_WINDOWS.lock() {
-        g.retain(|(when, _, _)| when.elapsed().as_secs() < WINDOWS_TTL_SECS);
+        g.retain(|(when, _, _)| when.elapsed().as_secs() < DXPED_WINDOWS_TTL_SECS);
         g.retain(|(_, k, _)| *k != key);
         g.push((std::time::Instant::now(), key, out.clone()));
     }
@@ -3674,7 +3717,7 @@ async fn get_pca(
         let guard = cache.lock().map_err(|e| e.to_string())?;
         guard
             .as_ref()
-            .map(|(_, s)| s.space_wx.kp as f64)
+            .map(|(_, s, _)| s.space_wx.kp as f64)
             .unwrap_or(0.0)
     };
     let now = now_unix();
@@ -17898,7 +17941,7 @@ fn build_connect_board(
 ) -> Option<tempo_app::connect_web::ConnectBoardData> {
     use tempo_app::connect_web::{ConnectBand, ConnectBoardData, ConnectOpening};
     // One bounded clone under each lock; everything else is built off-lock.
-    let snap = prop.lock().ok()?.as_ref().map(|(_, p)| p.clone())?;
+    let snap = prop.lock().ok()?.as_ref().map(|(_, p, _)| p.clone())?;
     let (call, grid) = {
         let e = engine_lock(engine);
         let s = e.settings();
@@ -21896,6 +21939,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             region_paths: d.region_paths.clone(),
             ota: d.ota_spots.clone(),
             health: d.health.clone(),
+            propagation: d.prop_cache.clone(),
         }),
     );
     tauri::Builder::default()

@@ -32,6 +32,11 @@
 }
 .remote-insights-status button { min-height: 48px; }
 .remote-insights-status span { flex: 1 1 20em; }
+.remote-dxpeditions-view > .dxped-view { flex: 1 1 auto; min-height: 0; overflow: auto; }
+/* The board owns scrolling. Its calendar is an existing .panel, whose generic
+   flex shrink/hidden overflow would otherwise collapse it below the cards. */
+.remote-dxpeditions-view > .dxped-view > * { flex: 0 0 auto; }
+.remote-dxpeditions-view .dxped-calendar { overflow: visible; }
 /* The unchanged Nexus header can wrap above a phone-height viewport at pinned
    zoom. Keep the app bounded, and let that excess scroll while retaining a
    usable summary pane and the visible connection/authority status. */
