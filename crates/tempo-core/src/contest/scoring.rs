@@ -4,11 +4,10 @@
 //! and had no representation of the third at all:
 //!
 //! 1. **QSO points** — [`PointsRule`]. Today's `points_by_mode_class` table.
-//! 2. **Multipliers** — a count of distinct values at a scope. Neither Field Day event
-//!    has one, which is exactly why `ScoringModel` had no concept of one and why a
-//!    third arm for CQ WW would have had to invent it while re-implementing the points
-//!    path inside itself. `MultiplierRule` and the rules-file key that carries it land
-//!    in the next commit; this one is the two axes `ScoringModel` already fused.
+//! 2. **Multipliers** — [`MultiplierRule`]. A count of distinct values at a scope.
+//!    Neither Field Day event has one, which is exactly why `ScoringModel` had no
+//!    concept of one and why a third arm for CQ WW would have had to invent it while
+//!    re-implementing the points path inside itself.
 //! 3. **Post-multipliers** — [`PostMultiplier`]. FD's power tier, WFD's objectives,
 //!    the claimed bonus menu.
 //!
@@ -17,6 +16,14 @@
 //! `crates/tempo-core/tests/fd_goldens.rs` pins their Cabrillo bytes, their ADIF bytes
 //! and their six score numbers against output captured before any of this existed. If a
 //! golden moves, this file is what is wrong.
+//!
+//! ⚠️ **[`MultiplierRule`] has no evaluator here and that is deliberate.** No shipped
+//! ruleset declares one (the seed writes `"multipliers": []` for both events, and
+//! `fd_rules`'s tests pin that), and counting distinct received values needs the
+//! per-row field vectors that arrive with the generalised contest log. A multiplier
+//! evaluator written now would be untested code on the scoring path of a live contest.
+//! What lands here is the TYPE: it deserialises from a rules file, the loader validates
+//! it against the exchange (§2.5), and a ruleset that declares none still loads.
 
 /// Per-mode-class QSO points (the `points_by_mode_class` table in the rules data).
 /// The seed matches the historical hardcoded map (phone 1, CW/digital 2); a data edit
@@ -54,8 +61,8 @@ impl ModePoints {
 /// log must stay O(rows) with no allocation and no lookups.
 ///
 /// ⚠️ It carries what the scorer READS, and grows as the rules that read it land — the
-/// generalised contest log adds the band (which a per-band multiplier scope and a
-/// band-group points rule both need), the resolved DXCC entity and prefix, and the received field
+/// generalised contest log adds the band (which [`MultScope::PerBand`] and a band-group
+/// points rule both need), the resolved DXCC entity and prefix, and the received field
 /// vector. Adding a field here is additive for every caller; changing the signature
 /// again would not be.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,6 +94,61 @@ impl PointsRule {
     }
 }
 
+/// Where a multiplier's value comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MultSource {
+    /// An exchange slot the worked station sent me. `domain` names which arm of a
+    /// `OneOf` slot counts (`None` = the slot's whole value, whatever it matched) —
+    /// this is how a QSO party counts counties and states as two separate universes
+    /// out of one QTH slot.
+    Field {
+        key: &'static str,
+        domain: Option<&'static str>,
+    },
+    /// The DXCC entity of the worked callsign (CQ WW's country multiplier).
+    DxccEntity,
+    /// The callsign prefix (CQ WPX).
+    Prefix,
+}
+
+/// The scope a multiplier is counted at — a value counts once per what.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MultScope {
+    /// Once for the whole log (Sweepstakes sections, CQP).
+    PerLog,
+    /// Once per band (CQ WW zones and countries, ARRL VHF grids, TNQP).
+    PerBand,
+    /// Once per mode (OhQP).
+    PerMode,
+    /// Once per band and mode.
+    PerBandMode,
+}
+
+/// One multiplier universe: what counts, from where, at what scope, for whom.
+///
+/// ⚠️ **This has exactly one home — `Scoring::multipliers`.** An earlier design also
+/// hung a list on the exchange's `RoleSpec`, which left two collections, no rule for
+/// which won, and a validator that walked one of them. The per-role variation a QSO
+/// party needs (an Ohio station counts states, provinces, counties and DX; an
+/// out-of-state station counts only the 88 counties) is expressed by [`roles`] — a
+/// filter on the one collection — rather than by a second collection.
+///
+/// [`roles`]: MultiplierRule::roles
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MultiplierRule {
+    /// Stable id, unique within a ruleset (`"zone"`, `"country"`, `"section"`,
+    /// `"county"`, `"prefix"`, `"grid"`). Names one board on the multiplier display and
+    /// one column in a summary.
+    pub id: &'static str,
+    pub source: MultSource,
+    pub scope: MultScope,
+    /// Values that do NOT count (IARU: the HQ and official rows are not zone
+    /// multipliers).
+    pub excluding: &'static [&'static str],
+    /// Which roles count this multiplier. **Empty = every role.**
+    pub roles: &'static [&'static str],
+}
+
 /// What happens to the QSO-point total after the multipliers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PostMultiplier {
@@ -112,6 +174,9 @@ pub enum PostMultiplier {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Scoring {
     pub qso_points: PointsRule,
+    /// Empty for both Field Day events — neither has a multiplier. See the module note
+    /// on why nothing evaluates this yet.
+    pub multipliers: &'static [MultiplierRule],
     pub post: &'static [PostMultiplier],
 }
 
@@ -204,6 +269,7 @@ mod tests {
         ];
         let s = Scoring {
             qso_points: PointsRule::ByModeClass(FD_POINTS),
+            multipliers: &[],
             post: POST,
         };
         // 2 CW + 3 phone + 2 digital = 4 + 3 + 4 = 11, the goldens' number.
@@ -227,6 +293,7 @@ mod tests {
         ];
         let s = Scoring {
             qso_points: PointsRule::ByModeClass(FD_POINTS),
+            multipliers: &[],
             post: POST,
         };
         let log = ["CW", "CW", "PH", "PH", "PH", "DIG", "DIG"];
@@ -261,6 +328,7 @@ mod tests {
         static POST: &[PostMultiplier] = &[PostMultiplier::PowerTier { tiers: &[1, 2, 5] }];
         let s = Scoring {
             qso_points: PointsRule::ByModeClass(FD_POINTS),
+            multipliers: &[],
             post: POST,
         };
         assert_eq!(s.qso_and_powered(rows(&[]), 5), (0, 0));

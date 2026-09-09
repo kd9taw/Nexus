@@ -32,7 +32,8 @@
           "CW": 2,
           "DIG": 2
         },
-        "power_tiers": 5
+        "power_tiers": 5,
+        "multipliers": []
       },
       "dupe": {
         "by_call": true,
@@ -197,7 +198,8 @@
           1,
           2,
           5
-        ]
+        ],
+        "multipliers": []
       },
       "dupe": {
         "by_call": true,

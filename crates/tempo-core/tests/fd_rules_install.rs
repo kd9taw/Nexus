@@ -77,6 +77,22 @@ fn an_installed_file_with_changed_points_changes_the_computed_score() {
         "the seed's phone points are 1 — the edit below is a real change"
     );
     spec["rulesets"][0]["scoring"]["points_by_mode_class"]["PH"] = 3.into();
+    // …and a multiplier, which no SHIPPED ruleset declares. `fd_rules`'s own
+    // `no_shipped_ruleset_declares_a_multiplier` asserts both seeded events
+    // carry an empty list; this is the positive control for that pair — without
+    // it, a loader that dropped the block on the floor would look identical.
+    assert_eq!(
+        spec["rulesets"][0]["scoring"]["multipliers"],
+        serde_json::json!([]),
+        "the seed declares no multiplier — the block below is a real addition"
+    );
+    spec["rulesets"][0]["scoring"]["multipliers"] = serde_json::json!([{
+        "id": "section",
+        "source": { "type": "field", "key": "SECTION", "domain": "fd_sections" },
+        "scope": "per_band",
+        "excluding": ["DX"],
+        "roles": [""],
+    }]);
     spec["generated"] = "2026-12-31T00:00:00Z".into();
     let stats = fd_rules::install_from(&spec.to_string()).expect("valid file installs");
     assert_eq!(stats.generated, "2026-12-31T00:00:00Z");
@@ -95,6 +111,30 @@ fn an_installed_file_with_changed_points_changes_the_computed_score() {
     );
     assert_eq!(powered, 48, "power tier still multiplies the new points");
     assert_eq!(fd_rules::active_generated(), "2026-12-31T00:00:00Z");
+
+    // -- …and a declared multiplier reaches the built ruleset intact. -------
+    // The whole of `MultiplierRule` survives the leak-once build: its id, both
+    // halves of the field source, the scope, the exclusion list and the role
+    // filter. Nothing SCORES it yet (§11.2 — it lands unused), so this walk is
+    // the only thing standing between a typo in `build` and a batch-10 contest
+    // silently counting the wrong universe.
+    assert_eq!(
+        rs.scoring.multipliers,
+        &[tempo_core::contest::MultiplierRule {
+            id: "section",
+            source: tempo_core::contest::MultSource::Field {
+                key: "SECTION",
+                domain: Some("fd_sections"),
+            },
+            scope: tempo_core::contest::MultScope::PerBand,
+            excluding: &["DX"],
+            roles: &[""],
+        }],
+        "the installed multiplier must reach the ruleset"
+    );
+    // The scoring MATH is untouched by its presence: 24/48 above is the same
+    // pair a multiplier-free file produced, because nothing evaluates one yet.
+    assert_eq!((qso_pts, powered), (24, 48));
 
     // -- A second install is the loud ordering error, not a swap. ----------
     assert!(

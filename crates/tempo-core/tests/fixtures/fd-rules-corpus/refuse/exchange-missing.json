@@ -36,7 +36,8 @@
           1,
           2,
           5
-        ]
+        ],
+        "multipliers": []
       },
       "dupe": {
         "by_call": true,
@@ -153,7 +154,8 @@
           1,
           2,
           5
-        ]
+        ],
+        "multipliers": []
       },
       "dupe": {
         "by_call": true,

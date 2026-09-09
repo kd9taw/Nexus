@@ -37,7 +37,15 @@
           2,
           5
         ],
-        "multipliers": []
+        "multipliers": [
+          {
+            "id": "section",
+            "source": { "type": "field", "key": "COUNTY", "domain": "" },
+            "scope": "per_log",
+            "excluding": [],
+            "roles": []
+          }
+        ]
       },
       "dupe": {
         "by_call": true,
@@ -57,9 +65,8 @@
               "sent": ""
             },
             "kind": {
-              "type": "number",
-              "min": -1,
-              "max": 10
+              "type": "pattern",
+              "re": "^[0-9]{1,2}[ABCDEF]$"
             }
           },
           {

@@ -31,6 +31,19 @@
 //! the schema check never runs. Same refusal, different message; do not credit
 //! the version check with it.
 //!
+//! ⚠️ **Schema 2 is still being filled in, and additions to it are ADDITIVE by
+//! rule.** The `Scoring` refactor added `scoring.multipliers` as a REQUIRED key
+//! rather than bumping to schema 3, and that choice has one cost worth naming:
+//! a schema-2 file published BEFORE it — there is one published artifact and
+//! one URL — is refused by this build until the workflow republishes the seed
+//! (which the same merge does). The refusal is inert: `fd_rules_download_if_newer`
+//! validates the candidate before writing anything, so the good local copy and
+//! the seed floor are untouched and Field Day keeps scoring exactly as it did.
+//! The reverse direction is what the additive rule buys — a shipped 1.11.x build
+//! ignores an unknown key, so it keeps receiving rules updates. A key RENAMED or
+//! RESHAPED inside schema 2 would take that away, permanently; that is a schema
+//! bump, not an addition.
+//!
 //! `rules_year` stamps each ruleset; the pinned per-event score fixtures in the
 //! tests below run against [`ruleset`] = the BUNDLED SEED (an installed file is
 //! invisible to them by design — its visibility to the operator is the status
@@ -38,7 +51,9 @@
 //! seed edit changes a score without a matching test update, catching drift
 //! before it ships.
 
-use crate::contest::{ModePoints, PointsRule, PostMultiplier};
+use crate::contest::{
+    ModePoints, MultScope, MultSource, MultiplierRule, PointsRule, PostMultiplier,
+};
 use crate::fieldday::FdEvent;
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
@@ -696,11 +711,69 @@ struct ScoringSpec {
     /// (ARRL FD — a legal power tier) or `"objectives"` (WFD — objectives
     /// applied at submission, so nothing multiplies on the air). Both carry the
     /// claimed bonus menu.
+    ///
+    /// ⚠️ The Rust model behind this is three independent axes
+    /// ([`contest::Scoring`](crate::contest::Scoring)), and this string names a
+    /// pair of them; a contest whose points are not per-mode-class cannot be
+    /// written in this file yet. That is deliberate: widening it is a change to
+    /// the PUBLISHED artifact, and there is one file and one URL, so a shape
+    /// change strands every shipped build's rules updates on its bundled seed
+    /// (spec §8d). It widens in the batch that ships the first contest needing
+    /// it, not one written speculatively ahead of one.
     model: String,
     /// Per-mode-class QSO points. `PH`, `CW` and `DIG` are all required.
     points_by_mode_class: BTreeMap<String, u32>,
     /// Legal power multipliers, strictly ascending.
     power_tiers: Vec<u32>,
+    /// The multiplier universes this event counts. **`[]` is the explicit "this
+    /// event has no multiplier"** — both Field Day events write it — and the key
+    /// is REQUIRED so that a rules file which simply forgot CQ WW's zones cannot
+    /// load and score a log at a fraction of its real total (spec §8c: absent
+    /// must be loud).
+    multipliers: Vec<MultiplierSpec>,
+}
+
+/// One [`MultiplierRule`] in the rules file.
+#[derive(Debug, serde::Deserialize)]
+struct MultiplierSpec {
+    id: String,
+    source: MultSourceSpec,
+    scope: MultScopeSpec,
+    /// Values that do NOT count. `[]` = every value counts.
+    excluding: Vec<String>,
+    /// Which roles count this multiplier. `[]` = every role.
+    roles: Vec<String>,
+}
+
+/// Where a multiplier's value comes from, in the rules file — internally tagged
+/// on `type`, exactly like [`KindSpec`].
+#[derive(Debug, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum MultSourceSpec {
+    /// An exchange slot the worked station sent me. `domain` names which arm of
+    /// a `one_of` slot counts; `""` is the explicit "the whole value, whatever
+    /// it matched", the same statement `""` makes in an `adif` tag pair.
+    Field {
+        key: String,
+        domain: String,
+    },
+    DxccEntity,
+    Prefix,
+}
+
+/// The scope vocabulary is CLOSED — serde refuses an unknown one by name, which
+/// is what stops `"per_hour"` from loading as a silent per-log count.
+#[derive(Debug, Clone, Copy, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+// The shared `Per` prefix is the wire vocabulary, one variant per `MultScope`
+// arm; dropping it here would make the file's names and the type's names differ
+// for a lint's sake, and `rename_all` derives the wire strings from these.
+#[allow(clippy::enum_variant_names)]
+enum MultScopeSpec {
+    PerLog,
+    PerBand,
+    PerMode,
+    PerBandMode,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -1061,6 +1134,47 @@ fn parse_spec(text: &str) -> Result<FileSpec, String> {
                 }
             }
         }
+        // The multiplier rules (§2.5). Nothing SCORES a multiplier yet — no
+        // shipped ruleset declares one — so every check here is the difference
+        // between a rules bug caught at load and a multiplier that silently
+        // counts nothing on contest Saturday. They are validated on the way in
+        // for the same reason the exchange is: the loader is the only place
+        // that sees the file and the exchange in the same breath.
+        let mut mult_ids: Vec<&str> = Vec::new();
+        for m in &r.scoring.multipliers {
+            if m.id.is_empty() {
+                return Err(format!("{tag}: empty multiplier id"));
+            }
+            if mult_ids.contains(&m.id.as_str()) {
+                return Err(format!("{tag}: duplicate multiplier id {:?}", m.id));
+            }
+            mult_ids.push(&m.id);
+            if let MultSourceSpec::Field { key, domain } = &m.source {
+                // A multiplier counts values the OTHER station sent me, so its
+                // slot has to be one some role receives. Read against `sends`
+                // it would count my own constant exchange once and stop.
+                if !x.roles.iter().any(|role| role.receives.contains(key)) {
+                    return Err(format!(
+                        "{tag}: multiplier {:?} names slot {key:?}, which no role receives",
+                        m.id
+                    ));
+                }
+                if !domain.is_empty() && !resolve_domain(r, domain) {
+                    return Err(format!(
+                        "{tag}: multiplier {:?} names unknown domain {domain:?}",
+                        m.id
+                    ));
+                }
+            }
+            for role_id in &m.roles {
+                if !x.roles.iter().any(|role| &role.id == role_id) {
+                    return Err(format!(
+                        "{tag}: multiplier {:?} names undeclared role {role_id:?}",
+                        m.id
+                    ));
+                }
+            }
+        }
         let mut ids: Vec<&str> = Vec::new();
         for b in r.bonuses.iter().chain(&r.objectives) {
             if b.id.is_empty() {
@@ -1324,8 +1438,38 @@ fn build(spec: FileSpec) -> RulesTable {
                 ]
                 .into_boxed_slice(),
             );
+            let multipliers: &'static [MultiplierRule] = Box::leak(
+                r.scoring
+                    .multipliers
+                    .into_iter()
+                    .map(|m| MultiplierRule {
+                        id: leak_str(m.id),
+                        source: match m.source {
+                            MultSourceSpec::Field { key, domain } => MultSource::Field {
+                                key: leak_str(key),
+                                // "" in the file means "the whole value,
+                                // whatever arm it matched" — the same statement
+                                // `None` makes in the type.
+                                domain: (!domain.is_empty()).then(|| leak_str(domain) as &str),
+                            },
+                            MultSourceSpec::DxccEntity => MultSource::DxccEntity,
+                            MultSourceSpec::Prefix => MultSource::Prefix,
+                        },
+                        scope: match m.scope {
+                            MultScopeSpec::PerLog => MultScope::PerLog,
+                            MultScopeSpec::PerBand => MultScope::PerBand,
+                            MultScopeSpec::PerMode => MultScope::PerMode,
+                            MultScopeSpec::PerBandMode => MultScope::PerBandMode,
+                        },
+                        excluding: leak_keys(m.excluding),
+                        roles: leak_keys(m.roles),
+                    })
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice(),
+            );
             let scoring = crate::contest::Scoring {
                 qso_points: PointsRule::ByModeClass(points),
+                multipliers,
                 post,
             };
             let mut overrides: Vec<(u16, EventWindow)> = r
@@ -2020,6 +2164,7 @@ mod tests {
             arrl.scoring,
             crate::contest::Scoring {
                 qso_points: PointsRule::ByModeClass(FD_POINTS),
+                multipliers: &[],
                 post: &[
                     PostMultiplier::PowerTier { tiers: &[1, 2, 5] },
                     PostMultiplier::Bonuses,
@@ -2031,6 +2176,7 @@ mod tests {
             wfd.scoring,
             crate::contest::Scoring {
                 qso_points: PointsRule::ByModeClass(FD_POINTS),
+                multipliers: &[],
                 post: &[
                     PostMultiplier::Objectives {
                         at_submission: true
@@ -2039,6 +2185,150 @@ mod tests {
                 ],
             }
         );
+    }
+
+    /// §11.2: `MultiplierRule` lands with **no shipped ruleset using one**, and
+    /// that is a decision the seed has to state rather than a gap. Neither Field
+    /// Day event has a multiplier — the ARRL FD score is QSO points × power plus
+    /// bonuses, and `FieldDayLog::sections()` is a display count — so both write
+    /// `"multipliers": []`.
+    ///
+    /// The POSITIVE CONTROL for this pair is in `tests/fd_rules_install.rs`: an
+    /// installed file that DOES declare multipliers reaches the built ruleset
+    /// intact, which is what makes the two empties above a decision rather than a
+    /// loader that drops the block on the floor.
+    #[test]
+    fn no_shipped_ruleset_declares_a_multiplier() {
+        for e in [FdEvent::ArrlFd, FdEvent::WinterFd] {
+            let s = ruleset(e, CURRENT_RULES_YEAR).scoring;
+            assert!(s.multipliers.is_empty(), "{e:?}: {:?}", s.multipliers);
+        }
+    }
+
+    /// …and the key is REQUIRED, so a rules file that simply forgot a contest's
+    /// multipliers is refused rather than scoring its log at a fraction of the
+    /// real total (§8c: absent must be loud, `[]` must be a decision).
+    #[test]
+    fn a_scoring_block_with_no_multipliers_key_is_refused() {
+        let mut v: serde_json::Value = serde_json::from_str(SEED).unwrap();
+        v["rulesets"][0]["scoring"]
+            .as_object_mut()
+            .unwrap()
+            .remove("multipliers");
+        let e = parse_spec(&v.to_string()).unwrap_err();
+        assert!(e.contains("multipliers"), "{e}");
+        // POSITIVE CONTROL: the same file with the key present loads.
+        assert!(parse_spec(SEED).is_ok());
+    }
+
+    /// §2.5's multiplier checks, each with the control that the same file
+    /// without that one mutation loads. A multiplier counts what the OTHER
+    /// station sent, so its slot must be one some role RECEIVES; its domain must
+    /// resolve; and a `roles` filter must name a role that exists, or the
+    /// universe it selects is empty and the contest silently scores no
+    /// multipliers at all.
+    #[test]
+    fn the_multiplier_checks_refuse_a_rule_the_exchange_cannot_serve() {
+        let with = |m: serde_json::Value| {
+            let mut v: serde_json::Value = serde_json::from_str(SEED).unwrap();
+            v["rulesets"][0]["scoring"]["multipliers"] = serde_json::json!([m]);
+            parse_spec(&v.to_string())
+        };
+        let good = serde_json::json!({
+            "id": "section",
+            "source": { "type": "field", "key": "SECTION", "domain": "" },
+            "scope": "per_log",
+            "excluding": [],
+            "roles": [],
+        });
+        // POSITIVE CONTROL first: a well-formed rule against Field Day's own
+        // exchange loads, so every refusal below is about its one mutation.
+        assert!(with(good.clone()).is_ok(), "{:?}", with(good.clone()));
+
+        let mutate = |f: &dyn Fn(&mut serde_json::Value)| {
+            let mut m = good.clone();
+            f(&mut m);
+            with(m).unwrap_err()
+        };
+        assert!(
+            mutate(&|m| m["id"] = "".into()).contains("empty multiplier id"),
+            "{}",
+            mutate(&|m| m["id"] = "".into())
+        );
+        assert!(
+            mutate(&|m| m["source"]["key"] = "CLASS_NOT_RECEIVED".into())
+                .contains("which no role receives")
+        );
+        assert!(mutate(&|m| m["source"]["domain"] = "counties".into())
+            .contains("names unknown domain \"counties\""));
+        assert!(mutate(&|m| m["roles"] = serde_json::json!(["in_state"]))
+            .contains("names undeclared role \"in_state\""));
+        // The empty role id IS Field Day's only role, so naming it must LOAD —
+        // otherwise the check above would be refusing every legal filter.
+        assert!(with(serde_json::json!({
+            "id": "section",
+            "source": { "type": "field", "key": "SECTION", "domain": "" },
+            "scope": "per_log",
+            "excluding": [],
+            "roles": [""],
+        }))
+        .is_ok());
+        // Two rules may not share an id: one board, two universes, and nothing
+        // downstream able to say which is which.
+        let mut v: serde_json::Value = serde_json::from_str(SEED).unwrap();
+        v["rulesets"][0]["scoring"]["multipliers"] = serde_json::json!([good, good]);
+        assert!(parse_spec(&v.to_string())
+            .unwrap_err()
+            .contains("duplicate multiplier id"));
+    }
+
+    /// The scope vocabulary is CLOSED. An unknown scope must be refused by name
+    /// rather than falling back to a per-log count — the difference between
+    /// "this file is wrong" and a contest quietly scoring one multiplier where
+    /// it should have scored one per band.
+    #[test]
+    fn an_unknown_multiplier_scope_is_refused_by_name() {
+        let scoped = |scope: &str| {
+            let mut v: serde_json::Value = serde_json::from_str(SEED).unwrap();
+            v["rulesets"][0]["scoring"]["multipliers"] = serde_json::json!([{
+                "id": "section",
+                "source": { "type": "field", "key": "SECTION", "domain": "" },
+                "scope": scope,
+                "excluding": [],
+                "roles": [],
+            }]);
+            parse_spec(&v.to_string())
+        };
+        let e = scoped("per_hour").unwrap_err();
+        assert!(e.contains("per_hour"), "{e}");
+        // POSITIVE CONTROL: all four real scopes load through the same path.
+        for s in ["per_log", "per_band", "per_mode", "per_band_mode"] {
+            assert!(scoped(s).is_ok(), "{s} must load");
+        }
+    }
+
+    /// The additive rule the module header rests on, MEASURED rather than
+    /// reasoned: this parser IGNORES a key it does not know, so a key added to
+    /// schema 2 by a later batch does not stop an already-shipped build from
+    /// receiving rules updates. (Nothing here declares
+    /// `#[serde(deny_unknown_fields)]`, and this test is what would notice if
+    /// something did.) A key RENAMED or RESHAPED is a different act with a
+    /// different cost — the schema number exists for that.
+    #[test]
+    fn an_unknown_key_is_ignored_so_schema_2_can_grow_additively() {
+        let mut v: serde_json::Value = serde_json::from_str(SEED).unwrap();
+        v["rulesets"][0]["scoring"]["a_key_from_a_later_batch"] = serde_json::json!({"x": [1]});
+        v["rulesets"][0]["a_ruleset_key_from_a_later_batch"] = 7.into();
+        assert!(parse_spec(&v.to_string()).is_ok());
+        // NEGATIVE CONTROL: the same insertion where a key is REQUIRED is not
+        // forgiving at all — an unknown key is ignored, a missing one is not.
+        v["rulesets"][0]["scoring"]
+            .as_object_mut()
+            .unwrap()
+            .remove("power_tiers");
+        assert!(parse_spec(&v.to_string())
+            .unwrap_err()
+            .contains("power_tiers"));
     }
 
     /// §8(c): a missing block must be a LOUD failure. serde defaults a missing

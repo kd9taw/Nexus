@@ -36,7 +36,8 @@
           1,
           2,
           5
-        ]
+        ],
+        "multipliers": []
       },
       "domains": [],
       "exchange": {
@@ -196,7 +197,8 @@
           1,
           2,
           5
-        ]
+        ],
+        "multipliers": []
       },
       "dupe": {
         "by_call": true,

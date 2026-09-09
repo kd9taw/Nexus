@@ -1,0 +1,1 @@
+bad JSON: unknown variant `per_hour`, expected one of `per_log`, `per_band`, `per_mode`, `per_band_mode`

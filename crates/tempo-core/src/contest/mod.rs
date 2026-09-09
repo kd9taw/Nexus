@@ -31,7 +31,10 @@ pub mod spec;
 
 pub use exchanges::{casual, field_day};
 
-pub use scoring::{ModePoints, PointsRule, PostMultiplier, ScoreRow, Scoring};
+pub use scoring::{
+    ModePoints, MultScope, MultSource, MultiplierRule, PointsRule, PostMultiplier, ScoreRow,
+    Scoring,
+};
 
 pub use spec::{
     AdifTags, Domain, ExchangeSpec, FieldKind, FieldSpec, FieldValue, RoleSelector, RoleSpec,
