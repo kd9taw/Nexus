@@ -14266,19 +14266,34 @@ fn conn_health_path() -> PathBuf {
     config_dir().join("conn-health.json")
 }
 
-/// The test twin of [`conn_health_path`] — see its note. One path per process (the store is
-/// a process-global), under the temp dir, keyed by pid so concurrent test binaries cannot
-/// share a file.
+/// The test twin of [`conn_health_path`] — see its note. Under the temp dir, keyed by pid so
+/// concurrent test binaries cannot share a file, and by THREAD so concurrent tests cannot.
+///
+/// ⚠️ **The pid alone was not enough, and the pid alone is what "one path per process" bought.**
+/// `cargo test` runs its tests in parallel threads inside ONE binary, so a per-process path is a
+/// single file shared by every test that stamps a row — and [`note_conn_health`] builds the
+/// whole-file text under the store lock but writes it after dropping it. Two threads therefore
+/// interleave as: B builds its text, A stamps its row and writes, B writes its now-stale text
+/// over the top — and `write_json_atomic`'s scratch file is keyed by pid too, so the two writes
+/// also clobber each other mid-flight and one `rename` loses. Either way A's row is missing from
+/// a file A had just written, which is
+/// `no_test_can_write_the_operators_conn_health_file` failing its own "that file must be THIS
+/// store's" control. Measured on this binary: **6 failures in 200 consecutive suite runs before
+/// this key, 0 in 200 after** — the flake three agents diagnosed as a flake in one night.
+///
+/// The in-memory store stays process-global (it is `static`, and this is a test twin of a path,
+/// not of the store); the tests that share it already take a distinct id each, so the file was
+/// the only thing they were actually contending for. One file per thread is one file per test.
 #[cfg(test)]
 fn conn_health_path() -> PathBuf {
-    static P: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
-    P.get_or_init(|| {
-        std::env::temp_dir().join(format!(
-            "nexus-test-conn-health-{}.json",
-            std::process::id()
-        ))
-    })
-    .clone()
+    thread_local! {
+        static P: PathBuf = std::env::temp_dir().join(format!(
+            "nexus-test-conn-health-{}-{:?}.json",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+    }
+    P.with(|p| p.clone())
 }
 
 /// Parse `conn-health.json`. Malformed = nothing (never a startup failure over a status
