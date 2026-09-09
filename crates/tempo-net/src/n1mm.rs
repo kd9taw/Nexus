@@ -40,7 +40,12 @@ pub struct N1mmContact {
     /// exchange, no grid is passed), and then omitted from the datagram entirely.
     pub gridsquare: String,
     pub points: u32,
-    /// "ARRL-FIELD-DAY" | "WFD" | [`GENERAL_LOG`] for an ordinary QSO.
+    /// The contest this contact belongs to, or [`GENERAL_LOG`] for an ordinary QSO.
+    ///
+    /// ⚠️ **Not an enumeration of two.** This said `"ARRL-FIELD-DAY" | "WFD"` while
+    /// those were the only contests Nexus ran; the caller now sends the ADIF
+    /// `CONTEST_ID` of whatever ruleset is running (see `fd_contest_name` in
+    /// `tempo-audio`, which records why ADIF rather than N1MM's own vocabulary).
     pub contestname: String,
     /// WHICH RADIO made this contact — N1MM's `<radionr>`, 1-based (#33).
     ///
