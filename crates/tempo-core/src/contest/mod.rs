@@ -24,12 +24,22 @@
 //! [`scoring`] joined it for the same reason the shape did: `fd_rules::ScoringModel`
 //! took a `&FieldDayLog`, which welded the scoring math to one contest's log type. It
 //! is mode-neutral and log-neutral here, and reads a log through [`ScoreRow`].
+//!
+//! ⭐ **[`session`] holds what a run of a contest IS, and it holds only the CURRENT
+//! sent exchange.** What a given contact sent lives on that contact's own row. There is
+//! deliberately no function anywhere that produces a sent exchange from a session or a
+//! log, because that is the shape that relabelled every row already logged the moment a
+//! mobile changed county. [`carrier`] is how a field vector rides one ADIF tag.
 
+pub mod carrier;
 pub mod exchanges;
 pub mod scoring;
+pub mod session;
 pub mod spec;
 
 pub use exchanges::{casual, field_day};
+
+pub use session::{ContestSession, InFlightQso, MyLocation};
 
 pub use scoring::{
     ModePoints, MultScope, MultSource, MultiplierRule, PointsRule, PostMultiplier, ScoreRow,
