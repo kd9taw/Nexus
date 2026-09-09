@@ -326,6 +326,7 @@ impl AppState {
                 clock_age_secs: None,
                 clock_servers: None,
                 clock_gross_ms: None,
+                clock_owner_note: String::new(),
                 source: crate::dto::SourceKind::Native,
                 source_label: String::new(),
             },

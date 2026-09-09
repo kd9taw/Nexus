@@ -125,6 +125,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The clock chip says what Nexus is doing, instead of telling you to go and fix it.** Nexus has
+  been correcting the PC-clock offset itself since June; the top bar had not caught up, and painted
+  a red alarm and a "sync via NTP / time.is" tooltip on a station whose timing was in fact correct.
+  It now distinguishes four things: the offset it is **already applying** (with how old that
+  measurement is and how many servers agreed), a correction that has **aged out** because nothing
+  has answered, a clock **too far out to correct**, and — the one case where it asks you to do
+  something — the machine whose clock you need to set yourself. It also names **who owns the
+  clock**: if you run NetTime, Meinberg or Dimension 4, Nexus deliberately touches nothing and now
+  says so, rather than leaving you to wonder why.
+
+- **Nexus diagnoses its own clock problems, and on Windows fixes the ones it can.** A time service
+  that a "debloat" script disabled is started; one that is running but has never reached a server is
+  told to re-discover and re-sync; a healthy machine that only checks the time every nine hours is
+  asked to check every seventeen minutes. Each needs one administrator prompt, once, and only on a
+  machine a check has already found to be broken — a healthy machine is left completely alone, and
+  so is any machine running a third-party time client. Nexus never changes which time server your
+  machine uses. On Linux and macOS nothing is changed at all: their time daemons already check far
+  more often than Windows does.
+
+- **Nexus's own time check no longer uses the NTP Pool.** The pool is volunteer-run and its vendor
+  policy asks applications not to use its default zones as a shipped default; Nexus now asks
+  operator-run public time services instead, and spreads its check times so a thousand installations
+  do not arrive on the same second.
+
 - **Field Day refuses a section its own rules do not list.** Entering an unrecognised section used
   to start the mode anyway and let you transmit it; it now declines, the way a blank section already
   did. If you operate a section Nexus does not know, this will stop you where it previously did not.

@@ -76,6 +76,17 @@ pub struct StationCore {
     /// bare number cannot say "measured 40 minutes ago and about to stop being
     /// worth applying", which is the whole of what an off-grid operator needs.
     pub(crate) clock: crate::clocksync::ClockState,
+    /// One operator-facing line saying WHO owns this machine's clock and what
+    /// state it is in — the third-party client that is doing the work, the OS
+    /// service that is stopped, the Pi that has never checked its clock against
+    /// anything. Produced by `tempo_audio::clockdiag`, which is the layer that
+    /// can run OS commands; the engine only carries it to the UI. Empty until a
+    /// detection pass has run.
+    pub(crate) clock_owner_note: String,
+    /// WSJT-X-format ALL.TXT decode lines pending flush to disk (when
+    /// `settings.write_all_txt`). The engine is I/O-free, so the shell drains this via
+    /// [`Self::take_all_txt_pending`] and appends to the log file. Capped so a
+    /// never-draining shell can't grow it without bound.
     pub(crate) all_txt_pending: Vec<String>,
     /// Freshly-logged QSOs awaiting the shell's connector auto-upload worker
     /// (QRZ / ClubLog / eQSL). EVERY `Engine::log_qso` path queues here — the
@@ -202,6 +213,7 @@ impl StationCore {
     pub(crate) fn new() -> Self {
         Self {
             clock: crate::clocksync::ClockState::default(),
+            clock_owner_note: String::new(),
             all_txt_pending: Vec::new(),
             pending_uploads: VecDeque::new(),
             catchup_slot_unix: 0,
@@ -1377,6 +1389,16 @@ impl StationCore {
     /// and any offset guard 3 refused to steer by.
     pub fn clock_state(&self) -> &crate::clocksync::ClockState {
         &self.clock
+    }
+
+    /// Record who owns this machine's clock (see [`Self::clock_owner_note`]).
+    pub fn set_clock_owner_note(&mut self, note: String) {
+        self.clock_owner_note = note;
+    }
+
+    /// The clock-ownership line, empty until a detection pass has run.
+    pub fn clock_owner_note(&self) -> &str {
+        &self.clock_owner_note
     }
 
     /// Set the offset directly, bypassing the probe. `Some` publishes it as a

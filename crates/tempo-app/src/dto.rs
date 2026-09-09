@@ -1033,6 +1033,12 @@ pub struct RadioStatus {
     /// operator has to fix the machine.
     #[serde(default)]
     pub clock_gross_ms: Option<i64>,
+    /// Who owns this machine's clock, in one operator-facing line — the
+    /// third-party client doing the work, the OS service that is stopped, or the
+    /// off-grid machine that has never checked its clock against anything. Empty
+    /// until a detection pass has run.
+    #[serde(default)]
+    pub clock_owner_note: String,
     /// Where decodes come from: the native engine or a WSJT-X/JTDX/MSHV companion.
     #[serde(default)]
     pub source: SourceKind,

@@ -48,6 +48,7 @@
     "clockAgeSecs": null,
     "clockGrossMs": null,
     "clockOffsetMs": null,
+    "clockOwnerNote": "",
     "clockServers": null,
     "comp": null,
     "compLevel": null,

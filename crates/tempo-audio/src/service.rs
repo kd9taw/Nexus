@@ -10662,8 +10662,20 @@ fn clock_probe_loop(engine: Arc<Mutex<Engine>>) {
     // (`clocksync::hold_window`). Dropped whenever a clock jump intervenes: the
     // difference across a step is not a drift rate.
     let mut prev: Option<(i64, Instant)> = None;
+    // Guard 9: at most one repair an hour, and a terminal stop after three
+    // consecutive failures. Lives across the whole thread — a limiter rebuilt
+    // per cycle limits nothing.
+    let mut limiter = crate::clockdiag::RepairLimiter::new();
+    // Did the OS step the clock since the last pass? Set by the previous
+    // sleep's early wake, which the radio loop's jump detector triggers. This is
+    // the resume trigger, and it is why the loop carries a flag across an
+    // iteration instead of asking a fresh question: the step is over by the time
+    // we get here, and W32Time will happily report a healthy last sync taken
+    // before the machine went to sleep.
+    let mut stepped = false;
     loop {
         let enabled = engine_lock(&engine).settings().clock_check;
+        let mut measured: Option<i64> = None;
         if !enabled {
             // Off means off: drop the offset so nothing keeps steering by a
             // measurement the operator has asked us to stop taking. No re-probe
@@ -10676,15 +10688,74 @@ fn clock_probe_loop(engine: Arc<Mutex<Engine>>) {
             });
             engine_lock(&engine).publish_clock_offset(m.offset_ms, m.agreeing, rate_ppm);
             prev = Some((m.offset_ms, now));
+            measured = Some(m.offset_ms);
         }
         // No `else` — a round that did not agree publishes NOTHING (B2).
 
-        if clock_probe_sleep(&engine, CLOCK_PROBE_INTERVAL) {
+        if enabled {
+            clock_diagnose_and_repair(&engine, measured, stepped, &mut limiter);
+        }
+
+        stepped = clock_probe_sleep(&engine, CLOCK_PROBE_INTERVAL);
+        if stepped {
             // Woken by a clock jump. The stored measurement is on the far side of
             // a step, so it cannot support a drift rate.
             prev = None;
         }
     }
+}
+
+/// Diagnose the machine's clock, publish who owns it, and repair it if — and
+/// only if — the diagnosis says a repair would help.
+///
+/// **The detection is the feature; the poll write is not.** On a healthy,
+/// converged, always-on desktop the registry write improves 27–79 ms of drift to
+/// 0.9–2.5 ms, which is real and cheap and far inside a tolerance that machine
+/// already met. What earns this code its place is the machine whose time service
+/// somebody disabled, the one whose UDP 123 is blocked, the laptop that just
+/// resumed from sleep hours out of date, and the Pi with no RTC that boots
+/// believing it is last Tuesday. `clockdiag::decide` tells those apart, and each
+/// gets a different answer — including "nothing", which is the answer for most
+/// machines and for every machine running somebody else's time client.
+fn clock_diagnose_and_repair(
+    engine: &Arc<Mutex<Engine>>,
+    measured_offset_ms: Option<i64>,
+    just_stepped: bool,
+    limiter: &mut crate::clockdiag::RepairLimiter,
+) {
+    use crate::clockdiag::{self, Repair};
+
+    let diag = clockdiag::detect(
+        measured_offset_ms.is_some(),
+        measured_offset_ms,
+        just_stepped,
+    );
+    engine_lock(engine).set_clock_owner_note(diag.detail.clone());
+
+    if diag.repair == Repair::None {
+        return;
+    }
+    // ⚠️ TX INTERLOCK (§8.3). Every repair below can move the system clock, and
+    // moving it mid-over changes the timebase the PTT-hold deadline and the slot
+    // boundary were built from. Waiting costs at most one T/R period. This is a
+    // transmit-path invariant: it is never the thing to relax to make something
+    // work.
+    if engine_lock(engine).on_air() {
+        return;
+    }
+    if !limiter.may_attempt(Instant::now()) {
+        return;
+    }
+
+    let ok = clockdiag::run_repair_elevated(diag.repair);
+    limiter.record(Instant::now(), ok);
+
+    // GUARD 11: report what the machine ACHIEVED, never what we requested. A
+    // successful write says the registry took the number, not that W32Time is
+    // using it — `SpecialPollInterval` is clamped up to `2^MinPollInterval`, and
+    // without the `0x1` SpecialInterval flag it is ignored outright.
+    let note = clockdiag::repair_outcome_note(&diag, ok, limiter.is_terminal());
+    engine_lock(engine).set_clock_owner_note(note);
 }
 
 /// One corroborated measurement, confirmed by a second round (guards 1 and 2).

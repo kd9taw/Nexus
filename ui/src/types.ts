@@ -1321,8 +1321,28 @@ export interface RadioStatus {
   holdTxFreq: boolean
   /** TX audio drive level (0.0–1.0) — the "Pwr" slider. */
   txLevel: number
-  /** Real PC-clock-vs-UTC offset in ms (positive = fast), or null if offline/disabled. */
+  /** Measured PC-clock-vs-UTC offset in ms (positive = fast) that Nexus **is
+   *  already applying** to TX keying and decode windows. Not a "go fix your
+   *  clock" number — the station's slot timing is right while this is present.
+   *  Null when the check is off, no round of servers agreed, or the last
+   *  measurement aged out of its hold window. */
   clockOffsetMs?: number | null
+  /** Seconds since that measurement was taken. Counts up off-grid until the hold
+   *  window ends, at which point `clockOffsetMs` goes null and this stays — that
+   *  pair is how the chip says "expired" instead of just going quiet. */
+  clockAgeSecs?: number | null
+  /** How many NTP servers agreed on it (the probe needs at least two). */
+  clockServers?: number | null
+  /** An offset too large to steer by (|offset| > 60 s). Present exactly when the
+   *  operator has to fix the machine's clock themselves. */
+  clockGrossMs?: number | null
+  /** Who owns this machine's clock, in one line — the third-party client doing
+   *  the work, the OS service that is stopped, or the off-grid machine that has
+   *  never checked its clock against anything. Empty until a detection pass has
+   *  run. Appended to the clock chip's tooltip: "your clock is 0.4 s out" and
+   *  "NetTime is managing this clock" are different facts and the operator needs
+   *  both to know whether anything is theirs to do. */
+  clockOwnerNote?: string
   /** Where decodes come from: the native engine or a WSJT-X/JTDX/MSHV companion. */
   source: SourceKind
   /** Human-readable source label, e.g. "Native (FT8)" or "WSJT-X UDP". */

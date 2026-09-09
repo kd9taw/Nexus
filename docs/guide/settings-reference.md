@@ -770,9 +770,18 @@ All Decoder settings drive the *native* decoder. On a WSJT-X UDP source
   unacknowledged QSO overs escalate redundancy. Off = RV0-only." (TempoFast/
   TempoDeep — see
   [the Tempo chat layer](operate-digital.md#the-tempo-chat-layer-tempofasttempodeep).)
-- **Clock check (NTP)** — check the PC clock against an NTP server and show the
-  offset in the top bar. "TempoFast/TempoDeep are slot-timed to UTC — keep it
-  within ~0.5 s." Turn off for fully-offline operation (no network calls).
+- **Clock check (NTP)** — measure the PC clock against public NTP servers and
+  **correct for it**. TempoFast/TempoDeep are slot-timed to UTC, and Nexus shifts
+  its own transmit and decode windows by the measured offset so they land on the
+  true UTC grid even when the clock is off — so a clock a few tenths of a second
+  out is not something you need to go and fix. The top bar shows what is being
+  applied, how old the measurement is, and who is keeping the clock right (if you
+  run NetTime or Meinberg, Nexus leaves the clock entirely alone and says so).
+  A clock more than a minute out is *not* corrected: that is too far to fly, and
+  your logged QSO times would be wrong by the same amount, so the bar asks you to
+  set the machine's clock instead. Turn the check off for fully-offline operation
+  (no network calls) — the last measurement then keeps steering until it ages
+  out, and the bar says when it has.
 - **Station power (W)** — "Your transmit power in watts — unlocks the Journey
   miles-per-watt & QRP feats." It also feeds the P.533 link budget. Leave blank
   if unknown. This is what you actually run, for the record — it commands

@@ -16272,6 +16272,7 @@ impl Engine {
             s.radio.clock_age_secs = held.map(|o| o.age(now).as_secs().min(u32::MAX as u64) as u32);
             s.radio.clock_servers = held.map(|o| o.servers);
             s.radio.clock_gross_ms = clock.gross_ms();
+            s.radio.clock_owner_note = self.station.clock_owner_note().to_string();
         }
         s.radio.source = self.source_kind;
         // ⚠️ THE CACHE, NOT THE LOCK. Reading `source_lock(&self.source).label()`
@@ -19556,6 +19557,25 @@ impl Engine {
     /// See [`StationCore::take_clock_reprobe`].
     pub fn take_clock_reprobe(&mut self) -> bool {
         self.station.take_clock_reprobe()
+    }
+
+    /// See [`StationCore::set_clock_owner_note`].
+    pub fn set_clock_owner_note(&mut self, note: String) {
+        self.station.set_clock_owner_note(note)
+    }
+
+    /// Is anything on the air right now?
+    ///
+    /// The TX interlock for the clock-repair path (§8.3): **never step or resync
+    /// the system clock while transmitting.** A repair that moves the clock
+    /// mid-over changes the timebase every deadline in flight was built on, and
+    /// nothing downstream is expecting that. Deliberately generous about what
+    /// counts — Nexus's own over, a tune carrier, and a rig keyed by the mic or a
+    /// straight key at the radio, which Nexus did not start and cannot end.
+    /// Waiting out an over costs at most one T/R period; getting it wrong costs a
+    /// transmission.
+    pub fn on_air(&self) -> bool {
+        self.app.transmitting() || self.rig_keyed || self.tuning()
     }
 
     /// See [`StationCore::take_all_txt_pending`].

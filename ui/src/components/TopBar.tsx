@@ -163,16 +163,103 @@ export function modeMismatch(
   return modeFamily(rig) === modeFamily(believed) ? null : rig.toUpperCase()
 }
 
-/** Color class for the NTP clock offset: ok ≤0.3 s, warn ≤1 s, else bad. */
-function clockClass(ms: number): string {
-  const a = Math.abs(ms)
-  return a <= 300 ? 'ok' : a <= 1000 ? 'warn' : 'bad'
-}
-
 /** Format the clock offset as a signed seconds value, e.g. "+0.32s". */
 function clockLabel(ms: number): string {
   const s = ms / 1000
   return `${s > 0 ? '+' : ''}${s.toFixed(2)}s`
+}
+
+/** Measurement age as an invariant `N min`, floored at 1 so a just-taken
+ *  measurement never reads "0 min ago". `min` is the SI symbol and stays in the
+ *  code with the other units. */
+function clockAgeLabel(secs: number): string {
+  return `${Math.max(1, Math.round(secs / 60))} min`
+}
+
+/** Above this much CORRECTED offset the chip goes amber — not because the
+ *  station's timing is wrong (it is not; Nexus is steering by exactly this
+ *  number) but because `tempo_core::logbook` stamps QSOs from the RAW system
+ *  clock, so a second of PC-clock error is a second of error in every logged
+ *  and uploaded record. */
+const CLOCK_LOG_CONCERN_MS = 1000
+
+/** The clock chip — what Nexus knows about the PC clock, said honestly.
+ *
+ * ⚠️ THIS CHIP USED TO LIE, AND THE LIE WAS SPECIFIC. It painted the raw offset
+ * red above 1 s and its tooltip told the operator to "sync via NTP / time.is"
+ * — advice for a problem Nexus has corrected in the radio loop since June 2026
+ * (`service.rs` subtracts the measured offset from the system clock so TX keys
+ * and decode windows land on the true UTC grid). A working station with a
+ * sloppy clock therefore showed a red alarm about nothing, which is how an
+ * operator learns to ignore a chip.
+ *
+ * Four states, each saying something different and only one of them asking the
+ * operator to do anything:
+ *
+ *  - **too far out** (guard 3, |offset| > 60 s) — the one case where "fix the
+ *    machine's clock" is the right advice, because Nexus refuses to steer by it;
+ *  - **corrected** — the ordinary case: the offset is what we are ALREADY
+ *    applying, with its age and how many servers agreed;
+ *  - **expired** — off-grid long enough that the last measurement aged out of
+ *    its hold window, so steering has stopped and slot timing follows the PC
+ *    clock again. This one used to happen SILENTLY;
+ *  - **never measured** — the pre-existing DT-derived health, unchanged. */
+function ClockChip({ radio }: { radio: RadioStatus }) {
+  // Who is keeping this clock right, appended to whatever the chip says. On the
+  // machines where it matters most it is the whole answer: a station running
+  // NetTime or Meinberg has a clock Nexus deliberately does not touch (guard 8),
+  // and without this the operator sees a chip full of numbers and no way to know
+  // that nothing here is theirs to fix.
+  const owner = radio.clockOwnerNote?.trim() ? ` (${radio.clockOwnerNote.trim()})` : ''
+
+  if (radio.clockGrossMs != null) {
+    const offset = clockLabel(radio.clockGrossMs)
+    return (
+      <span className="timesync bad" title={t('topbar.clock.gross.title', { offset }) + owner}>
+        <span className="dot" />
+        {t('topbar.clock.gross.label', { offset })}
+      </span>
+    )
+  }
+
+  if (radio.clockOffsetMs != null) {
+    const offset = clockLabel(radio.clockOffsetMs)
+    const concerning = Math.abs(radio.clockOffsetMs) > CLOCK_LOG_CONCERN_MS
+    const title =
+      t('topbar.clock.corrected.title', {
+        offset,
+        age: clockAgeLabel(radio.clockAgeSecs ?? 0),
+        servers: String(radio.clockServers ?? 0),
+      }) +
+      (concerning ? ` ${t('topbar.clock.logNote')}` : '') +
+      owner
+    return (
+      <span className={`timesync ${concerning ? 'warn' : 'ok'}`} title={title}>
+        <span className="dot" />
+        {t('topbar.clock.corrected.label', { offset })}
+      </span>
+    )
+  }
+
+  if (radio.clockAgeSecs != null) {
+    const age = clockAgeLabel(radio.clockAgeSecs)
+    return (
+      <span className="timesync warn" title={t('topbar.clock.stale.title', { age }) + owner}>
+        <span className="dot" />
+        {t('topbar.clock.stale.label')}
+      </span>
+    )
+  }
+
+  return (
+    <span
+      className={`timesync ${radio.timeSyncOk ? 'ok' : 'bad'}`}
+      title={(radio.timeSyncOk ? t('topbar.sync.ok.title') : t('topbar.sync.bad.title')) + owner}
+    >
+      <span className="dot" />
+      {radio.timeSyncOk ? t('topbar.sync.ok.label') : t('topbar.sync.bad.label')}
+    </span>
+  )
 }
 
 /** Live UTC clock (HH:MM:SS), ticking once a second. */
@@ -460,25 +547,7 @@ export function TopBar({
         <UtcClock />
         {!hideDigitalChrome && (
           <>
-            {radio.clockOffsetMs != null ? (
-              <span
-                className={`timesync ${clockClass(radio.clockOffsetMs)}`}
-                title={t('topbar.clock.title', { offset: clockLabel(radio.clockOffsetMs) })}
-              >
-                <span className="dot" />
-                {t('topbar.clock.label', { offset: clockLabel(radio.clockOffsetMs) })}
-              </span>
-            ) : (
-              <span
-                className={`timesync ${radio.timeSyncOk ? 'ok' : 'bad'}`}
-                title={
-                  radio.timeSyncOk ? t('topbar.sync.ok.title') : t('topbar.sync.bad.title')
-                }
-              >
-                <span className="dot" />
-                {radio.timeSyncOk ? t('topbar.sync.ok.label') : t('topbar.sync.bad.label')}
-              </span>
-            )}
+            <ClockChip radio={radio} />
             <span
               className={`dt-readout${Math.abs(link.dtSec) > 0.5 ? ' bad' : ''}`}
               title={t('topbar.dt.title')}

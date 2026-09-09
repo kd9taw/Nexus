@@ -5147,7 +5147,7 @@ export const EN = {
     'On (default) = a weak frame that fails is recovered by joint-combining its retransmissions (RV0+RV1+RV2), and unacknowledged QSO overs escalate redundancy. Off = RV0-only (each frame decoded on its own).',
   'settings.digital.clockCheck.label': 'Clock check (NTP)',
   'settings.digital.clockCheck.hint':
-    'Periodically check your PC clock against an NTP server and show the offset in the top bar. TempoFast/TempoDeep are slot-timed to UTC — keep it within ~0.5 s (NTP / time.is; off-grid: GPS). Turn off for fully-offline operation (no network calls).',
+    'Measure your PC clock against public NTP servers and CORRECT for it: TempoFast/TempoDeep are slot-timed to UTC, and Nexus shifts its own transmit and decode windows by the measured offset so they land on the true UTC grid even when the clock is off. The top bar shows what is being applied. Turn off for fully-offline operation (no network calls) — the last measurement then keeps steering until it ages out.',
   'settings.digital.stationPower.label': 'Station power (W)',
   'settings.digital.stationPower.hint':
     'Your transmit power in watts — unlocks the Journey miles-per-watt & QRP feats. Leave blank if unknown.',
@@ -8624,15 +8624,33 @@ export const EN = {
   'topbar.slotClock.title': 'Time to next slot',
   'topbar.slotClock.label': 'next slot',
   'topbar.utc.title': 'UTC time',
-  // `{{offset}}` is the signed clock error, formatted invariantly by the bar.
-  'topbar.clock.label': 'clock {{offset}}',
-  'topbar.clock.title':
-    'PC clock is {{offset}} vs UTC (NTP). TempoFast/TempoDeep need it within ~0.5 s — sync via NTP / time.is (off-grid: GPS).',
+  // The clock chip. `{{offset}}` is the signed clock error and `{{age}}` the
+  // measurement age (`N min`), both formatted invariantly by the bar;
+  // `{{servers}}` is a plain count. The ✓ and ✗ are glyphs, not words.
+  //
+  // ⚠️ ONLY THE `gross` STRINGS MAY TELL THE OPERATOR TO SYNC THEIR CLOCK.
+  // Nexus has corrected the PC-clock offset in its own radio loop since June
+  // 2026, so "your clock is wrong, go set it" is false advice everywhere else —
+  // the station's slot timing is right, and the operator sent to fix it finds
+  // nothing wrong. The `corrected` strings must keep saying that the correction
+  // is ALREADY APPLIED; `logNote` is the one extra thing a big corrected offset
+  // still costs, and it is about the log, not about decoding.
+  'topbar.clock.corrected.label': 'clock {{offset}} ✓',
+  'topbar.clock.corrected.title':
+    'Your PC clock is {{offset}} off UTC and Nexus is already correcting for it — transmit and decode windows land on the true UTC grid. Measured {{age}} ago, {{servers}} time servers agreeing.',
+  'topbar.clock.logNote':
+    'Logged QSO times still come from the PC clock, so this one is worth fixing at the machine.',
+  'topbar.clock.stale.label': 'clock unchecked',
+  'topbar.clock.stale.title':
+    'The last UTC measurement was {{age}} ago and has aged out, so Nexus has stopped correcting — slot timing now follows the PC clock directly. It resumes on its own as soon as a time server answers.',
+  'topbar.clock.gross.label': 'clock {{offset}} ✗',
+  'topbar.clock.gross.title':
+    'Your PC clock is {{offset}} off UTC — too far for Nexus to correct, and your logged QSO times would be wrong by the same amount. Set the clock on the machine itself (off-grid: GPS).',
   'topbar.sync.ok.label': 'Sync',
   'topbar.sync.bad.label': 'No Sync',
   'topbar.sync.ok.title': 'Time sync OK (from decode timing)',
   'topbar.sync.bad.title':
-    'Decodes land far off the slot boundary — sync your PC clock (NTP / time.is; off-grid: GPS).',
+    'Decodes land far off the slot boundary and no NTP measurement has come back yet, so nothing is being corrected. Check the network, or set the PC clock (off-grid: GPS).',
   'topbar.dt.title': 'Decode time offset (how far heard signals land from the slot boundary)',
   // The transmit-cycle group: three WHOLE labels for the Auto button and one each for the two
   // locks, never a stem plus a period token. `<s>` is the small type, supplied by the call site.

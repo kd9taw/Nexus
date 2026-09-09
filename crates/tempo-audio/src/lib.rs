@@ -45,6 +45,10 @@ pub mod baud_ladder;
 /// feature; `device::CpalBackend` owns one per capture stream.
 pub mod capture_resample;
 pub mod civ;
+/// Who owns this machine's clock, whether it is working, and whether anything
+/// Nexus can do would help. Unprivileged, read-only detection through the OS's
+/// own tools; the repair (Windows only) is a decision table, not a reflex.
+pub mod clockdiag;
 /// Opening a serial port used ONLY for DTR/RTS control lines (CW keyline, FSK
 /// keyline, serial PTT): the baud ladder that heals a rig refusing a given rate.
 /// Pure fallback logic, unit-tested; the real open rides the `serial` feature.
