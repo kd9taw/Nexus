@@ -16830,6 +16830,139 @@ mod tests {
         );
     }
 
+    /// ⭐ THE FOUR CW KEYER BACKENDS, PINNED AT THE WIRE — the mode word the CW section
+    /// commands while RECEIVING, and every mode word it commands across a KEYED OVER, on both
+    /// sides of the 10 MHz line.
+    ///
+    /// Measured for the 2026-09 FT-710 report ("it tuned but selected DATA-U, not CW-U") as the
+    /// BEFORE half of a proposed narrowing of the soundcard keyer's DATA submode to the keyed
+    /// window — receive in `CW`/`CWR`, command `PKTUSB`/`PKTLSB` only while keying. That
+    /// narrowing was investigated and NOT built (`tasks/cw-data-window.md`): Nexus carries ONE
+    /// dial number, a frequency written over CAT is a number in the CURRENT mode's convention,
+    /// and on a Yaesu with CW FREQ DISPLAY = PITCH OFFSET the CW convention differs from the
+    /// SSB/DATA one by the rig's CW pitch (the ±650 Hz field report the mode-before-dial fix
+    /// exists for — see the long note in the force path). Crossing that boundary twice per over,
+    /// with no way to read which convention the rig applies, puts either receive or transmit a
+    /// pitch off on half the fleet. Today there is no crossing, which is why RX and TX agree
+    /// whatever the rig's menu says — and THAT is the property this pins.
+    ///
+    /// Two facts per backend, both read off the wire and not out of app state:
+    ///  * the mode word commanded while RECEIVING, and
+    ///  * every mode word commanded across a whole over (queue → key → tail → idle).
+    ///
+    /// The second is EMPTY for all four backends, and the emptiness is only worth anything
+    /// because the over really happened: the soundcard arm's `T 1`…`T 0` and the CAT arm's
+    /// `b TEST` are asserted as the positive control. A future narrowing is exactly the change
+    /// that makes the soundcard row non-empty — this is the test that names what moved, and the
+    /// three true-CW rows are the ones that must NOT move with it.
+    ///
+    /// ⚠️ The harness configures no WinKeyer/serial keyline PORT (there is no such hardware on
+    /// this box), so those two backends' WORDS fall through to the CAT arm — the shipped
+    /// behaviour, and not what this test is about. The MODE word is backend-derived either way,
+    /// which is what is pinned here.
+    #[test]
+    fn the_cw_keyer_backends_command_one_mode_word_for_receive_and_transmit_alike() {
+        use tempo_app::settings::CwKeyerBackend;
+        // (mode words seen while receiving, mode words seen across the over, the whole wire)
+        let probe = |keyer: CwKeyerBackend, dial: f64, band: &str| {
+            let (addr, seen, _live) = band_stacking_rigctld_stub((dial * 1e6) as u64, &[]);
+            let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+            {
+                let mut e = engine.lock().unwrap();
+                e.set_license_class("extra");
+                let mut s = e.settings().clone();
+                s.cw_keyer = keyer;
+                e.apply_settings(s);
+                e.set_operating_mode("cw", true);
+                e.set_frequency(dial, band, "USB");
+            }
+            let mut rig = Rig::rigctld(&addr);
+            let mut backend = MockBackend::new();
+            let mut state = loop_state_for(&engine);
+            let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+            let mut station = StationSinks::new();
+            let mut run = |state: &mut RadioLoop, rig: &mut Rig, b: &mut MockBackend, t: f64| {
+                state
+                    .step(&engine, b, rig, &sinks, t, &mut ra, &mut rr, &mut station)
+                    .unwrap();
+            };
+            let modes = |s: &Arc<Mutex<Vec<String>>>| -> Vec<String> {
+                s.lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|l| l.starts_with("M "))
+                    .cloned()
+                    .collect()
+            };
+            run(&mut state, &mut rig, &mut backend, 0.0);
+            let rx = modes(&seen);
+            seen.lock().unwrap().clear();
+            // One whole over: `send_cw` queues the macro word-by-word in one go, so the ticks
+            // below carry it from the queue through the key to the far side of the PTT tail.
+            engine.lock().unwrap().send_cw("TEST");
+            for i in 1..=8 {
+                run(&mut state, &mut rig, &mut backend, i as f64 * 500.0);
+            }
+            let over = modes(&seen);
+            let wire = seen.lock().unwrap().clone();
+            (rx, over, wire)
+        };
+
+        for (dial, band, cw, data) in [
+            (7.030, "40m", "M CWR -1", "M PKTLSB 3000"),
+            (14.030, "20m", "M CW -1", "M PKTUSB 3000"),
+        ] {
+            // The three TRUE-CW backends: the rig keys itself in CW, so the section commands
+            // the rig's own CW mode at its own default width (`-1`), band-aware — CW-L below
+            // 10 MHz, CW-U at 30 m and up (the operator's 2026-07-24 ruling).
+            for keyer in [
+                CwKeyerBackend::Cat,
+                CwKeyerBackend::WinKeyer,
+                CwKeyerBackend::Serial,
+            ] {
+                let (rx, over, wire) = probe(keyer, dial, band);
+                assert_eq!(
+                    rx,
+                    vec![cw.to_string()],
+                    "{keyer:?} on {band} receives in CW"
+                );
+                assert!(
+                    over.is_empty(),
+                    "{keyer:?} on {band}: a keyed over must command NO mode — the receive mode \
+                     IS the transmit mode. saw {over:?}"
+                );
+                assert!(
+                    wire.iter().any(|l| l == "b TEST"),
+                    "POSITIVE CONTROL: the over must actually have keyed, or an empty mode list \
+                     proves nothing. wire={wire:?}"
+                );
+            }
+
+            // The SOUNDCARD keyer: a keyed audio tone has to reach the modulator rather than the
+            // mic jack, so the section commands the DATA submode — for the WHOLE session,
+            // receive included. That is the FT-710 report ("it tuned but it didn't switch"), and
+            // the `3000` is its other half: a 3 kHz SSB filter where a CW operator wants a
+            // narrow one. Both are deliberate today, and both are what a narrowing would change.
+            let (rx, over, wire) = probe(CwKeyerBackend::Soundcard, dial, band);
+            assert_eq!(
+                rx,
+                vec![data.to_string()],
+                "the soundcard keyer holds the rig in the DATA submode to RECEIVE on {band}"
+            );
+            assert!(
+                over.is_empty(),
+                "…and a keyed over commands NO mode either: there is exactly one mode word for \
+                 receive and transmit alike, which is why they cannot disagree about the dial \
+                 convention. saw {over:?}"
+            );
+            assert!(
+                wire.iter().any(|l| l == "T 1") && wire.iter().any(|l| l == "T 0"),
+                "POSITIVE CONTROL: the soundcard over must actually have keyed and unkeyed. \
+                 wire={wire:?}"
+            );
+        }
+    }
+
     #[test]
     fn the_mode_is_commanded_before_the_dial_on_a_cockpit_switch() {
         // ⭐ FIELD REPORT, v1.0.0 on an FTDX10 (2026-08-05): moving CW→Phone added 650 Hz to the
