@@ -365,7 +365,7 @@ export function ModeNav({ view, mode, enabled, onSelect, tier, onDigitalMode, on
                   item (including through a drag-reorder) because that is the only place an
                   operator looks for it, and it is gated on the SAME switch — the FD master
                   switch, never on club sync. Gating it on sync is what hid it: the board only
-                  existed inside FieldDayView once `fieldDay.club` was non-null, so an operator
+                  existed inside ContestView once `fieldDay.club` was non-null, so an operator
                   who had not already turned sync on had no way to learn it was there. */}
               {it.id === 'fieldDay' && (
                 <Tooltip content={t('nav.fdClub.title')}>

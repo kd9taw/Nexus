@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { annotate, buildSummaryText } from './FieldDayView'
+import { annotate, buildSummaryText } from './ContestView'
 import type { FieldDayQso } from '../types'
 
 function qso(call: string, band: string, mode: string): FieldDayQso {

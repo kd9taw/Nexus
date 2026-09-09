@@ -1,12 +1,12 @@
 // @vitest-environment jsdom
 //
-// The club-sync block on FieldDayView: the honesty chip (derived state, queue
+// The club-sync block on ContestView: the honesty chip (derived state, queue
 // in the label), the band board with its 15 s stale marks, the >30 s clock-skew
 // warning, and the host-only club export buttons. The whole section is gated on
 // `fieldDay.club` — a solo Field Day renders none of it (the control).
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup } from '@testing-library/react'
-import { FieldDayView } from './FieldDayView'
+import { ContestView } from './ContestView'
 import defaultSettings from './__fixtures__/defaultSettings.json'
 import type { FdClubStatus, FieldDayStatus } from '../types'
 
@@ -70,14 +70,14 @@ const fd = (club?: FdClubStatus): FieldDayStatus => ({
 
 afterEach(() => cleanup())
 
-describe('FieldDayView club sync section', () => {
+describe('ContestView club sync section', () => {
   it('renders nothing club-related for a solo Field Day (no club block)', () => {
-    render(<FieldDayView fieldDay={fd(undefined)} onSetMode={() => {}} />)
+    render(<ContestView fieldDay={fd(undefined)} onSetMode={() => {}} />)
     expect(screen.queryByLabelText('Club sync')).toBeNull()
   })
 
   it('shows the synced chip, counters, host line and the band board with stale marks', () => {
-    render(<FieldDayView fieldDay={fd(CLUB)} onSetMode={() => {}} />)
+    render(<ContestView fieldDay={fd(CLUB)} onSetMode={() => {}} />)
     expect(screen.getByText('Synced')).toBeTruthy()
     expect(screen.getByText('Club: 1234 pts · 312 QSOs · 41 sections')).toBeTruthy()
     expect(screen.getByText('W9ABC Field Day · host W9ABC')).toBeTruthy()
@@ -96,7 +96,7 @@ describe('FieldDayView club sync section', () => {
 
   it('keeps the queue in the label — behind and offline can never read as synced', () => {
     render(
-      <FieldDayView
+      <ContestView
         fieldDay={fd({ ...CLUB, syncState: 'behind', queued: 3 })}
         onSetMode={() => {}}
       />,
@@ -104,7 +104,7 @@ describe('FieldDayView club sync section', () => {
     expect(screen.getByText('Behind — 3 to send')).toBeTruthy()
     cleanup()
     render(
-      <FieldDayView
+      <ContestView
         fieldDay={fd({ ...CLUB, syncState: 'offline', queued: 7, offlineSinceUnix: 1 })}
         onSetMode={() => {}}
       />,
@@ -115,7 +115,7 @@ describe('FieldDayView club sync section', () => {
 
   it('warns past 30 s of clock skew and surfaces a host error verbatim', () => {
     render(
-      <FieldDayView
+      <ContestView
         fieldDay={fd({ ...CLUB, skewSecs: -45, lastError: 'update the host' })}
         onSetMode={() => {}}
       />,
@@ -127,7 +127,7 @@ describe('FieldDayView club sync section', () => {
   })
 
   it('offers the club exports only in the host role', () => {
-    render(<FieldDayView fieldDay={fd({ ...CLUB, hosting: true })} onSetMode={() => {}} />)
+    render(<ContestView fieldDay={fd({ ...CLUB, hosting: true })} onSetMode={() => {}} />)
     expect(screen.getByText('Club Cabrillo')).toBeTruthy()
     expect(screen.getByText('Club ADIF')).toBeTruthy()
   })

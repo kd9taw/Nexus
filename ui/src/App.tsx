@@ -153,7 +153,7 @@ import type { PropagationSnapshot, FeedHealth, NeedAlert, SpotRow, DxpedWindow, 
 import { NeededPanel } from './components/NeededPanel'
 import { SpotsPanel } from './components/SpotsPanel'
 import { LogConfirm } from './components/LogConfirm'
-import { FieldDayView } from './components/FieldDayView'
+import { ContestView } from './components/ContestView'
 import { OperateDecodes } from './components/OperateDecodes'
 import { Logbook } from './components/Logbook'
 import { RoamPanel } from './components/RoamPanel'
@@ -2483,7 +2483,7 @@ export default function App() {
       // fdDashboardShell.test.tsx).
       workspace = (
         <main className="layout single">
-          <FieldDayView
+          <ContestView
             fieldDay={snap.fieldDay}
             onSetMode={handleSetMode}
             fdActive={settings?.fdActive ?? false}
@@ -3029,7 +3029,7 @@ export default function App() {
           // The club band board is a WINDOW, not a section: the rail button opens the
           // `fdclub` pop-out straight onto a second monitor. It rides the Field Day
           // master switch (navEnabled.fieldDay = fdActive) and NOT club sync — the
-          // board used to be reachable only from inside FieldDayView once sync was
+          // board used to be reachable only from inside ContestView once sync was
           // already on, which is exactly why nobody found it.
           onClubBoard={() => void openPanelWindow('fdclub')}
         />

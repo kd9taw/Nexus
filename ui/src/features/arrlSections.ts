@@ -3,7 +3,7 @@
 //
 // This is a TS mirror of `ARRL_SECTIONS` in
 // crates/tempo-core/src/fd_rules.rs (the authoritative list). Like the
-// `FD_BONUSES` mirror in FieldDayView.tsx, this is a deliberate small
+// `FD_BONUSES` mirror in ContestView.tsx, this is a deliberate small
 // duplication: the sections change rarely (years apart), and mirroring them
 // here keeps the frontend board free of a backend round-trip for the static
 // universe. Worked-state still comes from the log / DTO `workedSections`.

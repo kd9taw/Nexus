@@ -50,7 +50,7 @@ describe('profiles', () => {
   it('contest surfaces the rate tools and de-emphasizes awards', () => {
     const en = resolveEnabled('contest')
     expect(en.fieldDay).toBe(true)
-    // 'log' (Field Log) was deleted in Batch B — export buttons moved into FieldDayView.
+    // 'log' (Field Log) was deleted in Batch B — export buttons moved into ContestView.
     // 'band' (Broadcasts) was deleted in Batch B.
     expect(en.awards).toBe(false)
     expect(en.dxped).toBe(false)

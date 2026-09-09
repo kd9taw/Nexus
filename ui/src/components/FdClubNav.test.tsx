@@ -6,7 +6,7 @@
 // bands when multiple stations are operating."
 //
 // The findability defect this file pins is narrow and exact. The board used to
-// exist ONLY as a block inside FieldDayView that renders when `fieldDay.club` is
+// exist ONLY as a block inside ContestView that renders when `fieldDay.club` is
 // non-null — which requires club sync to already be ON. An operator who has not
 // switched sync on saw nothing, was told nothing, and had no way to discover the
 // board existed. So the rail button is gated on the FIELD DAY MASTER SWITCH

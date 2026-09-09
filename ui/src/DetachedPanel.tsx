@@ -77,7 +77,7 @@ import { DxpeditionsView } from './components/DxpeditionsView'
 import { SatellitesView } from './components/SatellitesView'
 import { Toasts } from './components/Toasts'
 import { OperateCockpit } from './components/OperateCockpit'
-import { FdClubSection, FieldDayScoreboard, FdBandOccupancy } from './components/FieldDayView'
+import { FdClubSection, FieldDayScoreboard, FdBandOccupancy } from './components/ContestView'
 import { Waterfall } from './components/Waterfall'
 import { FT_PALETTE_SCOPE } from './waterfallPalette'
 import { StationList } from './components/StationList'
@@ -105,7 +105,7 @@ type SpotTarget = {
 }
 type OperateLayout = 'classic' | 'roster'
 
-// The club board's SYNC-OFF panel. Inline off the shared tokens (the FieldDayView
+// The club board's SYNC-OFF panel. Inline off the shared tokens (the ContestView
 // idiom) rather than a styles.css section: four elements in one branch. Set larger
 // than body copy for the same reason the board itself is — this window is read from
 // the operating position, and the route is something the operator retypes elsewhere.

@@ -1,12 +1,12 @@
 // @vitest-environment jsdom
 //
-// The FieldDayView event banner hosts the warn-only advisories (FdAdvisories) —
+// The ContestView event banner hosts the warn-only advisories (FdAdvisories) —
 // the integration half of FdAdvisories.test.tsx: the banner actually mounts the
 // component and feeds it the DTO props App supplies. Failing-first: the banned-
 // chip test was watched failing with the banner mount removed before landing.
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, act, cleanup } from '@testing-library/react'
-import { FieldDayView } from './FieldDayView'
+import { ContestView } from './ContestView'
 import defaultSettings from './__fixtures__/defaultSettings.json'
 import type { FieldDayStatus } from '../types'
 import type { FdRulesetDto } from '../api'
@@ -55,7 +55,7 @@ afterEach(cleanup)
 describe('the event banner hosts the warn-only advisories', () => {
   it('shows the banned-mode chip for FT8 at WFD, inside the banner', async () => {
     render(
-      <FieldDayView fieldDay={fd()} onSetMode={() => {}} fdActive fdRuleset={WFD_RULES} tier="FT8" />,
+      <ContestView fieldDay={fd()} onSetMode={() => {}} fdActive fdRuleset={WFD_RULES} tier="FT8" />,
     )
     await settle()
     const chip = document.querySelector('.fd-event-banner .fd-advisory.banned')
@@ -65,7 +65,7 @@ describe('the event banner hosts the warn-only advisories', () => {
 
   it('shows no chip at ARRL FD, and none with the master switch off', async () => {
     render(
-      <FieldDayView
+      <ContestView
         fieldDay={fd({ event: 'arrlfd' })}
         onSetMode={() => {}}
         fdActive
@@ -77,7 +77,7 @@ describe('the event banner hosts the warn-only advisories', () => {
     expect(document.querySelector('.fd-advisory')).toBeNull()
     cleanup()
     render(
-      <FieldDayView fieldDay={fd()} onSetMode={() => {}} fdActive={false} fdRuleset={WFD_RULES} tier="FT8" />,
+      <ContestView fieldDay={fd()} onSetMode={() => {}} fdActive={false} fdRuleset={WFD_RULES} tier="FT8" />,
     )
     await settle()
     expect(document.querySelector('.fd-advisory')).toBeNull()
@@ -86,7 +86,7 @@ describe('the event banner hosts the warn-only advisories', () => {
   it('assistance stays DORMANT with the shipped (all-allowed) rules even with live sources — and the restricted control shows through the same path', async () => {
     // Dormant: the DTO's assistanceOn is live, the shipped policy allows everything.
     render(
-      <FieldDayView
+      <ContestView
         fieldDay={fd({ assistanceOn: ['DX cluster / RBN', 'PSK Reporter needs'] })}
         onSetMode={() => {}}
         fdActive
@@ -99,7 +99,7 @@ describe('the event banner hosts the warn-only advisories', () => {
     cleanup()
     // Positive control: a restricted ruleset flips the very same wiring visible.
     render(
-      <FieldDayView
+      <ContestView
         fieldDay={fd({ assistanceOn: ['DX cluster / RBN', 'PSK Reporter needs'] })}
         onSetMode={() => {}}
         fdActive

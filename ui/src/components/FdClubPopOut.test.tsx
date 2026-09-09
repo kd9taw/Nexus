@@ -14,7 +14,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, act, cleanup } from '@testing-library/react'
 import { DetachedPanel } from '../DetachedPanel'
-import { FdClubSection, FdBandOccupancy } from './FieldDayView'
+import { FdClubSection, FdBandOccupancy } from './ContestView'
 import { openPanelWindow, subscribeSnapshot, getSettings } from '../api'
 import type { AppSnapshot, FdClubStatus } from '../types'
 import { BAND_COLOR } from '../bandColors'

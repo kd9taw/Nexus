@@ -6,7 +6,7 @@
 // "what screen is this supposed to represent? Why are theyere waterfalls in here when its
 // not the primary working area?"
 //
-// THE CAUSE. `App.tsx` rendered `<FieldDayView>` through `threePane(...)`, which is not a
+// THE CAUSE. `App.tsx` rendered `<ContestView>` through `threePane(...)`, which is not a
 // layout helper — it is the digital operating workspace, and it hardcodes its furniture:
 // the stations/chat rail on the left, and on the right a rail of Waterfall + Band activity
 // (OperateDecodes) + the mesh LinkPill. The dashboard is a setup / score / log screen. It
@@ -117,21 +117,21 @@ describe('the Field Day dashboard is not wearing the operating workspace', () =>
 
   it('mounts it in the single-column panel shell instead', () => {
     const arm = fieldDayCase()
-    expect(arm, 'the fieldDay arm no longer renders FieldDayView').toContain('<FieldDayView')
+    expect(arm, 'the fieldDay arm no longer renders ContestView').toContain('<ContestView')
     expect(
       arm,
-      'FieldDayView is not inside a `<main className="layout single">`. Its root is a ' +
+      'ContestView is not inside a `<main className="layout single">`. Its root is a ' +
         '`.panel`, so `.layout.single > .panel` is the shell that gives it its height, its ' +
         'deficit valve and its measure — the same one Logbook, Settings and Program use.',
     ).toContain('className="layout single"')
   })
 
-  it('the class list those shell rules target is still the one FieldDayView renders', () => {
+  it('the class list those shell rules target is still the one ContestView renders', () => {
     // `.layout.single > .panel` is a `>` combinator against an exact class; rename either
     // half and every rule reasoned about here silently stops applying.
     expect(
-      SRC('components/FieldDayView.tsx'),
-      'FieldDayView no longer roots on `conversation panel fieldday` — the shell rules this ' +
+      SRC('components/ContestView.tsx'),
+      'ContestView no longer roots on `conversation panel fieldday` — the shell rules this ' +
         'file resolves are modelling a view that is not rendered any more.',
     ).toContain(`className="${FIELDDAY}"`)
   })

@@ -8,7 +8,7 @@
 // narrow.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, act, cleanup } from '@testing-library/react'
-import { FieldDayView } from './FieldDayView'
+import { ContestView } from './ContestView'
 import { setFdOperator, setSettings } from '../api'
 import defaultSettings from './__fixtures__/defaultSettings.json'
 import type { FieldDayStatus } from '../types'
@@ -46,7 +46,7 @@ afterEach(() => cleanup())
 
 describe('Field Day operator swap', () => {
   it('persists the new operator through the narrow write, not the whole-settings save', async () => {
-    render(<FieldDayView fieldDay={FD} onSetMode={() => {}} />)
+    render(<ContestView fieldDay={FD} onSetMode={() => {}} />)
     await settle()
 
     const input = screen.getByLabelText('Field Day operator (call or initials)')

@@ -10,7 +10,7 @@
 // quietly counted a plan would be a submitted-score error.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, act, cleanup, within } from '@testing-library/react'
-import { FieldDayView, FD_BONUSES, fdBonusState, fdBonusTally } from './FieldDayView'
+import { ContestView, FD_BONUSES, fdBonusState, fdBonusTally } from './ContestView'
 import { setSettings, saveTextToDownloads } from '../api'
 import defaultSettings from './__fixtures__/defaultSettings.json'
 import type { FieldDayStatus, Settings } from '../types'
@@ -51,7 +51,7 @@ const ALL_POINTS = FD_BONUSES.reduce((n, b) => n + b.points, 0)
 
 async function mount(patch: Partial<Settings>, fd: FieldDayStatus = FD) {
   settingsNow = { ...defaultSettings, fdPowerMult: 2, fdBonuses: [], fdBonusesPlanned: [], ...patch }
-  const r = render(<FieldDayView fieldDay={fd} onSetMode={() => {}} />)
+  const r = render(<ContestView fieldDay={fd} onSetMode={() => {}} />)
   await settle()
   return r
 }

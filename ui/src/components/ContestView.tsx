@@ -590,7 +590,7 @@ function MultiplierBoard({ board }: { board: ContestBoard }) {
 
 // ---------------------------------------------------------------------------
 // Shared scoreboard (spec: the score tiles + sections board + settable operator),
-// rendered by BOTH the docked FieldDayView and the torn-off scoreboard window.
+// rendered by BOTH the docked ContestView and the torn-off scoreboard window.
 // ---------------------------------------------------------------------------
 
 /** Worked-section set for the board — prefer the authoritative DTO field, fall back
@@ -1229,7 +1229,7 @@ export function FieldDayScoreboard({
   )
 }
 
-export function FieldDayView({ fieldDay, onSetMode, fdActive = false, fdRuleset = null, tier }: Props) {
+export function ContestView({ fieldDay, onSetMode, fdActive = false, fdRuleset = null, tier }: Props) {
   // Log tail: bottom-pinned via the shared discipline. The old unconditional
   // snap on every logged QSO undid a mid-run scroll-back (checking a call two
   // contacts up) the moment the next contact landed. Pinned follows the run;

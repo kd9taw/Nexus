@@ -8553,7 +8553,7 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   min-width: 0;
   /* THE COLUMN'S DEFICIT VALVE. This column is banner + header + operator row + score tiles
      + sections board + the Bonuses disclosure + the log, and every one of them is
-     `flex: 0 0 auto` except the board. Once the board is at its floor (FieldDayView.tsx
+     `flex: 0 0 auto` except the board. Once the board is at its floor (ContestView.tsx
      SECTIONS_BOARD_WRAP) the residual has nowhere left to go, and `.panel { overflow: hidden }`
      would CLIP it — the log off the bottom with no scrollbar in the chain, which is what
      opening Bonuses at 1200×750 did.
@@ -9067,7 +9067,7 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
      The Sections board went on being crushed to a blank strip underneath the claim.
      WHAT ACTUALLY PROTECTS THE SIBLINGS is two rules elsewhere, and the pair is the
      mechanism — either alone is worse than neither: `SECTIONS_BOARD_WRAP { min-height }`
-     (FieldDayView.tsx) is where the column stops shrinking the board, and
+     (ContestView.tsx) is where the column stops shrinking the board, and
      `.fieldday { overflow-y: auto }` (~7960) is where the residual past that floor goes.
      Keep the cap against --vh-eff, not raw vh — raw vh is blind to `.app { zoom }`.
      Computed in layout-single-deficit.test.tsx; the cap itself in panel-overflow.test.ts. */

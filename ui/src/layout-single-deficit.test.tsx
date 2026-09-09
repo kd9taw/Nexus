@@ -48,7 +48,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { Logbook } from './components/Logbook'
 import { RadioProgView } from './components/RadioProgView'
-import { FieldDayView } from './components/FieldDayView'
+import { ContestView } from './components/ContestView'
 import type { FieldDayStatus } from './types'
 import { classifyViewport } from './useViewport'
 
@@ -286,7 +286,7 @@ describe('the .panel-rooted views of .layout.single, as a class', () => {
     { file: 'components/RadioProgView.tsx', classes: 'radioprog panel', what: 'Program' },
     { file: 'components/SettingsPanel.tsx', classes: 'panel settings-panel', what: 'Settings' },
     { file: 'components/PotaSotaView.tsx', classes: 'panel pota-view pota-hunter', what: 'POTA/SOTA' },
-    { file: 'components/FieldDayView.tsx', classes: 'conversation panel fieldday', what: 'Field Day dashboard' },
+    { file: 'components/ContestView.tsx', classes: 'conversation panel fieldday', what: 'Field Day dashboard' },
   ]
 
   /** The panel as App.tsx mounts it, attached so ancestor selectors really match. */
@@ -398,7 +398,7 @@ describe('Field Day: opening Bonuses must not pay for itself out of the sections
   function mountFieldDay() {
     return render(
       <main className="layout single">
-        <FieldDayView fieldDay={FD} onSetMode={() => {}} />
+        <ContestView fieldDay={FD} onSetMode={() => {}} />
       </main>,
     )
   }

@@ -6,10 +6,10 @@
 // WFD's final six hours (it is a 30-hour event, 1600Z Sat → 21:59Z Sun) the banner claimed
 // the event was over and counted down ~a year to the next one — the last surface still
 // carrying the 24 h window bug class. Failing-first: this file was watched failing against
-// the fdNextEvent() path before FieldDayView consumed the DTO window.
+// the fdNextEvent() path before ContestView consumed the DTO window.
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, act, cleanup } from '@testing-library/react'
-import { FieldDayView } from './FieldDayView'
+import { ContestView } from './ContestView'
 import defaultSettings from './__fixtures__/defaultSettings.json'
 import type { FieldDayStatus } from '../types'
 
@@ -59,7 +59,7 @@ describe('Field Day banner window comes from the DTO, not TS date math', () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date(Date.UTC(2026, 0, 25, 20, 0, 0)))
 
-    render(<FieldDayView fieldDay={FD} onSetMode={() => {}} />)
+    render(<ContestView fieldDay={FD} onSetMode={() => {}} />)
     await settle()
 
     const subtitle = document.querySelector('.fd-event-subtitle')
@@ -74,7 +74,7 @@ describe('Field Day banner window comes from the DTO, not TS date math', () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date(Date.UTC(2026, 0, 10, 12, 0, 0)))
 
-    render(<FieldDayView fieldDay={FD} onSetMode={() => {}} />)
+    render(<ContestView fieldDay={FD} onSetMode={() => {}} />)
     await settle()
 
     const subtitle = document.querySelector('.fd-event-subtitle')
@@ -82,7 +82,7 @@ describe('Field Day banner window comes from the DTO, not TS date math', () => {
   })
 
   it('shows the rules-data identity line (rules year + generated date)', async () => {
-    render(<FieldDayView fieldDay={FD} onSetMode={() => {}} />)
+    render(<ContestView fieldDay={FD} onSetMode={() => {}} />)
     await settle()
 
     const rules = document.querySelector('.fd-event-rules')
@@ -97,7 +97,7 @@ describe('Field Day banner window comes from the DTO, not TS date math', () => {
     delete bare.eventEndUnix
     delete bare.rulesYear
     delete bare.rulesGenerated
-    render(<FieldDayView fieldDay={bare} onSetMode={() => {}} />)
+    render(<ContestView fieldDay={bare} onSetMode={() => {}} />)
     await settle()
 
     // The event name still shows; the subtitle and rules line simply stay out.

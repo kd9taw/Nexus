@@ -7,7 +7,7 @@
 //
 //   BANNED MODE — the active on-air tier is in the event's `bannedModes` (WFD
 //   bans the WSJT suite; this is the first consumer the data has ever had).
-//   Renders in the FieldDayView event banner AND the Operate cockpit header.
+//   Renders in the ContestView event banner AND the Operate cockpit header.
 //
 //   ASSISTANCE — the ruleset restricts spotting or cluster use AND the
 //   corresponding assistance source is effectively ON. Banner only
@@ -52,7 +52,7 @@ export function FdAdvisories({
   activeMode?: string
   /** `FieldDayStatus.assistanceOn` — the live assistance sources. */
   assistanceOn?: string[]
-  /** The FieldDayView banner shows the assistance advisory; the cockpit header
+  /** The ContestView banner shows the assistance advisory; the cockpit header
    *  hosts only the banned-mode chip. */
   showAssistance?: boolean
 }) {

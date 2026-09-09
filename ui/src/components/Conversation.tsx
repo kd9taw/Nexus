@@ -2,7 +2,7 @@
 // from the catalog: the CQ line itself (`CQ <MYCALL> <MYGRID>` is what goes on the air, and
 // the two stand-ins below are what fills it before a callsign or grid is set), the band
 // macros the operator typed, the peer's callsign, and the Winter Field Day chip — an event
-// name, invariant exactly as it is in `FieldDayView.tsx`. The ⇄/⚙/💓/🤍 marks are glyphs.
+// name, invariant exactly as it is in `ContestView.tsx`. The ⇄/⚙/💓/🤍 marks are glyphs.
 //
 // The Call CQ button and the heartbeat toggle put a signal on the air, but neither is a
 // TX-enable latch and this cockpit renders no stop control (it has none — Tempo's stop line

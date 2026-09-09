@@ -18,7 +18,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, act, cleanup, fireEvent } from '@testing-library/react'
-import { FieldDayView } from './FieldDayView'
+import { ContestView } from './ContestView'
 import { fdSetUpload } from '../api'
 import defaultSettings from './__fixtures__/defaultSettings.json'
 import type { FieldDayStatus } from '../types'
@@ -101,7 +101,7 @@ afterEach(() => {
 
 describe('the multiplier display is the session’s boards', () => {
   it('renders one block per board, and Field Day’s is its sections board', async () => {
-    render(<FieldDayView fieldDay={FD()} onSetMode={() => {}} />)
+    render(<ContestView fieldDay={FD()} onSetMode={() => {}} />)
     await settle()
     const boards = screen.getAllByLabelText('Worked sections board')
     expect(boards).toHaveLength(1)
@@ -114,7 +114,7 @@ describe('the multiplier display is the session’s boards', () => {
 
   it('renders a second block when the session declares a second board', async () => {
     render(
-      <FieldDayView
+      <ContestView
         fieldDay={FD({
           boards: [
             {
@@ -142,7 +142,7 @@ describe('the multiplier display is the session’s boards', () => {
 
 describe('⭐ the ClubLog sweep limitation renders beside the control', () => {
   it('is on screen with the switch OFF — the state that would otherwise mislead', async () => {
-    render(<FieldDayView fieldDay={FD()} onSetMode={() => {}} />)
+    render(<ContestView fieldDay={FD()} onSetMode={() => {}} />)
     await settle()
     const sw = screen.getByRole('switch', { name: "Upload this session's merged contacts" })
     expect(sw.getAttribute('aria-checked')).toBe('false')
@@ -155,7 +155,7 @@ describe('⭐ the ClubLog sweep limitation renders beside the control', () => {
 
   it('is still on screen with the switch ON', async () => {
     render(
-      <FieldDayView
+      <ContestView
         fieldDay={FD({
           upload: { enabled: true, destinations: ['wrl'], available: ['qrz', 'wrl'], hint: HINT },
         })}
@@ -169,7 +169,7 @@ describe('⭐ the ClubLog sweep limitation renders beside the control', () => {
   })
 
   it('writes the switch and the destination through the per-session command', async () => {
-    render(<FieldDayView fieldDay={FD()} onSetMode={() => {}} />)
+    render(<ContestView fieldDay={FD()} onSetMode={() => {}} />)
     await settle()
     fireEvent.click(screen.getByRole('switch', { name: "Upload this session's merged contacts" }))
     await settle()
