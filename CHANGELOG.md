@@ -26,6 +26,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A station heard both ways draws once, in green. The 3-D globe's existing heard-me arcs are now
   capped the same way; they never were.
 
+### Fixed
+
+- **Correcting a busted callsign now re-sends the QSO to the logging services.** Fixing a call
+  in the Logbook's edit form has always cleared that contact's upload stamps — the point being
+  that QRZ, ClubLog, eQSL and the rest hold the *old* call and need to hear the correction. But
+  nothing ever put the corrected contact back on the upload queue, so they never did: your log
+  showed the right call and every service kept the wrong one, permanently, with the stamps that
+  were the only sign anything was owed now erased. A callsign correction goes back out to every
+  connector you have switched on. Other edits (name, grid, RST, a park reference) still don't
+  re-upload — the services already have that contact under that call.
+- **The Logbook edit form's CALL box shows the whole callsign.** It shares its row with the QRZ
+  lookup button, and in a normal-width window that left it about five characters wide, so a
+  six-character call read back as if its last letter had been dropped. The value was never
+  short — what you saved was always what you typed — but you could not see it. The button now
+  steps down to its own line when the field gets tight.
+
 ## [1.11.1] — 2026-09-08
 
 > **There is no 1.11.0 release.** The first beta of this work shipped as `v1.11.0-beta.2`

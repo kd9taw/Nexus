@@ -12158,6 +12158,22 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 .logbook-field .logbook-when {
   min-width: 190px;
 }
+/* CALL is the only field that shares its grid track with a button (the QRZ lookup), and this
+   grid really does sit at its 140px floor: auto-fit packs 140px columns, so a ~900px form gives
+   tracks of exactly 140px. The button takes ~56px and the gap 8px, leaving the input a ~50px
+   text box — five characters at 14px. That is how a logged WW9WTF reads back as "WW9WT" in the
+   edit form (operator report, 2026-09-08). The VALUE was never short: the form loads and saves
+   the whole call (Logbook.test.tsx), so this is the view, not the data.
+   Fixed by letting the row WRAP rather than by squeezing the input — a min-width floor here
+   (the .logbook-when idiom above) would overflow the track at the width this grid most often
+   produces. At a comfortable track nothing moves; at a tight one the button drops to its own
+   line and the input gets the full track. */
+.logbook-field-call .settings-input-row {
+  flex-wrap: wrap;
+}
+.logbook-field-call .settings-input {
+  flex: 1 1 120px;
+}
 .logbook-notes {
   resize: vertical;
   min-height: 58px;

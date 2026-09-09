@@ -1075,7 +1075,7 @@ export function Logbook({
       {showForm && (
         <form className="logbook-form" onSubmit={submit}>
           <div className="logbook-form-grid">
-            <label className="logbook-field">
+            <label className="logbook-field logbook-field-call">
               <span>{t('logbook.field.call.label')}</span>
               <div className="settings-input-row">
                 <input
