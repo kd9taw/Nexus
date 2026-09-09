@@ -1,12 +1,13 @@
 import { APPLICATION_TIMEOUT_MS, applyApplicationReply } from './application-protocol'
 import type { ApplicationValue } from './application-protocol'
 import { STREAM_INTEREST_MS, STREAM_INTERVAL, streamExact, streamUpdates } from './application-stream-protocol'
-import type { StreamTopic } from './application-stream-protocol'
+import type { StreamTopic, StreamVersion } from './application-stream-protocol'
 
 type Waiting = { promise: Promise<unknown>; resolve: (value: unknown) => void; reject: (error: Error) => void }
 // api.ts polling expresses local interest only. One socket subscription serves
 // every mounted consumer; expired interest removes work from the station union.
 export class ApplicationStreamClient {
+  private version: StreamVersion = 2
   private values = new Map<StreamTopic, ApplicationValue & { at: number }>()
   private interests = new Map<StreamTopic, number>()
   private waiting = new Map<StreamTopic, Waiting>()
@@ -17,6 +18,7 @@ export class ApplicationStreamClient {
   private flushTimer: ReturnType<typeof setTimeout> | undefined
   private deadline: ReturnType<typeof setTimeout> | undefined
   constructor(private readonly send: (message: string) => void, private readonly fail: () => void) {}
+  negotiate(version: StreamVersion): void { this.version = version }
   age(command: StreamTopic): number { const value = this.values.get(command); return value ? performance.now() - value.at : Infinity }
   invoke<T>(command: StreamTopic): Promise<T> {
     this.interests.set(command, performance.now())
@@ -38,7 +40,7 @@ export class ApplicationStreamClient {
     if (this.cancelled.includes(String(message.requestId))) return
     if (!this.credit || message.requestId !== this.credit.id) throw new Error('unexpectedApplicationFrame')
     const now = performance.now(), elapsed = now - this.credit.at
-    const updates = streamUpdates(message.updates, this.credit.id)
+    const updates = streamUpdates(message.updates, this.credit.id, this.version)
     // Validate the complete frame before any consumer can see a partial commit.
     const next = updates.map(update => {
       if (update.type === 'applicationError') return { update, value: null }

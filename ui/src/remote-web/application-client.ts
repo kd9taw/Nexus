@@ -2,11 +2,12 @@
 // in-flight request and a short local cache; exact-base deltas reduce wire bytes.
 // Traffic is demand-driven. Unmounting a pane stops its reads without another socket.
 import type { ApplicationTransport } from '../applicationTransport'
-import { APPLICATION_COMMANDS, APPLICATION_ERRORS, APPLICATION_TIMEOUT_MS, applicationCommand,
+import { APPLICATION_ERRORS, APPLICATION_TIMEOUT_MS, applicationCommand,
   applicationReply, applyApplicationReply } from './application-protocol'
 import type { ApplicationCommand, ApplicationValue } from './application-protocol'
 import { ApplicationStreamClient } from './application-stream-client'
-import { STREAM_TOPICS, streamTopic } from './application-stream-protocol'
+import { streamTopic } from './application-stream-protocol'
+import { APPLICATION_VERSIONS, applicationCommands } from './application-capabilities'
 import type { StreamTopic } from './application-stream-protocol'
 import { ApplicationQueryClient } from './application-query-client'
 import { QUERY_COMMAND, RECALL_COMMAND } from './application-query-protocol'
@@ -30,7 +31,7 @@ export class ApplicationClient implements ApplicationTransport {
     this.stream = new ApplicationStreamClient(send, () => { this.disconnected(); close() })
     this.query = new ApplicationQueryClient(send, () => { this.disconnected(); close() })
   }
-  supports(command: string): boolean { return this.phase === 'ready' && ((this.version >= 2 ? streamTopic(command) : applicationCommand(command)) || (this.version >= 3 && command === QUERY_COMMAND) || (this.version === 4 && command === RECALL_COMMAND)) }
+  supports(command: string): boolean { return this.phase === 'ready' && applicationCommands(this.version).includes(command) }
   getPhase = (): ApplicationPhase => this.phase
   age(command: StreamTopic): number {
     if (this.version >= 2) return this.stream.age(command)
@@ -56,12 +57,12 @@ export class ApplicationClient implements ApplicationTransport {
   }
   invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
     if (this.phase === 'ready' && this.version >= 3 && command === QUERY_COMMAND) return this.query.read(args ?? {}, 3) as Promise<T>
-    if (this.phase === 'ready' && this.version === 4 && command === RECALL_COMMAND) {
+    if (this.phase === 'ready' && this.version >= 4 && command === RECALL_COMMAND) {
       if (args?.collection !== 'recall') return Promise.reject(new Error('applicationUnsupported'))
       return this.query.read(args, 4) as Promise<T>
     }
     if (this.phase === 'ready' && this.version >= 2) {
-      if (!streamTopic(command) || (args && Object.keys(args).length)) return Promise.reject(new Error('applicationUnsupported'))
+      if (!streamTopic(command, this.version) || (args && Object.keys(args).length)) return Promise.reject(new Error('applicationUnsupported'))
       return this.stream.invoke<T>(command)
     }
     if (!applicationCommand(command) || (args && Object.keys(args).length)) return Promise.reject(new Error('applicationUnsupported'))
@@ -79,13 +80,14 @@ export class ApplicationClient implements ApplicationTransport {
   }
   receive(message: Record<string, unknown>): void {
     if (message.type === 'applicationCapabilities') {
-      const commands = message.version === 4 ? [...STREAM_TOPICS, QUERY_COMMAND, RECALL_COMMAND] : message.version === 3 ? [...STREAM_TOPICS, QUERY_COMMAND] : message.version === 2 ? STREAM_TOPICS : APPLICATION_COMMANDS
-      if (this.phase !== 'connecting' || Object.keys(message).length !== 3 || ![0, 1, ...(this.serviceVersion >= 2 ? [2] : []), ...(this.serviceVersion >= 3 ? [3] : []), ...(this.serviceVersion === 4 ? [4] : [])].includes(message.version as number) ||
+      const commands = applicationCommands(Number(message.version))
+      if (this.phase !== 'connecting' || Object.keys(message).length !== 3 || ![0, ...APPLICATION_VERSIONS.filter(v => v <= this.serviceVersion)].includes(message.version as number) ||
         !Array.isArray(message.commands) || (message.version === 0 ? message.commands.length !== 0 :
           message.commands.length !== commands.length || !commands.every(command => (message.commands as unknown[]).includes(command)))) {
         throw new Error('invalidApplicationCapabilities')
       }
       this.version = message.version as number
+      this.stream.negotiate(this.version === 5 ? 5 : 2)
       this.setPhase(this.version > 0 ? 'ready' : 'updateRequired')
       return
     }
