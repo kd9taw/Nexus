@@ -30328,6 +30328,136 @@ mod tests {
         );
     }
 
+    /// ⭐ **THE OPERATOR PATH, end to end, through the engine** — pick a QSO party in
+    /// Settings, enter the mode, work stations, read the screen.
+    ///
+    /// `tempo-core`'s `tests/qso_parties.rs` proves the four rulesets against their
+    /// sponsors' rules; this proves the wiring between the picker and them, which is the
+    /// half that was missing. Every assertion here is on the SNAPSHOT — what the
+    /// operator's screen actually says.
+    #[test]
+    fn picking_a_qso_party_runs_that_partys_exchange_dupe_rule_and_score() {
+        let mut e = Engine::new("W4ABC", "EM66", 0);
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            // The picker writes this, and Station data writes the two below it. Note
+            // there is no class and no section: a QSO party sends neither, and the mode
+            // must start without them.
+            s.fd_event = "tnqp".into();
+            s.contest_qth_state = "TN".into();
+            s.contest_qth_county = "WILL".into();
+            e.apply_settings(s);
+        }
+        e.set_mode("fieldday-run").unwrap();
+
+        let fd = e.snapshot().field_day.expect("the contest workspace is up");
+        assert_eq!(
+            fd.event, "tnqp",
+            "the snapshot names the party, not Field Day"
+        );
+        assert_eq!(fd.role, "in_state", "derived from TN, never typed");
+        // THE ENTRY STRIP renders one box per slot here — RST then QTH, not Class and
+        // Section.
+        assert_eq!(
+            fd.receives
+                .iter()
+                .map(|f| f.key.as_str())
+                .collect::<Vec<_>>(),
+            vec!["RST", "QTH"]
+        );
+        // THE SENT SIDE the strip shows read-only: the ruleset's RST and my county.
+        assert_eq!(
+            fd.composing
+                .iter()
+                .map(|v| v.raw.as_str())
+                .collect::<Vec<_>>(),
+            vec!["599", "WILL"]
+        );
+
+        // WORK SOME STATIONS through the field-vector command the strip calls.
+        let ex = |q: &str| {
+            vec![
+                ("RST".to_string(), "599".into()),
+                ("QTH".to_string(), q.into()),
+            ]
+        };
+        assert!(e
+            .contest_log_manual("K1ABC", &ex("CT"), "CW", None)
+            .unwrap());
+        assert!(e
+            .contest_log_manual("W4XYZ", &ex("DAVI"), "CW", None)
+            .unwrap());
+        // THE DUPE VERDICT is this ruleset's own key…
+        assert!(!e
+            .contest_log_manual("K1ABC", &ex("CT"), "CW", None)
+            .unwrap());
+        // …and the positive control: another mode class is a legal second contact.
+        assert!(e
+            .contest_log_manual("K1ABC", &ex("CT"), "PH", None)
+            .unwrap());
+
+        // THE SCORE on screen: 3 points per QSO regardless of mode, times the
+        // multipliers this role counts per band.
+        let fd = e.snapshot().field_day.expect("still in the contest");
+        assert_eq!(fd.qso_count, 3);
+        assert_eq!(fd.points, 9, "TNQP: 3 points per QSO, every mode");
+        assert_eq!(fd.mult_count, 2, "CT and DAVI, per band");
+        assert_eq!(fd.total_score, 18);
+        // ⭐ …and the note saying what that number LEAVES OUT. TNQP's bonuses are
+        // computed from the log and are deliberately not modelled.
+        assert_eq!(fd.score_note_key, "settings.contestScore.incomplete");
+
+        // THE CABRILLO the operator submits is this sponsor's.
+        // Through the export the dialog itself calls, so what is asserted is what an
+        // operator would submit.
+        let cab = e.export_log("cabrillo").expect("one entry");
+        assert!(cab.contains("CONTEST: TN-QSO-PARTY\n"), "{cab}");
+        assert!(cab.contains(" W4ABC 599 WILL K1ABC 599 CT\n"), "{cab}");
+    }
+
+    /// ⭐ **Field Day's screen is not moved by any of it.** The same engine, the same
+    /// snapshot fields, with the picker left on ARRL Field Day: the multiplier count is
+    /// zero (the event has no such concept), the score note is empty, and the strip is
+    /// the Class/Section pair it has always been.
+    #[test]
+    fn field_days_screen_is_unchanged_by_the_qso_parties() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_event = "arrlfd".into();
+            s.fd_class = "3A".into();
+            s.fd_section = "WI".into();
+            s.fd_power_mult = 5;
+            e.apply_settings(s);
+        }
+        e.set_mode("fieldday-run").unwrap();
+        let fd = e.snapshot().field_day.expect("FD chrome");
+        assert_eq!(fd.event, "arrlfd");
+        assert_eq!(
+            fd.role, "",
+            "Field Day is symmetric — one unconditional role"
+        );
+        assert_eq!(
+            fd.receives
+                .iter()
+                .map(|f| f.key.as_str())
+                .collect::<Vec<_>>(),
+            vec!["CLASS", "SECTION"]
+        );
+        assert_eq!(fd.my_class, "3A");
+        assert_eq!(fd.my_section, "WI");
+        assert!(e.fd_log_manual("K1ABC", "2A", "EMA", "CW").unwrap());
+        let fd = e.snapshot().field_day.expect("FD chrome");
+        // ⚠️ ZERO multipliers is NOT a zero multiplier: `Scoring::score` applies the
+        // count only when the ruleset declares a rule, so the powered total is the
+        // power-tier total it has always been (2 CW points × tier 5).
+        assert_eq!(fd.mult_count, 0);
+        assert_eq!((fd.points, fd.powered_points, fd.total_score), (2, 10, 10));
+        assert_eq!(fd.score_note_key, "");
+    }
+
     /// PARITY GUARD for the `fd_rules` refactor: `fd_score` + the snapshot
     /// scoring block now compute via `fd_rules::ruleset(..).scoring`/bonuses
     /// instead of the old inline `legal_fd_power` + `fd_bonus_points`. The
