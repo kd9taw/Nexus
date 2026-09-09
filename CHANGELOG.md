@@ -5,6 +5,27 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **The map draws your transmit and receive paths.** A dashed green great circle runs from your
+  QTH out to every station that reported hearing you, and a dotted blue one out to every station
+  you decoded — the picture GridTracker operators know, on both the 2-D map and the 3-D globe, and
+  correct in all three projections (it bends round the globe, stays a true beam radial on the beam
+  map, and cuts cleanly at the antimeridian on the world map).
+
+  Two things keep it a map rather than a spider's web. Each direction is its own layer with its own
+  checkbox and opacity slider, and each is capped at 30 paths, freshest first — a contest pileup
+  cannot bury the coastline. Paths also expire rather than piling up: a reception report older than
+  30 minutes and a station that has gone stale in the roster stop drawing at all. **Heard-you (TX)
+  paths are on by default; heard-by-you (RX) paths are off** — the first set is a handful of paths
+  worth seeing unasked, the second is your whole decode roster, which on a busy FT8 band is a
+  hundred stations. One checkbox in Layers turns it on.
+
+  A station heard both ways draws once, in green. The 3-D globe's existing heard-me arcs are now
+  capped the same way; they never were.
+
 ## [1.11.1] — 2026-09-08
 
 > **There is no 1.11.0 release.** The first beta of this work shipped as `v1.11.0-beta.2`

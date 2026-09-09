@@ -28,6 +28,14 @@ export function MapLegend() {
       <span className="map-legend-dot worked" />
       <span>{t('map.legend.worked')}</span>
       <span className="map-legend-sep" />
+      {/* TX/RX path lines. A new visual encoding with no key is the exact complaint that
+          created this legend, and the dash pattern is half the encoding (CVD-safe), so the
+          swatches carry it rather than being two coloured bars. */}
+      <span className="map-legend-line tx" />
+      <span>{t('map.legend.txPath')}</span>
+      <span className="map-legend-line rx" />
+      <span>{t('map.legend.rxPath')}</span>
+      <span className="map-legend-sep" />
       <span>{t('map.legend.opening')}</span>
       <span className="map-legend-bar" style={{ background: `linear-gradient(90deg, ${stops})` }} />
       <span className="map-legend-sep" />

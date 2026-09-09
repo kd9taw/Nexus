@@ -46,6 +46,7 @@ import {
 import { getAurora, getPca, getSatellites, getSatTrackStatus, getLog } from '../api'
 import cqzonesUrl from '../data/cqzones.geojson?url'
 import { spotTooltip } from '../propViz'
+import { txPaths, rxPaths } from '../features/mapPaths'
 import { t, type MessageKey } from '../i18n'
 import { MapInsightRail } from './prop/MapInsightRail'
 import { MapLegend, MufLegend } from './MapLegend'
@@ -279,6 +280,7 @@ interface Props {
 }
 
 const GETTING_OUT = '#3ddc6a' // a station that heard ME (matches the 2-D map)
+const PATH_RX = '#8fb8d8' // a station I decoded — the RX arc (matches MapView's PATH_RX)
 
 let glowTex: THREE.CanvasTexture | null = null
 /** Soft radial sprite for the heat layer — one blob per spot, additive, so overlapping
@@ -334,6 +336,7 @@ type GlobeLayerKey =
   | 'spots'
   | 'decodes'
   | 'arcs'
+  | 'rxarcs'
   | 'dxped'
   | 'heat'
   | 'openings'
@@ -358,6 +361,7 @@ const LAYER_ROWS: readonly GlobeLayerRow[] = [
   { k: 'spots', labelKey: 'globe.layer.spots' },
   { k: 'decodes', labelKey: 'globe.layer.decodes' },
   { k: 'arcs', labelKey: 'globe.layer.arcs' },
+  { k: 'rxarcs', labelKey: 'globe.layer.rxarcs' },
   { k: 'dxped', labelKey: 'globe.layer.dxped' },
   { k: 'heat', labelKey: 'globe.layer.heat' },
   { k: 'openings', labelKey: 'globe.layer.openings' },
@@ -393,6 +397,7 @@ function webglOk(): boolean {
 type GlobeLayers = {
   spots: boolean
   arcs: boolean
+  rxarcs: boolean
   states: boolean
   lights: boolean
   flare: boolean
@@ -417,6 +422,9 @@ const GLOBE_LAYERS_KEY = 'nexus.connect.globe3d.layers'
 const defaultGlobeLayers = (showStates: boolean): GlobeLayers => ({
   spots: true,
   arcs: true,
+  // OFF by default, like the 2-D map's `rxPaths`: the decode roster on a busy band is 100+
+  // stations, and default-on would web the globe for everyone on upgrade.
+  rxarcs: false,
   states: showStates,
   lights: true,
   flare: true,
@@ -603,19 +611,37 @@ export default function Globe3D({
     [spots],
   )
 
-  // Great-circle arcs from the QTH to the SELECTED station + every heard-me station.
+  // Great-circle arcs from the QTH: the SELECTED station, everyone who reported hearing ME
+  // (TX), and — under its own toggle — everyone I decoded (RX).
+  //
+  // WHICH stations earn an arc, the recency gate, the fade and the cap all come from
+  // `features/mapPaths`, the same module the 2-D map draws its TX/RX lines from, so the two
+  // surfaces cannot drift. That also fixes an uncapped set here: this drew one arc per
+  // heard-me spot with no ceiling, which on a good run is the spider's web the cap exists
+  // to prevent.
   const arcs = useMemo(() => {
     if (!qth) return []
-    return spots
-      .filter((s) => s.heardMe || s.call === selectedCall)
-      .map((s) => ({
-        startLat: qth.lat,
-        startLng: qth.lon,
-        endLat: s.lat,
-        endLng: s.lon,
-        color: s.call === selectedCall ? '#a9d4ff' : s.heardMe ? GETTING_OUT : bandColor(s.band),
-      }))
-  }, [spots, selectedCall, qth])
+    const leg = (endLat: number, endLng: number, color: string) => ({
+      startLat: qth.lat,
+      startLng: qth.lon,
+      endLat,
+      endLng,
+      color,
+    })
+    const out: Array<ReturnType<typeof leg>> = []
+    // Kept out of the TX fan and drawn in the selection colour, exactly as before — one arc
+    // per station, never a blue and a green stroke over the same geometry.
+    const sel = spots.find((s) => s.call === selectedCall)
+    const tx = show.arcs ? txPaths(spots).filter((p) => p.call !== sel?.call) : []
+    if (show.arcs) {
+      for (const p of tx) out.push(leg(p.ll.lat, p.ll.lon, GETTING_OUT))
+      if (sel) out.push(leg(sel.lat, sel.lon, '#a9d4ff'))
+    }
+    if (show.rxarcs) {
+      for (const p of rxPaths(stations ?? [], tx)) out.push(leg(p.ll.lat, p.ll.lon, PATH_RX))
+    }
+    return out
+  }, [spots, stations, selectedCall, qth, show.arcs, show.rxarcs])
 
   // US state borders as globe paths (one path per border line-string).
   const statePaths = useMemo(() => {
@@ -1605,7 +1631,7 @@ export default function Globe3D({
             el.onmouseleave = () => setHover(null)
             return el
           }}
-          arcsData={show.arcs ? arcs : []}
+          arcsData={arcs}
           arcColor="color"
           arcStroke={0.5}
           arcDashLength={0.5}

@@ -67,6 +67,7 @@ import {
   type LatLon,
 } from '../grid'
 import { heatBoost, sectorPulse } from '../features/pulse'
+import { txPaths, rxPaths, type MapPath } from '../features/mapPaths'
 import { openingModeColor } from '../bandColors'
 import {
   APRS_HOME_ZOOM,
@@ -352,6 +353,8 @@ type LayerKey =
   | 'liveSpots'
   | 'stations'
   | 'paths'
+  | 'txPaths'
+  | 'rxPaths'
   | 'dxped'
   | 'ota'
 interface Layer {
@@ -382,6 +385,8 @@ const LAYER_LABEL: Record<LayerKey, { labelKey: MessageKey }> = {
   liveSpots: { labelKey: 'map.layer.liveSpots.label' },
   stations: { labelKey: 'map.layer.stations.label' },
   paths: { labelKey: 'map.layer.paths.label' },
+  txPaths: { labelKey: 'map.layer.txPaths.label' },
+  rxPaths: { labelKey: 'map.layer.rxPaths.label' },
   dxped: { labelKey: 'map.layer.dxped.label' },
   ota: { labelKey: 'map.layer.ota.label' },
 }
@@ -416,6 +421,13 @@ export const DEFAULT_LAYERS: Record<LayerKey, Layer> = {
   liveSpots: { visible: true, opacity: 0.9 },
   stations: { visible: true, opacity: 1 },
   paths: { visible: true, opacity: 1 },
+  // "Am I getting out" — the scarce, high-value half of the picture (5–40 paths on a
+  // busy band), and the 3-D globe has drawn these arcs by default since it shipped.
+  txPaths: { visible: true, opacity: 0.9 },
+  // OFF by default, deliberately. The roster on a busy FT8 band is 100+ stations, and a
+  // line is far more ink than a dot — default-on would web the map for every operator on
+  // upgrade. One checkbox turns it on, and `mapPaths` caps it either way.
+  rxPaths: { visible: false, opacity: 0.75 },
   // Off by default: Connect is the PROPAGATION view (DXpeditions have their own area).
   // The layer toggle stays for anyone who wants DX-target markers on the map.
   dxped: { visible: false, opacity: 1 },
@@ -564,6 +576,15 @@ const BAND_COLOR: Record<string, string> = {
 }
 const bandColor = (b: string): string => BAND_COLOR[b] ?? '#8aa0b0'
 const GETTING_OUT = '#3ddc6a' // a station that heard ME
+
+// TX/RX path lines (`features/mapPaths.ts` decides WHICH stations earn one). TX reuses
+// GETTING_OUT so "green = they heard me" means one thing on dots and lines alike; RX is a
+// quiet cool grey-blue because it is the bigger, less newsworthy set and must recede under
+// the spots it connects. The two DASH patterns are a redundant, CVD-safe channel — the same
+// habit as the station dots encoding SNR as size on top of color.
+const PATH_RX = '#8fb8d8'
+const PATH_TX_DASH = [5, 4] // dashes — "getting out"
+const PATH_RX_DASH = [1, 3] // dots — "hearing"
 
 /** #rrggbb → rgba(r,g,b,0) — a zero-alpha gradient end stop of the SAME hue.
  * 'transparent' is rgba(0,0,0,0): fine under 'lighter' compositing but it dirties
@@ -1074,6 +1095,22 @@ export function MapView({
     // space-weather numbers must not reproject hundreds of points.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [me, kind, size, prop?.spots, view])
+
+  // TX/RX path lines. WHICH stations earn one — and the recency gate, cap and fade that
+  // keep a fan from becoming a spider's web — live in `features/mapPaths`, shared with the
+  // 3-D globe so the two surfaces cannot drift. Nothing is projected here: the draw pass
+  // hands each pair to `geoPath`, which resamples the geodesic for whichever projection is
+  // live, so one call covers globe, AEQD and world alike.
+  const txLines = useMemo(
+    () => (layers.txPaths.visible ? txPaths(prop?.spots ?? []) : []),
+    [layers.txPaths.visible, prop?.spots],
+  )
+  // A call heard BOTH ways keeps only its green TX line (`exclude`) — two dotted strokes
+  // over identical geometry read as a rendering artifact.
+  const rxLines = useMemo(
+    () => (layers.rxPaths.visible ? rxPaths(stations, txLines) : []),
+    [layers.rxPaths.visible, stations, txLines],
+  )
 
   // Project the DXpedition markers (bearing+distance placement) the same way —
   // retained for hover/click/work; previously glyphs with no hit-target.
@@ -2057,6 +2094,35 @@ export function MapView({
       }
     }
 
+    // TX/RX path lines — the GridTracker picture: a dashed great circle out to everyone who
+    // reported hearing ME, a dotted one out to everyone I decoded. Drawn UNDER the spot and
+    // station dots on purpose: the dots are what the operator clicks, so the fan must never
+    // sit on top of them.
+    //
+    // `greatCircle()` + `path()` is the whole geometry, exactly as the selected path below
+    // does it: d3-geo reads a two-point LineString as a geodesic and adaptively resamples
+    // it, so the same call bends correctly on the globe (clipped at the horizon), stays a
+    // true radial on the AEQD beam map, and gets cut at the antimeridian in world view.
+    // Nothing here is per-projection.
+    if (me && (txLines.length > 0 || rxLines.length > 0)) {
+      const drawPaths = (lines: MapPath[], color: string, dash: number[], layerAlpha: number) => {
+        if (lines.length === 0) return
+        ctx.strokeStyle = color
+        ctx.lineWidth = 1.1
+        ctx.setLineDash(dash)
+        for (const ln of lines) {
+          ctx.globalAlpha = layerAlpha * 0.75 * ln.fade
+          ctx.beginPath()
+          path(greatCircle(me, ln.ll))
+          ctx.stroke()
+        }
+        ctx.setLineDash([])
+        ctx.globalAlpha = 1
+      }
+      drawPaths(rxLines, PATH_RX, PATH_RX_DASH, layers.rxPaths.opacity)
+      drawPaths(txLines, GETTING_OUT, PATH_TX_DASH, layers.txPaths.opacity)
+    }
+
     // Live spots — the cluster/RBN/PSKR firehose + own decodes, placed by grid or
     // DXCC centroid. Colored by band; green = a station that heard ME ("getting
     // out"); faded by age; centroid-placed (approx) spots dimmer. This is what
@@ -2345,7 +2411,7 @@ export function MapView({
     // theme is a draw dependency so colors refresh on theme switch (the cssVar
     // memo is emptied at the top of this effect).
     void theme
-  }, [me, myQth, showQth, kind, devScale, markerScale, colorBy, pathMode, view, size, layers, placed, placedSpots, placedDxped, mufStations, auroraPts, pca, cqzones, sats, reliefReady, prop, selStation, selectedCall, needByCall, theme, nowMs, focusBand, pulseTick, xrayEff, flareActive, flareHafNow, hoverKey, focusSat, coverageDim, coverageGridGeo, workedZones, aprs, selectedAprs, aprsFadeAfterMin, aprsTtlMin, aprsTick, satFav, satChaseRev])
+  }, [me, myQth, showQth, kind, devScale, markerScale, colorBy, pathMode, view, size, layers, placed, placedSpots, placedDxped, txLines, rxLines, mufStations, auroraPts, pca, cqzones, sats, reliefReady, prop, selStation, selectedCall, needByCall, theme, nowMs, focusBand, pulseTick, xrayEff, flareActive, flareHafNow, hoverKey, focusSat, coverageDim, coverageGridGeo, workedZones, aprs, selectedAprs, aprsFadeAfterMin, aprsTtlMin, aprsTick, satFav, satChaseRev])
 
   // THE SUN + RADIATING ENERGY — the flare layer's animated half, on its own
   // transparent canvas at ~20 fps, mounted ONLY while a flare is active and the
