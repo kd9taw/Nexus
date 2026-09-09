@@ -3240,8 +3240,17 @@ struct RadioLoop {
     silent_capture_since: Option<f64>,
     /// Latest measured PC-clock-vs-UTC offset (ms, `local − UTC`), read from the
     /// engine each loop and SUBTRACTED from the system clock so TX/RX slots land
-    /// on the true UTC grid even when the OS clock is skewed. 0 until measured.
+    /// on the true UTC grid even when the OS clock is skewed. 0 until measured,
+    /// and 0 again once the last measurement ages out of its hold window
+    /// (`tempo_app::clocksync`) — an expiry the operator can see coming on the
+    /// clock chip, rather than the silent un-steering that shipped before.
     clock_offset_ms: i64,
+    /// Watches the system clock against a monotonic one so an OS clock STEP —
+    /// Windows restoring the system clock from the RTC on resume from sleep,
+    /// observed stepping by over three hours — is noticed on the tick it
+    /// happens. See [`Self::step`]'s handling: the held offset describes a clock
+    /// that no longer exists, so it is dropped and re-measured immediately.
+    clock_jump: tempo_app::clocksync::ClockJumpDetector,
     /// The persistent decode worker (heavy decode off this thread + the engine mutex).
     decode: DecodeWorker,
     /// A decode job (early OR boundary) is out on the worker. Guards against a second
@@ -3407,6 +3416,7 @@ impl RadioLoop {
             level_misses: [0; N_LEVELS],
 
             clock_offset_ms: 0,
+            clock_jump: tempo_app::clocksync::ClockJumpDetector::new(),
             decode: DecodeWorker::spawn(),
             decode_in_flight: false,
             dropped_decodes: 0,
@@ -4770,6 +4780,51 @@ impl RadioLoop {
         // radio chain, so they live outside this per-radio loop state.
         station: &mut StationSinks,
     ) -> Result<(), String> {
+        // ── DID THE OS STEP THE CLOCK UNDER US? ──────────────────────────────
+        //
+        // Windows restores the system clock from the RTC on resume from sleep or
+        // hibernate — observed on a real machine stepping 3 h 06 m in one go, and
+        // W32Time then took over six hours of uptime to re-synchronise. Linux and
+        // macOS do the same on resume, and any time service that steps rather
+        // than slews does it too.
+        //
+        // A held `clock_offset_ms` measured before such a step describes a clock
+        // that no longer exists. Applying it does not merely fail to help — it
+        // makes the station wrong the OTHER way for as long as it is held. So the
+        // measurement is dropped here and the probe thread is woken to take a
+        // fresh one immediately (`clear_clock_offset(true)`); until it lands,
+        // steering by zero is right, because the OS clock is the best information
+        // there is. This detection MUST run before the steering line below, or
+        // this tick would still be positioned by the offset it has just decided
+        // is meaningless.
+        //
+        // ⚠️ IT READS THE SYSTEM CLOCK ITSELF RATHER THAN THE `now` ARGUMENT,
+        // and that is not a shortcut. The two are the same value in the shipped
+        // loop (`run_radio` passes `now_unix_ms()`), but `now` is an argument any
+        // caller may synthesise: the loop's own tests advance it 400 ms per step
+        // while real time barely moves, which reads as a 400 ms clock step on
+        // every single tick. A detector fed a synthetic clock reports on the
+        // synthetic clock. What this guard exists to watch is the REAL system
+        // clock against the REAL monotonic one, so it reads both, together,
+        // here. `ClockJumpDetector::seeded` is how the tests place a baseline.
+        if self.clock_jump.observe(now_unix_ms(), Instant::now()) {
+            self.clock_offset_ms = 0;
+            // ⚠️ TX INTERLOCK. `tx_until_ms` is a PTT-hold deadline built on the
+            // timebase that just ceased to exist, and nothing else will notice:
+            // the wall-clock TX watchdog measures with `saturating_sub`, so a
+            // clock that jumped BACKWARDS reads as zero elapsed and never trips.
+            // An over whose deadline is now hours in the future would hold the
+            // transmitter up for those hours. Expiring it to this instant hands
+            // the unkey to the ordinary deadline path below (flush, then drop
+            // PTT) rather than introducing a second way to unkey a rig; the cost
+            // of a false positive is one truncated over, and the cost of missing
+            // a true one is a stuck transmitter.
+            if self.tx_until_ms.is_some() {
+                self.tx_until_ms = Some(now);
+            }
+            engine_lock(engine).clear_clock_offset(true);
+        }
+
         // Steer the slot clock to TRUE UTC: subtract the measured PC-clock-vs-UTC
         // offset (local − UTC) from the system clock, so TX keys and RX decode
         // windows land on the real UTC grid (:00/:15/:30/:45 for FT8) even when the
@@ -10526,30 +10581,182 @@ fn tune_carrier(freq: f32, n: usize, sample_rate: f32, phase: &mut f32) -> Vec<f
     out
 }
 
-/// Periodically probe an NTP server to estimate the PC-clock-vs-UTC offset and
-/// publish it to the engine (for the UI clock chip). Runs on its own thread so a
-/// slow or failed query never stalls the audio loop; honors the `clock_check`
-/// setting and fails silently when off-grid (publishes `None`, so the UI falls
-/// back to the DT-derived sync health).
+/// The NTP servers Nexus's own probe asks.
+///
+/// Three, because guard 1 needs a quorum and two servers leave no way to break a
+/// tie. Three *different operators*, because two hosts of one operator
+/// corroborate a path, not a clock.
+///
+/// ⛔ **`pool.ntp.org` is not on this list and must never be put back.** It was
+/// until 2026-09. The pool is volunteer-run infrastructure whose vendor policy
+/// says plainly: *"You must absolutely not use the default pool.ntp.org zone
+/// names as the default configuration in your application or appliance."* The
+/// correct way to use the pool from a shipped application is a registered vendor
+/// zone (`0.`–`3.<vendor>.pool.ntp.org`), which is an account the project does
+/// not have; an *unregistered* vendor zone resolves but violates the same
+/// policy, so it is not a shortcut. All three servers below are operator-run
+/// public services that exist to answer general clients — Microsoft's is already
+/// what every Windows machine polls by default.
+///
+/// ⚠️ **Leap smearing, and why one smearing server is safe here.** Google says
+/// *"don't configure Google Public NTP together with non-leap-smearing NTP
+/// servers"*, and the concern is real: during a smear the two kinds disagree by
+/// up to half a second, which is TempoFast's whole fast-side budget. Cloudflare
+/// smears too. It stays on the list as a deliberate **minority of one**: guard 1
+/// publishes the median of the largest *agreeing* cluster, so on a smear day the
+/// two non-smearing servers form the cluster and the smeared sample is outvoted
+/// — proved in `tempo_net::sntp`'s `a_leap_smearing_server_in_the_minority_is_outvoted`.
+/// Dropping it instead would leave two servers and no tie-breaker, which is
+/// worse every other day of the decade. **The invariant is that smearing servers
+/// are never half or more of this list** (`clock_servers_keep_smearers_in_the_minority`).
+const CLOCK_SERVERS: [&str; 3] = [
+    "time.nist.gov:123",
+    "time.windows.com:123",
+    "time.cloudflare.com:123",
+];
+
+/// The hosts in [`CLOCK_SERVERS`] known to smear leap seconds. Named so the
+/// minority invariant can be tested rather than merely asserted in a comment.
+#[cfg(test)]
+const CLOCK_SMEARING_SERVERS: [&str; 1] = ["time.cloudflare.com:123"];
+
+/// How long a full probe cycle waits before the next one.
+const CLOCK_PROBE_INTERVAL: Duration = Duration::from_secs(600);
+
+/// Guard 2's gap: how long after the first round the confirming round is taken.
+///
+/// Seconds, not minutes. Guard 2 exists to catch a round that was *momentarily*
+/// wrong — a server mid-restart, a captive portal answering, a path that
+/// hiccupped — and a few seconds is enough to be a genuinely independent
+/// measurement while real clock drift over the gap is unmeasurable (2.4 ppm for
+/// 5 s is 12 µs). Spacing the two rounds a whole probe interval apart would
+/// instead delay every correction by ten minutes, which on a badly-skewed
+/// machine is ten minutes of not decoding.
+const CLOCK_CONFIRM_GAP: Duration = Duration::from_secs(5);
+
+/// Per-server UDP timeout. A round is at most `3 × this`.
+const CLOCK_QUERY_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// Periodically measure the PC-clock-vs-UTC offset and publish it to the engine,
+/// which steers every TX key and decode window by it.
+///
+/// Runs on its own thread so a slow or failed query never stalls the audio loop,
+/// and honors the `clock_check` setting.
+///
+/// ⚠️ **This thread positions the transmitter.** Three things follow from that,
+/// and each replaced a defect that shipped:
+///
+/// - **Guard 1 — never act on one sample.** `sntp::measure` asks every server and
+///   publishes only the median of a cluster that agrees. What shipped before was
+///   `query_any`: the FIRST server that answered, unvalidated, held for 600 s.
+/// - **Guard 2 — agreement across time.** A round is confirmed by a second round
+///   [`CLOCK_CONFIRM_GAP`] later; disagreement publishes NOTHING and does not
+///   fall back to either round.
+/// - **B2 — a failed round publishes nothing at all.** It does not publish
+///   `None`. The engine keeps the last good offset until its hold window ends,
+///   so a POTA operator walking out of coverage keeps the correction that was
+///   working instead of silently losing it at the first missed packet.
 fn clock_probe_loop(engine: Arc<Mutex<Engine>>) {
-    const SERVERS: [&str; 3] = [
-        "pool.ntp.org:123",
-        "time.nist.gov:123",
-        "time.google.com:123",
-    ];
+    // The previous ACCEPTED measurement, purely to estimate how fast this
+    // machine's clock actually drifts — which is what sizes B2's hold window
+    // (`clocksync::hold_window`). Dropped whenever a clock jump intervenes: the
+    // difference across a step is not a drift rate.
+    let mut prev: Option<(i64, Instant)> = None;
     loop {
         let enabled = engine_lock(&engine).settings().clock_check;
-        let offset = if enabled {
-            tempo_net::sntp::query_any(&SERVERS, Duration::from_secs(3)).ok()
-        } else {
-            None
-        };
-        {
-            let mut e = engine_lock(&engine);
-            e.set_clock_offset_ms(offset);
+        if !enabled {
+            // Off means off: drop the offset so nothing keeps steering by a
+            // measurement the operator has asked us to stop taking. No re-probe
+            // request — this is a settings change, not a broken clock.
+            engine_lock(&engine).clear_clock_offset(false);
+        } else if let Some(m) = clock_measure_confirmed() {
+            let now = Instant::now();
+            let rate_ppm = prev.and_then(|(ms, at)| {
+                tempo_app::clocksync::drift_ppm(ms, m.offset_ms, now.saturating_duration_since(at))
+            });
+            engine_lock(&engine).publish_clock_offset(m.offset_ms, m.agreeing, rate_ppm);
+            prev = Some((m.offset_ms, now));
         }
-        std::thread::sleep(Duration::from_secs(600)); // ~10 min
+        // No `else` — a round that did not agree publishes NOTHING (B2).
+
+        if clock_probe_sleep(&engine, CLOCK_PROBE_INTERVAL) {
+            // Woken by a clock jump. The stored measurement is on the far side of
+            // a step, so it cannot support a drift rate.
+            prev = None;
+        }
     }
+}
+
+/// One corroborated measurement, confirmed by a second round (guards 1 and 2).
+/// `None` when either round failed to reach a quorum or the two disagreed.
+fn clock_measure_confirmed() -> Option<tempo_net::sntp::Measurement> {
+    let first = tempo_net::sntp::measure(&CLOCK_SERVERS, CLOCK_QUERY_TIMEOUT)?;
+    std::thread::sleep(CLOCK_CONFIRM_GAP);
+    let second = tempo_net::sntp::measure(&CLOCK_SERVERS, CLOCK_QUERY_TIMEOUT)?;
+    // The SECOND round is what gets published — it is the fresher of two the
+    // first has already vouched for, and publishing the older one would carry
+    // the confirmation gap as avoidable age.
+    clock_rounds_agree(first.offset_ms, second.offset_ms).then_some(second)
+}
+
+/// Guard 2's decision: do two rounds taken [`CLOCK_CONFIRM_GAP`] apart describe
+/// the same clock?
+///
+/// Split out from [`clock_measure_confirmed`] because that function needs real
+/// sockets and this is the part with a rule in it. Disagreement means **publish
+/// nothing** — deliberately not "fall back to the first round" or "average
+/// them": if the two disagree, one of them is wrong and nothing here can say
+/// which, so the honest answer is no measurement, and B2's held offset carries
+/// the station until a round does agree.
+fn clock_rounds_agree(first_ms: i64, second_ms: i64) -> bool {
+    (first_ms - second_ms).abs() <= tempo_net::sntp::AGREE_WINDOW_MS
+}
+
+/// Sleep out a probe interval, waking early if something asked for a fresh
+/// measurement. Returns `true` when it was woken rather than timing out.
+///
+/// The wake is the resume trigger: `RadioLoop::step`'s jump detector raises the
+/// request the moment the OS steps the clock, so a laptop coming out of sleep is
+/// re-measured within seconds instead of up to ten minutes later.
+///
+/// Polled in slices rather than blocking on a condvar because the engine mutex
+/// is the radio loop's hot lock and this thread must never hold it waiting.
+fn clock_probe_sleep(engine: &Arc<Mutex<Engine>>, total: Duration) -> bool {
+    const SLICE: Duration = Duration::from_secs(2);
+    // B4: the NTP Pool asks clients to randomise their poll times so a
+    // population of installations does not synchronise into a thundering herd.
+    // Nexus does not use the pool, but the reason applies to any shared server:
+    // ±10% here scatters 1000+ installations across a two-minute spread instead
+    // of stacking them on the same second.
+    let jitter = clock_probe_jitter(total);
+    let deadline = Instant::now() + jitter;
+    loop {
+        if engine_lock(engine).take_clock_reprobe() {
+            return true;
+        }
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return false;
+        }
+        std::thread::sleep(left.min(SLICE));
+    }
+}
+
+/// `total` scattered by ±10%, without pulling in a random-number dependency:
+/// the low bits of the monotonic clock are as unpredictable across machines as
+/// this needs to be (nothing here is security-sensitive — it only has to stop
+/// installations sharing a poll second).
+fn clock_probe_jitter(total: Duration) -> Duration {
+    let span = total.as_millis() as u64 / 5; // 20% of the interval, total spread
+    if span == 0 {
+        return total;
+    }
+    let entropy = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos() as u64)
+        .unwrap_or(0);
+    let low = total.as_millis() as u64 - span / 2;
+    Duration::from_millis(low + entropy % span)
 }
 
 /// The transport-affecting subset of the operator's settings: which rig/PTT and
@@ -18320,6 +18527,247 @@ mod tests {
 
         assert!(!rig.keyed, "PTT released after the hold deadline");
         assert!(state.tx_until_ms.is_none());
+    }
+
+    // ── B4: what Nexus's own probe is allowed to ask ─────────────────────────
+
+    #[test]
+    fn the_clock_probe_never_targets_the_ntp_pool() {
+        // The pool's vendor policy forbids its default zones as a shipped
+        // application default, and this is a machine-wide-shaped load: 1000+
+        // installations × a probe every ten minutes × three servers. A
+        // registered vendor zone would be fine; an unregistered one is the same
+        // violation with extra steps, so neither shape may appear here.
+        for host in CLOCK_SERVERS {
+            assert!(
+                !host.contains("pool.ntp.org"),
+                "{host}: Nexus must not point its own probe at the NTP Pool"
+            );
+        }
+    }
+
+    #[test]
+    fn clock_servers_are_three_distinct_operators() {
+        assert_eq!(CLOCK_SERVERS.len(), 3, "guard 1 needs a tie-breaker");
+        // The registrable label — "nist" from "time.nist.gov:123" — i.e. the
+        // second-from-last dotted component, which is the operator.
+        let mut seen: Vec<&str> = CLOCK_SERVERS
+            .iter()
+            .map(|h| h.rsplit('.').nth(1).unwrap_or(h))
+            .collect();
+        seen.sort_unstable();
+        seen.dedup();
+        assert_eq!(
+            seen.len(),
+            3,
+            "two hosts of one operator corroborate a path, not a clock: {CLOCK_SERVERS:?}"
+        );
+    }
+
+    #[test]
+    fn clock_servers_keep_smearers_in_the_minority() {
+        // Guard 1's median outvotes a leap-smearing server only while smearing
+        // servers are a strict minority. Half is not a minority — two smearers
+        // out of four could form the agreeing cluster and win.
+        let smearing = CLOCK_SERVERS
+            .iter()
+            .filter(|h| CLOCK_SMEARING_SERVERS.contains(h))
+            .count();
+        assert!(
+            smearing * 2 < CLOCK_SERVERS.len(),
+            "{smearing} of {} servers smear leap seconds — guard 1 can no longer outvote them",
+            CLOCK_SERVERS.len()
+        );
+    }
+
+    // ── Guard 2: agreement across time ────────────────────────────────────────
+
+    #[test]
+    fn two_rounds_publish_only_when_they_agree() {
+        let w = tempo_net::sntp::AGREE_WINDOW_MS;
+        assert!(clock_rounds_agree(400, 400), "identical rounds agree");
+        assert!(
+            clock_rounds_agree(400, 400 + w),
+            "exactly the window agrees"
+        );
+        assert!(clock_rounds_agree(400, 400 - w), "in both directions");
+        assert!(
+            !clock_rounds_agree(400, 400 + w + 1),
+            "one ms past it does not — and the caller then publishes NOTHING, \
+             rather than falling back to either round"
+        );
+        // The case guard 2 exists for: a round that was momentarily wrong. A
+        // 5 s disagreement five seconds apart is not drift, it is a bad round.
+        assert!(!clock_rounds_agree(0, 5_000));
+    }
+
+    // ── §8.2(a): an OS clock step invalidates the offset the loop steers by ──
+    //
+    // `step` reads the REAL system and monotonic clocks for this check (see the
+    // comment at the call site — a synthetic `now` argument would make every
+    // test tick look like a step). So a jump is staged by SEEDING the detector's
+    // previous observation: place the baseline an hour off the real clock and the
+    // next tick's honest read is a one-hour discontinuity. Nothing waits.
+
+    /// The fixture: an engine holding a measured offset, a loop that has not yet
+    /// picked it up, and a keyed rig if `keyed`.
+    fn jump_fixture(keyed: bool) -> (Arc<Mutex<Engine>>, RadioLoop, Rig, MockBackend) {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_clock_offset_ms(Some(400));
+            if keyed {
+                // ⚠️ WITHOUT THIS THE TEST PROVES NOTHING. `tx_enabled` defaults
+                // OFF (the WSJT-X Enable-Tx latch), and the loop's `tx_off_cut`
+                // arm unkeys any non-slot over on the FIRST tick — so a fixture
+                // that only sets `rig.ptt(true)` is already unkeyed before the
+                // clock ever jumps, and the assertion passes for the wrong
+                // reason. Caught by printing the state after tick one.
+                e.set_tx_enabled(true);
+            }
+        }
+        let mut rig = Rig::vox();
+        if keyed {
+            let _ = rig.ptt(true);
+        }
+        (engine, loop_state(), rig, MockBackend::new())
+    }
+
+    /// Rewind the loop's jump baseline by `ms` of wall clock, so the next tick
+    /// reads as a step of that size. Positive = the clock appears to jump
+    /// FORWARD (resume from sleep, the RTC ahead of the system clock).
+    fn stage_clock_step(state: &mut RadioLoop, ms: f64) {
+        state.clock_jump = tempo_app::clocksync::ClockJumpDetector::seeded(
+            now_unix_ms() - ms,
+            std::time::Instant::now(),
+        );
+    }
+
+    #[test]
+    fn a_wall_clock_step_drops_the_offset_and_asks_for_a_fresh_probe() {
+        // Windows restores the system clock from the RTC on resume — observed
+        // stepping 3 h 06 m. The held offset then describes a clock that no
+        // longer exists, and applying it makes the station wrong the OTHER way.
+        let (engine, mut state, mut rig, mut backend) = jump_fixture(false);
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut tick = |state: &mut RadioLoop, now: f64| {
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    now,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+        };
+
+        tick(&mut state, 1_000.0); // picks the offset up off the engine
+        assert_eq!(state.clock_offset_ms, 400, "steering by the measurement");
+
+        // The observed resume step: 3 h 06 m 16 s of wall clock in one tick.
+        stage_clock_step(&mut state, 11_176_113.0);
+        tick(&mut state, 1_400.0);
+        assert_eq!(
+            state.clock_offset_ms, 0,
+            "the stale correction is not applied"
+        );
+        let mut eng = engine.lock().unwrap();
+        assert_eq!(eng.clock_offset_ms(), None, "and the engine dropped it too");
+        assert!(
+            eng.take_clock_reprobe(),
+            "the probe thread is woken to re-measure"
+        );
+    }
+
+    /// ⚠️ POSITIVE CONTROL for the test above: the same fixture and the same
+    /// ticks, with nothing staged. If this ever fails, the detector is
+    /// trigger-happy and is dropping good corrections on a healthy machine —
+    /// the opposite failure, and the one nobody would notice.
+    #[test]
+    fn ordinary_ticks_never_drop_the_offset() {
+        let (engine, mut state, mut rig, mut backend) = jump_fixture(false);
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        for i in 0..8 {
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    1_000.0 + f64::from(i) * 400.0,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+        }
+        assert_eq!(state.clock_offset_ms, 400, "a healthy clock keeps steering");
+        assert_eq!(engine.lock().unwrap().clock_offset_ms(), Some(400));
+        assert!(
+            !engine.lock().unwrap().take_clock_reprobe(),
+            "and nothing asked for a re-probe"
+        );
+    }
+
+    #[test]
+    fn a_wall_clock_step_mid_over_unkeys_rather_than_holding_ptt() {
+        // ⚠️ THE STUCK-TRANSMITTER CASE. `tx_until_ms` is on the timebase that
+        // just vanished, and the wall-clock TX watchdog cannot save it: it
+        // measures with `saturating_sub`, so a BACKWARDS step reads as zero
+        // elapsed and never trips. Without the interlock the rig stays keyed
+        // until real time catches up — hours, for the step §2.6 observed.
+        let (engine, mut state, mut rig, mut backend) = jump_fixture(true);
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        // An over whose deadline is most of a slot away.
+        state.tx_until_ms = Some(14_000.0);
+
+        // The CONTROL: ordinary ticks must leave the over alone. Without it the
+        // final assertion cannot tell "the jump ended the over" from "something
+        // else ended it two ticks earlier".
+        for i in 0..3 {
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    1_000.0 + f64::from(i) * 400.0,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+        }
+        assert!(rig.keyed, "still mid-over across ordinary ticks");
+        assert!(state.tx_until_ms.is_some(), "and its deadline still stands");
+
+        // The clock jumps BACKWARDS by an hour — the direction the watchdog
+        // cannot see.
+        stage_clock_step(&mut state, -3_600_000.0);
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                2_200.0,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+        assert!(!rig.keyed, "the transmitter is unkeyed, not held");
+        assert!(
+            state.tx_until_ms.is_none(),
+            "and the dead deadline is cleared"
+        );
     }
 
     #[test]

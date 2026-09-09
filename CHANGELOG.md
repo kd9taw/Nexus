@@ -45,6 +45,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Your transmit timing was being steered by a single unchecked network packet.** Nexus measures
+  the PC clock against a time server every ten minutes and shifts its own transmit and decode
+  windows by the result, so slots land on the true UTC grid. That measurement used to be one reply
+  from whichever server answered first, held for ten minutes with nothing to corroborate it — a
+  captive portal, a server mid-restart or a hijacked reply would have moved every over you sent. It
+  now asks three servers, requires at least two to agree within 200 ms, uses the median of those
+  that do, and confirms the whole thing with a second round a few seconds later. If nothing agrees,
+  nothing is published.
+
+- **The clock correction no longer disappears the moment you lose signal.** Walk out of coverage
+  and the timing correction that had been keeping you decoding used to vanish silently on the first
+  missed measurement — worst on exactly the portable stations that needed it. The last good
+  measurement is now held with an age, for a window derived from how fast your machine's clock has
+  actually been observed to drift, and the top bar tells you when it has aged out instead of the
+  correction simply stopping.
+
+- **A clock more than a minute out is no longer corrected silently.** Nexus refuses to steer by an
+  offset that large and says so instead. Slot timing is not the only thing a clock that wrong
+  breaks: your logged QSO times come from the machine's clock, so they would be wrong by the same
+  amount in every record you upload.
+
+- **Waking a laptop from sleep no longer leaves the wrong correction applied for up to ten
+  minutes.** Windows restores the system clock from the hardware clock on resume — a jump of hours,
+  on a real machine — and the correction measured before that describes a clock that no longer
+  exists, so applying it makes the timing wrong the other way. Nexus now notices the jump within a
+  tick, drops the stale correction, re-measures immediately, and on Windows asks the time service to
+  re-check rather than waiting for its next scheduled poll. If the jump lands mid-transmission the
+  over is ended rather than held: the transmit watchdog measures elapsed wall-clock time and cannot
+  see a clock that moved backwards, so a keyed radio would otherwise have stayed keyed.
+
 - **Pop-out panels scroll again.** A torn-off POTA/SOTA board could not be scrolled — content below
   the fold was simply unreachable. The pop-out window had no scrolling container at all, an omission
   since pop-outs were introduced; every other pop-out was checked and only this one was affected.

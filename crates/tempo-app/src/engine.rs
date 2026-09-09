@@ -16261,7 +16261,18 @@ impl Engine {
         s.radio.xit_hz = self.xit_hz;
         s.radio.active_vfo = if self.active_vfo_b { "B" } else { "A" }.to_string();
         s.radio.hold_tx_freq = self.hold_tx_freq;
-        s.radio.clock_offset_ms = self.station.clock_offset_ms;
+        // The clock chip's whole story, not just the number: what we steer by,
+        // how old that measurement is, how many servers stood behind it, and any
+        // offset guard 3 refused. `now` once, so age and freshness agree.
+        {
+            let now = std::time::Instant::now();
+            let clock = self.station.clock_state();
+            s.radio.clock_offset_ms = clock.offset_ms(now);
+            let held = clock.held();
+            s.radio.clock_age_secs = held.map(|o| o.age(now).as_secs().min(u32::MAX as u64) as u32);
+            s.radio.clock_servers = held.map(|o| o.servers);
+            s.radio.clock_gross_ms = clock.gross_ms();
+        }
         s.radio.source = self.source_kind;
         // ⚠️ THE CACHE, NOT THE LOCK. Reading `source_lock(&self.source).label()`
         // here put this 300 ms UI poll — which holds the ENGINE mutex — behind the
@@ -19529,6 +19540,22 @@ impl Engine {
     /// See [`StationCore::clock_offset_ms`].
     pub fn clock_offset_ms(&self) -> Option<i64> {
         self.station.clock_offset_ms()
+    }
+
+    /// See [`StationCore::publish_clock_offset`].
+    pub fn publish_clock_offset(&mut self, offset_ms: i64, servers: u8, rate_ppm: Option<f64>) {
+        self.station
+            .publish_clock_offset(offset_ms, servers, rate_ppm)
+    }
+
+    /// See [`StationCore::clear_clock_offset`].
+    pub fn clear_clock_offset(&mut self, reprobe: bool) {
+        self.station.clear_clock_offset(reprobe)
+    }
+
+    /// See [`StationCore::take_clock_reprobe`].
+    pub fn take_clock_reprobe(&mut self) -> bool {
+        self.station.take_clock_reprobe()
     }
 
     /// See [`StationCore::take_all_txt_pending`].

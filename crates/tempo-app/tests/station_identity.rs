@@ -128,7 +128,13 @@ fn normalize(v: &mut Value) {
         Value::Object(map) => {
             for (k, val) in map.iter_mut() {
                 if k == "nextSlotMs"
+                    // Every clock-derived field, for the reason `clockOffsetMs`
+                    // was already here: they are measurements of the machine the
+                    // test runs on, not station state.
                     || k == "clockOffsetMs"
+                    || k == "clockAgeSecs"
+                    || k == "clockServers"
+                    || k == "clockGrossMs"
                     || k == "qsoStartUnix"
                     || k.ends_with("Tick")
                 {

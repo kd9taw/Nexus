@@ -1012,8 +1012,27 @@ pub struct RadioStatus {
     pub hold_tx_freq: bool,
     /// Real PC-clock-vs-UTC offset in ms from an NTP probe, or `None` when the
     /// probe is disabled / offline (then the UI falls back to DT-derived health).
+    ///
+    /// ⚠️ `Some(x)` means **Nexus is already steering TX and decode windows by
+    /// x** — it is not a "your clock is wrong, go fix it" number. The three
+    /// fields below are what make that legible; a chip that shows this one alone
+    /// tells an operator their working station is broken.
     #[serde(default)]
     pub clock_offset_ms: Option<i64>,
+    /// Seconds since the steering offset was measured, or `None` when there is
+    /// no measurement to age. Off-grid this counts up until the hold window ends
+    /// and `clock_offset_ms` goes to `None`.
+    #[serde(default)]
+    pub clock_age_secs: Option<u32>,
+    /// How many NTP servers agreed on it (guard 1 needs ≥2). `0` for an offset
+    /// set directly rather than measured.
+    #[serde(default)]
+    pub clock_servers: Option<u8>,
+    /// A measurement guard 3 REFUSED to steer by (|offset| > 60 s). Present
+    /// exactly when the clock is too far out to correct silently and the
+    /// operator has to fix the machine.
+    #[serde(default)]
+    pub clock_gross_ms: Option<i64>,
     /// Where decodes come from: the native engine or a WSJT-X/JTDX/MSHV companion.
     #[serde(default)]
     pub source: SourceKind,

@@ -354,11 +354,22 @@ mod tests {
     /// written to measure. `offset ≡ now (mod period)` is what puts the steered clock
     /// on a boundary; adding whole periods preserves the congruence, which is how a
     /// large skew and a known phase coexist.
+    ///
+    /// ⚠️ The resulting offset must stay inside `clocksync::MAX_STEER_MS` (60 s):
+    /// guard 3 refuses to steer by anything larger, so a bigger skew here would
+    /// silently give the engine NO offset and the caller would be testing the
+    /// unsteered path while believing otherwise. Asserted, not assumed.
     fn align_to_slot_start(eng: &mut Engine, skew_ms: i64) {
         let period_ms = eng.active_slot_secs() * 1000.0;
         let phase = now_unix_ms().rem_euclid(period_ms);
         let whole = (skew_ms as f64 / period_ms).round() * period_ms;
-        eng.set_clock_offset_ms(Some((phase + whole) as i64));
+        let offset = (phase + whole) as i64;
+        eng.set_clock_offset_ms(Some(offset));
+        assert_eq!(
+            eng.clock_offset_ms(),
+            Some(offset),
+            "the skew must be inside guard 3's ceiling or this helper aligns nothing"
+        );
     }
 
     /// A throwaway rigctld that answers every command with `RPRT 0` — but only
@@ -662,12 +673,19 @@ mod tests {
         // clock is skewed. Re-reading the raw system clock instead puts the deadline
         // on a DIFFERENT timebase and shifts it by the whole offset — silently, and
         // worst on exactly the badly-synced machines the steering exists to rescue.
-        // A 90 s skew is ordinary on a PC that has never talked to an NTP server.
-        const OFFSET_MS: i64 = 90_000; // PC clock ~90 s AHEAD of true UTC
+        // A skew of tens of seconds is ordinary on a PC that has never talked to
+        // an NTP server. 30 s (two whole FT8 periods) rather than the 90 s this
+        // test used until 2026-09: guard 3 (`clocksync::MAX_STEER_MS`) refuses to
+        // steer by more than 60 s, and `align_to_slot_start` adds up to one
+        // period of phase on top. The subject of this test is the TIMEBASE, not
+        // the magnitude — 30 s is still 100× TempoFast's whole −0.30 s budget, so
+        // a deadline built on the wrong clock still misses by two whole periods.
+        // Guard 3's own behaviour is proven in `clocksync`, both directions.
+        const OFFSET_MS: i64 = 30_000; // PC clock ~30 s AHEAD of true UTC
         const CAT_STALL_MS: f64 = 400.0;
         let mut eng = armed_engine();
-        // Whole periods, so the skew stays ~90 s while the steered clock still lands
-        // on a boundary — see `align_to_slot_start`. 90 s is six whole FT8 periods.
+        // Whole periods, so the skew stays ~30 s while the steered clock still lands
+        // on a boundary — see `align_to_slot_start`. 30 s is two whole FT8 periods.
         align_to_slot_start(&mut eng, OFFSET_MS);
         let mut rig = Rig::vox();
         let mut backend = MockBackend::new();

@@ -14,6 +14,7 @@
 
 pub mod alltxt;
 pub mod bandplan;
+pub mod clocksync;
 pub mod connect_web;
 pub mod dto;
 pub mod engine;
@@ -322,6 +323,9 @@ impl AppState {
                 tx_offset_hz: 1500.0,
                 hold_tx_freq: false,
                 clock_offset_ms: None,
+                clock_age_secs: None,
+                clock_servers: None,
+                clock_gross_ms: None,
                 source: crate::dto::SourceKind::Native,
                 source_label: String::new(),
             },

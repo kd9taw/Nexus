@@ -70,12 +70,12 @@ fn band_key(band: &str) -> String {
 /// The operator's station: one log, one identity of record, one set of outbound
 /// connector queues — shared by every receive/transmit chain the app runs.
 pub struct StationCore {
-    /// Real PC-clock-vs-UTC offset (ms) from the NTP probe, or None if disabled/offline.
-    pub(crate) clock_offset_ms: Option<i64>,
-    /// WSJT-X-format ALL.TXT decode lines pending flush to disk (when
-    /// `settings.write_all_txt`). The engine is I/O-free, so the shell drains this via
-    /// [`Self::take_all_txt_pending`] and appends to the log file. Capped so a
-    /// never-draining shell can't grow it without bound.
+    /// What the station knows about its own clock: the corroborated NTP offset
+    /// it is steering by, its age and expiry, and any measurement guard 3
+    /// refused. See [`crate::clocksync`] — this is NOT a bare number, because a
+    /// bare number cannot say "measured 40 minutes ago and about to stop being
+    /// worth applying", which is the whole of what an off-grid operator needs.
+    pub(crate) clock: crate::clocksync::ClockState,
     pub(crate) all_txt_pending: Vec<String>,
     /// Freshly-logged QSOs awaiting the shell's connector auto-upload worker
     /// (QRZ / ClubLog / eQSL). EVERY `Engine::log_qso` path queues here — the
@@ -201,7 +201,7 @@ impl StationCore {
     /// real ones in at startup (log path, cty.dat/rarity/LoTW resolvers, journals).
     pub(crate) fn new() -> Self {
         Self {
-            clock_offset_ms: None,
+            clock: crate::clocksync::ClockState::default(),
             all_txt_pending: Vec::new(),
             pending_uploads: VecDeque::new(),
             catchup_slot_unix: 0,
@@ -1351,18 +1351,56 @@ impl StationCore {
         &self.sstv_gallery
     }
 
-    /// Set the measured PC-clock-vs-UTC offset (ms) from the NTP probe (`None`
-    /// when the check is disabled or offline). Surfaced for the UI clock chip.
-    pub fn set_clock_offset_ms(&mut self, ms: Option<i64>) {
-        self.clock_offset_ms = ms;
+    /// Adopt a corroborated NTP measurement (`tempo_net::sntp::measure`), sizing
+    /// its hold window from this machine's own measured drift when the probe has
+    /// one. Guard 3's 60 s ceiling is applied inside
+    /// [`crate::clocksync::ClockState::publish`].
+    pub fn publish_clock_offset(&mut self, offset_ms: i64, servers: u8, rate_ppm: Option<f64>) {
+        self.clock
+            .publish(offset_ms, servers, rate_ppm, std::time::Instant::now());
     }
 
-    /// The measured PC-clock-vs-UTC offset (ms), `local − UTC` (positive = the PC
-    /// clock is ahead of UTC). `None` when the NTP check is off / offline. The
-    /// radio loop subtracts this from the system clock so TX/RX slots land on the
-    /// true UTC grid even when the OS clock is skewed.
+    /// Drop the current offset. `reprobe` asks the probe thread to measure
+    /// immediately rather than sleep out its interval — raised when the OS
+    /// stepped the clock under us (resume from sleep), not when the operator
+    /// merely turned the check off.
+    pub fn clear_clock_offset(&mut self, reprobe: bool) {
+        self.clock.clear(reprobe);
+    }
+
+    /// Take the pending re-probe request raised by [`Self::clear_clock_offset`].
+    pub fn take_clock_reprobe(&mut self) -> bool {
+        self.clock.take_reprobe()
+    }
+
+    /// The full clock picture for the UI: the held measurement (fresh or not)
+    /// and any offset guard 3 refused to steer by.
+    pub fn clock_state(&self) -> &crate::clocksync::ClockState {
+        &self.clock
+    }
+
+    /// Set the offset directly, bypassing the probe. `Some` publishes it as a
+    /// measurement taken now with the default hold window; `None` clears.
+    ///
+    /// ⚠️ Guard 3 still applies — a value beyond
+    /// [`crate::clocksync::MAX_STEER_MS`] is refused here exactly as it is on the
+    /// probe path, so a test cannot arrange a skew the shipped app would never
+    /// steer by.
+    pub fn set_clock_offset_ms(&mut self, ms: Option<i64>) {
+        match ms {
+            Some(ms) => self.publish_clock_offset(ms, 0, None),
+            None => self.clear_clock_offset(false),
+        }
+    }
+
+    /// The PC-clock-vs-UTC offset (ms) to steer by right now, `local − UTC`
+    /// (positive = the PC clock is ahead of UTC). `None` when the NTP check is
+    /// off, no round has ever agreed, the last measurement has aged out of its
+    /// hold window, or guard 3 refused it. The radio loop subtracts this from the
+    /// system clock so TX/RX slots land on the true UTC grid even when the OS
+    /// clock is skewed.
     pub fn clock_offset_ms(&self) -> Option<i64> {
-        self.clock_offset_ms
+        self.clock.offset_ms(std::time::Instant::now())
     }
 
     /// Drain the WSJT-X-format ALL.TXT lines buffered since the last call (the shell

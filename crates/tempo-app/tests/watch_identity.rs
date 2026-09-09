@@ -112,7 +112,11 @@ fn scripted_session() -> Engine {
 ///
 /// EXACTLY five rules, and they are the contract of this harness:
 /// * `nextSlotMs`     — slot countdown, fed from the audio service's clock.
-/// * `clockOffsetMs`  — measured PC-vs-UTC offset from the NTP probe.
+/// * `clock*`         — everything the NTP probe measures about THIS machine's
+///   clock: `clockOffsetMs` (the offset being applied), `clockAgeSecs` (how old
+///   that measurement is), `clockServers` (how many agreed) and `clockGrossMs`
+///   (an offset too large to steer by). All are properties of the runner, not of
+///   the station.
 /// * `qsoStartUnix`   — the QSO start stamp (`now_unix_secs`).
 /// * `*Tick`          — UI change counters (`clearTick`, `workTick`, `uploadTick`).
 /// * `freqHz` (float) — the decoder's frequency ESTIMATE, rounded to whole Hz, not blanked;
@@ -125,7 +129,14 @@ fn normalize(v: &mut Value) {
         Value::Object(map) => {
             for (k, val) in map.iter_mut() {
                 if k == "nextSlotMs"
+                    // Named one by one, never a `starts_with("clock")` prefix —
+                    // a prefix match would silently absorb the next field
+                    // somebody adds under that name, which is exactly the
+                    // finding this harness exists to surface.
                     || k == "clockOffsetMs"
+                    || k == "clockAgeSecs"
+                    || k == "clockServers"
+                    || k == "clockGrossMs"
                     || k == "qsoStartUnix"
                     || k.ends_with("Tick")
                 {
