@@ -134,7 +134,7 @@ fn main() {
         std::fs::write(dir.join(format!("{stem}.cbr")), log.cabrillo(14_074)).unwrap();
         std::fs::write(dir.join(format!("{stem}.adi")), log.adif()).unwrap();
         let rs = ruleset(event, CURRENT_RULES_YEAR);
-        let (qso, powered) = rs.scoring.qso_and_powered(&log, 5);
+        let (qso, powered) = rs.scoring.qso_and_powered(log.score_rows(), 5);
         let bonus = rs.bonus_points(&["w1aw-bulletin".to_string(), "web-submission".to_string()]);
         // Printed, not written: the score golden is PINNED AS LITERALS in fd_goldens.rs,
         // so a later batch cannot regenerate its own expectation by re-running this.

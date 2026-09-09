@@ -86,7 +86,8 @@ fn an_installed_file_with_changed_points_changes_the_computed_score() {
     // Seed scores this log 16 QSO pts (4×1 + 6×2, the in-crate pinned
     // fixture); with PH worth 3 it must score 4×3 + 6×2 = 24.
     let rs = fd_rules::ruleset(FdEvent::ArrlFd, fd_rules::CURRENT_RULES_YEAR);
-    let (qso_pts, powered) = rs.scoring.qso_and_powered(&pinned_log(), 2);
+    let log = pinned_log();
+    let (qso_pts, powered) = rs.scoring.qso_and_powered(log.score_rows(), 2);
     assert_eq!(qso_pts, 24, "the installed points table scored the log");
     assert_ne!(
         qso_pts, 16,

@@ -1,6 +1,11 @@
 //! ARRL Field Day mode: the Class+Section exchange, an auto-sequencer that runs
-//! operator-initiated two-way contacts, a dupe-checked log with scoring and a
-//! section multiplier, and ADIF / Cabrillo export.
+//! operator-initiated two-way contacts, a dupe-checked log with scoring, and
+//! ADIF / Cabrillo export.
+//!
+//! ⚠️ **Field Day has no section multiplier**, whatever this comment said until
+//! 2026-09-08. The ARRL FD score is QSO points × the power tier plus claimed
+//! bonuses — nothing in [`fd_rules`](crate::fd_rules) reads a section — and
+//! [`FieldDayLog::sections`] is a display count, not a score input.
 //!
 //! Field Day requires operator-initiated contacts (no fully-automated QSOs), and
 //! the exchange is **Class + ARRL/RAC Section** (e.g. `3A WI`). FT1 carries this
@@ -252,7 +257,22 @@ impl FieldDayLog {
         &self.qsos
     }
 
-    /// Distinct ARRL/RAC sections worked (the Field Day multiplier).
+    /// This log's rows as the scorer reads them.
+    ///
+    /// The seam that took scoring off this type: `Scoring::qso_and_powered` used to
+    /// take a `&FieldDayLog`, which is what welded the scoring math to Field Day's
+    /// own log. Borrowed and lazy, because the score is recomputed on every
+    /// snapshot tick and must stay O(rows) with no allocation.
+    pub fn score_rows(&self) -> impl Iterator<Item = crate::contest::ScoreRow<'_>> {
+        self.qsos.iter().map(|q| crate::contest::ScoreRow {
+            mode_class: &q.mode,
+        })
+    }
+
+    /// Distinct ARRL/RAC sections worked — a DISPLAY count for the worked-sections
+    /// board, **not a multiplier**: neither Field Day event has one, and no scoring
+    /// path reads this. (Said otherwise here until 2026-09-08, on the very function
+    /// a reader would check.)
     pub fn sections(&self) -> usize {
         self.qsos
             .iter()

@@ -26,7 +26,7 @@
 //! **Scoring honesty**: the score block is computed by replaying the merged
 //! rows through [`tempo_core::fieldday::FieldDayLog`] and asking the active
 //! [`tempo_core::fd_rules`] ruleset — the same dedupe and the same math every
-//! other surface uses, never re-derived. For WFD (`ScoringModel::Objectives`)
+//! other surface uses, never re-derived. For WFD (no `PostMultiplier::PowerTier`)
 //! the payload carries **no power fields at all**, so the page *cannot* render
 //! ARRL power math for an event that has none: the headline is raw QSO points
 //! and the ×(n+1) projection is a labelled secondary (multipliers apply at
@@ -389,18 +389,22 @@ fn event_kind(e: FdEvent) -> &'static str {
     }
 }
 
-fn model_tag(s: &fd_rules::ScoringModel) -> &'static str {
-    match s {
-        fd_rules::ScoringModel::PoweredMultiplier { .. } => "powered",
-        fd_rules::ScoringModel::Objectives { .. } => "objectives",
+/// Which of the two payload shapes this event's score block takes. An event with
+/// a power tier renders ARRL power math; one without renders the raw total and
+/// the labelled ×(n+1) projection. The tier list is the discriminator because it
+/// is what the power fields are computed FROM — a page that carried them for an
+/// event with no tiers would be inventing them.
+fn model_tag(s: &tempo_core::contest::Scoring) -> &'static str {
+    if s.power_tiers().is_some() {
+        "powered"
+    } else {
+        "objectives"
     }
 }
 
-fn mode_points_of(s: &fd_rules::ScoringModel) -> fd_rules::ModePoints {
-    match s {
-        fd_rules::ScoringModel::PoweredMultiplier { points, .. } => *points,
-        fd_rules::ScoringModel::Objectives { points, .. } => *points,
-    }
+fn mode_points_of(s: &tempo_core::contest::Scoring) -> tempo_core::contest::ModePoints {
+    let tempo_core::contest::PointsRule::ByModeClass(points) = s.qso_points;
+    points
 }
 
 /// The civil (UTC) year containing a Unix timestamp — Howard Hinnant's civil
@@ -472,7 +476,7 @@ pub fn build_data_core(d: &FdBoardData, now_unix: u64) -> String {
         );
     }
 
-    let (qso_points, powered) = rs.scoring.qso_and_powered(&log, d.power_mult);
+    let (qso_points, powered) = rs.scoring.qso_and_powered(log.score_rows(), d.power_mult);
     let menu = if rs.objectives.is_empty() {
         rs.bonuses
     } else {
@@ -485,8 +489,8 @@ pub fn build_data_core(d: &FdBoardData, now_unix: u64) -> String {
         .cloned()
         .collect();
     let bonus_points = rs.bonus_points(&claimed);
-    let score = match rs.scoring {
-        fd_rules::ScoringModel::PoweredMultiplier { .. } => ScoreBlock {
+    let score = if rs.scoring.power_tiers().is_some() {
+        ScoreBlock {
             model: model_tag(&rs.scoring),
             qso_points,
             bonus_points,
@@ -501,19 +505,18 @@ pub fn build_data_core(d: &FdBoardData, now_unix: u64) -> String {
             total: powered + bonus_points,
             projected_at_submission: None,
             objectives_claimed: None,
-        },
-        fd_rules::ScoringModel::Objectives { .. } => {
-            let n = claimed.len() as u32;
-            ScoreBlock {
-                model: model_tag(&rs.scoring),
-                qso_points,
-                bonus_points,
-                power_mult: None,
-                powered_points: None,
-                total: qso_points,
-                projected_at_submission: Some(qso_points * (n + 1)),
-                objectives_claimed: Some(n),
-            }
+        }
+    } else {
+        let n = claimed.len() as u32;
+        ScoreBlock {
+            model: model_tag(&rs.scoring),
+            qso_points,
+            bonus_points,
+            power_mult: None,
+            powered_points: None,
+            total: qso_points,
+            projected_at_submission: Some(qso_points * (n + 1)),
+            objectives_claimed: Some(n),
         }
     };
 

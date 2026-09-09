@@ -89,7 +89,7 @@ fn both_events_score_exactly_what_head_scored() {
     ] {
         let log = capture::golden_log(event);
         let rs = ruleset(event, CURRENT_RULES_YEAR);
-        let (qso, powered) = rs.scoring.qso_and_powered(&log, 5);
+        let (qso, powered) = rs.scoring.qso_and_powered(log.score_rows(), 5);
         let bonus = rs.bonus_points(&["w1aw-bulletin".to_string(), "web-submission".to_string()]);
         assert_eq!(
             (qso, powered, bonus),

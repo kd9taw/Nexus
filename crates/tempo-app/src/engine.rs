@@ -8404,7 +8404,7 @@ impl Engine {
         );
         let (qso_pts, powered) = rs
             .scoring
-            .qso_and_powered(&station.log, self.settings.fd_power_mult);
+            .qso_and_powered(station.log.score_rows(), self.settings.fd_power_mult);
         let bonus = rs.bonus_points(&self.settings.fd_bonuses);
         Some((qso_pts, powered, bonus))
     }
@@ -15897,8 +15897,9 @@ impl Engine {
                     log.event,
                     tempo_core::fd_rules::CURRENT_RULES_YEAR,
                 );
-                let (qso_pts, powered) =
-                    rs.scoring.qso_and_powered(log, self.settings.fd_power_mult);
+                let (qso_pts, powered) = rs
+                    .scoring
+                    .qso_and_powered(log.score_rows(), self.settings.fd_power_mult);
                 let bonus = rs.bonus_points(&self.settings.fd_bonuses);
                 // The running-or-next event window, from the rules data (the
                 // banner/countdown's single source — no TS date math).

@@ -397,7 +397,7 @@ impl ClubLog {
         let rs =
             tempo_core::fd_rules::ruleset(self.event, tempo_core::fd_rules::CURRENT_RULES_YEAR);
         let log = self.unique_log(mycall, class, section);
-        let (qso_pts, powered) = rs.scoring.qso_and_powered(&log, power_mult);
+        let (qso_pts, powered) = rs.scoring.qso_and_powered(log.score_rows(), power_mult);
         let bonus = rs.bonus_points(bonuses);
         (qso_pts, powered, bonus, powered + bonus)
     }

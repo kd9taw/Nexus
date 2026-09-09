@@ -30,7 +30,7 @@ fn a_read_before_install_locks_the_seed_in_loudly() {
     // And the SEED is what scores: one phone QSO is worth 1, not 3.
     let mut log = FieldDayLog::new("W9XYZ", Exchange::new("3A", "WI"), "20m");
     assert!(log.log_mode_at("K1ABC", "2A", "IL", "PH", 0, 100));
-    let (qso_pts, _) = rs.scoring.qso_and_powered(&log, 1);
+    let (qso_pts, _) = rs.scoring.qso_and_powered(log.score_rows(), 1);
     assert_eq!(
         qso_pts, 1,
         "the seed's phone points, untouched by the refusal"

@@ -38,7 +38,8 @@
 //! seed edit changes a score without a matching test update, catching drift
 //! before it ships.
 
-use crate::fieldday::{FdEvent, FieldDayLog};
+use crate::contest::{ModePoints, PointsRule, PostMultiplier};
+use crate::fieldday::FdEvent;
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
@@ -85,79 +86,6 @@ pub struct DupeRule {
 pub struct EventWindow {
     pub start_unix: u64,
     pub end_unix: u64,
-}
-
-/// Per-mode-class QSO points (the `points_by_mode_class` table in the data).
-/// The seed matches the historical hardcoded map (phone 1, CW/digital 2); a
-/// data edit here provably changes computed scores (the install integration
-/// test's whole point).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ModePoints {
-    pub ph: u32,
-    pub cw: u32,
-    pub dig: u32,
-}
-
-impl ModePoints {
-    /// Points for one logged mode class — the same normalization as the legacy
-    /// [`qso_points_for_mode`](crate::fieldday::qso_points_for_mode) (which
-    /// keeps serving the per-QSO interop push with the historical constants).
-    pub fn for_mode(&self, mode: &str) -> u32 {
-        match mode.to_ascii_uppercase().as_str() {
-            "PH" | "PHONE" | "SSB" | "FM" => self.ph,
-            "CW" => self.cw,
-            _ => self.dig, // digital
-        }
-    }
-}
-
-/// How an event turns a log into a score.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ScoringModel {
-    /// ARRL Field Day: sum the per-mode QSO points (from the ruleset's
-    /// [`ModePoints`] table — seed: phone 1, CW/digital 2), multiply by a legal
-    /// power tier, then add claimed bonus points. This is the exact math the
-    /// engine used inline before centralization.
-    PoweredMultiplier {
-        power_tiers: &'static [u32],
-        points: ModePoints,
-    },
-    /// Winter Field Day: QSOs × (objectives + 1). Objective multipliers are
-    /// applied at submission, so with no objective values in the data yet this
-    /// scores RAW QSO points on the air and flags that the total is provisional
-    /// (`multipliers_at_submission`). See the module-level concerns.
-    Objectives {
-        multipliers_at_submission: bool,
-        points: ModePoints,
-    },
-}
-
-impl ScoringModel {
-    /// `(qso_pts, powered_pts)` for this log at the given stored power tier.
-    /// `PoweredMultiplier` snaps the tier to a legal value and multiplies;
-    /// `Objectives` returns `powered == qso_pts` (no on-air power multiplier).
-    pub fn qso_and_powered(&self, log: &FieldDayLog, power_mult: u32) -> (u32, u32) {
-        match self {
-            ScoringModel::PoweredMultiplier {
-                power_tiers,
-                points,
-            } => {
-                let qso_pts = points_total(log, points);
-                (qso_pts, qso_pts * legal_power(power_tiers, power_mult))
-            }
-            ScoringModel::Objectives { points, .. } => {
-                let qso_pts = points_total(log, points);
-                (qso_pts, qso_pts)
-            }
-        }
-    }
-}
-
-/// Sum the log's QSO points from the ruleset's data-carried table (the seed
-/// matches `FieldDayLog::qso_points()`'s historical constants; an installed
-/// file's table wins here, which is what makes the parameters DATA).
-fn points_total(log: &FieldDayLog, p: &ModePoints) -> u32 {
-    log.qsos().iter().map(|q| p.for_mode(&q.mode)).sum()
 }
 
 /// The event's assistance policy — advisory DATA for a UI warn chip (never an
@@ -209,7 +137,7 @@ pub struct FdRuleset {
     /// through the parser is a later batch; doing it here would have made this
     /// batch a behaviour change.
     pub exchange: &'static crate::contest::ExchangeSpec,
-    pub scoring: ScoringModel,
+    pub scoring: crate::contest::Scoring,
     pub bonuses: &'static [Bonus],
     pub dupe_rule: DupeRule,
     /// Tempo (FT1 keyboard chat) is a first-class FD contact surface for this
@@ -431,19 +359,6 @@ fn derive_arrl_sections(secs: &'static [Section]) -> crate::contest::Domain {
 /// would be a second copy of a list that already exists, free to drift from it,
 /// and unable to carry `division` at all.
 const RESERVED_DOMAIN_IDS: [&str; 2] = ["arrl_sections", "fd_sections"];
-
-/// Snap a stored power multiplier to the highest legal tier ≤ `v` (or the
-/// smallest tier). Replaces the engine's old `legal_fd_power` for the ARRL
-/// `{1, 2, 5}` tiers — a hand-edited settings file must never score with a
-/// ×3/×4 that isn't a real tier.
-fn legal_power(tiers: &[u32], v: u32) -> u32 {
-    tiers
-        .iter()
-        .rev()
-        .copied()
-        .find(|&t| v >= t)
-        .unwrap_or_else(|| tiers.first().copied().unwrap_or(1))
-}
 
 // ---------------------------------------------------------------------------
 // The rules table: parse + validate + leak — and the startup-only install seam
@@ -777,7 +692,10 @@ struct DupeSpec {
 /// makes it loud.
 #[derive(Debug, serde::Deserialize)]
 struct ScoringSpec {
-    /// `"powered_multiplier"` (ARRL FD) or `"objectives"` (WFD).
+    /// Which POST-multiplier profile this event runs: `"powered_multiplier"`
+    /// (ARRL FD — a legal power tier) or `"objectives"` (WFD — objectives
+    /// applied at submission, so nothing multiplies on the air). Both carry the
+    /// claimed bonus menu.
     model: String,
     /// Per-mode-class QSO points. `PH`, `CW` and `DIG` are all required.
     points_by_mode_class: BTreeMap<String, u32>,
@@ -1389,15 +1307,26 @@ fn build(spec: FileSpec) -> RulesTable {
                 dig: r.scoring.points_by_mode_class["DIG"],
             };
             let power_tiers: &'static [u32] = Box::leak(r.scoring.power_tiers.into_boxed_slice());
-            let scoring = match r.scoring.model.as_str() {
-                "powered_multiplier" => ScoringModel::PoweredMultiplier {
-                    power_tiers,
-                    points,
-                },
-                _ => ScoringModel::Objectives {
-                    multipliers_at_submission: true,
-                    points,
-                },
+            // The file's `model` string names a POST-multiplier profile; both
+            // profiles also carry the claimed bonus menu, which is what the two
+            // old `ScoringModel` arms each did implicitly by having the callers
+            // add `bonus_points` afterwards.
+            let post: &'static [PostMultiplier] = Box::leak(
+                vec![
+                    match r.scoring.model.as_str() {
+                        "powered_multiplier" => PostMultiplier::PowerTier { tiers: power_tiers },
+                        // Validated to be one of the two above.
+                        _ => PostMultiplier::Objectives {
+                            at_submission: true,
+                        },
+                    },
+                    PostMultiplier::Bonuses,
+                ]
+                .into_boxed_slice(),
+            );
+            let scoring = crate::contest::Scoring {
+                qso_points: PointsRule::ByModeClass(points),
+                post,
             };
             let mut overrides: Vec<(u16, EventWindow)> = r
                 .window
@@ -1609,7 +1538,7 @@ mod tests {
         ]);
         assert_eq!(log.qso_count(), 10);
         let rs = ruleset(FdEvent::ArrlFd, CURRENT_RULES_YEAR);
-        let (qso_pts, powered) = rs.scoring.qso_and_powered(&log, 2);
+        let (qso_pts, powered) = rs.scoring.qso_and_powered(log.score_rows(), 2);
         assert_eq!(qso_pts, 16, "4×1 + 6×2");
         assert_eq!(powered, 32, "16 QSO pts × ×2 power tier");
         let bonus = rs.bonus_points(&["w1aw-bulletin".to_string()]);
@@ -1625,15 +1554,16 @@ mod tests {
         let log = log_with(&[("K1ABC", "CW"), ("W1AW", "PH"), ("N0XYZ", "DIG")]);
         assert_eq!(log.qso_points(), 2 + 1 + 2);
         let rs = ruleset(FdEvent::WinterFd, CURRENT_RULES_YEAR);
-        let (qso_pts, powered) = rs.scoring.qso_and_powered(&log, 5);
+        let (qso_pts, powered) = rs.scoring.qso_and_powered(log.score_rows(), 5);
         assert_eq!((qso_pts, powered), (5, 5), "raw points, power tier ignored");
-        assert!(matches!(
-            rs.scoring,
-            ScoringModel::Objectives {
-                multipliers_at_submission: true,
-                ..
-            }
-        ));
+        assert!(
+            rs.scoring.post.contains(&PostMultiplier::Objectives {
+                at_submission: true
+            }),
+            "{:?}",
+            rs.scoring.post
+        );
+        assert_eq!(rs.scoring.power_tiers(), None, "no on-air power multiplier");
     }
 
     #[test]
@@ -1652,24 +1582,6 @@ mod tests {
         // The ruleset id must never drift from the export id.
         for e in [FdEvent::ArrlFd, FdEvent::WinterFd] {
             assert_eq!(ruleset(e, 2026).contest_id, e.contest_id());
-        }
-    }
-
-    #[test]
-    fn legal_power_snaps_to_arrl_tiers() {
-        let tiers = &[1u32, 2, 5][..];
-        // Matches the engine's old `legal_fd_power`: ≥5→5, ≥2→2, else 1.
-        for (v, want) in [
-            (0, 1),
-            (1, 1),
-            (2, 2),
-            (3, 2),
-            (4, 2),
-            (5, 5),
-            (6, 5),
-            (150, 5),
-        ] {
-            assert_eq!(legal_power(tiers, v), want, "power {v}");
         }
     }
 
@@ -2098,37 +2010,34 @@ mod tests {
     /// the numbers inside are the same numbers they were when they were flat.
     #[test]
     fn the_scoring_block_carries_todays_model_unchanged() {
+        const FD_POINTS: ModePoints = ModePoints {
+            ph: 1,
+            cw: 2,
+            dig: 2,
+        };
         let arrl = ruleset(FdEvent::ArrlFd, CURRENT_RULES_YEAR);
-        assert!(
-            matches!(
-                arrl.scoring,
-                ScoringModel::PoweredMultiplier {
-                    power_tiers: &[1, 2, 5],
-                    points: ModePoints {
-                        ph: 1,
-                        cw: 2,
-                        dig: 2
-                    },
-                }
-            ),
-            "{:?}",
-            arrl.scoring
+        assert_eq!(
+            arrl.scoring,
+            crate::contest::Scoring {
+                qso_points: PointsRule::ByModeClass(FD_POINTS),
+                post: &[
+                    PostMultiplier::PowerTier { tiers: &[1, 2, 5] },
+                    PostMultiplier::Bonuses,
+                ],
+            }
         );
         let wfd = ruleset(FdEvent::WinterFd, CURRENT_RULES_YEAR);
-        assert!(
-            matches!(
-                wfd.scoring,
-                ScoringModel::Objectives {
-                    multipliers_at_submission: true,
-                    points: ModePoints {
-                        ph: 1,
-                        cw: 2,
-                        dig: 2
+        assert_eq!(
+            wfd.scoring,
+            crate::contest::Scoring {
+                qso_points: PointsRule::ByModeClass(FD_POINTS),
+                post: &[
+                    PostMultiplier::Objectives {
+                        at_submission: true
                     },
-                }
-            ),
-            "{:?}",
-            wfd.scoring
+                    PostMultiplier::Bonuses,
+                ],
+            }
         );
     }
 

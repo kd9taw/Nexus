@@ -20,11 +20,18 @@
 //! ⚠️ Nothing in [`spec`] reads a clock, a setting, or the rules table. The
 //! [`exchanges`] submodule's [`field_day`] DOES load the rules table (for the section
 //! domain) and therefore carries `fd_rules::ruleset`'s ordering rule — see its docs.
+//!
+//! [`scoring`] joined it for the same reason the shape did: `fd_rules::ScoringModel`
+//! took a `&FieldDayLog`, which welded the scoring math to one contest's log type. It
+//! is mode-neutral and log-neutral here, and reads a log through [`ScoreRow`].
 
 pub mod exchanges;
+pub mod scoring;
 pub mod spec;
 
 pub use exchanges::{casual, field_day};
+
+pub use scoring::{ModePoints, PointsRule, PostMultiplier, ScoreRow, Scoring};
 
 pub use spec::{
     AdifTags, Domain, ExchangeSpec, FieldKind, FieldSpec, FieldValue, RoleSelector, RoleSpec,
