@@ -8839,6 +8839,35 @@ fn export_log_for_operator(
     Ok(eng.export_logbook_for_operator(&operator))
 }
 
+/// Distinct activations present in the log — your park × UTC day × the callsign you signed,
+/// newest first. Empty for a station that has never activated, which is what the Logbook uses to
+/// decide whether to offer the per-activation export at all.
+#[tauri::command(async)]
+fn log_activations(
+    state: State<'_, SharedEngine>,
+) -> Result<Vec<tempo_app::dto::LoggedActivationDto>, String> {
+    let eng = engine_lock(&state);
+    Ok(eng.log_activations().into_iter().map(Into::into).collect())
+}
+
+/// ADIF for ONE activation — the park, the UTC day and the callsign of a single submission.
+///
+/// Deliberately takes NO date range. The export date range and this are alternatives, not
+/// filters that compose: an activation is already a bounded thing, and intersecting it with a
+/// range the operator left set from a previous export would silently produce a SHORT log — the
+/// same class of failure as the per-operator export above, which is unranged for the same
+/// reason. The UI enforces the same rule at the button.
+#[tauri::command(async)]
+fn export_log_for_activation(
+    state: State<'_, SharedEngine>,
+    reference: String,
+    day_start_unix: u64,
+    callsign: Option<String>,
+) -> Result<String, String> {
+    let eng = engine_lock(&state);
+    Ok(eng.export_logbook_for_activation(&reference, day_start_unix, callsign.as_deref()))
+}
+
 /// Write export text to a file in the operator's Downloads folder and return the FULL saved path.
 /// The Logbook "Export ADIF/CSV" buttons use this instead of a webview `<a download>` blob — that
 /// browser trick is unreliable in a WebView2 window (a synchronous URL revoke can abort the write,
@@ -22086,6 +22115,8 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             check_beta_update,
             install_beta_update,
             log_operators,
+            log_activations,
+            export_log_for_activation,
             export_settings_bundle,
             import_settings_bundle,
             export_log_for_operator,

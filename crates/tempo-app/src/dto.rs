@@ -1856,6 +1856,36 @@ impl From<OtaDto> for tempo_core::logbook::Ota {
     }
 }
 
+/// One activation offered by the per-activation export — serde mirror of
+/// `tempo_core::logbook::LoggedActivation`.
+///
+/// The unit is (your park) × (UTC day) × (the callsign you signed), because that is the unit
+/// POTA credits and the unit its submission filename names. `qsos` rides along so the picker can
+/// show the count before the operator uploads a day that never reached ten.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoggedActivationDto {
+    pub program: Option<String>,
+    pub reference: String,
+    pub day_start_unix: u64,
+    pub date: String,
+    pub callsign: Option<String>,
+    pub qsos: usize,
+}
+
+impl From<tempo_core::logbook::LoggedActivation> for LoggedActivationDto {
+    fn from(a: tempo_core::logbook::LoggedActivation) -> Self {
+        LoggedActivationDto {
+            program: a.program,
+            reference: a.reference,
+            day_start_unix: a.day_start_unix,
+            date: a.date,
+            callsign: a.callsign,
+            qsos: a.qsos,
+        }
+    }
+}
+
 impl From<tempo_core::logbook::QsoRecord> for LoggedQso {
     fn from(r: tempo_core::logbook::QsoRecord) -> Self {
         LoggedQso {

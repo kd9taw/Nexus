@@ -1456,6 +1456,25 @@ impl StationCore {
     pub fn export_logbook_for_operator(&self, operator: &str) -> String {
         self.logbook.adif_for_operator(operator)
     }
+
+    /// Distinct activations in the log — YOUR park × UTC day × the callsign it was worked
+    /// under, newest first. What the per-activation export offers to split by, the way
+    /// [`Self::log_operators`] drives the per-operator one.
+    pub fn log_activations(&self) -> Vec<tempo_core::logbook::LoggedActivation> {
+        self.logbook.activations()
+    }
+
+    /// ADIF containing only ONE activation's contacts — the three bounds an
+    /// `Activation` carries, handed straight back.
+    pub fn export_logbook_for_activation(
+        &self,
+        reference: &str,
+        day_start_unix: u64,
+        callsign: Option<&str>,
+    ) -> String {
+        self.logbook
+            .adif_for_activation(reference, day_start_unix, callsign)
+    }
 }
 
 #[cfg(test)]

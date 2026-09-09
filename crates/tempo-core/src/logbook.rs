@@ -438,6 +438,70 @@ pub struct Ota {
     pub iota: Option<String>,
 }
 
+/// One activation present in the log: YOUR reference, the UTC day it ran on, and the callsign it
+/// was worked under — plus how many contacts fell in it.
+///
+/// The triple is deliberate. POTA's unit of credit is a park on a Zulu day, and its submission
+/// filename (`callsign@parkNumber-activationDate.adi`) names exactly these three things, so an
+/// activator who already has the triple has the file. See [`Logbook::activations`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoggedActivation {
+    /// Program tag from `MY_SIG` ("POTA" / "SOTA"), uppercased. `None` only for a record that
+    /// carried a reference with no program — the export names such a file plainly rather than
+    /// claiming a program nobody wrote down.
+    pub program: Option<String>,
+    /// Your park/summit reference, uppercased ("US-1234").
+    pub reference: String,
+    /// 00:00:00 UTC of the activation day, Unix seconds.
+    pub day_start_unix: u64,
+    /// The same day as `YYYY-MM-DD`, for display (the POTA filename wants it without dashes).
+    pub date: String,
+    /// The callsign worked under — `STATION_CALLSIGN`, else `OPERATOR`, uppercased. `None` when
+    /// the records carry neither.
+    pub callsign: Option<String>,
+    /// Contacts in this activation. POTA needs ten for it to count, which is why the number is
+    /// carried rather than left for the operator to discover after uploading.
+    pub qsos: usize,
+}
+
+/// 00:00:00 UTC of the day containing `unix`.
+fn day_start(unix: u64) -> u64 {
+    unix - unix % 86_400
+}
+
+/// The references one record activates, uppercased and trimmed.
+///
+/// Normally exactly one: `MY_SIG_INFO` is a single ADIF value and [`Logbook`] stores it as a
+/// single `Option<String>`, so a two-fer — one QSO made at a site where two park boundaries
+/// overlap, which POTA permits and credits as two separate logs — has **no first-class
+/// representation here**. Splitting on comma/semicolon is the one thing that keeps such a record
+/// submittable at all: an operator who types both references into the park field gets two
+/// activations and two files, each carrying only its own reference. It costs nothing on the
+/// ordinary record, because a real park reference never contains either separator.
+fn my_refs(r: &QsoRecord) -> Vec<String> {
+    r.ota
+        .my_ref
+        .as_deref()
+        .unwrap_or("")
+        .split([',', ';'])
+        .map(|s| s.trim().to_ascii_uppercase())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+/// The callsign a record was worked under: the station call given over the air, else the
+/// individual operator's. POTA's own required field is "STATION_CALLSIGN or OPERATOR"
+/// (docs.pota.app/docs/activator_reference/ADIF_for_POTA_reference.html, read 2026-09-09), and
+/// that is the precedence — a club activation signs the club call, and the whole group's
+/// contacts belong in ONE file under it, not one file per operator.
+fn worked_under(r: &QsoRecord) -> Option<String> {
+    r.station_callsign
+        .as_deref()
+        .or(r.operator.as_deref())
+        .map(|c| c.trim().to_ascii_uppercase())
+        .filter(|c| !c.is_empty())
+}
+
 /// Outbound upload outcome for one source (e.g. LoTW via TQSL).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UploadOutcome {
@@ -1836,6 +1900,125 @@ impl Logbook {
             if is_theirs {
                 s.push_str(&adif_record(r));
             }
+        }
+        s
+    }
+
+    /// Every distinct activation in the log — YOUR reference × UTC day × the callsign it was
+    /// worked under — newest first, with the contact count each one holds.
+    ///
+    /// That triple is the unit, not the date. POTA credits "a minimum of 10 QSOs from a park in
+    /// the designated list within a single UTC day (Zulu day)" (docs.pota.app/docs/rules.html,
+    /// read 2026-09-09), and its own filename convention is `callsign@parkNumber-activationDate`
+    /// — the same three fields. An activator who worked one park in the morning, drove to a
+    /// second in the afternoon, and ragchewed from home in the evening has three buckets here and
+    /// two submittable files; a date range has one bucket and cannot separate them. That is the
+    /// whole reason this exists beside [`Self::adif_in_range`].
+    ///
+    /// Only the ACTIVATOR side counts. A hunter contact — the other station was in a park, you
+    /// were not (`their_ref` set, `my_ref` empty) — is not an activation of yours and never
+    /// appears here, because keying on `my_ref` is what "your park" means.
+    ///
+    /// A record whose callsign is unknown (neither `STATION_CALLSIGN` nor `OPERATOR`, which is
+    /// every record logged before the station-call stamp existed) buckets under `None` rather
+    /// than being defaulted to the current call — same ruling as [`Self::operators`]: inventing
+    /// a callsign would claim the operator signed something they never did.
+    pub fn activations(&self) -> Vec<LoggedActivation> {
+        type Key = (String, u64, Option<String>);
+        let mut seen: std::collections::HashMap<Key, (Option<String>, usize)> =
+            std::collections::HashMap::new();
+        for r in &self.records {
+            let call = worked_under(r);
+            let day = day_start(r.when_unix);
+            for reference in my_refs(r) {
+                let slot = seen
+                    .entry((reference, day, call.clone()))
+                    .or_insert((None, 0));
+                if slot.0.is_none() {
+                    slot.0 = r
+                        .ota
+                        .my_program
+                        .as_deref()
+                        .map(|p| p.trim().to_ascii_uppercase())
+                        .filter(|p| !p.is_empty());
+                }
+                slot.1 += 1;
+            }
+        }
+        let mut out: Vec<LoggedActivation> = seen
+            .into_iter()
+            .map(|((reference, day_start_unix, callsign), (program, qsos))| {
+                let (y, mo, d, ..) = datetime_utc(day_start_unix);
+                LoggedActivation {
+                    program,
+                    reference,
+                    day_start_unix,
+                    date: format!("{y:04}-{mo:02}-{d:02}"),
+                    callsign,
+                    qsos,
+                }
+            })
+            .collect();
+        // Newest first — the activation the operator just finished is the one they came to
+        // export. Reference then callsign break a tie so two parks on one day list in a stable
+        // order instead of the hash map's.
+        out.sort_by(|a, b| {
+            b.day_start_unix
+                .cmp(&a.day_start_unix)
+                .then_with(|| a.reference.cmp(&b.reference))
+                .then_with(|| a.callsign.cmp(&b.callsign))
+        });
+        out
+    }
+
+    /// The log as ADIF containing ONLY one activation's contacts: `reference`, worked on the UTC
+    /// day containing `day_start_unix`, under `callsign`. The three bounds a [`LoggedActivation`]
+    /// carries, fed straight back.
+    ///
+    /// The day is HALF-OPEN — `[day, day + 86_400)` — which is what "a single UTC day" means and
+    /// what keeps an activation that ran through midnight in two files rather than one. POTA
+    /// accepts a file spanning several UTC days ("A single ADIF file may contain multiple UTC
+    /// days" — docs.pota.app/docs/activator_reference/submitting_logs.html, read 2026-09-09), so
+    /// splitting is a choice, not a requirement: it is made here because each file is then
+    /// exactly one thing POTA credits, and the count beside it in the picker is the count that
+    /// has to reach ten.
+    ///
+    /// `my_ref` is rewritten to the requested reference on the way out. Normally that is a
+    /// no-op case fold, but it is what makes a two-fer submittable: a record carrying two
+    /// references (see [`my_refs`]) must not export `MY_SIG_INFO` holding both, because POTA
+    /// reads one park per log and would take the pair as a park name.
+    ///
+    /// An activation with no contacts yields a valid, EMPTY ADIF (header only) rather than an
+    /// error or the whole log — same contract, and the same reason, as
+    /// [`Self::adif_for_operator`].
+    pub fn adif_for_activation(
+        &self,
+        reference: &str,
+        day_start_unix: u64,
+        callsign: Option<&str>,
+    ) -> String {
+        let want = reference.trim().to_ascii_uppercase();
+        let day = day_start(day_start_unix);
+        let want_call = callsign
+            .map(|c| c.trim().to_ascii_uppercase())
+            .filter(|c| !c.is_empty());
+        let mut s = adif_header();
+        if want.is_empty() {
+            return s;
+        }
+        for r in &self.records {
+            if r.when_unix < day || r.when_unix >= day + 86_400 {
+                continue;
+            }
+            if worked_under(r) != want_call {
+                continue;
+            }
+            if !my_refs(r).contains(&want) {
+                continue;
+            }
+            let mut one = r.clone();
+            one.ota.my_ref = Some(want.clone());
+            s.push_str(&adif_record(&one));
         }
         s
     }
@@ -7278,5 +7461,405 @@ mod qsl_card_tests {
             lb.mark_qsl_card(0, true),
             "control: a real index still works"
         );
+    }
+}
+
+/// Per-ACTIVATION export: (your park) × (UTC day) × (your callsign).
+///
+/// From a real activation (2026-09-09): 17 SSB contacts from one park, uploaded fine, but the
+/// operator could not get a file holding only those 17 — his own non-POTA contacts from earlier
+/// the same UTC day came out with them, because the only filter the export had was a date range.
+/// A second park later the same day had no answer at all. That is what these guard.
+#[cfg(test)]
+mod activation_split_tests {
+    use super::*;
+
+    /// 00:00:00 UTC of a `YYYY-MM-DD`.
+    fn day(date: &str) -> u64 {
+        day_bounds_utc(date).unwrap().0
+    }
+
+    /// A contact at `when`, activating `my_ref` (None = not activating), signed `call_used`.
+    fn act(call: &str, when: u64, my_ref: Option<&str>, call_used: Option<&str>) -> QsoRecord {
+        QsoRecord {
+            call: call.into(),
+            grid: None,
+            country: None,
+            state: None,
+            band: "20m".into(),
+            freq_mhz: 14.250,
+            freq_rx_mhz: None,
+            mode: "SSB".into(),
+            rst_sent: None,
+            rst_rcvd: None,
+            name: None,
+            qth: None,
+            comment: None,
+            notes: None,
+            tx_power: None,
+            when_unix: when,
+            time_off_unix: None,
+            confirmed: false,
+            award_confirmed: false,
+            qsl_rcvd: Default::default(),
+            qsl_sent: Default::default(),
+            credit_granted: Vec::new(),
+            credit_submitted: Vec::new(),
+            upload: Default::default(),
+            ota: Ota {
+                my_program: my_ref.map(|_| "POTA".to_string()),
+                my_ref: my_ref.map(|r| r.to_string()),
+                ..Default::default()
+            },
+            time_known: true,
+            dxcc: None,
+            prop_mode: None,
+            sat_name: None,
+            operator: None,
+            station_callsign: call_used.map(|c| c.to_string()),
+            extra: Vec::new(),
+            contest: None,
+        }
+    }
+
+    /// Records in an exported ADIF.
+    fn qsos(adif: &str) -> usize {
+        adif.matches("<EOR>").count()
+    }
+
+    /// ⭐ THE REPORTED SCENARIO. 17 POTA contacts and a handful of ordinary ones on the SAME UTC
+    /// day; the activation file must hold exactly the 17.
+    ///
+    /// The second half is the positive control: the date-range export — the only tool he had —
+    /// really does sweep the non-POTA contacts in. Without it a broken activation filter that
+    /// merely returned everything could still pass the first half on a log that happened to be
+    /// all-POTA, and this test would be measuring nothing.
+    #[test]
+    fn seventeen_pota_contacts_export_without_the_same_days_non_pota_contacts() {
+        let d = day("2026-09-09");
+        let mut records: Vec<QsoRecord> = (0..17)
+            .map(|i| {
+                act(
+                    &format!("W9P{i:02}"),
+                    d + 15 * 3600 + i * 60,
+                    Some("US-1234"),
+                    Some("KD9TAW"),
+                )
+            })
+            .collect();
+        // Earlier the same UTC day, from home: no park, no business in the submission.
+        records.push(act("K1HOME", d + 2 * 3600, None, Some("KD9TAW")));
+        records.push(act("K2HOME", d + 3 * 3600, None, Some("KD9TAW")));
+        let lb = Logbook { records };
+
+        let adif = lb.adif_for_activation("US-1234", d, Some("KD9TAW"));
+        assert_eq!(qsos(&adif), 17, "the activation file is not exactly the 17");
+        assert!(
+            !adif.contains("K1HOME") && !adif.contains("K2HOME"),
+            "a non-POTA contact from the same UTC day leaked into the activation file"
+        );
+
+        // Positive control: the date range genuinely cannot do this.
+        let (from, to) = day_bounds_utc("2026-09-09").unwrap();
+        let ranged = lb.adif_in_range(Some(from), Some(to));
+        assert_eq!(qsos(&ranged), 19, "the control did not reproduce the bug");
+        assert!(ranged.contains("K1HOME"), "the control did not trip");
+    }
+
+    /// His explicit second question: two parks in one UTC day. Two activations, two files, and
+    /// neither carries the other's contacts.
+    #[test]
+    fn two_parks_in_one_utc_day_are_two_activations_and_two_files() {
+        let d = day("2026-09-09");
+        let lb = Logbook {
+            records: vec![
+                act("W9AAA", d + 14 * 3600, Some("US-1234"), Some("KD9TAW")),
+                act("W9BBB", d + 15 * 3600, Some("US-1234"), Some("KD9TAW")),
+                act("W9CCC", d + 20 * 3600, Some("US-5678"), Some("KD9TAW")),
+            ],
+        };
+        let acts = lb.activations();
+        assert_eq!(acts.len(), 2, "two parks in a day is two activations");
+        assert_eq!(acts[0].reference, "US-1234");
+        assert_eq!(acts[0].qsos, 2);
+        assert_eq!(acts[1].reference, "US-5678");
+        assert_eq!(acts[1].qsos, 1);
+
+        let first = lb.adif_for_activation("US-1234", d, Some("KD9TAW"));
+        assert!(first.contains("W9AAA") && first.contains("W9BBB"));
+        assert!(
+            !first.contains("W9CCC"),
+            "the afternoon park's contact rode along in the morning park's file"
+        );
+        let second = lb.adif_for_activation("US-5678", d, Some("KD9TAW"));
+        assert_eq!(qsos(&second), 1);
+        assert!(second.contains("W9CCC"));
+    }
+
+    /// POTA credits a park per Zulu day, so an activation that runs through 0000Z is two
+    /// activations. Two rows in the picker, two files, and the counts say which day made ten.
+    #[test]
+    fn an_activation_across_utc_midnight_is_two_days_not_one() {
+        let first = day("2026-09-09");
+        let second = day("2026-09-10");
+        let lb = Logbook {
+            records: vec![
+                act(
+                    "W9AAA",
+                    first + 23 * 3600 + 50 * 60,
+                    Some("US-1234"),
+                    Some("KD9TAW"),
+                ),
+                act("W9BBB", second + 5 * 60, Some("US-1234"), Some("KD9TAW")),
+            ],
+        };
+        let acts = lb.activations();
+        assert_eq!(acts.len(), 2, "one park across midnight is two activations");
+        assert_eq!(acts[0].date, "2026-09-10", "newest first");
+        assert_eq!(acts[1].date, "2026-09-09");
+        assert_eq!(
+            qsos(&lb.adif_for_activation("US-1234", first, Some("KD9TAW"))),
+            1
+        );
+        assert_eq!(
+            qsos(&lb.adif_for_activation("US-1234", second, Some("KD9TAW"))),
+            1
+        );
+    }
+
+    /// A hunter contact — THEY were in a park, you were at home. It is not your activation, it
+    /// must never enumerate as one, and it must never reach an activator file.
+    #[test]
+    fn a_hunter_contact_is_not_an_activation_of_yours() {
+        let d = day("2026-09-09");
+        let mut hunted = act("W9HUNT", d + 16 * 3600, None, Some("KD9TAW"));
+        hunted.ota.their_program = Some("POTA".into());
+        hunted.ota.their_ref = Some("US-9999".into());
+        let lb = Logbook {
+            records: vec![
+                hunted,
+                act("W9AAA", d + 17 * 3600, Some("US-1234"), Some("KD9TAW")),
+            ],
+        };
+        let acts = lb.activations();
+        assert_eq!(acts.len(), 1);
+        assert_eq!(acts[0].reference, "US-1234");
+        assert!(
+            !lb.adif_for_activation("US-1234", d, Some("KD9TAW"))
+                .contains("W9HUNT"),
+            "a park you HUNTED was submitted as a park you activated"
+        );
+        assert_eq!(
+            qsos(&lb.adif_for_activation("US-9999", d, Some("KD9TAW"))),
+            0,
+            "the hunted park is not a file you can submit"
+        );
+    }
+
+    /// POTA needs ten. A short activation is not an error — it is a real day at a park that did
+    /// not qualify — so it enumerates with its count and the operator sees it before uploading.
+    #[test]
+    fn a_short_activation_is_listed_with_the_count_that_falls_short() {
+        let d = day("2026-09-09");
+        let lb = Logbook {
+            records: (0..4)
+                .map(|i| {
+                    act(
+                        &format!("W9A{i}"),
+                        d + 3600 + i * 60,
+                        Some("US-1234"),
+                        Some("KD9TAW"),
+                    )
+                })
+                .collect(),
+        };
+        let acts = lb.activations();
+        assert_eq!(acts.len(), 1);
+        assert_eq!(acts[0].qsos, 4, "the count POTA will measure against ten");
+    }
+
+    /// A two-fer: one QSO at a site where two park boundaries overlap. POTA permits it and wants
+    /// a SEPARATE log per park, the same QSO in both. `my_ref` is one ADIF value, so the only
+    /// way to say it today is both references in the one field — and then each file must carry
+    /// ONLY its own reference, or POTA reads the pair as a park name.
+    #[test]
+    fn a_two_fer_exports_one_file_per_park_each_naming_only_its_own() {
+        let d = day("2026-09-09");
+        let lb = Logbook {
+            records: vec![act(
+                "W9AAA",
+                d + 16 * 3600,
+                Some("US-1234,US-5678"),
+                Some("KD9TAW"),
+            )],
+        };
+        let acts = lb.activations();
+        assert_eq!(acts.len(), 2, "a two-fer is two submittable activations");
+        assert_eq!(acts[0].reference, "US-1234");
+        assert_eq!(acts[1].reference, "US-5678");
+        assert_eq!(acts[0].qsos, 1, "the QSO counts toward BOTH parks");
+        assert_eq!(acts[1].qsos, 1);
+
+        let first = lb.adif_for_activation("US-1234", d, Some("KD9TAW"));
+        assert!(first.contains("<MY_SIG_INFO:7>US-1234"), "got: {first}");
+        assert!(
+            !first.contains("US-5678"),
+            "the other park's reference rode along inside MY_SIG_INFO"
+        );
+        let second = lb.adif_for_activation("US-5678", d, Some("KD9TAW"));
+        assert!(second.contains("<MY_SIG_INFO:7>US-5678"), "got: {second}");
+        assert!(!second.contains("US-1234"));
+    }
+
+    /// Two callsigns at one park on one day — a club weekend, or an operator who signs /P
+    /// portable. POTA's file is named for the callsign given over the air, so these are two
+    /// submissions, not one.
+    #[test]
+    fn two_callsigns_at_one_park_on_one_day_are_two_activations() {
+        let d = day("2026-09-09");
+        let lb = Logbook {
+            records: vec![
+                act("W9AAA", d + 14 * 3600, Some("US-1234"), Some("KD9TAW")),
+                act("W9BBB", d + 15 * 3600, Some("US-1234"), Some("KD9TAW/P")),
+            ],
+        };
+        let acts = lb.activations();
+        assert_eq!(acts.len(), 2);
+        let calls: Vec<&str> = acts.iter().filter_map(|a| a.callsign.as_deref()).collect();
+        assert_eq!(calls, vec!["KD9TAW", "KD9TAW/P"]);
+        let portable = lb.adif_for_activation("US-1234", d, Some("KD9TAW/P"));
+        assert_eq!(qsos(&portable), 1);
+        assert!(portable.contains("W9BBB"));
+    }
+
+    /// The station call is the file's identity, but `OPERATOR` alone is what an older record (or
+    /// a Field Day style multi-op row) carries — POTA accepts "STATION_CALLSIGN or OPERATOR", in
+    /// that order, and so does this.
+    #[test]
+    fn the_operator_stands_in_when_no_station_call_was_stamped() {
+        let d = day("2026-09-09");
+        let mut r = act("W9AAA", d + 14 * 3600, Some("US-1234"), None);
+        r.operator = Some("w1abc".into());
+        let unstamped = act("W9BBB", d + 15 * 3600, Some("US-1234"), None);
+        let lb = Logbook {
+            records: vec![r, unstamped],
+        };
+        let acts = lb.activations();
+        assert_eq!(
+            acts.len(),
+            2,
+            "a stamped and an unstamped row are not one file"
+        );
+        let with_call = lb.adif_for_activation("US-1234", d, Some("W1ABC"));
+        assert!(with_call.contains("W9AAA") && !with_call.contains("W9BBB"));
+        let without = lb.adif_for_activation("US-1234", d, None);
+        assert!(without.contains("W9BBB") && !without.contains("W9AAA"));
+    }
+
+    /// Typed by a human, mid-activation, on a phone in a car park.
+    #[test]
+    fn matching_a_reference_ignores_case_and_stray_spaces() {
+        let d = day("2026-09-09");
+        let lb = Logbook {
+            records: vec![act(
+                "W9AAA",
+                d + 14 * 3600,
+                Some(" us-1234 "),
+                Some(" kd9taw "),
+            )],
+        };
+        assert_eq!(lb.activations()[0].reference, "US-1234");
+        assert_eq!(lb.activations()[0].callsign.as_deref(), Some("KD9TAW"));
+        assert!(lb
+            .adif_for_activation("us-1234", d, Some("kd9taw"))
+            .contains("W9AAA"));
+    }
+
+    /// Any point inside the day identifies it — the caller hands back what `activations()` gave,
+    /// but a mid-day second must not silently produce an empty file.
+    #[test]
+    fn any_second_within_the_day_selects_that_days_activation() {
+        let d = day("2026-09-09");
+        let lb = Logbook {
+            records: vec![act("W9AAA", d + 14 * 3600, Some("US-1234"), Some("KD9TAW"))],
+        };
+        assert_eq!(
+            qsos(&lb.adif_for_activation("US-1234", d + 20 * 3600, Some("KD9TAW"))),
+            1
+        );
+    }
+
+    /// A park with nothing logged gets a valid EMPTY file. The failure this forbids is falling
+    /// back to the whole log, which is exactly the bug being fixed — silently, and uploaded.
+    #[test]
+    fn an_unknown_activation_gets_an_empty_file_not_the_whole_log() {
+        let d = day("2026-09-09");
+        let lb = Logbook {
+            records: vec![act("W9AAA", d + 14 * 3600, Some("US-1234"), Some("KD9TAW"))],
+        };
+        for out in [
+            lb.adif_for_activation("US-0000", d, Some("KD9TAW")),
+            lb.adif_for_activation("US-1234", day("2026-09-08"), Some("KD9TAW")),
+            lb.adif_for_activation("US-1234", d, Some("K9NOBODY")),
+            lb.adif_for_activation("", d, Some("KD9TAW")),
+        ] {
+            assert!(!out.contains("W9AAA"), "the whole log leaked out");
+            assert!(out.contains("<EOH>"), "still a valid ADIF file, just empty");
+        }
+    }
+
+    /// An empty log offers nothing to pick, and a log with no activator side offers nothing
+    /// either — the picker must not appear for a hunter-only station.
+    #[test]
+    fn a_log_with_no_activations_enumerates_none() {
+        let d = day("2026-09-09");
+        assert!(Logbook::default().activations().is_empty());
+        let lb = Logbook {
+            records: vec![act("W9AAA", d, None, Some("KD9TAW"))],
+        };
+        assert!(lb.activations().is_empty());
+    }
+
+    /// Newest first: the activation just finished is the one being exported.
+    #[test]
+    fn activations_list_newest_first() {
+        let lb = Logbook {
+            records: vec![
+                act(
+                    "W9AAA",
+                    day("2026-08-01") + 3600,
+                    Some("US-1111"),
+                    Some("KD9TAW"),
+                ),
+                act(
+                    "W9BBB",
+                    day("2026-09-09") + 3600,
+                    Some("US-2222"),
+                    Some("KD9TAW"),
+                ),
+                act(
+                    "W9CCC",
+                    day("2026-09-01") + 3600,
+                    Some("US-3333"),
+                    Some("KD9TAW"),
+                ),
+            ],
+        };
+        let acts = lb.activations();
+        let dates: Vec<&str> = acts.iter().map(|a| a.date.as_str()).collect();
+        assert_eq!(dates, vec!["2026-09-09", "2026-09-01", "2026-08-01"]);
+    }
+
+    /// The program tag rides along so the caller can name a SOTA file plainly instead of under
+    /// POTA's convention. A summit is an activation too, and enumerating it is free.
+    #[test]
+    fn a_sota_summit_enumerates_with_its_own_program() {
+        let d = day("2026-09-09");
+        let mut r = act("W9AAA", d + 3600, Some("W7A/MN-001"), Some("KD9TAW"));
+        r.ota.my_program = Some("SOTA".into());
+        let lb = Logbook { records: vec![r] };
+        let acts = lb.activations();
+        assert_eq!(acts[0].program.as_deref(), Some("SOTA"));
+        assert_eq!(acts[0].reference, "W7A/MN-001");
     }
 }

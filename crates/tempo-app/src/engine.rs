@@ -19640,6 +19640,22 @@ Pick the one you operate from on the Contesting tab in Settings.",
         self.station.export_logbook_for_operator(operator)
     }
 
+    /// See [`StationCore::log_activations`].
+    pub fn log_activations(&self) -> Vec<tempo_core::logbook::LoggedActivation> {
+        self.station.log_activations()
+    }
+
+    /// See [`StationCore::export_logbook_for_activation`].
+    pub fn export_logbook_for_activation(
+        &self,
+        reference: &str,
+        day_start_unix: u64,
+        callsign: Option<&str>,
+    ) -> String {
+        self.station
+            .export_logbook_for_activation(reference, day_start_unix, callsign)
+    }
+
     /// Two-instance freshness: re-read + reconcile the shared log iff another instance touched
     /// it (mtime-gated, so a no-op stat when unchanged). Call on the Needed-board poll so a
     /// monitoring radio's needs never go stale relative to the other radio. Returns true if it
