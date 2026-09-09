@@ -49,12 +49,22 @@ export class BrowserClient {
   signIn(): Promise<void> { return this.auth.loginWithRedirect() }
   signOut(): Promise<void> { return this.auth.logout({ logoutParams: { returnTo: window.location.origin } }) }
   async post<T>(path: string, body: object = {}, signal?: AbortSignal): Promise<T> {
+    return (await this.request<T>(path, body, signal)).body
+  }
+  observationTicket(stationId: string, signal: AbortSignal): Promise<{ body: { ticket: string; serverNow: number }; startedAt: number }> {
+    return this.request(`stations/${stationId}/ticket`, {}, signal)
+  }
+  private async request<T>(path: string, body: object, signal?: AbortSignal): Promise<{ body: T; startedAt: number }> {
     let token: string
     try { token = await this.auth.getTokenSilently() } catch { throw new RemoteError(401) }
-    return boundedJson<T>(`/api/remote/${path}`, {
+    // The service clock anchor starts at the HTTP request, after account-token
+    // acquisition. Waiting for identity cannot make a later fresh frame stale.
+    const startedAt = performance.now()
+    const result = await boundedJson<T>(`/api/remote/${path}`, {
       method: 'POST', credentials: 'same-origin', cache: 'no-store', signal,
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify(body),
     })
+    return { body: result, startedAt }
   }
 }
 
@@ -93,8 +103,7 @@ export class HostedConnection {
   private async connect(): Promise<void> {
     if (this.disposed) return
     try {
-      const start = performance.now()
-      const ticket = await this.client.post<{ ticket: string; serverNow: number }>(`stations/${this.stationId}/ticket`, {}, this.abort.signal)
+      const { body: ticket, startedAt: start } = await this.client.observationTicket(this.stationId, this.abort.signal)
       if (this.disposed) return
       if (!/^[0-9a-f]{64}$/.test(ticket.ticket) || !Number.isSafeInteger(ticket.serverNow)) throw new RemoteError(403)
       this.anchor = { server: ticket.serverNow, start }

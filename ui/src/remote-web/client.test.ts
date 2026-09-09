@@ -25,7 +25,11 @@ async function connection() {
   vi.stubGlobal('WebSocket', Socket)
   const ticket = crypto.randomUUID().replace(/-/g, '') + crypto.randomUUID().replace(/-/g, '')
   const post = vi.fn(async (_path: string, _body?: object, _signal?: AbortSignal) => ({ ticket, serverNow: 1000 }))
-  const remote = new HostedConnection({ post } as unknown as BrowserClient, crypto.randomUUID())
+  const observationTicket = async (stationId: string, signal: AbortSignal) => {
+    const startedAt = performance.now()
+    return { body: await post(`stations/${stationId}/ticket`, {}, signal), startedAt }
+  }
+  const remote = new HostedConnection({ post, observationTicket } as unknown as BrowserClient, crypto.randomUUID())
   remote.start(); await vi.advanceTimersByTimeAsync(0)
   return { remote, post, ticket, socket: sockets[sockets.length - 1] }
 }
@@ -50,6 +54,44 @@ it('uses a one-use subprotocol ticket, accounts for transport/residence age and 
   socket.close()
   await expect(remote.source.read(new AbortController().signal)).rejects.toThrow('remoteUnavailable')
   remote.stop()
+})
+
+it.each([
+  { authenticationMs: 0, transportMs: 100, fresh: true },
+  { authenticationMs: 4000, transportMs: 100, fresh: true },
+  { authenticationMs: 0, transportMs: 3001, fresh: false },
+  { authenticationMs: 4000, transportMs: 3001, fresh: false },
+])('measures $transportMs ms transport independently of $authenticationMs ms obtaining authority', async ({ authenticationMs, transportMs, fresh }) => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'performance'] })
+  vi.stubGlobal('WebSocket', Socket)
+  const ticket = crypto.randomUUID().replace(/-/g, '') + crypto.randomUUID().replace(/-/g, '')
+  const auth = { getTokenSilently: async () => {
+    await new Promise(resolve => setTimeout(resolve, authenticationMs))
+    return 'synthetic-account-token'
+  } } as unknown as Auth0Client
+  vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true,
+    json: async () => ({ ticket, serverNow: 1000 + performance.now() }),
+  })))
+  const remote = new HostedConnection(new BrowserClient(auth), crypto.randomUUID())
+  try {
+    remote.start()
+    await vi.advanceTimersByTimeAsync(authenticationMs)
+    expect(sockets).toHaveLength(1)
+    const socket = sockets[0]
+    await vi.advanceTimersByTimeAsync(200)
+    const sentAtMs = 1000 + performance.now()
+    await vi.advanceTimersByTimeAsync(transportMs)
+    socket.receive(publication(1, 'native', sentAtMs))
+    if (fresh) {
+      const current = await remote.source.read(new AbortController().signal) as typeof fixtures.spe
+      expect(current.station.radio.readings.dial!.ageMs).toBe(fixtures.spe.station.radio.readings.dial.ageMs + transportMs)
+      expect(socket.sent.map(value => JSON.parse(value))).toEqual([{ type: 'ack', epoch: fixtures.spe.epoch, sequence: 1 }])
+    } else {
+      await expect(remote.source.read(new AbortController().signal)).rejects.toThrow('remoteUnavailable')
+      expect(socket.sent).toHaveLength(0)
+      expect(socket.readyState).toBe(2)
+    }
+  } finally { remote.stop() }
 })
 
 it('refuses fixture data and delayed transport rather than displaying it as native', async () => {
