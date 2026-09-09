@@ -30416,6 +30416,38 @@ mod tests {
         assert!(cab.contains(" W4ABC 599 WILL K1ABC 599 CT\n"), "{cab}");
     }
 
+    /// ⚠️ **A NAMED BEHAVIOUR CHANGE, pinned here rather than discovered.** A section
+    /// the domain does not hold now REFUSES mode entry; before this batch the mode
+    /// started and the operator transmitted it, and the ARRL received a log full of a
+    /// section that does not exist.
+    ///
+    /// It falls out of the general refusal (`ContestSession::for_ruleset` checks every
+    /// sent value against its slot's domain) rather than being a Field Day rule, which
+    /// is why it is worth a test: the shipped guard three lines above it refuses a
+    /// BLANK class or section and always has, so the only thing that moved is the
+    /// out-of-domain case — and it moved toward the refusal the blank case already had.
+    #[test]
+    fn field_day_now_refuses_a_section_its_own_domain_does_not_hold() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_event = "arrlfd".into();
+            s.fd_class = "3A".into();
+            s.fd_section = "ZZZ".into();
+            e.apply_settings(s);
+        }
+        let err = e.set_mode("fieldday-run").unwrap_err();
+        assert!(err.contains("ZZZ"), "the refusal names the value: {err}");
+        // POSITIVE CONTROL: a real section on the same settings starts the mode.
+        {
+            let mut s = e.settings().clone();
+            s.fd_section = "WI".into();
+            e.apply_settings(s);
+        }
+        e.set_mode("fieldday-run").expect("WI is a section");
+    }
+
     /// ⭐ **Field Day's screen is not moved by any of it.** The same engine, the same
     /// snapshot fields, with the picker left on ARRL Field Day: the multiplier count is
     /// zero (the event has no such concept), the score note is empty, and the strip is
