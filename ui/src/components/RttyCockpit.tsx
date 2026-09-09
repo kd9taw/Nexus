@@ -555,7 +555,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
             { hz: rtty.markHz, color: '#3ddc8c', label: 'M' },
             { hz: rtty.spaceHz, color: '#ffb347', label: 'S' },
           ]}
-          hint={t(control ? 'rtty.waterfall.hint' : 'remote.keyboardFollowsStation')}
+          hint={control ? t('rtty.waterfall.hint') : t('remote.keyboardFollowsStation')}
           onTune={control ? (hz) => void rttyNet(hz).then(setRtty).catch(() => {}) : undefined}
         />
       )}
@@ -667,7 +667,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           </button>
         </div>
         {!control && (!rtty || !armed) && <p className="cw-decode-idle" role="status">
-          {t(rtty ? 'remote.keyboardStopped' : 'remote.keyboardUnavailable')}
+          {rtty ? t('remote.keyboardStopped') : t('remote.keyboardUnavailable')}
         </p>}
         <div className="cw-decode-text" ref={streamPin.ref} onScroll={streamPin.onScroll}>
           {text_rx ? (

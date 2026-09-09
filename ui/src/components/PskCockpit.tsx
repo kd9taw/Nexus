@@ -529,7 +529,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
           rxOffsetHz={centerHz}
           txOffsetHz={0}
           cursors={[{ hz: centerHz, color: '#3ddc8c', label: 'RX' }]}
-          hint={t(control ? 'psk.waterfall.hint' : 'remote.keyboardFollowsStation')}
+          hint={control ? t('psk.waterfall.hint') : t('remote.keyboardFollowsStation')}
           onTune={control ? (hz) => void pskNet(hz).then(setPsk).catch(() => {}) : undefined}
         />
       )}
@@ -603,7 +603,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
               </button>
             </div>
             {!control && (!psk || !armed) && <p className="cw-decode-idle" role="status">
-              {t(psk ? 'remote.keyboardStopped' : 'remote.keyboardUnavailable')}
+              {psk ? t('remote.keyboardStopped') : t('remote.keyboardUnavailable')}
             </p>}
             <div className="cw-decode-text" ref={streamPin.ref} onScroll={streamPin.onScroll}>
               {text_rx ? (
