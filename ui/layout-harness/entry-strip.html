@@ -36,6 +36,19 @@
    exists to keep still. 13 px of header is the cheaper of the two, so that is where it
    ships. `sentIn: "row"` below is the rejected alternative, kept because a number
    nobody can reproduce is not evidence.
+
+  THE STATE QSO PARTIES (2026-09-09, re-measured when they became selectable):
+   Two received boxes, exactly Field Day's count — so the ROW budget is untouched. What
+   moves is the SENT string, which is longer than Field Day's `3A WI`. At 1024, header
+   variant:
+     • `3A WI`      sentW 286.9   callW 506.7   stripH 130   overflow 0
+     • `599 WILL`   sentW 312.2   callW 506.7   stripH 130   overflow 0  (TNQP/OhQP/TXQP)
+     • `1234 ALAM`  sentW 320.6   callW 506.7   stripH 130   overflow 0  (CQP, 4-digit serial)
+   The sent block absorbs the extra 34 px inside its own share of the header row: the
+   Call box keeps all 506.7 px, the strip stays at the shipped 130 px, and nothing
+   overflows or wraps. The control still trips — six fields reports
+   `boxesOnOneLine: false`, `stripH 204` — so these are a measurement, not a page that
+   stopped laying out.
 -->
 <body>
 <div class="app" style="display:block">
@@ -70,6 +83,12 @@
 // real classes, so the same page measures Field Day (2) and Sweepstakes (5).
 const FD = ['Class', 'Section'];
 const SS = ['NR', 'PREC', 'CALL', 'CK', 'SEC'];
+// The state QSO parties: two received slots, same as Field Day, but a WIDER sent block
+// — `599 WILL` / `1234 ALAM` against Field Day's `3A WI`. The box count is what the row
+// budget is about; the sent string is what the header block's width is about, and the
+// parties move only the second, so both are measured.
+const QP = ['RST', 'QTH'];
+const SENT = { fd: '3A WI', qp: '599 WILL', cqp: '1234 ALAM' };
 function fields(caps) {
   const host = document.getElementById('boxes');
   host.replaceChildren();
@@ -85,9 +104,10 @@ function fields(caps) {
   }
 }
 
-function measure(width, caps, where) {
+function measure(width, caps, where, sentText) {
   document.querySelector('.host').style.width = width + 'px';
   fields(caps);
+  document.querySelector('.le-fd-sent-val').textContent = sentText || SENT.fd;
   // VARIANT: where the read-only sent block lives — in the entry row (the literal
   // reading of §9's "beside the entry boxes") or in the strip's header row.
   const sentEl = document.querySelector('.le-fd-sent');
@@ -107,6 +127,7 @@ function measure(width, caps, where) {
     width,
     fields: caps.length,
     sentIn: where || 'row',
+    sentText: document.querySelector('.le-fd-sent-val').textContent,
     // The whole point: the row WRAPS, it never scrolls.
     rowOverflow: +Math.max(0, row.scrollWidth - row.clientWidth).toFixed(1),
     stripOverflow: +Math.max(0, strip.scrollWidth - strip.clientWidth).toFixed(1),
@@ -135,6 +156,10 @@ function run() {
     rows.push(measure(w, FD, 'header'));
     rows.push(measure(w, SS, 'header'));
   }
+  // The QSO parties at the floor: two boxes like Field Day, and the widest sent strings
+  // any shipped ruleset produces.
+  rows.push(measure(1024, QP, 'header', SENT.qp));
+  rows.push(measure(1024, QP, 'header', SENT.cqp));
   // CONTROL: one MORE field than the budget admits. If the numbers below do not move
   // from the five-field row, the measurement is not seeing the boxes.
   rows.push(measure(1024, SS.concat(['SIX']), 'header'));
