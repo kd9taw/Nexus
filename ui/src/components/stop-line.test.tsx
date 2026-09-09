@@ -402,8 +402,10 @@ const snap = { mycall: 'KD9TAW', radio } as unknown as AppSnapshot
 /** Field Day switched ON, as App hands it to the cockpits during an event — the state that
  *  swaps their log strip for the FD one. See the Phone case's own note on why it is swept. */
 const fdStatus = {
-  myClass: '3A',
-  mySection: 'WI',
+  composing: [
+    { key: 'CLASS', raw: '3A' },
+    { key: 'SECTION', raw: 'WI', domain: 'fd_sections' },
+  ],
   running: true,
   state: 'running',
   qsoCount: 12,

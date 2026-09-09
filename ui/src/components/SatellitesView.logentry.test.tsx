@@ -167,8 +167,10 @@ const snap = (over: Record<string, unknown> = {}, top: Record<string, unknown> =
 
 /** Field Day running, the way `snap.fieldDay` arrives from the engine. */
 const fieldDay = () => ({
-  myClass: '1D',
-  mySection: 'IL',
+  composing: [
+    { key: 'CLASS', raw: '1D' },
+    { key: 'SECTION', raw: 'IL', domain: 'fd_sections' },
+  ],
   running: true,
   state: 'running',
   qsoCount: 4,

@@ -8724,6 +8724,20 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   padding-top: var(--space-2);
   border-top: 1px solid var(--border-soft);
 }
+/* THE END-OF-CONTEST MERGE — the trigger and its report, on the row above the upload
+   switch so both sit under the same limitation hint. It wraps rather than growing: the
+   report is a sentence, not a column, and the block is a control strip that may never
+   use surplus height. */
+.fd-merge {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.fd-merge-report {
+  font-size: var(--fs-label);
+  color: var(--text-dim);
+}
 .fd-upload-row {
   display: flex;
   align-items: center;

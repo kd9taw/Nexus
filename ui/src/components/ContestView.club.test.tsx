@@ -57,8 +57,10 @@ const CLUB: FdClubStatus = {
 }
 
 const fd = (club?: FdClubStatus): FieldDayStatus => ({
-  myClass: '3A',
-  mySection: 'WI',
+  composing: [
+    { key: 'CLASS', raw: '3A' },
+    { key: 'SECTION', raw: 'WI', domain: 'fd_sections' },
+  ],
   running: false,
   state: 'Listening',
   qsoCount: 0,

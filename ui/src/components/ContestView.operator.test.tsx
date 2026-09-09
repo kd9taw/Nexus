@@ -22,8 +22,10 @@ vi.mock('../api', () => ({
 }))
 
 const FD: FieldDayStatus = {
-  myClass: '1A',
-  mySection: 'IL',
+  composing: [
+    { key: 'CLASS', raw: '1A' },
+    { key: 'SECTION', raw: 'IL', domain: 'fd_sections' },
+  ],
   running: true,
   state: 'sp',
   qsoCount: 0,

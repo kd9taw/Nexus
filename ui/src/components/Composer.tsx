@@ -4,6 +4,7 @@
 // closers themselves, and `DE <MYCALL>` is the on-air framing prefix.
 import { useState } from 'react'
 import type { FieldDayStatus, OpMode, Settings } from '../types'
+import { composingText } from '../features/contestExchange'
 import { clampToFrames } from '../freetext'
 import { t } from '../i18n'
 import { FreetextMeter } from './FreetextMeter'
@@ -39,10 +40,9 @@ function quickRepliesFor(
       return macros.qso
     case 'fieldDay': {
       if (fieldDay == null || fieldDay.event !== 'wfd') return macros.chat
-      const exchange =
-        fieldDay.myClass && fieldDay.mySection
-          ? `${fieldDay.myClass} ${fieldDay.mySection}`
-          : null
+      // What the SESSION is composing — this chip sends the next contact's exchange, so
+      // the session is the right source. A row already logged carries its own `mex`.
+      const exchange = composingText(fieldDay.composing)
       return exchange ? [exchange, 'RR73', '73'] : ['RR73', '73']
     }
     case 'chat':
@@ -59,12 +59,8 @@ export function Composer({ peer, mode, fieldDay, macros, onSend, broadcast = fal
   // move, not just another closer. Gated to WFD (see quickRepliesFor); null under
   // SFD/no-FD so no chip gets highlighted.
   const fdExchange =
-    !broadcast &&
-    mode === 'fieldDay' &&
-    fieldDay?.event === 'wfd' &&
-    fieldDay.myClass &&
-    fieldDay.mySection
-      ? `${fieldDay.myClass} ${fieldDay.mySection}`
+    !broadcast && mode === 'fieldDay' && fieldDay?.event === 'wfd'
+      ? composingText(fieldDay.composing) || null
       : null
   // Broadcasts go on air as `DE <MYCALL> <body>` — the prefix counts against the
   // frame budget but isn't typed in the box, so feed it to the clamp + meter.

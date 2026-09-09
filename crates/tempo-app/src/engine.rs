@@ -16292,11 +16292,6 @@ impl Engine {
                 // banner/countdown's single source — no TS date math).
                 let event_window = rs.next_or_running(now_unix_secs());
                 s.field_day = Some(FieldDayStatus {
-                    // What the session is composing RIGHT NOW. Each DTO row still
-                    // carries its own received exchange; the per-row SENT exchange
-                    // reaches the UI when `FieldDayQso` gains `mex` (the DTO batch).
-                    my_class: log.session.field("CLASS").to_string(),
-                    my_section: log.session.field("SECTION").to_string(),
                     running: *running,
                     state: format!("{:?}", station.state),
                     dxcall: station.dxcall.clone(),
@@ -16339,6 +16334,11 @@ impl Engine {
                             mode: q.mode.clone(),
                             submode: q.submode.clone(),
                             when_unix: q.when_unix,
+                            // ⭐ THE ROW'S OWN SENT EXCHANGE (§3.3). Rendered from the
+                            // row by the one function that renders one, so an emitter
+                            // looping over these rows has the right value in hand and
+                            // no reason to reach out to the session.
+                            mex: tempo_core::contest::sent_exchange_string(q, spec),
                         })
                         .collect(),
                     club: self.fd_club_dto(log),
@@ -29560,6 +29560,36 @@ mod tests {
         );
     }
 
+    /// ⭐ **And it reaches the DTO per row** — which is the seam the interop emitters
+    /// read, and the one that was wrong.
+    ///
+    /// The row above proves the core renders a per-row exchange; this proves the
+    /// snapshot carries it, because `FieldDayStatus` no longer has a session-level pair
+    /// an emitter could reach for instead (§3.3 mechanism 2). The session is composing
+    /// `3A IL` while two rows still say `3A WI`, so a snapshot that leaked the session's
+    /// value would be visibly wrong here.
+    #[test]
+    fn the_snapshot_gives_every_row_its_own_sent_exchange() {
+        let mut e = fd_session("W9XYZ");
+        e.contest_i_moved(vec![("SECTION".to_string(), "IL".to_string())])
+            .expect("IL is a section");
+        assert!(e.fd_log_manual("K2DEF", "1D", "MN", "CW").unwrap());
+        let fd = e.snapshot().field_day.expect("in Field Day");
+        assert_eq!(
+            fd.log.iter().map(|q| q.mex.as_str()).collect::<Vec<_>>(),
+            vec!["3A WI", "3A WI", "3A IL"]
+        );
+        // The positive control: the session's own composing exchange is the OTHER
+        // value, so this fixture can tell a per-row read from a session-level one.
+        assert_eq!(
+            fd.composing
+                .iter()
+                .map(|v| v.raw.as_str())
+                .collect::<Vec<_>>(),
+            vec!["3A", "IL"]
+        );
+    }
+
     /// A refused move writes NEITHER half — the property that makes "both or neither"
     /// mean something.
     #[test]
@@ -30759,8 +30789,15 @@ mod tests {
             .field_day
             .expect("master on + class/section → engine enters Field Day S&P");
         assert!(!fd.running, "the master enters passive S&P, not a run");
-        assert_eq!(fd.my_class, "3A");
-        assert_eq!(fd.my_section, "WI");
+        // The session's composing exchange — a vector of slots, which is the only shape
+        // a session-level sent exchange crosses this seam in (§3.3 mechanism 2).
+        assert_eq!(
+            fd.composing
+                .iter()
+                .map(|v| (v.key.as_str(), v.raw.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("CLASS", "3A"), ("SECTION", "WI")]
+        );
     }
 
     /// `FieldDayStatus.assistance_on` mirrors `Settings::assistance_sources()`'s

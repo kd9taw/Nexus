@@ -50,8 +50,6 @@ const snap = {
  *  composing exchange as a VECTOR, and the empty role of a symmetric contest. */
 const fdStatus = (over: Partial<FieldDayStatus> = {}): FieldDayStatus =>
   ({
-    myClass: '3A',
-    mySection: 'WI',
     running: true,
     state: 'Idle',
     qsoCount: 0,

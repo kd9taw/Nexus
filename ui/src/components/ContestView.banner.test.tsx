@@ -26,8 +26,10 @@ const WFD_START = Date.UTC(2026, 0, 24, 16, 0, 0) / 1000
 const WFD_END = WFD_START + 30 * 3600
 
 const FD: FieldDayStatus = {
-  myClass: '1O',
-  mySection: 'IL',
+  composing: [
+    { key: 'CLASS', raw: '1O' },
+    { key: 'SECTION', raw: 'IL', domain: 'fd_sections' },
+  ],
   running: true,
   state: 'sp',
   qsoCount: 0,

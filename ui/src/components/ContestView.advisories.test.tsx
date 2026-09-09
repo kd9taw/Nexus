@@ -30,8 +30,10 @@ const WFD_RULES: FdRulesetDto = {
 const SFD_RULES: FdRulesetDto = { ...WFD_RULES, event: 'arrlfd', bannedModes: [] }
 
 const fd = (over: Partial<FieldDayStatus> = {}): FieldDayStatus => ({
-  myClass: '1O',
-  mySection: 'IL',
+  composing: [
+    { key: 'CLASS', raw: '1O' },
+    { key: 'SECTION', raw: 'IL', domain: 'fd_sections' },
+  ],
   running: true,
   state: 'sp',
   qsoCount: 0,
