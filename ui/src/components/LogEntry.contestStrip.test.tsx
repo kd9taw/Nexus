@@ -270,6 +270,29 @@ describe('the sent side, read-only, with its one action', () => {
     expect(api.contestIMoved).toHaveBeenCalledWith([['SECTION', 'IL']])
   })
 
+  it('commits on Enter and backs out on Escape — the hands stay on the keyboard', async () => {
+    renderStrip()
+    fireEvent.click(screen.getByRole('button', { name: 'I moved' }))
+    const sent = document.querySelector('.le-fd-sent')!
+    const sec = [...sent.querySelectorAll('input')].find(
+      (i) => i.getAttribute('aria-label') === 'Section',
+    )!
+    fireEvent.change(sec, { target: { value: 'IL' } })
+    fireEvent.keyDown(sec, { key: 'Escape' })
+    // Backed out: the read-only value is showing again and nothing was sent.
+    expect(document.querySelector('.le-fd-sent-val')!.textContent).toBe('3A WI')
+    expect(api.contestIMoved).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'I moved' }))
+    const sec2 = [...document.querySelectorAll('.le-fd-sent input')].find(
+      (i) => i.getAttribute('aria-label') === 'Section',
+    )!
+    await act(async () => {
+      fireEvent.change(sec2, { target: { value: 'IL' } })
+      fireEvent.keyDown(sec2, { key: 'Enter' })
+    })
+    expect(api.contestIMoved).toHaveBeenCalledWith([['SECTION', 'IL']])
+  })
+
   it('sends nothing when nothing changed', async () => {
     renderStrip()
     fireEvent.click(screen.getByRole('button', { name: 'I moved' }))

@@ -1156,6 +1156,13 @@ export function LogEntry({
                       onChange={(e) =>
                         setMovingTo((prev) => ({ ...prev, [v.key]: e.target.value.toUpperCase() }))
                       }
+                      // Enter commits and Escape backs out, because a contest
+                      // operator's hands are on the keyboard and a two-box edit that
+                      // needs the mouse to finish is one they will not use mid-run.
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') void commitMove()
+                        else if (e.key === 'Escape') setMovingTo(null)
+                      }}
                       aria-label={fdFieldLabel(v.key)}
                       autoComplete="off"
                       spellCheck={false}
