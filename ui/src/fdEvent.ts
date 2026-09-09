@@ -51,6 +51,14 @@ export const CONTESTS: { id: string; name: string }[] = [
   // and on arrl.org.
   { id: 'arrlss_cw', name: 'ARRL November Sweepstakes (CW)' },
   { id: 'arrlss_ssb', name: 'ARRL November Sweepstakes (Phone)' },
+  // ⚠️ ARRL VHF is THREE contests, not one row with three dates. The January running
+  // prices 902/1296 MHz and 2.3 GHz-and-up differently from June and September
+  // (VHF-Rules.pdf v1.2 §5.1 vs §5.2), each running has its own ADIF id and Cabrillo
+  // token, and each is on its own weekend in its own month. ARRL's own current names,
+  // as they appear on the contest calendar.
+  { id: 'arrlvhf_jan', name: 'ARRL January VHF Contest' },
+  { id: 'arrlvhf_jun', name: 'ARRL June VHF Contest' },
+  { id: 'arrlvhf_sep', name: 'ARRL September VHF Contest' },
   // CQ WW and CQ WPX are likewise two contests each, on separate weekends with separate
   // Cabrillo tokens. The sponsors' own names, from cqww.com and cqwpx.com.
   // NB the RTTY runnings of both are a DIFFERENT sponsor's contests (CQ/RJ, with the RTTY

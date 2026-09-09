@@ -1050,6 +1050,31 @@ struct ScoringSpec {
     /// SCORE a relation-priced contest, and the first build that can is the one that
     /// introduced the key.
     relation_points: Vec<RelationPointsSpec>,
+    /// ⭐ **The QSO-point table for a contest priced by the BAND alone** — ARRL January /
+    /// June / September VHF, whose §5.1 and §5.2 are four band groups each.
+    ///
+    /// **`[]` is the explicit "this event prices some other way"**, the statement
+    /// `multipliers: []` and `relation_points: []` each make about themselves, and the key
+    /// is REQUIRED for the same reason: a file that simply forgot ARRL VHF's table must
+    /// not load and score every contact at zero.
+    ///
+    /// ⚠️ **Exactly one of the three point tables is populated.** Two live tables would
+    /// leave a reader to guess which one scored the log.
+    ///
+    /// ⚠️ An ADDITION to schema 2 like `relation_points` before it, not a reshape: an
+    /// already-shipped build ignores an unknown key and keeps receiving rules updates.
+    band_points: Vec<BandPointsSpec>,
+}
+
+/// One row of [`ScoringSpec::band_points`].
+#[derive(Debug, serde::Deserialize)]
+struct BandPointsSpec {
+    /// Band labels this row prices — `["6m", "2m"]`. Never empty and never overlapping
+    /// another row; both are refused, because an empty list is a catch-all that would
+    /// price a band the contest does not score and an overlap turns a lookup into an
+    /// ordered rule list.
+    bands: Vec<String>,
+    points: u32,
 }
 
 /// One row of [`ScoringSpec::relation_points`].
@@ -1304,24 +1329,70 @@ fn parse_spec(text: &str) -> Result<FileSpec, String> {
                 r.scoring.model
             ));
         }
-        // ⭐ EXACTLY ONE point table is live. `relation_points: []` is the explicit "this
-        // event prices by mode class" and is what every contest before CQ WW writes; a
-        // populated table means the mode-class map must be empty, because there is no
-        // honest per-mode-class number for a contest whose points depend on where the
-        // other station is.
-        if r.scoring.relation_points.is_empty() {
+        // ⭐ EXACTLY ONE point table is live. `relation_points: []` and `band_points: []`
+        // are each the explicit "this event does not price that way", and what every
+        // contest before CQ WW writes is both of them empty plus a full mode-class map.
+        // Two populated tables would leave a reader to guess which one scored the log,
+        // and there is no honest per-mode-class number for a contest whose points depend
+        // on where the other station is or on which band it was worked.
+        //
+        // The order here is the order the message names them in, and it is pinned by the
+        // corpus fixture that predates the third table.
+        let populated: Vec<&str> = [
+            (!r.scoring.relation_points.is_empty()).then_some("relation_points"),
+            (!r.scoring.points_by_mode_class.is_empty()).then_some("points_by_mode_class"),
+            (!r.scoring.band_points.is_empty()).then_some("band_points"),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        if populated.len() > 1 {
+            let named = match populated.as_slice() {
+                [a, b] => format!("both {a} and {b}"),
+                parts => parts.join(", "),
+            };
+            return Err(format!(
+                "{tag}: {named} are populated (a contest has ONE point table)"
+            ));
+        }
+        if r.scoring.relation_points.is_empty() && r.scoring.band_points.is_empty() {
             for k in ["PH", "CW", "DIG"] {
                 if !r.scoring.points_by_mode_class.contains_key(k) {
                     return Err(format!("{tag}: points_by_mode_class misses {k}"));
                 }
             }
-        } else {
-            if !r.scoring.points_by_mode_class.is_empty() {
-                return Err(format!(
-                    "{tag}: both relation_points and points_by_mode_class are populated \
-                     (a contest has ONE point table)"
-                ));
+        }
+        // ⭐ The BAND-GROUP table's shape. There is deliberately no COVERAGE check to
+        // match `relation_points`' one below: every contact has exactly one relation, so a
+        // missing relation arm is a hole; a band is not a closed set a rules file
+        // enumerates, and ARRL VHF's own table names the seven bands it scores and is
+        // silent about the rest. What must hold instead is that the table is a LOOKUP —
+        // one answer per band, or none.
+        {
+            let mut seen: Vec<String> = Vec::new();
+            for g in &r.scoring.band_points {
+                if g.bands.is_empty() {
+                    return Err(format!(
+                        "{tag}: a band_points row names no bands (an empty list would be a \
+                         catch-all, and it would price the bands this contest does not score)"
+                    ));
+                }
+                for b in &g.bands {
+                    if b.trim().is_empty() {
+                        return Err(format!("{tag}: band_points names an empty band label"));
+                    }
+                    let up = b.trim().to_ascii_uppercase();
+                    if seen.contains(&up) {
+                        return Err(format!(
+                            "{tag}: band {b:?} is priced by two band_points rows (the table \
+                             is a lookup, so a band in two rows has no answer)"
+                        ));
+                    }
+                    seen.push(up);
+                }
             }
+        }
+        if !r.scoring.relation_points.is_empty() {
             // ⚠️ The VOCABULARY first, then the coverage. A misspelt relation is also a
             // missing one, and reporting the coverage failure for a row that is simply
             // typed wrong sends the reader to the wrong half of the file.
@@ -1950,10 +2021,23 @@ fn build(spec: FileSpec) -> RulesTable {
                     .collect::<Vec<_>>()
                     .into_boxed_slice(),
             );
-            // The two point tables the validator has already proved are mutually
-            // exclusive: a populated `relation_points` is the relation-priced contest,
-            // and an empty one is the per-mode-class map every earlier contest writes.
-            let qso_points = if r.scoring.relation_points.is_empty() {
+            // The three point tables the validator has already proved are mutually
+            // exclusive: a populated `band_points` is the band-group-priced contest, a
+            // populated `relation_points` the relation-priced one, and neither is the
+            // per-mode-class map every earlier contest writes.
+            let qso_points = if !r.scoring.band_points.is_empty() {
+                PointsRule::ByBandGroup(Box::leak(
+                    r.scoring
+                        .band_points
+                        .into_iter()
+                        .map(|g| crate::contest::BandPoints {
+                            bands: leak_keys(g.bands),
+                            points: g.points,
+                        })
+                        .collect::<Vec<_>>()
+                        .into_boxed_slice(),
+                ))
+            } else if r.scoring.relation_points.is_empty() {
                 PointsRule::ByModeClass(points)
             } else {
                 PointsRule::ByRelation(Box::leak(
@@ -3907,9 +3991,9 @@ mod tests {
         let b = build(parse_spec(&twice).expect("and parses again after a round trip"));
         assert_eq!(
             a.rulesets.len(),
-            12,
+            15,
             "two Field Day events + four QSO parties + both Sweepstakes weekends + \
-             CQ WW's two and CQ WPX's two"
+             CQ WW's two and CQ WPX's two + ARRL VHF's three runnings"
         );
         assert_eq!(a.rulesets.len(), b.rulesets.len());
         for (x, y) in a.rulesets.iter().zip(b.rulesets) {

@@ -429,7 +429,7 @@ impl ContestSession {
                 .exchange
                 .field(key)
                 .ok_or_else(|| format!("{key} is not a slot this exchange declares"))?;
-            let raw = sent_value(field, role, station, &s.my_location)?;
+            let raw = normalise_sent(field, &sent_value(field, role, station, &s.my_location)?);
             if raw.is_empty() {
                 if field.required {
                     return Err(format!(
@@ -681,10 +681,21 @@ Fill it in on the Contesting tab in Settings."
                 .exchange
                 .field(key)
                 .ok_or_else(|| format!("{key} is not a slot this exchange declares"))?;
-            let raw = raw.trim().to_ascii_uppercase();
+            let raw = normalise_sent(field, &raw.trim().to_ascii_uppercase());
             if let super::FieldKind::Enum { domain } = field.kind {
                 if !domain.contains(&raw) {
                     return Err(format!("\"{raw}\" is not a {} value", domain.id));
+                }
+            }
+            // ⭐ A GRID is the other shape whose universe this crate can state, and a
+            // move is exactly when a rover's changes. An unchecked one goes on the air
+            // and then becomes a multiplier bucket of its own in every log that copies
+            // it — the same failure a section that is not a section makes, one line up.
+            if let super::FieldKind::Grid { chars } = field.kind {
+                if !accepts(field, &raw, role) {
+                    return Err(format!(
+                        "\"{raw}\" is not a {chars}-character Maidenhead grid square."
+                    ));
                 }
             }
             let v = self
@@ -802,12 +813,39 @@ not carry",
     }
 }
 
+/// ⭐ **The one KIND-driven normalisation a sent value gets, and it is a CUT rather
+/// than a rewrite.**
+///
+/// [`FieldSpec`](super::FieldSpec)'s own header forbids rewriting what a station sent,
+/// and this does not: `my_exchange` is the SOURCE a row copies from, never the record of
+/// a row already logged, so what is normalised here is what is about to go on the air.
+///
+/// Today it is grids and only grids. `mygrid` is the station's identity setting and a
+/// six-character locator is correct there — it is what awards want and what a logbook
+/// record should carry — while ARRL VHF §4.1 asks for *"4-character Maidenhead
+/// grid-square locator"*. That is exactly the split
+/// [`qso::air_grid`](crate::qso) already makes at the FT message boundary: the settings
+/// grid is untouched and only what leaves the antenna is cut. Without the cut an
+/// operator with a perfectly ordinary `EN52AA` would either be refused a contest they
+/// are entitled to enter, or would transmit a locator that counts as its own multiplier
+/// in every log that copies it.
+///
+/// A slot of any other kind is returned unchanged: there is no other shape this build
+/// can shorten without guessing.
+fn normalise_sent(field: &'static super::FieldSpec, raw: &str) -> String {
+    match field.kind {
+        super::FieldKind::Grid { chars } => raw.chars().take(chars as usize).collect(),
+        _ => raw.to_string(),
+    }
+}
+
 /// Is `raw` a value this slot's declared shape holds, FOR THIS ROLE?
 ///
-/// Only the shapes whose universe this crate CAN state are checked — an `Enum`'s domain
-/// and a `OneOf`'s arms. A `Pattern` needs a matcher this crate does not carry and a
-/// `Number`'s bounds are checked by whatever parsed it; approximating either is exactly
-/// what [`FieldKind::Pattern`](super::FieldKind::Pattern) forbids, so both pass.
+/// Only the shapes whose universe this crate CAN state are checked — an `Enum`'s domain,
+/// a `Grid`'s Maidenhead form, and a `OneOf`'s arms. A `Pattern` needs a matcher this
+/// crate does not carry and a `Number`'s bounds are checked by whatever parsed it;
+/// approximating either is exactly what
+/// [`FieldKind::Pattern`](super::FieldKind::Pattern) forbids, so both pass.
 ///
 /// ⭐ **The role is a parameter because a `OneOf`'s catch-all arm belongs to ONE role,
 /// not to the slot.** TNQP and TXQP express "or a U.S. state, Canadian province or DXCC
@@ -825,6 +863,16 @@ fn accepts(field: &'static super::FieldSpec, raw: &str, role: &'static RoleSpec)
     };
     match field.kind {
         super::FieldKind::Enum { domain } => domain.contains(raw),
+        // ⭐ A [`FieldKind::Grid`] is the third shape whose universe this crate CAN
+        // state: a Maidenhead locator is a closed form, not a pattern needing a matcher,
+        // and `message::is_valid_grid` is the one place this build decides what one is
+        // (it already gates FT keying on the same question). The length is checked
+        // separately because that predicate accepts 4 AND 6 and the ruleset declares
+        // which the sponsor asked for — a six-character locator sent into a four-
+        // character slot is a multiplier of its own in every log that copies it.
+        super::FieldKind::Grid { chars } => {
+            raw.len() == chars as usize && crate::message::is_valid_grid(raw)
+        }
         super::FieldKind::OneOf(arms) => {
             let has_enum_arm = arms
                 .iter()

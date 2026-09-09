@@ -407,16 +407,18 @@ fn model_tag(s: &tempo_core::contest::Scoring) -> &'static str {
 /// event that has none.
 ///
 /// ⚠️ **The zeroes are honest, not a fallback.** CQ WW and CQ WPX price a contact by the
-/// RELATION between two stations, so there is no per-mode-class number to show for them —
-/// a phone contact is worth 1, 2, 3 or 0 points depending on who was worked, and this
-/// page's per-mode row cannot say that. The club scoreboard is Field Day's surface
-/// (`FdBoardData::event` is an `FdEvent`, a two-arm enum), so no relation-priced ruleset
-/// reaches here today; the arm exists so that when one does it shows nothing rather than
+/// RELATION between two stations and ARRL VHF prices it by BAND GROUP, so there is no
+/// per-mode-class number to show for any of them — a phone contact is worth 1, 2, 3 or 0
+/// points depending on who was worked, or 1, 2, 3, 4 or 8 depending on the band, and this
+/// page's per-mode row cannot say either. The club scoreboard is Field Day's surface
+/// (`FdBoardData::event` is an `FdEvent`, a two-arm enum), so neither ruleset family
+/// reaches here today; the arms exist so that when one does it shows nothing rather than
 /// a number it made up.
 fn mode_points_of(s: &tempo_core::contest::Scoring) -> tempo_core::contest::ModePoints {
     match s.qso_points {
         tempo_core::contest::PointsRule::ByModeClass(points) => points,
-        tempo_core::contest::PointsRule::ByRelation(_) => tempo_core::contest::ModePoints {
+        tempo_core::contest::PointsRule::ByRelation(_)
+        | tempo_core::contest::PointsRule::ByBandGroup(_) => tempo_core::contest::ModePoints {
             ph: 0,
             cw: 0,
             dig: 0,
