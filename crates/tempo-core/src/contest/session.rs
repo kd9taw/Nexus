@@ -351,20 +351,21 @@ Fill it in on the Contesting tab in Settings."
                 }
                 continue;
             }
-            // The value is CONFIRMED against the slot's domains here, at the one moment
-            // it is decided, so the recorded arm is a fact rather than a later guess
-            // (§2.4) — and so an out-of-domain value is refused before it goes on the
-            // air rather than after it is in a submitted log.
-            let v = s
-                .exchange
-                .copied(key, &raw)
-                .expect("the slot resolved one line above");
+            // ⭐ CHECKED, THEN CONFIRMED, in that order. An out-of-domain value is
+            // refused here — before it goes on the air, rather than after it is in a
+            // submitted log — and what survives is recorded with the domain arm that
+            // matched it, at the one moment that arm is a fact rather than a later
+            // guess (§2.4).
             if !accepts(field, &raw, role) {
                 return Err(format!(
                     "\"{raw}\" is not a value the {key} slot of this contest accepts."
                 ));
             }
-            my_exchange.push(v);
+            my_exchange.push(
+                s.exchange
+                    .copied(key, &raw)
+                    .expect("the slot resolved a few lines above"),
+            );
         }
         s.my_exchange = my_exchange;
         // ⭐ **Where the entry says it is, derived the SAME way `move_to` derives it** —
