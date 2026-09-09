@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 mod dxpeditions;
 mod insights;
+pub(super) mod memories;
 mod recall;
 
 const PAGE_BYTES: usize = 256 * 1024;
@@ -27,6 +28,7 @@ pub enum Collection {
     Awards,
     Statistics,
     Dxpeditions,
+    Memories,
 }
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -59,7 +61,10 @@ impl Request {
             })
             && (!matches!(
                 self.collection,
-                Collection::Awards | Collection::Statistics | Collection::Dxpeditions
+                Collection::Awards
+                    | Collection::Statistics
+                    | Collection::Dxpeditions
+                    | Collection::Memories
             ) || self.cursor.is_none())
             && self
                 .cursor
@@ -92,6 +97,7 @@ pub struct Sources {
     pub ota: crate::SharedOtaSpots,
     pub health: crate::SharedHealth,
     pub propagation: crate::PropCache,
+    pub memories: memories::Bank,
 }
 
 // Display-only journal from the existing Remote snapshot producer. The engine's
@@ -256,6 +262,7 @@ impl Publisher {
                     | Collection::Awards
                     | Collection::Statistics
                     | Collection::Dxpeditions
+                    | Collection::Memories
             ) {
                 0 // Explicit selection/Refresh must see intervening local log changes.
             } else if request.collection == Collection::Decodes {
@@ -351,6 +358,13 @@ impl Publisher {
             _ => Err("applicationUnavailable"),
         };
         let rows = match request.collection {
+            Collection::Memories => {
+                return Ok((
+                    Vec::new(),
+                    0,
+                    memories::read(&sources.ok_or("applicationUnavailable")?.memories)?,
+                ));
+            }
             Collection::Dxpeditions => {
                 return Ok((
                     Vec::new(),

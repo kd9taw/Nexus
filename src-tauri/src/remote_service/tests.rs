@@ -132,6 +132,51 @@ fn disable_preempts_a_full_command_queue() {
 }
 
 #[test]
+fn memory_publication_obeys_enable_generation_and_disable_preemption() {
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let (commands, _receiver) = mpsc::channel(1);
+    let service = Service {
+        commands,
+        status: Default::default(),
+        control: Default::default(),
+    };
+    let bank = service.control.lock().unwrap().memories.clone();
+    let raw = include_str!("../../../ui/src/remote-web/__fixtures__/memories.json");
+    assert!(!service.publish_memories("0", Some(raw)));
+    assert!(service.status().unwrap().observation_generation.is_none());
+    service.control.lock().unwrap().enabled = true;
+    assert_eq!(
+        service.status().unwrap().observation_generation.as_deref(),
+        Some("0")
+    );
+    assert!(service.publish_memories("0", Some(raw)));
+    assert!(query::memories::read(&bank).is_ok());
+    assert!(!service.publish_memories("0", Some("{}")));
+    assert!(query::memories::read(&bank).is_err());
+    assert!(service.publish_memories("0", Some(raw)));
+    let (reply, _) = oneshot::channel();
+    service
+        .commands
+        .try_send((Action::Refresh {}, 0, reply))
+        .unwrap();
+    assert_eq!(
+        runtime.block_on(service.action(Action::Disable {})).err(),
+        Some("remoteBusy")
+    );
+    assert!(query::memories::read(&bank).is_err());
+    service.control.lock().unwrap().enabled = true;
+    assert!(
+        !service.publish_memories("0", Some(raw)),
+        "old enable replies cannot revive the bank"
+    );
+    assert!(query::memories::read(&bank).is_err());
+    assert!(service.publish_memories("1", Some(raw)));
+    assert!(query::memories::read(&bank).is_ok());
+    assert!(!service.publish_memories("1", None));
+    assert!(query::memories::read(&bank).is_err());
+}
+
+#[test]
 fn refused_enable_does_not_change_local_authority() {
     let runtime = tokio::runtime::Runtime::new().unwrap();
     let (commands, _receiver) = mpsc::channel(1);
@@ -233,6 +278,7 @@ fn cloud_runtime_probe() {
         ota: Default::default(),
         health: Default::default(),
         propagation: prop_cache.clone(),
+        memories: Default::default(),
     };
     let mut service = Service::start(
         origin.clone(),
@@ -248,6 +294,17 @@ fn cloud_runtime_probe() {
     std::io::stdout().flush().unwrap();
     for line in lines {
         let value: serde_json::Value = serde_json::from_str(&line.unwrap()).unwrap();
+        if value["type"] == "publishMemories" {
+            let generation = service
+                .status()
+                .unwrap()
+                .observation_generation
+                .unwrap_or_default();
+            let accepted = service.publish_memories(&generation, value["bank"].as_str());
+            println!("REMOTE_TEST:{}", json!({ "accepted": accepted }));
+            std::io::stdout().flush().unwrap();
+            continue;
+        }
         if value["type"] == "seedDxpeditions" {
             let mut e = engine.lock().unwrap();
             let mut settings = e.settings().clone();

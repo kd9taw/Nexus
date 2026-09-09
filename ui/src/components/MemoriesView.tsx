@@ -37,6 +37,7 @@ import {
   updateMemory,
   useMemories,
   type Memory,
+  type MemoriesBank,
   type MemoryKind,
   type OffsetDir,
   type ToneMode,
@@ -57,7 +58,9 @@ export interface MemoriesViewProps {
   dialMhz: number
   dialMode: string
   /** Recall = tune (App's recallMemory: settings + retune + cockpit switch). */
-  onRecall: (m: Memory) => void
+  onRecall?: (m: Memory) => void
+  /** An ephemeral station bank. Never read or write the local singleton in this view. */
+  observation?: MemoriesBank
   /** Station grid from Settings — how far away a starred repeater is, recomputed
    * from here on every render (operate portable and the mileage follows you). */
   myGrid?: string
@@ -324,14 +327,22 @@ function rowSummary(m: Memory, myGrid: string, units: Units): string {
   return parts.join(' · ')
 }
 
-export function MemoriesView({
+export function MemoriesView(props: MemoriesViewProps) {
+  return props.observation ? <MemoriesContent {...props} bank={props.observation} /> : <NativeMemoriesView {...props} />
+}
+function NativeMemoriesView(props: MemoriesViewProps) {
+  const bank = useMemories()
+  return <MemoriesContent {...props} bank={bank} />
+}
+function MemoriesContent({
   dialMhz,
   dialMode,
   onRecall,
   myGrid = '',
   onPopOut,
-}: MemoriesViewProps) {
-  const bank = useMemories()
+  bank,
+  observation,
+}: MemoriesViewProps & { bank: MemoriesBank }) {
   const units = useUnits()
   const [sel, setSel] = useState<Selection>('all')
   const [q, setQ] = useState('')
@@ -433,7 +444,7 @@ export function MemoriesView({
   const selectedShown = shown.filter((m) => selected.has(m.id))
   const allShownSelected = shown.length > 0 && selectedShown.length === shown.length
 
-  const commit = (fn: (b: typeof bank) => typeof bank) => memoriesStore.update(fn)
+  const commit = (fn: (b: typeof bank) => typeof bank) => { if (!observation) memoriesStore.update(fn) }
 
   // An operator edit to a channel's CONTENT makes the row theirs: a pack re-install
   // reconciles only rows the pack still owns (source 'curated'), so this stamp is what
@@ -983,7 +994,7 @@ export function MemoriesView({
 
   return (
     <section className="memories-view" aria-label={t('memories.aria')}>
-      {showPacks && (
+      {!observation && showPacks && (
         <div className="mv-packs-overlay" onClick={() => setShowPacks(false)}>
           <div
             className="mv-packs"
@@ -1055,7 +1066,7 @@ export function MemoriesView({
             ) : (
               sideItem({ group: g.id }, g.name, bank.memories.filter((m) => m.groups.includes(g.id)).length)
             )}
-            {groupSel === g.id && renamingGroup !== g.id && (
+            {!observation && groupSel === g.id && renamingGroup !== g.id && (
               <span className="mv-side-tools">
                 <button
                   type="button"
@@ -1078,7 +1089,7 @@ export function MemoriesView({
             )}
           </div>
         ))}
-        <form
+        {!observation && <form
           className="mv-side-add"
           onSubmit={(e) => {
             e.preventDefault()
@@ -1094,7 +1105,7 @@ export function MemoriesView({
           <button type="submit" disabled={!newGroupName.trim()}>
             ＋
           </button>
-        </form>
+        </form>}
       </aside>
 
       <div className="mv-main">
@@ -1121,6 +1132,7 @@ export function MemoriesView({
           >
             {t('memories.toolbar.grid.label')}
           </button>
+          {!observation && <>
           <span className="mv-toolbar-gap" />
           <button
             type="button"
@@ -1186,6 +1198,7 @@ export function MemoriesView({
               e.target.value = '' // re-importing the same file re-fires onChange
             }}
           />
+          </>}
         </div>
 
         {/* The selection bar. Delete only ever takes the VISIBLE selection (`selectedShown`),
@@ -1193,7 +1206,7 @@ export function MemoriesView({
             and Clear with it — vanish at exactly the moment a selection went out of view
             behind a search, leaving rows ticked with nothing on screen saying so and no way
             to drop them without widening the filter again. */}
-        {selected.size > 0 && (
+        {!observation && selected.size > 0 && (
           <div className="mv-selbar">
             <label className="mv-selbar-all">
               <input
@@ -1233,12 +1246,14 @@ export function MemoriesView({
             {bank.memories.length === 0 ? (
               <>
                 <p>{t('memories.empty.none')}</p>
+                {!observation && <>
                 <p className="mv-empty-hint">
                   <T k="memories.empty.hint" tags={{ b: <strong /> }} />
                 </p>
                 <button type="button" className="mv-empty-packs" onClick={() => setShowPacks(true)}>
                   {t('memories.empty.browsePacks')}
                 </button>
+                </>}
               </>
             ) : (
               <p>{t('memories.empty.noMatch')}</p>
@@ -1254,6 +1269,7 @@ export function MemoriesView({
                         without it "select this whole group" costs a manual tick first, since
                         the selection bar only exists once something is selected. */}
                     <input
+                      disabled={!!observation}
                       type="checkbox"
                       className="mv-pick"
                       aria-label={t('memories.select.all.aria')}
@@ -1299,6 +1315,7 @@ export function MemoriesView({
                   >
                     <td>
                       <input
+                        disabled={!!observation}
                         type="checkbox"
                         className="mv-pick"
                         aria-label={t('memories.select.row.aria', { name: m.name })}
@@ -1310,14 +1327,16 @@ export function MemoriesView({
                       <button
                         type="button"
                         className={`mv-star${m.favorite ? ' on' : ''}`}
+                        disabled={!!observation}
                         onClick={() => commit((b) => toggleFavorite(b, m.id))}
-                        title={m.favorite ? t('memories.row.unstar.title') : t('memories.row.star.title')}
+                        title={observation ? undefined : m.favorite ? t('memories.row.unstar.title') : t('memories.row.star.title')}
                       >
                         {m.favorite ? '★' : '☆'}
                       </button>
                     </td>
                     <td>
                       <CommitInput
+                        readOnly={!!observation}
                         className="mv-cell"
                         resetKey={`${m.id}:gname:${m.name}`}
                         value={m.name}
@@ -1326,6 +1345,7 @@ export function MemoriesView({
                     </td>
                     <td>
                       <CommitInput
+                        readOnly={!!observation}
                         className="mv-cell mv-cell-num"
                         resetKey={`${m.id}:grx:${m.rxMhz}`}
                         inputMode="decimal"
@@ -1334,24 +1354,24 @@ export function MemoriesView({
                       />
                     </td>
                     <td>
-                      <ChoiceSelect
+                      {observation ? <span className="mv-cell mv-cell-mode">{m.mode}</span> : <ChoiceSelect
                         key={`${m.id}:gmode`}
                         className="mv-cell mv-cell-mode"
                         label={t('memories.editor.mode.label')}
                         options={MODE_SUGGESTIONS}
                         value={m.mode}
                         onCommit={(v) => editRow(m.id, { mode: v })}
-                      />
+                      />}
                     </td>
                     <td className="mv-ro">{rowSummary(m, myGrid, units) || '—'}</td>
                     <td className="mv-ro">
                       {m.toneMode && m.toneMode !== 'none' ? m.toneMode.toUpperCase() : '—'}
                     </td>
                     <td className="mv-ro">{KIND_LABEL[m.kind]}</td>
-                    <td className="mv-row-actions">
+                    <td className="mv-row-actions">{!observation && <>
                       <button
                         type="button"
-                        onClick={() => onRecall(m)}
+                        onClick={() => { if (!observation) onRecall?.(m) }}
                         title={t('memories.grid.tune.title')}
                       >
                         {t('memories.grid.tune.label')}
@@ -1363,7 +1383,7 @@ export function MemoriesView({
                       >
                         ✕
                       </button>
-                    </td>
+                    </>}</td>
                   </tr>
                     ))}
                   </Fragment>
@@ -1391,13 +1411,13 @@ export function MemoriesView({
                 }${selected.has(m.id) ? ' picked' : ''}`}
               >
                 <div className="mv-row-line">
-                  <input
+                  {!observation && <input
                     type="checkbox"
                     className="mv-pick"
                     aria-label={t('memories.select.row.aria', { name: m.name })}
                     checked={selected.has(m.id)}
                     onChange={() => toggleSelected(m.id)}
-                  />
+                  />}
                   {rankView && (
                     <span
                       className={`mv-rank${offStrip ? ' off' : ''}`}
@@ -1420,16 +1440,18 @@ export function MemoriesView({
                   <button
                     type="button"
                     className={`mv-star${m.favorite ? ' on' : ''}`}
+                    disabled={!!observation}
                     onClick={() => commit((b) => toggleFavorite(b, m.id))}
-                    title={m.favorite ? t('memories.row.unstar.title') : t('memories.row.star.title')}
+                    title={observation ? undefined : m.favorite ? t('memories.row.unstar.title') : t('memories.row.star.title')}
                   >
                     {m.favorite ? '★' : '☆'}
                   </button>
                   <button
                     type="button"
                     className="mv-row-main"
-                    onClick={() => onRecall(m)}
-                    title={t('memories.row.main.title', {
+                    disabled={!!observation}
+                    onClick={() => { if (!observation) onRecall?.(m) }}
+                    title={observation ? undefined : t('memories.row.main.title', {
                       freq: m.rxMhz.toFixed(4),
                       mode: m.mode,
                     })}
@@ -1448,7 +1470,7 @@ export function MemoriesView({
                       ) : null
                     })}
                   </button>
-                  {(rankView || (sel === 'all' && !sort && !query)) && (
+                  {!observation && (rankView || (sel === 'all' && !sort && !query)) && (
                     <span className="mv-row-move">
                       <button
                         type="button"
@@ -1480,10 +1502,11 @@ export function MemoriesView({
                       </button>
                     </span>
                   )}
+                  {!observation && <>
                   <button
                     type="button"
                     className="mv-row-tune"
-                    onClick={() => onRecall(m)}
+                    onClick={() => { if (!observation) onRecall?.(m) }}
                     title={t('memories.row.tune.title')}
                   >
                     {t('memories.row.tune.label')}
@@ -1504,8 +1527,10 @@ export function MemoriesView({
                   >
                     ✕
                   </button>
+                  </>}
                 </div>
-                {editingId === m.id && editor(m, () => setEditingId(null))}
+                {observation && m.notes && <p className="mv-row-sum remote-memory-note">{m.notes}</p>}
+                {!observation && editingId === m.id && editor(m, () => setEditingId(null))}
               </li>
                   )
                 })}
@@ -1518,7 +1543,7 @@ export function MemoriesView({
             ＋ New's editor, docked at the bottom of the pane instead of opening inline
             somewhere in the list. `flex: none` under `.mv-main`, so the list keeps being the
             one scroll owner and the panel is always in front of the operator. */}
-        {addingMem && (
+        {!observation && addingMem && (
           <div
             className="mv-add"
             ref={addRef}

@@ -186,6 +186,7 @@ export async function getRemoteMonitorFrame(): Promise<unknown> {
   return invoke<unknown>('get_remote_monitor_frame')
 }
 
+export function publishRemoteMemoryBank(generation: string, bank: string | null): Promise<boolean> { return invoke('publish_remote_memory_bank', { generation, bank }) }
 export function getRemoteStationStatus(): Promise<RemoteStationStatus> { return invoke('get_remote_station_status') }
 export function remoteStationAction(action: RemoteStationAction): Promise<RemoteStationStatus> { return invoke('remote_station_action', { action }) }
 

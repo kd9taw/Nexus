@@ -347,6 +347,10 @@ function ensureBank(): MemoriesBank {
  * "save to memories") goes through set/update so all mounted surfaces re-render
  * — the v1 bank's stale-until-reload bug is structurally gone. */
 export const memoriesStore = {
+  /** Observe only an already loaded bank; unlike get(), this cannot migrate or persist. */
+  peek(): MemoriesBank | null {
+    return bankState
+  },
   get(): MemoriesBank {
     return ensureBank()
   },

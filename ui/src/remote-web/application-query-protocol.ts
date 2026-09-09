@@ -7,10 +7,11 @@ import { streamExact, streamId } from './application-stream-protocol'
 export const QUERY_COMMAND = 'get_remote_page'
 export const RECALL_COMMAND = 'get_remote_recall'
 export const INSIGHTS_COMMAND = 'get_remote_insights'
+export const MEMORIES_COMMAND = 'get_remote_memories'
 export const DXPEDITIONS_COMMAND = 'get_remote_dxpeditions'
 export const COLLECTIONS = ['decodes', 'needs', 'spots', 'log', 'entities', 'health'] as const
 export type InsightCollection = 'awards' | 'statistics'
-export type Collection = typeof COLLECTIONS[number] | 'recall' | InsightCollection | 'dxpeditions'
+export type Collection = typeof COLLECTIONS[number] | 'recall' | InsightCollection | 'dxpeditions' | 'memories'
 export const QUERY_MAX_BYTES = 256 * 1024
 export const QUERY_ROWS = 128
 export const QUERY_MAX_ROWS = 3000
@@ -21,7 +22,7 @@ export type QueryPage = { type: 'applicationPage'; requestId: string; collection
   offset: number; total: number; retained: number; nextCursor: string | null; ageMs: number; rows: Json[]; meta: Json }
 export const insightCollection = (v: unknown): v is InsightCollection => v === 'awards' || v === 'statistics'
 export const collection = (v: unknown, version = 3): v is Collection => COLLECTIONS.includes(v as typeof COLLECTIONS[number]) ||
-  ([4, 6, 7].includes(version) && v === 'recall') || ([6, 7].includes(version) && insightCollection(v)) || (version === 7 && v === 'dxpeditions')
+  ([4, 6, 7, 8].includes(version) && v === 'recall') || ([6, 7, 8].includes(version) && insightCollection(v)) || ([7, 8].includes(version) && v === 'dxpeditions') || (version === 8 && v === 'memories')
 const integer = (v: unknown) => Number.isSafeInteger(v) && Number(v) >= 0
 export function queryCursor(v: unknown): v is string {
   if (typeof v !== 'string') return false
@@ -36,7 +37,7 @@ export function queryRequest(v: Record<string, unknown>, version = 3): QueryRequ
     /[\p{Cc}\uD800-\uDFFF]/u.test(v.search) || typeof v.unconfirmed !== 'boolean' ||
     (v.collection === 'recall' ? !/^[A-Z0-9/]{3,32}$/.test(v.search) || v.unconfirmed || v.cursor !== null :
       v.collection !== 'log' && (v.search !== '' || v.unconfirmed)) ||
-    ((insightCollection(v.collection) || v.collection === 'dxpeditions') && v.cursor !== null) ||
+    ((insightCollection(v.collection) || v.collection === 'dxpeditions' || v.collection === 'memories') && v.cursor !== null) ||
     (v.after !== null && (v.collection !== 'decodes' || !integer(v.after)))) throw new Error('invalidApplicationQuery')
   return v as QueryRequest
 }

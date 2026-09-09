@@ -10,7 +10,7 @@ import { streamTopic } from './application-stream-protocol'
 import { APPLICATION_VERSIONS, applicationCommands } from './application-capabilities'
 import type { StreamTopic } from './application-stream-protocol'
 import { ApplicationQueryClient } from './application-query-client'
-import { DXPEDITIONS_COMMAND, INSIGHTS_COMMAND, QUERY_COMMAND, RECALL_COMMAND, insightCollection } from './application-query-protocol'
+import { MEMORIES_COMMAND, DXPEDITIONS_COMMAND, INSIGHTS_COMMAND, QUERY_COMMAND, RECALL_COMMAND, insightCollection } from './application-query-protocol'
 
 export type ApplicationPhase = 'connecting' | 'ready' | 'updateRequired' | 'unavailable'
 type Job = { command: ApplicationCommand; resolve: (value: unknown) => void; reject: (reason: Error) => void }
@@ -56,6 +56,10 @@ export class ApplicationClient implements ApplicationTransport {
     this.setPhase('unavailable')
   }
   invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+    if (this.phase === 'ready' && this.version >= 8 && command === MEMORIES_COMMAND) {
+      if (args?.collection !== 'memories') return Promise.reject(new Error('applicationUnsupported'))
+      return this.query.read(args, 8) as Promise<T>
+    }
     if (this.phase === 'ready' && this.version >= 7 && command === DXPEDITIONS_COMMAND) {
       if (args?.collection !== 'dxpeditions') return Promise.reject(new Error('applicationUnsupported'))
       return this.query.read(args, 7) as Promise<T>

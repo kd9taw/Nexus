@@ -61,3 +61,21 @@
   visibility: hidden;
   pointer-events: none;
 }
+
+/* Keep the existing Memories manager and its own list/grid scroll owner. */
+.remote-memories-view { overflow: auto; }
+.remote-memory-bank { display: contents; }
+.remote-memory-bank[hidden] { display: none; }
+.remote-memories-view .memories-view { min-width: 0; min-height: 20rem; flex: 1 0 20rem; }
+.remote-memories-view .mv-row-main { flex-wrap: wrap; white-space: normal; }
+.remote-memories-view .mv-row-name { max-width: 100%; }
+.remote-memories-view .mv-row-freq { flex: 0 0 auto; }
+.remote-memories-view .mv-row-main:disabled,
+.remote-memories-view .mv-star:disabled { opacity: 1; cursor: default; }
+.remote-memories-view .mv-cell[readonly] { cursor: text; }
+.remote-memory-note { margin: 0; padding: 0 12px 8px; overflow-wrap: anywhere; white-space: pre-wrap; }
+@media (max-width: 700px) {
+  .remote-memories-view .memories-view { flex-direction: column; min-height: 28rem; flex-basis: 28rem; }
+  .remote-memories-view .mv-row-name { flex-basis: 100%; }
+  .remote-memories-view .mv-side { flex: 0 0 auto; max-height: 9rem; }
+}

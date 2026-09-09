@@ -21940,6 +21940,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             ota: d.ota_spots.clone(),
             health: d.health.clone(),
             propagation: d.prop_cache.clone(),
+            memories: Default::default(),
         }),
     );
     tauri::Builder::default()
@@ -21986,6 +21987,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             get_snapshot,
             remote_monitor::get_remote_monitor_frame,
             remote_service::get_remote_station_status,
+            remote_service::publish_remote_memory_bank,
             remote_service::remote_station_action,
             send_message,
             resend_chat,

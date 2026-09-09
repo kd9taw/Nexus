@@ -26,6 +26,7 @@ pub struct Status {
     expires_at: Option<u64>,
     devices: Vec<Device>,
     error: Option<&'static str>,
+    observation_generation: Option<String>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -62,6 +63,7 @@ pub enum Action {
 type Reply = oneshot::Sender<Result<(), &'static str>>;
 #[derive(Default)]
 struct Control {
+    memories: query::memories::Bank,
     enabled: bool,
     cancel: Option<watch::Sender<bool>>,
     generation: u64,
@@ -69,6 +71,9 @@ struct Control {
 impl Control {
     fn stop(&mut self) {
         self.enabled = false;
+        if let Ok(mut bank) = self.memories.lock() {
+            *bank = None;
+        }
         self.generation = self.generation.wrapping_add(1);
         if let Some(cancel) = self.cancel.take() {
             let _ = cancel.send(true);
@@ -165,7 +170,13 @@ impl Service {
             origin: origin.clone(),
             ..Default::default()
         }));
-        let control = Arc::new(Mutex::new(Control::default()));
+        let control = Arc::new(Mutex::new(Control {
+            memories: sources
+                .as_ref()
+                .map(|s| s.memories.clone())
+                .unwrap_or_default(),
+            ..Default::default()
+        }));
         let (commands, receiver) = mpsc::channel(1);
         let task_status = status.clone();
         let task_control = control.clone();
@@ -213,16 +224,30 @@ impl Service {
             .lock()
             .map_err(|_| "serviceUnavailable")?
             .clone();
-        let enabled = self
-            .control
-            .lock()
-            .map_err(|_| "serviceUnavailable")?
-            .enabled;
+        let control = self.control.lock().map_err(|_| "serviceUnavailable")?;
+        let enabled = control.enabled;
+        status.observation_generation = enabled.then(|| control.generation.to_string());
         if !enabled && ["connected", "connecting", "reconnecting"].contains(&status.phase.as_str())
         {
             status.phase = "disabled".into();
         }
         Ok(status)
+    }
+    fn publish_memories(&self, generation: &str, bank: Option<&str>) -> bool {
+        // Parse outside the control lock. Recheck the local enable generation at
+        // admission so an old WebView reply cannot revive a disabled snapshot.
+        let value = bank.and_then(query::memories::parse);
+        let Ok(control) = self.control.try_lock() else {
+            return false;
+        };
+        if !control.enabled || control.generation.to_string() != generation {
+            return false;
+        }
+        let Ok(mut cache) = control.memories.try_lock() else {
+            return false;
+        };
+        *cache = value.map(|v| (std::time::Instant::now(), Arc::new(v)));
+        cache.is_some()
     }
     pub async fn action(&self, action: Action) -> Result<Status, &'static str> {
         let (reply, response) = oneshot::channel();
@@ -586,4 +611,16 @@ pub async fn remote_station_action(
     action: Action,
 ) -> Result<Status, &'static str> {
     service.action(action).await
+}
+
+// The canonical desktop WebView owns the in-memory bank. Detached windows and
+// the hosted browser cannot publish it or send a generic durable-state map.
+#[tauri::command]
+pub fn publish_remote_memory_bank(
+    service: tauri::State<'_, Service>,
+    window: tauri::WebviewWindow,
+    generation: String,
+    bank: Option<String>,
+) -> bool {
+    window.label() == "main" && service.publish_memories(&generation, bank.as_deref())
 }

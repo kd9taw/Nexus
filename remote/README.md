@@ -49,6 +49,9 @@ Version 7 adds only `get_remote_dxpeditions` and the argument-free `dxpeditions`
 collection, requiring `x-nexus-application-dxpeditions-version: 1` and all preceding
 advertisements. It preserves every v1–v6 vocabulary, including mixed browsers and
 hibernation recovery.
+Version 8 adds only `get_remote_memories` and the argument-free `memories`
+collection, requiring `x-nexus-application-memories-version: 1` and every preceding
+advertisement. Versions 1–7 retain their exact vocabularies.
 An older pilot keeps its existing FT observation; an older monitor-only installer
 reports the workspace update requirement without losing compact observation.
 
@@ -56,7 +59,8 @@ In version 2, existing panel polling renews local interest. Interest changes cro
 the socket; the room combines the interests of approved browsers into one native
 watch. The station batches due topics at 100 ms (spectra), 200 ms (meters/CW/RTTY/PSK),
 500 ms (snapshot) and 1,000 ms (settings/band plan). Interest expires after 2,500 ms
-without a consumer read. No interested browsers means no native application data.
+without a consumer read. No interested browsers means no application values cross
+the station socket.
 Top-level deltas require an exact acknowledged base; a joining observer receives a
 full value. The legacy contract retains one outstanding read/result per browser.
 
@@ -155,9 +159,30 @@ routing, popout, Chase and alarms are unavailable remotely; website gestures ope
 the existing HTTP(S)/QRZ destination in the user's browser. A compatible station
 build is required. Automated synthetic-data checks do not establish DSP/WAN load
 capacity or live expedition/shack acceptance.
+
+Memories reuses the actual channel manager's list/grid, groups, favorites, nets
+and search. The installed main WebView, after loading its existing durable store,
+publishes its already loaded canonical bank into an ephemeral native cache only while
+local observation is enabled. A five-second local check coalesces changes and
+refreshes an unchanged cache every 20 seconds. The native-only publication command
+requires the main window and current local enable generation. Disable clears the
+cache; delayed publications from a previous enable cannot revive it. No browser
+query or publisher initiates a file read, UI-state migration or durable-store write.
+An uninitialized bank is unavailable until its native owner loads it normally.
+
+The closed bank admits at most 512 channels, 64 groups, 64 group references per
+channel, seven net days, 1,024 bytes per text field and 128 KiB of serialized JSON.
+Unknown fields, duplicate IDs and oversized/invalid banks refuse the whole read.
+Native and browser readers independently expire the publication after 60 seconds;
+the browser includes transit/capture age and hides failed or lost data. Refresh
+preserves browser filtering and list/grid choice. The browser never adopts the
+station bank into its own memory store. Tuning/recall, edits, reorder, imports,
+exports, starter packs and net alarms remain station-local. Full entry details,
+write round trips, hardware tuning and live station comparison remain separate.
+
 FT selection and CW/Phone/RTTY/PSK callsign entry use the existing Nexus recall card;
 its contact rows open the existing filtered Logbook. Stale sessions and changed
-callsigns discard old results. QSO entry, memories, rotator and voice-keyer/audio data remain
+callsigns discard old results. QSO entry, cockpit memory recall, rotator and voice-keyer/audio data remain
 unavailable and are identified in their existing panes. Other navigation destinations display
 their availability limit, and the full Settings panel is not mounted with partial
 settings. Station controls, including the existing amplifier controls, are

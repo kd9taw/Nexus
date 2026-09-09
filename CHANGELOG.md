@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Remote Memories observation:** The browser uses Nexus's existing channel
+  list/grid, groups, favorites and search with a current snapshot from the
+  station's main window. Refresh preserves the selected group and display mode;
+  stale or unavailable values are hidden. A compatible station pilot is required.
+  Tuning, editing, file operations and net alerts remain on the station.
+
 - **Remote DXpeditions observation:** The browser uses Nexus's existing expedition
   cards, calendar and cached station prediction windows, with data age and Refresh.
   Reads preserve the station's need/live-evidence distinctions and refuse expired

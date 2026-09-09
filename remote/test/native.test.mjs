@@ -1,4 +1,5 @@
 import { test } from 'node:test'
+import { readFile } from 'node:fs/promises'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { createInterface } from 'node:readline'
@@ -281,10 +282,30 @@ test('actual native controller pairs, stores authority, publishes real DTOs, dis
     assert.equal(board.source, dxpeditions.source); assert.equal(board.asOf, dxpeditions.asOf)
     assert.equal(board.windows, null, 'a cold prediction cache remains absent')
     dx.send({ type: 'applicationQueryAck', requestId: dxRequest }); dx.close()
+    const bank = JSON.parse(await readFile(new URL('../../ui/src/remote-web/__fixtures__/memories.json', import.meta.url), 'utf8'))
+    assert.equal((await probe.send({ type: 'publishMemories', bank: JSON.stringify(bank) })).accepted, true)
+    const { value: memoryTicket } = await browser.post(`stations/${stationId}/ticket`)
+    const memories = await browser.open(stationId, memoryTicket.ticket)
+    await memories.take(value => value.type === 'session')
+    memories.send({ type: 'applicationHello', version: 8 })
+    assert.ok((await memories.take(value => value.type === 'applicationCapabilities')).commands.includes('get_remote_memories'))
+    for (const valid of [true, false, true]) {
+      assert.equal((await probe.send({ type: 'publishMemories', bank: valid ? JSON.stringify(bank) : '{}' })).accepted, valid)
+      const requestId = crypto.randomUUID()
+      memories.send({ type: 'applicationQuery', requestId, collection: 'memories', cursor: null, search: '', unconfirmed: false, after: null })
+      const page = await memories.take(value => value.requestId === requestId)
+      if (valid) {
+        assert.equal(page.type, 'applicationPage')
+        assert.deepEqual(statsReference.parseMemories(page).bank, bank, 'native cache and compiled UI parser preserve every canonical bank field')
+      } else { assert.equal(page.type, 'applicationQueryError'); assert.equal(page.error, 'applicationUnavailable') }
+      memories.send({ type: 'applicationQueryAck', requestId })
+    }
+    memories.close()
     const second = await socket.take(value => value.type === 'observation')
     assert.ok(second.frame.sequence > first.frame.sequence)
     assert.equal((await probe.send({ type: 'disable' })).ok, true)
     await socket.take(value => value.type === 'closed')
+    assert.equal((await probe.send({ type: 'publishMemories', bank: JSON.stringify(bank) })).accepted, false)
     const restarted = await probe.send({ type: 'restart' })
     assert.equal(restarted.status.stationId, stationId)
     assert.equal(restarted.status.phase, 'disabled')
