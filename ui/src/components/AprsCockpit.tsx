@@ -785,10 +785,24 @@ export function AprsCockpit({
    */
   const writeSettings = (patch: Partial<Settings>) => {
     if (!settings) return
-    const next = { ...settings, ...patch }
-    setSettingsState(next) // optimistic, so the control does not lag a round-trip
+    setSettingsState({ ...settings, ...patch }) // optimistic, so the control does not lag
     setSavingInet(true)
-    void setSettings(next)
+    // ⚠️ **THE PATCH GOES ONTO A FRESHLY-READ STRUCT, NEVER ONTO THIS BOARD'S COPY.**
+    //
+    // `set_settings` replaces the struct WHOLESALE, and this board is PERMANENTLY MOUNTED
+    // (App renders it under a `hidden` host whenever the APRS view is enabled) while its
+    // own read is behind a once-only guard. So its copy is as old as the session: every
+    // field the operator has changed in Settings since — on any tab — is stale in it, and
+    // posting that copy silently reverts all of them. That is not hypothetical; it is how
+    // the beta-updates opt-in came back off after the operator turned it on, and it would
+    // do the same to the contest station-data block and to ~170 other fields.
+    //
+    // Reading first costs one round trip on a control nobody spams, and it is the shape
+    // `OperateCockpit`'s specialOp write and `SatellitesView`'s Doppler write already use.
+    // The board's own optimistic state is untouched by this: it is a display copy, and the
+    // re-read below is what makes it authoritative again.
+    void getSettings()
+      .then((fresh) => setSettings({ ...fresh, ...patch }))
       .then(() => getSettings())
       .then((fresh) => {
         // Re-read rather than trust the optimistic copy: the engine merges live radio state into
