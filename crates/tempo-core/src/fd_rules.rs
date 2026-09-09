@@ -130,6 +130,9 @@ pub enum WeekendRule {
 pub struct WindowRule {
     pub month: u32,
     pub weekend: WeekendRule,
+    /// Hours from 0000Z on the ANCHOR SATURDAY, `0..=47` — so 41 is 1700Z on the
+    /// Sunday, which is when the Tennessee QSO Party starts. Both Field Day events
+    /// are under 24 and read exactly as the name suggests.
     pub start_hour_utc: u64,
     pub duration_hours: u64,
     pub overrides: &'static [(u16, EventWindow)],
@@ -139,7 +142,16 @@ pub struct WindowRule {
 /// every surface reads.
 #[derive(Debug)]
 pub struct FdRuleset {
-    pub event: FdEvent,
+    /// The rules-file event id — `"arrlfd"`, `"wfd"`, `"tnqp"`, `"ohqp"`, `"cqp"`,
+    /// `"txqp"`.
+    ///
+    /// ⭐ **An id, not an [`FdEvent`].** The table carries contests that enum has no
+    /// arm for, and it must be able to: giving each new contest an arm would put
+    /// every match on `FdEvent` in the tree (184 sites at `aaef8da2`) on the critical
+    /// path of adding a row to a data file. [`FdEvent::code`] is the one place the
+    /// two vocabularies meet, and [`ruleset`] is still typed on `FdEvent` so the two
+    /// Field Day lookups stay infallible.
+    pub event: &'static str,
     pub rules_year: u16,
     pub contest_id: &'static str,
     /// The exchange this event runs, as data. Byte-for-byte the exchange
@@ -174,6 +186,22 @@ pub struct FdRuleset {
     /// Advisory posture — `"warn"` only today (warn, never remove or disable a
     /// surface — operator ruling).
     pub enforcement: &'static str,
+    /// ⭐ **An i18n key naming what this event's computed score LEAVES OUT**, or `""`
+    /// when the score is complete.
+    ///
+    /// The state QSO parties need it and Field Day does not. TNQP and TXQP both award
+    /// bonus points COMPUTED FROM THE LOG (100 per K4TCG QSO, 500 per Tennessee county
+    /// with ≥10 QSOs; 500 per Texas mobile worked in five counties, 1000 per county a
+    /// Texas mobile covers with ≥5 QSOs), and TNQP a multiplier gated on a per-county
+    /// QSO count. [`PostMultiplier::Bonuses`] is a menu the operator TICKS and
+    /// [`MultiplierRule`] cannot express a count threshold, so neither term is in the
+    /// total this build shows. **An operator must not read a claimed score off a
+    /// number that silently omits their bonuses** — so the omission is data the score
+    /// surface renders, not a sentence in a provenance block nobody sees.
+    ///
+    /// [`PostMultiplier::Bonuses`]: crate::contest::PostMultiplier::Bonuses
+    /// [`MultiplierRule`]: crate::contest::MultiplierRule
+    pub score_note_key: &'static str,
     /// The algorithmic event-window rule, as data (spec §2.3 — the parameters
     /// are never hand-edited in code anymore; they ride the rules file).
     pub window: WindowRule,
@@ -246,18 +274,29 @@ impl FdRuleset {
 /// Reads the loaded table — the bundled seed, or a file [`install_from`]
 /// activated at startup.
 pub fn ruleset(event: FdEvent, year: u16) -> &'static FdRuleset {
+    ruleset_by_id(event.code(), year).expect("validation guarantees a ruleset per Field Day event")
+}
+
+/// The active ruleset for a rules-file EVENT ID — the fallible lookup, for a contest
+/// [`FdEvent`] has no arm for.
+///
+/// ⭐ **Fallible on purpose, and that is what [`ruleset`]'s floor rests on.** A rules
+/// file that drops `arrlfd` or `wfd` would make [`ruleset`] panic, so those two are
+/// refused at load ([`parse_spec`]). A file that drops `tnqp` costs the operator the
+/// Tennessee QSO Party and nothing else, because every reader of one comes through
+/// here and gets a `None` to handle. The floor guards the panic, not the menu.
+pub fn ruleset_by_id(event_id: &str, year: u16) -> Option<&'static FdRuleset> {
     let mine = || {
         table()
             .rulesets
             .iter()
             .copied()
-            .filter(|r| r.event == event)
+            .filter(|r| r.event == event_id)
     };
     mine()
         .filter(|r| r.rules_year <= year)
         .max_by_key(|r| r.rules_year)
         .or_else(|| mine().max_by_key(|r| r.rules_year))
-        .expect("validation guarantees a ruleset per event")
 }
 
 /// The ARRL/RAC section master list — the section universe the worked-sections
@@ -510,28 +549,38 @@ pub fn seed_generated() -> &'static str {
     })
 }
 
-/// The BUNDLED seed's ruleset event ids — the floor a downloaded file must
-/// contain (§8d's inversion: a download may ADD contests, never REMOVE one this
-/// build ships with).
+/// The event ids a rules file MUST carry — §8(d)'s inversion: a download may ADD
+/// contests, but never remove one this build cannot run without.
 ///
-/// Deliberately parsed with its own minimal struct, exactly like
-/// [`seed_generated`]: calling [`parse_spec`] here would recurse, because
-/// `parse_spec` is the very function that consults this list.
-fn seed_events() -> &'static [String] {
-    static E: OnceLock<Vec<String>> = OnceLock::new();
-    E.get_or_init(|| {
-        #[derive(serde::Deserialize)]
-        struct EventsOnly {
-            rulesets: Vec<EventOnly>,
-        }
-        #[derive(serde::Deserialize)]
-        struct EventOnly {
-            event: String,
-        }
-        serde_json::from_str::<EventsOnly>(SEED)
-            .map(|e| e.rulesets.into_iter().map(|r| r.event).collect())
-            .unwrap_or_default()
-    })
+/// ⭐ **The floor is [`FdEvent::ALL`], not "every ruleset the bundled seed carries",
+/// and the difference is which failure it prevents.** [`ruleset`] is INFALLIBLE for
+/// an `FdEvent`, so a file without `arrlfd` or `wfd` is not a missing menu entry — it
+/// is a panic on the Field Day scoring path. Every other contest is reached through
+/// [`ruleset_by_id`], which returns `None`, so a file that drops one degrades to "that
+/// contest is not offered".
+///
+/// Batch 1 derived this list from the seed instead, reasoning that a derived floor
+/// grows by itself as contests are added. It does — and what it grows is the set of
+/// files the app REFUSES ENTIRELY. A published file that dropped one QSO party would
+/// cost every install its Field Day rules updates too, which is the outcome the seed
+/// floor exists to prevent, arriving through the guard meant to prevent it. It also
+/// made every one of the 57 corpus fixtures have to carry a verbatim copy of every
+/// county domain in the seed (≈188 000 lines) to stay loadable, for no gain in what
+/// any of them pins.
+fn required_events() -> &'static [&'static str] {
+    static E: OnceLock<Vec<&'static str>> = OnceLock::new();
+    E.get_or_init(|| FdEvent::ALL.iter().map(|e| e.code()).collect())
+}
+
+/// Is `id` a well-formed rules-file event id — `^[a-z][a-z0-9_]*$`?
+///
+/// ⚠️ **This replaces a hardcoded `["arrlfd", "wfd"]` membership test**, which as
+/// written refused the very contests the programme adds (spec §8d names it). The
+/// vocabulary of events is OPEN — a rules push is how a contest arrives — while the
+/// vocabulary of everything an event DECLARES stays closed, which is where a typo
+/// still has to be caught.
+fn is_event_id(id: &str) -> bool {
+    is_domain_id(id)
 }
 
 /// The ACTIVE rules data's `generated` stamp — whichever file won at startup.
@@ -584,6 +633,15 @@ struct RulesetSpec {
     tempo_fd: bool,
     assistance: AssistanceSpec,
     enforcement: String,
+    /// An i18n key naming what this event's score leaves out; `""` = nothing.
+    ///
+    /// ⚠️ `#[serde(default)]` here follows `assistance.assistance_note_key`, the file's
+    /// own convention for an ADVISORY DISPLAY string: absent means the score carries
+    /// no note, which is exactly what both Field Day events mean and is visible on
+    /// screen either way. That is not the `exchange`/`scoring` case §8(c) rules on,
+    /// where a default would let a file load with a whole behaviour missing.
+    #[serde(default)]
+    score_note_key: String,
     #[serde(default)]
     objectives: Vec<BonusSpec>,
 }
@@ -652,7 +710,96 @@ struct FieldBlockSpec {
     label: String,
     required: bool,
     adif: AdifTagsSpec,
+    /// ⭐ **Where the value this slot SENDS comes from** (spec §2.5, §3.4) — one of
+    /// [`SENT_SOURCE_CONSTANT`], [`SENT_SOURCE_SERIAL`], `"setting:<name>"` naming a
+    /// field of [`SENT_SLOT_SETTINGS`], or `"derived:<what>"`. `""` is legal only for
+    /// a slot NO role sends.
+    ///
+    /// **Why this exists, and it is not paperwork.** Round 3's Sweepstakes blocker was
+    /// not that a setting was hard to add; it was that NOTHING CHECKED. Batch 8 added
+    /// `contest_qth_*` for the QSO parties' counties and batch 9 shipped Sweepstakes,
+    /// whose role sends a check and a section — neither of which had a source anywhere
+    /// in the build. The failure surfaces as an operator at 1400 on contest Saturday
+    /// who cannot fill their own exchange. With this field the rules file will not
+    /// load, which is a red gate at development time.
+    ///
+    /// ⚠️ **`setting:` is checked against a CLOSED list, which is what gives the rule
+    /// teeth.** A free-text source would only assert that somebody typed something.
+    /// [`SENT_SLOT_SETTINGS`] names the settings this build can actually supply, and
+    /// `tempo-app` holds the test that every name in it is a real serde field of
+    /// `Settings` — so the chain runs file → loader → struct with no unchecked link.
+    ///
+    /// ⚠️ **Required, not `#[serde(default)]`** — the same rule [`AdifTagsSpec`] is
+    /// written to. Absent must be a refusal; `""` must be a decision ("no role sends
+    /// this slot"). A defaulted source would let a file that simply forgot one load as
+    /// though its author had decided the slot needs none.
+    source: String,
     kind: KindSpec,
+}
+
+/// A sent slot whose value is a constant the composer supplies (an RST: `599` on
+/// CW/digital, `59` on phone).
+const SENT_SOURCE_CONSTANT: &str = "constant";
+/// A sent slot filled from the session's serial counter.
+const SENT_SOURCE_SERIAL: &str = "serial";
+
+/// ⭐ **The settings a rules file may name as the source of a sent slot** (spec §3.4).
+///
+/// The frozen `fd_*` names and the `contest_*` block that landed beside them — never
+/// replacing them (§8c: renaming a persisted serde field is a silent-reset hazard).
+/// A ruleset naming anything else is refused with the name, because a source this
+/// build cannot read is the same failure as no source at all, arriving later.
+///
+/// ⚠️ These are the RUST field names (`snake_case`), which is what
+/// `tempo_app::settings::Settings` serialises under; the TypeScript mirror is
+/// camelCase and is a separate site (`ui/src/types.ts`).
+pub const SENT_SLOT_SETTINGS: &[&str] = &[
+    // Frozen, shipped, and read for Sweepstakes' section too — §8(c) freezes the
+    // NAME, not the meaning.
+    "fd_class",
+    "fd_section",
+    // New in batch 8, beside them.
+    "contest_qth_county",
+    "contest_qth_state",
+    "contest_check",
+    "contest_cq_zone",
+    "contest_itu_zone",
+    "contest_power",
+    // Identity, long shipped: ARRL VHF sends the operator's own grid.
+    "mygrid",
+];
+
+/// ⭐ **The derivations a rules file may name, each with the settings it is built
+/// from** — the second half of §2.5's chain, and the half that keeps a derivation from
+/// being a place to hide a missing setting.
+///
+/// A slot whose value is assembled rather than read straight out of one field names a
+/// derivation: a QSO party's `QTH` is the session's `MyLocation`, which is county *or*
+/// state depending on the role, so no single `setting:` token describes it. Naming the
+/// derivation's own inputs here means `derived:` is not an escape hatch — every input
+/// still has to be a settings field this build carries.
+const SENT_SLOT_DERIVATIONS: &[(&str, &[&str])] = &[
+    // §3.4: "QTH (county / state / DX) → contest_qth_county, contest_qth_state —
+    // this is `my_location` (§3)". One slot, two settings, chosen by role.
+    ("my_location", &["contest_qth_county", "contest_qth_state"]),
+];
+
+/// Is `s` a source this build can honour for a slot some role sends?
+fn is_sent_source(s: &str) -> bool {
+    match s {
+        SENT_SOURCE_CONSTANT | SENT_SOURCE_SERIAL => true,
+        _ => match s.split_once(':') {
+            Some(("setting", name)) => SENT_SLOT_SETTINGS.contains(&name),
+            // A derivation is named, never blank — and every one of ITS inputs is a
+            // settings field this build carries, or the derivation is the same "no
+            // source" hole wearing a different word.
+            Some(("derived", what)) => SENT_SLOT_DERIVATIONS
+                .iter()
+                .find(|(id, _)| *id == what)
+                .is_some_and(|(_, inputs)| inputs.iter().all(|i| SENT_SLOT_SETTINGS.contains(i))),
+            _ => false,
+        },
+    }
 }
 
 /// How a role is matched against the operator.
@@ -833,14 +980,6 @@ struct AssistanceSpec {
     assistance_note_key: String,
 }
 
-fn event_of(s: &str) -> Option<FdEvent> {
-    match s {
-        "arrlfd" => Some(FdEvent::ArrlFd),
-        "wfd" => Some(FdEvent::WinterFd),
-        _ => None,
-    }
-}
-
 fn stats_of(spec: &FileSpec) -> RulesStats {
     RulesStats {
         generated: spec.generated.clone(),
@@ -975,16 +1114,16 @@ fn parse_spec(text: &str) -> Result<FileSpec, String> {
     // replaces — it grows with the seed instead of having to be re-edited
     // alongside it, which is exactly the drift that would otherwise appear the
     // first time a contest is added.
-    for want in seed_events() {
-        if !spec.rulesets.iter().any(|r| &r.event == want) {
+    for want in required_events() {
+        if !spec.rulesets.iter().any(|r| r.event == *want) {
             return Err(format!("missing the `{want}` ruleset"));
         }
     }
     let mut seen_events: Vec<(&str, u16)> = Vec::new();
     for r in &spec.rulesets {
         let tag = format!("ruleset {}/{}", r.event, r.rules_year);
-        if event_of(&r.event).is_none() {
-            return Err(format!("{tag}: unknown event"));
+        if !is_event_id(&r.event) {
+            return Err(format!("{tag}: event id is not ^[a-z][a-z0-9_]*$"));
         }
         if seen_events.contains(&(r.event.as_str(), r.rules_year)) {
             return Err(format!("{tag}: duplicate event+year"));
@@ -998,7 +1137,7 @@ fn parse_spec(text: &str) -> Result<FileSpec, String> {
         // fixtures match on.
         if !matches!(
             r.scoring.model.as_str(),
-            "powered_multiplier" | "objectives"
+            "powered_multiplier" | "objectives" | "none"
         ) {
             return Err(format!(
                 "{tag}: unknown scoring model {:?}",
@@ -1010,7 +1149,19 @@ fn parse_spec(text: &str) -> Result<FileSpec, String> {
                 return Err(format!("{tag}: points_by_mode_class misses {k}"));
             }
         }
-        if r.scoring.power_tiers.is_empty() {
+        // `none` is the state QSO parties: QSO points × geographic multipliers and
+        // nothing after. It is the only model that may declare no power tiers, and it
+        // must declare none — a tier list under a model that applies no power
+        // multiplier is a claim the scorer would silently ignore, which is exactly how
+        // an event ends up scoring by a rule nobody can find in the file.
+        if r.scoring.model == "none" {
+            if !r.scoring.power_tiers.is_empty() {
+                return Err(format!(
+                    "{tag}: scoring model \"none\" declares power_tiers \
+                     (a model with no post-multiplier applies none)"
+                ));
+            }
+        } else if r.scoring.power_tiers.is_empty() {
             return Err(format!("{tag}: empty power_tiers"));
         }
         if !r.scoring.power_tiers.windows(2).all(|w| w[0] < w[1]) {
@@ -1102,6 +1253,7 @@ fn parse_spec(text: &str) -> Result<FileSpec, String> {
             return Err(format!("{tag}: exchange has no roles"));
         }
         let mut role_ids: Vec<&str> = Vec::new();
+        let last_role = x.roles.last().expect("roles checked non-empty above");
         for role in &x.roles {
             if role_ids.contains(&role.id.as_str()) {
                 return Err(format!("{tag}: duplicate role id {:?}", role.id));
@@ -1140,9 +1292,17 @@ fn parse_spec(text: &str) -> Result<FileSpec, String> {
                     role.receives.len()
                 ));
             }
-            if matches!(role.selector, SelectorSpec::Always) && x.roles.len() != 1 {
+            // ⭐ `always` may be the LAST role, not only the ONLY role. The reason the
+            // rule exists is unchanged and is what it still enforces — a role AFTER an
+            // unconditional one could never be reached — but "only" also refused the
+            // shape the QSO parties are built on: spec §2.3's own worked Ohio example
+            // ends `role "dx": Always`, three roles deep, and it is the catch-all
+            // `ContestSession::role` already documents itself as falling through to. A
+            // DX entrant matches no `my_location_in`, so without a trailing `always`
+            // the last role is reached by ordering alone and the file cannot say so.
+            if matches!(role.selector, SelectorSpec::Always) && !std::ptr::eq(role, last_role) {
                 return Err(format!(
-                    "{tag}: role {:?} selector `always` must be the only role \
+                    "{tag}: role {:?} selector `always` must be the LAST role \
                      (a role after it could never be reached)",
                     role.id
                 ));
@@ -1170,6 +1330,40 @@ fn parse_spec(text: &str) -> Result<FileSpec, String> {
         // happen. Read against the wrong direction it is worse — `by_fields` against
         // `sends` would key my own constant exchange and refuse legal contacts — so the
         // two lists are checked against the two directions separately.
+        // ⭐ **EVERY SLOT ANY ROLE SENDS HAS A DECLARED SOURCE** (spec §2.5, §3.4).
+        //
+        // This is the rule that makes "the batch that ships this contest forgot to add
+        // the setting its exchange needs" a red gate here rather than an operator who
+        // cannot fill their own exchange on contest Saturday. It runs after the role
+        // loop because it is the ROLES that say which slots are sent: a slot only a
+        // role RECEIVES is copied off the air and has no source to declare.
+        for f in &x.fields {
+            let sent = x.roles.iter().any(|role| role.sends.contains(&f.key));
+            if !sent {
+                // A received-only slot must say so with `""`, and must not claim a
+                // source it can never use.
+                if !f.source.is_empty() {
+                    return Err(format!(
+                        "{tag}: slot {} declares source {:?} but no role sends it",
+                        f.key, f.source
+                    ));
+                }
+                continue;
+            }
+            if f.source.is_empty() {
+                return Err(format!(
+                    "{tag}: slot {} is sent but declares no source \
+                     (spec §3.4 — name a setting, a derivation, or the serial counter)",
+                    f.key
+                ));
+            }
+            if !is_sent_source(&f.source) {
+                return Err(format!(
+                    "{tag}: slot {} declares source {:?}, which this build cannot supply",
+                    f.key, f.source
+                ));
+            }
+        }
         for key in &r.dupe.by_fields {
             if !x.roles.iter().any(|role| role.receives.contains(key)) {
                 return Err(format!(
@@ -1249,7 +1443,13 @@ fn parse_spec(text: &str) -> Result<FileSpec, String> {
             "last_full" => {}
             _ => return Err(format!("{tag}: window weekend {:?} n={}", w.weekend, w.n)),
         }
-        if w.start_hour_utc >= 24 {
+        // ⭐ Up to 47, not 23: the field is hours from 0000Z on the ANCHOR SATURDAY,
+        // and the Tennessee QSO Party starts at 1700Z on the SUNDAY (= 41). Capped at
+        // 23 there was no expressible rule for it at all — the sponsor's own PDF
+        // publishes the 2026 instants and no annual rule, so a build that could only
+        // anchor on the Saturday would have had to pin every year by hand and would
+        // show a window 24 hours early for any year nobody pinned.
+        if w.start_hour_utc >= 48 {
             return Err(format!("{tag}: window start_hour_utc {}", w.start_hour_utc));
         }
         if !(1..=72).contains(&w.duration_hours) {
@@ -1470,16 +1670,27 @@ fn build(spec: FileSpec) -> RulesTable {
             // old `ScoringModel` arms each did implicitly by having the callers
             // add `bonus_points` afterwards.
             let post: &'static [PostMultiplier] = Box::leak(
-                vec![
-                    match r.scoring.model.as_str() {
-                        "powered_multiplier" => PostMultiplier::PowerTier { tiers: power_tiers },
-                        // Validated to be one of the two above.
-                        _ => PostMultiplier::Objectives {
+                match r.scoring.model.as_str() {
+                    // ⭐ No post-multiplier at all — the state QSO parties. Not even
+                    // `Bonuses`: each of the four declares an empty bonus menu, and
+                    // the two that DO have bonuses (TNQP, TXQP) compute them from the
+                    // log rather than from a menu the operator ticks, which
+                    // `PostMultiplier::Bonuses` cannot express. Declaring the arm
+                    // anyway would read as "the bonuses are handled" when they are
+                    // deliberately omitted — see the seed's `_provenance`.
+                    "none" => vec![],
+                    "powered_multiplier" => vec![
+                        PostMultiplier::PowerTier { tiers: power_tiers },
+                        PostMultiplier::Bonuses,
+                    ],
+                    // Validated to be one of the three.
+                    _ => vec![
+                        PostMultiplier::Objectives {
                             at_submission: true,
                         },
-                    },
-                    PostMultiplier::Bonuses,
-                ]
+                        PostMultiplier::Bonuses,
+                    ],
+                }
                 .into_boxed_slice(),
             );
             let multipliers: &'static [MultiplierRule] = Box::leak(
@@ -1559,7 +1770,7 @@ fn build(spec: FileSpec) -> RulesTable {
             );
             let exchange_built = build_exchange(r.exchange, domains_built, &reserved);
             &*Box::leak(Box::new(FdRuleset {
-                event: event_of(&r.event).expect("validated"),
+                event: leak_str(r.event),
                 rules_year: r.rules_year,
                 contest_id: leak_str(r.contest_id),
                 scoring,
@@ -1588,6 +1799,7 @@ fn build(spec: FileSpec) -> RulesTable {
                     assistance_note_key: leak_str(r.assistance.assistance_note_key),
                 },
                 enforcement: leak_str(r.enforcement),
+                score_note_key: leak_str(r.score_note_key),
                 window: WindowRule {
                     month: r.window.month,
                     weekend: match r.window.weekend.as_str() {
@@ -2086,7 +2298,7 @@ mod tests {
         let sfd = t
             .rulesets
             .iter()
-            .find(|r| r.event == FdEvent::ArrlFd)
+            .find(|r| r.event == FdEvent::ArrlFd.code())
             .unwrap();
         assert_eq!(
             sfd.event_window(2027),
@@ -2180,29 +2392,68 @@ mod tests {
         assert!(e.contains("schema 2"), "names what it reads: {e}");
     }
 
-    /// §8(d)'s inversion: a downloaded file may ADD contests but never REMOVE
-    /// one the bundled seed carries — strictly stronger than the hardcoded
-    /// `["arrlfd", "wfd"]` pair it replaces, because it grows with the seed
-    /// instead of having to be re-edited alongside it.
+    /// §8(d)'s inversion: a downloaded file may ADD contests but never REMOVE one
+    /// this build cannot run without — `arrlfd` and `wfd`, the two reached through
+    /// the infallible [`ruleset`].
+    ///
+    /// ⭐ **And the other half, which is what the narrowed floor buys:** dropping a
+    /// state QSO party is NOT a refusal. That file still loads, Field Day still gets
+    /// its rules update, and the only cost is that [`ruleset_by_id`] returns `None`
+    /// for the contest that went away. Under a floor derived from the seed, one
+    /// withdrawn QSO party would have cost every install its Field Day updates too.
     #[test]
-    fn a_file_missing_a_seeded_ruleset_is_refused_and_the_same_file_with_it_loads() {
-        let mut v: serde_json::Value = serde_json::from_str(SEED).unwrap();
-        let dropped = v["rulesets"].as_array_mut().unwrap().pop().expect("wfd");
-        let e = parse_spec(&v.to_string()).unwrap_err();
-        assert!(e.contains("wfd"), "names the missing ruleset: {e}");
-        // POSITIVE CONTROL: put it back and the very same file must load.
-        v["rulesets"].as_array_mut().unwrap().push(dropped);
-        assert!(
-            parse_spec(&v.to_string()).is_ok(),
-            "the control file must load"
-        );
+    fn a_file_missing_a_required_ruleset_is_refused_and_a_dropped_qso_party_is_not() {
+        let drop_event = |ev: &str| {
+            let mut v: serde_json::Value = serde_json::from_str(SEED).unwrap();
+            let rs = v["rulesets"].as_array_mut().unwrap();
+            let i = rs
+                .iter()
+                .position(|r| r["event"] == ev)
+                .unwrap_or_else(|| panic!("the seed carries {ev}"));
+            rs.remove(i);
+            parse_spec(&v.to_string())
+        };
+        for ev in ["arrlfd", "wfd"] {
+            let e = drop_event(ev).unwrap_err();
+            assert!(e.contains(ev), "names the missing ruleset: {e}");
+        }
+        // POSITIVE CONTROL, both directions: the untouched file loads, and a file
+        // missing a contest OUTSIDE the floor loads too.
+        assert!(parse_spec(SEED).is_ok(), "the control file must load");
+        for ev in ["tnqp", "ohqp", "cqp", "txqp"] {
+            assert!(
+                drop_event(ev).is_ok(),
+                "a file without {ev} must still load — the floor is not the menu"
+            );
+        }
     }
 
-    /// `seed_events` must read the SEED, not a hardcoded pair — otherwise the
-    /// inversion above is the old rule wearing a new name.
+    /// ⭐ **The floor is the events reached through the INFALLIBLE accessor**, and
+    /// it is derived from [`FdEvent::ALL`] rather than written out here — a
+    /// hardcoded pair would drift the moment `FdEvent` gained an arm.
+    ///
+    /// What it is NOT is "every ruleset the seed carries". The seed now carries four
+    /// state QSO parties as well, and each is reached through [`ruleset_by_id`], which
+    /// returns `None`: a file that drops one costs the operator that contest. A file
+    /// that drops `arrlfd` or `wfd` would make [`ruleset`] panic, which is the whole
+    /// reason a floor exists.
     #[test]
-    fn seed_events_are_read_from_the_bundled_seed() {
-        assert_eq!(seed_events(), ["arrlfd", "wfd"]);
+    fn the_floor_is_the_events_with_an_infallible_lookup() {
+        assert_eq!(required_events(), ["arrlfd", "wfd"]);
+        assert_eq!(
+            required_events().len(),
+            FdEvent::ALL.len(),
+            "one floor entry per FdEvent arm"
+        );
+        // The seed carries MORE than the floor, which is the point of the narrowing.
+        let seeded: Vec<&str> = table().rulesets.iter().map(|r| r.event).collect();
+        for want in required_events() {
+            assert!(seeded.contains(want), "the seed must satisfy its own floor");
+        }
+        assert!(
+            seeded.len() > required_events().len(),
+            "the seed ships contests beyond the floor"
+        );
     }
 
     /// §11.1: the seed gains CONTENT, not behaviour. `scoring` absorbs the two
@@ -2672,6 +2923,7 @@ mod tests {
                 out.push(serde_json::json!({
                     "key": k, "label": "", "required": false,
                     "adif": { "rcvd": "", "sent": "" },
+                    "source": "constant",
                     "kind": { "type": "text", "max_len": 8 }
                 }));
             }
@@ -2786,5 +3038,538 @@ mod tests {
         let sfd = ruleset(FdEvent::ArrlFd, 2026);
         assert!(sfd.banned_modes.is_empty());
         assert!(!sfd.mode_banned("FT8"));
+    }
+
+    // ---- the state QSO parties (batch 8) ----------------------------------
+
+    /// A shipped QSO-party ruleset by event id. Every one of these is reached the way
+    /// the app reaches it — through the fallible lookup — so a test cannot pass by
+    /// consulting a `static` the loader never produced.
+    fn party(event: &str) -> &'static FdRuleset {
+        ruleset_by_id(event, CURRENT_RULES_YEAR)
+            .unwrap_or_else(|| panic!("the seed must carry {event}"))
+    }
+
+    fn domain_of(rs: &FdRuleset, id: &str) -> &'static crate::contest::Domain {
+        rs.domains
+            .iter()
+            .copied()
+            .find(|d| d.id == id)
+            .unwrap_or_else(|| panic!("{} must declare the {id} domain", rs.event))
+    }
+
+    /// ⭐⭐ **THE TEXAS FINDING, and it is the most important assertion in this batch.**
+    ///
+    /// txqp.net's rules page says logs *"must use the approved **four-letter** county
+    /// abbreviation for the exchange"* — and the sponsor's OWN official list, on
+    /// `?page_id=90`, contains **two three-letter codes: `BEE` (Bee) and `LEE` (Lee)**.
+    /// 252 + 2 = 254.
+    ///
+    /// A validator written to the sponsor's PROSE rejects two real Texas counties. The
+    /// operator who pays for that is a Texas mobile in Bee or Lee county, and what they
+    /// get is an **unsubmittable log** for every QSO made from it — §13's first-named
+    /// risk, arriving through a rule that reads like a safe simplification.
+    ///
+    /// **The `len == 4` rule below is the negative control**, and it is in the test on
+    /// purpose: without it this is just a count, and a count cannot show that the
+    /// obvious implementation is the wrong one. It must reject exactly Bee and Lee.
+    #[test]
+    fn txqp_ships_the_sponsors_254_counties_and_bee_and_lee_are_valid() {
+        let tx = domain_of(party("txqp"), "tx_counties");
+        assert_eq!(tx.values.len(), 254, "the sponsor's list is 254 entries");
+        let codes: Vec<&str> = tx.values.iter().map(|(c, _)| *c).collect();
+        assert_eq!(
+            codes
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            254,
+            "no duplicate codes"
+        );
+
+        // The whole point: the two three-letter codes are members.
+        for (code, name) in [("BEE", "Bee"), ("LEE", "Lee")] {
+            assert!(
+                tx.contains(code),
+                "{code} must validate — it is a real county"
+            );
+            assert_eq!(
+                tx.values.iter().find(|(c, _)| *c == code).map(|(_, n)| *n),
+                Some(name),
+                "{code} is {name} county"
+            );
+        }
+
+        // NEGATIVE CONTROL — the validator the sponsor's prose describes. It must
+        // reject exactly the two, and nothing else: that is what makes "254" evidence
+        // rather than arithmetic.
+        let prose_rule = |c: &&str| c.len() == 4;
+        let rejected: Vec<&str> = codes.iter().copied().filter(|c| !prose_rule(c)).collect();
+        assert_eq!(
+            rejected,
+            vec!["BEE", "LEE"],
+            "a four-letter-only validator rejects exactly Bee and Lee"
+        );
+        assert_eq!(
+            codes.iter().filter(|c| prose_rule(c)).count(),
+            252,
+            "252 four-letter + 2 three-letter = 254"
+        );
+
+        // The codes are the sponsor's, not generated from the names — the scheme is
+        // irregular and a first-four-letters rule gets these wrong.
+        let mut generated_would_differ = 0;
+        for (code, name) in [
+            ("BZIA", "Brazoria"),
+            ("BZOS", "Brazos"),
+            ("CMRN", "Cameron"),
+            ("COLN", "Collin"),
+            ("COLW", "Collingsworth"),
+            ("COML", "Comal"),
+            ("COMA", "Comanche"),
+            ("DALM", "Dallam"),
+            ("DALS", "Dallas"),
+        ] {
+            assert_eq!(
+                tx.values.iter().find(|(c, _)| *c == code).map(|(_, n)| *n),
+                Some(name),
+                "{code} is the sponsor's code for {name}"
+            );
+            if &name.to_ascii_uppercase()[..4] != code {
+                generated_would_differ += 1;
+            }
+            // …and most of them are cases a first-four-letters rule gets WRONG.
+            // (Comanche → COMA is the one that happens to agree, which is why the
+            // scheme has to be taken from the list rather than inferred from a
+            // sample that looks regular.)
+        }
+        assert_eq!(
+            generated_would_differ, 8,
+            "8 of these 9 sponsor codes are not the county name's first four letters"
+        );
+    }
+
+    /// ⭐ **The Ohio QSO Party is THREE roles** (§2.3), because ohqp.org publishes
+    /// three sending behaviours with a domain for each. A two-role model ships a DX
+    /// entrant the wrong exchange, and that error would reach the air.
+    ///
+    /// The `w_ve` selector list is the other half: the sponsor puts KH6/KL7 in the
+    /// W/VE role explicitly, so a list built from the CONUS states would give a KL7
+    /// entrant the DX role.
+    #[test]
+    fn ohqp_declares_three_roles_and_the_w_ve_list_includes_ak_and_hi() {
+        let oh = party("ohqp");
+        let roles = oh.exchange.roles;
+        assert_eq!(
+            roles.iter().map(|r| r.id).collect::<Vec<_>>(),
+            ["in_state", "w_ve", "dx"],
+            "three roles, in the order the sponsor states them"
+        );
+        // Every role sends and receives the same two slots; what differs is the value
+        // the QTH slot can carry, which is what `OneOf` expresses.
+        for r in roles {
+            assert_eq!(r.sends, ["RST", "QTH"], "role {}", r.id);
+            assert_eq!(r.receives, ["RST", "QTH"], "role {}", r.id);
+        }
+        let Some(RoleSelectorProbe::Location(list)) = roles
+            .iter()
+            .find(|r| r.id == "w_ve")
+            .map(|r| RoleSelectorProbe::of(&r.selector))
+        else {
+            panic!("w_ve selects on location");
+        };
+        for s in ["AK", "HI", "OH"] {
+            let want = s != "OH";
+            assert_eq!(
+                list.contains(&s),
+                want,
+                "{s} in the W/VE selector list: expected {want}"
+            );
+        }
+        assert_eq!(list.len(), 61, "the sponsor's 62 codes less DX");
+        // The DX role is the trailing catch-all `ContestSession::role` falls through
+        // to, and the file says so rather than relying on ordering alone.
+        assert!(matches!(
+            roles.last().map(|r| r.selector),
+            Some(crate::contest::RoleSelector::Always)
+        ));
+        // The two multiplier universes the sponsor publishes: 88 counties for
+        // everyone, and 150 (88 + 62) for an Ohio station.
+        assert_eq!(domain_of(oh, "oh_counties").values.len(), 88);
+        assert_eq!(domain_of(oh, "oh_mults").values.len(), 62);
+        // The sponsor's own typo is shipped verbatim — the ROBOT matches on the code,
+        // and "fixing" a name here would put a display string out of step with it.
+        assert_eq!(
+            domain_of(oh, "oh_counties")
+                .values
+                .iter()
+                .find(|(c, _)| *c == "AUGL")
+                .map(|(_, n)| *n),
+            Some("Auglaze"),
+            "the sponsor spells Auglaize this way"
+        );
+    }
+
+    /// A read-only view of a selector, so a test can assert on the location list
+    /// without matching a three-arm enum inline four times.
+    enum RoleSelectorProbe {
+        Location(&'static [&'static str]),
+        Other,
+    }
+    impl RoleSelectorProbe {
+        fn of(s: &crate::contest::RoleSelector) -> Self {
+            match s {
+                crate::contest::RoleSelector::MyLocationIn(l) => Self::Location(l),
+                _ => Self::Other,
+            }
+        }
+    }
+
+    /// Every county domain is the size the sponsor's own list is, counted off that
+    /// list rather than read off a stated total — which is exactly how `BEE`/`LEE`
+    /// surfaced, since no stated total would have shown them.
+    #[test]
+    fn every_qso_party_county_domain_is_the_sponsors_own_list() {
+        for (event, domain, n) in [
+            ("tnqp", "tn_counties", 95),
+            ("ohqp", "oh_counties", 88),
+            ("ohqp", "oh_mults", 62),
+            ("cqp", "ca_counties", 58),
+            ("cqp", "cqp_states", 63),
+            ("txqp", "tx_counties", 254),
+        ] {
+            let d = domain_of(party(event), domain);
+            assert_eq!(d.values.len(), n, "{event}/{domain}");
+            assert!(
+                d.values.iter().all(|(c, l)| !c.is_empty() && !l.is_empty()),
+                "{event}/{domain}: every value is a code AND a name"
+            );
+        }
+        // The non-obvious TNQP mappings, which a first-four-letters rule gets wrong.
+        let tn = domain_of(party("tnqp"), "tn_counties");
+        for (code, name) in [
+            ("HARD", "Hardeman"),
+            ("HARN", "Hardin"),
+            ("VANB", "Van Buren"),
+        ] {
+            assert_eq!(
+                tn.values.iter().find(|(c, _)| *c == code).map(|(_, n)| *n),
+                Some(name)
+            );
+        }
+        // CQP's state list is the 63 subdivision codes and carries no DC: the sponsor
+        // labels MD "Maryland & DC".
+        let ca = domain_of(party("cqp"), "cqp_states");
+        assert!(!ca.contains("DX"), "DX is its own domain in CQP");
+        assert!(!ca.contains("DC"), "CQP has no DC code");
+        assert_eq!(
+            ca.values.iter().find(|(c, _)| *c == "MD").map(|(_, n)| *n),
+            Some("Maryland & DC")
+        );
+    }
+
+    /// Each party's exchange, dupe rule, points and multiplier scope are the sponsor's
+    /// own — and each one loads through the real table, so this is the ruleset the app
+    /// would run, not a fixture.
+    #[test]
+    fn every_qso_party_ruleset_loads_with_the_sponsors_shape() {
+        for (event, contest_id, slots, pts, scope) in [
+            (
+                "tnqp",
+                "TN-QSO-PARTY",
+                ["RST", "QTH"],
+                [3, 3, 3],
+                MultScope::PerBand,
+            ),
+            (
+                "ohqp",
+                "OH-QSO-PARTY",
+                ["RST", "QTH"],
+                [1, 2, 0],
+                MultScope::PerMode,
+            ),
+            (
+                "cqp",
+                "CA-QSO-PARTY",
+                ["NR", "QTH"],
+                [3, 3, 0],
+                MultScope::PerLog,
+            ),
+            (
+                "txqp",
+                "TX-QSO-PARTY",
+                ["RST", "QTH"],
+                [2, 3, 3],
+                MultScope::PerLog,
+            ),
+        ] {
+            let rs = party(event);
+            assert_eq!(rs.contest_id, contest_id);
+            assert_eq!(rs.rules_year, 2026);
+            for r in rs.exchange.roles {
+                assert_eq!(r.sends, slots, "{event} role {} sends", r.id);
+                assert_eq!(r.receives, slots, "{event} role {} receives", r.id);
+            }
+            let PointsRule::ByModeClass(p) = rs.scoring.qso_points;
+            assert_eq!([p.ph, p.cw, p.dig], pts, "{event} QSO points");
+            assert!(
+                !rs.scoring.multipliers.is_empty(),
+                "{event} counts a geographic multiplier"
+            );
+            for m in rs.scoring.multipliers {
+                assert!(
+                    matches!(m.scope, s if s == scope),
+                    "{event} mult {} scope",
+                    m.id
+                );
+            }
+            // A QSO party has no post-multiplier at all — not a power tier, not
+            // objectives, and not the claimed bonus menu (see the seed's
+            // `_provenance`: TNQP's and TXQP's bonuses are COMPUTED, and this build
+            // does not compute them).
+            assert!(
+                rs.scoring.post.is_empty(),
+                "{event} declares no post-multiplier"
+            );
+            assert!(
+                rs.scoring.power_tiers().is_none(),
+                "{event} has no power tier"
+            );
+            assert!(rs.bonuses.is_empty() && rs.objectives.is_empty());
+            // Both halves of the mobile rule, which is what the whole batch is for.
+            assert_eq!(rs.dupe_rule.by_fields, ["QTH"], "{event}: they moved");
+            assert_eq!(rs.dupe_rule.by_sent_fields, ["QTH"], "{event}: I moved");
+            assert!(rs.dupe_rule.by_call && rs.dupe_rule.by_band && rs.dupe_rule.by_mode_class);
+        }
+    }
+
+    /// ⭐ **The two parties whose score is knowingly incomplete SAY SO in data**, so
+    /// the omission reaches the operator's screen instead of living in a provenance
+    /// block nobody reads. The two whose score is complete must NOT carry a note —
+    /// a note on every event is a note nobody reads either.
+    #[test]
+    fn the_computed_bonus_omission_is_declared_where_it_applies_and_only_there() {
+        for event in ["tnqp", "txqp"] {
+            assert!(
+                !party(event).score_note_key.is_empty(),
+                "{event} computes bonuses this build does not, and must say so"
+            );
+        }
+        for event in ["ohqp", "cqp"] {
+            assert!(
+                party(event).score_note_key.is_empty(),
+                "{event}'s score is complete — no note"
+            );
+        }
+        for e in FdEvent::ALL {
+            assert!(
+                ruleset(e, CURRENT_RULES_YEAR).score_note_key.is_empty(),
+                "neither Field Day event's score omits anything"
+            );
+        }
+    }
+
+    /// The window parameters reproduce each sponsor's own stated instants for 2026.
+    ///
+    /// ⚠️ TNQP is why `start_hour_utc` reaches 47: the sponsor's PDF publishes
+    /// *"1700z Sunday, September 6 until 0300z Monday, September 7, 2026"* and no
+    /// annual rule at all, so the only expressible reading is the SUNDAY of the first
+    /// full September weekend — 41 hours from 0000Z on that Saturday.
+    #[test]
+    fn the_qso_party_windows_reproduce_the_sponsors_2026_instants() {
+        let at = |y, m, d, h: u64| days_from_civil(y, m, d) as u64 * 86_400 + h * 3600;
+        for (event, start, end) in [
+            // 1700Z Sun 6 Sep 2026 → 0300Z Mon 7 Sep 2026.
+            ("tnqp", at(2026, 9, 6, 17), at(2026, 9, 7, 3)),
+            // "fourth Saturday of August … 1600Z Saturday until 0400Z Sunday."
+            ("ohqp", at(2026, 8, 22, 16), at(2026, 8, 23, 4)),
+            // 1600 UTC 3 Oct 2026 → 2200 UTC 4 Oct 2026.
+            ("cqp", at(2026, 10, 3, 16), at(2026, 10, 4, 22)),
+            // "third weekend … from 1400Z on SATURDAY … to 2000Z on SUNDAY" — the
+            // OUTER ENVELOPE; the sponsor's 0200Z–1400Z Sunday break is not
+            // expressible and is recorded in `_provenance`.
+            ("txqp", at(2026, 9, 19, 14), at(2026, 9, 20, 20)),
+        ] {
+            let w = party(event).event_window(2026);
+            assert_eq!(w.start_unix, start, "{event} start");
+            assert_eq!(w.end_unix, end, "{event} end");
+        }
+    }
+
+    /// ⭐⭐ **EVERY SENT SLOT HAS A DECLARED SOURCE** (§2.5, §3.4) — the rule that makes
+    /// batch 9 onward genuinely data-only.
+    ///
+    /// The failure it closes is not hypothetical. Sweepstakes' role sends a `CK` (the
+    /// year the operator was first licensed) and a `SEC`; batch 8 added
+    /// `contest_qth_*` for the QSO parties and batch 9 added nothing, so both slots
+    /// had **no source anywhere in the build and no check said so**. What that looks
+    /// like on the day is an operator at 1400 on contest Saturday who cannot fill
+    /// their own exchange. With this rule the rules file does not load.
+    ///
+    /// Each arm below has its positive control on the same file, because a validator
+    /// that refused everything would pass the refusals alone.
+    #[test]
+    fn a_sent_slot_with_no_declared_source_is_refused_and_the_same_file_with_one_loads() {
+        // Field Day's own CLASS slot: sent by its one role, sourced from `fd_class`.
+        let at = |f: &dyn Fn(&mut serde_json::Value)| {
+            let mut v: serde_json::Value = serde_json::from_str(SEED).unwrap();
+            f(&mut v);
+            parse_spec(&v.to_string())
+        };
+        let src = |v: &mut serde_json::Value, s: &str| {
+            v["rulesets"][0]["exchange"]["fields"][0]["source"] = s.into();
+        };
+
+        // (a) No source at all.
+        let e = at(&|v| src(v, "")).unwrap_err();
+        assert!(
+            e.contains("CLASS") && e.contains("no source"),
+            "names the slot and what is missing: {e}"
+        );
+
+        // (b) A source this build cannot supply — a settings field that does not
+        // exist. This is the arm that would have caught the Sweepstakes blocker.
+        let e = at(&|v| src(v, "setting:first_licensed_year")).unwrap_err();
+        assert!(
+            e.contains("CLASS") && e.contains("first_licensed_year"),
+            "names the slot and the source it cannot supply: {e}"
+        );
+
+        // (c) A derivation this build does not know.
+        let e = at(&|v| src(v, "derived:vibes")).unwrap_err();
+        assert!(e.contains("derived:vibes"), "{e}");
+
+        // (d) `derived:` is not an escape hatch: a derivation is only usable when
+        // every setting it is built FROM is one this build carries.
+        assert!(
+            SENT_SLOT_DERIVATIONS
+                .iter()
+                .all(|(_, ins)| ins.iter().all(|i| SENT_SLOT_SETTINGS.contains(i))),
+            "every derivation's inputs are declared settings"
+        );
+
+        // (e) A slot NO role sends must not claim a source it can never use.
+        let e = at(&|v| {
+            v["rulesets"][0]["exchange"]["roles"][0]["sends"] = serde_json::json!(["SECTION"]);
+            v["rulesets"][0]["exchange"]["roles"][0]["constant_sent"] = serde_json::json!([]);
+        })
+        .unwrap_err();
+        assert!(
+            e.contains("CLASS") && e.contains("no role sends it"),
+            "a received-only slot declares no source: {e}"
+        );
+
+        // POSITIVE CONTROLS — every legal source shape, on the same file.
+        for good in [
+            "constant",
+            "serial",
+            "setting:fd_class",
+            "setting:contest_check",
+            "setting:mygrid",
+            "derived:my_location",
+        ] {
+            assert!(
+                at(&|v| src(v, good)).is_ok(),
+                "{good} is a source this build can supply"
+            );
+        }
+        // …and the untouched seed, which is the file that actually ships.
+        assert!(parse_spec(SEED).is_ok());
+    }
+
+    /// ⭐ **`always` may be the LAST role, and only the last** — the relaxation the
+    /// QSO parties need, with the rule it relaxes still enforced.
+    ///
+    /// §2.3's own worked Ohio example ends `role "dx": Always` three roles deep, and
+    /// that is the catch-all `ContestSession::role` documents itself as falling
+    /// through to; the earlier "must be the ONLY role" refused it. What has not
+    /// changed is the reason the rule exists — a role AFTER an unconditional one could
+    /// never be reached.
+    #[test]
+    fn always_may_be_the_last_role_but_never_an_earlier_one() {
+        let with_roles = |roles: serde_json::Value| {
+            let mut v: serde_json::Value = serde_json::from_str(SEED).unwrap();
+            v["rulesets"][0]["exchange"]["roles"] = roles;
+            parse_spec(&v.to_string())
+        };
+        let role = |id: &str, sel: serde_json::Value| {
+            serde_json::json!({
+                "id": id, "selector": sel,
+                "sends": ["CLASS", "SECTION"], "receives": ["CLASS", "SECTION"],
+                "constant_sent": []
+            })
+        };
+        let loc = serde_json::json!({ "type": "my_location_in", "locations": ["OH"] });
+        let always = serde_json::json!({ "type": "always" });
+
+        // Last: legal. This is the shape all four QSO parties ship.
+        assert!(with_roles(serde_json::json!([
+            role("in_state", loc.clone()),
+            role("dx", always.clone())
+        ]))
+        .is_ok());
+        // Only: still legal — both Field Day events.
+        assert!(with_roles(serde_json::json!([role("", always.clone())])).is_ok());
+        // First of two: refused, and the message says why.
+        let e = with_roles(serde_json::json!([
+            role("dx", always.clone()),
+            role("in_state", loc.clone())
+        ]))
+        .unwrap_err();
+        assert!(e.contains("always") && e.contains("LAST"), "{e}");
+        // Middle of three: refused too — "last" is not "not first".
+        let e = with_roles(serde_json::json!([
+            role("in_state", loc.clone()),
+            role("dx", always.clone()),
+            role("w_ve", loc.clone())
+        ]))
+        .unwrap_err();
+        assert!(e.contains("always"), "{e}");
+    }
+
+    /// A scoring model with no post-multiplier declares no power tiers, and a model
+    /// that HAS one still must — both directions, because one is half a test.
+    #[test]
+    fn the_none_scoring_model_declares_no_power_tiers_and_the_others_still_must() {
+        let at = |f: &dyn Fn(&mut serde_json::Value)| {
+            let mut v: serde_json::Value = serde_json::from_str(SEED).unwrap();
+            f(&mut v);
+            parse_spec(&v.to_string())
+        };
+        // arrlfd is `powered_multiplier`; the QSO parties are `none`.
+        let party_ix = |v: &serde_json::Value| {
+            v["rulesets"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .position(|r| r["event"] == "tnqp")
+                .expect("the seed carries tnqp")
+        };
+        let e = at(&|v| {
+            let i = party_ix(v);
+            v["rulesets"][i]["scoring"]["power_tiers"] = serde_json::json!([1, 2, 5]);
+        })
+        .unwrap_err();
+        assert!(e.contains("none") && e.contains("power_tiers"), "{e}");
+        // The old rule, unchanged, on a model that does apply a power multiplier.
+        let e = at(&|v| v["rulesets"][0]["scoring"]["power_tiers"] = serde_json::json!([]))
+            .unwrap_err();
+        assert!(e.contains("empty power_tiers"), "{e}");
+        // POSITIVE CONTROL: the seed as it ships has both shapes in it and loads.
+        assert!(parse_spec(SEED).is_ok());
+    }
+
+    /// `start_hour_utc` counts from 0000Z on the anchor Saturday and reaches 47, which
+    /// is the only way TNQP's Sunday start is expressible. 48 is still refused.
+    #[test]
+    fn a_window_start_hour_spans_the_weekend_but_stops_at_48() {
+        let at = |h: u64| {
+            let mut v: serde_json::Value = serde_json::from_str(SEED).unwrap();
+            v["rulesets"][0]["window"]["start_hour_utc"] = h.into();
+            parse_spec(&v.to_string())
+        };
+        assert!(at(41).is_ok(), "1700Z on the Sunday");
+        assert!(at(47).is_ok());
+        assert!(at(48).unwrap_err().contains("start_hour_utc 48"));
     }
 }

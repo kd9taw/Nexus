@@ -37,6 +37,26 @@ impl FdEvent {
             FdEvent::WinterFd => "WFD",
         }
     }
+    /// The rules-file `event` id for this event — the inverse of
+    /// [`from_code`](Self::from_code), and the key
+    /// [`fd_rules::ruleset`](crate::fd_rules::ruleset) looks a ruleset up by.
+    ///
+    /// ⭐ A rules file's `event` is a plain id, not an `FdEvent`: the rules table
+    /// carries contests this enum has no arm for (the state QSO parties), and giving
+    /// each one an `FdEvent` arm would put every non-exhaustive match in the tree on
+    /// the critical path of adding a contest. `FdEvent` stays what it is — the two
+    /// Field Day events the app has dedicated behaviour for — and this is the one
+    /// place the two vocabularies meet.
+    pub fn code(self) -> &'static str {
+        match self {
+            FdEvent::ArrlFd => "arrlfd",
+            FdEvent::WinterFd => "wfd",
+        }
+    }
+    /// Every event this enum can name. The rules floor is derived from it (see
+    /// [`fd_rules`](crate::fd_rules)), because these are exactly the events looked up
+    /// through an INFALLIBLE accessor.
+    pub const ALL: [FdEvent; 2] = [FdEvent::ArrlFd, FdEvent::WinterFd];
     pub fn from_code(s: &str) -> Self {
         if s.trim().eq_ignore_ascii_case("wfd") {
             FdEvent::WinterFd

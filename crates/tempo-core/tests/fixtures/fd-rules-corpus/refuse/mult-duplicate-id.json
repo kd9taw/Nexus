@@ -67,6 +67,7 @@
         "fields": [
           {
             "key": "CLASS",
+            "source": "setting:fd_class",
             "label": "",
             "required": true,
             "adif": {
@@ -80,6 +81,7 @@
           },
           {
             "key": "SECTION",
+            "source": "setting:fd_section",
             "label": "",
             "required": true,
             "adif": {
@@ -235,6 +237,7 @@
         "fields": [
           {
             "key": "CLASS",
+            "source": "setting:fd_class",
             "label": "",
             "required": true,
             "adif": {
@@ -248,6 +251,7 @@
           },
           {
             "key": "SECTION",
+            "source": "setting:fd_section",
             "label": "",
             "required": true,
             "adif": {

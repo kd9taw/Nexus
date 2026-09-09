@@ -37,15 +37,7 @@
           2,
           5
         ],
-        "multipliers": [
-          {
-            "id": "section",
-            "source": { "type": "field", "key": "SECTION", "domain": "counties" },
-            "scope": "per_log",
-            "excluding": [],
-            "roles": []
-          }
-        ]
+        "multipliers": []
       },
       "dupe": {
         "by_call": true,
@@ -60,7 +52,7 @@
         "fields": [
           {
             "key": "CLASS",
-            "source": "setting:fd_class",
+            "source": "setting:first_licensed_year",
             "label": "",
             "required": true,
             "adif": {

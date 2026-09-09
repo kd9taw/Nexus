@@ -1,0 +1,1 @@
+ruleset arrlfd/2026: slot CLASS declares source "setting:fd_class" but no role sends it

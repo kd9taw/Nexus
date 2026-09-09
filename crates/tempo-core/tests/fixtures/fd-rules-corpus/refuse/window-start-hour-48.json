@@ -21,7 +21,7 @@
         "month": 6,
         "weekend": "nth_full",
         "n": 4,
-        "start_hour_utc": 18,
+        "start_hour_utc": 48,
         "duration_hours": 27,
         "overrides": {}
       },
@@ -37,15 +37,7 @@
           2,
           5
         ],
-        "multipliers": [
-          {
-            "id": "section",
-            "source": { "type": "field", "key": "SECTION", "domain": "counties" },
-            "scope": "per_log",
-            "excluding": [],
-            "roles": []
-          }
-        ]
+        "multipliers": []
       },
       "dupe": {
         "by_call": true,

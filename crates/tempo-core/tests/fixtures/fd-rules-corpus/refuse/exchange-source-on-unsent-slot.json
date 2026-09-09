@@ -37,15 +37,7 @@
           2,
           5
         ],
-        "multipliers": [
-          {
-            "id": "section",
-            "source": { "type": "field", "key": "SECTION", "domain": "counties" },
-            "scope": "per_log",
-            "excluding": [],
-            "roles": []
-          }
-        ]
+        "multipliers": []
       },
       "dupe": {
         "by_call": true,
@@ -94,7 +86,6 @@
               "type": "always"
             },
             "sends": [
-              "CLASS",
               "SECTION"
             ],
             "receives": [

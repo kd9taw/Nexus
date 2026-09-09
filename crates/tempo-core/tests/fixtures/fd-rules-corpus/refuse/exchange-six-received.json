@@ -52,6 +52,7 @@
         "fields": [
           {
             "key": "A",
+            "source": "constant",
             "label": "",
             "required": false,
             "adif": {
@@ -65,6 +66,7 @@
           },
           {
             "key": "B",
+            "source": "constant",
             "label": "",
             "required": false,
             "adif": {
@@ -78,6 +80,7 @@
           },
           {
             "key": "C",
+            "source": "constant",
             "label": "",
             "required": false,
             "adif": {
@@ -91,6 +94,7 @@
           },
           {
             "key": "D",
+            "source": "constant",
             "label": "",
             "required": false,
             "adif": {
@@ -104,6 +108,7 @@
           },
           {
             "key": "E",
+            "source": "constant",
             "label": "",
             "required": false,
             "adif": {
@@ -117,6 +122,7 @@
           },
           {
             "key": "F",
+            "source": "constant",
             "label": "",
             "required": false,
             "adif": {
@@ -280,6 +286,7 @@
         "fields": [
           {
             "key": "CLASS",
+            "source": "setting:fd_class",
             "label": "",
             "required": true,
             "adif": {
@@ -293,6 +300,7 @@
           },
           {
             "key": "SECTION",
+            "source": "setting:fd_section",
             "label": "",
             "required": true,
             "adif": {
