@@ -12,6 +12,7 @@
 import { useEffect, useState, useRef } from 'react'
 import { PHONE_PANEL_IDS, type PhonePanelId, type PanelLayoutApi } from '../features/panelState'
 import { panelHost, NO_DSP_FUNCS_REASON, NO_DSP_LEVELS_REASON } from '../features/panelHost'
+import { composingText } from '../features/contestExchange'
 import type { AppSnapshot, FieldDayStatus, NeedTag, SpotRow } from '../types'
 import { PhoneScope } from './PhoneScope'
 import { TxMeters, TX_METERS_WHEN } from './TxMeters'
@@ -758,8 +759,9 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   }, [lock])
 
   // Field Day exchange the operator reads aloud (and the string to record into a voice-keyer
-  // slot). Class + Section from the active ruleset; empty until FD setup fills them in.
-  const fdExchange = fieldDay ? `${fieldDay.myClass} ${fieldDay.mySection}`.trim() : ''
+  // slot) — what the SESSION is composing, which is what the next contact will hear. Empty
+  // until FD setup fills it in.
+  const fdExchange = composingText(fieldDay?.composing)
 
   // ── THE PANE REGION (2026-07-30 layout assessment, design3 §3) ─────────────────────
   // Every operator-content block under the scope renders through a CockpitPaneFrame in

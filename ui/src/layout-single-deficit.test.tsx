@@ -382,8 +382,10 @@ describe('the .panel-rooted views of .layout.single, as a class', () => {
 // floor creates has somewhere to go.
 describe('Field Day: opening Bonuses must not pay for itself out of the sections board', () => {
   const FD: FieldDayStatus = {
-    myClass: '2A',
-    mySection: 'WI',
+    composing: [
+      { key: 'CLASS', raw: '2A' },
+      { key: 'SECTION', raw: 'WI', domain: 'fd_sections' },
+    ],
     running: false,
     state: 'Idle',
     qsoCount: 0,

@@ -156,6 +156,8 @@ fn tnqp_from_tennessee_works_anyone_and_scores_per_band_multipliers() {
 
     // THE CABRILLO the operator submits.
     let cab = log.cabrillo(14_030).expect("one entry");
+    // TNQP is on neither side of the Cabrillo token map, so the ADIF id passes through
+    // unchanged — which is the other half of the mapping being exercised.
     assert!(cab.contains("CONTEST: TN-QSO-PARTY\n"), "{cab}");
     assert!(cab.contains("LOCATION: TN\n"), "{cab}");
     assert!(cab.contains("CATEGORY-OPERATOR: SINGLE-OP\n"), "{cab}");
@@ -332,7 +334,17 @@ fn ohqp_counts_multipliers_once_per_mode() {
     assert_eq!(log.ruleset().score_note_key, "");
 
     let cab = log.cabrillo(7_030).expect("one entry");
-    assert!(cab.contains("CONTEST: OH-QSO-PARTY\n"), "{cab}");
+    // ⚠️ The Cabrillo TOKEN, not the ADIF id: OhQP is `OH-QSO-PARTY` to ADIF and
+    // `MRRC-OHQP` on the Cabrillo master list. The two namespaces meet once, in the
+    // header writer, and the session's own id is what reaches it — reading `FdEvent`
+    // there would hand every party to the mapper as Field Day and get `ARRL-FD` back.
+    assert!(cab.contains("CONTEST: MRRC-OHQP\n"), "{cab}");
+    // …and the CONTROL that the two really are different namespaces: the ADIF export
+    // keeps the ADIF id on the same log.
+    assert!(
+        log.adif().contains("OH-QSO-PARTY"),
+        "ADIF keeps the ADIF id"
+    );
     assert!(cab.contains(" W8ABC 599 FRAN W8XYZ 599 CUYA\n"), "{cab}");
 }
 
@@ -507,7 +519,12 @@ fn txqp_from_texas_scores_per_log_and_shows_its_score_note() {
     );
 
     let cab = log.cabrillo(14_030).expect("one entry");
-    assert!(cab.contains("CONTEST: TX-QSO-PARTY\n"), "{cab}");
+    // The Cabrillo token again — `TX-QSO-PARTY` to ADIF, `TXQP` to Cabrillo.
+    assert!(cab.contains("CONTEST: TXQP\n"), "{cab}");
+    assert!(
+        log.adif().contains("TX-QSO-PARTY"),
+        "ADIF keeps the ADIF id"
+    );
     assert!(cab.contains(" W5ABC 599 BEXA W5MOB 599 BEE\n"), "{cab}");
 }
 

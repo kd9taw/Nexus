@@ -31,8 +31,7 @@ const snap = {
 } as unknown as AppSnapshot
 
 const fieldDay = {
-  myClass: '',
-  mySection: '',
+  composing: [],
   running: true,
   state: '',
   qsoCount: 0,

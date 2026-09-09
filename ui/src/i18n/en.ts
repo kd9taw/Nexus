@@ -1528,6 +1528,13 @@ export const EN = {
   'map.reset.label': 'Reset',
   'map.reset.title': 'Reset view + layers',
 
+  // Full screen: the map fills the window and everything framing it is hidden. The SAME
+  // button comes back out, so the label states what pressing it does now.
+  'map.full.enter.label': 'Full screen',
+  'map.full.enter.title': 'Fill the window with the map — hide the panels',
+  'map.full.exit.label': 'Exit full screen',
+  'map.full.exit.title': 'Bring the panels back (Esc)',
+
   // `SP` / `LP` are the ham abbreviations for the two great-circle paths and stay in the
   // component as named constants, exactly as the Q-codes on the logbook row do.
   'map.path.aria': 'Path',
@@ -1570,6 +1577,9 @@ export const EN = {
 
   // The layer panel. The layer IDS are code; only these names are read.
   'map.layers.head': 'Layers',
+  // The full-screen toolbar's way back to the panel it hid (it reuses the heading above as
+  // its label, so only the tooltip is new).
+  'map.layers.toggle.title': 'Show or hide the Layers panel',
   'map.layer.opacity.aria': '{{layer}} opacity',
   'map.layer.daynight.label': 'Day / night (greyline)',
   'map.layer.relief.label': 'Relief (World view)',
@@ -1591,6 +1601,8 @@ export const EN = {
   'map.layer.liveSpots.label': 'Live spots (cluster/RBN)',
   'map.layer.stations.label': 'My decodes',
   'map.layer.paths.label': 'Selected path',
+  'map.layer.txPaths.label': 'Heard-you paths (TX)',
+  'map.layer.rxPaths.label': 'Heard-by-you paths (RX)',
   'map.layer.dxped.label': 'DXpeditions',
   'map.layer.ota.label': 'Parks on the air',
 
@@ -1602,6 +1614,8 @@ export const EN = {
   'map.legend.zoneMode': 'zone/mode',
   'map.legend.confirm': 'confirm',
   'map.legend.worked': 'worked',
+  'map.legend.txPath': 'heard you',
+  'map.legend.rxPath': 'you heard',
   'map.legend.opening': 'opening',
   'map.legend.heat.label': 'heat = band activity',
   'map.legend.heat.title': 'Colored auras = live spot density per band; pulsing = a detected opening',
@@ -1665,6 +1679,7 @@ export const EN = {
   'globe.layer.spots': 'Spots',
   'globe.layer.decodes': 'My decodes',
   'globe.layer.arcs': 'Heard-me arcs',
+  'globe.layer.rxarcs': 'Heard-by-me arcs',
   'globe.layer.dxped': 'DXpeditions',
   'globe.layer.heat': 'Band heat',
   'globe.layer.openings': 'Opening sectors',
@@ -2556,6 +2571,20 @@ export const EN = {
   'fieldDay.board.count': '{{worked}}/{{total}} worked',
   'fieldDay.board.cell.worked.title': '{{code}} — {{name}} — worked',
   'fieldDay.board.cell.notWorked.title': '{{code}} — {{name}} — not worked yet',
+  // The end-of-contest merge. The label carries the count so the button says what it
+  // will do BEFORE it does it, and the report says what it did — which is the only thing
+  // that tells a second (idempotent, no-op) press apart from a button that did nothing.
+  'fieldDay.merge.label': {
+    one: 'Merge {{count}} contact into my logbook',
+    other: 'Merge {{count}} contacts into my logbook',
+  },
+  'fieldDay.merge.busy': 'Merging…',
+  'fieldDay.merge.title':
+    "Add this session's contacts to your general logbook. Safe to press twice — a contact already there is skipped, never duplicated.",
+  'fieldDay.merge.added': 'Added {{count}}',
+  'fieldDay.merge.already': '{{count}} already in your logbook',
+  'fieldDay.merge.refused': '{{count}} refused — no stable id',
+  'fieldDay.merge.queued': 'queued for upload',
   'fieldDay.upload.label': 'Send merged contacts to my logbook',
   'fieldDay.upload.aria': 'Upload this session\'s merged contacts',
 
@@ -4100,6 +4129,7 @@ export const EN = {
   // The device NAME is the OS's, and it is never translated — only the note after it is.
   'settings.audio.device.notInList': '{{device}} — saved, not in the list',
 
+  'settings.betaUpdates.failed': 'Could not change the update channel',
   'settings.satellites.vfoMap.failed': 'Could not confirm the VFO mapping',
 
   'settings.workingFreq.reset.confirm.title': 'Clear all working-frequency overrides?',

@@ -2527,12 +2527,21 @@ export interface FieldDayQso {
    *  their class IS the mode — and for rows logged before submode was recorded. */
   submode?: string
   whenUnix?: number
+  /** ⭐ The exchange THIS CONTACT SENT, rendered in Rust from the row itself.
+   *
+   *  It is on the row because it MOVES: a mobile station changes county mid-session, and
+   *  a contact worked before the move sent the old one. Absent on a snapshot from a
+   *  build older than this field. */
+  mex?: string
 }
 
 /** Field Day operating + scoring status. */
 export interface FieldDayStatus {
-  myClass: string
-  mySection: string
+  /* ⛔ NO SESSION-LEVEL SENT EXCHANGE LIVES HERE. The `myClass`/`mySection` pair that
+     used to head this interface was DELETED, not renamed: two interop emitters read it
+     inside their per-QSO loops, so a mobile station that changed county relabelled every
+     contact already logged. What the session composes is `composing` below (a vector);
+     a row's own sent exchange is `FieldDayQso.mex`. */
   running: boolean
   state: string
   /** The station currently being worked (quiets decode popups about them). */
@@ -2655,6 +2664,24 @@ export interface FdUploadControl {
    *  regardless of this switch. Show it beside the switch — an operator who reads
    *  "upload: off" and gets a ClubLog upload anyway has been misled by us. */
   hint: string
+}
+
+/** What one merge into the general logbook did (§3.2).
+ *
+ *  The merge is IDEMPOTENT — a row already in the logbook is skipped, not duplicated —
+ *  so a second press is a real no-op, and this is what lets the operator SEE that
+ *  instead of wondering whether the button worked. */
+export interface FdMergeReport {
+  /** Rows written to the general logbook by this run. */
+  added: number
+  /** Rows already there. On a second press of the same merge, all of them. */
+  already: number
+  /** Rows with no stable identity, refused rather than duplicated. Reported so a count
+   *  that does not add up is visible instead of silent. */
+  refused: number
+  /** Whether those rows were also QUEUED for upload — this session's own control,
+   *  off unless the operator turned it on. */
+  queued: boolean
 }
 
 /** One club band-board row (host-computed, pushed to every position). */
@@ -3224,7 +3251,10 @@ export interface Settings {
   /** Serve Connect as a read-only page on the LAN. The toggle IS the opt-in. */
   connectWeb?: boolean
   connectWebPort?: number
-  /** Opt in to auto-update through beta (pre-release) builds; off = stable channel only. */
+  /** Opt in to auto-update through beta (pre-release) builds; off = stable channel only.
+   * READ-ONLY through this struct: the backend keeps the live value across every settings
+   * save, so putting it in a `setSettings` payload does nothing. Write it with `setBetaUpdates`
+   * (api.ts), which is the ONE writer — see that function for why. */
   betaUpdates?: boolean
   /** N3FJP real-time push (club master log). Empty host = off. */
   n3fjpHost?: string

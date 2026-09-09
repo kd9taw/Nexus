@@ -878,11 +878,23 @@ impl FieldDayLog {
         classes.sort_unstable();
         classes.dedup();
         let headers = crate::contest::CabrilloHeaders {
-            contest: crate::contest::resolve_contest_id(
+            // ⭐ …then translated out of ADIF's namespace into Cabrillo's. The id
+            // above is an ADIF `CONTEST_ID` enumeration value, which is NOT the
+            // Cabrillo `CONTEST:` token for every contest — ARRL Field Day is
+            // `ARRL-FIELD-DAY` to ADIF and `ARRL-FD` to Cabrillo. This is the last
+            // step before the header and the only place the two registries meet;
+            // the ADIF export above reads the id directly and must keep doing so.
+            //
+            // ⚠️ The id it translates comes from the SESSION, not from `self.event`:
+            // `FdEvent` has no arm for a QSO party, so reading it here would hand
+            // every party's log to the Cabrillo mapper under Field Day's id and get
+            // `ARRL-FD` back.
+            contest: crate::contest::cabrillo_contest_token(&crate::contest::resolve_contest_id(
                 &self.session.contest_id,
                 &self.session.contest_id_by_mode,
                 &classes,
-            )?,
+            )?)
+            .to_string(),
             callsign: self.mycall.clone(),
             // ⭐ The declaration, not a literal. `CATEGORY-OPERATOR: MULTI-OP` was
             // hardcoded here, so every solo entry submitted a claim that more than

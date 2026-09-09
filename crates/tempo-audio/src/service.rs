@@ -632,7 +632,7 @@ fn foreign_cat_port_message(addr: &str, reply: &str, rig_model: u32) -> String {
     )
 }
 
-use tempo_app::dto::{SourceKind, Tier};
+use tempo_app::dto::{FieldDayQso, SourceKind, Tier};
 use tempo_app::settings::{RadioProfile, Settings};
 use tempo_core::message::Msg;
 // Band label → club-log meter string. Lives in `tempo_net` beside the two
@@ -9998,28 +9998,15 @@ impl RadioLoop {
                 });
                 if let Some(fd) = snap.field_day.as_ref() {
                     if fd.qso_count > station.last_fd_qsos {
-                        let sent = format!("{} {}", fd.my_class, fd.my_section);
+                        let ctx = FdWsjtxCtx {
+                            when_secs: now_secs,
+                            dial_hz: sinks.cfg_dial_hz,
+                            tier: tier.to_string(),
+                            mycall: snap.mycall.clone(),
+                            mygrid: snap.mygrid.clone(),
+                        };
                         for q in &fd.log[station.last_fd_qsos.min(fd.log.len())..] {
-                            let recvd = format!("{} {}", q.class, q.section);
-                            let _ = server.send_qso_logged(&WsjtxQso {
-                                time_off: now_secs,
-                                dx_call: &q.call,
-                                dx_grid: "",
-                                tx_freq: sinks.cfg_dial_hz,
-                                mode: tier,
-                                report_sent: "",
-                                report_recvd: "",
-                                tx_power: "",
-                                comments: "",
-                                name: "",
-                                time_on: now_secs,
-                                op_call: &snap.mycall,
-                                my_call: &snap.mycall,
-                                my_grid: &snap.mygrid,
-                                exchange_sent: &sent,
-                                exchange_recvd: &recvd,
-                                adif_propmode: "",
-                            });
+                            let _ = server.send_qso_logged(&fd_wsjtx_qso(q, &ctx).as_datagram());
                         }
                     }
                 }
@@ -10055,14 +10042,20 @@ impl RadioLoop {
                                 op.to_string()
                             }
                         };
-                        let myexch = format!("{} {}", fd.my_class, fd.my_section);
-                        let contest = if fd.event == "wfd" {
-                            "WFD"
-                        } else {
-                            "ARRL-FIELD-DAY"
-                        };
+                        // The contest, off the RULESET the session is running — never a
+                        // match on the event id, whose `else` branch reported every
+                        // contest that was not Winter Field Day as ARRL Field Day.
+                        let contest = fd_contest_name(&fd.event, fd.rules_year);
                         let dial_mhz = cur_dial as f64 / 1e6;
                         let fallback_unix = (now / 1000.0) as u64;
+                        let n1_ctx = FdN1mmCtx {
+                            mycall: mycall.clone(),
+                            operator: operator.clone(),
+                            contest,
+                            dial_mhz,
+                            radionr: n1mm_radio_nr,
+                            fallback_unix,
+                        };
                         std::thread::spawn(move || {
                             for (i, q) in new_qsos.iter().enumerate() {
                                 let mode_str = fd_interop_mode(&q.mode, &q.submode);
@@ -10102,34 +10095,7 @@ impl RadioLoop {
                                     }
                                 }
                                 if !n1_addr.is_empty() {
-                                    let c = tempo_net::n1mm::N1mmContact {
-                                        // Field Day IS the multi-op case #33 is about, so this
-                                        // emitter carries the active radio's number too — the
-                                        // dashboards bucket by it and a whole station reading
-                                        // as radio 1 is exactly the wrong answer here.
-                                        radionr: n1mm_radio_nr,
-                                        mycall: mycall.clone(),
-                                        call: q.call.clone(),
-                                        band: band_for_interop(&q.band),
-                                        mode: mode_str.to_string(),
-                                        timestamp: tempo_net::n1mm::utc_timestamp(when),
-                                        section: q.section.clone(),
-                                        // A contest exchange carries no grid.
-                                        gridsquare: String::new(),
-                                        points: tempo_core::fieldday::qso_points_for_mode(&q.mode),
-                                        contestname: contest.to_string(),
-                                        freq_10hz: (dial_mhz * 1e5) as u64,
-                                        sent_exchange: myexch.clone(),
-                                        // Field Day's exchange IS class+section — no RST is
-                                        // passed on the air, so both stay empty and the
-                                        // omit-when-empty rule keeps this datagram byte-identical
-                                        // to the one that has been on the air since 0.8.0.
-                                        rst_sent: String::new(),
-                                        rst_rcvd: String::new(),
-                                        operator: operator.clone(),
-                                        // 32-hex dedup id: time + batch index + call hash.
-                                        id: tempo_net::n1mm::dedup_id(when, &q.call, i as u64),
-                                    };
+                                    let c = fd_n1mm_contact(q, i, &n1_ctx);
                                     if let Err(e) = tempo_net::n1mm::send_contact(&n1_addr, &c) {
                                         eprintln!("tempo: N1MM broadcast failed: {e}");
                                     }
@@ -10190,6 +10156,186 @@ impl RadioLoop {
 // provable without a sound card, rig, or live socket. The loop calls these and
 // sends the result; the math (audio-offset → RF frequency) and the
 // callsign-gating live here where they can be tested.
+
+/// What the WSJT-X type-5 emitter knows about the STATION rather than the contact.
+///
+/// Split out so the per-row half below is a function that can be called — and its bytes
+/// asserted — without a socket, a sound card or the slot loop around it.
+struct FdWsjtxCtx {
+    /// The slot boundary this batch is emitted on (both `time_on` and `time_off`).
+    when_secs: i64,
+    dial_hz: u64,
+    /// The link tier's WSJT-X mode token.
+    tier: String,
+    mycall: String,
+    mygrid: String,
+}
+
+/// Every WSJT-X type-5 field a Field Day contact fills in, OWNED.
+///
+/// [`QsoLogged`](WsjtxQso) borrows, so the datagram itself cannot be returned from a
+/// builder; this is the owned half, and [`as_datagram`](Self::as_datagram) is the
+/// borrow the server encodes.
+struct FdWsjtxQso {
+    when_secs: i64,
+    dx_call: String,
+    dial_hz: u64,
+    tier: String,
+    mycall: String,
+    mygrid: String,
+    exchange_sent: String,
+    exchange_recvd: String,
+}
+
+impl FdWsjtxQso {
+    /// The datagram struct, with the fields this contest wire has never carried left
+    /// empty exactly as they have been since 0.8.0.
+    fn as_datagram(&self) -> WsjtxQso<'_> {
+        WsjtxQso {
+            time_off: self.when_secs,
+            dx_call: &self.dx_call,
+            dx_grid: "",
+            tx_freq: self.dial_hz,
+            mode: &self.tier,
+            report_sent: "",
+            report_recvd: "",
+            tx_power: "",
+            comments: "",
+            name: "",
+            time_on: self.when_secs,
+            op_call: &self.mycall,
+            my_call: &self.mycall,
+            my_grid: &self.mygrid,
+            exchange_sent: &self.exchange_sent,
+            exchange_recvd: &self.exchange_recvd,
+            adif_propmode: "",
+        }
+    }
+}
+
+/// The type-5 `QSOLogged` datagram for ONE logged contest contact.
+///
+/// ⭐ **Both exchanges come from `q` — the ROW — and from nowhere else** (spec §3.3).
+/// The sent side used to be one session-level `format!` hoisted out of the caller's
+/// loop, which relabelled every contact already logged the moment a mobile station
+/// changed county.
+fn fd_wsjtx_qso(q: &FieldDayQso, ctx: &FdWsjtxCtx) -> FdWsjtxQso {
+    FdWsjtxQso {
+        when_secs: ctx.when_secs,
+        dx_call: q.call.clone(),
+        dial_hz: ctx.dial_hz,
+        tier: ctx.tier.clone(),
+        mycall: ctx.mycall.clone(),
+        mygrid: ctx.mygrid.clone(),
+        exchange_sent: q.mex.clone(),
+        exchange_recvd: format!("{} {}", q.class, q.section),
+    }
+}
+
+/// What the N1MM `<contactinfo>` emitter knows about the STATION rather than the
+/// contact. Built before the push thread is spawned and moved into it.
+struct FdN1mmCtx {
+    mycall: String,
+    operator: String,
+    /// N1MM's `<contestname>` — the ADIF `CONTEST_ID` off the running ruleset, via
+    /// [`fd_contest_name`], or [`GENERAL_LOG`](tempo_net::n1mm::GENERAL_LOG) when the
+    /// contest cannot be named. **Not a two-value field**: it was
+    /// `"ARRL-FIELD-DAY" | "WFD"` while those were the only two contests, and every
+    /// other contest fell into the `else`.
+    contest: String,
+    dial_mhz: f64,
+    /// Which radio N1MM attributes the batch to, 1-based (#33).
+    radionr: u32,
+    /// Log time for a row that carries none (legacy rows).
+    fallback_unix: u64,
+}
+
+/// The `<contactinfo>` datagram for ONE logged contest contact. `batch_index` is this
+/// row's place in the push batch — the third component of the 32-hex dedup id.
+///
+/// ⭐ **The sent exchange comes from `q`, the ROW** (spec §3.3), for the same reason as
+/// [`fd_wsjtx_qso`]: this emitter hoisted its own copy of the same `format!`.
+fn fd_n1mm_contact(
+    q: &FieldDayQso,
+    batch_index: usize,
+    ctx: &FdN1mmCtx,
+) -> tempo_net::n1mm::N1mmContact {
+    // Per-QSO log time (a multi-contact batch must not collapse onto one wall clock).
+    let when = if q.when_unix > 0 {
+        q.when_unix
+    } else {
+        ctx.fallback_unix
+    };
+    tempo_net::n1mm::N1mmContact {
+        // Field Day IS the multi-op case #33 is about, so this emitter carries the
+        // active radio's number too — the dashboards bucket by it and a whole station
+        // reading as radio 1 is exactly the wrong answer here.
+        radionr: ctx.radionr,
+        mycall: ctx.mycall.clone(),
+        call: q.call.clone(),
+        band: band_for_interop(&q.band),
+        mode: fd_interop_mode(&q.mode, &q.submode),
+        timestamp: tempo_net::n1mm::utc_timestamp(when),
+        section: q.section.clone(),
+        // A contest exchange carries no grid.
+        gridsquare: String::new(),
+        points: tempo_core::fieldday::qso_points_for_mode(&q.mode),
+        contestname: ctx.contest.clone(),
+        freq_10hz: (ctx.dial_mhz * 1e5) as u64,
+        sent_exchange: q.mex.clone(),
+        // Field Day's exchange IS class+section — no RST is passed on the air, so both
+        // stay empty and the omit-when-empty rule keeps this datagram byte-identical to
+        // the one that has been on the air since 0.8.0.
+        rst_sent: String::new(),
+        rst_rcvd: String::new(),
+        operator: ctx.operator.clone(),
+        // 32-hex dedup id: time + batch index + call hash.
+        id: tempo_net::n1mm::dedup_id(when, &q.call, batch_index as u64),
+    }
+}
+
+/// The contest this session is running, as N1MM's `<contestname>`.
+///
+/// ⭐ **The value comes from the RULESET, not from a match on the event id.** It used to
+/// be `if event == "wfd" { "WFD" } else { "ARRL-FIELD-DAY" }`, which was right only
+/// while those were the only two contests: every other event id fell into the `else`, so
+/// a Tennessee QSO Party contact would have gone onto the wire carrying its correct
+/// per-row exchange under ARRL Field Day's name. `ruleset_by_id` is the same rules row
+/// the session was opened from, so this cannot disagree with what the log exports as.
+///
+/// **Which vocabulary this field wants — what was established, and what was not.**
+/// N1MM's `<contestname>` is N1MM's OWN identifier, not an ADIF or Cabrillo one: its
+/// official page (linked from `tempo_net::n1mm`'s module header) documents no vocabulary
+/// and its examples show `CWOPS` beside `ARRL-FIELD-DAY`, and this tree already relies
+/// on that by sending [`GENERAL_LOG`](tempo_net::n1mm::GENERAL_LOG) — `"DX"`, N1MM's
+/// name for its non-contest log, and not an ADIF value — for an ordinary QSO.
+///
+/// * **For Field Day the two vocabularies COINCIDE.** `ARRL-FIELD-DAY` is both the ADIF
+///   `CONTEST_ID` and the literal string in N1MM's own documented example, so the
+///   datagram that has been on the air since 0.8.0 is right under either reading and
+///   does not move.
+/// * **For the state QSO parties they DIVERGE, and N1MM's side is not per-party.** N1MM
+///   has no Tennessee/Ohio/California/Texas contest: all four are the single log type
+///   `QSOPARTY` with the state chosen separately in its UI. What its `<contestname>`
+///   actually emits for one is **not documented anywhere I could read**, and the only
+///   candidate — `QSOPARTY` for all four — is a mapping no source states, collapses four
+///   contests into one bucket, and throws away the identity a dashboard buckets on.
+///
+/// So this sends the **ADIF id**: it is a registry already in the tree
+/// (`FdRuleset::contest_id`) rather than a third one invented here, it keeps Field Day
+/// byte-identical, and it names the contest rather than a category. It is deliberately
+/// NOT the Cabrillo token (`ARRL-FD`, `MRRC-OHQP`, `TXQP`) — that is a submission-file
+/// vocabulary, and using it would change the shipped Field Day wire.
+///
+/// `GENERAL_LOG` is the fallback because an unnameable contest must not be labelled as
+/// some other contest — that is the whole defect — and `<contestname>` is not omitted
+/// when empty (an empty one reads as malformed to consumers that bucket by it).
+fn fd_contest_name(event_id: &str, rules_year: u16) -> String {
+    tempo_core::fd_rules::ruleset_by_id(event_id, rules_year)
+        .map(|rs| rs.contest_id)
+        .unwrap_or(tempo_net::n1mm::GENERAL_LOG)
+        .to_string()
+}
 
 /// The mode token one Field Day QSO is pushed to N3FJP / N1MM with, from its
 /// scoring class (`FieldDayQso::mode`, "DIG" | "CW" | "PH") and recorded
@@ -11817,6 +11963,285 @@ mod tests {
         assert_eq!(fd_interop_mode("DIG", ""), "FT8");
         assert_eq!(fd_interop_mode("CW", ""), "CW");
         assert_eq!(fd_interop_mode("PH", ""), "SSB");
+    }
+
+    // ── THE INTEROP PROVENANCE FIXTURES (spec §3.3) ───────────────────────────────
+    //
+    // Two emitters put a SENT exchange on a wire: the WSJT-X type-5 `QSOLogged`
+    // datagram and the N1MM `<contactinfo>` broadcast. Both used to read one
+    // session-level string hoisted out of their own per-QSO loops, so a mobile station
+    // that changed county relabelled every contact already logged — on both wires, and
+    // silently, because the receiving logger cannot tell a wrong exchange from a right
+    // one.
+    //
+    // The fixtures below are the pair §3.3 mechanism 4 asks for. `fd_rows` is the
+    // control: Field Day's exchange never moves, so every row carries what the session
+    // composes and NOTHING on that wire may change. `mobile_rows` is the discriminator:
+    // its rows carry exchanges the session no longer composes, so an emitter reading the
+    // session instead of the row produces visibly different bytes.
+
+    // The pinned Field Day datagrams. Captured from these same encoders BEFORE the
+    // provenance change, which is what makes them a before/after measurement rather
+    // than a restatement of what the code now does.
+    const WSJTX_FD_ROW0_HEX: &str = "adbccbda000000030000000500000007544553542d49440000000000258caa033f9aa0010000000457314157000000000000000000d6c0900000000346543800000000000000000000000000000000000000000000000000258caa033f9aa00100000005573958595a00000005573958595a00000004454e353300000005334120574900000005324120435400000000";
+    const WSJTX_FD_ROW1_HEX: &str = "adbccbda000000030000000500000007544553542d49440000000000258caa033f9aa001000000054b39414243000000000000000000d6c0900000000346543800000000000000000000000000000000000000000000000000258caa033f9aa00100000005573958595a00000005573958595a00000004454e353300000005334120574900000005314420494c00000000";
+    const N1MM_FD_ROW0: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?><contactinfo><app>NEXUS</app><contestname>ARRL-FIELD-DAY</contestname><contestnr>1</contestnr><timestamp>2025-06-15 15:06:40</timestamp><mycall>W9XYZ</mycall><band>20</band><rxfreq>1407400</rxfreq><txfreq>1407400</txfreq><operator>W9XYZ</operator><mode>FT8</mode><call>W1AW</call><section>CT</section><points>2</points><radionr>1</radionr><IsRunQSO>0</IsRunQSO><StationName>NEXUS</StationName><ID>0000000ca18d4e80000000000bb55600</ID><IsClaimedQso>1</IsClaimedQso><SentExchange>3A WI</SentExchange></contactinfo>";
+    const N1MM_FD_ROW1: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?><contactinfo><app>NEXUS</app><contestname>ARRL-FIELD-DAY</contestname><contestnr>1</contestnr><timestamp>2025-06-15 15:07:40</timestamp><mycall>W9XYZ</mycall><band>20</band><rxfreq>1407400</rxfreq><txfreq>1407400</txfreq><operator>W9XYZ</operator><mode>FT8</mode><call>K9ABC</call><section>IL</section><points>2</points><radionr>1</radionr><IsRunQSO>0</IsRunQSO><StationName>NEXUS</StationName><ID>0000000ca18d55c5000000052c38d890</ID><IsClaimedQso>1</IsClaimedQso><SentExchange>3A WI</SentExchange></contactinfo>";
+
+    const N1MM_WFD_ROW0: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?><contactinfo><app>NEXUS</app><contestname>WFD</contestname><contestnr>1</contestnr><timestamp>2025-06-15 15:06:40</timestamp><mycall>W9XYZ</mycall><band>20</band><rxfreq>1407400</rxfreq><txfreq>1407400</txfreq><operator>W9XYZ</operator><mode>FT8</mode><call>W1AW</call><section>CT</section><points>2</points><radionr>1</radionr><IsRunQSO>0</IsRunQSO><StationName>NEXUS</StationName><ID>0000000ca18d4e80000000000bb55600</ID><IsClaimedQso>1</IsClaimedQso><SentExchange>3A WI</SentExchange></contactinfo>";
+    const N1MM_WFD_ROW1: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?><contactinfo><app>NEXUS</app><contestname>WFD</contestname><contestnr>1</contestnr><timestamp>2025-06-15 15:07:40</timestamp><mycall>W9XYZ</mycall><band>20</band><rxfreq>1407400</rxfreq><txfreq>1407400</txfreq><operator>W9XYZ</operator><mode>FT8</mode><call>K9ABC</call><section>IL</section><points>2</points><radionr>1</radionr><IsRunQSO>0</IsRunQSO><StationName>NEXUS</StationName><ID>0000000ca18d55c5000000052c38d890</ID><IsClaimedQso>1</IsClaimedQso><SentExchange>3A WI</SentExchange></contactinfo>";
+
+    /// One DTO log row, as the snapshot hands it to the emitters.
+    fn fd_row(call: &str, class: &str, section: &str, mex: &str, when_unix: u64) -> FieldDayQso {
+        FieldDayQso {
+            call: call.into(),
+            class: class.into(),
+            section: section.into(),
+            band: "20m".into(),
+            mode: "DIG".into(),
+            submode: "FT8".into(),
+            when_unix,
+            mex: mex.into(),
+        }
+    }
+
+    /// A Field Day session: the exchange never moves, so every row's sent exchange is
+    /// the one the session is composing.
+    fn fd_rows() -> Vec<FieldDayQso> {
+        vec![
+            fd_row("W1AW", "2A", "CT", "3A WI", 1_750_000_000),
+            fd_row("K9ABC", "1D", "IL", "3A WI", 1_750_000_060),
+        ]
+    }
+
+    /// A mobile session that has CHANGED COUNTY. Row 0 was worked from Wilson, row 1
+    /// from Davidson, and the session is now composing `3A DAV` — so a session-level
+    /// read stamps `3A DAV` on row 0, which was never sent from Davidson.
+    fn mobile_rows() -> Vec<FieldDayQso> {
+        vec![
+            fd_row("W1AW", "2A", "CT", "3A WIL", 1_750_000_000),
+            fd_row("K9ABC", "1D", "IL", "3A DAV", 1_750_000_060),
+        ]
+    }
+
+    fn wsjtx_ctx() -> FdWsjtxCtx {
+        FdWsjtxCtx {
+            when_secs: 1_750_000_100,
+            dial_hz: 14_074_000,
+            tier: "FT8".into(),
+            mycall: "W9XYZ".into(),
+            mygrid: "EN53".into(),
+        }
+    }
+
+    /// The N1MM context for a session running `event_id`.
+    ///
+    /// ⚠️ The contest name is RESOLVED, not hardcoded — it goes through the same
+    /// [`fd_contest_name`] the emitter calls. A fixture that hardcoded
+    /// `"ARRL-FIELD-DAY"` would pin the byte string while proving nothing about the
+    /// code that produces it.
+    fn n1mm_ctx(event_id: &str) -> FdN1mmCtx {
+        FdN1mmCtx {
+            mycall: "W9XYZ".into(),
+            operator: "W9XYZ".into(),
+            contest: fd_contest_name(event_id, tempo_core::fd_rules::CURRENT_RULES_YEAR),
+            dial_mhz: 14.074,
+            radionr: 1,
+            fallback_unix: 1_750_000_100,
+        }
+    }
+
+    /// ⭐ **THE FIELD DAY WIRE, PINNED TO ITS BYTES.**
+    ///
+    /// Field Day's exchange never moves, so a Field Day operator's two interop wires
+    /// must stay byte-for-byte what they have been since 0.8.0 — the provenance change
+    /// is only allowed to matter where the exchange actually moves. These are the WHOLE
+    /// encoded datagrams from the real encoders, captured before the change and
+    /// unchanged by it, not a description of the part that was expected to move.
+    #[test]
+    fn field_day_interop_datagrams_are_byte_pinned() {
+        let ctx = wsjtx_ctx();
+        let wsjtx: Vec<String> = fd_rows()
+            .iter()
+            .map(|q| {
+                let b = tempo_net::wsjtx::encode_qso_logged(
+                    "TEST-ID",
+                    &fd_wsjtx_qso(q, &ctx).as_datagram(),
+                );
+                b.iter().map(|x| format!("{x:02x}")).collect::<String>()
+            })
+            .collect();
+        assert_eq!(wsjtx, vec![WSJTX_FD_ROW0_HEX, WSJTX_FD_ROW1_HEX]);
+
+        // N1MM `<contactinfo>` is XML, so its bytes are readable and pinned as text.
+        let nctx = n1mm_ctx("arrlfd");
+        let n1mm: Vec<String> = fd_rows()
+            .iter()
+            .enumerate()
+            .map(|(i, q)| tempo_net::n1mm::build_contactinfo(&fd_n1mm_contact(q, i, &nctx)))
+            .collect();
+        assert_eq!(n1mm, vec![N1MM_FD_ROW0, N1MM_FD_ROW1]);
+    }
+
+    /// ⭐ **AND WINTER FIELD DAY, PINNED THE SAME WAY.**
+    ///
+    /// The other shipped contest, and the one the old `if event == "wfd"` branch got
+    /// right — so it is exactly the case a resolver rewrite could quietly break while
+    /// the ARRL pin above stayed green.
+    #[test]
+    fn winter_field_day_contactinfo_is_byte_pinned() {
+        let nctx = n1mm_ctx("wfd");
+        let n1mm: Vec<String> = fd_rows()
+            .iter()
+            .enumerate()
+            .map(|(i, q)| tempo_net::n1mm::build_contactinfo(&fd_n1mm_contact(q, i, &nctx)))
+            .collect();
+        assert_eq!(n1mm, vec![N1MM_WFD_ROW0, N1MM_WFD_ROW1]);
+    }
+
+    /// ⭐ **THE DIFFERENTIAL ORACLE — the replaced expression, quoted, as the control.**
+    ///
+    /// The ARRL Field Day pin above was captured from the emitter BEFORE this change and
+    /// still passes, so that wire is a measured before/after. Winter Field Day had no
+    /// such fixture to capture from, so its identity rests on this instead: the literal
+    /// expression that was deleted, run beside its replacement, over the two contests it
+    /// was ever correct for. `fd_n1mm_contact` puts `ctx.contest` on the wire verbatim
+    /// (the byte pins hold that down), so agreement here IS datagram identity.
+    #[test]
+    fn the_resolver_agrees_with_the_expression_it_replaced() {
+        // Exactly what `service.rs` did before this change, character for character.
+        fn old_expression(event: &str) -> &str {
+            if event == "wfd" {
+                "WFD"
+            } else {
+                "ARRL-FIELD-DAY"
+            }
+        }
+        let year = tempo_core::fd_rules::CURRENT_RULES_YEAR;
+        for id in ["arrlfd", "wfd"] {
+            assert_eq!(
+                fd_contest_name(id, year),
+                old_expression(id),
+                "{id} must reach the wire exactly as it always has"
+            );
+        }
+        // And the control that makes that mean something: the two DISAGREE for every
+        // other contest, which is the whole reason the expression was replaced.
+        for id in ["tnqp", "ohqp", "cqp", "txqp"] {
+            assert_eq!(old_expression(id), "ARRL-FIELD-DAY");
+            assert_ne!(fd_contest_name(id, year), old_expression(id));
+        }
+    }
+
+    /// ⭐ **NO CONTEST REACHES THE N1MM WIRE UNDER ANOTHER CONTEST'S NAME.**
+    ///
+    /// The defect this replaces: `if event == "wfd" { "WFD" } else { "ARRL-FIELD-DAY" }`
+    /// was a two-value match on a field that now holds a rules-file event id, so every
+    /// contest that was not Winter Field Day — the four state QSO parties included —
+    /// went onto the wire labelled ARRL Field Day, carrying its own correct per-row
+    /// exchange under someone else's contest. A dashboard bucketing by `<contestname>`
+    /// has no way to tell that from a real Field Day contact.
+    ///
+    /// The invariant holds **whether or not a ruleset for the id is installed**, which
+    /// is what makes it testable here, one merge before the QSO-party rulesets land:
+    /// with a ruleset the name is that contest's, without one it is
+    /// [`GENERAL_LOG`](tempo_net::n1mm::GENERAL_LOG) — and never ARRL Field Day's.
+    #[test]
+    fn a_contest_that_is_not_field_day_is_never_labelled_field_day() {
+        // The two shipped contests resolve to their own ADIF ids, which is also what
+        // the byte pins above hold to the wire.
+        let year = tempo_core::fd_rules::CURRENT_RULES_YEAR;
+        assert_eq!(fd_contest_name("arrlfd", year), "ARRL-FIELD-DAY");
+        assert_eq!(fd_contest_name("wfd", year), "WFD");
+
+        // Every event id that is not ARRL Field Day — the four state QSO parties this
+        // build is one merge away from running, plus a junk id standing for a rules
+        // file that lost a row.
+        for id in ["tnqp", "ohqp", "cqp", "txqp", "not-a-contest", ""] {
+            let name = fd_contest_name(id, year);
+            assert_ne!(
+                name, "ARRL-FIELD-DAY",
+                "event id {id:?} reached the N1MM wire labelled ARRL Field Day"
+            );
+            // …and it reaches the wire as whatever was resolved, not as a default
+            // buried in the emitter.
+            let nctx = n1mm_ctx(id);
+            let xml = tempo_net::n1mm::build_contactinfo(&fd_n1mm_contact(&fd_rows()[0], 0, &nctx));
+            assert!(
+                xml.contains(&format!("<contestname>{name}</contestname>")),
+                "{xml}"
+            );
+        }
+    }
+
+    /// The positive control for the guard above: it can only mean something if
+    /// `ARRL-FIELD-DAY` is a string this resolver really can produce, and if the wire
+    /// really does carry the name it is given.
+    #[test]
+    fn the_contest_name_guard_discriminates() {
+        let year = tempo_core::fd_rules::CURRENT_RULES_YEAR;
+        // The value the guard forbids for every other id IS what ARRL Field Day
+        // produces — so the assertion is discriminating, not vacuous.
+        assert_eq!(fd_contest_name("arrlfd", year), "ARRL-FIELD-DAY");
+        // And the emitter puts the ctx's name on the wire verbatim: hand it Field Day's
+        // name under a QSO party's id and the datagram says Field Day. That is exactly
+        // what the old code did, and what the guard above now catches.
+        let mut nctx = n1mm_ctx("tnqp");
+        nctx.contest = "ARRL-FIELD-DAY".into();
+        let xml = tempo_net::n1mm::build_contactinfo(&fd_n1mm_contact(&fd_rows()[0], 0, &nctx));
+        assert!(
+            xml.contains("<contestname>ARRL-FIELD-DAY</contestname>"),
+            "{xml}"
+        );
+    }
+
+    /// ⭐ **THE MOBILE DEFECT — a session-level exchange stamped on every row.**
+    ///
+    /// Both wires must describe row 0 with what row 0 actually sent. The failing-first
+    /// control is the same fixture read the old way: the session composes `3A DAV`, so
+    /// an emitter that reads the session puts `3A DAV` on a contact worked from Wilson.
+    #[test]
+    fn a_mobile_session_puts_each_rows_own_exchange_on_both_wires() {
+        let rows = mobile_rows();
+        let ctx = wsjtx_ctx();
+        let nctx = n1mm_ctx("arrlfd");
+
+        // What the session is composing NOW — the value the deleted DTO pair carried,
+        // and the wrong answer for row 0. Nothing below can reach it: it exists here
+        // only as the discriminator this fixture is checked against.
+        let session_now = "3A DAV";
+
+        for (i, q) in rows.iter().enumerate() {
+            let dg = tempo_net::wsjtx::encode_qso_logged(
+                "TEST-ID",
+                &fd_wsjtx_qso(q, &ctx).as_datagram(),
+            );
+            let hay = String::from_utf8_lossy(&dg).to_string();
+            assert!(
+                hay.contains(q.mex.as_str()),
+                "row {i} ({}) must reach the WSJT-X wire with its OWN exchange {:?}: {hay:?}",
+                q.call,
+                q.mex
+            );
+
+            let xml = tempo_net::n1mm::build_contactinfo(&fd_n1mm_contact(q, i, &nctx));
+            assert!(
+                xml.contains(&format!("<SentExchange>{}</SentExchange>", q.mex)),
+                "row {i} ({}) must reach the N1MM wire with its OWN exchange {:?}: {xml}",
+                q.call,
+                q.mex
+            );
+        }
+
+        // The positive control §3.3 mechanism 4 requires: this fixture DISCRIMINATES.
+        // Row 0's exchange differs from what the session composes, so a session-level
+        // read is a different byte string — which is what makes the assertions above
+        // capable of failing.
+        assert_ne!(
+            rows[0].mex, session_now,
+            "the fixture must discriminate: row 0's exchange has to differ from the \
+             session's, or a session-level read would pass this test"
+        );
     }
 
     /// AUTO and OFF must survive the round trip, and must NEVER come back as "mid".
@@ -16354,6 +16779,355 @@ mod tests {
             "back on 20 m in the FT8 section the rig must carry the DATA policy mode, \
              not the CW its stack stored — got {m}"
         );
+    }
+
+    /// ⭐ FIELD REPORT 2026-09 (FT-710 beta): "double-clicking a CW signal on the map tunes the
+    /// radio to the frequency but leaves it in DATA-U instead of CW-U — I clicked in a CW
+    /// contact and it didn't switch."
+    ///
+    /// THE HYPOTHESIS THIS TEST REFUTES, and it is the reason the test is worth keeping: that
+    /// the dedupe's BELIEF (`last_mode`, deliberately the app's own commanded mode and never
+    /// the rig's — see the read-only-launch note at its seed) suppresses an EXPLICIT operator
+    /// mode command once the rig has diverged from it. It does not, and this pins that it never
+    /// starts to. The FORCE path — the branch an `immediate_retune` one-shot selects, which
+    /// `work_spot` arms twice over (`set_operating_mode` and `set_frequency` both set it) —
+    /// re-asserts the mode UNCONDITIONALLY: `mode_changed` there governs only the passband and
+    /// the read-back note, never whether `set_mode` is sent.
+    ///
+    /// The scene is the divergence at its widest: the operator's own hand put the rig in DATA-U
+    /// while the app still believes CW, which is exactly the state the display-only read-back
+    /// leaves behind by design (`observe_rig_mode`). Working a spot must still reach the rig.
+    #[test]
+    fn an_explicit_work_a_spot_mode_command_survives_a_stale_mode_belief() {
+        // Same band on purpose: no band crossing, so `reassert_mode_after_band_cross` stands
+        // down and the only thing that can move the rig is the force path's own `set_mode`.
+        let (addr, seen, live_mode) = band_stacking_rigctld_stub(14_030_000, &[]);
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_license_class("extra");
+            e.set_operating_mode("cw", true);
+            e.set_frequency(14.030, "20m", "USB");
+        }
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state_for(&engine);
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut run = |state: &mut RadioLoop, rig: &mut Rig, b: &mut MockBackend, t: f64| {
+            state
+                .step(&engine, b, rig, &sinks, t, &mut ra, &mut rr, &mut station)
+                .unwrap();
+        };
+        run(&mut state, &mut rig, &mut backend, 0.0);
+        assert_eq!(state.last_mode, "CW", "scene guard: the belief is CW");
+
+        // The operator turns the rig's OWN mode knob to DATA-U, and the app finds out about it
+        // only through the display-only read-back. The belief stays CW — that is the design.
+        *live_mode.lock().unwrap() = "PKTUSB".to_string();
+        for t in [1_000.0, 2_000.0, 3_000.0] {
+            run(&mut state, &mut rig, &mut backend, t);
+        }
+        assert_eq!(
+            state.last_mode, "CW",
+            "scene guard: the belief has NOT adopted the rig's mode — that is what makes this \
+             a stale belief at all"
+        );
+        seen.lock().unwrap().clear();
+
+        // The gesture: double-click a CW spot on the map (work_spot is the atomic backend verb
+        // behind it — set the section's mode AND the exact dial under one lock).
+        engine.lock().unwrap().work_spot("cw", 14.055, "20m");
+        run(&mut state, &mut rig, &mut backend, 4_000.0);
+
+        let wire = seen.lock().unwrap().clone();
+        assert!(
+            wire.iter().any(|l| l.starts_with("M CW")),
+            "an explicit work-a-spot must COMMAND the mode even though the belief already \
+             holds it — the dedupe governs the steady path, never this one. wire={wire:?}"
+        );
+        assert_eq!(
+            live_mode.lock().unwrap().as_str(),
+            "CW",
+            "…and the radio must END in CW"
+        );
+    }
+
+    /// ⭐ THE INVARIANT THAT OUTRANKS THE FIX (same 2026-09 report): a mode the OPERATOR set on
+    /// the rig's own front panel MUST STAND. The periodic read-back is display-only by design
+    /// (`observe_rig_mode`, and the loop's `// display-only; never adopted into operating_mode`
+    /// at the read-only-launch seed); the dedupe's belief is the app's own commanded mode. Both
+    /// halves exist so Nexus never fights the hand on the knob.
+    ///
+    /// This is the test that must go RED if a future "reconcile the belief from the rig"
+    /// change is ever made: adopting the observed mode into `last_mode` would make the steady
+    /// path see a mode change on the very next tick and stomp the operator's DATA-U back to CW,
+    /// eight times a second, with no operator action anywhere in the loop.
+    #[test]
+    fn a_front_panel_mode_change_is_never_reconciled_away() {
+        let (addr, seen, live_mode) = band_stacking_rigctld_stub(14_030_000, &[]);
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_license_class("extra");
+            e.set_operating_mode("cw", true);
+            e.set_frequency(14.030, "20m", "USB");
+        }
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state_for(&engine);
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut run = |state: &mut RadioLoop, rig: &mut Rig, b: &mut MockBackend, t: f64| {
+            state
+                .step(&engine, b, rig, &sinks, t, &mut ra, &mut rr, &mut station)
+                .unwrap();
+        };
+        run(&mut state, &mut rig, &mut backend, 0.0);
+        assert_eq!(live_mode.lock().unwrap().as_str(), "CW", "scene guard");
+
+        // The hand on the knob. Nothing in the app asked for this.
+        *live_mode.lock().unwrap() = "PKTUSB".to_string();
+        seen.lock().unwrap().clear();
+
+        // Run long enough that the mode read-back (every 4th heavy poll) has certainly seen it.
+        for i in 1..=40 {
+            run(&mut state, &mut rig, &mut backend, i as f64 * 1_000.0);
+        }
+
+        let wire = seen.lock().unwrap().clone();
+        let commands: Vec<&String> = wire.iter().filter(|l| l.starts_with("M ")).collect();
+        assert!(
+            commands.is_empty(),
+            "the loop must send NO mode command with no operator action — a front-panel mode \
+             change stands. sent={commands:?}"
+        );
+        assert_eq!(
+            live_mode.lock().unwrap().as_str(),
+            "PKTUSB",
+            "the operator's own mode is still on the radio"
+        );
+        // …and the app SAW it: the read-back is a display mirror, not a correction.
+        assert_eq!(
+            engine.lock().unwrap().snapshot().radio.rig_mode.as_deref(),
+            Some("PKTUSB"),
+            "the read-back mirrors the rig's real mode for the cockpit to flag"
+        );
+    }
+
+    /// ⭐ THE MECHANISM THAT ACTUALLY PUTS A YAESU IN **DATA-U WHILE THE OPERATOR IS CHASING
+    /// CW** — the one the 2026-09 FT-710 report matches word for word, found by ruling the
+    /// dedupe out (see `an_explicit_work_a_spot_mode_command_survives_a_stale_mode_belief`).
+    ///
+    /// With the CW keyer set to **Soundcard**, `Settings::rig_mode_on_sideband`'s CW arm
+    /// commands `PKTUSB`/`PKTLSB` — Yaesu **DATA-U/DATA-L** — instead of `CW`/`CWR`, because a
+    /// keyed audio tone has to reach the modulator rather than the mic jack (the FTX-1 "keys
+    /// but no audio" fix, 2026-08-29). So the rig is held in DATA-U for the whole CW session,
+    /// receive included: working a CW spot from the FT8 section moves the DIAL and changes NO
+    /// mode at all, which is precisely "it tuned but it didn't switch". Nothing is broken on
+    /// the CAT path — this is the mode word Nexus chose.
+    ///
+    /// Pinned here at the WIRE, end to end through the loop, so the coupling between a keyer
+    /// backend and the mode a spot click commands can never be changed by accident. The CAT
+    /// keyer half is the control: same click, same rig, and the radio lands in CW.
+    #[test]
+    fn the_soundcard_cw_keyer_works_a_cw_spot_into_the_data_submode() {
+        let land_mode = |keyer: tempo_app::settings::CwKeyerBackend| {
+            // Sitting in the FT8 section on 20 m — where the operator was when he clicked.
+            let (addr, seen, live_mode) = band_stacking_rigctld_stub(14_074_000, &[]);
+            let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+            {
+                let mut e = engine.lock().unwrap();
+                e.set_license_class("extra");
+                let mut s = e.settings().clone();
+                s.cw_keyer = keyer;
+                e.apply_settings(s);
+                e.set_operating_mode("digital", true);
+                e.set_frequency(14.074, "20m", "USB");
+            }
+            let mut rig = Rig::rigctld(&addr);
+            let mut backend = MockBackend::new();
+            let mut state = loop_state_for(&engine);
+            let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+            let mut station = StationSinks::new();
+            let mut run = |state: &mut RadioLoop, rig: &mut Rig, b: &mut MockBackend, t: f64| {
+                state
+                    .step(&engine, b, rig, &sinks, t, &mut ra, &mut rr, &mut station)
+                    .unwrap();
+            };
+            run(&mut state, &mut rig, &mut backend, 0.0);
+            assert_eq!(
+                live_mode.lock().unwrap().as_str(),
+                "PKTUSB",
+                "scene guard: FT8 holds the rig in DATA-U"
+            );
+            seen.lock().unwrap().clear();
+
+            // Double-click a CW spot on the map, same band (20 m CW segment).
+            engine.lock().unwrap().work_spot("cw", 14.030, "20m");
+            run(&mut state, &mut rig, &mut backend, 1_000.0);
+            let dial = seen
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|l| l.starts_with("F 14030000"));
+            let landed = live_mode.lock().unwrap().clone();
+            (landed, dial)
+        };
+
+        let (cat_mode, cat_dial) = land_mode(tempo_app::settings::CwKeyerBackend::Cat);
+        assert!(cat_dial, "the CAT-keyer click lands the spot's dial");
+        assert_eq!(
+            cat_mode, "CW",
+            "CONTROL: with the rig's own keyer, working a CW spot puts the radio in CW"
+        );
+
+        let (sc_mode, sc_dial) = land_mode(tempo_app::settings::CwKeyerBackend::Soundcard);
+        assert!(
+            sc_dial,
+            "the dial lands either way — that half of the report is not in dispute"
+        );
+        assert_eq!(
+            sc_mode, "PKTUSB",
+            "THE REPORT: with the soundcard keyer the CW section commands the DATA submode, so \
+             a rig already in DATA-U does not change mode at all — 'it tuned but it didn't \
+             switch'. This assertion is a CHARACTERISATION of deliberate behaviour, not an \
+             endorsement: if the DATA submode is ever narrowed to the keyed window (the way \
+             `sstv_in_flight` narrows Phone's), THIS is the test that names what changed."
+        );
+    }
+
+    /// ⭐ THE FOUR CW KEYER BACKENDS, PINNED AT THE WIRE — the mode word the CW section
+    /// commands while RECEIVING, and every mode word it commands across a KEYED OVER, on both
+    /// sides of the 10 MHz line.
+    ///
+    /// Measured for the 2026-09 FT-710 report ("it tuned but selected DATA-U, not CW-U") as the
+    /// BEFORE half of a proposed narrowing of the soundcard keyer's DATA submode to the keyed
+    /// window — receive in `CW`/`CWR`, command `PKTUSB`/`PKTLSB` only while keying. That
+    /// narrowing was investigated and NOT built (`tasks/cw-data-window.md`): Nexus carries ONE
+    /// dial number, a frequency written over CAT is a number in the CURRENT mode's convention,
+    /// and on a Yaesu with CW FREQ DISPLAY = PITCH OFFSET the CW convention differs from the
+    /// SSB/DATA one by the rig's CW pitch (the ±650 Hz field report the mode-before-dial fix
+    /// exists for — see the long note in the force path). Crossing that boundary twice per over,
+    /// with no way to read which convention the rig applies, puts either receive or transmit a
+    /// pitch off on half the fleet. Today there is no crossing, which is why RX and TX agree
+    /// whatever the rig's menu says — and THAT is the property this pins.
+    ///
+    /// Two facts per backend, both read off the wire and not out of app state:
+    ///  * the mode word commanded while RECEIVING, and
+    ///  * every mode word commanded across a whole over (queue → key → tail → idle).
+    ///
+    /// The second is EMPTY for all four backends, and the emptiness is only worth anything
+    /// because the over really happened: the soundcard arm's `T 1`…`T 0` and the CAT arm's
+    /// `b TEST` are asserted as the positive control. A future narrowing is exactly the change
+    /// that makes the soundcard row non-empty — this is the test that names what moved, and the
+    /// three true-CW rows are the ones that must NOT move with it.
+    ///
+    /// ⚠️ The harness configures no WinKeyer/serial keyline PORT (there is no such hardware on
+    /// this box), so those two backends' WORDS fall through to the CAT arm — the shipped
+    /// behaviour, and not what this test is about. The MODE word is backend-derived either way,
+    /// which is what is pinned here.
+    #[test]
+    fn the_cw_keyer_backends_command_one_mode_word_for_receive_and_transmit_alike() {
+        use tempo_app::settings::CwKeyerBackend;
+        // (mode words seen while receiving, mode words seen across the over, the whole wire)
+        let probe = |keyer: CwKeyerBackend, dial: f64, band: &str| {
+            let (addr, seen, _live) = band_stacking_rigctld_stub((dial * 1e6) as u64, &[]);
+            let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+            {
+                let mut e = engine.lock().unwrap();
+                e.set_license_class("extra");
+                let mut s = e.settings().clone();
+                s.cw_keyer = keyer;
+                e.apply_settings(s);
+                e.set_operating_mode("cw", true);
+                e.set_frequency(dial, band, "USB");
+            }
+            let mut rig = Rig::rigctld(&addr);
+            let mut backend = MockBackend::new();
+            let mut state = loop_state_for(&engine);
+            let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+            let mut station = StationSinks::new();
+            let mut run = |state: &mut RadioLoop, rig: &mut Rig, b: &mut MockBackend, t: f64| {
+                state
+                    .step(&engine, b, rig, &sinks, t, &mut ra, &mut rr, &mut station)
+                    .unwrap();
+            };
+            let modes = |s: &Arc<Mutex<Vec<String>>>| -> Vec<String> {
+                s.lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|l| l.starts_with("M "))
+                    .cloned()
+                    .collect()
+            };
+            run(&mut state, &mut rig, &mut backend, 0.0);
+            let rx = modes(&seen);
+            seen.lock().unwrap().clear();
+            // One whole over: `send_cw` queues the macro word-by-word in one go, so the ticks
+            // below carry it from the queue through the key to the far side of the PTT tail.
+            engine.lock().unwrap().send_cw("TEST");
+            for i in 1..=8 {
+                run(&mut state, &mut rig, &mut backend, i as f64 * 500.0);
+            }
+            let over = modes(&seen);
+            let wire = seen.lock().unwrap().clone();
+            (rx, over, wire)
+        };
+
+        for (dial, band, cw, data) in [
+            (7.030, "40m", "M CWR -1", "M PKTLSB 3000"),
+            (14.030, "20m", "M CW -1", "M PKTUSB 3000"),
+        ] {
+            // The three TRUE-CW backends: the rig keys itself in CW, so the section commands
+            // the rig's own CW mode at its own default width (`-1`), band-aware — CW-L below
+            // 10 MHz, CW-U at 30 m and up (the operator's 2026-07-24 ruling).
+            for keyer in [
+                CwKeyerBackend::Cat,
+                CwKeyerBackend::WinKeyer,
+                CwKeyerBackend::Serial,
+            ] {
+                let (rx, over, wire) = probe(keyer, dial, band);
+                assert_eq!(
+                    rx,
+                    vec![cw.to_string()],
+                    "{keyer:?} on {band} receives in CW"
+                );
+                assert!(
+                    over.is_empty(),
+                    "{keyer:?} on {band}: a keyed over must command NO mode — the receive mode \
+                     IS the transmit mode. saw {over:?}"
+                );
+                assert!(
+                    wire.iter().any(|l| l == "b TEST"),
+                    "POSITIVE CONTROL: the over must actually have keyed, or an empty mode list \
+                     proves nothing. wire={wire:?}"
+                );
+            }
+
+            // The SOUNDCARD keyer: a keyed audio tone has to reach the modulator rather than the
+            // mic jack, so the section commands the DATA submode — for the WHOLE session,
+            // receive included. That is the FT-710 report ("it tuned but it didn't switch"), and
+            // the `3000` is its other half: a 3 kHz SSB filter where a CW operator wants a
+            // narrow one. Both are deliberate today, and both are what a narrowing would change.
+            let (rx, over, wire) = probe(CwKeyerBackend::Soundcard, dial, band);
+            assert_eq!(
+                rx,
+                vec![data.to_string()],
+                "the soundcard keyer holds the rig in the DATA submode to RECEIVE on {band}"
+            );
+            assert!(
+                over.is_empty(),
+                "…and a keyed over commands NO mode either: there is exactly one mode word for \
+                 receive and transmit alike, which is why they cannot disagree about the dial \
+                 convention. saw {over:?}"
+            );
+            assert!(
+                wire.iter().any(|l| l == "T 1") && wire.iter().any(|l| l == "T 0"),
+                "POSITIVE CONTROL: the soundcard over must actually have keyed and unkeyed. \
+                 wire={wire:?}"
+            );
+        }
     }
 
     #[test]

@@ -9,7 +9,7 @@
 // modes, bearings, km, MHz, dB, knots, satellite names, CQ zone numbers, the layer and
 // projection ids, and the SP/LP path abbreviations below. The prose is in the catalog
 // under `map.*`. Nothing drawn on the canvas is prose — every fillText draws a token.
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { workedGridSet } from '../coverage'
 import type { AprsStation } from '../api'
 import { bandLabelForMhz } from '../band'
@@ -26,7 +26,7 @@ import {
 } from '../aprsSymbols'
 import { MapLegend, MufLegend } from './MapLegend'
 import { geoPath, type GeoPermissibleObjects } from 'd3-geo'
-import { RotateCcw } from 'lucide-react'
+import { Layers as LayersIcon, Maximize2, Minimize2, RotateCcw } from 'lucide-react'
 import type {
   AuroraPoint,
   PcaView,
@@ -67,6 +67,7 @@ import {
   type LatLon,
 } from '../grid'
 import { heatBoost, sectorPulse } from '../features/pulse'
+import { txPaths, rxPaths, type MapPath } from '../features/mapPaths'
 import { openingModeColor } from '../bandColors'
 import {
   APRS_HOME_ZOOM,
@@ -124,6 +125,12 @@ interface Props {
    * POTA map opening with Parks off). Set true to make the preset yield only to a pick made ON
    * THIS surface. Default false keeps every existing (inheriting) call site unchanged. */
   dedicatedIntent?: boolean
+  /** The map's full-screen toggle changed (the toolbar button, or Escape leaving it). The map
+   * hides its OWN chrome by itself; a host that frames it — Connect, with a header, four rail
+   * panes and a bottom strip — hides that too, so "full screen" means the whole window. Called
+   * on mount with the restored value, so a surface reopens the way it was left. Omitted = the
+   * map still goes full-screen, just inside whatever the host already gave it. */
+  onFullChange?: (full: boolean) => void
   /** Double-click-to-work a live spot / DXpedition marker: the app's atomic
    * work path (rig → band+mode+freq, cockpit opens). Omitted = gesture off.
    * `program`/`reference` carry a park identity (POTA/SOTA) when the spot is one, so the
@@ -278,6 +285,24 @@ export function layersFromStored(v: string | null): Record<LayerKey, Layer> | nu
   return out
 }
 
+// FULL-SCREEN (operator request): the map fills its window — on Connect that means the
+// header, the four rail panes and the bottom strip go with the Layers panel, so a map on a
+// second monitor is all map. Deliberately NOT the Fullscreen API: this is a Tauri window the
+// operator already sized and placed, and `requestFullscreen` would take over the whole
+// display, hoist the map into the top layer (out of `.app`'s `--ui-zoom` scope, and away from
+// every portaled dialog/tooltip), and route Escape through the browser instead of us. Hiding
+// the chrome inside the window is the same result with none of that.
+//
+// PER-SURFACE, AND — unlike the projection and the layer picks above — WITHOUT THE
+// INHERITANCE. Those two are content preferences a torn-off map should carry over; this is a
+// statement about ONE WINDOW's shape. Inherited, the primary surface's choice would open a
+// brand-new pop-out (the dedicated POTA map included) with its chrome already gone, which
+// reads as a rendering fault, not a restored preference. So: this surface's OWN key or off.
+const FULL_KEY = 'nexus.connect.mapfull'
+function loadFull(): boolean {
+  return surfaceHasOwn(FULL_KEY) && surfaceGet(FULL_KEY) === '1'
+}
+
 /** Grid-rarity → the dashed halo color (matches the .rarity-gem palette), or
  * null for tiers too common to decorate. */
 function rarityRing(r: import('../types').GridRarity | null | undefined): string | null {
@@ -328,6 +353,8 @@ type LayerKey =
   | 'liveSpots'
   | 'stations'
   | 'paths'
+  | 'txPaths'
+  | 'rxPaths'
   | 'dxped'
   | 'ota'
 interface Layer {
@@ -358,6 +385,8 @@ const LAYER_LABEL: Record<LayerKey, { labelKey: MessageKey }> = {
   liveSpots: { labelKey: 'map.layer.liveSpots.label' },
   stations: { labelKey: 'map.layer.stations.label' },
   paths: { labelKey: 'map.layer.paths.label' },
+  txPaths: { labelKey: 'map.layer.txPaths.label' },
+  rxPaths: { labelKey: 'map.layer.rxPaths.label' },
   dxped: { labelKey: 'map.layer.dxped.label' },
   ota: { labelKey: 'map.layer.ota.label' },
 }
@@ -392,6 +421,13 @@ export const DEFAULT_LAYERS: Record<LayerKey, Layer> = {
   liveSpots: { visible: true, opacity: 0.9 },
   stations: { visible: true, opacity: 1 },
   paths: { visible: true, opacity: 1 },
+  // "Am I getting out" — the scarce, high-value half of the picture (5–40 paths on a
+  // busy band), and the 3-D globe has drawn these arcs by default since it shipped.
+  txPaths: { visible: true, opacity: 0.9 },
+  // OFF by default, deliberately. The roster on a busy FT8 band is 100+ stations, and a
+  // line is far more ink than a dot — default-on would web the map for every operator on
+  // upgrade. One checkbox turns it on, and `mapPaths` caps it either way.
+  rxPaths: { visible: false, opacity: 0.75 },
   // Off by default: Connect is the PROPAGATION view (DXpeditions have their own area).
   // The layer toggle stays for anyone who wants DX-target markers on the map.
   dxped: { visible: false, opacity: 1 },
@@ -448,6 +484,79 @@ const MAP_RIM = '#2a4254' // the globe's edge (AEQD reads as a sphere)
 const MAP_OCEAN_LIT = '#1c4a66' // lit ocean highlight (toward the light source)
 const MAP_OCEAN_DEEP = '#06101c' // sphere limb (dark edge)
 const MAP_ATMO = 'rgba(104, 168, 226, 0.55)' // atmosphere glow at the limb
+/** ⭐ MARKER HALO — how "brighter" is done WITHOUT touching the colour scheme.
+ *  A band-coloured dot competes with whatever it lands on: a 40 m blue dot on the deep-sea
+ *  blue (#0f2334) and a 20 m green dot on the continental green (#364a3c) are close enough
+ *  in value to disappear at a distance, which is what "hard to see" means on a wall display.
+ *  Saturating the palette would fix that by changing the colours the operator said they like;
+ *  a dark outline fixes it by raising the CONTRAST STEP at the marker's edge, so every dot
+ *  keeps its exact hue and reads against land, sea, relief raster and greyline alike. Darker
+ *  than MAP_OCEAN_DEEP so it separates even from the globe's own limb. */
+const MARKER_HALO = 'rgba(2, 7, 12, 0.9)'
+
+/** ⭐ MARKER SCALE — one factor, derived from the canvas, applied to every station/spot/park/
+ *  satellite/APRS/QTH marker and its label.
+ *
+ *  WHY IT IS SIZE-DERIVED AND NOT A SETTING. The same MapView renders in an embedded detail
+ *  globe a few hundred px across and popped out full screen on a second monitor; a fixed
+ *  radius that reads at arm's length in a pane is a speck at 2560 px viewed across a shack.
+ *  Growing the markers with the surface is the thing the operator actually asked for ("larger
+ *  ... easier to see", running it full screen on a separate monitor) and it costs no control.
+ *
+ *  WHY IT IS NOT ZOOM-BLIND. `w`/`h` here are the canvas's LAYOUT px, and the app magnifies
+ *  with `.app { zoom: var(--ui-zoom) }` — so raising UI zoom shrinks the layout box and this
+ *  factor, exactly cancelling the zoom that is already enlarging the whole canvas. Apparent
+ *  marker size therefore depends on the physical size of the map, not on how it was reached.
+ *
+ *  FLOOR 1: never smaller than what shipped, so no existing surface loses density.
+ *  CEILING 1.9: past that the dots start to merge into blobs in a busy DX opening. */
+export function markerScaleFor(w: number, h: number): number {
+  const m = Math.min(w, h)
+  if (!(m > 0)) return 1
+  return Math.max(1, Math.min(1.9, m / 560))
+}
+
+/** ⭐ HOVER-CARD PLACEMENT — the three properties the card has to hold at once.
+ *
+ *  (1) NEVER COVER THE MARKER. The card is what explains the icon under the pointer; a card
+ *      big enough to read at a distance is big enough to swallow the thing it describes.
+ *      Vertical placement is decided FIRST and is the property that holds this: below the
+ *      marker when there is room, flipped above when there is not. Because the card's band
+ *      then excludes the marker's row, horizontal clamping afterwards can move it freely
+ *      without ever sliding back over the icon.
+ *  (2) STAY INSIDE THE MAP. Near an edge — and a full-screen map has four of them full of
+ *      markers — an unclamped card is half off-screen, which is worse than a small one.
+ *  (3) BE STABLE. `ax`/`ay` are the MARKER's projected position, not the cursor's, so this
+ *      returns the same point for every pixel of a hit target. See the call site.
+ *
+ *  `cw`/`ch` are 0 on the first render (nothing measured yet); the flips then simply do not
+ *  fire and the layout effect corrects before paint. Degenerate case — a box too short for
+ *  the card either way — clamps and is allowed to overlap: there is no non-overlapping answer.
+ */
+export function placeHoverCard(o: {
+  /** Marker anchor, canvas layout px. */
+  ax: number
+  ay: number
+  /** Measured card size, layout px (0 = not measured yet). */
+  cw: number
+  ch: number
+  /** Canvas box, layout px. */
+  vw: number
+  vh: number
+  /** Radius to keep clear around the marker (its drawn size / hit target). */
+  clear: number
+}): { left: number; top: number } {
+  const pad = 6
+  const gap = Math.max(10, o.clear)
+  let top = o.ay + gap
+  if (o.ch > 0 && top + o.ch + pad > o.vh) {
+    const above = o.ay - gap - o.ch
+    top = above >= pad ? above : Math.max(pad, Math.min(top, o.vh - o.ch - pad))
+  }
+  let left = o.ax + gap
+  if (o.cw > 0) left = Math.max(pad, Math.min(left, Math.max(pad, o.vw - o.cw - pad)))
+  return { left, top }
+}
 
 // Per-band spot colors (low bands cool → high bands warm), so the live-spot
 // firehose reads by band at a glance. "Heard me" spots override to green.
@@ -467,6 +576,15 @@ const BAND_COLOR: Record<string, string> = {
 }
 const bandColor = (b: string): string => BAND_COLOR[b] ?? '#8aa0b0'
 const GETTING_OUT = '#3ddc6a' // a station that heard ME
+
+// TX/RX path lines (`features/mapPaths.ts` decides WHICH stations earn one). TX reuses
+// GETTING_OUT so "green = they heard me" means one thing on dots and lines alike; RX is a
+// quiet cool grey-blue because it is the bigger, less newsworthy set and must recede under
+// the spots it connects. The two DASH patterns are a redundant, CVD-safe channel — the same
+// habit as the station dots encoding SNR as size on top of color.
+const PATH_RX = '#8fb8d8'
+const PATH_TX_DASH = [5, 4] // dashes — "getting out"
+const PATH_RX_DASH = [1, 3] // dots — "hearing"
 
 /** #rrggbb → rgba(r,g,b,0) — a zero-alpha gradient end stop of the SAME hue.
  * 'transparent' is rgba(0,0,0,0): fine under 'lighter' compositing but it dirties
@@ -509,6 +627,7 @@ export function MapView({
   needByCall,
   intent,
   dedicatedIntent = false,
+  onFullChange,
   onWorkSpot,
   onSelectSat,
   aprs,
@@ -561,6 +680,20 @@ export function MapView({
   const hadStoredLayers = useRef(
     !embedded && (dedicatedIntent ? surfaceHasOwn(LAYERS_KEY) : surfaceGet(LAYERS_KEY) != null),
   )
+  // Full screen: everything but the map goes. The embedded detail globe has no chrome to
+  // hide and no toolbar to hold the way back, so it is never full-screen.
+  const [full, setFull] = useState(() => !embedded && loadFull())
+  // The Layers panel, peeked while full-screen. Transient by design: full screen means the
+  // panel is away, and re-hiding it on the way in/out is what makes ONE button the whole
+  // story. It comes back as an overlay (see `.map-view.map-full .map-layers`) so peeking at
+  // a layer never re-flows the canvas — a 200 px shove would re-project and repaint the
+  // whole map twice for a checkbox.
+  const [layersPeek, setLayersPeek] = useState(false)
+  const setFullScreen = (on: boolean) => {
+    setFull(on)
+    setLayersPeek(false)
+    surfaceSet(FULL_KEY, on ? '1' : '0')
+  }
   const [size, setSize] = useState({ w: 0, h: 0 })
   const [hover, setHover] = useState<{ x: number; y: number; text: string; info?: boolean } | null>(null)
   // The hovered feature's call — drives the on-canvas hover ring (changes only
@@ -796,6 +929,27 @@ export function MapView({
     surfaceSet(LAYERS_KEY, JSON.stringify(layers))
   }, [layers, embedded])
 
+  // Tell the host, including on mount so a surface restored as full-screen opens with the
+  // host's chrome already gone rather than flashing it away a frame later.
+  useEffect(() => {
+    onFullChange?.(full)
+  }, [full, onFullChange])
+
+  // ESCAPE LEAVES. A full-screen map on a second monitor with only a mouse way out is a
+  // trap — the toolbar button stays on screen, but the keyboard has to work too. Listener
+  // mounted only while full, and it yields to anything that already answered the key (a
+  // dialog, a menu): Escape must close that first, not tear the window's chrome down.
+  useEffect(() => {
+    if (!full) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return
+      e.preventDefault()
+      setFullScreen(false)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [full]) // eslint-disable-line react-hooks/exhaustive-deps
+
   // The operator's real QTH — drives the "you are here" marker, and normally the
   // projection centre too.
   const myQth = useMemo(() => gridToLatLon(myGrid), [myGrid])
@@ -860,6 +1014,54 @@ export function MapView({
     return () => ro.disconnect()
   }, [])
 
+  // ⭐ DEVICE PIXELS PER LAYOUT PIXEL (= UI zoom × devicePixelRatio) — the number the canvas
+  // backing store must be sized by, and the reason the map used to look soft.
+  //
+  // `size` above is LAYOUT px (`clientWidth`, which CSS `zoom` does not scale). The app
+  // magnifies everything with `.app { zoom: var(--ui-zoom) }`, so the canvas actually paints
+  // into `layout × zoom × dpr` device pixels — and sizing the bitmap `layout × dpr` (what this
+  // file did) left the compositor to UPSCALE it at every UI scale above 100%. That is the blur
+  // an operator sees on a big screen, where scaling the UI up for distance reading is exactly
+  // what you do. `devicePixelRatio` cannot see zoom; only `devicePixelContentBoxSize` can.
+  //
+  // Same fix, same reason as Waterfall.tsx:441 — which also had to derive "device px per CSS
+  // px" from it rather than from `dpr`.
+  //
+  // A SEPARATE observer from the one above deliberately: `size` stays the wrap's layout box
+  // (it is the projection space, and every hit test compares against it), and this measures
+  // only the ratio. The two boxes are geometrically identical (the canvas is `inset: 0` on the
+  // wrap), so `round(size.w * devScale)` is the device box even if the two fire a frame apart.
+  const [devScale, setDevScale] = useState(() =>
+    typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1,
+  )
+  useEffect(() => {
+    const el = canvasRef.current
+    if (!el) return
+    const apply = (entry?: ResizeObserverEntry) => {
+      const dev = entry?.devicePixelContentBoxSize?.[0]
+      const css = entry?.contentBoxSize?.[0]
+      let s = window.devicePixelRatio || 1
+      if (dev && css && css.inlineSize > 0) s = dev.inlineSize / css.inlineSize
+      else if (dev && el.clientWidth > 0) s = dev.inlineSize / el.clientWidth
+      if (!Number.isFinite(s) || s <= 0) s = 1
+      // Only a REAL change: this state is a draw dependency, and a float that jitters in the
+      // last bits would repaint the whole map on every resize tick.
+      setDevScale((prev) => (Math.abs(prev - s) < 1e-3 ? prev : s))
+    }
+    const ro = new ResizeObserver((entries) => apply(entries[0]))
+    try {
+      // The only box that reports post-zoom device pixels; older engines reject the option.
+      ro.observe(el, { box: 'device-pixel-content-box' })
+    } catch {
+      ro.observe(el)
+    }
+    apply()
+    return () => ro.disconnect()
+  }, [])
+
+  /** One scale factor for every marker + marker label — see `markerScaleFor`. */
+  const markerScale = useMemo(() => markerScaleFor(size.w, size.h), [size.w, size.h])
+
   // Project all stations once per draw input (also used for hit-testing).
   const placed = useMemo(() => {
     if (!me || size.w === 0) return [] as Array<{ s: Station; ll: LatLon; xy: [number, number] }>
@@ -893,6 +1095,22 @@ export function MapView({
     // space-weather numbers must not reproject hundreds of points.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [me, kind, size, prop?.spots, view])
+
+  // TX/RX path lines. WHICH stations earn one — and the recency gate, cap and fade that
+  // keep a fan from becoming a spider's web — live in `features/mapPaths`, shared with the
+  // 3-D globe so the two surfaces cannot drift. Nothing is projected here: the draw pass
+  // hands each pair to `geoPath`, which resamples the geodesic for whichever projection is
+  // live, so one call covers globe, AEQD and world alike.
+  const txLines = useMemo(
+    () => (layers.txPaths.visible ? txPaths(prop?.spots ?? []) : []),
+    [layers.txPaths.visible, prop?.spots],
+  )
+  // A call heard BOTH ways keeps only its green TX line (`exclude`) — two dotted strokes
+  // over identical geometry read as a rendering artifact.
+  const rxLines = useMemo(
+    () => (layers.rxPaths.visible ? rxPaths(stations, txLines) : []),
+    [layers.rxPaths.visible, stations, txLines],
+  )
 
   // Project the DXpedition markers (bearing+distance placement) the same way —
   // retained for hover/click/work; previously glyphs with no hit-target.
@@ -1091,7 +1309,13 @@ export function MapView({
     const canvas = canvasRef.current
     const { w, h } = size
     if (!canvas || w === 0 || h === 0 || !me) return
-    const dpr = window.devicePixelRatio || 1
+    // Device px per LAYOUT px — `devScale`, not `devicePixelRatio`: under `.app`'s CSS zoom
+    // the two differ, and using the latter is what made the map soft at any UI scale ≠ 100%.
+    // See the devScale effect above.
+    const dpr = devScale
+    // `ms` scales every marker + marker label with the size of the map, so the icons read at
+    // wall-display distance instead of staying pane-sized. See `markerScaleFor`.
+    const ms = markerScale
     // RESIZE ONLY ON A REAL SIZE CHANGE. Assigning canvas.width/height DISCARDS the
     // backing store and allocates a fresh one even when the value is identical — and
     // this effect's deps carry `pulseTick` (1 s) and `aprsTick` (2 s), so the
@@ -1112,6 +1336,24 @@ export function MapView({
     const ctx = canvas.getContext('2d')!
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
     ctx.clearRect(0, 0, w, h)
+    /** A marker label with a dark halo, so it reads over land, sea, relief raster and the
+     *  greyline alike — MARKER_HALO's contrast trick applied to text. Preserves the caller's
+     *  fillStyle (the label's own ink) and only borrows the stroke. */
+    const haloText = (s: string, x: number, y: number) => {
+      const fill = ctx.fillStyle
+      ctx.lineJoin = 'round'
+      ctx.lineWidth = Math.max(2, 2.6 * ms)
+      ctx.strokeStyle = MARKER_HALO
+      ctx.strokeText(s, x, y)
+      ctx.fillStyle = fill
+      ctx.fillText(s, x, y)
+    }
+    /** A marker outline at the current path — the "brighter" lever (see MARKER_HALO). */
+    const haloStroke = (lw = 1) => {
+      ctx.strokeStyle = MARKER_HALO
+      ctx.lineWidth = lw * ms
+      ctx.stroke()
+    }
 
     const proj = makeProjection(kind, me, w, h, view)
     const path = geoPath(proj, ctx)
@@ -1336,7 +1578,7 @@ export function MapView({
       // Symbols only once the view is local enough for them to be legible; see SYMBOL_MIN_ZOOM.
       const drawSymbols = showSymbolAt(view.zoom)
       const drawNowSec = Date.now() / 1000
-      ctx.font = `500 10px ${cssVar('--font-mono') || 'monospace'}`
+      ctx.font = `500 ${Math.round(10 * ms)}px ${cssVar('--font-mono') || 'monospace'}`
       ctx.textAlign = 'left'
       ctx.textBaseline = 'middle'
       // Newest last so a station that has moved draws its current dot on top of
@@ -1353,10 +1595,10 @@ export function MapView({
         // Course/speed vector: only for a station actually under way. A parked
         // station with a stale course would otherwise draw a lie.
         if (a.speedKnots != null && a.speedKnots > 1 && a.courseDeg != null) {
-          const len = Math.min(26, 6 + a.speedKnots * 0.5)
+          const len = Math.min(26, 6 + a.speedKnots * 0.5) * ms
           const rad = ((a.courseDeg - 90) * Math.PI) / 180
           ctx.strokeStyle = isSel ? '#5eead4' : 'rgba(148, 163, 184, 0.8)'
-          ctx.lineWidth = 1.2
+          ctx.lineWidth = 1.2 * ms
           ctx.beginPath()
           ctx.moveTo(p[0], p[1])
           ctx.lineTo(p[0] + Math.cos(rad) * len, p[1] + Math.sin(rad) * len)
@@ -1379,14 +1621,14 @@ export function MapView({
         const ink = isSel ? '#5eead4' : 'rgba(203, 213, 225, 0.95)'
         if (drawSymbols) {
           const sym = resolveSymbol(a.symbolTable, a.symbolCode)
-          const size = isSel ? 20 : 17
+          const size = (isSel ? 20 : 17) * ms
           ctx.save()
           ctx.globalAlpha = layers.aprs.opacity * alpha * fade
           ctx.translate(p[0], p[1])
           // The ring first, so the glyph sits inside it rather than under it.
           ctx.strokeStyle = ink
-          ctx.lineWidth = 1.2
-          ctx.setLineDash(ring === 'dashed' ? [2.5, 2.5] : [])
+          ctx.lineWidth = 1.2 * ms
+          ctx.setLineDash(ring === 'dashed' ? [2.5 * ms, 2.5 * ms] : [])
           ctx.beginPath()
           ctx.arc(0, 0, size * 0.72, 0, Math.PI * 2)
           ctx.stroke()
@@ -1432,11 +1674,11 @@ export function MapView({
         } else {
           // Zoomed out: a screen of glyphs is unreadable mush, and the question at this scale is
           // "where is there traffic", not "what is each station". Back to dots.
-          const r = isSel ? 5 : 3.5
+          const r = (isSel ? 5 : 3.5) * ms
           ctx.globalAlpha = layers.aprs.opacity * alpha * fade
           if (ring === 'dashed') {
             ctx.strokeStyle = isSel ? '#5eead4' : 'rgba(148, 163, 184, 0.85)'
-            ctx.lineWidth = 1.4
+            ctx.lineWidth = 1.4 * ms
             ctx.beginPath()
             ctx.arc(p[0], p[1], r, 0, Math.PI * 2)
             ctx.stroke()
@@ -1445,21 +1687,22 @@ export function MapView({
             ctx.beginPath()
             ctx.arc(p[0], p[1], r, 0, Math.PI * 2)
             ctx.fill()
+            haloStroke(1)
           }
         }
         ctx.globalAlpha = layers.aprs.opacity
         if (isSel) {
           ctx.strokeStyle = '#5eead4'
-          ctx.lineWidth = 1.5
+          ctx.lineWidth = 1.5 * ms
           ctx.beginPath()
-          ctx.arc(p[0], p[1], drawSymbols ? 16 : 9, 0, Math.PI * 2)
+          ctx.arc(p[0], p[1], (drawSymbols ? 16 : 9) * ms, 0, Math.PI * 2)
           ctx.stroke()
         }
         // Label only the selection and anything moving — labelling every station
         // turns a busy local net into a wall of text.
         if (isSel || (a.speedKnots != null && a.speedKnots > 1)) {
           ctx.fillStyle = cssVar('--text') || '#e2e8f0'
-          ctx.fillText(a.call, p[0] + 8, p[1])
+          haloText(a.call, p[0] + 8 * ms, p[1])
         }
         placedAprsRef.current.push({ call: a.call, x: p[0], y: p[1] })
       }
@@ -1524,7 +1767,7 @@ export function MapView({
         ctx.stroke()
         ctx.setLineDash([])
       }
-      ctx.font = `500 10px ${cssVar('--font-mono') || 'monospace'}`
+      ctx.font = `500 ${Math.round(10 * ms)}px ${cssVar('--font-mono') || 'monospace'}`
       ctx.textAlign = 'left'
       ctx.textBaseline = 'middle'
       // ⭐ THE DETAIL GLOBE SHOWS ONE BIRD, NOT ALL OF THEM. Every satellite drew
@@ -1576,7 +1819,7 @@ export function MapView({
         // a bird, not a box. Scales slightly up for chased birds. The shape is
         // features/satIcon — the sky dome renders the same glyph in SVG, and a
         // second hand-tuned copy would drift on the first tweak.
-        const sc = isChased ? 1.25 : 1
+        const sc = (isChased ? 1.25 : 1) * ms
         ctx.save()
         ctx.translate(p[0], p[1])
         ctx.rotate((SAT_ICON_TILT_DEG * Math.PI) / 180)
@@ -1604,11 +1847,11 @@ export function MapView({
       // to 2-D — mapLabels.ts) and in explicit label ink: the old inline
       // fillText inherited whatever fillStyle the previous layer left behind.
       if (satLabels.length > 0) {
-        const rowH = 12 // 10 px mono line + breathing room
+        const rowH = 12 * ms // 10 px mono line + breathing room, scaled with the labels
         const ys = decollideLabels(satLabels, rowH, rowH / 2, h - rowH / 2)
         ctx.globalAlpha = layers.sats.opacity
         ctx.fillStyle = cssVar('--text') || '#e2e8f0'
-        satLabels.forEach((l, i) => ctx.fillText(l.text, l.x, ys[i]))
+        satLabels.forEach((l, i) => haloText(l.text, l.x, ys[i]))
       }
       ctx.globalAlpha = 1
     }
@@ -1709,7 +1952,7 @@ export function MapView({
       for (const s of mufStations) {
         const p = project(proj, { lat: s.lat, lon: s.lon })
         if (!p) continue
-        const r = 3.8
+        const r = 3.8 * ms
         ctx.beginPath()
         ctx.moveTo(p[0], p[1] - r)
         ctx.lineTo(p[0] + r, p[1])
@@ -1718,9 +1961,7 @@ export function MapView({
         ctx.closePath()
         ctx.fillStyle = mufDotColor(s.muf)
         ctx.fill()
-        ctx.lineWidth = 1
-        ctx.strokeStyle = 'rgba(0, 0, 0, 0.55)'
-        ctx.stroke()
+        haloStroke(1)
       }
       ctx.globalAlpha = 1
     }
@@ -1853,6 +2094,35 @@ export function MapView({
       }
     }
 
+    // TX/RX path lines — the GridTracker picture: a dashed great circle out to everyone who
+    // reported hearing ME, a dotted one out to everyone I decoded. Drawn UNDER the spot and
+    // station dots on purpose: the dots are what the operator clicks, so the fan must never
+    // sit on top of them.
+    //
+    // `greatCircle()` + `path()` is the whole geometry, exactly as the selected path below
+    // does it: d3-geo reads a two-point LineString as a geodesic and adaptively resamples
+    // it, so the same call bends correctly on the globe (clipped at the horizon), stays a
+    // true radial on the AEQD beam map, and gets cut at the antimeridian in world view.
+    // Nothing here is per-projection.
+    if (me && (txLines.length > 0 || rxLines.length > 0)) {
+      const drawPaths = (lines: MapPath[], color: string, dash: number[], layerAlpha: number) => {
+        if (lines.length === 0) return
+        ctx.strokeStyle = color
+        ctx.lineWidth = 1.1
+        ctx.setLineDash(dash)
+        for (const ln of lines) {
+          ctx.globalAlpha = layerAlpha * 0.75 * ln.fade
+          ctx.beginPath()
+          path(greatCircle(me, ln.ll))
+          ctx.stroke()
+        }
+        ctx.setLineDash([])
+        ctx.globalAlpha = 1
+      }
+      drawPaths(rxLines, PATH_RX, PATH_RX_DASH, layers.rxPaths.opacity)
+      drawPaths(txLines, GETTING_OUT, PATH_TX_DASH, layers.txPaths.opacity)
+    }
+
     // Live spots — the cluster/RBN/PSKR firehose + own decodes, placed by grid or
     // DXCC centroid. Colored by band; green = a station that heard ME ("getting
     // out"); faded by age; centroid-placed (approx) spots dimmer. This is what
@@ -1870,12 +2140,16 @@ export function MapView({
     const dimBand = (band: string) =>
       focusBand && focusHasMatch ? (band === focusBand ? 1 : 0.15) : 1
     if (layers.liveSpots.visible) {
-      ctx.font = '10px system-ui'
+      ctx.font = `${Math.round(10 * ms)}px system-ui`
       ctx.textAlign = 'left'
       ctx.textBaseline = 'middle'
       for (const { sp, xy: p } of placedSpots) {
         const ageMin = sp.ageSecs / 60
-        const fade = ageMin < 10 ? 1 : ageMin < 30 ? 0.6 : 0.35
+        // AGE FADE, LIFTED (operator: "brighter"). The ordering is the information — recent
+        // asserts more than stale — and it is untouched; only the FLOOR moved (0.6/0.35 →
+        // 0.75/0.5), because a 35%-alpha dot the size of a full stop is not "old", it is
+        // invisible on a screen read from across the room. The halo below does the rest.
+        const fade = ageMin < 10 ? 1 : ageMin < 30 ? 0.75 : 0.5
         // Band focus: the focused band stays bright; everything else recedes.
         const focusF = dimBand(sp.band)
         const isSel = sp.call === selectedCall
@@ -1885,34 +2159,37 @@ export function MapView({
             ? layers.liveSpots.opacity
             : layers.liveSpots.opacity * fade * (sp.approx ? 0.7 : 1) * focusF
         ctx.beginPath()
-        ctx.arc(p[0], p[1], sp.heardMe ? 3.5 : 2.8, 0, Math.PI * 2)
+        ctx.arc(p[0], p[1], (sp.heardMe ? 3.5 : 2.8) * ms, 0, Math.PI * 2)
         ctx.fillStyle = sp.heardMe ? GETTING_OUT : bandColor(sp.band)
         ctx.fill()
+        // The contrast step that makes a band colour survive whatever it landed on. Drawn on
+        // the SAME path as the fill, so the dot keeps its exact radius and hue.
+        haloStroke(1)
         // Hover ring: "you're on it — click lands here". Selection gets the
         // louder accent ring + label below.
         if (isHover && !isSel) {
           ctx.beginPath()
-          ctx.arc(p[0], p[1], 6, 0, Math.PI * 2)
+          ctx.arc(p[0], p[1], 6 * ms, 0, Math.PI * 2)
           ctx.strokeStyle = cssVar('--text')
-          ctx.lineWidth = 1.2
+          ctx.lineWidth = 1.2 * ms
           ctx.stroke()
         }
         // A CLICKED spot must visibly respond (operator report: clicks looked
         // dead) — accent ring + callsign label, same language as station dots.
         if (isSel) {
           ctx.beginPath()
-          ctx.arc(p[0], p[1], 6, 0, Math.PI * 2)
+          ctx.arc(p[0], p[1], 6 * ms, 0, Math.PI * 2)
           ctx.strokeStyle = cssVar('--accent')
-          ctx.lineWidth = 2
+          ctx.lineWidth = 2 * ms
           ctx.stroke()
           ctx.fillStyle = cssVar('--accent')
-          ctx.fillText(sp.call, p[0] + 9, p[1])
+          haloText(sp.call, p[0] + 9 * ms, p[1])
         }
         if (sp.heardMe) {
           ctx.beginPath()
-          ctx.arc(p[0], p[1], 4.5, 0, Math.PI * 2)
+          ctx.arc(p[0], p[1], 4.5 * ms, 0, Math.PI * 2)
           ctx.strokeStyle = GETTING_OUT
-          ctx.lineWidth = 1
+          ctx.lineWidth = 1 * ms
           ctx.stroke()
         }
         // Rarity ring: a station transmitting FROM a rare/water grid is a
@@ -1920,10 +2197,10 @@ export function MapView({
         const rar = rarityRing(sp.gridRarity)
         if (rar) {
           ctx.beginPath()
-          ctx.setLineDash([2, 2])
-          ctx.arc(p[0], p[1], 5.5, 0, Math.PI * 2)
+          ctx.setLineDash([2 * ms, 2 * ms])
+          ctx.arc(p[0], p[1], 5.5 * ms, 0, Math.PI * 2)
           ctx.strokeStyle = rar
-          ctx.lineWidth = 1.2
+          ctx.lineWidth = 1.2 * ms
           ctx.stroke()
           ctx.setLineDash([])
         }
@@ -1974,7 +2251,7 @@ export function MapView({
     // label so the map shows WHO is workable WHERE.
     if (layers.stations.visible) {
       ctx.globalAlpha = layers.stations.opacity
-      ctx.font = '10px system-ui'
+      ctx.font = `${Math.round(10 * ms)}px system-ui`
       ctx.textAlign = 'left'
       ctx.textBaseline = 'middle'
       const byNeed = colorBy === 'need'
@@ -1984,11 +2261,12 @@ export function MapView({
         const nc = needColor(need)
         const isSel = s.call === selectedCall
         const isHover = s.call === hoverKey
-        // Recency fade — heard recently pops, going stale fades toward the noise.
-        const ageF = s.presence === 'active' ? 1 : s.presence === 'idle' ? 0.6 : 0.32
+        // Recency fade — heard recently pops, going stale fades toward the noise. Floor lifted
+        // for the same reason as the spot fade above: still ordered, no longer invisible.
+        const ageF = s.presence === 'active' ? 1 : s.presence === 'idle' ? 0.75 : 0.5
         const ringed = (byNeed && nc) || isSel
         // Needed stations are drawn larger so they pop out of the field.
-        const r = byNeed && nc ? baseR + 2.5 : baseR
+        const r = (byNeed && nc ? baseR + 2.5 : baseR) * ms
         const fill = byNeed ? (nc ?? (s.worked ? cssVar('--text-faint') : cssVar(v))) : cssVar(v)
         // In Need mode, dim worked-and-not-needed so the ones worth working pop.
         const dim = byNeed && s.worked && !nc ? 0.5 : 1
@@ -1997,35 +2275,36 @@ export function MapView({
         ctx.arc(xy[0], xy[1], r, 0, Math.PI * 2)
         ctx.fillStyle = fill
         ctx.fill()
+        haloStroke(1)
         ctx.globalAlpha = layers.stations.opacity * ageF
         if (isHover && !ringed) {
           // Hover ring: "you're on it — click lands here".
           ctx.beginPath()
-          ctx.arc(xy[0], xy[1], r + 2.5, 0, Math.PI * 2)
+          ctx.arc(xy[0], xy[1], r + 2.5 * ms, 0, Math.PI * 2)
           ctx.strokeStyle = cssVar('--text')
-          ctx.lineWidth = 1.2
+          ctx.lineWidth = 1.2 * ms
           ctx.stroke()
         }
         if (ringed) {
           // bright ring on the valuable / selected ones
           ctx.beginPath()
-          ctx.arc(xy[0], xy[1], r + 2.5, 0, Math.PI * 2)
+          ctx.arc(xy[0], xy[1], r + 2.5 * ms, 0, Math.PI * 2)
           ctx.strokeStyle = isSel ? cssVar('--accent') : fill
-          ctx.lineWidth = isSel ? 2 : 1.25
+          ctx.lineWidth = (isSel ? 2 : 1.25) * ms
           ctx.stroke()
           // callsign label
           ctx.fillStyle = isSel ? cssVar('--accent') : fill
-          ctx.fillText(s.call, xy[0] + r + 4, xy[1])
+          haloText(s.call, xy[0] + r + 4 * ms, xy[1])
         }
         // Rarity ring — a second dashed halo (outside the need ring) for a
         // station in a rare/water-only grid, whatever the color-by mode.
         const rar = rarityRing(s.gridRarity)
         if (rar) {
           ctx.beginPath()
-          ctx.setLineDash([2, 2])
-          ctx.arc(xy[0], xy[1], r + (ringed ? 5 : 2.5), 0, Math.PI * 2)
+          ctx.setLineDash([2 * ms, 2 * ms])
+          ctx.arc(xy[0], xy[1], r + (ringed ? 5 : 2.5) * ms, 0, Math.PI * 2)
           ctx.strokeStyle = rar
-          ctx.lineWidth = 1.2
+          ctx.lineWidth = 1.2 * ms
           ctx.stroke()
           ctx.setLineDash([])
         }
@@ -2035,7 +2314,7 @@ export function MapView({
 
     // DXpedition markers — placed by bearing+distance, glyph+color by need.
     if (layers.dxped.visible) {
-      ctx.font = '13px system-ui'
+      ctx.font = `${Math.round(13 * ms)}px system-ui`
       ctx.textAlign = 'center'
       ctx.textBaseline = 'middle'
       for (const { card, xy: p } of placedDxped) {
@@ -2044,7 +2323,7 @@ export function MapView({
         // when the operator focuses 20 m, or the focus reads as broken.
         ctx.globalAlpha = dimBand(card.band)
         ctx.fillStyle = cssVar(nm.cssVar)
-        ctx.fillText(nm.glyph, p[0], p[1])
+        haloText(nm.glyph, p[0], p[1])
       }
       ctx.globalAlpha = 1
     }
@@ -2062,16 +2341,20 @@ export function MapView({
         const band = bandLabelForMhz(sp.freqMhz)
         ctx.globalAlpha = (band ? dimBand(band) : 1) * layers.ota.opacity
         ctx.beginPath()
-        ctx.moveTo(p[0], p[1] - 5)
-        ctx.lineTo(p[0] + 4.5, p[1] + 3.5)
-        ctx.lineTo(p[0] - 4.5, p[1] + 3.5)
+        ctx.moveTo(p[0], p[1] - 5 * ms)
+        ctx.lineTo(p[0] + 4.5 * ms, p[1] + 3.5 * ms)
+        ctx.lineTo(p[0] - 4.5 * ms, p[1] + 3.5 * ms)
         ctx.closePath()
         if (sp.newRef) {
           ctx.fillStyle = accent
           ctx.fill()
+          haloStroke(1)
         } else {
+          // A hollow park is the one marker whose whole signal IS its outline, so it gets the
+          // halo UNDER its own stroke (drawn wider first) rather than over it.
+          haloStroke(3)
           ctx.strokeStyle = faint
-          ctx.lineWidth = 1.2
+          ctx.lineWidth = 1.2 * ms
           ctx.stroke()
         }
       }
@@ -2087,50 +2370,48 @@ export function MapView({
       ctx.save()
       // Additive glow halo so the QTH reads as "lit" even over a busy area.
       ctx.globalCompositeOperation = 'lighter'
-      const glow = ctx.createRadialGradient(c[0], c[1], 0, c[0], c[1], 16)
+      const glow = ctx.createRadialGradient(c[0], c[1], 0, c[0], c[1], 16 * ms)
       glow.addColorStop(0, accent)
       glow.addColorStop(1, fadeStop('#4ea1ff'))
-      ctx.globalAlpha = 0.35
+      ctx.globalAlpha = 0.45
       ctx.fillStyle = glow
       ctx.beginPath()
-      ctx.arc(c[0], c[1], 16, 0, Math.PI * 2)
+      ctx.arc(c[0], c[1], 16 * ms, 0, Math.PI * 2)
       ctx.fill()
       ctx.restore()
       // Two faint locus rings (the "you are here" target).
       ctx.strokeStyle = accent
-      ctx.globalAlpha = 0.5
-      ctx.lineWidth = 1
+      ctx.globalAlpha = 0.65
+      ctx.lineWidth = 1 * ms
       for (const rr of [8, 12]) {
         ctx.beginPath()
-        ctx.arc(c[0], c[1], rr, 0, Math.PI * 2)
+        ctx.arc(c[0], c[1], rr * ms, 0, Math.PI * 2)
         ctx.stroke()
       }
       // Crosshair ticks.
-      ctx.globalAlpha = 0.7
+      ctx.globalAlpha = 0.85
       ctx.beginPath()
-      ctx.moveTo(c[0] - 14, c[1])
-      ctx.lineTo(c[0] - 6, c[1])
-      ctx.moveTo(c[0] + 6, c[1])
-      ctx.lineTo(c[0] + 14, c[1])
-      ctx.moveTo(c[0], c[1] - 14)
-      ctx.lineTo(c[0], c[1] - 6)
-      ctx.moveTo(c[0], c[1] + 6)
-      ctx.lineTo(c[0], c[1] + 14)
+      ctx.moveTo(c[0] - 14 * ms, c[1])
+      ctx.lineTo(c[0] - 6 * ms, c[1])
+      ctx.moveTo(c[0] + 6 * ms, c[1])
+      ctx.lineTo(c[0] + 14 * ms, c[1])
+      ctx.moveTo(c[0], c[1] - 14 * ms)
+      ctx.lineTo(c[0], c[1] - 6 * ms)
+      ctx.moveTo(c[0], c[1] + 6 * ms)
+      ctx.lineTo(c[0], c[1] + 14 * ms)
       ctx.stroke()
       ctx.globalAlpha = 1
       // The solid center dot with a dark outline for contrast on any basemap.
       ctx.beginPath()
-      ctx.arc(c[0], c[1], 4, 0, Math.PI * 2)
+      ctx.arc(c[0], c[1], 4 * ms, 0, Math.PI * 2)
       ctx.fillStyle = accent
       ctx.fill()
-      ctx.strokeStyle = cssVar('--bg')
-      ctx.lineWidth = 1.5
-      ctx.stroke()
+      haloStroke(1.5)
     }
     // theme is a draw dependency so colors refresh on theme switch (the cssVar
     // memo is emptied at the top of this effect).
     void theme
-  }, [me, myQth, showQth, kind, colorBy, pathMode, view, size, layers, placed, placedSpots, placedDxped, mufStations, auroraPts, pca, cqzones, sats, reliefReady, prop, selStation, selectedCall, needByCall, theme, nowMs, focusBand, pulseTick, xrayEff, flareActive, flareHafNow, hoverKey, focusSat, coverageDim, coverageGridGeo, workedZones, aprs, selectedAprs, aprsFadeAfterMin, aprsTtlMin, aprsTick, satFav, satChaseRev])
+  }, [me, myQth, showQth, kind, devScale, markerScale, colorBy, pathMode, view, size, layers, placed, placedSpots, placedDxped, txLines, rxLines, mufStations, auroraPts, pca, cqzones, sats, reliefReady, prop, selStation, selectedCall, needByCall, theme, nowMs, focusBand, pulseTick, xrayEff, flareActive, flareHafNow, hoverKey, focusSat, coverageDim, coverageGridGeo, workedZones, aprs, selectedAprs, aprsFadeAfterMin, aprsTtlMin, aprsTick, satFav, satChaseRev])
 
   // THE SUN + RADIATING ENERGY — the flare layer's animated half, on its own
   // transparent canvas at ~20 fps, mounted ONLY while a flare is active and the
@@ -2145,7 +2426,9 @@ export function MapView({
     const fx = fxRef.current
     const { w, h } = size
     if (!fx || !me || w === 0 || h === 0 || !flarePulsing || !xrayEff) return
-    const dpr = window.devicePixelRatio || 1
+    // devScale, not devicePixelRatio — the fx overlay sits exactly on the base canvas, so a
+    // different backing-store scale would make the sun soft where the map is sharp.
+    const dpr = devScale
     // Same guard as the main canvas above: a full-window bitmap (~20 MB at 3440x1440)
     // was thrown away on every view change (each drag/zoom commit re-runs this effect).
     // Safe to skip the reallocation here because the rAF loop below clearRect()s every
@@ -2303,7 +2586,32 @@ export function MapView({
     }
     raf = requestAnimationFrame(draw)
     return () => cancelAnimationFrame(raf)
-  }, [me, kind, view, size, flarePulsing, xrayEff, flareOpacity])
+  }, [me, kind, view, size, devScale, flarePulsing, xrayEff, flareOpacity])
+
+  // ⭐ THE HOVER CARD IS PLACED IMPERATIVELY, IN A LAYOUT EFFECT, and that is the point: the
+  // clamping and edge-flipping in `placeHoverCard` need the card's MEASURED size, which does not
+  // exist until it is in the document. A layout effect runs after the DOM is written and before
+  // the browser paints, so the corrected position is the FIRST thing painted — routing it back
+  // through state would render the card at the uncorrected spot for one frame, which is a visible
+  // jump every time the pointer enters a marker near an edge. The JSX below seeds the same
+  // function with a zero size (its flips then simply do not fire) so the pre-measurement position
+  // is already the right one everywhere except at an edge.
+  const hoverRef = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    const el = hoverRef.current
+    if (!el || !hover) return
+    const { left, top } = placeHoverCard({
+      ax: hover.x,
+      ay: hover.y,
+      cw: el.offsetWidth,
+      ch: el.offsetHeight,
+      vw: size.w,
+      vh: size.h,
+      clear: 10 * markerScale,
+    })
+    el.style.left = `${left}px`
+    el.style.top = `${top}px`
+  }, [hover, size.w, size.h, markerScale])
 
   if (!me) {
     return (
@@ -2318,20 +2626,32 @@ export function MapView({
   // pixels resolve to the most actionable thing. Each respects its layer toggle.
   // Ionosonde MUF diamonds come LAST and are hover-info only (a measurement,
   // not a station) — without a tooltip they read as "dots that won't click".
-  type MapHit =
-    | { kind: 'station'; d: number; s: Station; ll: LatLon }
-    | { kind: 'dxped'; d: number; card: WorkableCard }
-    | { kind: 'spot'; d: number; sp: MapSpot }
-    | { kind: 'sat'; d: number; name: string; norad?: number | null; chased: boolean }
-    | { kind: 'aprs'; d: number; name: string }
-    | { kind: 'ota'; d: number; sp: OtaMapSpot }
-    | { kind: 'muf'; d: number; muf: number }
+  //
+  // ⭐ EVERY HIT CARRIES ITS MARKER'S SCREEN POSITION (`x`/`y`). The hover card is anchored to
+  // THAT, never to the cursor: within one target the card is then perfectly still, and it moves
+  // exactly once when the pointer crosses to another marker. Following the cursor made a card
+  // sized for distance reading swim around under the pointer, which reads as flicker.
+  type MapHitAt = { d: number; x: number; y: number }
+  type MapHit = MapHitAt &
+    (
+      | { kind: 'station'; s: Station; ll: LatLon }
+      | { kind: 'dxped'; card: WorkableCard }
+      | { kind: 'spot'; sp: MapSpot }
+      | { kind: 'sat'; name: string; norad?: number | null; chased: boolean }
+      | { kind: 'aprs'; name: string }
+      | { kind: 'ota'; sp: OtaMapSpot }
+      | { kind: 'muf'; muf: number }
+    )
+  // Hit targets grow with the markers (`markerScale`): a 1.9x dot inside a fixed 10 px target
+  // would be a marker you can see but not reliably click, which is the complaint backwards.
+  const hitR = 10 * markerScale
   const hitTest = (mx: number, my: number): MapHit | null => {
     if (layers.stations.visible) {
       let best: MapHit | null = null
       for (const { s, ll, xy } of placed) {
         const d = Math.hypot(xy[0] - mx, xy[1] - my)
-        if (d < 10 && (!best || d < best.d)) best = { kind: 'station', d, s, ll }
+        if (d < hitR && (!best || d < best.d))
+          best = { kind: 'station', d, x: xy[0], y: xy[1], s, ll }
       }
       if (best) return best
     }
@@ -2339,7 +2659,8 @@ export function MapView({
       let best: MapHit | null = null
       for (const { card, xy } of placedDxped) {
         const d = Math.hypot(xy[0] - mx, xy[1] - my)
-        if (d < 10 && (!best || d < best.d)) best = { kind: 'dxped', d, card }
+        if (d < hitR && (!best || d < best.d))
+          best = { kind: 'dxped', d, x: xy[0], y: xy[1], card }
       }
       if (best) return best
     }
@@ -2350,7 +2671,7 @@ export function MapView({
       let best: MapHit | null = null
       for (const { sp, xy } of placedOta) {
         const d = Math.hypot(xy[0] - mx, xy[1] - my)
-        if (d < 10 && (!best || d < best.d)) best = { kind: 'ota', d, sp }
+        if (d < hitR && (!best || d < best.d)) best = { kind: 'ota', d, x: xy[0], y: xy[1], sp }
       }
       if (best) return best
     }
@@ -2360,7 +2681,7 @@ export function MapView({
         const d = Math.hypot(xy[0] - mx, xy[1] - my)
         // Generous 10 px target on a ~3 px dot — small dots were genuinely
         // hard to hit (operator report).
-        if (d < 10 && (!best || d < best.d)) best = { kind: 'spot', d, sp }
+        if (d < hitR && (!best || d < best.d)) best = { kind: 'spot', d, x: xy[0], y: xy[1], sp }
       }
       if (best) return best
     }
@@ -2368,7 +2689,7 @@ export function MapView({
       let best: MapHit | null = null
       for (const { call, x, y } of placedAprsRef.current) {
         const d = Math.hypot(x - mx, y - my)
-        if (d < 10 && (!best || d < best.d)) best = { kind: 'aprs', d, name: call }
+        if (d < hitR && (!best || d < best.d)) best = { kind: 'aprs', d, x, y, name: call }
       }
       if (best) return best
     }
@@ -2377,7 +2698,8 @@ export function MapView({
       let best: MapHit | null = null
       for (const { name, norad, x, y, chased } of placedSatsRef.current) {
         const d = Math.hypot(x - mx, y - my)
-        if (d < 12 && (!best || d < best.d)) best = { kind: 'sat', d, name, norad, chased }
+        if (d < 1.2 * hitR && (!best || d < best.d))
+          best = { kind: 'sat', d, x, y, name, norad, chased }
       }
       if (best) return best
     }
@@ -2388,7 +2710,8 @@ export function MapView({
         const p = project(proj, { lat: s.lat, lon: s.lon })
         if (!p) continue
         const d = Math.hypot(p[0] - mx, p[1] - my)
-        if (d < 9 && (!best || d < best.d)) best = { kind: 'muf', d, muf: s.muf }
+        if (d < 0.9 * hitR && (!best || d < best.d))
+          best = { kind: 'muf', d, x: p[0], y: p[1], muf: s.muf }
       }
       if (best) return best
     }
@@ -2532,7 +2855,16 @@ export function MapView({
     if (!d) {
       const [mx, my] = canvasXY(e)
       const hit = hitTest(mx, my)
-      setHover(hit ? { x: mx, y: my, text: hitText(hit), info: hit.kind === 'muf' } : null)
+      // ANCHOR ON THE MARKER, NOT THE CURSOR (see MapHit) — and bail out of the state update
+      // when nothing about the card changed, so crossing a hit target costs zero renders
+      // instead of one per mousemove. Together those are what make the card hold still.
+      setHover((prev) => {
+        if (!hit) return null
+        const next = { x: hit.x, y: hit.y, text: hitText(hit), info: hit.kind === 'muf' }
+        return prev && prev.x === next.x && prev.y === next.y && prev.text === next.text && prev.info === next.info
+          ? prev
+          : next
+      })
       setHoverKey(hitCall(hit)) // state only changes on target enter/leave
       return
     }
@@ -2664,7 +2996,7 @@ export function MapView({
   const prov = prop ? prop.source : 'loading'
 
   return (
-    <div className="map-view">
+    <div className={`map-view${full ? ' map-full' : ''}`}>
       {!embedded && (
       <div className="map-toolbar">
         <div className="map-proj" role="group" aria-label={t('map.projection.aria')}>
@@ -2716,6 +3048,33 @@ export function MapView({
         >
           <RotateCcw size={13} /> {t('map.reset.label')}
         </button>
+        {/* Full screen hides the Layers panel, so the way back to a layer has to live out
+            here — otherwise the operator is stuck with whatever was on when they pressed it.
+            Only while full: nothing changes about the normal toolbar. */}
+        {full && (
+          <button
+            type="button"
+            className={`map-chrome-btn map-layers-toggle${layersPeek ? ' active' : ''}`}
+            aria-pressed={layersPeek}
+            onClick={() => setLayersPeek((p) => !p)}
+            title={t('map.layers.toggle.title')}
+          >
+            <LayersIcon size={13} /> {t('map.layers.head')}
+          </button>
+        )}
+        {/* THE ONE CONTROL, both ways. The same button in the same place goes in and comes
+            back out, and it is never hidden by the mode it turns on — the toolbar is the one
+            piece of chrome full screen keeps, precisely so the exit is always on screen. */}
+        <button
+          type="button"
+          className={`map-chrome-btn map-full-toggle${full ? ' active' : ''}`}
+          aria-pressed={full}
+          onClick={() => setFullScreen(!full)}
+          title={full ? t('map.full.exit.title') : t('map.full.enter.title')}
+        >
+          {full ? <Minimize2 size={13} /> : <Maximize2 size={13} />}{' '}
+          {full ? t('map.full.exit.label') : t('map.full.enter.label')}
+        </button>
       </div>
       )}
 
@@ -2764,7 +3123,26 @@ export function MapView({
             />
           )}
           {hover && (
-            <div className="map-hover" style={{ left: hover.x + 12, top: hover.y + 12 }}>
+            <div
+              ref={hoverRef}
+              className="map-hover"
+              style={{
+                ...placeHoverCard({
+                  ax: hover.x,
+                  ay: hover.y,
+                  cw: 0,
+                  ch: 0,
+                  vw: size.w,
+                  vh: size.h,
+                  clear: 10 * markerScale,
+                }),
+                // The card grows with the map for the same reason the icons do — a tooltip
+                // read from across the shack needs the type the icons just got. Capped below
+                // the marker ceiling: text gains legibility from size faster than a dot does,
+                // and an unbounded card starts covering the map it explains.
+                '--map-ui-scale': Math.min(1.6, markerScale),
+              } as React.CSSProperties}
+            >
               {hover.text}
             </div>
           )}
@@ -2821,8 +3199,10 @@ export function MapView({
         </div>
 
         {/* The layer panel used to be gated on Connect's Expert detail level too; that toggle
-            was removed 2026-07-26, so only the embedded/standalone distinction remains. */}
-        {!embedded && (
+            was removed 2026-07-26, so only the embedded/standalone distinction remains.
+            Full screen is the third state: the panel is away, and the toolbar's Layers
+            button brings it back over the map (never beside it — see `layersPeek`). */}
+        {!embedded && (!full || layersPeek) && (
         <aside className="map-layers">
           <h3>{t('map.layers.head')}</h3>
           {(Object.keys(layers) as LayerKey[]).map((k) => (

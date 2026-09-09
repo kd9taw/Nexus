@@ -2,18 +2,20 @@ import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties } fr
 import type {
   ContestBoard,
   FdClubStatus,
+  FdMergeReport,
   FieldDayQso,
   FieldDayStatus,
   ModeRequest,
   Settings,
 } from '../types'
-import { exportLog, fdClubExport, fdSetUpload, getSettings, setSettings, setFdOperator, openPanelWindow, saveTextToDownloads, type FdRulesetDto } from '../api'
+import { exportLog, fdClubExport, fdMergeToGeneral, fdSetUpload, getSettings, setSettings, setFdOperator, openPanelWindow, saveTextToDownloads, type FdRulesetDto } from '../api'
 import { FdAdvisories } from './FdAdvisories'
 import { pushToast } from '../toast'
 import { fdEventFromWindow, fdHeaderSubtitle, FD_EVENT_NAMES, type FdKind } from '../fdEvent'
 import { usePinnedScroll } from '../usePinnedScroll'
 import { ARRL_SECTIONS_BY_DIVISION, ARRL_SECTION_TOTAL } from '../features/arrlSections'
 import { contestDomain, type DomainGroup } from '../features/contestDomains'
+import { composingSlot } from '../features/contestExchange'
 import { t } from '../i18n'
 import type { MessageKey } from '../i18n'
 import { T } from '../i18n/T'
@@ -1359,6 +1361,29 @@ export function ContestView({ fieldDay, onSetMode, fdActive = false, fdRuleset =
     }
   }
 
+  // The end-of-contest merge (§11 item 5). The BEFORE half is the button's own label —
+  // how many contacts, to which logbook — read off the live log so it cannot go stale;
+  // the AFTER half is the report, which is the only thing that tells a second press
+  // apart from a broken button.
+  const [merging, setMerging] = useState(false)
+  const [mergeReport, setMergeReport] = useState<FdMergeReport | null>(null)
+  const [mergeError, setMergeError] = useState<string | null>(null)
+  const mergeCount = log.length
+  const runMerge = async () => {
+    setMerging(true)
+    setMergeError(null)
+    try {
+      setMergeReport(await fdMergeToGeneral())
+    } catch (e) {
+      // The engine's own sentence — it refuses when the mode is not live, and that
+      // refusal is its wording, not a second copy here that could drift from it.
+      setMergeReport(null)
+      setMergeError(String(e))
+    } finally {
+      setMerging(false)
+    }
+  }
+
   // One optimistic writer for every scoring field on this panel (earned list, plan list,
   // power multiplier) — the shape the single bonus checkbox already used. Each patches ONE
   // field of the settings the panel is holding, so the three controls cannot write over
@@ -1444,8 +1469,8 @@ export function ContestView({ fieldDay, onSetMode, fdActive = false, fdRuleset =
           isWfd,
           rulesYear: fieldDay?.rulesYear ?? 0,
           rulesGenerated: fieldDay?.rulesGenerated ?? '',
-          myClass: fieldDay?.myClass ?? '',
-          mySection: fieldDay?.mySection ?? '',
+          myClass: composingSlot(fieldDay?.composing, 'CLASS'),
+          mySection: composingSlot(fieldDay?.composing, 'SECTION'),
           log,
           modes,
           workedSet,
@@ -1514,9 +1539,14 @@ export function ContestView({ fieldDay, onSetMode, fdActive = false, fdRuleset =
       <div className="panel-header fd-header">
         <div className="fd-ident">
           <h2 className="conv-peer">{isWfd ? FD_SHORT_NAMES.wfd : FD_SHORT_NAMES.arrlfd}</h2>
+          {/* What the SESSION is composing — the exchange the next contact will get.
+              A logged row's own exchange is in the log table below, off `mex`. */}
           <span className="fd-class">
-            {fieldDay?.myClass ?? '—'}
-            <span className="fd-section"> {fieldDay?.mySection ?? '—'}</span>
+            {composingSlot(fieldDay?.composing, 'CLASS') || '—'}
+            <span className="fd-section">
+              {' '}
+              {composingSlot(fieldDay?.composing, 'SECTION') || '—'}
+            </span>
           </span>
         </div>
         <div className="fd-role-toggle" role="group" aria-label={t('fieldDay.role.aria')}>
@@ -1596,6 +1626,46 @@ export function ContestView({ fieldDay, onSetMode, fdActive = false, fdRuleset =
             Connector ids (`clublog`, `qrz`, `wrl`) are invariant tokens. */}
         {fieldDay?.upload && (
           <div className="fd-upload">
+            {/* ⭐ THE END-OF-CONTEST MERGE — §11 item 5's "one click", which shipped with
+                commands and no control, so it was unreachable.
+
+                It WRITES INTO THE OPERATOR'S GENERAL LOGBOOK, so it says what it will do
+                before it does it (how many contacts, to which logbook) and what it did
+                after (added versus already there). The merge is idempotent — every row
+                carries its own identity and one already in the logbook is skipped — and
+                the report is what makes a second press VISIBLY a no-op ("added 0, 42
+                already there") rather than a button that looks broken.
+
+                It sits with the upload switch below and under the same hint, because the
+                switch decides whether what this button merges is also queued for upload,
+                and the hint names the one thing neither of them closes. */}
+            <div className="fd-merge">
+              <button
+                type="button"
+                className="export-btn fd-merge-btn"
+                disabled={merging || mergeCount === 0}
+                onClick={() => void runMerge()}
+                title={t('fieldDay.merge.title')}
+              >
+                {merging
+                  ? t('fieldDay.merge.busy')
+                  : t('fieldDay.merge.label', { count: mergeCount })}
+              </button>
+              {mergeReport && (
+                <span className="fd-merge-report" role="status">
+                  {t('fieldDay.merge.added', { count: mergeReport.added })}
+                  {' · '}
+                  {t('fieldDay.merge.already', { count: mergeReport.already })}
+                  {mergeReport.refused > 0 && (
+                    <> {' · '}{t('fieldDay.merge.refused', { count: mergeReport.refused })}</>
+                  )}
+                  {mergeReport.queued && <> {' · '}{t('fieldDay.merge.queued')}</>}
+                </span>
+              )}
+              {mergeError && (
+                <span className="log-export-error" role="alert">{mergeError}</span>
+              )}
+            </div>
             <div className="fd-upload-row">
               <button
                 type="button"

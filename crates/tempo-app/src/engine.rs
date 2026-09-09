@@ -4705,6 +4705,18 @@ impl Engine {
         // Alt-double-click gesture and the Settings editor both go through it), so a
         // stale form save can't silently un-block or re-block a call mid-QSO.
         let live_blocked = std::mem::take(&mut self.settings.blocked_calls);
+        // The BETA-CHANNEL opt-in has ONE writer (`set_beta_updates`) for the same reason
+        // `operating_mode` above does, and it is captured here for the same reason: a Settings
+        // payload is a snapshot from whenever the sending surface last read the settings, and
+        // several surfaces hold one for the life of the window rather than re-reading — the
+        // APRS cockpit is mounted permanently (`.aprs-host`, hidden rather than unmounted) and
+        // refreshes its copy only after its own writes, so its `betaUpdates` can be hours stale
+        // and any control on it would post that stale value over the live one.
+        //
+        // That would be an ordinary revert for most fields. For this one it is invisible in a
+        // way no other setting's is: the operator is quietly moved back to the stable channel,
+        // the betas stop arriving, and there is no error, no toast and no log line to notice.
+        let live_beta_updates = self.settings.beta_updates;
         // The Cloudlog key is a WRITE-ONLY credential, not editable state, so it is captured here and
         // restored below UNCONDITIONALLY — on a form save AND on a restore/reset, unlike the roster
         // fields above. `get_settings` clears it on the way OUT to the frontend (round 9), so the
@@ -4762,6 +4774,13 @@ impl Engine {
         self.settings.operating_mode = live_op_mode;
         if keep_live_roster {
             self.settings.blocked_calls = live_blocked;
+        }
+        // Scoped to the FORM path, deliberately. A restore/reset is the opposite contract (see
+        // `apply_restored_settings`): the bundle — or `Settings::default()` for a factory reset —
+        // is the whole truth, so a reset really does return the operator to the stable channel,
+        // as it does with every other setting it promises to clear.
+        if keep_live_roster {
+            self.settings.beta_updates = live_beta_updates;
         }
         self.settings.ensure_radio_profiles();
         // Fold the form's flat rig/audio edits into the profile the FORM was editing — the flat fields
@@ -5096,6 +5115,23 @@ impl Engine {
             .map(|c| c.trim().to_ascii_uppercase())
             .filter(|c| !c.is_empty() && seen.insert(c.clone()))
             .collect();
+    }
+
+    /// ⛔ **THE ONE WRITER of the beta-channel opt-in** (Settings ▸ App updates). A NARROW
+    /// write, and the narrowness is the whole point rather than the #54 cost saving it is
+    /// elsewhere: while this field was form-writable, any whole-struct save could author it,
+    /// and several of the surfaces that post one hold a settings snapshot for the life of the
+    /// window (see the capture in `apply_settings_inner`). A months-old `false` posted over a
+    /// live `true` returns a beta tester to the stable channel with no error, no toast and no
+    /// log line — the betas just stop arriving. Routing the switch through here, and having
+    /// `apply_settings` put the live value back, makes that unrepresentable rather than
+    /// guarded against one caller at a time.
+    ///
+    /// Nothing else changes: the channel is read by the frontend's `useSelfUpdate`, so this
+    /// only has to persist (the caller saves) and be visible to the next `get_settings`.
+    pub fn set_beta_updates(&mut self, on: bool) -> &Settings {
+        self.settings.beta_updates = on;
+        &self.settings
     }
 
     /// Change band / dial frequency / mode **live** — without resetting the
@@ -16346,11 +16382,6 @@ impl Engine {
                 // banner/countdown's single source — no TS date math).
                 let event_window = rs.next_or_running(now_unix_secs());
                 s.field_day = Some(FieldDayStatus {
-                    // What the session is composing RIGHT NOW. Each DTO row still
-                    // carries its own received exchange; the per-row SENT exchange
-                    // reaches the UI when `FieldDayQso` gains `mex` (the DTO batch).
-                    my_class: log.session.field("CLASS").to_string(),
-                    my_section: log.session.field("SECTION").to_string(),
                     running: *running,
                     state: format!("{:?}", station.state),
                     dxcall: station.dxcall.clone(),
@@ -16396,6 +16427,11 @@ impl Engine {
                             mode: q.mode.clone(),
                             submode: q.submode.clone(),
                             when_unix: q.when_unix,
+                            // ⭐ THE ROW'S OWN SENT EXCHANGE (§3.3). Rendered from the
+                            // row by the one function that renders one, so an emitter
+                            // looping over these rows has the right value in hand and
+                            // no reason to reach out to the session.
+                            mex: tempo_core::contest::sent_exchange_string(q, spec),
                         })
                         .collect(),
                     club: self.fd_club_dto(log),
@@ -24079,6 +24115,105 @@ mod tests {
         );
     }
 
+    /// ⛔ **No settings payload may move the beta-channel opt-in — in either direction.**
+    ///
+    /// `set_beta_updates` is its one writer, and this is the property that makes that real.
+    /// A Settings payload is a snapshot from whenever the sending surface last read the
+    /// settings, and several surfaces hold one for the life of the window rather than
+    /// re-reading — the APRS cockpit is mounted permanently and refreshes only after its own
+    /// writes, so a control on it posts a `betaUpdates` that can be hours old.
+    ///
+    /// For most fields that is an ordinary revert. For this one the loss is invisible: a beta
+    /// tester quietly returned to the stable channel gets no error, no toast and no log line —
+    /// the betas just stop arriving, and the maintainer finds out when the feedback dries up.
+    #[test]
+    fn a_form_save_cannot_move_the_beta_opt_in() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_beta_updates(true);
+        assert!(e.settings().beta_updates, "baseline: opted in");
+
+        // A stale snapshot from a surface that read the settings before the operator opted in.
+        let mut stale = e.settings().clone();
+        stale.beta_updates = false;
+        e.apply_settings(stale);
+        assert!(
+            e.settings().beta_updates,
+            "a stale form payload silently opted the operator out of the beta channel"
+        );
+
+        // …and the other direction, so this is a "the form does not own it" property and not
+        // a "beta is sticky once on" one: a stale `true` cannot opt a stable operator IN.
+        e.set_beta_updates(false);
+        let mut stale_on = e.settings().clone();
+        stale_on.beta_updates = true;
+        e.apply_settings(stale_on);
+        assert!(
+            !e.settings().beta_updates,
+            "a stale form payload opted a stable-channel operator into the beta channel"
+        );
+    }
+
+    /// The same property against the OTHER shape a payload can take: no `betaUpdates` key at
+    /// all. Struct-level `#[serde(default)]` turns an absent key into `false` — the position
+    /// nobody chose — so a form built before the field existed, or any partial writer, is the
+    /// same hazard wearing different clothes.
+    #[test]
+    fn a_form_save_that_omits_the_beta_key_cannot_move_it_either() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_beta_updates(true);
+
+        let mut v = serde_json::to_value(e.settings()).unwrap();
+        v.as_object_mut().unwrap().remove("betaUpdates");
+        assert!(
+            v.get("betaUpdates").is_none(),
+            "control: the key really is absent from the payload"
+        );
+        let payload: Settings = serde_json::from_value(v).unwrap();
+        assert!(
+            !payload.beta_updates,
+            "control: an absent key really does deserialise to false, which is the hazard"
+        );
+
+        e.apply_settings(payload);
+        assert!(
+            e.settings().beta_updates,
+            "a payload that never mentioned the beta channel silently opted the operator out"
+        );
+    }
+
+    /// The positive control for both tests above: the switch must still work. Without this,
+    /// the same code would pass by making the opt-in immovable, and nothing would say so.
+    #[test]
+    fn set_beta_updates_is_the_writer_that_does_move_it() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        assert!(!e.settings().beta_updates, "baseline: stable channel");
+        e.set_beta_updates(true);
+        assert!(e.settings().beta_updates, "the verb turns it on");
+        e.set_beta_updates(false);
+        assert!(
+            !e.settings().beta_updates,
+            "and back off — the switch is two-way"
+        );
+    }
+
+    /// A RESTORE has the opposite contract from a form save (see `apply_restored_settings`):
+    /// the bundle — or, for a factory reset, `Settings::default()` — is the whole truth. So the
+    /// capture above is deliberately scoped to the form path: a reset really does put the
+    /// operator back on the stable channel, exactly as it does with every other setting it
+    /// promises to clear.
+    #[test]
+    fn a_restore_takes_the_bundles_beta_channel_rather_than_the_live_one() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_beta_updates(true);
+        assert!(e.settings().beta_updates, "baseline: opted in");
+
+        e.apply_restored_settings(Settings::default()); // what reset_settings sends
+        assert!(
+            !e.settings().beta_updates,
+            "a factory reset returns the operator to the stable channel"
+        );
+    }
+
     #[test]
     fn poll_tx_empty_when_tx_disabled() {
         let mut e = Engine::new("W9XYZ", "EN37", 0);
@@ -27995,6 +28130,85 @@ mod tests {
     }
 
     #[test]
+    fn a_callsign_correction_re_uploads_the_corrected_contact() {
+        // THE BUSTED-CALL GAP. A call is logged wrong, auto-upload sends it, and the
+        // operator then fixes it in the Logbook edit form. `Logbook::update_record` clears
+        // the upload stamps on a callsign correction and says why: "the services hold the
+        // OLD call, so clearing the upload stamps re-queues the corrected QSO to every one
+        // of them". Nothing put it back on the queue. The local log shows the corrected
+        // call and QRZ/ClubLog/eQSL keep the busted one — permanently, because the stamps
+        // are the only record that anything was ever owed and they have just been erased.
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        let rec = e.qso_record("WW9WT".into(), None, None);
+        e.log_qso(rec);
+        e.take_pending_uploads(); // the first-attempt queue; this is about the CORRECTION
+        assert!(e.take_pending_uploads().is_empty(), "queue drained");
+        // That first upload landed at QRZ — under the BUSTED call.
+        let sent = e.get_log()[0].clone();
+        e.stamp_qrz_upload(
+            &sent,
+            tempo_core::logbook::UploadOutcome::Accepted,
+            now_unix_secs() as i64,
+            None,
+        );
+
+        // The operator corrects the call in the edit form.
+        let mut fixed = e.get_log()[0].clone();
+        fixed.call = "WW9WTF".into();
+        assert!(e.update_qso(0, fixed), "the edit applies");
+        assert_eq!(e.get_log()[0].call, "WW9WTF", "the log holds the fix");
+        assert!(
+            e.get_log()[0].upload.qrz.is_none(),
+            "the busted call's QRZ stamp is cleared — that is what makes it owed again"
+        );
+
+        let queued = e.take_pending_uploads();
+        assert_eq!(
+            queued.len(),
+            1,
+            "a corrected callsign must go back out to the connectors — otherwise every \
+             service keeps the busted call and the operator has no way to know"
+        );
+        assert_eq!(queued[0].rec.call, "WW9WTF", "the CORRECTED call is sent");
+        assert_eq!(
+            queued[0].legs,
+            upload_legs::ALL,
+            "every stamp was cleared, so every leg is owed"
+        );
+    }
+
+    #[test]
+    fn an_ordinary_edit_does_not_re_upload_the_contact() {
+        // The other side of the correction re-queue: only a CALLSIGN change re-sends. An
+        // ordinary field fix (name, grid, RST, a park ref) keeps its upload stamps — the
+        // services already hold this contact under this call — so re-pushing on every save
+        // would turn a typo fix into a duplicate insert at four services.
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        let rec = e.qso_record("WW9WTF".into(), None, None);
+        e.log_qso(rec);
+        e.take_pending_uploads();
+
+        let mut edited = e.get_log()[0].clone();
+        edited.name = Some("Dave".into());
+        assert!(e.update_qso(0, edited));
+        assert!(
+            e.take_pending_uploads().is_empty(),
+            "a non-callsign edit must not re-push the contact"
+        );
+
+        // Nor does re-typing the SAME call in a different case or with padding — that is
+        // the rule `update_record` uses to decide whether confirmations survive, and the
+        // re-queue has to read the edit the same way or the two disagree on every save.
+        let mut same = e.get_log()[0].clone();
+        same.call = " ww9wtf ".into();
+        assert!(e.update_qso(0, same));
+        assert!(
+            e.take_pending_uploads().is_empty(),
+            "the same call in another case is not a correction"
+        );
+    }
+
+    #[test]
     fn a_credential_fix_requeues_the_clublog_qsos_that_never_uploaded() {
         // THE F4MQS GAP: QSOs logged before the app-password was stored stayed
         // un-uploaded with nothing flagging them, and fixing the password retried
@@ -29439,6 +29653,36 @@ mod tests {
         );
     }
 
+    /// ⭐ **And it reaches the DTO per row** — which is the seam the interop emitters
+    /// read, and the one that was wrong.
+    ///
+    /// The row above proves the core renders a per-row exchange; this proves the
+    /// snapshot carries it, because `FieldDayStatus` no longer has a session-level pair
+    /// an emitter could reach for instead (§3.3 mechanism 2). The session is composing
+    /// `3A IL` while two rows still say `3A WI`, so a snapshot that leaked the session's
+    /// value would be visibly wrong here.
+    #[test]
+    fn the_snapshot_gives_every_row_its_own_sent_exchange() {
+        let mut e = fd_session("W9XYZ");
+        e.contest_i_moved(vec![("SECTION".to_string(), "IL".to_string())])
+            .expect("IL is a section");
+        assert!(e.fd_log_manual("K2DEF", "1D", "MN", "CW").unwrap());
+        let fd = e.snapshot().field_day.expect("in Field Day");
+        assert_eq!(
+            fd.log.iter().map(|q| q.mex.as_str()).collect::<Vec<_>>(),
+            vec!["3A WI", "3A WI", "3A IL"]
+        );
+        // The positive control: the session's own composing exchange is the OTHER
+        // value, so this fixture can tell a per-row read from a session-level one.
+        assert_eq!(
+            fd.composing
+                .iter()
+                .map(|v| v.raw.as_str())
+                .collect::<Vec<_>>(),
+            vec!["3A", "IL"]
+        );
+    }
+
     /// A refused move writes NEITHER half — the property that makes "both or neither"
     /// mean something.
     #[test]
@@ -30478,8 +30722,16 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["CLASS", "SECTION"]
         );
-        assert_eq!(fd.my_class, "3A");
-        assert_eq!(fd.my_section, "WI");
+        // The sent side is the COMPOSING VECTOR — `my_class`/`my_section` are gone from
+        // the DTO (§3.3 mechanism 2: the log-level sent pair was deleted rather than
+        // renamed, so no per-QSO emitter can reach for one).
+        assert_eq!(
+            fd.composing
+                .iter()
+                .map(|v| v.raw.as_str())
+                .collect::<Vec<_>>(),
+            vec!["3A", "WI"]
+        );
         assert!(e.fd_log_manual("K1ABC", "2A", "EMA", "CW").unwrap());
         let fd = e.snapshot().field_day.expect("FD chrome");
         // ⚠️ NO multiplier concept, which is not a multiplier of zero: `Scoring::score`
@@ -30800,8 +31052,15 @@ mod tests {
             .field_day
             .expect("master on + class/section → engine enters Field Day S&P");
         assert!(!fd.running, "the master enters passive S&P, not a run");
-        assert_eq!(fd.my_class, "3A");
-        assert_eq!(fd.my_section, "WI");
+        // The session's composing exchange — a vector of slots, which is the only shape
+        // a session-level sent exchange crosses this seam in (§3.3 mechanism 2).
+        assert_eq!(
+            fd.composing
+                .iter()
+                .map(|v| (v.key.as_str(), v.raw.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("CLASS", "3A"), ("SECTION", "WI")]
+        );
     }
 
     /// `FieldDayStatus.assistance_on` mirrors `Settings::assistance_sources()`'s

@@ -30,8 +30,10 @@ vi.mock('../api', () => ({
 /** No score fields on the snapshot, so the view falls back to computing the bonus points
  *  from settings — the exact path a plan could leak into. */
 const FD: FieldDayStatus = {
-  myClass: '2A',
-  mySection: 'WI',
+  composing: [
+    { key: 'CLASS', raw: '2A' },
+    { key: 'SECTION', raw: 'WI', domain: 'fd_sections' },
+  ],
   running: false,
   state: 'Idle',
   qsoCount: 4,

@@ -69,7 +69,10 @@ pub use exchanges::{casual, field_day};
 
 pub use adif::directed_columns;
 
-pub use cabrillo::{resolve_contest_id, side_declares_call, CabrilloHeaders, OperatorCategory};
+pub use cabrillo::{
+    cabrillo_contest_token, resolve_contest_id, side_declares_call, CabrilloHeaders,
+    OperatorCategory,
+};
 
 pub use dupe::{DupeRule, KEY_SEP};
 

@@ -23,6 +23,7 @@ import type {
   Activation,
   DetectedRig,
   FdEventBeacon,
+  FdMergeReport,
   OtaSpot,
   DiagnosticsReport,
   FeedHealth,
@@ -672,6 +673,26 @@ export async function fdSetUpload(
   destinations: string[],
 ): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('fd_set_upload', { enabled, destinations })
+}
+
+/** ⭐ Merge this contest session's contacts into the general logbook — the one-click
+ *  end-of-contest action (§3.2, §11 item 5).
+ *
+ *  IDEMPOTENT: every row carries its own merge identity, so a row already in the logbook
+ *  is skipped rather than duplicated — safe to press twice, and safe after a restart.
+ *  The report says which happened, so a second press reads as a no-op instead of looking
+ *  like one that quietly did nothing.
+ *
+ *  Whether the merged rows are ALSO queued for connector upload is the session's own
+ *  control (`fdSetUpload`), off unless the operator turned it on; `queued` reports what
+ *  that control was at merge time. It does not override ClubLog's catch-up sweep — see
+ *  `fieldDay.upload.hint`.
+ *
+ *  The command answers with the snapshot too (one engine lock, one logbook sweep); the
+ *  poll delivers that anyway, so only the report is handed back. */
+export async function fdMergeToGeneral(): Promise<FdMergeReport> {
+  const [report] = await invoke<[FdMergeReport, AppSnapshot]>('fd_merge_to_general')
+  return report
 }
 
 /** ⭐ "I moved" — edit the exchange this session is COMPOSING (§4.1).
@@ -2445,6 +2466,18 @@ export async function setHoldTxFreq(on: boolean): Promise<AppSnapshot> {
  * so it is safe mid-QSO. The auto-responder honors the list on the next slot. */
 export async function setBlockedCalls(calls: string[]): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_blocked_calls', { calls })
+}
+
+/** Turn the BETA update channel on or off — the ONE write path for Settings ▸ App updates,
+ * and the reason `betaUpdates` is not written by the settings form. A settings payload is a
+ * snapshot from whenever the sending surface last read the settings, and some surfaces keep
+ * theirs for the life of the window (the APRS cockpit is mounted permanently and reloads only
+ * after its own writes) — so a whole-struct save could post a stale value over the live one.
+ * Doing that to this field is invisible: it returns a beta tester to the stable channel with
+ * no error, no toast and no log line, and the betas simply stop arriving. The backend keeps
+ * the live value across every settings save, so this verb is the only thing that moves it. */
+export async function setBetaUpdates(on: boolean): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_beta_updates', { on })
 }
 
 /** Set (or clear, with '') who is at the key — the ONE write path for the seat-swap chip,

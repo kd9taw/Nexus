@@ -1751,6 +1751,22 @@ button.nb-chip:hover {
 [data-viewport='xs'] .connect-strip {
   grid-template-columns: 1fr;
 }
+/* FULL-SCREEN MAP — one cell, no frame. The header, the four rail panes and the bottom
+   strip are UNMOUNTED by ConnectView, so this only has to collapse the grid they were laid
+   out in; the padding and gap go too, or the "full screen" map would sit in a 12px border.
+   ⚠️ SPECIFICITY, NOT SOURCE ORDER: `[data-viewport='xs'] .connect` is (0,2,0) and rewrites
+   all three template properties for the stacked layout, so the two-class descendant form
+   (0,3,0) is what makes this hold at EVERY viewport class. A bare `.connect.map-full` would
+   tie at (0,2,0) and win only by sitting later in the file — one reordering from silently
+   restacking a full-screen map on a small window. Grower stays minmax(0,1fr): the canvas is
+   100%-width/height and a bare 1fr lets it run away. */
+.connect-shell.map-full .connect {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  grid-template-areas: 'center';
+  padding: 0;
+  gap: 0;
+}
 .connect-hero-row {
   display: flex;
   align-items: flex-start;
@@ -2534,8 +2550,12 @@ button.nb-chip:hover {
   color: var(--alert-warning);
   border-color: var(--alert-warning);
 }
-.map-reset {
-  margin-left: auto;
+/* Toolbar buttons that stand alone (not in a .map-proj segmented group): Reset, and the
+   full-screen / Layers pair beside it. One look, one rule; only Reset takes the auto margin
+   that pushes the trailing group to the right edge — repeating it on each of the three would
+   split the free space BETWEEN them instead of grouping them. */
+.map-reset,
+.map-chrome-btn {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
@@ -2546,6 +2566,16 @@ button.nb-chip:hover {
   padding: var(--space-1) var(--space-2);
   font-size: var(--fs-label);
   cursor: pointer;
+  white-space: nowrap;
+}
+.map-reset {
+  margin-left: auto;
+}
+/* Pressed state, matching the segmented groups' `.map-proj button.active`. */
+.map-chrome-btn.active {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-color: var(--accent);
 }
 .map-body {
   display: flex;
@@ -2577,17 +2607,35 @@ button.nb-chip:hover {
   inset: 0;
   display: block;
 }
+/* ⭐ THE MAP HOVER CARD is read at whatever distance the map is being read at, and the map is
+   the one surface an operator pops out full screen on a second monitor. At 11px with 2px of
+   padding it was a caption on a chart; this is a readable card.
+   `--map-ui-scale` is stamped inline by MapView from its own `markerScale`, so the card grows
+   with the map exactly as the icons do (fallback 1 — Globe3D shares this class and sets none).
+   NOT a size @media: that would be zoom-blind, and the scale composes with `--ui-zoom` anyway.
+   `left`/`top` come from `placeHoverCard` — off the marker, inside the map, stable. */
 .map-hover {
   position: absolute;
   pointer-events: none;
+  /* MEASURED, not guessed (headless Chrome against this sheet, 2026-09-08): the map's tooltips
+     are single logical lines of ~70-110 chars, and at 56ch they reflowed a one-line spot into
+     THREE — bigger type that is harder to read, which is the request backwards. 72ch fits the
+     common spot/park line on one line at every size; the 92% keeps a small embedded globe's
+     card inside the globe. */
+  max-width: min(72ch, 92%);
   background: var(--bg-elev-2);
   color: var(--text);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  padding: 2px var(--space-2);
+  padding: var(--space-2) var(--space-3);
   font-family: var(--font-mono);
-  font-size: var(--fs-micro);
-  box-shadow: var(--elev-2);
+  font-size: calc(var(--fs-label) * var(--map-ui-scale, 1));
+  line-height: var(--lh-normal);
+  /* A long tooltip must wrap into the card, not run off the edge of the map. */
+  overflow-wrap: anywhere;
+  /* Elevation one step up: the card floats over a busy, high-contrast picture, and --elev-2
+     is not enough separation from a starfield or a relief raster. */
+  box-shadow: var(--elev-3);
   z-index: 5;
 }
 /* Persistent selected-path readout (bearing + distance, SP/LP) — top-right so it
@@ -2833,6 +2881,13 @@ button.nb-chip:hover {
   transform: translateX(-50%);
   bottom: var(--space-3);
   display: flex;
+  /* Wraps because the TX/RX path keys made this row long enough to matter: it is
+     centre-anchored with `translateX(-50%)`, so an un-wrapped overflow spills out of BOTH
+     sides of a narrow map (a tall pop-out, or the 1024 floor with the layer panel open)
+     rather than clipping at one edge. */
+  flex-wrap: wrap;
+  justify-content: center;
+  max-width: calc(100% - 2 * var(--space-3));
   align-items: center;
   gap: 6px;
   background: var(--bg-elev);
@@ -2990,6 +3045,23 @@ button.nb-chip:hover {
   background: var(--text-faint);
   opacity: 0.5;
 }
+/* TX/RX path swatches. The colors and the dash rhythm both MIRROR what MapView strokes on
+   the canvas (GETTING_OUT + [5,4]; PATH_RX + [1,3]) — a legend that draws a different line
+   from the map is worse than none. Theme-agnostic like the rest of the map palette. */
+.map-legend-line {
+  width: 18px;
+  height: 0;
+  display: inline-block;
+  border-top-width: 2px;
+}
+.map-legend-line.tx {
+  border-top-style: dashed;
+  border-top-color: #3ddc6a;
+}
+.map-legend-line.rx {
+  border-top-style: dotted;
+  border-top-color: #8fb8d8;
+}
 .map-empty-hint {
   position: absolute;
   left: 50%;
@@ -3059,6 +3131,27 @@ button.nb-chip:hover {
   border: 1px solid var(--border);
   background: transparent;
   color: var(--text);
+}
+
+/* FULL-SCREEN MAP — the Layers panel PEEKED over the map instead of beside it.
+   In flow it is a 200px column, so opening it to flip one checkbox would narrow the canvas,
+   re-fire the ResizeObserver and re-project the whole map, twice per peek. Out of flow the
+   map's geometry never moves. Opaque background because it sits over live pixels (the
+   sticky/pinned-surface rule); it keeps its own `overflow:auto` from the base rule, so it is
+   still the only scroller in this corner. `.map-body` is only made a containing block here —
+   every existing overlay (hover, path, legends, insight rail) hangs off `.map-canvas-wrap`,
+   which is already relative, so nothing else moves. */
+.map-view.map-full .map-body {
+  position: relative;
+}
+.map-view.map-full .map-layers {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 6;
+  background: var(--bg-elev);
+  box-shadow: var(--elev-2);
 }
 
 /* Logbook header action buttons (Import ADIF / Log QSO). */
@@ -8631,6 +8724,20 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   padding-top: var(--space-2);
   border-top: 1px solid var(--border-soft);
 }
+/* THE END-OF-CONTEST MERGE — the trigger and its report, on the row above the upload
+   switch so both sit under the same limitation hint. It wraps rather than growing: the
+   report is a sentence, not a column, and the block is a control strip that may never
+   use surplus height. */
+.fd-merge {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.fd-merge-report {
+  font-size: var(--fs-label);
+  color: var(--text-dim);
+}
 .fd-upload-row {
   display: flex;
   align-items: center;
@@ -12065,6 +12172,22 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 .logbook-field .logbook-when {
   min-width: 190px;
 }
+/* CALL is the only field that shares its grid track with a button (the QRZ lookup), and this
+   grid really does sit at its 140px floor: auto-fit packs 140px columns, so a ~900px form gives
+   tracks of exactly 140px. The button takes ~56px and the gap 8px, leaving the input a ~50px
+   text box — five characters at 14px. That is how a logged WW9WTF reads back as "WW9WT" in the
+   edit form (operator report, 2026-09-08). The VALUE was never short: the form loads and saves
+   the whole call (Logbook.test.tsx), so this is the view, not the data.
+   Fixed by letting the row WRAP rather than by squeezing the input — a min-width floor here
+   (the .logbook-when idiom above) would overflow the track at the width this grid most often
+   produces. At a comfortable track nothing moves; at a tight one the button drops to its own
+   line and the input gets the full track. */
+.logbook-field-call .settings-input-row {
+  flex-wrap: wrap;
+}
+.logbook-field-call .settings-input {
+  flex: 1 1 120px;
+}
 .logbook-notes {
   resize: vertical;
   min-height: 58px;
@@ -14149,6 +14272,28 @@ button.cq-skiptx1.on {
 .app.detached .needed-panel {
   flex: 1;
   min-height: 0;
+}
+/* A `.panel`-rooted view torn off on its own: the panel IS the window, so it takes the height
+   and owns its own deficit — the SAME fate `.layout.single > .panel` gives it docked, in the
+   host that has no `.layout.single` to give it. Without this the only overflow declaration
+   reaching it is `.panel { overflow: hidden }`, a clip with nothing interposed: the operator
+   reported the torn-off POTA/SOTA board (the one view in this shape today) as having "no
+   ability to scroll down", with every spot below the fold unreachable.
+
+   It is the docked rule's own history one host over. `.pota-view` used to carry a private
+   `overflow-y: auto` to escape that clip; ed50c50e retired it as dead because
+   `.layout.single > .panel` had just declared the identical value at (0,2,0) — true when
+   written, and its comment says why ("POTA renders nowhere else"). Then the pop-out shipped.
+   Written on the HOST rather than back on `.pota-view` for the reason that fix was: a private
+   escape per view is what let five of them drift, and a second `.panel` pop-out would arrive
+   trapped in exactly this way. (0,2,0) with the child combinator, so it beats `.panel` (0,1,0)
+   and reaches only a panel that is the whole window — never a cockpit pane, which is always
+   nested. overflow-x stays hidden, as it does docked. Computed in
+   DetachedPanel.scroll.test.tsx. */
+.app.detached > .panel {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 /* The torn-off Needed window used to bump its root font + --space-scale 25% here, because
    it is read from across the shack and every pop-out was pinned to the 65% zoom floor

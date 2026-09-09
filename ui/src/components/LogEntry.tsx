@@ -17,6 +17,7 @@ import { t, type MessageKey } from '../i18n'
 import { contestIMoved, contestLogManual, getLog, logQso, lookupPark, lookupParkLive, qrzLookup, resolveEntity, searchParks, setCwPeerInfo, type Park } from '../api'
 import { bandKey, callHistory, entitySlots, isNewEntity, modeKey } from '../features/callHistory'
 import { inDomain } from '../features/contestDomains'
+import { composingSlot } from '../features/contestExchange'
 import { azimuthLabel, azimuthTo, isValidLoggedGrid } from '../grid'
 import { RecallPanel } from './RecallPanel'
 import { pushToast, withErrorToast } from '../toast'
@@ -383,7 +384,10 @@ export function LogEntry({
   // last entry / fieldDay status, and persists across log-and-clear so a run does
   // not re-type them.
   const [fdFields, setFdFields] = useState<Record<string, string>>(() => ({
-    CLASS: fieldDay?.myClass ?? '',
+    // A first guess only: most Field Day contacts are the same class as ours, and the
+    // operator overtypes it. The SESSION's composing value is the right source for a
+    // guess about the next contact; it is never a record of one.
+    CLASS: composingSlot(fieldDay?.composing, 'CLASS'),
   }))
   const setFdField = (key: string, v: string) =>
     setFdFields((prev) => ({ ...prev, [key]: v.toUpperCase() }))
