@@ -16614,6 +16614,222 @@ mod tests {
         );
     }
 
+    /// ⭐ FIELD REPORT 2026-09 (FT-710 beta): "double-clicking a CW signal on the map tunes the
+    /// radio to the frequency but leaves it in DATA-U instead of CW-U — I clicked in a CW
+    /// contact and it didn't switch."
+    ///
+    /// THE HYPOTHESIS THIS TEST REFUTES, and it is the reason the test is worth keeping: that
+    /// the dedupe's BELIEF (`last_mode`, deliberately the app's own commanded mode and never
+    /// the rig's — see the read-only-launch note at its seed) suppresses an EXPLICIT operator
+    /// mode command once the rig has diverged from it. It does not, and this pins that it never
+    /// starts to. The FORCE path — the branch an `immediate_retune` one-shot selects, which
+    /// `work_spot` arms twice over (`set_operating_mode` and `set_frequency` both set it) —
+    /// re-asserts the mode UNCONDITIONALLY: `mode_changed` there governs only the passband and
+    /// the read-back note, never whether `set_mode` is sent.
+    ///
+    /// The scene is the divergence at its widest: the operator's own hand put the rig in DATA-U
+    /// while the app still believes CW, which is exactly the state the display-only read-back
+    /// leaves behind by design (`observe_rig_mode`). Working a spot must still reach the rig.
+    #[test]
+    fn an_explicit_work_a_spot_mode_command_survives_a_stale_mode_belief() {
+        // Same band on purpose: no band crossing, so `reassert_mode_after_band_cross` stands
+        // down and the only thing that can move the rig is the force path's own `set_mode`.
+        let (addr, seen, live_mode) = band_stacking_rigctld_stub(14_030_000, &[]);
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_license_class("extra");
+            e.set_operating_mode("cw", true);
+            e.set_frequency(14.030, "20m", "USB");
+        }
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state_for(&engine);
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut run = |state: &mut RadioLoop, rig: &mut Rig, b: &mut MockBackend, t: f64| {
+            state
+                .step(&engine, b, rig, &sinks, t, &mut ra, &mut rr, &mut station)
+                .unwrap();
+        };
+        run(&mut state, &mut rig, &mut backend, 0.0);
+        assert_eq!(state.last_mode, "CW", "scene guard: the belief is CW");
+
+        // The operator turns the rig's OWN mode knob to DATA-U, and the app finds out about it
+        // only through the display-only read-back. The belief stays CW — that is the design.
+        *live_mode.lock().unwrap() = "PKTUSB".to_string();
+        for t in [1_000.0, 2_000.0, 3_000.0] {
+            run(&mut state, &mut rig, &mut backend, t);
+        }
+        assert_eq!(
+            state.last_mode, "CW",
+            "scene guard: the belief has NOT adopted the rig's mode — that is what makes this \
+             a stale belief at all"
+        );
+        seen.lock().unwrap().clear();
+
+        // The gesture: double-click a CW spot on the map (work_spot is the atomic backend verb
+        // behind it — set the section's mode AND the exact dial under one lock).
+        engine.lock().unwrap().work_spot("cw", 14.055, "20m");
+        run(&mut state, &mut rig, &mut backend, 4_000.0);
+
+        let wire = seen.lock().unwrap().clone();
+        assert!(
+            wire.iter().any(|l| l.starts_with("M CW")),
+            "an explicit work-a-spot must COMMAND the mode even though the belief already \
+             holds it — the dedupe governs the steady path, never this one. wire={wire:?}"
+        );
+        assert_eq!(
+            live_mode.lock().unwrap().as_str(),
+            "CW",
+            "…and the radio must END in CW"
+        );
+    }
+
+    /// ⭐ THE INVARIANT THAT OUTRANKS THE FIX (same 2026-09 report): a mode the OPERATOR set on
+    /// the rig's own front panel MUST STAND. The periodic read-back is display-only by design
+    /// (`observe_rig_mode`, and the loop's `// display-only; never adopted into operating_mode`
+    /// at the read-only-launch seed); the dedupe's belief is the app's own commanded mode. Both
+    /// halves exist so Nexus never fights the hand on the knob.
+    ///
+    /// This is the test that must go RED if a future "reconcile the belief from the rig"
+    /// change is ever made: adopting the observed mode into `last_mode` would make the steady
+    /// path see a mode change on the very next tick and stomp the operator's DATA-U back to CW,
+    /// eight times a second, with no operator action anywhere in the loop.
+    #[test]
+    fn a_front_panel_mode_change_is_never_reconciled_away() {
+        let (addr, seen, live_mode) = band_stacking_rigctld_stub(14_030_000, &[]);
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_license_class("extra");
+            e.set_operating_mode("cw", true);
+            e.set_frequency(14.030, "20m", "USB");
+        }
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state_for(&engine);
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut run = |state: &mut RadioLoop, rig: &mut Rig, b: &mut MockBackend, t: f64| {
+            state
+                .step(&engine, b, rig, &sinks, t, &mut ra, &mut rr, &mut station)
+                .unwrap();
+        };
+        run(&mut state, &mut rig, &mut backend, 0.0);
+        assert_eq!(live_mode.lock().unwrap().as_str(), "CW", "scene guard");
+
+        // The hand on the knob. Nothing in the app asked for this.
+        *live_mode.lock().unwrap() = "PKTUSB".to_string();
+        seen.lock().unwrap().clear();
+
+        // Run long enough that the mode read-back (every 4th heavy poll) has certainly seen it.
+        for i in 1..=40 {
+            run(&mut state, &mut rig, &mut backend, i as f64 * 1_000.0);
+        }
+
+        let wire = seen.lock().unwrap().clone();
+        let commands: Vec<&String> = wire.iter().filter(|l| l.starts_with("M ")).collect();
+        assert!(
+            commands.is_empty(),
+            "the loop must send NO mode command with no operator action — a front-panel mode \
+             change stands. sent={commands:?}"
+        );
+        assert_eq!(
+            live_mode.lock().unwrap().as_str(),
+            "PKTUSB",
+            "the operator's own mode is still on the radio"
+        );
+        // …and the app SAW it: the read-back is a display mirror, not a correction.
+        assert_eq!(
+            engine.lock().unwrap().snapshot().radio.rig_mode.as_deref(),
+            Some("PKTUSB"),
+            "the read-back mirrors the rig's real mode for the cockpit to flag"
+        );
+    }
+
+    /// ⭐ THE MECHANISM THAT ACTUALLY PUTS A YAESU IN **DATA-U WHILE THE OPERATOR IS CHASING
+    /// CW** — the one the 2026-09 FT-710 report matches word for word, found by ruling the
+    /// dedupe out (see `an_explicit_work_a_spot_mode_command_survives_a_stale_mode_belief`).
+    ///
+    /// With the CW keyer set to **Soundcard**, `Settings::rig_mode_on_sideband`'s CW arm
+    /// commands `PKTUSB`/`PKTLSB` — Yaesu **DATA-U/DATA-L** — instead of `CW`/`CWR`, because a
+    /// keyed audio tone has to reach the modulator rather than the mic jack (the FTX-1 "keys
+    /// but no audio" fix, 2026-08-29). So the rig is held in DATA-U for the whole CW session,
+    /// receive included: working a CW spot from the FT8 section moves the DIAL and changes NO
+    /// mode at all, which is precisely "it tuned but it didn't switch". Nothing is broken on
+    /// the CAT path — this is the mode word Nexus chose.
+    ///
+    /// Pinned here at the WIRE, end to end through the loop, so the coupling between a keyer
+    /// backend and the mode a spot click commands can never be changed by accident. The CAT
+    /// keyer half is the control: same click, same rig, and the radio lands in CW.
+    #[test]
+    fn the_soundcard_cw_keyer_works_a_cw_spot_into_the_data_submode() {
+        let land_mode = |keyer: tempo_app::settings::CwKeyerBackend| {
+            // Sitting in the FT8 section on 20 m — where the operator was when he clicked.
+            let (addr, seen, live_mode) = band_stacking_rigctld_stub(14_074_000, &[]);
+            let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+            {
+                let mut e = engine.lock().unwrap();
+                e.set_license_class("extra");
+                let mut s = e.settings().clone();
+                s.cw_keyer = keyer;
+                e.apply_settings(s);
+                e.set_operating_mode("digital", true);
+                e.set_frequency(14.074, "20m", "USB");
+            }
+            let mut rig = Rig::rigctld(&addr);
+            let mut backend = MockBackend::new();
+            let mut state = loop_state_for(&engine);
+            let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+            let mut station = StationSinks::new();
+            let mut run = |state: &mut RadioLoop, rig: &mut Rig, b: &mut MockBackend, t: f64| {
+                state
+                    .step(&engine, b, rig, &sinks, t, &mut ra, &mut rr, &mut station)
+                    .unwrap();
+            };
+            run(&mut state, &mut rig, &mut backend, 0.0);
+            assert_eq!(
+                live_mode.lock().unwrap().as_str(),
+                "PKTUSB",
+                "scene guard: FT8 holds the rig in DATA-U"
+            );
+            seen.lock().unwrap().clear();
+
+            // Double-click a CW spot on the map, same band (20 m CW segment).
+            engine.lock().unwrap().work_spot("cw", 14.030, "20m");
+            run(&mut state, &mut rig, &mut backend, 1_000.0);
+            let dial = seen
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|l| l.starts_with("F 14030000"));
+            let landed = live_mode.lock().unwrap().clone();
+            (landed, dial)
+        };
+
+        let (cat_mode, cat_dial) = land_mode(tempo_app::settings::CwKeyerBackend::Cat);
+        assert!(cat_dial, "the CAT-keyer click lands the spot's dial");
+        assert_eq!(
+            cat_mode, "CW",
+            "CONTROL: with the rig's own keyer, working a CW spot puts the radio in CW"
+        );
+
+        let (sc_mode, sc_dial) = land_mode(tempo_app::settings::CwKeyerBackend::Soundcard);
+        assert!(
+            sc_dial,
+            "the dial lands either way — that half of the report is not in dispute"
+        );
+        assert_eq!(
+            sc_mode, "PKTUSB",
+            "THE REPORT: with the soundcard keyer the CW section commands the DATA submode, so \
+             a rig already in DATA-U does not change mode at all — 'it tuned but it didn't \
+             switch'. This assertion is a CHARACTERISATION of deliberate behaviour, not an \
+             endorsement: if the DATA submode is ever narrowed to the keyed window (the way \
+             `sstv_in_flight` narrows Phone's), THIS is the test that names what changed."
+        );
+    }
+
     #[test]
     fn the_mode_is_commanded_before_the_dial_on_a_cockpit_switch() {
         // ⭐ FIELD REPORT, v1.0.0 on an FTDX10 (2026-08-05): moving CW→Phone added 650 Hz to the
