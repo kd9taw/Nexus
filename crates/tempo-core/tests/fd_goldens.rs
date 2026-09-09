@@ -68,6 +68,50 @@ fn arrl_field_day_cabrillo_and_adif_are_byte_identical() {
     assert_eq!(log.adif(), ARRLFD_ADI, "ARRL FD ADIF moved");
 }
 
+/// ⭐ **The two registries must not CROSS.** `contest::cabrillo`'s six-token test stops
+/// them DRIFTING apart; this stops them being UNIFIED, which is the opposite failure and
+/// the more likely one.
+///
+/// `ARRL-FD` is a Cabrillo name and is NOT in ADIF's `Contest_ID` enumeration. A later
+/// refactor that "tidies away" the two ids into one — by pointing the ADIF export at
+/// `cabrillo_contest_token`, which is the obvious way anyone would do it — writes a token
+/// no importer can resolve into every logbook that reads a Nexus ADIF, and **nothing in
+/// the app looks wrong**: the header is still right, the export still succeeds, and the
+/// Cabrillo goldens still pass. It surfaces when somebody else's software chokes.
+///
+/// So both exports are taken from ONE log in one breath, and each is asserted to carry
+/// its own registry's value **and not the other's** — the two strings visibly different
+/// in the same test.
+#[test]
+fn the_cabrillo_token_never_reaches_the_adif_contest_id() {
+    let log = capture::golden_log(FdEvent::ArrlFd);
+    let cbr = log
+        .cabrillo(14_074)
+        .expect("a single-mode event exports one entry");
+    let adi = log.adif();
+
+    // Cabrillo carries the master-list name, and only that.
+    assert!(
+        cbr.contains("CONTEST: ARRL-FD\n"),
+        "the Cabrillo header must carry the master-list name: {cbr}"
+    );
+    assert!(
+        !cbr.contains("ARRL-FIELD-DAY"),
+        "the ADIF id must not appear anywhere in a Cabrillo entry: {cbr}"
+    );
+
+    // ADIF carries the enumeration value, on every row, and only that.
+    assert_eq!(
+        adi.matches("<CONTEST_ID:14>ARRL-FIELD-DAY").count(),
+        7,
+        "every one of the seven rows must carry the ADIF enumeration value: {adi}"
+    );
+    assert!(
+        !adi.contains("ARRL-FD"),
+        "the Cabrillo token must never reach CONTEST_ID: {adi}"
+    );
+}
+
 #[test]
 fn winter_field_day_cabrillo_and_adif_are_byte_identical() {
     let log = capture::golden_log(FdEvent::WinterFd);
