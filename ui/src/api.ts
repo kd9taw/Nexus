@@ -2386,6 +2386,18 @@ export async function setBlockedCalls(calls: string[]): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_blocked_calls', { calls })
 }
 
+/** Turn the BETA update channel on or off — the ONE write path for Settings ▸ App updates,
+ * and the reason `betaUpdates` is not written by the settings form. A settings payload is a
+ * snapshot from whenever the sending surface last read the settings, and some surfaces keep
+ * theirs for the life of the window (the APRS cockpit is mounted permanently and reloads only
+ * after its own writes) — so a whole-struct save could post a stale value over the live one.
+ * Doing that to this field is invisible: it returns a beta tester to the stable channel with
+ * no error, no toast and no log line, and the betas simply stop arriving. The backend keeps
+ * the live value across every settings save, so this verb is the only thing that moves it. */
+export async function setBetaUpdates(on: boolean): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_beta_updates', { on })
+}
+
 /** Set (or clear, with '') who is at the key — the ONE write path for the seat-swap chip,
  * the Field Day panel's Operator field and the pop-out scoreboard. Narrow write: never the
  * heavyweight settings save, which clears the TX queue and re-derives the TX cycle from the

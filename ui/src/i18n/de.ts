@@ -941,6 +941,7 @@ export const DE: PartialCatalog = {
   "settings.save.fdPositionName": "Diese Position im Reiter „Contest“ benennen, bevor ein Club-Event gehostet oder betreten wird — die Club-Bandtafel zeigt diesen Namen.",
   "settings.save.checkRadio": "Die Einstellungen des Funkgeräts prüfen.",
   "settings.save.failed": "Einstellungen konnten nicht gespeichert werden.",
+  "settings.betaUpdates.failed": "Update-Kanal konnte nicht geändert werden",
   "settings.satellites.vfoMap.failed": "VFO-Zuordnung konnte nicht bestätigt werden",
   "settings.workingFreq.reset.confirm.title": "Alle Überschreibungen der Arbeitsfrequenzen löschen?",
   "settings.workingFreq.reset.confirm.body": "Die Standard-Frequenztabelle von WSJT-X wird wiederhergestellt.",

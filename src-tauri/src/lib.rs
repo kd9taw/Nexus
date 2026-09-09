@@ -12386,6 +12386,24 @@ fn set_fd_operator(state: State<'_, SharedEngine>, call: String) -> Result<AppSn
     Ok(eng.snapshot())
 }
 
+/// Turn the BETA update channel on or off — the Settings ▸ App updates switch, and the ONE
+/// write path for it. A NARROW write, and here the narrowness is the point rather than the
+/// #54 cost saving: while this rode along in the whole-struct save, any surface holding a
+/// stale settings snapshot could post an old value over the live one, and several hold one
+/// for the life of the window (the APRS cockpit is mounted permanently and reloads only after
+/// its own writes). Silently returning a beta tester to the stable channel produces no error,
+/// no toast and no log line — the betas simply stop arriving. `Engine::apply_settings` now
+/// keeps the live value, so this is the only thing that can change it.
+#[tauri::command(async)]
+fn set_beta_updates(state: State<'_, SharedEngine>, on: bool) -> Result<AppSnapshot, String> {
+    let mut eng = engine_lock(&state);
+    let s = eng.set_beta_updates(on);
+    if let Err(e) = s.save(&settings_path()) {
+        eprintln!("tempo: failed to persist beta updates opt-in: {e}");
+    }
+    Ok(eng.snapshot())
+}
+
 /// Replace the blocked-callsigns list (the Alt-double-click gesture + the Settings
 /// editor's one write path). A NARROW write — never `apply_settings` (#54: the heavyweight
 /// path resets the mode and clears the TX queue, and this gets clicked mid-QSO). Persists;
@@ -22088,6 +22106,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             n3fjp_test_connection,
             set_hold_tx_freq,
             set_blocked_calls,
+            set_beta_updates,
             set_fd_operator,
             call_station,
             open_panel_window,

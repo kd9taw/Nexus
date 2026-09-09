@@ -4051,6 +4051,7 @@ export const EN = {
   // The device NAME is the OS's, and it is never translated — only the note after it is.
   'settings.audio.device.notInList': '{{device}} — saved, not in the list',
 
+  'settings.betaUpdates.failed': 'Could not change the update channel',
   'settings.satellites.vfoMap.failed': 'Could not confirm the VFO mapping',
 
   'settings.workingFreq.reset.confirm.title': 'Clear all working-frequency overrides?',

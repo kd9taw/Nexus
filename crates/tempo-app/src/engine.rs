@@ -4638,6 +4638,18 @@ impl Engine {
         // Alt-double-click gesture and the Settings editor both go through it), so a
         // stale form save can't silently un-block or re-block a call mid-QSO.
         let live_blocked = std::mem::take(&mut self.settings.blocked_calls);
+        // The BETA-CHANNEL opt-in has ONE writer (`set_beta_updates`) for the same reason
+        // `operating_mode` above does, and it is captured here for the same reason: a Settings
+        // payload is a snapshot from whenever the sending surface last read the settings, and
+        // several surfaces hold one for the life of the window rather than re-reading — the
+        // APRS cockpit is mounted permanently (`.aprs-host`, hidden rather than unmounted) and
+        // refreshes its copy only after its own writes, so its `betaUpdates` can be hours stale
+        // and any control on it would post that stale value over the live one.
+        //
+        // That would be an ordinary revert for most fields. For this one it is invisible in a
+        // way no other setting's is: the operator is quietly moved back to the stable channel,
+        // the betas stop arriving, and there is no error, no toast and no log line to notice.
+        let live_beta_updates = self.settings.beta_updates;
         // The Cloudlog key is a WRITE-ONLY credential, not editable state, so it is captured here and
         // restored below UNCONDITIONALLY — on a form save AND on a restore/reset, unlike the roster
         // fields above. `get_settings` clears it on the way OUT to the frontend (round 9), so the
@@ -4695,6 +4707,13 @@ impl Engine {
         self.settings.operating_mode = live_op_mode;
         if keep_live_roster {
             self.settings.blocked_calls = live_blocked;
+        }
+        // Scoped to the FORM path, deliberately. A restore/reset is the opposite contract (see
+        // `apply_restored_settings`): the bundle — or `Settings::default()` for a factory reset —
+        // is the whole truth, so a reset really does return the operator to the stable channel,
+        // as it does with every other setting it promises to clear.
+        if keep_live_roster {
+            self.settings.beta_updates = live_beta_updates;
         }
         self.settings.ensure_radio_profiles();
         // Fold the form's flat rig/audio edits into the profile the FORM was editing — the flat fields
@@ -5029,6 +5048,23 @@ impl Engine {
             .map(|c| c.trim().to_ascii_uppercase())
             .filter(|c| !c.is_empty() && seen.insert(c.clone()))
             .collect();
+    }
+
+    /// ⛔ **THE ONE WRITER of the beta-channel opt-in** (Settings ▸ App updates). A NARROW
+    /// write, and the narrowness is the whole point rather than the #54 cost saving it is
+    /// elsewhere: while this field was form-writable, any whole-struct save could author it,
+    /// and several of the surfaces that post one hold a settings snapshot for the life of the
+    /// window (see the capture in `apply_settings_inner`). A months-old `false` posted over a
+    /// live `true` returns a beta tester to the stable channel with no error, no toast and no
+    /// log line — the betas just stop arriving. Routing the switch through here, and having
+    /// `apply_settings` put the live value back, makes that unrepresentable rather than
+    /// guarded against one caller at a time.
+    ///
+    /// Nothing else changes: the channel is read by the frontend's `useSelfUpdate`, so this
+    /// only has to persist (the caller saves) and be visible to the next `get_settings`.
+    pub fn set_beta_updates(&mut self, on: bool) -> &Settings {
+        self.settings.beta_updates = on;
+        &self.settings
     }
 
     /// Change band / dial frequency / mode **live** — without resetting the
@@ -23571,6 +23607,105 @@ mod tests {
         assert!(
             e.snapshot().conversations.iter().any(|c| c.peer == "*"),
             "band feed survives a grid change"
+        );
+    }
+
+    /// ⛔ **No settings payload may move the beta-channel opt-in — in either direction.**
+    ///
+    /// `set_beta_updates` is its one writer, and this is the property that makes that real.
+    /// A Settings payload is a snapshot from whenever the sending surface last read the
+    /// settings, and several surfaces hold one for the life of the window rather than
+    /// re-reading — the APRS cockpit is mounted permanently and refreshes only after its own
+    /// writes, so a control on it posts a `betaUpdates` that can be hours old.
+    ///
+    /// For most fields that is an ordinary revert. For this one the loss is invisible: a beta
+    /// tester quietly returned to the stable channel gets no error, no toast and no log line —
+    /// the betas just stop arriving, and the maintainer finds out when the feedback dries up.
+    #[test]
+    fn a_form_save_cannot_move_the_beta_opt_in() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_beta_updates(true);
+        assert!(e.settings().beta_updates, "baseline: opted in");
+
+        // A stale snapshot from a surface that read the settings before the operator opted in.
+        let mut stale = e.settings().clone();
+        stale.beta_updates = false;
+        e.apply_settings(stale);
+        assert!(
+            e.settings().beta_updates,
+            "a stale form payload silently opted the operator out of the beta channel"
+        );
+
+        // …and the other direction, so this is a "the form does not own it" property and not
+        // a "beta is sticky once on" one: a stale `true` cannot opt a stable operator IN.
+        e.set_beta_updates(false);
+        let mut stale_on = e.settings().clone();
+        stale_on.beta_updates = true;
+        e.apply_settings(stale_on);
+        assert!(
+            !e.settings().beta_updates,
+            "a stale form payload opted a stable-channel operator into the beta channel"
+        );
+    }
+
+    /// The same property against the OTHER shape a payload can take: no `betaUpdates` key at
+    /// all. Struct-level `#[serde(default)]` turns an absent key into `false` — the position
+    /// nobody chose — so a form built before the field existed, or any partial writer, is the
+    /// same hazard wearing different clothes.
+    #[test]
+    fn a_form_save_that_omits_the_beta_key_cannot_move_it_either() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_beta_updates(true);
+
+        let mut v = serde_json::to_value(e.settings()).unwrap();
+        v.as_object_mut().unwrap().remove("betaUpdates");
+        assert!(
+            v.get("betaUpdates").is_none(),
+            "control: the key really is absent from the payload"
+        );
+        let payload: Settings = serde_json::from_value(v).unwrap();
+        assert!(
+            !payload.beta_updates,
+            "control: an absent key really does deserialise to false, which is the hazard"
+        );
+
+        e.apply_settings(payload);
+        assert!(
+            e.settings().beta_updates,
+            "a payload that never mentioned the beta channel silently opted the operator out"
+        );
+    }
+
+    /// The positive control for both tests above: the switch must still work. Without this,
+    /// the same code would pass by making the opt-in immovable, and nothing would say so.
+    #[test]
+    fn set_beta_updates_is_the_writer_that_does_move_it() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        assert!(!e.settings().beta_updates, "baseline: stable channel");
+        e.set_beta_updates(true);
+        assert!(e.settings().beta_updates, "the verb turns it on");
+        e.set_beta_updates(false);
+        assert!(
+            !e.settings().beta_updates,
+            "and back off — the switch is two-way"
+        );
+    }
+
+    /// A RESTORE has the opposite contract from a form save (see `apply_restored_settings`):
+    /// the bundle — or, for a factory reset, `Settings::default()` — is the whole truth. So the
+    /// capture above is deliberately scoped to the form path: a reset really does put the
+    /// operator back on the stable channel, exactly as it does with every other setting it
+    /// promises to clear.
+    #[test]
+    fn a_restore_takes_the_bundles_beta_channel_rather_than_the_live_one() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_beta_updates(true);
+        assert!(e.settings().beta_updates, "baseline: opted in");
+
+        e.apply_restored_settings(Settings::default()); // what reset_settings sends
+        assert!(
+            !e.settings().beta_updates,
+            "a factory reset returns the operator to the stable channel"
         );
     }
 

@@ -2481,6 +2481,7 @@ export const JA: PartialCatalog = {
   "settings.audio.rxGain.failed": "受信ゲインを適用できませんでした",
   "settings.audio.txPower.failed": "送信出力を設定できませんでした",
   "settings.audio.device.notInList": "{{device}} — 保存済み（リストにありません）",
+  "settings.betaUpdates.failed": "更新チャンネルを変更できませんでした",
   "settings.satellites.vfoMap.failed": "VFOマッピングを確認できませんでした",
   "settings.workingFreq.reset.confirm.title": "運用周波数の上書きをすべてクリアしますか？",
   "settings.workingFreq.reset.confirm.body": "標準のWSJT-X周波数テーブルに戻ります。",

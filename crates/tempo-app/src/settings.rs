@@ -814,6 +814,23 @@ pub struct Settings {
     #[serde(default = "default_connect_web_port")]
     pub connect_web_port: u16,
     /// Opt in to auto-update through beta (pre-release) builds; off = stable channel only.
+    ///
+    /// ⛔ **ONE WRITER: [`Engine::set_beta_updates`](crate::engine::Engine::set_beta_updates).**
+    /// A whole-struct settings save must never author this field —
+    /// [`Engine::apply_settings`](crate::engine::Engine::apply_settings) captures the live value
+    /// and puts it back, exactly as it does for `operating_mode` and the dual-radio roster, and
+    /// for the same reason: a Settings payload is a snapshot from whenever the sending surface
+    /// last read the settings, and several surfaces hold one for the life of the window (the
+    /// APRS cockpit is mounted permanently and reloads only after its own writes). Left
+    /// form-writable, any of them could post a months-old `false` over a live `true`.
+    ///
+    /// This one matters more than the others in the same shape, because its loss is **silent in
+    /// both directions**: a beta tester returned to the stable channel gets no error, no toast
+    /// and no log line — the betas simply stop arriving, and the maintainer finds out when the
+    /// feedback dries up. There is nothing to notice and nothing to grep for.
+    ///
+    /// The frontend reads it (`!!settings.betaUpdates` → `useSelfUpdate`) and writes it through
+    /// the `set_beta_updates` command; nothing in Rust reads it today.
     #[serde(default)]
     pub beta_updates: bool,
     /// Periodically transmit a presence beacon ("CQ <call> <grid>") in Chat
@@ -6989,6 +7006,48 @@ mod tests {
         assert!(back.fd_scoreboard);
         assert_eq!(back.fd_scoreboard_port, 7474);
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// ⛔ **The beta-channel opt-in must survive the file round trip, and an upgrade must
+    /// never turn it on by itself.**
+    ///
+    /// This is the setting whose loss is invisible: a beta tester silently returned to the
+    /// stable channel gets no error and no log line — the betas just stop arriving. The file
+    /// half of that contract is pinned here; the save-payload half is in `engine.rs`
+    /// (`apply_settings_keeps_the_beta_opt_in_when_the_payload_omits_it`).
+    #[test]
+    fn beta_updates_round_trips_and_an_upgrade_leaves_it_alone() {
+        // A settings.json written before the field existed: the stable channel — an upgrade
+        // must never opt anyone in.
+        let older = r#"{"mycall":"W9XYZ","mygrid":"EN37"}"#;
+        let s: Settings = serde_json::from_str(older).unwrap();
+        assert!(!s.beta_updates, "an upgrade never opts anyone into beta");
+
+        // A beta tester's file: the opt-in survives a load → save → load cycle, which is what
+        // every ordinary settings write does to it.
+        let dir = std::env::temp_dir().join(format!("tempo_beta_rt_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        std::fs::write(&path, r#"{"mycall":"KD9TAW","betaUpdates":true}"#).unwrap();
+
+        let loaded = Settings::load(&path);
+        assert!(loaded.beta_updates, "the opt-in loaded");
+        loaded.save(&path).unwrap();
+        assert!(
+            Settings::load(&path).beta_updates,
+            "an ordinary save dropped the operator back to the stable channel"
+        );
+
+        // …and turning it OFF sticks too (the control: the round trip is not just
+        // "always true").
+        let off = Settings {
+            beta_updates: false,
+            ..Settings::default()
+        };
+        off.save(&path).unwrap();
+        assert!(!Settings::load(&path).beta_updates);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// F8 (round 7): settings.json holds the ClubLog API key (and a Cloudlog key until the keychain
