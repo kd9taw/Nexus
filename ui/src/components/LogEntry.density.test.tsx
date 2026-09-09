@@ -48,6 +48,7 @@ import type { AppSnapshot } from '../types'
 
 vi.mock('../api', () => ({
   fdLogManual: vi.fn(async () => ({})),
+  contestLogManual: vi.fn(async () => ({})),
   logQso: vi.fn(async () => ({})),
   getLog: vi.fn(async () => []),
   lookupPark: vi.fn(async () => null),

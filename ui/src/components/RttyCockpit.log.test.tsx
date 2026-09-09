@@ -43,7 +43,7 @@ const state: { current: RttyState } = {
 }
 
 const logQso = vi.fn(async (rec: LoggedQso) => rec)
-const fdLogManual = vi.fn(async (..._args: unknown[]) => ({}))
+const contestLogManual = vi.fn(async (..._args: unknown[]) => ({}))
 
 vi.mock('../api', () => ({
   // The cockpit's own surface.
@@ -68,7 +68,8 @@ vi.mock('../api', () => ({
   haltTx: vi.fn(async () => ({})),
   // …and the log strip's, which is the point of this file.
   logQso: (rec: LoggedQso) => logQso(rec),
-  fdLogManual: (...args: unknown[]) => fdLogManual(...args),
+  contestLogManual: (...args: unknown[]) => contestLogManual(...args),
+  fdLogManual: vi.fn(async () => ({})),
   getLog: vi.fn(async () => [] as LoggedQso[]),
   qrzLookup: vi.fn(async () => null),
   resolveEntity: vi.fn(async () => null),
@@ -118,7 +119,7 @@ async function renderCockpit(s: AppSnapshot = snap) {
 beforeEach(() => {
   state.current = { ...state.current, auto: false, seqState: 'idle', sending: false }
   logQso.mockClear()
-  fdLogManual.mockClear()
+  contestLogManual.mockClear()
 })
 afterEach(cleanup)
 
@@ -217,8 +218,16 @@ describe('the RTTY cockpit works FIELD DAY (all-mode FD, digital class)', () => 
     expect((pane.querySelector('.le-fd-mode') as HTMLElement).textContent).toBe('DIG')
 
     await logFd('w1aw', '2a', 'ema')
-    await waitFor(() => expect(fdLogManual).toHaveBeenCalled())
-    expect(fdLogManual.mock.calls[0]).toEqual(['W1AW', '2A', 'EMA', 'DIG', 'RTTY'])
+    await waitFor(() => expect(contestLogManual).toHaveBeenCalled())
+    expect(contestLogManual.mock.calls[0]).toEqual([
+      'W1AW',
+      [
+        ['CLASS', '2A'],
+        ['SECTION', 'EMA'],
+      ],
+      'DIG',
+      'RTTY',
+    ])
     // ONE LOG PER CONTACT. A Field Day contact belongs to the contest log alone — a copy in
     // the general logbook would also re-broadcast it on the WSJT-X sink and the upload queue.
     expect(logQso, 'the FD contact was double-logged as a casual QSO').not.toHaveBeenCalled()
@@ -231,6 +240,6 @@ describe('the RTTY cockpit works FIELD DAY (all-mode FD, digital class)', () => 
     const pane = document.querySelector('[data-pane="log"]') as HTMLElement
     expect(pane.querySelector('.log-entry-fd'), 'FD layout with the master off').toBeNull()
     expect(pane.querySelector('.le-call'), 'no casual callsign field').not.toBeNull()
-    expect(fdLogManual).not.toHaveBeenCalled()
+    expect(contestLogManual).not.toHaveBeenCalled()
   })
 })

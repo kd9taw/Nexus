@@ -2,13 +2,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react'
 import { LogEntry } from './LogEntry'
-import { fdLogManual, logQso, qrzLookup, lookupPark } from '../api'
+import { contestLogManual, logQso, qrzLookup, lookupPark } from '../api'
 import type { AppSnapshot, FieldDayStatus } from '../types'
 
 // The FD log + standard-log seams matter here; the other api functions are imported by the
 // component but never reached on these render paths, so stub them harmlessly.
 vi.mock('../api', () => ({
   fdLogManual: vi.fn(() => Promise.resolve({})),
+  contestLogManual: vi.fn(() => Promise.resolve({})),
   logQso: vi.fn(() => Promise.resolve({})),
   getLog: vi.fn(() => Promise.resolve([])),
   lookupPark: vi.fn(() => Promise.resolve(null)),
@@ -19,7 +20,7 @@ vi.mock('../api', () => ({
   setCwPeerInfo: vi.fn(() => Promise.resolve()),
 }))
 
-const mockedFdLog = vi.mocked(fdLogManual)
+const mockedFdLog = vi.mocked(contestLogManual)
 const mockedLogQso = vi.mocked(logQso)
 const mockedQrz = vi.mocked(qrzLookup)
 const mockedLookupPark = vi.mocked(lookupPark)
@@ -65,7 +66,7 @@ beforeEach(() => {
 afterEach(() => cleanup())
 
 describe('LogEntry Field Day exchange gate', () => {
-  it('blocks logging (button disabled, no fdLogManual) when the section is blank', () => {
+  it('blocks logging (button disabled, nothing sent) when the section is blank', () => {
     renderFd()
     fireEvent.change(call(), { target: { value: 'w1aw' } })
     fireEvent.change(klass(), { target: { value: '2a' } })
@@ -96,7 +97,15 @@ describe('LogEntry Field Day exchange gate', () => {
     // mode. It exists for the 'DIG' class, whose scoring class covers every digital mode
     // there is (see the `fdSubmode` prop) — passing one here would put a submode on a record
     // that has no use for it.
-    expect(mockedFdLog).toHaveBeenCalledWith('W1AW', '2A', 'WI', 'PH', undefined)
+    expect(mockedFdLog).toHaveBeenCalledWith(
+      'W1AW',
+      [
+        ['CLASS', '2A'],
+        ['SECTION', 'WI'],
+      ],
+      'PH',
+      undefined,
+    )
   })
 })
 

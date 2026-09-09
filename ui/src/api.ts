@@ -408,7 +408,7 @@ export async function fetchFdRules(): Promise<FdRulesStatus> {
  * in the catalogs, computed UI-side. `enforcement` ships `'warn'`: nothing is
  * ever removed or disabled by rule (operator ruling). */
 export interface FdRulesetDto {
-  /** 'arrlfd' | 'wfd' — the snapshot's event convention. */
+  /** The rules-file event id — 'arrlfd' | 'wfd' | 'tnqp' | 'ohqp' | 'cqp' | 'txqp'. */
   event: string
   rulesYear: number
   /** On-air modes this event's rules ban outright (uppercase ADIF-style). */
@@ -416,6 +416,16 @@ export interface FdRulesetDto {
   spottingAllowed: boolean
   clusterAllowed: boolean
   enforcement: string
+  /** ⭐ The role the SAVED settings put this operator in — `''` for a symmetric contest
+   *  (both Field Day events). Derived in Rust by the same constructor mode entry uses;
+   *  never re-derived here, so the preview cannot promise a role the session won't give. */
+  role?: string
+  /** ⭐ The exchange that role would SEND, in send order. The role id names a rule; this
+   *  is what goes on the air. */
+  exchange?: string[]
+  /** Why no session could be built from the saved settings — the sentence mode entry
+   *  would refuse with. `''` when the configuration is good. */
+  problem?: string
 }
 
 /** Ruleset facts for the CONFIGURED event (`settings.fdEvent`) — independent of
@@ -610,6 +620,29 @@ export async function notifyErase(window: 0 | 1 | 2): Promise<void> {
  * wrong ADIF mode, Cabrillo "DG" where ARRL wants "RY", and a mode Winter Field Day bans
  * outright on a QSO that was perfectly legal. Omit it for CW and PH, whose class IS their
  * on-air mode. */
+/** ⭐ **Log a contest contact, with the received exchange as a FIELD VECTOR.**
+ *
+ * `fields` is `[slot id, raw]` per box the entry strip rendered, in the session role's
+ * own receive order — Field Day's `CLASS`/`SECTION`, a QSO party's `RST`/`QTH`, CQP's
+ * `NR`/`QTH`. The slot ids come from `fieldDay.receives`, so the UI never learns which
+ * contest means what by position.
+ *
+ * ⚠️ `mode` IS THE SCORING CLASS and `submode` IS THE MODE THAT WAS ON THE AIR — see
+ * `fdLogManual` below, whose two notes apply here unchanged. */
+export async function contestLogManual(
+  call: string,
+  fields: [string, string][],
+  mode: 'CW' | 'PH' | 'DIG',
+  submode?: string,
+): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('contest_log_manual', {
+    call,
+    fields,
+    mode,
+    submode: submode ?? null,
+  })
+}
+
 export async function fdLogManual(
   call: string,
   klass: string,

@@ -28,6 +28,33 @@ export const FD_EVENT_NAMES: Record<FdKind, string> = {
   wfd: 'Winter Field Day',
 }
 
+/**
+ * ⭐ **Every contest the picker offers, in the order it offers them** — the rules-file
+ * event id (`settings.fdEvent`) and the sponsor's own name for the event.
+ *
+ * ⚠️ INVARIANT — never translated, for the same reason `FD_EVENT_NAMES` is not: an
+ * operator enters "Ohio QSO Party", submits a Cabrillo log to it and reads those words
+ * on ohqp.org. A translated event name names nothing.
+ *
+ * ⚠️ **The ids are the rules file's, and this list is a MENU, not a source of truth.**
+ * Rust looks each one up through `fd_rules::ruleset_by_id`, which returns `None` for a
+ * ruleset a downloaded rules file dropped — so an id here that the data does not carry
+ * costs the operator that contest and nothing else. Adding a contest is a rules-file
+ * row plus a line here; nothing else in the UI knows a contest by name.
+ */
+export const CONTESTS: { id: string; name: string }[] = [
+  { id: 'arrlfd', name: FD_EVENT_NAMES.arrlfd },
+  { id: 'wfd', name: FD_EVENT_NAMES.wfd },
+  { id: 'cqp', name: 'California QSO Party' },
+  { id: 'ohqp', name: 'Ohio QSO Party' },
+  { id: 'tnqp', name: 'Tennessee QSO Party' },
+  { id: 'txqp', name: 'Texas QSO Party' },
+]
+
+/** Is this one of the two events Field Day Setup (class + section) describes? */
+export const isFieldDay = (id: string | undefined): boolean =>
+  !id || id === 'arrlfd' || id === 'wfd'
+
 export interface FdEvent {
   kind: FdKind
   /** UTC start of the event (Saturday 1800 UTC for ARRL FD; 1600 UTC for WFD). */

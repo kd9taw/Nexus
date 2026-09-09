@@ -2561,6 +2561,10 @@ export interface FieldDayStatus {
    *  the log, which the claimed-bonus model cannot express, so their total is honestly
    *  short of the sponsor's — and an operator must not read a claimed score off a
    *  number that silently omits their bonuses. */
+  /** ⭐ How many multipliers this log has earned, by the ruleset's own rules and scopes.
+   *  `0` for a contest with no multiplier concept (both Field Day events) — which is why
+   *  the score line only shows the multiplier arithmetic when this is above zero. */
+  multCount?: number
   scoreNoteKey?: string
   /** The active ruleset's rules year + the rules data's `generated` stamp. */
   rulesYear?: number

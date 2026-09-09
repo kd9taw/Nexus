@@ -14,7 +14,7 @@ import type {
   LoggedQso,
 } from '../types'
 import { t, type MessageKey } from '../i18n'
-import { contestIMoved, fdLogManual, getLog, logQso, lookupPark, lookupParkLive, qrzLookup, resolveEntity, searchParks, setCwPeerInfo, type Park } from '../api'
+import { contestIMoved, contestLogManual, getLog, logQso, lookupPark, lookupParkLive, qrzLookup, resolveEntity, searchParks, setCwPeerInfo, type Park } from '../api'
 import { bandKey, callHistory, entitySlots, isNewEntity, modeKey } from '../features/callHistory'
 import { inDomain } from '../features/contestDomains'
 import { azimuthLabel, azimuthTo, isValidLoggedGrid } from '../grid'
@@ -246,13 +246,13 @@ interface Props {
     confirmed: boolean
   } | null
   /**
-   * When provided, the component enters FD mode: contacts go to fdLogManual()
+   * When provided, the component enters FD mode: contacts go to contestLogManual()
    * instead of the general logbook.  The `mode` prop determines the FD mode
    * code ('CW' in CwCockpit, 'PH' in PhoneCockpit).
    */
   fieldDay?: FieldDayStatus | null
   /**
-   * The FD mode code to pass to fdLogManual: the SCORING CLASS this position logs under.
+   * The FD mode code to pass to contestLogManual: the SCORING CLASS this position logs under.
    *
    * ⚠️ 'DIG' IS ONE OF THE THREE, and leaving it out was a silent scoring error. Field Day
    * scores CW, phone and digital as three classes, and the engine's `log_mode_at`
@@ -296,7 +296,7 @@ interface Props {
  * Shared rich log strip for the CW + Phone cockpits.
  *
  * When `fieldDay` is active (non-null) the strip shows Class + Section inputs
- * and routes the log through fdLogManual() — a dupe rejection shows the error
+ * and routes the log through contestLogManual() — a dupe rejection shows the error
  * toast. A "FD" chip on the strip signals contacts go to the FD log, not the
  * general logbook.
  *
@@ -901,29 +901,38 @@ export function LogEntry({
     }
 
     if (fdActive) {
-      // FD path: fdLogManual rejects on band+mode dupe. Class + section are MANDATORY — never log
+      // FD path: contestLogManual rejects on the ruleset's own dupe key. Every REQUIRED slot
+      // is mandatory — never log
       // a blank as the literal '?' (it would inflate the section multiplier), so bail until the
       // exchange is complete and the section is a real ARRL/RAC code.
       if (!fdExchangeOk) return
-      // ⚠️ THE TRANSPORT IS STILL FIELD DAY'S — `fd_log_manual(call, class, section, …)`,
-      // two positional slots. The strip's SHAPE is the session's receive order; its wire
-      // is the first two of those slots, which for Field Day are exactly CLASS and
-      // SECTION. A contest that receives something else needs a command that carries a
-      // field vector, and that lands with the contest that needs it (§11 item 8) rather
-      // than as an unused generalisation here.
-      const cls = (fdFields[fdReceives[0]?.key ?? ''] ?? '').trim().toUpperCase()
-      const sec = (fdFields[fdReceives[1]?.key ?? ''] ?? '').trim().toUpperCase()
+      // ⭐ THE TRANSPORT IS THE FIELD VECTOR — `contest_log_manual(call, fields, …)`,
+      // one pair per box the strip actually rendered, in the session's own receive
+      // order. It replaced `fd_log_manual`'s two positional slots, which could carry
+      // Field Day's CLASS and SECTION and nothing else: a QSO party receives RST + QTH
+      // and CQP receives a serial + QTH, so the first two slots of the wire meant a
+      // different thing per contest and the UI would have had to know which.
+      const ex = fdReceives.map(
+        (f) => [f.key, (fdFields[f.key] ?? '').trim().toUpperCase()] as [string, string],
+      )
       const fmode = fdMode ?? 'PH'
       // The on-air mode behind the class, for 'DIG' alone — see `fdSubmode`. Sent only with
       // that class so a CW or phone contact can never acquire one it has no meaning for.
       const fsub = fmode === 'DIG' ? fdSubmode : undefined
       const r = await withErrorToast(
-        () => fdLogManual(call, cls, sec, fmode, fsub),
+        () => contestLogManual(call, ex, fmode, fsub),
         t('logEntry.fd.failed'),
       )
       if (r) {
+        // The toast names what was copied, in receive order, whatever the slots are —
+        // it read `class`/`section` off two named locals, which for CQP would have
+        // announced a serial as a Field Day class.
         pushToast(
-          t('logEntry.fd.logged', { call, class: cls, section: sec, mode: fmode }),
+          t('logEntry.fd.logged', {
+            call,
+            exchange: ex.map(([, v]) => v).join(' '),
+            mode: fmode,
+          }),
           'success',
         )
         reset()
@@ -1072,7 +1081,7 @@ export function LogEntry({
   //
   // While-typing dupe verdict, zero IPC: the full own log already rides every
   // snapshot and the club-sync block ships club-ONLY keys, so both checks are
-  // plain lookups on data in hand. OWN dupe = the hard block fdLogManual will
+  // plain lookups on data in hand. OWN dupe = the hard block contestLogManual will
   // refuse (same key: call, band, mode class). CLUB dupe = another position
   // already worked them — N3FJP semantics, a WARNING only; logging proceeds
   // and the host keeps both rows.

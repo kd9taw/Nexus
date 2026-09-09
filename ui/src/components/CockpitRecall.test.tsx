@@ -102,6 +102,7 @@ vi.mock('../api', async (importOriginal) => {
     getCatCwUnprovenRigModels: vi.fn(async () => []),
     // LogEntry
     fdLogManual: vi.fn(async () => ({})),
+    contestLogManual: vi.fn(async () => ({})),
     logQso: vi.fn(async () => ({})),
     getLog: vi.fn(async () => priorQsos),
     lookupPark: vi.fn(async () => null),

@@ -97,7 +97,7 @@ import { pushToast, withErrorToast } from '../toast'
 import { setLocale, t, type MessageKey } from '../i18n'
 import { LOCALE_NATIVE_NAME, localeChoices, useLocale } from '../i18n/useLocale'
 import { T } from '../i18n/T'
-import { FD_EVENT_NAMES } from '../fdEvent'
+import { CONTESTS, isFieldDay } from '../fdEvent'
 
 /** The Cabrillo `CATEGORY-OPERATOR` tokens, in the order a sponsor's template lists
  *  them. INVARIANT: each goes into the file verbatim, so none is ever translated and
@@ -118,6 +118,7 @@ import { fetchLotwUsers, getLotwUsersStatus, type LotwUsersStatus } from '../api
 import { fetchFccStates, getFccStatesStatus, type FccStatesStatus } from '../api'
 import { fetchCty, getCtyStatus, type CtyStatus } from '../api'
 import { fetchFdRules, getFdRulesStatus, type FdRulesStatus } from '../api'
+import { getFdRuleset, type FdRulesetDto } from '../api'
 import { fetchTlesNow, getTleStatus, importTles, type TleStatus } from '../api'
 import { tleRefreshMessage } from '../features/tleMessages'
 import { elementBandParts } from '../features/elementBands'
@@ -1223,6 +1224,26 @@ export function SettingsPanel({
       window.removeEventListener(CREDENTIALS_CHANGED, pull)
     }
   }, [])
+
+  // ⭐ THE ROLE PREVIEW (§2.3). What role the SAVED settings would put this operator in,
+  // and the exchange that role would transmit — computed by the backend with the same
+  // constructor mode entry uses, never re-derived here, so the preview cannot reassure
+  // an operator about a role they are not in.
+  //
+  // It follows SAVED settings, which is the honest semantics: it answers "what happens
+  // if I start the contest now", and the answer changes when a save lands. Re-pulled on
+  // every save for exactly that reason.
+  const [savedTick, setSavedTick] = useState(0)
+  const [rulesetPreview, setRulesetPreview] = useState<FdRulesetDto | null>(null)
+  useEffect(() => {
+    let live = true
+    getFdRuleset()
+      .then((r) => live && setRulesetPreview(r))
+      .catch(() => {})
+    return () => {
+      live = false
+    }
+  }, [savedTick])
   // LoTW/eQSL passwords are write-only (kept in the OS keychain, never read back),
   // so they live in local state — not in `form`/Settings.
   const [lotwPw, setLotwPw] = useState('')
@@ -2186,6 +2207,9 @@ export function SettingsPanel({
   // Takes the form explicitly: setForm is async, so a caller that just built a new form must
   // hand it over rather than let this read a stale closure.
   const persistRadioForm = async (next: NonNullable<typeof form>) => {
+    // Every save moves whatever the backend derives from the saved settings — today the
+    // contest role preview, which is why it reads this rather than the form.
+    setSavedTick((n) => n + 1)
     if (editingRadioId != null && editingRadioId !== next.activeRadio) {
       const edited = next.radios?.find((r) => r.id === editingRadioId)
       // `withActiveRadioConfig` puts the ACTIVE radio's own config back in the flat fields, so
@@ -10127,29 +10151,28 @@ export function SettingsPanel({
                   contest is what decides the exchange, the dupe rule, the multiplier
                   universe and the Cabrillo headers, so it is the first thing on this
                   tab and Field Day Setup below is shown for the contests it describes.
-                  Two shipped contests today; the picker is what the families in later
-                  batches land in, rather than a second control beside this one.
+                  Six shipped contests: the two Field Day events and the four state QSO
+                  parties. The list is `CONTESTS` — the rules-file ids, in one place —
+                  so adding a contest is a rules-file row plus a line there, and nothing
+                  in this file learns a contest by name.
 
                   The contest NAMES are the events' own — invariant tokens, shared with
                   the header, never translated. */}
               <div className="settings-field">
                 <span className="settings-label">{t('settings.contestPick.contest.label')}</span>
                 <div className="theme-switcher" role="group" aria-label={t('settings.contestPick.contest.aria')}>
-                  {([
-                    { value: 'arrlfd', label: FD_EVENT_NAMES.arrlfd },
-                    { value: 'wfd',    label: FD_EVENT_NAMES.wfd },
-                  ] as { value: string; label: string }[]).map((ev) => (
+                  {CONTESTS.map((ev) => (
                     <button
-                      key={ev.value}
+                      key={ev.id}
                       type="button"
-                      className={`theme-chip${(form.fdEvent ?? 'arrlfd') === ev.value ? ' active' : ''}`}
-                      aria-pressed={(form.fdEvent ?? 'arrlfd') === ev.value}
+                      className={`theme-chip${(form.fdEvent || 'arrlfd') === ev.id ? ' active' : ''}`}
+                      aria-pressed={(form.fdEvent || 'arrlfd') === ev.id}
                       onClick={() => {
                         markDirty()
-                        setForm((prev) => prev ? { ...prev, fdEvent: ev.value } : prev)
+                        setForm((prev) => prev ? { ...prev, fdEvent: ev.id } : prev)
                       }}
                     >
-                      {ev.label}
+                      {ev.name}
                     </button>
                   ))}
                 </div>
@@ -10172,11 +10195,32 @@ export function SettingsPanel({
                   because one run of one contest under one callsign IS the entry. */}
               <div className="settings-field">
                 <span className="settings-label">{t('settings.contestPick.role.label')}</span>
+                {/* THE LIVE SESSION'S role wins when there is one — it is the role
+                    contacts are actually going out under. Otherwise the preview, which
+                    is what starting the contest right now would produce. A role id is
+                    an invariant token, as is the exchange it sends. */}
                 <span className="settings-hint">
-                  {fieldDay?.role
-                    ? t('settings.contestPick.role.value', { role: fieldDay.role })
+                  {(fieldDay?.role ?? rulesetPreview?.role)
+                    ? t('settings.contestPick.role.value', {
+                        role: fieldDay?.role || rulesetPreview?.role || '',
+                      })
                     : t('settings.contestPick.role.symmetric')}
                 </span>
+                {/* ⭐ WHAT THAT ROLE SENDS. A role id names a rule; this is the thing
+                    that goes on the air, and a wrong county is obvious here while it is
+                    still free to fix. */}
+                {!fieldDay && rulesetPreview?.exchange?.length ? (
+                  <span className="settings-hint mono">
+                    {rulesetPreview.exchange.join(' ')}
+                  </span>
+                ) : null}
+                {/* …and why no session could be built, if none could — the same
+                    sentence mode entry would refuse with, one tab earlier. */}
+                {!fieldDay && rulesetPreview?.problem ? (
+                  <span className="fd-section-warn" role="alert">
+                    {rulesetPreview.problem}
+                  </span>
+                ) : null}
               </div>
 
               <div className="settings-field">
@@ -10405,12 +10449,21 @@ export function SettingsPanel({
               </button>
               <span className="settings-hint">{t('settings.fieldDay.mode.hint')}</span>
             </label>
-            {form.fdActive && (!form.fdClass.trim() || !form.fdSection.trim()) && (
-              <p className="settings-note">
-                <T k="settings.fieldDay.needExchange" tags={{ b: <strong /> }} />
-              </p>
-            )}
+            {/* ⭐ CLASS + SECTION ARE FIELD DAY'S OWN EXCHANGE, so they are shown for the
+                two Field Day events and for nothing else. A QSO party sends a county or
+                a state, from Station data above; prompting for a Field Day class there
+                would be asking for a value nothing transmits. Everything else in this
+                section — the master switch that reveals the contest workspace, the power
+                tier, the bonuses — belongs to whichever contest is picked and stays. */}
+            {isFieldDay(form.fdEvent) &&
+              form.fdActive &&
+              (!form.fdClass.trim() || !form.fdSection.trim()) && (
+                <p className="settings-note">
+                  <T k="settings.fieldDay.needExchange" tags={{ b: <strong /> }} />
+                </p>
+              )}
             <div className="settings-grid">
+              {isFieldDay(form.fdEvent) && (
               <label className="settings-field">
                 <span className="settings-label">
                   {(form.fdEvent ?? 'arrlfd') === 'wfd'
@@ -10432,7 +10485,9 @@ export function SettingsPanel({
                     : t('settings.fieldDay.class.hint')}
                 </span>
               </label>
+              )}
 
+              {isFieldDay(form.fdEvent) && (
               <label className="settings-field">
                 <span className="settings-label">{t('settings.fieldDay.section.label')}</span>
                 <input
@@ -10460,6 +10515,7 @@ export function SettingsPanel({
                   {t('settings.fieldDay.section.hint', { count: FD_SECTION_OPTIONS.length })}
                 </span>
               </label>
+              )}
 
               <div className="settings-field">
                 <span className="settings-label">{t('settings.fieldDay.power.label')}</span>

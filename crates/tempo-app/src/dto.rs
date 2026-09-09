@@ -1359,6 +1359,14 @@ pub struct FieldDayStatus {
     pub event_start_unix: u64,
     #[serde(default)]
     pub event_end_unix: u64,
+    /// ⭐ **How many multipliers this log has earned** — the count the score is
+    /// multiplied by, summed over every universe the ruleset declares.
+    ///
+    /// `0` for an event with no multiplier concept (both Field Day events), which is
+    /// NOT the same as a zero multiplier: `Scoring::score` applies the count only when
+    /// the ruleset declares at least one rule, so a Field Day total is untouched.
+    #[serde(default)]
+    pub mult_count: u32,
     /// ⭐ **An i18n key naming what this contest's computed score LEAVES OUT**, or
     /// empty when the score is complete (both Field Day events, OhQP, CQP).
     ///

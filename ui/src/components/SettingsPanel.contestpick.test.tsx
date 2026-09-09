@@ -128,11 +128,45 @@ describe('the contest picker', () => {
     renderPanel()
     await openContesting()
     const group = await groupFor('Contest')
+    // ⭐ SIX contests: the two Field Day events and the four state QSO parties batch 8
+    // shipped as rulesets and nobody could select. The names are the sponsors' own.
     expect([...group.querySelectorAll('button')].map((b) => b.textContent)).toEqual([
       'ARRL Field Day',
       'Winter Field Day',
+      'California QSO Party',
+      'Ohio QSO Party',
+      'Tennessee QSO Party',
+      'Texas QSO Party',
     ])
     expect((await chip('Contest', 'Winter Field Day')).getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('picks a QSO party, and Field Day Setup drops the class and section it does not send', async () => {
+    api.get('getSettings').mockImplementation(() =>
+      Promise.resolve({ ...defaultSettings, fdEvent: 'tnqp' } as never),
+    )
+    renderPanel()
+    await openContesting()
+    expect((await chip('Contest', 'Tennessee QSO Party')).getAttribute('aria-pressed')).toBe(
+      'true',
+    )
+    // CLASS and SECTION are Field Day's own exchange. A Tennessee QSO Party operator
+    // sends a county, from Station data — prompting for a Field Day class here would be
+    // asking for a value nothing transmits.
+    expect(screen.queryByPlaceholderText('1D')).toBeNull()
+    // The ARRL/RAC section input, found by ITS OWN datalist rather than by the `WI`
+    // placeholder — Station data's state box carries the same placeholder and is
+    // exactly the control a QSO party operator does fill in.
+    expect(document.querySelector('#fd-section-list')).toBeNull()
+    // POSITIVE CONTROL: the same panel on a Field Day event still shows both.
+    cleanup()
+    api.get('getSettings').mockImplementation(() =>
+      Promise.resolve({ ...defaultSettings, fdEvent: 'arrlfd' } as never),
+    )
+    renderPanel()
+    await openContesting()
+    expect(await screen.findByPlaceholderText('1D')).not.toBeNull()
+    expect(document.querySelector('#fd-section-list')).not.toBeNull()
   })
 
   it('lives in ONE place — the picker is not also inside Field Day Setup', async () => {

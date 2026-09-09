@@ -52,6 +52,7 @@ const api = vi.hoisted(() => ({
   getSatTrackStatus: vi.fn((): Promise<SatTrackStatus | null> => Promise.resolve(null)),
   fetchTlesNow: vi.fn(() => Promise.resolve(null)),
   fdLogManual: vi.fn(async () => ({})),
+  contestLogManual: vi.fn(async () => ({})),
   logQso: vi.fn(async () => ({})),
   getLog: vi.fn(async () => []),
   lookupPark: vi.fn(async () => null),

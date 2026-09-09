@@ -29,6 +29,7 @@ import type { AppSnapshot, FieldDayStatus } from '../types'
 // "not one of these was called", which is the only form of that claim worth making.
 vi.mock('../api', () => ({
   fdLogManual: vi.fn(() => Promise.resolve({})),
+  contestLogManual: vi.fn(() => Promise.resolve({})),
   contestIMoved: vi.fn(() => Promise.resolve({})),
   logQso: vi.fn(() => Promise.resolve({})),
   getLog: vi.fn(() => Promise.resolve([])),
@@ -185,7 +186,18 @@ describe('3 — the exchange persists across log-and-clear', () => {
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Log FD' }))
     })
-    expect(api.fdLogManual).toHaveBeenCalledWith('K1ABC', '2A', 'EMA', 'PH', undefined)
+    // ⭐ THE WIRE IS THE FIELD VECTOR — one `[slot, value]` pair per box the strip
+    // rendered, in the session's own receive order. Field Day's two positional slots
+    // could not carry a QSO party's RST/QTH or CQP's serial/QTH.
+    expect(api.contestLogManual).toHaveBeenCalledWith(
+      'K1ABC',
+      [
+        ['CLASS', '2A'],
+        ['SECTION', 'EMA'],
+      ],
+      'PH',
+      undefined,
+    )
     expect(callBox().value).toBe('')
     expect(box('Class').value).toBe('2A')
     expect(box('Section').value).toBe('EMA')

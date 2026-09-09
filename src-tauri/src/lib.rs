@@ -4439,7 +4439,8 @@ async fn fetch_fd_rules() -> Result<FdRulesStatus, String> {
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct FdRulesetDto {
-    /// "arrlfd" | "wfd" — the snapshot's event convention.
+    /// The rules-file event id — `"arrlfd"`, `"wfd"`, `"tnqp"`, `"ohqp"`, `"cqp"`,
+    /// `"txqp"`.
     event: String,
     rules_year: u16,
     /// On-air modes this event's rules ban outright (uppercase ADIF-style).
@@ -4447,21 +4448,48 @@ struct FdRulesetDto {
     spotting_allowed: bool,
     cluster_allowed: bool,
     enforcement: String,
+    /// ⭐ **THE ROLE THIS OPERATOR WOULD RUN AS, previewed BEFORE the contest starts.**
+    ///
+    /// A role is derived from where the operator says they are, and a wrong one sends a
+    /// wrong exchange for the whole contest — so it is shown on the tab where the
+    /// location is typed, not only on the strip once contacts are already going out.
+    /// `""` for a symmetric contest (both Field Day events), which is the shape the
+    /// role block already renders as "nothing to choose".
+    role: String,
+    /// ⭐ **The exchange that role would SEND**, in send order, as the operator would
+    /// hear it. The role id alone is a token; this is the thing that goes on the air,
+    /// and reading `599 WILL` beside "in_state" is what makes a wrong county obvious
+    /// while it is still free to fix.
+    exchange: Vec<String>,
+    /// Why no session could be built from the current settings — the same sentence the
+    /// mode entry would refuse with, shown before the operator gets there. `""` when
+    /// the configuration is good.
+    problem: String,
 }
 
 fn fd_ruleset_dto(fd_event: &str) -> FdRulesetDto {
+    // ⭐ The rules-file id first — `"tnqp"` names a real ruleset and
+    // `FdEvent::from_code` would have called it ARRL Field Day, reporting a QSO party's
+    // banned modes, assistance policy and rules year as Field Day's. The `FdEvent`
+    // fallback is what an empty or unknown setting resolves to, unchanged.
     let event = tempo_core::fieldday::FdEvent::from_code(fd_event);
-    let rs = tempo_core::fd_rules::ruleset(event, tempo_core::fd_rules::CURRENT_RULES_YEAR);
+    let id = fd_event.trim();
+    let rs = tempo_core::fd_rules::ruleset_by_id(id, tempo_core::fd_rules::CURRENT_RULES_YEAR)
+        .unwrap_or_else(|| {
+            tempo_core::fd_rules::ruleset(event, tempo_core::fd_rules::CURRENT_RULES_YEAR)
+        });
     FdRulesetDto {
-        event: match event {
-            tempo_core::fieldday::FdEvent::WinterFd => "wfd".into(),
-            tempo_core::fieldday::FdEvent::ArrlFd => "arrlfd".into(),
-        },
+        event: rs.event.to_string(),
         rules_year: rs.rules_year,
         banned_modes: rs.banned_modes.iter().map(|m| m.to_string()).collect(),
         spotting_allowed: rs.assistance.spotting_allowed,
         cluster_allowed: rs.assistance.cluster_allowed,
         enforcement: rs.enforcement.to_string(),
+        // Filled by `get_fd_ruleset`, which has the settings this needs. The bare
+        // ruleset facts stay reachable without them.
+        role: String::new(),
+        exchange: Vec::new(),
+        problem: String::new(),
     }
 }
 
@@ -4471,7 +4499,24 @@ fn fd_ruleset_dto(fd_event: &str) -> FdRulesetDto {
 #[tauri::command(async)]
 fn get_fd_ruleset(state: State<'_, SharedEngine>) -> Result<FdRulesetDto, String> {
     let eng = engine_lock(&state);
-    Ok(fd_ruleset_dto(&eng.settings().fd_event))
+    let mut dto = fd_ruleset_dto(&eng.settings().fd_event);
+    // ⭐ THE ROLE PREVIEW. It is built by the SAME constructor mode entry uses, on the
+    // same station data, so what Settings shows is what will go on the air — a second
+    // derivation here is exactly how the preview would come to reassure an operator
+    // about a role they are not in.
+    if let Some(rs) = tempo_core::fd_rules::ruleset_by_id(
+        dto.event.as_str(),
+        tempo_core::fd_rules::CURRENT_RULES_YEAR,
+    ) {
+        match tempo_core::contest::ContestSession::for_ruleset(rs, &eng.contest_station_data()) {
+            Ok(s) => {
+                dto.role = s.role().id.to_string();
+                dto.exchange = s.my_exchange.iter().map(|v| v.raw.clone()).collect();
+            }
+            Err(e) => dto.problem = e,
+        }
+    }
+    Ok(dto)
 }
 
 /// The LEGACY per-profile TLE cache (a bare `Vec<Tle>` array, pre-snapshot
@@ -18129,6 +18174,30 @@ fn fd_log_manual(
     Ok(eng.snapshot())
 }
 
+/// ⭐ **Log a contest contact whose received exchange is a FIELD VECTOR.**
+///
+/// `fields` is `[[slot id, raw], …]` in the session role's receive order — which is
+/// exactly the order the entry strip renders its boxes in, so the strip sends back what
+/// it collected without a per-contest mapping anywhere in the UI.
+///
+/// [`fd_log_manual`] stays for the two positional Field Day slots the FT sequencer and
+/// the club host hand off the air.
+#[tauri::command(async)]
+fn contest_log_manual(
+    state: State<'_, SharedEngine>,
+    call: String,
+    fields: Vec<(String, String)>,
+    mode: String,
+    submode: Option<String>,
+) -> Result<AppSnapshot, String> {
+    let mut eng = engine_lock(&state);
+    let sub = submode.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    if !eng.contest_log_manual(&call, &fields, &mode, sub)? {
+        return Err(format!("{call} is a dupe on this band/mode"));
+    }
+    Ok(eng.snapshot())
+}
+
 /// What one merge into the general logbook did (§3.2).
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -22166,6 +22235,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             set_hunt_target,
             clear_hunt_target,
             fd_log_manual,
+            contest_log_manual,
             fd_merge_to_general,
             fd_set_upload,
             contest_i_moved,

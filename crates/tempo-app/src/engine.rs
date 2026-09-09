@@ -8458,6 +8458,69 @@ impl Engine {
         Ok(logged)
     }
 
+    /// ⭐ **Log a contact whose received exchange is a FIELD VECTOR** — the manual path
+    /// for a contest that receives something other than `(class, section)`.
+    ///
+    /// `fields` is `(slot id, raw)` in the role's receive order, which is exactly what
+    /// the entry strip renders and therefore exactly what it can send back. The two
+    /// positional arguments of [`fd_log_manual`](Self::fd_log_manual) are the shape the
+    /// FT sequencer and the club host hand off the air and stay; a QSO party's four
+    /// slots have no way to ride them.
+    pub fn contest_log_manual(
+        &mut self,
+        call: &str,
+        fields: &[(String, String)],
+        mode: &str,
+        submode: Option<&str>,
+    ) -> Result<bool, String> {
+        self.sync_fd_band(); // a knob-QSY between contacts must stamp the REAL band
+        let now = now_unix_secs();
+        let Mode::FieldDay { station, .. } = &mut self.mode else {
+            return Err("Contest mode is not active".into());
+        };
+        let logged =
+            station
+                .log
+                .log_fields_at(call, fields, mode, submode.unwrap_or_default(), 0, now);
+        if logged {
+            self.persist_fd_log(); // journal every contact — a crash loses nothing
+        }
+        Ok(logged)
+    }
+
+    /// ⭐ **The operator's station data, as the sources a ruleset may name** (§3.4).
+    ///
+    /// One place, so the session constructor and anything else that fills a sent slot
+    /// read the same fields under the same names — the settings names the rules file
+    /// itself declares (`fd_rules::SENT_SLOT_SETTINGS`).
+    ///
+    /// `dxcc` is `contest_qth_state == "DX"`, which is the value that field's own doc
+    /// already lists ("the sponsor's own abbreviation (`WI`, `ON`, `DX`)"). It is a
+    /// DECLARATION either way: an operator who has filled nothing in is not a DX
+    /// entrant, and the catch-all role they fall to is the ruleset's own answer for
+    /// "none of the above", not an inference this makes on their behalf.
+    pub fn contest_station_data(&self) -> tempo_core::contest::StationData {
+        let st = self.settings.contest_qth_state.trim();
+        tempo_core::contest::StationData {
+            fd_class: self.settings.fd_class.clone(),
+            fd_section: self.settings.fd_section.clone(),
+            contest_qth_county: self.settings.contest_qth_county.clone(),
+            contest_qth_state: st.to_string(),
+            contest_check: self.settings.contest_check.clone(),
+            contest_cq_zone: match self.settings.contest_cq_zone {
+                0 => String::new(),
+                z => z.to_string(),
+            },
+            contest_itu_zone: match self.settings.contest_itu_zone {
+                0 => String::new(),
+                z => z.to_string(),
+            },
+            contest_power: self.settings.contest_power.clone(),
+            mygrid: self.settings.mygrid.clone(),
+            dxcc: st.eq_ignore_ascii_case("DX"),
+        }
+    }
+
     /// Field Day score = QSO points × power multiplier + claimed bonuses.
     /// (Section count is the reported multiplier-equivalent; ARRL FD totals
     /// QSO-points × power, plus bonus points, and lists sections separately.)
@@ -8465,15 +8528,16 @@ impl Engine {
         let Mode::FieldDay { station, .. } = &self.mode else {
             return None;
         };
-        let rs = tempo_core::fd_rules::ruleset(
-            station.log.event,
-            tempo_core::fd_rules::CURRENT_RULES_YEAR,
-        );
-        let (qso_pts, powered) = rs
+        let rs = station.log.ruleset();
+        // ⭐ The MULTIPLIERS are in the total now. Neither Field Day event declares one,
+        // so this is byte-identical there; a QSO party's whole score is its QSO points
+        // times its multiplier count, and `Scoring::score` is the one place that is
+        // applied.
+        let (qso_pts, _powered, _mults, scored) = rs
             .scoring
-            .qso_and_powered(station.log.score_rows(), self.settings.fd_power_mult);
+            .score(station.log.score_rows(), self.settings.fd_power_mult);
         let bonus = rs.bonus_points(&self.settings.fd_bonuses);
-        Some((qso_pts, powered, bonus))
+        Some((qso_pts, scored, bonus))
     }
 
     // ----- the general-log seam (§3.2, §18.1) --------------------------------
@@ -9468,9 +9532,17 @@ impl Engine {
             // rather than arm a sequencer with nothing to sequence.
             self.require_qso_capable()?;
         }
-        // The Field Day exchange goes ON THE AIR — refuse to start the mode on a
-        // blank class/section rather than transmit somebody else's defaults.
+        // The exchange goes ON THE AIR — refuse to start the mode on a blank or
+        // out-of-domain one rather than transmit somebody else's defaults.
+        //
+        // ⚠️ For Field Day this stays a class/section check with Field Day's own
+        // wording, because the two events are shipped software with users and this is
+        // the sentence their operators have been reading. Every OTHER contest is
+        // refused by `ContestSession::for_ruleset` below, which names the slot and the
+        // value it could not accept — a more useful message than this one, but not one
+        // worth changing a shipped refusal for.
         if spec.starts_with("fieldday")
+            && matches!(self.settings.fd_event.trim(), "" | "arrlfd" | "wfd")
             && (self.settings.fd_class.trim().is_empty()
                 || self.settings.fd_section.trim().is_empty())
         {
@@ -9501,11 +9573,26 @@ impl Engine {
         let session = match &self.mode {
             Mode::FieldDay { station, .. } => station.log.session.clone(),
             _ => {
-                let mut s = ContestSession::field_day(
-                    tempo_core::fieldday::FdEvent::from_code(&self.settings.fd_event),
-                    &self.settings.fd_class,
-                    &self.settings.fd_section,
-                );
+                // ⭐ THE CONTEST THE OPERATOR PICKED, whichever it is. The picker writes
+                // `fd_event` and this is the one place it is turned into a session, so
+                // adding a fifth contest is a rules-file row and no code at all.
+                //
+                // A ruleset id the table does not hold — a rules file that dropped a
+                // party, a hand-edited settings.json — falls back to Field Day rather
+                // than refusing the mode, which is the same degradation
+                // `fd_rules::ruleset_by_id`'s own doc describes: the operator loses the
+                // party they picked, not Field Day.
+                let mut s = match tempo_core::fd_rules::ruleset_by_id(
+                    self.settings.fd_event.trim(),
+                    tempo_core::fd_rules::CURRENT_RULES_YEAR,
+                ) {
+                    Some(rs) => ContestSession::for_ruleset(rs, &self.contest_station_data())?,
+                    None => ContestSession::field_day(
+                        tempo_core::fieldday::FdEvent::from_code(&self.settings.fd_event),
+                        &self.settings.fd_class,
+                        &self.settings.fd_section,
+                    ),
+                };
                 // ⭐ WHEN THIS SESSION BEGAN — the bound the session-scoped B4 sweep
                 // reads (§3.1). A session left at `start_unix: 0` is not bounded at
                 // all, and the DUPE badge silently reverts to the lifetime B4 it
@@ -16239,13 +16326,16 @@ impl Engine {
             Mode::FieldDay { station, running } => {
                 s.mode = OpMode::FieldDay;
                 let log = &station.log;
-                let rs = tempo_core::fd_rules::ruleset(
-                    log.event,
-                    tempo_core::fd_rules::CURRENT_RULES_YEAR,
-                );
-                let (qso_pts, powered) = rs
+                // The SESSION's ruleset — the only lookup that can name a contest
+                // `FdEvent` has no arm for (`FieldDayLog::ruleset`).
+                let rs = log.ruleset();
+                // ⭐ `scored` is the total AFTER the post-multiplier and the
+                // multipliers: for both Field Day events that is the power-tier total
+                // it has always been (neither declares a multiplier), and for a QSO
+                // party it is the points × mults the sponsor's rules ask for.
+                let (qso_pts, _powered, mult_count, scored) = rs
                     .scoring
-                    .qso_and_powered(log.score_rows(), self.settings.fd_power_mult);
+                    .score(log.score_rows(), self.settings.fd_power_mult);
                 let bonus = rs.bonus_points(&self.settings.fd_bonuses);
                 // The exchange and the role this session is running — read ONCE here,
                 // so the strip's boxes, the sent display and the multiplier boards
@@ -16268,14 +16358,17 @@ impl Engine {
                     sections: log.sections(),
                     worked_sections: log.worked_sections(),
                     points: qso_pts,
-                    event: if matches!(log.event, tempo_core::fieldday::FdEvent::WinterFd) {
-                        "wfd".into()
-                    } else {
-                        "arrlfd".into()
-                    },
-                    powered_points: powered,
+                    // ⭐ How many multipliers this log has earned, by the ruleset's own
+                    // rules and scopes. 0 for an event that has no such concept, which
+                    // is both Field Day events.
+                    mult_count,
+                    // ⭐ The RULES-FILE event id, off the session — `"tnqp"`, not the
+                    // two-arm Field Day enum this read before, which reported every QSO
+                    // party as ARRL Field Day to every surface downstream.
+                    event: log.session.event_id.clone(),
+                    powered_points: scored,
                     bonus_points: bonus,
-                    total_score: powered + bonus,
+                    total_score: scored + bonus,
                     event_start_unix: event_window.start_unix,
                     event_end_unix: event_window.end_unix,
                     rules_year: rs.rules_year,

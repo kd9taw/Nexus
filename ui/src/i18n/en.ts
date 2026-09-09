@@ -929,7 +929,7 @@ export const EN = {
   'logEntry.fd.needClass': 'Enter their Field Day class to log.',
   'logEntry.fd.badSection':
     'Section "{{section}}" isn\'t a known ARRL/RAC section — required to log.',
-  'logEntry.fd.logged': 'FD: logged {{call}} {{class}}/{{section}} ({{mode}})',
+  'logEntry.fd.logged': 'Logged {{call}} {{exchange}} ({{mode}})',
   'logEntry.fd.failed': 'FD log failed',
   'logEntry.fd.dupe.own': 'Dupe: {{call}} is already in this position\'s log on {{band}} {{mode}}',
   'logEntry.fd.dupe.club': 'Club dupe: another position already worked {{call}} on {{band}} {{mode}} — logging is allowed but adds no points',
@@ -2523,6 +2523,12 @@ export const EN = {
 
   'fieldDay.score.qsos': 'QSOs',
   'fieldDay.score.sections': 'Sections',
+  // The multiplier tile and line, for a contest whose ruleset declares multipliers. Both
+  // Field Day events declare none and show neither: a "× 0 mults" on a Field Day score
+  // would be arithmetic that contest does not do.
+  'fieldDay.score.mults': 'Mults',
+  'fieldDay.score.mathMults':
+    'QSO pts <b>{{qsoPts}}</b> × mults <b>{{multCount}}</b> = <total>{{totalScore}}</total>',
   // Winter Field Day scores by objectives at submission, so its line states the raw count
   // instead of the ARRL power×+bonus arithmetic — a different statement, not a shortened one.
   'fieldDay.score.wfd':

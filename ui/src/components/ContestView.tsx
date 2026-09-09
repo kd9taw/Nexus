@@ -627,6 +627,8 @@ interface FdScore {
   claimedBonusIds: string[]
   bonusPoints: number
   totalScore: number
+  /** ⭐ How many multipliers the ruleset counted — 0 when it declares none. */
+  multCount: number
 }
 
 /** Score components from the snapshot (new fields); fall back to computed if absent. */
@@ -639,7 +641,19 @@ function computeFdScore(fieldDay: FieldDayStatus | null, settings: Settings | nu
     .filter((b) => claimedBonusIds.includes(b.id))
     .reduce((sum, b) => sum + b.points, 0)
   const totalScore = fieldDay?.totalScore ?? poweredPoints + bonusPoints
-  return { fdPowerMult, qsoPts, poweredPoints, claimedBonusIds, bonusPoints, totalScore }
+  // ⭐ The multiplier count off the ruleset — 0 for a contest that declares none, which
+  // is what switches the tile and the score line between Field Day's arithmetic and a
+  // QSO party's.
+  const multCount = fieldDay?.multCount ?? 0
+  return {
+    fdPowerMult,
+    qsoPts,
+    poweredPoints,
+    claimedBonusIds,
+    bonusPoints,
+    totalScore,
+    multCount,
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1135,7 +1149,7 @@ export function FieldDayScoreboard({
   const isWfd = (fieldDay?.event ?? '') === 'wfd'
   const modes = useMemo(() => modeCounts(log), [log])
   const workedSet = useMemo(() => workedSectionSet(fieldDay), [fieldDay])
-  const { fdPowerMult, qsoPts, poweredPoints, bonusPoints, totalScore } = computeFdScore(
+  const { fdPowerMult, qsoPts, poweredPoints, bonusPoints, totalScore, multCount } = computeFdScore(
     fieldDay,
     settings,
   )
@@ -1204,10 +1218,22 @@ export function FieldDayScoreboard({
           <span className="fd-score-val">{fieldDay?.qsoCount ?? 0}</span>
           <span className="fd-score-label">{t('fieldDay.score.qsos')}</span>
         </div>
-        <div className="fd-score">
-          <span className="fd-score-val">{fieldDay?.sections ?? 0}</span>
-          <span className="fd-score-label">{t('fieldDay.score.sections')}</span>
-        </div>
+        {/* ⭐ MULTIPLIERS when the ruleset has them, SECTIONS when it does not. The
+            sections tile is Field Day's worked-sections count, which is a display count
+            and not a multiplier (neither FD event has one); a QSO party's multiplier
+            total IS its score's other factor, so the tile shows the number that is doing
+            the work rather than one that means nothing for the contest on screen. */}
+        {multCount > 0 ? (
+          <div className="fd-score">
+            <span className="fd-score-val">{multCount}</span>
+            <span className="fd-score-label">{t('fieldDay.score.mults')}</span>
+          </div>
+        ) : (
+          <div className="fd-score">
+            <span className="fd-score-val">{fieldDay?.sections ?? 0}</span>
+            <span className="fd-score-label">{t('fieldDay.score.sections')}</span>
+          </div>
+        )}
         {/* Per-mode chips — a count and a mode code, both invariant. */}
         <div className="fd-mode-chips">
           {modes.dig > 0 && <span className="fd-mode-chip dig">{modes.dig} {FD_MODE_CODES.dig}</span>}
@@ -1215,7 +1241,20 @@ export function FieldDayScoreboard({
           {modes.ph > 0 && <span className="fd-mode-chip ph">{modes.ph} {FD_MODE_CODES.ph}</span>}
         </div>
         {/* Score math */}
-        {isWfd ? (
+        {multCount > 0 ? (
+          /* ⭐ A CONTEST WITH MULTIPLIERS scores points × mults. Showing Field Day's
+             power×+bonus line here would print `× power ×1` for a contest that has no
+             power multiplier and omit the factor that actually decides the total. */
+          <div className="fd-score-math">
+            <span className="fd-score-math-line">
+              <T
+                k="fieldDay.score.mathMults"
+                tags={{ b: <strong />, total: <strong className="fd-score-total" /> }}
+                vals={{ qsoPts, multCount, totalScore }}
+              />
+            </span>
+          </div>
+        ) : isWfd ? (
           /* WFD scores by OBJECTIVES (QSOs × (multipliers+1)) — we don't track
              operator counts/objectives, so showing ARRL power×+bonus math would
              claim a number WFD rules never produce. Show the honest raw counts. */
