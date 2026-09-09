@@ -1,3 +1,4 @@
+import { RemoteRecall } from '../remote-web/RemoteRecall'
 import { useStationControl } from '../stationAccess'
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every reading in this
 // cockpit is DATA and stays in the code — the dial, the audio offsets in Hz, the band, the
@@ -874,8 +875,9 @@ export function OperateCockpit({
   })
     ? (snap.qso?.dxcall ?? null)
     : null
-  const recallCard = control && shownRecallCall ? (
-    <OperateRecall snap={snap} call={shownRecallCall} mode={tier} onOpenLog={onOpenLogbook} />
+  const recallCard = shownRecallCall ? (control
+    ? <OperateRecall snap={snap} call={shownRecallCall} mode={tier} onOpenLog={onOpenLogbook} />
+    : <RemoteRecall snap={snap} call={shownRecallCall} mode={tier} onOpenLog={onOpenLogbook} bounded />
   ) : null
 
   return (
@@ -1319,7 +1321,7 @@ export function OperateCockpit({
             side rail is gone — otherwise the survivor keeps its 2fr/1fr track and the
             removed panel's space is never actually reclaimed. */}
         <div
-          className={`cockpit-lower ${layoutMode}`}
+          className={`cockpit-lower ${layoutMode}${control ? '' : ' remote-cockpit-lower'}`}
           data-cols={dataCols}
           ref={layoutMode === 'classic' ? lowerClassicRef : undefined}
           style={layoutMode === 'classic' ? classicColStyle() : undefined}

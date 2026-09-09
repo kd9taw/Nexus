@@ -14,6 +14,13 @@
 .remote-application-status span { flex: 1 1 18em; }
 .remote-application-status button { min-height: 48px; }
 .remote-view-unavailable { padding: 1em; overflow: auto; }
+/* The hosted status strip consumes shell height. At pinned zoom the FT header
+   and content can exceed the remaining box; allow the existing shell to scroll
+   that deficit instead of clipping its recall rail below the window. */
+.remote-workspace .layout.single.operate-cockpit { overflow-y: auto; }
+/* A stacked Tx-message column must scroll its content rather than paint over
+   the following recall rail when the effective viewport is narrow. */
+.remote-workspace .cockpit-qsocol { overflow-y: auto; }
 .app[data-remote-stale="true"] > :not(.remote-application-status) {
   visibility: hidden;
   pointer-events: none;

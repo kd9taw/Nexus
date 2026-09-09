@@ -11,11 +11,11 @@ import type { StreamCheckpoint } from './application-stream-relay'
 import { STREAM_TOPICS } from './application-stream-protocol'
 import { ApplicationQueryRelay } from './application-query-relay'
 import type { QueryCheckpoint } from './application-query-relay'
-import { QUERY_COMMAND } from './application-query-protocol'
+import { QUERY_COMMAND, RECALL_COMMAND } from './application-query-protocol'
 
 type Pending = { requestId: string; forwardId: string; command: ApplicationCommand; at: number; delivered: boolean }
 type LegacyCheckpoint = { version: 1; ready: boolean; windowAt: number; count: number; pending: Pending | null }
-export type ApplicationCheckpoint = LegacyCheckpoint | StreamCheckpoint | { version: 3; stream: StreamCheckpoint; query: QueryCheckpoint }
+export type ApplicationCheckpoint = LegacyCheckpoint | StreamCheckpoint | { version: 3 | 4; stream: StreamCheckpoint; query: QueryCheckpoint }
 type Browser = LegacyCheckpoint & { peer: Peer }
 export class ApplicationRelay {
   private station: { peer: Peer; version: number } | null = null
@@ -37,10 +37,10 @@ export class ApplicationRelay {
     }
     this.expire(now)
     this.stream.sync(station && station.version >= 2 ? station.peer : null, observers, now)
-    this.query.sync(station?.version === 3 ? station.peer : null, observers, now)
+    this.query.sync(station && station.version >= 3 ? station.peer : null, observers, now, station?.version ?? 0)
   }
   restore(sessionId: string, saved: ApplicationCheckpoint): void {
-    if (saved.version === 3) { this.stream.restore(sessionId, saved.stream); this.query.restore(sessionId, saved.query); return }
+    if (saved.version === 3 || saved.version === 4) { this.stream.restore(sessionId, saved.stream); this.query.restore(sessionId, saved.query); return }
     if (saved.version === 2) { this.stream.restore(sessionId, saved); return }
     const browser = this.browsers.get(sessionId)
     if (!browser || saved.version !== 1) throw new Error('invalidApplicationCheckpoint')
@@ -49,7 +49,7 @@ export class ApplicationRelay {
   checkpoint(sessionId: string): ApplicationCheckpoint | undefined {
     const stream = this.stream.checkpoint(sessionId)
     const query = this.query.checkpoint(sessionId)
-    if (stream && query) return { version: 3, stream, query }
+    if (stream && query) return { version: query.version ?? 3, stream, query }
     if (stream) return stream
     const browser = this.browsers.get(sessionId)
     if (!browser) return
@@ -63,14 +63,14 @@ export class ApplicationRelay {
     if (!browser) return
     try {
       if (new TextEncoder().encode(JSON.stringify(message)).length > APPLICATION_REQUEST_BYTES) throw new Error('invalidApplicationRequest')
-      if (message.type === 'applicationHello' && (Object.keys(message).length === 1 || (Object.keys(message).length === 2 && [2, 3].includes(message.version as number)))) {
+      if (message.type === 'applicationHello' && (Object.keys(message).length === 1 || (Object.keys(message).length === 2 && [2, 3, 4].includes(message.version as number)))) {
         if (browser.ready) throw new Error('applicationAlreadyNegotiated')
         browser.ready = true
-        const version = message.version === 3 && this.station?.version === 3 ? 3 : Number(message.version) >= 2 && this.station && this.station.version >= 2 ? 2 : this.station && this.station.version >= 1 ? 1 : 0
+        const version = Math.min(Number(message.version ?? 1), this.station?.version ?? 0)
         if (version >= 2) this.stream.add(sessionId, now)
-        if (version === 3) this.query.add(sessionId, now)
+        if (version >= 3) this.query.add(sessionId, now, version as 3 | 4)
         browser.peer.send(JSON.stringify({ type: 'applicationCapabilities', version,
-          commands: version === 3 ? [...STREAM_TOPICS, QUERY_COMMAND] : version === 2 ? STREAM_TOPICS : version === 1 ? APPLICATION_COMMANDS : [] }))
+          commands: version === 4 ? [...STREAM_TOPICS, QUERY_COMMAND, RECALL_COMMAND] : version === 3 ? [...STREAM_TOPICS, QUERY_COMMAND] : version === 2 ? STREAM_TOPICS : version === 1 ? APPLICATION_COMMANDS : [] }))
         return
       }
       if (message.type === 'applicationAck' && Object.keys(message).length === 2 && typeof message.requestId === 'string') {

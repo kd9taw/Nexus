@@ -417,3 +417,12 @@
   max-height: min(22em, 45%);
   overflow-y: auto;
 }
+
+/* The hosted observer adds session chrome above the FT shell. At pinned zoom
+   its lower grid can otherwise collapse to zero and leave the rail outside
+   even the shell's scroll range. Reserve a yielding content region, following
+   the pane grid's 18em floor, with a viewport share for short windows. The
+   remote shell provides the interposed scroller; native FT sizing is unchanged. */
+.remote-cockpit-lower {
+  min-height: min(18em, calc(0.35 * var(--vh-eff)));
+}

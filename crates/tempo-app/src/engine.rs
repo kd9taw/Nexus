@@ -19051,6 +19051,11 @@ impl Engine {
         self.station.logbook.records()
     }
 
+    /// Retain across chunked reads to detect any intervening log mutation/replacement.
+    pub fn log_read_token(&self) -> std::sync::Arc<()> {
+        self.station.logbook.read_token()
+    }
+
     /// See [`StationCore::get_log`].
     pub fn get_log(&self) -> Vec<QsoRecord> {
         self.station.get_log()

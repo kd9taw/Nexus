@@ -569,8 +569,11 @@ impl UploadState {
 /// An in-memory logbook backed by an ADIF file.
 #[derive(Debug, Clone, Default)]
 pub struct Logbook {
-    records: Vec<QsoRecord>,
+    records: Records,
 }
+
+mod records;
+use records::Records;
 
 impl Logbook {
     pub fn new() -> Self {
@@ -579,6 +582,11 @@ impl Logbook {
 
     pub fn records(&self) -> &[QsoRecord] {
         &self.records
+    }
+    /// Identity for a consistent, chunked immutable read. Compare with Arc::ptr_eq
+    /// after each chunk and before returning; a changed token means retry the read.
+    pub fn read_token(&self) -> std::sync::Arc<()> {
+        self.records.read_token()
     }
     /// Mutable access to the records (for in-place upload-state stamping).
     pub fn records_mut(&mut self) -> &mut [QsoRecord] {
@@ -1087,7 +1095,8 @@ impl Logbook {
             Self::scrub_log_in_place(path, bytes.len(), clean);
         }
         Self {
-            records: parse_adif(&String::from_utf8_lossy(clean.as_deref().unwrap_or(&bytes))),
+            records: parse_adif(&String::from_utf8_lossy(clean.as_deref().unwrap_or(&bytes)))
+                .into(),
         }
     }
 
@@ -3015,6 +3024,55 @@ fn unix_from_ymdhms(y: i32, m: u32, d: u32, h: u32, mi: u32, s: u32) -> u64 {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn chunked_read_identity_tracks_mutation_and_clone_divergence_without_changing_adif() {
+        let mut book = Logbook::new();
+        book.add(rec("W1AW", "20m", 100));
+        let before = book.adif();
+        let token = book.read_token();
+        assert_eq!(book.records().len(), 1);
+        assert!(std::sync::Arc::ptr_eq(&token, &book.read_token()));
+        assert_eq!(
+            book.adif(),
+            before,
+            "retaining a read identity cannot change stored contacts"
+        );
+        let mut copy = book.clone();
+        copy.records_mut()[0].notes = Some("different copy".into());
+        assert!(std::sync::Arc::ptr_eq(&token, &book.read_token()));
+        assert!(!std::sync::Arc::ptr_eq(&token, &copy.read_token()));
+        assert_eq!(book.adif(), before);
+        for mutate in [
+            (|b: &mut Logbook| {
+                b.mark_qsl_card(0, true);
+            }) as fn(&mut Logbook),
+            |b| {
+                b.records_mut()[0].notes = Some("new note".into());
+            },
+            |b| {
+                b.add(rec("K1ABC", "40m", 200));
+            },
+            |b| {
+                b.delete(0);
+            },
+            |b| {
+                b.reconcile_disk(&adif_record(&rec("ZL1ABC", "20m", 300)));
+            },
+            |b| {
+                b.clear();
+            },
+        ] {
+            let old = book.read_token();
+            mutate(&mut book);
+            assert!(!std::sync::Arc::ptr_eq(&old, &book.read_token()));
+        }
+        let replacement = Logbook::new();
+        assert!(!std::sync::Arc::ptr_eq(
+            &book.read_token(),
+            &replacement.read_token()
+        ));
+    }
 
     /// #31's last unfolded example: BPSK31 is a logger spelling of ADIF's PSK31 — one mode,
     /// two strings. Re-importing a log round-tripped through such a logger must not double it.
@@ -6628,7 +6686,8 @@ mod operator_split_tests {
                 rec("W9AAA", Some("W1ABC")),
                 rec("W9BBB", Some("G0PQR")),
                 rec("W9CCC", Some("W1ABC")),
-            ],
+            ]
+            .into(),
         };
         assert_eq!(
             lb.operators(),
@@ -6642,7 +6701,7 @@ mod operator_split_tests {
     #[test]
     fn operators_invents_no_bucket_for_unstamped_contacts() {
         let lb = Logbook {
-            records: vec![rec("W9AAA", None), rec("W9BBB", Some("  "))],
+            records: vec![rec("W9AAA", None), rec("W9BBB", Some("  "))].into(),
         };
         assert!(lb.operators().is_empty());
     }
@@ -6654,7 +6713,8 @@ mod operator_split_tests {
                 rec("W9AAA", Some("W1ABC")),
                 rec("W9BBB", Some("G0PQR")),
                 rec("W9CCC", None),
-            ],
+            ]
+            .into(),
         };
         let out = lb.adif_for_operator("W1ABC");
         assert!(out.contains("W9AAA"), "their own contact is missing");
@@ -6672,7 +6732,7 @@ mod operator_split_tests {
     #[test]
     fn matching_an_operator_ignores_case_and_stray_spaces() {
         let lb = Logbook {
-            records: vec![rec("W9AAA", Some(" w1abc "))],
+            records: vec![rec("W9AAA", Some(" w1abc "))].into(),
         };
         assert!(lb.adif_for_operator("W1ABC").contains("W9AAA"));
         assert_eq!(lb.operators(), vec!["W1ABC".to_string()]);
@@ -6684,7 +6744,7 @@ mod operator_split_tests {
     #[test]
     fn an_operator_with_no_contacts_gets_an_empty_file_not_everyone_elses() {
         let lb = Logbook {
-            records: vec![rec("W9AAA", Some("W1ABC"))],
+            records: vec![rec("W9AAA", Some("W1ABC"))].into(),
         };
         let out = lb.adif_for_operator("K9NOBODY");
         assert!(!out.contains("W9AAA"));

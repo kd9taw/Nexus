@@ -5,6 +5,7 @@ use serde_json::{json, Value};
 use std::collections::{BinaryHeap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+mod recall;
 
 const PAGE_BYTES: usize = 256 * 1024;
 const CACHE_BYTES: usize = 16 * 1024 * 1024;
@@ -20,6 +21,7 @@ pub enum Collection {
     Log,
     Entities,
     Health,
+    Recall,
 }
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -36,7 +38,17 @@ impl Request {
         super::transport::identifier(&self.request_id)
             && self.search.len() <= 96
             && !self.search.chars().any(char::is_control)
-            && (self.collection == Collection::Log || (self.search.is_empty() && !self.unconfirmed))
+            && (if self.collection == Collection::Recall {
+                (3..=32).contains(&self.search.len())
+                    && self
+                        .search
+                        .bytes()
+                        .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'/')
+                    && !self.unconfirmed
+                    && self.cursor.is_none()
+            } else {
+                self.collection == Collection::Log || (self.search.is_empty() && !self.unconfirmed)
+            })
             && self.after.is_none_or(|n| {
                 self.collection == Collection::Decodes && n <= 9_007_199_254_740_991
             })
@@ -224,7 +236,9 @@ impl Publisher {
         } else {
             // Share one recent capture across observers. A fresh page-zero request
             // eventually sees local log changes; an existing cursor stays sealed.
-            let reuse = if request.collection == Collection::Decodes {
+            let reuse = if request.collection == Collection::Recall {
+                0 // Explicit selection/Refresh must see intervening local log changes.
+            } else if request.collection == Collection::Decodes {
                 500
             } else if request.collection == Collection::Needs {
                 15000
@@ -300,7 +314,7 @@ impl Publisher {
             if reply.len() <= PAGE_BYTES {
                 return Ok(reply);
             }
-            if end <= offset + 1 {
+            if request.collection == Collection::Recall || end <= offset + 1 {
                 return Err("applicationTooLarge");
             }
             end -= 1;
@@ -317,6 +331,9 @@ impl Publisher {
             _ => Err("applicationUnavailable"),
         };
         let rows = match request.collection {
+            Collection::Recall => {
+                return recall::read_engine(engine, &request.search)?.encode();
+            }
             Collection::Decodes => {
                 return Ok(self
                     .journal

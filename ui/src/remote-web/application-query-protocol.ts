@@ -5,8 +5,9 @@ import type { Json } from './application-protocol'
 import { streamExact, streamId } from './application-stream-protocol'
 
 export const QUERY_COMMAND = 'get_remote_page'
+export const RECALL_COMMAND = 'get_remote_recall'
 export const COLLECTIONS = ['decodes', 'needs', 'spots', 'log', 'entities', 'health'] as const
-export type Collection = typeof COLLECTIONS[number]
+export type Collection = typeof COLLECTIONS[number] | 'recall'
 export const QUERY_MAX_BYTES = 256 * 1024
 export const QUERY_ROWS = 128
 export const QUERY_MAX_ROWS = 3000
@@ -15,7 +16,7 @@ export type QueryArgs = { collection: Collection; cursor: string | null; search:
 export type QueryRequest = QueryArgs & { type: 'applicationQuery'; requestId: string }
 export type QueryPage = { type: 'applicationPage'; requestId: string; collection: Collection; snapshotId: string;
   offset: number; total: number; retained: number; nextCursor: string | null; ageMs: number; rows: Json[]; meta: Json }
-export const collection = (v: unknown): v is Collection => COLLECTIONS.includes(v as Collection)
+export const collection = (v: unknown, version = 3): v is Collection => COLLECTIONS.includes(v as typeof COLLECTIONS[number]) || (version === 4 && v === 'recall')
 const integer = (v: unknown) => Number.isSafeInteger(v) && Number(v) >= 0
 export function queryCursor(v: unknown): v is string {
   if (typeof v !== 'string') return false
@@ -23,18 +24,19 @@ export function queryCursor(v: unknown): v is string {
   const [id, offset] = parts
   return parts.length === 2 && streamId(id) && /^[1-9][0-9]{0,3}$/.test(offset ?? '') && Number(offset) < QUERY_MAX_ROWS
 }
-export function queryRequest(v: Record<string, unknown>): QueryRequest {
+export function queryRequest(v: Record<string, unknown>, version = 3): QueryRequest {
   streamExact(v, ['type', 'requestId', 'collection', 'cursor', 'search', 'unconfirmed', 'after'])
-  if (v.type !== 'applicationQuery' || !streamId(v.requestId) || !collection(v.collection) ||
+  if (v.type !== 'applicationQuery' || !streamId(v.requestId) || !collection(v.collection, version) ||
     (v.cursor !== null && !queryCursor(v.cursor)) || typeof v.search !== 'string' || new TextEncoder().encode(v.search).length > 96 ||
     /[\p{Cc}\uD800-\uDFFF]/u.test(v.search) || typeof v.unconfirmed !== 'boolean' ||
-    (v.collection !== 'log' && (v.search !== '' || v.unconfirmed)) ||
+    (v.collection === 'recall' ? !/^[A-Z0-9/]{3,32}$/.test(v.search) || v.unconfirmed || v.cursor !== null :
+      v.collection !== 'log' && (v.search !== '' || v.unconfirmed)) ||
     (v.after !== null && (v.collection !== 'decodes' || !integer(v.after)))) throw new Error('invalidApplicationQuery')
   return v as QueryRequest
 }
-export function queryPage(v: Record<string, unknown>): QueryPage {
+export function queryPage(v: Record<string, unknown>, version = 3): QueryPage {
   streamExact(v, ['type', 'requestId', 'collection', 'snapshotId', 'offset', 'total', 'retained', 'nextCursor', 'ageMs', 'rows', 'meta'])
-  if (v.type !== 'applicationPage' || !streamId(v.requestId) || !streamId(v.snapshotId) || !collection(v.collection) ||
+  if (v.type !== 'applicationPage' || !streamId(v.requestId) || !streamId(v.snapshotId) || !collection(v.collection, version) ||
     !integer(v.offset) || !integer(v.total) || !integer(v.retained) || Number(v.retained) > QUERY_MAX_ROWS || Number(v.total) < Number(v.retained) ||
     !integer(v.ageMs) || Number(v.ageMs) >= APPLICATION_TIMEOUT_MS || !Array.isArray(v.rows) || v.rows.length > QUERY_ROWS ||
     !validApplicationJson(v.rows) || !validApplicationJson(v.meta) ||

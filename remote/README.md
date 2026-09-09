@@ -34,7 +34,10 @@ reads: `get_snapshot`, `get_settings`, `get_band_plan`, `get_spectrum_row` and
 `get_meters`. Version 2 adds the passive `get_scope_snapshot` and `get_cw_state`.
 Version 3 adds `get_remote_page`, negotiated only when the station also advertises
 `x-nexus-application-query-version: 1`. Its collection channel is independent of
-the unchanged seven stream topics. Older browsers still negotiate versions 1/2.
+the unchanged seven stream topics. Version 4 adds `get_remote_recall` when the
+station also advertises `x-nexus-application-recall-version: 1`. The original six
+collections remain closed in version 3; only version 4 accepts `recall`.
+Older browsers and stations still negotiate versions 1/2/3.
 An older pilot keeps its existing FT observation; an older monitor-only installer
 reports the workspace update requirement without losing compact observation.
 
@@ -63,8 +66,8 @@ application values or contact history. After hibernation, a new watch epoch requ
 full samples; old epochs cannot refresh a restored session. A slow or failed browser is retired
 independently of the station and other approved observers.
 
-Collection queries address only decodes, needs, spots, logbook, DXCC locations and
-feed health. Pages contain at most 128 rows and 256 KiB. Each browser has one
+Collection queries address only decodes, needs, spots, logbook, DXCC locations,
+feed health and exact-call recall. Pages contain at most 128 rows and 256 KiB. Each browser has one
 outstanding query/result, a three-second deadline and a 16-request/second ceiling;
 the room also caps the aggregate at 32/second using persisted per-browser counters.
 The station runs one collection worker separately from the live socket loop.
@@ -80,6 +83,17 @@ counts when capped. Award/privilege/source calculations are shared with native
 Nexus. Needs scoring runs after releasing the engine lock. Reads do not invoke
 shared-log recovery, write QSOs, import, confirm, export or upload contacts.
 
+Cockpit recall returns the newest 20 exact-call contacts, full-log worked and
+confirmation counts, band/mode and entity context, and the newest nonempty note.
+It copies at most 128 contacts per engine-lock acquisition and computes DXCC
+context after releasing the lock. A retained opaque log token detects mutation
+or replacement between chunks, including edits that leave the count unchanged;
+an inconsistent or over-budget read is refused. The read has a two-second total
+deadline and bounded summaries, and never reports a truncated summary as a new
+entity/band/mode. Recall bypasses capture reuse: selection or **Refresh** reads
+the current log. It does not poll. Names, locations and notes come from prior
+contacts; this is not a station callbook lookup.
+
 The independent decode display journal retains up to 3,000 rows from the current
 Remote connection, with a unique session/context identifier and monotonic sequence.
 It samples existing snapshot publications; it is not an offline or lossless decode
@@ -92,7 +106,9 @@ the decoder transcript, sent-text history and callsign candidates. CW/Phone shar
 the station scope, meters, settings, amplifier status and observed band activity.
 Needed, Spots and the paged Logbook now support read-only browsing. Existing QRZ
 profile links open in the browser, without contacting the station or its vault.
-QSO entry, cockpit recall, memories, rotator and voice-keyer/audio data remain
+FT selection and CW/Phone callsign entry now use the existing Nexus recall card;
+its contact rows open the existing filtered Logbook. Stale sessions and changed
+callsigns discard old results. QSO entry, memories, rotator and voice-keyer/audio data remain
 unavailable and are identified in their existing panes. Other navigation destinations display
 their availability limit, and the full Settings panel is not mounted with partial
 settings. Station controls, including the existing amplifier controls, are
@@ -104,7 +120,7 @@ This read adapter is an incremental integration boundary, not paid-service
 completion. Before enabling remote operation, the protocol needs explicit station
 control leases, expiring and deduplicated commands, native authorization at
 execution, and attended transmitter/amplifier acceptance. Full read parity also
-needs cockpit recall, additional history sources and remaining per-feature data contracts. Shared
+needs additional history sources and remaining per-feature data contracts. Shared
 subscriptions require measured load and WAN acceptance before commercial capacity
 claims. Audio needs its own negotiated media path. Billing must
 materialize service entitlement separately from browser trust and station control;

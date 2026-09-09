@@ -2945,7 +2945,7 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   }
 
   return (
-    <div className="app" data-remote-stale={remote?.stale || undefined}>
+    <div className={`app${remote ? ' remote-workspace' : ''}`} data-remote-stale={remote?.stale || undefined}>
       {remote?.status}
       {remote?.collections && (effectiveView === 'needed' || effectiveView === 'spots') && <div className="remote-application-status"><CollectionStatus name={effectiveView === 'needed' ? 'needs' : 'spots'} /></div>}
       <TopBar

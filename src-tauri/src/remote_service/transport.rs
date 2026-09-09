@@ -196,6 +196,11 @@ pub async fn connected(
         "x-nexus-application-query-version",
         "1".parse().map_err(|_| "invalidResponse")?,
     );
+    // Preserve all previous advertisements for rollback to a v1/v2/v3 service.
+    request.headers_mut().insert(
+        "x-nexus-application-recall-version",
+        "1".parse().map_err(|_| "invalidResponse")?,
+    );
     let config = WebSocketConfig::default()
         .max_message_size(Some(512))
         .max_frame_size(Some(512))

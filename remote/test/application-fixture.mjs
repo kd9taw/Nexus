@@ -46,3 +46,12 @@ export function collectionFixture() {
       grid:'RF72',country:'New Zealand',rv:-1,mine:false,ap:false,lowConf:false} }], meta:{generation:'fixture:1',band:'80m',tier:'FT8',dropped:0,latestSequence:1} },
   }
 }
+
+export function recallFixture(call) {
+  const rows = Array.from({length:20}, (_,i) => ({call, whenUnix:1788940800-i*86400, band:'40m', mode:'FT8', freqMhz:7.074,
+    confirmed:false, awardConfirmed:false, timeKnown:true, name:'', qth:'', grid:'FN31', country:'United States',
+    comment:'Previous contact', rstSent:'-10', rstRcvd:'-12'}))
+  return { rows, total:2030, meta: { call, entity:'United States', latestNote:'Recall browser note',
+    history:{count:2030,workedBefore:true,lastUnix:1788940800,confirmedCount:10,bands:['40m'],modes:['FT8']},
+    workedBandModes:[['40m','FT8']], slots:{workedEver:true,bandUnknown:false,bandsWorked:['40M'],modesWorked:['FT8']} } }
+}

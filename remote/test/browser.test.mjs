@@ -10,7 +10,7 @@ import { join } from 'node:path'
 import { createHash, randomBytes } from 'node:crypto'
 import WebSocket from 'ws'
 import { runtime } from './runtime.mjs'
-import { applicationFixture, collectionFixture } from './application-fixture.mjs'
+import { applicationFixture, collectionFixture, recallFixture } from './application-fixture.mjs'
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 async function chrome() {
@@ -61,7 +61,7 @@ async function chrome() {
   } catch(error) { ws?.close(); if(!exited)process.kill(-child.pid,'SIGTERM'); await rm(profile,{recursive:true,force:true,maxRetries:8,retryDelay:100}); throw error }
 }
 
-for (const applicationVersion of [1, 2, 3]) test(`compiled hosted browser v${applicationVersion} completes PKCE, local device approval, observation and viewport checks`, { timeout: 120000 }, async () => {
+for (const applicationVersion of [1, 2, 3, 4]) test(`compiled hosted browser v${applicationVersion} completes PKCE, local device approval, observation and viewport checks`, { timeout: 120000 }, async () => {
   const app=await runtime(), artifacts=process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS ? join(process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS, `v${applicationVersion}`) : undefined
   let browser, station, producing=true, producer, applicationProducer
   const results=[]
@@ -71,7 +71,8 @@ for (const applicationVersion of [1, 2, 3]) test(`compiled hosted browser v${app
     const shell = await fetch(app.origin,{signal:AbortSignal.timeout(3000)})
     assert.equal(shell.status,200)
     assert.match(await shell.text(), /Nexus Remote/)
-    station=await pair.native.open(pair.stationId, undefined, 101, { 'x-nexus-application-version': '1', ...(applicationVersion >= 2 ? { 'x-nexus-application-stream-version': '2' } : {}), ...(applicationVersion === 3 ? { 'x-nexus-application-query-version': '1' } : {}) })
+    const stationHeaders = { 'x-nexus-application-version': '1', ...(applicationVersion >= 2 ? { 'x-nexus-application-stream-version': '2' } : {}), ...(applicationVersion >= 3 ? { 'x-nexus-application-query-version': '1' } : {}), ...(applicationVersion === 4 ? { 'x-nexus-application-recall-version': '1' } : {}) }
+    station=await pair.native.open(pair.stationId, undefined, 101, stationHeaders)
     let code=null, oauth=null, exchanges=0, providerFailure=false, exceptions=0, acknowledgements=0, unexpectedMessages=0
     const applicationTraffic = { reads: 0, acks: 0, subscriptions: 0, batches: 0, bytes: 0, byCommand: {}, maxResponseBytes: 0 }
     browser.on('Runtime.exceptionThrown', event=>{exceptions++; console.error(event.exceptionDetails?.exception?.description ?? 'Browser runtime exception')})
@@ -104,7 +105,7 @@ for (const applicationVersion of [1, 2, 3]) test(`compiled hosted browser v${app
       try {
         const message = JSON.parse(event.response.payloadData)
         if (message.type === 'ack' && Object.keys(message).sort().join(',') === 'epoch,sequence,type') acknowledgements++
-        else if (message.type === 'applicationHello' && (Object.keys(message).length === 1 || (Object.keys(message).length === 2 && [2,3].includes(message.version)))) {}
+        else if (message.type === 'applicationHello' && (Object.keys(message).length === 1 || (Object.keys(message).length === 2 && [2,3,4].includes(message.version)))) {}
         else if (message.type === 'applicationRead' && Object.keys(message).length === 4) applicationTraffic.reads++
         else if (message.type === 'applicationQuery' && Object.keys(message).length === 7) applicationTraffic.queries=(applicationTraffic.queries??0)+1
         else if (message.type === 'applicationQueryAck' && Object.keys(message).length === 2) {}
@@ -115,6 +116,8 @@ for (const applicationVersion of [1, 2, 3]) test(`compiled hosted browser v${app
       } catch { unexpectedMessages++ }
     })
     await browser.call('Page.addScriptToEvaluateOnNewDocument',{source:`
+      window.__socketClosures=[];const originalWebSocket=window.WebSocket;
+      window.WebSocket=class extends originalWebSocket{constructor(...args){super(...args);this.addEventListener('close',e=>window.__socketClosures.push({code:e.code,reason:e.reason}))}};
       window.__frameDelay=0;
       const originalRaf=window.requestAnimationFrame.bind(window),originalCancel=window.cancelAnimationFrame.bind(window),delayedFrames=new Map();
       window.requestAnimationFrame=callback=>{const id=originalRaf(time=>{if(!window.__frameDelay){callback(time);return}delayedFrames.set(id,setTimeout(()=>{delayedFrames.delete(id);callback(performance.now())},window.__frameDelay))});return id};
@@ -128,7 +131,7 @@ for (const applicationVersion of [1, 2, 3]) test(`compiled hosted browser v${app
     `},session)
     const evaluate=async expression=>{
       const value=await browser.call('Runtime.evaluate',{expression,returnByValue:true,awaitPromise:true},session)
-      if(value.exceptionDetails)throw new Error('Browser evaluation failed')
+      if(value.exceptionDetails)throw new Error('Browser evaluation failed: '+String(value.exceptionDetails.exception?.description??value.exceptionDetails.text).split('\n')[0])
       return value.result?.value
     }
     // useViewport publishes dimensions on an animation frame. A fixed sleep can
@@ -175,32 +178,38 @@ for (const applicationVersion of [1, 2, 3]) test(`compiled hosted browser v${app
     if(artifacts){await mkdir(artifacts,{recursive:true});await geometry(390,844);const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-account.png'),Buffer.from(shot.data,'base64'))}
     const fixture=JSON.parse(await readFile(new URL('../../ui/src/remote-monitor/fixtures.v2.json',import.meta.url),'utf8')).spe
     let sequence=0
-    producer=(async()=>{while(producing){let watch;try{watch=await station.take(value=>value.type==='watch'&&value.enabled,1000)}catch{continue}await sleep(200);if(!producing)break;station.send({type:'publication',requestId:watch.requestId,frame:{...fixture,source:'native',sequence:++sequence}})}})()
+    producer=(async()=>{while(producing){const source=station;let watch;try{watch=await source.take(value=>value.type==='watch'&&value.enabled,1000)}catch{continue}await sleep(200);if(!producing)break;if(source!==station||source.closed)continue;source.send({type:'publication',requestId:watch.requestId,frame:{...fixture,source:'native',sequence:++sequence}})}})()
     const applicationData = await applicationFixture()
     const collections = collectionFixture()
+    if (applicationVersion === 4) applicationData.get_snapshot.stations = [{ call:'W1AW', grid:'FN31', snr:-8, lastHeardSlot:0,
+      heardCount:2, presence:'heard', worked:true, workedBand:false, country:'United States', tier:'FT8', freqHz:1500 }]
     const querySnapshots = new Map()
     let applicationRevision = 1, applicationAvailable = true
+    const withheld = []
     let streamWatch = null
     const sentAt = new Map(), bases = new Map()
     const intervals = { get_snapshot:500, get_settings:1000, get_band_plan:1000, get_spectrum_row:100, get_meters:200, get_scope_snapshot:100, get_cw_state:200 }
-    applicationProducer=(async()=>{while(producing){let request;try{request=await station.take(value=>['applicationRead','applicationWatch','applicationCredit','applicationQuery'].includes(value.type),1000)}catch{continue}
-      if (!applicationAvailable || !producing) continue
+    applicationProducer=(async()=>{while(producing){const source=station;let request;try{request=await source.take(value=>['applicationRead','applicationWatch','applicationCredit','applicationQuery'].includes(value.type),1000)}catch{continue}
+      if(source!==station||source.closed)continue
+      if (!applicationAvailable || !producing) { withheld.push({type:request.type,collection:request.collection});continue }
       if (request.type === 'applicationQuery') {
-        assert.equal(applicationVersion,3)
+        assert.ok(applicationVersion >= 3)
+        if (request.collection === 'recall') assert.equal(applicationVersion, 4)
         const [givenId, offsetText] = (request.cursor??'').split(':')
         const offset = Number(offsetText??0), snapshotId=givenId||crypto.randomUUID()
         if (!givenId) {
-          let rows=collections[request.collection].rows
+          const collection = request.collection === 'recall' ? recallFixture(request.search) : collections[request.collection]
+          let rows=collection.rows
           if(request.collection==='log') rows=rows.filter(q=>(!request.unconfirmed||!q.awardConfirmed)&&(!request.search||q.call.toLowerCase().includes(request.search.toLowerCase())))
           if(request.collection==='decodes'&&request.after!==null) rows=rows.filter(q=>q.sequence>request.after)
-          querySnapshots.set(snapshotId,{...collections[request.collection], rows})
+          querySnapshots.set(snapshotId,{...collection, rows})
           if(querySnapshots.size>16) querySnapshots.delete(querySnapshots.keys().next().value)
         }
         const capture=querySnapshots.get(snapshotId)
         assert.ok(capture,'browser must keep a valid sealed cursor')
         const rows=capture.rows.slice(offset,offset+128), end=offset+rows.length
-        station.send({type:'applicationPage',requestId:request.requestId,collection:request.collection,snapshotId,offset,
-          total:capture.rows.length,retained:capture.rows.length,nextCursor:end<capture.rows.length?`${snapshotId}:${end}`:null,
+        source.send({type:'applicationPage',requestId:request.requestId,collection:request.collection,snapshotId,offset,
+          total:capture.total??capture.rows.length,retained:capture.rows.length,nextCursor:end<capture.rows.length?`${snapshotId}:${end}`:null,
           ageMs:0,rows,meta:{capturedAgeMs:0,source:capture.meta}})
         continue
       }
@@ -225,10 +234,11 @@ for (const applicationVersion of [1, 2, 3]) test(`compiled hosted browser v${app
           if (!updates.length) await sleep(100)
         }
         if (!producing) break
+        if(source!==station||source.closed)continue
         const response={type:'applicationBatch',watchId:streamWatch.watchId,requestId:request.requestId,updates}
         const bytes=Buffer.byteLength(JSON.stringify(response));applicationTraffic.bytes+=bytes;applicationTraffic.batches++
         applicationTraffic.maxResponseBytes=Math.max(applicationTraffic.maxResponseBytes,bytes)
-        station.send(response);continue
+        source.send(response);continue
       }
       assert.ok(Object.hasOwn(applicationData, request.command), 'only the closed read vocabulary may reach the station')
       applicationTraffic.byCommand[request.command] = (applicationTraffic.byCommand[request.command] ?? 0) + 1
@@ -236,7 +246,7 @@ for (const applicationVersion of [1, 2, 3]) test(`compiled hosted browser v${app
       const response={type:'applicationResult',requestId:request.requestId,command:request.command,revision:applicationRevision,
         baseRevision:delta?applicationRevision:null,ageMs:0,data:delta?{}:data,removed:[]}
       const bytes=Buffer.byteLength(JSON.stringify(response));applicationTraffic.bytes+=bytes;applicationTraffic.maxResponseBytes=Math.max(applicationTraffic.maxResponseBytes,bytes)
-      station.send(response)
+      source.send(response)
     }})()
     await geometry(390,844)
     await click(button('Observe station'))
@@ -291,6 +301,12 @@ for (const applicationVersion of [1, 2, 3]) test(`compiled hosted browser v${app
         await click(button(label))
         await until(`!!document.querySelector('.${mode}-cockpit')`)
         if (mode === 'cw') await until(`document.querySelector('.cw-cockpit [role="log"]')?.textContent.includes('W1AW')`)
+        if (applicationVersion === 4) {
+          await click(`document.querySelector('.${mode}-cockpit .le-call')`)
+          await browser.call('Input.insertText',{text:'W1AW'},session)
+          await until(`document.querySelector('.${mode}-cockpit .recall-card')?.textContent.includes('Recall browser note')`)
+          assert.ok(await evaluate(`document.querySelector('.${mode}-cockpit .recall-card').textContent.includes('Showing 20 of 2030')`))
+        }
         await until(`document.querySelector('.ph-scope canvas')?.width>0 || document.querySelector('.ph-scope-canvas')?.width>0`)
         for (const [width,height] of [[390,844],[1024,768],[1280,800],[3440,1440]]) {
           await browser.call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false},session)
@@ -317,7 +333,7 @@ for (const applicationVersion of [1, 2, 3]) test(`compiled hosted browser v${app
       assert.ok(applicationTraffic.subscriptions>0 && applicationTraffic.batches>0 && applicationTraffic.acks>0, 'positive control: real subscriptions, native batches and browser ACKs flowed')
       assert.equal(applicationTraffic.reads,0, 'v2 panel polling stays within the browser')
     }
-    if (applicationVersion === 3) {
+    if (applicationVersion >= 3) {
       await until(`document.querySelector('.operate-host:not([hidden])')?.textContent.includes('CQ ZL1HIST RF72')`)
       for(const [label,selector,call] of [['Needed','.needed-panel','W1AW'],['Spots','.spots-panel','W1AW'],['Logbook','.logbook','K1T129']]) {
         await click(button(label))
@@ -343,12 +359,54 @@ for (const applicationVersion of [1, 2, 3]) test(`compiled hosted browser v${app
       await click(button('FT'))
       await until(`!!document.querySelector('.operate-host:not([hidden])')`)
     }
+    if (applicationVersion === 4) {
+      await click(`document.querySelectorAll('.cockpit-layout-toggle button')[1]`)
+      await until(`!!document.querySelector('.or-row[aria-selected]')`)
+      await click(`document.querySelector('.or-row[aria-selected]')`)
+      try { await until(`document.querySelector('.operate-host .recall-card')?.textContent.includes('Recall browser note')`) }
+      catch (error) {
+        console.log('Recall selection diagnostic', await evaluate(`({rows:[...document.querySelectorAll('.or-row')].map(e=>({selected:e.getAttribute('aria-selected'),call:e.querySelector('.or-call')?.textContent})),cards:[...document.querySelectorAll('.operate-host .recall-card')].map(e=>e.textContent),sides:document.querySelectorAll('.operate-host .cockpit-side').length,status:document.querySelector('.remote-application-status')?.textContent})`))
+        throw error
+      }
+      for (const layout of [0,1]) {
+        await click(`document.querySelectorAll('.cockpit-layout-toggle button')[${layout}]`)
+        for (const [width,height] of [[1024,768],[1280,800],[1200,1390],[3440,1440]]) for (const zoom of [1,1.75]) {
+          await browser.call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false},session)
+          await evaluate(`document.documentElement.style.setProperty('--ui-zoom','${zoom}');window.dispatchEvent(new Event('resize'))`)
+          await settledLayout()
+          // At narrow effective widths Nexus stacks its panes in an existing
+          // scroller. Check reachability, not an assumption that every pane is
+          // above the fold. elementFromPoint also detects clipping/occlusion.
+          await evaluate(`document.querySelector('.operate-host .recall-card').scrollIntoView({block:'nearest',inline:'nearest'})`)
+          await settledLayout()
+          const shape = await evaluate(`(()=>{const card=document.querySelector('.operate-host .recall-card'),r=card.getBoundingClientRect(),header=document.querySelector('.remote-application-status').getBoundingClientRect();return {docW:document.documentElement.scrollWidth,docH:document.documentElement.scrollHeight,cardTop:r.top,cardBottom:r.bottom,cardHeight:r.height,headerTop:header.top,reachable:card.contains(document.elementFromPoint(r.left+r.width/2,r.top+r.height/2))}})()`)
+          const reachable=shape.docW<=width+1 && shape.docH<=height+1 && shape.cardHeight>0 && shape.cardTop>=0 && shape.cardBottom<=height+1 && shape.headerTop>=0 && shape.reachable
+          if(!reachable){console.log('Recall geometry diagnostic',await evaluate(`(()=>{const card=document.querySelector('.operate-host .recall-card'),r=card.getBoundingClientRect(),chain=[];for(let e=card;e;e=e.parentElement){const c=getComputedStyle(e),b=e.getBoundingClientRect();chain.push({class:e.className,top:b.top,bottom:b.bottom,scroll:e.scrollHeight,client:e.clientHeight,y:c.overflowY})}return {chain,hit:document.elementFromPoint(r.left+r.width/2,r.top+r.height/2)?.className}})()`));if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-nexus-recall-failure.png'),Buffer.from(shot.data,'base64'))}}
+          assert.ok(reachable, `recall remains reachable inside its existing pane: ${JSON.stringify({layout,width,height,zoom,shape})}`)
+          results.push({recall:true,layout,width,height,zoom,shape})
+        }
+      }
+      await browser.call('Emulation.setDeviceMetricsOverride',{width:1280,height:800,deviceScaleFactor:1,mobile:false},session)
+      await evaluate(`document.documentElement.style.setProperty('--ui-zoom','1');window.dispatchEvent(new Event('resize'))`)
+      await settledLayout()
+      if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-nexus-recall.png'),Buffer.from(shot.data,'base64'))}
+      await click(`document.querySelector('.operate-host .recall-log-row')`)
+      await until(`!!document.querySelector('.logbook')`)
+      assert.ok(await evaluate(`[...document.querySelectorAll('.logbook input')].some(e=>e.value==='W1AW')`),'recall navigates to the existing filtered Logbook')
+      await click(button('FT'))
+    }
     applicationAvailable=false
     await until(`document.querySelector('.app')?.dataset.remoteStale==='true'`)
     assert.equal(await evaluate(`getComputedStyle(document.querySelector('.operate-host')).visibility`),'hidden','stale operating values must be hidden')
     applicationAvailable=true;applicationRevision++
     applicationData.get_snapshot.radio.dialMhz=7.074;applicationData.get_snapshot.radio.band='40m'
-    await until(`document.querySelector('.app')?.dataset.remoteStale!=='true' && document.body.textContent.includes('7.074')`)
+    // Withholding a station credit can legitimately expire BOTH sockets. The
+    // fixture must reconnect the native endpoint as the real controller does;
+    // restoring an in-memory boolean cannot revive an expired WebSocket.
+    station.close()
+    station=await pair.native.open(pair.stationId, undefined, 101, stationHeaders)
+    try { await until(`document.querySelector('.app')?.dataset.remoteStale!=='true' && document.body.textContent.includes('7.074')`) }
+    catch (error) { console.log('Station recovery diagnostic',withheld,await evaluate(`({closures:window.__socketClosures,stale:document.querySelector('.app')?.dataset.remoteStale,status:document.querySelector('.remote-application-status')?.textContent})`));throw error }
     assert.equal(exceptions,0,'actual Nexus must render and reconnect without runtime exceptions')
     await click(button('Disconnect and return to stations'))
     await until(`!!${button('Observe station')}`)

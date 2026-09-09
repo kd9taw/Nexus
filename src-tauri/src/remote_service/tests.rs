@@ -223,6 +223,24 @@ fn cloud_runtime_probe() {
     std::io::stdout().flush().unwrap();
     for line in lines {
         let value: serde_json::Value = serde_json::from_str(&line.unwrap()).unwrap();
+        // Test-only input to the in-memory engine. The production controller has
+        // no import action; the response supplies desktop truth for parity checks.
+        if value["type"] == "seedRecallLog" {
+            let mut e = engine.lock().unwrap();
+            e.import_adif(value["adif"].as_str().unwrap());
+            let records = e.get_log();
+            drop(e);
+            let mut log: Vec<_> = records
+                .into_iter()
+                .map(tempo_app::dto::LoggedQso::from)
+                .collect();
+            for q in &mut log {
+                q.entity = propagation::dxcc::resolve(&q.call).map(|i| i.entity.to_string());
+            }
+            println!("REMOTE_TEST:{}", json!({ "log": log }));
+            std::io::stdout().flush().unwrap();
+            continue;
+        }
         let result = match value["type"].as_str() {
             Some("status") => service.status(),
             Some("vaultFailure") => {

@@ -1,3 +1,4 @@
+import { RemoteRecallEntry } from '../remote-web/RemoteRecall'
 import { CollectionStatus, useRemoteCollection } from '../remote-web/collections'
 import { useStationControl } from '../stationAccess'
 // ⚠️ THIS FILE IS ON THE **MIGRATED** LIST (i18n/hardcoded-strings.test.ts): every
@@ -1324,7 +1325,7 @@ export function CwCockpit({
         }}
         fieldDay={fieldDay}
         fdMode="CW"
-      /> : <p className="dim" role="status">{t('remote.loggingUnavailable')}</p>}
+      /> : <RemoteRecallEntry snap={snap} mode="CW" onOpenLog={onOpenLogbook} />}
     </CockpitPaneFrame>
   )
 

@@ -3,7 +3,7 @@ import type { ApplicationTransport } from '../applicationTransport'
 import type { DecodeRow, Tier } from '../types'
 import { t } from '../i18n'
 import type { Json } from './application-protocol'
-import { QUERY_COMMAND } from './application-query-protocol'
+import { QUERY_COMMAND, RECALL_COMMAND } from './application-query-protocol'
 import type { Collection, QueryArgs, QueryPage } from './application-query-protocol'
 import type { ApplicationClient } from './application-client'
 
@@ -47,8 +47,14 @@ export class RemoteCollections implements ApplicationTransport {
     return structuredClone(name === 'health' ? (result.meta as { source: Json }).source : result.rows) as T
   }
   async page(args: QueryArgs): Promise<QueryPage> {
+    const generation = this.generation
     for (let attempt = 0; attempt < 3; attempt++) {
-      try { return await this.client.invoke<QueryPage>(QUERY_COMMAND, args) }
+      try {
+        if (!this.live || generation !== this.generation) throw new Error('applicationUnavailable')
+        const page = await this.client.invoke<QueryPage>(args.collection === 'recall' ? RECALL_COMMAND : QUERY_COMMAND, args)
+        if (!this.live || generation !== this.generation) throw new Error('applicationUnavailable')
+        return page
+      }
       catch (error) {
         if (attempt === 2 || !(error instanceof Error) || error.message !== 'applicationBusy') throw error
         await new Promise(resolve => setTimeout(resolve, 250))

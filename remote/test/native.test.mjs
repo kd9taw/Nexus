@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import { runtime, roomStatus } from './runtime.mjs'
+import { recallReference, recallAdif } from './recall-reference.mjs'
 
 function nativeProbe(binary, origin) {
   const child = spawn(binary, ['--ignored', '--exact', 'remote_service::tests::cloud_runtime_probe', '--nocapture'], { stdio: ['pipe', 'pipe', 'pipe'] })
@@ -175,6 +176,31 @@ test('actual native controller pairs, stores authority, publishes real DTOs, dis
       if (collection === 'entities') assert.ok(count > 300, 'positive control: actual station DXCC table crossed multiple pages')
     }
     query.close()
+    const { log } = await probe.send({ type: 'seedRecallLog', adif: recallAdif() })
+    assert.ok(log.length > 40, 'the independent desktop reference must receive the seeded log')
+    const reference = await recallReference()
+    const { value: recallTicket } = await browser.post(`stations/${stationId}/ticket`)
+    const recall = await browser.open(stationId, recallTicket.ticket)
+    await recall.take(value => value.type === 'session')
+    recall.send({ type: 'applicationHello', version: 4 })
+    assert.ok((await recall.take(value => value.type === 'applicationCapabilities')).commands.includes('get_remote_recall'))
+    for (const call of ['W1AW', 'W1AW/P', 'DL2ABC', 'JA1ABC', '000']) {
+      const requestId = crypto.randomUUID()
+      recall.send({ type: 'applicationQuery', requestId, collection: 'recall', cursor: null, search: call, unconfirmed: false, after: null })
+      const page = await recall.take(value => value.requestId === requestId)
+      assert.equal(page.type, 'applicationPage')
+      const source = page.meta.source
+      const { qsos, dupeThisBand: _dupe, ...history } = reference.callHistory(log, call, '20m', 'FT8', true)
+      assert.deepEqual(source.history, history, `complete exact-call history: ${call}`)
+      assert.deepEqual(source.slots, reference.entitySlots(log, source.entity), `desktop entity slots and unknown-band rules: ${call}`)
+      assert.deepEqual(page.rows, [...qsos].sort((a, b) => b.whenUnix - a.whenUnix).slice(0, 20))
+      for (const band of ['20m', '40M', '80m']) for (const mode of ['CW', 'FT8', 'FT4', 'SSB']) for (const match of [false, true]) {
+        const dupe = source.workedBandModes.some(([b, m]) => b === band.toLowerCase() && (!match || m === mode))
+        assert.equal(dupe, reference.callHistory(log, call, band, mode, match).dupeThisBand)
+      }
+      recall.send({ type: 'applicationQueryAck', requestId })
+    }
+    recall.close()
     const second = await socket.take(value => value.type === 'observation')
     assert.ok(second.frame.sequence > first.frame.sequence)
     assert.equal((await probe.send({ type: 'disable' })).ok, true)

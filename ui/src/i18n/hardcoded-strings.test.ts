@@ -54,6 +54,7 @@ import { EN, type MessageKey } from './index'
  */
 const MIGRATED = [
   'remote-web/collections.tsx',
+  'remote-web/RemoteRecall.tsx',
   'remote-web/BrowserApplication.tsx',
   'remote-web/RemoteApp.tsx',
   'remote-native/RemoteStation.tsx',

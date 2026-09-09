@@ -16,6 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   observation requires local enable after each launch. The pilot needs a
   configured staging service and administrator-enabled trial access. Receive
   audio, radio/amplifier commands, QSO logging and payment are later stages.
+- **Remote cockpit recall:** FT, CW and Phone reuse Nexus's callsign card to show
+  prior contacts, full-log worked/confirmation counts and entity context. The
+  card displays the newest 20 contacts and links to the existing Logbook. Reads
+  release the station engine between small chunks and refuse a changing log.
+  This requires the updated station pilot; operating controls remain disabled.
 
 ## [1.11.1] — 2026-09-08
 

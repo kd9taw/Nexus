@@ -1,3 +1,4 @@
+import { RemoteRecallEntry } from '../remote-web/RemoteRecall'
 import { CollectionStatus, useRemoteCollection } from '../remote-web/collections'
 import { useStationControl } from '../stationAccess'
 // ⚠️ THIS FILE IS ON THE **PARTIAL** LIST (i18n/hardcoded-strings.test.ts), and for one
@@ -1185,7 +1186,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
         onConsumeWork={onConsumeWork}
         fieldDay={fieldDay}
         fdMode="PH"
-      /> : <p className="dim" role="status">{t('remote.loggingUnavailable')}</p>}
+      /> : <RemoteRecallEntry snap={snap} mode={commandedMode === 'FM' ? 'FM' : 'SSB'} onOpenLog={onOpenLogbook} />}
     </CockpitPaneFrame>
   )
 

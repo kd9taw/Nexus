@@ -35,6 +35,7 @@ import { loadRosterFilters, saveRosterFilters, type RosterFilters } from '../ope
 import { hasOverridingNeed, isHiddenByCountry, useCountryExclude } from '../features/countryExclude'
 import { CountryHiddenChip } from './CountryExclude'
 import { RarityChip } from './RarityChip'
+import { useStationControl } from '../stationAccess'
 
 interface Props {
   stations: Station[]
@@ -147,6 +148,7 @@ export function OperateRoster({
   band,
   feedMode,
 }: Props) {
+  const control = useStationControl()
   // QTH magnetic declination (WMM) — the Brg column's tooltip shows the compass
   // heading a rotator zeroed on magnetic north needs.
   const units = useUnits()
@@ -339,6 +341,7 @@ export function OperateRoster({
   const roving = useRovingList(rows.length, (i, mods) => {
     const s = rows[i]?.s
     if (!s) return
+    if (!control && (mods.alt || mods.shift)) return
     if (mods.alt) onToggleIgnore?.(s.call)
     else if (mods.shift) onCall(s.call, s.grid ?? undefined, undefined, undefined, s.freqHz ?? undefined)
     else onSelect(s.call)
@@ -415,8 +418,8 @@ export function OperateRoster({
           <button
             type="button"
             className="or-filter or-spot"
-            disabled={!selectedCall}
-            onClick={() => selectedCall && onSpot(selectedCall)}
+            disabled={!control || !selectedCall}
+            onClick={() => control && selectedCall && onSpot(selectedCall)}
             title={
               selectedCall
                 ? t('operate.roster.spot.title', { call: selectedCall })
@@ -492,14 +495,14 @@ export function OperateRoster({
                   roving.setActive(i)
                   onSelect(s.call)
                 }}
-                onDoubleClick={(e) =>
+                onDoubleClick={(e) => control && (
                   // Alt-double-click toggles the session ignore (stock WSJT-X).
                   e.altKey && onToggleIgnore
                     ? onToggleIgnore(s.call)
                     : onCall(s.call, s.grid ?? undefined, undefined, undefined, s.freqHz ?? undefined)
-                }
+                )}
                 title={
-                  ignoredRow
+                  !control ? s.call : ignoredRow
                     ? t('operate.row.ignored.title')
                     : t('operate.roster.row.work.title', { call: s.call })
                 }
