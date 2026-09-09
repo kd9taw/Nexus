@@ -109,10 +109,14 @@ impl Instance {
             return Ok(Instance::Main);
         }
         if let Some(digits) = token.strip_prefix('w') {
-            return canonical_digits(digits, 3).map(Instance::Window).ok_or_else(bad);
+            return canonical_digits(digits, 3)
+                .map(Instance::Window)
+                .ok_or_else(bad);
         }
         if let Some(digits) = token.strip_prefix('r') {
-            return canonical_digits(digits, 9).map(Instance::Radio).ok_or_else(bad);
+            return canonical_digits(digits, 9)
+                .map(Instance::Radio)
+                .ok_or_else(bad);
         }
         Err(bad())
     }
@@ -283,7 +287,10 @@ impl Chains {
         // existence and the obvious next edit — taking the whole profile list — bypasses `add`
         // entirely. No existing test would catch that, because they all go through `add`. The
         // standard here is that a cap which is documented but not enforced is worse than none.
-        debug_assert!(me.chains.len() <= MAX_CHAINS, "Chains::new exceeded the cap");
+        debug_assert!(
+            me.chains.len() <= MAX_CHAINS,
+            "Chains::new exceeded the cap"
+        );
         me
     }
 
@@ -350,7 +357,11 @@ mod tests {
         let w2 = Instance::parse("w2").unwrap();
         let r2 = Instance::parse("r2").unwrap();
         assert_ne!(w2, r2);
-        assert_eq!(w2.chain(), ChainRef::ActiveRadio, "w2 is unbound — it names no radio");
+        assert_eq!(
+            w2.chain(),
+            ChainRef::ActiveRadio,
+            "w2 is unbound — it names no radio"
+        );
         assert_eq!(r2.chain(), ChainRef::Radio(2), "r2 names radio 2");
         assert_ne!(panel_label("operate", w2), panel_label("operate", r2));
         assert_eq!(chain_of_label("panel-operate-w2"), ChainRef::ActiveRadio);
@@ -369,20 +380,20 @@ mod tests {
             Instance::Radio(999_999_999)
         );
         for bad in [
-            "",           // empty
-            "2",          // a bare number — the shape the amendment removed
-            "W2",         // case matters; the token is generated, not typed
-            "w",          // no digits
-            "r",          //
-            "w1000",      // over the 3-digit window bound
-            "r1234567890",// over the 9-digit radio bound
-            "r02",        // non-canonical — would be a second label for radio 2
-            "w007",       //
-            "r2 ",        // stray whitespace
-            "r-2",        //
-            "radio2",     //
-            "main2",      //
-            "operate2",   // a panel slug, not an instance
+            "",            // empty
+            "2",           // a bare number — the shape the amendment removed
+            "W2",          // case matters; the token is generated, not typed
+            "w",           // no digits
+            "r",           //
+            "w1000",       // over the 3-digit window bound
+            "r1234567890", // over the 9-digit radio bound
+            "r02",         // non-canonical — would be a second label for radio 2
+            "w007",        //
+            "r2 ",         // stray whitespace
+            "r-2",         //
+            "radio2",      //
+            "main2",       //
+            "operate2",    // a panel slug, not an instance
         ] {
             assert!(
                 Instance::parse(bad).is_err(),
@@ -446,15 +457,15 @@ mod tests {
     #[test]
     fn panel_key_rejects_labels_this_app_did_not_create() {
         for label in [
-            "main",                 // the main window is not a panel window
-            "panel-",               // empty slug
-            "",                     //
-            "operate",              // no `panel-` prefix
-            "panel-operate-2",      // the bare-number shape: no longer readable at all
-            "panel-operate-main",   // `main` is never suffixed onto a label
-            "panel-operate-w9999",  // instance-shaped but out of grammar
-            "panel-operate-r02",    // instance-shaped but non-canonical
-            "panel-band map",       // non-alphanumeric slug
+            "main",                // the main window is not a panel window
+            "panel-",              // empty slug
+            "",                    //
+            "operate",             // no `panel-` prefix
+            "panel-operate-2",     // the bare-number shape: no longer readable at all
+            "panel-operate-main",  // `main` is never suffixed onto a label
+            "panel-operate-w9999", // instance-shaped but out of grammar
+            "panel-operate-r02",   // instance-shaped but non-canonical
+            "panel-band map",      // non-alphanumeric slug
         ] {
             assert_eq!(panel_key(label), None, "{label:?} must not resolve");
             assert_eq!(
@@ -470,7 +481,10 @@ mod tests {
     /// just the radio-bound case that is obviously dangerous.
     #[test]
     fn only_the_main_surface_may_be_opened_yet() {
-        assert!(openable(Instance::Main).is_ok(), "the surface that has always existed");
+        assert!(
+            openable(Instance::Main).is_ok(),
+            "the surface that has always existed"
+        );
         for inst in [Instance::Radio(0), Instance::Radio(7), Instance::Window(2)] {
             let e = openable(inst).expect_err(&format!("{inst} must be refused while inert"));
             assert!(
@@ -480,7 +494,10 @@ mod tests {
         }
         // r0 specifically: profile id 0 is the default single-radio station, so it is the id
         // most likely to be reached for first and must not slip through as a falsy value.
-        assert!(openable(Instance::Radio(0)).is_err(), "r0 is a real radio, not an absence");
+        assert!(
+            openable(Instance::Radio(0)).is_err(),
+            "r0 is a real radio, not an absence"
+        );
     }
 
     // Unbound surfaces name no chain; only `r<id>` does. `ChainRef::ActiveRadio` means "follow
@@ -510,7 +527,10 @@ mod tests {
         assert!(err.contains("multi-radio-rollback.md"), "{err}");
         // The registry is untouched by the failed add.
         assert!(chains.get(1).is_none(), "the refused chain was not stored");
-        assert!(chains.get(0).is_some(), "the existing chain was not evicted");
+        assert!(
+            chains.get(0).is_some(),
+            "the existing chain was not evicted"
+        );
     }
 
     #[test]

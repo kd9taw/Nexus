@@ -106,8 +106,16 @@ export function FrequencyControl({
           {grouped.map((g) => (
             <optgroup key={g.group} label={g.group}>
               {g.items.map((c) => (
-                <option key={chanKey(c)} value={chanKey(c)} title={c.note}>
+                <option
+                  key={chanKey(c)}
+                  value={chanKey(c)}
+                  // Receive-only bands stay SELECTABLE — you may listen anywhere, and the
+                  // rig tunes there. The suffix says why you will not be able to key it;
+                  // the transmit gate is what actually refuses.
+                  title={c.tx === false ? t('freq.channel.rxOnly.title') : c.note}
+                >
                   {c.label} · {c.dialMhz.toFixed(4)} · {c.mode}
+                  {c.tx === false ? ` · ${t('freq.channel.rxOnly')}` : ''}
                 </option>
               ))}
             </optgroup>

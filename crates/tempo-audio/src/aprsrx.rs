@@ -9,7 +9,7 @@
 //! loop does nothing but a brief flag check, so everyone else pays nothing.
 
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use tempo_app::engine::{engine_lock, AprsHeard, AprsSource, Engine};
 use tempo_core::aprs::{AprsPacket, Deframer, Demod};
@@ -22,6 +22,10 @@ const POLL: Duration = Duration::from_millis(100);
 
 /// A sample this close to full scale is clipped for reporting purposes (-0.09 dBFS).
 const CLIP_PEAK: f32 = 0.99;
+
+/// How often an armed decoder writes its health line to the diagnostic log. Long enough that a
+/// session's log stays readable, short enough that a fault the operator noticed is bracketed.
+const LOG_EVERY: Duration = Duration::from_secs(30);
 
 /// Spawn the APRS RX decode thread (call once at startup, beside `spawn_rtty_rx`).
 pub fn spawn_aprs_rx(engine: Arc<Mutex<Engine>>) {
@@ -38,10 +42,11 @@ fn now_unix() -> i64 {
         .unwrap_or(0)
 }
 
-/// What one drain of audio produced. `frames_seen` counts HDLC frames the deframer recovered
-/// BEFORE the FCS check, so `frames_seen > packets.len()` means the demodulator is finding packets
-/// it cannot verify — a mistuned or over-driven channel, which is a completely different fault
-/// from hearing nothing at all.
+/// What one drain of audio produced. `frames_seen` counts HDLC segments that look like an AX.25
+/// UI frame ([`looks_like_ax25`]) but have NOT yet had their FCS checked, so
+/// `frames_seen > packets.len()` means the demodulator is finding packets it cannot verify — a
+/// mistuned or over-driven channel, which is a completely different fault from hearing nothing at
+/// all.
 pub(crate) struct DecodeStep {
     /// Each decoded packet paired with the TNC2 monitor line it came from. The line is kept
     /// because the RX iGate contributes packets VERBATIM — re-encoding a parsed packet would
@@ -57,6 +62,38 @@ pub(crate) struct DecodeStep {
     pub clipped_samples: usize,
 }
 
+/// Shortest possible AX.25 UI frame: 14 bytes of address + control + PID + the 2-byte FCS.
+const MIN_UI_FRAME: usize = 18;
+
+/// Could this HDLC segment be an AX.25 UI frame at all?
+///
+/// The deframer does not check the FCS — it hands back every byte-aligned flag-to-flag segment it
+/// finds, and on an open squelch plain receiver hiss produces one roughly every four seconds
+/// (measured: 149 of them in 600 s of Gaussian noise with nothing transmitted). Counting those as
+/// `frames_seen` is what made the cockpit tell the operator "{n} failed CRC" on a channel that was
+/// simply quiet — and the health card's own advice, open the squelch, manufactured the evidence.
+///
+/// So do what a TNC does and require the segment to be *shaped* like a frame before it counts:
+/// long enough, and an address field whose callsign octets are the shifted 7-bit ASCII AX.25
+/// specifies. This is a plausibility gate, NOT a second FCS check — a frame that gets in here and
+/// then fails its CRC is still counted, which is the reading ("mistuned or over-driven") the
+/// counter exists for.
+fn looks_like_ax25(bytes: &[u8]) -> bool {
+    if bytes.len() < MIN_UI_FRAME {
+        return false;
+    }
+    // Destination at 0, source at 7 — six callsign octets each, every one an uppercase letter,
+    // digit or space shifted left one bit. Deliberately NOT the SSID octets at 6 and 13: those
+    // carry the C/H bit and the extension bit, are not ASCII, and demanding it there would reject
+    // every real frame whose destination has the command bit set.
+    [0usize, 7].iter().all(|&base| {
+        bytes[base..base + 6].iter().all(|&b| {
+            let c = b >> 1;
+            c.is_ascii_uppercase() || c.is_ascii_digit() || c == b' '
+        })
+    })
+}
+
 /// One decode step: audio in, packets + health out.
 ///
 /// Deliberately free of the engine and its lock — this is the entire RX chain below the UI
@@ -65,7 +102,11 @@ pub(crate) struct DecodeStep {
 pub(crate) fn decode_step(demod: &mut Demod, deframer: &mut Deframer, audio: &[f32]) -> DecodeStep {
     let audio_peak = audio.iter().fold(0.0f32, |m, s| m.max(s.abs()));
     let clipped_samples = audio.iter().filter(|s| s.abs() >= CLIP_PEAK).count();
-    let frames = deframer.push(&demod.feed(audio));
+    let frames: Vec<Vec<u8>> = deframer
+        .push(&demod.feed(audio))
+        .into_iter()
+        .filter(|f| looks_like_ax25(f))
+        .collect();
     DecodeStep {
         frames_seen: frames.len(),
         clipped_samples,
@@ -80,19 +121,61 @@ pub(crate) fn decode_step(demod: &mut Demod, deframer: &mut Deframer, audio: &[f
     }
 }
 
+/// What the armed decoder has heard since the last diagnostic-log line.
+#[derive(Default)]
+struct LogWindow {
+    peak: f32,
+    seen: usize,
+    decoded: usize,
+}
+
 fn run(engine: Arc<Mutex<Engine>>) {
     // Streaming decoder state is thread-private (like RTTY's demod): dropped + rebuilt on disarm so
     // every re-arm is a clean acquire (fresh timing PLL, fresh frame sync).
     let mut decoder: Option<(Demod, Deframer)> = None;
+    // Diagnostic log (see `tempo_core::applog`). APRS had no voice in the log at all, so a report
+    // of an APRS fault arrived with a log that talked only about FT8 — the operator could not tell
+    // an unarmed decoder from a deaf one from a quiet band. Arm/disarm plus a periodic armed line
+    // is the whole of it; the numbers are the same three the cockpit's health card reads.
+    let mut was_armed = false;
+    let mut window = LogWindow::default();
+    let mut last_log = Instant::now();
     loop {
         if SHUTDOWN.load(std::sync::atomic::Ordering::Relaxed) {
             return;
         }
         std::thread::sleep(POLL);
         let armed = engine_lock(&engine).aprs_armed();
+        if armed != was_armed {
+            was_armed = armed;
+            tempo_core::applog::info(
+                "aprs",
+                if armed {
+                    "armed — RX decoder running on the 12 kHz tap"
+                } else {
+                    "disarmed — RX decoder stopped"
+                },
+            );
+            window = LogWindow::default();
+            last_log = Instant::now();
+        }
         if !armed {
             decoder = None;
             continue;
+        }
+        if last_log.elapsed() >= LOG_EVERY {
+            tempo_core::applog::info(
+                "aprs",
+                &format!(
+                    "armed: peak {:.4}, {} frames seen, {} decoded in the last {} s",
+                    window.peak,
+                    window.seen,
+                    window.decoded,
+                    LOG_EVERY.as_secs()
+                ),
+            );
+            window = LogWindow::default();
+            last_log = Instant::now();
         }
         let audio = engine_lock(&engine).take_aprs_audio();
         if audio.is_empty() {
@@ -107,6 +190,9 @@ fn run(engine: Arc<Mutex<Engine>>) {
         let (demod, deframer) = decoder.get_or_insert_with(|| (Demod::new(), Deframer::new()));
         // The heavy part — correlators, timing PLL, HDLC de-stuff, FCS — runs off-lock.
         let step = decode_step(demod, deframer, &audio);
+        window.peak = window.peak.max(step.audio_peak);
+        window.seen += step.frames_seen;
+        window.decoded += step.packets.len();
         let at = now_unix();
         let heard: Vec<AprsHeard> = step
             .packets
@@ -260,5 +346,67 @@ mod tests {
         assert_eq!(heard[0].kind, "message");
         assert!(heard[0].lat.is_none(), "a message has no position to plot");
         assert_eq!(heard[0].msg_id.as_deref(), Some("001"));
+    }
+
+    /// Deterministic Gaussian hiss — an open squelch with NOTHING on the channel. A fixed LCG +
+    /// Box–Muller so a failure is reproducible rather than a coin toss; `sigma` is the RMS level.
+    fn hiss(samples: usize, sigma: f32, seed: u64) -> Vec<f32> {
+        fn next_u(state: &mut u64) -> f32 {
+            *state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            ((*state >> 11) as f64 / (1u64 << 53) as f64) as f32
+        }
+        let mut state = seed | 1;
+        let mut out = Vec::with_capacity(samples + 1);
+        while out.len() < samples {
+            let (u1, u2) = (next_u(&mut state).max(1e-9), next_u(&mut state));
+            let r = sigma * (-2.0 * u1.ln()).sqrt();
+            let theta = std::f32::consts::TAU * u2;
+            out.push(r * theta.cos());
+            out.push(r * theta.sin());
+        }
+        out.truncate(samples);
+        out
+    }
+
+    #[test]
+    fn open_squelch_hiss_is_never_counted_as_a_packet_that_failed_its_crc() {
+        // The reported defect (#182). The deframer emits every byte-aligned flag-to-flag segment
+        // it can find and does NOT check the FCS, so plain receiver hiss manufactures "frames" at
+        // roughly a quarter of a second apart. `framesSeen > 0 && framesDecoded == 0` is what
+        // renders "{n} failed CRC" in the cockpit, so within seconds of opening the squelch the
+        // operator is told the channel is full of undecodable packets. Measured before the fix:
+        // 82/68/64/89/83 counted frames across these five levels, 0 decoded at every one.
+        for sigma in [0.3f32, 0.1, 0.03, 0.01, 0.003] {
+            let (heard, seen, peak) = run_chain(&hiss(12_000 * 60, sigma, 0x5EED));
+            assert!(
+                peak > sigma,
+                "the hiss is plainly audible at sigma {sigma}, peak {peak}"
+            );
+            assert!(heard.is_empty(), "noise decoded a station at sigma {sigma}");
+            assert_eq!(
+                seen, 0,
+                "60 s of hiss at sigma {sigma} was reported as {seen} failed packets"
+            );
+        }
+    }
+
+    #[test]
+    fn a_genuine_packet_buried_in_that_same_hiss_still_counts_and_still_decodes() {
+        // The other direction, and the reason the gate is a plausibility check and not a
+        // squelch: a real packet on a noisy channel must still be counted AND decoded. The audio
+        // comes from the real modulator, so the gate cannot drift away from the frames the modem
+        // actually produces.
+        let packet = audio_for(b"!4903.50N/07201.75W-Nexus", "APZNEX");
+        let mut audio = hiss(12_000 * 5, 0.05, 0xC0FFEE);
+        for (i, s) in packet.iter().enumerate() {
+            audio[12_000 + i] += s * 0.5;
+        }
+        let (heard, seen, _) = run_chain(&audio);
+        assert_eq!(seen, 1, "the one real frame on the channel, and only it");
+        assert_eq!(heard.len(), 1, "and it decoded");
+        assert_eq!(heard[0].source, "KD9TAW-9");
+        assert!(heard[0].lat.is_some(), "and it is mappable");
     }
 }

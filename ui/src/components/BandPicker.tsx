@@ -51,6 +51,13 @@ export function BandPicker({ snap, mode, onSnap }: Props) {
   // (shared with the map's spot dots) so "what band am I on" reads across the room.
   const col = bandColor(snap.radio.band)
 
+  // The transmit frequency, when the rig has ACKNOWLEDGED a split that differs from the dial.
+  // Null on simplex (or on an old snapshot), where the dial IS the emission and the existing
+  // wording needs no change.
+  const em = snap.radio.txEmissionMhz
+  const splitTx =
+    em != null && Math.abs(em - snap.radio.dialMhz) > 1e-6 ? em : null
+
   return (
     <div className="band-picker">
       <span className="band-picker-dot" style={{ background: col }} aria-hidden="true" />
@@ -69,7 +76,22 @@ export function BandPicker({ snap, mode, onSnap }: Props) {
         ))}
       </select>
       {!snap.radio.txAllowed && (
-        <span className="tx-lock" title={t('bandPicker.txLock.title')}>
+        <span
+          className="tx-lock"
+          title={
+            // NAME THE FREQUENCY BEING JUDGED. Every path said the same sentence and never said
+            // which frequency — and under split that sentence was about the RX dial, a
+            // frequency the operator is NOT transmitting on (field report 2026-08-25). When a
+            // confirmed split TX differs from the dial, say so explicitly; otherwise the plain
+            // sentence is still exactly right.
+            splitTx != null
+              ? t('bandPicker.txLock.splitTitle', {
+                  tx: splitTx.toFixed(4),
+                  rx: snap.radio.dialMhz.toFixed(4),
+                })
+              : t('bandPicker.txLock.title')
+          }
+        >
           {t('bandPicker.txLock.label')}
         </span>
       )}

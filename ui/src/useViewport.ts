@@ -35,13 +35,18 @@ function currentZoom(): number {
  * Pass the current UI `scale` so the size class is recomputed when the operator
  * changes zoom (the effective width shifts even though the window didn't resize).
  */
-export function useViewport(scale?: number): void {
+export function useViewport(scale?: number, visibleArea = false): void {
   useEffect(() => {
     let raf = 0
     const apply = () => {
       const zoom = currentZoom()
-      const effW = window.innerWidth / zoom
-      const effH = window.innerHeight / zoom
+      // Standalone phone observers opt into the area above an on-screen keyboard.
+      // Existing desktop cockpits retain their layout-viewport behavior.
+      const viewport = visibleArea ? window.visualViewport : null
+      const width = viewport?.width ?? window.innerWidth
+      const height = viewport?.height ?? window.innerHeight
+      const effW = width / zoom
+      const effH = height / zoom
       const d = document.documentElement
       d.setAttribute('data-viewport', classifyViewport(effW))
       d.style.setProperty('--vh-eff', `${effH}px`)
@@ -55,7 +60,7 @@ export function useViewport(scale?: number): void {
       if (app) {
         app.style.height = '' // re-measure the stylesheet's natural 100% first
         const visual = app.getBoundingClientRect().height // post-zoom visual px
-        const gap = window.innerHeight - visual
+        const gap = height - visual
         if (Math.abs(gap) > 1) {
           const layoutH = parseFloat(getComputedStyle(app).height) // layout px
           if (Number.isFinite(layoutH)) {
@@ -71,9 +76,11 @@ export function useViewport(scale?: number): void {
     // Defer one frame so a just-changed --ui-zoom is committed before we read it.
     raf = requestAnimationFrame(apply)
     window.addEventListener('resize', onResize)
+    if (visibleArea) window.visualViewport?.addEventListener('resize', onResize)
     return () => {
       window.removeEventListener('resize', onResize)
+      if (visibleArea) window.visualViewport?.removeEventListener('resize', onResize)
       cancelAnimationFrame(raf)
     }
-  }, [scale])
+  }, [scale, visibleArea])
 }

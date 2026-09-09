@@ -16,6 +16,7 @@ pub mod aprs;
 pub mod beacon;
 pub mod channel;
 pub mod clublog;
+pub mod contest;
 pub mod cw;
 pub mod cw_decode;
 pub mod cw_parse;
@@ -47,6 +48,8 @@ pub mod textmode;
 pub mod timing;
 pub mod tx;
 pub mod wavfile;
+pub mod winlink;
+pub mod wrl;
 
 pub use modes;
 pub use tempo_fast;

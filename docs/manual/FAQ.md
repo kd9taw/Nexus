@@ -43,7 +43,7 @@ For Field Day specifically, Nexus pushes each contact to N3FJP over TCP (ADDDIRE
 
 ### Do I need to install Hamlib separately?
 
-**On Windows, no.** The installer bundles `rigctld.exe` plus the required DLLs (`libhamlib-4.dll`, `libusb-1.0.dll`, and the MinGW runtime). Nexus spawns and manages rigctld internally on port 4532 — you never run it manually. On Linux, install the system Hamlib once (the `.deb` pulls `libhamlib-utils` in for you; AppImage users run `sudo apt install libhamlib-utils`). On macOS, `brew install hamlib` in Terminal, then restart Nexus — Nexus searches the Homebrew/MacPorts prefixes itself, so no PATH setup is needed (a Finder-launched app never sees your shell PATH anyway).
+**No, on any platform.** Every download bundles Hamlib — Windows carries `rigctld.exe` and its DLLs, and since 1.9.0 Linux (`.deb`, AppImage, both Pi bases) and macOS carry `rigctld` and `libhamlib` too. Nexus spawns and manages rigctld internally on port 4532; you never run it manually. If its own copy ever fails to start it falls back to a system Hamlib, searching the Homebrew/MacPorts prefixes itself so no PATH setup is needed (a Finder-launched app never sees your shell PATH anyway).
 
 The bundled Hamlib model table covers approximately 50 radios (Icom, Yaesu, Kenwood, Elecraft, FlexRadio, Xiegu, QRP Labs, and others), verified against Hamlib 4.7.1. For a radio not on that list, run an external `rigctld` for it and connect Nexus as **NET rigctl** (model 2, in the dropdown).
 

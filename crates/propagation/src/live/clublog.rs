@@ -11,6 +11,7 @@
 //! and HTTPS is enforced. Mirrors the `qrz.rs` `client()`/`redact` discipline (NOT
 //! the relaxed `dxped.rs` live client).
 
+use super::neterr;
 use std::time::Duration;
 
 const UA: &str = "nexus-propagation/0.1 (+ham radio propagation nowcast)";
@@ -48,15 +49,7 @@ pub fn push_realtime(url: &str, body: String) -> Result<(u16, String), String> {
 /// Map a transport error to a safe, category-only message — never `Display`/
 /// `to_string`/`source` (which can echo the URL/credentials).
 fn redact(e: reqwest::Error) -> String {
-    if e.is_timeout() {
-        "ClubLog: request timed out — try again shortly".to_string()
-    } else if e.is_connect() {
-        "ClubLog: could not connect — check your network".to_string()
-    } else if e.is_redirect() {
-        "ClubLog: blocked an unexpected redirect".to_string()
-    } else {
-        "ClubLog: request failed".to_string()
-    }
+    neterr::redact("ClubLog", &e)
 }
 
 #[cfg(test)]

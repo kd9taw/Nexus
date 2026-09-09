@@ -44,14 +44,22 @@ const METER_POLL_MS = 100
  * within ~0.7 s, never as a frozen needle. */
 const METER_STALE_MS = 600
 
-const REST: MeterReadout = { rxLevel: 0, smeterDb: null }
+const REST: MeterReadout = { rxLevel: 0, smeterDb: null, cwToneHz: null }
 
-/** True when two readouts would RENDER identically (0.5 dB level quantum; exact S-meter). */
+/** True when two readouts would RENDER identically (0.5 dB level quantum; exact S-meter;
+ * the zero-beat tone to the nearest Hz, which is finer than any rig's tuning step and far
+ * finer than the needle can draw). */
 function sameReading(a: MeterReadout, b: MeterReadout): boolean {
   return (
     Math.round(rxLevelDb(a.rxLevel) * 2) === Math.round(rxLevelDb(b.rxLevel) * 2) &&
-    a.smeterDb === b.smeterDb
+    a.smeterDb === b.smeterDb &&
+    quantizedTone(a.cwToneHz) === quantizedTone(b.cwToneHz)
   )
+}
+
+/** The zero-beat tone as it would be RENDERED — whole Hz, or null. */
+function quantizedTone(hz: number | null): number | null {
+  return hz === null ? null : Math.round(hz)
 }
 
 // ---- the shared poller: ONE interval, many subscribers ----
@@ -132,6 +140,15 @@ function useMeterValue<T>(select: (m: MeterReadout) => T, active: boolean): T {
  * changes, never on RX-level churn. */
 export function useSmeterDb(active = true): number | null {
   return useMeterValue((m) => m.smeterDb, active)
+}
+
+/** The measured received CW tone (Hz; null = nothing to tune to), for the CW cockpit's
+ * zero-beat indicator. A cwToneHz-only subscription, exactly like [`useSmeterDb`]: the
+ * indicator re-renders at the poll cadence and the cockpit around it does not.
+ *
+ * ⛔ A READING, NOT A CONTROL. Nothing in this path steers the radio, and nothing may. */
+export function useCwToneHz(active = true): number | null {
+  return useMeterValue((m) => m.cwToneHz, active)
 }
 
 /** Drop-in [`LevelMeter`] on the shared live poll. Subscribes to `rxLevel` only, so the

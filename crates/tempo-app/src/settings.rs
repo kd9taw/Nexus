@@ -509,6 +509,16 @@ pub enum PounceThreshold {
     AtnoZoneOrState,
 }
 
+/// `skip_serializing_if` for the pending [`Settings::cloudlog_key`]. A whitespace-only value is not
+/// a real key, so it is treated as ABSENT — matching the migration gate, which skips migrating a
+/// `cloudlog_key.trim().is_empty()` value (`run()` in src-tauri `lib.rs`). A plain `String::is_empty`
+/// disagreed with that gate: a whitespace-only value serialized to settings.json forever yet was
+/// never migrated (round 10 N2). Trimming here makes the two agree — neither serializes nor migrates
+/// a blank key.
+fn cloudlog_key_absent(s: &str) -> bool {
+    s.trim().is_empty()
+}
+
 /// Everything the operator configures: identity, band/frequency, Field Day
 /// exchange, rig/PTT control, and network (WSJT-X UDP API + PSK Reporter).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -607,6 +617,58 @@ pub struct Settings {
     /// move up the letters as the path degrades. Defaults to A.
     #[serde(default)]
     pub q65_submode: u8,
+    // --- JS8 (JS8Call-compatible keyboard-to-keyboard; `crates/js8`) ---
+    /// JS8 TRANSMIT speed as an index into `Js8Speed::ALL`: 0 Slow (30 s), 1 Normal (15 s),
+    /// 2 Fast (10 s), 3 Turbo (6 s). An index rather than the enum — the house shape of
+    /// `q65_submode`/`jt65_submode` — so a stale or hand-edited file degrades to Normal
+    /// (`Tier::js8_kind`) instead of refusing to load. Sets the slot clock and the boundary
+    /// decode window; receive decodes every speed in `js8_rx_speeds` regardless.
+    #[serde(default = "default_js8_speed")]
+    pub js8_speed: u8,
+    /// Bitmask of speeds the receiver decodes each cycle: Slow 1 · Normal 2 · Fast 4 ·
+    /// Turbo 8. Defaults to 15 (all four) — JS8Call's `SubModeMultiDecode=true` — so a
+    /// fresh install hears every station on the watering hole with zero toggles. 0 is
+    /// treated as 15 by the scheduler (a mask that decodes nothing is never what anyone
+    /// meant).
+    #[serde(default = "default_js8_rx_speeds")]
+    pub js8_rx_speeds: u8,
+    /// Heartbeat repeat interval in minutes; 0 = on demand (JS8Call `HBInterval` default).
+    /// Whether HB is ON is NOT a setting — it is session-only (`Engine.js8_hb_on`), so the
+    /// app can never launch beaconing.
+    #[serde(default)]
+    pub js8_hb_interval_min: u16,
+    /// CQ repeat interval in minutes; 0 = on demand (JS8Call `CQInterval` default), which
+    /// leaves the cockpit's CQ button the one-shot it is today. Whether the repeat is ON is
+    /// NOT a setting — it is session-only (`Station::cq_on`), so the app can never launch
+    /// calling CQ, exactly as for the heartbeat.
+    #[serde(default)]
+    pub js8_cq_interval_min: u16,
+    /// Answer heard heartbeats with `HEARTBEAT SNR +NN` (JS8Call `SubModeHBAck`, default
+    /// OFF). The persisted SECOND act of the two-act rule; the session TX latch is the first.
+    #[serde(default)]
+    pub js8_hb_ack: bool,
+    /// Autoreply to directed queries (SNR? GRID? INFO? …) addressed to me, @ALLCALL or a
+    /// joined group. JS8Call default ON (G3). Second act of the two-act rule.
+    #[serde(default = "default_js8_autoreply")]
+    pub js8_autoreply: bool,
+    /// Relay `>` traffic for other stations (third-party traffic — §97.115 is the operator's).
+    /// JS8Call default ON (G3). Second act of the two-act rule.
+    #[serde(default = "default_js8_relay")]
+    pub js8_relay: bool,
+    /// JS8Call's idle watchdog (`TxIdleWatchdog`): minutes without an operator act before
+    /// HB/autoreply/relay switch themselves OFF. Default 60; the engine applies the floor
+    /// of 5; 0 disables. The ordinary 6-min wall-clock watchdog is a separate clock.
+    #[serde(default = "default_js8_idle_watchdog_min")]
+    pub js8_idle_watchdog_min: u16,
+    /// Free text answered to `INFO?` (JS8Call "My Info").
+    #[serde(default)]
+    pub js8_info: String,
+    /// Free text answered to `STATUS?`; empty = JS8Call's default `IDLE <min> VERSION …`.
+    #[serde(default)]
+    pub js8_status: String,
+    /// Joined @GROUP names (e.g. `@FUN`) the station answers directed traffic for.
+    #[serde(default)]
+    pub js8_groups: Vec<String>,
     /// FM repeater offset override in Hz (0 = use the band convention from
     /// [`Self::rptr_offset_hz`]). Set by the Program section's tune-now so
     /// odd-split machines (e.g. +1 MHz on 2 m) key the right input.
@@ -631,6 +693,14 @@ pub struct Settings {
     /// table). Stored as ids so the table can evolve.
     #[serde(default)]
     pub fd_bonuses: Vec<String>,
+    /// PLANNED bonus ids — what the club set out to earn, not what it earned.
+    /// A sibling list rather than a second meaning for [`Self::fd_bonuses`],
+    /// which stays exactly the EARNED set the score is made of: no scoring
+    /// path, export or club report may ever read this one. `#[serde(default)]`
+    /// so an older settings file loads with nothing planned and scores the
+    /// same points it always did.
+    #[serde(default)]
+    pub fd_bonuses_planned: Vec<String>,
     /// N3FJP real-time push: each FD QSO lands in the club's N3FJP master log
     /// over its TCP API. Empty host = off.
     #[serde(default)]
@@ -685,6 +755,67 @@ pub struct Settings {
     /// the QSO's operator; empty = fall back to `mycall`.
     #[serde(default)]
     pub fd_operator: String,
+    /// Host a Nexus↔Nexus club event on this box. **This toggle IS the LAN
+    /// opt-in**: while on, the fdsync listener binds 0.0.0.0 (the app's one
+    /// deliberate non-loopback inbound socket — data-plane only, see
+    /// `tempo_net::fdsync`) and a discovery beacon broadcasts once a second.
+    /// Default OFF; everything else keeps the loopback discipline.
+    #[serde(default)]
+    pub fd_host_enable: bool,
+    /// TCP port the club-sync host listens on (and the beacon advertises).
+    #[serde(default = "default_fd_host_port")]
+    pub fd_host_port: u16,
+    /// Operator-facing club event name ("W9ABC Field Day") — the beacon and
+    /// the welcome carry it; also names the host's event journal.
+    #[serde(default)]
+    pub fd_event_name: String,
+    /// Join a club event at `host:port` (manual entry, or filled by the
+    /// "Find club events" discovery). Empty = not joining. Ignored while
+    /// [`Self::fd_host_enable`] is on — the host joins itself over loopback.
+    #[serde(default)]
+    pub fd_join_addr: String,
+    /// Friendly position label for the club band board ("CW tent").
+    #[serde(default)]
+    pub fd_position_name: String,
+    /// This machine's club-sync position identity: 8 hex chars, generated
+    /// once at startup when empty and persisted. Non-edited (no UI control):
+    /// QSO ids are `(this, seq)`, so changing it would re-push every contact
+    /// as new. Also suffixes the FD ADIF journal, which is what stops two
+    /// instances sharing a settings dir from clobbering each other's backup.
+    #[serde(default)]
+    pub fd_position_id: String,
+    /// Serve the read-only spectator scoreboard — a self-contained web page of
+    /// the club score for a TV/projector on the site LAN. **This toggle IS the
+    /// LAN opt-in**: while on, `tempo_app::fd_scoreboard`'s GET/HEAD-only
+    /// server binds `0.0.0.0:fd_scoreboard_port` (threat model in that
+    /// module's header — the data is what the event broadcasts on the air).
+    /// Default OFF; shows real data only in the host role.
+    #[serde(default)]
+    pub fd_scoreboard: bool,
+    /// TCP port the spectator scoreboard serves on ("73 73" — unassigned,
+    /// memorable for hams).
+    #[serde(default = "default_fd_scoreboard_port")]
+    pub fd_scoreboard_port: u16,
+    /// Serve Connect as a read-only web page for a shack TV or a browser on the
+    /// house network. **This toggle IS the LAN opt-in**: while on,
+    /// `tempo_app::connect_web` serves through the same GET/HEAD-only server on
+    /// `0.0.0.0:connect_web_port`.
+    ///
+    /// ⚠️ Its threat model is NOT the spectator scoreboard's. That one is defensible
+    /// partly because a contest log is already broadcast in clear on the air; this
+    /// page is the station's own conditions picture. It carries the callsign, the
+    /// grid and the propagation nowcast, and deliberately NOT the dial frequency,
+    /// the log or the needs board — a payload-shape test in `connect_web` pins that.
+    /// Default OFF, and the Settings copy must say what it exposes and to whom.
+    #[serde(default)]
+    pub connect_web: bool,
+    /// TCP port the Connect web page serves on. Distinct from the scoreboard's so a
+    /// Field Day host can serve both at once.
+    #[serde(default = "default_connect_web_port")]
+    pub connect_web_port: u16,
+    /// Opt in to auto-update through beta (pre-release) builds; off = stable channel only.
+    #[serde(default)]
+    pub beta_updates: bool,
     /// Periodically transmit a presence beacon ("CQ <call> <grid>") in Chat
     /// mode. **Off by default** — the app starts passive (hunt-and-pounce):
     /// it listens and only transmits when the operator acts (sends a message,
@@ -767,6 +898,41 @@ pub struct Settings {
     /// to a rig that did not ask for it.
     #[serde(default)]
     pub cat_rts_keys_ptt: bool,
+    /// The rig's serial HANDSHAKE, stated rather than inferred: `"auto"` (default) | `"none"` |
+    /// `"hardware"` | `"xonxoff"`.
+    ///
+    /// ⚠️ #145 IS THE THIRD TIME AN INFERENCE HERE WAS WRONG, so this one is asked. `"auto"` is
+    /// today's behaviour to the byte — Nexus reads the backend's declaration out of the
+    /// operator's own Hamlib and drops the handshake only when [`Settings::cat_rts_keys_ptt`] or
+    /// a recognised keying cable says RTS is deliberate. That inference cannot reach the
+    /// reported case at all: with PTT = serial RTS on the CAT port, Hamlib reports RTS
+    /// unsettable BECAUSE it is the keying line, which makes the handshake override's own
+    /// precondition false — so rigctld launches saying nothing whatever about RTS and the
+    /// line's idle state falls to Hamlib's default and the USB-serial driver.
+    ///
+    /// Anything other than `"auto"` is emitted verbatim as `-C serial_handshake=…` and REPLACES
+    /// the inference. It is the operator's declaration about their own cable, which is the only
+    /// place that fact has ever lived — see [`Settings::cat_rts_keys_ptt`] for why no VID/PID
+    /// rule can supply it.
+    #[serde(default = "default_cat_auto")]
+    pub cat_serial_handshake: String,
+    /// What the KEYING line (serial RTS/DTR PTT) is held at while idle: `"auto"` (default) |
+    /// `"untouched"` | `"low"` | `"high"`.
+    ///
+    /// ⚠️ THIS IS THE LINE THAT KEYS THE TRANSMITTER (#145). [`Settings::cat_rts_state`] /
+    /// [`Settings::cat_dtr_state`] are deliberately never emitted for the line Hamlib is keying
+    /// with, so today the keying line's idle level is whatever `rig_open` and the serial driver
+    /// leave it at — which on a CP210x can be ASSERTED, i.e. the rig keyed from launch. `"auto"`
+    /// keeps exactly that (say nothing), so no working station changes under an upgrade.
+    ///
+    /// ⚠️ NEEDS-BENCH, and it is not a formality: Hamlib's `rig_open` REFUSES `rts_state` on the
+    /// line it keys with (`rig.c:1253-1272`), and that refusal is the SILENT kind — `-RIG_ECONF`,
+    /// rigctld does not exit, and it goes on serving a rig it never opened. So a non-`"auto"`
+    /// value can cost this operator CAT entirely on some backends and fix a keyed-at-launch rig
+    /// on others, and which one it does cannot be established from this machine — there is no
+    /// serial rig here. It exists so the operator who can watch the pin has a knob to turn.
+    #[serde(default = "default_cat_auto")]
+    pub cat_ptt_line_state: String,
     /// Serial baud rate for CAT.
     pub baud: u32,
     /// Rig connection type: "serial" (default; rigctld talks to `serial_port`/`baud`) or
@@ -786,6 +952,30 @@ pub struct Settings {
     /// [`RadioProfile::icom_native_cat`]). Default off.
     #[serde(default)]
     pub icom_native_cat: bool,
+    /// Follow the radio's OWN split, rather than only a split Nexus set. Default OFF.
+    ///
+    /// Only meaningful on a rig whose capability dump says it can report both split state and
+    /// the split TX frequency NATIVELY, with frequency targetable
+    /// (`baud_ladder::SplitDetect::Native`). On anything else Nexus would have to move the radio
+    /// to answer the question, so the setting is not offered and this flag has no effect — the
+    /// gate never consults a reading it was told is emulated.
+    ///
+    /// ⚠️ NEEDS BENCH. Class-wide CAT behaviour; ships OFF so nothing changes for anyone who
+    /// does not choose it, and wants a real radio in front of someone before it is called
+    /// working — in particular the question no source answers: does a rig report a split set
+    /// from its FRONT PANEL, as opposed to one set over CAT?
+    #[serde(default)]
+    pub split_detect_enabled: bool,
+    /// FT-710 RF scope for the active radio (flat mirror of the profile field — see
+    /// [`RadioProfile::yaesu_rf_scope`]). Default off.
+    ///
+    /// ⚠️ THE MIRROR IS LOAD-BEARING, not decoration. Saving the radio you are currently
+    /// USING goes through the flat form, so a per-profile field with no flat twin is dropped
+    /// in silence: the operator ticks the box, saves, reopens Settings and finds it off, with
+    /// nothing reporting a failure. That made the whole scope feature unreachable in the
+    /// normal case — it persisted only while editing a NON-active radio.
+    #[serde(default)]
+    pub yaesu_rf_scope: bool,
     /// Which Icom DATA mode the active radio uses (flat mirror — see
     /// [`RadioProfile::icom_data_mode`]). 1 is today's behaviour.
     #[serde(default = "one")]
@@ -794,6 +984,10 @@ pub struct Settings {
     /// (flat mirror — see [`RadioProfile::data_modes_plain_ssb`]). Default off.
     #[serde(default)]
     pub data_modes_plain_ssb: bool,
+    /// Hold the FM DATA submode for as long as the SSTV receiver is running, for the active
+    /// radio (flat mirror — see [`RadioProfile::sstv_hold_data_submode`]). Default off.
+    #[serde(default)]
+    pub sstv_hold_data_submode: bool,
     /// DEPRECATED / ignored. Digital now ALWAYS forces the DATA submode (like Phone/CW
     /// force their mode), so this opt-out is no longer consulted by
     /// [`rig_mode`](Self::rig_mode). Kept only so older settings files still deserialize.
@@ -898,6 +1092,45 @@ pub struct Settings {
     pub rotator_port: String,
     #[serde(default = "default_rotator_baud")]
     pub rotator_baud: u32,
+    /// The amplifier family on this radio's amp port: "" = none (the default, and the state of
+    /// most stations), "spe" = SPE Expert 1.3K-FA/1.5K-FA/2K-FA, "kpa" = Elecraft KPA500/KPA1500.
+    ///
+    /// PER RADIO, like the rotator: an SO2R station has an amplifier per radio, and a field that
+    /// lived only on the flat `Settings` would let one radio's amp config overwrite the other's.
+    #[serde(default)]
+    pub amp_model: String,
+    /// Serial port the amplifier is on. Empty = not configured, which is what makes every
+    /// amplifier surface render NOTHING rather than an empty frame (the rotator's honesty rule:
+    /// unconfigured shows nothing, configured-and-silent shows "—").
+    #[serde(default)]
+    pub amp_port: String,
+    /// Step the amplifier to the band the radio is on, without being asked. **Off by default.**
+    ///
+    /// ⚠️ OFF IS DELIBERATE, AND NOT JUST CAUTION. The standing rule in this app is that Nexus
+    /// notifies and never moves the station unattended; an amplifier is a slaved accessory
+    /// rather than the thing making the QSO, which is why this is offered at all. But it is
+    /// still Nexus putting a command on a kilowatt's wire with nobody's hand on it, so the
+    /// operator turns it on rather than discovering it.
+    ///
+    /// ⭐ AND THE TWO FAMILIES DO NOT CARRY THE SAME RISK. Elecraft sets a band ABSOLUTELY
+    /// (`^BNbb;`) against a table Elecraft publishes in full, so following is one command whose
+    /// result is read back on the next poll. SPE can only STEP (`BAND-`/`BAND+`), and the middle
+    /// of its ladder is derived from two published endpoints plus one measured point rather than
+    /// published — so following there is several commands walking a table that has never been
+    /// confirmed end to end on hardware. Both honour this switch; only one of them is proven.
+    ///
+    /// ⚠️ AND ON MOST SPE STATIONS THIS SHOULD STAY OFF FOR A REASON THAT IS NOT ABOUT RISK.
+    /// An SPE is normally wired to follow the radio through its own band-data cable, in
+    /// hardware. Where that cable is fitted, this setting is a SECOND thing steering one band —
+    /// redundant at best, and at worst two controllers disagreeing about where the amplifier
+    /// should be. Reported by the operator on 2026-08-29, whose own 1.5K-FA is wired exactly
+    /// that way; it is also why the SPE ladder's middle is still unmeasured here, since testing
+    /// the step would have meant unplugging a cable that is doing the job correctly.
+    ///
+    /// The setting's own hint says this, in all four catalogs. It is the difference between a
+    /// switch an operator can judge and one they have to guess at.
+    #[serde(default)]
+    pub amp_follow_band: bool,
     /// ADVANCED override: an external `rotctld` daemon address `host:port`
     /// (for operators who already run their own). Non-empty wins over the
     /// integrated model/port spawn. Empty + model 0 = no rotator.
@@ -1058,7 +1291,9 @@ pub struct Settings {
     // --- network (WSJT-X parity) ---
     /// Emit the WSJT-X-compatible UDP protocol (for JTAlert/GridTracker/loggers).
     pub wsjtx_udp: bool,
-    /// UDP address to send WSJT-X messages to (WSJT-X default is 127.0.0.1:2237).
+    /// UDP address(es) to send WSJT-X messages to (WSJT-X default is 127.0.0.1:2237). ONE
+    /// OR MANY, comma-separated — `127.0.0.1:2237, 129.212.188.3:2237` feeds a local tool and
+    /// a remote contest scorer at once, which WSJT-X's single sink cannot.
     pub wsjtx_udp_addr: String,
     /// Append every decode to a WSJT-X-format `ALL.TXT` decode log in the app data dir —
     /// the running record loggers/GridTracker tail. Off by default.
@@ -1259,6 +1494,22 @@ pub struct Settings {
     pub max_power_cw: Option<f32>,
     #[serde(default)]
     pub max_power_digital: Option<f32>,
+    /// AM's ceiling, as a fraction of the rig's max. AM rides `OperatingMode::Phone`, so without
+    /// this it took the SSB cap — and AM is not SSB.
+    ///
+    /// ⚠️ A RIG MAKING 100 W PEP ON SSB MAKES ABOUT 25 W OF CARRIER ON AM, because AM's power is
+    /// in a carrier that is always there plus two sidebands, and PEP is reached on modulation
+    /// peaks. Run the SSB drive into AM and the peaks flat-top. Most rigs' manuals say a quarter,
+    /// which is where the 0.25 default comes from — it is a starting point, not a rule, and any
+    /// operator who knows their rig can raise it.
+    ///
+    /// Applied as the LOWER of this and the phone cap (see [`Settings::rf_power_ceiling`]), never
+    /// on its own: an operator who set AM above phone must not have AM lift their power past what
+    /// the phone cap allows. That min-shape is the same one `rf_power_ceiling_high_duty` uses for
+    /// SSTV, and for the same reason — it can only ever LOWER power, which is what makes it safe
+    /// without a bench.
+    #[serde(default = "default_max_power_am")]
+    pub max_power_am: Option<f32>,
     /// Path-prediction engine: "heuristic" (physics-lite, the default) or
     /// "p533" (the native ITU-R P.533 engine). Unknown values fall back to
     /// the heuristic in the factory, so old configs can never break.
@@ -1327,16 +1578,44 @@ pub struct Settings {
     /// of the combined `RR73`. Off by default (RR73 — modern FT8 practice).
     #[serde(default)]
     pub prefer_rrr: bool,
-    /// Stop a CQ run after this many unanswered calls. `None` (default) = stock
-    /// WSJT-X behavior: CQ repeats indefinitely, the Tx watchdog is the backstop.
-    /// The earlier always-on 6-call cap is preserved as this opt-in.
-    #[serde(default)]
+    /// Stop a CQ run after this many unanswered calls, then wait [`Self::cq_pause_secs`]
+    /// and start again. `Some(8)` by default (operator ruling); `None` = stock WSJT-X,
+    /// which repeats CQ indefinitely with only the Tx watchdog as a backstop.
+    ///
+    /// ⚠️ A DELIBERATE DIVERGENCE FROM WSJT-X, and it is worth saying because an operator
+    /// running both will see the difference and read it as a fault. WSJT-X calls CQ until
+    /// something stops it; Nexus calls eight times, breathes, and calls again. The reason is
+    /// band courtesy — an unanswered run holds a frequency other people could be using — and
+    /// it costs nothing, because the pause still ANSWERS anyone who calls: only the outgoing
+    /// CQ is withheld, never the sequencer's ability to reply.
+    ///
+    /// Counting is per-STEP, so it never bites a working run: `tx_count` resets the moment a
+    /// QSO advances, which is why "if stations keep calling back, it keeps working them" is
+    /// the behaviour rather than a special case.
+    #[serde(default = "default_cq_max_calls")]
     pub cq_max_calls: Option<u32>,
-    /// Stop calling a specific station after this many unanswered overs of a directed
-    /// in-QSO step (AwaitReport/Roger/Rr73) — prevents endless recalling a station that
-    /// went silent in FT8/FT4 S&P. `Some(8)` by default (operator preference); `None`
-    /// = stock WSJT-X (repeat until answered, only the Tx watchdog stops it). Distinct
-    /// from `cq_max_calls`, which governs a CQ run.
+    /// How long to wait after a CQ run hits [`Self::cq_max_calls`] before calling again,
+    /// in seconds. 180 (three minutes) by default; `Some(0)` or `None` means do not resume —
+    /// the run simply stops, which is what happened before this setting existed.
+    ///
+    /// The pause is a TRANSMIT pause only. The sequencer stays in `CallingCq` and keeps
+    /// listening, so a station that answers during it is worked normally — a pause that made
+    /// the operator deaf would defeat the point of running CQ at all.
+    #[serde(default = "default_cq_pause_secs")]
+    pub cq_pause_secs: Option<u32>,
+    /// Stop calling a station that ANSWERED you and then went silent, after this many
+    /// unanswered overs of the exchange (AwaitRoger/AwaitRr73) — the club station that
+    /// works three people at once and drops you mid-contact. `Some(8)` by default
+    /// (operator preference); `None` = stock WSJT-X (repeat until answered, only the Tx
+    /// watchdog stops it). Distinct from `cq_max_calls`, which governs a CQ run.
+    ///
+    /// ⚠️ IT DOES NOT APPLY WHILE YOU ARE CALLING SOMEBODY WHO HAS NOT COME BACK
+    /// (operator ruling 2026-08-23: "make it not apply to a station I picked
+    /// deliberately"). It used to cover `AwaitReport` as well, which per
+    /// `Station::start` is only ever reached BEFORE the DX has addressed you — so eight
+    /// calls into a DXpedition pileup and Nexus went quiet, which is the whole of DX
+    /// chasing governed by a setting written for the opposite case. The Tx watchdog is
+    /// what bounds a call nobody answers, exactly as upstream.
     #[serde(default = "default_directed_max_calls")]
     pub directed_max_calls: Option<u32>,
     /// Tempo chat: max transmit cycles per directed message before it goes terminal
@@ -1385,6 +1664,21 @@ pub struct Settings {
     /// after t s". Default matches the loop's long-standing 12 s safety cap.
     #[serde(default = "default_tune_timeout")]
     pub tune_timeout_secs: u32,
+    /// RF power for the TUNE carrier, percent — the level a tune-up keys at, whatever the
+    /// operating slider says.
+    ///
+    /// `None` = LEAVE THE RIG'S POWER ALONE, which is today's behaviour to the byte: a tune
+    /// keys at whatever the cockpit slider is on. Percent (u8) with a watts hint from
+    /// [`Settings::station_power_w`], following [`Settings::sstv_tx_power_pct`] exactly — the
+    /// control it seeds is a percent slider.
+    ///
+    /// ⚠️ SAFE-DIRECTION ONLY: the loop applies it as the LOWER of this and the level it has
+    /// already commanded, so a tune power can turn the rig DOWN for the tune-up and can never
+    /// turn it up past the operator's own setting or past the per-mode duty-cycle ceiling those
+    /// levels are already clamped to ([`Settings::rf_power_ceiling`]). A tune carrier is 100%
+    /// duty into a load or a mismatched antenna, so the only direction worth allowing is down.
+    #[serde(default)]
+    pub tune_power_pct: Option<u8>,
     /// WSJT-X Split Operation (Settings ▸ Radio): keep the TRANSMITTED audio in
     /// 1500–2000 Hz (harmonics land outside the TX filter) by shifting the TX
     /// dial in 500 Hz steps. `None` = stock default (transmit at the raw audio
@@ -1518,6 +1812,11 @@ pub struct Settings {
     /// for the session (the decline memory), exactly as SSTV/APRS do.
     #[serde(default = "default_true")]
     pub psk_rx_auto_arm: bool,
+    /// Whether opening the RTTY view starts the receiver — [`Settings::psk_rx_auto_arm`]'s
+    /// twin, same doctrine, same default, and the same interior-acronym trap on the wire key
+    /// (`rttyRXAutoArm` compiles clean on both sides and never matches).
+    #[serde(default = "default_true")]
+    pub rtty_rx_auto_arm: bool,
 
     // --- alerts / comforts ---
     /// Alert (sound + visual) when your callsign is decoded (someone calling you).
@@ -1526,6 +1825,23 @@ pub struct Settings {
     pub alert_cq: bool,
     /// Alert when a new (not previously heard) station is decoded.
     pub alert_new: bool,
+    /// Beep when a park is freshly spotted on the air — App's own poll of
+    /// `get_ota_map_spots`, gated on this setting (no poll at all while off).
+    pub pota_new_activation_alert: bool,
+    /// Put the exchanged dB reports into the logged QSO's COMMENT field, WSJT-X's
+    /// "dB reports to comments" (`dBtoComments`, default false there — logqso.cpp:143
+    /// builds `"<mode>  Sent: <rpt>  Rcvd: <rpt>"`, two spaces, parts omitted when
+    /// absent, and this matches it byte for byte). Opt-in, exactly as WSJT-X ships it.
+    #[serde(default)]
+    pub log_reports_to_comments: bool,
+    /// Show the "Confirm" tier — worked-but-unconfirmed award slots (LoTW confirmation
+    /// opportunities) — on the Needed board and as decode/roster chips. Default ON:
+    /// the tier ships lit and this is the opt-OUT for operators who chase contacts,
+    /// not confirmations (operator ask, 2026-09-01). `default = "default_on"`, not a
+    /// bare default: a settings.json from an older build must read TRUE, or the
+    /// upgrade would silently turn the tier off for everyone.
+    #[serde(default = "default_on")]
+    pub alert_confirm_tier: bool,
     /// Band scope for new-DXCC alerts: "off" | "hf" | "vhf" | "all". `alert_new`
     /// stays the master gate (backward compat); these scopes refine it per type.
     #[serde(default = "default_alert_scope_all")]
@@ -1708,7 +2024,25 @@ pub struct Settings {
     /// NOT the HRD Logbook UDP push above). Off by default. The station callsign is
     /// `mycall`; the upload code lives in the OS keychain. HRDLog.net is not an ARRL
     /// confirmation source — an upload here never earns DXCC/WAS credit.
+    /// The eQSL account's QTH Nickname. Required by eQSL when one callsign has
+    /// several QTH profiles ("if not logged in, if multiple accounts with same
+    /// callsign" — their spec); such an account cannot authenticate at all without
+    /// it (field report, 2026-09-01). Empty for the single-profile majority, whose
+    /// requests are byte-identical to before.
+    #[serde(default)]
+    pub eqsl_qth_nickname: String,
     pub hrdlog_upload: bool,
+    /// Auto-push each logged QSO to World Radio League (`POST /v1/contacts`).
+    /// Flipped on by saving a WRL API key, off by clearing it — the credential IS
+    /// the opt-in, like every other connector.
+    #[serde(default)]
+    pub wrl_upload: bool,
+    /// The WRL logbook contacts go to. Resolved ONCE at key-save time (`GET /v1/me`,
+    /// falling back to the account's single logbook) and stored here — an id, not a
+    /// secret, so Settings not the keychain. Empty = omit `logbookId` and let the
+    /// account's default take it.
+    #[serde(default)]
+    pub wrl_logbook_id: String,
 
     /// Auto-forward EVERY logged QSO (not just Field Day) to N3FJP over the same
     /// `n3fjp_host`/`n3fjp_port` — N3FJP ACLog / everyday general logging. ADDDIRECT with
@@ -1724,11 +2058,33 @@ pub struct Settings {
     #[serde(default)]
     pub cloudlog_station_id: String,
     /// Cloudlog/Wavelog instance API key. LEGACY-ONLY at rest: the key now lives in
-    /// the OS keychain (see src-tauri `set_cloudlog_key`). `skip_serializing` keeps
-    /// it OUT of settings.json on every save; it still DESERIALIZES an older file's
-    /// plaintext key so the shell can migrate it into the keychain once, then clear
-    /// it. Not sent to the frontend — the UI field is write-only.
-    #[serde(default, skip_serializing)]
+    /// the OS keychain (see src-tauri `set_cloudlog_key`). It DESERIALIZES an older
+    /// file's plaintext key so the shell can migrate it into the keychain once, then
+    /// clear it.
+    ///
+    /// `skip_serializing_if = is_empty`, NOT an unconditional `skip_serializing`: the
+    /// migration DEFERS on a box with no keychain (round 7 F12) and retries next launch,
+    /// and that retry needs the key to survive in settings.json across the ordinary saves
+    /// that run right after (the FD position-id save, every settings command). An
+    /// unconditional skip dropped it from those saves and destroyed the only copy (round 8
+    /// F1). The invariant: the key lives in EXACTLY one of {file, keychain}. While it is
+    /// non-empty (pending migration) it serializes, so no save can drop it; once the
+    /// keychain has it the migration clears the field and the empty value is omitted, so
+    /// the plaintext is never re-written. `settings.save` is 0600 (F8), so the pending key
+    /// at rest is owner-only; `export_settings_bundle` strips `cloudlogKey`
+    /// (`BACKUP_REDACTED_FIELDS`); `get_settings` clears it, keeping the "write-only, not sent
+    /// to the frontend" contract even while a pending key sits in the file; and
+    /// `Engine::apply_settings_inner` preserves it across the wholesale `self.settings = s` of
+    /// every form Save / reset / restore, so no such round-trip can blank it (round 10 Finding 1).
+    ///
+    /// `skip_serializing_if = cloudlog_key_absent` (trim-aware), NOT `String::is_empty`, so it
+    /// agrees with the migration gate on a whitespace-only value (round 10 N2).
+    ///
+    /// DOWNGRADE CAVEAT (round 10 N3): an OLDER build carried an unconditional
+    /// `skip_serializing`, so if the operator downgrades while a key is pending it deserializes the
+    /// key, then drops it on its first save — the pending key is lost. This build cannot prevent a
+    /// prior build's behaviour; the mitigation is simply not to downgrade with a migration pending.
+    #[serde(default, skip_serializing_if = "cloudlog_key_absent")]
     pub cloudlog_key: String,
     /// Auto-forward each logged QSO to the Cloudlog/Wavelog instance above. Off by default.
     #[serde(default)]
@@ -1804,8 +2160,30 @@ fn default_tune_timeout() -> u32 {
     12
 }
 
+/// The shared default for the two #145 CAT declarations: "work it out as before".
+fn default_cat_auto() -> String {
+    "auto".to_string()
+}
+
 fn default_directed_max_calls() -> Option<u32> {
     Some(8)
+}
+
+/// Eight unanswered CQs before a breather (operator ruling). Enough to be heard through a
+/// fade, short enough not to hold a frequency for a quarter of an hour.
+/// A quarter of the rig's maximum — what most manuals say for AM, because the carrier is always
+/// there and the peaks are what flat-top. A starting point an operator can raise.
+fn default_max_power_am() -> Option<f32> {
+    Some(0.25)
+}
+
+fn default_cq_max_calls() -> Option<u32> {
+    Some(8)
+}
+
+/// Three minutes off the air after an unanswered run, then call again.
+fn default_cq_pause_secs() -> Option<u32> {
+    Some(180)
 }
 
 /// A G-5500's own resolution is about this; below it a command is noise rather
@@ -1907,6 +2285,19 @@ fn default_qrz_sync_hours() -> u32 {
 
 fn default_lotw_auto_upload_hours() -> u32 {
     6
+}
+
+fn default_fd_host_port() -> u16 {
+    tempo_net::fdsync::DEFAULT_TCP_PORT
+}
+
+fn default_fd_scoreboard_port() -> u16 {
+    7373
+}
+
+/// One past the scoreboard, so a Field Day host can serve both boards at once.
+fn default_connect_web_port() -> u16 {
+    7374
 }
 
 fn default_fd_power() -> u32 {
@@ -2252,6 +2643,30 @@ pub struct RadioProfile {
     /// a DATA submode nor SSB.
     #[serde(default)]
     pub data_modes_plain_ssb: bool,
+    /// **Hold the FM DATA submode while the SSTV receiver is running** (#130, PA3GYQ).
+    ///
+    /// Default OFF, which is today's behaviour: [`Engine::fm_mode_word`] commands `PKTFM`
+    /// only while an image is QUEUED OR IN FLIGHT and plain `FM` the rest of the time, so a
+    /// rig parked on an FM SSTV channel drops out of FM-D between pictures. That revert is
+    /// deliberate — an SSTV send once keyed a data mode into an FM repeater input — but it is
+    /// wrong for the operator who sits on an FM SSTV calling channel all evening.
+    ///
+    /// ON, the DATA submode is held for as long as `Engine::sstv_armed` is true, i.e. from the
+    /// moment the SSTV view starts the receiver until the operator stops it.
+    ///
+    /// ⚠️ THE COST, AND IT IS THE REASON THIS IS OPT-IN. The receiver stays armed after the
+    /// operator leaves the SSTV view (only an explicit Stop, or the ISS LOS unwind, disarms
+    /// it). So with this on, an FM VOICE call made without stopping the receiver first is
+    /// commanded in the FM data submode, where a normally-wired rig takes transmit audio from
+    /// the data port and the microphone modulates nothing — the same "red light, no RF"
+    /// failure `data_modes_plain_ssb` exists for, one mode along. Stop the receiver before
+    /// going back to voice; the hint on the switch says so.
+    ///
+    /// PER RADIO, not global, for `data_modes_plain_ssb`'s reason: it is a property of how
+    /// THAT rig is cabled and operated. A station can run SSTV on the 9700 and voice on the HF
+    /// rig, and only one of them should be held.
+    #[serde(default)]
+    pub sstv_hold_data_submode: bool,
     // --- audio (a rig's own RX codec) ---
     pub audio_in: String,
     pub audio_out: String,
@@ -2262,6 +2677,9 @@ pub struct RadioProfile {
     pub rotator_model: u32,
     pub rotator_port: String,
     pub rotator_baud: u32,
+    pub amp_model: String,
+    pub amp_port: String,
+    pub amp_follow_band: bool,
     pub rotator_host: String,
     /// UNIQUE across enabled profiles (validated) — each radio's own rotctld TCP port.
     pub rotctld_port: u16,
@@ -2291,6 +2709,37 @@ pub struct RadioProfile {
     /// the same reason as `flex_radio_ip` — one Flex may run it while another rig does not.
     #[serde(default)]
     pub flex_native_pan: bool,
+    /// Opt-in to the FT-710's own RF spectrum over its internal FT4222 USB→SPI bridge (FORK-LOCAL;
+    /// only has an effect in a build with the `yaesu-wf` feature). OFF by default.
+    ///
+    /// ⚠️ THE RADIO MUST BE TOLD TO EXPOSE IT, AND NEXUS CANNOT DO THAT. The FT4222 only appears on
+    /// USB once **SCU-LAN10** is enabled in the radio's EX menu, and frames only flow once the
+    /// **external display** output is on too. Both are EX-menu items this app cannot set over CAT,
+    /// so a silent scope with this switched on is an instruction to the operator rather than a fault
+    /// to retry — which is what `RadioStatus::scope_error` says, naming whichever of the two it is.
+    #[serde(default)]
+    pub yaesu_rf_scope: bool,
+    /// Where the rig's FIX sweep starts, per BAND, in MHz — `{"20m": 14.15}`.
+    ///
+    /// The radio reports this nowhere: it is set by a long press on FIX, a front-panel-only action,
+    /// and the whole `EX` menu was searched without finding it. So the operator states it once and
+    /// Nexus keeps it. PER BAND because the radio keeps one per band — a 20 m start drawn on 40 m
+    /// would be a window somewhere else entirely, and unlike most errors here it would persist,
+    /// since a FIX window has no reason to change.
+    ///
+    /// ⚠️ NOTHING WRITES THIS YET, so in a shipped build it is always empty and the FIX start comes
+    /// from `yaesu_wf::auto_fix_start` — the band edge, measured on the radio. `Engine::set_yaesu_fix_start`
+    /// is the intended writer and currently has no caller: there is no Tauri command for it, and the
+    /// chip-row input that would have driven one was deliberately removed once the derivation proved
+    /// right on the air, because inviting a value the app can derive is a worse default than deriving it.
+    ///
+    /// It is kept — rather than deleted as dead — because the derivation CAN be wrong and nothing can
+    /// detect that: the operator may long-press FIX and move the window, and the radio will report
+    /// neither the change nor the new start. This map is the only escape hatch that exists for that,
+    /// and the loop already reads it in preference to the derived value. Wiring a writer is a
+    /// follow-up, not dead code to remove.
+    #[serde(default)]
+    pub yaesu_fix_starts: std::collections::BTreeMap<String, f64>,
     /// Opt-in to THIS radio's native FlexRadio DAX audio (BOTH directions — see
     /// [`Settings::flex_native_audio`]). Per-radio, as above.
     #[serde(default)]
@@ -2340,6 +2789,11 @@ pub struct RadioProfilePatch {
     /// See `RadioProfile::data_modes_plain_ssb` — plain SSB instead of the DATA submode.
     #[serde(default)]
     pub data_modes_plain_ssb: bool,
+    /// See `RadioProfile::sstv_hold_data_submode` — hold FM-D while the SSTV receiver runs.
+    /// `#[serde(default)]` like its neighbour: a patch written before the field existed still
+    /// deserializes, as OFF, which is the pre-field behaviour.
+    #[serde(default)]
+    pub sstv_hold_data_submode: bool,
     pub audio_in: String,
     pub audio_out: String,
     pub tx_level: f32,
@@ -2347,6 +2801,9 @@ pub struct RadioProfilePatch {
     pub rotator_model: u32,
     pub rotator_port: String,
     pub rotator_baud: u32,
+    pub amp_model: String,
+    pub amp_port: String,
+    pub amp_follow_band: bool,
     pub rotator_host: String,
     pub rotctld_port: u16,
     pub native_scope: String,
@@ -2357,6 +2814,21 @@ pub struct RadioProfilePatch {
     /// See `RadioProfile::flex_native_pan`.
     #[serde(default)]
     pub flex_native_pan: bool,
+    /// See `RadioProfile::yaesu_rf_scope`. `Option`, and NOT a bare `bool` like its neighbours —
+    /// this one has no UI control, so an omitted field is the NORMAL case rather than an old
+    /// payload, and `#[serde(default)]` on a `bool` would read that omission as `false`.
+    ///
+    /// It cost the operator a working RF scope on 2026-08-20: saving anything on the radio form
+    /// sent a patch without this field, the scope switched itself off, and the waterfall silently
+    /// fell back to sound-card audio with nothing to explain it. `flex_native_pan` gets away with a
+    /// bare `bool` only because it HAS a toggle, so the form always states its value. `None` here
+    /// means "leave whatever is stored alone"; a caller that wants it off says so.
+    #[serde(default)]
+    pub yaesu_rf_scope: Option<bool>,
+    /// See `RadioProfile::yaesu_fix_starts`. `Option` for the same reason as the field above: a form
+    /// that does not know about it must not erase it.
+    #[serde(default)]
+    pub yaesu_fix_starts: Option<std::collections::BTreeMap<String, f64>>,
     /// See `RadioProfile::flex_native_audio`.
     #[serde(default)]
     pub flex_native_audio: bool,
@@ -2365,6 +2837,17 @@ pub struct RadioProfilePatch {
     /// which `radio_profile_patch_assigns_every_field_it_carries` enforces.
     #[serde(default)]
     pub live_mic_device: String,
+}
+
+impl Settings {
+    /// Test-only mirror of `Engine::set_yaesu_fix_start` — the same write, without an Engine.
+    #[cfg(test)]
+    fn set_yaesu_fix_start_for_test(&mut self, band: &str, mhz: f64) {
+        let id = self.active_radio;
+        if let Some(p) = self.radios.iter_mut().find(|p| p.id == id) {
+            p.yaesu_fix_starts.insert(band.to_string(), mhz);
+        }
+    }
 }
 
 impl RadioProfilePatch {
@@ -2389,18 +2872,28 @@ impl RadioProfilePatch {
         p.icom_native_cat = self.icom_native_cat;
         p.icom_data_mode = self.icom_data_mode;
         p.data_modes_plain_ssb = self.data_modes_plain_ssb;
+        p.sstv_hold_data_submode = self.sstv_hold_data_submode;
         p.audio_in = self.audio_in;
         p.audio_out = self.audio_out;
         p.tx_level = self.tx_level;
         p.rx_gain = self.rx_gain;
         p.rotator_model = self.rotator_model;
         p.rotator_port = self.rotator_port;
+        p.amp_model = self.amp_model;
+        p.amp_port = self.amp_port;
+        p.amp_follow_band = self.amp_follow_band;
         p.rotator_baud = self.rotator_baud;
         p.rotator_host = self.rotator_host;
         p.rotctld_port = self.rotctld_port;
         p.native_scope = self.native_scope;
         p.flex_radio_ip = self.flex_radio_ip;
         p.flex_native_pan = self.flex_native_pan;
+        if let Some(v) = self.yaesu_rf_scope {
+            p.yaesu_rf_scope = v;
+        }
+        if let Some(v) = &self.yaesu_fix_starts {
+            p.yaesu_fix_starts = v.clone();
+        }
         p.flex_native_audio = self.flex_native_audio;
         p.live_mic_device = self.live_mic_device;
     }
@@ -2478,6 +2971,7 @@ impl Default for RadioProfile {
             icom_native_cat: false,
             icom_data_mode: 1,
             data_modes_plain_ssb: false,
+            sstv_hold_data_submode: false,
             audio_in: String::new(),
             audio_out: String::new(),
             tx_level: 0.9,
@@ -2485,6 +2979,9 @@ impl Default for RadioProfile {
             rotator_model: 0,
             rotator_port: String::new(),
             rotator_baud: default_rotator_baud(),
+            amp_model: String::new(),
+            amp_port: String::new(),
+            amp_follow_band: false,
             rotator_host: String::new(),
             rotctld_port: 4533,
             bands: Vec::new(),
@@ -2494,6 +2991,8 @@ impl Default for RadioProfile {
             native_scope: "auto".to_string(),
             flex_radio_ip: String::new(),
             flex_native_pan: false,
+            yaesu_rf_scope: false,
+            yaesu_fix_starts: Default::default(),
             flex_native_audio: false,
             live_mic_device: String::new(),
         }
@@ -2692,6 +3191,87 @@ pub fn cw_key_port_conflict(
         })
 }
 
+/// An amplifier configured on a port some OTHER device on this station already owns.
+///
+/// ⭐ SERIAL PORTS ARE EXCLUSIVE-OPEN. The amplifier poller holds `amp_port` for the whole
+/// session the moment it is configured — the same thing `Engine::hold_cat_port` and its
+/// release/ack handshake exist to manage for CAT, and the reason the baud ladder says "our own
+/// live daemon holds the port even when the rig is mute". So an operator who types their CAT
+/// port into the amplifier field does not get an amplifier that fails to answer, they get a
+/// RADIO that fails to connect, and they will report it as a radio bug.
+///
+/// [`serial_port_conflicts`] cannot see this: it filters on `serial_port` alone and never looks
+/// at `amp_port`. This is its amplifier twin, and the exact sibling of [`cw_key_port_conflict`]
+/// — an auxiliary serial device colliding with something else that opens a port.
+///
+/// SOFT, like all three of its siblings in the warning chain: it is not a save-block. It rides
+/// `radio_config_warning` and self-clears the moment the ports differ.
+///
+/// Checked against every port a live station actually opens: each enabled serial radio's CAT
+/// port and its dedicated PTT keying port, the amplifier's own radio's rotator port, and the
+/// three global auxiliary serial devices (`cw_key_port`, `winkeyer_port`, `rtty_fsk_port`).
+pub fn amp_port_conflict(
+    radios: &[RadioProfile],
+    cw_key_port: &str,
+    winkeyer_port: &str,
+    rtty_fsk_port: &str,
+) -> Option<String> {
+    for p in radios
+        .iter()
+        .filter(|p| p.enabled && !p.amp_port.trim().is_empty() && !p.amp_model.trim().is_empty())
+    {
+        let ap = p.amp_port.trim();
+        let same = |other: &str| !other.trim().is_empty() && other.trim().eq_ignore_ascii_case(ap);
+
+        // Its own rotator, which this radio's rotctld opens.
+        if p.rotator_model > 0 && same(&p.rotator_port) {
+            return Some(format!(
+                "{}'s amplifier port {ap} is also its rotator port — a serial port can only be \
+                 open once, so one of the two will fail to connect. Give the amplifier its own \
+                 port.",
+                p.name
+            ));
+        }
+
+        // Any enabled serial radio's CAT port or dedicated keying port — including this one's.
+        for r in radios.iter().filter(|r| r.enabled) {
+            let serial_cat = r.rig_model > 0 && r.rig_conn.eq_ignore_ascii_case("serial");
+            if serial_cat && same(&r.serial_port) {
+                return Some(format!(
+                    "{}'s amplifier port {ap} is also {}'s CAT port — a serial port can only be \
+                     open once, so the radio will fail to connect. Give the amplifier its own \
+                     port.",
+                    p.name, r.name
+                ));
+            }
+            if same(&r.ptt_serial_port) {
+                return Some(format!(
+                    "{}'s amplifier port {ap} is also {}'s PTT keying port — a serial port can \
+                     only be open once, so the rig will not key. Give the amplifier its own port.",
+                    p.name, r.name
+                ));
+            }
+        }
+
+        // The global auxiliary serial devices.
+        for (port, what) in [
+            (cw_key_port, "the CW keyline"),
+            (winkeyer_port, "the WinKeyer"),
+            (rtty_fsk_port, "the RTTY FSK keyline"),
+        ] {
+            if same(port) {
+                return Some(format!(
+                    "{}'s amplifier port {ap} is also {what}'s port — a serial port can only be \
+                     open once, so one of the two will fail to connect. Give the amplifier its \
+                     own port.",
+                    p.name
+                ));
+            }
+        }
+    }
+    None
+}
+
 /// Q65-60: the EME working period. See [`Settings::q65_period_s`].
 fn default_q65_period_s() -> u16 {
     60
@@ -2705,6 +3285,31 @@ fn default_fst4_period_s() -> u16 {
 /// MSK144 at 15 s — the 6 m meteor-scatter period. See [`Settings::msk144_period_s`].
 fn default_msk144_period_s() -> u16 {
     15
+}
+
+/// JS8 Normal = index 1 of `Js8Speed::ALL`. See [`Settings::js8_speed`].
+fn default_js8_speed() -> u8 {
+    1
+}
+
+/// All four JS8 speeds (Slow 1 | Normal 2 | Fast 4 | Turbo 8). See [`Settings::js8_rx_speeds`].
+fn default_js8_rx_speeds() -> u8 {
+    15
+}
+
+/// JS8Call ships autoreply ON (G3). See [`Settings::js8_autoreply`].
+fn default_js8_autoreply() -> bool {
+    true
+}
+
+/// JS8Call ships relay ON (G3). See [`Settings::js8_relay`].
+fn default_js8_relay() -> bool {
+    true
+}
+
+/// JS8Call's `TxIdleWatchdog` default (minutes). See [`Settings::js8_idle_watchdog_min`].
+fn default_js8_idle_watchdog_min() -> u16 {
+    60
 }
 
 impl Default for Settings {
@@ -2742,12 +3347,24 @@ impl Default for Settings {
             msk144_period_s: default_msk144_period_s(),
             jt65_submode: 0,
             q65_submode: 0,
+            js8_speed: default_js8_speed(),
+            js8_rx_speeds: default_js8_rx_speeds(),
+            js8_hb_interval_min: 0,
+            js8_cq_interval_min: 0,
+            js8_hb_ack: false,
+            js8_autoreply: default_js8_autoreply(),
+            js8_relay: default_js8_relay(),
+            js8_idle_watchdog_min: default_js8_idle_watchdog_min(),
+            js8_info: String::new(),
+            js8_status: String::new(),
+            js8_groups: Vec::new(),
             rptr_offset_override_hz: 0, // 0 = band-convention offset
             fd_active: false,           // never auto-enabled — only the operator's toggle sets this
             fd_class: String::new(),
             fd_event: String::new(), // "" = arrlfd
             fd_power_mult: 2,
             fd_bonuses: Vec::new(),
+            fd_bonuses_planned: Vec::new(),
             n3fjp_host: String::new(),
             n3fjp_port: 1100,
             n3fjp_use_enter: true,
@@ -2760,6 +3377,17 @@ impl Default for Settings {
             // every operator outside Wisconsin).
             fd_section: String::new(),
             fd_operator: String::new(),
+            fd_host_enable: false, // hosting exposes a LAN port — operator-only opt-in
+            fd_host_port: default_fd_host_port(),
+            fd_event_name: String::new(),
+            fd_join_addr: String::new(),
+            fd_position_name: String::new(),
+            fd_position_id: String::new(), // generated (8-hex) at startup, then persisted
+            fd_scoreboard: false,          // serving a LAN page is an operator-only opt-in
+            fd_scoreboard_port: default_fd_scoreboard_port(),
+            connect_web: false, // same rule: exposing the station on the LAN is opt-in
+            connect_web_port: default_connect_web_port(),
+            beta_updates: false, // stable channel by default; MUST match the serde default (false)
             beacon: false,
             harq_enabled: true,
             ptt_method: "vox".to_string(),
@@ -2777,13 +3405,21 @@ impl Default for Settings {
             // what must never happen to a rig that did not ask for it (the FTDX10/FT-991 bench
             // regression). An operator who ticks nothing gets today's behaviour unchanged.
             cat_rts_keys_ptt: false,
+            // "auto" on both = today's behaviour exactly: infer the handshake as before, and
+            // say nothing at all about the keying line. #145's knobs are opt-in, because each
+            // of them can cost a working station its CAT (see the field docs).
+            cat_serial_handshake: default_cat_auto(),
+            cat_ptt_line_state: default_cat_auto(),
             baud: 38400,
             rig_conn: "serial".to_string(),
             rig_addr: String::new(),
             omnirig_slot: 1,
             icom_native_cat: false,
+            split_detect_enabled: false,
+            yaesu_rf_scope: false,
             icom_data_mode: 1,
             data_modes_plain_ssb: false,
+            sstv_hold_data_submode: false,
             set_rig_mode: true, // force the DATA submode for digital, so sections set the rig
             operating_mode: OperatingMode::Digital, // digital obeys; phone/CW force
             license_class: LicenseClass::Open, // no TX lockout until the operator declares a class
@@ -2808,6 +3444,9 @@ impl Default for Settings {
             rotator_model: 0,
             rotator_port: String::new(),
             rotator_baud: default_rotator_baud(),
+            amp_model: String::new(),
+            amp_port: String::new(),
+            amp_follow_band: false,
             rotator_host: String::new(),
             // Satellite Doppler is OFF and unmapped by default: a station
             // with no satellite interest must never have its dial moved.
@@ -2910,6 +3549,7 @@ impl Default for Settings {
             max_power_phone: None,
             max_power_cw: None,
             max_power_digital: None,
+            max_power_am: default_max_power_am(),
             prop_engine: default_prop_engine(),
             save_wav: default_save_wav(),
             lotw_max_age_days: default_lotw_max_age_days(),
@@ -2926,7 +3566,12 @@ impl Default for Settings {
             prompt_to_log: false,
             save_qso_wav: false,
             prefer_rrr: false,
-            cq_max_calls: None,
+            // Both of these MUST match their serde defaults above. A struct default that
+            // disagrees with the serde one means a fresh install and a settings.json missing
+            // the field behave differently — the same operator, two answers, and no way to
+            // tell which they got.
+            cq_max_calls: default_cq_max_calls(),
+            cq_pause_secs: default_cq_pause_secs(),
             directed_max_calls: Some(8),
             chat_max_cycles: None,
             chat_implicit_ack: true,
@@ -2937,6 +3582,7 @@ impl Default for Settings {
             clear_dx_after_log: false,
             double_click_sets_tx: true,
             tune_timeout_secs: 12,
+            tune_power_pct: None, // None = never touch the operator's power
             split_mode: SplitMode::None,
             special_op: SpecialOp::None,
             decode_depth: 3,
@@ -2954,7 +3600,10 @@ impl Default for Settings {
             sstv_default_tx_mode: default_sstv_default_tx_mode(),
             sstv_tx_power_pct: None,
             psk_rx_auto_arm: true,
+            rtty_rx_auto_arm: true,
             alert_my_call: true,
+            alert_confirm_tier: true, // the tier ships lit; the setting is the opt-out
+            log_reports_to_comments: false, // WSJT-X parity: dBtoComments defaults false
             best_caller: default_best_caller(),
             best_caller_min_snr: None,
             blocked_calls: Vec::new(),
@@ -2964,6 +3613,7 @@ impl Default for Settings {
             // New-DXCC / new-grid alerts: ON by default — these are the "new ones"
             // worth chasing (not per-decode spam, which we never alert on).
             alert_new: true,
+            pota_new_activation_alert: false,
             alert_dxcc_bands: default_alert_scope_all(),
             alert_grid_bands: default_alert_grid_bands(),
             b4_match_mode: false,
@@ -2993,7 +3643,10 @@ impl Default for Settings {
             clublog_api_key: String::new(),
             clublog_upload: false,
             eqsl_upload: false,
+            eqsl_qth_nickname: String::new(),
             hrdlog_upload: false,
+            wrl_upload: false, // the credential is the opt-in
+            wrl_logbook_id: String::new(),
             n3fjp_upload: false,
             cloudlog_url: String::new(),
             cloudlog_station_id: String::new(),
@@ -3072,6 +3725,7 @@ impl Settings {
             icom_native_cat: self.icom_native_cat,
             icom_data_mode: self.icom_data_mode,
             data_modes_plain_ssb: self.data_modes_plain_ssb,
+            sstv_hold_data_submode: self.sstv_hold_data_submode,
             audio_in: self.audio_in.clone(),
             audio_out: self.audio_out.clone(),
             tx_level: self.tx_level,
@@ -3080,6 +3734,12 @@ impl Settings {
             rotator_port: self.rotator_port.clone(),
             rotator_baud: self.rotator_baud,
             rotator_host: self.rotator_host.clone(),
+            // MIRRORS the flat value, not a blank: this is the migration seed for a
+            // single-radio station's profile 0, and blanking here would lose an amplifier the
+            // operator had already configured before profiles existed.
+            amp_model: self.amp_model.clone(),
+            amp_port: self.amp_port.clone(),
+            amp_follow_band: self.amp_follow_band,
             rotctld_port: 4533,
             bands: Vec::new(),
             last_dial_mhz: self.dial_mhz,
@@ -3091,6 +3751,11 @@ impl Settings {
             // that already HAS profiles).
             flex_radio_ip: self.flex_radio_ip.clone(),
             flex_native_pan: self.flex_native_pan,
+            // No flat counterpart by design: this opt-in is per-radio only. A station with two
+            // rigs has at most one FT-710, and a global mirror would recreate exactly the
+            // dual-representation problem the flat fields already are.
+            yaesu_rf_scope: false,
+            yaesu_fix_starts: Default::default(),
             flex_native_audio: self.flex_native_audio,
             live_mic_device: String::new(),
         }
@@ -3125,6 +3790,29 @@ impl Settings {
             .iter()
             .filter(|p| p.enabled && p.bands.iter().any(|b| b.eq_ignore_ascii_case(band)))
             .count() as u32
+    }
+
+    /// Does any ENABLED radio cover `band`? Drives the band dropdowns (#184).
+    ///
+    /// Same coverage semantics as [`Self::radio_for_band`]: an empty `bands` list is a
+    /// catch-all ("this rig covers everything"), a non-empty one is an explicit claim.
+    ///
+    /// ⚠️ TRUE WHEN NOTHING IS CONFIGURED, and that is the whole safety of this filter. A
+    /// station with no radios yet — the first-run wizard, or an operator who has not added one
+    /// — must see the full band list, not an empty dropdown. Likewise any catch-all rig makes
+    /// every band covered, so the single-radio majority is unaffected: the filter can only
+    /// remove a band when EVERY enabled radio has named its bands and none of them named this
+    /// one. It is a DISPLAY filter and must never be consulted by the transmit gate; privileges
+    /// decide what may be keyed, this decides only what is worth offering.
+    pub fn any_radio_covers(&self, band: &str) -> bool {
+        let mut any_enabled = false;
+        for p in self.radios.iter().filter(|p| p.enabled) {
+            any_enabled = true;
+            if p.bands.is_empty() || p.bands.iter().any(|b| b.eq_ignore_ascii_case(band)) {
+                return true;
+            }
+        }
+        !any_enabled
     }
 
     /// Which radio should own `band` (Dual-Radio P4 auto band-routing). Returns `Some(id)` only when a
@@ -3407,13 +4095,17 @@ impl Settings {
         self.omnirig_slot = p.omnirig_slot;
         self.rigctld_port = p.rigctld_port;
         self.icom_native_cat = p.icom_native_cat;
+        self.yaesu_rf_scope = p.yaesu_rf_scope;
         self.data_modes_plain_ssb = p.data_modes_plain_ssb;
+        self.sstv_hold_data_submode = p.sstv_hold_data_submode;
         self.audio_in = p.audio_in;
         self.audio_out = p.audio_out;
         self.tx_level = p.tx_level;
         self.rx_gain = p.rx_gain;
         self.rotator_model = p.rotator_model;
         self.rotator_port = p.rotator_port;
+        self.amp_model = p.amp_model;
+        self.amp_port = p.amp_port;
         self.rotator_baud = p.rotator_baud;
         self.rotator_host = p.rotator_host;
         // The Flex three ride the SAME mirror as every other rig field, so every existing consumer
@@ -3443,7 +4135,9 @@ impl Settings {
             omnirig_slot,
             rigctld_port,
             icom_native_cat,
+            yaesu_rf_scope,
             data_modes_plain_ssb,
+            sstv_hold_data_submode,
             audio_in,
             audio_out,
             tx_level,
@@ -3452,6 +4146,8 @@ impl Settings {
             rotator_port,
             rotator_baud,
             rotator_host,
+            amp_model,
+            amp_port,
             flex_radio_ip,
             flex_native_pan,
             flex_native_audio,
@@ -3467,7 +4163,9 @@ impl Settings {
             self.omnirig_slot,
             self.rigctld_port,
             self.icom_native_cat,
+            self.yaesu_rf_scope,
             self.data_modes_plain_ssb,
+            self.sstv_hold_data_submode,
             self.audio_in.clone(),
             self.audio_out.clone(),
             self.tx_level,
@@ -3476,6 +4174,8 @@ impl Settings {
             self.rotator_port.clone(),
             self.rotator_baud,
             self.rotator_host.clone(),
+            self.amp_model.clone(),
+            self.amp_port.clone(),
             self.flex_radio_ip.clone(),
             self.flex_native_pan,
             self.flex_native_audio,
@@ -3492,7 +4192,9 @@ impl Settings {
             p.omnirig_slot = omnirig_slot;
             p.rigctld_port = rigctld_port;
             p.icom_native_cat = icom_native_cat;
+            p.yaesu_rf_scope = yaesu_rf_scope;
             p.data_modes_plain_ssb = data_modes_plain_ssb;
+            p.sstv_hold_data_submode = sstv_hold_data_submode;
             p.audio_in = audio_in;
             p.audio_out = audio_out;
             p.tx_level = tx_level;
@@ -3501,6 +4203,8 @@ impl Settings {
             p.rotator_port = rotator_port;
             p.rotator_baud = rotator_baud;
             p.rotator_host = rotator_host;
+            p.amp_model = amp_model;
+            p.amp_port = amp_port;
             p.flex_radio_ip = flex_radio_ip;
             p.flex_native_pan = flex_native_pan;
             p.flex_native_audio = flex_native_audio;
@@ -3718,9 +4422,30 @@ impl Settings {
         to_save.sync_active_from_flat();
         let json = serde_json::to_string_pretty(&to_save).map_err(std::io::Error::other)?;
         let tmp = path.with_extension("json.tmp");
+        // ⛔ Owner-only. settings.json holds the ClubLog API key (and a Cloudlog key until the
+        // keychain migration completes) and sits beside conn-health.json; `File::create` leaves it
+        // world-readable at 0644 (round 7 F8). Create the temp 0600 from the first byte on unix, and
+        // re-assert the mode to cover a slack umask or a stale temp; the rename carries the mode onto
+        // the published file. On non-unix the profile dir's ACL governs it, as elsewhere.
+        #[cfg(unix)]
+        let mut f = {
+            use std::os::unix::fs::OpenOptionsExt;
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&tmp)?
+        };
+        #[cfg(not(unix))]
         let mut f = std::fs::File::create(&tmp)?;
         std::io::Write::write_all(&mut f, json.as_bytes())?;
         f.sync_all()?; // data on disk BEFORE the rename publishes it
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        }
         drop(f);
         // No pre-remove of `path`: rename replaces it atomically on Unix and Windows
         // (MOVEFILE_REPLACE_EXISTING); a remove-first would open a no-file crash window.
@@ -3803,6 +4528,23 @@ impl Settings {
         digital.min(self.rf_power_ceiling())
     }
 
+    /// The ceiling for an AM transmission, whatever the phone cap says.
+    ///
+    /// ⚠️ AM IS NOT SSB, AND THE SSB CAP LETS IT FLAT-TOP. A rig making 100 W PEP on SSB makes
+    /// about 25 W of carrier on AM: the power is in a carrier that is always present plus two
+    /// sidebands, and PEP is reached on modulation peaks. Run the SSB drive into AM and the peaks
+    /// clip. Most manuals say a quarter, which is the [`default_max_power_am`] default.
+    ///
+    /// The LOWER of the AM cap and the selected mode's own cap, never the AM one alone — an
+    /// operator who set AM above phone must not have AM lift their power past what the phone cap
+    /// allows. Identical in shape to [`Self::rf_power_ceiling_high_duty`], and for the identical
+    /// reason: enforcement here may only ever LOWER power, which is what makes it safe to apply
+    /// without bench proof.
+    pub fn rf_power_ceiling_am(&self) -> f32 {
+        let am = self.max_power_am.map(|c| c.clamp(0.0, 1.0)).unwrap_or(1.0);
+        am.min(self.rf_power_ceiling())
+    }
+
     pub fn rig_mode(&self) -> String {
         // FM is BAND-GATED, and that gate is a bug fix, not a preference. `phone_mode`
         // is one station-wide field: nothing resets it when the operator changes band or
@@ -3855,12 +4597,12 @@ impl Settings {
     /// side, and its callers gate on it before they get here.
     pub(crate) fn rig_mode_on_sideband(&self, lsb: bool) -> String {
         match self.operating_mode {
-            // CW: force CW for the CAT keyer; for the soundcard keyer the rig must be
-            // in USB so it transmits the keyed audio tone (band-aware: LSB <10 MHz).
+            // CW: force CW for the CAT keyer; for the soundcard keyer the rig must be in a
+            // DATA submode so it transmits the keyed audio tone (band-aware: LSB <10 MHz).
             OperatingMode::Cw => match self.cw_keyer {
                 // CAT, WinKeyer, and the serial keyline all key the rig in CW mode (the rig
                 // shapes the envelope); only the soundcard keyer keys an audio tone, so that
-                // one needs the rig in SSB (band-aware sideband).
+                // one needs the rig on the SSB side — as a DATA submode, see its arm below.
                 //
                 // BAND-AWARE CW SIDEBAND (operator 2026-07-24, "40 m sets CW-U, should be
                 // CW-L"): same 10 MHz convention as the sideband rules below — CW-L
@@ -3870,7 +4612,24 @@ impl Settings {
                 CwKeyerBackend::Cat | CwKeyerBackend::WinKeyer | CwKeyerBackend::Serial => {
                     if lsb { "CWR" } else { "CW" }.to_string()
                 }
-                CwKeyerBackend::Soundcard => if lsb { "LSB" } else { "USB" }.to_string(),
+                // SOUNDCARD: a DATA submode, exactly like every other soundcard-audio path
+                // here (Digital, Keyboard, RTTY-AFSK, and SSTV's `PKTFM`) — and for their
+                // reason, which this arm was the only one not to apply: on a normally-wired
+                // rig plain SSB takes TX audio from the MIC JACK, so a keyed tone played into
+                // the USB codec never reaches the modulator and the over radiates ZERO RF.
+                // That is the "keys but no audio" field report (Yaesu FTX-1, 2026-08-28).
+                //
+                // The SIDE is unchanged — the CW convention above still picks it — so this
+                // moves USB→PKTUSB and LSB→PKTLSB and nothing else, and it inherits the
+                // `data_modes_plain_ssb` opt-out that mic-jack interfaces need.
+                //
+                // ⚠️ NEEDS-BENCH (no rig on this box). What is proven here is the MODE WORD
+                // Nexus commands. What is NOT proven is a radio putting RF out in DATA-U
+                // where plain USB put none out — that is one key-down on a real rig with the
+                // power meter watched, and it is the whole point of the change.
+                CwKeyerBackend::Soundcard => {
+                    self.plain_ssb_if_configured(if lsb { "PKTLSB" } else { "PKTUSB" })
+                }
             },
             // Phone: force the correct sideband — the hard convention is LSB below
             // 10 MHz (160/80/40 m), USB at 30 m and up. (AM comes later as an explicit
@@ -3977,6 +4736,7 @@ mod tests {
             icom_native_cat: true,
             icom_data_mode: 2,
             data_modes_plain_ssb: true,
+            sstv_hold_data_submode: true,
             audio_in: "USB Audio CODEC #2".into(),
             audio_out: "USB Audio CODEC #2 out".into(),
             tx_level: 0.42,
@@ -3984,11 +4744,24 @@ mod tests {
             rotator_model: 202,
             rotator_port: "COM11".into(),
             rotator_baud: 19_200,
+            amp_model: String::new(),
+            amp_port: String::new(),
+            amp_follow_band: false,
             rotator_host: "192.0.2.20".into(),
             rotctld_port: 4534,
             native_scope: "civ".into(),
             flex_radio_ip: "192.0.2.50".into(),
             flex_native_pan: true,
+            yaesu_rf_scope: Some(false),
+            // A REAL value, like every other field here. `None` was the original seeding and it
+            // made this guard cry wolf: the patch serialises `null`, the profile serialises `{}`,
+            // the comparison calls that a dropped field, and the failure names `apply_to` — which
+            // copies it correctly. A guard whose fixture leaves a field unset is testing its own
+            // serialisation, not the assignment it exists to check.
+            yaesu_fix_starts: Some(std::collections::BTreeMap::from([(
+                "20m".to_string(),
+                14.150_f64,
+            )])),
             flex_native_audio: true,
             live_mic_device: String::new(),
         };
@@ -4028,6 +4801,57 @@ mod tests {
     /// `last_*` tune memory the radio loop owns — and adding a field to `RadioProfile` that is
     /// neither excluded nor in the patch fails here rather than in the field.
     #[test]
+    fn editing_one_radios_amplifier_leaves_the_others_alone() {
+        // The SO2R case, and the reason the amplifier is a PER-RADIO field rather than a station
+        // one: two radios, an amplifier on each. The 2026-07-25 COM-port incident and the Flex
+        // audit both found the same shape — a patch that omits a field silently blanks it on the
+        // profile it touches, and the operator is told "saved".
+        let mut s = Settings {
+            radios: vec![
+                RadioProfile {
+                    id: 0,
+                    amp_model: "spe".into(),
+                    amp_port: "/dev/ttyUSB0".into(),
+                    ..RadioProfile::default()
+                },
+                RadioProfile {
+                    id: 1,
+                    amp_model: "kpa".into(),
+                    amp_port: "/dev/ttyUSB1".into(),
+                    ..RadioProfile::default()
+                },
+            ],
+            active_radio: 0,
+            ..Settings::default()
+        };
+
+        // Edit radio 0's amplifier through the patch path the Settings form uses.
+        let mut p0 = s.radios[0].clone();
+        RadioProfilePatch {
+            amp_model: "kpa".into(),
+            amp_port: "/dev/ttyUSB9".into(),
+            ..patch_of(&s.radios[0])
+        }
+        .apply_to(&mut p0);
+        s.radios[0] = p0;
+
+        assert_eq!(
+            s.radios[0].amp_model, "kpa",
+            "the edited radio took the change"
+        );
+        assert_eq!(s.radios[0].amp_port, "/dev/ttyUSB9");
+        // …and the OTHER radio is untouched. This is the assertion that matters.
+        assert_eq!(
+            s.radios[1].amp_model, "kpa",
+            "radio 1's amplifier model was disturbed by editing radio 0"
+        );
+        assert_eq!(
+            s.radios[1].amp_port, "/dev/ttyUSB1",
+            "radio 1's amplifier PORT was disturbed by editing radio 0"
+        );
+    }
+
+    #[test]
     fn every_per_radio_field_is_reachable_through_the_patch() {
         const NOT_EDITABLE: [&str; 7] = [
             "id",
@@ -4053,6 +4877,7 @@ mod tests {
             icom_native_cat: false,
             icom_data_mode: 3,
             data_modes_plain_ssb: false,
+            sstv_hold_data_submode: false,
             audio_in: String::new(),
             audio_out: String::new(),
             tx_level: 0.0,
@@ -4060,11 +4885,16 @@ mod tests {
             rotator_model: 0,
             rotator_port: String::new(),
             rotator_baud: 0,
+            amp_model: String::new(),
+            amp_port: String::new(),
+            amp_follow_band: false,
             rotator_host: String::new(),
             rotctld_port: 0,
             native_scope: String::new(),
             flex_radio_ip: String::new(),
             flex_native_pan: false,
+            yaesu_rf_scope: Some(false),
+            yaesu_fix_starts: None,
             flex_native_audio: false,
             live_mic_device: String::new(),
         })
@@ -4089,6 +4919,229 @@ mod tests {
              patch is silently dropped on Save. Add it to the patch + apply_to, or list it in \
              NOT_EDITABLE with a reason."
         );
+    }
+
+    /// The advisory UI matches assistance sources BY THEIR DISPLAY LABELS
+    /// (`FieldDayStatus.assistance_on` carries `assistance_sources()`'s labels;
+    /// `FdAdvisories.tsx` string-matches the spotting/cluster ones). A rename on
+    /// either side would silently kill the match — same drift class as the
+    /// sections mirror, same include_str! cure.
+    #[test]
+    fn the_advisory_ui_matches_real_assistance_source_labels() {
+        let ts = include_str!("../../../ui/src/components/FdAdvisories.tsx");
+        let labels: Vec<&str> = Settings::default()
+            .assistance_sources()
+            .iter()
+            .map(|&(label, _)| label)
+            .collect();
+        // Control: the Rust list is the full known set, so a miss below is a
+        // rename, not a parser hole.
+        assert_eq!(
+            labels.len(),
+            3,
+            "assistance_sources changed shape: {labels:?}"
+        );
+        for needed in ["DX cluster / RBN", "PSK Reporter needs"] {
+            assert!(
+                labels.contains(&needed),
+                "{needed:?} left assistance_sources() — update FdAdvisories.tsx's match list too"
+            );
+            assert!(
+                ts.contains(&format!("'{needed}'")),
+                "FdAdvisories.tsx no longer matches {needed:?} — it would miss a live source"
+            );
+        }
+    }
+
+    /// ⭐ THE OTHER SIDE OF THE SAME DRIFT — and the half that was missing while the guard
+    /// above was cited as covering it.
+    ///
+    /// `every_per_radio_field_is_reachable_through_the_patch` compares `RadioProfile` against
+    /// `RadioProfilePatch` — **Rust against Rust**. It cannot see TypeScript, so it passes
+    /// happily while the UI's own `RadioProfilePatch` is missing a field the backend requires.
+    /// `SettingsPanel.tsx` nonetheless described it as the guard that "fails when a per-radio
+    /// field is added without a home in this patch", which is the dangerous kind of wrong: a
+    /// check believed to cover a gap it structurally cannot reach.
+    ///
+    /// What that cost, both found on 2026-08-27 and both live on main at the time:
+    ///
+    /// - `amp_model` / `amp_port` had **no serde default**, so a patch from the UI failed to
+    ///   deserialize outright — `missing field ampModel` — taking the entire Save with it.
+    /// - `icom_data_mode` **had** a default, so it deserialized fine and silently reset the
+    ///   operator's Icom DATA submode to DATA1 on every edit of the rig form. A serde default
+    ///   turns a loud failure into a quiet one; it does not make the drift safe.
+    ///
+    /// So this reads the TypeScript interface itself and compares it key for key. Adding a
+    /// field to either side without the other now fails here, in CI, in seconds.
+    #[test]
+    fn the_typescript_patch_carries_every_field_the_rust_patch_does() {
+        let ts_src = include_str!("../../../ui/src/api.ts");
+
+        // Pull the body of `export interface RadioProfilePatch { … }`.
+        let head = "export interface RadioProfilePatch {";
+        let start = ts_src
+            .find(head)
+            .expect("the UI declares RadioProfilePatch")
+            + head.len();
+        let body = &ts_src[start..];
+        let end = body.find("\n}").expect("the interface is closed");
+        let body = &body[..end];
+
+        // Field lines look like `  name: type` / `  name?: type`. Comments and blanks are not.
+        let mut ts_keys: Vec<String> = Vec::new();
+        for line in body.lines() {
+            let t = line.trim();
+            if t.is_empty() || t.starts_with("//") || t.starts_with("/*") || t.starts_with('*') {
+                continue;
+            }
+            let Some((name, _)) = t.split_once(':') else {
+                continue;
+            };
+            let name = name.trim().trim_end_matches('?');
+            if !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+                ts_keys.push(name.to_string());
+            }
+        }
+
+        // A parser that found nothing would pass every assertion below it.
+        assert!(
+            ts_keys.len() > 20,
+            "parsed only {} fields out of the TS interface — the parser is broken, not the \
+             interface: {ts_keys:?}",
+            ts_keys.len()
+        );
+
+        // Constructed field by field ON PURPOSE, as the guard above is: there is no Default, so
+        // adding a field to the struct breaks this line and forces a look at both sides.
+        let rust = serde_json::to_value(RadioProfilePatch {
+            ptt_method: String::new(),
+            rig_model: 0,
+            rig_model_name: String::new(),
+            serial_port: String::new(),
+            ptt_serial_port: String::new(),
+            baud: 0,
+            rig_conn: String::new(),
+            rig_addr: String::new(),
+            omnirig_slot: 0,
+            rigctld_port: 0,
+            icom_native_cat: false,
+            icom_data_mode: 1,
+            data_modes_plain_ssb: false,
+            sstv_hold_data_submode: false,
+            audio_in: String::new(),
+            audio_out: String::new(),
+            tx_level: 0.0,
+            rx_gain: 0.0,
+            rotator_model: 0,
+            rotator_port: String::new(),
+            rotator_baud: 0,
+            amp_model: String::new(),
+            amp_port: String::new(),
+            amp_follow_band: false,
+            rotator_host: String::new(),
+            rotctld_port: 0,
+            native_scope: String::new(),
+            flex_radio_ip: String::new(),
+            flex_native_pan: false,
+            flex_native_audio: false,
+            // Added by this branch. `yaesu_rf_scope` has a UI counterpart (`yaesuRfScope?`);
+            // `yaesu_fix_starts` deliberately does NOT — its own doc says nothing writes it yet
+            // and calls wiring a writer a follow-up. This guard exists to force exactly that look.
+            yaesu_rf_scope: None,
+            yaesu_fix_starts: Default::default(),
+            // Added by the live-mic branch. Its UI counterpart is `liveMicDevice?` in types.ts —
+            // checked when this line was added, which is what this guard is for.
+            live_mic_device: String::new(),
+        })
+        .expect("patch serializes");
+        let rust_keys: Vec<&str> = rust
+            .as_object()
+            .expect("an object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+
+        let missing_in_ts: Vec<&&str> = rust_keys
+            .iter()
+            .filter(|k| !ts_keys.iter().any(|t| t == *k))
+            .collect();
+        assert!(
+            missing_in_ts.is_empty(),
+            "RadioProfilePatch field(s) {missing_in_ts:?} exist in Rust but NOT in the UI's \
+             interface at ui/src/api.ts. Without a serde default the save fails to deserialize \
+             entirely; with one it silently resets the operator's value. Add them to the TS \
+             interface AND to radioPatch() in SettingsPanel.tsx."
+        );
+
+        let missing_in_rust: Vec<&String> = ts_keys
+            .iter()
+            .filter(|t| !rust_keys.contains(&t.as_str()))
+            .collect();
+        assert!(
+            missing_in_rust.is_empty(),
+            "The UI sends RadioProfilePatch field(s) {missing_in_rust:?} that Rust does not \
+             declare — serde will reject the whole payload as an unknown field, or drop it."
+        );
+    }
+
+    /// A patch that does not MENTION the RF scope must leave it alone.
+    ///
+    /// Station report, 2026-08-20: the FT-710 waterfall was working, then it was showing sound-card
+    /// audio again and `yaesuRfScope` had gone to `false` on its own. Cause: this field has no UI
+    /// control, so the radio form builds a patch WITHOUT it, `#[serde(default)]` on a bare `bool`
+    /// read the omission as `false`, and `apply_to` assigned it unconditionally. Saving anything at
+    /// all on the radio form switched the scope off, and nothing said so — the waterfall just fell
+    /// back to audio.
+    ///
+    /// `flex_native_pan` next door is a bare `bool` and is fine, because it HAS a toggle: its form
+    /// always states a value. That is the difference this test exists to hold.
+    #[test]
+    fn a_patch_that_omits_the_rf_scope_leaves_it_enabled() {
+        let mut p = RadioProfile {
+            yaesu_rf_scope: true,
+            ..RadioProfile::default()
+        };
+        // Exactly what the radio form sends: every field it knows, and no mention of this one.
+        let json = r#"{
+            "pttMethod": "cat", "rigModel": 1049, "rigModelName": "Yaesu FT-710",
+            "serialPort": "/dev/cu.usbserial-01AF7FED0", "pttSerialPort": "", "baud": 38400,
+            "rigConn": "serial", "rigAddr": "", "omnirigSlot": 0, "rigctldPort": 4533,
+            "icomNativeCat": false, "dataModesPlainSsb": false, "sstvHoldDataSubmode": false,
+            "audioIn": "USB Audio Device", "audioOut": "USB Audio Device",
+            "txLevel": 0.9, "rxGain": 1.0,
+            "rotatorModel": 0, "rotatorPort": "", "rotatorBaud": 9600, "rotatorHost": "",
+            "rotctldPort": 4533, "nativeScope": "auto", "flexRadioIp": "",
+            "flexNativePan": false, "flexNativeAudio": false,
+            "ampModel": "", "ampPort": "", "ampFollowBand": false
+        }"#;
+        let patch: RadioProfilePatch =
+            serde_json::from_str(json).expect("the form's payload parses");
+        assert_eq!(
+            patch.yaesu_rf_scope, None,
+            "an absent field is UNKNOWN, not false"
+        );
+        patch.apply_to(&mut p);
+        assert!(
+            p.yaesu_rf_scope,
+            "saving the radio form must not switch the RF scope off behind the operator"
+        );
+    }
+
+    /// And the other direction, so the field is not merely unreachable: a caller that SAYS false
+    /// still turns it off. Without this, "leave it alone" could be implemented as "never assign".
+    #[test]
+    fn a_patch_that_says_false_still_turns_the_rf_scope_off() {
+        let mut p = RadioProfile {
+            yaesu_rf_scope: true,
+            ..RadioProfile::default()
+        };
+        RadioProfilePatch {
+            yaesu_rf_scope: Some(false),
+            yaesu_fix_starts: None,
+            ..patch_of(&p)
+        }
+        .apply_to(&mut p);
+        assert!(!p.yaesu_rf_scope);
     }
 
     /// THE FIELD-SPECIFIC HALF for OmniRig, written because yesterday's bug was exactly this
@@ -4225,6 +5278,7 @@ mod tests {
             icom_native_cat: p.icom_native_cat,
             icom_data_mode: 1,
             data_modes_plain_ssb: p.data_modes_plain_ssb,
+            sstv_hold_data_submode: p.sstv_hold_data_submode,
             audio_in: p.audio_in.clone(),
             audio_out: p.audio_out.clone(),
             tx_level: p.tx_level,
@@ -4232,11 +5286,16 @@ mod tests {
             rotator_model: p.rotator_model,
             rotator_port: p.rotator_port.clone(),
             rotator_baud: p.rotator_baud,
+            amp_model: String::new(),
+            amp_port: String::new(),
+            amp_follow_band: false,
             rotator_host: p.rotator_host.clone(),
             rotctld_port: p.rotctld_port,
             native_scope: p.native_scope.clone(),
             flex_radio_ip: p.flex_radio_ip.clone(),
             flex_native_pan: p.flex_native_pan,
+            yaesu_rf_scope: Some(p.yaesu_rf_scope),
+            yaesu_fix_starts: Some(p.yaesu_fix_starts.clone()),
             flex_native_audio: p.flex_native_audio,
             live_mic_device: String::new(),
         }
@@ -4403,10 +5462,77 @@ mod tests {
         assert_eq!(s.rig_mode(), "CW", "20 m CW is CW-U");
         s.dial_mhz = 10.110; // 30 m — at/above the 10 MHz line
         assert_eq!(s.rig_mode(), "CW", "30 m CW is CW-U");
-        // The soundcard keyer keeps its SSB mapping (audio-tone keying).
+        // The soundcard keyer keeps the same SIDE (audio-tone keying) — as the DATA submode
+        // its siblings use, see `the_soundcard_cw_keyer_commands_a_data_submode_…`.
         s.cw_keyer = CwKeyerBackend::Soundcard;
         s.dial_mhz = 7.030;
-        assert_eq!(s.rig_mode(), "LSB");
+        assert_eq!(s.rig_mode(), "PKTLSB");
+    }
+
+    /// ⭐ THE SOUNDCARD CW KEYER WAS THE ONE SOUNDCARD PATH THAT SKIPPED THE DATA SUBMODE
+    /// (field report, Yaesu FTX-1, 2026-08-28: "TX would send, but no audio heard while
+    /// listening for it").
+    ///
+    /// Every other path in this app that transmits SOUNDCARD AUDIO commands a DATA submode —
+    /// Digital/FT8, Keyboard/PSK31, RTTY-AFSK, and an SSTV image on FM — and the reason is
+    /// written out three times in this file and once in the tune path: on a normally-wired rig
+    /// plain SSB takes TX audio from the MIC JACK, so the codec audio never reaches the
+    /// modulator and the over radiates ZERO RF. The CW soundcard keyer commanded plain
+    /// `USB`/`LSB` and so keyed a carrier with nothing on it.
+    ///
+    /// This is a CLASS test, not an FTX-1 test: it pins the CW arm to the same rule as its four
+    /// siblings, including the `data_modes_plain_ssb` mic-jack opt-out, which the arm did not
+    /// consult either.
+    #[test]
+    fn the_soundcard_cw_keyer_commands_a_data_submode_like_every_other_soundcard_path() {
+        let mut s = Settings::default();
+        s.operating_mode = OperatingMode::Cw;
+        s.cw_keyer = CwKeyerBackend::Soundcard;
+
+        // USB-side above 10 MHz, LSB-side below — the CW sideband convention is unchanged;
+        // only the SUBMODE moves, so the audio reaches the modulator instead of the mic jack.
+        s.dial_mhz = 14.050;
+        assert_eq!(
+            s.rig_mode(),
+            "PKTUSB",
+            "20 m soundcard CW must be the DATA submode — plain USB radiates no RF"
+        );
+        s.dial_mhz = 7.030;
+        assert_eq!(
+            s.rig_mode(),
+            "PKTLSB",
+            "40 m soundcard CW keeps the LSB side AND gains the DATA submode"
+        );
+
+        // THE MIC-JACK OPT-OUT, which the old arm never consulted: an operator whose interface
+        // feeds the mic input gets plain SSB back, exactly like FT8 and PSK31 do for him.
+        s.data_modes_plain_ssb = true;
+        assert_eq!(
+            s.rig_mode(),
+            "LSB",
+            "mic-jack interface: plain SSB, as its siblings"
+        );
+        s.dial_mhz = 14.050;
+        assert_eq!(s.rig_mode(), "USB", "mic-jack interface, USB side");
+        s.data_modes_plain_ssb = false;
+
+        // AND THE OTHER THREE KEYERS ARE UNTOUCHED — they key the rig in CW, and a DATA
+        // submode there would be a different bug. This is the half that keeps the fix narrow.
+        for k in [
+            CwKeyerBackend::Cat,
+            CwKeyerBackend::WinKeyer,
+            CwKeyerBackend::Serial,
+        ] {
+            s.cw_keyer = k;
+            s.dial_mhz = 14.050;
+            assert_eq!(s.rig_mode(), "CW", "{k:?} keys the rig in CW");
+            s.dial_mhz = 7.030;
+            assert_eq!(
+                s.rig_mode(),
+                "CWR",
+                "{k:?} keys the rig in CW-L below 10 MHz"
+            );
+        }
     }
 
     #[test]
@@ -4931,6 +6057,67 @@ mod tests {
     }
 
     #[test]
+    fn band_coverage_hides_a_band_only_when_every_rig_named_its_bands() {
+        // #184: akhepcat runs an FTdx10 (HF..4m) and an FT-817 (2m/70cm) and expected the band
+        // dropdown to stop offering 23 cm, which neither rig can reach. The filter may only
+        // subtract when EVERY enabled rig has named its bands — anything else and an operator
+        // ends up staring at an empty dropdown.
+        let mut s = three_radio_shack();
+        let ids: Vec<u32> = s.radios.iter().map(|p| p.id).collect();
+        for (i, id) in ids.iter().enumerate() {
+            let p = s.radios.iter_mut().find(|p| p.id == *id).unwrap();
+            p.enabled = true;
+            p.bands = if i == 0 {
+                vec!["20m".into(), "4m".into()]
+            } else {
+                vec!["2m".into(), "70cm".into()]
+            };
+        }
+        assert!(
+            s.any_radio_covers("20m"),
+            "an explicitly claimed band is offered"
+        );
+        assert!(s.any_radio_covers("4m"), "…on either rig");
+        assert!(s.any_radio_covers("2m"));
+        assert!(
+            !s.any_radio_covers("23cm"),
+            "no rig reaches 23 cm, so it is not worth offering"
+        );
+        // Case matters to nobody.
+        assert!(s.any_radio_covers("70CM"));
+
+        // ONE catch-all rig restores everything — the single-radio majority is untouched.
+        let first = ids[0];
+        s.radios.iter_mut().find(|p| p.id == first).unwrap().bands = Vec::new();
+        assert!(
+            s.any_radio_covers("23cm"),
+            "a rig that claims nothing claims everything"
+        );
+
+        // A disabled rig is not coverage…
+        s.radios.iter_mut().find(|p| p.id == first).unwrap().enabled = false;
+        assert!(
+            !s.any_radio_covers("23cm"),
+            "a disabled catch-all does not count"
+        );
+
+        // …and with NOTHING enabled the filter must open all the way up rather than
+        // leaving a fresh install with an empty band list.
+        for id in &ids {
+            s.radios.iter_mut().find(|p| p.id == *id).unwrap().enabled = false;
+        }
+        assert!(
+            s.any_radio_covers("23cm"),
+            "no radios configured = no opinion, show every band"
+        );
+        s.radios.clear();
+        assert!(
+            s.any_radio_covers("23cm"),
+            "…and likewise with an empty roster"
+        );
+    }
+
+    #[test]
     fn radios_covering_counts_only_explicit_claims() {
         let mut s = three_radio_shack();
         // FTdx10 (id 0) is a catch-all; the 9700 and 991A both claim 2 m explicitly.
@@ -5142,6 +6329,47 @@ mod tests {
         assert!(back.data_modes_plain_ssb);
     }
 
+    /// THE UPGRADE PATH for the Field Day bonus PLAN. `fd_bonuses` has always meant
+    /// EARNED — the score reads it — and the planned list is a new sibling rather than a
+    /// reinterpretation of it, precisely so an existing settings.json keeps scoring the
+    /// same points it scored yesterday. Proven by deserializing a blob that predates the
+    /// key, not by trusting the `#[serde(default)]`.
+    #[test]
+    fn an_older_settings_file_loads_with_its_earned_bonuses_and_no_plan() {
+        let before: Settings = serde_json::from_str(
+            r#"{"mycall":"KD9TAW","fdClass":"3A","fdPowerMult":5,
+                "fdBonuses":["w1aw-bulletin","web-submission"]}"#,
+        )
+        .expect("an older settings file must still load");
+        assert_eq!(
+            before.fd_bonuses,
+            vec!["w1aw-bulletin".to_string(), "web-submission".to_string()],
+            "the EARNED list is untouched — this is what the score is made of"
+        );
+        assert!(
+            before.fd_bonuses_planned.is_empty(),
+            "a file written before planning existed has planned nothing; inheriting the \
+             earned list as a plan would be a lie about what the club intends"
+        );
+        assert!(Settings::default().fd_bonuses_planned.is_empty());
+
+        // And it round-trips once set — a field that serialises but never deserialises
+        // would lose the club's Friday plan at the first restart.
+        let mut planned = Settings::default();
+        planned.fd_bonuses_planned = vec!["youth".into(), "safety-officer".into()];
+        let json = serde_json::to_string(&planned).unwrap();
+        assert!(
+            json.contains("\"fdBonusesPlanned\":[\"youth\",\"safety-officer\"]"),
+            "{json}"
+        );
+        let back: Settings = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.fd_bonuses_planned, planned.fd_bonuses_planned);
+        assert!(
+            back.fd_bonuses.is_empty(),
+            "planning never fills the earned list"
+        );
+    }
+
     /// The setting lives on the RADIO, so switching rigs must switch the behaviour with it —
     /// a mic-jack interface on one rig and a data-port interface on the other is the whole
     /// reason it is per-radio rather than global.
@@ -5202,12 +6430,13 @@ mod tests {
         // CW with the CAT keyer: force CW.
         s.operating_mode = OperatingMode::Cw;
         assert_eq!(s.rig_mode(), "CW");
-        // CW with the SOUNDCARD keyer: the rig must be in USB/LSB to send the tone.
+        // CW with the SOUNDCARD keyer: the rig must be on the SSB side to send the tone, and
+        // in a DATA submode so the tone reaches the modulator rather than the mic jack.
         s.cw_keyer = CwKeyerBackend::Soundcard;
         s.dial_mhz = 14.050;
-        assert_eq!(s.rig_mode(), "USB");
+        assert_eq!(s.rig_mode(), "PKTUSB");
         s.dial_mhz = 7.030;
-        assert_eq!(s.rig_mode(), "LSB");
+        assert_eq!(s.rig_mode(), "PKTLSB");
         s.cw_keyer = CwKeyerBackend::Cat;
 
         // Phone: band-aware sideband — LSB below 10 MHz, USB at/above.
@@ -5481,6 +6710,179 @@ mod tests {
         assert!(!off.psk_rx_auto_arm);
     }
 
+    /// RTTY's auto-arm field, added as the exact twin of the PSK one above — same default,
+    /// same `#[serde(default_true)]` shape, same interior-acronym trap on the wire key.
+    #[test]
+    fn rtty_settings_default_and_wire_key() {
+        let s = Settings::default();
+        assert!(
+            s.rtty_rx_auto_arm,
+            "opening the RTTY view arms the receiver — the PSK/SSTV doctrine"
+        );
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(
+            json.contains("\"rttyRxAutoArm\":true"),
+            "missing wire key rttyRxAutoArm in {json}"
+        );
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert!(old.rtty_rx_auto_arm, "an upgrader's file predates the key");
+        let off: Settings = serde_json::from_str(r#"{"rttyRxAutoArm":false}"#).unwrap();
+        assert!(!off.rtty_rx_auto_arm, "and an explicit opt-out survives");
+    }
+
+    /// The ten JS8 fields: JS8Call's own defaults (G3, operator-approved 2026-09-05), the
+    /// exact camelCase wire keys, an upgrader's file, and the TS mirror — read from
+    /// `ui/src/types.ts` itself, the `the_typescript_patch_carries_every_field_the_rust_patch_does`
+    /// cure, because a hand-written key that disagrees compiles clean on both sides and the
+    /// control silently does nothing (reference-settings-plumbing).
+    #[test]
+    fn js8_settings_defaults_wire_keys_and_ts_mirror() {
+        let s = Settings::default();
+        assert_eq!(s.js8_speed, 1, "Normal is index 1 of Speed::ALL");
+        assert_eq!(
+            s.js8_rx_speeds, 15,
+            "all four speeds decode with zero toggles"
+        );
+        assert_eq!(
+            s.js8_hb_interval_min, 0,
+            "HB on demand (JS8Call HBInterval=0)"
+        );
+        assert_eq!(
+            s.js8_cq_interval_min, 0,
+            "CQ on demand (JS8Call CQInterval=0) — the CQ button stays a one-shot"
+        );
+        assert!(!s.js8_hb_ack, "JS8Call SubModeHBAck default false");
+        assert!(s.js8_autoreply, "JS8Call autoreply default ON (G3)");
+        assert!(s.js8_relay, "JS8Call relay default ON (G3)");
+        assert_eq!(
+            s.js8_idle_watchdog_min, 60,
+            "JS8Call TxIdleWatchdog default"
+        );
+        assert!(s.js8_info.is_empty() && s.js8_status.is_empty() && s.js8_groups.is_empty());
+
+        let json = serde_json::to_string(&s).unwrap();
+        let keys = [
+            "\"js8Speed\":1",
+            "\"js8RxSpeeds\":15",
+            "\"js8HbIntervalMin\":0",
+            "\"js8CqIntervalMin\":0",
+            "\"js8HbAck\":false",
+            "\"js8Autoreply\":true",
+            "\"js8Relay\":true",
+            "\"js8IdleWatchdogMin\":60",
+            "\"js8Info\":\"\"",
+            "\"js8Status\":\"\"",
+            "\"js8Groups\":[]",
+        ];
+        for k in keys {
+            assert!(json.contains(k), "missing wire key/value {k} in {json}");
+        }
+        // An upgrader's file predates every key: defaults apply, nothing fails to load.
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert_eq!(old.js8_speed, 1);
+        assert!(old.js8_autoreply && old.js8_relay && !old.js8_hb_ack);
+        // An explicit opt-out survives the round trip.
+        let off: Settings = serde_json::from_str(
+            r#"{"js8Autoreply":false,"js8Relay":false,"js8Speed":3,"js8RxSpeeds":2,"js8Groups":["@FUN"]}"#,
+        )
+        .unwrap();
+        assert!(!off.js8_autoreply && !off.js8_relay);
+        assert_eq!((off.js8_speed, off.js8_rx_speeds), (3, 2));
+        assert_eq!(off.js8_groups, vec!["@FUN".to_string()]);
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&off).unwrap()).unwrap();
+        assert_eq!(back, off);
+
+        // The TS mirror carries every key, as a typed field line (`  js8Speed: number`).
+        let ts = include_str!("../../../ui/src/types.ts");
+        let head = "export interface Settings {";
+        let start = ts.find(head).expect("the UI declares Settings") + head.len();
+        let body = &ts[start..];
+        let body = &body[..body.find("\n}").expect("the interface is closed")];
+        for key in [
+            "js8Speed",
+            "js8RxSpeeds",
+            "js8HbIntervalMin",
+            "js8CqIntervalMin",
+            "js8HbAck",
+            "js8Autoreply",
+            "js8Relay",
+            "js8IdleWatchdogMin",
+            "js8Info",
+            "js8Status",
+            "js8Groups",
+        ] {
+            assert!(
+                body.lines()
+                    .any(|l| l.trim_start().starts_with(&format!("{key}:"))),
+                "ui/src/types.ts Settings is missing `{key}`"
+            );
+        }
+        // CONTROL: a key that must NOT exist is not found, so the scan is not vacuous.
+        assert!(
+            !body.lines().any(|l| l.trim_start().starts_with("js8HbOn:"))
+                && !body.lines().any(|l| l.trim_start().starts_with("js8CqOn:")),
+            "HB and CQ-repeat on/off are session-only and must never be settings"
+        );
+    }
+
+    /// The tune carrier's own power level, on the exact wire key the UI hand-writes.
+    ///
+    /// `None` is the whole safety story: an operator who upgrades and never opens the setting
+    /// must find their tune-up keying at exactly the level it always did.
+    #[test]
+    fn tune_power_default_and_wire_key() {
+        let s = Settings::default();
+        assert_eq!(
+            s.tune_power_pct, None,
+            "None = never touch the operator's power, which is today's behaviour"
+        );
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(
+            json.contains("\"tunePowerPct\":null"),
+            "missing wire key tunePowerPct in {json}"
+        );
+        assert_eq!(serde_json::from_str::<Settings>(&json).unwrap(), s);
+
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert_eq!(
+            old.tune_power_pct, None,
+            "an upgrader's file predates the key"
+        );
+        let set: Settings = serde_json::from_str(r#"{"tunePowerPct":10}"#).unwrap();
+        assert_eq!(set.tune_power_pct, Some(10), "and a set level survives");
+    }
+
+    /// ⭐ #145's two declarations: BOTH default to "auto", which is today's behaviour to the
+    /// byte — the inference for the handshake, and silence for the keying line. Nobody's
+    /// working station may change under them, which is the entire reason they are opt-in
+    /// rather than a fourth guess (see the field docs for the first three).
+    #[test]
+    fn the_cat_line_declarations_default_to_todays_behaviour() {
+        let s = Settings::default();
+        assert_eq!(s.cat_serial_handshake, "auto");
+        assert_eq!(s.cat_ptt_line_state, "auto");
+        let json = serde_json::to_string(&s).unwrap();
+        for key in [
+            "\"catSerialHandshake\":\"auto\"",
+            "\"catPttLineState\":\"auto\"",
+        ] {
+            assert!(json.contains(key), "missing wire key {key} in {json}");
+        }
+        assert_eq!(serde_json::from_str::<Settings>(&json).unwrap(), s);
+
+        // An upgrader's file predates both keys.
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert_eq!(old.cat_serial_handshake, "auto");
+        assert_eq!(old.cat_ptt_line_state, "auto");
+        // …and an explicit declaration survives the round trip — the other direction of the
+        // same gate, which a default that ignored the file would pass on its own.
+        let set: Settings =
+            serde_json::from_str(r#"{"catSerialHandshake":"none","catPttLineState":"low"}"#)
+                .unwrap();
+        assert_eq!(set.cat_serial_handshake, "none");
+        assert_eq!(set.cat_ptt_line_state, "low");
+    }
+
     #[test]
     fn monitor_defaults_and_roundtrip() {
         let s = Settings::default();
@@ -5554,6 +6956,186 @@ mod tests {
         assert_eq!(s.ptt_method, "vox"); // default
         assert_eq!(s.rigctld_port, 4534); // default — broker owns 4532, rotctld 4533 (#53)
         assert_eq!(s.wsjtx_udp_addr, "127.0.0.1:2237"); // default
+    }
+
+    #[test]
+    fn fd_sync_settings_round_trip_and_default_safe() {
+        // A pre-sync settings file: hosting OFF (the LAN bind is opt-in and
+        // an upgrade must never open a port), the default port, no identity.
+        let partial = r#"{"mycall":"W9XYZ","mygrid":"EN37"}"#;
+        let s: Settings = serde_json::from_str(partial).unwrap();
+        assert!(!s.fd_host_enable, "an upgrade never turns hosting on");
+        assert_eq!(s.fd_host_port, 42073);
+        assert_eq!(s.fd_join_addr, "");
+        assert_eq!(s.fd_position_id, "");
+
+        let path = std::env::temp_dir()
+            .join("tempo_settings_fdsync")
+            .join("settings.json");
+        let s = Settings {
+            fd_host_enable: true,
+            fd_host_port: 42111,
+            fd_event_name: "W9ABC Field Day".into(),
+            fd_join_addr: "192.168.1.10:42073".into(),
+            fd_position_name: "CW tent".into(),
+            fd_position_id: "a1b2c3d4".into(),
+            ..Settings::default()
+        };
+        s.save(&path).unwrap();
+        let back = Settings::load(&path);
+        assert!(back.fd_host_enable);
+        assert_eq!(back.fd_host_port, 42111);
+        assert_eq!(back.fd_event_name, "W9ABC Field Day");
+        assert_eq!(back.fd_join_addr, "192.168.1.10:42073");
+        assert_eq!(back.fd_position_name, "CW tent");
+        assert_eq!(back.fd_position_id, "a1b2c3d4");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn fd_scoreboard_settings_default_off_and_round_trip() {
+        // A pre-scoreboard settings file: the board OFF (serving a LAN page is
+        // opt-in and an upgrade must never open a port), the default port.
+        let partial = r#"{"mycall":"W9XYZ","mygrid":"EN37"}"#;
+        let s: Settings = serde_json::from_str(partial).unwrap();
+        assert!(!s.fd_scoreboard, "an upgrade never turns the board on");
+        assert_eq!(s.fd_scoreboard_port, 7373);
+
+        let path = std::env::temp_dir()
+            .join("tempo_settings_fdboard")
+            .join("settings.json");
+        let s = Settings {
+            fd_scoreboard: true,
+            fd_scoreboard_port: 7474,
+            ..Settings::default()
+        };
+        s.save(&path).unwrap();
+        let back = Settings::load(&path);
+        assert!(back.fd_scoreboard);
+        assert_eq!(back.fd_scoreboard_port, 7474);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// F8 (round 7): settings.json holds the ClubLog API key (and a Cloudlog key until the keychain
+    /// migration completes), so it must not be world-readable. `File::create` leaves it at 0644.
+    #[test]
+    #[cfg(unix)]
+    fn save_writes_the_settings_file_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join("tempo_settings_mode");
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("settings.json");
+        let s = Settings {
+            mycall: "W9XYZ".into(),
+            clublog_api_key: "cl0gk3yAbCdEf0123456789".into(),
+            ..Settings::default()
+        };
+        s.save(&path).unwrap();
+        // Control: the key really is in the file at rest (so "owner-only" is protecting something).
+        assert!(
+            std::fs::read_to_string(&path).unwrap().contains("cl0gk3y"),
+            "control: the ClubLog key is written to settings.json"
+        );
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "settings.json is world-readable at {mode:o}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⛔ **A deferred Cloudlog key must survive an unrelated save (round 8 F1, DATA LOSS).**
+    ///
+    /// The `run()` migration moves a legacy plaintext Cloudlog key into the OS keychain and clears
+    /// the field — but ONLY once the keychain store succeeds. On a box with no Secret Service the
+    /// store fails, the migration DEFERS, and the key is retried next launch. That retry depends on
+    /// the key surviving in `settings.json` across the ordinary saves that run right after the
+    /// deferral (the Field-Day position-id save, the tty heal, every settings-mutating command).
+    /// Round 7's unconditional `skip_serializing` dropped it from EVERY save, so the first such save
+    /// destroyed the operator's only copy.
+    ///
+    /// The real invariant: the key lives in EXACTLY one of {file, keychain}, and no save may drop it
+    /// from the file while it is not in the keychain. This test models the real sequence —
+    /// migrate-defer (the key is still in the in-memory `Settings` the engine took), an unrelated
+    /// save, read back — and then the OTHER direction: a cleared (migrated) key stays out of the file.
+    #[test]
+    fn a_deferred_cloudlog_key_survives_an_unrelated_save() {
+        let dir = std::env::temp_dir().join(format!("tempo_cl_defer_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        // A legacy file: the plaintext Cloudlog key beside a normal (always-serialized) secret.
+        std::fs::write(
+            &path,
+            r#"{"cloudlogKey":"CLOUDLOG-LEGACY-KEY-9999","clublogApiKey":"CLUBLOG-CONTROL-8888"}"#,
+        )
+        .unwrap();
+
+        // Migration deferred: the keychain was unavailable, so the field was left in the in-memory
+        // Settings for the retry. `load` reproduces exactly that state.
+        let s = Settings::load(&path);
+        assert_eq!(
+            s.cloudlog_key, "CLOUDLOG-LEGACY-KEY-9999",
+            "pre: the legacy key deserialized into memory"
+        );
+        assert_eq!(
+            s.clublog_api_key, "CLUBLOG-CONTROL-8888",
+            "pre: the control secret is present"
+        );
+
+        // An ordinary save runs next (the FD position-id save). It must not drop the deferred key.
+        s.save(&path).unwrap();
+
+        let back = Settings::load(&path);
+        assert_eq!(
+            back.cloudlog_key, "CLOUDLOG-LEGACY-KEY-9999",
+            "an ordinary save destroyed the deferred Cloudlog key — no retry is possible, it is gone"
+        );
+        // Control: a normal secret survives the SAME save, so the detector can see persistence.
+        assert_eq!(
+            back.clublog_api_key, "CLUBLOG-CONTROL-8888",
+            "control: an always-serialized secret survives the save"
+        );
+
+        // The other direction of the invariant: once the key IS in the keychain the migration clears
+        // the field, and a save must then keep it OUT of the file — the keychain is the one place.
+        let mut migrated = back;
+        migrated.cloudlog_key.clear();
+        migrated.save(&path).unwrap();
+        let file = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !file.contains("cloudlogKey") && !file.contains("CLOUDLOG-LEGACY-KEY-9999"),
+            "a cleared (migrated) key must not be written back to settings.json: {file}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// round 10 N2 — the serializer skip and the migration gate must agree on a WHITESPACE-only key.
+    ///
+    /// The migration (`run()`) skips a `cloudlog_key.trim().is_empty()` value; the serializer must
+    /// too, or a blank value serializes to settings.json forever yet is never migrated. Control: a
+    /// REAL key still serializes, so the check is not simply "nothing ever serializes".
+    #[test]
+    fn a_whitespace_only_cloudlog_key_is_treated_as_absent() {
+        // A blank "key" is not migratable and must not be persisted.
+        let blank = Settings {
+            cloudlog_key: "   ".into(),
+            ..Settings::default()
+        };
+        let json = serde_json::to_string(&blank).unwrap();
+        assert!(
+            !json.contains("cloudlogKey"),
+            "a whitespace-only cloudlog key must be treated as absent (agree with the migration \
+             gate), not serialized forever: {json}"
+        );
+        // Control: a real key DOES serialize (the skip is trim-aware, not "always skip").
+        let real = Settings {
+            cloudlog_key: "REAL-KEY-1234".into(),
+            ..Settings::default()
+        };
+        let json = serde_json::to_string(&real).unwrap();
+        assert!(
+            json.contains("REAL-KEY-1234"),
+            "control: a genuine pending key must still serialize so the migration can retry: {json}"
+        );
     }
 
     #[test]
@@ -6222,6 +7804,81 @@ mod tests {
         assert!(cw_key_port_conflict(CwKeyerBackend::Serial, "COM3", &net).is_none());
     }
 
+    /// ⭐ SERIAL PORTS ARE EXCLUSIVE-OPEN, and the amplifier poller takes a hold on `amp_port`
+    /// the moment it is configured. An operator who types their CAT port into the amplifier
+    /// field gets a CAT failure — a dead radio — and will report it as a radio bug, because
+    /// nothing on screen connects the two. `serial_port_conflicts` cannot see this: it filters
+    /// on `serial_port` alone and never looks at `amp_port`.
+    #[test]
+    fn amp_port_conflict_flags_an_amplifier_sharing_a_port_with_the_radio() {
+        let rig = |name: &str, port: &str, amp: &str| RadioProfile {
+            name: name.into(),
+            serial_port: port.into(),
+            rig_conn: "serial".into(),
+            rig_model: 1042,
+            amp_model: "spe".into(),
+            amp_port: amp.into(),
+            enabled: true,
+            ..Default::default()
+        };
+
+        // The amplifier on this radio's OWN CAT port, case-insensitively.
+        let radios = [rig("FTDX10", "COM3", "com3")];
+        let msg = amp_port_conflict(&radios, "", "", "").expect("conflict");
+        assert!(msg.contains("FTDX10"), "the message names the radio: {msg}");
+        assert!(msg.to_lowercase().contains("com3"), "and the port: {msg}");
+
+        // CONTROL, and it must NOT trip: a separate port for the amplifier is the normal
+        // station and must stay silent, or the warning lane cries wolf for everyone.
+        assert!(
+            amp_port_conflict(&[rig("FTDX10", "COM3", "COM7")], "", "", "").is_none(),
+            "an amplifier on its own port is the ordinary case"
+        );
+
+        // The OTHER radio's CAT port — an SO2R station's amplifier pointed at radio 2.
+        let so2r = [rig("FTDX10", "COM3", "COM4"), rig("IC-7300", "COM4", "")];
+        assert!(amp_port_conflict(&so2r, "", "", "").is_some());
+
+        // Its own rotator's port.
+        let mut rot = rig("FTDX10", "COM3", "COM8");
+        rot.rotator_model = 401;
+        rot.rotator_port = "COM8".into();
+        assert!(amp_port_conflict(&[rot], "", "", "").is_some());
+
+        // The global auxiliary serial devices, one at a time.
+        let aux = [rig("FTDX10", "COM3", "COM9")];
+        assert!(
+            amp_port_conflict(&aux, "COM9", "", "").is_some(),
+            "CW keyline"
+        );
+        assert!(
+            amp_port_conflict(&aux, "", "COM9", "").is_some(),
+            "WinKeyer"
+        );
+        assert!(
+            amp_port_conflict(&aux, "", "", "COM9").is_some(),
+            "RTTY FSK"
+        );
+
+        // No amplifier configured — nothing to collide, whatever the ports say.
+        let none = [rig("FTDX10", "COM3", "")];
+        assert!(amp_port_conflict(&none, "COM3", "", "").is_none());
+
+        // A network-CAT radio owns no COM port, so a matching string is not a collision.
+        let mut net = rig("Flex", "COM3", "COM3");
+        net.rig_conn = "network".into();
+        assert!(
+            amp_port_conflict(&[net], "", "", "").is_none(),
+            "the radio never opens COM3, so the amplifier may have it"
+        );
+
+        // A DISABLED radio's ports are not held.
+        let mut off = rig("FTDX10", "COM3", "");
+        off.enabled = false;
+        let live = rig("IC-7300", "COM7", "COM3");
+        assert!(amp_port_conflict(&[off, live], "", "", "").is_none());
+    }
+
     #[test]
     fn add_radio_profile_assigns_a_fresh_id_and_distinct_ports() {
         // Adding a 2nd radio must never collide daemon ports with radio 1 (or the CAT broker) — two
@@ -6846,5 +8503,180 @@ mod tests {
             s.ai_cw_active(),
             "a fresh install keeps its shipped AI CW decoder"
         );
+    }
+
+    /// The FIX start is kept PER BAND, and survives a save.
+    ///
+    /// The radio keeps one per band; carrying a 20 m start onto 40 m would draw a window somewhere
+    /// else entirely, and unlike most errors here it would persist, because a FIX window has no
+    /// reason to change. Operator asked for persistence (2026-08-20) after paying the click on every
+    /// band change.
+    /// The FT-710 scope opt-in must survive a save of the ACTIVE radio.
+    ///
+    /// REPRO for the defect that made the whole feature unreachable. The toggle lives on
+    /// `RadioProfile`, but saving the radio you are currently USING goes through the flat form
+    /// (`set_settings`), not `update_radio_profile` — and a per-profile field with no flat mirror
+    /// is silently dropped by that path: serde never sees it, `sync_active_from_flat` has nothing
+    /// to copy, and the profile keeps its old value. The operator ticks the box, saves, reopens
+    /// Settings and finds it off again, with nothing reporting a failure.
+    ///
+    /// It only ever worked while editing a NON-active radio, which is the rarer case — so the
+    /// feature looked implemented and was not.
+    #[test]
+    fn the_yaesu_scope_optin_survives_a_flat_save_of_the_active_radio() {
+        let mut s = Settings::default();
+        s.radios = vec![RadioProfile {
+            id: 0,
+            rig_model: 1049,
+            ..RadioProfile::default()
+        }];
+        s.active_radio = 0;
+        s.sync_flat_from_active();
+
+        // The operator ticks the box on the ACTIVE radio: the UI writes the FLAT field.
+        s.yaesu_rf_scope = true;
+        // Which is what `set_settings` folds into the profile.
+        s.sync_active_from_flat();
+        assert!(
+            s.radios[0].yaesu_rf_scope,
+            "the flat opt-in must reach the active radio's profile"
+        );
+
+        // And a reload (profile -> flat) must show it still on, or the panel reopens unticked.
+        let json = serde_json::to_string(&s).expect("settings serialize");
+        let mut back: Settings = serde_json::from_str(&json).expect("settings parse");
+        back.sync_flat_from_active();
+        assert!(
+            back.yaesu_rf_scope,
+            "and survive a round trip through settings.json"
+        );
+    }
+
+    #[test]
+    fn a_fix_start_is_kept_per_band_and_survives_a_round_trip() {
+        let mut s = Settings::default();
+        s.radios = vec![RadioProfile {
+            id: 0,
+            ..RadioProfile::default()
+        }];
+        s.active_radio = 0;
+        s.set_yaesu_fix_start_for_test("20m", 14.150);
+        s.set_yaesu_fix_start_for_test("40m", 7.050);
+        let json = serde_json::to_string(&s).expect("settings serialize");
+        let back: Settings = serde_json::from_str(&json).expect("settings parse");
+        let starts = &back.radios[0].yaesu_fix_starts;
+        assert_eq!(starts.get("20m"), Some(&14.150));
+        assert_eq!(starts.get("40m"), Some(&7.050), "each band keeps its own");
+        assert_eq!(starts.get("15m"), None, "a band never stated has none");
+    }
+
+    /// A settings file written before this existed still loads, with no starts.
+    #[test]
+    fn an_older_settings_file_loads_with_no_fix_starts() {
+        let profile: RadioProfile =
+            serde_json::from_str(r#"{"id":0,"name":"FT-710","rigModel":1049}"#)
+                .expect("an older per-radio block still parses");
+        assert!(profile.yaesu_fix_starts.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod cq_pause_wire_tests {
+    use super::*;
+
+    /// The UI reads `cqPauseSecs`; the Rust field is `cq_pause_secs`. That only lines up because
+    /// of the container's rename_all, and a mismatch here is invisible in both languages — the
+    /// setting silently reverts to its default on every save, which is exactly the shape of bug
+    /// the settings-plumbing notes warn about. So the WIRE NAME is asserted, not assumed.
+    #[test]
+    fn the_auto_cq_settings_use_the_names_the_ui_sends() {
+        let json = serde_json::to_value(Settings::default()).expect("serialises");
+        assert!(
+            json.get("cqPauseSecs").is_some(),
+            "cqPauseSecs must be on the wire"
+        );
+        assert!(
+            json.get("cqMaxCalls").is_some(),
+            "cqMaxCalls must be on the wire"
+        );
+        assert!(
+            json.get("cq_pause_secs").is_none(),
+            "snake_case on the wire would mean the UI never sees it"
+        );
+    }
+
+    /// The operator's ruling: eight CQs, then three minutes. Defaults are the whole feature for
+    /// anyone who never opens Settings, which is most people.
+    #[test]
+    fn the_defaults_are_eight_calls_and_three_minutes() {
+        let d = Settings::default();
+        assert_eq!(d.cq_max_calls, Some(8));
+        assert_eq!(d.cq_pause_secs, Some(180));
+        // And a settings.json written before these existed must load with the same values —
+        // otherwise an upgrading operator gets different behaviour from a fresh install.
+        let old: Settings = serde_json::from_str("{}").expect("an empty settings file loads");
+        assert_eq!(
+            old.cq_max_calls,
+            Some(8),
+            "serde default must match the struct default"
+        );
+        assert_eq!(old.cq_pause_secs, Some(180));
+    }
+}
+
+#[cfg(test)]
+mod am_power_tests {
+    use super::*;
+
+    /// AM'S CAP MAY ONLY EVER LOWER POWER. That property is the whole reason this can ship
+    /// without a rig on the bench, exactly as `rf_power_ceiling_high_duty` did for SSTV.
+    ///
+    /// Why it needs a cap at all: a rig making 100 W PEP on SSB makes about 25 W of carrier on
+    /// AM. The power sits in a carrier that is always present plus two sidebands, and PEP is
+    /// reached on modulation peaks — so the SSB drive clips the peaks.
+    #[test]
+    fn am_lowers_the_phone_ceiling_and_never_lifts_it() {
+        let mut s = Settings {
+            operating_mode: OperatingMode::Phone,
+            // Default: a quarter, and below an uncapped phone.
+            max_power_phone: None,
+            ..Default::default()
+        };
+        assert_eq!(s.rf_power_ceiling(), 1.0, "phone uncapped");
+        assert_eq!(s.rf_power_ceiling_am(), 0.25, "AM still capped");
+
+        // An operator who set AM ABOVE phone must not have AM lift them past the phone cap.
+        s.max_power_phone = Some(0.30);
+        s.max_power_am = Some(0.90);
+        assert_eq!(
+            s.rf_power_ceiling_am(),
+            0.30,
+            "the LOWER of the two, always"
+        );
+
+        // And the ordinary case: AM below phone.
+        s.max_power_am = Some(0.20);
+        assert_eq!(s.rf_power_ceiling_am(), 0.20);
+    }
+
+    /// An operator who deliberately clears the AM cap gets the phone cap — not 1.0, and not a
+    /// silent re-imposition of the default.
+    #[test]
+    fn clearing_the_am_cap_falls_back_to_phone_not_to_full_power() {
+        let s = Settings {
+            operating_mode: OperatingMode::Phone,
+            max_power_am: None,
+            max_power_phone: Some(0.5),
+            ..Default::default()
+        };
+        assert_eq!(s.rf_power_ceiling_am(), 0.5);
+    }
+
+    /// A settings.json written before AM existed must load with the cap ON. An upgrading
+    /// operator is exactly the person who has never thought about AM drive.
+    #[test]
+    fn an_old_settings_file_gains_the_am_cap() {
+        let old: Settings = serde_json::from_str("{}").expect("empty settings loads");
+        assert_eq!(old.max_power_am, Some(0.25));
     }
 }

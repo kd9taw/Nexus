@@ -8,6 +8,7 @@
 //! `reqwest::Error`'s `Display`/`source` can echo the request URL, so we never
 //! stringify the raw error; only fixed, category-based messages.
 
+use super::neterr;
 use std::time::Duration;
 
 const UA: &str = "nexus-propagation/0.1 (+ham radio propagation nowcast)";
@@ -47,15 +48,7 @@ pub fn post_form(url: &str, body: String) -> Result<String, String> {
 /// Map a transport error to a safe, category-only message — never `Display`/
 /// `to_string`/`source` (which can echo the URL/upload code).
 fn redact(e: reqwest::Error) -> String {
-    if e.is_timeout() {
-        "HRDLog: request timed out — try again shortly".to_string()
-    } else if e.is_connect() {
-        "HRDLog: could not connect — check your network".to_string()
-    } else if e.is_redirect() {
-        "HRDLog: blocked an unexpected redirect".to_string()
-    } else {
-        "HRDLog: request failed".to_string()
-    }
+    neterr::redact("HRDLog", &e)
 }
 
 #[cfg(test)]

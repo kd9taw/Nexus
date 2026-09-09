@@ -8,8 +8,10 @@ zero-beat scope, and your license privileges enforced — so you can call CQ and
 hold a conversation without a paddle and without copying by ear if you'd rather
 not.
 
-CW is an opt-in section. Turn it on in the first-run wizard's "which modes?"
-step or in [Settings ▸ Appearance ▸ Features](settings-reference.md#features).
+CW ships enabled — the wizard turns everything on; there is no mode picker to
+miss it in. No goal profile enables it, though, so if you pick one in
+[Settings ▸ Appearance ▸ Features](settings-reference.md#features), switch CW
+back on there — or take **Everything (expert)**, which includes it.
 
 ![The CW cockpit receiving on 14.0310 MHz. Its header carries the Keyer dropdown set to CAT, the Speed slider at 22 WPM, Pitch and the MEM strip, with ⊞ Panels · 2 hidden, Tune and Stop TX on the row above the CW audio zero-beat scope. Below the scope the Decode pane holds the transcript, its title bar carrying the AI badge, the decoded 28 WPM, the AI switch and Clear; Band activity sits under it and the Log pane (WC1D, 599 sent and received) takes the right-hand column, with the eight F-key macros and the type-and-send field along the bottom.](../img/manual/cw-cockpit.webp)
 
@@ -34,7 +36,19 @@ own explanation, so you can read the others before you switch:
   command. This is the workaround, not the clean path: it works **only** if
   Nexus's audio output is routed to the rig (as for FT8) *and* PTT works, and you
   must keep drive below ALC — otherwise it looks like it's sending and nothing
-  reaches the air. The rig goes to USB/LSB for this path.
+  reaches the air. **This path takes the radio out of CW**, into a data mode
+  (DATA-U/DATA-L) — the same mode FT8 uses, and for the same reason: on the common
+  Icom and default-Yaesu wiring, plain SSB takes its transmit audio from the MIC
+  socket, so the rig would key and radiate nothing. CW mode comes back when you
+  pick another keyer. If your interface feeds the rig's **mic jack** instead of its
+  data input, tick **plain SSB for data modes** on that radio in
+  [Settings ▸ Radio](settings-reference.md#radio) and this path uses plain SSB for
+  you, exactly as it does for FT8.
+
+  On a Yaesu FTX-1, CAT keying is flagged as **unproven** where you pick it: its
+  Hamlib backend sends a different keying command from the one other radios use and
+  reports success either way, so if nothing goes out Nexus cannot tell you. It is a
+  notice, not a block.
 
 **The CW decoder.** The **AI** decoder is the default: a neural net (the DeepCW
 model by e04) reads the whole 400–1200 Hz window rather than one pitch, which is
@@ -52,6 +66,22 @@ click one to make that station your worked peer.
 
 **The AF scope** is a narrow 300–1100 Hz display with a hairline drawn at your
 sidetone pitch, so you can zero-beat a station by ear and eye.
+
+**The zero-beat light** goes further: Nexus measures the tone actually coming in
+and tells you where it sits against your pitch. A light comes on when you are on
+pitch, and beside it a needle and a signed offset in Hz say which way and how far
+off you are — being 80 Hz out no longer looks the same as being 400 Hz out. How
+close counts as on pitch follows your rig's CW filter: 25 Hz behind the usual
+500 Hz one, tighter behind a narrow filter. With several signals in the passband it
+follows the one nearest your marker rather than the loudest, so it does not jump to
+a strong station 300 Hz away while you are closing in.
+
+On a dead band it goes quiet and stays quiet. A reading only appears once a tone has
+held the same frequency long enough to be a signal you are tuning rather than the
+loudest thing the receiver happened to hear — otherwise the needle would twitch at
+band noise between overs. That costs about a fifth of a second before a new signal
+shows, and the wait is paid when a station starts sending, never between their
+letters. It is a display only: it never touches your dial.
 
 **⊞ Panels** in the header shows and hides the panes under the scope, and an
 entry with nothing on screen behind it right now says why in a line under it —
@@ -105,15 +135,60 @@ cut down to `5NN`** automatically. Set your operator name (for `{NAME}`) in
 
 ## Core workflows
 
+### Keying backends, and what each one puts the rig into
+
+Entering the cockpit commands the rig's mode for you, and **which mode depends on
+the keyer you picked**. Three of the four leave the rig in CW and let it shape the
+signal; the Soundcard backend plays an audio tone, so it needs the rig on the SSB
+side in a data submode — the same reason FT8 does.
+
+![The CW cockpit header row with the Keyer dropdown open. Left to right: the Speed slider at 24 WPM, the Keyer control reading WinKeyer with its list open below it — CAT, Serial, WinKeyer (highlighted), Soundcard — then Pitch 600 and BW 500.](../img/manual/cw-keyer-backends.webp)
+
+*The four keyer backends in Nexus 1.10.3. Each entry in the list explains itself
+on hover, so you can read the others before you switch.*
+
+| Keyer | What makes the Morse | Mode Nexus commands | Does Nexus key PTT? | TX audio | Extra setup |
+|---|---|---|---|---|---|
+| **CAT** | the rig's own keyer (Hamlib `send_morse`, fed one word at a time) | **CW** at 30 m and up, **CW-L** (Hamlib `CWR`) on 160/80/40 m | no — the rig keys itself | not used | none |
+| **Serial** | the rig, keyed by DTR or RTS on its KEY jack | same as CAT | no — the rig keys off its KEY line | not used | **Keyline serial port** and **Keying line** in [Settings ▸ CW](settings-reference.md#cw) |
+| **WinKeyer** | a K1EL WinKeyer over serial | same as CAT | no — the keyer and the rig handle it | not used | **WinKeyer port** in [Settings ▸ CW](settings-reference.md#cw) |
+| **Soundcard** | Nexus, as a keyed audio tone | **DATA-U** at 30 m and up, **DATA-L** on 160/80/40 m — plain USB/LSB only if **plain SSB for data modes** is ticked for that radio | **yes** | yes — the same TX audio path FT8 uses | your PTT method, plus Nexus's audio routed to the rig and drive under ALC |
+
+The 10 MHz split is the ordinary CW and sideband convention: below it the lower
+side, above it the upper. It is the same rule the Phone cockpit follows, and it
+is why a rig on 40 m lands in CW-L rather than CW-U.
+
+**When nothing goes out**, the cockpit names the backend that failed rather than
+leaving you guessing:
+
+- **CAT** — "Your rig didn't accept CAT CW keying (Hamlib `send_morse`)." Many
+  Hamlib backends serve frequency, mode and PTT but not keying. Move to WinKeyer
+  or Soundcard.
+- **Serial** — the operating system's own error on the port, verbatim, with the
+  reminder that CAT or another program may be holding it.
+- **Soundcard** — "the rig didn't accept PTT". Audio-routing faults cannot be
+  detected here: a tone that plays locally while the rig is in plain SSB on a
+  data-input interface radiates nothing, and looks identical to a good send.
+- On a **Yaesu FTX-1**, CAT keying is flagged **unproven** where you pick it: its
+  Hamlib backend sends a different keying command from the one other radios use
+  and reports success either way, so a silent failure cannot be reported. It is a
+  notice, not a block.
+
 ### Call CQ and work an answer
 
-1. Set your band and frequency. Entering the cockpit commands the rig to CW
-   automatically (or USB/LSB on the Soundcard path).
+1. Set your band and frequency. Entering the cockpit commands the rig's mode for
+   you — CW (CW-L below 10 MHz) on the CAT, Serial and WinKeyer keyers, a DATA
+   submode on the Soundcard keyer. See the table above.
 2. Press **`F1`** to send CQ.
 3. When someone answers, type or click their call into the his-call field, then
    run **`F3`** (report + name) → **`F4`** (73) as the QSO progresses. You send
    each over — nothing fires automatically.
 4. **`Esc`** aborts keying instantly: it clears the queue and stops the rig.
+
+![The CW macro row, F1 CQ through F8, over the type-and-send field holding W1AW DE KD9TAW R R TNX JIM UR 599 599 IN MADISON WI BK, with a Send button at the right.](../img/manual/cw-typed-buffer.webp)
+
+*The macro row and the typed buffer in Nexus 1.10.3. Enter sends what is in the
+field, and it queues behind whatever a macro is already sending.*
 
 ### Read the other station
 
@@ -126,6 +201,12 @@ cut down to `5NN`** automatically. Set your operator name (for `{NAME}`) in
    follow the next copy, even if you had scrolled up.
 4. Click a decoded-call chip in the Copilot to make that station your worked peer
    — it fills the his-call token in your macros and the Log pane.
+
+![The CW Decode pane holding a full exchange with W1AW, its head carrying an AI badge, 24 WPM and the AI switch on, beside a Copilot pane reading Working W1AW · 579 · JIM with two runner-up call chips.](../img/manual/cw-decode-copilot.webp)
+
+*Decode and Copilot in Nexus 1.10.3. The WPM beside the AI badge is the speed
+read off the air, not a setting. The Copilot's first chip is its best candidate
+for the call and the two after it are the near-misses it also considered.*
 
 ### Land here from the Needed board
 

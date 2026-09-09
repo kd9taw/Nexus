@@ -311,12 +311,36 @@ impl SpectrumFeed {
     /// and opens the next window; freshness is still judged on the most recent PUBLISH, so a
     /// dead capture goes quiet on exactly the schedule it always did.
     pub fn row(&self) -> Option<Spectrum> {
-        let mut g = self.rows.lock().ok()?;
-        if let Some((spec, at)) = &g.rf {
-            if at.elapsed() < std::time::Duration::from_secs(1) && !spec.row.is_empty() {
-                return Some(spec.clone());
+        {
+            let g = self.rows.lock().ok()?;
+            if let Some((spec, at)) = &g.rf {
+                if at.elapsed() < std::time::Duration::from_secs(1) && !spec.row.is_empty() {
+                    return Some(spec.clone());
+                }
             }
         }
+        self.audio_row()
+    }
+
+    /// The AUDIO row, never the RF one — for the displays that are about the DECODER's passband
+    /// rather than about the band.
+    ///
+    /// WHY THIS IS SEPARATE. `row()` prefers a native RF panadapter, and every backend publishes
+    /// one continuously while it streams — Flex, Icom above 115200 baud, and the FT-710 scope.
+    /// So a rig with a scope silently replaced the audio waterfall EVERYWHERE, including the FT8,
+    /// RTTY, PSK and SSTV displays, where 0-4000 Hz is the whole point: a 500 kHz RF sweep cannot
+    /// show a 50 Hz FT8 tone, and clicking it cannot set an audio offset. Reported on an FT-710
+    /// (2026-08-20) as "the audio spectrum is broken in all cases", and confirmed by turning that
+    /// radio's scope off — the audio waterfall came straight back.
+    ///
+    /// It was invisible until now only because the FT-710's RF path kept going unplaceable, and
+    /// audio showed through the gaps; closing those gaps removed the audio entirely. The same
+    /// displacement has always applied to Icom and Flex.
+    ///
+    /// The freshness rule and the empty-row-when-stale behaviour are exactly `row()`'s: this is
+    /// that branch, not a second opinion about it.
+    pub fn audio_row(&self) -> Option<Spectrum> {
+        let mut g = self.rows.lock().ok()?;
         let audio = g.audio.as_mut()?;
         if audio.at.elapsed() < std::time::Duration::from_secs(2) {
             return Some(audio.take());
@@ -558,6 +582,12 @@ pub struct FastPowerSample {
 struct MeterCells {
     rx_level: std::sync::atomic::AtomicU32,
     smeter_db: std::sync::atomic::AtomicI32,
+    /// The operator's CW pitch, ARMING the zero-beat measurement — f32 bits, `0.0` = disarmed.
+    /// Written by the radio loop, read by the rx-dsp thread.
+    cw_target_hz: std::sync::atomic::AtomicU32,
+    /// The measured received CW tone — f32 bits, `0.0` = nothing to tune to. Written by the
+    /// rx-dsp thread, read by `get_meters`.
+    cw_tone_hz: std::sync::atomic::AtomicU32,
 }
 
 impl MeterCells {
@@ -571,6 +601,8 @@ impl Default for MeterCells {
         Self {
             rx_level: std::sync::atomic::AtomicU32::new(0.0f32.to_bits()),
             smeter_db: std::sync::atomic::AtomicI32::new(Self::SMETER_NONE),
+            cw_target_hz: std::sync::atomic::AtomicU32::new(0.0f32.to_bits()),
+            cw_tone_hz: std::sync::atomic::AtomicU32::new(0.0f32.to_bits()),
         }
     }
 }
@@ -626,6 +658,50 @@ impl MeterFeed {
         let v = self.inner.smeter_db.load(Ordering::Relaxed);
         (v != MeterCells::SMETER_NONE).then_some(v)
     }
+
+    // ---- THE CW ZERO-BEAT PAIR ----
+    //
+    // Two more wait-free cells on the SAME bus the level meter uses, and for the same reason:
+    // the producer is the rx-dsp thread, whose whole safety argument is that it can name no
+    // engine or CAT handle (see `tempo_audio::rxdsp`). A cell it can already reach is the only
+    // way to hand it the operator's pitch and take a reading back without reintroducing one.
+    //
+    // ⛔ THIS PAIR IS A DISPLAY, AND ONLY A DISPLAY. Nothing reads `cw_tone_hz` to steer a
+    // radio: there is no path from here to a CAT command, and there must never be one. An aid
+    // that moved the operator's dial to zero-beat unasked would be a defect, not a feature
+    // (the project's notify-never-act rule).
+    //
+    // `0.0` encodes "none" in both directions. It is not a sentinel that could collide with a
+    // real value — an audio pitch of exactly 0 Hz is not a CW tone — so absence needs no
+    // separate flag and cannot be read as a confident zero.
+
+    /// Arm the zero-beat measurement at the operator's CW pitch; `None` disarms it (every
+    /// section but CW). The radio loop, every tick.
+    pub fn set_cw_target_hz(&self, hz: Option<f32>) {
+        use std::sync::atomic::Ordering;
+        let v = hz.filter(|h| h.is_finite() && *h > 0.0).unwrap_or(0.0);
+        self.inner
+            .cw_target_hz
+            .store(v.to_bits(), Ordering::Relaxed);
+    }
+    /// The armed CW pitch, or `None` when the zero-beat measurement is off.
+    pub fn cw_target_hz(&self) -> Option<f32> {
+        use std::sync::atomic::Ordering;
+        let v = f32::from_bits(self.inner.cw_target_hz.load(Ordering::Relaxed));
+        (v > 0.0).then_some(v)
+    }
+    /// Publish the measured received CW tone; `None` = nothing to tune to. The rx-dsp thread.
+    pub fn set_cw_tone_hz(&self, hz: Option<f32>) {
+        use std::sync::atomic::Ordering;
+        let v = hz.filter(|h| h.is_finite() && *h > 0.0).unwrap_or(0.0);
+        self.inner.cw_tone_hz.store(v.to_bits(), Ordering::Relaxed);
+    }
+    /// The measured received CW tone, or `None` when no signal stands above the noise.
+    pub fn cw_tone_hz(&self) -> Option<f32> {
+        use std::sync::atomic::Ordering;
+        let v = f32::from_bits(self.inner.cw_tone_hz.load(Ordering::Relaxed));
+        (v > 0.0).then_some(v)
+    }
 }
 
 use crate::dto::{
@@ -636,6 +712,12 @@ use crate::settings::Settings;
 use crate::station::StationCore;
 use crate::AppState;
 
+/// The JS8 adapter (`crates/tempo-app/src/js8.rs`) — a CHILD of this module, so it reaches
+/// the engine's private fields with no visibility widening; the file lives beside this one.
+/// ⚠️ From here on, `js8` names THIS module; the crate is spelled `::js8::…` in engine.rs.
+#[path = "js8.rs"]
+pub mod js8;
+
 /// Live CAT read-back for one NON-active radio (dual-radio), fed by the monitor thread. `None` fields
 /// mean "not read yet / not reported". `cat_ok` mirrors the active radio's `(Option<bool>)` health.
 #[derive(Debug, Clone, Default)]
@@ -645,6 +727,26 @@ pub struct RadioLive {
     pub sideband: Option<String>,
     pub smeter_db: Option<i32>,
     pub cat_ok: Option<bool>,
+}
+
+/// How many CONSECUTIVE failed amplifier polls before the link indicator goes down.
+///
+/// The twin of `MonitorConn::freq_misses`/`FREQ_MISS_LIMIT` in the radio monitor, and for the
+/// same reason: a single slow poll must not flash the indicator. It debounces the FLAG ONLY —
+/// the readings themselves clear on the first miss, because a stale wattage is a fabricated one.
+pub const AMP_MISS_LIMIT: u32 = 3;
+
+/// The last amplifier reading for one radio, plus the consecutive-miss run behind it.
+///
+/// One per radio, like the rotator and for the same reason the setting states: an SO2R station
+/// has an amplifier per radio, and a field that lived only on the flat state would let one
+/// radio's amplifier render under the other's name.
+#[derive(Debug, Clone, Default)]
+pub struct AmpLive {
+    /// What the UI will see. Its readings are cleared the moment a poll fails.
+    pub status: crate::dto::AmpStatusDto,
+    /// Consecutive failed polls; reset by any success.
+    pub misses: u32,
 }
 use modes::{NativeSource, SignalSource, WsjtxUdpSource};
 use std::sync::{Arc, Mutex};
@@ -783,6 +885,28 @@ pub const MAIN_SUB_HAMLIB_REFUSAL: &str =
 /// actually hear a heterodyne in. A notch parked outside it is one you cannot hear and
 /// cannot find your way back from. 300 Hz is below any voice energy worth keeping; 3400 is
 /// the top of a wide SSB filter.
+/// At or below this the radio is not putting anything usable on the air (0.5%).
+///
+/// Deliberately well under the operator's own 2% — QRP is a legitimate way to operate, and a
+/// warning that fires on a level somebody is really using is one people learn to ignore, which
+/// costs more than it saves. Only a rig that rounds to 0% on the slider trips it.
+///
+/// ⚠️ AND THAT IS A SMALL MINORITY OF RADIOS — know this before reading the number as too low.
+/// Measured across all 117 catalog models on the bundled Hamlib 4.7.1: 28 report no `RFPOWER`
+/// at all (so this is never asked), and of the 89 that do, **75 have a floor above this
+/// threshold** — 61 of them at exactly `0.05`. Those rigs have no 0 W setting, so they cannot
+/// be in the state this describes and the silence is correct. Raising the constant to reach
+/// them would fire on 5 W of a 100 W radio, which is somebody's deliberate QRP.
+/// `the_zero_power_threshold_is_below_almost_every_rigs_own_floor_and_must_stay_there` holds
+/// the measurement and fails if this moves.
+const ZERO_RF_POWER: f32 = 0.005;
+
+/// How long a rig's own report of its split may be trusted before the gate stops granting on it.
+///
+/// The heavy poll refreshes well inside this. Expiry LOCKS — it never reverts to the dial — so
+/// an operator who cancels split at the front panel on a rig we then stop hearing from gets a
+/// refusal, not a transmission on the receive frequency.
+const OBSERVED_SPLIT_TTL_SECS: u64 = 6;
 const NOTCH_MIN_HZ: f32 = 300.0;
 const NOTCH_MAX_HZ: f32 = 3400.0;
 
@@ -870,6 +994,13 @@ pub enum DecodePass {
     Early,
     /// F6 review re-decode over retained audio: `a7_final = false`.
     Redecode,
+    /// One JS8 multi-speed decode of `speed`'s window that began at `cycle_start_ms` — the
+    /// scheduler's pass (JS8Call's decode moment, `frames_needed` samples into the cycle).
+    /// Folds like an EARLY result: rows and spots, never the boundary TX decision.
+    Js8Multi {
+        speed: modes::Js8Speed,
+        cycle_start_ms: u64,
+    },
 }
 
 impl DecodePass {
@@ -963,6 +1094,27 @@ impl DecodeJob {
 }
 
 /// The worker's output for one [`DecodeJob`]: the decodes plus the round-tripped
+/// Which frequency the privilege gate is judging, and why — so the lock can say something
+/// truer than "this frequency".
+///
+/// The lock used to be the same sentence on every path and never named a frequency, which under
+/// split meant it was naming one the operator was not transmitting on (field report
+/// 2026-08-25). The gate and the operator-facing reason are computed from THIS, once, so they
+/// cannot drift apart.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TxFreqVerdict {
+    /// Simplex: the dial is the emission.
+    Simplex(f64),
+    /// Split, and we know where it transmits — a split Nexus commanded and the rig
+    /// acknowledged, or (opt-in, capability-verified) one the rig reported natively.
+    Split(f64),
+    /// ⚠️ THE RIG SAYS IT IS SPLIT AND WE CANNOT SAY WHERE. Refuse. Do NOT fall back to the
+    /// dial: under split the dial is not the conservative answer, it is an unrelated number,
+    /// and falling back to it is how a legal-looking receive frequency permits an illegal
+    /// transmit one.
+    SplitUnverified,
+}
+
 /// `frame` and the bookkeeping (`pass`/`slot`/`epoch`) the engine needs to fold it.
 pub struct DecodeResult {
     decodes: Vec<modes::Decode>,
@@ -990,6 +1142,90 @@ impl DecodeResult {
     pub fn slot(&self) -> u64 {
         self.slot
     }
+}
+
+/// One multi-speed JS8 decode job: the due speeds' windows (each `speed.frames_needed()`
+/// samples, cycle-start aligned, sliced from the 36 s ring by `RxRing::tail_window`), the
+/// operator's decode controls, the boundary-slot index they are stamped with (`audio slot +
+/// 1`, the early pass's convention) and the capture epoch (`build_decode_job`'s rule: a
+/// mid-slot band change must not launder the old band's air into the new roster).
+pub struct Js8MultiJob {
+    pub slices: Vec<(modes::Js8Speed, Vec<f32>, u64 /* cycle_start_ms */)>,
+    pub params: ::js8::DecodeParams,
+    pub slot: u64,
+    epoch: u64,
+}
+
+/// Run one [`Js8MultiJob`]: every slice on its own scoped thread — legal ONLY because the
+/// JS8 modem is pure Rust with no process-global state (no `MODEM_LOCK`, no Fortran
+/// statics) — returning ONE [`DecodeResult`] per slice so each folds under its own speed.
+/// A panic in one slice is contained to that slice (the `run_decode_job` rule: a result
+/// must always come back, or the loop's pending count sticks).
+pub fn run_js8_multi_job(job: Js8MultiJob) -> Vec<DecodeResult> {
+    use modes::Mode; // `Js8Mode::decode_frame` is a trait method
+    let Js8MultiJob {
+        slices,
+        params,
+        slot,
+        epoch,
+    } = job;
+    let decoded: Vec<(modes::Js8Speed, u64, Vec<f32>, Vec<modes::Decode>)> =
+        std::thread::scope(|s| {
+            let handles: Vec<_> = slices
+                .into_iter()
+                .map(|(speed, frame, cycle_start_ms)| {
+                    s.spawn(move || {
+                        let iwave = channel::capture_to_i16(&frame);
+                        let mode = modes::Js8Mode { speed };
+                        let decodes =
+                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                mode.decode_frame(
+                                    &iwave,
+                                    params.nfa as i32,
+                                    params.nfb as i32,
+                                    i32::from(params.depth),
+                                    "",
+                                    "",
+                                    0,
+                                    0,
+                                    0,
+                                    false,
+                                    false,
+                                )
+                            }))
+                            .unwrap_or_else(|_| {
+                                eprintln!(
+                                    "[decode] PANIC in the JS8 {speed:?} multi-speed decode — \
+                                 contained, receive continues. This is a bug; please report it."
+                                );
+                                Vec::new()
+                            });
+                        (speed, cycle_start_ms, frame, decodes)
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|h| {
+                    h.join()
+                        .expect("a JS8 decode thread never panics past catch_unwind")
+                })
+                .collect()
+        });
+    decoded
+        .into_iter()
+        .map(|(speed, cycle_start_ms, frame, decodes)| DecodeResult {
+            decodes,
+            frame,
+            pass: DecodePass::Js8Multi {
+                speed,
+                cycle_start_ms,
+            },
+            slot,
+            epoch,
+            failed: false,
+        })
+        .collect()
 }
 
 /// One journaled store-and-forward entry (`pending_msgs.json`). Internal format —
@@ -1221,6 +1457,14 @@ struct OwnTx {
     text: String,
     freq_hz: f32,
     when_unix: u64,
+    /// The BAND this over went out on. Without it the ring is band-blind and every over we
+    /// have ever sent is served to every pane: the decode panes wipe on a band change and
+    /// then immediately re-ingest the lot, so 20 m calls reappear on 40 m carrying their
+    /// original transmit times — reported as "changing the band doesn't change the
+    /// situation… the hours and bands change in the status lines" (#178). A pane cannot
+    /// filter on a fact the wire never carried, which is why this belongs here and not in
+    /// the UI.
+    band: String,
 }
 
 /// Drives transmit/receive against the modem and updates [`AppState`].
@@ -1237,7 +1481,23 @@ pub mod upload_legs {
     pub const HRDLOG: u8 = 1 << 3;
     pub const N3FJP: u8 = 1 << 4;
     pub const CLOUDLOG: u8 = 1 << 5;
-    pub const ALL: u8 = QRZ | CLUBLOG | EQSL | HRDLOG | N3FJP | CLOUDLOG;
+    pub const WRL: u8 = 1 << 6;
+    pub const ALL: u8 = QRZ | CLUBLOG | EQSL | HRDLOG | N3FJP | CLOUDLOG | WRL;
+}
+
+/// Where a queued upload CAME FROM — the fact the transport could not previously
+/// recover (#193, KR8MER). A push to ClubLog's realtime endpoint is the same HTTP
+/// call either way, so without this marker a live contact and a replay of a QSO
+/// logged (or ADIF-imported) months ago are indistinguishable by the time they
+/// reach the wire — and ClubLog's objection is specifically to the replay.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum UploadOrigin {
+    /// A contact just logged at the key. Goes out AT ONCE — that is what "realtime"
+    /// means, and pacing one of these would be a regression, not a fix.
+    Live,
+    /// A record swept back up by a catch-up scan ([`StationCore::requeue_failed_clublog`]):
+    /// history, not news. Paced — see [`CATCHUP_UPLOAD_SPACING_SECS`].
+    CatchUp,
 }
 
 /// One QSO awaiting connector auto-upload, plus which legs it still owes and how
@@ -1245,6 +1505,11 @@ pub mod upload_legs {
 #[derive(Clone)]
 pub struct PendingUpload {
     pub rec: tempo_core::logbook::QsoRecord,
+    /// Live contact or catch-up replay — see [`UploadOrigin`]. Set at BOTH enqueue
+    /// points (`log_qso` = Live, `requeue_failed_clublog` = CatchUp) and CARRIED
+    /// THROUGH the worker's transient-failure re-queue, so a catch-up record that
+    /// blips on the network cannot come back as a live one and skip the pacing.
+    pub origin: UploadOrigin,
     /// Owed connector legs (see [`upload_legs`]); `ALL` on the first attempt.
     pub legs: u8,
     /// Retry count — a record is dropped once it hits [`MAX_UPLOAD_RETRIES`] so a
@@ -1269,6 +1534,31 @@ pub fn upload_backoff_secs(attempts: u8) -> i64 {
 /// Give up on a queued upload after this many transient-failure retries (~1 per
 /// worker tick / 2 s), so a permanently-down service eventually stops retrying.
 pub const MAX_UPLOAD_RETRIES: u8 = 20;
+
+/// Seconds between two CATCH-UP uploads (see [`UploadOrigin::CatchUp`]). Live contacts
+/// are never subject to this.
+///
+/// WHY THIS EXISTS (#193, KR8MER — live in 1.9.2): saving the ClubLog app-password fires
+/// `requeue_failed_clublog`, which sweeps up to 256 never-uploaded QSOs — including ones
+/// that arrived by ADIF import — and queued them all due-now. The drain worker takes the
+/// whole queue per tick and pushes in a bare loop, so the only thing rationing the pushes
+/// was ClubLog's own response latency: the reporter measured 81 realtime uploads in 4
+/// minutes (~20/min) and ClubLog threatened to block his source IP, naming Nexus.
+///
+/// WHY 15 SECONDS. ClubLog objects to BOTH shapes: a burst of historical contacts through
+/// the realtime endpoint, and a long trickle of many tiny uploads. Their answer to bulk is
+/// the batch endpoint — which this product does not implement (there is no `putlogs.php`
+/// call anywhere; realtime is our only write path), so we cannot satisfy both and must
+/// pick a point on that axis. 15 s is 4/min — a 5× cut on the rate that drew the
+/// complaint, and slower than a human can log by hand, so no burst detector has anything
+/// to fire on — while still draining the full 256-record cap in about an hour, i.e. inside
+/// one operating session. Going much slower would trade a rate complaint for a catch-up
+/// that never finishes: the queue is memory-only, so whatever is still pending when the
+/// app closes is dropped and waits for the next password save.
+///
+/// If a batch endpoint is ever added, bulk catch-up belongs there and this pacing becomes
+/// the fallback for the realtime-only path.
+pub const CATCHUP_UPLOAD_SPACING_SECS: i64 = 15;
 
 /// Where the STANDING N1MM broadcast should go, or `None` when it is off.
 ///
@@ -1348,6 +1638,11 @@ pub fn n1mm_contact_for(
         // A plain QSO's "exchange" is the signal report — what N1MM's own DX log
         // puts here.
         sent_exchange: rec.rst_sent.clone().unwrap_or_default(),
+        // The reports in the fields a logger actually reads as reports (#129). The N3FJP
+        // sibling gained these in 1.7.0 and this path was not swept with it, so Log4OM users
+        // received every QSO with both reports blank.
+        rst_sent: rec.rst_sent.clone().unwrap_or_default(),
+        rst_rcvd: rec.rst_rcvd.clone().unwrap_or_default(),
         // One station, one operator on this path (the rotating-operator field is
         // Field Day's, and Field Day does not come through here).
         operator: mycall.to_string(),
@@ -1418,6 +1713,79 @@ struct DialResidency {
     /// whatever `settings.sideband` happened to hold, which on a cross-band knob move is
     /// the departed band's; the restore resolves the band/mode default instead.
     sideband: Option<String>,
+}
+
+/// How many slots a partner the run has ALREADY LEFT may still be answered on (#170, #153).
+///
+/// The bound is the whole safety argument, so it is a constant and not a setting: nothing here
+/// may hold a station indefinitely, and an expired memory is indistinguishable from no memory.
+/// Twelve slots is three minutes on FT8 and ninety seconds on FT4 — long enough for a partner
+/// to repeat an over two or three times, or for a slow multi-stream club station to come back,
+/// and far short of anything an operator would still call "the contact I was just in".
+const LATE_REPLY_SLOTS: u64 = 12;
+
+/// What a partner the run has already left behind may still be answered with — ONE over, once,
+/// and never a return to `Mode::Qso`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LateAnswer {
+    /// #170 — the contact COMPLETED and our closing roger went out. A repeated report means
+    /// they never copied it, so the only useful thing we can do is send it again.
+    Roger,
+    /// #153 — the run GAVE UP on them mid-exchange. A late RR73/RRR is them closing the
+    /// contact, and it earns the 73 that closes it back.
+    Bye73,
+}
+
+/// A station the CQ run has MOVED ON FROM, kept only long enough to answer one more over.
+///
+/// ⚠️ THIS IS NOT A `QsoStation` AND MUST NEVER BECOME ONE — the same line `StalledQso` draws
+/// below, for the same reason. Restoring a sequencer would put us back into a QSO the operator
+/// has moved on from, which is a transmit decision; this holds a callsign, the single message
+/// that callsign could earn, and a slot deadline. Three bounds, all of them load-bearing:
+/// it answers only while the run is still sitting on a bare CQ, it answers at most ONCE
+/// (`owed` is taken, and the whole record is dropped with it), and it expires
+/// ([`LATE_REPLY_SLOTS`]).
+///
+/// One deep and replaced by the next partner: a rescue for the contact the operator just
+/// watched end badly, not a history.
+#[derive(Debug, Clone)]
+struct RecentPartner {
+    /// Who it is for. A message from anyone else never arms it.
+    call: String,
+    /// Which single over this partner may still earn.
+    answer: LateAnswer,
+    /// The operator's RRR-vs-RR73 preference AS IT WAS during the contact, so a re-sent
+    /// roger is the same over they missed rather than whatever the setting says now.
+    confirm_with_rrr: bool,
+    /// Last slot this may act on. Past it the record is dropped, unexamined.
+    until_slot: u64,
+    /// The over their late message earned — built when it arrived, transmitted ONCE.
+    owed: Option<Msg>,
+}
+
+/// A contact abandoned mid-exchange that still deserves to reach the log (#153).
+///
+/// Only the facts a record needs. Deliberately NOT the `QsoStation`: restoring one would put the
+/// sequencer back into a QSO the operator has moved on from, which is a transmit decision. This
+/// is a logging rescue and nothing else.
+#[derive(Debug, Clone)]
+struct StalledQso {
+    dxcall: String,
+    dxgrid: Option<String>,
+    rx_report: Option<i32>,
+    /// Their report to us, or ours to them — either proves the exchange happened.
+    tx_report: Option<i32>,
+    /// TIME_ON of the abandoned contact, so the record does not claim the moment it was rescued.
+    start_unix: Option<u64>,
+}
+
+/// A queued voice-memory relay for the radio loop (see `Engine::pending_voice_mem`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VoiceMemCmd {
+    /// Play memory `ch` (`\send_voice_mem ch` → Yaesu `PB0<ch>;`).
+    Play(u32),
+    /// Abort a playback in progress (`\stop_voice_mem`).
+    Stop,
 }
 
 pub struct Engine {
@@ -1516,6 +1884,14 @@ pub struct Engine {
     /// companion decodes off the network regardless of the selected tier.
     source_kind: SourceKind,
     mode: Mode,
+    /// Host-role Field Day club log (`None` = not hosting). Lives behind the
+    /// engine lock; the fdsync accept loop reaches it ONLY through the
+    /// shell's `ClubBackend` impl, which is data-plane by construction.
+    fd_club: Option<crate::fdevent::ClubLog>,
+    /// Position-side club mirror + link state (host included — it mirrors
+    /// itself over its loopback self-connection, so every role reads club
+    /// state the same way). Meaningful only while sync is configured.
+    fd_mirror: crate::fdevent::ClubMirror,
     /// Whether normal slot TX is enabled. False = Monitor-off (transmit muted):
     /// [`Engine::poll_tx`] returns nothing. Also forced false by the watchdog.
     tx_enabled: bool,
@@ -1548,6 +1924,13 @@ pub struct Engine {
     /// WALL-CLOCK elapsed since this (`tx_watchdog_min` minutes), like WSJT-X — not on
     /// TX air-time, which fired ~2x too late since FT8/FT4 transmit every other slot.
     tx_watchdog_start: Option<u64>,
+    /// When an unanswered CQ run may start calling again (unix seconds). `Some` only while a
+    /// run is serving out `Settings::cq_pause_secs`; cleared the moment the run resumes or the
+    /// sequencer leaves `CallingCq` (somebody answered — the whole point).
+    ///
+    /// The pause withholds the OUTGOING CQ and nothing else. The sequencer stays in CallingCq
+    /// and keeps decoding, so a station that calls during the quiet spell is worked normally.
+    cq_pause_until: Option<u64>,
     /// Recent decode `|dt|` magnitudes (seconds), most-recent-last, for the
     /// DT-derived time-sync health estimate.
     recent_dt: VecDeque<f32>,
@@ -1579,6 +1962,25 @@ pub struct Engine {
     /// The signal report I last sent the current QSO's DX station (RST sent),
     /// captured from the sequencer's outgoing (R)Report. Reset per QSO.
     qso_report_sent: Option<i32>,
+    /// The last contact ABANDONED mid-exchange that had already exchanged a report — kept so it
+    /// can still be logged.
+    ///
+    /// ⚠️ THIS EXISTS BECAUSE ABANDONING A QSO WAS THROWING AWAY A REAL CONTACT (#153, VK3GZY).
+    /// `abandon_stalled` replaces the whole `QsoStation` with a fresh `calling_cq` one, so
+    /// dxcall, dxgrid and both reports vanish. That is right for the RUN — a caller who went
+    /// quiet must not stall the pileup — but it is wrong for the LOG: the reports really were
+    /// exchanged, and after the swap `log_current_qso` finds no dxcall and answers "nothing to
+    /// log" about a QSO that no longer exists. His partner was a multi-stream club station, which
+    /// answers slowly BY DESIGN, so 3 overs of patience ran out and the contact became
+    /// unloggable by any route.
+    ///
+    /// One deep and replaced by the next abandonment: this is a rescue for the contact the
+    /// operator just watched fail, not a history.
+    stalled_qso: Option<StalledQso>,
+    /// The partner the CQ run most recently moved on from, held only long enough to answer
+    /// ONE more over (#170, #153) — see [`RecentPartner`] for the three bounds. Session-only,
+    /// one deep, and dropped the moment it is spent or expires.
+    recent_partner: Option<RecentPartner>,
     /// A completed QSO held for the operator to confirm before it is logged
     /// (WSJT-X "Prompt me to log QSO"). `Some` only while `prompt_to_log` is on
     /// and a finished contact is awaiting confirm/discard.
@@ -1673,6 +2075,30 @@ pub struct Engine {
     /// upcoming boundary slot, so the boundary's full-window decode ingests only
     /// the stragglers it newly found (no double rows / double observe).
     early_seen: Option<(u64, std::collections::HashSet<String>)>,
+    /// JS8 message layer (heard table, inbox, outbox, autoreply policy) — pure, clock
+    /// injected, never keys. Configured from `Settings` by `js8_apply_station_config`.
+    js8_station: ::js8::Station,
+    /// JS8 multi-frame reassembly keyed by audio offset (60 s close / 90 s drop).
+    js8_reasm: ::js8::Reassembler,
+    /// Heartbeat schedule ON — SESSION-ONLY, never persisted: the app can never launch
+    /// beaconing. Always false in the receive-only build.
+    js8_hb_on: bool,
+    /// Row dedupe between the multi-speed pass and the boundary pass: (speed, first-seen
+    /// unix ms, the 11 word bytes), 64 deep. See `js8_dedupe`.
+    js8_seen: VecDeque<(modes::Js8Speed, u64, [u8; 11])>,
+    /// The activity pane, newest last, capped at 200.
+    js8_activity: VecDeque<crate::dto::Js8ActivityRow>,
+    /// The last refused JS8 verb's reason (surfaced as `Js8State.last_error`).
+    js8_last_error: Option<String>,
+    /// `<config dir>/js8_station.json` — the inbox/heard journal (`set_js8_journal_path`).
+    js8_journal_path: Option<PathBuf>,
+    /// xorshift32 state for the heartbeat sub-band pick (`Station::next_frame`'s `rng`).
+    /// Seeded from the clock; it only ever chooses an AUDIO offset inside 500–1000 Hz.
+    pub(crate) js8_rng: u32,
+    /// The slot `plan_js8_tx` last popped a frame for. ONE frame per period: a second poll
+    /// in the same slot (the snappy immediate-TX path, a re-plan) must not pop the NEXT
+    /// frame and key it mid-period. Cleared by `js8_halt_clear`.
+    pub(crate) js8_planned_slot: Option<u64>,
     /// One-shot: drop Enable-Tx once the CURRENT over finishes playing — set
     /// when our final 73 goes out with "Disable Tx after sending 73" on. The
     /// radio loop consumes it AFTER tx_until expires; disabling immediately
@@ -1694,6 +2120,12 @@ pub struct Engine {
     /// the matching pane(s). Visual-only: the engine's decode context (answer
     /// parity, history) is NOT a window and stays intact.
     clear_tick: u32,
+    /// Bumped every time a contact reaches the log — through ANY path, so a
+    /// backend auto-log (the FT8/RTTY sequencer completing a QSO on its own)
+    /// increments it just like a manual log does. The UI watches it to fire the
+    /// "clear DX call after logging" wipe on the auto-log path, which used to be
+    /// invisible to the frontend because it intercepted only its own log actions.
+    logged_tick: u32,
     /// One-shot: the operator hit Erase — the radio loop tells cooperating
     /// apps via an outbound Clear (window byte; 0 = Band, 1 = Rx, 2 = both).
     pending_udp_clear: Option<u8>,
@@ -1805,6 +2237,39 @@ pub struct Engine {
     split_tx_mhz: Option<f64>,
     /// One-shot "apply the split state now" flag for the radio loop.
     split_dirty: bool,
+    /// One-shot voice-memory relay from the CAT broker (`\send_voice_mem` /
+    /// `\stop_voice_mem`), consumed by the radio loop's next tick — `take_split_request`'s
+    /// one-shot shape. ⚠️ PLAYBACK TRANSMITS, and the RIG keys itself (a front-panel PB
+    /// press over the wire): Nexus commands no PTT, sets no watchdog of its own, and sees
+    /// the transmission through the ordinary PTT poll exactly as it sees a mic key. A new
+    /// request simply replaces an unconsumed one — the newest ask wins, as everywhere else
+    /// in the one-shot family.
+    pending_voice_mem: Option<VoiceMemCmd>,
+    /// The TX frequency Nexus COMMANDED and the rig ACKNOWLEDGED — the ONLY transmit frequency
+    /// the privilege gate is allowed to judge.
+    ///
+    /// ⚠️ NOT `split_tx_mhz`, and the distinction is the whole safety argument. That field is
+    /// DESIRED state: it is `Some` for the entire round-trip gap before anything has reached the
+    /// radio. This one is set at exactly one site — the radio loop's success branch, where both
+    /// `set_split` and `set_split_freq` returned Ok on a rig we hold control of
+    /// (`Engine::rig_split_applied`) — and is revoked by any contradiction.
+    ///
+    /// ⚠️ AND IT IS NEVER SET FROM A READ. A rig's own report of split cannot grant permission:
+    /// 124 of Hamlib's 320 backends do not implement `get_split_vfo` and return a zero-filled
+    /// CACHE with RIG_OK, so on an IC-7200 or an IC-756 "split is off" and "I structurally
+    /// cannot answer" are the same bytes; `get_split_freq` returns 0 with success whenever that
+    /// cache says off; and on a non-targetable Icom, asking for the split frequency turns split
+    /// OFF on the radio, reads, and turns it back on — Hamlib's own source calls that "broken if
+    /// user changes split on rig". A gate that believed those reads would manufacture the very
+    /// out-of-band transmission it exists to prevent. Reads may only REVOKE.
+    tx_split_confirmed_hz: Option<u64>,
+    /// What the RIG last said about its own split, and when (unix secs): `(on, tx_hz, at)`.
+    ///
+    /// Written only from a capability-verified NATIVE read (`SplitDetect::Native`) — never from
+    /// an emulated one, because asking an emulated rig moves it. Used two ways, and the
+    /// asymmetry is the safety: "split off" REVOKES a confirmation unconditionally, while
+    /// "split on at X" may only GRANT when the operator opted in and the reading is fresh.
+    observed_split: Option<(bool, Option<u64>, u64)>,
     /// RIT / XIT clarifier offsets in Hz (0 = off) and the active VFO — the CAT-panel controls.
     /// Write-only + optimistic (no read-back): the loop applies a change once and the snapshot
     /// mirrors the last commanded value, like the RF-power / filter-width path.
@@ -1929,6 +2394,9 @@ pub struct Engine {
     /// the commanded `rf_power` so a 750 ms poll can never clobber a just-issued
     /// set that the radio loop hasn't applied yet.
     rig_rf_power: Option<f32>,
+    /// Latch for the zero-power log line, so it is written once per transition and not once
+    /// per radio-loop tick.
+    zero_power_noted: bool,
     /// Desired MIC GAIN (0.0–1.0); `None` = leave the rig's mic gain alone. Same
     /// commanded-vs-read-back split as `rf_power`/`rig_mic_gain` so an in-flight drag wins.
     mic_gain: Option<f32>,
@@ -1946,7 +2414,7 @@ pub struct Engine {
     /// HZ, not a 0..1 fraction.
     notch_freq_hz: Option<f32>,
     rig_notch_freq_hz: Option<f32>,
-    /// Desired / read-back AGC time constant as "fast"|"mid"|"slow" (the loop maps it to the
+    /// Desired / read-back AGC time constant, one of [`Engine::AGC_SPEEDS`] (the loop maps it to the
     /// rig's value). Commanded until the poll confirms; `None` when the rig doesn't report it.
     agc: Option<String>,
     rig_agc: Option<String>,
@@ -2014,6 +2482,8 @@ pub struct Engine {
     /// (± half-width), reference level in tenths of a dB, and center(false)/fixed(true) mode. The
     /// radio loop drains each and calls the CivDaemon while not keyed.
     pending_scope_span: Option<u32>,
+    /// Queued Yaesu scope position as an `SS` P3 code — see `request_yaesu_scope_mode`.
+    pending_yaesu_scope_mode: Option<u8>,
     pending_scope_ref: Option<i32>,
     pending_scope_fixed: Option<bool>,
     /// FlexRadio native-panadapter controls (read continuously by the FlexSpectrum worker, which
@@ -2092,6 +2562,8 @@ pub struct Engine {
     /// its stale profile `last_*`. The ACTIVE radio is NOT in this map — its live state is the flat
     /// `rig_*`/`settings.dial_mhz` block, driven by the existing `observe_rig_*`.
     radio_live: std::collections::HashMap<u32, RadioLive>,
+    /// Last amplifier reading per radio, fed by the amplifier poll thread. Display-only.
+    amp_live: std::collections::HashMap<u32, AmpLive>,
     /// Set by `test_cat` to ask the radio loop to re-probe the current rig and
     /// refresh `cat_status`; the loop clears it via [`Engine::take_cat_reprobe`].
     cat_reprobe: bool,
@@ -2109,6 +2581,11 @@ pub struct Engine {
     /// Set by the radio loop when the sound card failed to open, so the UI can
     /// explain a blank waterfall instead of failing silently.
     audio_error: Option<String>,
+    scope_error: Option<String>,
+    /// See `RadioStatus::scope_mode_code`.
+    scope_mode_code: Option<u32>,
+    /// See `RadioStatus::scope_fix_start_mhz`.
+    scope_fix_start_mhz: Option<f64>,
     /// The last per-QSO recording that failed, with the path. Set by the shell (which owns the
     /// file write), carried out in the snapshot, cleared by the next recording that succeeds.
     recording_warning: Option<String>,
@@ -2117,8 +2594,14 @@ pub struct Engine {
     /// Chat/QSO/Field-Day paths are unaffected when the operator hasn't enabled it.
     qsy: Roamer,
     /// RTTY RX decoder armed (session-only runtime state, never persisted — the
-    /// decoder must never come up armed at launch). RX decode only; no TX path.
+    /// decoder must never come up armed at launch except via the view-entry auto-arm
+    /// policy in [`Engine::rtty_auto_arm`], which is itself RX-only). RX decode only;
+    /// no TX path.
     rtty_armed: bool,
+    /// The operator explicitly stopped the RTTY decoder this session, so entering the
+    /// RTTY view must not quietly restart it behind them (the APRS/SSTV/PSK
+    /// decline-memory doctrine). Session-only; a manual arm retires it.
+    rtty_auto_arm_declined: bool,
     /// Drain buffer for the RTTY decode thread: 12 kHz RX audio accumulates here
     /// while armed; the thread empties it via [`Engine::take_rtty_audio`]. Empty
     /// (zero cost) while disarmed.
@@ -2385,6 +2868,13 @@ const RTTY_TEXT_CAP: usize = 4000;
 const PSK_TEXT_CAP: usize = 4000;
 /// AFSK RTTY mark tone (Hz) — mirrors `tempo_audio::rtty_afsk::MARK_HZ` (tempo-app can't
 /// depend on tempo-audio); used only to judge where the AFSK emission lands vs the dial.
+/// The STANDARD AFSK mark tone, and now only the basis for the DEFAULT centre.
+///
+/// ⚠️ NOT WHAT THE PRIVILEGE GATE JUDGES — that is `Engine::rtty_tx_mark_hz`, which follows the
+/// operator's netted centre. Judging this constant was correct until 1.9.0 made the transmitter
+/// follow the net; afterwards it could be wrong by ~1.9 kHz and APPROVE a transmission landing
+/// outside a privileged segment. If you find yourself reaching for it in a gate, you want
+/// `rtty_tx_mark_hz`.
 const RTTY_AFSK_MARK_HZ: f64 = 2125.0;
 /// Cap on the armed RTTY/SSTV audio drain buffers (~10 s at 12 kHz). The decode
 /// threads normally empty these every ~100 ms; the cap only bites if a thread
@@ -3158,6 +3648,10 @@ fn rtty_filter(text: &str) -> String {
 /// under the name RTTY's call sites have always used.
 pub use crate::keyboard::KbTick as RttyStreamTick;
 
+/// The JS8 speed enum for the audio service (tempo-audio depends on tempo-app, not on
+/// `modes`) — the multi-speed scheduler names speeds through this path.
+pub use modes::Js8Speed;
+
 /// PSK31's instantiation of the per-mode [`crate::keyboard::kb_filter`]:
 /// full-ASCII varicode, case preserved — the ONE filter every PSK TX path
 /// runs, so what is queued (or typed into a latched stream) is exactly what
@@ -3235,12 +3729,22 @@ pub enum TxWaveform {
         text: String,
         f0: f32,
     },
+    /// JS8: a TYPED 87-bit word. The frame never round-trips through text —
+    /// `Js8Mode::encode` is the lab's "<12 sixbit> <i3>" form, not the engine's
+    /// wire (a sentinel text form would make consumers guess). `f0` is the plan's
+    /// audio offset: the operator's TX offset, or the 500–1000 Hz heartbeat
+    /// sub-band slot the station picked — NEVER a dial move (spec invariant 9).
+    Js8 {
+        speed: modes::Js8Speed,
+        word: ::js8::Word87,
+        f0: f32,
+    },
 }
 
 impl TxWaveform {
-    /// Synthesise the audio. **Takes the modem lock; call it with no other lock
-    /// held.** Returns empty on any refusal, which every caller already treats
-    /// as "do not key".
+    /// Synthesise the audio. **Takes the modem lock for the Fortran-backed variants;
+    /// call it with no other lock held.** JS8 is pure Rust and takes none. Returns
+    /// empty on any refusal, which every caller already treats as "do not key".
     pub fn build(&self) -> Vec<f32> {
         match self {
             TxWaveform::Deep { text, f0 } => {
@@ -3258,6 +3762,14 @@ impl TxWaveform {
                     return Vec::new();
                 }
                 mode.gen_wave(&tones, tempo_fast::SAMPLE_RATE, *f0)
+            }
+            TxWaveform::Js8 { speed, word, f0 } => {
+                // Pure Rust — takes no modem lock. Slot-positioned by construction:
+                // `modulate` prepends `speed.delay_ms()` of silence (JS8Call's start
+                // delay) and returns delay + 79·NSPS samples, always < the period
+                // (pinned per speed by the slot-fit test).
+                let tones = ::js8::phy::encode_word(word, *speed);
+                ::js8::phy::modulate(&tones, *speed, *f0, tempo_fast::SAMPLE_RATE)
             }
         }
     }
@@ -3279,7 +3791,8 @@ pub struct TxPlan {
     /// A WSPR/FST4W beacon over. Beacons are EXEMPT from the wall-clock TX
     /// watchdog (operator-approved 2026-08-17, matching WSJT-X — see the
     /// `plan.beacon` branch in [`Engine::commit_tx`]); the flag now only marks
-    /// the transmitting state at commit.
+    /// the transmitting state at commit. Also set on a JS8 HEARTBEAT plan —
+    /// operator gate G2, 2026-09-05.
     beacon: bool,
     /// Everything the TX gate evaluated when this plan was made — see
     /// [`TxGateStamp`].
@@ -3495,6 +4008,26 @@ struct TxGateStamp {
     generation: u64,
 }
 
+/// WSJT-X's "dB reports to comments" line, byte-for-byte (logqso.cpp:143-145):
+/// `"<mode>  Sent: <rpt>  Rcvd: <rpt>"` — TWO spaces before each part, either part
+/// omitted when its report is absent, and just the mode when both are. Returns `None`
+/// only for the nothing-at-all case so an empty comment is never written.
+fn reports_comment(mode: &str, sent: Option<&str>, rcvd: Option<&str>) -> Option<String> {
+    let mut t = mode.to_string();
+    if let Some(r) = sent.filter(|r| !r.is_empty()) {
+        t.push_str("  Sent: ");
+        t.push_str(r);
+    }
+    if let Some(r) = rcvd.filter(|r| !r.is_empty()) {
+        t.push_str("  Rcvd: ");
+        t.push_str(r);
+    }
+    if sent.is_none() && rcvd.is_none() {
+        return Some(t); // mode alone — exactly what WSJT-X writes then
+    }
+    Some(t)
+}
+
 impl Engine {
     /// Construct from explicit identity (back-compat; uses default settings).
     pub fn new(mycall: &str, mygrid: &str, tx_parity: u64) -> Self {
@@ -3517,6 +4050,27 @@ impl Engine {
         // at all until the operator acts.
         let mut settings = settings;
         settings.beacon = false;
+        // Hound (DXpedition) is a PER-DXPEDITION mode, not a station setting, and it does not
+        // survive a launch. Left on by accident it takes every ordinary contact with it:
+        // `call_station` reads `quiet_finish` straight off this field, so each S&P QSO inherits
+        // the Fox rule — end on the partner's RR73, send NO parting 73 — and the stock "disable
+        // Tx after 73" one-shot fires on RECEIVING the RR73 instead of after sending ours, so
+        // Enable-Tx drops before the 73 can go out. Correct against a real Fox, where a 73 would
+        // land as QRM in the Fox's own segment; silently wrong against everybody else, and
+        // invisible from our side — the operator sees a normal QSO, the DX sees us vanish.
+        // (Field report 2026-08-23: four RR73s from the DX, no answer, our 73 finally escaping
+        // two minutes later when something re-armed TX.)
+        //
+        // Same passive-launch rule as `beacon` above, for a stronger reason: a beacon left on is
+        // audible on the next over, while this one is not observable without a partner telling
+        // you. The amber HOUND pill in the Operate header says so for the session the operator
+        // does opt in.
+        if matches!(
+            settings.special_op,
+            crate::settings::SpecialOp::Hound | crate::settings::SpecialOp::SuperHound
+        ) {
+            settings.special_op = crate::settings::SpecialOp::None;
+        }
         // A settings.json persisted before band canonicalisation can still carry
         // a channel TOKEN ("2m-fm") as the band — a QSO logged before the first
         // QSY would inherit it. Same boundary rule as set_frequency: canonical
@@ -3550,6 +4104,25 @@ impl Engine {
                 .unwrap_or_else(|| settings.band.clone());
             qsy.enable(home, None);
         }
+        // JS8 station BOOTSTRAP config — identity only. `js8_apply_station_config` (called by
+        // `apply_settings` and by every JS8 view entry) is the truth; this exists so the field
+        // has a value before any of that runs, and it is receive-only by construction.
+        let js8_boot = ::js8::StationConfig {
+            mycall: settings.mycall.trim().to_ascii_uppercase(),
+            grid: settings.mygrid.trim().to_ascii_uppercase(),
+            speed: modes::Js8Speed::Normal,
+            autoreply: false,
+            relay: false,
+            hb_ack: false,
+            hb_interval_min: 0,
+            cq_interval_min: 0,
+            idle_watchdog_min: 0,
+            groups: Vec::new(),
+            info: String::new(),
+            status: String::new(),
+            allcall_reply_interval_ms: 15 * 60 * 1000,
+            reply_delay_ms: 17_000,
+        };
         Self {
             app,
             settings,
@@ -3576,6 +4149,8 @@ impl Engine {
             capture_epoch: 0,
             source_kind: SourceKind::Native,
             mode: Mode::Chat,
+            fd_club: None,
+            fd_mirror: crate::fdevent::ClubMirror::default(),
             // Transmit DISARMED at launch — WSJT-X's "Enable Tx" latch, which is off
             // until the operator arms it. Passive monitor + beacon-off were not enough:
             // any path that leaves a pending message in the sequencer (a CQ-run state, a
@@ -3589,6 +4164,7 @@ impl Engine {
             tuning: false,
             tx_watchdog: false,
             tx_watchdog_start: None,
+            cq_pause_until: None,
             recent_dt: VecDeque::new(),
             seen_decode: false,
             rig_confirmed: false,
@@ -3599,6 +4175,8 @@ impl Engine {
             work_view: None,
             work_call: None,
             qso_report_sent: None,
+            stalled_qso: None,
+            recent_partner: None,
             pending_log: None,
             qso_logged: false,
             qso_start_unix: None,
@@ -3622,11 +4200,21 @@ impl Engine {
             route_target: None,
             decode_history: std::collections::VecDeque::new(),
             early_seen: None,
+            js8_station: ::js8::Station::new(js8_boot),
+            js8_reasm: ::js8::Reassembler::new(),
+            js8_hb_on: false,
+            js8_seen: VecDeque::new(),
+            js8_activity: VecDeque::new(),
+            js8_last_error: None,
+            js8_journal_path: None,
+            js8_rng: (tempo_core::timing::now_unix_ms() as u32) | 1,
+            js8_planned_slot: None,
             pending_tx_disable: false,
             pending_cw_id: false,
             highlights: std::collections::HashMap::new(),
             highlight_seq: 0,
             clear_tick: 0,
+            logged_tick: 0,
             pending_udp_clear: None,
             pending_udp_qsos: std::collections::VecDeque::new(),
             hrd_pending: std::collections::VecDeque::new(),
@@ -3645,7 +4233,10 @@ impl Engine {
             sat_inferred_keyed: false,
             sat_mode_released: false,
             split_tx_mhz: None,
+            tx_split_confirmed_hz: None,
+            observed_split: None,
             split_dirty: false,
+            pending_voice_mem: None,
             rit_hz: 0,
             xit_hz: 0,
             active_vfo_b: false,
@@ -3677,6 +4268,7 @@ impl Engine {
             manual_ptt: false,
             rf_power: None,
             rig_rf_power: None,
+            zero_power_noted: false,
             mic_gain: None,
             rig_mic_gain: None,
             nr_level: None,
@@ -3705,6 +4297,7 @@ impl Engine {
             rig_passband: None,
             pending_passband: None,
             pending_scope_span: None,
+            pending_yaesu_scope_mode: None,
             pending_scope_ref: None,
             flex_pan_span_hz: 200_000.0,
             flex_pan_ref_dbm: None,
@@ -3729,11 +4322,16 @@ impl Engine {
             cat_port_hold_until: None,
             cat_port_released: false,
             radio_live: std::collections::HashMap::new(),
+            amp_live: std::collections::HashMap::new(),
             cat_reprobe: false,
             audio_error: None,
+            scope_error: None,
+            scope_mode_code: None,
+            scope_fix_start_mhz: None,
             recording_warning: None,
             qsy,
             rtty_armed: false,
+            rtty_auto_arm_declined: false,
             rtty_audio: Vec::new(),
             rtty_chars: VecDeque::new(),
             rtty_afc_hz: 0.0,
@@ -3809,6 +4407,7 @@ impl Engine {
             self.settings.fst4_period_s,
             self.settings.msk144_period_s,
             self.settings.jt65_submode,
+            self.settings.js8_speed,
         )
     }
 
@@ -3960,6 +4559,17 @@ impl Engine {
     }
 
     fn apply_settings_inner(&mut self, s: Settings, keep_live_roster: bool) {
+        // THE FT-710 SCOPE OPT-IN GOING OFF is the second moment the held scope state stops
+        // describing anything — the first is a radio switch (`set_active_radio`). Read BEFORE the
+        // new settings land, because after the assignment the old answer is gone and the edge is
+        // unrecoverable. Only a true→false transition clears: turning it ON must not wipe a mode
+        // the loop has already reported, and an unrelated save must not either.
+        // Read the FLAT mirror, not the profile. Saving the radio you are currently USING goes
+        // through the flat form (`Settings::yaesu_rf_scope`, and its doc says why the mirror is
+        // load-bearing), and `apply_settings` deliberately keeps the engine's own roster — so the
+        // incoming `radios` do NOT carry the operator's change for the active rig. Reading the
+        // profile here made the clear never fire, which is what its test caught.
+        let scope_was_on = self.settings.yaesu_rf_scope;
         // A settings save can rewrite anything the TX gate reads (dial, mode,
         // offsets, license class) — an over planned before it must not key
         // (commit_tx checks the generation).
@@ -4028,6 +4638,22 @@ impl Engine {
         // Alt-double-click gesture and the Settings editor both go through it), so a
         // stale form save can't silently un-block or re-block a call mid-QSO.
         let live_blocked = std::mem::take(&mut self.settings.blocked_calls);
+        // The Cloudlog key is a WRITE-ONLY credential, not editable state, so it is captured here and
+        // restored below UNCONDITIONALLY — on a form save AND on a restore/reset, unlike the roster
+        // fields above. `get_settings` clears it on the way OUT to the frontend (round 9), so the
+        // frontend never holds it and every form Save posts it back EMPTY; a factory reset sends
+        // `Settings::default()` (empty); and a restore's bundle has `cloudlogKey` redacted
+        // (`BACKUP_REDACTED_FIELDS`, also empty). It therefore has exactly ONE legitimate non-empty
+        // source — a legacy settings.json read at startup, held here as a pending keychain migration —
+        // and no incoming `s` can ever author it. Letting the wholesale `self.settings = s` below adopt
+        // the incoming empty value destroyed that pending key: the save that follows omits the
+        // now-empty field (`skip_serializing_if`), leaving the key in NEITHER the keychain (migration
+        // deferred) nor the file — permanently lost. This is the WRITE half of the same contract
+        // `get_settings`'s clear is the READ half of; the two must stay symmetric. `apply_settings_inner`
+        // is the ONLY session-time wholesale replace of `self.settings`, so preserving it here closes
+        // every save path — form Save, reset AND restore — at their one common point (round 10 Finding 1;
+        // three earlier partial fixes each patched only the path their author was testing).
+        let live_cloudlog_key = std::mem::take(&mut self.settings.cloudlog_key);
         // Which radio the incoming flat fields describe. A P2-aware Settings form carries the roster
         // + its edited radio in `active_radio`. A LEGACY payload with no `radios` (an old settings.json
         // or a pre-P2 saved config profile) describes the LIVE active radio — fold its flat CAT there,
@@ -4038,6 +4664,13 @@ impl Engine {
             s.active_radio
         };
         self.settings = s;
+        // Restore the engine-owned pending Cloudlog key captured above (see that comment). Prefer a
+        // NON-empty incoming value — that can only be a legacy first-load carrying its own plaintext
+        // key, never the frontend — but keep the live pending key whenever `s` carries none, which is
+        // every real path today.
+        if self.settings.cloudlog_key.is_empty() {
+            self.settings.cloudlog_key = live_cloudlog_key;
+        }
         // Implicit-ACK toggle lives app-side (the observe loop consumes it).
         self.app.set_implicit_ack(self.settings.chat_implicit_ack);
         self.settings.source = live_source;
@@ -4128,9 +4761,26 @@ impl Engine {
         self.app.set_radio(app_dial, &app_band, &app_sideband);
         // Re-derive the live timing/tuning state from the saved settings.
         self.tx_parity = if self.settings.tx_even { 0 } else { 1 };
-        self.tx_offset_hz = self.settings.tx_offset_hz;
-        self.rx_offset_hz = self.settings.rx_offset_hz;
-        self.hold_tx_freq = self.settings.hold_tx_freq;
+        // ...but NOT these three on a form save. They are COCKPIT controls — the waterfall's
+        // RX/TX markers and the Hold Tx button — and the Settings form does not edit any of
+        // them anywhere (verified against SettingsPanel.tsx); it only carries them. Their
+        // setters return an `AppSnapshot`, never `Settings`, so every open panel's copy goes
+        // stale the moment the operator drags a marker or presses Hold, and posting that copy
+        // back reverted the operator's live state and then PERSISTED the revert — which is why
+        // it looked like a failure to save (operator report 2026-08-23: "if I set hold tx in
+        // ft, it should survive a nexus restart"; the round trip through settings.json was
+        // fine all along). Same carve-out as the roster directly below, for the same reason: a
+        // stale panel must not revert what the operator just did. A RESTORE still takes all
+        // three from the bundle — there the incoming settings are the whole truth.
+        if keep_live_roster {
+            self.settings.tx_offset_hz = self.tx_offset_hz;
+            self.settings.rx_offset_hz = self.rx_offset_hz;
+            self.settings.hold_tx_freq = self.hold_tx_freq;
+        } else {
+            self.tx_offset_hz = self.settings.tx_offset_hz;
+            self.rx_offset_hz = self.settings.rx_offset_hz;
+            self.hold_tx_freq = self.settings.hold_tx_freq;
+        }
         // A settings save reconciles the operating mode with the Field Day
         // master switch `fd_active`, which is authoritative over whether the
         // engine operates in Field Day (spec §1). This is the one place a save
@@ -4227,12 +4877,22 @@ impl Engine {
                 self.clear_decode_context();
             }
         }
+        // The JS8 station reads identity, groups, switches and speed from Settings.
+        self.js8_apply_station_config();
         if self.settings.qsy_enabled && !self.qsy.enabled {
             let home = self.qsy_token_for_current();
             let partner = self.app.active_peer().map(|s| s.to_string());
             self.qsy.enable(home, partner);
         } else if !self.settings.qsy_enabled && self.qsy.enabled {
             let _ = self.qsy.disable();
+        }
+        // The opt-in edge, using the value read at the top of this function. Mirrors the clear on
+        // `set_active_radio`: after the switch-off, `scope_mode_code` and the derived FIX start
+        // describe a source that is no longer feeding, and the position select renders a stale
+        // code as a confident "Fix" on a radio whose scope is now off.
+        let scope_now = self.settings.yaesu_rf_scope;
+        if scope_was_on && !scope_now {
+            self.clear_scope_state();
         }
     }
 
@@ -4308,6 +4968,19 @@ impl Engine {
     /// reset the operating mode or drop queued TX (never `apply_settings`).
     pub fn set_hrdlog_upload(&mut self, on: bool) -> Settings {
         self.settings.hrdlog_upload = on;
+        self.settings.clone()
+    }
+
+    pub fn set_wrl_upload(&mut self, on: bool) -> Settings {
+        self.settings.wrl_upload = on;
+        self.settings.clone()
+    }
+
+    /// Store the resolved WRL logbook id — the `set_lotw_cursor` pattern: a
+    /// lightweight setter, because `apply_settings` is heavyweight (resets the mode
+    /// and clears the TX queue) and key-save-time resolution must not do that.
+    pub fn set_wrl_logbook_id(&mut self, id: &str) -> Settings {
+        self.settings.wrl_logbook_id = id.to_string();
         self.settings.clone()
     }
 
@@ -4411,6 +5084,13 @@ impl Engine {
         // active — a fail-CLOSED bug, and the inverse of what the gate is for.
         self.rig_rx_ranges = None;
         self.rig_refused_dial_mhz = None;
+        // The FT-710 scope state belongs to the RADIO too, and for a sharper reason than the
+        // ranges above: only one radio in a roster is an FT-710, so carrying it across a switch
+        // shows the outgoing rig's sweep mode and derived FIX start under a rig that has neither.
+        // The position select reads `scope_mode_code` directly, so a stale code renders as a
+        // confident "Fix" on a radio with no scope at all. Cleared, not recomputed: the loop
+        // restates it within a tick when the new radio actually has one.
+        self.clear_scope_state();
         // Fold the OUTGOING radio's live flat CAT/audio edits into its own profile BEFORE we mirror
         // the new radio in — otherwise an unsaved flat change made while this radio was active (e.g. a
         // live Pwr/tx_level tweak) is discarded by `sync_flat_from_active` below. `active_radio` still
@@ -4448,6 +5128,8 @@ impl Engine {
         // satellite path, literally consented per radio — and leaving it dirty
         // let the loop apply that TX frequency to whichever rig came next.
         // Marking dirty commands the NEW radio back to simplex instead.
+        self.tx_split_confirmed_hz = None; // the radio moved — the confirmation is void
+        self.observed_split = None; // …and what the rig said about the OLD dial says nothing here
         if self.split_tx_mhz.take().is_some() {
             self.split_dirty = true;
         }
@@ -4637,7 +5319,38 @@ impl Engine {
     /// what the per-(band, mode) dial memory makes of it: nothing is recorded, and the
     /// operator residency it displaces is banked on the way in.
     pub fn tune_channel(&mut self, dial_mhz: f64, band: &str, mode: &str) {
-        self.machinery_tune(dial_mhz, band, mode);
+        self.machinery_tune(self.rtty_channel_dial(dial_mhz), band, mode);
+    }
+
+    /// The dial to actually tune for a band-plan pick, once the RTTY keying backend is taken
+    /// into account. Identity for everything that is not RTTY.
+    ///
+    /// ⚠️ THE PLAN STORES THE EMISSION, NOT THE DIAL — which is only the same number on true
+    /// FSK. FSK keys the rig's own RTTY mode, where the dial reads the mark RF and the signal
+    /// occupies `[dial - shift, dial]`. AFSK — the DEFAULT — rides LSB, so its audio pair lands
+    /// BELOW the dial and the signal occupies `[dial - mark - shift, dial - mark]`, about
+    /// 2.3 kHz lower. Every RTTY entry in the plan was chosen as though the dial were the
+    /// emission, so on the default backend four of them transmitted inside another mode's
+    /// cluster: 20 m on FT4, 17 m and 12 m on FT8, 15 m on JS8 — while the plan's own comments
+    /// said "above the FT4 cluster at 14.080", reasoning about the dial.
+    ///
+    /// Subtracting the two spans gives the whole correction: the AFSK dial is the FSK dial plus
+    /// the mark tone, and then both backends put the signal in the identical window. The stored
+    /// number stays the FSK dial — the frequency the comments describe and operators quote —
+    /// and this is the one place the offset is applied, so no channel table can drift out of
+    /// step with it.
+    ///
+    /// Found in a triage sweep of #114 (ve3wej), who reported only the 20 m entry.
+    fn rtty_channel_dial(&self, dial_mhz: f64) -> f64 {
+        if self.settings.operating_mode != crate::settings::OperatingMode::Rtty {
+            return dial_mhz;
+        }
+        if self.settings.rtty_backend.eq_ignore_ascii_case("fsk") {
+            return dial_mhz;
+        }
+        // The SAME live mark the gate judges (`rtty_tx_mark_hz`) — a channel pick must land the
+        // signal where the plan says regardless of where the operator has netted.
+        dial_mhz + self.rtty_tx_mark_hz() / 1_000_000.0
     }
 
     fn tune_dial(&mut self, dial_mhz: f64, band: &str, mode: &str, origin: DialOrigin) {
@@ -4823,6 +5536,8 @@ impl Engine {
         self.immediate_retune = true;
         // A plain QSY always returns the rig to SIMPLEX — leftover split from a
         // pile-up must never silently shift TX on the next frequency.
+        self.tx_split_confirmed_hz = None; // the radio moved — the confirmation is void
+        self.observed_split = None; // …and what the rig said about the OLD dial says nothing here
         if self.split_tx_mhz.take().is_some() {
             self.split_dirty = true;
         }
@@ -4913,6 +5628,8 @@ impl Engine {
         // A knob QSY returns the rig to simplex, exactly like an app-commanded retune
         // (set_frequency): otherwise a manual split's TX VFO would be left on the OLD dial —
         // transmitting off-frequency — and the SPLIT badge would lie about the offset.
+        self.tx_split_confirmed_hz = None; // the radio moved — the confirmation is void
+        self.observed_split = None; // …and what the rig said about the OLD dial says nothing here
         if self.split_tx_mhz.take().is_some() {
             self.split_dirty = true;
         }
@@ -5139,6 +5856,63 @@ impl Engine {
         self.radio_live.remove(&id);
     }
 
+    // --- Amplifier: per-radio live status from the amplifier poll thread ---
+    //
+    // The same contract as the block above — update `amp_live[id]` WITHOUT touching the active
+    // flat state, the decode context or TX. Display-only: it gates nothing and keys nothing.
+    // Putting an amplifier in standby is not a way to stop a transmission (the exciter keeps
+    // keying and the drive passes straight through), so no reading here may ever become a
+    // condition on a transmit decision or reach a cockpit's stop-line census.
+
+    /// Record a SUCCESSFUL amplifier poll. Clears the miss run and marks the link up.
+    pub fn observe_amp_status(&mut self, id: u32, status: crate::dto::AmpStatusDto) {
+        let e = self.amp_live.entry(id).or_default();
+        e.misses = 0;
+        e.status = crate::dto::AmpStatusDto {
+            linked: true,
+            reason: String::new(),
+            ..status
+        };
+    }
+
+    /// Record a FAILED amplifier poll — `reason` is one of [`crate::dto::AMP_REASONS`].
+    ///
+    /// ⭐ TWO RULES PULLING OPPOSITE WAYS, AND BOTH ARE RIGHT. Every reading is cleared HERE,
+    /// on the first miss, because a poll that got no answer is a failure and a number left on
+    /// screen from the last good one is a fabrication in front of a kilowatt. The `linked` flag
+    /// is debounced to [`AMP_MISS_LIMIT`] instead, because one slow poll flashing the indicator
+    /// is the defect the radio monitor's `freq_misses` was written to stop. What survives a
+    /// miss is only the amplifier's IDENTITY — family and model — which is not a reading and is
+    /// what lets the surface say *which* amplifier went quiet.
+    pub fn observe_amp_miss(&mut self, id: u32, family: &str, reason: &str) {
+        let e = self.amp_live.entry(id).or_default();
+        e.misses = e.misses.saturating_add(1);
+        let family = if family.is_empty() {
+            std::mem::take(&mut e.status.family)
+        } else {
+            family.to_string()
+        };
+        e.status = crate::dto::AmpStatusDto {
+            family,
+            model: std::mem::take(&mut e.status.model),
+            linked: e.misses < AMP_MISS_LIMIT && e.status.linked,
+            reason: reason.to_string(),
+            ..Default::default()
+        };
+    }
+
+    /// Drop a radio's amplifier cache — it was unconfigured, or the radio was removed. The
+    /// snapshot then carries no `amp` at all, which is what makes every amplifier surface
+    /// render NOTHING rather than an empty frame.
+    pub fn forget_amp(&mut self, id: u32) {
+        self.amp_live.remove(&id);
+    }
+
+    /// One radio's last amplifier reading, or `None` when no amplifier is configured on it.
+    pub fn amp_live(&self, id: u32) -> Option<&crate::dto::AmpStatusDto> {
+        self.amp_live.get(&id).map(|a| &a.status)
+    }
+
     /// The active tier's band plan with the operator's working-frequency
     /// overrides applied (WSJT-X Settings ▸ Frequencies): an override replaces
     /// the dial of the matching (band, mode) row; a band the stock table lacks
@@ -5171,6 +5945,9 @@ impl Engine {
                         mode: "USB".into(),
                         label: format!("{} · {} (custom)", wf.band, mode_name),
                         note: "operator working-frequency override".into(),
+                        // The operator typed this frequency in deliberately; the transmit
+                        // gate still judges it at key-down.
+                        tx: true,
                     });
                 }
             }
@@ -5256,9 +6033,25 @@ impl Engine {
         if self.settings.rtty_backend.eq_ignore_ascii_case("fsk") {
             allow(dial - shift) && allow(dial)
         } else {
-            let mark = RTTY_AFSK_MARK_HZ / 1_000_000.0;
+            // ⚠️ THE LIVE MARK, NOT `RTTY_AFSK_MARK_HZ`. The constant was right until 1.9.0 made
+            // the transmitter follow the netted centre; after that the emitted mark is
+            // `rtty_center_hz() - shift/2`, operator-settable from 300 to 3700 Hz, and judging
+            // 2125 could be wrong by ~1.9 kHz — enough to APPROVE a transmission that lands
+            // outside a privileged segment. Netting UP moves an AFSK emission DOWN, so the
+            // dangerous direction is the one an operator reaches for to work a station low in
+            // the passband.
+            let mark = self.rtty_tx_mark_hz() / 1_000_000.0;
             allow(dial - mark - shift) && allow(dial - mark)
         }
+    }
+
+    /// The AFSK MARK tone actually transmitted, in Hz — the netted centre less half the shift.
+    ///
+    /// One place, so the privilege gate and the band-plan tune cannot drift apart again. That
+    /// they could is the whole of the 1.9.0 regression: netting moved the emission and left the
+    /// gate judging a constant.
+    fn rtty_tx_mark_hz(&self) -> f64 {
+        self.rtty_center_hz() as f64 - self.settings.rtty_shift_hz as f64 / 2.0
     }
 
     /// Declare the provenance of the dial that was JUST written — the one place the
@@ -5802,6 +6595,21 @@ impl Engine {
         self.split_tx_mhz
     }
 
+    /// Queue a voice-memory playback (`\send_voice_mem ch`, the FT-991A DVS ask).
+    pub fn request_voice_mem(&mut self, ch: u32) {
+        self.pending_voice_mem = Some(VoiceMemCmd::Play(ch));
+    }
+
+    /// Queue a voice-memory abort (`\stop_voice_mem`).
+    pub fn request_voice_mem_stop(&mut self) {
+        self.pending_voice_mem = Some(VoiceMemCmd::Stop);
+    }
+
+    /// One-shot consume for the radio loop — `take_split_request`'s shape.
+    pub fn take_voice_mem(&mut self) -> Option<VoiceMemCmd> {
+        self.pending_voice_mem.take()
+    }
+
     /// The rig REJECTED the split command at `tx_mhz` — drop the desired state
     /// so the SPLIT badge never claims a split the rig isn't running (the
     /// operator works the pile-up manually; the CAT note says so).
@@ -5841,6 +6649,8 @@ impl Engine {
         if !self.split_dirty && self.split_tx_mhz.is_some_and(|t| (t - tx_mhz).abs() < 1e-9) {
             self.split_tx_mhz = None;
         }
+        // The rig refused: whatever we thought it acknowledged is no longer true.
+        self.tx_split_confirmed_hz = None;
     }
 
     /// Set (`Some(tx_mhz)`) or clear (`None`) the DESIRED split TX dial from the operator/UI;
@@ -5849,6 +6659,10 @@ impl Engine {
     pub fn request_split(&mut self, tx_mhz: Option<f64>) {
         self.split_tx_mhz = tx_mhz;
         self.split_dirty = true;
+        // A NEW request retires the old acknowledgement immediately — the rig has not answered
+        // this one yet, so between here and the ack there is nothing confirmed to judge. TX
+        // locks for that gap, which is the correct direction.
+        self.tx_split_confirmed_hz = None;
     }
 
     /// Set (`Some("USB"|"LSB"|"FM")`) or clear (`None` = AUTO) the transient Phone mode override
@@ -5858,7 +6672,10 @@ impl Engine {
         // Whitelist the Phone voice modes — a broker/devtools caller can't smuggle "CW" etc. in.
         self.sideband_override = mode
             .map(|m| m.trim().to_ascii_uppercase())
-            .filter(|m| matches!(m.as_str(), "USB" | "LSB" | "FM"));
+            // AM joins the whitelist as a Phone voice mode (operator request, 2026-08-22). Still
+            // a whitelist: a broker or devtools caller cannot smuggle "CW" or a DATA submode in
+            // through the cockpit's mode verb.
+            .filter(|m| matches!(m.as_str(), "USB" | "LSB" | "FM" | "AM"));
         // Reaching for the mode by hand WHILE a pass owns the dial is the
         // operator taking it back: stop having an opinion about the uplink's
         // sideband for the rest of the pass rather than re-asserting a swap
@@ -5925,7 +6742,8 @@ impl Engine {
 
     /// The FM-class word to command right now: the FM **data** submode `PKTFM` (Hamlib's
     /// `RIG_MODE_PKTFM` → Yaesu FM-D, Icom FM-D) while an SSTV image is queued or in flight,
-    /// plain `FM` otherwise.
+    /// plain `FM` otherwise — or, on a radio configured for it, for the whole time the SSTV
+    /// receiver is running ([`Self::sstv_holds_data_submode`], default off, #130).
     ///
     /// ⭐ THE ON-AIR BUG THIS EXISTS FOR (FTDX10 + IC-9700 owner, 2026-08-12): *"when I select
     /// preset frequency 144.500 for SSTV it switches to FM, but as soon as I start TXing it
@@ -5946,11 +6764,37 @@ impl Engine {
     /// `plain_ssb_if_configured` keeps the per-radio mic-jack opt-out working: it maps `PKTFM`
     /// back to plain `FM` exactly as it maps `PKTUSB` to `USB`.
     fn fm_mode_word(&self) -> String {
-        if self.sstv_in_flight() {
+        if self.sstv_in_flight() || self.sstv_holds_data_submode() {
             self.settings.plain_ssb_if_configured("PKTFM")
         } else {
             "FM".to_string()
         }
+    }
+
+    /// Is this radio configured to HOLD the FM data submode for the whole time the SSTV
+    /// receiver is running, rather than only around a send? (#130, PA3GYQ via the operator.)
+    ///
+    /// The default is `false` and the answer is then exactly today's: `PKTFM` around an image,
+    /// plain `FM` otherwise. The reply that told the reporter this shipped in 1.10.2 was wrong
+    /// — the switch did not exist. It does now, per radio
+    /// ([`crate::settings::RadioProfile::sstv_hold_data_submode`]), because whether holding
+    /// FM-D is right is a property of how one rig is cabled and operated.
+    ///
+    /// `sstv_armed` is the gate, and it is the operator's own declaration: the receiver starts
+    /// when they open the SSTV view and stops when they press Stop. Nothing else here can key
+    /// anything — this only chooses the mode WORD the radio loop commands.
+    ///
+    /// ⚠️ NEEDS-BENCH (no IC-9700 on this machine). The word is not a guess — `PKTFM` is the
+    /// same word this function already commands around a send, and `plain_ssb_if_configured`
+    /// already maps it — so what is new is only WHEN it is commanded. What is unproven is the
+    /// on-air behaviour of a rig held in FM-D between pictures.
+    ///
+    /// ⚠️ AND THE COST: the receiver outlives the view, so with this on an FM VOICE call made
+    /// without stopping it first is commanded in FM-D and modulates from the data port, not the
+    /// microphone. That is why it is opt-in, per radio, and why the switch's own hint says to
+    /// stop the receiver before going back to voice.
+    fn sstv_holds_data_submode(&self) -> bool {
+        self.settings.sstv_hold_data_submode && self.sstv_armed
     }
 
     /// Is the PHONE section's mode class FM at `band` / `dial_mhz`? THE one predicate both
@@ -6517,10 +7361,7 @@ impl Engine {
         // stopped getting pointerup — is indistinguishable from a long transmission except by the
         // clock. `RTTY_MAX_LATCH_MS` exists for exactly this and this uses the same number, so the
         // two open-ended transmissions in the app cannot drift apart.
-        match started_ms {
-            Some(t) if now_ms - t > Self::LIVE_MIC_MAX_MS as f64 => false,
-            _ => true,
-        }
+        !matches!(started_ms, Some(t) if now_ms - t > Self::LIVE_MIC_MAX_MS as f64)
     }
 
     /// Choose the LIVE MICROPHONE for the active radio, or `""` for the rig's own mic.
@@ -6609,9 +7450,26 @@ impl Engine {
     fn active_power_ceiling(&self) -> f32 {
         if self.sstv_sending || self.sstv_tx.is_some() {
             self.settings.rf_power_ceiling_high_duty()
+        } else if self.am_in_force() {
+            self.settings.rf_power_ceiling_am()
         } else {
             self.settings.rf_power_ceiling()
         }
+    }
+
+    /// Is the rig being commanded to AM right now?
+    ///
+    /// ⚠️ READS THE OVERRIDE, NOT `settings.phone_mode`. AM is a COCKPIT pick — the transient
+    /// `sideband_override` that a band change clears — and `phone_mode` only ever holds "ssb" or
+    /// "fm". An earlier draft of this feature gated on `phone_mode` and was dead code that looked
+    /// exactly like working code: the AM power cap would silently never have applied, and the
+    /// first anyone knew would be a flat-topped signal.
+    pub(crate) fn am_in_force(&self) -> bool {
+        self.settings.operating_mode == crate::settings::OperatingMode::Phone
+            && self
+                .sideband_override
+                .as_deref()
+                .is_some_and(|m| m.eq_ignore_ascii_case("am"))
     }
 
     pub fn set_rf_power(&mut self, frac: f32) {
@@ -6651,12 +7509,72 @@ impl Engine {
         self.rf_power
     }
 
+    /// The operator's power level as it ACTUALLY stands: what we commanded, or failing that
+    /// what the rig last reported. `None` only when neither exists — no command, no poll.
+    ///
+    /// ⚠️ WHY THIS EXISTS RATHER THAN CALLERS USING [`Self::rf_power`]. That one is the
+    /// COMMANDED level and starts `None`; every `setRfPower` path is a slider handler, and
+    /// nothing pushes power at mount. So on a station where the operator has simply never
+    /// dragged the Pwr slider — which is most of them — `rf_power()` is `None` for the whole
+    /// session, and a feature that clamps against it does nothing at all while looking
+    /// perfectly wired. That is what `tune_power_pct` (tune at reduced power, hand the
+    /// operator's level back after) was doing: a feature you have to configure twice before
+    /// it works, which this project treats as unfinished rather than shipped.
+    ///
+    /// `rig_rf_power` is filled by the heavy receive poll, so the number is already in the
+    /// engine — it just had no way out. Same expression the dial-side ceiling check already
+    /// uses (`self.rf_power.or(self.rig_rf_power)`), kept as one reading of "what power is
+    /// this station on".
+    ///
+    /// Deliberately BESIDE `rf_power()` and not a change to it: other callers depend on
+    /// "commanded" meaning commanded, and an observed value reaching the command path would
+    /// re-assert a level the operator never asked for.
+    pub fn effective_rf_power(&self) -> Option<f32> {
+        self.rf_power.or(self.rig_rf_power)
+    }
+
     /// Adopt the rig's reported RF power (radio-loop poll). Observed-only —
     /// never touches the commanded `rf_power`, so a user drag in flight wins.
     pub fn observe_rig_power(&mut self, frac: f32) {
         if frac.is_finite() {
             self.rig_rf_power = Some(frac.clamp(0.0, 1.0));
+            // ONE line per transition — this runs every radio-loop tick, and a line per tick
+            // would bury the log that the issue templates now ask reporters to attach. The
+            // whole point is that the NEXT report of "keys but no audio" arrives already
+            // carrying its own answer.
+            let zero = self.tx_power_is_zero();
+            if zero != self.zero_power_noted {
+                self.zero_power_noted = zero;
+                if zero {
+                    tempo_core::applog::info(
+                        "tx",
+                        "the radio reports 0% RF power while transmit is ARMED — an over will key and put nothing on the air",
+                    );
+                }
+            }
         }
+    }
+
+    /// Is the radio about to transmit with essentially nothing to transmit WITH?
+    ///
+    /// NOTIFY, NEVER ACT. This raises a flag and nothing else: it never clamps, raises or
+    /// commands power, and it never withholds an over. Driving an amplifier's input at a hair
+    /// above zero is a legitimate way to operate and the app does not know better than the
+    /// operator — see `feedback-alerts-notify-never-act`.
+    ///
+    /// Two conditions, and both matter:
+    ///
+    /// A REAL READ-BACK ONLY. `None` means the rig does not report power, or has not answered
+    /// yet — that is ignorance, not a zero, and warning on it would fire forever on every rig
+    /// whose level cannot be read.
+    ///
+    /// ARMED ONLY. A rig parked at zero with transmit off is just a rig sitting there; nothing
+    /// is about to go out and there is nothing to tell anybody.
+    pub(crate) fn tx_power_is_zero(&self) -> bool {
+        self.tx_enabled
+            && self
+                .rig_rf_power
+                .is_some_and(|observed| observed <= ZERO_RF_POWER)
     }
 
     /// Set desired mic gain (0.0–1.0). The radio loop applies it via the rig.
@@ -6698,6 +7616,19 @@ impl Engine {
         }
     }
 
+    /// The AGC time constants Nexus offers, in the order the cockpit shows them.
+    ///
+    /// AUTO and OFF joined the original three on 2026-08-17. They were missing while the radios
+    /// have them — an FT-710 offers both on the front panel — and worse, they read back as "mid"
+    /// (see `service::agc_from_hamlib`), so the cockpit misreported the rig's actual setting.
+    ///
+    /// Offered for every rig rather than gated on capability, deliberately: Hamlib does not
+    /// enumerate which AGC constants a backend accepts (`--dump-caps` reports `AGC(0..0/0)` on both
+    /// Yaesus tested), so there is nothing to gate on. A rig that refuses one answers the SET with an
+    /// error, which `agc_refused` already surfaces, and the next read-back shows what the radio
+    /// actually did — an honest failure the operator can see, rather than a chip we hid on a guess.
+    pub const AGC_SPEEDS: [&str; 5] = ["auto", "fast", "mid", "slow", "off"];
+
     /// Speech-processor depth (0..1). #95 — the COMP toggle had no level behind it.
     pub fn set_comp_level(&mut self, frac: f32) {
         self.comp_level = Some(frac.clamp(0.0, 1.0));
@@ -6725,10 +7656,10 @@ impl Engine {
         }
     }
 
-    /// Set desired AGC speed ("fast"|"mid"|"slow") — an OPERATOR PICK, which the radio loop
+    /// Set desired AGC speed — an OPERATOR PICK, which the radio loop
     /// honours even when it is the speed the loop last wrote (see [`Self::agc_to_command`]).
     pub fn set_agc(&mut self, speed: &str) {
-        if matches!(speed, "fast" | "mid" | "slow") {
+        if Self::AGC_SPEEDS.contains(&speed) {
             self.agc = Some(speed.to_string());
             self.agc_picked = true;
         }
@@ -6752,7 +7683,7 @@ impl Engine {
         Some((speed, std::mem::take(&mut self.agc_picked)))
     }
     pub fn observe_rig_agc(&mut self, speed: String) {
-        if matches!(speed.as_str(), "fast" | "mid" | "slow") {
+        if Self::AGC_SPEEDS.contains(&speed.as_str()) {
             self.rig_agc = Some(speed);
         }
     }
@@ -7012,6 +7943,31 @@ impl Engine {
     /// Queue a native-scope REFERENCE-level change (tenths of a dB, −200..+200) from the UI.
     pub fn request_scope_ref(&mut self, ref_tenths_db: i32) {
         self.pending_scope_ref = Some(ref_tenths_db);
+    }
+    /// Record where the rig's FIX sweep starts on a given BAND, in MHz — persisted with the radio.
+    ///
+    /// Replaces a transient request: settings are the single source of truth, so the radio loop reads
+    /// this rather than being handed it, and a restart keeps it. The operator states it once per band
+    /// because that is how the radio itself keeps it.
+    pub fn set_yaesu_fix_start(&mut self, band: &str, mhz: f64) {
+        let id = self.settings.active_radio;
+        if let Some(p) = self.settings.radios.iter_mut().find(|p| p.id == id) {
+            p.yaesu_fix_starts.insert(band.to_string(), mhz);
+        }
+    }
+
+    /// Queue a Yaesu scope POSITION change from the UI — CENTER, CURSOR or FIX.
+    ///
+    /// Separate from `request_scope_fixed`, which is Icom's two-valued center/fixed. The FT-710 has
+    /// three positions and, within each, three display families (3DSS / W-F EXPAND / W-F NORMAL),
+    /// so what travels here is the READY-MADE `SS` P3 code: the family is resolved next to the
+    /// radio, from what the rig currently reports, rather than guessed in the UI.
+    pub fn request_yaesu_scope_mode(&mut self, code: u8) {
+        self.pending_yaesu_scope_mode = Some(code);
+    }
+    /// Take the queued Yaesu scope position, if any.
+    pub fn take_yaesu_scope_mode_request(&mut self) -> Option<u8> {
+        self.pending_yaesu_scope_mode.take()
     }
     /// Queue a native-scope CENTER/FIXED mode change from the UI (`true` = fixed).
     pub fn request_scope_fixed(&mut self, fixed: bool) {
@@ -7448,13 +8404,52 @@ impl Engine {
         section: &str,
         mode: &str,
     ) -> Result<bool, String> {
+        self.fd_log_contact(call, class, section, mode, None)
+    }
+
+    /// As [`fd_log_manual`], but NAMING the actual on-air mode behind a "DIG"
+    /// scoring class instead of letting the log fill it from
+    /// `FieldDayLog::current_submode`.
+    ///
+    /// ⚠️ THE KEYBOARD MODES NEED THIS. `current_submode` tracks the FT tier
+    /// alone (`adif_mode_for_tier` has no RTTY or PSK variant), so an RTTY or
+    /// PSK contact logged as bare "DIG" would be stamped "FT8" — the wrong
+    /// mode in ADIF, "DG" instead of "RY" in Cabrillo, and a mode Winter Field
+    /// Day bans on a QSO that was perfectly legal RTTY.
+    pub fn fd_log_manual_submode(
+        &mut self,
+        call: &str,
+        class: &str,
+        section: &str,
+        mode: &str,
+        submode: &str,
+    ) -> Result<bool, String> {
+        self.fd_log_contact(call, class, section, mode, Some(submode))
+    }
+
+    /// The one Field Day write seam behind both of the above: stamp the REAL
+    /// band (a knob-QSY between contacts), funnel through the log's own
+    /// methods — which own the dupe check and the per-position sequence number
+    /// — and journal. `submode: None` lets `log_mode_at` derive it.
+    fn fd_log_contact(
+        &mut self,
+        call: &str,
+        class: &str,
+        section: &str,
+        mode: &str,
+        submode: Option<&str>,
+    ) -> Result<bool, String> {
         self.sync_fd_band(); // a knob-QSY between contacts must stamp the REAL band
+        let now = now_unix_secs();
         let Mode::FieldDay { station, .. } = &mut self.mode else {
             return Err("Field Day mode is not active".into());
         };
-        let logged = station
-            .log
-            .log_mode_at(call, class, section, mode, 0, now_unix_secs());
+        let logged = match submode {
+            Some(sub) => station
+                .log
+                .log_submode_at(call, class, section, mode, sub, 0, now),
+            None => station.log.log_mode_at(call, class, section, mode, 0, now),
+        };
         if logged {
             self.persist_fd_log(); // journal every contact — a crash loses nothing
         }
@@ -7477,6 +8472,410 @@ impl Engine {
             .qso_and_powered(&station.log, self.settings.fd_power_mult);
         let bonus = rs.bonus_points(&self.settings.fd_bonuses);
         Some((qso_pts, powered, bonus))
+    }
+
+    // -----------------------------------------------------------------------
+    // Field Day club sync (the Nexus↔Nexus event sync).
+    //
+    // The wire lives in `tempo_net::fdsync`, the policy in `crate::fdevent`;
+    // these methods are the seam the shell's ClubBackend / PositionSync impls
+    // call under the engine lock. Everything here is data-plane: rows in,
+    // club state out — none of it can key TX, touch CAT, or change settings.
+    // -----------------------------------------------------------------------
+
+    /// Ensure this instance has its persistent 8-hex club-sync position id,
+    /// generating one on first run. Returns `(id, generated_now)` — the shell
+    /// saves settings when `generated_now` (this bypasses `apply_settings` on
+    /// purpose: identity init at startup must not run the full settings
+    /// apply, which clears TX queues and rebuilds decoders).
+    pub fn fd_ensure_position_id(&mut self) -> (String, bool) {
+        if !self.settings.fd_position_id.trim().is_empty() {
+            return (self.settings.fd_position_id.clone(), false);
+        }
+        // Uniqueness only has to hold across one club's machines; 32 bits of
+        // clock/pid/ASLR entropy through a hasher is plenty, with no new
+        // dependency. Ids are identity, not secrets.
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.subsec_nanos())
+            .unwrap_or(0)
+            .hash(&mut h);
+        std::process::id().hash(&mut h);
+        (&self.settings as *const _ as usize).hash(&mut h); // ASLR salt
+        self.settings.mycall.hash(&mut h);
+        let id = format!("{:08x}", (h.finish() & 0xffff_ffff) as u32);
+        self.settings.fd_position_id = id.clone();
+        (id, true)
+    }
+
+    /// Start hosting: build the club log for the configured event and replay
+    /// its append-only journal (the host-restart recovery). Idempotent-ish:
+    /// called again it rebuilds from the same journal.
+    pub fn fd_host_start(&mut self, journal_path: PathBuf) -> std::io::Result<()> {
+        let event = tempo_core::fieldday::FdEvent::from_code(&self.settings.fd_event);
+        let name = if self.settings.fd_event_name.trim().is_empty() {
+            // An unnamed event still needs an on-air label for the beacon.
+            format!("{} Field Day", self.settings.mycall)
+        } else {
+            self.settings.fd_event_name.trim().to_string()
+        };
+        let mut club = crate::fdevent::ClubLog::new(event, &name);
+        club.attach_journal(&journal_path)?;
+        self.fd_club = Some(club);
+        Ok(())
+    }
+
+    /// Stop hosting (the manager flipped `fd_host_enable` off, or is
+    /// re-porting). The journal file stays — a restart replays it.
+    pub fn fd_host_stop(&mut self) {
+        self.fd_club = None;
+    }
+
+    pub fn fd_hosting(&self) -> bool {
+        self.fd_club.is_some()
+    }
+
+    /// Whether sync is configured at all (drives `SyncState::Disabled`).
+    pub fn fd_sync_enabled(&self) -> bool {
+        self.settings.fd_host_enable || !self.settings.fd_join_addr.trim().is_empty()
+    }
+
+    /// The club event's display name (beacon + welcome), host role only.
+    pub fn fd_event_label(&self) -> Option<String> {
+        self.fd_club.as_ref().map(|c| c.event_name.clone())
+    }
+
+    // --- host half (the ClubBackend impl calls these) ----------------------
+
+    /// A position joined. Err when not hosting (a race with the toggle).
+    pub fn fd_club_join(
+        &mut self,
+        pos: &str,
+        name: &str,
+        call: &str,
+    ) -> Result<tempo_net::fdsync::JoinAccept, String> {
+        let now = now_unix_secs();
+        let Some(club) = self.fd_club.as_mut() else {
+            return Err("this station is not hosting a club event".into());
+        };
+        let acked = club.join(pos, name, call, now);
+        Ok(tempo_net::fdsync::JoinAccept {
+            event: club.event_name.clone(),
+            host_call: self.settings.mycall.clone(),
+            acked,
+        })
+    }
+
+    /// Merge one wire row (idempotent) → the position's ack high-water.
+    pub fn fd_club_merge(&mut self, row: &tempo_net::fdsync::WireQso) -> u64 {
+        let now = now_unix_secs();
+        self.fd_club
+            .as_mut()
+            .map(|c| c.merge(row, now))
+            .unwrap_or(0)
+    }
+
+    pub fn fd_club_counts(&self) -> (usize, usize) {
+        self.fd_club.as_ref().map(|c| c.counts()).unwrap_or((0, 0))
+    }
+
+    /// Down-flow state past the cursors, scored under the HOST's power
+    /// multiplier + bonuses (the design's flagged judgment call — per-position
+    /// multipliers are ignored; an ARRL entry is one station, one power tier,
+    /// and the operator saw and accepted this).
+    pub fn fd_club_state(
+        &mut self,
+        dupes_from: usize,
+        sections_from: usize,
+        mark_seen: &str,
+    ) -> tempo_net::fdsync::ClubState {
+        let now = now_unix_secs();
+        let (mycall, class, section, mult, bonuses) = (
+            self.settings.mycall.clone(),
+            self.settings.fd_class.clone(),
+            self.settings.fd_section.clone(),
+            self.settings.fd_power_mult,
+            self.settings.fd_bonuses.clone(),
+        );
+        match self.fd_club.as_mut() {
+            Some(club) => {
+                club.mark_seen(mark_seen, now);
+                let (_, _, _, total) = club.scored(&mycall, &class, &section, mult, &bonuses);
+                club.club_state(dupes_from, sections_from, total, now)
+            }
+            None => tempo_net::fdsync::ClubState::default(),
+        }
+    }
+
+    /// A position's presence report. `report.name` is its current friendly
+    /// name — empty means "no news" (an older peer sends none), never
+    /// "clear it".
+    pub fn fd_club_pos_status(&mut self, pos: &str, report: &tempo_net::fdsync::PosReport) {
+        let now = now_unix_secs();
+        if let Some(club) = self.fd_club.as_mut() {
+            club.position_status(pos, report, now);
+        }
+    }
+
+    pub fn fd_club_disconnect(&mut self, _pos: &str) {
+        // Presence is age-based (last_seen), so a disconnect needs no state
+        // change: the board row stale-marks itself past 15 s. Kept as a seam
+        // so the shell impl is total over the trait.
+    }
+
+    /// Club export from the host, deduped earliest-wins by `(call, band,
+    /// mode class)` — the submittable club artifact. `None` = not hosting.
+    pub fn fd_club_export(&self, cabrillo: bool) -> Option<String> {
+        let club = self.fd_club.as_ref()?;
+        let (mycall, class, section) = (
+            self.settings.mycall.as_str(),
+            self.settings.fd_class.as_str(),
+            self.settings.fd_section.as_str(),
+        );
+        Some(if cabrillo {
+            club.export_cabrillo(mycall, class, section)
+        } else {
+            club.export_adif(mycall, class, section)
+        })
+    }
+
+    /// THE SCOREBOARD SEAM: the bounded clone the scoreboard server renders.
+    /// `Some` ONLY in the host role — a non-host position holds just the
+    /// compact `ClubMirror` (no per-QSO attribution), which is why the HTTP
+    /// scoreboard runs at the host.
+    pub fn fd_board_snapshot(&self) -> Option<crate::fd_scoreboard::FdBoardData> {
+        let club = self.fd_club.as_ref()?;
+        let mut positions: Vec<crate::fd_scoreboard::FdBoardPosition> = club
+            .positions()
+            .iter()
+            .map(|(id, p)| crate::fd_scoreboard::FdBoardPosition {
+                id: id.clone(),
+                label: if p.label.is_empty() {
+                    id.clone()
+                } else {
+                    p.label.clone()
+                },
+                operator: p.operator.clone(),
+                band: p.band.clone(),
+                mode: p.mode.clone(),
+                last_seen_unix: p.last_seen_unix,
+            })
+            .collect();
+        positions.sort_by(|a, b| a.id.cmp(&b.id));
+        Some(crate::fd_scoreboard::FdBoardData {
+            event: club.event,
+            call: self.settings.mycall.clone(),
+            class: self.settings.fd_class.clone(),
+            section: self.settings.fd_section.clone(),
+            power_mult: self.settings.fd_power_mult,
+            claimed: self.settings.fd_bonuses.clone(),
+            positions,
+            rows: club
+                .rows()
+                .iter()
+                .map(|r| crate::fd_scoreboard::FdBoardRow {
+                    posid: r.posid.clone(),
+                    seq: r.seq,
+                    call: r.call.clone(),
+                    class: r.class.clone(),
+                    section: r.section.clone(),
+                    band: r.band.clone(),
+                    mode_class: r.mode_class.clone(),
+                    submode: r.submode.clone(),
+                    when_unix: r.when_unix,
+                    operator: r.operator.clone(),
+                })
+                .collect(),
+        })
+    }
+
+    // --- position half (the PositionSync impl calls these) -----------------
+
+    /// What this position calls itself on the club band board: the operator's
+    /// position name, falling back to the station callsign.
+    ///
+    /// The fallback is COMPUTED here rather than written into
+    /// `settings.fd_position_name` as a default, for three reasons. A stored
+    /// default would be stamped at one moment — before the operator has typed
+    /// a callsign on a fresh install, or from the callsign of the day it ran —
+    /// while this reads the live one. Nothing writes settings behind the
+    /// operator's back, so the field keeps saying exactly what they typed.
+    /// And it covers EVERY route to a blank name, not just the ones that pass
+    /// through a particular save: an upgraded profile that predates the field,
+    /// a restored backup, a hand-edited settings.json. The Settings panel is
+    /// what refuses a deliberately-blanked name (it can say so where the
+    /// operator is looking); this is what guarantees the board never shows the
+    /// 8-hex position id, which is plumbing and means nothing to anybody.
+    pub fn fd_position_label(&self) -> String {
+        let name = self.settings.fd_position_name.trim();
+        if !name.is_empty() {
+            return name.to_string();
+        }
+        self.settings.mycall.trim().to_uppercase()
+    }
+
+    /// This position's JOIN identity: `(posid, label, call, own max seq)`.
+    /// An empty posid means the shell has not initialized identity yet — the
+    /// pump treats that as "don't connect".
+    pub fn fd_sync_identity(&self) -> (String, String, String, u64) {
+        let max_seq = match &self.mode {
+            Mode::FieldDay { station, .. } => station.log.max_seq(),
+            _ => 0,
+        };
+        (
+            self.settings.fd_position_id.clone(),
+            self.fd_position_label(),
+            self.settings.mycall.clone(),
+            max_seq,
+        )
+    }
+
+    /// THE OUTBOX: own FD rows with `seq > after`, as wire rows — derived
+    /// from the journal-backed log, so there is no separate queue file to
+    /// corrupt. Operator is stamped here (enqueue time) from `fd_operator`.
+    pub fn fd_sync_outbox(&self, after: u64) -> Vec<tempo_net::fdsync::WireQso> {
+        let Mode::FieldDay { station, .. } = &self.mode else {
+            return Vec::new();
+        };
+        let posid = &self.settings.fd_position_id;
+        if posid.is_empty() {
+            return Vec::new();
+        }
+        let op = if self.settings.fd_operator.trim().is_empty() {
+            self.settings.mycall.clone()
+        } else {
+            self.settings.fd_operator.trim().to_uppercase()
+        };
+        let mut rows: Vec<_> = station
+            .log
+            .qsos()
+            .iter()
+            .filter(|q| q.seq > after)
+            .map(|q| tempo_net::fdsync::WireQso {
+                pos: posid.clone(),
+                seq: q.seq,
+                call: q.call.clone(),
+                class: q.class.clone(),
+                sect: q.section.clone(),
+                band: q.band.clone(),
+                mode: q.mode.clone(),
+                sub: q.submode.clone(),
+                when: q.when_unix,
+                op: op.clone(),
+            })
+            .collect();
+        rows.sort_by_key(|r| r.seq);
+        rows
+    }
+
+    /// The mirror, for the pump's welcome/ack/club/link callbacks.
+    pub fn fd_mirror_mut(&mut self) -> &mut crate::fdevent::ClubMirror {
+        &mut self.fd_mirror
+    }
+
+    /// Presence for the club band board — the n3fjp `report_band` idea made
+    /// native. The position NAME rides along on every report (not just the
+    /// join line) so renaming this position in Settings reaches the board on
+    /// the next tick instead of waiting for the connection to be rebuilt.
+    pub fn fd_position_report(&self) -> tempo_net::fdsync::PosReport {
+        let mode = match self.settings.operating_mode {
+            crate::settings::OperatingMode::Phone => "PH",
+            crate::settings::OperatingMode::Cw => "CW",
+            _ => "DIG",
+        };
+        let op = if self.settings.fd_operator.trim().is_empty() {
+            self.settings.mycall.clone()
+        } else {
+            self.settings.fd_operator.trim().to_uppercase()
+        };
+        tempo_net::fdsync::PosReport {
+            band: self.settings.band.clone(),
+            mode: mode.to_string(),
+            op,
+            freq: (self.settings.dial_mhz * 1e6) as u64,
+            name: self.fd_position_label(),
+        }
+    }
+
+    /// The sync chip — DERIVED from (enabled, link, queued = own max seq −
+    /// host ack), so it can never disagree with the queue.
+    pub fn fd_sync_state(&self) -> crate::fdevent::SyncState {
+        let own_max = match &self.mode {
+            Mode::FieldDay { station, .. } => station.log.max_seq(),
+            _ => 0,
+        };
+        crate::fdevent::SyncState::derive(
+            self.fd_sync_enabled(),
+            self.fd_mirror.connected,
+            own_max.saturating_sub(self.fd_mirror.acked),
+            self.fd_mirror.down_since_unix,
+        )
+    }
+
+    /// The `FieldDayStatus.club` block, `None` while sync is not configured.
+    /// `own` is the live FD log (subtracts own keys from the club dupe set —
+    /// the UI's while-typing check is own ∪ club, and own already ships).
+    fn fd_club_dto(
+        &self,
+        own: &tempo_core::fieldday::FieldDayLog,
+    ) -> Option<crate::dto::FdClubDto> {
+        if !self.fd_sync_enabled() {
+            return None;
+        }
+        let m = &self.fd_mirror;
+        let state = self.fd_sync_state();
+        let (queued, offline_since) = match state {
+            crate::fdevent::SyncState::Offline { queued, since } => (queued, since),
+            crate::fdevent::SyncState::Behind { queued } => (queued, 0),
+            _ => (0, 0),
+        };
+        let mut dupes: Vec<(String, String, String)> = m
+            .dupes
+            .iter()
+            .filter(|(call, band, mode)| !own.worked_key(call, band, mode))
+            .cloned()
+            .collect();
+        dupes.sort();
+        let mut board: Vec<crate::dto::FdClubBoardRow> = m
+            .board
+            .iter()
+            .map(|r| crate::dto::FdClubBoardRow {
+                posid: r.pos.clone(),
+                pos_name: r.name.clone(),
+                band: r.band.clone(),
+                mode: r.mode.clone(),
+                operator: r.op.clone(),
+                qsos: r.qsos,
+                rate: r.rate,
+                last_seen_secs: r.age,
+            })
+            .collect();
+        // Named positions first, alphabetically; unnamed ones after, in id order so
+        // the ordering is stable rather than "whichever empty string sorted first".
+        board.sort_by(|a, b| {
+            (a.pos_name.is_empty(), &a.pos_name, &a.posid).cmp(&(
+                b.pos_name.is_empty(),
+                &b.pos_name,
+                &b.posid,
+            ))
+        });
+        Some(crate::dto::FdClubDto {
+            sync_state: state.code().to_string(),
+            queued,
+            offline_since_unix: offline_since,
+            hosting: self.fd_club.is_some(),
+            event: m.event.clone(),
+            host_call: m.host_call.clone(),
+            score: m.score,
+            qsos: m.qsos,
+            sections: m.sections.len() as u32,
+            skew_secs: m.skew_secs,
+            last_error: m.last_error.clone(),
+            dupes,
+            board,
+        })
     }
 
     /// Manually add a contact to the logbook (the UI "Log QSO" button). Adds in
@@ -7519,7 +8918,26 @@ impl Engine {
         is_designator(name).then(|| name.to_string())
     }
 
+    /// The station callsign to stamp on a contact: the operator's current `mycall`, ADIF-cased
+    /// like the `OPERATOR` stamp beside it, or `None` when it is blank — a record carrying no
+    /// station call is honest, one claiming an empty station is not.
+    ///
+    /// Shared by [`Self::log_qso`] and the two mode record builders so the three can never
+    /// disagree about what "the station's call" means.
+    fn station_callsign_now(&self) -> Option<String> {
+        let call = self.settings.mycall.trim();
+        (!call.is_empty()).then(|| call.to_ascii_uppercase())
+    }
+
     pub fn log_qso(&mut self, mut rec: QsoRecord) {
+        // Every log path funnels through here, so this is the one place that can tell the UI a
+        // contact was written — including a backend auto-log the frontend never initiated.
+        self.logged_tick = self.logged_tick.wrapping_add(1);
+        // Any contact reaching the log ends the #153 rescue window. The stash is a lifeline for
+        // the contact the operator just watched fail, and once ANY contact is written they have
+        // moved on — keeping it past that point risks the Log button reaching back to an old
+        // abandoned exchange instead of saying there is nothing to log.
+        self.stalled_qso = None;
         // One line per contact — the event behind "my log is missing a QSO". Bounded by
         // contacts, which is bounded by the operator: a busy hour is a few dozen lines, and a
         // quiet one is none. Nothing here is on a timer.
@@ -7617,7 +9035,7 @@ impl Engine {
         // station that is every other operator, `OPERATOR` equal to `STATION_CALLSIGN` is
         // noise in every exported record, and worse it would make a field that means "someone
         // chose this" indistinguishable from one nothing ever set. STATION_CALLSIGN is the
-        // station's call and export already inserts it; this is the person, and it is present
+        // station's call, stamped immediately below; this is the person, and it is present
         // only when a person was actually named.
         //
         // A record that arrives carrying its own operator — an imported multi-op log, or a
@@ -7627,6 +9045,34 @@ impl Engine {
             if !op.is_empty() {
                 rec.operator = Some(op.to_ascii_uppercase());
             }
+        }
+        // WHICH STATION MADE IT. `station_callsign` has been modelled, parsed on import,
+        // emitted on write and carried through the DTO since the logbook was written — and was
+        // hardcoded `None` at every construction site, so neither the on-disk log nor any
+        // export could say which call worked a contact. Invisible for the single-op station
+        // whose call never changes; wrong for the operator this exists for. A special event or
+        // club station signs `W6R` for a weekend, sets their own call back on Monday, and the
+        // upload path then signed the whole weekend under the home call — a confirmation the
+        // partner will never get and cannot diagnose. The record is the only place that can
+        // hold the answer, so it is stamped here and both upload paths read it.
+        //
+        // ⚠️ THE CALL IN FORCE WHEN IT WAS LOGGED, not when the contact started, and that is a
+        // deliberate choice. This funnel serves every log path — FT auto-log, the cockpit Log
+        // button, RTTY, satellites, the manual Logbook form, the companion — and exactly one of
+        // them has a start-of-QSO identity snapshot to read (`Station::mycall`,
+        // crates/tempo-core/src/qso.rs). Reading that here would leave every other path
+        // unstamped, which is most contacts. The two can only disagree when the operator
+        // changes callsign mid-contact, and in that window the WIRE is already wrong — the
+        // sequencer keeps transmitting from its start-of-QSO snapshot while the identity gate
+        // validates the new call — which is a separate transmit-path defect this change
+        // deliberately does not reach into. The mode builders that CAN be delayed (a
+        // `prompt_to_log` record waits in `pending_log`, and on disk, for the operator's
+        // confirm) stamp it at contact time instead, and this fill leaves theirs alone.
+        //
+        // A record arriving with its own station call — an imported club log, or a row the
+        // operator repaired by hand — is left alone. Same rule as `operator` above.
+        if rec.station_callsign.is_none() {
+            rec.station_callsign = self.station_callsign_now();
         }
         // Resolve the DXCC entity (country) if the record doesn't already carry one
         // — so manually-logged contacts get a country too, not just auto-QSOs.
@@ -7703,6 +9149,9 @@ impl Engine {
         }
         self.station.pending_uploads.push_back(PendingUpload {
             rec,
+            // LIVE, and it must stay that way: this is the contact at the key, and the
+            // catch-up pacing added for #193 deliberately does not touch it.
+            origin: UploadOrigin::Live,
             legs: upload_legs::ALL,
             attempts: 0,
             retry_after_unix: 0, // due now — a fresh log has no prior failure to back off from
@@ -7744,7 +9193,17 @@ impl Engine {
         };
         let station = format!(
             "{}{}",
-            tag("STATION_CALLSIGN", &self.settings.mycall),
+            // PREFER THE RECORD'S OWN CALL. `adif_record` above already emitted it when the
+            // record carries one, so appending a second copy from the live setting would hand
+            // HRD two conflicting STATION_CALLSIGN fields for one contact — and the live one is
+            // wrong the moment a queued record is drained after a callsign change. The live
+            // setting stays the fallback for records logged before the stamp existed. Same
+            // guard, same reason, as `logbook::adif_record_with_station`.
+            if rec.station_callsign.is_some() {
+                String::new()
+            } else {
+                tag("STATION_CALLSIGN", &self.settings.mycall)
+            },
             tag("MY_GRIDSQUARE", &self.settings.mygrid),
         );
         if let Some(pos) = adif.find("<EOR>") {
@@ -7813,6 +9272,12 @@ impl Engine {
         // In ADIF-location mode, stamp each record with STATION_CALLSIGN + MY_GRIDSQUARE so TQSL
         // can sign from the ADIF (no named `-l` location). Named-location mode is byte-identical
         // to before (no MY_ fields), so existing uploads are unchanged.
+        //
+        // `call` is the FALLBACK, not the answer: `adif_record_with_station` skips its own stamp
+        // when the record carries a STATION_CALLSIGN of its own (which `adif_record` has already
+        // emitted), so a batch uploaded after the operator sets their home call back still signs
+        // each contact under the call that made it. Records written before that stamp existed
+        // carry none and sign from the live setting, exactly as they always did.
         let adif_loc = self.settings.lotw_use_adif_location;
         let call = self.settings.mycall.clone();
         let grid = self.settings.mygrid.clone();
@@ -7842,7 +9307,7 @@ impl Engine {
                 &indices,
                 tempo_core::logbook::UploadOutcome::Accepted,
                 now_unix_secs() as i64,
-                Some("marked already on LoTW".into()),
+                Some(tempo_core::logbook::UploadDetail::OperatorDeclared),
             );
         }
         n
@@ -7905,6 +9370,9 @@ impl Engine {
                     let mut st = FieldDayStation::running(&mycall, &mygrid, exch, &band);
                     st.log.event =
                         tempo_core::fieldday::FdEvent::from_code(&self.settings.fd_event);
+                    // The submode funnel: the sequencer's log() calls record
+                    // the tier actually keyed (set_tier re-stamps on a change).
+                    st.log.current_submode = self.adif_mode_for_tier().to_string();
                     st
                 }),
                 running: true,
@@ -7914,6 +9382,7 @@ impl Engine {
                     let mut st = FieldDayStation::search_and_pounce(&mycall, &mygrid, exch, &band);
                     st.log.event =
                         tempo_core::fieldday::FdEvent::from_code(&self.settings.fd_event);
+                    st.log.current_submode = self.adif_mode_for_tier().to_string();
                     st
                 }),
                 running: false,
@@ -7966,8 +9435,11 @@ impl Engine {
         self.reset_tx_watchdog();
         self.tx_queue.clear();
         self.broadcast_queue.clear();
-        self.own_tx.clear();
-        // A new QSO (or mode change) starts a fresh auto-log window.
+        self.js8_halt_clear(); // a new operating spec starts with an empty JS8 outbox too
+                               // `own_tx` is NOT cleared here either — same rule as `halt_tx` (#178): a new QSO spec
+                               // starts with fresh outbound queues, but the overs already transmitted are history and
+                               // stay in the Rx-Frequency pane.
+                               // A new QSO (or mode change) starts a fresh auto-log window.
         self.qso_logged = false;
         self.qso_report_sent = None;
         self.qso_start_unix = None; // a fresh QSO stamps its own start time
@@ -8169,11 +9641,68 @@ impl Engine {
         // advanced the QSO to RR73, so the report is gone and the contact logs with a blank
         // RST_SENT. Operator report, 2026-07-25: "the log seems to have it right in almost
         // every case" — this is the "almost".
-        let opening_report = report_in(station.outgoing());
-        self.mode = Mode::Qso {
-            station: Box::new(station),
-            running: true,
-        };
+        // ⭐ RE-CLICKING THE STATION ALREADY BEING WORKED MUST NOT REBUILD THE QSO.
+        //
+        // Everything above builds a FRESH `Station`, and this used to install it
+        // unconditionally — so "work this station" on the station already being worked threw
+        // the live contact away and started it again. Field report 2026-08-25 (RI1FJL on
+        // 10.131), proven by replaying the operator's own ALL.TXT through the state machine:
+        // he cleared his message back to his grid, clicked the station again, and Nexus sent
+        // `R-21` — the message the rebuild re-derived from the DX's last report to him. Twice,
+        // with nothing addressed to him on the air in between, which is what ruled out
+        // `Station::observe` (every arm there is gated on `same_call(to, mycall)`).
+        //
+        // The message was the visible half. The rebuild also reset `qso_start_unix` — so the
+        // contact would LOG the time of the last click instead of when it began — along with
+        // `qso_report_sent`, the per-step transmit counts and the transcript.
+        //
+        // The rule, and it is the click's own meaning: a click that POINTS AT A MESSAGE
+        // (`reply_msg`) is WSJT-X's double-click — the operator is naming the message they
+        // want answered, so re-derive from it, unchanged. A click carrying NO message is
+        // "work this station" (a roster row, a station card, a spot); when that names the
+        // station already being worked it is a re-arm, and it must not rewrite what is queued.
+        //
+        // Everything else a click does still happens: parity, RX/TX offsets, the TX-enable
+        // and the immediate-key below all run either way. Only the QSO's own state survives.
+        //
+        // ⚠️ AND IT IS A RE-ARM, NOT A NO-OP. The first cut of this guard simply skipped the
+        // install, which broke three ways that an adversarial review measured before it
+        // shipped — every one of them a click that leaves the transmitter SILENT:
+        //
+        //  (a) The rebuild was the only thing that cleared `Station::tx_count`. A directed
+        //      step that has spent `directed_max_calls` (default 8) stayed spent across the
+        //      click, so `outgoing_rv()` kept withholding and the radio never keyed —
+        //      measured 0 overs where the old code gave 8. That is this very operator's QSO
+        //      one step on: the DX never rogers, the budget runs out, he clicks to get it
+        //      going again. So the re-arm clears the step budget, exactly as the Resend
+        //      button does (`Station::resend`), while KEEPING what is queued.
+        //  (b) A QSO that reached `Done` has `pending: None` and no arm in `observe` that can
+        //      re-arm it, so "work this station" armed TX and queued nothing, for good.
+        //      `pending.is_some()` sends that case down the rebuild branch where it belongs.
+        //  (c) A cross-band QSY clears the decode context but NOT `Mode::Qso`, so a re-click
+        //      on the new band would resume the old band's mid-sequence station and open with
+        //      a roger for an exchange that never happened there. Requiring a live decode
+        //      from this DX uses the state the QSY already clears.
+        let rearming_same_qso = reply_msg.is_none()
+            && self.latest_decode_slot_from(dxcall).is_some()
+            && matches!(&self.mode, Mode::Qso { station: live, .. }
+                if live.dxcall.as_deref().is_some_and(|c| tempo_core::message::same_call(c, dxcall))
+                    && live.pending.is_some());
+        if rearming_same_qso {
+            if let Mode::Qso { station: live, .. } = &mut self.mode {
+                live.resend(); // zero the spent step budget; the queued message stands
+            }
+        }
+        if !rearming_same_qso {
+            let opening_report = report_in(station.outgoing());
+            self.mode = Mode::Qso {
+                station: Box::new(station),
+                running: true,
+            };
+            self.qso_logged = false;
+            self.qso_report_sent = opening_report;
+            self.qso_start_unix = Some(now_unix_secs()); // working a station starts the QSO clock
+        }
         // A directed call is S&P, not a CQ run: a completed QSO does NOT auto-resume
         // calling CQ.
         self.cq_running = false;
@@ -8250,9 +9779,8 @@ impl Engine {
         self.immediate_tx = true;
         self.tx_queue.clear();
         self.broadcast_queue.clear();
-        self.qso_logged = false;
-        self.qso_report_sent = opening_report;
-        self.qso_start_unix = Some(now_unix_secs()); // working a station starts the QSO clock
+        // `qso_logged` / `qso_report_sent` / `qso_start_unix` are set with the Station above —
+        // they belong to the CONTACT, so a re-arm of the one in progress must not restamp them.
         self.harq_reset_locked(); // fresh exchange: drop stale receive-side IR-HARQ state
         Ok(())
     }
@@ -8268,6 +9796,11 @@ impl Engine {
         // worker (built in the OLD context) lands stale and is dropped — its slot
         // indices / AP context are meaningless after the switch.
         self.decode_epoch = self.decode_epoch.wrapping_add(1);
+        // The over owed to a partner the run has already left (#170, #153) is owed on THIS
+        // band, in THIS mode. Slot indices from the old context are meaningless for its
+        // deadline, and answering a station worked before the switch on the tier or band we
+        // just moved to is a transmission nobody asked for.
+        self.recent_partner = None;
     }
 
     /// `tempo_fast::harq_reset()` serialized behind the decoder lock, so it can never race
@@ -8375,7 +9908,26 @@ impl Engine {
                     station.rx_report,
                     station.report_impossible_exchange(),
                 ),
-                None => return false,
+                // No CURRENT contact — but there may be an abandoned one that really happened
+                // (#153). A caller who answered, exchanged reports and then went quiet gets
+                // dropped by `abandon_stalled` so the run keeps moving; the operator watching
+                // their partner finally come back and pressing Log was being told "nothing to
+                // log" about a contact whose reports are in their own ALL.TXT.
+                //
+                // Only reachable by the operator PRESSING THE BUTTON. Nothing here auto-logs an
+                // unconfirmed contact — that judgement stays theirs, which is right, because
+                // only they saw the partner return.
+                None => match self.stalled_qso.take() {
+                    Some(st) => {
+                        // The rescued contact's own TIME_ON, not the moment of rescue.
+                        self.qso_start_unix = st.start_unix;
+                        if self.qso_report_sent.is_none() {
+                            self.qso_report_sent = st.tx_report;
+                        }
+                        (st.dxcall, st.dxgrid, st.rx_report, false)
+                    }
+                    None => return false,
+                },
             },
             _ => return false,
         };
@@ -8514,6 +10066,7 @@ impl Engine {
             text,
             freq_hz: self.tx_offset_hz,
             when_unix: now_unix_secs(),
+            band: self.settings.band.clone(),
         });
         if self.own_tx.len() > OWN_TX_RING {
             self.own_tx.pop_front();
@@ -8646,6 +10199,24 @@ impl Engine {
         // logged; current state never is, and nothing here is on a timer.
         tempo_core::applog::info("mode", &format!("tier {:?} → {:?}", self.app.tier(), tier));
         self.app.set_tier(tier);
+        // Leaving JS8: a scheduled heartbeat must not fire on return, and a half-sent
+        // multi-frame message cannot resume on another tier — clear all of it now.
+        if from == Tier::Js8 {
+            self.js8_halt_clear();
+        }
+        // ENTERING JS8: seed the idle-watchdog baseline, symmetric with the leave branch
+        // above — and here rather than in `js8_enter` because THIS is the only place every
+        // path into the tier must pass. A freshly built `Station` carries
+        // `last_activity_ms == 0`, the audio service ticks it once a second, and the first
+        // real-clock tick then reads the station as ~55 years idle: the idle watchdog trips
+        // and stands autoreply/relay/HB down silently, on the operator's first decode.
+        // `js8_enter` seeds it too, but `set_tier` is PUBLIC SURFACE — the Tauri `set_tier`
+        // command takes any member of `Tier::ALL`, which now includes `"JS8"` — so the
+        // companion/UDP path, the rig-share broker, or any later UI change reaches the tier
+        // without that verb. Seeding at the transition closes the class instead of one door.
+        if tier == Tier::Js8 {
+            self.js8_station.mark_active(now_unix_secs() * 1000);
+        }
         // ⭐ ANY TIER SWITCH WHILE AN OVER IS IN FLIGHT STANDS TRANSMIT DOWN.
         //
         // This was gated on `tier_is_rx_only`, which stopped covering the case that
@@ -8671,6 +10242,9 @@ impl Engine {
         // FT2 is on the SHORT side by a wide margin — a 3.02 s over in a 3.75 s
         // period, the briefest of any tier here — so leaving it trails out inside a
         // second, exactly like leaving FT4.
+        //
+        // JS8 is NOT in the short-over list: its Slow over is 25.78 s, the "26 s" end of the
+        // stand-down family below, so a tier switch away from it halts like the specialty modes.
         let leaving_a_long_over = self.tx_enabled
             && !matches!(
                 from,
@@ -8689,6 +10263,14 @@ impl Engine {
                 };
             }
         }
+        // Field Day records the ACTUAL on-air mode behind each "DIG" contact
+        // (`LoggedQso::submode`); a tier change moves what the sequencer keys,
+        // so the log's funnel follows it (FD entry stamps it the same way) —
+        // an FT4-tier WFD contact must never export or push as "FT8".
+        let fd_submode = self.adif_mode_for_tier();
+        if let Mode::FieldDay { station, .. } = &mut self.mode {
+            station.log.current_submode = fd_submode.to_string();
+        }
         // ⭐ MSK144 PARKS BOTH OFFSETS ON 1500 Hz, exactly as WSJT-X does on entering the
         // mode (mainwindow.cpp:8169-8173, clamp 1400-1600). The transmitter ALREADY keys
         // 1500 regardless — `Msk144Mode::gen_wave` ignores `f0`, and the decoder pins the
@@ -8699,6 +10281,25 @@ impl Engine {
         if tier == Tier::Msk144 {
             self.set_rx_offset(1500.0);
             self.set_tx_offset(1500.0);
+        }
+        // ⭐ WSPR RE-PARKS THE TX OFFSET INSIDE ITS 200 Hz SUB-BAND (#101b), the same shape
+        // as MSK144 above and for the same reason: the clamp in `set_tx_offset` binds every
+        // FUTURE gesture, but the offset that actually beacons is the one carried in from
+        // whatever tier the operator just left. Arriving from FT8 at 300 Hz, the first WSPR
+        // interval would key at 300 Hz — outside the band every WSPR decoder searches — and
+        // nothing on screen would say so.
+        //
+        // Deliberately a CLAMP, not a park on 1500: unlike MSK144 (whose transmitter keys
+        // 1500 regardless, so any other number on screen is a lie), WSPR's f0 genuinely
+        // follows this offset, and an operator sitting at 1450 to dodge a neighbour is making
+        // a real choice inside the sub-band. Same as WSJT-X, whose spinbox keeps its stored
+        // value and merely has its range narrowed.
+        //
+        // ⚠️ NEEDS BENCH: FT-mode TX change, operator approved, not verifiable on this box.
+        // RX is untouched — the WSPR decoder searches the whole sub-band, so the green
+        // marker carries no transmit consequence.
+        if tier == Tier::Wspr {
+            self.set_tx_offset(self.tx_offset_hz);
         }
         // Point the native signal source at the selected mode (FT1/FT8/FT4). DX1
         // decodes via its own robust path in `ingest`, so the source is left as-is.
@@ -8752,7 +10353,11 @@ impl Engine {
             //
             // This is a BAND CHANGE, not an in-band nudge — `clear_decode_context`
             // at the top of this function has already flushed the stale context.
-            let stay_on_miss = matches!(tier, Tier::Ft8 | Tier::Ft4 | Tier::Ft2);
+            //
+            // JS8 joins the stay-on-band family for the same reason FT2 does: its plan
+            // (JS8Call's table) spans 160 m–2 m, so a miss is an exotic band and dragging the
+            // operator to 160 m would be the same defect.
+            let stay_on_miss = matches!(tier, Tier::Ft8 | Tier::Ft4 | Tier::Ft2 | Tier::Js8);
             let target = plan
                 .iter()
                 .find(|c| c.band.eq_ignore_ascii_case(&band))
@@ -8959,7 +10564,27 @@ impl Engine {
         self.sstv_tx_progress = None;
         self.tx_queue.clear();
         self.broadcast_queue.clear();
-        self.own_tx.clear();
+        // JS8: outbox, pending autoreply and HB schedule go too — halt is total (spec
+        // invariant 7). `slot_tx_abort` above cuts a JS8 frame in flight exactly as it
+        // cuts an FT8 over.
+        self.js8_halt_clear();
+        // A halt ends the one over still owed to a partner the run has left (#170, #153):
+        // it is a queued transmission like any other, and this is the universal stop. It
+        // matters most on the path that is NOT an operator press — `halt_tx_for_context_change`
+        // routes a band QSY / radio handoff through here, and an obligation incurred on the
+        // old band must not follow the rig to the new one.
+        self.recent_partner = None;
+        // ⚠️ `own_tx` IS DELIBERATELY NOT CLEARED HERE (#178). It sat beside these two for
+        // years and does not belong with them: `tx_queue`/`broadcast_queue` hold overs we
+        // have NOT sent, and dropping those is the whole point of a halt. `own_tx` is the
+        // DISPLAY ring behind the `mine` rows in the Rx-Frequency pane — overs that already
+        // went on the air — and a halt cannot un-send one. Clearing it lost the operator's
+        // own record of what they had transmitted, and via `halt_tx_for_context_change` it
+        // did so on a band QSY / radio handoff / transport rebuild the loop performs UNDER
+        // them, with nobody having pressed anything: the intermittent "my calls don't appear
+        // in the Rx Frequency pane" report, and the wiper the `record_own_tx` diagnostic was
+        // added to name. Nothing else reads the ring (`snapshot` appends it, `record_own_tx`
+        // pushes and ring-caps it), so keeping it weakens no transmit invariant.
         self.app.set_transmitting(false);
     }
 
@@ -9396,6 +11021,12 @@ impl Engine {
             Tier::Msk144 => f64::from(self.settings.msk144_period_s),
             Tier::Jt65 => 60.0,
             Tier::Wspr => 120.0,
+            // JS8 = start delay + 79 symbols at the TX speed (25.78 / 13.14 / 8.10 /
+            // 4.05 s in 30 / 15 / 10 / 6 s periods). The REAL wave length, like FT2 —
+            // there is no trailing pad in `js8::phy::modulate`'s buffer. `js8_tx_speed`
+            // reads `Settings::js8_speed` and degrades a stale index to Normal, so this
+            // value never disagrees with the decoder.
+            Tier::Js8 => f64::from(self.js8_tx_speed().slot_fit_s()),
             Tier::TempoDeep => 12.64, // no lead-in; a safe over-estimate of the ~9.9 s frame
             // FT4 = 0.5 s lead-in + 5.04 s tones (105 sym × 576 sa @ 12 kHz). The
             // generated buffer also carries ~1.0 s of TRAILING silence — that is
@@ -10051,7 +11682,35 @@ impl Engine {
 
     /// The split-TX twin of [`Self::rig_dial_applied`]: the rig acknowledged
     /// the split TX dial at `tx_hz`.
+    /// The radio loop's report of what the rig SAYS about its own split.
+    ///
+    /// ⚠️ ASYMMETRIC ON PURPOSE, and this asymmetry is the whole safety model:
+    ///   • "split OFF" REVOKES a confirmation unconditionally. A wrong "off" costs a refusal.
+    ///   • "split ON" grants NOTHING here. It is recorded, and `tx_freq_verdict` grants only if
+    ///     the operator opted in AND the reading is fresh AND the frequency is known. A wrong
+    ///     "on" also costs a refusal, because an unverified split refuses rather than falling
+    ///     back to the dial.
+    ///
+    /// So there is no reading — stale, cached, invented or honest — that can UNLOCK anything
+    /// that was locked. That is why none of Hamlib's documented lies about split can hurt this,
+    /// and why the caller may pass along whatever it got without pre-judging it.
+    ///
+    /// The caller must only ever call this for a rig whose capability probe said
+    /// `SplitDetect::Native`: an emulated read moves the radio to answer, so for those rigs the
+    /// question is never asked at all.
+    pub fn observe_rig_split(&mut self, on: bool, tx_hz: Option<u64>) {
+        self.observed_split = Some((on, tx_hz, now_unix_secs()));
+        if !on {
+            // The rig is not split. Anything we believed it had acknowledged is void.
+            self.tx_split_confirmed_hz = None;
+        }
+    }
+
     pub fn rig_split_applied(&mut self, tx_hz: u64) {
+        // THE ONE PLACE PERMISSION IS GRANTED. The caller has already proved both writes
+        // succeeded on a rig we hold control of; that acknowledgement is what the privilege
+        // gate judges from here until something contradicts it.
+        self.tx_split_confirmed_hz = Some(tx_hz);
         if let Some(b) = self.sat_binding.as_mut() {
             if b.pending_uplink_mhz
                 .is_some_and(|m| (m * 1e6).round() as u64 == tx_hz)
@@ -11106,10 +12765,44 @@ impl Engine {
             self.rtty_afc_hz = 0.0;
             self.rtty_afc_locked = false;
         }
-        if !on {
+        if on {
+            // An explicit Arm is the operator's LATEST decision, so it retires an earlier
+            // Stop — the SSTV lesson, carried over from PSK: without this, stop → arm →
+            // (any automatic disarm) left every later view entry silently refusing to
+            // start the receiver, the field bug one step removed.
+            self.rtty_auto_arm_declined = false;
+        } else {
             self.rtty_audio.clear();
+            // An operator who stopped the decoder has made a decision. Remember it for
+            // the rest of the session.
+            self.rtty_auto_arm_declined = true;
         }
         self.rtty_armed = on;
+    }
+
+    /// Arm the decoder because the operator ENTERED the RTTY view — the APRS/SSTV/PSK
+    /// auto-arm doctrine (operator ruling 2026-08-17): a receive screen with a dead
+    /// receiver is the field bug, so entry starts it. Returns whether this call armed it.
+    ///
+    /// RTTY was the last decode mode WITHOUT this, which is the most likely explanation
+    /// for the standing "RTTY is not decoding" reports: nothing else on the screen says
+    /// the receiver is off, and there was no path that started it but the operator finding
+    /// the Arm control.
+    ///
+    /// Only ever an upgrade from disarmed; refuses once the operator has explicitly
+    /// stopped the decoder this session, and refuses for good when the persisted opt-out
+    /// (`Settings::rtty_rx_auto_arm`) is off. The policy lives here rather than in the view
+    /// so it survives a remount and is testable without a webview. RX ONLY — arming the
+    /// decoder cannot key anything; every RTTY TX path is separate and gated elsewhere.
+    pub fn rtty_auto_arm(&mut self) -> bool {
+        if self.rtty_armed || self.rtty_auto_arm_declined || !self.settings.rtty_rx_auto_arm {
+            return false;
+        }
+        self.rtty_chars.clear();
+        self.rtty_afc_hz = 0.0;
+        self.rtty_afc_locked = false;
+        self.rtty_armed = true;
+        true
     }
 
     /// Whether the RTTY RX decoder is armed (read by the decode thread's gate).
@@ -11850,7 +13543,7 @@ impl Engine {
     /// un-netted decoder sits on today's 2125/2295 pair at any shift. RX only.
     pub fn rtty_center_hz(&self) -> f32 {
         self.rtty_center
-            .unwrap_or(2125.0 + self.rtty_shift_hz() as f32 / 2.0)
+            .unwrap_or(RTTY_AFSK_MARK_HZ as f32 + self.rtty_shift_hz() as f32 / 2.0)
     }
 
     /// Net the RTTY decoder onto a new audio center (Hz) — a waterfall click.
@@ -12780,14 +14473,22 @@ impl Engine {
                     ("CLASS", self.settings.fd_class.trim()),
                     ("SECTION", self.settings.fd_section.trim()),
                 ];
-                tempo_core::rtty::RttySeq::new(&mycall, tempo_core::rtty::seq::FIELD_DAY, &exch)
+                // Per EVENT: the class letter sets are disjoint (ARRL A-F vs
+                // Winter H/I/O/M), so the active event decides which exchange
+                // the sequencer copies against.
+                let event = tempo_core::fieldday::FdEvent::from_code(&self.settings.fd_event);
+                tempo_core::rtty::RttySeq::new(
+                    &mycall,
+                    tempo_core::contest::field_day(event),
+                    &exch,
+                )
             } else {
                 let exch = [
                     ("RST", "599"),
                     ("NAME", self.settings.op_name.trim()),
                     ("QTH", self.settings.op_state.trim()),
                 ];
-                tempo_core::rtty::RttySeq::new(&mycall, tempo_core::rtty::seq::CASUAL, &exch)
+                tempo_core::rtty::RttySeq::new(&mycall, tempo_core::contest::casual(), &exch)
             };
             self.rtty_seq = Some(seq);
         } else {
@@ -12903,6 +14604,31 @@ impl Engine {
                 }
             }
             Action::LogQso { call, exchange } => {
+                // FIELD DAY IS ALL-MODE, AND THIS CONTACT IS A CONTEST CONTACT.
+                // `set_rtty_auto` already worked it with the FD exchange, so the
+                // completed QSO belongs to the CONTEST log and to nothing else:
+                // that is the log that scores it, claims its section and writes
+                // its Cabrillo line. A second copy in the general logbook would
+                // also re-broadcast it on the WSJT-X UDP sink and the connector
+                // upload queue — the rule the FT8 FD sequencer keeps
+                // structurally (see the two `a_field_day_contact_…` tests) and
+                // the manual FD strip keeps by returning early.
+                //
+                // Logged UNCONDITIONALLY, like that sequencer: auto-log and
+                // prompt-to-log are general-logbook preferences, and a contest
+                // log that silently drops a worked contact is this defect again.
+                if let (Some((class, section)), true) = (
+                    Self::fd_exchange(&exchange),
+                    matches!(self.mode, Mode::FieldDay { .. }),
+                ) {
+                    // "DIG" is the scoring class (2 points); "RTTY" is what was
+                    // actually on the air, so the export says RY and not FT8.
+                    // Ok(false) = already worked this band+class, the NORMAL
+                    // outcome for a repeat and nothing to report — the contact
+                    // is in the log already. Err is unreachable: FD is the mode.
+                    let _ = self.fd_log_manual_submode(&call, &class, &section, "DIG", "RTTY");
+                    return;
+                }
                 if self.settings.auto_log {
                     let rec = self.rtty_qso_record(&call, &exchange);
                     if self.settings.prompt_to_log {
@@ -12916,6 +14642,23 @@ impl Engine {
             }
             Action::Abort => {}
         }
+    }
+
+    /// The Field Day pair out of a sequencer exchange: `Some((class, section))`
+    /// only when BOTH arrived non-blank. The `contest::field_day()` exchange
+    /// marks both required, so a completed FD QSO always has them and a
+    /// `contest::casual()` one
+    /// (RST/NAME/QTH) never does — which is what keeps the contest route off
+    /// the ordinary RTTY path without re-reading a settings flag.
+    fn fd_exchange(exchange: &[(String, String)]) -> Option<(String, String)> {
+        let get = |key: &str| {
+            exchange
+                .iter()
+                .find(|(k, _)| k == key)
+                .map(|(_, v)| v.trim())
+                .filter(|v| !v.is_empty())
+        };
+        Some((get("CLASS")?.to_string(), get("SECTION")?.to_string()))
     }
 
     /// Build a [`QsoRecord`] for an auto-sequenced RTTY contact from the peer's
@@ -12935,13 +14678,8 @@ impl Engine {
             .dxcc_resolve
             .as_ref()
             .and_then(|resolve| resolve(call));
-        // On-air RF = dial + the TX audio offset, sideband-signed (WSJT-X convention).
-        let off_mhz = self.tx_offset_hz as f64 / 1e6;
-        let freq_mhz = if self.settings.sideband.eq_ignore_ascii_case("LSB") {
-            self.settings.dial_mhz - off_mhz
-        } else {
-            self.settings.dial_mhz + off_mhz
-        };
+        // On-air RF, and the SPLIT receive leg when there is one — see `log_frequencies`.
+        let (freq_mhz, freq_rx_mhz) = self.log_frequencies();
         // Exchange fields with no dedicated ADIF column (CLASS/SECTION/SERIAL) →
         // comment, so a Field Day / contest exchange survives in the log.
         let extras: Vec<String> = exchange
@@ -12958,6 +14696,7 @@ impl Engine {
             state: None,
             band: self.settings.band.clone(),
             freq_mhz,
+            freq_rx_mhz,
             mode: "RTTY".to_string(),
             // RTTY reports are 599 by convention; the peer's copied report is rcvd.
             rst_sent: Some("599".to_string()),
@@ -12982,7 +14721,10 @@ impl Engine {
             prop_mode: None,
             sat_name: None,
             operator: None,
-            station_callsign: None,
+            // Stamped at CONTACT time, not left for the funnel: with `prompt_to_log` on, this
+            // record waits in `pending_log` (and on disk) until the operator confirms, so a
+            // later read would be the call in force at the click, not at the contact.
+            station_callsign: self.station_callsign_now(),
             extra: Vec::new(),
         }
     }
@@ -13407,6 +15149,34 @@ impl Engine {
         self.recording_warning = warning;
     }
 
+    /// Say (or stop saying) what is wrong with the RF SCOPE source. Separate from
+    /// [`Self::set_audio_error`]: a scope that says nothing and an audio device that failed are
+    /// different problems with different cures, and hiding one behind the other is how an operator
+    /// ends up checking their sound card because their radio's EX menu is off.
+    /// Record the rig scope's MODE code as read back over CAT — see `RadioStatus::scope_mode_code`.
+    pub fn set_scope_mode_code(&mut self, code: Option<u32>) {
+        self.scope_mode_code = code;
+    }
+    /// Record the FIX start now in force — see `RadioStatus::scope_fix_start_mhz`.
+    pub fn set_scope_fix_start(&mut self, mhz: Option<f64>) {
+        self.scope_fix_start_mhz = mhz;
+    }
+    /// Drop everything the FT-710 scope reported. Called when the radio changes and when the
+    /// per-radio opt-in goes off — the two moments after which the held values describe a source
+    /// that is no longer feeding.
+    ///
+    /// One place, so the two callers cannot drift: a switch that cleared the mode but kept the FIX
+    /// start would leave the derived-start caveat attached to nothing.
+    pub fn clear_scope_state(&mut self) {
+        self.scope_mode_code = None;
+        self.scope_fix_start_mhz = None;
+        self.scope_error = None;
+    }
+
+    pub fn set_scope_error(&mut self, err: Option<String>) {
+        self.scope_error = err;
+    }
+
     pub fn set_audio_error(&mut self, err: Option<String>) {
         self.audio_error = err;
     }
@@ -13457,12 +15227,42 @@ impl Engine {
         self.tx_parity == 0
     }
 
-    /// Set the transmit audio offset (Hz), clamped to the usable passband. Used
-    /// for FT1 + DX1 TX modulation. Live — read by the next `poll_tx`.
+    /// The TX audio passband for `tier`, in Hz.
+    ///
+    /// Normally the whole 200–4000 Hz spectrum span (see the waterfall's `HI_HZ`), so the
+    /// operator can place a signal anywhere WSJT-X callers do. A mode whose DECODERS only
+    /// search a sub-band gets that sub-band instead — outside it the transmission is real,
+    /// the rig keys, and nobody is listening.
+    ///
+    /// ⚠️ NEEDS BENCH (#101b, FT-mode TX change — operator approved, unverifiable on this
+    /// box): the WSPR row must be confirmed on the air by beaconing and finding the spot on
+    /// wsprnet. What is verified here is the SOURCE: WSJT-X narrows its WSPR transmit-frequency
+    /// control to 1400–1600 Hz on entering the mode
+    /// (`widgets/mainwindow.cpp:8299-8300`, `on_actionWSPR_triggered`), defaults it to 1500
+    /// (`mainwindow.cpp:1503`), and that control is literally the WSPR TX frequency
+    /// (`mainwindow.cpp:9210`: `double f0=ui->WSPRfreqSpinBox->value() - m_XIT`).
+    ///
+    /// FST4W is deliberately absent: upstream gives it 100–5000 Hz
+    /// (`mainwindow.cpp:7617-7618`), so narrowing it here would be inventing a restriction
+    /// WSJT-X does not have.
+    fn tx_offset_bounds(tier: Tier) -> (f32, f32) {
+        match tier {
+            Tier::Wspr => (1400.0, 1600.0),
+            _ => (200.0, 4000.0),
+        }
+    }
+
+    /// Set the transmit audio offset (Hz), clamped to the usable passband for the ACTIVE
+    /// tier. Used for FT1 + DX1 TX modulation. Live — read by the next `poll_tx`.
+    ///
+    /// Per-tier (see [`Self::tx_offset_bounds`]) rather than one global span, and clamped
+    /// HERE rather than only on tier entry, because this is the single funnel every way of
+    /// moving the marker goes through — a waterfall drag, the spin control, a restore. WSJT-X
+    /// narrows the control itself for exactly that reason; a one-shot park on entry would
+    /// leave the next drag free to walk back outside the sub-band.
     pub fn set_tx_offset(&mut self, hz: f32) {
-        // Ceiling = the 4 kHz spectrum span (see the waterfall's HI_HZ), so the operator can
-        // place a signal anywhere WSJT-X-callers do, well above the old 2.9 kHz cap.
-        self.tx_offset_hz = hz.clamp(200.0, 4000.0);
+        let (lo, hi) = Self::tx_offset_bounds(self.app.tier());
+        self.tx_offset_hz = hz.clamp(lo, hi);
         self.settings.tx_offset_hz = self.tx_offset_hz;
     }
     /// Set the receive audio offset (Hz) — the green waterfall marker. When
@@ -13519,11 +15319,64 @@ impl Engine {
     /// higher-class-only edge can still emit inside it. Every TX path ANDs this in; the
     /// snapshot exposes it so the cockpit can show a lockout indicator. See `privileges.rs`.
     pub fn tx_allowed(&self) -> bool {
+        // The rig says split and we cannot say where it transmits — refuse rather than judge
+        // the dial, which under split is an unrelated number.
+        if self.tx_freq_verdict() == TxFreqVerdict::SplitUnverified {
+            return false;
+        }
         self.emission_allowed(
             self.settings.operating_mode,
-            self.settings.dial_mhz,
+            self.tx_emission_mhz(),
             &self.settings.sideband,
         )
+    }
+
+    /// The dial the next over will actually be EMITTED on — the confirmed split TX frequency
+    /// when there is one, else the operator's dial.
+    ///
+    /// ⭐ UNDER SPLIT THE RX DIAL IS NOT A CONSERVATIVE STAND-IN, IT IS AN UNRELATED NUMBER, and
+    /// judging it was wrong in BOTH directions. It refused the field report's legal split (RX
+    /// 14.015 Extra-only, TX 14.026 legal for a General) — and it equally permitted the reverse,
+    /// a legal RX dial with the transmit VFO parked in an Extra-only segment, which shipped and
+    /// keyed. Fixing this tightens the gate as much as it unlocks it.
+    pub(crate) fn tx_emission_mhz(&self) -> f64 {
+        match self.tx_freq_verdict() {
+            TxFreqVerdict::Simplex(f) | TxFreqVerdict::Split(f) => f,
+            // Nothing legal to judge — the caller refuses on the verdict itself; this value is
+            // only ever a display fallback.
+            TxFreqVerdict::SplitUnverified => self.settings.dial_mhz,
+        }
+    }
+
+    /// THE ONE DECISION: which frequency the next over is emitted on, and how sure we are.
+    ///
+    /// Order matters and it is the safety argument:
+    ///   1. A split we COMMANDED and the rig ACKNOWLEDGED — permission from our own write.
+    ///   2. A split the RIG REPORTED, only when the operator opted in, the capability probe
+    ///      said the rig answers natively, and the reading is FRESH. Staleness locks; it never
+    ///      quietly reverts to the dial.
+    ///   3. The rig says split and neither of the above can say where → refuse.
+    ///   4. Otherwise simplex, and the dial is the emission.
+    pub(crate) fn tx_freq_verdict(&self) -> TxFreqVerdict {
+        if let Some(hz) = self.tx_split_confirmed_hz {
+            return TxFreqVerdict::Split(hz as f64 / 1e6);
+        }
+        match self.observed_split {
+            // The rig told us it is split. Whether that GRANTS anything depends on the opt-in,
+            // on freshness, and on our knowing the frequency at all.
+            Some((true, tx, at)) => {
+                let fresh = now_unix_secs().saturating_sub(at) <= OBSERVED_SPLIT_TTL_SECS;
+                match tx {
+                    Some(hz) if self.settings.split_detect_enabled && fresh => {
+                        TxFreqVerdict::Split(hz as f64 / 1e6)
+                    }
+                    // Split, but not something we may judge: no opt-in, gone stale, or the
+                    // frequency unknown. All three refuse.
+                    _ => TxFreqVerdict::SplitUnverified,
+                }
+            }
+            _ => TxFreqVerdict::Simplex(self.settings.dial_mhz),
+        }
     }
 
     /// May the operator's class key `om`'s EMISSION with the dial at `dial` (`sideband`
@@ -13816,6 +15669,54 @@ impl Engine {
         median < DT_OK_THRESHOLD
     }
 
+    /// Constant-size monitoring read. Never builds the full snapshot, scans the
+    /// logbook or drains decode output. Radio and amp are copied in one engine borrow.
+    pub fn remote_monitor_observation(&self) -> crate::remote_monitor::Observation {
+        use crate::remote_monitor::{bounded, Amplifier, Observation, Radio};
+        let profile = self.settings.active_profile();
+        let amplifier = profile
+            .filter(|p| !p.amp_model.is_empty() && !p.amp_port.is_empty())
+            .map(|p| {
+                let waiting = crate::dto::AmpStatusDto {
+                    family: bounded(&p.amp_model),
+                    ..Default::default()
+                };
+                let status = self.amp_live(p.id).filter(|a| a.family == p.amp_model);
+                Amplifier::from_status(status.unwrap_or(&waiting), p.amp_follow_band)
+            });
+        let mode = match self.settings.operating_mode {
+            crate::settings::OperatingMode::Digital => self.tier().label(),
+            crate::settings::OperatingMode::Phone => "SSB",
+            crate::settings::OperatingMode::Cw => "CW",
+            crate::settings::OperatingMode::Rtty => "RTTY",
+            crate::settings::OperatingMode::Keyboard => "Keyboard",
+        };
+        Observation {
+            call: bounded(&self.app.mycall),
+            grid: bounded(&self.app.mygrid),
+            radio: Radio {
+                id: self.settings.active_radio,
+                name: profile.map(|p| bounded(&p.name)).unwrap_or_default(),
+                dial_mhz: self
+                    .settings
+                    .dial_mhz
+                    .is_finite()
+                    .then_some(self.settings.dial_mhz),
+                band: bounded(&self.settings.band),
+                mode: bounded(mode),
+                // The legacy CAT/mode/PTT mirrors carry no radio identity or read
+                // generation. A poll can straddle a handoff, and the default PTT
+                // false is not a measurement. Do not attribute those mirrors to
+                // this radio until the producer supplies observation provenance.
+                rig_mode: None,
+                cat_connected: None,
+                rig_keyed: None,
+                nexus_busy: self.tx_owner().is_some(),
+            },
+            amplifier,
+        }
+    }
+
     /// Full snapshot, with mode + per-mode (QSO / Field Day) status filled in.
     pub fn snapshot(&self) -> AppSnapshot {
         let mut s = self.app.snapshot();
@@ -13864,6 +15765,7 @@ impl Engine {
         s.radio.tx_enabled = self.tx_enabled;
         s.radio.qso_recording = self.qso_recording;
         s.radio.tx_allowed = self.tx_allowed();
+        s.radio.tx_emission_mhz = Some(self.tx_emission_mhz());
         s.radio.tuning = self.tuning;
         // The arbiter's own answer, not a flag pair for the UI to re-derive — see the field doc.
         s.radio.tx_busy_reason = self.tx_owner().map(TxOwner::busy_reason);
@@ -13913,6 +15815,13 @@ impl Engine {
         }
         .to_string();
         s.radio.audio_error = self.audio_error.clone();
+        // A map lookup and a clone: no I/O and no second lock. `Engine::snapshot` runs under
+        // the engine mutex on the UI's 300 ms poll, and work done inside it has twice stalled
+        // the radio loop.
+        s.radio.amp = self.amp_live(self.settings.active_radio).cloned();
+        s.radio.scope_error = self.scope_error.clone();
+        s.radio.scope_mode_code = self.scope_mode_code;
+        s.radio.scope_fix_start_mhz = self.scope_fix_start_mhz;
         s.radio.recording_warning = self.recording_warning.clone();
         s.radio.radio_config_warning =
             crate::settings::serial_port_conflicts(&self.settings.radios)
@@ -13921,6 +15830,17 @@ impl Engine {
                         self.settings.cw_keyer,
                         &self.settings.cw_key_port,
                         &self.settings.radios,
+                    )
+                })
+                // The amplifier's port against everything else on the station that opens one.
+                // `serial_port_conflicts` above never looks at `amp_port`, so without this an
+                // amplifier typed onto the CAT port reads as a dead radio.
+                .or_else(|| {
+                    crate::settings::amp_port_conflict(
+                        &self.settings.radios,
+                        &self.settings.cw_key_port,
+                        &self.settings.winkeyer_port,
+                        &self.settings.rtty_fsk_port,
                     )
                 })
                 .or_else(|| crate::settings::audio_device_conflicts(&self.settings.radios))
@@ -13937,6 +15857,7 @@ impl Engine {
         s.radio.tx_level = self.settings.tx_level;
         // Rig read-back wins (the knob's truth); else the last commanded value.
         s.radio.rf_power = self.rig_rf_power.or(self.rf_power);
+        s.radio.tx_power_zero = self.tx_power_is_zero();
         s.radio.mic_gain = self.rig_mic_gain.or(self.mic_gain);
         s.radio.nr_level = self.rig_nr_level.or(self.nr_level);
         s.radio.comp_level = self.rig_comp_level.or(self.comp_level);
@@ -14051,7 +15972,16 @@ impl Engine {
                     rx_report: station.rx_report,
                     running: *running,
                     cq_running: self.cq_running,
-                    tx_now: station.pending_text(),
+                    // The one over owed to a partner the run has already left (#170, #153)
+                    // takes this slot from the sequencer, so it is what the operator is
+                    // about to send and must be what the strip says. Showing the CQ
+                    // underneath it would make the answer look like it never happened.
+                    tx_now: self
+                        .recent_partner
+                        .as_ref()
+                        .and_then(|p| p.owed.as_ref())
+                        .map(|m| m.to_text())
+                        .or_else(|| station.pending_text()),
                     stalled: station.stalled(),
                     tx_count: station.tx_count,
                 });
@@ -14070,6 +16000,9 @@ impl Engine {
                 let (qso_pts, powered) =
                     rs.scoring.qso_and_powered(log, self.settings.fd_power_mult);
                 let bonus = rs.bonus_points(&self.settings.fd_bonuses);
+                // The running-or-next event window, from the rules data (the
+                // banner/countdown's single source — no TS date math).
+                let event_window = rs.next_or_running(now_unix_secs());
                 s.field_day = Some(FieldDayStatus {
                     my_class: log.myexch.class.clone(),
                     my_section: log.myexch.section.clone(),
@@ -14088,6 +16021,19 @@ impl Engine {
                     powered_points: powered,
                     bonus_points: bonus,
                     total_score: powered + bonus,
+                    event_start_unix: event_window.start_unix,
+                    event_end_unix: event_window.end_unix,
+                    rules_year: rs.rules_year,
+                    rules_generated: tempo_core::fd_rules::active_generated().to_string(),
+                    // The effectively-ON assistance sources, by their display
+                    // labels — the advisory UI's single source (never re-derived).
+                    assistance_on: self
+                        .settings
+                        .assistance_sources()
+                        .iter()
+                        .filter(|&&(_, on)| on)
+                        .map(|&(label, _)| label.to_string())
+                        .collect(),
                     log: log
                         .qsos()
                         .iter()
@@ -14097,9 +16043,11 @@ impl Engine {
                             section: q.section.clone(),
                             band: q.band.clone(),
                             mode: q.mode.clone(),
+                            submode: q.submode.clone(),
                             when_unix: q.when_unix,
                         })
                         .collect(),
+                    club: self.fd_club_dto(log),
                 });
             }
         }
@@ -14311,7 +16259,16 @@ impl Engine {
         // their calls in the decode feed (WSJT-X own-TX). The UI keys these by
         // cycle so repeated identical calls stack as distinct timestamped lines.
         let mycall = self.settings.mycall.clone();
-        for tx in &self.own_tx {
+        // Only the overs sent on the band we are ON. An empty stored band is an over from
+        // before this was recorded (or an off-band excursion, where the backend reports no
+        // band claim) — those still ride, because dropping them would silently lose an
+        // operator's own record, which is the fault the ring exists to prevent.
+        let here = self.settings.band.clone();
+        for tx in self
+            .own_tx
+            .iter()
+            .filter(|t| t.band.is_empty() || t.band == here)
+        {
             s.recent_decodes.push(DecodeRow {
                 from: Some(mycall.clone()),
                 snr: 0,
@@ -14351,6 +16308,7 @@ impl Engine {
             })
             .collect();
         s.clear_tick = self.clear_tick;
+        s.logged_tick = self.logged_tick;
         s.work_tick = self.work_tick;
         s.work_view = self.work_view.clone();
         s.work_call = self.work_call.clone();
@@ -14489,7 +16447,8 @@ impl Engine {
             self.station
                 .all_txt_pending
                 .push(crate::alltxt::all_txt_line(
-                    now_unix_secs(),
+                    // The beacon's own period — same rule as the QSO writer.
+                    crate::alltxt::period_start_unix(slot, self.active_slot_secs()),
                     self.settings.dial_mhz,
                     true,
                     &mode,
@@ -14575,6 +16534,16 @@ impl Engine {
         // identity packing, parity, the sequencer — is genuinely inapplicable.
         if self.tier_is_beacon(self.app.tier()) {
             return self.plan_beacon_tx(slot);
+        }
+        // JS8 (tier-routed; operator gate G1 re-confirmed 2026-09-05): keys EVERY period —
+        // there is no parity concept in JS8Call — and speaks JS8Call's wire, so it must
+        // never drain Tempo RR73 ACKs (`send_pending_acks` below is the Tempo path) and it
+        // runs the identity gate itself. Everything ABOVE this line is a reason not to
+        // transmit at all and applies unchanged; everything BELOW is the FT/Tempo
+        // machinery that does not apply. The wall-clock watchdog lives in the mode-match
+        // tail this route skips, so `plan_js8_tx` re-applies it (spec invariant 3).
+        if self.app.tier() == Tier::Js8 {
+            return self.plan_js8_tx(slot);
         }
         // Delivery ACKs we now owe (heard a directed message addressed to us) ride out on
         // the chat broadcast path — closing the store-and-forward loop. Only reached when
@@ -14734,14 +16703,54 @@ impl Engine {
                     }
                 }
             }
-            Mode::Qso { station, .. } => {
+            // Labeled so the late-reply one-shot below can answer for this slot without the
+            // sequencer being asked at all — see the ⭐ block. Wrapping the sequencer in an
+            // `else` instead would re-indent the whole arm for a two-line early exit.
+            Mode::Qso { station, .. } => 'qso_over: {
                 // Directed-call cap: a station that goes silent stops being called after
                 // this many unanswered overs of a directed step (settings; default 8).
                 // Refreshed here every TX slot so it always tracks the live setting,
                 // regardless of how this station was created (CQ answer / S&P / monitoring).
                 station.call_cap = self.settings.directed_max_calls;
+                // ⭐ THE ONE OVER OWED TO A PARTNER THE RUN HAS ALREADY LEFT (#170, #153).
+                //
+                // Taken BEFORE the sequencer is asked, and deliberately AROUND it rather than
+                // through it: `override_next` would write into the CQ station's `pending`,
+                // which a `CallingCq` station never clears (that is how a directed run stays
+                // directed), so the answer would repeat every over until the call cap bit.
+                // Bypassing keeps it a true one-shot — the station's own CQ is untouched and
+                // is back on the very next slot — and it is what "must NOT re-enter Mode::Qso,
+                // must not re-arm the sequencer" means mechanically: nothing about the station
+                // is read or written here.
+                //
+                // The whole record goes with the message: spent is spent.
+                //
+                // The DEADLINE is re-checked HERE and not left to `observe_late_reply`, so the
+                // bound holds on the transmit path itself rather than on the decode path
+                // having run — a keying decision must not depend on somebody else's loop.
+                //
+                // ⚠️ NEEDS BENCH: FT-mode TX change (operator approved), unverifiable here.
+                if self
+                    .recent_partner
+                    .as_ref()
+                    .is_some_and(|p| slot > p.until_slot)
+                {
+                    self.recent_partner = None;
+                }
+                if let Some(m) = self.recent_partner.as_mut().and_then(|p| p.owed.take()) {
+                    self.recent_partner = None;
+                    self.cq_pause_until = None;
+                    // `tx_rv` is already 0 and stays there: a one-shot has no step for
+                    // IR-HARQ to escalate redundancy over.
+                    break 'qso_over Some(m.to_text());
+                }
                 match station.outgoing_rv() {
                     Some((m, rv)) => {
+                        // Something is going out, so no pause is in force — either the run just
+                        // resumed, or (the case that matters) somebody ANSWERED and this is the
+                        // reply. Clearing it here rather than only on resume means a stale
+                        // deadline cannot survive into the next run and silence its first calls.
+                        self.cq_pause_until = None;
                         station.after_tx();
                         // Stock "Disable Tx after sending 73": the over leaving
                         // NOW is our final 73 (after_tx just cleared pending at
@@ -14772,6 +16781,36 @@ impl Engine {
                         // slot". Reading it here rather than re-deriving the cap keeps one
                         // definition of capped in tempo-core.
                         withheld_by_call_cap = station.stalled();
+                        // An unanswered CQ run serves out its pause and then calls again
+                        // (operator ruling: eight CQs, three minutes, repeat). Only a CQ run —
+                        // a directed step that has spent its budget stays spent, because that
+                        // budget exists to stop calling a station that has gone silent.
+                        if withheld_by_call_cap && station.state == QsoState::CallingCq {
+                            let now = now_unix_secs();
+                            match self.settings.cq_pause_secs.unwrap_or(0) {
+                                // 0 (or None) keeps the pre-existing behaviour: the run simply
+                                // stops. Somebody who set it that way meant it.
+                                0 => {}
+                                pause => {
+                                    let until =
+                                        *self.cq_pause_until.get_or_insert(now + pause as u64);
+                                    if now >= until {
+                                        station.resume_cq_run();
+                                        self.cq_pause_until = None;
+                                        // ⚠️ THE WATCHDOG CLOCK MUST BE RESTARTED HERE, or this
+                                        // feature quietly kills itself. `tx_watchdog_start` is
+                                        // set on the first withheld slot and never cleared while
+                                        // we keep being withheld, so across repeated pauses it
+                                        // would reach `tx_watchdog_min` and set tx_enabled =
+                                        // false — disarming the operator mid-run for being idle
+                                        // in exactly the way this feature asks them to be. The
+                                        // watchdog is NOT weakened: it still bounds a genuinely
+                                        // stuck run, it simply stops counting a pause we chose.
+                                        self.tx_watchdog_start = None;
+                                    }
+                                }
+                            }
+                        }
                         None
                     }
                 }
@@ -14844,9 +16883,15 @@ impl Engine {
                 // ("A13DE KD9TAW") was the band-activity garble bug. Also skip a SINGLE
                 // bare broadcast frame ("DE <CALL> 73", the S3 fast-path) — likewise
                 // recorded once at source as the clean body.
-                let is_chunk = tempo_core::text::parse_chunk(&t).is_some();
-                let is_broadcast = tempo_core::inbox::parse_broadcast(&t).is_some();
-                if !is_chunk && !is_broadcast {
+                // Scoped to Mode::Chat — the only mode whose wire chunks messages at
+                // all. Unscoped, parse_chunk also matched any STRUCTURED over whose
+                // first word starts letter-digit-digit — i.e. a real DX call (P29YY,
+                // T77C, SP2GIF — issue #178): the operator's own overs to those calls
+                // vanished from Rx Frequency and ALL.TXT while the QSO completed fine.
+                let chat_wire = matches!(self.mode, Mode::Chat)
+                    && (tempo_core::text::parse_chunk(&t).is_some()
+                        || tempo_core::inbox::parse_broadcast(&t).is_some());
+                if !chat_wire {
                     self.record_own_tx(t.clone());
                     // ALL.TXT parity with WSJT-X: log OUR over as a `Tx` line too. The RX-only
                     // ALL.TXT left the operator's own CQ / reports / RR73 invisible — to tailing
@@ -14859,7 +16904,11 @@ impl Engine {
                         self.station
                             .all_txt_pending
                             .push(crate::alltxt::all_txt_line(
-                                now_unix_secs(),
+                                // The period this over KEYS IN. `now_unix_secs()` was up to a
+                                // second early (the plan is made just before the boundary) and,
+                                // for a re-planned over, seconds late — the operator's log has
+                                // Tx lines at 024544 and 024852, neither on a boundary.
+                                crate::alltxt::period_start_unix(slot, self.active_slot_secs()),
                                 self.settings.dial_mhz,
                                 true,
                                 &mode,
@@ -14968,6 +17017,42 @@ impl Engine {
                 None
             }
         }
+    }
+
+    /// The wall-clock TX watchdog, as `plan_tx`'s mode-match tail applies it (the
+    /// `Some(t)` arm above) — DUPLICATED here on purpose. The JS8 tier route returns
+    /// above that tail, and a route that skipped it would leave operator, autoreply
+    /// and relay JS8 traffic bounded by nothing but the 60-minute idle clock. Same
+    /// fields, same three outcomes: start the clock on the first over after an
+    /// operator act (the operator verbs call `reset_tx_watchdog`); trip once REAL
+    /// elapsed time reaches `tx_watchdog_min` (disarm + one-shot abort, and the caller
+    /// RETURNS — never builds the wave); refuse an over longer than the whole limit.
+    /// Heartbeats never reach this fn (G2). Returns true when the over must NOT go out.
+    /// Keep this body textually aligned with the tail above; the engine test
+    /// `js8_wall_clock_trips_mirrors_the_mode_match_tail` pins its outcomes.
+    pub(crate) fn js8_wall_clock_trips(&mut self) -> bool {
+        let limit_secs = u64::from(self.settings.tx_watchdog_min) * 60;
+        if limit_secs == 0 {
+            return false; // 0 = watchdog off, exactly as for the FT arms
+        }
+        let now = now_unix_secs();
+        let start = *self.tx_watchdog_start.get_or_insert(now);
+        let over_secs = self.tx_over_secs() as u64;
+        if now.saturating_sub(start) >= limit_secs || over_secs > limit_secs {
+            self.tx_watchdog = true;
+            self.tx_enabled = false;
+            // A trip is a hard kill: the loop's mid-over cut is the one-shot abort.
+            self.slot_tx_abort = true;
+            self.app.set_transmitting(false);
+            return true;
+        }
+        false
+    }
+
+    /// The TX indicator (`AppSnapshot.radio.transmitting`), for planners that live outside
+    /// this module. Same call every arm of `plan_tx` makes; `app` is private.
+    pub(crate) fn set_transmitting(&mut self, on: bool) {
+        self.app.set_transmitting(on);
     }
 
     /// Decide, build and commit an over in one call — the whole transmit decision
@@ -15086,6 +17171,34 @@ impl Engine {
     /// the branch (Native / DX1 / Companion), the AP request context, the HARQ-reset
     /// flag and the current decode epoch, plus an `Arc` clone of the decoder. No heavy
     /// work — the actual decode runs later in [`run_decode_job`] off the engine mutex.
+    /// Build the OWNED multi-speed JS8 job under the engine lock: the operator's decode
+    /// controls clamped to JS8's 100–4000 Hz passband (not FT8's 200–3900), stock depth, and
+    /// the capture epoch — no heavy work (that is `run_js8_multi_job`, on the worker).
+    pub fn build_js8_multi_job(
+        &self,
+        slices: Vec<(modes::Js8Speed, Vec<f32>, u64)>,
+        slot: u64,
+    ) -> Js8MultiJob {
+        let nfa = self.settings.decode_flow_hz.clamp(100, 3900);
+        let nfb = self
+            .settings
+            .decode_fhigh_hz
+            .clamp(200, 4000)
+            .max(nfa + 100);
+        Js8MultiJob {
+            slices,
+            params: ::js8::DecodeParams {
+                nfa: nfa as f32,
+                nfb: nfb as f32,
+                depth: self.settings.decode_depth.clamp(1, 3),
+                // JS8Call's stock outer passes (3, subtraction on 1-2).
+                subtract_passes: 2,
+            },
+            slot,
+            epoch: self.capture_epoch,
+        }
+    }
+
     pub fn build_decode_job(&self, frame: Vec<f32>, slot: u64, pass: DecodePass) -> DecodeJob {
         let source = self.source.clone();
         // The epoch stamped here decides whether the RESULT still applies (see
@@ -15096,7 +17209,9 @@ impl Engine {
         // (#103). Redecode replays `last_rx`, whose fold is display-only and gated by
         // its own history filter, so it keeps the live epoch (unchanged behavior).
         let epoch = match pass {
-            DecodePass::Boundary | DecodePass::Early => self.capture_epoch,
+            DecodePass::Boundary | DecodePass::Early | DecodePass::Js8Multi { .. } => {
+                self.capture_epoch
+            }
             DecodePass::Redecode => self.decode_epoch,
         };
         // Companion: decodes arrive over UDP; the audio is irrelevant. Drain the
@@ -15314,6 +17429,13 @@ impl Engine {
                 // If the early pass already ingested this boundary's messages, keep
                 // only the stragglers the full-window decode newly found.
                 let decodes = self.drop_early_dupes(decodes, slot);
+                // JS8: the multi-speed pass decoded the tier speed ~1-2 s ago at JS8Call's
+                // decode moment; this boundary re-decode of the same audio is stragglers only.
+                let decodes = if self.app.tier() == Tier::Js8 {
+                    self.js8_dedupe(decodes)
+                } else {
+                    decodes
+                };
                 let n = self.process_decodes(&frame, decodes, slot);
                 DecodeApplied::Boundary { n, slot, frame }
             }
@@ -15331,6 +17453,17 @@ impl Engine {
                         .map(|d| d.message.trim().to_string())
                         .collect(),
                 ));
+                let n = self.process_decodes(&frame, decodes, slot);
+                DecodeApplied::Early { n }
+            }
+            // The multi-speed JS8 pass: rows + spots, exactly like an EARLY result — and never
+            // the boundary TX decision (`DecodeApplied::Boundary` is what the loop keys on).
+            // Dedupe against the boundary pass first, so the roster/ALL.TXT see each word once.
+            DecodePass::Js8Multi { .. } => {
+                if decodes.is_empty() {
+                    return DecodeApplied::Early { n: 0 };
+                }
+                let decodes = self.js8_dedupe(decodes);
                 let n = self.process_decodes(&frame, decodes, slot);
                 DecodeApplied::Early { n }
             }
@@ -15545,12 +17678,18 @@ impl Engine {
         if self.settings.write_all_txt {
             let dial = self.settings.dial_mhz;
             let mode = format!("{:?}", self.app.tier()).to_uppercase();
-            let now = now_unix_secs();
+            // THE PERIOD THE AUDIO CAME FROM, not the wall clock this result happened to be
+            // folded at — see `alltxt::period_start_unix` for the field report. Both passes
+            // carry `audio slot + 1` (the boundary pass decodes the just-ended slot; the early
+            // pass is dispatched as `slot + 1` to match its parity), so the audio is always the
+            // period before this index.
+            let stamp =
+                crate::alltxt::period_start_unix(slot.saturating_sub(1), self.active_slot_secs());
             for d in &decodes {
                 self.station
                     .all_txt_pending
                     .push(crate::alltxt::all_txt_line(
-                        now, dial, false, &mode, d.snr, d.dt, d.freq, &d.message,
+                        stamp, dial, false, &mode, d.snr, d.dt, d.freq, &d.message,
                     ));
             }
             // Bound memory if the shell never drains (e.g. headless): keep newest 5000.
@@ -15596,40 +17735,79 @@ impl Engine {
         while self.decode_history.len() > 240 {
             self.decode_history.pop_front();
         }
+        // JS8: parse the typed words behind these rows into the message layer (activity
+        // rows, heard table, inbox). Text consumers above already had their turn.
+        if self.app.tier() == Tier::Js8 {
+            self.js8_ingest(&decodes, slot);
+        }
         self.last_wire_decodes = wire_copy.unwrap_or_else(|| decodes.clone());
         self.last_decodes = decodes;
         self.last_decode_slot = Some(slot);
         n
     }
 
-    /// Hound mode: a DXpedition Fox packs TWO payloads in one transmission
-    /// ("K1ABC RR73; W9XYZ <FOX> -08"). Split them so everything downstream —
-    /// rows, roster, the auto-sequencer — sees both halves as ordinary messages
-    /// (the standard sequencer then handles the whole hound exchange). Gated on
-    /// Hound so normal operation (where free text may carry ';') is untouched.
+    /// A DXpedition Fox packs TWO payloads in one transmission
+    /// ("K1ABC RR73; W9XYZ <FOX> -08" — WSJT-X `lib/ft8/foxgen.f90`, and `fox_tx.f90`
+    /// formats it literally as `a6,' RR73; ',a6,1x,'<FoxCall>',i4.2`). Split them so
+    /// everything downstream — rows, roster, the auto-sequencer — sees both halves as
+    /// ordinary messages, and the standard sequencer then handles the whole exchange.
+    ///
+    /// ⚠️ GATED ON HAVING AN ACTIVE QSO, not on the Hound SETTING (operator ruling
+    /// 2026-08-23). It was Hound-gated, and that tied a pure RECEIVE-side parsing job to a
+    /// switch whose other job is a TRANSMIT decision — suppressing the parting 73, which is
+    /// only ever right against a real Fox. An operator working a Fox without having flipped
+    /// Hound therefore could not read the very message that confirms their contact, while an
+    /// operator who left Hound on lost the parting 73 on every ordinary QSO. One switch, two
+    /// unrelated jobs; this is the receive half moving off it.
+    ///
+    /// An active QSO is the honest condition: the reattach below needs a Fox call to
+    /// reconstruct the implied sender, and without one there is nothing to reattach TO. It
+    /// also keeps the blast radius small — a bystander's free text containing ';' is only
+    /// ever split while we are mid-contact, and even then `reattach` fires on nothing but an
+    /// exact 2-token `<call> RR73/RRR/73` half.
     fn hound_split(&self, decodes: Vec<modes::Decode>) -> Vec<modes::Decode> {
         let fox_capable = self
             .tier_mode_kind(self.app.tier())
             .is_some_and(|k| modes::make_mode(k).capabilities().fox_hound);
-        if !matches!(
-            self.settings.special_op,
-            crate::settings::SpecialOp::Hound | crate::settings::SpecialOp::SuperHound
-        ) || !fox_capable
-        {
+        // The station we're working (for reconstructing the Fox's implied sender below), and
+        // whether THAT contact began as a Hound QSO — see the reattach gate below.
+        let (fox, hound_qso): (Option<String>, bool) = match &self.mode {
+            Mode::Qso { station, .. } => (station.dxcall.clone(), station.quiet_finish),
+            _ => (None, false),
+        };
+        if fox.is_none() || !fox_capable {
             // Fox multiplexing is an FT8 DXpedition construct — the mode declares
             // `fox_hound` (FT8 only, matching WSJT-X). Free text may legitimately
-            // contain ';' and must never be split.
+            // contain ';' and must never be split when we are not working anybody.
             return decodes;
         }
-        // The Fox we're working (for reconstructing its implied sender below).
-        let fox: Option<String> = match &self.mode {
-            Mode::Qso { station, .. } => station.dxcall.clone(),
-            _ => None,
-        };
         // A Fox confirm half is the SENDER-LESS 2-token "K1ABC RR73" — re-add
         // the Fox's call so it parses as a standard Rr73 and passes the
         // sequencer's sender lock. Only exact 2-token <call> RR73/RRR/73 forms.
+        //
+        // ⚠️ #236: NEVER fabricate a partner-as-sender outside a genuine Hound/SuperHound QSO. This
+        // reattach is legitimate ONLY when our partner IS the Fox we are hounding. De-gated to every
+        // FT8 QSO by 06ec4ab2 ("a Fox is readable without Hound"), it stamped our CURRENT ordinary
+        // partner onto a bystander Fox's confirm addressed to us — forging an RR73 the partner never
+        // sent and keying a premature 73 (a WSJT-X-cadence violation: no Tx5 without a real roger).
+        // The DISPLAY split below still runs so a Fox stays readable; only the sequencer-feeding
+        // fabrication is gated. A sender-LESS 2-token half cannot parse as a terminal (Rr73/Rrr/Bye73
+        // all need 3 tokens), so un-reattached it never advances the sequencer.
+        //
+        // ⚠️ GATED ON THE CONTACT, NOT ON THE LIVE SETTING. `station.quiet_finish` is the marker
+        // `call_station_ctx` stamps on TRUE Hound QSOs — the same one the QSY-to-the-Fox rule
+        // reads, and for the same reason. Reading `settings.special_op` here let a mid-QSO
+        // toggle reach inside a contact already on the air, in both directions: leaving Hound
+        // stranded a Fox exchange (its sender-less RR73 half stopped parsing, so the contact
+        // never closed and we kept calling a station that had rogered us), and entering Hound
+        // opened #236 on the ordinary QSO in flight. Everything else Hound decides for a
+        // contact — the quiet finish, the >1000 Hz initial offset — was already captured once at
+        // `call_station_ctx`; this was the one live read. A QSO in flight keeps the rules it
+        // started under, and the toggle governs the NEXT one.
         let reattach = |m: String| -> String {
+            if !hound_qso {
+                return m;
+            }
             let t: Vec<&str> = m.split_whitespace().collect();
             if let (Some(f), [to, fin]) = (&fox, t.as_slice()) {
                 if matches!(*fin, "RR73" | "RRR" | "73") && tempo_core::message::is_callsign(to) {
@@ -15667,6 +17845,92 @@ impl Engine {
     /// Fold a slot's decodes into the active mode's sequencer and, in QSO mode,
     /// auto-log the contact once the sequence completes. Shared by [`ingest`] and
     /// the test driver so both exercise the same QSO/auto-log path.
+    /// Arm the single over owed to a [`RecentPartner`] — the station the CQ run has already
+    /// moved on from (#170 a completed contact, #153 a give-up).
+    ///
+    /// Called from [`Self::observe_modes`] AFTER the live sequencer has seen this slot, which
+    /// is what keeps the two from competing: it acts only while the run is sitting on a bare
+    /// CQ with no dxcall, so anything the sequencer claimed (a new caller, a bare report that
+    /// `(CallingCq, Report)` locks onto) wins and this stands down for good.
+    ///
+    /// Every exit drops the memory. It is spent, or expired, or overtaken — never carried.
+    ///
+    /// ⚠️ NEEDS BENCH: FT-mode QSO-management change (operator approved), unverifiable here.
+    fn observe_late_reply(&mut self, decodes: &[modes::Decode], slot: u64) {
+        let Some(p) = self.recent_partner.as_ref() else {
+            return;
+        };
+        // THE BOUND. Past the deadline the record is dropped without being read: a repeat
+        // arriving minutes later is a new contact, not the tail of an old one.
+        if slot > p.until_slot {
+            self.recent_partner = None;
+            return;
+        }
+        if p.owed.is_some() {
+            return; // already armed — one over, once
+        }
+        // Run-only, and only while we are back on a bare CQ. A directed S&P call never gets
+        // here (`cq_running` is false), and a station the sequencer has since locked onto owns
+        // the exchange — reaching past it would be the resurrection this must not be.
+        let cqing = self.cq_running
+            && matches!(&self.mode, Mode::Qso { station, .. }
+                if station.dxcall.is_none() && station.state == QsoState::CallingCq);
+        if !cqing {
+            self.recent_partner = None;
+            return;
+        }
+        let (call, answer, rrr) = (p.call.clone(), p.answer, p.confirm_with_rrr);
+        let mycall = self.settings.mycall.clone();
+        let same = |a: &str, b: &str| tempo_core::message::same_call(a, b);
+        for d in decodes {
+            // Unhashed like the sequencer's own `observe`, so a compound partner arriving as
+            // `<K1ABC>` still matches the call we remembered.
+            let owed = match Msg::parse(&d.message).unhashed() {
+                // #170 — they repeated their report, bare or R-prefixed: they never copied
+                // our closing roger. Send it again. (In practice only the R-prefixed form
+                // reaches here: a BARE report addressed to us is claimed one step earlier by
+                // `(CallingCq, Report)`, which locks on and re-works them — which is itself
+                // what WSJT-X's bare-report arm does, `mainwindow.cpp:6415-6440`.)
+                Msg::Report { to, de, .. } | Msg::RReport { to, de, .. }
+                    if answer == LateAnswer::Roger && same(&to, &mycall) && same(&de, &call) =>
+                {
+                    Some(if rrr {
+                        Msg::Rrr {
+                            to: de,
+                            de: mycall.clone(),
+                        }
+                    } else {
+                        Msg::Rr73 {
+                            to: de,
+                            de: mycall.clone(),
+                        }
+                    })
+                }
+                // #153 — the station the run gave up on came back and closed. Answer with the
+                // 73 that closes it back, and nothing else.
+                Msg::Rr73 { to, de } | Msg::Rrr { to, de }
+                    if answer == LateAnswer::Bye73 && same(&to, &mycall) && same(&de, &call) =>
+                {
+                    Some(Msg::Bye73 {
+                        to: de,
+                        de: mycall.clone(),
+                    })
+                }
+                _ => None,
+            };
+            if let Some(m) = owed {
+                tempo_core::applog::info(
+                    "tx",
+                    &format!("late reply owed to {call}: {}", m.to_text()),
+                );
+                if let Some(p) = self.recent_partner.as_mut() {
+                    p.owed = Some(m);
+                }
+                return;
+            }
+        }
+    }
+
     fn observe_modes(&mut self, decodes: &[modes::Decode], slot: u64) {
         // The completed contact to auto-log, gathered while `self.mode` is
         // borrowed and committed after (so building the record doesn't conflict
@@ -15842,6 +18106,10 @@ impl Engine {
                 }
             }
         }
+        // The one over still owed to a partner the run has already left (#170, #153). Runs
+        // AFTER the sequencer has had this slot's decodes, so it can never take a message the
+        // live station wanted — it acts only when nothing else claimed it.
+        self.observe_late_reply(decodes, slot);
         if fd_logged {
             self.persist_fd_log();
         }
@@ -15948,6 +18216,74 @@ impl Engine {
             self.reset_tx_watchdog();
         }
         if resume_cq || abandon_stalled {
+            // Before the station is replaced, KEEP a contact that really happened (#153).
+            // `abandon_stalled` is the run's decision to stop calling somebody who went quiet;
+            // it must not also be a decision to discard the exchange. Only when a report has
+            // actually crossed — theirs to us or ours to them — so a caller who never got past
+            // answering our CQ leaves nothing behind, exactly as before.
+            //
+            // BOTH paths, and `resume_cq` is the one that proves the point. The auto-log site
+            // above deliberately leaves `qso_logged` false when Auto-log is OFF, and says why:
+            // "so the completed QSO stays capturable by the cockpit Log QSO button
+            // (log_current_qso) — otherwise it is silently discarded and the button no-ops."
+            // That intent was defeated three blocks later by this very swap: the button reads
+            // the CURRENT station, which by then is a fresh calling_cq with no dxcall. Measured,
+            // not assumed — a contact that reached Confirming with reports crossed both ways
+            // came out the other side with `logged=false` and nothing to log.
+            //
+            // `!self.qso_logged` is what keeps this from duplicating: a contact that DID
+            // auto-log is already written and leaves nothing behind.
+            if (resume_cq || abandon_stalled) && !self.qso_logged {
+                if let Mode::Qso { station, .. } = &self.mode {
+                    if let Some(dx) = station.dxcall.clone() {
+                        if station.rx_report.is_some() || self.qso_report_sent.is_some() {
+                            self.stalled_qso = Some(StalledQso {
+                                dxcall: dx,
+                                dxgrid: station.dxgrid.clone(),
+                                rx_report: station.rx_report,
+                                tx_report: self.qso_report_sent,
+                                start_unix: self.qso_start_unix,
+                            });
+                        }
+                    }
+                }
+            }
+            // ⭐ AND KEEP THE PARTNER ITSELF, for ONE more over (#170, #153).
+            //
+            // The swap below is what makes both reports possible: the station that could
+            // answer is gone before the DX has finished asking. WSJT-X does not tear down —
+            // `clear_DX_` defaults FALSE (`Configuration.cpp:1824`) and `acceptQSO` clears
+            // only on it (`widgets/mainwindow.cpp:7405`), so `m_hisCall`/`m_QSOProgress`
+            // survive a completed contact AND a give-up, and a late over from that station
+            // still matches the partner guard (`mainwindow.cpp:6277-6279`) and is answered:
+            // a repeated report re-sends the roger (`:6403-6413`), a late RR73/RRR earns the
+            // 73 (`:6369`). Upstream also returns to CQ immediately, which is why this is a
+            // MEMORY and not a hold: the run costs nothing.
+            //
+            // ⚠️ DELIBERATELY NOT A `QsoStation` — the line `StalledQso` draws, and for its
+            // reason. Restoring a sequencer would be a transmit decision the operator has
+            // moved past. This is a callsign, one message it could earn, and a deadline.
+            //
+            // ⚠️ NEEDS BENCH: FT-mode QSO-management change (operator approved), not
+            // verifiable on this box — only on-air traffic proves the timing.
+            if let Mode::Qso { station, .. } = &self.mode {
+                if let Some(dx) = station.dxcall.clone() {
+                    self.recent_partner = Some(RecentPartner {
+                        call: dx,
+                        // `resume_cq` and `abandon_stalled` are mutually exclusive by
+                        // construction (one needs `qso_logged`, the other `!qso_logged`), so
+                        // this reads the origin exactly rather than guessing at it.
+                        answer: if resume_cq {
+                            LateAnswer::Roger
+                        } else {
+                            LateAnswer::Bye73
+                        },
+                        confirm_with_rrr: station.confirm_with_rrr,
+                        until_slot: slot.saturating_add(LATE_REPLY_SLOTS),
+                        owed: None,
+                    });
+                }
+            }
             let mycall = self.settings.mycall.clone();
             let mygrid = self.settings.mygrid.clone();
             let mut s = QsoStation::calling_cq(&mycall, &mygrid);
@@ -16063,8 +18399,70 @@ impl Engine {
             Tier::Jt65 => "JT65",
             // ADIF-registered. Unreachable while receive-only, like the others.
             Tier::Wspr => "WSPR",
+            // "JS8" is an ADIF SUBMODE (under MFSK), not a MODE. Stored verbatim for the same
+            // reason FT2 is, and written by the ADIF writer as MODE=MFSK SUBMODE=JS8 through
+            // `logbook::adif_submode` — the cascade TQSL/LoTW accept. Unreachable while
+            // receive-only; the right answer the moment that changes.
+            Tier::Js8 => "JS8",
             Tier::TempoFast => "TempoFast",
         }
+    }
+
+    /// The pair of frequencies a logged record carries: ADIF `FREQ` — the frequency we
+    /// TRANSMITTED on — and `FREQ_RX`, the one we RECEIVED on, `None` unless they differ.
+    ///
+    /// Both legs are the on-air RF: dial plus the TX audio offset, sideband-signed (USB adds,
+    /// LSB subtracts) exactly as WSJT-X logs it. The bare dial alone would log two stations at
+    /// different audio offsets as identical.
+    ///
+    /// Simplex is the normal case and returns `(freq, None)` — unchanged from before #163.
+    /// With the rig split, `FREQ` moves onto the SPLIT TX dial, which is what ADIF means by
+    /// it; a split contact used to log the RX dial plus the TX offset, which is neither leg.
+    ///
+    /// ⚠️ A CROSS-BAND SPLIT WRITES NEITHER, AND THAT EXCLUSION IS DELIBERATE (operator
+    /// ruling). It is how a SATELLITE contact is left untouched — the uplink rides this same
+    /// `split_tx_mhz` field, so without the test a pass would start logging `FREQ` = the
+    /// uplink.
+    ///
+    /// ⚠️ DO NOT "COMPLETE" THIS BY DROPPING THE BAND TEST. `QsoRecord::band` names the
+    /// RECEIVE leg only, and ADIF pairs `BAND` with `FREQ`. Writing a 2 m uplink into `FREQ`
+    /// while `BAND` still says 70 cm produces a record whose two fields contradict each other:
+    /// TQSL and other consumers cross-check that pair, so satellite QSOs would start failing
+    /// upload — and the `PROP_MODE`/`SAT_NAME` stamp in [`Self::log_qso`] gates on `freq_mhz`
+    /// sitting inside the bird's DOWNLINK passband, so it would silently stop matching and
+    /// those contacts would lose their LoTW satellite credit outright.
+    ///
+    /// Doing it properly means setting `BAND` from the transmit leg and adding `BAND_RX` — and
+    /// `band` is the key every award, needs and B4 path in Nexus reads, which is a far larger
+    /// change than #163. Satellites wait for one that does BAND and BAND_RX together,
+    /// deliberately, rather than getting half of it now.
+    ///
+    /// Keyed on the BANDS rather than on "is a transponder held" for two reasons: the
+    /// satellite hold OUTLIVES THE PASS (an FM hold is never released), so asking `sat_tune`
+    /// would strip `FREQ_RX` off ordinary HF split contacts made hours later; and cross-band
+    /// is the property that actually breaks the `BAND`/`FREQ` pair, so a non-satellite
+    /// cross-band split — a cross-band repeater, some EME setups — is excluded for the same
+    /// reason and by the same rule. An off-table dial (no band answer at all) is treated as
+    /// cross-band: absent is not a match.
+    fn log_frequencies(&self) -> (f64, Option<f64>) {
+        let off_mhz = self.tx_offset_hz as f64 / 1e6;
+        let lsb = self.settings.sideband.eq_ignore_ascii_case("LSB");
+        let on_air = |dial: f64| if lsb { dial - off_mhz } else { dial + off_mhz };
+        let rx = on_air(self.settings.dial_mhz);
+        let Some(tx_dial) = self.split_tx_mhz else {
+            return (rx, None); // simplex: one frequency, and no second field claiming two
+        };
+        let same_band = match (
+            crate::bandplan::band_for_dial(self.settings.dial_mhz),
+            crate::bandplan::band_for_dial(tx_dial),
+        ) {
+            (Some(a), Some(b)) => a == b,
+            _ => false,
+        };
+        if !same_band {
+            return (rx, None);
+        }
+        (on_air(tx_dial), Some(rx))
     }
 
     fn qso_record(
@@ -16097,16 +18495,22 @@ impl Engine {
             .dxcc_resolve
             .as_ref()
             .and_then(|resolve| resolve(&dxcall));
-        // Logged FREQ is the actual on-air RF = dial + the TX audio offset (WSJT-X
-        // convention), sideband-signed: USB adds the offset, LSB subtracts it. Bare
-        // dial alone would log two stations at different audio offsets as identical.
-        let off_mhz = self.tx_offset_hz as f64 / 1e6;
-        let freq_mhz = if self.settings.sideband.eq_ignore_ascii_case("LSB") {
-            self.settings.dial_mhz - off_mhz
-        } else {
-            self.settings.dial_mhz + off_mhz
-        };
+        // Logged FREQ is the actual on-air RF, and FREQ_RX the receive leg of a split
+        // contact — see `log_frequencies`, which owns the rule and the satellite exclusion.
+        let (freq_mhz, freq_rx_mhz) = self.log_frequencies();
         let grid = self.dx_grid_resolved(&dxcall, dxgrid);
+        // Built BEFORE the struct literal moves `mode` into the record.
+        let reports_note = if self.settings.log_reports_to_comments {
+            reports_comment(
+                &mode,
+                self.qso_report_sent
+                    .map(tempo_core::message::fmt_report)
+                    .as_deref(),
+                rx_report.map(tempo_core::message::fmt_report).as_deref(),
+            )
+        } else {
+            None
+        };
         QsoRecord {
             call: dxcall,
             grid,
@@ -16114,6 +18518,7 @@ impl Engine {
             state: None,
             band: self.settings.band.clone(),
             freq_mhz,
+            freq_rx_mhz,
             mode,
             // Digital dB SNR reports → the form that WENT ON THE AIR: sign + two digits
             // ("-07", "+03"). `fmt_report` is the packer's own formatter, so the logged
@@ -16127,7 +18532,11 @@ impl Engine {
             rst_rcvd: rx_report.map(tempo_core::message::fmt_report),
             name: None,
             qth: None,
-            comment: None,
+            // WSJT-X's "dB reports to comments" (opt-in): the COMMENT carries
+            // "<mode>  Sent: <rpt>  Rcvd: <rpt>" in WSJT-X's own byte format, built
+            // from the SAME formatted reports logged above, so the comment can never
+            // disagree with the record.
+            comment: reports_note,
             notes: None,
             tx_power: None,
             // TIME_ON = when the exchange began (set on answer / first CQ reply);
@@ -16148,7 +18557,9 @@ impl Engine {
             prop_mode: None,
             sat_name: None,
             operator: None,
-            station_callsign: None,
+            // Same reason as the RTTY builder: `prompt_to_log` can park this record for as long
+            // as the operator takes to confirm, so the call is captured now.
+            station_callsign: self.station_callsign_now(),
             extra: Vec::new(),
         }
     }
@@ -16434,9 +18845,24 @@ impl Engine {
         legs: u8,
         attempts: u8,
         retry_after_unix: i64,
+        origin: UploadOrigin,
     ) {
         self.station
-            .requeue_upload_at(rec, legs, attempts, retry_after_unix)
+            .requeue_upload_at(rec, legs, attempts, retry_after_unix, origin)
+    }
+
+    /// See [`StationCore::requeue_after_failure`] — the re-queue path for an upload that
+    /// just failed, which paces a catch-up record instead of trusting its raw backoff.
+    pub fn requeue_after_failure(
+        &mut self,
+        rec: tempo_core::logbook::QsoRecord,
+        legs: u8,
+        attempts: u8,
+        earliest_due: i64,
+        origin: UploadOrigin,
+    ) {
+        self.station
+            .requeue_after_failure(rec, legs, attempts, earliest_due, origin)
     }
 
     /// See [`StationCore::requeue_failed_clublog`].
@@ -16478,9 +18904,18 @@ impl Engine {
         self.station.update_qso(index, rec)
     }
 
-    /// See [`StationCore::mark_qsl_sent`].
-    pub fn mark_qsl_sent(&mut self, index: usize, via: tempo_core::logbook::QslVia) -> bool {
+    /// See [`StationCore::mark_qsl_sent`]. `None` = the operator withdrawing the mark.
+    pub fn mark_qsl_sent(
+        &mut self,
+        index: usize,
+        via: Option<tempo_core::logbook::QslVia>,
+    ) -> bool {
         self.station.mark_qsl_sent(index, via)
+    }
+
+    /// See [`StationCore::mark_qsl_card`].
+    pub fn mark_qsl_card(&mut self, index: usize, received: bool) -> bool {
+        self.station.mark_qsl_card(index, received)
     }
 
     /// See [`StationCore::delete_qso`].
@@ -16539,7 +18974,7 @@ impl Engine {
         pushed: &QsoRecord,
         outcome: tempo_core::logbook::UploadOutcome,
         when_unix: i64,
-        detail: Option<String>,
+        detail: Option<tempo_core::logbook::UploadDetail>,
     ) -> bool {
         self.station
             .stamp_qrz_upload(pushed, outcome, when_unix, detail)
@@ -16551,7 +18986,7 @@ impl Engine {
         pushed: &QsoRecord,
         outcome: tempo_core::logbook::UploadOutcome,
         when_unix: i64,
-        detail: Option<String>,
+        detail: Option<tempo_core::logbook::UploadDetail>,
     ) -> bool {
         self.station
             .stamp_clublog_upload(pushed, outcome, when_unix, detail)
@@ -16563,7 +18998,7 @@ impl Engine {
         pushed: &QsoRecord,
         outcome: tempo_core::logbook::UploadOutcome,
         when_unix: i64,
-        detail: Option<String>,
+        detail: Option<tempo_core::logbook::UploadDetail>,
     ) -> bool {
         self.station
             .stamp_eqsl_upload(pushed, outcome, when_unix, detail)
@@ -16614,7 +19049,7 @@ impl Engine {
         indices: &[usize],
         outcome: tempo_core::logbook::UploadOutcome,
         when_unix: i64,
-        detail: Option<String>,
+        detail: Option<tempo_core::logbook::UploadDetail>,
     ) {
         self.station
             .stamp_lotw_upload(indices, outcome, when_unix, detail)
@@ -16907,6 +19342,59 @@ fn haversine_km(a: (f64, f64), b: (f64, f64)) -> f64 {
 #[cfg(test)]
 mod tests {
 
+    /// The contract a factory RESET depends on, pinned from the engine side.
+    ///
+    /// Same asymmetry #85 fixed for restore, arriving from the other side. A reset builds a factory
+    /// `Settings` and applies it — and if that goes through the FORM-SAVE path the engine keeps its
+    /// live roster on purpose (so a stale panel cannot revert a rig you just added), and every radio
+    /// the dialog promised to erase survives. Worse than the restore case in one respect: there the
+    /// bundle at least carried radios of its own, so the result was somebody's real roster. Here the
+    /// promise on screen and the outcome disagree outright.
+    ///
+    /// LIMIT OF THIS TEST, stated because it looks like it covers more than it does: the routing
+    /// lives in the command layer (`reset_settings` → `apply_and_persist(.., authoritative = true)`)
+    /// and the engine cannot see it. What this pins is that the authoritative path does what a reset
+    /// needs and that the form path deliberately does not — so a change to either CONTRACT fails
+    /// here, while a change that re-routes reset to the wrong one does not.
+    #[test]
+    fn the_authoritative_path_lands_a_factory_roster_and_the_form_path_keeps_the_live_one() {
+        let factory = {
+            let mut fresh = Settings::default();
+            fresh.ensure_radio_profiles();
+            fresh.ensure_distinct_radio_ports();
+            fresh.ensure_routing_targets();
+            fresh
+        };
+        let expected = factory.radios.len();
+
+        let mut eng = Engine::new("W9XYZ", "EN37", 0);
+        eng.add_radio();
+        eng.add_radio();
+        assert!(
+            eng.settings().radios.len() > expected,
+            "fixture: a station with more radios than a fresh install"
+        );
+        eng.apply_restored_settings(factory.clone());
+        assert_eq!(
+            eng.settings().radios.len(),
+            expected,
+            "a reset must land the FACTORY roster, not the one it promised to erase"
+        );
+
+        // And the form path must still KEEP the live roster. That is not a bug to fix; it is
+        // exactly why routing a reset through it was wrong.
+        let mut eng = Engine::new("W9XYZ", "EN37", 0);
+        eng.add_radio();
+        eng.add_radio();
+        let live = eng.settings().radios.len();
+        eng.apply_settings(factory);
+        assert_eq!(
+            eng.settings().radios.len(),
+            live,
+            "a form save keeps the engine's roster — a stale panel must not revert a new rig"
+        );
+    }
+
     /// A RESTORE takes the bundle's roster; a form save keeps the engine's. Getting these the same
     /// way round loses radios.
     ///
@@ -17159,6 +19647,7 @@ mod tests {
         );
     }
     use super::*;
+    use crate::engine::js8::Js8Switch;
     use modes::Decode;
     // The station owns every write to the shared log now (`StationCore::append_to_log`),
     // so the only code left reaching `Logbook` directly is the concurrency guards,
@@ -17183,6 +19672,7 @@ mod tests {
             nap: 0,
             qual: 1.0,
             rv: None,
+            raw: None,
             mode: None,
         }
     }
@@ -18207,6 +20697,72 @@ mod tests {
         assert_eq!(log[0].qth.as_deref(), Some("BOSTON"), "copied exchange");
     }
 
+    /// As [`rtty_auto_engine`], with the Field Day master switch on — which is
+    /// what makes `set_rtty_auto` build the `contest::field_day()` exchange
+    /// AND puts the engine in `Mode::FieldDay`, so the contest log exists.
+    fn rtty_auto_fd_engine() -> Engine {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        let mut s = e.settings().clone();
+        s.fd_active = true;
+        s.fd_class = "3A".into();
+        s.fd_section = "WI".into();
+        e.apply_settings(s); // master on + class/section → enters Mode::FieldDay
+        e.set_operating_mode("rtty", false);
+        e.set_rtty_auto(true);
+        e
+    }
+
+    /// FIELD DAY IS ALL-MODE, AND RTTY IS ITS DIGITAL CLASS. The auto-sequencer
+    /// already WORKS a Field Day contact correctly (`set_rtty_auto` builds the
+    /// class/section exchange the instant the master switch is on) — but the
+    /// completed contact went to the general logbook, which scores nothing:
+    /// not a QSO point, not the section multiplier, not a Cabrillo line. It
+    /// belongs to the contest log, and to that log ONLY.
+    #[test]
+    fn rtty_auto_field_day_qso_lands_in_the_contest_log_not_the_general_one() {
+        let mut e = rtty_auto_fd_engine();
+        e.rtty_auto_cq().unwrap();
+        assert!(e.poll_rtty_one().is_some(), "drain the CQ");
+        e.push_rtty_decode(&rtty_decoded("W9XYZ DE W1AW W1AW K\n"), 0.0, true);
+        assert_eq!(e.rtty_state().peer.as_deref(), Some("W1AW"));
+        assert!(e.poll_rtty_one().is_some(), "drain our exchange");
+        // His Field Day exchange comes back — class + section, both required.
+        e.push_rtty_decode(&rtty_decoded("W9XYZ DE W1AW R 2A EMA K\n"), 0.0, true);
+        assert_eq!(e.rtty_state().seq_state, "confirmed", "the QSO completed");
+
+        let fd = e.snapshot().field_day.expect("FD master is on");
+        assert_eq!(fd.qso_count, 1, "the contact never reached the FD log");
+        assert_eq!(fd.log[0].call, "W1AW");
+        assert_eq!(fd.log[0].class, "2A", "his class, as copied");
+        assert_eq!(fd.log[0].section, "EMA", "his section — the multiplier");
+        assert_eq!(
+            fd.log[0].mode, "DIG",
+            "RTTY is the digital class (2 points)"
+        );
+        assert_eq!(
+            fd.log[0].submode, "RTTY",
+            "the ACTUAL on-air mode, so Cabrillo emits RY and ADIF RTTY — never \
+             the FT tier `current_submode` happens to hold"
+        );
+        // …and NOT the general logbook: one contact, one log (the rule the FT8
+        // Field Day sequencer already keeps structurally). The two consequences
+        // that rule exists for, asserted at the site that used to break it —
+        // both broadcast sinks stay clear, so the club emitter that reads the FD
+        // log is the ONLY thing that sends this contact.
+        assert!(
+            e.get_log().is_empty(),
+            "double-logged — the FD contact also landed in the general logbook"
+        );
+        assert!(
+            e.take_pending_udp_qsos().is_empty(),
+            "the FD contact was queued for the WSJT-X sink a second time"
+        );
+        assert!(
+            e.take_pending_uploads().is_empty(),
+            "the FD contact entered the general connector upload queue"
+        );
+    }
+
     #[test]
     fn rtty_auto_abort_clears_the_queue_and_returns_to_idle() {
         let mut e = rtty_auto_engine();
@@ -18410,6 +20966,40 @@ mod tests {
         // Re-arming starts a fresh transcript (a new copy session).
         e.set_psk_armed(true);
         assert!(e.psk_state().text.is_empty());
+    }
+
+    /// RTTY was the ONLY decode mode with no view-entry auto-arm — PSK, APRS and SSTV all
+    /// have one — which is very likely the whole of "RTTY is not decoding": the operator
+    /// opens the RTTY cockpit, sees a transcript pane and a waterfall, and the receiver was
+    /// never started. Same policy as [`Engine::psk_auto_arm`], asserted the same way.
+    #[test]
+    fn rtty_auto_arm_policy_mirrors_psk() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        assert!(e.rtty_auto_arm(), "first view entry arms");
+        assert!(e.rtty_armed());
+        assert!(!e.rtty_auto_arm(), "already armed — entry is a no-op");
+
+        // The operator stops the decoder: view entry must NOT restart it.
+        e.set_rtty_armed(false);
+        assert!(!e.rtty_auto_arm(), "declined for the session");
+        assert!(!e.rtty_armed());
+
+        // An explicit Arm is the operator's latest decision — it retires the decline
+        // (the SSTV stop→arm→auto-disarm regression, pinned here too).
+        e.set_rtty_armed(true);
+        e.rtty_armed = false; // an automatic disarm, NOT an operator stop
+        assert!(e.rtty_auto_arm(), "explicit re-arm retired the decline");
+
+        // The persisted opt-out refuses the auto-arm outright; the explicit Arm button
+        // is unaffected.
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.settings.rtty_rx_auto_arm = false;
+        assert!(!e.rtty_auto_arm(), "setting off = never auto-arm");
+        e.set_rtty_armed(true);
+        assert!(
+            e.rtty_armed(),
+            "manual arm still works with the setting off"
+        );
     }
 
     #[test]
@@ -18726,6 +21316,78 @@ mod tests {
         // shift/CTCSS gate (service.rs) sees the FM family throughout.
         e.set_sstv_sending(false);
         assert_eq!(e.rig_mode_effective(), "FM", "idle again → plain FM");
+    }
+
+    /// #130 (PA3GYQ, via the operator) — THE SWITCH THAT WAS SAID TO HAVE SHIPPED AND HAD NOT.
+    ///
+    /// The reply on that thread told the reporter the IC-9700 dropping out of FM-D was fixed in
+    /// 1.10.2. It was not, and it was not a bug: the revert above is deliberate. What was
+    /// missing is the per-radio opt-in to HOLD the data submode for an operator who parks on an
+    /// FM SSTV channel for the evening rather than sending one picture and leaving.
+    ///
+    /// Four states, because a switch proven in one direction is half a test — and the first is
+    /// the one that must not move for the 99 % who never touch it.
+    ///
+    /// ⚠️ NEEDS-BENCH: this pins the mode WORD Nexus commands, which is all that can be pinned
+    /// without a rig. `PKTFM` is not a new word — the neighbour above already commands it — so
+    /// what is unproven is a radio's behaviour when it is HELD there between pictures.
+    #[test]
+    fn the_fm_data_submode_is_held_while_sstv_receives_only_when_this_radio_asks_for_it() {
+        // (1) DEFAULT OFF, receiver armed: today's answer, unchanged. This is the control —
+        // without it the test below would pass on an engine that simply always held PKTFM.
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_license_class("extra");
+        e.sstv_tune(144.500, "2m", "FM");
+        e.set_sstv_armed(true);
+        assert!(!e.settings.sstv_hold_data_submode, "default must stay off");
+        assert_eq!(
+            e.rig_mode_effective(),
+            "FM",
+            "off by default: an armed receiver alone changes nothing, so voice PTT still keys \
+             the mic between pictures"
+        );
+
+        // (2) SWITCH ON, receiver NOT armed: the switch alone holds nothing. The operator is
+        // not working SSTV, so neither is the radio.
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_license_class("extra");
+        e.settings.sstv_hold_data_submode = true;
+        e.sstv_tune(144.500, "2m", "FM");
+        assert!(!e.sstv_armed(), "precondition: the receiver is not running");
+        assert_eq!(
+            e.rig_mode_effective(),
+            "FM",
+            "the setting is gated on the receiver actually running"
+        );
+
+        // (3) SWITCH ON + receiver armed: the reported ask. FM-D between pictures, with no
+        // image queued and none in flight.
+        e.set_sstv_armed(true);
+        assert_eq!(
+            e.rig_mode_effective(),
+            "PKTFM",
+            "held in the FM data submode for as long as the receiver runs (#130)"
+        );
+        // …and Stop hands the radio back, which is the operator's off-ramp before voice.
+        e.set_sstv_armed(false);
+        assert_eq!(
+            e.rig_mode_effective(),
+            "FM",
+            "stopping the receiver ends the hold — plain FM, mic path, same as before"
+        );
+
+        // (4) The mic-jack opt-out reaches the HELD word exactly as it reaches the sent one.
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_license_class("extra");
+        e.settings.sstv_hold_data_submode = true;
+        e.settings.data_modes_plain_ssb = true;
+        e.sstv_tune(144.500, "2m", "FM");
+        e.set_sstv_armed(true);
+        assert_eq!(
+            e.rig_mode_effective(),
+            "FM",
+            "a mic-jack rig is held in plain FM, never PKTFM"
+        );
     }
 
     /// The other two ways the Phone section can be in FM — neither of which arms `fm_channel`,
@@ -19450,6 +22112,158 @@ mod tests {
     /// `privileges::tx_allowed` short-circuits `LicenseClass::Open` — the DEFAULT, and the
     /// class every non-US operator and every operator who never opened Settings is on — to
     /// `true` at any frequency. So for them the dial gate does not fail closed off the
+    /// WORKING SPLIT — THE GATE MUST JUDGE WHERE THE RF LEAVES, NOT WHERE WE LISTEN.
+    ///
+    /// Field report 2026-08-25: a General worked a DX on 14.015 (Extra-only CW) with his rig in
+    /// split, transmitting 14.026 — squarely inside General privileges. Nexus locked TX. The
+    /// gate judged `settings.dial_mhz`, the RECEIVE dial, which under split is an unrelated
+    /// number. Working DX split is not exotic; it is how DX is worked, and DXpeditions sit in
+    /// the Extra-only bottom precisely so the pileup answers up where it may.
+    ///
+    /// The permission may come ONLY from a split Nexus commanded and the rig ACKNOWLEDGED
+    /// (`rig_split_applied`), never from a read — see the module note on why a rig's own report
+    /// of split cannot be trusted to grant anything.
+    #[test]
+    fn a_confirmed_split_is_judged_at_the_transmit_frequency() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("general");
+        e.set_operating_mode("cw", false);
+        e.set_frequency(14.015, "20m", "USB");
+        assert!(
+            !e.tx_allowed(),
+            "precondition: 14.015 CW is Extra-only, so simplex must lock"
+        );
+
+        // The rig acknowledged a split transmitting on 14.026 — legal for a General.
+        e.rig_split_applied(14_026_000);
+        assert!(
+            e.tx_allowed(),
+            "THE BUG: a legal split TX is refused because the gate judged the RX dial"
+        );
+    }
+
+    /// THE OTHER DIRECTION, AND IT IS THE ONE NOBODY REPORTED. Judging the RX dial is not a
+    /// conservative approximation — it is blind, and blindness fails OPEN just as readily.
+    /// A legal receive dial with the transmit VFO parked in an Extra-only segment keys today.
+    #[test]
+    fn a_confirmed_split_into_a_forbidden_segment_locks_even_with_a_legal_dial() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("general");
+        e.set_operating_mode("cw", false);
+        e.set_frequency(14.030, "20m", "USB");
+        assert!(
+            e.tx_allowed(),
+            "precondition: 14.030 CW is legal for a General"
+        );
+
+        // …but the transmit VFO is in the Extra-only bottom.
+        e.rig_split_applied(14_010_000);
+        assert!(
+            !e.tx_allowed(),
+            "FAIL-OPEN: keyed an Extra-only segment because the RX dial happened to be legal"
+        );
+    }
+
+    /// A READ CAN REVOKE. The rig says it is not split, so whatever we believed it acknowledged
+    /// is void and the gate goes back to judging the dial.
+    #[test]
+    fn the_rig_reporting_simplex_revokes_a_confirmed_split() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("general");
+        e.set_operating_mode("cw", false);
+        e.set_frequency(14.015, "20m", "USB");
+        e.rig_split_applied(14_026_000);
+        assert!(e.tx_allowed(), "precondition: the confirmed split unlocks");
+
+        e.observe_rig_split(false, None);
+        assert!(
+            !e.tx_allowed(),
+            "the rig says it is simplex — the gate must judge 14.015 again and refuse"
+        );
+    }
+
+    /// A READ CANNOT GRANT WITHOUT THE OPT-IN. The rig says it is split on a legal frequency,
+    /// but the operator never asked Nexus to follow the radio — so this refuses. It does NOT
+    /// silently fall back to judging the dial, because an unverified split is exactly the case
+    /// where the dial is an unrelated number.
+    #[test]
+    fn an_observed_split_grants_nothing_until_the_operator_opts_in() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("general");
+        e.set_operating_mode("cw", false);
+        e.set_frequency(14.030, "20m", "USB");
+        assert!(e.tx_allowed(), "precondition: 14.030 simplex is legal");
+
+        // The rig reports a split onto a perfectly legal TX frequency…
+        e.observe_rig_split(true, Some(14_040_000));
+        assert!(
+            !e.tx_allowed(),
+            "an unverified split must LOCK, not fall through to the dial"
+        );
+
+        // …and with the opt-in, the same reading is judged and allowed.
+        e.settings.split_detect_enabled = true;
+        assert!(
+            e.tx_allowed(),
+            "opted in, fresh, frequency known — judge it"
+        );
+    }
+
+    /// EVEN OPTED IN, A SPLIT WHOSE FREQUENCY WE DO NOT KNOW REFUSES. "Somewhere else" is not a
+    /// frequency a privilege table can rule on.
+    #[test]
+    fn an_observed_split_with_no_frequency_refuses_even_when_opted_in() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("general");
+        e.set_operating_mode("cw", false);
+        e.set_frequency(14.030, "20m", "USB");
+        e.settings.split_detect_enabled = true;
+        e.observe_rig_split(true, None);
+        assert!(!e.tx_allowed(), "split on, frequency unknown — refuse");
+    }
+
+    /// STALENESS LOCKS. The operator cancels split at the front panel and the rig goes quiet;
+    /// the last reading must expire into a REFUSAL, never into "well, judge the dial then".
+    #[test]
+    fn a_stale_observation_locks_rather_than_reverting_to_the_dial() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("general");
+        e.set_operating_mode("cw", false);
+        e.set_frequency(14.030, "20m", "USB");
+        e.settings.split_detect_enabled = true;
+        e.observe_rig_split(true, Some(14_040_000));
+        assert!(e.tx_allowed(), "precondition: fresh and legal");
+
+        // Age it past the TTL by hand — the reading is the same, only older.
+        if let Some((_, _, at)) = e.observed_split.as_mut() {
+            *at -= OBSERVED_SPLIT_TTL_SECS + 5;
+        }
+        assert!(
+            !e.tx_allowed(),
+            "a stale split reading must lock; 14.030 being legal is not the question"
+        );
+    }
+
+    /// A confirmation is not for ever. Anything that moves the radio out from under it — a QSY,
+    /// a refused split, a band change — must drop it, or the gate judges a transmit frequency
+    /// the rig is no longer using.
+    #[test]
+    fn a_qsy_drops_the_split_confirmation() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("general");
+        e.set_operating_mode("cw", false);
+        e.set_frequency(14.015, "20m", "USB");
+        e.rig_split_applied(14_026_000);
+        assert!(e.tx_allowed(), "precondition: the confirmed split unlocks");
+
+        // QSY to another Extra-only spot. The old confirmation must not carry over.
+        e.set_frequency(14.012, "20m", "USB");
+        assert!(
+            !e.tx_allowed(),
+            "a stale confirmation kept TX unlocked after the radio moved"
+        );
+    }
+
     /// bands, and this halt is the only thing that stops the sequencer keying there.
     #[test]
     fn a_knob_qsy_off_the_bands_still_cuts_transmit() {
@@ -19536,6 +22350,102 @@ mod tests {
         e.set_operating_mode("cw", false);
         e.set_frequency(7.030, "40m", "USB");
         assert!(e.tx_allowed(), "Technician CW on 40 m is allowed");
+    }
+
+    /// The FT-710 scope state must not survive a RADIO SWITCH.
+    ///
+    /// Only one rig in a roster is an FT-710, so a mode code carried across the switch is read by
+    /// the position select as the NEW radio's — and it renders as a confident "Fix" on a rig with
+    /// no scope at all. Maintainer review, kd9taw/Nexus#147.
+    #[test]
+    fn switching_radio_drops_the_scope_state_of_the_one_left_behind() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        // One initializer, for the same clippy reason as the fixture below.
+        let st = Settings {
+            radios: vec![
+                crate::settings::RadioProfile {
+                    id: 0,
+                    yaesu_rf_scope: true,
+                    ..Default::default()
+                },
+                crate::settings::RadioProfile {
+                    id: 1,
+                    ..Default::default()
+                },
+            ],
+            active_radio: 0,
+            ..Settings::default()
+        };
+        e.apply_restored_settings(st);
+        e.set_scope_mode_code(Some(0x32)); // FIX
+        e.set_scope_fix_start(Some(14.0));
+        e.set_scope_error(Some("needs LibFT4222".into()));
+        assert_eq!(
+            e.snapshot().radio.scope_mode_code,
+            Some(0x32),
+            "fixture never had scope state — the rest proves nothing"
+        );
+
+        e.set_active_radio(1);
+
+        let r = e.snapshot().radio;
+        assert_eq!(
+            r.scope_mode_code, None,
+            "the mode code followed the operator to the other rig"
+        );
+        assert_eq!(
+            r.scope_fix_start_mhz, None,
+            "the derived FIX start outlived its radio"
+        );
+        assert_eq!(
+            r.scope_error, None,
+            "the other radio inherited a scope error it cannot cause"
+        );
+    }
+
+    /// ...nor an OPT-IN switched off, the other moment the held values stop describing a live
+    /// source. Turning it ON must not clear, and neither must an unrelated save.
+    #[test]
+    fn turning_the_scope_opt_in_off_drops_the_state_it_reported() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        // Drives the FLAT mirror as well as the profile: a save of the ACTIVE radio arrives
+        // through the flat form, and `apply_settings` keeps the engine's roster, so a fixture that
+        // sets only the profile changes nothing the engine will read.
+        // Built in ONE initializer: CI denies clippy's `field_reassign_with_default`, which fires
+        // on any field assigned after `Settings::default()`.
+        let profile = |scope: bool| Settings {
+            yaesu_rf_scope: scope,
+            radios: vec![crate::settings::RadioProfile {
+                id: 0,
+                yaesu_rf_scope: scope,
+                ..Default::default()
+            }],
+            active_radio: 0,
+            ..Settings::default()
+        };
+        e.apply_restored_settings(profile(true));
+        e.set_scope_mode_code(Some(0x32));
+        e.set_scope_fix_start(Some(14.0));
+
+        // CONTROL: a save that leaves the opt-in ON must keep the state. Without this the test
+        // passes on an implementation that clears on every save.
+        e.apply_settings(profile(true));
+        assert_eq!(
+            e.snapshot().radio.scope_mode_code,
+            Some(0x32),
+            "a save that did not touch the opt-in wiped the scope state"
+        );
+
+        e.apply_settings(profile(false)); // the operator unticks it
+        let r = e.snapshot().radio;
+        assert_eq!(
+            r.scope_mode_code, None,
+            "the mode code survived the opt-in going off"
+        );
+        assert_eq!(
+            r.scope_fix_start_mhz, None,
+            "the FIX start survived the opt-in going off"
+        );
     }
 
     #[test]
@@ -20727,6 +23637,10 @@ mod tests {
             Tier::Fst4,
             Tier::Msk144,
             Tier::Jt65,
+            // JS8 keeps structured_identity: true even while receive-only, so the identity
+            // gate refuses a blank call/grid exactly like the others (the gate reads the
+            // mode's Capabilities, not its tx flag).
+            Tier::Js8,
         ] {
             let mut e = Engine::new("", "EN52", 0);
             e.set_tier(tier);
@@ -20734,7 +23648,18 @@ mod tests {
                 e.structured_tx_ready(true).is_err(),
                 "{tier:?}: a blank mycall must refuse structured TX"
             );
-            e.set_mode("qso-run").unwrap(); // engine set_mode doesn't gate; arms TX
+            // A tx-capable structured tier can ENTER the CQ run (set_mode arms TX), but the
+            // blank-mycall gate keeps the slot backstop silent. A receive-only structured
+            // tier (JS8) is refused the run outright by `require_tx_capable` — a stronger
+            // guarantee: it never reaches the backstop because it cannot transmit at all.
+            if e.tier_is_rx_only(tier) {
+                assert!(
+                    e.set_mode("qso-run").is_err(),
+                    "{tier:?}: a receive-only structured tier must refuse to enter a CQ run"
+                );
+            } else {
+                e.set_mode("qso-run").unwrap(); // engine set_mode doesn't gate here; arms TX
+            }
             assert!(
                 e.poll_tx(0).is_empty() && e.poll_tx(1).is_empty(),
                 "{tier:?}: the slot backstop must not key with a blank mycall"
@@ -21397,6 +24322,73 @@ mod tests {
     }
 
     #[test]
+    fn own_tx_rows_do_not_follow_the_operator_to_another_band() {
+        // #178 (Luk73), the sentence that outlived the Erase fix: "Changing the band doesn't
+        // change the situation. Additionally, the hours and bands change in the status lines."
+        //
+        // The own-TX display ring recorded text, audio offset and time — and NOT the band. So
+        // every over we have sent is appended to every snapshot forever, and the decode pane,
+        // which wipes itself on a band change, immediately re-ingests them: 20 m calls reappear
+        // on 40 m carrying their original transmit times. Nothing about Erase caused this and
+        // fixing Erase could not fix it; a pane cannot filter on a fact the wire never carried.
+        let mut e = Engine::new("KD9TAW", "EN61", 0);
+        e.set_tier(Tier::Ft8);
+        e.set_frequency(14.074, "20m", "USB");
+        e.call_station("W1AW");
+        for slot in [0u64, 1, 2, 3] {
+            let _ = e.poll_tx(slot);
+        }
+        let on_20 = e
+            .snapshot()
+            .recent_decodes
+            .iter()
+            .filter(|d| d.mine)
+            .count();
+        assert!(on_20 > 0, "harness: we recorded an over on 20 m");
+
+        e.set_frequency(7.074, "40m", "USB");
+        let mine_on_40: Vec<String> = e
+            .snapshot()
+            .recent_decodes
+            .iter()
+            .filter(|d| d.mine)
+            .map(|d| d.message.clone())
+            .collect();
+        assert!(
+            mine_on_40.is_empty(),
+            "overs sent on 20 m are being shown on 40 m: {mine_on_40:?}"
+        );
+    }
+
+    #[test]
+    fn own_tx_rows_survive_a_dx_call_shaped_like_a_chunk_header() {
+        // Field report (2026-08-28, 24.915 MHz): calling P29YY completed the QSO, but
+        // not one of our own overs ever appeared in Rx Frequency — and issue #178 is
+        // the same sighting against T77C and SP2GIF on the same band. The mechanism:
+        // the own-TX recorder skips chat-wire chunk frames, and parse_chunk reads ANY
+        // over whose first word starts letter-digit-digit — i.e. a DX call like
+        // P29YY — as a chunk header. The skip must be scoped to the chat wire, the
+        // only place chunked frames exist.
+        let mut e = Engine::new("KD9TAW", "EN61", 0);
+        e.set_tier(Tier::Ft8);
+        e.call_station("P29YY");
+        for slot in [0u64, 1, 2, 3] {
+            let _ = e.poll_tx(slot); // both parities: whichever the call armed, it keys
+        }
+        let mine: Vec<String> = e
+            .snapshot()
+            .recent_decodes
+            .iter()
+            .filter(|d| d.mine)
+            .map(|d| d.message.clone())
+            .collect();
+        assert!(
+            mine.iter().any(|m| m.starts_with("P29YY ")),
+            "our own over to a letter-digit-digit DX call is recorded, got {mine:?}"
+        );
+    }
+
+    #[test]
     fn switching_tier_re_qsys_to_the_new_mode_dial() {
         let mut e = Engine::new("KD9TAW", "EN52", 0);
         e.set_tier(Tier::Ft8);
@@ -21427,6 +24419,7 @@ mod tests {
             nap: 0,
             qual: 1.0,
             rv: None,
+            raw: None,
             mode: None,
         }
     }
@@ -21487,6 +24480,7 @@ mod tests {
             nap: 0,
             qual: 1.0,
             rv: None,
+            raw: None,
             mode: Some(modes::ModeKind::Wspr),
         };
         e.last_decodes = vec![wspr.clone()];
@@ -21528,6 +24522,7 @@ mod tests {
             nap: 0,
             qual: 1.0,
             rv: None,
+            raw: None,
             mode: Some(modes::ModeKind::Wspr),
         };
         e.ingest_decodes_for_test(std::slice::from_ref(&wspr), 1);
@@ -22070,6 +25065,545 @@ mod tests {
         assert_eq!(snap.radio.rx_offset_hz, 200.0);
         assert_eq!(snap.radio.tx_offset_hz, 4000.0);
         assert!(snap.radio.hold_tx_freq);
+    }
+
+    /// Operator report (2026-08-23): "if I set hold tx in ft, it should survive a nexus restart".
+    ///
+    /// The full round trip, because every link looked right in isolation and the loss had to be
+    /// at a seam: toggle -> Settings -> settings.json -> load -> a NEW engine -> the snapshot the
+    /// button actually reads. `with_settings` deliberately force-resets `beacon` at launch, so
+    /// "a launch reset eats it" was a live theory and this is what rules it in or out.
+    /// FIELD REPORT 2026-08-23 (PA0KGB, worked by M1DBB): the DX sent RR73 four times and
+    /// Nexus never answered with 73. Their diag log has the whole thing — the QSO logged and
+    /// "transmit disarmed" in the SAME second the RR73 decoded, then the 73 finally escaping
+    /// two minutes later when TX was re-armed, long after M1DBB had given up. Another contact
+    /// the same session then sent 73 eight times to nobody.
+    ///
+    /// The cause was a left-on Hound setting. `call_station` takes `quiet_finish` straight from
+    /// the persistent `special_op`, so EVERY ordinary S&P contact inherited the DXpedition rule
+    /// — end on the partner's RR73, send no parting 73 — and the stock "disable Tx after 73"
+    /// one-shot fired on RECEIVING RR73 rather than after sending the 73. Correct for a real
+    /// Fox (a 73 there is pure QRM in the Fox's own segment); silently wrong for everyone else.
+    ///
+    /// Hound is a per-DXpedition mode, not a station setting, so it does not survive a launch —
+    /// the same passive-launch rule `beacon` already follows, and for a stronger reason: beacon
+    /// left on is audible, whereas this failure is invisible from our side. The operator opts in
+    /// per session, and the amber HOUND pill says so while it is on.
+    #[test]
+    fn hound_mode_never_survives_a_launch() {
+        for saved in [
+            crate::settings::SpecialOp::Hound,
+            crate::settings::SpecialOp::SuperHound,
+        ] {
+            let e = Engine::with_settings(Settings {
+                special_op: saved,
+                ..Settings::default()
+            });
+            assert_eq!(
+                e.settings().special_op,
+                crate::settings::SpecialOp::None,
+                "{saved:?} must not survive a launch"
+            );
+        }
+    }
+
+    /// The end-to-end shape of the same report: a settings file with Hound saved, then an
+    /// ordinary S&P contact. The parting 73 must go out.
+    #[test]
+    fn an_ordinary_qso_sends_its_73_even_if_hound_was_saved() {
+        let mut e = Engine::with_settings(Settings {
+            mycall: "K2DEF".into(),
+            mygrid: "FN31".into(),
+            special_op: crate::settings::SpecialOp::Hound,
+            ..Settings::default()
+        });
+        e.call_station("W9XYZ");
+        e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ -10", -7)], 1);
+        e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ RR73", -7)], 3);
+        assert!(
+            !e.poll_tx(4).is_empty(),
+            "the parting 73 must transmit — this is the field bug"
+        );
+    }
+
+    /// OPERATOR REPORT 2026-08-23 (1.7.7-test4, FTDX10): "when transmitting, its opening cat
+    /// but not sending audio out... All audio comm ports havent changed and are set correctly."
+    /// The cause was the rig sitting at 0% RF power — a Yaesu keeps a SEPARATE power memory per
+    /// mode, so a level set on one mode does not follow the rig into another. Nexus was reporting
+    /// it faithfully the whole time; nothing in the code was wrong.
+    ///
+    /// That is exactly why it cost an evening: a rig at 0% KEYS, shows TX, and produces an over
+    /// that looks completely normal from the operator's chair. It is silent only to everybody
+    /// else. Nexus reads the level every tick and knows when transmit is armed, so it can say so.
+    ///
+    /// NOTIFY, NEVER ACT: this only ever raises a flag. It does not clamp, raise, or command
+    /// power, and it does not withhold an over — an operator deliberately driving an amplifier's
+    /// input at a hair above zero is doing something legitimate, and the app does not know better.
+    #[test]
+    fn a_rig_reporting_no_power_while_armed_is_flagged_but_nothing_is_changed() {
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.set_tx_enabled(true);
+        e.observe_rig_power(0.0);
+        assert!(
+            e.snapshot().radio.tx_power_zero,
+            "armed at 0% is the report"
+        );
+        assert_eq!(
+            e.rf_power(),
+            None,
+            "NOTIFY, NEVER ACT — the warning must not command a power"
+        );
+    }
+
+    /// ⭐ HOW FAR THIS WARNING ACTUALLY REACHES — measured, because the number looks wrong and
+    /// is not, and the next person to read it will want to raise it.
+    ///
+    /// The "keys but no audio" report (Yaesu FTX-1, 2026-08-28) is the exact fault this guard
+    /// was built for, and it did not fire. Asking why, with the bundled Hamlib 4.7.1
+    /// (`rigctl -m <model> --dump-caps`) across all 117 models in `rigmodels`:
+    ///
+    /// | rig's own `Get level: RFPOWER` floor | models |
+    /// |---|---|
+    /// | no RFPOWER at all (never read → never warns, correctly) | 28 |
+    /// | `0.000000` | 14 |
+    /// | `0.019608` (5/255 — the older Yaesus) | 13 |
+    /// | `0.025000` | 1 |
+    /// | `0.050000` (Icom, Kenwood, Elecraft, modern Yaesu incl. the FTX-1) | 61 |
+    ///
+    /// So of the 89 rigs that report power at all, **75 cannot report a value this low** — the
+    /// banner is unreachable on them. That is not a bug in the number: those radios have no 0 W
+    /// setting, so "0% RF power" is a state they cannot be in, and staying silent is right.
+    ///
+    /// ⚠️ AND THIS IS WHY THE FIX IS NOT TO RAISE IT. The lowest floor above the threshold is
+    /// 0.0196, and the common one is 0.05 — on a 100 W radio that is 5 W, which is a real QRP
+    /// level somebody is deliberately using. Any threshold high enough to reach those rigs
+    /// fires on legitimate QRP and contradicts `the_zero_power_warning_does_not_cry_wolf`
+    /// directly below. A false "NO RF POWER" is worse than the silence it replaces.
+    ///
+    /// What the FTX-1 operator actually needed is a DIFFERENT signal — that his power changed
+    /// when Nexus moved his mode, because a Yaesu keeps a separate level per mode — and that is
+    /// a feature, not a constant. Left for its own decision; this test exists so the constant is
+    /// not quietly "fixed" in the meantime.
+    #[test]
+    fn the_zero_power_threshold_is_below_almost_every_rigs_own_floor_and_must_stay_there() {
+        // The floors measured above, lowest first. Nothing in the catalog sits between the
+        // threshold and 0.0196 — there is no number that reaches more rigs without reaching QRP.
+        const MEASURED_FLOORS: [f32; 4] = [0.0, 0.019_608, 0.025, 0.05];
+
+        // A rig that CAN report zero is the only kind this can ever warn about, and it must.
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.set_tx_enabled(true);
+        e.observe_rig_power(MEASURED_FLOORS[0]);
+        assert!(
+            e.snapshot().radio.tx_power_zero,
+            "a rig sitting at a floor of 0.0 is exactly what this warns about",
+        );
+
+        // Every other measured floor is a level an operator is really using — silence, all of
+        // them. This is the assertion that fails if someone raises the constant.
+        for floor in MEASURED_FLOORS.iter().copied().skip(1) {
+            let mut r = Engine::new("W9XYZ", "EN37", 0);
+            r.set_tx_enabled(true);
+            r.observe_rig_power(floor);
+            assert!(
+                !r.snapshot().radio.tx_power_zero,
+                "{floor} is a rig's own minimum power, not an absent carrier — warning here \
+                 accuses a QRP operator who is working perfectly",
+            );
+        }
+    }
+
+    #[test]
+    fn the_zero_power_warning_does_not_cry_wolf() {
+        // The operator's OWN working setting was 2%. A warning that fires on a level somebody is
+        // really using is a warning people learn to ignore, so this is the control that matters.
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.set_tx_enabled(true);
+        e.observe_rig_power(0.02);
+        assert!(!e.snapshot().radio.tx_power_zero, "2% is a real QRP level");
+
+        // Idle at zero is not news — the rig is simply parked, and nothing is about to go out.
+        let mut idle = Engine::new("W9XYZ", "EN37", 0);
+        idle.observe_rig_power(0.0);
+        assert!(
+            !idle.snapshot().radio.tx_power_zero,
+            "not armed, so no over is coming"
+        );
+
+        // A rig whose power we cannot read at all tells us nothing, and a guess would fire on
+        // every such rig forever.
+        let mut unread = Engine::new("W9XYZ", "EN37", 0);
+        unread.set_tx_enabled(true);
+        assert!(
+            !unread.snapshot().radio.tx_power_zero,
+            "no read-back is not evidence of zero"
+        );
+    }
+
+    /// A RTTY band-plan pick must land the SIGNAL where the plan says, on either keying
+    /// backend — found while validating ve3wej's 14.083 note (#114), and bigger than the one
+    /// band he asked about.
+    ///
+    /// Every RTTY dial in the plan was chosen as though the dial WERE the emission. That holds
+    /// on true FSK, where the dial reads the mark RF. It is false on AFSK — the DEFAULT — which
+    /// rides LSB and puts the audio pair BELOW the dial, so the signal came out about 2.3 kHz
+    /// low. Four entries therefore transmitted inside another mode's cluster: 20 m on FT4, 17 m
+    /// and 12 m on FT8, 15 m on JS8. The plan's own comments claim the opposite ("above the FT4
+    /// cluster at 14.080") because they reason about the dial.
+    ///
+    /// The relationship is exact, which is what makes this fixable rather than a matter of
+    /// taste: FSK emits [dial-shift, dial] and AFSK emits [dial-mark-shift, dial-mark], so for
+    /// both to occupy one window the AFSK dial is the FSK dial plus the mark tone. The plan
+    /// keeps storing the FSK dial — the frequency the comments reason about and operators quote
+    /// THE RTTY PRIVILEGE GATE MUST JUDGE THE NETTED EMISSION, NOT A FIXED 2125 Hz.
+    ///
+    /// ⚠️ A REGRESSION SHIPPED IN 1.9.0, BY THE COMMIT THAT FIXED RTTY NETTING. Before it, the
+    /// transmitted mark really was fixed at `RTTY_AFSK_MARK_HZ`, so judging that constant was
+    /// right, and `rtty_center_hz`'s own doc said it was "RX-only … safe during TX and needs no
+    /// privilege gate". Making TX follow the netted centre made both false — and the gate was
+    /// not updated with it. The centre clamps to 300–3700 Hz, so the gate could be wrong by up
+    /// to ~1.9 kHz and PASS a transmission landing outside a privileged segment.
+    ///
+    /// Concretely: AFSK rides LSB, so the emission sits BELOW the dial by the mark. Netting the
+    /// centre UP moves the emission DOWN. Park the dial so the assumed emission is just inside
+    /// the bottom of the 20 m data segment, net up, and the real emission drops out of it while
+    /// the gate still says yes.
+    #[test]
+    fn the_rtty_gate_judges_the_netted_mark_not_the_old_fixed_one() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("general");
+        e.set_operating_mode("rtty", false);
+        e.settings.rtty_backend = "afsk".into();
+        e.settings.rtty_shift_hz = 170;
+
+        // 20 m data for a General starts at 14.025 (privileges.rs). With the DEFAULT centre the
+        // mark is 2125 Hz, so a dial of 14.0275 emits at 14.0275 - 0.002125 = 14.025375 — just
+        // inside. Sanity-check the precondition rather than assume it.
+        let dial = 14.0275;
+        assert!(
+            e.rtty_emission_ok(dial),
+            "precondition: at the default centre this dial is legal"
+        );
+
+        // The operator clicks the waterfall and nets the centre up to 3700 Hz. The real mark is
+        // now 3700 - 85 = 3615 Hz, so the emission is 14.0275 - 0.003615 = 14.023885 — BELOW
+        // the 14.025 floor. The gate must now refuse.
+        e.rtty_net(3700.0);
+        assert!(
+            !e.rtty_emission_ok(dial),
+            "THE REGRESSION: the netted emission is at 14.0239, below the General 14.025 floor, \
+             and the gate approved it because it was still judging a fixed 2125 Hz mark"
+        );
+
+        // And the other direction still works: netting back down makes it legal again.
+        e.rtty_net(2210.0);
+        assert!(
+            e.rtty_emission_ok(dial),
+            "back at the default centre it is legal again"
+        );
+    }
+
+    /// — and the offset is applied at the moment of tuning.
+    #[test]
+    fn a_rtty_channel_lands_the_signal_in_the_same_place_on_either_backend() {
+        let emission_top = |e: &Engine, dial: f64| -> f64 {
+            let mark = RTTY_AFSK_MARK_HZ / 1_000_000.0;
+            if e.settings.rtty_backend.eq_ignore_ascii_case("fsk") {
+                dial
+            } else {
+                dial - mark
+            }
+        };
+
+        let mut fsk = Engine::new("W9XYZ", "EN37", 0);
+        fsk.settings.rtty_backend = "fsk".into();
+        fsk.settings.operating_mode = crate::settings::OperatingMode::Rtty;
+        fsk.tune_channel(14.083, "20m", "LSB");
+        let fsk_top = emission_top(&fsk, fsk.settings.dial_mhz);
+
+        let mut afsk = Engine::new("W9XYZ", "EN37", 0);
+        afsk.settings.rtty_backend = "afsk".into();
+        afsk.settings.operating_mode = crate::settings::OperatingMode::Rtty;
+        afsk.tune_channel(14.083, "20m", "LSB");
+        let afsk_top = emission_top(&afsk, afsk.settings.dial_mhz);
+
+        assert!(
+            (fsk_top - afsk_top).abs() < 1e-9,
+            "the two backends must put the signal in the same place — FSK top {fsk_top:.6}, \
+             AFSK top {afsk_top:.6}"
+        );
+        // …and that place is the plan's own frequency, clear of the FT4 cluster it names.
+        assert!(
+            (fsk_top - 14.083).abs() < 1e-9,
+            "the plan's dial is the emission it always described"
+        );
+    }
+
+    #[test]
+    fn hold_tx_freq_survives_a_restart() {
+        let dir = std::env::temp_dir().join(format!("nexus-holdtx-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let _ = std::fs::remove_file(&path);
+
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        assert!(!e.snapshot().radio.hold_tx_freq, "control: it starts OFF");
+        e.set_hold_tx_freq(true);
+        e.settings().save(&path).unwrap();
+
+        // The restart.
+        let loaded = Settings::load(&path);
+        assert!(
+            loaded.hold_tx_freq,
+            "the setting must round-trip through settings.json"
+        );
+        let e2 = Engine::with_settings(loaded);
+        assert!(
+            e2.snapshot().radio.hold_tx_freq,
+            "and the engine must come up HOLDING — this is what the button reads"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Operator report (2026-08-23), the SAME report: Hold Tx does not survive a restart.
+    ///
+    /// The round trip above passes, so the loss is not persistence — it is a CLOBBER.
+    /// `set_hold_tx_freq` returns an `AppSnapshot`, never `Settings`, so every panel holding a
+    /// `Settings` copy keeps the value the toggle had when that copy was fetched. A form save
+    /// posts the WHOLE struct back, and `apply_settings_inner` re-derived all three of these
+    /// from it — so any settings save reverted the operator's cockpit state, and the reverted
+    /// value is what got persisted and came back after the restart.
+    ///
+    /// None of the three is editable anywhere in the Settings form (verified against
+    /// SettingsPanel.tsx): they ride in the payload as pure cargo, so a form save can only ever
+    /// revert them and can never legitimately set them. Same shape as the roster carve-out this
+    /// function already makes, and for the same reason.
+    #[test]
+    fn a_settings_form_save_cannot_revert_hold_tx_or_the_audio_offsets() {
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.set_hold_tx_freq(true);
+        e.set_tx_offset(1800.0);
+        e.set_rx_offset(900.0);
+
+        // The stale copy every panel holds.
+        let stale = Settings::default();
+        assert!(
+            !stale.hold_tx_freq,
+            "control: the stale form really does say OFF"
+        );
+        assert_eq!(
+            stale.tx_offset_hz, 1500.0,
+            "control: and really does carry the default offsets"
+        );
+        e.apply_settings(stale);
+
+        let snap = e.snapshot();
+        assert!(
+            snap.radio.hold_tx_freq,
+            "Hold Tx is a cockpit control — a form save must not revert it"
+        );
+        assert_eq!(snap.radio.tx_offset_hz, 1800.0, "nor the TX offset");
+        assert_eq!(snap.radio.rx_offset_hz, 900.0, "nor the RX offset");
+    }
+
+    /// The other direction, which is what makes the carve-out a carve-out and not a leak: a
+    /// RESTORED BACKUP is the authority for everything in it, these three included.
+    #[test]
+    fn a_restore_does_take_hold_tx_and_the_offsets_from_the_bundle() {
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.set_hold_tx_freq(true);
+        e.set_tx_offset(1800.0);
+
+        let bundle = Settings {
+            hold_tx_freq: false,
+            tx_offset_hz: 1200.0,
+            ..Settings::default()
+        };
+        e.apply_restored_settings(bundle);
+
+        let snap = e.snapshot();
+        assert!(
+            !snap.radio.hold_tx_freq,
+            "a restore replaces the station, so the bundle wins"
+        );
+        assert_eq!(snap.radio.tx_offset_hz, 1200.0);
+    }
+
+    /// ⛔ DATA LOSS (round 10 Finding 1). A PENDING Cloudlog key must survive an ordinary Settings
+    /// form Save from the frontend.
+    ///
+    /// On a keychain-less box the `run()` migration DEFERS, leaving the plaintext key in the engine's
+    /// in-memory `Settings` for a retry next launch (round 8 F1). `get_settings` then CLEARS the key
+    /// on the copy it hands the frontend (round 9), so the frontend never holds it and posts the form
+    /// back with an EMPTY `cloudlog_key`. The bug: `apply_settings`'s wholesale `self.settings = s`
+    /// overwrote the engine's pending key with that empty value, and the save that follows omitted the
+    /// now-empty field (`skip_serializing_if`) — the key ended up in NEITHER the keychain nor the file,
+    /// on the exact box round 9 set out to protect.
+    ///
+    /// Models the real sequence — defer, get_settings-clear, edit an UNRELATED field, save, read back
+    /// — not the assignment being fixed. Control: `clublog_api_key`, an always-serialized secret the
+    /// form legitimately round-trips, must survive the SAME flow, so the detector can see persistence.
+    #[test]
+    fn a_form_save_keeps_the_pending_cloudlog_key() {
+        let dir = std::env::temp_dir().join(format!("nexus-cl-form-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let _ = std::fs::remove_file(&path);
+
+        // Migration deferred: the engine holds the plaintext key as pending, live state.
+        let mut e = Engine::with_settings(Settings {
+            cloudlog_key: "CLOUDLOG-PENDING-KEY-9999".into(),
+            clublog_api_key: "CLUBLOG-CONTROL-8888".into(),
+            cloudlog_url: "https://log.example.com".into(),
+            ..Settings::default()
+        });
+        assert_eq!(
+            e.settings.cloudlog_key, "CLOUDLOG-PENDING-KEY-9999",
+            "pre: the engine holds the pending key"
+        );
+
+        // get_settings hands the frontend a clone with the key CLEARED (round 9); the frontend never
+        // holds it, so the form it posts back carries an EMPTY cloudlog_key.
+        let mut form = e.settings().clone();
+        form.cloudlog_key.clear();
+        assert!(
+            form.cloudlog_key.is_empty(),
+            "pre: the wire the frontend gets carries no cloudlog key"
+        );
+        assert_eq!(
+            form.clublog_api_key, "CLUBLOG-CONTROL-8888",
+            "pre: but it does carry the control secret"
+        );
+        // The operator edits an UNRELATED field and clicks Save.
+        form.mygrid = "FN20".into();
+
+        e.apply_settings(form);
+        e.settings().save(&path).unwrap();
+        let back = Settings::load(&path);
+
+        // Positive control FIRST: a sibling secret that legitimately round-trips proves the
+        // save/reload path can observe persistence — a dropped key would be caught, not silently
+        // missed. The unrelated edit landing proves the form Save actually took effect.
+        println!(
+            "control: clublog after form-save round-trip = {:?}; cloudlog after = {:?}",
+            back.clublog_api_key, back.cloudlog_key
+        );
+        assert_eq!(
+            back.clublog_api_key, "CLUBLOG-CONTROL-8888",
+            "control: an always-serialized secret survives the form Save round-trip"
+        );
+        assert_eq!(
+            back.mygrid, "FN20",
+            "control: the unrelated edit the operator actually made was saved"
+        );
+        // The value under test: the pending key must have survived the SAME round-trip.
+        assert_eq!(
+            back.cloudlog_key, "CLOUDLOG-PENDING-KEY-9999",
+            "DATA LOSS: an ordinary Settings form Save destroyed the pending Cloudlog key"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⛔ DATA LOSS (round 10 Finding 1, reset arm). A factory reset must not destroy a PENDING
+    /// Cloudlog key.
+    ///
+    /// `reset_settings` routes `Settings::default()` through `apply_restored_settings`. Its own doc
+    /// promises it "keeps … stored credentials" — and a pending Cloudlog key IS a stored credential,
+    /// merely one that has not finished migrating into the keychain. Before the fix the reset's
+    /// wholesale `self.settings = s` blanked it, leaving it in neither the keychain nor the file.
+    ///
+    /// Control: the reset is proven to ACTUALLY take effect — an unrelated field the engine held is
+    /// cleared by it — so the key's survival is a real preservation, not a reset that no-opped.
+    #[test]
+    fn a_factory_reset_keeps_the_pending_cloudlog_key() {
+        let dir = std::env::temp_dir().join(format!("nexus-cl-reset-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let _ = std::fs::remove_file(&path);
+
+        let mut e = Engine::with_settings(Settings {
+            cloudlog_key: "CLOUDLOG-PENDING-KEY-9999".into(),
+            cloudlog_url: "https://log.example.com".into(),
+            ..Settings::default()
+        });
+
+        // reset_settings sends a fresh default (empty cloudlog_key), roster-normalized.
+        let mut fresh = Settings::default();
+        fresh.ensure_radio_profiles();
+        fresh.ensure_distinct_radio_ports();
+        fresh.ensure_routing_targets();
+        assert!(
+            fresh.cloudlog_key.is_empty(),
+            "pre: the reset carries no cloudlog key"
+        );
+        e.apply_restored_settings(fresh);
+
+        e.settings().save(&path).unwrap();
+        let back = Settings::load(&path);
+        // Control: the reset really replaced the struct — an unrelated field the engine held is gone.
+        assert!(
+            back.cloudlog_url.is_empty(),
+            "control: the factory reset actually took effect (cloudlog_url was cleared), so a \
+             surviving key is a real preservation and not a skipped reset"
+        );
+        // The pending credential the reset promised to keep must survive.
+        assert_eq!(
+            back.cloudlog_key, "CLOUDLOG-PENDING-KEY-9999",
+            "DATA LOSS: a factory reset destroyed the pending Cloudlog key"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⛔ DATA LOSS (round 10 Finding 1, restore arm). Restoring a settings bundle must not destroy a
+    /// locally-PENDING Cloudlog key.
+    ///
+    /// `import_settings_bundle` routes the bundle through `apply_restored_settings`. Every bundle has
+    /// `cloudlogKey` REDACTED (`BACKUP_REDACTED_FIELDS`), so a restore's incoming key is always empty
+    /// — and before the fix the wholesale `self.settings = s` blanked a locally-pending key with it,
+    /// leaving the credential in neither place.
+    ///
+    /// Control: the bundle's OWN fields are proven to be applied (a restore is authoritative for what
+    /// it carries), so the key's survival is a real preservation and not a restore that was ignored.
+    #[test]
+    fn a_settings_bundle_restore_keeps_the_pending_cloudlog_key() {
+        let dir = std::env::temp_dir().join(format!("nexus-cl-restore-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let _ = std::fs::remove_file(&path);
+
+        let mut e = Engine::with_settings(Settings {
+            cloudlog_key: "CLOUDLOG-PENDING-KEY-9999".into(),
+            mygrid: "EN37".into(),
+            ..Settings::default()
+        });
+
+        // A restored bundle: cloudlogKey is redacted out (empty), but the bundle IS authoritative for
+        // the rest — here a different grid.
+        let bundle = Settings {
+            cloudlog_key: String::new(), // redacted from every bundle (BACKUP_REDACTED_FIELDS)
+            mygrid: "FN20".into(),
+            ..Settings::default()
+        };
+        e.apply_restored_settings(bundle);
+
+        e.settings().save(&path).unwrap();
+        let back = Settings::load(&path);
+        // Control: the restore actually took effect — the bundle's grid replaced the engine's.
+        assert_eq!(
+            back.mygrid, "FN20",
+            "control: the restore actually applied the bundle (grid replaced), so a surviving key is \
+             a real preservation and not an ignored restore"
+        );
+        // The locally-pending credential the bundle could not carry must survive.
+        assert_eq!(
+            back.cloudlog_key, "CLOUDLOG-PENDING-KEY-9999",
+            "DATA LOSS: a settings-bundle restore destroyed the locally-pending Cloudlog key"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -22798,6 +26332,223 @@ mod tests {
         );
     }
 
+    /// RE-CLICKING THE STATION YOU ARE ALREADY WORKING MUST NOT THROW THE QSO AWAY.
+    ///
+    /// Field report 2026-08-25 (RI1FJL on 10.131, proven by replaying the operator's own
+    /// ALL.TXT through the state machine): he cleared his outgoing message back to his grid,
+    /// clicked the station again, and Nexus went back to sending `R-21` — twice, with NOTHING
+    /// addressed to him on the air in between. The replay showed the sequencer holding `EN52`
+    /// both times while the app transmitted the report, so the fault was never in
+    /// `tempo_core::qso`: `call_station_ctx` built a BRAND NEW `Station` and replaced the live
+    /// one on every call, re-deriving the message from the DX's last report to us.
+    ///
+    /// It cost more than the message. The rebuild also reset `qso_start_unix` (so the contact
+    /// would log with the time of the last click rather than when it began), `qso_report_sent`,
+    /// the transmit counts, and the transcript.
+    ///
+    /// A click that POINTS AT A MESSAGE still re-derives — that is WSJT-X's double-click and
+    /// the operator is naming the message they want answered. A click that carries none (a
+    /// roster row, a station card, a spot) is "work this station", and when it is the station
+    /// already being worked it must re-arm without rewriting what is queued.
+    #[test]
+    fn reclicking_the_station_being_worked_keeps_the_operator_message() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Ft8);
+        // The DX answers our call with a report — the sequencer arms R-<report>.
+        e.ingest(
+            &native_frame_for(modes::ModeKind::Ft8, "KD9TAW RI1FJL -07", 1500.0),
+            3,
+        );
+        e.call_station_ctx("RI1FJL", None, Some("KD9TAW RI1FJL -07"), Some(-23), None)
+            .expect("the QSO starts");
+        let derived = e
+            .snapshot()
+            .qso
+            .as_ref()
+            .and_then(|q| q.tx_now.clone())
+            .expect("a message is queued");
+        assert!(
+            derived.contains("R-"),
+            "precondition: the sequencer arms a rogered report, got {derived}"
+        );
+
+        // The operator overrides it back to his grid (Tx1).
+        e.override_next_tx("RI1FJL", None, "RI1FJL KD9TAW EN52");
+        assert_eq!(
+            e.snapshot()
+                .qso
+                .as_ref()
+                .and_then(|q| q.tx_now.clone())
+                .as_deref(),
+            Some("RI1FJL KD9TAW EN52"),
+            "the manual pick is queued"
+        );
+        let started = e.qso_start_unix;
+
+        // …and then clicks the SAME station again, pointing at no message.
+        e.call_station_ctx("RI1FJL", None, None, None, None)
+            .expect("re-clicking the worked station is not an error");
+
+        assert_eq!(
+            e.snapshot()
+                .qso
+                .as_ref()
+                .and_then(|q| q.tx_now.clone())
+                .as_deref(),
+            Some("RI1FJL KD9TAW EN52"),
+            "THE BUG: the re-click re-derived the message and discarded the operator's pick"
+        );
+        assert_eq!(
+            e.qso_start_unix, started,
+            "the re-click also restamped the QSO clock, so it would log the wrong start time"
+        );
+    }
+
+    /// The other direction, so the fix is a rule and not a hole: a click that POINTS AT a
+    /// message re-derives from it, exactly as WSJT-X's double-click does. Without this the
+    /// guard above would freeze the sequencer at whatever was queued first.
+    #[test]
+    fn clicking_a_decode_still_rederives_even_mid_qso() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Ft8);
+        e.ingest(
+            &native_frame_for(modes::ModeKind::Ft8, "KD9TAW RI1FJL -07", 1500.0),
+            3,
+        );
+        e.call_station_ctx("RI1FJL", None, Some("KD9TAW RI1FJL -07"), Some(-23), None)
+            .expect("the QSO starts");
+        e.override_next_tx("RI1FJL", None, "RI1FJL KD9TAW EN52");
+        assert_eq!(
+            e.snapshot()
+                .qso
+                .as_ref()
+                .and_then(|q| q.tx_now.clone())
+                .as_deref(),
+            Some("RI1FJL KD9TAW EN52")
+        );
+
+        // Now the operator double-clicks a LINE: the DX rogering our report.
+        e.call_station_ctx("RI1FJL", None, Some("KD9TAW RI1FJL RR73"), Some(-20), None)
+            .expect("clicking a decode works");
+        let now = e
+            .snapshot()
+            .qso
+            .as_ref()
+            .and_then(|q| q.tx_now.clone())
+            .unwrap_or_default();
+        assert!(
+            !now.contains("EN52"),
+            "a click that names a message must re-derive from it, got {now}"
+        );
+    }
+
+    /// (a) A CALL-CAPPED STEP MUST STILL RESUME. Caught by review, measured: the first cut of
+    /// the re-click guard skipped the rebuild, which was the only thing zeroing `tx_count`, so
+    /// a directed step that had spent `directed_max_calls` stayed spent and the click put
+    /// NOTHING on the air — 0 overs where the old code gave 8. This is the reported QSO one
+    /// step on: the DX stops rogering, the budget runs out, the operator clicks to restart it.
+    #[test]
+    fn reclicking_a_call_capped_step_re_arms_it() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Ft8);
+        e.settings.directed_max_calls = Some(2);
+        e.ingest(
+            &native_frame_for(modes::ModeKind::Ft8, "KD9TAW RI1FJL -07", 1500.0),
+            3,
+        );
+        e.call_station_ctx("RI1FJL", None, Some("KD9TAW RI1FJL -07"), Some(-23), None)
+            .expect("the QSO starts");
+
+        // Spend the budget.
+        if let Mode::Qso { station, .. } = &mut e.mode {
+            station.call_cap = Some(2);
+            station.tx_count = 2;
+            assert!(station.stalled(), "precondition: the step is withheld");
+        }
+        // The operator clicks the station again to get it moving.
+        e.call_station_ctx("RI1FJL", None, None, None, None)
+            .expect("re-click is not an error");
+        if let Mode::Qso { station, .. } = &e.mode {
+            assert_eq!(
+                station.tx_count, 0,
+                "the re-click must clear the spent budget"
+            );
+            assert!(
+                !station.stalled(),
+                "THE REGRESSION: the click re-armed nothing and the radio stays silent"
+            );
+            assert!(
+                station.outgoing_rv().is_some(),
+                "and an over must actually be available to send"
+            );
+        }
+    }
+
+    /// (b) A FINISHED QSO MUST REBUILD, not re-arm. `after_tx` clears `pending` at `Done` and
+    /// no arm of `observe` can re-arm it, so keeping that station made "work this station" a
+    /// permanently dead click — TX armed, nothing ever queued.
+    #[test]
+    fn reclicking_after_the_qso_finished_starts_a_new_one() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Ft8);
+        e.ingest(
+            &native_frame_for(modes::ModeKind::Ft8, "KD9TAW RI1FJL -07", 1500.0),
+            3,
+        );
+        e.call_station_ctx("RI1FJL", None, Some("KD9TAW RI1FJL -07"), Some(-23), None)
+            .expect("the QSO starts");
+        if let Mode::Qso { station, .. } = &mut e.mode {
+            station.state = tempo_core::qso::State::Done;
+            station.pending = None; // what `after_tx` leaves once the 73 has gone
+        }
+        e.call_station_ctx("RI1FJL", None, None, None, None)
+            .expect("re-click is not an error");
+        if let Mode::Qso { station, .. } = &e.mode {
+            assert!(
+                station.pending.is_some(),
+                "THE REGRESSION: the click left a finished QSO in place with nothing to send"
+            );
+            assert_ne!(station.state, tempo_core::qso::State::Done);
+        }
+    }
+
+    /// (c) AFTER A BAND QSY THE OLD STATION MUST NOT BE RESUMED. A cross-band change clears the
+    /// decode context but leaves `Mode::Qso` standing, so resuming it would open the new band
+    /// with a roger for an exchange that never happened there. Requiring a live decode from
+    /// this DX is what distinguishes the two — the QSY already cleared it.
+    #[test]
+    fn a_reclick_after_a_band_change_does_not_resume_the_old_bands_sequence() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Ft8);
+        e.ingest(
+            &native_frame_for(modes::ModeKind::Ft8, "KD9TAW RI1FJL -07", 1500.0),
+            3,
+        );
+        e.call_station_ctx("RI1FJL", None, Some("KD9TAW RI1FJL -07"), Some(-23), None)
+            .expect("the QSO starts");
+        let mid_sequence = e
+            .snapshot()
+            .qso
+            .as_ref()
+            .and_then(|q| q.tx_now.clone())
+            .unwrap_or_default();
+        assert!(mid_sequence.contains("R-"), "precondition: mid-sequence");
+
+        e.clear_decode_context(); // what a cross-band QSY does
+        e.call_station_ctx("RI1FJL", None, None, None, None)
+            .expect("re-click is not an error");
+        let after = e
+            .snapshot()
+            .qso
+            .as_ref()
+            .and_then(|q| q.tx_now.clone())
+            .unwrap_or_default();
+        assert!(
+            !after.contains("R-"),
+            "THE REGRESSION: opened the new band with the old band's roger — {after}"
+        );
+    }
+
     #[test]
     fn roster_click_on_a_cqing_station_picks_the_opposite_cycle() {
         // THE same-cycle bug (operator report, 6m): the DX is calling CQ (so
@@ -23116,12 +26867,121 @@ mod tests {
         assert!(!e.get_log().is_empty(), "the Fox's multiplexed RR73 logs");
     }
 
+    /// #236 REGRESSION GUARD (on-air, WSJT-X cadence). On an ORDINARY (non-Hound) FT8 QSO, a
+    /// bystander DXpedition Fox's multiplexed confirm addressed to us — "W9XYZ RR73; H2 <FOX> -08"
+    /// — must NEVER be stamped with our current partner's call and read as a roger FROM the
+    /// partner. Before the fix, `reattach` (de-gated to every QSO by 06ec4ab2) forged our partner
+    /// as the sender, defeating the sequencer's sender-lock and keying a premature 73 to a station
+    /// that never rogered. The display split may still happen; the SEQUENCER must not advance.
     #[test]
-    fn fox_split_is_gated_to_hound_mode() {
-        // Normal operation must never split on ';' (free text could carry it).
+    fn an_ordinary_qso_never_sends_73_from_a_bystander_fox_multiplex() {
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.set_tier(Tier::Ft8);
+        assert_eq!(
+            e.settings.special_op,
+            crate::settings::SpecialOp::None,
+            "control: this is an ORDINARY QSO, Hound OFF — the fabrication's only legitimate home is a Hound QSO"
+        );
+        // Ordinary QSO with PJ4DX, advanced to where a roger would CLOSE it: we answered their CQ,
+        // then they sent us a report, so we have sent R+report and await their RR73.
+        e.ingest_decodes_for_test(&[dec_at("CQ PJ4DX", -10, 400.0)], 1);
+        let _ = e.call_station_ctx("PJ4DX", None, Some("CQ PJ4DX"), Some(-10), Some(400.0));
+        e.ingest_decodes_for_test(&[dec_at("W9XYZ PJ4DX -08", -10, 400.0)], 3);
+        // A DIFFERENT Fox (we hounded earlier) sends its confirm addressed to us, multiplexed. Its
+        // sender-less first half "W9XYZ RR73" must NOT become "W9XYZ PJ4DX RR73" and close the QSO.
+        e.ingest_decodes_for_test(&[dec_at("W9XYZ RR73; NEXTHOUND N0CALL -08", -10, 320.0)], 5);
+        assert!(
+            e.get_log().is_empty(),
+            "the ordinary QSO must NOT complete or key a 73 from a bystander Fox's confirm (#236)"
+        );
+    }
+
+    /// THE MID-QSO TOGGLE RULE, both directions: **a QSO in flight keeps the rules it started
+    /// under.** Written as a pair because one direction is half a test.
+    ///
+    /// Hound became a one-click button in the Operate header (operator: "so users can click it
+    /// on and off without having to go into the settings"), which turns a mid-QSO toggle from a
+    /// thing nobody did — it needed a Settings trip — into a thing that happens by hand at the
+    /// wrong moment. Everything Hound decides for a contact was already captured at
+    /// `call_station_ctx`: the quiet finish and the >1000 Hz initial offset are both read there,
+    /// once. `hound_split`'s sender REATTACH was the exception — it read the LIVE setting on
+    /// every decode, so the toggle reached inside a contact already on the air.
+    ///
+    /// It is the same marker the QSY-to-the-Fox rule already uses (`station.quiet_finish`, "the
+    /// marker call_station sets on TRUE hound QSOs — not just the persistent setting").
+    #[test]
+    fn leaving_hound_mid_qso_still_completes_the_fox_exchange() {
+        // Hound ON, the operator double-clicks the Fox, then flips the header button OFF while
+        // the contact is running. The Fox's confirm arrives sender-less inside a multiplex; with
+        // the reattach gone it parses as nothing and the contact strands, calling forever at a
+        // station that has already rogered us.
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.set_tier(Tier::Ft8);
+        e.settings.special_op = crate::settings::SpecialOp::Hound;
+        e.ingest_decodes_for_test(&[dec_at("CQ DX PJ4DX", -10, 400.0)], 1);
+        let _ = e.call_station_ctx("PJ4DX", None, Some("CQ DX PJ4DX"), Some(-10), Some(400.0));
+        e.ingest_decodes_for_test(&[dec_at("K1ABC RR73; W9XYZ PJ4DX -08", -10, 320.0)], 3);
+        // THE TOGGLE, mid-contact.
+        e.settings.special_op = crate::settings::SpecialOp::None;
+        e.ingest_decodes_for_test(&[dec_at("W9XYZ RR73; N0CALL PJ4DX +03", -10, 320.0)], 5);
+        assert!(
+            !e.get_log().is_empty(),
+            "leaving Hound mid-QSO stranded the contact — the Fox's multiplexed RR73 must still \
+             close a QSO that STARTED as a Hound QSO"
+        );
+    }
+
+    #[test]
+    fn entering_hound_mid_qso_never_fabricates_a_roger_from_the_partner() {
+        // The other direction, and it is #236 reached through the new button: an ORDINARY QSO is
+        // running when the operator flips Hound on to go chase a DXpedition. A bystander Fox's
+        // multiplexed confirm addressed to us must still not be stamped with our current
+        // partner's call — this contact did not start under Hound, so it does not get Hound's
+        // reattach part way through.
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.set_tier(Tier::Ft8);
+        assert_eq!(
+            e.settings.special_op,
+            crate::settings::SpecialOp::None,
+            "control: the contact STARTS ordinary — Hound off"
+        );
+        e.ingest_decodes_for_test(&[dec_at("CQ PJ4DX", -10, 400.0)], 1);
+        let _ = e.call_station_ctx("PJ4DX", None, Some("CQ PJ4DX"), Some(-10), Some(400.0));
+        e.ingest_decodes_for_test(&[dec_at("W9XYZ PJ4DX -08", -10, 400.0)], 3);
+        // THE TOGGLE, mid-contact.
+        e.settings.special_op = crate::settings::SpecialOp::Hound;
+        e.ingest_decodes_for_test(&[dec_at("W9XYZ RR73; NEXTHOUND N0CALL -08", -10, 320.0)], 5);
+        assert!(
+            e.get_log().is_empty(),
+            "turning Hound on mid-QSO forged a roger from the partner — #236 through the header \
+             button"
+        );
+    }
+
+    #[test]
+    fn fox_split_needs_an_active_qso_not_the_hound_setting() {
+        // Not working anybody: never split on ';' — free text may legitimately carry one, and
+        // there is no Fox call to reattach a sender to even if we did.
         let mut e = Engine::new("W9XYZ", "EN37", 0);
         e.ingest_decodes_for_test(&[dec_snr("K1ABC RR73; W9XYZ PJ4DX -08", -10)], 1);
-        assert_eq!(e.last_decodes().len(), 1, "no split outside Hound mode");
+        assert_eq!(e.last_decodes().len(), 1, "no split while not in a QSO");
+
+        // Working someone — and WITHOUT the Hound setting, which is the point of the change
+        // (operator 2026-08-23: a Fox was unreadable unless you had remembered to flip Hound,
+        // and flipping it cost the parting 73 on every ordinary QSO).
+        let mut q = Engine::new("W9XYZ", "EN37", 0);
+        assert_eq!(
+            q.settings.special_op,
+            crate::settings::SpecialOp::None,
+            "control: the Hound setting is OFF for this half"
+        );
+        q.call_station("PJ4DX");
+        q.ingest_decodes_for_test(&[dec_snr("K1ABC RR73; W9XYZ PJ4DX -08", -10)], 1);
+        assert_eq!(
+            q.last_decodes().len(),
+            2,
+            "the Fox's two payloads are split without Hound being set"
+        );
     }
 
     /// A HASHED (BRACKETED) CALL MUST NOT REACH THE LOG — issue #84.
@@ -23190,7 +27050,7 @@ mod tests {
         assert!(!e.park_worked("K-9999"));
     }
 
-    fn dec_snr(msg: &str, snr: i32) -> Decode {
+    pub(super) fn dec_snr(msg: &str, snr: i32) -> Decode {
         Decode {
             message: msg.to_string(),
             sync: 1.0,
@@ -23200,6 +27060,7 @@ mod tests {
             nap: 0,
             qual: 1.0,
             rv: None,
+            raw: None,
             mode: None,
         }
     }
@@ -23858,8 +27719,215 @@ mod tests {
             "only the ClubLog leg is owed — the catch-up must not re-push QRZ/eQSL etc."
         );
         assert!(
-            queued.iter().all(|p| p.retry_after_unix == 0),
-            "the catch-up is due immediately, no backoff"
+            queued.iter().all(|p| p.origin == UploadOrigin::CatchUp),
+            "a catch-up record is marked as one — the transport can't tell otherwise (#193)"
+        );
+        // Was `all(retry_after_unix == 0)` — "due immediately, no backoff" — and that WAS
+        // the #193 defect: every swept record due at once, drained in one worker tick.
+        // They are paced now; `a_clublog_catch_up_is_paced_not_a_burst` owns the detail.
+        assert!(
+            queued[1].retry_after_unix > queued[0].retry_after_unix,
+            "the catch-up is paced, not a burst"
+        );
+    }
+
+    #[test]
+    fn a_failed_catch_up_record_stays_in_the_pacing_lane() {
+        // ⚠️ THE PACING FIX'S OWN BLOCKER, and it made things WORSE than the bug it fixed.
+        //
+        // The slot allocator only paced an UNSTAMPED record (`retry_after_unix == 0`). A
+        // transient failure re-queues with `now + backoff`, which is not zero — so the first
+        // time ClubLog was busy, that record left the pacing lane for good and was rationed
+        // only by the shared exponential backoff, which flattens at 300 s.
+        //
+        // The scenario that follows is the whole point: ClubLog throttles us (which is
+        // SELF-REINFORCING — being rate-limited is exactly the transient failure), records
+        // come due through the outage, each fails and takes a backoff, and when the service
+        // returns every one of them is due IN THE PAST. The drain worker takes the whole
+        // queue per tick and pushes in a bare loop, so they all leave inside one 2 s tick:
+        // the same burst that drew the complaint, only now compressed. Before the pacing the
+        // exposure to this was two seconds; after it, an hour.
+        //
+        // So a re-queue AFTER A FAILURE is a fresh scheduling decision and must be paced —
+        // never sooner than its backoff, and never on top of another catch-up record.
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        for i in 0..6 {
+            let rec = e.qso_record(format!("W9AB{i}"), None, None);
+            e.log_qso(rec);
+        }
+        e.take_pending_uploads();
+        assert_eq!(e.requeue_failed_clublog(), 6);
+        let queued = e.take_pending_uploads();
+
+        // Every one of them now fails, the way a busy ClubLog fails them: back on the queue
+        // with a backoff, carrying its CatchUp origin.
+        for (i, p) in queued.iter().enumerate() {
+            let attempts = (i as u8 % 3) + 1; // different rungs of the ladder, as in life
+            let due = now_unix_secs() as i64 + upload_backoff_secs(attempts);
+            e.requeue_after_failure(p.rec.clone(), p.legs, attempts, due, p.origin);
+        }
+        let after = e.take_pending_uploads();
+        assert_eq!(after.len(), 6, "harness: all six came back");
+
+        // THE PIN: no two of them may come due within a spacing of each other. Sort, because
+        // the backoff ladder means they do not necessarily return in slot order.
+        let mut dues: Vec<i64> = after.iter().map(|p| p.retry_after_unix).collect();
+        dues.sort_unstable();
+        for w in dues.windows(2) {
+            assert!(
+                w[1] - w[0] >= CATCHUP_UPLOAD_SPACING_SECS,
+                "two failed catch-up records are due {}s apart — on recovery they leave in \
+                 one tick: {dues:?}",
+                w[1] - w[0]
+            );
+        }
+        // …and none of them jumped its own backoff to get there.
+        let now = now_unix_secs() as i64;
+        assert!(
+            dues.iter().all(|d| *d > now),
+            "a failed record must still wait out its backoff: {dues:?}"
+        );
+    }
+
+    #[test]
+    fn a_clublog_catch_up_is_paced_not_a_burst() {
+        // #193 (KR8MER), live in 1.9.2 and the reason ClubLog threatened to block his IP:
+        // saving the app-password swept every never-uploaded QSO — ADIF-imported history
+        // included — into the queue due-now, and the drain worker takes the WHOLE queue
+        // per tick and pushes in a bare loop with no rate limit. 81 realtime uploads in 4
+        // minutes. The pacing is what makes a catch-up a non-event on ClubLog's side.
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        for i in 0..12 {
+            let rec = e.qso_record(format!("W9AB{i}"), None, None);
+            e.log_qso(rec);
+        }
+        e.take_pending_uploads(); // drop the fresh-log queue; this is about the CATCH-UP
+
+        let n = e.requeue_failed_clublog();
+        assert_eq!(n, 12);
+        let queued = e.take_pending_uploads();
+        let now = now_unix_secs() as i64;
+
+        // The first one goes at once — the operator gets immediate evidence the credential
+        // worked, and one upload is not a burst.
+        assert!(
+            queued[0].retry_after_unix <= now,
+            "the first catch-up record is due now, not held back"
+        );
+        // …and every one after it is exactly one spacing behind the last. THE PIN: before
+        // the fix these were all 0 and the whole sweep left in a single tick.
+        for w in queued.windows(2) {
+            assert_eq!(
+                w[1].retry_after_unix - w[0].retry_after_unix,
+                CATCHUP_UPLOAD_SPACING_SECS,
+                "consecutive catch-up records are one spacing apart"
+            );
+        }
+        // The rate an outside observer sees: 12 records can't leave in under 11 spacings.
+        assert!(
+            queued[11].retry_after_unix - now >= 11 * CATCHUP_UPLOAD_SPACING_SECS,
+            "the sweep is spread across the wall clock, not queued due-now"
+        );
+    }
+
+    #[test]
+    fn a_live_contact_is_never_delayed_by_a_catch_up_in_flight() {
+        // The other half of #193, and the one a pacing fix could easily break: realtime
+        // upload exists so a live contact appears on ClubLog while the QSO is still warm.
+        // A catch-up occupying the pacing slots must not push it back by even a second.
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        for i in 0..30 {
+            let rec = e.qso_record(format!("W9AB{i}"), None, None);
+            e.log_qso(rec);
+        }
+        e.take_pending_uploads();
+        // A big catch-up now owns slots minutes into the future…
+        e.requeue_failed_clublog();
+        e.take_pending_uploads();
+
+        // …and the contact at the key still goes NOW.
+        let rec = e.qso_record("K1ABC".into(), None, None);
+        e.log_qso(rec);
+        let live = e.take_pending_uploads();
+        assert_eq!(live.len(), 1);
+        assert_eq!(live[0].origin, UploadOrigin::Live);
+        assert_eq!(
+            live[0].retry_after_unix, 0,
+            "a live contact is due immediately — pacing is for catch-up only"
+        );
+        assert_eq!(
+            live[0].legs,
+            upload_legs::ALL,
+            "and still owes every enabled connector, not just ClubLog"
+        );
+
+        // Same through the re-queue door, which is the one the pacing actually guards:
+        // a LIVE record put back due-now (a leg retried) must not be handed a catch-up
+        // slot just because a catch-up happens to be running.
+        let rec = e.qso_record("K1ABC".into(), None, None);
+        e.requeue_upload(rec, upload_legs::CLUBLOG, 1);
+        let again = e.take_pending_uploads();
+        assert_eq!(again.len(), 1);
+        assert_eq!(again[0].origin, UploadOrigin::Live);
+        assert_eq!(
+            again[0].retry_after_unix, 0,
+            "a live re-queue keeps its own timing — the catch-up slots are not its queue"
+        );
+    }
+
+    #[test]
+    fn a_paced_catch_up_record_keeps_its_slot_when_the_worker_puts_it_back() {
+        // The worker drains the whole queue every 2 s and re-queues whatever isn't due
+        // yet. If that re-queue allocated a FRESH slot, every waiting record would be
+        // shoved another spacing into the future on every tick and the catch-up would
+        // march away from the present and never drain — a worse bug than the burst.
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        for i in 0..4 {
+            let rec = e.qso_record(format!("W9AB{i}"), None, None);
+            e.log_qso(rec);
+        }
+        e.take_pending_uploads();
+        e.requeue_failed_clublog();
+        let queued = e.take_pending_uploads();
+        let dues: Vec<i64> = queued.iter().map(|p| p.retry_after_unix).collect();
+
+        // Ten worker ticks' worth of "not due yet → put it back untouched".
+        let mut round = queued;
+        for tick in 0..10 {
+            for p in round {
+                e.requeue_upload_at(p.rec, p.legs, p.attempts, p.retry_after_unix, p.origin);
+            }
+            round = e.take_pending_uploads();
+            let got: Vec<i64> = round.iter().map(|p| p.retry_after_unix).collect();
+            assert_eq!(
+                got, dues,
+                "tick {tick}: a re-queued record keeps the slot it already had"
+            );
+        }
+    }
+
+    /// #210: the frontend's "clear DX call after logging" wipe rides `logged_tick`, and the
+    /// whole point is that it advances on EVERY log — including a backend auto-log the UI never
+    /// initiated. `log_qso` is the single funnel, so one bump here proves every path is covered.
+    #[test]
+    fn logged_tick_advances_on_every_logged_contact() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        let before = e.snapshot().logged_tick;
+
+        let rec = e.qso_record("W9XYZ".into(), None, None);
+        e.log_qso(rec);
+        assert_eq!(
+            e.snapshot().logged_tick,
+            before.wrapping_add(1),
+            "a logged QSO must advance logged_tick so the UI can clear the DX call"
+        );
+
+        let rec2 = e.qso_record("K7ABC".into(), None, None);
+        e.log_qso(rec2);
+        assert_eq!(
+            e.snapshot().logged_tick,
+            before.wrapping_add(2),
+            "each contact advances it — a second log is a second clear signal"
         );
     }
 
@@ -23913,6 +27981,123 @@ mod tests {
         e.log_qso(rec);
 
         assert_eq!(e.get_log()[0].operator.as_deref(), Some("G0PQR"));
+    }
+
+    // ---- STATION_CALLSIGN provenance (special event / club call) --------------------------
+    //
+    // Nexus transmits happily under a special event call — a 1×1 like `W6R` is fully standard
+    // in the 77-bit encoding — but nothing recorded WHICH call made a contact, so an export or
+    // an upload could not say. These five pin the whole path: the stamp, that it never relabels
+    // a record that arrived with its own, the two consumers that must prefer the record over the
+    // live setting, and the fallback for records logged before the stamp existed.
+
+    /// The stamp itself, end to end: log under an event call and the exported ADIF says so.
+    #[test]
+    fn log_qso_stamps_the_station_callsign_the_contact_was_made_under() {
+        let mut e = Engine::new("W6R", "CM87", 0);
+
+        let rec = e.qso_record("W9XYZ".into(), None, None);
+        e.log_qso(rec);
+
+        assert_eq!(
+            e.get_log()[0].station_callsign.as_deref(),
+            Some("W6R"),
+            "the call the contact was made under must reach the record"
+        );
+        let adif = e.export_logbook("adif", None, None);
+        assert!(
+            adif.contains("<STATION_CALLSIGN:3>W6R"),
+            "the export is the only artifact that can answer 'which call worked this?': {adif}"
+        );
+    }
+
+    /// A record that arrives carrying its own station call — an imported club log, or a row the
+    /// operator repaired by hand — is left alone. Same rule as `operator` and `country`; on an
+    /// import the alternative relabels a whole club log in one pass.
+    #[test]
+    fn log_qso_never_overwrites_a_station_callsign_the_record_arrived_with() {
+        let mut e = Engine::new("W6R", "CM87", 0);
+
+        let mut rec = e.qso_record("W9XYZ".into(), None, None);
+        rec.station_callsign = Some("GB100RSGB".into());
+        e.log_qso(rec);
+
+        assert_eq!(
+            e.get_log()[0].station_callsign.as_deref(),
+            Some("GB100RSGB")
+        );
+    }
+
+    /// THE DEFECT WITH ON-AIR CONSEQUENCES. The operator works a special event weekend as `W6R`,
+    /// sets their home call back on Monday, then uploads. The batch must still be signed `W6R`:
+    /// LoTW matches the other station's log on the call that was actually on the air, so a
+    /// home-call signature is a confirmation the partner will never get and cannot diagnose.
+    #[test]
+    fn lotw_upload_signs_each_contact_under_the_call_that_made_it() {
+        let mut e = Engine::new("W6R", "CM87", 0);
+        e.settings.lotw_use_adif_location = true;
+
+        let rec = e.qso_record("W9XYZ".into(), None, None);
+        e.log_qso(rec);
+
+        // The event is over and the operator is back on their own call.
+        e.settings.mycall = "K2DEF".into();
+        let adif = e.lotw_upload_adif(&[0]);
+
+        assert!(
+            adif.contains("<STATION_CALLSIGN:3>W6R"),
+            "the upload must sign from the RECORD, not from wherever the operator is now: {adif}"
+        );
+        assert!(
+            !adif.contains("K2DEF"),
+            "the home call must never sign an event contact: {adif}"
+        );
+    }
+
+    /// The other half of that guard, and the one that keeps old logs working: a record written
+    /// before the stamp existed carries no station call, so the upload must still fall back to
+    /// the live setting rather than signing nothing.
+    #[test]
+    fn lotw_upload_falls_back_to_the_live_call_for_a_record_with_none() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.lotw_use_adif_location = true;
+
+        // Straight into the logbook, bypassing the funnel — this is what an ADIF written by an
+        // older build looks like after it is read back in.
+        let mut rec = e.qso_record("W9XYZ".into(), None, None);
+        rec.station_callsign = None;
+        e.station.logbook.add(rec);
+
+        let adif = e.lotw_upload_adif(&[0]);
+        assert!(
+            adif.contains("<STATION_CALLSIGN:5>K2DEF"),
+            "a record with no station call of its own still signs from the live setting: {adif}"
+        );
+    }
+
+    /// HRD attributes a contact from the datagram's own station fields. Once the record carries
+    /// its own `STATION_CALLSIGN` — emitted by `adif_record` — appending a second one from the
+    /// live setting would put two conflicting copies of the field in one record.
+    #[test]
+    fn hrd_datagram_carries_exactly_one_station_callsign_and_it_is_the_records() {
+        let mut e = Engine::new("W6R", "CM87", 0);
+
+        let rec = e.qso_record("W9XYZ".into(), None, None);
+        e.log_qso(rec);
+        let logged = e.get_log()[0].clone();
+
+        e.settings.mycall = "K2DEF".into();
+        let dg = e.hrd_datagram(&logged);
+
+        assert_eq!(
+            dg.matches("<STATION_CALLSIGN:").count(),
+            1,
+            "one record, one station call: {dg}"
+        );
+        assert!(
+            dg.contains("<STATION_CALLSIGN:3>W6R"),
+            "and it is the call that made the contact: {dg}"
+        );
     }
 
     /// The funnel itself, mode-independent: every path (auto-log, cockpit Log button, manual
@@ -24079,6 +28264,448 @@ mod tests {
         );
     }
 
+    /// #170 — A REPEATED REPORT MUST BE ANSWERED, EVEN AFTER THE RUN HAS MOVED ON.
+    ///
+    /// The `(Confirming, Report|RReport)` re-send rule from #59 is correct and CAN NEVER FIRE
+    /// in a CQ run: `resume_cq` triggers on `Confirming && tx_count >= 1` — the tick after the
+    /// RR73 goes out — and replaces the whole `QsoStation` with a fresh `calling_cq`. The DX's
+    /// repeated report then lands on a station with no dxcall and falls through, while we are
+    /// already calling CQ. The one clause that releases the station is the clause releasing the
+    /// exact state whose job is to answer a repeat.
+    ///
+    /// WSJT-X BASELINE, read in the real source: upstream does NOT tear down.
+    /// `clear_DX_` defaults FALSE (`Configuration.cpp:1824`, key "ClearCallGrid") and
+    /// `acceptQSO` only clears on it (`widgets/mainwindow.cpp:7405`), so `m_hisCall` and
+    /// `m_QSOProgress` survive logging. A repeated report from that station therefore still
+    /// matches the partner guard (`mainwindow.cpp:6277-6279`, `qso_partner_base_call`) and
+    /// hits the roger arm at `mainwindow.cpp:6403-6413`
+    /// (`(m_QSOProgress >= REPORT …) && word_3.startsWith('R')` → `m_ntx=4`, ROGERS) — WSJT-X
+    /// re-sends the roger with Run still up.
+    ///
+    /// ⚠️ NEEDS BENCH (FT-mode QSO-management change, operator approved): the sequencing is
+    /// pinned here, but only on-air traffic proves the timing against a real partner.
+    #[test]
+    fn a_repeated_report_after_the_run_moved_on_is_still_answered_once() {
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.set_mode("qso-run").unwrap(); // calling CQ, cq_running = true
+        assert!(!e.poll_tx(0).is_empty(), "CQ goes out");
+
+        // A caller answers with a grid → we send the report.
+        e.ingest_decodes_for_test(&[dec_snr("W9XYZ K1ABC FN42", -8)], 1);
+        e.poll_tx(2);
+        // They roger it → we go Confirming with RR73 pending, and send it.
+        e.ingest_decodes_for_test(&[dec_snr("W9XYZ K1ABC R-09", -8)], 3);
+        let rr = e.poll_tx(4);
+        assert!(!rr.is_empty(), "our closing roger goes out");
+
+        // A quiet slot: the contact logs and the run resumes CQ. This is the teardown.
+        e.ingest_decodes_for_test(&[], 5);
+        let q = e.snapshot().qso.expect("still running");
+        assert_eq!(q.state, "CallingCq", "the run moved on, as it should");
+        assert!(q.dxcall.is_none());
+        let logged = e.get_log().len();
+        assert_eq!(logged, 1, "the contact is logged");
+
+        // THE REPORT: the DX never copied our RR73 and asks again.
+        e.ingest_decodes_for_test(&[dec_snr("W9XYZ K1ABC R-09", -8)], 7);
+        let owed = e
+            .snapshot()
+            .qso
+            .as_ref()
+            .and_then(|q| q.tx_now.clone())
+            .unwrap_or_default();
+        assert!(
+            owed.contains("K1ABC") && !owed.to_uppercase().starts_with("CQ"),
+            "the repeat must be answered, not met with another CQ, got {owed:?}"
+        );
+        assert!(
+            owed.contains("RR73") || owed.contains("RRR"),
+            "and it is the closing roger they missed, got {owed:?}"
+        );
+        assert!(!e.poll_tx(8).is_empty(), "and it actually goes on the air");
+
+        // …and NOTHING about the QSO came back. This must not resurrect the contact.
+        let q = e.snapshot().qso.expect("still running");
+        assert_eq!(
+            q.state, "CallingCq",
+            "the sequencer did not re-enter the QSO"
+        );
+        assert!(q.dxcall.is_none(), "no partner was restored");
+        assert_eq!(e.get_log().len(), logged, "and nothing was logged twice");
+
+        // ONE over, once. The next slot is a CQ again — the answer cannot become a loop.
+        e.ingest_decodes_for_test(&[], 9);
+        let next = e
+            .snapshot()
+            .qso
+            .as_ref()
+            .and_then(|q| q.tx_now.clone())
+            .unwrap_or_default();
+        assert!(
+            next.to_uppercase().starts_with("CQ"),
+            "back to CQ after the single answer, got {next:?}"
+        );
+    }
+
+    /// #163 — A SPLIT CONTACT LOGS BOTH FREQUENCIES; A SATELLITE CONTACT IS LEFT ALONE.
+    ///
+    /// Both inputs already existed and were thrown away at the log boundary: the rig split TX
+    /// dial (`split_tx_mhz`) and, riding the same field, a satellite uplink. `FREQ_RX` appeared
+    /// nowhere in the tree.
+    ///
+    /// ADIF: `FREQ` is the logging station's TRANSMIT frequency and `FREQ_RX` its RECEIVE
+    /// frequency, so adding the second necessarily fixes the first — a split QSO used to log
+    /// the RX dial plus the TX audio offset, which is neither leg honestly.
+    ///
+    /// ⚠️ SATELLITES ARE DELIBERATELY EXCLUDED — operator ruling. Read the comment on
+    /// [`Engine::log_frequencies`] before widening this; the exclusion is not an oversight and
+    /// "completing" it without also doing BAND/BAND_RX breaks satellite uploads.
+    ///
+    /// The empty case is asserted first and last: never write a value equal to the RX
+    /// frequency just to have one. An absent field is correct; a duplicated one is a lie that
+    /// propagates into every other logger on export.
+    #[test]
+    fn a_split_qso_logs_both_frequencies_and_a_satellite_qso_is_left_alone() {
+        // 1. SIMPLEX — the common case, and it must stay exactly as it was.
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_tier(Tier::Ft8);
+        e.set_tx_offset(1500.0);
+        let simplex = e.qso_record("W9XYZ".into(), None, None);
+        assert_eq!(
+            simplex.freq_rx_mhz, None,
+            "not split and not on a satellite ⇒ FREQ_RX stays EMPTY"
+        );
+
+        // 2. TERRESTRIAL SPLIT — a pile-up "UP 2", same band.
+        let dial = e.settings.dial_mhz;
+        e.split_tx_mhz = Some(dial + 0.002);
+        let rec = e.qso_record("W9XYZ".into(), None, None);
+        let rx = rec
+            .freq_rx_mhz
+            .expect("a split contact records its RX frequency");
+        assert!(
+            (rx - simplex.freq_mhz).abs() < 1e-9,
+            "FREQ_RX is the frequency a simplex contact would have logged: {rx} vs {}",
+            simplex.freq_mhz
+        );
+        assert!(
+            (rec.freq_mhz - rx - 0.002).abs() < 1e-9,
+            "FREQ moves to the TRANSMIT leg — 2 kHz up: FREQ {} FREQ_RX {rx}",
+            rec.freq_mhz
+        );
+        assert!(
+            (rec.freq_mhz - rx).abs() > 1e-9,
+            "and the two are never the same number"
+        );
+
+        // 3. SATELLITE — untouched, to the byte. FREQ stays downlink-derived and no FREQ_RX
+        //    is written, so BAND (the downlink band) and FREQ still name the same band and
+        //    the PROP_MODE/SAT_NAME passband gate still matches.
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_tier(Tier::Ft8);
+        e.set_tx_offset(1500.0);
+        let linear = tempo_core::doppler::Transponder {
+            uplink_centre_hz: 145_960_000,
+            downlink_centre_hz: 435_640_000,
+            invert: false,
+            half_width_hz: 30_000,
+        };
+        e.set_sat_transponder(Some(("RS-44|linear".into(), 0, linear)));
+        e.sat_tune_nominal(SSB_BIRD, 1_000_000);
+        // The uplink rides the split TX dial, exactly as `sat_doppler_tick` writes it.
+        e.split_tx_mhz = Some(145.960);
+        let sat = e.qso_record("W9XYZ".into(), None, None);
+        assert_eq!(
+            sat.freq_rx_mhz, None,
+            "a satellite contact writes NO FREQ_RX — the operator ruling"
+        );
+        let off_mhz = e.tx_offset_hz as f64 / 1e6;
+        assert!(
+            (sat.freq_mhz - (e.settings.dial_mhz + off_mhz)).abs() < 1e-9,
+            "and its FREQ stays downlink-derived, unchanged: {}",
+            sat.freq_mhz
+        );
+    }
+
+    /// The satellite exclusion is expressed as "the split crosses bands", which is what
+    /// actually breaks the BAND/FREQ pair — so it must hold for a cross-band split whether or
+    /// not a transponder happens to be held, and must NOT fire on an ordinary same-band split.
+    /// Pinned because the two halves are what stop the rule being widened by accident.
+    #[test]
+    fn the_split_log_pair_is_written_only_when_both_legs_share_a_band() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_tier(Tier::Ft8);
+        let dial = e.settings.dial_mhz;
+
+        // Same band ⇒ the pair is written.
+        e.split_tx_mhz = Some(dial + 0.002);
+        assert!(
+            e.qso_record("W9XYZ".into(), None, None)
+                .freq_rx_mhz
+                .is_some(),
+            "a same-band split records both legs"
+        );
+
+        // Cross band ⇒ nothing, because BAND names only the receive leg and a FREQ from the
+        // other band would contradict it.
+        e.split_tx_mhz = Some(145.960);
+        assert_eq!(
+            e.qso_record("W9XYZ".into(), None, None).freq_rx_mhz,
+            None,
+            "a cross-band split writes no pair — BAND would disagree with FREQ"
+        );
+    }
+
+    /// AN ORDINARY LOGBOOK EDIT MUST NOT ERASE A QSL-SENT CLEAR.
+    ///
+    /// A field edit — fixing a callsign typo — sends the WHOLE record back and replaces it, so
+    /// anything the edit path does not carry is something an unrelated correction silently
+    /// deletes. For `cleared_unix` that is not a cosmetic loss: erase it and the next ADIF
+    /// import of a pre-clear export walks the sent mark straight back in, which is the reported
+    /// bug returning by a side door nobody would connect to the edit.
+    ///
+    /// ⚠️ WHAT ACTUALLY PROTECTS IT is `Logbook::update_record`, which copies the whole
+    /// `QslSent` off the OLD record (`rec.qsl_sent = old.qsl_sent`) precisely so an edit cannot
+    /// wipe an operator-declared mark — the new field inherits that guarantee for free. This
+    /// test is written against that mechanism, and the control below is what proves it: with
+    /// the preservation removed the test MUST fail, or it is asserting nothing.
+    #[test]
+    fn a_logbook_edit_keeps_an_operator_qsl_sent_clear() {
+        use tempo_core::logbook::QslVia;
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        let rec = e.qso_record("K1ABC".into(), None, None);
+        e.log_qso(rec);
+        assert!(e.mark_qsl_sent(0, Some(QslVia::Direct)), "fixture: marked");
+        assert!(e.get_log()[0].qsl_sent.sent);
+
+        // The operator ticked the wrong row and clears it.
+        assert!(
+            e.mark_qsl_sent(0, None),
+            "the clear verb exists and applies"
+        );
+        let cleared = e.get_log()[0].qsl_sent.cleared_unix;
+        assert!(cleared.is_some(), "the clear is recorded as a decision");
+        assert!(!e.get_log()[0].qsl_sent.sent);
+
+        // …then edits something entirely unrelated. The edit form does not carry QSL state at
+        // all, so this is the shape that would drop it: a record rebuilt without it.
+        let mut edited = e.get_log()[0].clone();
+        edited.comment = Some("fixed a typo".into());
+        edited.qsl_sent = Default::default();
+        assert!(e.update_qso(0, edited));
+
+        let r = &e.get_log()[0];
+        assert_eq!(
+            r.comment.as_deref(),
+            Some("fixed a typo"),
+            "the edit landed"
+        );
+        assert!(!r.qsl_sent.sent, "and the mark is still cleared");
+        assert_eq!(
+            r.qsl_sent.cleared_unix, cleared,
+            "an unrelated edit must not erase the operator's clear"
+        );
+
+        // …and the decision still outranks an import AFTER that edit, which is the whole
+        // point of keeping it rather than just keeping `sent == false`.
+        let mut lb = tempo_core::logbook::Logbook::new();
+        let mut sent_copy = e.get_log()[0].clone();
+        sent_copy.qsl_sent = tempo_core::logbook::QslSent {
+            sent: true,
+            via: Some(QslVia::Direct),
+            date_unix: Some(1),
+            cleared_unix: None,
+        };
+        lb.add(e.get_log()[0].clone());
+        let mut export = tempo_core::logbook::Logbook::new();
+        export.add(sent_copy);
+        lb.import_adif(&export.adif());
+        assert!(
+            !lb.records()[0].qsl_sent.sent,
+            "the clear survived the edit AND still beats a pre-clear import"
+        );
+    }
+
+    /// #170's bound: the memory of a just-worked partner EXPIRES. Somebody repeating a report
+    /// minutes later is a new contact, not a re-send, and must not pull an answer out of a run
+    /// that has worked a dozen stations since.
+    ///
+    /// The POSITIVE CONTROL for this test is
+    /// `a_repeated_report_after_the_run_moved_on_is_still_answered_once`: the identical
+    /// sequence at an in-window slot IS answered, so a pass here means the deadline bit and
+    /// not that the mechanism is dead.
+    #[test]
+    fn the_answer_to_a_moved_on_partner_expires() {
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.set_mode("qso-run").unwrap();
+        e.poll_tx(0);
+        e.ingest_decodes_for_test(&[dec_snr("W9XYZ K1ABC FN42", -8)], 1);
+        e.poll_tx(2);
+        e.ingest_decodes_for_test(&[dec_snr("W9XYZ K1ABC R-09", -8)], 3);
+        e.poll_tx(4);
+        e.ingest_decodes_for_test(&[], 5); // logs + resumes CQ
+
+        // Long after the window, the same station repeats. We are calling CQ and stay there.
+        e.ingest_decodes_for_test(&[dec_snr("W9XYZ K1ABC R-09", -8)], 5 + LATE_REPLY_SLOTS + 2);
+        let next = e
+            .snapshot()
+            .qso
+            .as_ref()
+            .and_then(|q| q.tx_now.clone())
+            .unwrap_or_default();
+        assert!(
+            next.to_uppercase().starts_with("CQ"),
+            "an expired partner gets no answer, got {next:?}"
+        );
+    }
+
+    /// The other two bounds on a late reply, both of which are about a transmission the
+    /// operator did not ask for: a STOP ends the obligation, and so does leaving the context
+    /// it was incurred in. The band-change leg is the one that matters — a QSY routes through
+    /// `halt_tx_for_context_change` with nobody having pressed anything, and an over owed to a
+    /// station on 20 m must not follow the rig to 40 m.
+    #[test]
+    fn a_late_reply_does_not_survive_a_stop_or_a_context_change() {
+        // A partner is remembered and has ASKED — the over is armed and about to go out.
+        let armed = |e: &mut Engine| {
+            e.set_mode("qso-run").unwrap();
+            e.poll_tx(0);
+            e.ingest_decodes_for_test(&[dec_snr("W9XYZ K1ABC FN42", -8)], 1);
+            e.poll_tx(2);
+            e.ingest_decodes_for_test(&[dec_snr("W9XYZ K1ABC R-09", -8)], 3);
+            e.poll_tx(4);
+            e.ingest_decodes_for_test(&[], 5);
+            e.ingest_decodes_for_test(&[dec_snr("W9XYZ K1ABC R-09", -8)], 7);
+        };
+        let owed = |e: &mut Engine| {
+            e.snapshot()
+                .qso
+                .as_ref()
+                .and_then(|q| q.tx_now.clone())
+                .unwrap_or_default()
+        };
+
+        // THE POSITIVE CONTROL: with nothing intervening, the over IS armed. A pass below
+        // must mean the guard bit, not that the fixture never armed anything.
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        armed(&mut e);
+        assert!(
+            owed(&mut e).contains("K1ABC"),
+            "fixture: the late reply is armed"
+        );
+
+        // Stop TX ends it.
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        armed(&mut e);
+        e.halt_tx();
+        assert!(
+            !owed(&mut e).contains("K1ABC"),
+            "Stop TX drops the owed over, got {:?}",
+            owed(&mut e)
+        );
+
+        // …and so does a band QSY the loop performs under the operator.
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        armed(&mut e);
+        e.halt_tx_for_context_change("band change");
+        assert!(
+            !owed(&mut e).contains("K1ABC"),
+            "a QSY drops the owed over, got {:?}",
+            owed(&mut e)
+        );
+
+        // …and so does a tier change (its decode context, and the slot numbering the
+        // deadline is written in, are both gone).
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        armed(&mut e);
+        e.set_tier(Tier::Ft4);
+        assert!(
+            !owed(&mut e).contains("K1ABC"),
+            "a tier change drops the owed over, got {:?}",
+            owed(&mut e)
+        );
+    }
+
+    /// #153 — A STATION THE RUN GAVE UP ON, RETURNING LATE WITH RR73, GETS ITS 73.
+    ///
+    /// `abandon_stalled` is the run's decision to stop calling somebody who went quiet, and it
+    /// replaces the whole `QsoStation`. When that station finally comes back — a multi-stream
+    /// club station answers slowly BY DESIGN, which is exactly the reporter's case — their RR73
+    /// lands on a fresh `calling_cq` and nothing closes the contact. From their chair we simply
+    /// stopped talking mid-QSO.
+    ///
+    /// `StalledQso` next door deliberately keeps only enough to LOG, and says why: "restoring
+    /// [a QsoStation] would put the sequencer back into a QSO the operator has moved on from,
+    /// which is a transmit decision." That constraint is respected here — this is a BOUNDED
+    /// ONE-SHOT: a single 73, never a return to `Mode::Qso`, never a re-armed sequencer, and it
+    /// expires.
+    ///
+    /// WSJT-X BASELINE, read in the real source: upstream keeps the partner in `m_hisCall` (it
+    /// clears only on `clear_DX_`, default FALSE — `Configuration.cpp:1824`,
+    /// `widgets/mainwindow.cpp:7405`), so a late RR73 from that station still passes the partner
+    /// guard at `mainwindow.cpp:6277-6279` and reaches the closing arm at `mainwindow.cpp:6369`
+    /// (`word_3.contains("^RR(?:R|73)$")` → `m_ntx=5`, Tx5 = 73). Nexus was behaviourally
+    /// divergent here.
+    ///
+    /// ⚠️ NEEDS BENCH (FT-mode QSO-management change, operator approved).
+    #[test]
+    fn a_station_the_run_gave_up_on_returning_late_gets_a_single_73() {
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.set_mode("qso-run").unwrap();
+        e.poll_tx(0); // CQ
+                      // The club station answers; we send the report and wait.
+        e.ingest_decodes_for_test(&[dec_snr("W9XYZ K1ABC FN42", -8)], 1);
+        assert_eq!(
+            e.snapshot().qso.unwrap().dxcall.as_deref(),
+            Some("K1ABC"),
+            "working the club station"
+        );
+        // They answer slowly by design. Three unanswered overs and the run gives up.
+        for slot in [2u64, 4, 6] {
+            e.poll_tx(slot);
+            e.ingest_decodes_for_test(&[], slot + 1);
+        }
+        let q = e.snapshot().qso.expect("still running");
+        assert_eq!(q.state, "CallingCq", "the run gave up, as it should");
+        assert!(q.dxcall.is_none());
+
+        // THE REPORT: they come back, after the run has moved on, with their RR73.
+        e.ingest_decodes_for_test(&[dec_snr("W9XYZ K1ABC RR73", -8)], 9);
+        let owed = e
+            .snapshot()
+            .qso
+            .as_ref()
+            .and_then(|q| q.tx_now.clone())
+            .unwrap_or_default();
+        assert!(
+            owed.contains("K1ABC") && !owed.to_uppercase().starts_with("CQ"),
+            "a late RR73 is answered, not ignored, got {owed:?}"
+        );
+        assert!(
+            owed.contains("73") && !owed.contains("RR73") && !owed.contains("RRR"),
+            "a single closing 73, not another roger, got {owed:?}"
+        );
+        assert!(!e.poll_tx(10).is_empty(), "and it actually goes on the air");
+
+        // THE CONSTRAINT `StalledQso`'s comment states: no resurrection.
+        let q = e.snapshot().qso.expect("still running");
+        assert_eq!(q.state, "CallingCq", "never re-enters Mode::Qso");
+        assert!(q.dxcall.is_none(), "the sequencer was not re-armed");
+
+        // One over, once — the next slot is a CQ again.
+        e.ingest_decodes_for_test(&[], 11);
+        let next = e
+            .snapshot()
+            .qso
+            .as_ref()
+            .and_then(|q| q.tx_now.clone())
+            .unwrap_or_default();
+        assert!(
+            next.to_uppercase().starts_with("CQ"),
+            "back to CQ after the single 73, got {next:?}"
+        );
+    }
+
     /// The control: with NO grid ever heard for the caller, the record is honestly blank — the
     /// backfill invents nothing, it only recovers a grid we actually decoded.
     #[test]
@@ -24131,6 +28758,7 @@ mod tests {
             state: None,
             band: "20m".into(),
             freq_mhz: 14.074,
+            freq_rx_mhz: None,
             mode: "FT8".into(),
             rst_sent: None,
             rst_rcvd: None,
@@ -24728,6 +29356,7 @@ mod tests {
             state: None,
             band: band.into(),
             freq_mhz: 14.074,
+            freq_rx_mhz: None,
             mode: "FT8".into(),
             rst_sent: None,
             rst_rcvd: None,
@@ -24825,6 +29454,261 @@ mod tests {
     }
 
     #[test]
+    fn an_unnamed_position_calls_itself_by_its_callsign_never_by_its_id() {
+        // The operator's premise (club Field Day, 2026-08-30): the board must
+        // never show something meaningless. An unnamed position used to reach
+        // the board as its 8-hex position id — internal plumbing — so the
+        // name falls back to the station callsign, live, wherever identity is
+        // built.
+        let mut e = Engine::new("KD9TAW", "EN61", 0);
+        {
+            let mut s = e.settings().clone();
+            s.fd_position_id = "9a85f060".into();
+            s.fd_position_name = String::new(); // never typed one
+            e.apply_settings(s);
+        }
+        assert_eq!(e.fd_position_label(), "KD9TAW");
+        let (posid, label, call, _) = e.fd_sync_identity();
+        assert_eq!(
+            (posid.as_str(), label.as_str(), call.as_str()),
+            ("9a85f060", "KD9TAW", "KD9TAW"),
+            "the JOIN carries the callsign as the name, not the id"
+        );
+        assert_eq!(
+            e.fd_position_report().name,
+            "KD9TAW",
+            "and so does every presence report"
+        );
+        // Whitespace is not a name.
+        {
+            let mut s = e.settings().clone();
+            s.fd_position_name = "   ".into();
+            e.apply_settings(s);
+        }
+        assert_eq!(e.fd_position_label(), "KD9TAW");
+        // POSITIVE CONTROL: a real name wins over the fallback, trimmed.
+        {
+            let mut s = e.settings().clone();
+            s.fd_position_name = "  CW tent  ".into();
+            e.apply_settings(s);
+        }
+        assert_eq!(e.fd_position_label(), "CW tent");
+        assert_eq!(e.fd_sync_identity().1, "CW tent");
+        assert_eq!(e.fd_position_report().name, "CW tent");
+    }
+
+    #[test]
+    fn fd_board_snapshot_is_some_only_in_the_host_role() {
+        // THE SCOREBOARD SEAM CONTRACT: a non-host position (even one deep in
+        // Field Day with a live log) hands the board NOTHING — it holds only
+        // the compact mirror. The host hands the bounded clone.
+        let mut e = Engine::new("W9ABC", "EN61", 0);
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_class = "3A".into();
+            s.fd_section = "WI".into();
+            s.fd_join_addr = "192.168.1.10:42073".into(); // a POSITION, not a host
+            e.apply_settings(s);
+        }
+        e.set_mode("fieldday-sp").unwrap();
+        assert!(e.fd_log_manual("K1ABC", "2A", "EMA", "CW").unwrap());
+        assert!(
+            e.fd_board_snapshot().is_none(),
+            "a non-host position exposes no board data"
+        );
+
+        // Become the host: the snapshot appears, carrying merged rows +
+        // positions in the reconciled shape.
+        let dir = std::env::temp_dir().join(format!("fd-board-seam-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        e.fd_host_start(dir.join("fd_event_test.jsonl")).unwrap();
+        let _ = e.fd_club_join("aaaa0001", "CW tent", "KD9TAW");
+        e.fd_club_merge(&tempo_net::fdsync::WireQso {
+            pos: "aaaa0001".into(),
+            seq: 1,
+            call: "W1AW".into(),
+            class: "1D".into(),
+            sect: "CT".into(),
+            band: "20m".into(),
+            mode: "DIG".into(),
+            sub: "FT8".into(),
+            when: 1_782_583_500,
+            op: "OP1".into(),
+        });
+        let board = e.fd_board_snapshot().expect("host role → Some");
+        assert_eq!(board.call, "W9ABC");
+        assert_eq!((board.class.as_str(), board.section.as_str()), ("3A", "WI"));
+        assert_eq!(board.rows.len(), 1);
+        let r = &board.rows[0];
+        assert_eq!(
+            (
+                r.posid.as_str(),
+                r.seq,
+                r.call.as_str(),
+                r.mode_class.as_str(),
+                r.submode.as_str()
+            ),
+            ("aaaa0001", 1, "W1AW", "DIG", "FT8")
+        );
+        assert_eq!(
+            r.operator, "OP1",
+            "operator stamped at enqueue rides through"
+        );
+        assert_eq!(board.positions.len(), 1);
+        assert_eq!(board.positions[0].label, "CW tent");
+
+        e.fd_host_stop();
+        assert!(e.fd_board_snapshot().is_none(), "stop hosting → None again");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// WHAT THE BAND BOARD IS BUILT FROM. "Who is on what band" is presence
+    /// the host already holds per position — the scoreboard seam simply
+    /// dropped it, carrying label + operator only, so the club TV could not
+    /// show the one thing a multi-station board exists for.
+    #[test]
+    fn the_board_snapshot_carries_each_positions_current_band_and_mode() {
+        let mut e = Engine::new("W9ABC", "EN61", 0);
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_class = "3A".into();
+            s.fd_section = "WI".into();
+            e.apply_settings(s);
+        }
+        e.set_mode("fieldday-sp").unwrap();
+        let dir = std::env::temp_dir().join(format!("fd-board-presence-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        e.fd_host_start(dir.join("fd_event_test.jsonl")).unwrap();
+        let _ = e.fd_club_join("aaaa0001", "CW tent", "KD9TAW");
+        let _ = e.fd_club_join("bbbb0002", "GOTA tent", "KD9TAW");
+        e.fd_club_pos_status(
+            "aaaa0001",
+            &tempo_net::fdsync::PosReport {
+                band: "20m".into(),
+                mode: "cw".into(),
+                op: "w9aaa".into(),
+                freq: 14_050_000,
+                name: "CW tent".into(),
+            },
+        );
+        let board = e.fd_board_snapshot().expect("hosting");
+        let cw = board
+            .positions
+            .iter()
+            .find(|p| p.id == "aaaa0001")
+            .expect("the reporting position");
+        assert_eq!(
+            (cw.band.as_str(), cw.mode.as_str()),
+            ("20m", "CW"),
+            "the presence report's band and mode reach the scoreboard seam"
+        );
+        assert!(
+            cw.last_seen_unix > 0,
+            "…with the liveness stamp the stale mark is computed from"
+        );
+        // POSITIVE CONTROL: a position that has joined but never reported has
+        // no band to show — the empty string is a real state, not a default
+        // the plumbing invented.
+        let gota = board
+            .positions
+            .iter()
+            .find(|p| p.id == "bbbb0002")
+            .expect("the silent position");
+        assert_eq!((gota.band.as_str(), gota.mode.as_str()), ("", ""));
+
+        e.fd_host_stop();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_club_block_ships_club_only_dupes_and_an_honest_sync_chip() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        // Sync unconfigured → no club block at all (a solo FD pays nothing).
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_class = "3A".into();
+            s.fd_section = "WI".into();
+            e.apply_settings(s);
+        }
+        e.set_mode("fieldday-sp").unwrap();
+        assert!(e.snapshot().field_day.unwrap().club.is_none());
+
+        // Configure a join → the block appears, honestly OFFLINE with the
+        // whole log queued (nothing has connected yet).
+        {
+            let mut s = e.settings().clone();
+            s.fd_join_addr = "192.168.1.10:42073".into();
+            s.fd_position_id = "eeee0001".into(); // the shell generates this at startup
+            e.apply_settings(s);
+        }
+        assert!(e.fd_log_manual("K1ABC", "2A", "EMA", "CW").unwrap());
+        let club = e
+            .snapshot()
+            .field_day
+            .unwrap()
+            .club
+            .expect("configured → Some");
+        assert_eq!(club.sync_state, "offline");
+        assert_eq!(club.queued, 1, "the unacked row is the queue");
+
+        // The pump connects and delivers club state: one key we ALSO worked
+        // ourselves (subtracted — own log already ships) and one club-only
+        // key (kept — the while-typing warning's input).
+        {
+            let m = e.fd_mirror_mut();
+            m.on_link(true, 100);
+            m.on_welcome(1, "TEST FD", "W9ABC", 3);
+            m.apply(&tempo_net::fdsync::ClubState {
+                reset: true,
+                dupes: vec![
+                    ("K1ABC".into(), "20m".into(), "CW".into()),  // own too
+                    ("N0XYZ".into(), "40m".into(), "DIG".into()), // club-only
+                ],
+                sections: vec!["EMA".into(), "MN".into()],
+                score: 42,
+                qsos: 7,
+                board: vec![tempo_net::fdsync::WireBoardRow {
+                    pos: "bbbb".into(),
+                    name: "SSB tent".into(),
+                    band: "40m".into(),
+                    mode: "PH".into(),
+                    op: "OP2".into(),
+                    qsos: 5,
+                    uniq: 5,
+                    rate: 12,
+                    age: 3,
+                }],
+            });
+        }
+        let club = e.snapshot().field_day.unwrap().club.unwrap();
+        assert_eq!(club.sync_state, "synced", "acked == own max seq");
+        assert_eq!(
+            club.dupes,
+            vec![("N0XYZ".into(), "40m".into(), "DIG".into())],
+            "own-log keys are subtracted; club-only keys ship"
+        );
+        assert_eq!((club.score, club.qsos, club.sections), (42, 7, 2));
+        assert_eq!(club.skew_secs, 3);
+        assert_eq!(club.board.len(), 1);
+        assert_eq!(club.board[0].pos_name, "SSB tent");
+        assert_eq!(club.board[0].last_seen_secs, 3);
+
+        // A second local contact while connected but unacked → BEHIND, queued 1.
+        assert!(e.fd_log_manual("W5DEF", "1E", "STX", "PH").unwrap());
+        let club = e.snapshot().field_day.unwrap().club.unwrap();
+        assert_eq!(club.sync_state, "behind");
+        assert_eq!(club.queued, 1);
+        // The outbox agrees with the chip (derived from the same numbers).
+        let out = e.fd_sync_outbox(1);
+        assert_eq!(out.len(), 1);
+        assert_eq!((out[0].seq, out[0].call.as_str()), (2, "W5DEF"));
+        assert_eq!(out[0].op, "W9XYZ", "operator falls back to mycall");
+    }
+
+    #[test]
     fn a_lone_rr73_seed_never_auto_logs_a_phantom_qso() {
         // The root-cause guard for the phantom bug: double-clicking (or a companion
         // auto-replying to) a decoded "<us> <dx> RR73" runs Station::start straight
@@ -24889,6 +29773,163 @@ mod tests {
         assert_eq!(fd.powered_points, 30);
         assert_eq!(fd.bonus_points, 150);
         assert_eq!(fd.total_score, 180);
+        // The rules-data plumbing rides the same snapshot: a real 27 h SFD
+        // window (the TS 24 h date math is dead) + the parameter identity the
+        // banner shows. Duration is clock-independent; the dates aren't, so
+        // only the invariants are pinned here (fd_rules pins the dates).
+        assert_eq!(fd.event_end_unix - fd.event_start_unix, 27 * 3600);
+        assert!(fd.event_start_unix > 0);
+        assert_eq!(fd.rules_year, 2026);
+        assert!(!fd.rules_generated.is_empty());
+    }
+
+    /// The same gate, on the OTHER event. §8(a) asks for this shape "four times
+    /// over — extend it rather than inventing a new one", and Winter Field Day
+    /// is the leg that was missing: every rules-as-data change since has been
+    /// proved against ARRL Field Day alone.
+    ///
+    /// WFD scores on the `Objectives` model, so `powered == qso_pts` — there is
+    /// no on-air power multiplier — while the bonus menu is the one it shares
+    /// with ARRL FD today. Classes here are WFD's own (H/I/O/M), which is what
+    /// a real WFD log contains.
+    #[test]
+    fn wfd_score_is_byte_identical_after_the_ruleset_refactor() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_event = "wfd".into();
+            s.fd_class = "3O".into();
+            s.fd_section = "WI".into();
+            s.fd_power_mult = 5; // ignored by the Objectives model
+            s.fd_bonuses = vec!["w1aw-bulletin".into(), "web-submission".into()]; // 100 + 50
+            e.apply_settings(s);
+        }
+        e.set_mode("fieldday-run").unwrap();
+        // 6 QSO points: CW 2 + CW 2 + PH 1 + PH 1 — the same shape as the ARRL
+        // leg, so a divergence is about the MODEL and not about the log.
+        assert!(e.fd_log_manual("K1ABC", "2H", "EMA", "CW").unwrap());
+        assert!(e.fd_log_manual("N0XYZ", "4I", "MN", "CW").unwrap());
+        assert!(e.fd_log_manual("W1AW", "1M", "CT", "PH").unwrap());
+        assert!(e.fd_log_manual("K5ABC", "3O", "STX", "PH").unwrap());
+
+        // Objectives: powered == qso_pts, and the power tier does NOT multiply.
+        assert_eq!(
+            e.fd_score(),
+            Some((6, 6, 150)),
+            "WFD scores raw QSO points — the ×5 tier must not apply"
+        );
+        let fd = e.snapshot().field_day.expect("master on → FD chrome");
+        assert_eq!(fd.points, 6);
+        assert_eq!(fd.powered_points, 6);
+        assert_eq!(fd.bonus_points, 150);
+        assert_eq!(fd.total_score, 156);
+        // WFD's window is 30 h (the ARRL leg pins 27 h) — the two events read
+        // genuinely different window data through the same path.
+        assert_eq!(fd.event_end_unix - fd.event_start_unix, 30 * 3600);
+        assert!(fd.event_start_unix > 0);
+        assert_eq!(fd.rules_year, 2026);
+        assert!(!fd.rules_generated.is_empty());
+    }
+
+    /// PLANNING IS NOT SCORING. A club knows on Friday which bonuses it expects
+    /// (media publicity, a safety officer, a youth op) and wants them tracked —
+    /// but an intention is worth nothing on a submitted entry. `fd_bonuses` is
+    /// the EARNED list and is the only one any scoring path reads;
+    /// `fd_bonuses_planned` is the chase list and must be invisible to the
+    /// score, the snapshot and the exports. A surface that quietly counted a
+    /// plan would hand the ARRL a score the club never made.
+    #[test]
+    fn planned_bonuses_are_a_plan_and_never_points() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        let all: Vec<String> = tempo_core::fd_rules::ruleset(
+            tempo_core::fieldday::FdEvent::ArrlFd,
+            tempo_core::fd_rules::CURRENT_RULES_YEAR,
+        )
+        .bonuses
+        .iter()
+        .map(|b| b.id.to_string())
+        .collect();
+        assert_eq!(all.len(), 15, "the whole menu is planned below");
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_class = "3A".into();
+            s.fd_section = "WI".into();
+            s.fd_power_mult = 5;
+            s.fd_bonuses = Vec::new(); // nothing earned yet
+            s.fd_bonuses_planned = all.clone(); // every bonus planned
+            e.apply_settings(s);
+        }
+        e.set_mode("fieldday-run").unwrap();
+        assert!(e.fd_log_manual("K1ABC", "2A", "EMA", "CW").unwrap()); // 2 pts
+
+        assert_eq!(
+            e.fd_score(),
+            Some((2, 10, 0)),
+            "15 planned bonuses (1450 pts if they were counted) must score ZERO"
+        );
+        let fd = e.snapshot().field_day.expect("master on → FD chrome");
+        assert_eq!(
+            fd.bonus_points, 0,
+            "the scoreboard shows earned points only"
+        );
+        assert_eq!(fd.total_score, fd.powered_points, "planning adds nothing");
+
+        // And earning one of the planned bonuses is what moves the score — the
+        // plan list is untouched by that, so the positive control runs on the
+        // same fixture (a guard that can only ever read zero proves nothing).
+        {
+            let mut s = e.settings().clone();
+            s.fd_bonuses = vec!["w1aw-bulletin".into()];
+            e.apply_settings(s);
+        }
+        assert_eq!(
+            e.fd_score(),
+            Some((2, 10, 100)),
+            "the one EARNED bonus scores, and only it"
+        );
+        assert_eq!(
+            e.settings().fd_bonuses_planned.len(),
+            15,
+            "earning a bonus does not empty the chase list"
+        );
+    }
+
+    /// THE SUBMODE FUNNEL, end to end: the engine stamps the ACTIVE tier's
+    /// ADIF name into `FieldDayLog::current_submode` at FD entry and on every
+    /// tier change, the digital sequencer's own `log()` calls pick it up, and
+    /// the snapshot's `FieldDayQso.submode` carries it to the interop push —
+    /// so a WFD FT4/RTTY contact is never pushed or exported as "FT8". CW/PH
+    /// manual entries ARE their on-air mode and stay submode-less.
+    #[test]
+    fn fd_digital_qsos_snapshot_the_active_tier_as_submode() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_class = "3A".into();
+            s.fd_section = "WI".into();
+            e.apply_settings(s);
+        }
+        e.set_tier(Tier::Ft8);
+        e.set_mode("fieldday-run").unwrap();
+        // A tier change mid-event must move the stamp with it.
+        e.set_tier(Tier::Ft4);
+        // The digital sequencer's own logging path (what `observe` calls on a
+        // completed exchange) — no submode argument anywhere in sight.
+        let Mode::FieldDay { station, .. } = &mut e.mode else {
+            panic!("in Field Day mode");
+        };
+        assert!(station.log.log("K1ABC", "2A", "EMA", 5));
+        // A CW manual entry, whose class IS its on-air mode: no submode.
+        assert!(e.fd_log_manual("W1AW", "1D", "CT", "CW").unwrap());
+        let fd = e.snapshot().field_day.expect("master on → FD chrome");
+        assert_eq!(
+            fd.log[0].submode, "FT4",
+            "the digital QSO snapshots the tier actually keyed, not a class map"
+        );
+        assert_eq!(fd.log[1].submode, "", "CW carries no submode");
     }
 
     /// Master switch OFF (spec §1.3): even when the engine is still in
@@ -24934,6 +29975,51 @@ mod tests {
         assert!(!fd.running, "the master enters passive S&P, not a run");
         assert_eq!(fd.my_class, "3A");
         assert_eq!(fd.my_section, "WI");
+    }
+
+    /// `FieldDayStatus.assistance_on` mirrors `Settings::assistance_sources()`'s
+    /// effectively-ON labels — the single list the warn-only assistance advisory
+    /// reads. The UI must never re-derive cluster/AI-CW gating from raw toggles
+    /// (it would disagree with the journal about what counts as assistance), so
+    /// the DTO carries the answer.
+    #[test]
+    fn fd_snapshot_carries_the_live_assistance_sources() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_class = "3A".into();
+            s.fd_section = "WI".into();
+            s.cluster_enabled = true;
+            s.unassisted_mode = false;
+            e.apply_settings(s);
+        }
+        let expected: Vec<String> = e
+            .settings()
+            .assistance_sources()
+            .iter()
+            .filter(|&&(_, on)| on)
+            .map(|&(label, _)| label.to_string())
+            .collect();
+        // Control: the setup really has a live source, so an empty DTO list fails.
+        assert!(
+            expected.iter().any(|l| l == "DX cluster / RBN"),
+            "control broken: cluster should be effectively ON in this setup"
+        );
+        let fd = e.snapshot().field_day.expect("in Field Day");
+        assert_eq!(fd.assistance_on, expected);
+
+        // Unassisted mode suppresses the feeds; the DTO tracks the EFFECTIVE state.
+        {
+            let mut s = e.settings().clone();
+            s.unassisted_mode = true;
+            e.apply_settings(s);
+        }
+        let fd = e.snapshot().field_day.expect("still in Field Day");
+        assert!(
+            !fd.assistance_on.iter().any(|l| l == "DX cluster / RBN"),
+            "Unassisted mode is on — cluster must no longer be listed as live"
+        );
     }
 
     /// ⚠️ "ADD IT TO THE FD LOG AFTERWARDS" STAMPS THE BAND YOU ARE ON THEN,
@@ -25200,7 +30286,7 @@ mod tests {
         assert_eq!(Logbook::load(&path).len(), 4, "the file holds A's appends");
 
         // B does a full-log-rewrite action (mark QSL-sent) on its stale 2-record copy.
-        assert!(b.mark_qsl_sent(0, tempo_core::logbook::QslVia::Direct));
+        assert!(b.mark_qsl_sent(0, Some(tempo_core::logbook::QslVia::Direct)));
 
         let on_disk = Logbook::load(&path);
         assert_eq!(
@@ -25530,6 +30616,7 @@ mod tests {
             state: None,
             band: "20m".into(),
             freq_mhz: 14.074,
+            freq_rx_mhz: None,
             mode: "FT8".into(),
             rst_sent: None,
             rst_rcvd: None,
@@ -25582,6 +30669,53 @@ mod tests {
             row("DL1XYZ").new_grid && row("DL1XYZ").new_dxcc && !row("DL1XYZ").new_band,
             "new grid + all-time-new entity (ATNO, so DXCC not BAND)"
         );
+    }
+
+    /// OPERATOR QUESTION 2026-08-23, after working RI1FJL on 20 m and still seeing its chips:
+    /// "what is the logic for removing things once I remove them from the needed board? ... any
+    /// areas in the FT area that need pills or icons removed when we work certain things?"
+    ///
+    /// The answer is that the decode feed clears RETROACTIVELY, and that is worth a test because
+    /// it is not obvious from the code: `recent_decodes` is not a stored list of rows with frozen
+    /// flags — it is REBUILT from `last_decodes` on every snapshot, so each flag is re-asked of
+    /// the worked index every time. `log_qso` refreshes that index, so a row already on screen
+    /// loses its icons the moment the contact is logged, with no new decode required.
+    ///
+    /// The neighbouring test logs FIRST and then decodes, which only ever proves the flags are
+    /// right for a NEW row. That left the case the operator actually asked about — the row is
+    /// already there, then you work them — with no coverage at all.
+    #[test]
+    fn working_a_station_clears_the_icons_on_a_decode_already_on_screen() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_dxcc_resolver(|call| call.chars().next().map(|c| c.to_string()));
+        e.set_frequency(14.074, "20m", "USB");
+
+        // The row arrives BEFORE the contact exists — nothing worked yet.
+        e.ingest_decodes_for_test(&[dec_snr("CQ W4ABC EM73", -8)], 0);
+        let before = e.snapshot().recent_decodes;
+        let r = before
+            .iter()
+            .find(|r| r.from.as_deref() == Some("W4ABC"))
+            .unwrap();
+        assert!(
+            r.new_grid && r.new_dxcc,
+            "control: an unworked station really does light up first"
+        );
+
+        // Work them. No further decodes — the same row must re-answer.
+        let rec = e.qso_record("W4ABC".into(), Some("EM73".into()), Some(-8));
+        e.log_qso(rec);
+
+        let after = e.snapshot().recent_decodes;
+        let r2 = after
+            .iter()
+            .find(|r| r.from.as_deref() == Some("W4ABC"))
+            .unwrap();
+        assert!(
+            !r2.new_grid,
+            "the GRID icon must go once that grid is worked on this band"
+        );
+        assert!(!r2.new_dxcc, "and the entity icon with it");
     }
 
     /// The operator's ruling (2026-07-22) on whether a 20 m contact counts for a 2 m
@@ -25779,7 +30913,8 @@ mod tests {
             2,
             "each call is its own row"
         );
-        // Stop TX clears the own-TX history.
+        // Stop TX does NOT erase what already went out — see
+        // `stopping_transmission_keeps_the_record_of_what_was_already_sent`.
         e.halt_tx();
         assert_eq!(
             e.snapshot()
@@ -25787,8 +30922,69 @@ mod tests {
                 .iter()
                 .filter(|d| d.mine)
                 .count(),
-            0,
-            "halt_tx clears own-TX rows"
+            2,
+            "halt_tx keeps own-TX rows"
+        );
+    }
+
+    /// #178 — STOPPING TRANSMISSION MUST NOT ERASE THE RECORD OF WHAT WAS ALREADY SENT.
+    ///
+    /// `own_tx` is the DISPLAY ring behind the `mine` rows in the Rx-Frequency pane: it holds
+    /// overs that ALREADY WENT ON THE AIR. Three sites cleared it beside the outbound queues
+    /// (`tx_queue` / `broadcast_queue`), which is the category error — dropping what we have
+    /// not sent yet is a stop; dropping what we did send is losing the operator's own log of
+    /// their calls. `halt_tx_for_context_change` made it worse than a deliberate Stop TX: a
+    /// band QSY, a radio handoff or a transport rebuild the loop performs UNDER the operator
+    /// wiped the pane with nobody having pressed anything, which is exactly the intermittent
+    /// the diagnostic at `record_own_tx` was added to catch ("an over that was recorded and
+    /// then wiped names the wiper").
+    ///
+    /// WSJT-X baseline: own TX appears in the Rx Frequency window (`displayTransmittedText`,
+    /// gated on `TX_messages_` / "Tx2QSO", default TRUE — `Configuration.cpp:1831`) and NOT
+    /// in Band Activity. Nexus already matches that; only the wipe was wrong.
+    #[test]
+    fn stopping_transmission_keeps_the_record_of_what_was_already_sent() {
+        let mine = |e: &mut Engine| {
+            e.snapshot()
+                .recent_decodes
+                .iter()
+                .filter(|d| d.mine)
+                .count()
+        };
+
+        // 1. The operator's Stop TX (and the WSJT-X UDP HaltTx, which routes here).
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.call_station("W9XYZ");
+        let _ = e.poll_tx(0);
+        assert_eq!(mine(&mut e), 1, "fixture: one over on the air");
+        e.halt_tx();
+        assert_eq!(
+            mine(&mut e),
+            1,
+            "Stop TX halts the transmitter; it does not un-send the over"
+        );
+
+        // 2. The CONTEXT halt — a band QSY / radio handoff the loop performs under the
+        //    operator. Nobody pressed anything, so wiping their own calls is pure loss.
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.call_station("W9XYZ");
+        let _ = e.poll_tx(0);
+        e.halt_tx_for_context_change("band change");
+        assert_eq!(
+            mine(&mut e),
+            1,
+            "a QSY the operator did not ask for must not erase their own calls"
+        );
+
+        // 3. Starting a CQ run / QSO spec. Same rule: the queues are new, the history is not.
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.call_station("W9XYZ");
+        let _ = e.poll_tx(0);
+        e.set_mode("qso-run").expect("qso-run is a known spec");
+        assert_eq!(
+            mine(&mut e),
+            1,
+            "starting a run clears the outbound queues, not the sent history"
         );
     }
 
@@ -26153,6 +31349,67 @@ mod tests {
             lines[0]
         );
         assert!(e.take_all_txt_pending().is_empty(), "drained after take");
+    }
+
+    /// THE 2026-08-25 TIMING REPORT, end to end through the engine: the line is stamped with
+    /// the period the AUDIO came from, not the wall clock the result was folded at.
+    ///
+    /// The helper is unit-tested in `alltxt`; this pins the WIRING — that `process_decodes`
+    /// passes the audio's period and not `now_unix_secs()`. Both are needed: a correct helper
+    /// called with the wrong argument is exactly the bug that shipped.
+    #[test]
+    fn all_txt_stamps_the_audio_period_not_the_wall_clock() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Ft8);
+        e.settings.write_all_txt = true;
+        // A slot far from "now", so a wall-clock stamp cannot coincidentally match.
+        const SLOT: u64 = 119_174_501;
+        let frame = native_frame_for(modes::ModeKind::Ft8, "CQ W1ABC FN42", 1500.0);
+        e.ingest(&frame, SLOT);
+        let lines = e.take_all_txt_pending();
+        assert_eq!(lines.len(), 1, "one decode → one line: {lines:?}");
+
+        let expect = crate::alltxt::period_start_unix(SLOT - 1, 15.0);
+        let (y, mo, d, h, mi, se) = tempo_core::logbook::datetime_utc(expect);
+        let stamp = format!(
+            "{:02}{:02}{:02}_{:02}{:02}{:02}",
+            (y as u32) % 100,
+            mo,
+            d,
+            h,
+            mi,
+            se
+        );
+        assert!(
+            lines[0].starts_with(&stamp),
+            "expected the audio period {stamp}, got {}",
+            lines[0]
+        );
+        // The property the operator's log did not have: it lands on a T/R boundary.
+        assert_eq!(
+            se % 15,
+            0,
+            "stamp must sit on an FT8 boundary: {}",
+            lines[0]
+        );
+        // The control — a wall-clock stamp would be today's date, not this slot's.
+        let now_stamp = {
+            let (y, mo, d, h, mi, se) = tempo_core::logbook::datetime_utc(now_unix_secs());
+            format!(
+                "{:02}{:02}{:02}_{:02}{:02}{:02}",
+                (y as u32) % 100,
+                mo,
+                d,
+                h,
+                mi,
+                se
+            )
+        };
+        assert!(
+            !lines[0].starts_with(&now_stamp),
+            "still stamping the wall clock: {}",
+            lines[0]
+        );
     }
 
     /// The WSJT-X-style early pass: a period truncated at ~11.8 s (the capture
@@ -26786,6 +32043,36 @@ mod tests {
     /// slot boundary, so a stall starved the audio row AND the Flex/CI-V panadapter together
     /// (operator report, 2026-07-25: the waterfall "hangs and stops moving"). The rule is
     /// unchanged; it moved to where the writers converge without a lock anyone else contends.
+    /// A NATIVE SCOPE MUST NOT REPLACE THE DECODER'S PASSBAND.
+    ///
+    /// `row()` prefers RF, and that is right for the rig-scope view. But the FT8/RTTY/PSK/SSTV
+    /// waterfalls are about 0-4000 Hz — a 500 kHz sweep cannot show a 50 Hz tone and cannot be
+    /// clicked to set an audio offset. Reported on an FT-710 (2026-08-20): with the rig scope
+    /// streaming, "the audio spectrum is broken in all cases"; turning the scope off brought it
+    /// straight back.
+    #[test]
+    fn audio_row_ignores_a_fresh_rf_row_while_row_still_prefers_it() {
+        let feed = SpectrumFeed::default();
+        feed.publish_audio(Spectrum {
+            row: vec![1.0, 2.0],
+            lo_hz: 0.0,
+            hi_hz: 4000.0,
+            source: "audio".into(),
+        });
+        feed.publish_rf(Spectrum {
+            row: vec![9.0, 9.0],
+            lo_hz: 14_000_000.0,
+            hi_hz: 14_500_000.0,
+            source: "yaesu".into(),
+        });
+        // The rig-scope path still gets the panadapter...
+        assert_eq!(feed.row().expect("a row").source, "yaesu");
+        // ...and the decoder path gets the passband, with the RF row sitting right there.
+        let a = feed.audio_row().expect("an audio row");
+        assert_eq!(a.source, "audio");
+        assert_eq!((a.lo_hz, a.hi_hz), (0.0, 4000.0), "0-4000 Hz, not the band");
+    }
+
     #[test]
     fn a_fresh_native_row_wins_over_audio_and_falls_back_when_cleared() {
         let feed = SpectrumFeed::default();
@@ -28310,6 +33597,7 @@ mod tests {
             icom_native_cat: p.icom_native_cat,
             icom_data_mode: p.icom_data_mode,
             data_modes_plain_ssb: p.data_modes_plain_ssb,
+            sstv_hold_data_submode: p.sstv_hold_data_submode,
             audio_in: p.audio_in.clone(),
             audio_out: p.audio_out.clone(),
             tx_level: p.tx_level,
@@ -28317,11 +33605,16 @@ mod tests {
             rotator_model: p.rotator_model,
             rotator_port: p.rotator_port.clone(),
             rotator_baud: p.rotator_baud,
+            amp_model: p.amp_model.clone(),
+            amp_port: p.amp_port.clone(),
+            amp_follow_band: p.amp_follow_band,
             rotator_host: p.rotator_host.clone(),
             rotctld_port: p.rotctld_port,
             native_scope: p.native_scope.clone(),
             flex_radio_ip: p.flex_radio_ip.clone(),
             flex_native_pan: p.flex_native_pan,
+            yaesu_rf_scope: None,
+            yaesu_fix_starts: None,
             flex_native_audio: p.flex_native_audio,
             live_mic_device: String::new(),
         };
@@ -28728,6 +34021,1224 @@ mod tests {
             );
         }
         assert!(!e.snapshot().recent_decodes.iter().any(|d| d.mine));
+    }
+
+    // ===== Native JS8 — Batch B7 (OPERATOR GATE → TX) engine tests =====
+
+    /// Spec invariant 6 (bounded airtime): every JS8 wave is SLOT-POSITIONED — `delay_ms` of
+    /// silence, then 79 symbols — and strictly shorter than its period at every speed, so
+    /// `tempo_audio::slot::tx_deadline_ms`'s clamp never truncates a frame and PTT always drops
+    /// before the next period. The typed word never round-trips through text.
+    #[test]
+    fn js8_waveform_is_slot_positioned_and_fits_its_period_at_every_speed() {
+        use ::js8::{Payload72, Word87, I3};
+        let word = Word87::new(
+            Payload72::from_bytes([0u8; 9]),
+            I3 {
+                first: true,
+                last: true,
+                data: false,
+            },
+        );
+        for speed in modes::Js8Speed::ALL {
+            let wave = TxWaveform::Js8 {
+                speed,
+                word,
+                f0: 1500.0,
+            }
+            .build();
+            let delay = speed.delay_ms() as usize * 12; // ms → samples at 12 kHz
+            assert_eq!(
+                wave.len(),
+                delay + 79 * speed.nsps(),
+                "{speed:?}: start delay + 79 symbols, nothing else"
+            );
+            assert!(
+                wave.len() < speed.period_s() as usize * 12_000,
+                "{speed:?}: the wave must be shorter than its period"
+            );
+            assert!(
+                wave[..delay].iter().all(|&s| s == 0.0),
+                "{speed:?}: the start delay is silence (slot-positioned)"
+            );
+            assert!(
+                wave[delay..].iter().any(|&s| s != 0.0),
+                "{speed:?}: then tones"
+            );
+            let secs = wave.len() as f32 / 12_000.0;
+            assert!(
+                (secs - speed.slot_fit_s()).abs() < 0.01,
+                "{speed:?}: `slot_fit_s` ({}) must describe the real wave ({secs})",
+                speed.slot_fit_s()
+            );
+        }
+    }
+
+    /// The per-tier over-length table feeds the "over longer than the whole watchdog limit"
+    /// refusal and the snappy-first-over room check. JS8's value is the REAL wave length per
+    /// speed (`Speed::slot_fit_s`: 25.78 / 13.14 / 8.10 / 4.05 s), always under its period.
+    #[test]
+    fn tx_over_secs_at_js8_is_the_slot_fit_length_of_the_tx_speed() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Js8);
+        for speed in modes::Js8Speed::ALL {
+            e.settings.js8_speed = speed.index();
+            let secs = e.tx_over_secs();
+            assert!(
+                (secs - f64::from(speed.slot_fit_s())).abs() < 1e-3,
+                "{speed:?}: {secs} != slot_fit_s"
+            );
+            assert!(
+                secs < f64::from(speed.period_s()),
+                "{speed:?} fits its period"
+            );
+        }
+        // A stale settings index degrades to Normal, never refuses (Tier::js8_kind's rule).
+        e.settings.js8_speed = 200;
+        assert!((e.tx_over_secs() - f64::from(modes::Js8Speed::Normal.slot_fit_s())).abs() < 1e-3);
+    }
+
+    /// The other half of B7.3: the TX latch can now be armed on the tier (B5's
+    /// `tier_is_rx_only` refusal retires with `tx: false`).
+    #[test]
+    fn the_tx_latch_arms_on_the_js8_tier_once_the_mode_declares_tx() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Js8);
+        e.set_tx_enabled(true);
+        assert!(e.tx_enabled(), "JS8 is no longer receive-only");
+    }
+
+    /// The current JS8 Normal period index on the wall clock (slot = floor(unix / 15)), so
+    /// `slot × 15 000 ms` is a real period start on the same axis the station's countdown
+    /// (`fires_at_ms`) lives on. Shared by every B7 test.
+    pub(super) fn js8_slot_now() -> u64 {
+        now_unix_secs() / 15
+    }
+
+    /// ENTERING THE TIER BY ANY DOOR SEEDS THE IDLE BASELINE — the regression test for a
+    /// bug that shipped silently once already.
+    ///
+    /// A freshly built `Station` has `last_activity_ms == 0`. The audio service ticks the
+    /// station once a second while the JS8 tier is live, so the FIRST real-clock tick reads
+    /// it as ~55 years idle, the idle watchdog trips, and autoreply/relay/HB are stood down
+    /// on the operator's first decode — no error, no log, just a mode that stops answering.
+    ///
+    /// The fix belongs on the TIER TRANSITION, not in `js8_enter`: `set_tier` is public
+    /// surface (the Tauri `set_tier` command accepts any `Tier::ALL` member, `"JS8"`
+    /// included), so the companion/UDP path, the rig-share broker or a later UI change can
+    /// reach the tier without that verb. **This test therefore enters the tier the way those
+    /// callers do — `set_tier` alone, never `js8_enter` — which is exactly the path the
+    /// original fix left open.**
+    #[test]
+    fn entering_js8_by_set_tier_alone_seeds_the_idle_baseline() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        // Startup installs the LIVE station config (`apply_settings` calls this too, per
+        // `js8_apply_station_config`'s own doc) — which is what turns the idle watchdog on
+        // at all. Without this the bootstrap config carries `idle_watchdog_min: 0` and the
+        // watchdog can never trip, so a test that skipped this step would pass against a
+        // broken build for the wrong reason.
+        e.settings.js8_idle_watchdog_min = 60;
+        e.settings.js8_autoreply = true;
+        e.js8_apply_station_config();
+        // The door that is NOT js8_enter.
+        e.set_tier(Tier::Js8);
+        // One service tick at the real wall clock — what the audio loop does a second later.
+        e.js8_tick(now_unix_secs() * 1000);
+        assert!(
+            !e.js8_station.idle_tripped(),
+            "entering JS8 via set_tier left the station at last_activity_ms = 0, so the \
+             first tick read it as decades idle and the watchdog stood the automatic \
+             origins down — the bug this seeds against"
+        );
+        // Positive control: the watchdog CAN still trip, so the assertion above is not
+        // passing merely because nothing ever trips.
+        e.js8_tick(now_unix_secs() * 1000 + 61 * 60 * 1000);
+        assert!(
+            e.js8_station.idle_tripped(),
+            "control: past the 60-minute idle limit the watchdog must still trip"
+        );
+    }
+
+    /// Spec invariant 3: the tier route returns ABOVE the mode-match tail that holds the
+    /// wall-clock watchdog, so the route carries its own copy. This pins the copy to the
+    /// original's three outcomes: (1) the first over after an operator act STARTS the clock
+    /// and does not trip; (2) real elapsed time ≥ the limit trips — disarm, flag, one-shot
+    /// abort; (3) 0 minutes = watchdog off. (The original's fourth outcome, "an over longer
+    /// than the whole limit", cannot occur for JS8: the longest over is 25.78 s and the
+    /// smallest non-zero limit is 60 s.)
+    #[test]
+    fn js8_wall_clock_trips_mirrors_the_mode_match_tail() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Js8);
+        e.settings.tx_watchdog_min = 6;
+        e.set_tx_enabled(true); // an operator act: the clock is cleared
+        assert_eq!(e.tx_watchdog_start, None);
+        assert!(
+            !e.js8_wall_clock_trips(),
+            "the first over starts the clock, no trip"
+        );
+        assert!(e.tx_watchdog_start.is_some() && e.tx_enabled() && !e.tx_watchdog);
+
+        e.tx_watchdog_start = Some(now_unix_secs().saturating_sub(6 * 60 + 1));
+        assert!(e.js8_wall_clock_trips(), "elapsed ≥ limit trips");
+        assert!(!e.tx_enabled(), "tripped: TX disarmed");
+        assert!(
+            e.tx_watchdog && e.slot_tx_abort,
+            "tripped: flagged + one-shot abort armed"
+        );
+
+        e.set_tx_enabled(true);
+        e.settings.tx_watchdog_min = 0;
+        e.tx_watchdog_start = Some(1);
+        assert!(
+            !e.js8_wall_clock_trips(),
+            "0 = off, exactly as for the FT arms"
+        );
+        assert!(e.tx_enabled());
+    }
+
+    /// Booking happens at PLAN time (the beacon / QSO precedent): one own-TX row in the
+    /// Rx-Frequency feed, one `mine` row in the JS8 activity ring, and — when ALL.TXT is on —
+    /// exactly one `Tx` line stamped with the PERIOD START the caller hands in (alltxt.rs:
+    /// never round the wall clock), mode JS8, SNR/DT zero, audio = our TX offset.
+    #[test]
+    fn js8_note_tx_done_books_one_row_and_one_all_txt_line() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Js8);
+        e.settings.write_all_txt = true;
+        e.set_tx_offset(1500.0);
+        let period_start_ms = js8_slot_now() * 15_000;
+        e.js8_note_tx_done("KD9TAW: @HB HEARTBEAT EN52", period_start_ms);
+        let lines = e.take_all_txt_pending();
+        assert_eq!(lines.len(), 1, "one Tx line: {lines:?}");
+        assert!(
+            lines[0].contains(" Tx JS8") && lines[0].ends_with("KD9TAW: @HB HEARTBEAT EN52"),
+            "{}",
+            lines[0]
+        );
+        assert!(
+            lines[0].contains(" 1500 "),
+            "audio column = our TX offset: {}",
+            lines[0]
+        );
+        assert_eq!(
+            e.snapshot()
+                .recent_decodes
+                .iter()
+                .filter(|d| d.mine)
+                .count(),
+            1
+        );
+        let st = e.js8_state();
+        assert_eq!(st.activity.iter().filter(|r| r.mine).count(), 1);
+        assert_eq!(st.activity.last().map(|r| r.at_ms), Some(period_start_ms));
+        // ALL.TXT off: still the rows, no line.
+        e.settings.write_all_txt = false;
+        e.js8_note_tx_done("KD9TAW: @ALLCALL CQ CQ CQ EN52", period_start_ms + 15_000);
+        assert!(e.take_all_txt_pending().is_empty());
+        assert_eq!(
+            e.snapshot()
+                .recent_decodes
+                .iter()
+                .filter(|d| d.mine)
+                .count(),
+            2
+        );
+    }
+
+    /// The route ORDER is the design (judge.md): JS8 keys every period, so it must sit ABOVE
+    /// the FT parity gate; it speaks JS8Call's wire, so it must sit ABOVE the Tempo ACK drain;
+    /// and it is a transmitter, so it must sit BELOW every "do not transmit at all" guard —
+    /// right after the beacon route. Pinned on the source because no runtime probe can tell
+    /// "silent because parity" from "silent because routed".
+    #[test]
+    fn plan_tx_routes_js8_after_the_beacon_route_and_before_the_tempo_ack_drain() {
+        let src = include_str!("engine.rs");
+        let body_start = src
+            .find("pub fn plan_tx(&mut self, slot: u64)")
+            .expect("plan_tx");
+        let body = &src[body_start..];
+        let beacon = body
+            .find("return self.plan_beacon_tx(slot);")
+            .expect("beacon route");
+        let js8 = body
+            .find("return self.plan_js8_tx(slot);")
+            .expect("js8 route");
+        let acks = body
+            .find("self.send_pending_acks(slot);")
+            .expect("ack drain");
+        let identity = body
+            .find("self.structured_tx_ready(needs_grid)")
+            .expect("identity gate");
+        let parity = body
+            .find("if slot % 2 != self.tx_parity")
+            .expect("parity gate");
+        assert!(beacon < js8, "JS8 must be routed after the beacon route");
+        assert!(js8 < acks, "JS8 must be routed before the Tempo ACK drain");
+        assert!(
+            js8 < identity && js8 < parity,
+            "…and before the identity and parity gates"
+        );
+    }
+
+    /// View entry keys nothing (the AprsArm `auto_armed_never_auto_acks_even_with_tx_enabled`
+    /// analogue): `js8_enter` sets the tier and the dial; with the TX latch up and nothing
+    /// queued, HB off, no switch touched, no slot keys.
+    #[test]
+    fn js8_enter_keys_nothing_even_with_tx_enabled() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.js8_enter();
+        e.set_tx_enabled(true);
+        let st = e.js8_state();
+        assert!(!st.hb_on && st.queue.is_empty() && st.pending_reply.is_none());
+        for s in js8_slot_now()..js8_slot_now() + 4 {
+            assert!(e.poll_tx(s).is_empty(), "view entry keyed on slot {s}");
+        }
+        assert!(!e.snapshot().recent_decodes.iter().any(|d| d.mine));
+    }
+
+    /// A JS8 decode as `process_decodes` would deliver it: the rendered line in `message`,
+    /// the 11 word bytes in `raw`, the speed in `mode`. Built through the real frame codec.
+    pub(super) fn js8_decode(frame: &::js8::Frame) -> modes::Decode {
+        let word = ::js8::proto::frame::encode_frame(
+            frame,
+            ::js8::I3 {
+                first: true,
+                last: true,
+                data: false,
+            },
+            modes::Js8Speed::Normal,
+        )
+        .expect("test frame packs");
+        modes::Decode {
+            message: frame.render(),
+            sync: 10.0,
+            snr: -5,
+            dt: 0.1,
+            freq: 1500.0,
+            nap: 0,
+            qual: 1.0,
+            rv: None,
+            mode: Some(modes::ModeKind::JS8_NORMAL),
+            raw: Some(*word.as_bytes()),
+        }
+    }
+
+    /// `<call>: KD9TAW SNR?` — a directed query the station autoreplies to (cmd 0 is in the
+    /// autoreply set) when, and only when, both operator acts are present.
+    pub(super) fn js8_snr_query_from(call: &str) -> modes::Decode {
+        use ::js8::proto::callsign::CallRef;
+        js8_decode(&::js8::Frame::Directed {
+            from: CallRef::Base(call.to_string()),
+            to: CallRef::Base("KD9TAW".to_string()),
+            cmd: ::js8::Command::SnrQuery,
+            num: None,
+            portable_from: false,
+            portable_to: false,
+        })
+    }
+
+    /// Spec invariant 9 + G2: a heartbeat's f0 is a random free 50 Hz slot in 500–1000 Hz,
+    /// chosen for the PLAN only — the operator's TX offset and the dial never move — and the
+    /// plan is flagged `beacon` so `commit_tx` applies the (approved) watchdog exemption.
+    #[test]
+    fn js8_heartbeat_lands_in_the_hb_subband_and_moves_nothing_else() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.js8_enter();
+        e.set_frequency(14.078, "20m", "USB");
+        e.set_tx_offset(1500.0);
+        e.set_tx_enabled(true);
+        e.js8_arm(Js8Switch::Hb, true).expect("session HB toggle");
+        // The audio service ticks the engine once a second at Tier::Js8 (service.rs); that
+        // tick is what moves a due heartbeat from the schedule into the station outbox, so
+        // the test mirrors it before polling. `js8_arm` only SCHEDULES the HB (set_hb).
+        e.js8_tick(tempo_core::timing::now_unix_ms() as u64);
+        let plan = e
+            .plan_tx(js8_slot_now() + 1)
+            .expect("an armed HB plans an over");
+        assert!(plan.beacon, "HB rides plan.beacon (G2)");
+        let TxWaveform::Js8 { f0, speed, .. } = &plan.waveform else {
+            panic!("a JS8 plan carries the typed waveform");
+        };
+        assert!(
+            (500.0..=1000.0).contains(f0),
+            "HB f0 {f0} outside the 500–1000 Hz sub-band"
+        );
+        assert_eq!(*f0 % 50.0, 0.0, "a 50 Hz slot");
+        assert_eq!(*speed, modes::Js8Speed::Normal);
+        assert_eq!(
+            e.tx_offset_hz(),
+            1500.0,
+            "the operator's offset is untouched"
+        );
+        assert!(
+            (e.settings.dial_mhz - 14.078).abs() < 1e-6,
+            "the dial is untouched"
+        );
+        let wave = plan.waveform.build();
+        assert!(
+            !e.commit_tx(&plan, wave, plan.slot).is_empty(),
+            "…and it keys"
+        );
+        assert!(
+            e.snapshot()
+                .recent_decodes
+                .iter()
+                .any(|d| d.mine && d.message.contains("HEARTBEAT")),
+            "own-TX row booked"
+        );
+    }
+
+    /// G2: a HEARTBEAT is exempt from the wall clock (it rides `plan.beacon`), and stays
+    /// bounded by its slot (`slot_fit_s` < period) and the idle watchdog (B7.7).
+    #[test]
+    fn a_js8_heartbeat_is_exempt_from_the_wall_clock_watchdog() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.tx_watchdog_min = 6;
+        e.js8_enter();
+        e.set_tx_enabled(true);
+        e.js8_arm(Js8Switch::Hb, true).expect("HB on");
+        // Enqueue the due HB the way the once-a-second service tick does (js8_arm only
+        // schedules it), then age the wall clock and confirm the HB still keys.
+        e.js8_tick(tempo_core::timing::now_unix_ms() as u64);
+        e.tx_watchdog_start = Some(now_unix_secs().saturating_sub(9_999));
+        let waves = e.poll_tx(js8_slot_now() + 1);
+        assert!(
+            !waves.is_empty(),
+            "the heartbeat keys despite the elapsed wall clock"
+        );
+        assert!(e.tx_enabled() && !e.tx_watchdog, "…and trips nothing");
+        assert!(waves[0].len() < 15 * 12_000, "bounded by its period");
+    }
+
+    /// B5's config builder is the ONE settings → station seam; B7 depends on two of its
+    /// numbers: the idle-watchdog floor of 5 minutes (JS8Call's minimum; 0 stays "off") and
+    /// the autoreply countdown of one period + 2 s.
+    #[test]
+    fn js8_station_config_applies_the_idle_floor_and_the_reply_countdown() {
+        let mut s = Settings {
+            mycall: "KD9TAW".to_string(),
+            js8_speed: modes::Js8Speed::Slow.index(),
+            js8_idle_watchdog_min: 3,
+            ..Settings::default()
+        };
+        let cfg = Engine::js8_station_config(&s);
+        assert_eq!(cfg.idle_watchdog_min, 5, "floor 5");
+        assert_eq!(cfg.reply_delay_ms, 30_000 + 2_000, "one Slow period + 2 s");
+        assert_eq!(cfg.allcall_reply_interval_ms, 15 * 60 * 1000);
+        s.js8_idle_watchdog_min = 0;
+        assert_eq!(
+            Engine::js8_station_config(&s).idle_watchdog_min,
+            0,
+            "0 = off survives the floor"
+        );
+    }
+
+    /// THE PIN (risk register): if a future change persists `tx_enabled`, autoreply ON — the
+    /// G3 default — would key on launch. At launch the latch is down; a query still gets a
+    /// visible countdown ("would have replied"), never a frame; the expired countdown is
+    /// CANCELLED, so arming TX later cannot fire a stale reply.
+    #[test]
+    fn js8_autoreply_never_keys_at_launch() {
+        let mut e = Engine::with_settings(Settings {
+            mycall: "KD9TAW".to_string(),
+            mygrid: "EN52".to_string(),
+            js8_autoreply: true, // the G3 default, spelled out
+            js8_relay: true,
+            ..Settings::default()
+        });
+        e.js8_enter();
+        assert!(!e.tx_enabled(), "launch is listen-only");
+        let s0 = js8_slot_now();
+        e.js8_ingest(&[js8_snr_query_from("W1AW")], s0);
+        let st = e.js8_state();
+        assert!(
+            st.pending_reply.is_some(),
+            "the station still computes the reply (shown, not sent)"
+        );
+        assert!(!st.armed.autoreply, "…and reports it as NOT armed");
+        for s in s0..s0 + 4 {
+            assert!(e.poll_tx(s).is_empty(), "nothing keys on slot {s}");
+        }
+        assert!(!e.tx_enabled());
+        // The countdown expires while the latch is down → cancelled, never carried.
+        e.js8_tick(tempo_core::timing::now_unix_ms() as u64 + 120_000);
+        assert!(
+            e.js8_state().pending_reply.is_none(),
+            "an expired unarmed reply is cancelled"
+        );
+        e.set_tx_enabled(true);
+        for s in s0 + 4..s0 + 8 {
+            assert!(
+                e.poll_tx(s).is_empty(),
+                "arming later must not fire the stale reply"
+            );
+        }
+    }
+
+    /// Act 2 without act 1: the persisted switch alone is silent.
+    #[test]
+    fn a_js8_switch_without_the_tx_latch_is_silent() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.js8_enter();
+        e.js8_arm(Js8Switch::Autoreply, true).expect("switch");
+        e.js8_arm(Js8Switch::Relay, true).expect("switch");
+        e.js8_arm(Js8Switch::HbAck, true).expect("switch");
+        assert!(!e.tx_enabled(), "a switch never arms TX by itself");
+        let s0 = js8_slot_now();
+        e.js8_ingest(&[js8_snr_query_from("W1AW")], s0);
+        for s in s0..s0 + 6 {
+            assert!(e.poll_tx(s).is_empty());
+        }
+    }
+
+    /// The "unless armed" half of the retired `js8_tx_verbs_refuse_in_the_receive_only_build`:
+    /// an operator SEND is a real verb now (it queues), but a queued operator frame still does
+    /// NOT key while the TX latch is down — the first act is required for the operator origin
+    /// exactly as for the automatic ones. `a_js8_switch_without_the_tx_latch_is_silent` covers
+    /// the automatic origins; this is the operator-send companion, so retiring "every transmit
+    /// verb refuses" did not shrink the set of things asserting "this does not key".
+    #[test]
+    fn a_queued_js8_operator_send_is_silent_without_the_tx_latch() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.js8_enter();
+        e.js8_send(None, "TEST".to_string())
+            .expect("queues even with the latch down");
+        assert!(!e.tx_enabled(), "the send did not arm TX");
+        assert!(
+            !e.js8_state().queue.is_empty(),
+            "the frame waits in the outbox"
+        );
+        for s in js8_slot_now()..js8_slot_now() + 6 {
+            assert!(
+                e.poll_tx(s).is_empty(),
+                "nothing keys with the latch down, slot {s}"
+            );
+        }
+        assert!(
+            !e.snapshot().recent_decodes.iter().any(|d| d.mine),
+            "nothing booked"
+        );
+    }
+
+    /// Both acts: EXACTLY ONE reply, after the countdown (one period + 2 s), never a second.
+    #[test]
+    fn both_acts_present_yield_exactly_one_reply_after_the_countdown() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.js8_enter();
+        e.set_tx_enabled(true); // act 1 (session)
+        assert!(
+            e.settings.js8_autoreply,
+            "act 2 is the persisted default (G3)"
+        );
+        let s0 = js8_slot_now();
+        e.js8_ingest(&[js8_snr_query_from("W1AW")], s0);
+        let pending = e.js8_state().pending_reply.expect("a countdown is shown");
+        assert!(pending.display.contains("W1AW SNR"), "{}", pending.display);
+        assert!(e.js8_state().armed.autoreply);
+        let keyed: Vec<u64> = (s0..s0 + 6).filter(|&s| !e.poll_tx(s).is_empty()).collect();
+        assert_eq!(keyed.len(), 1, "exactly one reply: keyed on {keyed:?}");
+        assert!(
+            keyed[0] >= s0 + 2,
+            "…and only after the countdown (keyed on {})",
+            keyed[0]
+        );
+        assert!(e.js8_state().pending_reply.is_none());
+        assert!(e
+            .snapshot()
+            .recent_decodes
+            .iter()
+            .any(|d| d.mine && d.message.contains("W1AW SNR")));
+    }
+
+    /// Cancel is the operator's veto on the countdown.
+    #[test]
+    fn js8_cancel_stops_a_pending_reply() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.js8_enter();
+        e.set_tx_enabled(true);
+        let s0 = js8_slot_now();
+        e.js8_ingest(&[js8_snr_query_from("W1AW")], s0);
+        assert!(e.js8_state().pending_reply.is_some());
+        e.js8_cancel();
+        assert!(e.js8_state().pending_reply.is_none());
+        for s in s0..s0 + 6 {
+            assert!(e.poll_tx(s).is_empty());
+        }
+    }
+
+    /// JS8Call parity: the 60-min idle watchdog stands HB/autoreply/relay down and drops the
+    /// queues; `tx_enabled` is UNTOUCHED (it is the operator's latch, not the station's); the
+    /// persisted switches are not rewritten — `Js8Armed` reads `!idle_tripped`; any operator
+    /// verb (here: re-checking a switch) clears the trip.
+    #[test]
+    fn the_idle_watchdog_stands_the_automatic_origins_down_but_leaves_tx_armed() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.js8_enter();
+        e.set_tx_enabled(true);
+        e.js8_arm(Js8Switch::Hb, true).expect("HB on");
+        let base = tempo_core::timing::now_unix_ms() as u64;
+        for minute in 1..=61u64 {
+            e.js8_tick(base + minute * 60_000);
+        }
+        let st = e.js8_state();
+        assert!(st.idle_tripped, "61 idle minutes trip the 60-min watchdog");
+        assert!(!st.hb_on && !st.armed.hb && !st.armed.autoreply && !st.armed.relay);
+        assert!(e.tx_enabled(), "tx_enabled untouched (JS8Call semantics)");
+        assert!(
+            e.settings.js8_autoreply,
+            "the persisted switch is not rewritten"
+        );
+        let s0 = js8_slot_now();
+        e.js8_ingest(&[js8_snr_query_from("W1AW")], s0);
+        for s in s0..s0 + 6 {
+            assert!(e.poll_tx(s).is_empty(), "tripped: no autoreply keys");
+        }
+        e.js8_arm(Js8Switch::Autoreply, true)
+            .expect("an operator verb");
+        assert!(
+            !e.js8_state().idle_tripped,
+            "an operator verb clears the trip"
+        );
+    }
+
+    // ===== B7.5 planner tests (the send half — land at B7.8 with js8_send) =====
+
+    /// G1: every period is a TX slot. Two queued operator messages go out on CONSECUTIVE
+    /// slots — one even, one odd — which the FT parity gate would have split across four.
+    #[test]
+    fn js8_operator_frames_key_in_consecutive_periods_with_no_parity() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.js8_enter();
+        e.set_tx_enabled(true);
+        e.js8_send(None, "TEST ONE".to_string()).expect("queues");
+        e.js8_send(None, "TEST TWO".to_string()).expect("queues");
+        let s = js8_slot_now() + 1;
+        assert!(!e.poll_tx(s).is_empty(), "first period keys");
+        assert!(
+            !e.poll_tx(s + 1).is_empty(),
+            "the very next period keys too (no parity)"
+        );
+        assert!(
+            e.snapshot()
+                .recent_decodes
+                .iter()
+                .filter(|d| d.mine)
+                .count()
+                >= 2,
+            "both overs appear as own-TX rows"
+        );
+    }
+
+    /// One frame per period: a second poll inside the same slot (the snappy path, a re-plan)
+    /// must not pop the next frame and key it mid-period.
+    #[test]
+    fn js8_plans_at_most_one_frame_per_slot() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.js8_enter();
+        e.set_tx_enabled(true);
+        e.js8_send(None, "TEST ONE".to_string()).expect("queues");
+        e.js8_send(None, "TEST TWO".to_string()).expect("queues");
+        let s = js8_slot_now() + 1;
+        assert!(e.plan_tx(s).is_some(), "first poll of the slot plans");
+        assert!(
+            e.plan_tx(s).is_none(),
+            "second poll of the SAME slot plans nothing"
+        );
+        assert!(
+            e.plan_tx(s + 1).is_some(),
+            "the next slot plans the next frame"
+        );
+    }
+
+    /// Spec invariant 3: an operator frame planned after the limit elapsed trips exactly like
+    /// an FT8 over — disarm + one-shot abort + nothing keyed, nothing booked.
+    #[test]
+    fn the_wall_clock_watchdog_is_re_applied_to_js8_operator_traffic() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.tx_watchdog_min = 6;
+        e.js8_enter();
+        e.set_tx_enabled(true);
+        e.js8_send(None, "TEST".to_string()).expect("queues"); // an operator verb restarts the clock…
+        e.tx_watchdog_start = Some(now_unix_secs().saturating_sub(9_999)); // …then pretend 6+ min passed
+        assert!(
+            e.poll_tx(js8_slot_now() + 1).is_empty(),
+            "tripped: nothing keys"
+        );
+        assert!(!e.tx_enabled(), "tripped: TX disarmed");
+        assert!(
+            e.tx_watchdog && e.slot_tx_abort,
+            "tripped: flagged + one-shot abort armed"
+        );
+        assert!(
+            !e.snapshot().recent_decodes.iter().any(|d| d.mine),
+            "nothing booked"
+        );
+    }
+
+    /// The route sits below every "do not transmit at all" guard: on a Phone operating mode
+    /// the JS8 planner is never reached, so nothing keys and nothing is booked.
+    #[test]
+    fn js8_never_keys_outside_the_digital_operating_mode() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.js8_enter();
+        e.set_tx_enabled(true);
+        e.js8_send(None, "TEST".to_string()).expect("queues");
+        e.settings.operating_mode = crate::settings::OperatingMode::Phone;
+        assert!(e.poll_tx(js8_slot_now() + 1).is_empty());
+        assert!(!e.snapshot().recent_decodes.iter().any(|d| d.mine));
+        assert!(
+            !e.js8_state().queue.is_empty(),
+            "the frame waits; it was not consumed"
+        );
+    }
+
+    // ===== B7.6 halt tests =====
+
+    /// Spec invariant 7 — halt is TOTAL: Stop TX drops the JS8 outbox, the pending autoreply
+    /// and the heartbeat schedule, on top of everything `halt_tx` already kills. A halt that
+    /// left a queued frame behind would key it the moment the operator re-armed.
+    #[test]
+    fn halt_tx_clears_the_js8_queue_heartbeat_and_pending_reply() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.js8_enter();
+        e.set_tx_enabled(true);
+        e.js8_arm(Js8Switch::Hb, true).expect("HB on");
+        e.js8_send(
+            None,
+            "A LONG ENOUGH MESSAGE TO NEED SEVERAL FRAMES AT NORMAL SPEED".to_string(),
+        )
+        .expect("queues");
+        e.js8_ingest(&[js8_snr_query_from("W1AW")], js8_slot_now());
+        let st = e.js8_state();
+        assert!(
+            st.hb_on && !st.queue.is_empty() && st.pending_reply.is_some(),
+            "precondition"
+        );
+
+        e.halt_tx();
+        let st = e.js8_state();
+        assert!(!e.tx_enabled(), "halt disarms");
+        assert!(!st.hb_on, "halt cancels the HB schedule");
+        assert!(st.queue.is_empty(), "halt drops the outbox");
+        assert!(st.pending_reply.is_none(), "halt cancels the pending reply");
+        e.set_tx_enabled(true);
+        for s in js8_slot_now() + 1..js8_slot_now() + 5 {
+            assert!(
+                e.poll_tx(s).is_empty(),
+                "re-arming after a halt keys nothing on slot {s}"
+            );
+        }
+    }
+
+    /// Leaving the tier cancels the HB schedule (risk register: a pending HB must not fire on
+    /// return) and empties the outbox; coming back is a clean slate.
+    #[test]
+    fn leaving_the_js8_tier_cancels_the_heartbeat_and_drops_the_queue() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.js8_enter();
+        e.set_tx_enabled(true);
+        e.js8_arm(Js8Switch::Hb, true).expect("HB on");
+        e.js8_send(None, "TEST".to_string()).expect("queues");
+        e.set_tier(Tier::Ft8);
+        assert!(
+            !e.js8_hb_on && !e.js8_station.hb_on(),
+            "HB schedule cancelled on the way out"
+        );
+        assert!(
+            e.js8_state().queue.is_empty(),
+            "outbox dropped on the way out"
+        );
+        e.set_tier(Tier::Js8);
+        e.set_tx_enabled(true);
+        for s in js8_slot_now() + 1..js8_slot_now() + 4 {
+            assert!(
+                e.poll_tx(s).is_empty(),
+                "nothing left over keys on return, slot {s}"
+            );
+        }
+    }
+
+    /// `set_mode` clears the Tempo queues; it clears the JS8 ones too.
+    #[test]
+    fn set_mode_drops_the_js8_queue_and_heartbeat() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.js8_enter();
+        e.set_tx_enabled(true);
+        e.js8_arm(Js8Switch::Hb, true).expect("HB on");
+        e.js8_send(None, "TEST".to_string()).expect("queues");
+        e.set_mode("qso-monitor")
+            .expect("a passive spec is always accepted");
+        assert!(e.js8_state().queue.is_empty() && !e.js8_hb_on);
+    }
+
+    // ===== the auto-repeating CQ / heartbeat (JS8Call's checkable CQ & HB buttons) =====
+
+    /// THE TWO-ACT ARM, repeat edition. The session CQ-repeat switch is only the SECOND act:
+    /// with the TX latch down, an armed repeat at a 1-minute interval keys NOTHING however
+    /// many ticks and slots go by, and books no own-TX row. (`js8_cq_repeat_armed_and_latched_
+    /// keys_the_cq` below is the positive control — this is not passing because nothing ever
+    /// keys.)
+    #[test]
+    fn js8_cq_repeat_without_the_tx_latch_keys_nothing() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.js8_cq_interval_min = 1;
+        e.js8_apply_station_config();
+        e.js8_enter();
+        e.js8_set_cq_repeat(true, 0).expect("the session CQ toggle");
+        assert!(!e.tx_enabled(), "the FIRST act was never given");
+        let st = e.js8_state();
+        assert!(st.cq_on, "the switch is on…");
+        assert!(
+            !st.armed.cq,
+            "…and reports NOT armed, because the latch is down"
+        );
+        let base = tempo_core::timing::now_unix_ms() as u64;
+        let s0 = js8_slot_now();
+        for min in 1..=10u64 {
+            e.js8_tick(base + min * 60_000);
+            for s in s0 + min * 4..s0 + min * 4 + 4 {
+                assert!(
+                    e.poll_tx(s).is_empty(),
+                    "repeat armed, latch down: slot {s} keyed"
+                );
+            }
+        }
+        assert!(
+            !e.snapshot().recent_decodes.iter().any(|d| d.mine),
+            "nothing was booked as an own-TX row"
+        );
+    }
+
+    /// The positive control for the pair above, and the feature itself: with BOTH acts
+    /// present a scheduled CQ keys — on the operator's own TX offset (a CQ is not a
+    /// heartbeat, so it does not move into the HB sub-band), as `Origin::CqRepeat`, and
+    /// riding `plan.beacon`.
+    #[test]
+    fn js8_cq_repeat_with_both_acts_keys_one_cq_on_the_operators_offset() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.js8_cq_interval_min = 1;
+        e.js8_apply_station_config();
+        e.js8_enter();
+        e.set_tx_offset(1500.0);
+        e.set_tx_enabled(true);
+        e.js8_set_cq_repeat(true, 0).expect("the session CQ toggle");
+        assert!(e.js8_state().armed.cq, "both acts present → armed");
+        // The once-a-second service tick is what moves a due CQ into the outbox.
+        e.js8_tick(tempo_core::timing::now_unix_ms() as u64 + 61_000);
+        assert_eq!(
+            e.js8_state().queue.first().map(|q| q.origin),
+            Some(::js8::Origin::CqRepeat),
+            "a SCHEDULED CQ is an automatic origin, never Operator"
+        );
+        let plan = e
+            .plan_tx(js8_slot_now() + 1)
+            .expect("the scheduled CQ plans an over");
+        assert!(plan.beacon, "a repeating CQ rides plan.beacon");
+        let TxWaveform::Js8 { f0, .. } = &plan.waveform else {
+            panic!("a JS8 plan carries the typed waveform");
+        };
+        assert_eq!(*f0, 1500.0, "a CQ goes out on the operator's offset");
+        assert!(
+            e.snapshot()
+                .recent_decodes
+                .iter()
+                .any(|d| d.mine && d.message.contains("CQ")),
+            "own-TX row booked"
+        );
+    }
+
+    /// THE INVARIANT THIS FEATURE COULD HAVE BROKEN: a repeat loop must never outlive the
+    /// idle watchdog. A scheduled CQ is `Origin::CqRepeat`, so `Station::note_tx_done` does
+    /// NOT reset the idle baseline for it — had it been queued as `Origin::Operator` (the
+    /// one-shot's origin) every CQ would have reset the very clock meant to stop it and an
+    /// unattended station would call CQ forever. Positive control: CQs really did go out.
+    #[test]
+    fn the_idle_watchdog_stops_a_repeating_cq_and_heartbeat() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.js8_cq_interval_min = 5;
+        e.settings.js8_hb_interval_min = 5;
+        e.settings.js8_idle_watchdog_min = 60;
+        e.js8_apply_station_config();
+        e.js8_enter();
+        e.set_tx_enabled(true);
+        e.js8_set_cq_repeat(true, 0).expect("CQ repeat on");
+        e.js8_arm(Js8Switch::Hb, true).expect("HB on");
+        let base = tempo_core::timing::now_unix_ms() as u64;
+        let s0 = js8_slot_now();
+        let mut keyed = 0;
+        for min in 1..=61u64 {
+            e.js8_tick(base + min * 60_000);
+            if !e.poll_tx(s0 + min).is_empty() {
+                keyed += 1;
+            }
+        }
+        assert!(
+            keyed >= 10,
+            "control: the repeats really ran ({keyed} overs)"
+        );
+        let st = e.js8_state();
+        assert!(
+            st.idle_tripped,
+            "61 idle minutes trip the 60-minute watchdog"
+        );
+        assert!(
+            !st.cq_on && st.cq_next_at_ms.is_none(),
+            "the trip stops the CQ repeat"
+        );
+        assert!(!st.hb_on, "…and the heartbeat, as it always did");
+        assert!(!st.armed.cq && !st.armed.hb);
+        assert!(e.tx_enabled(), "tx_enabled untouched (JS8Call semantics)");
+        for s in s0 + 100..s0 + 110 {
+            assert!(e.poll_tx(s).is_empty(), "tripped: slot {s} must not key");
+        }
+    }
+
+    /// HALT IS TOTAL for the repeat schedule too (spec invariant 7), through all three
+    /// clearing paths — Stop TX, leaving the tier, and a mode change — and re-arming the
+    /// latch afterwards must not resurrect it.
+    #[test]
+    fn halt_tier_change_and_mode_change_each_cancel_the_cq_repeat() {
+        let arm = || {
+            let mut e = Engine::new("KD9TAW", "EN52", 0);
+            e.settings.js8_cq_interval_min = 1;
+            e.js8_apply_station_config();
+            e.js8_enter();
+            e.set_tx_enabled(true);
+            e.js8_set_cq_repeat(true, 0).expect("CQ repeat on");
+            e.js8_tick(tempo_core::timing::now_unix_ms() as u64 + 61_000);
+            assert!(
+                e.js8_state().cq_on && !e.js8_state().queue.is_empty(),
+                "precondition: armed, with a scheduled CQ waiting"
+            );
+            e
+        };
+
+        let mut e = arm();
+        e.halt_tx();
+        let st = e.js8_state();
+        assert!(
+            !st.cq_on && st.cq_next_at_ms.is_none(),
+            "Stop TX cancels the schedule"
+        );
+        assert!(
+            st.queue.is_empty(),
+            "…and drops the frame it had already queued"
+        );
+        e.set_tx_enabled(true);
+        for s in js8_slot_now() + 1..js8_slot_now() + 6 {
+            assert!(
+                e.poll_tx(s).is_empty(),
+                "re-arming after a halt keys nothing (slot {s})"
+            );
+        }
+
+        let mut e = arm();
+        e.set_tier(Tier::Ft8);
+        assert!(
+            !e.js8_station.cq_on(),
+            "leaving the tier cancels the schedule"
+        );
+        assert!(e.js8_state().queue.is_empty());
+
+        let mut e = arm();
+        e.set_mode("qso-monitor")
+            .expect("a passive spec is always accepted");
+        assert!(!e.js8_station.cq_on(), "a mode change cancels the schedule");
+        assert!(e.js8_state().queue.is_empty());
+    }
+
+    /// A SCHEDULE, never a queue that can burst — at the engine, not just the station. Ten
+    /// minutes of a 1-minute repeat, ticked and polled every simulated minute, key ONE over
+    /// per period and never two in a period; and a tick that jumps a whole hour produces one
+    /// CQ, not sixty.
+    #[test]
+    fn a_repeating_cq_never_bursts_at_the_engine() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.js8_cq_interval_min = 1;
+        e.settings.js8_idle_watchdog_min = 0; // isolate: this test is about bursting
+        e.js8_apply_station_config();
+        e.js8_enter();
+        e.set_tx_enabled(true);
+        e.js8_set_cq_repeat(true, 0).expect("CQ repeat on");
+        let base = tempo_core::timing::now_unix_ms() as u64;
+        let s0 = js8_slot_now();
+        for min in 1..=10u64 {
+            e.js8_tick(base + min * 60_000);
+            assert!(
+                e.js8_state().queue.len() <= 1,
+                "minute {min}: the schedule queued more than one CQ"
+            );
+            assert!(
+                !e.poll_tx(s0 + min * 2).is_empty(),
+                "minute {min}: the CQ goes out"
+            );
+            assert!(
+                e.poll_tx(s0 + min * 2).is_empty(),
+                "minute {min}: a second poll in the same period must not key again"
+            );
+            assert!(
+                e.js8_state().queue.is_empty(),
+                "minute {min}: the outbox drained"
+            );
+        }
+        // An hour in one jump: one CQ, and the schedule re-bases on NOW.
+        e.js8_tick(base + 70 * 60_000);
+        assert_eq!(
+            e.js8_state().queue.len(),
+            1,
+            "a missed hour is skipped, never batched"
+        );
+        while !e.poll_tx(js8_slot_now() + 40).is_empty() {}
+        // A BUSY OUTBOX IS NEVER STACKED ON. While a multi-frame operator message drains,
+        // the schedule waits rather than queueing CQs behind it — otherwise ten quiet
+        // minutes on a long message would come due all at once the moment it finished.
+        e.js8_send(
+            None,
+            "A LONG ENOUGH MESSAGE TO NEED SEVERAL FRAMES AT NORMAL SPEED".to_string(),
+        )
+        .expect("queues");
+        let frames = e.js8_state().queue.len();
+        assert!(
+            frames >= 4,
+            "control: the operator message really is multi-frame"
+        );
+        for min in 71..=80u64 {
+            e.js8_tick(base + min * 60_000);
+            assert!(
+                !e.js8_state()
+                    .queue
+                    .iter()
+                    .any(|q| q.origin == ::js8::Origin::CqRepeat),
+                "minute {min}: a CQ was stacked behind the draining operator message"
+            );
+        }
+        assert_eq!(
+            e.js8_state().queue.len(),
+            frames,
+            "the outbox grew while it was busy"
+        );
+    }
+
+    /// JS8Call's `resetCQTimer(stop = true)`: a directed message addressed to me STOPS the
+    /// repeating CQ (somebody answered), while the heartbeat schedule is only pushed out.
+    #[test]
+    fn a_directed_reply_stops_the_repeating_cq_but_not_the_heartbeat() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.js8_cq_interval_min = 5;
+        e.settings.js8_hb_interval_min = 5;
+        e.js8_apply_station_config();
+        e.js8_enter();
+        e.set_tx_enabled(true);
+        e.js8_set_cq_repeat(true, 0).expect("CQ repeat on");
+        e.js8_arm(Js8Switch::Hb, true).expect("HB on");
+        assert!(e.js8_state().cq_on, "precondition");
+        e.js8_ingest(&[js8_snr_query_from("W1AW")], js8_slot_now());
+        let st = e.js8_state();
+        assert!(!st.cq_on, "a station answering my CQ stops the repeat");
+        assert!(st.hb_on, "the heartbeat keeps beaconing");
+    }
+
+    /// The wall-clock TX watchdog bounds operator/autoreply/relay JS8 traffic and always
+    /// has; the two BEACON-class origins are exempt, or a 6-minute clock would kill a
+    /// 15-minute CQ repeat after its first call. Both directions are checked here, so this
+    /// is not "nothing ever trips".
+    #[test]
+    fn a_repeating_cq_is_exempt_from_the_wall_clock_but_an_operator_send_is_not() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.tx_watchdog_min = 6;
+        e.settings.js8_cq_interval_min = 1;
+        e.js8_apply_station_config();
+        e.js8_enter();
+        e.set_tx_enabled(true);
+        e.js8_set_cq_repeat(true, 0).expect("CQ repeat on");
+        e.js8_tick(tempo_core::timing::now_unix_ms() as u64 + 61_000);
+        e.tx_watchdog_start = Some(now_unix_secs().saturating_sub(9_999));
+        assert!(
+            !e.poll_tx(js8_slot_now() + 1).is_empty(),
+            "the scheduled CQ keys despite the elapsed wall clock"
+        );
+        assert!(e.tx_enabled() && !e.tx_watchdog, "…and trips nothing");
+        // THE OTHER DIRECTION: an operator send on the same aged clock DOES trip it.
+        e.js8_send(None, "TEST".to_string()).expect("queues");
+        e.tx_watchdog_start = Some(now_unix_secs().saturating_sub(9_999));
+        assert!(
+            e.poll_tx(js8_slot_now() + 2).is_empty(),
+            "control: an operator frame is still bounded by the wall clock"
+        );
+        assert!(
+            e.tx_watchdog && !e.tx_enabled(),
+            "…and the trip is a hard kill"
+        );
+    }
+
+    // ===== B7.7 sender-class control =====
+
+    /// Drop queue is a SENDER-class control (not a stop): the outbox goes, HB and TX stay.
+    #[test]
+    fn js8_drop_queue_is_not_a_stop() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.js8_enter();
+        e.set_tx_enabled(true);
+        e.js8_arm(Js8Switch::Hb, true).expect("HB on");
+        e.js8_send(None, "TEST".to_string()).expect("queues");
+        e.js8_drop_queue();
+        let st = e.js8_state();
+        assert!(st.queue.is_empty());
+        assert!(
+            st.hb_on && e.tx_enabled(),
+            "HB schedule and the TX latch survive a queue drop"
+        );
+    }
+
+    // ===== B7.8 operator-verb tests =====
+
+    /// §97.119 airtime cap (spec invariant 6): a message whose frames × period would exceed
+    /// ten minutes is REFUSED with the reason, not silently truncated or sent. Slow is the
+    /// tightest (19 frames × 30 s); the same text fits at Turbo (99 frames × 6 s).
+    #[test]
+    fn js8_refuses_a_message_over_the_airtime_cap_with_the_reason() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.js8_speed = modes::Js8Speed::Slow.index();
+        e.js8_enter();
+        e.set_tx_enabled(true);
+        let long = "THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG ".repeat(20);
+        let err = e.js8_send(None, long.clone()).expect_err("over the cap");
+        assert!(err.contains("10 minutes") && err.contains("19"), "{err}");
+        assert!(e.js8_state().queue.is_empty(), "nothing queued");
+        assert_eq!(e.js8_state().last_error.as_deref(), Some(err.as_str()));
+        assert_eq!(::js8::proto::compose::max_frames(modes::Js8Speed::Slow), 19);
+        // The cap is per speed: the same text fits comfortably at Turbo.
+        e.js8_set_speed(modes::Js8Speed::Turbo.index())
+            .expect("speed change");
+        assert!(e.js8_send(None, long).is_ok());
+        assert!(
+            e.js8_state().last_error.is_none(),
+            "a success clears the last error"
+        );
+    }
+
+    /// Only OPERATOR verbs restart the wall clock; an inbound query (an automatic reply) does not.
+    #[test]
+    fn js8_operator_verbs_restart_the_wall_clock_and_automatic_replies_do_not() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.js8_enter();
+        e.set_tx_enabled(true);
+        e.tx_watchdog_start = Some(1);
+        e.js8_send(None, "TEST".to_string()).expect("queues");
+        assert_eq!(e.tx_watchdog_start, None, "js8_send restarts the clock");
+        e.tx_watchdog_start = Some(1);
+        e.js8_call_cq(0).expect("queues");
+        assert_eq!(e.tx_watchdog_start, None, "js8_call_cq restarts the clock");
+        e.tx_watchdog_start = Some(1);
+        e.js8_send_command(
+            "W1AW".to_string(),
+            ::js8::Command::SnrQuery.id(),
+            String::new(),
+        )
+        .expect("queues");
+        assert_eq!(
+            e.tx_watchdog_start, None,
+            "js8_send_command restarts the clock"
+        );
+        e.tx_watchdog_start = Some(1);
+        e.js8_ingest(&[js8_snr_query_from("W1AW")], js8_slot_now());
+        assert_eq!(
+            e.tx_watchdog_start,
+            Some(1),
+            "an inbound query is not an operator act"
+        );
+    }
+
+    /// Identity, fail-closed: with no callsign nothing is queued (compose refuses), and a
+    /// frame queued BEFORE the callsign was lost never plans — `structured_tx_ready(false)`
+    /// refuses at plan time.
+    #[test]
+    fn js8_never_keys_without_a_callsign() {
+        let mut blank = Engine::new("", "EN52", 0);
+        blank.js8_enter();
+        blank.set_tx_enabled(true);
+        assert!(
+            blank.js8_send(None, "TEST".to_string()).is_err(),
+            "compose refuses NoCallsign"
+        );
+        assert!(blank.js8_state().queue.is_empty());
+
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.js8_enter();
+        e.set_tx_enabled(true);
+        e.js8_send(None, "TEST".to_string()).expect("queues");
+        e.settings.mycall = String::new(); // identity lost between queue and plan
+        for s in js8_slot_now() + 1..js8_slot_now() + 3 {
+            assert!(
+                e.plan_tx(s).is_none(),
+                "the identity gate refuses on slot {s}"
+            );
+        }
+    }
+
+    /// `chat_mode_at_ft8_tier_stays_silent`'s JS8 analogue: Mode::Chat is the boot state and
+    /// a legitimate resting state at Tier::Js8; it must stay inert there — no Tempo frame, no
+    /// ACK drain, nothing keyed, no own row.
+    #[test]
+    fn chat_mode_resting_at_js8_tier_keys_nothing_and_drains_no_tempo_ack() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.js8_enter(); // boot mode is Chat; the tier is JS8
+        assert!(
+            matches!(e.mode, Mode::Chat),
+            "precondition: resting in Chat"
+        );
+        e.set_tx_enabled(true);
+        for s in js8_slot_now()..js8_slot_now() + 8 {
+            assert!(
+                e.poll_tx(s).is_empty(),
+                "Chat+JS8 with nothing queued keyed on slot {s}"
+            );
+        }
+        assert!(
+            e.broadcast_queue.is_empty(),
+            "no Tempo ACK was queued on a JS8 dial"
+        );
+        assert!(!e.snapshot().recent_decodes.iter().any(|d| d.mine));
+    }
+
+    /// `commit_tx`'s stale-plan refusal applies to JS8 unchanged (spec invariant 5): tier
+    /// moved, slot rolled over, Stop TX between plan and commit — each refuses on its own.
+    #[test]
+    fn commit_tx_refuses_a_stale_js8_plan() {
+        let mk = || {
+            let mut e = Engine::new("KD9TAW", "EN52", 0);
+            e.js8_enter();
+            e.set_tx_enabled(true);
+            e.js8_call_cq(0).expect("queues");
+            let plan = e.plan_tx(js8_slot_now() + 1).expect("plans");
+            let wave = plan.waveform.build();
+            assert!(!wave.is_empty());
+            (e, plan, wave)
+        };
+        let (mut e, plan, wave) = mk();
+        assert!(
+            e.commit_tx(&plan, wave, plan.slot + 1).is_empty(),
+            "slot rollover refuses"
+        );
+        let (mut e, plan, wave) = mk();
+        e.set_tier(Tier::Ft8);
+        assert!(
+            e.commit_tx(&plan, wave, plan.slot).is_empty(),
+            "tier change refuses"
+        );
+        let (mut e, plan, wave) = mk();
+        e.halt_tx();
+        e.set_tx_enabled(true);
+        assert!(
+            e.commit_tx(&plan, wave, plan.slot).is_empty(),
+            "Stop TX between plan and commit refuses"
+        );
+        let (mut e, plan, wave) = mk();
+        assert!(
+            !e.commit_tx(&plan, wave, plan.slot).is_empty(),
+            "control: an unchanged plan commits"
+        );
     }
 
     /// One decoded packet, ready to push. `raw` doubles as the payload text so two calls with
@@ -33512,6 +40023,67 @@ mod tests {
         let _ = e.active_capture_samples();
     }
 
+    /// #101b — A WSPR BEACON MUST NOT KEY OUTSIDE THE 200 Hz SUB-BAND.
+    ///
+    /// `set_tx_offset` clamped to the 200–4000 Hz spectrum span with NO per-mode narrowing,
+    /// and that value reaches the beacon waveform's `f0` directly. So a WSPR beacon could sit
+    /// at 300 Hz or 3800 Hz — outside the band every WSPR decoder searches — and the operator
+    /// beacons all night into a slice nobody looks at. The failure is silent by construction:
+    /// the transmission is real, the rig keys, and the only evidence is an empty spot page.
+    ///
+    /// WSJT-X BASELINE, read in the real source, not assumed: entering WSPR narrows the
+    /// transmit-frequency control to 1400–1600 Hz —
+    /// `widgets/mainwindow.cpp:8299-8300` (`on_actionWSPR_triggered`):
+    ///     ui->WSPRfreqSpinBox->setMinimum(1400);
+    ///     ui->WSPRfreqSpinBox->setMaximum(1600);
+    /// with the stored default 1500 (`mainwindow.cpp:1503`), and that control IS the WSPR TX
+    /// frequency (`mainwindow.cpp:9210`, `double f0=ui->WSPRfreqSpinBox->value() - m_XIT`).
+    /// FST4W is deliberately NOT narrowed — upstream gives it 100–5000
+    /// (`mainwindow.cpp:7617-7618`) — so this clamp is WSPR's alone.
+    ///
+    /// The mechanism already exists: MSK144 gets its own per-mode narrowing in `set_tier`.
+    /// WSPR simply had none.
+    #[test]
+    fn a_wspr_beacon_cannot_be_parked_outside_the_wspr_sub_band() {
+        // Dragging the TX marker while ON the mode is clamped — the control itself is
+        // narrowed, exactly as WSJT-X narrows the spinbox.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Wspr);
+        e.set_tx_offset(300.0);
+        assert_eq!(e.tx_offset_hz(), 1400.0, "below the sub-band clamps up");
+        e.set_tx_offset(3800.0);
+        assert_eq!(e.tx_offset_hz(), 1600.0, "above the sub-band clamps down");
+        e.set_tx_offset(1500.0);
+        assert_eq!(e.tx_offset_hz(), 1500.0, "inside it is left alone");
+
+        // And ENTERING the mode re-parks an offset carried in from another tier — the
+        // MSK144 rule. Without this the clamp would only bind gestures made after the
+        // switch, and the offset that actually beacons is the one already there.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Ft8);
+        e.set_tx_offset(300.0);
+        assert_eq!(e.tx_offset_hz(), 300.0, "FT8 keeps the full passband");
+        e.set_tier(Tier::Wspr);
+        assert!(
+            (1400.0..=1600.0).contains(&e.tx_offset_hz()),
+            "entering WSPR parks the offset inside the sub-band, got {}",
+            e.tx_offset_hz()
+        );
+
+        // THE CONTROL, and it is the half that proves the clamp is per-tier and not a new
+        // global floor: every other tier still reaches the whole 200–4000 Hz span, and
+        // FST4W specifically — the other beacon mode — is NOT narrowed, because upstream
+        // does not narrow it.
+        for tier in [Tier::Ft8, Tier::Ft4, Tier::Fst4w] {
+            let mut e = Engine::new("KD9TAW", "EN52", 0);
+            e.set_tier(tier);
+            e.set_tx_offset(300.0);
+            assert_eq!(e.tx_offset_hz(), 300.0, "{tier:?} keeps the full passband");
+            e.set_tx_offset(3800.0);
+            assert_eq!(e.tx_offset_hz(), 3800.0, "{tier:?} keeps the full passband");
+        }
+    }
+
     #[test]
     fn msk144_gets_wsjtx_meteor_scatter_patience_not_ft8_patience() {
         // ⭐ SILENCE IS THE NORMAL STATE ON METEOR SCATTER. You transmit continuously
@@ -33721,8 +40293,19 @@ mod tests {
     /// Drive a directed QSO until `call_cap` withholds the over, and return the next
     /// own-parity slot. Asserts the capped state was actually reached — a helper that
     /// silently failed to cap would make every assertion below vacuously true.
+    ///
+    /// ⚠️ THE DX MUST ANSWER FIRST, and that is the point rather than a detail. `call_cap`
+    /// stopped covering `AwaitReport` on 2026-08-23 — a station the operator picked and that
+    /// has never come back is now called for as long as they like, matching stock WSJT-X —
+    /// so the only way to reach a capped state at all is a partner that ENGAGED and then
+    /// stopped advancing. The engaging decode below puts us in `AwaitRr73`, which is still
+    /// capped, and the watchdog property these tests pin is unchanged there.
+    ///
+    /// Both callers run K2DEF working W9XYZ, so the message is written out rather than
+    /// parameterised.
     fn cap_a_directed_call(e: &mut Engine, cap: u32) -> u64 {
-        let mut slot = 0;
+        e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ -12", -8)], 0);
+        let mut slot = 1;
         let mut sent = 0;
         while sent < cap + 2 && slot < 40 {
             if !e.poll_tx(slot).is_empty() {
@@ -34379,5 +40962,383 @@ mod tests {
         // Clipping is preserved rather than wrapping (±2.0 saturates, not overflows).
         assert_eq!(stored[6], i16::MAX);
         assert_eq!(stored[7], i16::MIN);
+    }
+}
+
+#[cfg(test)]
+mod am_override_tests {
+    use super::*;
+    use crate::settings::OperatingMode;
+
+    /// ⚠️ THE AM CAP MUST READ THE OVERRIDE, NOT `settings.phone_mode` — and this test exists
+    /// because the first draft of the feature read `phone_mode` and was DEAD CODE that looked
+    /// exactly like working code.
+    ///
+    /// `phone_mode` is the persistent station-wide sub-mode and only ever holds "ssb" or "fm";
+    /// AM is a COCKPIT pick, which lives in the transient `sideband_override`. Gating on the
+    /// wrong field means the AM power cap silently never applies, and the first anyone learns of
+    /// it is a flat-topped signal on the air.
+    #[test]
+    fn am_is_detected_from_the_cockpit_pick_not_the_station_setting() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.operating_mode = OperatingMode::Phone;
+
+        e.request_sideband_override(Some("AM"));
+        assert!(e.am_in_force(), "a cockpit AM pick is AM");
+
+        // The control that catches the original mistake: setting phone_mode alone must NOT read
+        // as AM, because that is not how AM is selected.
+        e.request_sideband_override(None);
+        e.settings.phone_mode = "am".into();
+        assert!(
+            !e.am_in_force(),
+            "phone_mode is not how AM is picked — gating on it is the dead-code bug"
+        );
+    }
+
+    /// The whitelist must admit AM, or the cockpit's pick is silently dropped and the rig stays
+    /// on sideband while the button looks selected.
+    #[test]
+    fn the_override_whitelist_admits_am_and_still_refuses_the_rest() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.operating_mode = OperatingMode::Phone;
+
+        for m in ["AM", "am", "USB", "LSB", "FM"] {
+            e.request_sideband_override(Some(m));
+            assert_eq!(
+                e.sideband_override().as_deref(),
+                Some(m.to_ascii_uppercase().as_str()),
+                "{m} is a Phone voice mode"
+            );
+        }
+        // Still a whitelist: a broker or devtools caller cannot smuggle a non-voice mode in.
+        for m in ["CW", "PKTUSB", "RTTY", "DATA-U"] {
+            e.request_sideband_override(Some(m));
+            assert_eq!(e.sideband_override(), None, "{m} must be refused");
+        }
+    }
+
+    /// AM leaves on a band change like every other cockpit pick — which is WHY it needs no
+    /// band gate in the engine: it cannot follow the operator onto a band they did not pick it
+    /// for. The picker simply does not offer it where AM is not worked.
+    #[test]
+    fn an_am_pick_does_not_survive_a_qsy_to_another_band() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.operating_mode = OperatingMode::Phone;
+        // BOTH fields: a fresh Engine starts on "20m", and `set_frequency` decides
+        // `band_changed` from the BAND label, not the dial. Setting only dial_mhz made the QSY
+        // below a 20m→20m move that correctly changed nothing — the test failed for its own
+        // reason and said the code was broken.
+        e.settings.band = "80m".into();
+        e.settings.dial_mhz = 3.885;
+        e.request_sideband_override(Some("AM"));
+        assert!(e.am_in_force());
+
+        e.set_frequency(14.200, "20m", "USB");
+        assert!(
+            !e.am_in_force(),
+            "a band change drops the pick — this is the reason the FM-style gate is unnecessary here"
+        );
+    }
+}
+
+#[cfg(test)]
+mod stalled_qso_log_tests {
+    use super::tests::dec_snr;
+    use super::*;
+
+    /// Answer our CQ with a report, we roger it, then they go quiet — the state bitslave was in
+    /// (#153): `AwaitRr73`, both reports already across, waiting on their RR73.
+    fn abandoned_after_reports_crossed() -> Engine {
+        let mut e = Engine::new("VK3GZY", "QF22", 0);
+        e.set_mode("qso-run").unwrap();
+        e.poll_tx(0); // our CQ
+        e.ingest_decodes_for_test(&[dec_snr("VK3GZY VK3ABC -10", -8)], 1); // they answer WITH a report
+        e.poll_tx(2); // we send R-08
+        e.ingest_decodes_for_test(&[], 3);
+        // They are multi-streaming and working somebody else. Three silent overs and the run
+        // gives up on them.
+        for slot in [4u64, 6, 8] {
+            e.poll_tx(slot);
+            e.ingest_decodes_for_test(&[], slot + 1);
+        }
+        e
+    }
+
+    /// #153 (VK3GZY): A REAL CONTACT BECAME UNLOGGABLE BY ANY ROUTE.
+    ///
+    /// He worked a club station running multi-stream — which answers slowly BY DESIGN, since it
+    /// is working several people across slots. Reports crossed both ways; then it went quiet.
+    /// After `cq_stall_overs` (3, about 45 s at FT8) the run dropped it so the pileup could keep
+    /// moving, which is right. But the drop also threw the exchange away: when the station
+    /// finally returned with RR73, pressing Log answered "the QSO already closed or no report was
+    /// exchanged" — about a contact whose reports are in his own ALL.TXT. Twice.
+    ///
+    /// Abandoning is a decision about who to CALL. It must not also be a decision about what to
+    /// LOG.
+    #[test]
+    fn a_contact_abandoned_after_the_reports_crossed_can_still_be_logged() {
+        let mut e = abandoned_after_reports_crossed();
+        let q = e.snapshot().qso.expect("still running");
+        assert_eq!(q.state, "CallingCq", "the run moved on, as it should");
+        assert!(q.dxcall.is_none(), "and dropped the silent station");
+
+        assert!(
+            e.log_current_qso(),
+            "a contact whose reports crossed must stay loggable after the run gives up on it"
+        );
+        assert_eq!(
+            e.station.logbook.records().last().map(|r| r.call.as_str()),
+            Some("VK3ABC"),
+            "and it is the right station"
+        );
+    }
+
+    /// THE RESCUE MUST NOT MAKE ANYTHING LOGGABLE THAT WAS NOT LOGGABLE A MOMENT EARLIER.
+    ///
+    /// This is the control, and it took a wrong turn to find the right shape. The first version
+    /// asserted "a caller who never exchanged a report is not a contact" — but that case is
+    /// UNREACHABLE on this path: abandoning requires `tx_count >= 3`, and every one of those overs
+    /// sends our report, so by the time the run gives up we have always sent one. Worse, the
+    /// premise contradicted the app's existing rule, which already logs a contact where our report
+    /// went out and theirs never came back (`log_current_qso` refuses only when NEITHER crossed).
+    ///
+    /// So the invariant worth holding is not about reports at all: the rescue must carry the live
+    /// QSO's verdict across the drop UNCHANGED. Same answer before, same answer after — it
+    /// preserves a contact, it does not promote one.
+    #[test]
+    fn the_rescue_carries_the_live_verdict_across_the_drop_unchanged() {
+        // A QSO one over short of being abandoned: whatever the button would say now…
+        let mut before = Engine::new("VK3GZY", "QF22", 0);
+        before.set_mode("qso-run").unwrap();
+        before.poll_tx(0);
+        before.ingest_decodes_for_test(&[dec_snr("VK3GZY VK3ABC -10", -8)], 1);
+        before.poll_tx(2);
+        before.ingest_decodes_for_test(&[], 3);
+        let verdict_live = before.log_current_qso();
+
+        // …it must still say after the run has given up and swapped the station out.
+        let mut after = abandoned_after_reports_crossed();
+        let verdict_rescued = after.log_current_qso();
+
+        assert_eq!(
+            verdict_live, verdict_rescued,
+            "the drop must not change whether this contact can be logged"
+        );
+        assert!(
+            verdict_live,
+            "…and for a contact with reports across, that answer is yes"
+        );
+    }
+
+    /// Consumed once. Pressing Log twice must not write the same contact into the log twice —
+    /// a duplicate is its own kind of lost QSO when it reaches LoTW.
+    #[test]
+    fn the_rescue_is_consumed_and_cannot_duplicate() {
+        let mut e = abandoned_after_reports_crossed();
+        assert!(e.log_current_qso(), "the rescue works once");
+        assert!(
+            !e.log_current_qso(),
+            "and is spent — a second press must not write a duplicate"
+        );
+        assert_eq!(
+            e.station
+                .logbook
+                .records()
+                .iter()
+                .filter(|r| r.call == "VK3ABC")
+                .count(),
+            1,
+            "exactly one record"
+        );
+    }
+
+    /// The rescued record must carry the CONTACT's own TIME_ON, not the moment the operator
+    /// noticed and pressed the button — a QSO stamped minutes late will not match the other
+    /// station's log at LoTW, which is a confirmation lost rather than a cosmetic slip.
+    #[test]
+    fn the_rescued_record_keeps_the_contacts_own_start_time() {
+        let mut e = abandoned_after_reports_crossed();
+        let stashed_start = e.stalled_qso.as_ref().and_then(|s| s.start_unix);
+        assert!(stashed_start.is_some(), "the start stamp was kept");
+        assert!(e.log_current_qso());
+        // qso_start_unix is consumed by the write; what matters is that the stash carried it
+        // rather than the record defaulting to "now".
+    }
+}
+
+#[cfg(test)]
+mod amp_tests {
+    use super::*;
+    use crate::dto::AmpStatusDto;
+
+    fn live_spe() -> AmpStatusDto {
+        AmpStatusDto {
+            family: "spe".into(),
+            model: "15K".into(),
+            linked: true,
+            operate: Some(true),
+            output_watts: Some(900),
+            swr: Some(1.3),
+            temp: Some(41),
+            alarm: "none".into(),
+            warning: "none".into(),
+            ..AmpStatusDto::default()
+        }
+    }
+
+    /// ⭐ THE RULE THAT KEEPS A KILOWATT FROM LYING: a poll that got no answer clears every
+    /// reading on the FIRST miss. A stale 900 W and a stale 1.3:1 sitting on screen while the
+    /// link is actually dead is exactly the fabricated reading `amplifier.rs` refuses to
+    /// produce ("A POLL THAT GOT NO ANSWER IS A FAILURE … none of them is a default reading")
+    /// and `MeterCells::SMETER_NONE` refuses to keep ("absence stays absent").
+    #[test]
+    fn a_single_missed_poll_clears_every_reading_immediately() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.observe_amp_status(0, live_spe());
+        assert_eq!(e.amp_live(0).unwrap().output_watts, Some(900));
+
+        e.observe_amp_miss(0, "spe", "noAnswer");
+        let a = e
+            .amp_live(0)
+            .expect("the amplifier is still CONFIGURED, so the cache stays");
+        assert_eq!(a.output_watts, None, "a stale watts reading is a lie");
+        assert_eq!(a.swr, None);
+        assert_eq!(a.temp, None);
+        assert_eq!(a.operate, None);
+        assert_eq!(a.reason, "noAnswer");
+        // CONTROL: the identity of the amplifier is NOT a reading and survives, otherwise the
+        // pane could not say which amplifier stopped answering.
+        assert_eq!(a.family, "spe");
+        assert_eq!(a.model, "15K");
+    }
+
+    /// …and the link indicator does NOT strobe on that first miss. Two rules pulling opposite
+    /// ways, split exactly where `FREQ_MISS_LIMIT`/`MonitorConn::freq_misses` split them: "a
+    /// single slow poll must not flash the pill", while no fabricated number is ever on screen.
+    #[test]
+    fn the_link_flag_flips_only_after_three_consecutive_misses_and_one_success_clears_it() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.observe_amp_status(0, live_spe());
+
+        for n in 1..AMP_MISS_LIMIT {
+            e.observe_amp_miss(0, "spe", "noAnswer");
+            assert!(
+                e.amp_live(0).unwrap().linked,
+                "miss {n} of {AMP_MISS_LIMIT} must not flash the link indicator"
+            );
+        }
+        e.observe_amp_miss(0, "spe", "noAnswer");
+        assert!(
+            !e.amp_live(0).unwrap().linked,
+            "after {AMP_MISS_LIMIT} consecutive misses the link is down and must say so"
+        );
+
+        // One success clears the run outright — misses must be CONSECUTIVE.
+        e.observe_amp_status(0, live_spe());
+        assert!(e.amp_live(0).unwrap().linked);
+        assert_eq!(
+            e.amp_live(0).unwrap().reason,
+            "",
+            "linked carries no reason"
+        );
+        e.observe_amp_miss(0, "spe", "noAnswer");
+        e.observe_amp_miss(0, "spe", "noAnswer");
+        assert!(
+            e.amp_live(0).unwrap().linked,
+            "the counter restarted at the success, so two misses is not three"
+        );
+    }
+
+    /// PER RADIO, like the rotator: an SO2R station has an amplifier per radio, and one flat
+    /// field would let one radio's reading render under the other's name.
+    #[test]
+    fn amp_readings_are_keyed_per_radio_and_forget_drops_only_one() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.observe_amp_status(0, live_spe());
+        e.observe_amp_status(
+            1,
+            AmpStatusDto {
+                family: "kpa".into(),
+                linked: true,
+                output_watts: Some(480),
+                ..AmpStatusDto::default()
+            },
+        );
+        assert_eq!(e.amp_live(0).unwrap().output_watts, Some(900));
+        assert_eq!(e.amp_live(1).unwrap().output_watts, Some(480));
+
+        e.forget_amp(0);
+        assert!(
+            e.amp_live(0).is_none(),
+            "radio 0's amplifier was unconfigured"
+        );
+        assert!(e.amp_live(1).is_some(), "radio 1's is untouched");
+    }
+
+    /// The delivery path, end to end: the snapshot the UI already polls carries the ACTIVE
+    /// radio's amplifier and nothing else — and carries `None` when none is configured, which
+    /// is what makes every amplifier surface render nothing at all.
+    #[test]
+    fn the_snapshot_carries_the_active_radios_amplifier_and_nothing_when_unconfigured() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        assert!(
+            e.snapshot().radio.amp.is_none(),
+            "no amplifier configured: the field is absent, not an empty frame"
+        );
+
+        e.observe_amp_status(e.settings().active_radio, live_spe());
+        let amp = e
+            .snapshot()
+            .radio
+            .amp
+            .expect("the active radio's amplifier");
+        assert_eq!(amp.model, "15K");
+        assert_eq!(amp.output_watts, Some(900));
+
+        // A NON-active radio's amplifier must not leak into the active readout.
+        e.forget_amp(e.settings().active_radio);
+        e.observe_amp_status(
+            e.settings().active_radio + 7,
+            AmpStatusDto {
+                family: "kpa".into(),
+                output_watts: Some(480),
+                ..AmpStatusDto::default()
+            },
+        );
+        assert!(
+            e.snapshot().radio.amp.is_none(),
+            "the other radio's amplifier is not this radio's"
+        );
+    }
+
+    /// WSJT-X byte-format parity for "dB reports to comments" — logqso.cpp:143-145
+    /// builds `mode + "  Sent: " + rpt + "  Rcvd: " + rpt` with TWO spaces and drops
+    /// absent parts. An operator running both programs will diff the two logs, so the
+    /// spelling is the contract, not just the idea.
+    #[test]
+    fn reports_comment_matches_wsjtx_byte_for_byte() {
+        assert_eq!(
+            super::reports_comment("FT8", Some("-07"), Some("-12")).as_deref(),
+            Some("FT8  Sent: -07  Rcvd: -12")
+        );
+        assert_eq!(
+            super::reports_comment("FT4", Some("+03"), None).as_deref(),
+            Some("FT4  Sent: +03")
+        );
+        assert_eq!(
+            super::reports_comment("FT8", None, Some("-19")).as_deref(),
+            Some("FT8  Rcvd: -19")
+        );
+        // Both absent: WSJT-X writes just the mode — so do we.
+        assert_eq!(
+            super::reports_comment("FT8", None, None).as_deref(),
+            Some("FT8")
+        );
+        // An empty-string report is absent, not "Sent: ".
+        assert_eq!(
+            super::reports_comment("FT8", Some(""), Some("-01")).as_deref(),
+            Some("FT8  Rcvd: -01")
+        );
     }
 }

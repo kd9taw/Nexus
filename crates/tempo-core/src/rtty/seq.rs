@@ -11,9 +11,10 @@
 //! The machine is PURE: it consumes [`DecodedChar`]s plus a millisecond clock
 //! the caller supplies, and emits [`Action`]s (send this text / log this QSO /
 //! abort) that the engine wires to the actual TX path and logbook. Exchange
-//! content is table-driven by an [`ExchangeSchema`] ([`CASUAL`] RST/name/QTH
-//! and [`FIELD_DAY`] class/section ship today — a contest serial is a schema
-//! entry ([`FieldKind::Serial`]), not an engine change), and every transmitted
+//! content is table-driven by a mode-neutral [`ExchangeSpec`]
+//! ([`crate::contest::casual`] RST/name/QTH and [`crate::contest::field_day`]
+//! class/section ship today — a contest serial is a spec entry
+//! ([`FieldKind::Serial`]), not an engine change), and every transmitted
 //! line is built from operator-editable [`Templates`] with
 //! `{CALL}`/`{MYCALL}`/`{RST}`/`{EXCH}` substitution — the same template layer
 //! a manual F-key presses.
@@ -25,13 +26,22 @@
 //! UI can SURFACE a heard CQ for the operator to click; it never transitions
 //! the machine.
 //!
+//! WHERE THE TOLERANCES LIVE: the exchange SHAPE is `tempo_core::contest`'s and
+//! is mode-neutral; the garble tolerances are THIS MODULE'S, because they are
+//! artefacts of THIS modem. `599` printed on the letters plane is `TOO`, the cut
+//! convention sends `5NN`, a lost FIGS prints `3A` as `EA` — none of that is true
+//! on CW, phone or FT8, where a station that sends `TOO` sent `TOO`. So each
+//! [`FieldKind`] is mapped once, at construction, to a private [`Tolerance`]
+//! matcher, and a kind this modem cannot copy tolerantly becomes
+//! [`Tolerance::Unsupported`], which claims no token at all rather than guessing.
+//!
 //! Timeout discipline: while waiting on the peer, every `timeout_ms` of
 //! silence sends `AGN` (or repeats the answering call); after `max_repeats`
 //! cycles the session aborts — a runner falls back to calling CQ, a
 //! search-and-pounce station returns to [`SeqState::Idle`].
 
 use super::demod::DecodedChar;
-use crate::fd_rules::valid_section;
+use crate::contest::{Domain, ExchangeSpec, FieldKind};
 
 // ---- Tunables -------------------------------------------------------------
 
@@ -68,90 +78,102 @@ impl Default for SeqConfig {
     }
 }
 
-// ---- Exchange schemas -----------------------------------------------------
+// ---- RTTY copy tolerances -------------------------------------------------
 
-/// How one exchange field is recognized in garbled copy.
+/// How the RTTY parser recognises one exchange slot IN GARBLED COPY.
+///
+/// This is the half of the old `FieldKind` that must NOT travel with
+/// [`ExchangeSpec`]. Garbled copy is normal on the RTTY bands: `599` printed on
+/// the letters plane is `TOO`, the cut convention sends `5NN`, and a lost FIGS on
+/// a class prints `3A` as `EA`. Those are DECODE ARTEFACTS of this modem. On CW,
+/// phone or FT8 they are not — a station that sends `TOO` sent `TOO` — so a spec
+/// that carried them would silently rewrite other modes' logs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FieldKind {
-    /// Signal report: `599`, `5NN` (cut), or full lost-FIGS garble (`TOO`).
-    Rst,
-    /// Field Day class — digits + one class letter (`3A`), lost-FIGS garble on
-    /// the digit part tolerated (`EA` → `3A`). `letters` is the legal class
-    /// letter set (SFD `A-F`; a WFD schema would pass `HIOM`).
-    FdClass { letters: &'static str },
-    /// ARRL/RAC section code, validated against the master list (plus the
-    /// `MX`/`DX` extensions DX stations send).
-    Section,
-    /// Contest serial number, 1–4 digits after garble normalization. No
-    /// shipped schema uses it yet — it exists so serials are a schema, not an
-    /// engine change.
-    Serial,
-    /// A free word (name, QTH), located by its on-air label.
+enum Tolerance {
+    /// Signal report of `digits` digits: `599`, `5NN` (cut), or full letters-plane
+    /// garble (`TOO`). Two passes — real digits first, so good copy is never
+    /// mis-normalised.
+    Rst { digits: u8 },
+    /// `min..=max` digits then one letter from `letters` (`3A`), lost-FIGS garble on
+    /// the DIGITS forgiven only on the fallback pass.
+    DigitsThenLetter {
+        min: usize,
+        max: usize,
+        letters: &'static str,
+    },
+    /// `min..=max` digits after garble normalisation (a serial, a Check).
+    Digits { min: usize, max: usize },
+    /// Membership in a domain, with the domain's own trim + uppercase.
+    Enum(&'static Domain),
+    /// A free word located by its on-air label.
     Word,
+    /// A [`FieldKind`] this parser has no tolerant matcher for. It never claims a
+    /// token, so a REQUIRED field of this kind never completes a QSO — the safe
+    /// failure. [`RttySeq::new`] names it in the app log once, at construction, so
+    /// it is visible rather than mysterious.
+    Unsupported,
 }
 
-/// One field of an exchange: its ADIF-ish key, the on-air label that precedes
-/// it (`NAME SETH`), whether the QSO can complete without it, and how to
-/// recognize it.
-#[derive(Debug, Clone, Copy)]
-pub struct FieldSpec {
-    pub key: &'static str,
-    pub label: Option<&'static str>,
-    pub required: bool,
-    pub kind: FieldKind,
+/// The RTTY matcher for one mode-neutral field kind.
+///
+/// ⚠️ `Text { max_len }`'s length limit is deliberately NOT enforced here. The
+/// pre-batch-0 `Word` arm accepted any all-alphabetic token of 2+ characters, and
+/// this move changes no behaviour. Enforcing `max_len` is a real behaviour change
+/// and belongs to the batch that gives the general (non-RTTY) parser its own
+/// matchers.
+fn tolerance_for(kind: &FieldKind) -> Tolerance {
+    match kind {
+        FieldKind::Rst { digits } => Tolerance::Rst { digits: *digits },
+        FieldKind::Serial { .. } => Tolerance::Digits { min: 1, max: 4 },
+        FieldKind::Enum { domain } => Tolerance::Enum(domain),
+        FieldKind::Pattern { re } => parse_pattern(re).unwrap_or(Tolerance::Unsupported),
+        FieldKind::Text { .. } => Tolerance::Word,
+        // No shipped spec uses these, and this modem has no tolerant matcher for
+        // any of them. Refusing to match beats guessing.
+        FieldKind::Number { .. }
+        | FieldKind::Grid { .. }
+        | FieldKind::Call
+        | FieldKind::OneOf(_) => Tolerance::Unsupported,
+    }
 }
 
-/// A table-driven exchange: the fields, in the order they are parsed. The
-/// contest-later seam — new events add a schema, never engine code.
-#[derive(Debug, Clone, Copy)]
-pub struct ExchangeSchema {
-    pub name: &'static str,
-    pub fields: &'static [FieldSpec],
+/// The tiny regex SUBSET this parser understands: `^[0-9]{m,n}[LETTERS]$` and
+/// `^[0-9]{n}$` — which is exactly the Class (`3A`) and Check (`74`) shapes, the only
+/// two `Pattern` forms the researched contest set needs. Anything else returns `None`
+/// and the slot becomes [`Tolerance::Unsupported`] rather than being approximated.
+///
+/// No regex crate enters the tree for two shapes: a new dependency would go through
+/// the `deny` job's licence and lockfile-divergence gates, and a per-token regex in
+/// this parser's hot loop would cost more than it bought.
+fn parse_pattern(re: &'static str) -> Option<Tolerance> {
+    let body = re.strip_prefix('^')?.strip_suffix('$')?;
+    let rest = body.strip_prefix("[0-9]")?;
+    let (min, max, rest) = match rest.strip_prefix('{') {
+        Some(r) => {
+            let (n, r) = r.split_once('}')?;
+            let (lo, hi) = match n.split_once(',') {
+                Some((a, b)) => (a.parse().ok()?, b.parse().ok()?),
+                None => {
+                    let v: usize = n.parse().ok()?;
+                    (v, v)
+                }
+            };
+            if lo == 0 || lo > hi {
+                return None;
+            }
+            (lo, hi, r)
+        }
+        None => (1usize, 1usize, rest),
+    };
+    if rest.is_empty() {
+        return Some(Tolerance::Digits { min, max });
+    }
+    let letters = rest.strip_prefix('[')?.strip_suffix(']')?;
+    if letters.is_empty() || !letters.chars().all(|c| c.is_ascii_uppercase()) {
+        return None;
+    }
+    Some(Tolerance::DigitsThenLetter { min, max, letters })
 }
-
-/// Casual ragchew: RST required, name and QTH picked up when labeled.
-pub const CASUAL: ExchangeSchema = ExchangeSchema {
-    name: "casual",
-    fields: &[
-        FieldSpec {
-            key: "RST",
-            label: None,
-            required: true,
-            kind: FieldKind::Rst,
-        },
-        FieldSpec {
-            key: "NAME",
-            label: Some("NAME"),
-            required: false,
-            kind: FieldKind::Word,
-        },
-        FieldSpec {
-            key: "QTH",
-            label: Some("QTH"),
-            required: false,
-            kind: FieldKind::Word,
-        },
-    ],
-};
-
-/// ARRL Field Day: class + section, both required.
-pub const FIELD_DAY: ExchangeSchema = ExchangeSchema {
-    name: "fieldday",
-    fields: &[
-        FieldSpec {
-            key: "CLASS",
-            label: None,
-            required: true,
-            kind: FieldKind::FdClass { letters: "ABCDEF" },
-        },
-        FieldSpec {
-            key: "SECTION",
-            label: None,
-            required: true,
-            kind: FieldKind::Section,
-        },
-    ],
-};
 
 // ---- Templates ------------------------------------------------------------
 
@@ -189,9 +211,9 @@ impl Templates {
         }
     }
 
-    /// The default set for a schema (falls back to the casual set).
-    pub fn for_schema(schema: &ExchangeSchema) -> Self {
-        if schema.name == "fieldday" {
+    /// The default set for an exchange (falls back to the casual set).
+    pub fn for_spec(spec: &ExchangeSpec) -> Self {
+        if spec.name == "fieldday" {
             Self::field_day()
         } else {
             Self::casual()
@@ -332,7 +354,7 @@ fn plausible_call(t: &str) -> bool {
         && t.chars().any(|c| c.is_ascii_digit())
         && t.chars().filter(|c| c.is_ascii_alphabetic()).count() >= 2
         && !is_keyword(t)
-        && normalize_rst(t).is_none()
+        && normalize_rst(t, 3).is_none()
 }
 
 /// Index in `long` whose removal yields `short` (`long.len() == short.len()+1`).
@@ -403,10 +425,11 @@ fn garble_digit(c: char) -> Option<char> {
 
 /// Normalize a token to an RST if possible: digits pass through, `N` is the 9
 /// cut number (`5NN`), and the QWERTYUIOP letters map back through the lost-
-/// FIGS garble (`TOO` → `599`). Valid RST = 3 digits, readability 1–5,
-/// strength/tone 1–9.
-fn normalize_rst(t: &str) -> Option<String> {
-    if t.len() != 3 {
+/// FIGS garble (`TOO` → `599`). Valid RST = `digits` digits, readability 1–5,
+/// every other position 1–9. The shipped RST slot passes `digits: 3`, so at
+/// that argument this is character for character the pre-batch-0 test.
+fn normalize_rst(t: &str, digits: u8) -> Option<String> {
+    if t.len() != digits as usize {
         return None;
     }
     let mut out = String::new();
@@ -421,19 +444,32 @@ fn normalize_rst(t: &str) -> Option<String> {
         out.push(d);
     }
     let b = out.as_bytes();
-    if (b'1'..=b'5').contains(&b[0]) && b[1] != b'0' && b[2] != b'0' {
+    // Readability tops out at 5; no other position may be 0. At `digits == 3`
+    // this is exactly the pre-batch-0 `b[1] != b'0' && b[2] != b'0'`.
+    //
+    // The `is_empty` guard is not dead code. Before batch 0 the length was fixed at 3 and `b[0]`
+    // could not fault; generalising to a `digits` parameter moved that guarantee into the caller,
+    // and the promoted `contest::FieldKind::Rst { digits }` carries no non-zero invariant — so a
+    // future ruleset declaring `digits: 0` would index an empty slice here. Refusing an empty
+    // token is the right answer anyway: a report with no digits is not a report.
+    if b.is_empty() {
+        return None;
+    }
+    if (b'1'..=b'5').contains(&b[0]) && b[1..].iter().all(|&x| x != b'0') {
         Some(out)
     } else {
         None
     }
 }
 
-/// Normalize a token to a Field Day class: 1–2 digits (garble tolerated) +
-/// one legal class letter. `garble` enables the lost-FIGS letter→digit map on
-/// the digit part (`EA` → `3A`) — the caller tries literal digits first.
-fn normalize_class(t: &str, letters: &str, garble: bool) -> Option<String> {
+/// Normalize a token to a Field Day class: `min..=max` digits (garble tolerated)
+/// followed by one legal class letter. `garble` enables the lost-FIGS
+/// letter→digit map on the digit part (`EA` → `3A`) — the caller tries literal
+/// digits first. The shipped class slot passes `1..=2`, so at those bounds the
+/// length test is exactly the pre-batch-0 `(2..=3).contains(&ch.len())`.
+fn normalize_class(t: &str, min: usize, max: usize, letters: &str, garble: bool) -> Option<String> {
     let ch: Vec<char> = t.chars().collect();
-    if !(2..=3).contains(&ch.len()) {
+    if !(min + 1..=max + 1).contains(&ch.len()) {
         return None;
     }
     let last = ch[ch.len() - 1];
@@ -454,9 +490,11 @@ fn normalize_class(t: &str, letters: &str, garble: bool) -> Option<String> {
     Some(format!("{digits}{last}"))
 }
 
-/// Normalize a token to a contest serial: 1–4 digits after garble mapping.
-fn normalize_serial(t: &str) -> Option<String> {
-    if !(1..=4).contains(&t.len()) {
+/// Normalize a token to `min..=max` digits after garble mapping (a contest
+/// serial, a Sweepstakes check). Was `normalize_serial`, hardcoded to 1–4; the
+/// shipped Serial slot passes exactly those bounds, so nothing moved.
+fn normalize_digits(t: &str, min: usize, max: usize) -> Option<String> {
+    if !(min..=max).contains(&t.len()) {
         return None;
     }
     t.chars()
@@ -507,7 +545,10 @@ pub fn find_cq(text: &str) -> Option<String> {
 #[derive(Debug)]
 pub struct RttySeq {
     mycall: String,
-    schema: ExchangeSchema,
+    spec: &'static ExchangeSpec,
+    /// One matcher per `spec.fields` entry, in the same order — built once at
+    /// construction so the parse loop is a zip, not a per-token dispatch.
+    tolerances: Vec<Tolerance>,
     pub templates: Templates,
     pub cfg: SeqConfig,
     /// My own exchange values, `(key, value)` — e.g. `[("RST","599"),
@@ -531,11 +572,27 @@ pub struct RttySeq {
 }
 
 impl RttySeq {
-    pub fn new(mycall: &str, schema: ExchangeSchema, my_exchange: &[(&str, &str)]) -> Self {
+    pub fn new(mycall: &str, spec: &'static ExchangeSpec, my_exchange: &[(&str, &str)]) -> Self {
+        let tolerances: Vec<Tolerance> =
+            spec.fields.iter().map(|f| tolerance_for(&f.kind)).collect();
+        for (f, t) in spec.fields.iter().zip(&tolerances) {
+            if *t == Tolerance::Unsupported {
+                // Loud once, at construction, rather than a silent never-matches
+                // at 0200 on contest night.
+                crate::applog::info(
+                    "rtty",
+                    &format!(
+                        "exchange {:?}: slot {:?} has no RTTY matcher — it will never be copied",
+                        spec.name, f.key
+                    ),
+                );
+            }
+        }
         Self {
             mycall: mycall.trim().to_ascii_uppercase(),
-            templates: Templates::for_schema(&schema),
-            schema,
+            templates: Templates::for_spec(spec),
+            spec,
+            tolerances,
             cfg: SeqConfig::default(),
             my_exchange: my_exchange
                 .iter()
@@ -716,8 +773,8 @@ impl RttySeq {
     /// fields as `VALUE`, RST excluded (it has its own `{RST}` slot).
     fn my_exch_string(&self) -> String {
         let mut parts = Vec::new();
-        for f in self.schema.fields {
-            if f.kind == FieldKind::Rst {
+        for f in self.spec.fields {
+            if matches!(f.kind, FieldKind::Rst { .. }) {
                 continue;
             }
             if let Some(v) = self.my_field(f.key) {
@@ -871,20 +928,23 @@ impl RttySeq {
             && self.peer.as_deref() != Some(toks[i].text.as_str())
     }
 
-    /// Tolerant table-driven exchange parse: each schema field claims the
-    /// first token that matches its kind (labeled Word fields claim the first
-    /// acceptable word AFTER their label). Repeats of a claimed value
-    /// (`599 599`) are claimed with it so a later Serial field cannot steal
+    /// Tolerant table-driven exchange parse: each spec field claims the
+    /// first token that matches its TOLERANCE (labeled word fields claim the
+    /// first acceptable word AFTER their label). Repeats of a claimed value
+    /// (`599 599`) are claimed with it so a later digits field cannot steal
     /// one. `None` until every REQUIRED field has been copied — fields
     /// accumulate across transmissions because the window survives an AGN
     /// cycle.
+    ///
+    /// The match is on [`Tolerance`], never on [`FieldKind`] directly: the kind
+    /// says what the slot IS and the tolerance says how THIS modem copies it.
     fn parse_exchange(&self, toks: &[Tok]) -> Option<Vec<(String, String)>> {
         let mut claimed = vec![false; toks.len()];
         let mut out = Vec::new();
-        for f in self.schema.fields {
+        for (f, tol) in self.spec.fields.iter().zip(&self.tolerances) {
             let mut hit: Option<(usize, String)> = None;
-            match f.kind {
-                FieldKind::Rst => {
+            match *tol {
+                Tolerance::Rst { digits } => {
                     // Pass A: tokens that still contain a digit (599, 5NN).
                     // Pass B: full letters-plane garble (TOO).
                     for garbled in [false, true] {
@@ -899,14 +959,14 @@ impl RttySeq {
                             if has_digit == garbled {
                                 continue;
                             }
-                            if let Some(v) = normalize_rst(&toks[i].text) {
+                            if let Some(v) = normalize_rst(&toks[i].text, digits) {
                                 hit = Some((i, v));
                                 break;
                             }
                         }
                     }
                 }
-                FieldKind::FdClass { letters } => {
+                Tolerance::DigitsThenLetter { min, max, letters } => {
                     // Literal digits first; garble mapping only as a fallback
                     // so real copy is never mis-normalized.
                     for garbled in [false, true] {
@@ -917,37 +977,43 @@ impl RttySeq {
                             if !self.usable(toks, &claimed, i) {
                                 continue;
                             }
-                            if let Some(v) = normalize_class(&toks[i].text, letters, garbled) {
+                            if let Some(v) =
+                                normalize_class(&toks[i].text, min, max, letters, garbled)
+                            {
                                 hit = Some((i, v));
                                 break;
                             }
                         }
                     }
                 }
-                FieldKind::Section => {
+                Tolerance::Enum(domain) => {
                     for i in 0..toks.len() {
                         if !self.usable(toks, &claimed, i) {
                             continue;
                         }
                         let t = toks[i].text.as_str();
-                        if valid_section(t) || t == "MX" || t == "DX" {
+                        // Was `valid_section(t) || t == "MX" || t == "DX"`. The
+                        // domain IS that set, derived from the same validated
+                        // sections table, and its normalisation is character for
+                        // character `valid_section`'s.
+                        if domain.contains(t) {
                             hit = Some((i, t.to_string()));
                             break;
                         }
                     }
                 }
-                FieldKind::Serial => {
+                Tolerance::Digits { min, max } => {
                     for i in 0..toks.len() {
                         if !self.usable(toks, &claimed, i) {
                             continue;
                         }
-                        if let Some(v) = normalize_serial(&toks[i].text) {
+                        if let Some(v) = normalize_digits(&toks[i].text, min, max) {
                             hit = Some((i, v));
                             break;
                         }
                     }
                 }
-                FieldKind::Word => {
+                Tolerance::Word => {
                     let label = f.label.unwrap_or(f.key);
                     if let Some(li) = toks.iter().position(|t| t.text == label) {
                         for i in li + 1..toks.len() {
@@ -962,6 +1028,9 @@ impl RttySeq {
                         }
                     }
                 }
+                // No matcher, so no claim: `hit` stays `None` and a REQUIRED slot
+                // of this kind refuses the QSO rather than logging a guess.
+                Tolerance::Unsupported => {}
             }
             match hit {
                 Some((idx, v)) => {
@@ -995,13 +1064,19 @@ mod tests {
     fn casual_seq() -> RttySeq {
         RttySeq::new(
             MYCALL,
-            CASUAL,
+            crate::contest::casual(),
             &[("RST", "599"), ("NAME", "SETH"), ("QTH", "MADISON")],
         )
     }
 
     fn fd_seq() -> RttySeq {
-        RttySeq::new(MYCALL, FIELD_DAY, &[("CLASS", "2A"), ("SECTION", "WI")])
+        RttySeq::new(
+            MYCALL,
+            // ARRL FD: `2A` is an A-F class. The Winter FD leg has its own
+            // fixtures below, because the two letter sets are disjoint.
+            crate::contest::field_day(crate::fieldday::FdEvent::ArrlFd),
+            &[("CLASS", "2A"), ("SECTION", "WI")],
+        )
     }
 
     fn sends(actions: &[Action]) -> Vec<String> {
@@ -1135,6 +1210,67 @@ mod tests {
 
         seq.feed_text("TU 73\n", 45_000);
         assert_eq!(seq.state(), SeqState::Done);
+    }
+
+    /// FAILING-FIRST REPRO for the Winter Field Day class letters.
+    ///
+    /// Winter Field Day's classes are H/I/O/M (Home / Indoor / Outdoor /
+    /// Mobile) — winterfieldday.org/downloads/2026-rules-v3.pdf, "V3 9.8.25",
+    /// read in full 2026-09-07: *"Class Options: H - Home station… I - Indoor
+    /// station… O - Outdoor station… M - Mobile / Mobile Stationary"*, with the
+    /// worked example *"If you have two stations and you are mobile in East
+    /// Pennsylvania, you are 2M EPA."*
+    ///
+    /// The shipped parser matched `^[0-9]{1,2}[ABCDEF]$` for BOTH events, so a
+    /// legal WFD class never satisfied the required CLASS slot and the QSO
+    /// never auto-logged. Not a cosmetic mismatch: NONE of H/I/O/M is in
+    /// ABCDEF, so the RTTY auto-sequencer could not complete a single Winter
+    /// Field Day contact.
+    #[test]
+    fn a_winter_field_day_class_completes_the_exchange() {
+        let mut seq = RttySeq::new(
+            MYCALL,
+            crate::contest::field_day(crate::fieldday::FdEvent::WinterFd),
+            &[("CLASS", "2M"), ("SECTION", "EPA")],
+        );
+        seq.start_cq(0);
+        seq.feed_text("W1XYZ W1XYZ K\n", 10_000);
+        assert_eq!(seq.state(), SeqState::ExchangeSent);
+        seq.take_actions();
+
+        // The sponsor's own example exchange, sent back at me.
+        seq.feed_text("KD9TAW DE W1XYZ R 2M EPA 2M EPA K\n", 30_000);
+        assert_eq!(
+            seq.state(),
+            SeqState::Confirmed,
+            "a legal WFD class must complete the exchange"
+        );
+        let l = logs(&seq.take_actions());
+        assert_eq!(l.len(), 1, "the QSO must auto-log");
+        assert_eq!(field(&l[0].1, "CLASS"), Some("2M"));
+        assert_eq!(field(&l[0].1, "SECTION"), Some("EPA"));
+    }
+
+    /// The other half of the same rule, and the reason the fix is per-event
+    /// rather than a widened letter set: ARRL Field Day's classes are A–F, so
+    /// an ARRL FD sequencer must still REFUSE a WFD class. A build that
+    /// accepted both would log `2M` as a legal ARRL FD entry.
+    #[test]
+    fn arrl_field_day_still_refuses_a_winter_field_day_class() {
+        let mut seq = RttySeq::new(
+            MYCALL,
+            crate::contest::field_day(crate::fieldday::FdEvent::ArrlFd),
+            &[("CLASS", "2A"), ("SECTION", "WI")],
+        );
+        seq.start_cq(0);
+        seq.feed_text("W1XYZ W1XYZ K\n", 10_000);
+        seq.take_actions();
+        seq.feed_text("KD9TAW DE W1XYZ R 2M EPA 2M EPA K\n", 30_000);
+        assert_ne!(
+            seq.state(),
+            SeqState::Confirmed,
+            "2M is not an ARRL Field Day class"
+        );
     }
 
     #[test]
@@ -1434,24 +1570,44 @@ mod tests {
 
     #[test]
     fn serial_schema_parses_without_engine_changes() {
-        static SERIAL_SCHEMA: ExchangeSchema = ExchangeSchema {
+        use crate::contest::{AdifTags, FieldSpec, RoleSelector, RoleSpec, SerialScope};
+        static SERIAL_FIELDS: &[FieldSpec] = &[
+            FieldSpec {
+                key: "RST",
+                adif: AdifTags {
+                    rcvd: Some("RST_RCVD"),
+                    sent: Some("RST_SENT"),
+                },
+                label: None,
+                required: true,
+                kind: FieldKind::Rst { digits: 3 },
+            },
+            FieldSpec {
+                key: "SERIAL",
+                adif: AdifTags {
+                    rcvd: Some("SRX"),
+                    sent: Some("STX"),
+                },
+                label: None,
+                required: true,
+                kind: FieldKind::Serial {
+                    scope: SerialScope::PerContest,
+                },
+            },
+        ];
+        static SERIAL_ROLES: &[RoleSpec] = &[RoleSpec {
+            id: "",
+            selector: RoleSelector::Always,
+            sends: &["RST", "SERIAL"],
+            receives: &["RST", "SERIAL"],
+            constant_sent: &[],
+        }];
+        static SERIAL_SCHEMA: ExchangeSpec = ExchangeSpec {
             name: "test-serial",
-            fields: &[
-                FieldSpec {
-                    key: "RST",
-                    label: None,
-                    required: true,
-                    kind: FieldKind::Rst,
-                },
-                FieldSpec {
-                    key: "SERIAL",
-                    label: None,
-                    required: true,
-                    kind: FieldKind::Serial,
-                },
-            ],
+            fields: SERIAL_FIELDS,
+            roles: SERIAL_ROLES,
         };
-        let mut seq = RttySeq::new(MYCALL, SERIAL_SCHEMA, &[("RST", "599")]);
+        let mut seq = RttySeq::new(MYCALL, &SERIAL_SCHEMA, &[("RST", "599")]);
         seq.start_cq(0);
         seq.feed_text("KD9TAW DE W1AW W1AW K\n", 10_000);
         seq.take_actions();
@@ -1492,16 +1648,71 @@ mod tests {
         assert_eq!(seq.peer(), Some("W1AW"));
     }
 
+    /// `digits: 0` must refuse, not panic. Batch 0 generalised `normalize_rst` from a fixed
+    /// length of 3 to a caller-supplied `digits`, which moved the non-empty guarantee out of the
+    /// function and into a `contest::FieldKind::Rst { digits }` that does not carry it. Found by
+    /// the batch-0 review as a latent index-out-of-bounds; unreachable from any shipped ruleset,
+    /// which is exactly why it needs a test rather than a comment.
+    #[test]
+    fn an_rst_of_zero_digits_is_refused_rather_than_panicking() {
+        assert_eq!(normalize_rst("", 0), None);
+        assert_eq!(normalize_rst("599", 0), None);
+    }
+
     #[test]
     fn rst_normalization_table() {
-        assert_eq!(normalize_rst("599").as_deref(), Some("599"));
-        assert_eq!(normalize_rst("5NN").as_deref(), Some("599"));
-        assert_eq!(normalize_rst("TOO").as_deref(), Some("599"));
-        assert_eq!(normalize_rst("T99").as_deref(), Some("599"));
-        assert_eq!(normalize_rst("579").as_deref(), Some("579"));
-        assert_eq!(normalize_rst("PET"), None, "035 is not a valid RST");
-        assert_eq!(normalize_rst("899"), None, "readability tops out at 5");
-        assert_eq!(normalize_rst("59"), None);
-        assert_eq!(normalize_rst("BOB"), None, "B is not a garble digit");
+        assert_eq!(normalize_rst("599", 3).as_deref(), Some("599"));
+        assert_eq!(normalize_rst("5NN", 3).as_deref(), Some("599"));
+        assert_eq!(normalize_rst("TOO", 3).as_deref(), Some("599"));
+        assert_eq!(normalize_rst("T99", 3).as_deref(), Some("599"));
+        assert_eq!(normalize_rst("579", 3).as_deref(), Some("579"));
+        assert_eq!(normalize_rst("PET", 3), None, "035 is not a valid RST");
+        assert_eq!(normalize_rst("899", 3), None, "readability tops out at 5");
+        assert_eq!(normalize_rst("59", 3), None);
+        assert_eq!(normalize_rst("BOB", 3), None, "B is not a garble digit");
+    }
+
+    // -- The Pattern subset --
+
+    #[test]
+    fn the_pattern_subset_parses_the_two_shapes_2_2_names() {
+        // Field Day / Winter FD class designator.
+        assert!(matches!(
+            parse_pattern("^[0-9]{1,2}[ABCDEF]$"),
+            Some(Tolerance::DigitsThenLetter {
+                min: 1,
+                max: 2,
+                letters: "ABCDEF"
+            })
+        ));
+        // Sweepstakes Check — not shipped yet, parsed correctly now.
+        assert!(matches!(
+            parse_pattern("^[0-9]{2}$"),
+            Some(Tolerance::Digits { min: 2, max: 2 })
+        ));
+    }
+
+    /// A pattern outside the subset must be REFUSED, not approximated. An
+    /// approximating matcher logs values nobody sent.
+    #[test]
+    fn the_pattern_subset_refuses_everything_else() {
+        for re in [
+            "[0-9]{2}",             // unanchored
+            "^[0-9]{2}",            // no tail anchor
+            "^[a-z]{2}$",           // lowercase class
+            "^[0-9]+$",             // quantifier outside the subset
+            "^[0-9]{1,2}[A-F]{2}$", // repeated letter class
+            "^(3A|2B)$",            // alternation
+            "",
+        ] {
+            assert!(parse_pattern(re).is_none(), "{re:?} must be refused");
+        }
+    }
+
+    /// POSITIVE CONTROL for the refusal list above: a refusal test that refuses
+    /// everything proves nothing. The one shape the shipped exchange uses MUST parse.
+    #[test]
+    fn the_pattern_refusal_control_accepts_the_shipped_pattern() {
+        assert!(parse_pattern("^[0-9]{1,2}[ABCDEF]$").is_some());
     }
 }

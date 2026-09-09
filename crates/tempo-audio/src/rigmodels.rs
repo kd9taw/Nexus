@@ -338,6 +338,30 @@ pub fn portless_rig_models() -> Vec<u32> {
         .collect()
 }
 
+/// Models where the **CAT CW keyer is unproven and cannot report its own failure** — so the
+/// operator is told BEFORE he spends an evening on it, rather than watching a radio not key.
+///
+/// Today that is the Yaesu FTX-1 (1051) alone. The measurement behind it, and the sharp limit on
+/// what it claims, are written out on
+/// `tests::the_ftx1_is_flagged_because_its_cat_keyer_cannot_report_its_own_failure` — read that
+/// before adding a model here. The short version: the FTX-1 has its own Beta Hamlib backend that
+/// emits a different `send_morse` wire form from the newcat one every other modern Yaesu uses,
+/// and it returns `RPRT 0` whether or not the radio did anything. Nexus has no second source of
+/// truth — the CAT keyer sends and the rig keys itself, so there is no PTT of ours to check.
+///
+/// **This is a NOTICE, never a block.** The keyer stays selectable and keeps working if it works:
+/// the flag is unproven, not broken, and an operator whose radio keys fine must not be stopped.
+/// A PTT read-back detector was considered and rejected — full break-in has the rig legitimately
+/// unkeyed between elements, so it would generate false alarms, and a false "your keyer is dead"
+/// is worse than the silence it replaces.
+///
+/// It crosses the Tauri boundary as a LIST for [`portless_rig_models`]'s reason, and the UI must
+/// not keep a copy for that reason too: membership here changes as backends are fixed upstream,
+/// and a stale TypeScript duplicate would warn about a radio that had started working.
+pub fn cat_cw_unproven_rig_models() -> Vec<u32> {
+    vec![1051]
+}
+
 /// Recognise a CAT server that **names itself** in the greeting it sends on connect, and
 /// return `(program name, the catalog model written for it)`.
 ///
@@ -597,6 +621,66 @@ pub fn flex_slice_for_cat_addr(rig_addr: &str) -> Option<u32> {
 mod tests {
     use super::*;
     use std::collections::HashSet;
+
+    /// ⭐ THE FIELD REPORT THIS LIST EXISTS FOR (Yaesu FTX-1, 2026-08-28, via KR4FQG): "Try send
+    /// a cw, never went to tx." Tune keyed fine, so PTT and the CAT link were both alive; it was
+    /// CW keying specifically that did nothing, and NOTHING WAS SHOWN — the operator had no way
+    /// to tell a dead backend from a dead radio.
+    ///
+    /// Measured against the Hamlib this app ships (4.7.1, `src-tauri/resources/hamlib`), driving
+    /// each backend against a pseudo-terminal standing in for the rig:
+    ///  - the FTX-1 has its OWN backend (`ftx1.c`, version `20251224.0`, status **Beta**), not
+    ///    the shared `newcat.c` every other modern Yaesu uses;
+    ///  - `send_morse` there emits ONE command, `KY0<TEXT>;`, and stops;
+    ///  - the newcat backends that key CW for our other Yaesu owners emit TWO — `KM1<TEXT>;`
+    ///    (store into keyer memory 1) then `KY6;` (the trigger). Verified on the wire for the
+    ///    FTDX10 (1042) and the FT-991A (1035);
+    ///  - and `b <text>` returns `RPRT 0` against a rig that acknowledged nothing, so Hamlib
+    ///    reports success unconditionally. Control: `Y 1 0` and `\reset 1` return `RPRT -11` on
+    ///    the same socket, so the error path is live and that success is real, not a stub.
+    ///
+    /// Nexus's only evidence is that return code (`Rig::send_morse` → `Rig::cat`), so a rig that
+    /// silently ignores the command is INDISTINGUISHABLE HERE from one that keyed. Hence a
+    /// caution the operator can read, not a detector we cannot honestly build.
+    ///
+    /// ⚠️ WHAT THIS LIST DOES NOT CLAIM. It does not say `KY0…;` is the wrong command — that is
+    /// Yaesu's FTX-1 CAT reference to settle and it is not on this machine, and inferring the
+    /// radio's protocol from Hamlib is exactly the mistake here, since Hamlib IS the suspect.
+    /// It says: on this model the CAT keyer is UNPROVEN and cannot report its own failure.
+    #[test]
+    fn the_ftx1_is_flagged_because_its_cat_keyer_cannot_report_its_own_failure() {
+        let unproven: HashSet<u32> = cat_cw_unproven_rig_models().into_iter().collect();
+        assert!(
+            unproven.contains(&1051),
+            "the FTX-1 (1051) is the model the field report names"
+        );
+
+        // NARROW, deliberately. The newcat Yaesus emit the two-command form that works, and
+        // flagging a backend that keys fine trains the operator to ignore the notice.
+        for (m, who) in [
+            (1042u32, "FTDX10"),
+            (1035, "FT-991/991A"),
+            (1049, "FT-710"),
+            (1036, "FT-891"),
+            (3073, "Icom IC-7300"),
+            (2037, "Kenwood TS-590SG"),
+        ] {
+            assert!(
+                !unproven.contains(&m),
+                "{who} ({m}) keys CW over CAT — do not cry wolf on it"
+            );
+        }
+
+        // Every flagged model must be a radio the operator can actually pick, or the notice is
+        // attached to nothing.
+        let catalog: HashSet<u32> = all_rig_models().into_iter().map(|(m, _)| m).collect();
+        for m in &unproven {
+            assert!(
+                catalog.contains(m),
+                "model {m} is flagged but not in the catalog"
+            );
+        }
+    }
 
     /// The CAT port names the slice Nexus operates (audit #1014/#1026).
     #[test]

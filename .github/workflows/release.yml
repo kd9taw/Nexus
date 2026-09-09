@@ -73,6 +73,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # EVERY job that builds or names an artifact stamps, and it stamps FIRST: a prerelease tag
+      # must produce artifacts and an app that say 1.11.0-beta.3, not 1.11.0. A stable tag is a
+      # no-op. Miss one job and that platform ships a differently-versioned artifact than its
+      # siblings. The script header carries the why; publish's filename check catches a miss.
+      - name: Stamp the tag's version into tauri.conf.json
+        run: bash scripts/stamp-version.sh
+
       - name: Stage the DeepCW model (not committed — AGPL-3.0 (c) e04)
         env:
           GH_TOKEN: ${{ github.token }}
@@ -91,6 +98,7 @@ jobs:
             librsvg2-dev libxdo-dev libssl-dev libsoup-3.0-dev patchelf \
             build-essential cmake ninja-build gfortran \
             libfftw3-dev libboost-dev libasound2-dev libudev-dev \
+            libusb-1.0-0-dev \
             libfuse2
 
       - uses: dtolnay/rust-toolchain@master
@@ -126,6 +134,44 @@ jobs:
           m=/tmp/dc/usr/lib/Nexus/resources/deepcw/model.onnx
           [ -s "$m" ] || { echo "DeepCW model missing from the .deb"; exit 1; }
           echo "$MODEL_SHA  $m" | sha256sum -c -
+          # HAMLIB MUST BE IN BOTH ARTIFACTS, and it must RUN from where it lands.
+          #
+          # Before 1.9.0 the AppImage shipped Hamlib's five licence .txt files and no Hamlib, and
+          # nothing went red: `resources/hamlib/*` still matched the licence files, so the bundle
+          # built green and CAT was simply dead for anyone who had not separately apt-installed
+          # libhamlib-utils. Presence is checked inside the package, not on the build tree.
+          for f in rigctld rigctl rotctld rotctl libhamlib.so.4; do
+            [ -s "/tmp/dc/usr/lib/Nexus/resources/hamlib/$f" ] \
+              || { echo "$f missing from the .deb"; exit 1; }
+          done
+          # …and the same inside the AppImage, which is the package that was actually broken.
+          "$app" --appimage-extract >/dev/null
+          hl=squashfs-root/usr/lib/Nexus/resources/hamlib
+          [ -s "$hl/rigctld" ] || { echo "rigctld missing from the AppImage"; exit 1; }
+          # GSTREAMER PLUGINS, or every alert tone in the app is silently dead. linuxdeploy
+          # bundles GStreamer's core libraries and no plugins, then points the plugin search
+          # path INSIDE the AppImage at a directory it never created — which also suppresses
+          # the scan that would have found the host's. WebKit's Web Audio runs on appsrc,
+          # appsink and autoaudiosink, so the band-edge tones, alert sounds and DXped alarm
+          # all fail with "element not found" and nothing else says a word. build-linux.sh
+          # copies them in; this proves they survived into the shipped file.
+          gst=squashfs-root/usr/lib/gstreamer-1.0
+          for p in app autodetect coreelements; do
+            [ -s "$gst/libgst$p.so" ] || { echo "libgst$p.so missing from the AppImage — its alert tones cannot work"; exit 1; }
+          done
+          # THE ONE THAT MATTERS: it has to find its own libhamlib, not the runner's. A CI box
+          # with Hamlib installed would let a broken rpath pass a bare --version, which is exactly
+          # how the first cut of fetch-hamlib-unix.sh looked correct while loading /lib's copy.
+          # Copy to a bare directory so there is nothing else it could possibly resolve against.
+          mkdir -p /tmp/hlcheck && cp "$hl/rigctld" "$hl/libhamlib.so.4" /tmp/hlcheck/
+          cp "$hl"/libusb-1.0.so.0 /tmp/hlcheck/ 2>/dev/null || true
+          got=$(ldd /tmp/hlcheck/rigctld | awk '/libhamlib/ {print $3}')
+          case "$got" in
+            /tmp/hlcheck/*) ;;
+            *) echo "bundled rigctld resolves libhamlib to '$got', not its own copy"; exit 1 ;;
+          esac
+          /tmp/hlcheck/rigctld --version || { echo "bundled rigctld will not run"; exit 1; }
+          rm -rf squashfs-root /tmp/hlcheck
           # GLIBC FLOOR — the check that makes the supported-distro list a decision instead of
           # a side effect of the runner image. Both shipped binaries are read: the .deb's
           # payload and the AppImage's INNER binary, because an AppImage bundles application
@@ -210,6 +256,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # See linux-x86: every artifact-producing job stamps, first, or this platform's installer
+      # carries a different version from its siblings.
+      - name: Stamp the tag's version into tauri.conf.json
+        run: bash scripts/stamp-version.sh
+
       - name: Stage the DeepCW model (not committed — AGPL-3.0 (c) e04)
         env:
           GH_TOKEN: ${{ github.token }}
@@ -225,6 +276,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 gfortran-mingw-w64-x86-64 \
+            binutils-mingw-w64-x86-64 \
             libboost-dev cmake ninja-build build-essential nsis
 
       - uses: dtolnay/rust-toolchain@master
@@ -269,6 +321,37 @@ jobs:
           mkdir -p out && cp "$exe" out/
           # The updater signature, when the signing secrets were present.
           [ -f "$exe.sig" ] && cp "$exe.sig" out/ || echo "note: unsigned build (no signing secrets)"
+
+          # ---- Crash symbols -------------------------------------------------------------
+          # A field crash report names a bare offset ("Nexus.exe+0x01ebcc35") and nothing can
+          # resolve it after the fact: the crash handler in src-tauri/src/main.rs cannot walk
+          # symbols (it runs with no allocation and about a page of stack), and the RELEASE
+          # BINARY IS NOT KEPT ANYWHERE — the artifact is the NSIS installer, whose payload is
+          # solid-compressed. The 1.8.1 report from a Flex/DAX station was unresolvable for
+          # exactly that reason, after downloading both the release asset and the workflow
+          # artifact and finding only the installer in each.
+          #
+          # ⚠️ THERE IS NO PDB TO SHIP, and asking for one is the natural mistake: PDBs are an
+          # MSVC artifact and this job cross-builds `x86_64-pc-windows-gnu` on ubuntu. What
+          # MinGW leaves behind is the SYMBOL TABLE, which survives because the release profile
+          # sets `strip = "debuginfo"` (DWARF only) rather than `strip = "symbols"`.
+          #
+          # So publish the table, not the binary: `nm` output is ~1.5 MB gzipped against 87 MB
+          # for Nexus.exe, and it answers the only question a crash report asks — which function
+          # owns this address. Resolve with the offset added to the 0x140000000 image base.
+          bin="src-tauri/target/x86_64-pc-windows-gnu/release/Nexus.exe"
+          if [ -f "$bin" ]; then
+            # Name it off the installer so the map can never drift from the build it describes.
+            sym="out/$(basename "$exe" -setup.exe).sym.gz"
+            x86_64-w64-mingw32-nm -C --defined-only -n "$bin" | gzip -9 > "$sym"
+            # A symbol map that resolved nothing would be worse than none — it would look like
+            # coverage. Require real entries, not just a non-empty file.
+            n=$(gzip -dc "$sym" | grep -c ' T ' || true)
+            [ "$n" -gt 1000 ] || { echo "symbol map has only $n text symbols — stripped too far"; exit 1; }
+            echo "symbol map: $n text symbols"
+          else
+            echo "no unpacked Nexus.exe to take symbols from — expected at $bin"; exit 1
+          fi
           ( cd out && sha256sum ./* )
 
       - uses: actions/upload-artifact@v4
@@ -301,6 +384,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # See linux-x86: every artifact-producing job stamps, first. The DMG, the .app's
+      # CFBundleShortVersionString and the updater tarball all take their version from here.
+      - name: Stamp the tag's version into tauri.conf.json
+        run: bash scripts/stamp-version.sh
+
       - name: Stage the DeepCW model (not committed — AGPL-3.0 (c) e04)
         env:
           GH_TOKEN: ${{ github.token }}
@@ -312,7 +400,7 @@ jobs:
           echo "$MODEL_JSON_SHA  src-tauri/resources/deepcw/model.onnx.json" | shasum -a 256 -c -
 
       - name: Install build dependencies
-        run: brew install cmake ninja gcc fftw boost
+        run: brew install cmake ninja gcc fftw boost libusb
 
       - uses: dtolnay/rust-toolchain@master
         with:
@@ -355,6 +443,50 @@ jobs:
       - name: Install tauri-cli
         run: cargo install tauri-cli --version "^2" --locked
 
+      # Hamlib for macOS. Explicit here because this job runs `cargo tauri build` directly —
+      # Linux and the Pi get it inside scripts/build-linux.sh, and macOS would silently ship
+      # without it, which is the exact hole this whole change closes. The script's own CAT-DEAD
+      # guard fails the build rather than producing a bundle with licence texts and no Hamlib.
+      - name: Stage Hamlib (bundled rigctld — no brew install for the user)
+        run: bash scripts/fetch-hamlib-unix.sh
+
+      # ⭐ AND SIGN IT, or notarization rejects the whole app. Apple requires EVERY Mach-O
+      # inside the bundle to carry a Developer ID signature, the hardened runtime and a secure
+      # timestamp — Tauri signs the app binary and its own libraries, not resources we stage.
+      # The 1.9.0 attempt failed here with exactly three messages, once per Hamlib executable:
+      # "not signed with a valid Developer ID certificate", "does not have the hardened runtime
+      # enabled", "signature does not include a secure timestamp". Windows does not notarize
+      # and Linux does not sign, so this can only ever surface on the macOS job.
+      #
+      # Discovered by FILE TYPE rather than a hard-coded list: a future Hamlib tool added to
+      # `fetch-hamlib-unix.sh` would otherwise be staged unsigned and fail notarization again,
+      # a whole release later. Libraries are signed before the executables that load them.
+      - name: Sign the bundled Hamlib binaries
+        run: |
+          set -euo pipefail
+          hl=src-tauri/resources/hamlib
+          # `mapfile` is bash 4+; macOS runners are bash 3.2. while-read is portable.
+          macho=()
+          while IFS= read -r f; do macho+=("$f"); done < <(
+            find "$hl" -type f -exec sh -c \
+              'file -b "$1" | grep -q "Mach-O" && echo "$1"' _ {} \; | sort)
+          [ "${#macho[@]}" -gt 0 ] || { echo "no Mach-O staged under $hl — staging failed"; exit 1; }
+          echo "signing ${#macho[@]} Mach-O file(s) as: $APPLE_SIGNING_IDENTITY"
+          # dylibs first, then the programs that load them.
+          for f in "${macho[@]}"; do case "$f" in *.dylib) : ;; *) continue ;; esac
+            codesign --force --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$f"
+          done
+          for f in "${macho[@]}"; do case "$f" in *.dylib) continue ;; esac
+            codesign --force --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$f"
+          done
+          # Verify here rather than discovering it 10 minutes later in notarization.
+          for f in "${macho[@]}"; do
+            codesign --verify --strict --verbose=2 "$f"
+            codesign -dvv "$f" 2>&1 | grep -q "flags=.*runtime" \
+              || { echo "$f: hardened runtime missing after signing"; exit 1; }
+          done
+          echo "all staged Hamlib binaries signed, hardened and timestamped"
+
       - name: Build, sign and notarize the DMG
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -393,6 +525,46 @@ jobs:
           m="$app/Contents/Resources/resources/deepcw/model.onnx"
           [ -s "$m" ] || { echo "DeepCW model missing from the .app"; exit 1; }
           echo "$MODEL_SHA  $m" | shasum -a 256 -c -
+          # HAMLIB MUST BE IN THE .app, AND THE APP MUST LOOK WHERE IT LANDS (#190).
+          #
+          # The Linux job has had this gate since 1.9.0; macOS had the staging and the
+          # signing but no gate, and that is the hole 1.9.2 shipped through: the tools were
+          # in the bundle, correctly signed, at Contents/Resources/resources/hamlib — while
+          # the resolver looked one directory up the tree, so EVERY fresh macOS install had
+          # no CAT at all. Presence alone would not have caught it; the second check is the
+          # one that matters, because it asserts the shipped PATH against the shipped CODE
+          # instead of against a fixture that agrees with the code.
+          hl="$app/Contents/Resources/resources/hamlib"
+          for f in rigctld rigctl rotctld rotctl; do
+            [ -s "$hl/$f" ] || { echo "$f missing from the .app"; exit 1; }
+          done
+          # Grep the CRATE, not one file: the resolver moved from rigctld_proc.rs into
+          # proc_util.rs in 1.11.0 and this gate went red on a build whose macOS CAT was
+          # perfectly good. Pinning the assertion to a filename made a refactor look like
+          # the #190 regression. The check that matters is that the shipped code somewhere
+          # searches the path the bundle actually stages to.
+          grep -rq '\.\./Resources/resources/hamlib/' crates/tempo-audio/src/ \
+            || { echo "the app does not search Contents/Resources/resources/hamlib (#190)"; exit 1; }
+          # It also has to RUN from where it lands — a wrong install-name or a missing dylib
+          # looks identical to a working build until a user double-clicks.
+          "$hl/rigctld" --version || { echo "bundled rigctld will not run"; exit 1; }
+          # …AND RUNNING HERE PROVES LESS THAN IT LOOKS: this runner has Homebrew, so an
+          # absolute /opt/homebrew/... path baked into any shipped Mach-O resolves perfectly
+          # in CI and dies on an operator's Mac. That is how the 1.10.0 CAT regression
+          # shipped — the four tools were repointed to @rpath but libhamlib.4.dylib still
+          # named Homebrew's libusb, and dyld killed every bundled tool before main on any
+          # Mac without it. Sweep EVERY Mach-O in the shipped .app: only @rpath/@loader_path
+          # or genuine system libraries. Per-file positive control: a real Mach-O always
+          # links libSystem, so a scan that cannot see it is reading nothing.
+          for f in "$hl"/rigctld "$hl"/rigctl "$hl"/rotctld "$hl"/rotctl "$hl"/*.dylib; do
+            [ -f "$f" ] || continue
+            deps=$(otool -L "$f")
+            printf '%s\n' "$deps" | grep -q '/usr/lib/libSystem.B.dylib' \
+              || { echo "otool read no dependencies from $f"; exit 1; }
+            bad=$(printf '%s\n' "$deps" | tail -n +2 | awk '{print $1}' \
+                  | grep -vE '^@rpath/|^@loader_path/|^/usr/lib/|^/System/' || true)
+            [ -z "$bad" ] || { echo "$f links outside the bundle — dead on a Mac without those paths:"; echo "$bad"; exit 1; }
+          done
           mkdir -p out
           ver=$(grep -m1 '"version"' src-tauri/tauri.conf.json | sed -E 's/.*"version": *"([^"]+)".*/\1/')
           cp "$dmg" "out/Nexus_${ver}_aarch64.dmg"
@@ -536,6 +708,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # See linux-x86: every artifact-producing job stamps, first. BOTH Pi bases go through
+      # this job, and the stamp is on the RUNNER — Dockerfile.pi COPYs the build context, so
+      # the container's tauri.conf.json is the stamped one (it seds the same file for
+      # createUpdaterArtifacts on top of it).
+      - name: Stamp the tag's version into tauri.conf.json
+        run: bash scripts/stamp-version.sh
+
       - name: Stage the DeepCW model (not committed — AGPL-3.0 (c) e04)
         env:
           GH_TOKEN: ${{ github.token }}
@@ -628,12 +807,57 @@ jobs:
           Write-Host "alive after 45 s (pid $($p.Id)) — startup smoke passed"
           Stop-Process -Id $p.Id -Force
 
+  # The offline manual (PDF + EPUB), built from the same docs/guide pages the website
+  # syncs, so the downloadable manual can never drift from the shipped one. GitHub's ubuntu
+  # runner already carries google-chrome (the PDF renders through it via CDP for real page
+  # numbers); pandoc and the websockets client are the only adds. Uploaded as an artifact the
+  # publish job attaches to the Release, where the site's download buttons point
+  # (releases/latest/download/Nexus-Manual.pdf / .epub — stable names, version on the cover).
+  manual:
+    name: Manual (PDF + EPUB)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      # See linux-x86: the cover version below is read straight out of tauri.conf.json, so the
+      # manual attached to a prerelease says 1.11.0-beta.3 like everything else in the release.
+      - name: Stamp the tag's version into tauri.conf.json
+        run: bash scripts/stamp-version.sh
+      - name: Tools (pandoc + the CDP websockets client; Chrome is preinstalled)
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends pandoc
+          python3 -m pip install --quiet websockets pillow  # websockets: CDP for the PDF; pillow: WebP→PNG for the EPUB
+      - name: Build the manual
+        run: |
+          set -euo pipefail
+          ver=$(grep -m1 '"version"' src-tauri/tauri.conf.json | sed -E 's/.*"version": *"([^"]+)".*/\1/')
+          mkdir -p manualdist
+          python3 scripts/build-manual-pdf.py  --version "$ver" --out manualdist/Nexus-Manual.pdf
+          python3 scripts/build-manual-epub.py --version "$ver" --out manualdist/Nexus-Manual.epub
+          ls -l manualdist
+          # A real PDF and a real EPUB, or fail the job — never ship an empty download.
+          [ -s manualdist/Nexus-Manual.pdf ] && head -c4 manualdist/Nexus-Manual.pdf | grep -q '%PDF'
+          [ -s manualdist/Nexus-Manual.epub ]
+      - name: Validate the EPUB (W3C epubcheck — the shipped download must be valid)
+        run: |
+          set -euo pipefail
+          EC=5.3.0
+          curl -fsSL "https://github.com/w3c/epubcheck/releases/download/v${EC}/epubcheck-${EC}.zip" -o /tmp/ec.zip
+          python3 -c "import zipfile; zipfile.ZipFile('/tmp/ec.zip').extractall('/tmp')"
+          java -jar "/tmp/epubcheck-${EC}/epubcheck.jar" manualdist/Nexus-Manual.epub
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nexus-manual
+          path: manualdist/*
+          if-no-files-found: error
+
   publish:
     name: Publish GitHub Release
     # Windows + Linux gate the release (operator's release order); the Pi .debs attach
     # in publish-pi as they finish and can never hold the primary artifacts hostage.
     # smoke-windows gates too: an installer that dies at launch must never publish.
-    needs: [linux-x86, windows, smoke-windows, macos, smoke-macos]
+    needs: [linux-x86, windows, smoke-windows, macos, smoke-macos, manual]
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     # `actions: write` is for the downstream hand-off at the end of this job. Job-level
@@ -669,14 +893,26 @@ jobs:
           set -euo pipefail
           tag="${GITHUB_REF_NAME}"
           ver="${tag#v}"
+          # A prerelease tag (v1.10.3-beta.1) carries a suffix the REPO never does: main keeps the
+          # plain version and scripts/stamp-version.sh writes the full one into tauri.conf.json
+          # inside each BUILD job. This job does not build and does not stamp, so the two checks
+          # below deliberately read different things — the committed version against the tag's
+          # BASE, and the artifacts against the FULL version they were actually stamped with.
+          base_ver="${ver%%-*}"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "ver=$ver" >> "$GITHUB_OUTPUT"
-          # The tag must match the version in tauri.conf.json — the single source of truth
-          # every artifact is stamped from. A mismatch means someone forgot to bump.
+          # The tag's base must match the version in tauri.conf.json — the single source of truth
+          # every artifact is stamped from. A mismatch means someone forgot to bump (or committed
+          # a suffix by hand, which this repo never does).
           conf=$(grep -m1 '"version"' src-tauri/tauri.conf.json | sed -E 's/.*"version": *"([^"]+)".*/\1/')
-          [ "$conf" = "$ver" ] || { echo "tag $tag ($ver) != tauri.conf.json ($conf)"; exit 1; }
-          # And every artifact filename must carry that exact version — catches a stale
-          # artifact from a cached/retried job sneaking into the release.
+          [ "$conf" = "$base_ver" ] || { echo "tag $tag (base $base_ver) != tauri.conf.json ($conf)"; exit 1; }
+          # And every artifact filename must carry the FULL version. Two things ride on this
+          # matching $ver rather than $base_ver: it still catches a stale artifact from a
+          # cached/retried job, AND on a prerelease it is what proves EVERY build job ran the
+          # stamp — a job that missed it produces Nexus_1.11.0_… , which no longer satisfies a
+          # v1.11.0-beta.3 tag. Matching on the base would wave that straight through, and one
+          # platform shipping a different version than its siblings is worse than none of them
+          # having the suffix at all.
           for f in dist/*; do
             case "$(basename "$f")" in
               *"$ver"*) : ;;
@@ -743,15 +979,25 @@ jobs:
           python3 -c "import json;json.load(open('dist/latest.json'));print('latest.json valid')"
           cat dist/latest.json
 
+      - name: Bring in the manual (PDF + EPUB)
+        uses: actions/download-artifact@v4
+        with:
+          name: nexus-manual
+          path: dist
+
       - name: Create the GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          # A SemVer prerelease tag (any hyphen, e.g. -beta.N) publishes as a GitHub pre-release so
+          # it never becomes "Latest" and downstream leaves the stable feeds alone; a plain X.Y.Z is
+          # explicitly marked --latest.
           gh release create "${{ steps.ver.outputs.tag }}" \
             --title "Nexus ${{ steps.ver.outputs.ver }}" \
             --notes-file dist/NOTES.md \
-            dist/Nexus_* dist/SHA256SUMS.txt \
+            $( case "${{ steps.ver.outputs.tag }}" in *-*) echo --prerelease ;; *) echo --latest ;; esac ) \
+            dist/Nexus_* dist/Nexus-Manual.pdf dist/Nexus-Manual.epub dist/SHA256SUMS.txt \
             $( [ -f dist/latest.json ] && echo dist/latest.json )
 
   # Second wave (operator's release order: Windows + Linux first, then Pi): attach the

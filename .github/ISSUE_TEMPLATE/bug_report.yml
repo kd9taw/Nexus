@@ -179,6 +179,16 @@ body:
         Whichever of these applies. Any one of them can turn a multi-day hunt
         into a single look.
 
+        - **Start here, whatever the fault:** attach `nexus-diag.log`. It sits
+          beside your log file — Settings, Logging, then Reveal in folder — and
+          Nexus writes it all the time, so you do not have to turn anything on
+          or reproduce the fault first. It carries startup, the rig and audio
+          device open, updater checks and crashes. Passwords and API keys are
+          masked before anything is written, so it is safe to attach here.
+        - **If I ask for more detail:** the same Settings page has an advanced
+          diagnostic log. Turn it on, reproduce the fault, turn it off, attach
+          the file. It is off by default on purpose — it is far more verbose and
+          only worth having for a fault we are already hunting.
         - **The app crashed or vanished:** attach `nexus-crash.txt`. On Windows
           it is written beside the program, or in your `%TEMP%` folder. It holds
           addresses and module names only, with no callsign and no log data.

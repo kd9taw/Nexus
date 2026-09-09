@@ -32,11 +32,10 @@ come here for the complete picture.
   offline out of the box. There is no separate Hamlib, WebView2, or driver download for
   supported radios. (USB bridge-chip drivers are the one exception — see
   [Troubleshooting → drivers](https://github.com/kd9taw/Nexus/blob/main/docs/troubleshooting.md#driver-hint-usb-bridge-chip-detected-but-the-rig-wont-open).)
-  On **Linux and the Pi**, CAT uses the system Hamlib instead: the `.deb` pulls
-  `libhamlib-utils` in automatically, and AppImage users run
-  `sudo apt install libhamlib-utils` once. On **macOS**, CAT uses Homebrew's Hamlib:
-  `brew install hamlib` in Terminal, then restart Nexus (Nexus searches the
-  Homebrew/MacPorts prefixes itself — no PATH setup needed).
+  The same is true on **Linux, the Pi and macOS** since 1.9.0: Hamlib rides inside
+  the download, so there is nothing to apt-install or brew-install. If Nexus's own
+  copy ever fails to start it falls back to a system Hamlib, and it searches the
+  Homebrew/MacPorts prefixes itself — no PATH setup needed.
 
 The installer is roughly **250 MB** because it carries the WebView2 runtime,
 Hamlib, and the DSP stack so a bare PC works with no internet. Expect the
@@ -53,7 +52,7 @@ files you download by hand):
 | File | Platform |
 |---|---|
 | `Nexus_<version>_x64-setup.exe` | Windows 10/11 x64 — NSIS, per-user, bundles WebView2 and Hamlib |
-| `Nexus_<version>_aarch64.dmg` | macOS on Apple Silicon — signed + notarized; `brew install hamlib` for CAT |
+| `Nexus_<version>_aarch64.dmg` | macOS on Apple Silicon — signed + notarized; bundles Hamlib |
 | `Nexus_<version>_amd64.AppImage` | Linux on a PC, portable — one file, updates itself in place (Ubuntu 24.04 or newer) |
 | `Nexus_<version>_pc_amd64.deb` | Debian / Ubuntu on a PC (Ubuntu 24.04 / Debian 13 or newer) |
 | `Nexus_<version>_pi_arm64_bookworm.deb` | Raspberry Pi OS bookworm, 64-bit |
@@ -129,8 +128,8 @@ through:
 3. Launch Nexus from Applications (or Spotlight). Running it from inside the mounted
    disk image works once, but self-update needs the app in Applications, so move it
    first.
-4. For CAT rig control, install Hamlib once: `brew install hamlib` in Terminal, then
-   restart Nexus. (Homebrew itself is at [brew.sh](https://brew.sh).)
+4. CAT rig control needs nothing else installed — Hamlib is inside the app since
+   1.9.0.
 
 On first launch macOS asks for **microphone access** — that is the rig's RX audio
 path; Nexus decodes nothing without it. If you declined it, re-enable it under
@@ -143,6 +142,45 @@ A denial is silent, not an error: Detect finds nothing on the LAN and CAT report
 that nothing answered. Check **System Settings ▸ Privacy & Security ▸ Local
 Network**, enable **Nexus** if it is listed, and relaunch. A rig on `127.0.0.1`
 is unaffected.
+
+### Chromebook (ChromeOS Linux)
+
+Nexus runs on a Chromebook inside the ChromeOS Linux container, using the AppImage.
+Nothing about this is officially supported — the notes below come from Pete-the-Geek,
+who worked the whole procedure out and posted it in the discussions. Three things trip
+people up, and none of them are Nexus itself:
+
+**The container ships an old Debian.** ChromeOS Linux still installs Bookworm, which is
+older than Nexus needs. Upgrade the container to Trixie first (`sudo apt dist-upgrade`
+after switching your apt sources), then install the pieces the AppImage expects:
+
+```
+sudo apt install -y gnome-keyring dbus-x11 pavucontrol alsa-utils
+```
+
+**Saved passwords need a keyring that is actually running.** The container starts
+without a session bus or an unlocked keyring, so Nexus has nowhere to put your logbook
+and cluster credentials and secure storage fails. Start both in your `~/.bashrc`:
+
+```
+if [ -z "$DBUS_SESSION_BUS_ADDRESS" ]; then
+    eval $(dbus-launch --sh-syntax)
+fi
+eval $(echo -n "" | gnome-keyring-daemon --start --components=secrets 2>/dev/null)
+export DBUS_SESSION_BUS_ADDRESS
+```
+
+Then launch with `--no-sandbox`, which the container requires.
+
+**Your radio has to be handed to the container.** Share the rig's USB device with Linux
+from ChromeOS settings, and add yourself to `dialout` (`sudo adduser $USER dialout`) so
+the serial port is readable — log out and back in for that to take.
+
+Audio is the fiddly part. If the rig's USB CODEC does not reach the container, clearing
+`~/.config/pulse` and using `pavucontrol` to pick the right capture device usually sorts
+it. On some Chromebooks the opposite works better: leave the CODEC with ChromeOS, make it
+the default device there, and turn system sounds off so nothing else transmits into your
+radio.
 
 ---
 

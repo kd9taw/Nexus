@@ -68,10 +68,22 @@ describe('what must NOT change', () => {
   })
 
   it('every cockpit that owns a frequency still homes from a different mode', () => {
-    for (const v of ['operate', 'cw', 'phone', 'rtty', 'psk']) {
+    for (const v of ['operate', 'cw', 'phone', 'rtty', 'psk', 'js8']) {
       const from: RigMode = v === 'cw' ? 'digital' : 'cw'
       expect(rigModeTransition(v, from).followFreq, `${v} must re-home`).toBe(true)
     }
+  })
+
+  it('JS8 owns the digital rig mode AND a frequency — it homes, unlike Tempo', () => {
+    // JS8 has its own watering holes (JS8Call's FrequencyList: 7.078, 14.078, …). Entering the
+    // view asserts DATA on the rig and re-homes, exactly as the FT screen does; `js8_enter`
+    // then sets the tier, whose band-change logic lands the dial on the JS8 channel.
+    expect(RIG_MODE_BY_VIEW.js8).toBe('digital')
+    expect(homesAlong(['cw', 'js8'])).toEqual(['cw', 'js8'])
+    const t = rigModeTransition('js8', 'cw')
+    expect(t.mode).toBe('digital')
+    expect(t.followFreq).toBe(true)
+    expect(t.nextHomed).toBe('digital')
   })
 
   it('control: the map is not empty and the helper can say no', () => {

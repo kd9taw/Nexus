@@ -5,6 +5,1752 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.11.1] — 2026-09-08
+
+> **There is no 1.11.0 release.** The first beta of this work shipped as `v1.11.0-beta.2`
+> and, through a defect in the release workflow since fixed, its installer was stamped
+> `1.11.0` rather than `1.11.0-beta.2`. A prerelease sorts below its release, so those
+> installs believed they were newer than any 1.11.0 that followed and would never have been
+> offered it. Releasing as 1.11.1 reaches them. Operators who were on 1.10.3 are unaffected
+> and were never offered a beta.
+
+### Added
+
+- **JS8: CQ and the heartbeat repeat on their own, with the countdown on the button.** JS8Call's
+  CQ and HB buttons are switches — arm one and it calls or beacons on a timer, with the seconds to
+  the next transmission ticking down in the button's own label (`CQ (12)`, `HB (42)`, `HB (now)`).
+  Nexus's were one-shots. They aren't any more. Set **Settings ▸ Digital ▸ JS8 ▸ CQ repeat
+  interval**; at 0 the CQ button stays the single-shot it always was, above 0 it becomes the
+  switch. The heartbeat's countdown appears whenever its schedule is running. This is the POTA and
+  beacon habit: set it going and walk away.
+
+  It stops when it should, and every existing transmit guard still holds. It keys nothing until
+  **both** acts are present — the session TX latch and the repeat switch itself — so arming one
+  with TX off shows "on", never "armed", and sends nothing. A station answering you turns the CQ
+  repeat off, exactly as JS8Call does. The idle watchdog (60 min by default) stands both down, and
+  a scheduled call cannot reset that clock the way your own sends do — an unattended station has a
+  bound. Stop TX, leaving JS8 and changing operating mode each cancel the schedule and drop
+  anything already queued. It is never remembered across launches: the app can never come back
+  calling CQ.
+
+- **The FT-710 can draw its own band scope.** The radio has a real spectrum display inside it and
+  an internal USB bridge that will hand it over; until now Nexus could only show the sound card's
+  4 kHz slice. Turn it on per radio in Settings ▸ Radio (it appears only for an FT-710), and the
+  Phone and CW cockpits gain span and position controls that drive the radio itself rather than
+  cropping its picture.
+
+  Two things it needs, and it tells you which one is missing instead of showing an empty panel:
+  **SCU-LAN10 enabled in the radio's EX menu**, and **FTDI's LibFT4222**, which is not bundled —
+  it is closed source and Nexus is GPL-3.0-only, so the app names it and links the download rather
+  than shipping it. Everything else works without it; this affects the RF panadapter only.
+
+  One caveat worth knowing: in FIX position the radio does not report where its own window starts,
+  so Nexus derives it from the band edge. That is measured, not assumed — but check it against the
+  rig's own scale, and the tooltip says so.
+
+- **JS8 is on out of the box.** The JS8 section shipped hidden behind a Settings ▸ Features
+  toggle while it was new. It now sits in the Digital group of the rail, after APRS, with no
+  toggle to find first. Nothing else about it changed: opening it tunes the rig to the band's
+  JS8 watering hole and starts decoding all four speeds, and it still transmits nothing until
+  you enable TX in the header and switch on whatever you want it to send. If you don't operate
+  JS8, turn it off in Settings ▸ Appearance ▸ Features.
+
+  Two things worth knowing, because they have not changed either: the four speeds have not been
+  run side by side with JS8Call on the air yet — Fast and Turbo have only ever been decoded from
+  generated audio, never off a real band — and at Normal, Nexus needs roughly 2 dB more signal
+  than JS8Call to print the same message. Reports from the air are welcome.
+
+- **JS8 transmits.** The JS8 section now keys every
+  period like JS8Call: your messages, CQ, heartbeats on a random free 500–1000 Hz slot, and —
+  behind the session TX latch plus the persisted switch — autoreplies, relay and HB-ack, each
+  with a visible, cancellable countdown. Heartbeats are exempt from the 6-minute TX watchdog
+  the way WSPR/FST4W beacons are and bounded by JS8Call's 60-minute idle watchdog; Stop TX
+  clears the queue, the heartbeat schedule and any pending reply.
+- **A POTA activity map in FT mode.** A new *Map* button beside Classic/Roster in the FT header
+  opens the map in its own window — put it on a second monitor next to the roster, the way
+  GridTracker is used for park hunting. It plots every spotted POTA activator from the live
+  feed (the same source GridTracker reads, with no mode or age filter), coloured by
+  new-vs-worked, with the park, activator, band, mode and spot age on hover. Double-click a
+  park to QSY, set the mode and tag it as your hunt target — it never keys the transmitter.
+  The window remembers its own layers and projection, separate from the Connect map.
+- **An audible alert for new POTA activations.** Settings ▸ Spots & Alerts has a new
+  *New POTA activation* switch (off by default). With it on, Nexus beeps once when a park
+  that was not on the air at the last check appears on the feed — from now on, never for the
+  backlog that was already active when you turned it on. It works whether or not the map
+  window is open.
+
+- **A per-radio switch to hold FM-D while you are receiving SSTV.** Nexus commands the FM data
+  submode (FM-D / DATA-FM) only while a picture is queued or going out, and puts the radio back
+  in plain FM in between — deliberate, because an SSTV send once keyed a data mode into an FM
+  repeater input, but wrong if you park on an FM SSTV calling channel for the evening and expect
+  the rig to stay in FM-D. **Settings ▸ Radio ▸ Rig & CAT ▸ Advanced ▸ "Hold FM-D while SSTV is
+  receiving"**, off by default, set per radio because it depends on how that rig is cabled and
+  what you use it for.
+
+  With it on, the radio is held in the data submode for as long as the SSTV receiver is running.
+  **Stop the receiver before you go back to voice** — the receiver keeps running after you leave
+  the SSTV screen, and while it does, transmit audio comes from the data port and your microphone
+  modulates nothing. The switch's own hint says so.
+
+  ⚠️ **NEEDS-BENCH on a real IC-9700.** What is proven here is the mode word Nexus commands — and
+  it is not a new word; it is the same one an SSTV send already uses. What is not proven is a
+  radio's on-air behaviour when it is *held* in FM-D between pictures. (#130)
+
+  This one was reported as already fixed, twice. It was not — see below.
+
+- **The manual is illustrated, and corrected.** Every one of the 22 chapters now carries
+  screenshots — 137 of them, up from 11 — and the pages an operator reaches first were the ones
+  most in need: the first-run wizard, the waterfall, the settings reference. An audit against the
+  running app also turned up a stack of things the manual said that were no longer true: the
+  wizard is four steps and not three, the waterfall takes three mouse gestures and not two, the
+  grid wants all six characters, and the mode chapters described transmit capabilities that
+  several modes do not have. Those are fixed. Where a picture would have had to be staged to
+  exist, there is no picture and the text says what is missing instead.
+
+- **The JS8 station list carries what a DX operator needs, and band activity is listed by
+  offset.** The stations pane gained distance, beam heading, a worked-before tick, the name and
+  comment from your last contact, and a pin for the stations you are watching — JS8Call's own
+  column set, and its own rule that worked-before means any band and any mode, not the
+  band/mode dupe scope. Alongside it, a new pane lists band activity ordered by audio offset
+  with its time delta, so finding a clear slot is a glance rather than a hunt. Both panes are
+  ⊞-hideable like their siblings.
+
+### Fixed
+
+- **The JS8 screen was drawing the Tempo screen underneath it.** Opening JS8 rendered the whole
+  Tempo workspace below the cockpit: its Fast and Deep tier buttons, its station roster, its
+  conversation pane, and a second waterfall beside JS8's own. Every other digital cockpit is
+  wired to leave that slot empty and JS8 had been missed, so it fell through to the chat screen's
+  layout. JS8 now shows JS8 and nothing else.
+
+- **Nothing could clear the callsign card in the FT cockpit, and F4 did nothing while you were
+  typing.** Two separate faults behind one report. The card follows whichever station you have
+  open plus whoever the sequencer is working, and no control anywhere put it back to empty — the
+  answer that said F4 did it was wrong, because F4 cleared the DX Call and Grid boxes in the Tx
+  Messages panel, which is a different block. F4 now clears both, and the card comes back on its
+  own the moment it would be about a different station. Separately, F4 was disarmed whenever the
+  cursor sat in a text box, which is exactly when you reach for it; it now fires while you type,
+  the way WSJT-X does. Alt+F4 still closes the window and clears nothing. (#204)
+
+- **The 60 m FT8 dial, and what changed underneath it.** The band button tunes 5.3715, the US
+  channel centred on 5373.0 kHz, and that was reported as the wrong frequency — which it was when
+  the report was filed, because 60 m FT8 lived on 5.357 worldwide. It is not wrong now: on
+  13 February 2026 the FCC split US 60 m into four 100 W ERP channels (5332.0 / 5348.0 / 5373.0 /
+  5405.0 kHz) plus the worldwide 5351.5–5366.5 kHz segment at 9.15 W ERP, and eliminated the
+  5358.5 kHz channel that 5.357 dialled. US FT8 moved to 5.3715 to keep the power.
+
+  So the band button stays where it is — moving it to 5.357 would drop a US station's legal
+  ceiling by about 10 dB with nothing on screen saying so — and the entry now says which dial is
+  which, and why. **Outside the US, and for QRP, 5.357 is still the one you want**, and it is a
+  Memories preset alongside it. A 60 m spot on *either* dial is now recognised as FT8 rather than
+  a bare "Digital", which it was not before. The 60 m notes on the Memories presets were also
+  wrong after the rule change — they described a 100 W channel at 5358.5 that no longer exists —
+  and are corrected. (#175)
+
+- **The diagnostic log's "Always on" now says why, and there is no `--debug`.** A reply implied
+  the log could be switched off and that a `--debug` command-line flag existed. Neither is true,
+  and neither is going to be: a log you can turn off is missing on exactly the launch that needed
+  it, and the switch would live in a settings file a failing launch may never reach. The Settings
+  entry now states that rather than leaving "Always on" as a bare assertion, and the
+  troubleshooting guide names the one switch that *is* yours — Settings ▸ Logging & Connectors ▸
+  "Extra detail in the diagnostic log", which applies live with no restart — and states plainly
+  that `--profile` is the only argument Nexus takes. (#101)
+- **Hound is one click, on the FT8 screen.** The DXpedition Hound mode was a dropdown in the
+  Operate header behind a setting only Settings otherwise wrote; it is now a single **Hound**
+  button you click on and off while you work. That matters because Hound is a per-DXpedition
+  mode, not a station setting — Nexus drops it at every restart for exactly that reason — and
+  you should be able to enter and leave it in the middle of a session without going anywhere.
+  Toggling it mid-QSO is safe: a contact already on the air keeps the rules it started under,
+  and the button governs the next one. The retired *SuperHound* option is not offered as a
+  choice, because it never did anything a plain Hound did not.
+
+- **Nexus tells you a DXpedition is running SuperFox before you call it.** SuperFox is a
+  transmission format this version has no decoder for, so such an operation never appears in
+  the decode list and Hound mode does not change that — which, found out mid-pileup, looks
+  exactly like bad propagation. When the DXpedition calendar shows a SuperFox operation on the
+  air, the Operate header now names it beside the Hound button and its card on the DXpeditions
+  board says the same thing: work that one in WSJT-X.
+
+- **Turning Hound off during a QSO with a Fox could strand the contact.** A DXpedition Fox
+  packs two replies into one transmission, and the half confirming you arrives without a
+  sender; Nexus put the Fox's callsign back on it so the exchange could close. That repair
+  was keyed to the Hound switch *as it stood right then* rather than to the contact, so
+  switching Hound off part way through stopped it: the Fox's confirmation no longer read as
+  one, and you kept calling a station that had already rogered you. The reverse could happen
+  too — switching Hound on during an ordinary contact let a passing Fox's confirmation be read
+  as your partner's. A contact now keeps the rules it started under from end to end.
+
+- **The satellite catalog was publishing years-old orbits for birds that had stopped being
+  tracked.** The mirror took the freshest elements it could find for each active bird — but for a
+  bird that has dropped out of Celestrak's amateur groups the only source left is a SatNOGS cache
+  that never expires, so it kept serving that bird's last recorded orbit, one day staler every
+  day. Forty birds were affected, the oldest carrying an orbit from 2014, and four of them had
+  already re-entered: pointing an antenna at one of those was pointing it at nothing. An element
+  more than 30 days old is no longer published. Those birds keep their row in the satellite list
+  with the status chip that says why, exactly like the ones that have gone silent — a row that
+  reads "no current elements" is honest, a track twelve years out of date is not. Every bird
+  anyone actually works is unaffected: ISS, SO-50, RS-44, AO-91, AO-7, QO-100, PO-101, AO-73 and
+  FO-29 all carry elements hours old.
+- **The RTTY auto-sequencer could not log a single Winter Field Day contact.** Winter Field Day
+  uses its own station classes — H (Home), I (Indoor), O (Outdoor), M (Mobile) — but the
+  sequencer matched the ARRL Field Day letters A–F for both events. None of the Winter classes is
+  in that set, so a station sending a perfectly legal `2M EPA` never satisfied the required Class
+  slot: the exchange stalled, the QSO never auto-logged, and the only way through was to log it by
+  hand. The sequencer now copies against the class set of whichever event is selected, so `2M EPA`
+  completes at Winter Field Day and `2A WI` still completes at ARRL Field Day. An ARRL Field Day
+  sequencer continues to refuse a Winter class, and vice versa — the two sets are not
+  interchangeable. Scoring, Cabrillo and ADIF output are untouched.
+
+- **The Chase pane stopped updating once you selected a station.** Its "open now / best 1400Z"
+  column and the colour accent on each row come from the modelled band outlook, and that was
+  deliberately not refreshed while a station was selected — correct for the map, which switches to
+  a per-station prediction, but it also starved Chase, the Chase feed and the band-outlook heatmap,
+  which use it all the time. Pick a station and their propagation column froze at whatever it last
+  held. It was most visible in a detached Connect window left open on a second monitor, but it
+  happened in the main window too. The outlook now refreshes on its own every minute regardless of
+  what is selected; the map is unchanged.
+
+- **CW and SSB park activations were missing from the roster for digital-only stations.** If
+  the CW or Phone features were off (the wizard's FT-only choice), a POTA or SOTA activator
+  running CW or SSB was dropped as if it were a CW/Phone *need* — so the Nexus roster showed
+  fewer parks than GridTracker's. A park activation is someone to hunt, not a mode you have to
+  operate: it now stays visible regardless of which mode features are on. Genuine CW/Phone
+  needs are still hidden exactly as before, and a park activator who also happens to be a new
+  entity shows as a park, not as a CW award row at the top of a digital-only board.
+
+- **Your log never recorded which callsign made a contact, so a special event batch uploaded
+  afterwards was signed under the wrong call.** Nexus has always transmitted correctly under a
+  special event or club call — a 1×1 like `W6R` is an entirely ordinary callsign to FT8 — but
+  nothing wrote down which call was in force, and the LoTW and HRD Logbook upload paths filled
+  that in from whatever callsign happened to be set at the moment you pressed upload. Work a
+  weekend as `W6R`, put your own call back on Monday, then upload, and every contact from the
+  event reached ARRL under your home call: a confirmation the other operator will never get and
+  cannot diagnose. Every contact now carries `STATION_CALLSIGN` in the log and in every ADIF
+  export, stamped with the call that made it, and both upload paths sign from the record rather
+  than from the current setting. Contacts logged by earlier versions carry no station call and
+  upload exactly as they did before.
+
+- **The QRZ callbook row in Settings ▸ Connections could never say it was working.** It was
+  wired to nothing, so a paid subscription with a working password and a subscription that had
+  lapsed months ago showed the same grey "not verified yet" row, and the only way anyone found
+  to clear it was to push a QSO through. Every callbook lookup now updates that row, and so
+  does the Test connection button on the QRZ Logbook row — which also could not clear its own
+  dot before. Because the row is a lookup and not an upload it now says "last lookup" rather
+  than "last upload".
+
+  A lookup QRZ *refuses* is kept apart from a callsign QRZ simply does not have. QRZ answers
+  both the same way — on a live session, with an error and no record — so a refused lookup was
+  being counted as a completed one: the row went green, and green does not just fail to warn,
+  it clears a red that was already there. A match and a genuine miss now read as a working
+  subscription; a refusal and a session QRZ will not accept read as failures, each naming what
+  to go and check. Telling those two apart reads QRZ's own not-found wording, and it now has to
+  be QRZ's not-found *reply* rather than any refusal that happens to use the words — a
+  subscription-level refusal worded "callsign not found at your subscription level" was being
+  read as a plain miss, which turned the row green.
+
+- **Cloudlog and Wavelog threw away the reason your upload was rejected.** The instance sends
+  back what it actually refused — a read-only API key, a station profile id not linked to that
+  key, a missing ADIF field — and Nexus replaced all of it with "auth rejected — check the API
+  key", which sent people to check the one thing that was usually fine. The instance's own
+  words now lead in the upload result, and where it said nothing the guess names the station
+  profile id as well as the key. A failure to reach the instance at all is no longer blamed on
+  the URL either: an antivirus or company proxy inspecting HTTPS traffic is named as the likely
+  cause, which is what it usually is.
+
+- **A logbook service's own error text is no longer kept in your config directory.** The Connections panel's
+  failure line was stored word for word in a file in your config directory, and for Cloudlog
+  and Wavelog that text can contain your API key — the key travels inside the upload request,
+  and an instance running in debug mode, or a proxy or firewall page in front of it, answers by
+  quoting the request straight back. What gets stored is now always Nexus's own sentence,
+  naming the failure and what to check. The service's exact words are still shown to you, in
+  the upload result and in this session's connection log; they are simply not kept. The same
+  rule now covers HRDLog.net and World Radio League, whose replies were being stored with no
+  length limit at all.
+
+  It covers the diagnostic output as well. On Linux the desktop session captures a program's
+  console output into a world-readable file in your home directory, and the connection log was
+  echoing every service reply there verbatim — so the same API key was landing in a second
+  file, kept until your next login. The console line now names only the connector and whether
+  it succeeded, and the ClubLog most-wanted fetcher, whose request carries your ClubLog key in
+  its URL, no longer echoes ClubLog's refusal there either. And a file that already had a key
+  in it from an earlier version is cleaned the next time Nexus starts: a stored failure line
+  that this version could not have written is dropped, and the row keeps the time it failed.
+
+- **A logbook service's own error text is no longer written into your log file — or uploaded
+  to ARRL with it.** When a QRZ Logbook or ClubLog upload bounced, the service's reply was
+  stored on the contact itself, inside `log.adi`. Both services answer a rejected upload by
+  quoting the request back, and the request carries your API key — so the key was written into
+  the logbook, and from there it rode out through every export built on it: the batch TQSL
+  signs with your callsign certificate and uploads to LoTW, the per-contact eQSL upload, and
+  any range or operator export you make. That is a secret leaving your machine under your own
+  signature, and it cannot be recalled. What the contact now records is Nexus's own description
+  of *why* the upload failed — the credentials were refused, the record was refused, TQSL
+  signed only part of the batch — and never the service's words. LoTW's own tool is covered by
+  the same rule. You still see exactly what the service said: it is in the upload result and in
+  this session's connection log.
+
+  A log file that already carries one of these replies is cleaned the moment Nexus reads it,
+  which is before any export can quote it — the contact keeps the fact that its upload bounced,
+  and when, and loses only the text.
+
+  **And so are the safety copies of it.** Nexus keeps a `log.adi.bak` beside your log — taken
+  the first time it opens a log and never overwritten — plus dated snapshots in a `backups`
+  folder. Those copies are made from the raw file, so on any machine that ran an affected
+  version they hold the same replies, and nothing ever rewrote them. Upgrading now cleans them
+  too: the copies keep every contact, they lose only the reply text, and any copy that held one
+  is rewritten so only your own account can read it. Your log itself is cleaned once, in place,
+  the first time this version opens it. A log with nothing to clean is not rewritten at all, so
+  a large log still opens as fast as it did.
+
+- **The automatic QRZ Logbook sync no longer prints QRZ's reply where the desktop can keep it.**
+  When the hourly sync failed, Nexus printed QRZ's own refusal line — which on Linux the desktop
+  session saves to a world-readable file until your next login, and QRZ quotes your failing
+  request, API key included. The failure now says what went wrong in Nexus's own words: no key
+  stored, the sync never reached QRZ, or QRZ refused it. QRZ's own wording still reaches you, in
+  Settings ▸ Connections, and it goes no further than that session.
+
+- **A LoTW upload that TQSL turns down now says what TQSL said, and which of two problems it
+  was.** The reason on the contact is Nexus's own sentence — the service's wording is not
+  written into your log — and that sentence sends you to this session's connection log to read
+  what TQSL actually printed. For LoTW it was not there: every other connector wrote its line,
+  LoTW wrote none, so a failed sign left the real message only in the toast of the click that
+  produced it. It is now recorded for every failing upload, automatic or manual. And a batch
+  that fails to sign no longer reports "check your credentials" for two problems with nothing
+  in common: a missing or expired **Callsign Certificate** (request or renew it at ARRL, load
+  the .p12 into TQSL) is now told apart from an unusable **Station Location** (create it in
+  TQSL, or correct the name in Settings).
+
+- **A QRZ callbook row no longer claims a working subscription it cannot prove.** The row went
+  green on far too little. QRZ answers "no such callsign" and "your subscription will not do
+  that" in exactly the same shape, so several versions of this check tried to tell them apart by
+  reading QRZ's wording, and each was beaten by the next wording — one of them still read *"Not
+  found: your subscription does not cover this record"* as a plain miss and marked the connector
+  green, clearing a real failure.
+
+  The wording was never the real problem. When your XML subscription lapses, QRZ does not send an
+  error at all — it sends a **successful** lookup with the free-tier fields in it: the callsign, a
+  name, a country, and no grid square and no state, because those are what the subscription buys.
+  Every version of this check saw a record come back and called the subscription healthy, so the
+  row read green for operators who were no longer subscribed to anything.
+
+  So the check was turned around. The row goes green only on positive proof — a lookup that comes
+  back carrying a subscriber-only field, read from the returned record itself and not from QRZ's
+  surrounding prose — and it now also believes QRZ's own subscription field: a reply that says
+  `non-subscriber`, or whose subscription expired, reads red no matter what else it carries. Every
+  other answer, including shapes QRZ has not sent before, reads as not confirmed. Two trades, both
+  deliberate: looking up a callsign that genuinely does not exist marks the row as failing until
+  your next successful lookup, and so does a lookup whose record happens to carry neither a grid nor
+  a state. A row that reads red until your next lookup costs you a glance; a row that reads green
+  over a subscription that has quietly lapsed is the bug this was reported as.
+
+<!-- ℹ️ NICE-TO-KNOW, no longer load-bearing (round 7 pass 2): green would rest on QRZ withholding
+     <state> from a non-subscriber (<state> is FCC-ULS-derivable, so QRZ MIGHT return it to a free US
+     account) — EXCEPT the predicate now also reads QRZ's own <SubExp> and refuses an explicit
+     `non-subscriber`/expired reply regardless of which fields it carries. So if QRZ ever does return
+     <state> free, the SubExp disqualifier is what catches it (the reply carries
+     <SubExp>non-subscriber</SubExp>), and #245 cannot return through that door. Proven by
+     `a_non_subscriber_body_carrying_a_real_state_is_disqualified_by_subexp` in qrz.rs. The only
+     residual — a free reply with <state> and NO SubExp marker at all — is worth confirming, not the
+     single assumption the fix rests on. CHECK when convenient: one lookup from a lapsed/free QRZ XML
+     subscription — does the <Callsign> carry <state>, and does the <Session> carry a <SubExp>? Do
+     NOT use live credentials in code/CI. -->
+
+- **A manual HRDLog.net or World Radio League push that never reached the service now records
+  it.** Pressing the per-contact upload button and getting a network failure left the
+  Connections row saying "stored — not verified yet" forever, while the automatic upload
+  recorded the identical failure — so the button an operator presses *because* the row has
+  never been verified was the one that could not change it.
+
+- **A Cloudlog failure now says which failure, after a restart too.** Every way an upload could
+  fail collapsed into one stored sentence, so once the connection log had gone with the session
+  the Connections row could not tell a station profile id that is not linked to your key from a
+  URL that is not a Cloudlog instance from the instance being down. Each of those now has its
+  own line on the row, naming what to go and check — the same way the HRDLog.net and World Radio
+  League rows already worked.
+
+- **A connector row could read green in the second it failed.** The panel compares when a
+  connector last worked with when it last failed, and those are stamped to the whole second —
+  so a QSO that uploaded and then failed inside the same second read as working, and stayed
+  that way until the next failure. The auto-upload worker pushes to every service back to back
+  with no spacing, and a Cloudlog instance on your own network answers in milliseconds, so this
+  was reachable. A tie now reads as failing.
+
+- **A LoTW report that failed to download said which step failed, not what went wrong.** Every
+  failure reading the response became "could not read the response body", so a request that
+  died after a minute and one that never started looked identical. It now says which happened
+  and how long it waited — and where it genuinely cannot tell (LoTW still assembling the
+  report, or a report too large to arrive inside the deadline) it says both instead of
+  guessing, and tells you to narrow the date range if it keeps happening.
+
+- **An upload code pasted with a stray space or newline made every upload fail, silently.**
+  Copying an HRDLog.net upload code, a QRZ Logbook API key or a World Radio League key out of a
+  web page usually brings a trailing newline with it. Nexus stored it exactly as pasted and
+  sent it that way, so the service rejected every QSO and nothing on screen explained why —
+  the code looked right because it was right, apart from a character you cannot see. Codes are
+  now trimmed when you save them. Existing stored codes are unaffected until you re-enter one.
+
+- **settings.json is no longer world-readable.** It holds your ClubLog API key (and, briefly, a
+  Cloudlog key on its way into the OS keychain), but was written so any account on the machine
+  could read it. It is now owner-only. Existing files are tightened the next time Nexus saves them.
+
+- **Upgrading no longer destroys a stored Cloudlog key when the OS keychain is unavailable.** The
+  one-time move of a legacy Cloudlog/Wavelog key from settings.json into the keychain cleared the
+  key from the file whether or not it had actually been stored — so on a Linux box with no Secret
+  Service running, the key was silently deleted at launch. It is now cleared only once it is safely
+  in the keychain, and the migration retries on a later launch otherwise.
+
+
+## [1.10.3] — 2026-09-04
+
+### Added
+
+- **Opt-in beta updates.** Settings ▸ Appearance ▸ App updates has a new *Receive beta
+  (pre-release) updates* switch. Turn it on and Nexus follows the beta channel — it offers
+  pre-release builds as they land (newer features, less tested); leave it off and you stay on
+  stable releases only, exactly as before. Beta builds carry a `-beta.N` version, are published
+  as GitHub pre-releases, and never reach anyone who hasn't opted in. When a stable release
+  supersedes the betas, opted-in stations roll onto it automatically.
+- **The WSJT-X UDP feed can target several destinations at once.** Settings ▸ Logging &
+  Connectors ▸ WSJT-X UDP API now accepts a comma-separated list of addresses, not just one,
+  so a single Nexus can feed a local tool (GridTracker, JTAlert) and a remote service (an
+  FT8 contest scorer such as FT8 Battle Royale) at the same time — something WSJT-X's own
+  single-sink UDP cannot do. A single address still works exactly as before, and a bad entry
+  in the list is skipped rather than taking the whole feed down.
+
+### Fixed
+
+- **A rig could get stuck transmitting after a CAT dropout (Yaesu, Enhanced USB port).** On some
+  Windows setups — reported on a Yaesu's Enhanced CAT port — a CAT interface hiccup while the radio
+  was keyed (an over or a tune) could leave the radio transmitting until it was powered off. The
+  1.10.2 automatic CAT-reconnect rebuilt the link but forgot the radio was keyed and, on the
+  external-Hamlib control path, never sent the key-up over the reopened channel — so the safety
+  retry that recovers a stuck key (present in 1.10.1) was switched off exactly when it was needed.
+  Nexus now always sends an unkey through a freshly reopened channel and keeps that recovery armed
+  across a reconnect, so a transient CAT dropout no longer strands the transmitter. NEEDS-BENCH on
+  a real Enhanced-port rig. If the USB device itself disappears entirely, no software can unkey it —
+  a hardware PTT that fails safe, or the rig's Standard port, is the sure guard there.
+- **FT8 no longer sends 73 without receiving RR73.** In an ordinary FT8 QSO, a DXpedition Fox's
+  multiplexed confirmation addressed to you — from a Fox you'd been chasing on the same band — could
+  be misread as your current partner's roger, and Nexus would send its closing 73 to a station that
+  never rogered. The code that stitches a Fox's split confirmation back together was running on every
+  QSO, not only in Hound mode; it now only does so when you're actually working a Fox, so an ordinary
+  contact is never closed by a bystander's signal. (#236)
+- **Frequency presets no longer collapse to a single band.** After 1.10.2 the frequency/band
+  dropdown could shrink to one band — an IC-7300 on 14.074 reading "custom", or only 40 m
+  showing — for stations that had set per-radio band coverage. The band selector was trimming
+  its list (and with it the frequency presets, which are the same list) by each radio's
+  band-coverage setting, but that setting is a dual-radio *routing* choice, not a limit on what
+  a rig can tune, so a radio with a partial coverage list wrongly hid every other band's
+  presets. The presets now always show, independent of coverage. (#231, #232)
+- **The generated-message pane now clears after an auto-logged contact.** With "Clear DX call
+  after logging" on, the DX Call/Grid fields cleared after a manual log but not when the FT8/RTTY
+  sequencer logged a contact on its own — the app only noticed its own log actions, not the
+  engine's. It now clears on every logged contact. (#210)
+- **FTDX-101D power no longer dips on transmit.** Nexus could send a power-level command to the
+  radio mid-transmission, which WSJT-X never does; on the FTDX-101D that showed as a power
+  foldback during the over. Nexus now sets power only before keying, never during a
+  transmission. NEEDS-BENCH on a real FTDX-101D. (#126)
+- **The 3-D globe now remembers its map layers.** The 2-D map remembered which layers you had on,
+  but the 3-D globe reset to defaults every time you opened it, so layer choices made on the globe
+  didn't stick. The globe now saves them the same way the flat map does. (#211)
+- **The 60 m FT calling frequency is now a preset.** Added 5.357 MHz for FT8 and FT4 on 60 m to
+  the digital band presets. (#175)
+- **The callsign lookup shows the beam heading.** A QRZ/callbook lookup in the log entry now
+  appends the short-path bearing from your grid, the way the station cards already do. (#222)
+- **The log editor's time field no longer clips on macOS.** The minutes part of the date/time
+  field in the log editor could be cut off on the Mac; the field is now wide enough for it.
+  NEEDS-BENCH on macOS. (#233)
+- **The radio engine no longer dies at launch on some Linux systems.** On certain Linux audio
+  devices — reported inside Debian 13 (trixie) containers, before any radio was configured — the
+  capture stream was killed at startup with "RADIO ENGINE STOPPED — Buffer size 4800 is not in
+  the supported range 10..=3840", leaving TX and RX dead until a restart. The 1.10.1 change that
+  gave the capture buffer more scheduling slack sized it against the range the device *declared*
+  it supported, and on these devices that declared range is looser than what ALSA actually
+  enforces when the stream is opened, so the request was refused. Nexus now falls back to the
+  system's default buffer whenever a device refuses the sized one, so the engine always starts.
+  From a field report.
+- **SSTV no longer loads some images upside down on macOS.** An image with a 180° EXIF
+  orientation tag came into the SSTV transmit stage upside down on the Mac (and would have
+  transmitted that way). The app rotates images upright itself, and its safeguard against
+  rotating one that the system already rotated only recognised the 90° cases — a 180° flip
+  changes no dimensions, so it slipped through, and macOS's image decoder rotates on its own
+  where Windows does not. Nexus now probes, once, whether the decoder applies orientation and
+  acts on the answer, so a picture lands upright on every platform. From a field report.
+
+## [1.10.2] — 2026-09-03
+
+### Fixed
+
+- **The TX meters read during Tune again.** Since late August the SWR/ALC/power bars stood
+  still while Tune was keyed — a deliberate change that kept a slow meter read from
+  gapping the tune carrier on a slow radio, made on the assumption that nobody watches
+  the meters during a tune-up. You do: it is how you see the antenna tuner take, and
+  remotely it is the only way. The meters now run during Tune with the same protection
+  built in differently — a read is issued only while the carrier has enough audio queued
+  to cover it, and it gives up quickly rather than wait — so a slow radio costs you a
+  reading, never a gap in the carrier. From the operator's field test of 1.10.1.
+
+- **CAT is more honest, and recovers on its own where it can.** Leaving Nexus running while
+  the radio was switched off could leave rig control in a bad state: the CAT indicator
+  might stay green over a radio that was off, and a band change made while it was off was
+  recorded as "the radio refused that frequency" and never sent again. Both are fixed. A
+  link that goes silent now trips the CAT indicator red within a few seconds; a radio that
+  simply did not answer is reported as exactly that, never as a refusal, so no band gets
+  blacklisted for the session; and every band or mode Nexus had given up on is forgiven
+  the moment the link comes back. Green now means a real answer — a mode change whose
+  read-back failed, or a radio Nexus could not open at all, can no longer paint the
+  indicator green, and on the native CI-V path a cached dial is trusted for only a few
+  seconds so a switched-off radio cannot look connected. And where the radio's USB port
+  itself comes and goes, Nexus watches for it and reopens the port when it returns — even
+  under a new COM number, following it by USB identity — retrying on a backoff rather than
+  giving up after one try. Some radios (notably the Yaesu FTDX10 and its family, whose
+  Hamlib backend shuts down entirely when the rig is off) may still need a restart to pick
+  the radio back up; that case is still being run down. From the operator's field tests.
+
+- **A working connector no longer reads "stored — not verified yet" after every restart.**
+  The connection health shown in Settings ▸ Logging & Connectors lived only in memory, so
+  each launch reset every connector to "not verified" until that session's first push —
+  and for HRDLog.net, World Radio League and Cloudlog, which record no per-contact upload
+  state, that line was the only evidence the code worked. It is now kept beside your
+  settings and survives a restart. A manual push from a Logbook row now counts as evidence
+  too, so pressing HRDLog or WRL on one contact updates the row immediately with HRDLog's
+  or WRL's actual answer. From an HRDLog field report (LZ2AOV).
+
+- **"Is calling you" now tells you about every station that calls — and never about the
+  one you just finished with.** Two things were backwards. With Auto on, a station
+  answering your CQ raised no alert at all (the sequencer had already engaged them by the
+  time the alert looked), a second or third station calling during a QSO was silent, and
+  the only toast you ever saw was the partner's "73" after the contact was over. The alert
+  is now per station: every new station that calls you is announced once, whatever you are
+  doing — answering your CQ, calling in while you work someone else — and a sign-off
+  (RR73/73) is never a call. A station you called yourself (search-and-pounce) never
+  "calls you"; its replies are the QSO. A station that keeps calling is one alert, not one
+  per period, and becomes news again after ten quiet minutes. From the operator's own
+  field test of 1.10.1, with GridTracker2's behaviour as the yardstick.
+
+- **−B4 now hides the station you just worked.** The hide-B4 (and hide-blocked,
+  hide-confirmed, hidden-call) filters kept the *selected* station on screen so your
+  current partner could never vanish mid-QSO — but the selection lingers after a contact
+  ends, so a just-worked station stayed in Band Activity with its B4 badge until you clicked
+  elsewhere. The exemption now follows the station the sequencer is actively working, and
+  nobody after the QSO is done. From the operator's 1.10.1 field test.
+
+## [1.10.1] — 2026-09-01
+
+<!-- Post-release work lands HERE, above the released section. A released section is
+     immutable history: folding new entries into it claims unshipped work as shipped,
+     which has had to be repaired on main once already. -->
+
+### Fixed
+
+- **A popped-out waterfall no longer strands itself across a restart.** If Nexus closed
+  while the waterfall (or any pane) was popped out to its own window, the next launch
+  could show the pane as still popped out — with no window anywhere and the docked copy
+  gone — and it stayed that way every launch. The boot-time tidy-up that re-docks stale
+  pop-outs ran before the saved UI state finished loading, so its correction was
+  overwritten by the very staleness it had just fixed. Writes that land during that
+  window now survive the load. Reported on a FlexRadio 6400M; nothing rig-specific.
+
+- **The Connect map remembers your layers.** Which layers you had on — parks, MUF,
+  aurora, spots, all of them, and their opacities — reset to defaults on every launch,
+  while the projection pick right beside them was remembered. The layer set now persists
+  the same way: the map opens as you left it, and choosing a view preset afterwards
+  still applies that preset's layers. Asked for from the field (#199).
+
+- **A rig keyed the moment Nexus started, when PTT was set to RTS.** On radios whose
+  Hamlib backend declares hardware flow control — the TS-2000 it was reported on, and
+  most Kenwoods and several Yaesus — choosing RTS as the PTT method on the CAT port let
+  the Windows serial driver take the RTS line as flow control and hold it up for the
+  whole session. On a Digirig-style interface that line is the key, so the transmitter
+  keyed at launch and nothing could release it until the app closed. RTS cannot be flow
+  control and the key at the same time, so when you declare RTS keying on such a radio
+  Nexus now tells the rig-control daemon to run without hardware flow control, and the
+  key line starts low and follows PTT. Other PTT methods and declared handshake settings
+  are untouched. From a field report (vk6mo); needs an on-air bench pass, and if your
+  radio's CAT menu has RTS flow control switched on it may need switching off to match.
+
+- **US stations no longer all show the same heading in Spots.** Every United States row
+  read "~309°" (or whatever one number your QTH gives) — the bearing to the country's
+  reference point in Kansas — while the spot itself was carrying the station's own grid.
+  A spot that carries a grid, from your own decodes or off the skimmer wire, now shows
+  the real heading to that station, unmarked; only a truly grid-less spot keeps the
+  approximate "~" country heading. Reported from the field the day it was asked about.
+
+- **macOS: CAT works again on a Mac without Homebrew.** 1.10.0 fixed the app not finding
+  the Hamlib it ships (#190) — and the copy it then found was broken on exactly the Macs
+  the bundling exists for: the bundled Hamlib library still looked for Homebrew's libusb
+  at its absolute Homebrew path, so on a Mac without it the rig tools died on launch and
+  Test CAT reported the rig never answered at any speed. 1.9.2 had worked on the same
+  machines only because it never found the bundled tools and quietly used a Hamlib already
+  installed there. Three fixes: the shipped library now points at the libusb shipped
+  beside it; the release check now sweeps every shipped binary for paths that would not
+  exist on an operator's Mac (it had checked only the one binary that was already
+  correct); and a bundled tool that cannot start no longer stops Nexus from falling back
+  to a Hamlib already on the machine. From two macOS field reports, an IC-756PROIII and
+  an IC-7300 — both radios are fine; neither was ever asked anything.
+
+- **Linux: the GStreamer warning at startup is gone, and RX capture gets more slack.**
+  The AppImage now bundles GStreamer's plugin-loader helper and points the app at it, so
+  the "External plugin loader failed" warning no longer appears (the alert tones already
+  worked — the fallback it warned about was doing the job, minus its crash isolation).
+  Separately, the sound-card capture buffer on Linux now asks for about 100 ms of slack
+  instead of the driver's default few milliseconds: a busy desktop scheduling Nexus late
+  was overrunning the capture, and every overrun drops audio — which on FT8 is a torn
+  symbol and a lost decode, not just a log line. Windows and macOS are untouched. From a
+  Linux field report; the reduction in "buffer underrun or overrun" messages is the thing
+  to watch for.
+
+- **eQSL works for accounts with more than one QTH profile.** eQSL requires a QTH
+  Nickname to tell those profiles apart, and Nexus never sent one — so such an account
+  could not authenticate at all: the inbox sync failed and uploads bounced. There is now
+  a QTH Nickname field beside your eQSL username in Settings; it rides the inbox request
+  and each uploaded record exactly as eQSL's own specs spell it. Single-profile accounts
+  need nothing and see no change. From a field report.
+
+- **The phantom "is calling you" is gone.** Finishing an FT8 contact could pop
+  "so-and-so is calling you" seconds later — about the station you had just worked, whose
+  RR73 was the tail of your own QSO — and switching bands could do the same before a
+  single new decode, replaying an old caller from the previous band. Reported on 1.9.2
+  and 1.10.0 with a screenshot that caught it live; the alert was re-judging old decodes
+  every cycle as the QSO state moved on around them. It now only ever speaks for a decode
+  that just arrived. A station genuinely calling you — including the one answering your
+  CQ — alerts exactly as before.
+
+### Added
+
+- **Scripts can play the rig's voice memories through Nexus.** The rig-sharing port
+  (NET rigctl, :4532) now answers `\send_voice_mem <n>` and `\stop_voice_mem` — the
+  same spellings Hamlib's own tools use — so an external script can trigger DVS
+  playback on a rig that supports it (Yaesu's PB command, among others) while Nexus
+  stays connected. The radio itself keys for the playback, exactly as if you had
+  pressed the memory button on the front panel, and a rig that doesn't support voice
+  memories over CAT says so in the CAT diagnostics. Raw CAT passthrough remains
+  deliberately unsupported: a scoped verb is a promise Nexus can keep; an open pipe to
+  the transmitter is not. From an FT-991A field request.
+
+- **Confirmation opportunities can be switched off.** The Needed board and the decode
+  chips include a "Confirm" tier — stations you have worked but not confirmed, your LoTW
+  confirmation chances. It stays on by default; operators who chase contacts rather than
+  confirmations can now turn it off under Settings ▸ Spots & Alerts ▸ Alerts, and both
+  the board rows and the chips follow. A station that is also a new band keeps its row
+  and only loses the Confirm chip. Asked for by KD9TAW.
+
+- **World Radio League joins the connectors.** Paste your WRL API key (their
+  Integrations ▸ Developer API page) into Settings ▸ Logging & Connectors and every
+  logged contact streams to your World Radio League logbook as it lands, alongside the
+  existing QRZ/ClubLog/eQSL/HRDLog pushes. The key is checked against the service the
+  moment you save it — a typo fails right there with a plain message, not on your first
+  QSO — and your destination logbook is worked out at the same time, so there is nothing
+  else to set up. Stored write-only in the OS keychain, like every other credential.
+  Failed uploads retry with backoff; a revoked key tells you to fix it in Settings.
+
+- **dB reports to comments, like WSJT-X.** Turn on Settings ▸ Digital ▸ Logging
+  Behavior ▸ "dB reports to comments" and every FT-mode contact logs its exchanged
+  reports into the QSO's comment — "FT8  Sent: -07  Rcvd: -12", the same format WSJT-X
+  writes, byte for byte, so the two programs' logs read alike. Off by default, exactly
+  as WSJT-X ships it. Asked for by KD9TAW.
+
+### Changed
+
+- **The TV page is now the real Connect view, not a summary.** 1.10.0's "Connect on a
+  TV" served a plain digest — a band table and some numbers. It now serves Connect
+  itself: the same map with every layer (grayline, spots, MUF, aurora, satellites,
+  parks on the air), the same panes, live in any browser on your network — a shack TV,
+  a Fire Stick's browser, a tablet — as a HamClock-style wall display. Still read-only
+  in the strict sense: the server accepts nothing but reads, a short fixed list of
+  propagation and space-weather feeds is all a browser can ask for, and everything
+  else is refused. Your log, your needs board and the frequency you are on are still
+  never sent; the setting's own text now also says that the picture includes the
+  callsigns of stations heard and spotted, because it does. The simple summary still
+  answers at /connect/data.json for anything scripted against it.
+
+## [1.10.0] — 2026-08-31
+
+### Added
+
+- **Field Day club sync — every position's contacts in one club log, live over the site
+  LAN, no third-party logger.** One PC at the club site turns on **Settings ▸ Contesting ▸
+  Field Day Club Sync ▸ Host a club event** (the one time Nexus listens beyond the local
+  computer, and the toggle says so); every other position joins it — **Find club events**
+  discovers the host on the network, or type its address — and from then on each logged
+  contact streams to the host the moment it lands. Every position sees the club's score,
+  QSO and section totals, a live band board (who is on which band/mode, with rate, stale-
+  marked the moment a position goes quiet), and a **club dupe warning while typing**: if
+  another tent already worked that call on this band and mode you are told before you call —
+  a warning, never a lock, exactly as N3FJP treats it (your own log's dupes still refuse).
+  Everything keeps working through failures: a position that loses the network logs on
+  paperlessly and re-syncs by itself when the cable comes back; if the host PC dies, turn on
+  hosting at any other position and everyone re-joins with nothing lost. The host exports
+  the merged club log as Cabrillo or ADIF, deduplicated the way the rules score it. A sync
+  chip on the Field Day view always tells the truth — Synced, Behind (with the count), or
+  Offline — and positions with clocks off by more than 30 seconds are told to fix them.
+  The N3FJP/N1MM interop pushes are untouched and keep running alongside.
+
+- **The club band board is its own window, one click from anywhere.** A **Club Board**
+  button sits in the left rail under Field Day and opens the board — position, band, mode,
+  operator, QSOs, rate — as a standalone window for a second monitor, in larger type than
+  the dashboard copy because it is watched from the operating position rather than read at
+  the keyboard. This is the display a multi-station club keeps up all event to see where
+  everyone is before moving to another band. The button is there whenever Field Day is on,
+  *before* club sync is switched on: opened with sync off, the window says so and names the
+  route that starts it (Settings ▸ Contesting ▸ Field Day Club Sync ▸ Host a club event)
+  instead of showing an empty board; with sync on and nobody else logging yet, it says it is
+  waiting. Previously the board existed only as a block inside the Field Day dashboard that
+  appeared once sync was already running, so an operator who had not found the setting had
+  no way to learn the board was there.
+
+- **Field Day spectator scoreboard — the club's score on the TV, from a web page the host
+  serves itself.** Turn on **Settings ▸ Contesting ▸ Field Day Club Sync ▸ Spectator
+  scoreboard** at the host position and any browser on the site network — a smart TV, a
+  projector's laptop, a visitor's phone — can open the address the Settings row shows
+  (port 7373 by default; nothing to install on the TV). One dark big-screen page shows the
+  live score, contact count and rate, all 83 ARRL/RAC sections lighting up as they are
+  worked, contacts by band and mode, a per-tent leaderboard, the bonus checklist, and each
+  new contact as it lands — plus one plain-language line so non-ham visitors know what they
+  are watching. The page is read-only by construction (viewers can only look; nothing on it
+  can reach the radio), works with zero internet, keeps itself updated, and rides out Wi-Fi
+  blips on its own. Scores are event-honest: ARRL FD shows the powered math, Winter Field
+  Day shows raw QSO points with the at-submission multiplier clearly labelled as projected —
+  never ARRL power math applied to an event that has none.
+
+- **Field Day rules can now be refreshed as data — and the countdown finally knows how long
+  the events really run.** The numbers behind Field Day — points per mode, power tiers, the
+  bonus menu, the section list, event weekends, Winter Field Day's banned-mode list — now ship
+  as a rules file the app can update, instead of being frozen into each release. A
+  **Check for rules updates** button in **Settings ▸ Contesting ▸ Field Day Setup** fetches the
+  current file before the event (validated before it is trusted, applied at the next launch,
+  with the built-in copy as the floor — the country-file discipline). The Field Day banner
+  shows which rules year is scoring your log and the Cabrillo export records it
+  (`X-NEXUS-RULES-YEAR:`), so a submission is traceable to the parameters that scored it.
+  In the same change the banner and countdown stop pretending both events are 24 hours: ARRL
+  Field Day is 27 (1800Z Saturday → 2100Z Sunday) and Winter Field Day 30 (1600Z Saturday →
+  21:59Z Sunday) — previously the app declared WFD over with six hours still on the clock and
+  started counting down to next year.
+
+- **Your country file can finally be updated — and Nexus tells you how old it is.** The DXCC
+  country data that drives the Needed board, award credit and entity labels was frozen into
+  each release; every install has been running a file from January 2025. **Settings ▸ Logging ▸
+  Country file (DXCC)** now shows the file's actual date and fetches the current one — the full
+  big-CTY edition, same as the big loggers use — checked weekly for freshness the way the
+  callsign database already is. A downloaded file is validated before it is ever trusted and
+  takes effect at the next launch; the built-in copy remains the floor, so a bad download can
+  never make things worse. Works the N3FJP way: update at home before Field Day, operate all
+  weekend offline.
+
+- **The rotator picker stops steering Easy-Rotor-Control owners wrong.** DF9GR's ERC V4 board
+  speaks three protocols, chosen in its own Service Tool — and configured the way its manual
+  recommends (GS-232B at 9600), the picker entry with the board's name on it was the one that
+  could never work: that entry is the DCU-1 flavour at a fixed 4800. Both labels now say which
+  mode they are, and the manual says which entry matches which Service-Tool setting. If you run
+  an ERC V4 as the vendor ships it, pick **Yaesu GS-232B** at 9600.
+
+- **The POTA/SOTA board tears off into its own window.** The hunter board's filters were
+  already saved per-window — the code was written for this and the window never came. A pop-out
+  button now opens it beside your operating screen (or one per program: a POTA board next to a
+  SOTA board), and HUNT works from the pop-out exactly as it does docked — click a spot and the
+  radio QSYs, mode and all.
+
+- **Nexus speaks Japanese.** 日本語に対応しました。 The whole application — all 4,765 phrases,
+  every screen, the same coverage the other languages have — picked up automatically from your
+  system language or chosen in Settings. Written to Japanese amateur-radio convention (ゼロイン
+  for zero-beat, Eスポ for sporadic-E, コンファーム for confirmations), with polite sentence
+  forms for messages and terse labels for controls. Frequencies, callsigns, reports, band and
+  mode names are never translated — 14.074 is 14.074 in every language.
+
+- **Your amplifier can follow the radio's band.** Switch it on under **Settings ▸ Radio ▸
+  Amplifier** and the amp steps to whatever band you tune to, without being asked. It is off
+  until you turn it on, which is deliberate — this is the one amplifier control that acts on its
+  own, and you should choose it rather than discover it. It never moves the amplifier while you
+  are transmitting, and it steps one band at a time, checking where the amplifier actually is
+  after each step rather than assuming it arrived. If your radio is on a band the amplifier does
+  not have, it does nothing at all instead of picking the nearest. ⚠️ If your amplifier already
+  follows the radio through its own band-data cable — which is how most SPE installations are
+  wired — leave this off. The hardware is doing the same job, and two things steering one band
+  is worse than either alone.
+
+### Changed
+
+- **Click a previous contact to see that station's log.** The callsign card lists every earlier
+  contact with the station in front of you. Those rows are now clickable: one takes you to the
+  Logbook with that callsign filtered, so you get the whole history instead of the few lines that
+  fit on the card. Works from every operating screen.
+
+- **The club TV says who is on what band.** The spectator scoreboard — the page a club puts on
+  a screen facing the room — listed each operating position with its operator, QSOs and points,
+  but not the one thing a multi-station club actually walks over to ask: which band that tent is
+  on. Every position row now carries its current band and mode, coloured by band the same way the
+  globe and the band grid are. It is presence, not history, so it expires: when a position's link
+  has been quiet longer than the sync layer's own timeout the reading goes dim rather than
+  claiming, for the rest of the event, that somebody is still on 20 metres.
+
+- **The club band board pops out onto its own screen.** The board that shows every position's
+  band, mode, operator and rate now has a **Pop out board** button beside the club exports, so a
+  multi-station club can park it on a second monitor or a corner of the big one and keep it in
+  view all event instead of scrolling the dashboard back to it. The torn-off window is for
+  watching: it carries no operator field and no export buttons, both of which stay on the
+  dashboard where they can tell you what they did.
+
+- **The Field Day dashboard is a Field Day screen now, not the digital operating screen with a
+  scoreboard in the middle.** It used to be drawn inside the FT8 workspace, so it came with a
+  waterfall, a band-activity list and the stations rail either side of it — none of which a
+  score, log and setup screen has anything to do with, and all of which squeezed it into a
+  narrow middle column that left its top row of buttons crowded. It now gets the window to
+  itself: one column, no rails, and up to 1600 px of width instead of about 1180. The waterfall
+  and band activity have not gone anywhere — they are where they belong, in Operate, which is
+  where digital Field Day contacts are made.
+
+- **The operator button is there before anyone has been named.** The OP button in the top bar
+  swaps who is at the key from any mode, but it only appeared once an operator had already been
+  set — which is backwards for a club station, where the first person to sit down is the one who
+  needs it. With Field Day switched on it is now always there, reading **Set operator** until
+  somebody claims the seat; pick anyone the log has seen in one click. On a single-operator
+  station with Field Day off, nothing changes and the button stays out of the way.
+
+- **Field Day: the club call, the position and the operator are explained side by side.** A club
+  site answers "who are you?" three different ways — the club callsign that goes on the air, the
+  position you are sitting at ("CW tent", "comms trailer"), and whoever is at the key right now —
+  and Nexus had all three, on three different screens, with nothing saying how they relate. The
+  position name in particular read as a mystery box. **Settings ▸ Contesting** now opens with
+  **Who's who at this event**: the three of them together, each with one plain line saying what it
+  is and how it differs from the other two. They are the same settings as before, not copies —
+  change one here and it changes everywhere, including the Station tab and the OPERATOR box on the
+  Field Day dashboard. The position name moved into that group from the club-sync section below it.
+
+- **The Windows download installs about 32 MB less.** Turning on link-time optimisation took
+  `Nexus.exe` from 87 MB to 55 MB, which is most of what the audio-library upgrade in 1.9.2 cost.
+  Nothing about the app changes; it is the same build, compiled more tightly. The installer
+  itself only shrinks a little because it was already compressed — the saving is disk space on
+  your machine, not download size.
+
+### Fixed
+
+
+- **A ClubLog catch-up no longer looks like a flood.** Saving your ClubLog password makes Nexus
+  send any contacts that never uploaded. It was sending them all at once, back to back, which
+  ClubLog reads as abusing the live-upload endpoint. One operator was warned his address would be
+  blocked. Contacts you just worked still upload immediately, as they should. A catch-up now goes
+  out one every 15 seconds, and if ClubLog is busy and the retries stack up, they stay spaced out
+  rather than arriving in one burst when it recovers. Worth knowing if you import an old log: the
+  imported contacts count as never uploaded, so the next time you save your password Nexus offers
+  them to ClubLog. It says so in the connection log while it works through them.
+
+- **RTTY on a radio that has no RTTY mode.** On a FlexRadio over SmartSDR CAT there is no RTTY
+  mode to select, so Nexus asked for one, was refused, and gave up silently — leaving the radio in
+  whatever the last mode was, usually the wide data mode FT8 had set. It now falls back to the
+  data sideband the radio does accept, which is what AFSK RTTY needs anyway.
+
+- **Your own transmissions no longer follow you to another band.** Nexus keeps a short record of
+  the overs you have sent so your calls do not vanish when the app changes band under you, but that
+  record never noted which band each one went out on. Change from 20 to 40 and your 20 m calls came
+  back, carrying the times they were originally sent.
+
+- **Tune could interrupt itself: a blip and a brief power drop while the carrier was up.**
+  Reported by an operator running an FTDX-101D who saw the power fall 10–15 W for about a
+  second, on the waterfall and on an analogue wattmeter, and only in Nexus — never in WSJT-X on
+  the same station. Nexus was writing the VFO frequency to the radio *while it was
+  transmitting*: a tune deliberately cancels any pending transmission, and the code that puts
+  the dial back after a Split Operation offset read that as "nothing is on the air" and went
+  ahead. A Yaesu re-locks its synthesiser when the frequency changes, which is precisely a blip
+  and a momentary power drop. The dial now waits for the carrier to stop, which is what the rest
+  of the transmit path already did. Most likely to have bitten anyone who tunes up straight after
+  an FT8 over with Split Operation on. Power changes Nexus commands are also written to the
+  diagnostic log now, so a report like this one can be answered from a log instead of argued.
+
+- **Renaming a Field Day position now shows up on the club board straight away — and a position
+  is never nameless.** The position name was sent to the host once, when the position joined, so
+  naming a tent after the event had started — or renaming it — left the club band board showing
+  the old text, or the internal position id, until the connection happened to be rebuilt, with
+  nothing on screen to explain it. The name now travels with every position update, so a rename
+  reaches the board within seconds and every other position sees it. A position that has no name
+  set uses your callsign instead of the internal id, and if you deliberately clear the name while
+  hosting or joining a club event, Save says so rather than putting a blank row on the board.
+
+- **macOS: a fresh install could not connect to a radio at all.** Every new Mac install failed
+  at the setup wizard's Test CAT with "Nexus could not start its own rigctl", and the only way
+  round it was to install Hamlib separately with Homebrew. Nexus ships Hamlib inside the app —
+  correctly, and correctly signed — but on macOS it was looking for it one folder up from where
+  the build actually puts it, so it never found its own copy and fell back to searching the
+  system, which on a clean Mac has nothing to find. Windows and Linux were never affected. The
+  release build now also opens the shipped .app and runs the bundled rigctld, so this cannot
+  come back quietly. (#190)
+
+- **Band dropdowns no longer offer bands no radio in the shack can reach.** With an HF rig and
+  a 2 m/70 cm radio configured, the band lists still offered 23 cm and everything else your
+  licence allows. The list is now the bands your licence allows *and* at least one of your
+  enabled radios covers. A radio with no bands listed still means "covers everything", so if you
+  run one radio — or have not set any of this up — nothing changes. Manually tuning somewhere
+  outside the list still works and the picker still shows where you are. (#184)
+
+- **Erase now clears your own transmissions too.** Pressing Erase wiped the pane and the next
+  quarter-second painted every one of your own overs straight back, so the only way to clear
+  them was to restart Nexus. Received decodes cleared properly, which is why it looked like
+  Erase half-worked. Nexus keeps a short record of the overs you have already sent — that is
+  deliberate, and it is what stops your own calls disappearing when the app changes band under
+  you — but the pane was re-reading it after every wipe. Each pane now remembers being erased:
+  everything sent up to that moment stays gone, the next over you send still appears, and
+  erasing Band Activity leaves Rx Frequency alone, the way the two windows have always worked.
+
+- **Your own transmissions no longer vanish from Rx Frequency when the DX call looks like
+  P29YY.** Calling a station whose callsign starts letter-digit-digit (P29YY, T77C, SP2GIF —
+  the #178 sightings) completed the QSO fine, but none of your own overs appeared in the
+  Rx Frequency pane or in ALL.TXT — the own-transmission recorder mistook them for internal
+  chat-wire framing and skipped them. The skip is now scoped to the chat modes, the only
+  place that framing exists. Display and logging only; nothing about what goes on the air
+  changed.
+
+- **Field Day now warns when the rules disagree with what you're doing — and never blocks.**
+  Winter Field Day's ruleset has always known the WSJT modes are not permitted there; nothing
+  ever said so. A chip in the event banner and the Operate header now cites the event and rules
+  year ("FT8 is not permitted at Winter Field Day (2026 rules) — you can still log it, but it
+  will not count"). The same machinery covers spotting-assistance restrictions, citing the rule
+  when a ruleset restricts and the matching feed is live — dormant today for both events,
+  because the 2026 ARRL rules were read and contain no such restriction, and WFD's could not be
+  read; no advisory will ever cite a rule nobody verified. Score Summary exports say which
+  year's rules scored them.
+
+- **A Winter Field Day RTTY contact no longer reaches your club logger labelled FT8.** The FD
+  log has always known the actual on-air mode behind a digital contact, but the push to N3FJP
+  and N1MM re-derived every digital row as FT8 — at WFD, a banned mode. The recorded mode now
+  travels the whole way: RTTY pushes as RTTY, and Cabrillo's RY rows, ADIF and the club logger
+  finally agree. Rows logged before this release keep the old fallback.
+
+- **The Field Day manual told you the event was 24 hours.** ARRL Field Day runs 27 and Winter
+  Field Day 30; the manual now carries the real windows, corrects the claim that class and
+  section have defaults (they must be set before FD mode engages), and documents what shipped
+  undocumented: the pop-out scoreboard, the Operator field, the sections board, WFD's advisory
+  mode restrictions, and all four exports. Two new build-time guards also pin the hand-mirrored
+  sections and bonus tables between Rust and the UI, so the 83-section board and the bonus list
+  can no longer drift apart silently.
+
+- **Spanish and French showed doubled text wherever a count was involved.** Fifty-two messages
+  in each language — import results, sync summaries, alert batches — had both grammatical
+  forms of the sentence glued together, so a French operator importing a log read
+  "3 QSO importé3 QSO importés". Shipped that way since 1.9.0. Every one is repaired, and a
+  guard now fails the build if the shape ever comes back.
+
+- **A band you cannot transmit on is now listed anyway, so you can listen.** The band
+  dropdowns hid any band your licence class holds no transmit privileges for, which applied a
+  transmit rule to a tuning list — nothing restricts *receiving*, and the radio tunes there
+  regardless. A US General could not select 4 m at all rather than being able to listen on it.
+  Every band your radios can reach is now offered, with the ones you cannot key marked
+  "receive only". Transmitting on them is refused exactly as before — listing a band has never
+  been permission to transmit on it. Reported by akhepcat (#184).
+
+- **Parks on the air now show on the Connect map.** POTA activators appear where they
+  actually are — the feed sends each park's own coordinates, which Nexus had been
+  fetching and discarding in favour of the grid square, so a park that was placed to
+  about 4 km is now placed to the park. They draw as a triangle rather than another
+  dot, because an activator is somewhere you go and work, not one more spot in the
+  firehose: filled for a park you have never logged, hollow for one already in your
+  log. Hover names the activator, the reference, the frequency and the mode. The layer
+  is off until you turn it on, and only then does it fetch anything. Turning on the
+  POTA/SOTA view switches it on for you — that view has promised "park/summit
+  activators" since it shipped and until now enabled nothing of the kind.
+  ⚠️ POTA only. A SOTA spot carries no position at all, and their spot feed is being
+  retired — see below.
+
+- **A three-day space-weather outlook: when do the bands settle down?** Everything in
+  Connect described conditions as they are now; nothing said what was coming. The new
+  **Kp outlook** pane shows NOAA's planetary-K forecast — the worst period still
+  ahead, when a storm is expected to start, and when it drops back. Measured hours are
+  drawn as solid bars and the forecast as hollow ones, so a prediction can never be
+  misread as a reading. If NOAA has published nothing, it says so instead of drawing a
+  quiet sky.
+
+- **A geomagnetic storm now finds you.** A solar flare already raised an alert
+  anywhere in the app, and so did a band coming alive — but a geomagnetic storm only
+  ever appeared in the Space Weather pane, so you saw it only if you were looking
+  straight at it. That is backwards: a flare is minutes of absorption, a storm is
+  hours or days of degraded HF. Storms now raise the same kind of heads-up, quiet at
+  G1 and prominent with a beep from G2, and they never repeat themselves while the
+  index wobbles around a threshold. With the outlook in hand there is a second,
+  separate note when NOAA *expects* a storm that has not started yet. Nexus tells you;
+  it never touches the radio.
+
+- **Connect on the shack TV.** Turn on **Settings ▸ Appearance ▸ Connect on a TV** and
+  Nexus serves your conditions picture as a plain web page to any browser on your
+  network — a TV across the room, a tablet on the bench, a phone. Large type, no
+  controls, refreshes itself: band conditions, space weather, live openings, the
+  plain-language notes and the forecast peak. It is read-only in the strict sense —
+  there is no way to change anything from it, and the page loads nothing from the
+  internet, so it works at a site with no connection. It is off until you turn it on,
+  and the setting says plainly what anyone on your network would see: your callsign,
+  your grid and band conditions. Your log, your needs board and the frequency you are
+  on are never sent.
+
+- **Memories offered every mode and let you pick only one.** Adding a channel by hand showed a
+  mode list with eight entries in it, of which exactly one could be chosen — whichever mode the
+  radio happened to be on, so for most stations "USB is the only mode I can add". The list was
+  the kind that filters itself down to what is already typed in the box, and a new memory starts
+  on the rig's current mode. It is an ordinary dropdown now, with every mode always in it, and
+  an **Other…** row for a mode we do not list. The tone picker had the same fault — with 103.5
+  in the box the 38-tone list collapsed to that one tone — and got the same fix. A channel
+  imported from CHIRP carrying a mode or tone Nexus has never heard of keeps it: it appears in
+  the list as its own entry instead of being quietly rewritten the first time you touch the row.
+
+- **The ＋ New button looked dead, and new memories came out as digital modes.** With anything
+  typed in the search box, ＋ New created the channel and then the search filtered it straight
+  back out — a new memory has no name yet — so the row and its editor were invisible and the
+  button appeared to do nothing. ＋ New clears the search now. New memories also defaulted to
+  FT8 regardless of what the radio was doing; they take the rig's current mode.
+
+- **Adding a memory happened somewhere in the list; now it happens in one place.** ＋ New opened
+  the editor on the new row wherever the sort, the band sections and the filters had put it —
+  in a bank of 200 channels, usually off screen. It opens a panel pinned at the bottom of the
+  pane instead, and the new row is marked in the list and the grid so it can still be found.
+  Pressing Escape in a field reverts that field as it always did, without closing the form
+  around it; opening ＋ New and closing it again no longer leaves an unnamed channel behind
+  each time.
+
+- **Deleting memories: select several, and take it back.** Every row has a tick box, the grid
+  has a select-all in its header, and deleting names how many will go before it does it.
+  Deletion only ever takes rows you can actually see — narrow the list with a search and the
+  rows hidden by it are safe — and the bar says so when part of your selection is out of view.
+  Every delete, including the single ✕ on a row, offers an Undo for eight seconds, and rows
+  come back in the position they were deleted from, so favorite order and the cockpit strip are
+  unchanged. Asked for by KD9TAW.
+
+- **A memory deleted in the popped-out Memories window could not be undone.** Torn-off windows
+  had no way to show a message, so the Undo the confirmation promised was raised and dropped on
+  the floor — the rows went and nothing appeared. Seven of the pop-out windows were in that
+  state; all of them can show messages now.
+
+
+## [1.9.2] — 2026-08-29
+
+### Added
+
+- **Amplifier controls in every cockpit.** With an amplifier configured — SPE Expert or Elecraft
+  KPA500/KPA1500 — each operating screen's header carries a compact strip: Standby/Operate, band
+  down and up, and power out, so you can put the amp in line or move it a band without leaving
+  the screen you are working on. It appears only when an amplifier is set up, and nothing at all
+  is added for the stations that have none. Operate reads from the amplifier itself rather than
+  from your click, so the button always shows where the amplifier actually is, even if you press
+  the front-panel key instead. Both controls are refused while you are transmitting: changing
+  band on a keyed amplifier can damage it, and dropping to standby mid-over does not stop
+  anything — the exciter keeps keying and the drive passes straight through. Nexus will never
+  switch your amplifier off; that command does not exist in the code. Asked for by KD9TAW.
+
+  ⚠️ The Elecraft side has never been run on hardware — it is written from Elecraft's own
+  programmer's references and is waiting on someone with a KPA to try it. The SPE side has been
+  tested against a 1.5K-FA.
+
+- **Nexus can read your amplifier.** Put an SPE Expert (1.3K-FA, 1.5K-FA, 2K-FA) or an Elecraft
+  KPA500/KPA1500 on its own serial port, set it under **Settings ▸ Radio ▸ Amplifier**, and place
+  the **Amplifier** pane in Connect: power out, SWR at the antenna and before the tuner, supply
+  volts and current, PA temperature, and the amplifier's own alarms and warnings. It only ever
+  asks — the one thing Nexus can send this amplifier is the six-byte status request, so it cannot
+  switch it off, put it in standby, change band or start a tune. Readings clear the moment a poll
+  goes unanswered, because a stale wattage beside a dead link is worse than no wattage; an alarm
+  code this build has never seen still shows as a fault rather than going quiet; and the port is
+  checked against everything else on the station, since a serial port opens only once and an
+  amplifier typed onto the CAT port takes the *radio* down. Verified against a real 1.5K-FA. The
+  Elecraft side is written from Elecraft's published references and has not been run on hardware.
+
+- **A zero-beat light in the CW cockpit.** The scope has always drawn a marker at your CW
+  pitch; now the app measures the tone actually coming in and tells you where it sits against
+  it. A light comes on when you are on pitch, and beside it a needle and a signed offset in Hz
+  say which way and how far off you are — being 80 Hz out no longer looks the same as being
+  400 Hz out. How close counts as on pitch follows your rig's CW filter (25 Hz behind the usual
+  500 Hz one, tighter behind a narrow filter). When several signals are in the passband it
+  follows the one nearest your marker rather than the loudest, so it does not jump to a strong
+  station 300 Hz away while you are closing in. On a dead band it goes quiet and stays quiet: a
+  reading only appears once a tone has held the same frequency long enough to be a signal you
+  are tuning rather than the loudest thing the receiver happened to hear, so the needle does not
+  twitch at band noise between overs. It waits about a fifth of a second before showing a new
+  signal, which is the price of that stillness, and it keeps tracking live once it has one — the
+  wait is paid when a station starts sending, never between their letters. It is a display only;
+  it never touches your dial. Asked for by KD9TAW.
+
+- **Tune can key at its own power.** Set a tune power under **Settings ▸ Digital ▸ Transmit &
+  Sequencing** and a tune-up keys at that level instead of whatever you are running. It can only
+  ever turn the rig *down* — it keys at whichever is lower, your setting or your current power —
+  so it can never lift you past a per-mode limit. Left empty it does nothing at all, which is the
+  default. Asked for by an operator running an MFJ-1786 loop, where a hundred watts into an
+  untuned loop is not what you want while the tuner hunts.
+
+- **Split contacts log both frequencies.** A contact worked split now records the frequency you
+  transmitted on and the frequency you received on, as separate ADIF fields, so a logger you export
+  to sees the same pair you actually used. Both values were already on screen and were being thrown
+  away at the log boundary. Not split? Nothing changes and no second frequency is written — an
+  invented one would be a false claim of split that every logger downstream believes. Satellite
+  passes are deliberately unchanged for now; doing them properly means moving the band field too,
+  which reaches every award and needed-list in Nexus. Asked for by swann.
+
+- **PSK has a log strip.** The PSK cockpit now carries the same log strip as CW and Phone, PSK31
+  and QPSK31 are in the mode list, and the manual log form stops pre-filling FT8 for a PSK
+  contact. It logs the sub-mode you actually worked, so a QPSK31 QSO records QPSK31. Reported by
+  KR4FQG.
+
+- **A callsign card in the FT8 cockpit.** Clicking a call in the roster now shows what you already
+  know about that station — previous contacts with band, mode and date, what is unconfirmed, the
+  new-one flags, distance and bearing, and your private note — the same card CW and Phone have
+  had. It follows the station you are working as well as one you click, so it is populated through
+  a normal run rather than only when you go looking. Reported by KR4FQG.
+
+- **RTTY starts receiving when you open it.** Every other decode mode auto-arms; RTTY was the one
+  that waited for you to press Arm RX, which is a likely reason behind "RTTY is not decoding".
+  Same Settings opt-out as PSK, APRS and SSTV.
+
+- **Tell Nexus what your serial cable actually does.** Two new declarations under **Settings ▸
+  Radio ▸ Rig & CAT ▸ Advanced** — serial handshake, and the keying line's state at startup. Both
+  default to **Auto**, which is exactly today's behaviour, so nothing about your station changes
+  by upgrading. They exist for one fault: a rig that keys the transmitter the moment Nexus opens.
+  If that is not happening to you, leave them alone.
+
+- **The app sizes itself to a high-resolution screen on Linux.** On a 4K panel, or a small sharp
+  laptop screen, Nexus used to open at 1:1 with the screen's pixels and read half the size the same
+  app does on Windows — Windows and macOS tell an app how dense the screen is, and Linux does not.
+  Nexus now asks the display for its physical size on first launch and lifts its own zoom ceiling to
+  match, so the interface can grow to the screen instead of being pinned at 100%. It only ever makes
+  things bigger, only on a screen that genuinely needs it, and only once: set the zoom yourself under
+  **Settings ▸ Appearance** and your choice stands for good. On an ordinary monitor, and on Windows
+  and macOS, nothing changes at all. Reported by an operator running 1920×1080 on a twelve-inch panel.
+
+### Fixed
+
+- **Soundcard CW keying now uses a data mode, so the audio actually reaches the transmitter.**
+  With the CW keyer set to Soundcard, Nexus put the radio into plain USB or LSB. On the common
+  Icom and default Yaesu wiring, plain SSB takes its transmit audio from the MIC socket, so the
+  rig keyed and radiated nothing — the red light came on and no signal went out. It now commands
+  the DATA submode (DATA-U/DATA-L), which is what FT8, PSK31, RTTY and SSTV have always done;
+  soundcard CW was the one path that did not. ⚠️ **If your interface feeds the rig's MIC socket
+  and soundcard CW was working for you, tick "plain SSB for data modes" on that radio in Settings
+  and it will work again** — that is the same switch the other four modes already use. Reported by
+  an FTX-1 operator.
+
+- **The CW cockpit and Settings now warn when CAT keying is unproven on your radio.** On the
+  Yaesu FTX-1, the keying command Hamlib sends differs from the one it uses on other radios, and
+  it reports success either way — so if nothing goes out, Nexus has no way to know and the keyer
+  error line stays dark. Rather than let you lose an evening to it, both the Settings picker and
+  the cockpit's live keyer switch now say it is unproven on that radio and point you at the
+  serial keyline, WinKeyer or the soundcard keyer. It is a notice, not a block: nothing stops you
+  using CAT keying, and nothing about what Nexus sends has changed.
+
+- **Switching to the Soundcard keyer says that it takes the radio out of CW.** It always did —
+  a keyed audio tone needs the rig in an SSB or data mode — but nothing on screen said so, so the
+  mode change looked like a bug. The Settings hint and the cockpit's keyer switch now both say it,
+  and say that CW mode comes back when you pick another keyer.
+
+- **The Work button left the markers behind.** Clicking Work on a station card in the Classic
+  layout's Stations pane started the QSO but did not move your RX and TX markers onto the
+  station, so you answered someone while still listening and transmitting on a different
+  offset. Band Activity's double-click and the Roster table both moved them; the card did not,
+  which made one gesture behave three ways in the same cockpit. Both marks now follow the
+  station, RX always and TX unless you have Hold Tx Freq set, the same as WSJT-X. Reported by
+  bitslave.
+
+- **eQSL sync blamed your password when the password was fine.** If the download came back as
+  anything other than the log file, Nexus told you to check your username and password — at a
+  point where the login had already succeeded. Uploads kept working, because they never go
+  through that check, so the app was simultaneously proving your credentials were right and
+  telling you they were wrong. It now says what actually happened and states plainly that it is
+  not a login problem.
+
+  The LoTW sync carried the identical fault and has been corrected the same way, before anyone
+  hit it — that is the one that matters for award credit.
+
+- **The SWR and ALC meters had no warning band.** The bar that should turn amber as SWR climbs
+  was painting the same red as the "too hot" band, so there was nothing between "fine" and
+  "trouble" — you saw a problem arriving rather than coming. Same on the ALC and the S-meter.
+  The colour was written correctly and never took effect. Green, amber, red now, as intended.
+
+- **A paused waterfall looked like an error.** Same cause as the meters: the pause indicator was
+  reaching for an amber that never applied, and painted the error red instead.
+
+- **Small print was rendering at full size in twenty places.** Text written to be small — panel
+  tags, beacon and band rows, the CW decoder's status and age lines, the waterfall pop-out
+  controls, APRS beacon titles — was silently falling back to body size, so it sat at 14px beside
+  neighbours at 12px and 11px. Now the size it was always meant to be.
+
+- **Colours that could not follow the theme now do.** Around eighty surfaces were painting
+  hard-coded colours rather than the app's own palette: reds that did not match each other (three
+  different ones), greens likewise, and ambers that stayed identical whether you were in light or
+  dark. Worst of it was on the light theme, where several recessed areas — the connections log,
+  the waterfall pop-out, the SSTV picture area, the CW decode strip — rendered as grey slabs
+  because their colour was a fixed black wash chosen against a dark panel. The settings search
+  results list had no background at all and drew straight over whatever was behind it.
+
+- **eQSL sync refused a perfectly good download.** eQSL stopped starting its InBox export with
+  the words Nexus was looking for, so the sync rejected the file and told you your credentials
+  were wrong — at a point where the login had already succeeded. Nexus now checks the markers
+  that identify an eQSL export rather than a sentence eQSL can reword whenever it likes. An HTML
+  error page is still refused, which is what that check was for in the first place. Found,
+  diagnosed and fixed by KR8MER.
+
+- **Dropdowns were white on white on Linux.** Every dropdown in the app drew as a white box with
+  the app's own pale text on it, which on a dark theme meant you could not read what was selected
+  — including the radio and sound-card pickers in step 2 of first-time setup, so a new operator
+  could not see what they were choosing while setting the app up. Linux draws form controls with
+  its own widget theme unless an app takes them over, and Nexus never did; Windows and macOS were
+  never affected, which is why the same build looked fine there. Every dropdown is now drawn by
+  Nexus itself, in your theme, with its own arrow. Reported by an operator on Ubuntu 24.04 with an
+  FT-991A, and by M0LHJ on Fedora. **The open list is a separate problem** and is not fixed here:
+  Linux draws that as a system menu that an application cannot style at all, so the list you see
+  after clicking may still use your desktop's colours.
+
+- **Grey slabs in the light theme.** On the light theme, the CW decode strip, the copilot strip,
+  and the SSTV image area, drop zone and progress bar all drew as flat mid-grey blocks — the SSTV
+  picture area worst of all, since it is the largest. Each was asking the stylesheet for a colour
+  that had never been defined, and falling back to a fixed dark wash that happens to look right on
+  the dark theme and muddy on the light one. They now use the same recessed colour the rest of the
+  app uses, which is defined for both themes. The dark theme is unchanged.
+
+- **Four Settings dropdowns were the wrong size.** The rotator model, pounce threshold, WAV
+  recording and propagation engine pickers rendered noticeably shorter than every other control on
+  the same page. They now match.
+
+- **A guessed radio model no longer looks confirmed.** When auto-detect proves the port but has to
+  guess the model — an FT-991A answers a probe meant for an FTDX10 — the wizard marks the model box
+  for you to confirm. That marking had never actually appeared on screen, on any platform, so the
+  one moment you could catch a wrong radio passed by silently. The box is now outlined.
+
+- **APRS reported packets that were never there.** With the squelch open, the APRS panel counted
+  plain noise as packets failing their checksum — about one every four seconds — so within moments
+  of listening you were told the channel was full of traffic Nexus could not read. Nothing was
+  wrong with the decoder; the counter simply accepted any burst of noise that happened to look
+  frame-shaped. It now checks that what it found could actually be an AX.25 frame before counting
+  it. A real packet that genuinely fails its checksum is still counted, which is what that reading
+  is for. APRS also writes to the diagnostic log now — it was the only mode that said nothing at
+  all, so an APRS problem arrived with a log that talked exclusively about FT8. Reported by swinn.
+
+- **"Check your network" was the answer to problems that had nothing to do with your network.**
+  Every connector — QRZ, ClubLog, LoTW, eQSL, HRDLog and the rest — reported a rejected secure
+  connection as a network failure. So if antivirus or a company proxy inspects your HTTPS traffic,
+  Nexus would fail to upload while your browser worked perfectly and every check you could run said
+  your connection was fine. It now tells the two apart and says when interception is the likely
+  cause. A genuinely unreachable network still says so. Raised by lz2aov.
+
+- **Test CAT told you to close other software when the real problem was permissions.** On Linux,
+  a serial port your user is not permitted to open reports "permission denied" — and Nexus
+  answered with the advice for a *busy* port, telling you to close WSJT-X and flrig. No amount of
+  closing programs grants a group membership, so you would close everything, test again, fail
+  again, and reasonably conclude Nexus does not do CAT on Linux. It now recognises a permission
+  refusal and gives the actual cure: add yourself to the `dialout` group, then log out and back in
+  — the second half matters, because a group does not apply to a session already running. A port
+  another program really is holding still gets the advice it always did. Reported from Ubuntu
+  24.04 with an FT-991A that worked on Windows on the same machine.
+
+- **Audio broke up badly on Windows, and worse on battery.** The sound-card callback and the code
+  feeding it were fighting over the same lock, and the feeding side held it while copying a whole
+  transmission — so when Windows slowed the cores down on battery, the callback missed its deadline
+  and put silence on the air. That is why raising Nexus's priority helped, and why WSJT-X on the
+  same laptop was clean. The two no longer share a lock. There are underrun counters behind it now,
+  so the next report comes with a number instead of an impression. Reported by KR8MER.
+
+- **No decodes, and a log that grew to 294 MB.** Nexus opened the playback side of your sound card
+  at startup whether or not you ever transmitted. On a codec that cannot record and play at the same
+  time, that open wedges, and the error retried forever — millions of identical lines — while
+  capture kept working, so the waterfall looked healthy and nothing ever decoded. Nexus now opens
+  the playback side when you first transmit, so a station that is only listening opens it at all.
+  Repeated errors are also capped: 22 lines with a count on each, instead of filling your disk.
+  Reported by M0LHJ, who did the diagnostic work that found it.
+
+- **Your radio's audio card could be missing from the transmit list on macOS.** A card that only
+  plays and does not record was dropped from the list entirely, so the rig keyed with no audio and
+  nothing on screen explained why. Two operators hit it on different interfaces. Reported by
+  pvanderp and crabtreejw; the cause was found by M7HNF-Ian, whose diagnosis this fix follows.
+
+- **Some sound cards were refused outright, with no audio at all.** Nexus understood four of the ten
+  audio formats a card can report. A card whose natural format was any of the other six got an
+  "unsupported format" message and silence — not a setting you could change, and nothing you did
+  wrong. All formats are carried now. If you have an interface that never worked with Nexus and you
+  could never find out why, it is worth another try.
+
+- **Nexus no longer adopts a rigctld that is driving a different radio.** When a rigctld was already
+  listening on a radio's CAT port, Nexus connected through it — which is the right thing, and is how
+  it shares a rig with WSJT-X — but it never checked WHICH radio that daemon was attached to. On a
+  two-radio station a stray daemon left over from the other rig would be adopted, and from then on
+  every frequency read, every band change and **every keying command went to the wrong radio**, with
+  the app showing the other rig's dial as though it were yours. Nexus now asks first: it reads the
+  daemon's own arguments (which carry the model AND the serial device) and falls back to asking the
+  daemon over the protocol when there is no local process to read. On a mismatch it refuses, says
+  which radio that daemon is actually driving, and tells you how to fix it — stop the daemon, or
+  give this radio its own rigctld port. Sharing a daemon that IS this radio's is unchanged, and so
+  is coexisting with an external NET-rigctl station.
+
+- **Tune could drop out repeatedly, defeating an automatic antenna tuner.** On a station with an
+  auto-tuning antenna — a magnetic loop especially — the tune carrier was interrupted over and
+  over. A tuner reads those gaps as a match, beeps, and stops before it has found one. Reported by
+  an operator running an MFJ-1786 with an IC-7300.
+
+  Two causes, both ours. Nexus queued only about 40 ms of tune audio ahead of the sound card while
+  asking the radio for meter readings on the same thread — and a radio that is slow to answer
+  stalls that thread for longer than the audio it has queued, so the carrier stops while the rig
+  stays keyed. Separately, if you had a per-mode power limit set, Nexus re-sent that limit to the
+  radio *every twenty milliseconds* for the whole tune. The meters now stand down during a
+  tune-up, the power limit is not re-sent under a live carrier, and the carrier runs a quarter of
+  a second ahead instead of forty milliseconds.
+
+- **A rig could key the transmitter the moment Nexus started.** With PTT set to serial RTS and no
+  separate PTT port, Nexus told the rig-control daemon nothing about the RTS line at all, so its
+  idle state fell to whatever the driver happened to do — on some cables, keyed. Two earlier
+  attempts guessed at this from other settings. Rather than guess a third time, the handshake and
+  the keying line's startup state are now things you can state outright (see Added). Reported by
+  VK6MO.
+
+- **Sharing your radio could report success for a mode it never set.** If another program —
+  VarAC, FreeDV, WSJT-X, a logger — asked Nexus for a data mode while Nexus was in a voice
+  section, Nexus answered "done" and left the rig in plain SSB. Your data signal went out on a
+  voice emission with nothing on screen to say so. It now answers honestly, and the connection log
+  names the mode that was asked for and the mode your radio is actually in. Reading the mode back
+  is honest too, on an FM calling channel, an APRS park or during an SSTV picture. Reported by
+  rogerloxton. **This is a behaviour change you may notice — see Changed.**
+
+- **A refused PTT from another program said nothing at all.** Nexus starts with transmit disarmed,
+  so the first time an external program tried to key, it was refused silently — which is why
+  pressing PTT in Phone appeared to "wake it up". The refusal now says why, in the connection log.
+
+- **Sharing could fill your connection log at one line a second, forever.** If something else
+  already owned the sharing port — your own rigctld, a second copy of Nexus — Nexus retried the
+  bind every second and logged every failure, without ever telling you plainly. It now says so
+  once, names the port and the likely cause, and backs off.
+
+- **Callsigns could be given the wrong country and a nonsense state.** WL7E showed as Alaska with
+  a state of "CA". The country comes from the callsign prefix and the state came from the FCC
+  index, which is a mailing address — and nothing compared the two. An Alaskan or Hawaiian call
+  now gets AK or HI, and a station outside the US gets no state at all. This also fed the Worked
+  All States "new one" cue, so it was quietly wrong there too. Reported by KR4FQG.
+
+- **Settings you changed while editing another radio were thrown away.** If you clicked Edit on a
+  radio you were not currently using and then changed anything station-wide — QRZ auto-upload, for
+  instance — the panel said it saved and nothing was written. This seam has now cost a keying
+  port, three Flex fields, an OmniRig slot and an Icom submode; the save itself is fixed rather
+  than another field name being added to it. Reported by barnburner6503.
+
+- **Your own transmissions vanished from the Rx Frequency pane.** Stopping transmit, changing band
+  or switching radio wiped the record of overs you had already sent — including when Nexus did it
+  for you, with nobody touching anything. Reported by Luk73.
+
+- **"Calling you" alerts only fired after the contact had ended.** An alert for the station you
+  were working was suppressed — and the station answering your CQ becomes that station in the same
+  instant the decode arrives, so the alert you actually wanted was the one that got suppressed.
+  Your own callsign now always raises the alert, as it does in WSJT-X. Reported by KR4FQG.
+
+- **LoTW confirmations were recorded as paper QSL cards.** A LoTW report carries an ordinary
+  confirmation field, and Nexus read it as a card — so the log claimed a card you never received,
+  and an ADIF export carried that claim on to any other logger. A hand-imported third-party ADIF
+  still counts as a card, correctly. Award credit is unaffected either way. Reported by rgoiko.
+
+- **A QSL-sent mark could not be undone.** Mis-click the QSL menu and it was permanent. There is a
+  clear entry now, and the clear sticks even if you later re-import a log that still says the card
+  went out. Reported by rgoiko.
+
+- **WSPR could beacon where nobody was listening.** The transmit marker could be dragged anywhere
+  from 200 Hz to 4 kHz, while every WSPR decoder searches 1400-1600 Hz. You could beacon all night
+  and be heard by nobody. It is held inside the sub-band now, matching WSJT-X. FT8, FT4 and FST4W
+  are unchanged. Reported by akhepcat.
+
+- **A repeated report went unanswered, and a station returning late got silence.** When a contact
+  closed, Nexus dropped the station immediately — so a partner who repeated their report got
+  nothing back, and a station the run had given up on that came back with RR73 never got a closing
+  73. WSJT-X keeps the station and answers both. Nexus now does too, bounded to a single over
+  within three minutes, without re-entering the contact. Reported by KR4FQG and bitslave.
+
+- **The update notice did nothing on Linux, and silenced itself.** Clicking Download dismissed the
+  pop-up and opened nothing — and it recorded the version as dismissed anyway, so the notice never
+  came back. Anyone who clicked it once stopped being told about updates entirely. It now opens
+  the page or tells you it could not and gives you the link to copy.
+
+- **A radio's audio could be refused by the monitor while working everywhere else.** On Linux the
+  headphone monitor picked the first audio format the card advertised rather than the one it could
+  actually use, and reported "unsupported format" for a card the rest of Nexus was using happily.
+  Reported by MW0CQU.
+
+- **Satellite elements stopped updating.** The upstream catalogue renamed the status that marks a
+  satellite as being in orbit, and the mirror correctly refused to publish rather than ship an
+  empty list — which meant satellite data quietly went stale instead. Fixed, and the check now
+  refuses an unknown status by name rather than only noticing when everything moves at once.
+
+- **Icom DATA submode was quietly reset whenever you edited a radio you were not using.** If you
+  run more than one radio and set an Icom to DATA2 or DATA3, opening that radio's entry and
+  saving it put it back to DATA1 without saying so. The panel reported success, the setting was
+  gone, and the next time you keyed that rig it was in the wrong submode.
+
+  The per-radio Edit form saves through a patch that the app and the radio settings each
+  describe separately, and the submode was missing from one of the two descriptions. Anything
+  missing there is filled in with a default rather than your value. It travels with the patch
+  now, and there is a check that fails the build if the two descriptions ever disagree again —
+  the same drift has cost a keying port, a Flex address and an OmniRig slot before this.
+
+### Changed
+
+- **A station that is only receiving no longer opens your sound card's playback side at all.** You
+  will see this if you look — the playback stream simply is not there until the first time you
+  transmit. That is the fix for the wedged-open problem above, and it also means one fewer thing
+  holding your card if you share it with another program.
+
+- **Your sound card may open at a different rate or format after this update.** The audio library
+  Nexus uses now picks the card's default differently — 48 kHz where it might previously have chosen
+  44.1 kHz, and a different sample format on some cards. Nexus adapts either way and you should not
+  hear a difference, but if you keep notes on your station's audio settings, this is the release
+  where a number may move on its own.
+
+- **Backup and Restore moved to their own Config tab.** They existed, but sat under **Radio ▸
+  Transmit limits & sharing**, which is why operators did not find them: backing up a whole
+  station has nothing to do with transmit limits. Same controls, same behaviour — a findable
+  home, and search keywords wide enough to survive a panic ("backup", "restore", "factory",
+  "defaults", "start over").
+
+- **Sharing your radio now refuses a mode it cannot set, where it used to accept it silently.**
+  This is the honest half of the fix above, and it is the one you might feel: a program configured
+  for a data mode while Nexus sits in Phone now gets a real error instead of a quiet success. Put
+  Nexus in the section that matches what the other program is doing — Digital for FT8 and
+  VarAC-style data, Phone for voice, CW for CW — and it goes through exactly as before. If you do
+  see a refusal, the connection log names both modes so you can see which end to change.
+
+- **The spots filter says what it does.** "Heard near me" is now "Heard on my continent", which is
+  what the filter has always actually done. Asked about by barnburner6503, who went looking for a
+  Europe-only filter that was already there and switched on.
+
+- **Grids by band lists the VUCC bands by default.** Grids count toward an award on 50 MHz and
+  up and nowhere else, so on an HF station the list was mostly grids that count toward nothing,
+  with the few bands that do count buried in it. It now starts at 6 m and up, with an **All
+  bands** button if you want the full count back.
+
+  The VUCC box above it has always been VHF-only and is unchanged. Suggested by NT9E.
+
+- **macOS: the Settings pickers can now tell two identical radios apart.** On a station with
+  two rigs that use the same bridge and codec chips, every serial port carried the same product
+  label ("CP2105 Dual USB to UART Bridge Controller", eight times) and both sound cards
+  enumerated as "USB Audio Device" — with only a positional " #2" between them, assigned by
+  enumeration order. Moving one rig to a different USB socket therefore swapped which radio each
+  saved name referred to, silently, with nothing to warn you. Nexus now reads USB topology on
+  macOS and uses it three ways. **Rig auto-detect and the CAT port probe** no longer see the same
+  physical port twice: a Silicon Labs bridge is offered once by Apple's driver
+  (`cu.usbserial-…`) and again by the vendor's (`cu.SLAB_USBtoUART…`), two names no rule could
+  pair, so Detect listed each rig twice and the baud sweep spent a full ladder probing a port it
+  had already tried. **Saving now warns** if you picked the half of a dual bridge that carries no
+  CAT — the most convincing way to make a working radio look dead, because the port opens and the
+  writes succeed and nothing ever answers. **And saving warns** if the sound card you chose is
+  inside the *other* radio. Both warnings are advisory and never block a save: an
+  unusual-but-correct station is still yours to configure. The port list itself is unchanged —
+  every port you could pick before, you can still pick.
+## [1.9.1] — 2026-08-26
+
+### Added
+
+- **CW and Operate have a real split control.** They only ever *displayed* that split was on.
+  Phone has had a proper one for a while; now all three do, so you can set up a split from the
+  cockpit you are working in rather than reaching for the radio.
+
+- **Nexus can follow the radio's own split**, if you turn it on in Settings and your radio can
+  report it reliably. Nexus asks the radio rather than asking you to guess — on a radio that
+  cannot answer without being disturbed, the option is not offered, because finding out would
+  mean moving your VFOs behind your back. Off by default.
+
+### Fixed
+
+- **RTTY: Nexus could let you transmit outside your licence privileges, and could ignore your
+  Reverse setting.** Both arrived in 1.9.0 and both are on the transmit path, so this is worth
+  taking even if neither has bitten you.
+
+  1.9.0 made RTTY transmit on the frequency you tuned to, which was the right fix — but the
+  privilege check was still working from the old fixed tone and never learned about it. Click
+  the waterfall to net onto a station and your signal moves; the check did not. It could be out
+  by as much as 1.9 kHz, and near the bottom of a band segment that is the difference between
+  legal and not. It now works from the tone you are actually sending.
+
+  Separately, **Reverse did nothing on transmit.** It was being applied twice and the two
+  cancelled out, so a rig set up for reversed tones decoded fine and answered the wrong way
+  round — the far end saw nothing. It applies once now, and receive and transmit agree.
+
+- **Working split no longer locks you out of transmitting, and no longer lets you transmit where
+  you should not.** The licence check judged your *receive* dial. Under split those are two
+  different frequencies, and it was wrong in both directions.
+
+  Receiving on a DX station in a segment you may not transmit in — the everyday way DX is
+  worked, since expeditions sit in the quiet part of the band and listen up where the pile-up
+  can answer — got you a TX lock even though your transmit frequency was perfectly legal. And
+  the reverse: a legal receive frequency with the transmit VFO parked somewhere you may not use
+  would key without complaint.
+
+  Nexus now judges the frequency your signal actually leaves on. When it cannot tell where that
+  is, it refuses rather than guessing.
+
+## [1.9.0] — 2026-08-25
+
+### Added
+
+- **CAT rig control now works out of the box on Linux and macOS.** Nexus carries Hamlib —
+  the `rigctld` program it drives your radio through — inside every download, on every
+  platform. Nothing to install, no Homebrew, no apt.
+
+  Windows has worked this way since the beginning. Linux and macOS did not, and the AppImage
+  was the worst of it: an AppImage is the download you choose *because* it installs nothing,
+  and it was the one that could not talk to a radio until you worked out on your own that you
+  needed a package called `libhamlib-utils` that nothing had ever mentioned. It shipped
+  Hamlib's licence files and no Hamlib. macOS had the same hole behind `brew install hamlib`.
+
+  If you already installed Hamlib yourself, nothing changes and nothing conflicts — Nexus
+  prefers its own copy, and falls back to yours if that ever fails to start.
+
+- **Nexus speaks Spanish and French.** Both are picked up automatically from your system
+  language, or you can choose one in Settings. The whole application is translated — all 4,681
+  phrases, every screen, the same coverage German has. Anything a future release adds shows its
+  English wording until it is translated, rather than a blank.
+
+  Frequencies, callsigns, grid squares, signal reports, mode names and every other on-air term
+  stay exactly as they are in all languages. That is deliberate: Spanish and French both write a
+  decimal comma, and a dial reading 14,074 is an operating fault, not a cosmetic one.
+
+### Fixed
+
+- **The SSTV waterfall comes back.** Change band while a picture was coming in and the band
+  display stopped and stayed stopped — switching modes and back was the only way to get it
+  returned, and landing on an SSTV frequency stopped it again.
+
+  The screen shows the band until a picture starts arriving and then shows the picture in the
+  same place. A decode that began and never finished was never cleaned up, so the app went on
+  believing a picture was still coming and held the display for it — for the rest of the
+  session. Changing band is the obvious way to cause that, but so is the sending station
+  stopping mid-picture, or the band simply going long.
+
+  A picture that has run well past the time its own mode takes is now given up on and the
+  waterfall returns. Nothing is given up early: the allowance is per mode, so a Scottie DX gets
+  its four and a half minutes.
+
+
+- **Picking a RTTY frequency from the band plan now puts your signal where the plan says.** The
+  listed frequencies were chosen as the frequency your signal comes out on — which is what the
+  dial reads on true FSK, but not on AFSK, the default. On AFSK the tones sit about 2.3 kHz below
+  the dial, so the signal landed low: on 20 m it was inside the FT4 cluster, on 17 m and 12 m
+  inside FT8, and on 15 m inside JS8 — the exact overlaps the band plan was written to avoid.
+  Both keying backends now land in the same place, and it is the place the plan describes. Your
+  dial reading will look about 2.3 kHz higher than before on AFSK; the signal is what moved back
+  where it belongs.
+
+- **A zoomed waterfall stays where you put it.** Picking a numeric span made the display
+  re-centre on your receive marker every time you clicked, so each click slid the view sideways
+  by up to half a span with nothing to scroll it back. The zoom is a slice of the passband now:
+  it holds still while your marker is in view, and only moves when you tune outside it — so it
+  still cannot end up showing you the wrong part of the band. The default Std view was never
+  affected.
+
+- **Linux: Nexus stops asking the system keyring whether it could upload when it has nothing to
+  upload.** The auto-upload worker checked your ClubLog credentials every two seconds whether or
+  not a single contact was waiting, and on Linux each check is a round trip to the keyring
+  daemon. That is the same thing that was restarting gnome-keyring in a loop before 1.8.0, at
+  more than twice the rate, in a different place. Windows and macOS were never affected — the
+  check there is a local call.
+
+- **Recording a QSL card that arrived no longer depends on a filter — or on not having sent
+  one.** The control shipped in 1.8.0 could not be reached: it only appeared while the "needs
+  confirmation" chip was on, so it was invisible in the ordinary Logbook where you work through a
+  stack of cards. Worse, marking a card *sent* removed the menu, so the card that came back
+  months later could never be recorded — the whole point of the feature. It is on every row now,
+  and you still cannot mark one sent twice.
+
+- **Contacts sent to Log4OM (and anything else on the N1MM broadcast) carry both signal
+  reports.** Sent and received RST were missing from every QSO — the sent one only travelled in a
+  field loggers read as contest exchange data, and the received one was not sent at all. The same
+  bug in the N3FJP broadcast was fixed a while back and this one was missed with it.
+
+- **RTTY transmits on the frequency you tuned to.** Clicking the waterfall to net onto a station
+  moved the decoder but not the transmitter, which stayed on the default tone pair — so you
+  answered on a frequency nobody was listening on. Your dial does not move; only the audio
+  offset, exactly like the FT8 transmit marker.
+
+- **The Tempo roster works on Tempo Deep.** It only ever listed stations heard on Tempo Fast, so
+  on Deep it was always empty — which reads like a quiet band rather than a fault.
+
+- **The compact Band Activity in the Tempo rail shows everything again.** It hid the filter chips
+  but still applied whichever one you last chose in Operate, so a "CQ" chip set elsewhere quietly
+  filtered the list with nothing on screen to explain it.
+
+- **A directed CQ (`CQ DX`) stays put instead of lasting one contact.** You can type your CQ
+  message in the Tx6 box on the Operate screen — `CQ DX KR4FQG EM64`, or POTA, NA, TEST, a zone
+  number — and it is parsed and sent. What went wrong is that "clear DX call and grid after
+  logging" was also wiping that box, so a directed CQ survived exactly one QSO and then went back
+  to a bare CQ, with the Classic screen the only way to set it again. That option clears the DX
+  call and grid, as its name says, and leaves your CQ message alone. Editing it back to a plain
+  CQ is still one change away.
+
+- **DXpedition is no longer counted as something you need.** A DXPED chip sat in the row of need
+  icons claiming there was something to gain from a station — including ones you had already
+  worked on that band, where it meant nothing at all. It was always a label rather than a reason,
+  and it is already shown as an activity marker, so it was being said twice. The Needed board's
+  DXped filter is unchanged, as are the POTA and SOTA markers.
+
+- **The "needs QSL" chip now reads LoTW**, which is what actually closes it for awards. A paper
+  card closes it too — the tooltip still says so — but eQSL and QRZ never did, and the old
+  wording left people wondering whether the eQSL they already had counted.
+
+## [1.8.1] — 2026-08-23
+
+### Fixed
+
+- **Calling a DXpedition no longer gives up after eight tries.** Nexus would stop calling a
+  station you had picked yourself once eight overs went unanswered, and then sit silent until you
+  clicked it again — which in a pileup is exactly when you least want it to stop. That limit
+  exists for a real problem, but a different one: a station that answered you and then went quiet
+  mid-contact, which is worth abandoning so your CQ run can move on. That part is unchanged.
+  Calling somebody who has not come back is now open-ended, the way WSJT-X does it.
+
+- **A station's callsign is no longer sent back in its shortened form.** When a DX is working
+  several callers at once it sends its own call in FT8's abbreviated `<CALL>` form to make room,
+  and Nexus copied that form straight into its own replies — so overs went out addressed to
+  `<RI1FJL>` rather than `RI1FJL`. It sends the plain call now. Compound calls like `KH8/W1AW`
+  still go out abbreviated, because the protocol has no room for them any other way.
+
+- **A DXpedition running Fox mode is understood without turning Hound on.** A Fox packs two
+  replies into one transmission, and Nexus could only read that while the DXpedition setting was
+  switched on — which also stopped it sending the closing 73 on every ordinary contact. Reading
+  the Fox no longer depends on that switch; it applies whenever you are working someone.
+
+- **The Phone waterfall gives the voice more of the panel.** The dial marker sits on the
+  suppressed carrier, so on USB your voice always sits to the RIGHT of it — that is correct, but a
+  third of the display was being held empty beside the marker to make it read as a line, and that
+  empty third made the dial look misplaced. The gap is much smaller now and the signal is wider.
+
+## [1.8.0] — 2026-08-23
+
+### Fixed
+
+- **Linux: the AppImage starts on Wayland desktops again (#138).** It was bundling its own copy
+  of `libwayland-client`, which loses to a newer compositor on the host — Nexus opened to a blank
+  white window on Fedora 44 and never drew anything. That library now comes from your system,
+  where it belongs. Only that one is dropped; its siblings are still bundled, because nothing in
+  the report pointed at them and removing them on a guess is how you break somebody else's
+  desktop.
+
+- **Nexus no longer gives up on the rigctld you chose because the machine was busy for a moment.**
+  Deciding whether a rigctld works meant running it once, and any failure to start it counted
+  against the binary — including the failures that say nothing about it at all. A system briefly
+  out of process slots, a signal landing mid-call, or the file still being held open by the
+  installer that had just written it would all read as "this rigctld is no good", and Nexus would
+  quietly substitute its own instead of the one you pointed it at. Those three are now retried;
+  a rigctld that genuinely is not there or not runnable still answers straight away.
+
+- **A station that sends you RR73 gets your 73 back.** If DXpedition "Hound" mode had been
+  left switched on, every ordinary contact inherited the Fox rule — the QSO ended on the other
+  station's RR73 and Nexus sent no parting 73, then switched Enable-Tx off before it could. From
+  your side it looked like a normal contact; from theirs you simply vanished, and they went on
+  repeating RR73. Hound is a per-DXpedition mode now: it is off again at every launch, you turn
+  it on for the DXpedition, and the amber HOUND badge marks the session while it is on. Working
+  a real Fox is unchanged.
+
+- **Hold Tx, and the waterfall's RX/TX markers, survive a settings save.** Pressing Hold Tx or
+  dragging a marker changed the live setting, but any later save from the Settings window posted
+  an older copy back over it and then stored that — so the setting looked as though it had never
+  been saved at all. None of the three is editable in Settings; they only travelled in the form,
+  so a save could only ever undo them. Restoring a backup still sets all three from the backup.
+
+- **The Needed board respects the New-grid band choice.** With "New grid" set to VHF+, HF grid
+  needs were still listed on the board. The band choice reached the roster and the decode rows
+  when it was added, but not the board, which had stopped sharing that code path earlier so that
+  turning the CW or Phone features off would not hide needs there. Both hold now: the board's own
+  mode filters still show everything, and the band choice applies.
+
+- **A contact the run gave up on can still be logged.** If a station answered you, exchanged
+  reports and then went quiet — a club station working several people at once does this
+  routinely — Nexus stopped calling them after a few overs so your CQ run kept moving. That part
+  is right. But it also threw the contact away, so when the station finally came back with RR73
+  the Log button said "nothing to log" about a QSO whose reports are in your own ALL.TXT. The
+  exchange is kept now, and pressing Log writes it with the contact's own start time. Nothing is
+  logged automatically that wasn't before — only you saw them come back, so it stays your call.
+
+- **The Band Activity list marks each period once again, not every decode.** Once about
+  three hundred decodes had built up, the dim time-and-band bar that separates one T/R
+  period from the next started appearing between every single line. It was comparing each
+  decode against one from the far end of the buffer instead of the row above it, so the
+  period looked different every time — which is why it began "after a while" and why
+  switching the All/CQ filters shuffled it without fixing it.
+
+- **A station answering your CQ makes a sound again.** The alert for somebody calling you
+  was being held back for the whole time you were calling CQ — the one stretch where it is
+  the only thing you are listening for. It stays quiet once you are into the exchange, which
+  is what it was always meant to do.
+
+- **Nexus stops interrogating the system keyring every few seconds.** On Fedora it could
+  crash GNOME's keyring service over and over for as long as Nexus was open, once any online
+  service had been set up. Nexus was asking the keyring whether each password was still there
+  every five seconds; it now asks once and then only when you actually save or clear one.
+
+- **OmniRig gets time to start.** If OmniRig was not already running, Nexus gave Windows a
+  second and a half to launch it and gave up — but a cold start takes longer than that, so
+  the connection failed for no visible reason and then worked later. Starting another program
+  that uses OmniRig first appeared to "fix" it, because that program had done the launching.
+  Nexus now waits twenty seconds for a start, while keeping the short timeout for ordinary
+  commands so a stuck server still cannot hang the radio.
+
+- **The OmniRig "needs administrator" message points at the fix.** It used to suggest
+  starting OmniRig yourself, which can fail for the same reason the launch did. OmniRig does
+  not need administrator to reach a radio, so the message now explains how to clear that flag
+  — including where Windows hides it when the checkbox already looks clear — and treats
+  running everything as administrator as the last resort it is.
+
+- **Nexus starts properly on a system with no regional settings.** On a machine running with
+  a plain `C` locale the FT screen came up as an error instead of a cockpit.
+
+- **A busy PC can no longer produce a phantom CAT failure.** A rig reply interrupted by the
+  operating system was being read as a dead radio, and on a longer reply it could be cut
+  short and accepted as complete.
+
+- **Linux: the AppImage no longer carries its own copy of a system graphics library**, which
+  is what left Nexus showing a blank white window on Fedora 44.
+
+### Added
+
+- **Nexus tells you when the radio is armed to transmit at 0% power.** A rig at zero still keys,
+  still shows TX, and still looks like a perfectly normal over from where you are sitting — it is
+  silent only to the station you are working, so there is nothing to notice. The status lane now
+  says NO RF POWER while that is true, and the diagnostic log records it. Nothing is changed on
+  your behalf: the power is not raised, not clamped, and no transmission is held back. Worth
+  knowing on a Yaesu in particular, which keeps a separate power level for SSB, DATA, CW and AM,
+  so a level you set in one mode does not follow the rig into another.
+
+- **The log table shows your Comment, and marks rows carrying a private Note.** Both fields
+  could be typed and saved, and neither was ever shown again — the only way to read a note was
+  to open a contact you had no way of knowing held one. The Comment now has its own column, and
+  a contact with a private Note carries a 📝 you can hover for the full text. (The callsign
+  recall card beside the log entry already showed both; that is unchanged.)
+
+- **AM on the Phone screen.** Pick AM beside AUTO/USB/LSB/FM and Nexus commands the rig to AM
+  with a 6 kHz filter — an SSB-width filter cuts half of a double-sideband signal away and the
+  audio comes out thin. It is offered on the bands AM is actually worked (the windows below
+  10 MHz, and 10 m / 6 m and up), not on 20 m where a 6 kHz signal has no room.
+
+  **Your power comes down automatically.** A rig making 100 W PEP on SSB makes about 25 W of
+  carrier on AM, so the same drive flat-tops the peaks. AM gets its own ceiling — a quarter by
+  default, adjustable — and it is always the LOWER of that and your phone cap, so it can only
+  ever reduce power, never raise it.
+
+- **The Phone waterfall has frequencies on it.** It showed you a signal without telling you
+  where it was, so clicking to tune was a guess. There is a scale along the bottom now, in MHz
+  to the kHz you would dial. It reads absolute frequency rather than an offset from your dial,
+  because the question it answers is "where will this click put me". If Nexus does not know your
+  dial — no CAT — it shows no numbers rather than invented ones.
+
+- **The Needed list shows the frequency, not just the band.** A rare one on 20 m is a different
+  proposition from a rare one on 14.074 — the exact spot frequency is now a column, and you can
+  sort by it to see what is worth swinging the dial for. Needs worked out from your log rather
+  than spotted have no exact frequency, and say so with a dash instead of an empty cell.
+
+- **Reset all settings to factory defaults.** There was no reset at all: a clean start meant
+  finding `settings.json` in a config folder and deleting it — and doing that while Nexus is
+  running resets nothing, because the app holds the old configuration in memory and writes it
+  straight back on the next save. The new control is in Settings → Radio → Transmit limits &
+  sharing, beside Back up. It asks first, and the dialog says what SURVIVES: your contact log
+  is untouched, and stored passwords stay in your keychain — clearing those stays a separate,
+  deliberate act rather than a surprise buried in a reset.
+
+- **An unanswered CQ run takes a breather instead of holding the frequency.** Nexus now calls
+  CQ eight times, waits three minutes, and calls again — both numbers are yours to change in
+  Settings ▸ Auto-CQ, and clearing the call count restores the old behaviour of calling until
+  you stop it. You are still listening throughout the pause: anyone who calls you is worked
+  normally, and answering resets the count, so a run that is getting replies never pauses at
+  all. This is a deliberate difference from WSJT-X, which repeats CQ indefinitely.
+
+- **You can record a QSL card that arrived in the post.** The Logbook could already note a
+  card you had SENT, but there was no way to say one had come back — even though a paper card
+  is one of only two confirmations that count towards DXCC, and the only one no online service
+  can tell Nexus about. It is in the QSL menu on each row, and it can be unticked again.
+
+- **"Hide worked" explains itself.** It hides stations you have worked EXCEPT those that still
+  fill a need, which is why a B4 chip can survive it — you worked that call on another band,
+  and it is still a new slot here. The checkbox now says so.
+
 ## [1.7.6] — 2026-08-21
 
 ### Fixed
@@ -56,14 +1802,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that round to the nearest filter they own are left alone: asking for 3 kHz and getting
   2.7 is the radio doing its job, not a fault.
 
-### Added
-
 - **A manual notch you can actually place, and a depth for the speech processor.** The Notch
   button was driving the radio's *automatic* notch — the one that hunts a carrier down by
   itself — which is not what most operators mean by the word. The manual notch, the one you
   park on a whistle by ear, is now there too, with a frequency slider to put it where the
   whistle is. COMP gained the control it was missing: how hard the compressor works. Each
   appears only if your radio reports it, so nothing grows a slider with nothing behind it.
+
+### Added
 
 - **The dial is marked on a native RF panadapter.** If your radio streams its own spectrum
   (Icom CI-V, FlexRadio), the tuned frequency now has a line and a DIAL label on it. It is
@@ -76,6 +1822,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   chapter and Tempo never had one. Both now cover the tour, the workflows and the honest
   limits — and a test now fails the build if a shipped section has no chapter, so the next
   mode cannot reach a release undocumented.
+
+- **AGC now offers AUTO and OFF, and stops reporting them as Mid.** The Phone and CW cockpits gave
+  three AGC settings — Fast, Mid, Slow — while the radios have five: an FT-710 offers AUTO and OFF
+  on its own front panel. Worse than missing, they were *misreported*: a rig sitting on AUTO, which
+  is where many operators leave it, displayed as **Mid**, and so did AGC switched off, because
+  anything Nexus did not recognise folded to "mid". So the cockpit could state a setting the radio
+  was not on. AUTO now appears to the left of Fast and OFF to the right of Slow, and a read-back of
+  either shows what the rig is actually doing. Offered for every rig rather than guessed at:
+  Hamlib does not report which AGC constants a backend accepts, so a rig that refuses one says so
+  and the read-back shows what it really did.
 
 ## [1.7.5] — 2026-08-20
 

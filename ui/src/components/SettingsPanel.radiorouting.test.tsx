@@ -42,6 +42,13 @@ vi.mock('../toast', () => ({
   withErrorToast: vi.fn(async (fn: () => Promise<unknown>) => fn()),
 }))
 
+/** Newest call to a mocked api verb. (`Array.prototype.at` is outside this project's lib
+ *  target, so index explicitly.) */
+function lastCall(name: string): unknown[] | undefined {
+  const calls = api.get(name).mock.calls
+  return calls.length ? (calls[calls.length - 1] as unknown[]) : undefined
+}
+
 const FTDX10 = {
   id: 0,
   name: 'FTDX10',
@@ -174,8 +181,21 @@ describe('rig form writes go to the radio they describe', () => {
     const [id, patch] = api.get('updateRadioProfile').mock.calls[0] as [number, { serialPort: string }]
     expect(id).toBe(1)
     expect(patch.serialPort).toBe('COM7')
-    // A whole-settings save is exactly what clobbered radio 0.
-    expect(api.get('setSettings')).not.toHaveBeenCalled()
+    // ⛔ DO NOT RESTORE `expect(setSettings).not.toHaveBeenCalled()` HERE. That assertion was
+    // #173 written down as a guarantee, and it is why this seam survived six data-loss
+    // bugs: routing the WHOLE save through the per-radio verb discarded every
+    // station-wide setting while the panel reported success, and any correct fix turned
+    // four assertions like this one red and read as a regression.
+    // WHAT IT GUARANTEES NOW: a whole-settings save built from the EDITED form is what
+    // clobbered radio 0 — the payload's identity, not the save's existence, is the invariant.
+    // Assert it describes the FTDX10.
+    const saved = lastCall('setSettings')?.[0] as
+      | { activeRadio: number; serialPort: string }
+      | undefined
+    if (saved) {
+      expect(saved.activeRadio).toBe(0)
+      expect(saved.serialPort).toBe('COM3') // the active FTDX10's, never the IC-9700's COM7
+    }
   })
 
   it('Test CAT does not report a green tick earned by the OTHER radio', async () => {
@@ -200,6 +220,19 @@ describe('rig form writes go to the radio they describe', () => {
     // answers only at its own CI-V address — so radio 2's port could never answer.
     await waitFor(() => expect(api.get('probeCatPorts')).toHaveBeenCalledWith(1))
     await waitFor(() => expect(api.get('updateRadioProfile')).toHaveBeenCalled())
-    expect(api.get('setSettings')).not.toHaveBeenCalled()
+    // ⛔ DO NOT RESTORE `expect(setSettings).not.toHaveBeenCalled()` HERE. That assertion was
+    // #173 written down as a guarantee, and it is why this seam survived six data-loss
+    // bugs: routing the WHOLE save through the per-radio verb discarded every
+    // station-wide setting while the panel reported success, and any correct fix turned
+    // four assertions like this one red and read as a regression.
+    // WHAT IT GUARANTEES NOW: as above — the station-wide write is allowed and must carry the
+    // ACTIVE radio's config.
+    const saved = lastCall('setSettings')?.[0] as
+      | { activeRadio: number; serialPort: string }
+      | undefined
+    if (saved) {
+      expect(saved.activeRadio).toBe(0)
+      expect(saved.serialPort).toBe('COM3')
+    }
   })
 })

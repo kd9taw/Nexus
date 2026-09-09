@@ -747,6 +747,35 @@ export const PSK_PANELS: PanelVocabulary<PskPanelId> = {
   panelIds: PSK_PANEL_IDS,
 }
 
+/** JS8 cockpit's removable panels (the JS8 programme, 2026-09). CW's region shape:
+ *  `scope` is the band waterfall (see SCOPE_PANEL_ID), `activity` every decoded frame at
+ *  every enabled speed, `offsets` the same decodes collapsed to one row per frequency offset,
+ *  `stations` the heard list, `inbox` the directed / store-and-forward messages, `log` the
+ *  LogEntry strip. The CockpitHeader and the TX dock are not panels.
+ *
+ *  `offsets` is JS8Call's second decode surface (`tableWidgetRXAll`, mainwindow.ui:989 — the
+ *  offset-bucketed table with the Time Delta column), which the first build fused into the
+ *  chronological `activity` transcript. It is an ordinary pane with an ordinary id: it renders
+ *  no sender and no stop, so it is ⊞-hideable exactly like its siblings and needs no special
+ *  case in the census below.
+ *
+ *  THE STOP LINE holds here the Operate way (a slotted mode): the census — every holder
+ *  OUTSIDE every ⊞-removable pane, none with an id in this vocabulary: Stop TX (header →
+ *  halt_tx, never disabled), Tune (header; the carrier it started), and Esc (window keydown
+ *  bound only while JS8 is the visible view → the same halt; keyboard-only ⇒ census-only).
+ *  The TX-enable latch is NOT a stop control here: `set_tx_enabled(false)` deliberately does
+ *  not arm `slot_tx_abort` (the operator's 2026-07-31 Operate ruling — a frame in flight
+ *  completes), so it is not on the sweep list. The dock's "Drop queue" is a SENDER-class
+ *  control (it empties the queue; a frame already keyed finishes) and must never be added to
+ *  stopControls. Swept in stop-line.test.tsx's JS8 case, rendered with App's props. */
+export const JS8_PANEL_IDS = [SCOPE_PANEL_ID, 'activity', 'offsets', 'stations', 'inbox', 'log'] as const
+export type Js8PanelId = (typeof JS8_PANEL_IDS)[number]
+
+export const JS8_PANELS: PanelVocabulary<Js8PanelId> = {
+  view: 'js8',
+  panelIds: JS8_PANEL_IDS,
+}
+
 /**
  * EVERY vocabulary in the app, so the stop-line name backstop cannot silently miss one.
  * It missed the Operate cockpit for the whole life of the rule — the guard listed the four
@@ -766,6 +795,7 @@ export const ALL_PANEL_VOCABULARIES: readonly PanelVocabulary<string>[] = [
   CW_PANELS,
   RTTY_PANELS,
   PSK_PANELS,
+  JS8_PANELS,
 ]
 
 /**
@@ -776,8 +806,9 @@ export const ALL_PANEL_VOCABULARIES: readonly PanelVocabulary<string>[] = [
  * Operate is the only cockpit that ever WRITES 'popped' into a visibility record —
  * OperateCockpit's waterfall pop-out holds the app's single `setPanelState(id, 'popped')`
  * call — and the only one with a re-dock bar. Pop-out AFFORDANCES are not rare, and an earlier
- * version of this note implied they were: DetachedPanel dispatches ten panel kinds (waterfall,
- * needed, memories, connect, dxped, sats, fieldday, operate, bandmapPhone, bandmapCw), and
+ * version of this note implied they were: DetachedPanel dispatches twelve panel kinds (waterfall,
+ * needed, memories, connect, dxped, sats, pota, fieldday, fdclub, operate, bandmapPhone,
+ * bandmapCw), and
  * Phone's and CW's band-map panes each carry one. Those call `openPanelWindow` directly and
  * never touch the record, which is exactly why they leave no stale 'popped' behind. In the
  * other four vocabularies a stored 'popped' renders the pane DOCKED while its ⊞ entry reads

@@ -102,8 +102,50 @@ jobs:
       - name: cargo fmt --check
         run: cargo fmt --all --check
 
+      # `cargo fmt --all` stops at the workspace boundary and src-tauri declares its
+      # OWN `[workspace]` table, so the step above has never reached it and no other
+      # job formats it either. Measured 2026-09-07, independently by two branches
+      # that both found the same number: the root step exited 0 while
+      # src-tauri/src/lib.rs carried 21 drifted regions no check could report. That
+      # also made `cargo fmt` unsafe to run in that directory, because it swept ~20
+      # unrelated reformats into whatever commit happened to be open. The sweep
+      # landed as its own commit so it could not contaminate a real diff.
+      #
+      # `--all` rather than the bare form: src-tauri is a single-package workspace
+      # today, so the two are equivalent — but if a member is ever added, the bare
+      # form silently stops covering it. Cheap and fast, so it sits beside the root
+      # fmt step: a formatting failure should not wait for a build.
+      - name: cargo fmt --check src-tauri
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --all --check
+
       - name: cargo test --workspace
         run: cargo test --workspace
+
+      # The fd-rules publish gate, run here on the file it exists to guard.
+      # `.github/workflows/fd-rules.yml` runs this exact command before pushing
+      # the seed to the rolling `fd-rules` Release that every install downloads,
+      # so a seed edit that the app would refuse goes red at MERGE time rather
+      # than at publish time.
+      #
+      # The gate is `crates/tempo-core/src/bin/fd-rules-check.rs`: a thin shell
+      # around `fd_rules::validate` — i.e. `parse_spec`, the very function the
+      # shipped app enforces. It replaced a SECOND validator written in node
+      # (`scripts/check-fd-rules.mjs` + `scripts/rust-serde-schema.mjs`) that was
+      # kept in step with the loader by a parity corpus. Four rounds of parity
+      # fixes each closed some divergence classes and revealed others, because
+      # agreeing with the loader byte-for-byte means reimplementing serde's
+      # derive behaviour and serde_json's lexer — presence rules, integer widths,
+      # surrogate pairing, the recursion limit, `IgnoredAny` scanning for unknown
+      # fields, and the exact error text. The last round reddened the gate on the
+      # seed's own `_provenance` prose, a file every shipped app accepts. There is
+      # one implementation now, so parity is true by construction.
+      #
+      # The corpus stayed and is walked THROUGH THIS BINARY by
+      # `cargo test -p tempo-core --test fd_rules_corpus` (in the run above):
+      # every refuse fixture must exit 1 with its recorded reason, every accept
+      # fixture must exit 0.
+      - name: fd-rules publish gate on the in-repo seed
+        run: cargo run --quiet -p tempo-core --bin fd-rules-check -- crates/tempo-core/src/fd_rules.seed.json
 
       - name: cargo clippy (deny warnings)
         run: cargo clippy --workspace --all-targets -- -D warnings
@@ -156,15 +198,15 @@ jobs:
       - name: cargo test src-tauri --features radio
         run: cargo test --manifest-path src-tauri/Cargo.toml --lib --features radio
 
-      # NOT `-D warnings`: src-tauri carries 15 pre-existing lints (MSRV, type
-      # complexity, redundant casts) precisely BECAUSE it was never linted, so
-      # denying crate-wide would fail on day one and burning that down is
-      # unrelated churn in a 10k-line lib.rs. Instead `chains.rs` denies warnings
-      # itself (`#![deny(warnings, clippy::all)]`), so a regression in the
-      # multi-radio addressing code is a hard error here while the backlog stays
-      # visible as warnings. Verified: planting a dead fn in chains.rs exits 101.
+      # `-D warnings`, matching every workspace clippy step: this crate carried ~38
+      # pre-existing lints (MSRV, needless borrows, type complexity, redundant
+      # casts) precisely because this step ran with no `-D warnings`, so nothing
+      # ever failed on them — invisible debt, not a clean bill. Burned down in the
+      # commit that added this flag; do not let it silently regrow. `chains.rs`'s
+      # own `#![deny(warnings, clippy::all)]` is now redundant with this step but
+      # left in place as a second, file-scoped backstop.
       - name: cargo clippy src-tauri --features radio
-        run: cargo clippy --manifest-path src-tauri/Cargo.toml --lib --features radio
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --lib --features radio -- -D warnings
 
   # Job 2 — Web UI (Vite + React + TypeScript). `npm run build` is `tsc -b &&
   # vite build`, so this also type-checks the DTO contract that mirrors
@@ -204,6 +246,24 @@ jobs:
       - name: Test the TLE mirror generator
         run: node --test scripts/gen-tles.test.mjs
 
+      # (The fd-rules publish gate used to have a node half here, walking a
+      # corpus against a second validator written in JS. There is one validator
+      # now — the loader itself — so the gate and its corpus both live in the
+      # `test` job above; see the comment there.)
+
+      # scripts/gates derives the local gate list from THIS FILE, and its whole
+      # value rests on one property: a step added here appears there with no edit
+      # to the script. scripts/gates.test.mjs is what holds that property down —
+      # it plants a step in a scratch copy of this workflow and fails if --list
+      # misses it — and until now it ran in no workflow at all. Same argument as
+      # the doc generators above, which is not a coincidence: a tool whose only
+      # trigger is somebody remembering is not a gate.
+      #
+      # The recursion is the point. This step is in ci.yml, so scripts/gates
+      # derives it and runs it, and the tool ends up gating its own correctness.
+      - name: scripts/gates still derives the gate list from this workflow
+        run: node --test scripts/gates.test.mjs
+
       # The two doc generators, in --check mode: they write nothing, they exit 1
       # when the committed page is behind the source it is derived from.
       #
@@ -228,6 +288,52 @@ jobs:
       # FT2 two without appearing on the page whose job is listing them.
       - name: docs/shipped.json is generated from the app's own lists
         run: node scripts/gen-shipped.mjs --check
+
+      # The per-commit half of scripts/release-docs.mjs: every published screenshot is mapped to
+      # the source it depicts, every image a page points at exists and carries alt text, every
+      # image in docs/img/manual/ is actually placed on a page, and every local link and heading
+      # anchor across docs/ resolves.
+      #
+      # WHY --push-gate AND NOT THE WHOLE SCRIPT. The rest of release-docs asks release questions
+      # — is there a RELEASE_NOTES for this version, is the CHANGELOG stamped, are its issue
+      # credits closed on GitHub, is the live site in sync — all legitimately unfinished on a
+      # topic branch, and two of them need the network. Those stay at release time. What is here
+      # is true of every commit and needs nothing but the checkout.
+      #
+      # WHY IT IS HERE AT ALL. release-docs.mjs ran in no workflow, so its checks fired only when
+      # somebody remembered to run it — which is the exact argument that file was written to make
+      # about gen-wiki.mjs, and it had come to apply to the file itself.
+      - name: The manual's images and cross-references resolve
+        run: node scripts/release-docs.mjs --push-gate
+
+  # The downloadable manual's EPUB must stay valid — a doc change that breaks it should go
+  # red here, on the push, not be discovered on a Kindle after release. Builds the EPUB only
+  # (no Chrome/PDF) and runs the official W3C epubcheck, which exits non-zero on any error.
+  # Its own first ship failed epubcheck with 89 errors (broken cross-links, missing images),
+  # so this gate is not hypothetical.
+  manual-epub:
+    name: Manual EPUB validates (epubcheck)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Tools (pandoc + pillow; Java is preinstalled)
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends pandoc
+          python3 -m pip install --quiet pillow
+      - name: Build the EPUB
+        run: |
+          set -euo pipefail
+          ver=$(grep -m1 '"version"' src-tauri/tauri.conf.json | sed -E 's/.*"version": *"([^"]+)".*/\1/')
+          python3 scripts/build-manual-epub.py --version "$ver" --out /tmp/Nexus-Manual.epub
+      - name: Validate with W3C epubcheck
+        run: |
+          set -euo pipefail
+          EC=5.3.0
+          curl -fsSL "https://github.com/w3c/epubcheck/releases/download/v${EC}/epubcheck-${EC}.zip" -o /tmp/ec.zip
+          python3 -c "import zipfile; zipfile.ZipFile('/tmp/ec.zip').extractall('/tmp')"
+          java -jar "/tmp/epubcheck-${EC}/epubcheck.jar" /tmp/Nexus-Manual.epub
 
   # Job 3 — MSRV: the workspace must compile on the pinned minimum toolchain
   # (Cargo.toml [workspace.package] rust-version = "1.91"). Build-only check,

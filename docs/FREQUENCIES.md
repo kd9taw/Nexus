@@ -84,8 +84,9 @@ where relevant.
 - **FM channels are segments, not assignments.** The exact 20 kHz slot within the
   2 m experimental (145.5x) and 1.25 m digital (223.5x) segments — and especially
   the 70 cm 445.95 pick — should be brought to a regional frequency coordinator.
-- **Omitted:** 60 m (channelized — no clean slot; FT8 already uses 5.357) and
-  33 cm / 23 cm (sparse; easy to add later).
+- **Omitted:** 60 m (channelized — no clean slot; FT8 uses 5.357 in the worldwide
+  5351.5–5366.5 kHz segment and, in the US since 13 Feb 2026, 5.3715 on the 100 W
+  channel) and 33 cm / 23 cm (sparse; easy to add later).
 - **Cramped bands.** 17 m and 12 m have data windows only ~42 / 40 kHz wide with
   FT8/FT4/JS8/WSPR packed at the top, so there is **no clean ≥2–3 kHz notch**: the
   Nexus dials (18.0955 / 24.9115) sit in the small gap below the FT8 cluster and

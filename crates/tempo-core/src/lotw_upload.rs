@@ -78,15 +78,29 @@ fn stderr_has_rejections(stderr: &str) -> bool {
         || s.contains("could not be processed")
 }
 
-/// Does the TQSL stderr indicate a credential / certificate / station-location
-/// problem (→ AuthFail) rather than a generic error?
-fn stderr_is_auth(stderr: &str) -> bool {
+/// Does the TQSL stderr indicate a **Callsign Certificate** problem — none loaded, or one
+/// TQSL will not sign with?
+fn stderr_is_certificate(stderr: &str) -> bool {
     let s = stderr.to_ascii_lowercase();
     s.contains("no certificate")
         || s.contains("no certificates")
         || s.contains("certificate")
-        || s.contains("station location")
         || s.contains("callsign certificate")
+}
+
+/// Does it indicate a **Station Location** problem — the named location missing, or none
+/// given at all?
+fn stderr_is_station_location(stderr: &str) -> bool {
+    stderr.to_ascii_lowercase().contains("station location")
+}
+
+/// Does the TQSL stderr indicate a credential / certificate / station-location
+/// problem (→ AuthFail) rather than a generic error?
+///
+/// One predicate because the OUTCOME is the same for both. WHICH of the two it was is
+/// [`tqsl_detail`]'s question, and it matters: the two have opposite fixes.
+fn stderr_is_auth(stderr: &str) -> bool {
+    stderr_is_certificate(stderr) || stderr_is_station_location(stderr)
 }
 
 /// Per-OS default locations to look for the `tqsl` binary, tried before a PATH
@@ -127,10 +141,56 @@ pub fn tqsl_candidate_paths() -> Vec<PathBuf> {
     }
 }
 
-/// Sanitize a TQSL stderr tail for storage/display: redact any absolute-path run
+/// WHY a TQSL run ended as it did, for the per-QSO stamp — the CLASS, off the exit code.
+///
+/// ⛔ Deliberately not [`sanitize_detail`]'s output. That is TQSL's own words, this value is
+/// written into `log.adi`, and `log.adi` is the file TQSL then SIGNS and uploads to ARRL —
+/// so whatever a subprocess printed would go out under the operator's callsign certificate.
+/// See [`crate::logbook::UploadDetail`]. TQSL's stderr still reaches the operator: it is the
+/// upload report's `detail`, which is a toast.
+///
+/// Reading the stderr to CLASSIFY is fine and already happens — [`classify_tqsl_exit`] does
+/// it for the cert/station-location and the record-rejection markers. This function reuses
+/// that decision rather than re-reading the stderr; the one thing it asks the stderr itself
+/// is WHICH of the two auth markers matched, because the outcome cannot carry it and the two
+/// have completely different fixes.
+pub fn tqsl_detail(code: i32, stderr: &str) -> Option<crate::logbook::UploadDetail> {
+    use crate::logbook::UploadDetail as D;
+    match classify_tqsl_exit(code, stderr)? {
+        // Nothing went wrong that needs explaining beyond the outcome.
+        UploadOutcome::Pending | UploadOutcome::Accepted | UploadOutcome::Duplicate => None,
+        // ⛔ Not one class. A missing Callsign Certificate is requested from ARRL and loaded
+        // into TQSL; a bad Station Location is created or renamed in TQSL (or corrected in
+        // Settings). Telling an operator with a station-location typo to go and renew a
+        // certificate is a wrong answer delivered confidently. This is not a guess: AuthFail
+        // is only reachable through `stderr_is_auth`, so at least one of the two markers
+        // matched — and when both did, the certificate wins, because TQSL cannot get as far
+        // as choosing a location without one.
+        UploadOutcome::AuthFail => Some(if stderr_is_certificate(stderr) {
+            D::CallsignCertificate
+        } else {
+            D::StationLocation
+        }),
+        UploadOutcome::Rejected => match code {
+            // 9 = some records signed, the rest silently dropped, and TQSL does not say
+            // which — the one thing here the outcome alone cannot express.
+            9 => Some(D::BatchPartlySigned),
+            // 8 with rejection markers: nothing survived validation.
+            8 => Some(D::RecordRefused),
+            _ => Some(D::Unclassified),
+        },
+    }
+}
+
+/// Sanitize a TQSL stderr tail for the operator's TOAST: redact any absolute-path run
 /// (Windows drive `X:\…` / UNC `\\…`, or a POSIX `/…`) to its last component, flatten
 /// whitespace, and truncate. Avoids leaking the cert path, a custom tqsl path, or
 /// the temp `.adi` path echoed on file errors. Returns `None` for empty input.
+///
+/// ⛔ **A screen, not a record.** This is a path redactor and knows nothing about
+/// credentials; it was feeding the persisted `UploadStatus.detail` and that is what let a
+/// service's reply reach `log.adi`. Its output may go to a toast or the connection log and
+/// nowhere else — [`tqsl_detail`] is what the stamp takes.
 pub fn sanitize_detail(stderr: &str) -> Option<String> {
     let flat = stderr.split_whitespace().collect::<Vec<_>>().join(" ");
     if flat.is_empty() {
@@ -235,6 +295,55 @@ mod tests {
         assert_eq!(
             classify_tqsl_exit(5, "internal tqsllib error"),
             Some(Rejected)
+        );
+    }
+
+    /// ⛔ TWO FAILURES WITH OPPOSITE FIXES MUST NOT ARRIVE AS ONE SENTENCE.
+    ///
+    /// Both reach the operator as `AuthFail` — the outcome is the same, and it is the one
+    /// that suspends the automatic upload. The DETAIL is where they have to separate: a
+    /// missing Callsign Certificate is requested from ARRL and loaded into TQSL, while a
+    /// Station Location is created in TQSL or renamed in Settings. They collapsed into one
+    /// `Credentials` class whose sentence sends the operator to Settings ▸ Connectors, which
+    /// is the wrong place for both of them.
+    #[test]
+    fn a_tqsl_cert_failure_and_a_station_location_failure_are_different_classes() {
+        use crate::logbook::UploadDetail as D;
+        assert_eq!(
+            tqsl_detail(5, "Error: No certificate for KD9TAW"),
+            Some(D::CallsignCertificate)
+        );
+        assert_eq!(
+            tqsl_detail(5, "Error: station location 'Home' not found"),
+            Some(D::StationLocation)
+        );
+        // Both markers in one message: the certificate wins, because TQSL cannot get as far
+        // as choosing a location without one.
+        assert_eq!(
+            tqsl_detail(5, "No certificate found; station location 'Home' unusable"),
+            Some(D::CallsignCertificate)
+        );
+        // The controls. Without the first, a mapping that answered CallsignCertificate for
+        // every auth failure would pass every assertion above; without the second, one that
+        // answered it for every exit code would.
+        assert_ne!(
+            tqsl_detail(5, "Error: station location 'Home' not found"),
+            tqsl_detail(5, "Error: No certificate for KD9TAW"),
+            "control: the two answers must actually differ"
+        );
+        assert_eq!(
+            tqsl_detail(5, "internal tqsllib error"),
+            Some(D::Unclassified)
+        );
+        // …and the two sentences must actually name the two different fixes, or the split is
+        // a token the operator never sees.
+        assert!(D::CallsignCertificate
+            .sentence()
+            .contains("Callsign Certificate"));
+        assert!(D::StationLocation.sentence().contains("Station Location"));
+        assert_ne!(
+            D::CallsignCertificate.sentence(),
+            D::StationLocation.sentence()
         );
     }
 

@@ -81,6 +81,21 @@ pub trait RigBackend: Send + Sync {
     fn stop_morse(&self) -> Option<bool> {
         None
     }
+    /// Play the rig's voice memory `ch` (`\send_voice_mem N` — Hamlib's NET client sends
+    /// exactly this spelling; on a Yaesu it becomes the `PB0N;` CAT command). ⚠️ PLAYBACK
+    /// TRANSMITS: the RIG keys itself for the message, exactly as a front-panel PB press —
+    /// Nexus never commands PTT here, and the rig arbitrates against whatever else it is
+    /// doing. `Some(true)` means Nexus accepted and relayed the request, not that audio has
+    /// gone out — the broker's whole write surface answers at the accepted-by-Nexus seam.
+    fn send_voice_mem(&self, _ch: u32) -> Option<bool> {
+        None
+    }
+    /// Abort a voice-memory playback in progress (`\stop_voice_mem`). Served even though
+    /// Hamlib 4.7.1's NET client never sends it (a raw script can, and the abort must not
+    /// be the one verb a scripter cannot reach).
+    fn stop_voice_mem(&self) -> Option<bool> {
+        None
+    }
     /// Split on/off + TX VFO (`S 0|1 VFOB`).
     fn set_split(&self, _on: bool, _tx_vfo: &str) -> Option<bool> {
         None
@@ -191,6 +206,39 @@ fn dump_state(backend: &dyn RigBackend) -> String {
     out
 }
 
+/// The reply an unrecognised verb gets. Named because the connection loop counts them.
+const NOT_IMPLEMENTED: &str = "RPRT -11\n";
+
+/// Does this line begin an HTTP request rather than a rigctld command?
+///
+/// ⚠️ THE REASON THIS EXISTS IS A BROWSER, NOT A HAM. The broker listens on loopback with no
+/// authentication, which is fine against the network — but a WEB PAGE the operator merely
+/// visits can POST to `http://127.0.0.1:4532/` with `enctype="text/plain"`. That is a
+/// CORS-simple request, so there is no preflight to refuse, and 4532 is not on the browsers'
+/// blocked-port list. The response is opaque to the page, but the BYTES ARRIVE — and the old
+/// loop answered every unrecognised line with `RPRT -11` and kept reading, so the HTTP verb and
+/// each header were absorbed one at a time and then the request BODY dispatched as rigctld
+/// commands. `F 14313000`, `T 1` and `b CQ CQ DE PIRATE` all landed, verified against a copy of
+/// this module.
+///
+/// A real rigctld client never sends this. Hamlib's own protocol has no line ending in
+/// ` HTTP/1.x`, so refusing one costs nothing and closes the whole class.
+fn looks_like_http(line: &str) -> bool {
+    let l = line.trim_end();
+    // "GET / HTTP/1.1", "POST /x HTTP/1.0" — the version token is the tell, and it is what a
+    // browser must send. Matching the METHOD alone would be wrong: `G` is a real rigctld verb.
+    l.ends_with(" HTTP/1.1") || l.ends_with(" HTTP/1.0") || l.ends_with(" HTTP/0.9")
+}
+
+/// How many unrecognised lines a client may send before the connection is dropped.
+///
+/// A real client sends commands this server understands, or asks once for something it does not
+/// implement and moves on. A run of them means the peer is not speaking this protocol at all —
+/// an HTTP body, a TLS ClientHello, a port scanner — and continuing to read it is what let a web
+/// page walk its payload past the parser one line at a time. Three is generous enough that a
+/// client probing two or three optional verbs at startup is unaffected.
+const MAX_CONSECUTIVE_UNKNOWN: u32 = 3;
+
 fn rprt(ok: bool) -> String {
     if ok {
         "RPRT 0\n".into()
@@ -203,7 +251,7 @@ fn rprt(ok: bool) -> String {
 /// `RPRT -11` (not implemented), otherwise RPRT 0/-1.
 fn rprt_ext(r: Option<bool>) -> String {
     match r {
-        None => "RPRT -11\n".into(),
+        None => NOT_IMPLEMENTED.into(),
         Some(ok) => rprt(ok),
     }
 }
@@ -289,11 +337,21 @@ pub fn handle_command(line: &str, backend: &dyn RigBackend) -> Handled {
         "\\chk_vfo" => Handled::Reply("CHKVFO 0\n".into()),
         "\\get_powerstat" => Handled::Reply("1\n".into()), // powered on
         "\\stop_morse" => Handled::Reply(rprt_ext(backend.stop_morse())),
+        "\\stop_voice_mem" => Handled::Reply(rprt_ext(backend.stop_voice_mem())),
         "q" | "Q" => Handled::Close,
         _ => {
             let mut p = line.split_whitespace();
             let reply = match p.next() {
                 Some("f") => format!("{}\n", backend.freq_hz()),
+                // No single-letter form exists for this verb — Hamlib's own NET client
+                // sends the spelled `\send_voice_mem <ch>` (netrigctl.c, 4.7.1), so it
+                // dispatches here rather than through `canonical_line`. A channel that
+                // does not parse is refused, never guessed at.
+                Some("\\send_voice_mem") => rprt_ext(
+                    p.next()
+                        .and_then(|c| c.parse::<u32>().ok())
+                        .map_or(Some(false), |ch| backend.send_voice_mem(ch)),
+                ),
                 // Hamlib sends freq as printf %lf ("F 14074000.000000"), so parse
                 // as f64 and round to Hz — a u64 parse rejects every real client.
                 Some("F") => rprt(
@@ -437,13 +495,37 @@ pub fn serve_connection(stream: TcpStream, backend: Arc<dyn RigBackend>) {
     // crashing / closing mid-transmit) can't leave the rig keyed forever — the
     // original code only ever unkeyed on an explicit `T 0`.
     let mut asserted_ptt = false;
+    // See `looks_like_http` and MAX_CONSECUTIVE_UNKNOWN: a peer that is not speaking this
+    // protocol must be hung up on, not patiently answered line after line while its payload
+    // walks past the parser.
+    let mut unknown_run: u32 = 0;
     for line in reader.lines() {
         let Ok(line) = line else { break };
+        if looks_like_http(&line) {
+            crate::civ::diag::note(
+                "rigctld_server: HTTP request line on the broker port — dropping (a web page, not a rig client)",
+            );
+            break;
+        }
         if let Some(v) = parse_ptt_set(&line) {
             asserted_ptt = v;
         }
         match handle_command(&line, backend.as_ref()) {
             Handled::Reply(r) => {
+                // Count only NOT-IMPLEMENTED. A command that ran and failed (`RPRT -1`) is a
+                // real client having a bad day — a rig that refused, a busy port — and must
+                // never cost it the connection.
+                if r == NOT_IMPLEMENTED {
+                    unknown_run += 1;
+                    if unknown_run >= MAX_CONSECUTIVE_UNKNOWN {
+                        crate::civ::diag::note(
+                            "rigctld_server: too many unrecognised lines in a row — dropping the connection",
+                        );
+                        break;
+                    }
+                } else {
+                    unknown_run = 0;
+                }
                 if !r.is_empty() && writer.write_all(r.as_bytes()).is_err() {
                     break;
                 }
@@ -580,6 +662,73 @@ pub fn classify_probe_reply(bytes: &[u8]) -> PortReply {
 ///
 /// The read budget is `timeout` in total, not per read, so the worst case is unchanged from
 /// the single-read version this replaces (connect + one timeout).
+/// Ask `addr` whether it is a rigctld we can share, and REPORT WHAT ANSWERED.
+///
+/// Sends `\chk_vfo` and reads one line back inside `timeout`. Two servers are being told
+/// apart here, and both talk on connect-or-command: a rigctld says nothing until asked and
+/// then answers one line; an SDR console's CAT server (Thetis, and PowerSDR forks) greets
+/// immediately and then ignores anything without a `;`. Writing the question first and
+/// reading once serves both — the greeting is already in the socket by then.
+///
+/// The read budget is `timeout` in total, not per read, so the worst case is unchanged from
+/// the single-read version this replaces (connect + one timeout).
+/// Ask the rigctld on `addr` WHICH RIG MODEL it is serving, via `\dump_state`.
+///
+/// WHY THIS EXISTS. [`probe_cat_port`] establishes that *a rigctld* is listening, and the
+/// coexist branch then connects through it. What it could never establish is which RADIO that
+/// daemon drives — the monitor path's comment says exactly this, and refuses to coexist at all
+/// for that reason, calling it "the dual-radio crossed-CAT bug". The active radio coexists
+/// anyway, so it inherited the bug.
+///
+/// Demonstrated on a two-radio macOS station, 2026-08-17: a stray rigctld left by a previous run
+/// held the FTX-1's port, Nexus adopted it, took its dial (145.000, a Hamlib dummy) as the rig's,
+/// and left the real radio's serial port untouched. The pill looked fine.
+///
+/// The premise was simply out of date: `\dump_state`'s SECOND line is the served model. A Hamlib
+/// dummy answers `1`, an FT-710 answers `1049`. That is enough to refuse a daemon that is driving
+/// something other than the rig this profile describes.
+///
+/// `None` means "could not establish" — not "mismatch". A daemon that does not answer, answers
+/// The model line of a `\dump_state` reply: line 1 is the protocol version, line 2 the model.
+///
+/// Split out so the parse is testable without a socket — and because the shape is the sort of
+/// thing that changes between Hamlib versions, so it must fail to `None` rather than guess.
+pub fn parse_dump_state_model(bytes: &[u8]) -> Option<u32> {
+    let text = String::from_utf8_lossy(bytes);
+    let mut lines = text.lines().filter(|l| !l.trim().is_empty());
+    let _protocol = lines.next()?;
+    lines.next()?.trim().parse::<u32>().ok()
+}
+
+/// something unparseable, or speaks a protocol variant we do not recognise must NOT be treated as
+/// foreign: refusing on absent evidence would break the sharing setups this branch exists for.
+pub fn served_rig_model(addr: &str, timeout: std::time::Duration) -> Option<u32> {
+    use std::io::{Read, Write};
+    use std::net::ToSocketAddrs;
+    let sa = addr.to_socket_addrs().ok()?.next()?;
+    let mut stream = TcpStream::connect_timeout(&sa, timeout).ok()?;
+    stream.set_write_timeout(Some(timeout)).ok()?;
+    stream.write_all(b"\\dump_state\n").ok()?;
+    let deadline = std::time::Instant::now() + timeout;
+    let mut buf: Vec<u8> = Vec::new();
+    let mut chunk = [0u8; 512];
+    // Two lines is all we need (protocol version, then the model), but they can arrive in one
+    // packet or several; stop as soon as a second newline is in hand.
+    while buf.len() < 2048 && buf.iter().filter(|b| **b == b'\n').count() < 2 {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        if left < std::time::Duration::from_millis(1)
+            || stream.set_read_timeout(Some(left)).is_err()
+        {
+            break;
+        }
+        match stream.read(&mut chunk) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => buf.extend_from_slice(&chunk[..n]),
+        }
+    }
+    parse_dump_state_model(&buf)
+}
+
 pub fn probe_cat_port(addr: &str, timeout: std::time::Duration) -> PortReply {
     use std::io::Read;
     use std::net::ToSocketAddrs;
@@ -631,14 +780,14 @@ pub fn probe_rigctld(addr: &str, timeout: std::time::Duration) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::sync::Mutex;
 
-    struct MockRig {
-        freq: Mutex<u64>,
-        ptt: Mutex<bool>,
-        mode: Mutex<(String, u32)>,
+    pub(crate) struct MockRig {
+        pub(crate) freq: Mutex<u64>,
+        pub(crate) ptt: Mutex<bool>,
+        pub(crate) mode: Mutex<(String, u32)>,
     }
     impl Default for MockRig {
         fn default() -> Self {
@@ -1075,6 +1224,7 @@ mod tests {
     struct ExtRig {
         base: MockRig,
         morse: Mutex<Vec<String>>,
+        voice: Mutex<Vec<u32>>,
         rit: Mutex<i32>,
     }
     impl RigBackend for ExtRig {
@@ -1116,10 +1266,49 @@ mod tests {
         fn stop_morse(&self) -> Option<bool> {
             Some(true)
         }
+        fn send_voice_mem(&self, ch: u32) -> Option<bool> {
+            self.voice.lock().unwrap().push(ch);
+            Some(true)
+        }
+        fn stop_voice_mem(&self) -> Option<bool> {
+            Some(true)
+        }
         fn set_rit(&self, hz: i32) -> Option<bool> {
             *self.rit.lock().unwrap() = hz;
             Some(true)
         }
+    }
+
+    /// The FT-991A DVS ask (2026-09-01): a script plays a voice memory through the broker
+    /// with Hamlib's own NET wire form — netrigctl sends exactly `\send_voice_mem <ch>`
+    /// (rigs/dummy/netrigctl.c, 4.7.1), and `\stop_voice_mem` exists for the abort even
+    /// though 4.7.1's NET client never sends it (a raw script can). A backend that does not
+    /// implement them answers `RPRT -11`, the same not-implemented contract as every other
+    /// extended verb — which is byte-identically what the pre-verb broker said, so an old
+    /// client sees no change. A malformed channel is a refusal, not a crash and not a relay.
+    #[test]
+    fn voice_memory_verbs_relay_with_hamlibs_own_wire_form() {
+        let b = ExtRig {
+            base: MockRig::default(),
+            morse: Mutex::new(Vec::new()),
+            voice: Mutex::new(Vec::new()),
+            rit: Mutex::new(0),
+        };
+        assert_eq!(reply("\\send_voice_mem 2", &b), "RPRT 0\n");
+        assert_eq!(*b.voice.lock().unwrap(), vec![2]);
+        assert_eq!(reply("\\stop_voice_mem", &b), "RPRT 0\n");
+        // Malformed or missing channel: refused, never relayed as a guess.
+        assert_eq!(reply("\\send_voice_mem x", &b), "RPRT -1\n");
+        assert_eq!(reply("\\send_voice_mem", &b), "RPRT -1\n");
+        assert_eq!(
+            b.voice.lock().unwrap().len(),
+            1,
+            "the refusals relayed nothing"
+        );
+        // The default backend keeps the pre-verb bytes: not implemented.
+        let plain = MockRig::default();
+        assert_eq!(reply("\\send_voice_mem 1", &plain), "RPRT -11\n");
+        assert_eq!(reply("\\stop_voice_mem", &plain), "RPRT -11\n");
     }
 
     #[test]
@@ -1127,6 +1316,7 @@ mod tests {
         let b = ExtRig {
             base: MockRig::default(),
             morse: Mutex::new(Vec::new()),
+            voice: Mutex::new(Vec::new()),
             rit: Mutex::new(0),
         };
         // Levels: `l` replies the value line; `L` acks.
@@ -1339,5 +1529,136 @@ mod tests {
             REPLY_SNIPPET_MAX + 1,
             "capped, with an ellipsis"
         );
+    }
+    /// `\dump_state`'s second line is the served rig's model — the fact that lets the coexist
+    /// branch ask "is this MY radio?" instead of assuming. Both replies below are real: the
+    /// Hamlib dummy and an FT-710, captured from the station on 2026-08-17.
+    #[test]
+    fn dump_state_names_the_rig_the_daemon_is_serving() {
+        let dummy = b"1\n1\n0\n150000.000000 1500000000.000000 0x1ff -1 -1 0x17e00007 0x1f\n";
+        let ft710 = b"1\n1049\n0\n30000.000000 60000000.000000 0x420201dbf -1 -1 0x10000003\n";
+        assert_eq!(parse_dump_state_model(dummy), Some(1));
+        assert_eq!(parse_dump_state_model(ft710), Some(1049));
+    }
+
+    /// EVERY "cannot tell" must be None, never a wrong number: refusing on a misread reply would
+    /// take CAT away from the sharing setups the coexist branch exists to support.
+    #[test]
+    fn an_unreadable_dump_state_is_undecided_rather_than_wrong() {
+        assert_eq!(parse_dump_state_model(b""), None);
+        assert_eq!(parse_dump_state_model(b"1\n"), None, "no model line yet");
+        assert_eq!(
+            parse_dump_state_model(b"1\nRPRT -1\n"),
+            None,
+            "an error reply"
+        );
+        assert_eq!(parse_dump_state_model(b"garbage\nalso garbage\n"), None);
+        // Blank lines must not shift the line the model is read from.
+        assert_eq!(parse_dump_state_model(b"1\n\n1049\n"), Some(1049));
+    }
+}
+
+#[cfg(test)]
+mod browser_smuggling_tests {
+    use super::*;
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
+    use std::sync::Arc;
+
+    /// A WEB PAGE THE OPERATOR VISITS COULD DRIVE THE RADIO, and this is the regression test.
+    ///
+    /// The broker listens on loopback with no authentication — fine against the network, but a
+    /// page can POST to `http://127.0.0.1:4532/` with `enctype="text/plain"`. That is a
+    /// CORS-simple request (no preflight to refuse), 4532 is not on the browsers' blocked-port
+    /// list, and although the response is opaque to the page, the BYTES ARRIVE. The old loop
+    /// answered each unrecognised line with `RPRT -11` and kept reading, so the verb and headers
+    /// were absorbed one at a time and the request BODY then dispatched as rigctld commands:
+    /// `F 14313000`, `T 1` and `b CQ CQ DE PIRATE` all landed.
+    ///
+    /// This sends the exact bytes a browser would and asserts the radio was NOT touched.
+    #[test]
+    fn an_http_post_from_a_web_page_cannot_drive_the_radio() {
+        let rig = Arc::new(super::tests::MockRig::default());
+        let before_freq = rig.freq_hz();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let backend: Arc<dyn RigBackend> = rig.clone();
+        let h = std::thread::spawn(move || {
+            let (sock, _) = listener.accept().unwrap();
+            serve_connection(sock, backend);
+        });
+
+        let mut c = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        // Byte-for-byte what a `<form enctype="text/plain">` auto-submit produces.
+        c.write_all(
+            b"POST / HTTP/1.1\r\n\
+              Host: 127.0.0.1\r\n\
+              Content-Type: text/plain;charset=UTF-8\r\n\
+              Content-Length: 44\r\n\
+              \r\n\
+              F 14313000\nT 1\nb CQ CQ DE PIRATE\nx=y\n",
+        )
+        .unwrap();
+        let _ = c.flush();
+        // ⚠️ BOUNDED, and the reason is the other half of this defect. With the guards removed
+        // the server NEVER closes the connection — it answers each line and reads on forever —
+        // so a `read_to_end` here hangs instead of failing, and the regression would show up as
+        // a stuck test suite rather than a red one. Shutting our write side and giving the
+        // server a moment lets the assertions below be the thing that speaks.
+        let _ = c.shutdown(std::net::Shutdown::Write);
+        c.set_read_timeout(Some(std::time::Duration::from_millis(500)))
+            .unwrap();
+        let mut sink = Vec::new();
+        let _ = c.read_to_end(&mut sink);
+        drop(c);
+        let _ = h.join();
+
+        assert_eq!(
+            rig.freq_hz(),
+            before_freq,
+            "a web page must not move the dial"
+        );
+        assert!(
+            !*rig.ptt.lock().unwrap(),
+            "a web page must NEVER key the transmitter"
+        );
+    }
+
+    /// The control, and it is the one that stops this fix from being a denial of service on the
+    /// operator's own logger: a REAL rigctld client must still be served normally.
+    #[test]
+    fn a_real_client_is_still_served() {
+        let rig = Arc::new(super::tests::MockRig::default());
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let backend: Arc<dyn RigBackend> = rig.clone();
+        let h = std::thread::spawn(move || {
+            let (sock, _) = listener.accept().unwrap();
+            serve_connection(sock, backend);
+        });
+
+        let mut c = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        c.write_all(b"f\nF 21074000\nf\nq\n").unwrap();
+        let _ = c.flush();
+        let mut out = String::new();
+        let _ = c.read_to_string(&mut out);
+        let _ = h.join();
+
+        assert!(
+            out.contains("21074000"),
+            "a real client's set+read must work: {out:?}"
+        );
+        assert_eq!(rig.freq_hz(), 21_074_000);
+    }
+
+    /// `G` is a genuine rigctld verb (vfo_op) and must not be mistaken for HTTP's GET.
+    #[test]
+    fn the_http_test_does_not_catch_real_verbs() {
+        assert!(looks_like_http("GET / HTTP/1.1"));
+        assert!(looks_like_http("POST /x HTTP/1.0"));
+        assert!(!looks_like_http("G UP"), "G is vfo_op, not GET");
+        assert!(!looks_like_http("F 14074000"));
+        assert!(!looks_like_http("\\dump_state"));
+        assert!(!looks_like_http(""), "a blank line is not HTTP");
     }
 }

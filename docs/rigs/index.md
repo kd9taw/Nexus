@@ -6,10 +6,9 @@ box with nothing else to install. Around fifty rigs are curated into the model
 picker; the definitive list for your installed Hamlib version is always
 `rigctl -l`.
 
-> **Where Hamlib comes from depends on the platform.** The bundled `rigctld` (and
-> rotator daemon) ship in the Windows installer only. Linux and Raspberry Pi use
-> the system Hamlib instead: the `.deb` pulls `libhamlib-utils` in for you, and
-> AppImage users run `sudo apt install libhamlib-utils` once. Either way Nexus
+> **Hamlib ships inside every download.** `rigctld` and the rotator daemon are
+> bundled on Windows, Linux (`.deb`, AppImage and both Raspberry Pi bases) and
+> macOS, so CAT works with nothing else installed. Either way Nexus
 > never transmits on launch — TX is always an explicit operator action, and a
 > declared license class is enforced as a real Part 97 sub-band lockout.
 

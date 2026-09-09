@@ -94,6 +94,9 @@ body { font: 10.5pt/1.55 "Inter", "Segoe UI", Roboto, -apple-system, sans-serif;
 .toc li { margin: 0 0 3.4mm; break-inside: avoid; font-size: 10.5pt; }
 .toc .n { font: 600 8.5pt "JetBrains Mono", ui-monospace, monospace; color: #3ddc8c;
           margin-right: 3mm; }
+/* The row is a link now (clickable in the PDF) but reads as the printed contents line —
+   no browser-blue, no underline. */
+.toc a { color: #14203a; text-decoration: none; }
 
 /* ---------- chapter openers ---------- */
 .chapter { page-break-before: always; break-before: page; }
@@ -243,6 +246,16 @@ def md_to_html(md: str, base: pathlib.Path) -> str:
         if not ln.strip():
             close_list(); i += 1; continue
 
+        # A WRAPPED LIST ITEM continues on an indented line carrying no marker of its own. It
+        # matches none of the branches above, so without this it falls through to the paragraph
+        # branch below — which close_list()es and emits an orphan <p> in the middle of a
+        # sentence. That affected every wrapped bullet in all 22 chapters of the printed manual.
+        # A nested bullet is not this case: it matched the list branches already.
+        if lst and ln[:1] in (" ", "\t") and out and out[-1].endswith("</li>"):
+            out[-1] = out[-1][: -len("</li>")] + " " + inline(ln.strip()) + "</li>"
+            i += 1
+            continue
+
         close_list()
         para = [ln]; i += 1
         while i < n and lines[i].strip() and not re.match(r"^(#{1,6}\s|\s*[-*]\s|\s*\d+\.\s|>|\||```)", lines[i]):
@@ -266,7 +279,12 @@ def render_pdf(browser: str, src: pathlib.Path, out: pathlib.Path, footer: str) 
 
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0)); port = s.getsockname()[1]
-    with tempfile.TemporaryDirectory() as td:
+    # mkdtemp + rmtree(ignore_errors) rather than the context manager: headless Chrome can
+    # still hold a lock file in its user-data-dir the instant after we terminate it, and the
+    # manager's cleanup then raises "Directory not empty" AFTER the PDF is already written —
+    # a spurious non-zero exit that would fail the release job over a temp file.
+    td = tempfile.mkdtemp()
+    try:
         env = dict(os.environ)
         runtime = pathlib.Path(td) / "xdg"; runtime.mkdir(mode=0o700)
         env["XDG_RUNTIME_DIR"] = str(runtime)
@@ -308,6 +326,9 @@ def render_pdf(browser: str, src: pathlib.Path, out: pathlib.Path, footer: str) 
                 time.sleep(6)  # images + fonts; the doc is local so this is generous
                 res = call("Page.printToPDF", {
                     "printBackground": True, "preferCSSPageSize": True,
+                    # The reader's clickable bookmark sidebar, built from the h1..h6 tree —
+                    # so every section AND its sub-headings are one click away. Chrome ≥126.
+                    "generateDocumentOutline": True,
                     "displayHeaderFooter": True,
                     "headerTemplate": "<span></span>", "footerTemplate": footer,
                     "marginTop": 0.79, "marginBottom": 0.71,
@@ -318,6 +339,8 @@ def render_pdf(browser: str, src: pathlib.Path, out: pathlib.Path, footer: str) 
             proc.terminate()
             try: proc.wait(timeout=10)
             except subprocess.TimeoutExpired: proc.kill()
+    finally:
+        shutil.rmtree(td, ignore_errors=True)
 
 
 def main() -> int:
@@ -368,15 +391,18 @@ def main() -> int:
         <div><h4>Chasing</h4><p>The Needed board and its evidence, spots, DXpeditions,
           propagation, satellites and the logbook.</p></div>
         <div><h4>Station</h4><p>Rig and audio setup, memories, radio programming,
-          contesting, and all eight Settings tabs.</p></div>
+          contesting, and every Settings tab.</p></div>
       </div>
       <div class="spectrum">{bars}</div>
       <div class="foot"><span>Version <b>{html.escape(args.version)}</b> · KD9TAW</span>
         <span>Free software · GPLv3</span></div>
     </div>"""
 
+    # Clickable TOC: each row jumps to its section anchor (`#sec-N`), and Chrome preserves
+    # the in-document link in the PDF. The PDF outline/bookmark sidebar comes separately, from
+    # `generateDocumentOutline` on the print call — this is the on-page contents list.
     toc = ('<div class="toc"><h2>Contents</h2><ol>'
-           + "".join(f'<li><span class="n">{i:02d}</span>{html.escape(t)}</li>'
+           + "".join(f'<li><a href="#sec-{i}"><span class="n">{i:02d}</span>{html.escape(t)}</a></li>'
                      for i, t in enumerate(titles, 1))
            + "</ol></div>")
 
@@ -384,7 +410,7 @@ def main() -> int:
     for i, (p, t) in enumerate(zip(pages, titles), 1):
         h = md_to_html(p.read_text(encoding="utf-8"), p.parent)
         # Tag the H1 so the chapter opener can number it.
-        h = re.sub(r"<h1>", f'<h1 data-n="Section {i:02d}">', h, count=1)
+        h = re.sub(r"<h1>", f'<h1 id="sec-{i}" data-n="Section {i:02d}">', h, count=1)
         body.append(f'<div class="chapter">{h}</div>')
         print(f"  {i:02d}  {p.relative_to(REPO)}")
 

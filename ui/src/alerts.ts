@@ -26,9 +26,24 @@ import { matchWatchlist, watchLabel, type WatchFilter } from './watchlist'
 // watch-list hit) must NEVER be evicted by churn from the repeating kinds — that
 // is precisely how an ATNO started re-alerting every cycle. See `alertedRepeat`.
 const alertedOnce = new Set<string>()
+/** Per-STATION "calling you" memory (call → last alert, ms). A station calling you is one
+ *  event per episode, however many decodes it spans and whatever the sequencer is doing —
+ *  the answer to your CQ, its R-report, its RR73 are one station, not three alerts. The
+ *  window lets the same station be news again later in the session. */
+const mycallAlertedAt = new Map<string, number>()
+const MYCALL_REPEAT_MS = 10 * 60_000
+
+/** Test seam: forget every dedup memory so a case starts from nothing. */
 // The kinds that legitimately repeat as an exchange advances (mycall / cq). Bounded,
 // because a busy band produces these continuously.
 const alertedRepeat = new Set<string>()
+
+export function __resetAlertsForTest(): void {
+  alertedOnce.clear()
+  alertedRepeat.clear()
+  seenDecodes.clear()
+  mycallAlertedAt.clear()
+}
 // Every decode key ever seen (not just alert-worthy) — drives the batch
 // freshness check for the decode tick + screen-reader batch summaries.
 const seenDecodes = new Set<string>()
@@ -177,7 +192,7 @@ export interface QsoContext {
  * The engine draws the same line: `qso.rs` scores `State::Listening | State::CallingCq => 0`
  * exchanges completed, grouping the two precisely as here.
  */
-function engagedInQso(ctx?: QsoContext): boolean {
+export function engagedInQso(ctx?: QsoContext): boolean {
   return (
     !!ctx?.state &&
     ctx.state !== 'Listening' &&
@@ -233,7 +248,6 @@ export function processDecodes(
   // Current dial (MHz) for the per-alert band scopes; absent = band unknown (permissive).
   dialMhz?: number,
 ): void {
-  const engaged = engagedInQso(qso)
   const partner = qso?.dxcall?.toUpperCase() ?? null
 
   // ── Batch freshness (eyes-free channel): which rows have never been seen at
@@ -243,11 +257,14 @@ export function processDecodes(
   // unbounded (a reset only risks one duplicate tick).
   if (seenDecodes.size > 5000) seenDecodes.clear()
   const fresh: DecodeRow[] = []
+  // Keys first seen in THIS batch — the "calling you" gate below rides on it.
+  const freshKeys = new Set<string>()
   for (const d of decodes) {
     if (d.mine) continue
     const k = decodeKey(d)
     if (!seenDecodes.has(k)) {
       seenDecodes.add(k)
+      freshKeys.add(k)
       fresh.push(d)
     }
   }
@@ -277,15 +294,82 @@ export function processDecodes(
   for (const d of decodes) {
     const call = d.from
 
-    // Already working this station → nothing about them is news (skipped WITHOUT
-    // consuming the dedup key, so a later fresh event can still alert).
-    if (partner && call?.toUpperCase() === partner) continue
+    // ⭐ THE MYCALL KIND IS DECIDED BEFORE THE PARTNER SKIP, and it has to be (#167). The
+    // sequencer sets `qso.dxcall` in the SAME ingest that produces the decode, so the very
+    // decode that ANSWERS your CQ arrives on a snapshot where that station is already the
+    // partner. Skipping it here dropped the one alert a CQ run exists for, and the operator
+    // heard nothing until their post-RR73 "73" — by then the QSO was over and dxcall had moved
+    // on. WSJT-X applies its MyCall highlight to every decode carrying your callsign with no
+    // exclusion for the station being worked (widgets/displaytext.cpp:490); dxCall drives a
+    // separate highlight. The anti-chatter job the skip was doing is the `engaged` gate's and
+    // the per-decode dedup's, not this line's: mid-exchange states never reach `callingMe`.
+    //
+    // ⭐ AND IT IS GATED ON FRESHNESS — first seen in THIS batch — because this function
+    // re-evaluates the whole rolling decode window on every snapshot, and a row's verdict
+    // must not change as the QSO state moves on around it. Without the gate, the phantom
+    // "XXX is calling you" (operator screenshot, 1.10.0): the partner's RR73 arrives mid-QSO
+    // and is rightly silent; your 73 goes out; the state reaches Done — which `engaged`
+    // rightly excludes, so a NEW caller can alert — and on the next snapshot the SAME stale
+    // RR73 re-qualifies and toasts about a QSO that is already over. The band-switch variant
+    // is the same replay: state resets to Listening while old to-you rows ride along in the
+    // window, so it fired before a single new decode. A decode suppressed in its own moment
+    // stays suppressed; only a decode ARRIVING now may claim "is calling you". #167 is
+    // unharmed — the CQ answer is fresh in exactly the batch it alerts from. Same defect
+    // class as the stale-boundary TX incident: a decode outliving its moment must not
+    // replay a decision.
+    //
+    // ⭐ AND THE RULE IS PER STATION, NOT PER SEQUENCER STATE (reversed 2026-09-02, the
+    // operator's own 1.10.1 field test). The `!engaged` gate that lived here suppressed the
+    // alerts a CQ run exists for and passed the one nobody wanted: with Auto on, the answer's
+    // decode lands on a snapshot whose state has ALREADY moved to AwaitRoger (the sequencer
+    // answered in the same ingest), so `engaged` silenced it; every further caller during the
+    // exchange was silenced the same way; and the partner's fresh "73" after Done — the one
+    // non-engaged moment — toasted "is calling you" about a QSO that was over. GridTracker2's
+    // contract, and now this one: every NEW station that calls you is announced, once,
+    // whatever you are doing. Three things decide it —
+    //   • not a sign-off: nobody initiates with RR73/73 (`d.signoff`, the engine's parse);
+    //   • not the station you are working — UNLESS you are the initiator (CallingCq /
+    //     AwaitRoger: they answered YOUR CQ, which is the #167 answer arriving on a snapshot
+    //     where it is already the partner). A station YOU called (AwaitReport / AwaitRr73,
+    //     the responder states) is never "calling you": its replies are the QSO;
+    //   • not announced within the last MYCALL_REPEAT_MS — the per-station memory that
+    //     replaces the sequencer gate as the anti-chatter, so the answer, its R-report and
+    //     its 73 are one event, not three.
+    const isPartner = !!partner && call?.toUpperCase() === partner
+    // "They are calling ME" holds for the partner while nothing is in progress (idle,
+    // Listening — a station the operator merely selected can still call first) and on the
+    // initiator path (CallingCq / AwaitRoger — they answered OUR CQ). On the responder path
+    // (AwaitReport / AwaitRr73 — we called THEM) and from Confirming on, the partner's
+    // messages are the exchange, never a call.
+    const st = qso?.state ?? null
+    const iAmInitiator =
+      st === null || st === 'Listening' || st === 'CallingCq' || st === 'AwaitRoger'
+    const stationKey = call?.toUpperCase() ?? ''
+    const recentlyAnnounced =
+      (mycallAlertedAt.get(stationKey) ?? Number.NEGATIVE_INFINITY) > Date.now() - MYCALL_REPEAT_MS
+    const callingMe = !!(
+      settings.alertMyCall &&
+      d.directedToMe &&
+      !d.signoff &&
+      freshKeys.has(decodeKey(d)) &&
+      !recentlyAnnounced &&
+      (!isPartner || iAmInitiator)
+    )
+    if (callingMe) mycallAlertedAt.set(stationKey, Date.now())
+
+    // Already working this station → nothing else about them is news (skipped WITHOUT
+    // consuming the dedup key, so a later fresh event can still alert). A partner row that
+    // IS someone calling us falls through to the kind ladder below, where `mycall` wins
+    // first — so a partner can still only ever produce that one alert.
+    if (isPartner && !callingMe) continue
 
     // User watch list FIRST: an explicitly-watched call/prefix/entity/grid is the loudest tier
     // and pre-empts the generic new/CQ logic (deduped once per filter+call so it doesn't spam).
     // Deliberately ABOVE the band-scope gates: a grid the operator typed in must fire on HF
     // even though unworked-grid chatter is HF-quiet by default.
-    if (watchlist && watchlist.length) {
+    // …but NOT for the station being worked: the watch tier is louder than "calling you" and
+    // pre-empts it, and a partner reaching this line is here on the mycall exemption alone.
+    if (!isPartner && watchlist && watchlist.length) {
       const hit = matchWatchlist(d, watchlist)
       if (hit) {
         const wkey = `watch:${hit.id}:${call ?? '?'}`
@@ -319,7 +403,7 @@ export function processDecodes(
     // the plain scope demotes a gem to a quiet toast when only IT is open).
     const isRareGrid = d.gridRarity === 'rare' || d.gridRarity === 'ultraRare'
     let kind: AlertKind | null = null
-    if (settings.alertMyCall && d.directedToMe && !engaged) kind = 'mycall'
+    if (callingMe) kind = 'mycall'
     else if (settings.alertNew && d.newDxcc && dxccOk) kind = 'newdxcc'
     else if (settings.alertNew && d.newGrid && (isRareGrid ? rareOk || gridOk : gridOk))
       kind = 'newgrid'

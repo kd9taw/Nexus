@@ -44,6 +44,13 @@ vi.mock('../toast', () => ({
   withErrorToast: vi.fn(async (fn: () => Promise<unknown>) => fn()),
 }))
 
+/** Newest call to a mocked api verb. (`Array.prototype.at` is outside this project's lib
+ *  target, so index explicitly.) */
+function lastCall(name: string): unknown[] | undefined {
+  const calls = api.get(name).mock.calls
+  return calls.length ? (calls[calls.length - 1] as unknown[]) : undefined
+}
+
 const FTDX10 = {
   id: 0,
   name: 'FTDX10',
@@ -191,8 +198,20 @@ describe('the Flex config travels with the radio it belongs to', () => {
     expect(patch.flexRadioIp).toBe('192.0.2.77')
     expect(patch.flexNativePan).toBe(true)
     expect(patch.flexNativeAudio).toBe(true)
-    // The station-wide write must NOT be the path taken — that is what stamped the edited
-    // radio's config onto the active one (the 2026-07-25 report).
-    expect(api.get('setSettings')).not.toHaveBeenCalled()
+    // ⛔ DO NOT RESTORE `expect(setSettings).not.toHaveBeenCalled()` HERE. That assertion was
+    // #173 written down as a guarantee, and it is why this seam survived six data-loss
+    // bugs: routing the WHOLE save through the per-radio verb discarded every
+    // station-wide setting while the panel reported success, and any correct fix turned
+    // four assertions like this one red and read as a regression.
+    // WHAT IT GUARANTEES NOW: Save sends BOTH writes, and the station-wide one must carry the
+    // ACTIVE radio's config in the flat fields the backend folds into the active profile —
+    // never the edited radio's. That is the real invariant behind the 2026-07-25 report ("both
+    // radios ended up on one set of comm ports"), and unlike the old assertion it still holds
+    // when the save also persists station-wide settings.
+    const saved = lastCall('setSettings')![0] as Record<string, unknown>
+    expect(saved.activeRadio).toBe(0)
+    expect(saved.serialPort).toBe('COM3') // the FTDX10's
+    expect(saved.flexRadioIp).toBe('') // NOT the edited Flex's 192.0.2.77
+    expect(saved.rigAddr).toBe('')
   })
 })

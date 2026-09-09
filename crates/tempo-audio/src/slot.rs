@@ -587,14 +587,26 @@ mod tests {
             None,
         );
 
+        let after = steered_now_ms(&eng);
+
         assert!(act.tx_this_slot, "the CQ keyed");
         let basis = deadline_basis_ms(&act, &backend);
+        // ⚠️ BRACKETED, NOT A TOLERANCE. This used to assert `(basis - steered).abs() < 100`,
+        // which measured how long THIS MACHINE took to run the call: on a loaded box
+        // `slot_tx_phase` outruns 100 ms and the test failed for a reason unrelated to the bug
+        // it guards (seen at 211 ms and 278 ms). A timing test that fails under load teaches
+        // people to re-run it, which is how the regression it exists to catch gets waved
+        // through. The claim that actually matters is an ORDERING one and it needs no
+        // tolerance at all: the basis must fall inside the window this call spanned. The bug
+        // puts it CAT_STALL_MS before `steered`, i.e. before the window opened, so this still
+        // fails on the defect while being immune to how busy the machine is.
         assert!(
-            (basis - steered).abs() < 100.0,
-            "PTT-hold deadline must be measured from the key ({steered:.0}), not from \
-             the tick's stale clock ({:.0}) — off by {:.0} ms",
+            basis >= steered && basis <= after,
+            "PTT-hold deadline must be measured from the key — expected it inside the window \
+             this call spanned ({steered:.0}..{after:.0}), got {basis:.0}. The stale-tick bug \
+             puts it at {:.0}, {:.0} ms before the window opened.",
             steered - CAT_STALL_MS,
-            basis - steered,
+            steered - basis,
         );
     }
 
@@ -632,11 +644,14 @@ mod tests {
             "a {KEY_MS} ms key must push the hold out with it — moved only {:.0} ms",
             basis - now_ms,
         );
+        // Bracketed for the same reason as the sibling test above: `(after - basis).abs() <
+        // 100` was measuring machine load, not behaviour. The basis must simply lie at or
+        // before the moment the call returned, and after the key that pushed it out.
         assert!(
-            (after - basis).abs() < 100.0,
-            "and the basis is the moment the carrier came up, not the call's entry \
-             ({:.0} ms before this call returned)",
-            after - basis,
+            basis <= after,
+            "and the basis is the moment the carrier came up, not something later than this \
+             call returned ({:.0} ms after)",
+            basis - after,
         );
     }
 

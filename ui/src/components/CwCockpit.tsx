@@ -16,6 +16,7 @@ import { BandPicker } from './BandPicker'
 import { BandStrip } from './BandStrip'
 import { TuningStrip } from './TuningStrip'
 import { CockpitHeader } from './CockpitHeader'
+import { ZeroBeat } from './ZeroBeat'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
 import { MemoryStrip } from './MemoryStrip'
 import { IS_MAC, FN_KEY_HINT } from '../platform'
@@ -49,6 +50,7 @@ import {
   setNrLevel,
   setAgc,
   setScopeSpan,
+  setYaesuScopeMode,
   setScopeRef,
   setFlexPanSpan,
   setFlexPanRef,
@@ -59,9 +61,11 @@ import {
   haltTx,
   startQsoRecording,
   stopQsoRecording,
+  getCatCwUnprovenRigModels,
 } from '../api'
 import { bandLabelForMhz, sidebandForQsy } from '../band'
 import { pushToast, withErrorToast } from '../toast'
+import { SplitControl } from './SplitControl'
 import { RotorStrip } from './RotorStrip'
 import { useWheelTune } from '../useWheelTune'
 import { useScopeTune } from '../useScopeTune'
@@ -69,6 +73,7 @@ import { useRegionCols } from '../useRegionCols'
 import { usePinnedScroll } from '../usePinnedScroll'
 import { cwScopeWindow, isRfScopeSource, sidebandSign, TRACE_HOLD_MS, NO_NATIVE_SCOPE_REASON } from '../waterfall'
 import { t } from '../i18n'
+import { T } from '../i18n/T'
 import type { MessageKey } from '../i18n'
 
 /** This cockpit's INVARIANT vocabulary — the words that are the mode's own technical tokens
@@ -86,12 +91,30 @@ const AGC = 'AGC'
 const BW = 'BW'
 const CAT = 'CAT'
 const WINKEYER = 'WinKeyer'
-const SPLIT_PLATE = 'SPLIT ▲'
 const REC = 'REC'
 /** The BW nudge and the AI decoder's audio window, as the tooltips print them — figures, so
  *  they are supplied to the message rather than written in it. */
+/** The SI unit symbol. A NAMED CONSTANT rather than inline text because this file is on the
+ *  i18n MIGRATED list, where the guard requires every operator-visible literal to come from the
+ *  catalog — with a stated exception for technical tokens, which a symbol like this is: `Hz` is
+ *  invariant across locales, so translating it would be wrong, and hiding it in the catalog would
+ *  invite exactly that. PhoneCockpit writes it inline only because that file is still PARTIAL. */
+const HZ = 'Hz'
 const FILTER_STEP_HZ = 50
 const AI_WINDOW_HZ = '400–1200'
+
+/** The AGC chips, in the order `Engine::AGC_SPEEDS` lists them: AUTO left of the three time
+ *  constants, OFF right of them — most-automatic through to no AGC at all. The `id` is the
+ *  token that goes on the wire and the label is a KEY, not a word: `t()` runs when the row
+ *  RENDERS, so a locale switch relabels the chips and the chip is still compared on its id
+ *  (the same split RF_SPANS makes, and for the same reason). */
+const AGC_CHIPS = [
+  { id: 'auto', labelKey: 'cw.rxDsp.agc.auto' },
+  { id: 'fast', labelKey: 'cw.rxDsp.agc.fast' },
+  { id: 'mid', labelKey: 'cw.rxDsp.agc.mid' },
+  { id: 'slow', labelKey: 'cw.rxDsp.agc.slow' },
+  { id: 'off', labelKey: 'cw.rxDsp.agc.off' },
+] as const satisfies readonly { id: string; labelKey: MessageKey }[]
 
 /** Client-side RF-zoom presets for a native panadapter (mirror of the Phone cockpit).
  *  The ± labels are measurements and stay written here; `Full` is a word. Both it and every
@@ -127,6 +150,31 @@ const RF_SPANS = [
     label: () => '±5k',
     title: () => t('cw.rfZoom.span.title', { khz: 5 }),
   },
+] as const
+
+/** The FT-710's OWN span ladder (CAT reference, `SS` P2=5) — these command the RADIO, not a crop.
+ *
+ *  The operator's expectation, and it is the right one: the app's panadapter should reflect the
+ *  radio's, its settings and its width. Cropping the row client-side shows a narrower window of the
+ *  SAME sweep — ±5 kHz out of 200 kHz is ~42 of 850 bins stretched across the panel, which is why
+ *  it looked coarse. Asking the RADIO for a 10 kHz sweep puts all 850 bins across it: 12 Hz per bin
+ *  instead of 235.
+ *
+ *  `label` is the radio's own name for the rung (the FT-710 menu says "200 kHz", never "±100k").
+ *  `halfHz` is what goes on the wire, because `setScopeSpan` was written for Icom CI-V 27 15 and its
+ *  argument is ± half the sweep; the backend doubles it back. Every rung the rig has is offered —
+ *  a span it cannot sweep is refused rather than rounded, so the two ladders cannot drift apart. */
+const YAESU_SPANS = [
+  { label: '1k', halfHz: 500 },
+  { label: '2k', halfHz: 1_000 },
+  { label: '5k', halfHz: 2_500 },
+  { label: '10k', halfHz: 5_000 },
+  { label: '20k', halfHz: 10_000 },
+  { label: '50k', halfHz: 25_000 },
+  { label: '100k', halfHz: 50_000 },
+  { label: '200k', halfHz: 100_000 },
+  { label: '500k', halfHz: 250_000 },
+  { label: '1M', halfHz: 500_000 },
 ] as const
 
 /** RIG scope-span presets (native Icom CI-V) — command the RADIO's real panadapter sweep width
@@ -195,6 +243,9 @@ interface Props {
   /** Open Settings at a section id (see settings/registry.ts). Absent ⇒ the surfaces that
    * point at Settings stay plain text. */
   onOpenSettings?: (target: string) => void
+  /** Open the Logbook filtered to a callsign (#192) — handed to the log strip's recall card,
+   *  whose previous-contact rows become clickable when it is present. Omitted ⇒ inert rows. */
+  onOpenLogbook?: (call: string) => void
   /** Panel visibility/resize record — host-owned (App) so it survives this view's remounts.
    *  Optional: without it every pane shows and there's no ⊞ menu. */
   panels?: PanelLayoutApi<CwPanelId>
@@ -253,7 +304,7 @@ const DEFAULT_MACROS: CwMacro[] = [
  * The engine fills {EXCH} = "{CLASS} {SECTION}" (e.g. "3A WI") from the FD settings, so
  * one template serves both events. Contest cadence: F1 CQ FD → F2 answer with your call →
  * F3 send the exchange (twice, for copy) → F4 confirm + TU. */
-const DEFAULT_FD_MACROS: CwMacro[] = [
+export const DEFAULT_FD_MACROS: CwMacro[] = [
   { key: 'F1', label: 'CQ FD', text: 'CQ FD DE {MYCALL} {MYCALL} K' },
   { key: 'F2', labelKey: 'cw.macro.call.label', text: '! DE {MYCALL} K' },
   { key: 'F3', labelKey: 'cw.macro.exch.label', text: '! DE {MYCALL} {EXCH} {EXCH} K' },
@@ -297,6 +348,7 @@ export function CwCockpit({
   onRecallMemory,
   onOpenMemories,
   onOpenSettings,
+  onOpenLogbook,
   panels,
 }: Props) {
   // Live S-meter (shared 100 ms poll, lock-free backend) — used to arrive via the 300 ms
@@ -410,7 +462,7 @@ export function CwCockpit({
   const [agcPick, setAgcPick] = useState<string | null>(null)
   const agc =
     agcPick != null && agcPick !== snap.radio.refusedAgc ? agcPick : (snap.radio.agc ?? null)
-  const changeAgc = (sp: 'fast' | 'mid' | 'slow') => {
+  const changeAgc = (sp: 'auto' | 'fast' | 'mid' | 'slow' | 'off') => {
     setAgcPick(sp)
     void setAgc(sp)
       .then((s) => onSnap?.(s))
@@ -423,6 +475,42 @@ export function CwCockpit({
     null,
   )
   const nativeRf = scopeFeed != null && isRfScopeSource(scopeFeed.source)
+  // The FT-710's span is commandable over plain CAT, so its row is the rig's own ladder rather
+  // than a client-side crop — the app then shows exactly what the radio sweeps. Mirror of Phone.
+  // TWO DIFFERENT QUESTIONS, and conflating them cost the operator the only way out of FIX.
+  //
+  // `yaesuScope` — does this radio have a scope Nexus is talking to? True as soon as the mode code
+  // has been read over CAT, which happens whether or not the sweep can be PLACED. The controls hang
+  // off this.
+  // `yaesuRf` — are RF rows arriving right now? The view bounds hang off this, because when the feed
+  // falls back to sound-card audio the axis really is audio.
+  //
+  // Gating the controls on the feed made them vanish exactly when they were needed: in FIX with no
+  // start stated no rows flow, so the panadapter block unmounted — and the position select went
+  // with it, leaving no way to get back to Center and no way to see why the panel had emptied.
+  //
+  // The original wording here justified that by a "FIX starts here" button being taken away with
+  // the block. There is no such button: the chip-row input that would have driven one was removed
+  // once the band-edge derivation proved right on the air (see `RadioProfile::yaesu_fix_starts`),
+  // and `Engine::set_yaesu_fix_start` still has no caller. The reason to keep the controls mounted
+  // survives that — it is the position select, not a start button, that must not disappear.
+  const yaesuScope = snap.radio.scopeModeCode != null
+  const yaesuRf = scopeFeed?.source === 'yaesu'
+  // What the radio reports, so the two selects show the rig's state rather than a local guess.
+  // `scopeModeCode` is the `SS` P3 byte widened for JSON; an unknown code shows as Center, which is
+  // the only position this app can place anyway.
+  const yaesuPosition: 'center' | 'cursor' | 'fix' = (() => {
+    switch (snap.radio.scopeModeCode ?? 0x34) {
+      case 0x31: case 0x36: case 0x37: return 'cursor'
+      case 0x32: case 0x39: case 0x41: return 'fix'
+      default: return 'center'
+    }
+  })()
+  // The span the radio is sweeping, matched back onto the ladder for the <select>'s value.
+  const yaesuSpanLabel =
+    YAESU_SPANS.find((sp) => scopeFeed != null && Math.abs((scopeFeed.hiHz - scopeFeed.loHz) - sp.halfHz * 2) < sp.halfHz * 0.1)?.label ??
+    YAESU_SPANS[7].label
+
   const civScope = scopeFeed?.source === 'civ'
   const flexScope = scopeFeed?.source === 'flex'
   // The sub-plate under the scope title: the fed span in MHz — a MEASUREMENT, so it is
@@ -557,6 +645,13 @@ export function CwCockpit({
   // exchange tokens) while FD mode is on. Keep the full settings so the switcher can
   // persist the new active-profile index without dropping other fields.
   const [cwSettings, setCwSettings] = useState<Settings | null>(null)
+  // Models whose CAT CW keyer is UNPROVEN and cannot report its own failure. Fetched from the
+  // backend, which owns the rule (`rigmodels::cat_cw_unproven_rig_models`) — the SAME list
+  // Settings ▸ CW reads, never a second copy here: membership changes as backends are fixed
+  // upstream, and two sources of truth is how the two surfaces come to disagree about a radio.
+  // Empty = rule unread (built without the `radio` feature, or the command failed), and no
+  // caution is shown — an unreadable rule must not warn an operator off a keyer that works.
+  const [catCwUnproven, setCatCwUnproven] = useState<number[]>([])
   const [profiles, setProfiles] = useState<{ name: string; macros: { key: string; label: string; text: string }[] }[]>(
     [],
   )
@@ -569,6 +664,11 @@ export function CwCockpit({
         setCwSettings(s)
         setProfiles(s.macros?.cwProfiles ?? [])
         setActiveProfile(s.macros?.activeCwProfile ?? 0)
+      })
+      .catch(() => {})
+    void getCatCwUnprovenRigModels()
+      .then((m) => {
+        if (alive && Array.isArray(m)) setCatCwUnproven(m)
       })
       .catch(() => {})
     return () => {
@@ -656,6 +756,13 @@ export function CwCockpit({
   // The four back-end descriptions, read once per render — the select wears the SELECTED
   // one's and each <option> wears its own.
   const keyerHelpText = keyerHelp()
+  // CAT KEYING IS UNPROVEN ON THIS RADIO (field report 2026-08-28, Yaesu FTX-1: "Try send a cw,
+  // never went to tx"). The rig's Hamlib backend reports success whether or not it keyed, so the
+  // keyer-error banner below can never light for this fault — the operator is told UP FRONT
+  // instead. Read off the LIVE `keyer` state, not the saved setting, because this header switch
+  // is where a backend gets changed without Settings ever being opened.
+  const catCwUnprovenHere =
+    keyer === 'cat' && !!cwSettings && catCwUnproven.includes(cwSettings.rigModel)
   const [text, setText] = useState('')
   // Sidetone pitch — local for instant marker response; persisted via set_cw_keyer.
   const [pitch, setPitch] = useState(pitchHz)
@@ -1072,19 +1179,15 @@ export function CwCockpit({
                 title={t('cw.rxDsp.agc.title')}
               >
                 <span className="ph-dsplev-lbl">{AGC}</span>
-                {(['fast', 'mid', 'slow'] as const).map((sp) => (
+                {AGC_CHIPS.map(({ id, labelKey }) => (
                   <button
-                    key={sp}
+                    key={id}
                     type="button"
-                    className={`theme-chip${agc === sp ? ' active' : ''}`}
-                    aria-pressed={agc === sp}
-                    onClick={() => changeAgc(sp)}
+                    className={`theme-chip${agc === id ? ' active' : ''}`}
+                    aria-pressed={agc === id}
+                    onClick={() => changeAgc(id)}
                   >
-                    {sp === 'fast'
-                      ? t('cw.rxDsp.agc.fast')
-                      : sp === 'mid'
-                        ? t('cw.rxDsp.agc.mid')
-                        : t('cw.rxDsp.agc.slow')}
+                    {t(labelKey)}
                   </button>
                 ))}
               </div>
@@ -1169,6 +1272,7 @@ export function CwCockpit({
           pane grid made this pane's .pane-body the scroller, so the FULL recall card (photo /
           bearing / history) can no longer crush the cockpit the way it did pre-overhaul. */}
       <LogEntry
+        onOpenLogbook={onOpenLogbook}
         snap={snap}
         mode="CW"
         defaultRst="599"
@@ -1372,13 +1476,23 @@ export function CwCockpit({
               )
           }
         />
-        {snap.radio.splitTxMhz != null && (
-          <span
-            className="cw-mode-badge"
-            title={t('cw.split.title', { freq: snap.radio.splitTxMhz.toFixed(4) })}
-          >
-            {SPLIT_PLATE}
-          </span>
+        {/* ⭐ A REAL SPLIT CONTROL, not a read-only plate. Until 2026-08-26 this header only
+            DISPLAYED that split was on; there was no way to set it from the CW cockpit at all.
+            A General working a DX in the Extra-only CW bottom — RX 14.015, TX 14.026, which is
+            simply how DX is worked — had to reach for the radio's front panel and then found
+            Nexus refusing to key, because the privilege gate had no way to learn where he was
+            transmitting. Fixing the gate without this left the fix unreachable by the operator
+            who reported it, and he was a CW operator.
+
+            Gated on `catOk` like Phone's: with no CAT there is nothing to command, and the
+            header is width-critical at 1024 (see the density note above), so it costs nothing
+            when there is no radio to talk to. NOT a stop control — see SplitControl's header. */}
+        {catOk && (
+          <SplitControl
+            snap={snap}
+            onSnap={onSnap}
+            onError={(m) => pushToast(m, 'error')}
+          />
         )}
         {/* Dot + "REC", the same `.ph-rec` class Phone uses. This header already carries the band
             picker, tuning strip, Tune, Stop TX, speed, pitch, macros, BW, memories and the rotator,
@@ -1405,6 +1519,17 @@ export function CwCockpit({
       {keyerError && (
         <div className="cw-keyer-warn" role="alert">
           ⚠ {keyerError}
+        </div>
+      )}
+
+      {/* The standing caution, BELOW a live error because an error outranks a notice. Same
+          sanctioned `.cw-keyer-warn` shell-child kind (the census admits one alert kind here,
+          not two), warning-toned rather than error-toned via `.caution`: this never blocks and
+          never disables the keyer, which keeps working if it works. The sentence is the SAME
+          catalog string Settings ▸ CW renders. */}
+      {catCwUnprovenHere && (
+        <div className="cw-keyer-warn caution" role="status">
+          ⚠ <T k="settings.cw.keyer.unproven" tags={{ b: <strong /> }} />
         </div>
       )}
 
@@ -1436,10 +1561,57 @@ export function CwCockpit({
             {nativeRf ? t('cw.scope.nativeRf.label') : t('cw.scope.audio.label')}{' '}
             <span className="ph-scope-sub">{scopeSub}</span>
           </span>
+          {/* ⭐ THE ZERO-BEAT INDICATOR sits in the SCOPE HEAD, beside the marker it
+              completes: the scope below draws your pitch, this says where the received
+              tone actually is, and its needle runs in the scope's own axis so the two can
+              never disagree. It is chrome in an existing row — no new shell child, no new
+              pane, no ⊞ id — and it is a display only: nothing here can move the radio. It
+              goes with the scope when the strip is hidden, which is right, because it is
+              the other half of that picture. */}
+          <ZeroBeat targetHz={pitch} filterHz={filterHz} />
           <span className="ph-scope-head-label">{t('cw.scope.colors.label')}</span>
           <PalettePicker />
         </div>
-        {nativeRf && (
+        {yaesuScope ? (
+          // The FT-710 sweeps its own span and owns where the sweep sits, so these command the RADIO
+          // and the app draws what comes back. Two compact <select>s rather than thirteen chips: the
+          // rig has ten span rungs and three positions, and a chip row that long crowds the scope it
+          // is supposed to serve.
+          <div className="ph-span" role="group" aria-label={t('phone.scope.yaesu.aria')}>
+            <select
+              className="theme-chip"
+              aria-label={t('phone.scope.yaesu.span.aria')}
+              title={t('phone.scope.yaesu.span.title')}
+              value={yaesuSpanLabel}
+              onChange={(e) => {
+                const sp = YAESU_SPANS.find((x) => x.label === e.target.value)
+                if (sp) void setScopeSpan(sp.halfHz).then((s) => onSnap?.(s)).catch((e) => pushToast(String(e), 'error'))
+              }}
+            >
+              {YAESU_SPANS.map((sp) => (
+                <option key={sp.label} value={sp.label}>
+                  {sp.label}
+                  {HZ}
+                </option>
+              ))}
+            </select>
+            <select
+              className="theme-chip"
+              aria-label={t('phone.scope.yaesu.pos.aria')}
+              title={t('phone.scope.yaesu.pos.title')}
+              value={yaesuPosition}
+              onChange={(e) => {
+                const pos = e.target.value as 'center' | 'cursor' | 'fix'
+                void setYaesuScopeMode(pos).then((s) => onSnap?.(s)).catch((e) => pushToast(String(e), 'error'))
+              }}
+            >
+              <option value="center">{t('phone.scope.yaesu.pos.center')}</option>
+              <option value="cursor">{t('phone.scope.yaesu.pos.cursor')}</option>
+              <option value="fix">{t('phone.scope.yaesu.pos.fix')}</option>
+            </select>
+          </div>
+        ) : null}
+        {nativeRf && !yaesuScope && (
           // Native RF panadapter: client-side RF-width zoom around the dial (mirror of Phone).
           <div className="ph-span" role="group" aria-label={t('cw.rfZoom.aria')}>
             {RF_SPANS.map((sp) => (
@@ -1463,8 +1635,8 @@ export function CwCockpit({
           transmitting={snap.radio.transmitting}
           theme={theme}
           smeterDb={smeterDb}
-          viewLoHz={nativeRf ? rfSpan.lo : cwView.loHz}
-          viewHiHz={nativeRf ? rfSpan.hi : cwView.hiHz}
+          viewLoHz={yaesuRf ? -1e9 : nativeRf ? rfSpan.lo : cwView.loHz}
+          viewHiHz={yaesuRf ? 1e9 : nativeRf ? rfSpan.hi : cwView.hiHz}
           markerHz={nativeRf ? undefined : pitch}
           sideband={scopeMode}
           dialHz={snap.radio.dialMhz > 0 ? Math.round(snap.radio.dialMhz * 1e6) : null}

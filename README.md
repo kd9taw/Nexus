@@ -11,10 +11,10 @@
 ![Status](https://img.shields.io/badge/status-1.0-brightgreen)
 
 [![Download](https://img.shields.io/badge/⬇_Download-Windows_·_macOS_·_Linux_·_Pi-0078D6?style=for-the-badge&logo=windows)](https://github.com/kd9taw/Nexus/releases/latest)
-[![Operator manual](https://img.shields.io/badge/📖_Operator_manual-docs-8957e5?style=for-the-badge)](docs/manual/)
+[![Operator manual](https://img.shields.io/badge/📖_Operator_manual-docs-8957e5?style=for-the-badge)](docs/guide/)
 
 <sub>Offline installer, bundles WebView2 **and Hamlib**, per-user install, no admin rights. ·
-**[Operator manual](docs/manual/)** · **[Comprehensive overview](docs/OVERVIEW.md)**</sub>
+**[Operator manual](docs/guide/)** · **[Comprehensive overview](docs/OVERVIEW.md)**</sub>
 
 </div>
 
@@ -158,7 +158,7 @@ WSJT-X muscle memory works unchanged inside a UI built this decade.
 - **🔌 Zero-config setup, with a real transmit lockout.** Plug in the radio and click **Detect my
   radio**: Nexus reads the USB descriptors, matches the rig model, pairs the audio CODEC, and links
   the one driver you need if it's missing. Digirig and RIGblaster interfaces are recognised by name.
-  Hamlib ships inside the installer. A goal-driven first-run wizard shapes the app to you, and your
+  Hamlib ships inside every installer. A goal-driven first-run wizard shapes the app to you, and your
   declared license class becomes a real Part 97 transmit lockout, a software guard in **every** TX
   path. Launching Nexus opens the rig **read-only** and commands nothing until you act, so a radio
   parked on 40 m LSB for a net stays there.
@@ -274,9 +274,9 @@ logs, and never shown back to the UI beyond "configured."
    | File | Platform |
    |---|---|
    | `Nexus_<version>_x64-setup.exe` | **Windows 10/11 x64** — NSIS, per-user, no admin rights, bundles WebView2 **and** Hamlib so it works offline |
-   | `Nexus_<version>_aarch64.dmg` | **macOS on Apple Silicon** (M-series, macOS 12+) — signed and notarized; CAT via Homebrew Hamlib (`brew install hamlib`); Intel Macs build from source |
-   | `Nexus_<version>_amd64.AppImage` | **Linux on a PC, portable** — one file, runs from anywhere, updates itself in place |
-   | `Nexus_<version>_pc_amd64.deb` | **Debian / Ubuntu on a PC** — apt-managed, pulls `libhamlib-utils` in for CAT |
+   | `Nexus_<version>_aarch64.dmg` | **macOS on Apple Silicon** (M-series, macOS 12+) — signed and notarized; bundles Hamlib, so CAT works with nothing else installed; Intel Macs build from source |
+   | `Nexus_<version>_amd64.AppImage` | **Linux on a PC, portable** — one file, runs from anywhere, updates itself in place, bundles Hamlib so CAT works with nothing installed |
+   | `Nexus_<version>_pc_amd64.deb` | **Debian / Ubuntu on a PC** — apt-managed; bundles Hamlib, and still pulls `libhamlib-utils` as a fallback |
    | `Nexus_<version>_pi_arm64_bookworm.deb` | **Raspberry Pi OS bookworm**, 64-bit (Pi 3/4/5) |
    | `Nexus_<version>_pi_arm64_trixie.deb` | **Raspberry Pi OS trixie**, 64-bit (Pi 3/4/5) |
 
@@ -294,7 +294,8 @@ logs, and never shown back to the UI beyond "configured."
 4. Watch decodes arrive. Double-click a station, the sequencer runs the QSO, and the contact lands
    in the logbook, on PSK Reporter, and (if configured) on QRZ and LoTW.
 
-New here? Start with **[Getting Started](docs/manual/Getting-Started.md)**.
+New here? Start with **[Quick start](docs/quick-start.md)** — install, the first-run wizard a
+step at a time, and your first contact.
 
 > The installer is **unsigned** (cross-compiled on Linux), so SmartScreen may warn: *More info →
 > Run anyway*. Verify the download against the `SHA-256` published on the
@@ -381,12 +382,18 @@ cd ui && npm install && npm test        # UI suites (vitest)
 ```
 
 The modem is Fortran + C behind a Rust FFI, so the **GNU toolchain** is required. See
-**[Building from Source](docs/manual/Building-from-Source.md)**, [WINDOWS.md](WINDOWS.md) and [LINUX.md](LINUX.md).
+**[Building from Source](docs/manual/Building-from-Source.md)**, [WINDOWS.md](WINDOWS.md), [LINUX.md](LINUX.md) and [MACOS.md](MACOS.md).
 
 ## Documentation
 
+- **[Operator manual](docs/guide/)** — the illustrated manual: one page per section of the app,
+  screenshots and all. Also published at
+  **[hamradiotools.io/manual](https://hamradiotools.io/manual/)**, and built into the EPUB and PDF
+- **[Quick start](docs/quick-start.md)** · **[Install](docs/install.md)** ·
+  **[Troubleshooting](docs/troubleshooting.md)** · **[FAQ](docs/faq.md)**
+- **[Topic pages](docs/manual/)** — rig and audio setup, building from source, architecture, the
+  frequency plan, Field Day, integrations, the roadmap
 - **[Comprehensive overview](docs/OVERVIEW.md)** — every surface, in depth
-- **[Operator manual](docs/manual/)** — setup, per-mode operating guides, integrations, troubleshooting
 - **[Tempo protocol specification](docs/Tempo-Protocol.md)** — the native waveforms, for implementers
 - **[Frequency plan](docs/FREQUENCIES.md)** — where the TempoFast/TempoDeep tiers live on the bands
 - **[Changelog](CHANGELOG.md)** — every release, in operator-facing prose
@@ -415,6 +422,11 @@ Nexus is **free software under the [GNU GPL v3](COPYING)** (GPL-3.0-only).
   channel-estimation chain are IU8LMC's work; the supporting files are K1JT's FT4 sources with
   a halved symbol time. Decodium's on-air behavior is the compatibility baseline for the mode
   (see **[NOTICE](NOTICE)** for the per-file provenance split).
+- **[JS8Call](https://github.com/js8call/js8call)** (GPLv3) — **Jordan Sherer KN4CRD** and the
+  JS8Call contributors. Nexus's **JS8** mode is on-air compatible with JS8Call, implemented in Rust
+  (`crates/js8/`) from JS8Call's source read as the protocol reference; the transcribed tables
+  (Costas arrays, LDPC(174,87) parity tables from WSJT-X, alphabets, command and group tables,
+  the JSC dictionary) are credited in **[NOTICE](NOTICE)**. No JS8Call code is copied.
 - **TempoFast / TempoDeep** — the native weak-signal waveforms by **KD9TAW**.
 - **[AetherSDR](https://github.com/aethersdr/AetherSDR)** (GPLv3) — the waterfall's 3D
   stacked-spectrum view (`ui/src/dss.ts`) and retained-history model
@@ -445,7 +457,8 @@ Nexus is **free software under the [GNU GPL v3](COPYING)** (GPL-3.0-only).
   their network, so it is validated against signals that actually arrived at an antenna and not only
   against another implementation of the same theory. Thanks to stations 1696, 4803, 5049 and 5062
   and their operators (see **[NOTICE](NOTICE)** for what is redistributed where).
-- **[Hamlib](https://hamlib.github.io/)** — bundled `rigctld` for CAT control (GPL/LGPL).
+- **[Hamlib](https://hamlib.github.io/)** — `rigctld` for CAT control, bundled on every platform
+  (tools GPL-2.0-or-later, library LGPL-2.1-or-later; launched as a separate process, not linked).
 - **[FFTW](https://www.fftw.org/)** (GPL), **[Tauri](https://tauri.app/)**, React,
   [cpal](https://github.com/RustAudio/cpal),
   [alsa-rs](https://github.com/diwic/alsa-rs) (Linux device names),
@@ -464,7 +477,7 @@ contributions welcome — see **[CONTRIBUTING.md](CONTRIBUTING.md)** and the
 <div align="center"><sub>
 
 **[⬇ Download](https://github.com/kd9taw/Nexus/releases/latest)** ·
-**[📖 Manual](docs/manual/)** ·
+**[📖 Manual](docs/guide/)** ·
 **[💬 Discussion group](https://groups.io/g/hamradiotools)** ·
 **[🐛 Report a bug](https://github.com/kd9taw/Nexus/issues)** ·
 **[🌐 hamradiotools.io](https://hamradiotools.io)**

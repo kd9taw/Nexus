@@ -680,7 +680,7 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
               {detecting ? t('setup.rig.detect.busy') : t('setup.rig.detect.action')}
             </button>
             {detectError && (
-              <span className="wizard-field-hint" role="alert" style={{ color: 'var(--danger, #e5484d)' }}>
+              <span className="wizard-field-hint" role="alert" style={{ color: 'var(--state-weak)' }}>
                 {t('setup.rig.detect.failed', { error: detectError })}
               </span>
             )}
@@ -1016,7 +1016,7 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
             <input
               ref={logFileRef}
               type="file"
-              accept=".adi,.adif,text/plain"
+              accept=".adi,.adif,.txt"
               style={{ display: 'none' }}
               onChange={onImportAdif}
             />

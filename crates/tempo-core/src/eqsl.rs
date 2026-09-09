@@ -30,6 +30,12 @@ pub struct EqslQuery {
     pub password: String,
     /// Incremental cursor `RcvdSince=YYYYMMDDHHMM`. `None`/empty → full InBox.
     pub rcvd_since: Option<String>,
+    /// The account's QTH Nickname. eQSL's own spec: "if not logged in, if multiple
+    /// accounts with same callsign" the `QTHNickname` parameter disambiguates —
+    /// without it, such an account's fresh (cookieless, which our transport always
+    /// is) authentication simply fails. Field report, 2026-09-01. Not a secret;
+    /// `None`/empty omits the parameter and single-profile accounts behave as before.
+    pub qth_nickname: Option<String>,
 }
 
 impl std::fmt::Debug for EqslQuery {
@@ -38,6 +44,7 @@ impl std::fmt::Debug for EqslQuery {
             .field("username", &self.username)
             .field("password", &"<redacted>")
             .field("rcvd_since", &self.rcvd_since)
+            .field("qth_nickname", &self.qth_nickname)
             .finish()
     }
 }
@@ -67,6 +74,13 @@ pub fn build_inbox_url(q: &EqslQuery) -> String {
         pct(&q.username),
         pct(&q.password),
     );
+    if let Some(nick) = q.qth_nickname.as_deref() {
+        let nick = nick.trim();
+        if !nick.is_empty() {
+            url.push_str("&QTHNickname=");
+            url.push_str(&pct(nick));
+        }
+    }
     if let Some(since) = q.rcvd_since.as_deref() {
         let since = since.trim();
         if !since.is_empty() {
@@ -182,19 +196,21 @@ fn force_https(url: &str) -> String {
 }
 
 /// True iff `body` is a genuine eQSL ADIF, so an HTML/error page is never parsed as
-/// ADIF. Like `lotw::is_lotw_adif`, this **prefix-checks** rather than `contains`:
-/// a real eQSL InBox export begins `ADIF 3 Export from eQSL.cc`, whereas an HTML
-/// page starts with `<` — even one whose chrome mentions the "eQSL.cc DownloadInBox"
-/// product name and embeds a literal `<eoh>`. Requires the PROGRAMID marker + an
-/// `<eoh>` too. Only the header region is inspected.
+/// ADIF. eQSL's human-readable preamble is not stable: older InBox exports began
+/// `ADIF 3 Export from eQSL.cc`, while current exports may begin `Received eQSLs
+/// for ...`. Validate the eQSL-specific PROGRAMID + `<eoh>` in the header instead,
+/// while retaining the leading-HTML rejection as defense in depth. Only the header
+/// region is inspected.
 pub fn is_eqsl_adif(body: &str) -> bool {
     let head: String = body
         .chars()
         .take(8192)
         .collect::<String>()
         .to_ascii_lowercase();
-    head.trim_start().starts_with("adif")
-        && head.contains("eqsl.cc downloadinbox")
+    let trimmed = head.trim_start();
+    !trimmed.starts_with('<')
+        && head.contains("<programid:")
+        && head.contains(">eqsl.cc downloadinbox")
         && head.contains("<eoh>")
 }
 
@@ -236,14 +252,42 @@ pub const EQSL_IMPORT_URL: &str = "https://www.eqsl.cc/qslcard/ImportADIF.cfm";
 /// into the `ADIFData` field. `record_adif` is a single `<…>…<eor>` record (e.g.
 /// from [`crate::logbook::adif_record`]). The body carries the password — never log
 /// it. ADIF length prefixes are BYTE lengths (ASCII calls/passwords).
-pub fn build_upload_body(user: &str, pswd: &str, record_adif: &str) -> String {
+pub fn build_upload_body(
+    user: &str,
+    pswd: &str,
+    record_adif: &str,
+    qth_nickname: Option<&str>,
+) -> String {
+    // The QTH Nickname goes IN THE RECORD — eQSL's ImportADIF spec places
+    // `APP_EQSL_QTH_NICKNAME` "at the record level", not the header — inserted just
+    // before this record's `<eor>`. Without it, an account with several QTH profiles
+    // under one callsign refuses the upload outright (field report, 2026-09-01).
+    let record = record_adif.trim_end();
+    let record = match qth_nickname.map(str::trim).filter(|n| !n.is_empty()) {
+        Some(nick) => {
+            let lower = record.to_ascii_lowercase();
+            match lower.rfind("<eor>") {
+                Some(i) => format!(
+                    "{}<APP_EQSL_QTH_NICKNAME:{}>{}{}",
+                    &record[..i],
+                    nick.len(),
+                    nick,
+                    &record[i..]
+                ),
+                // A record without <eor> is malformed anyway; append rather than lose
+                // the nickname.
+                None => format!("{record}<APP_EQSL_QTH_NICKNAME:{}>{nick}", nick.len()),
+            }
+        }
+        None => record.to_string(),
+    };
     let payload = format!(
         "Nexus eQSL upload\n<EQSL_USER:{}>{}\n<EQSL_PSWD:{}>{}\n<EOH>\n{}\n",
         user.len(),
         user,
         pswd.len(),
         pswd,
-        record_adif.trim_end(),
+        record,
     );
     format!("ADIFData={}", pct(&payload))
 }
@@ -295,6 +339,7 @@ mod tests {
 
     fn q() -> EqslQuery {
         EqslQuery {
+            qth_nickname: None,
             username: "KD9TAW".into(),
             password: "p@ss w&rd?1".into(),
             rcvd_since: None,
@@ -315,6 +360,7 @@ mod tests {
     #[test]
     fn url_includes_rcvd_since_when_set() {
         let url = build_inbox_url(&EqslQuery {
+            qth_nickname: None,
             rcvd_since: Some("202606050000".into()),
             ..q()
         });
@@ -408,14 +454,23 @@ mod tests {
 <PROGRAMID:21>eQSL.cc DownloadInBox <ADIF_Ver:5>3.1.6 <EOH>\n\
 <CALL:5>W1AW/4 <BAND:3>20m <MODE:3>FT8 <EQSL_QSL_RCVD:1>Y <EOR>\n";
 
+    const EQSL_ADIF_CURRENT: &str = "Received eQSLs for KR8MER\n\
+for QSOs between 01-Jan-1999 and 31-Dec-2030\n\
+Generated on Tuesday, August 25, 2026 at 22:21:51 PM UTC\n\
+<PROGRAMID:21>eQSL.cc DownloadInBox\n\
+<ADIF_Ver:5>3.1.6\n\
+<EOH>\n\
+<CALL:5>KC4WQ<QSO_DATE:8:D>20260808<BAND:3>40M<MODE:3>FT8<EQSL_QSL_RCVD:1>Y <EOR>\n";
+
     #[test]
     fn is_eqsl_adif_accepts_real_and_rejects_html() {
         assert!(is_eqsl_adif(EQSL_ADIF));
-        // Rejects an HTML page even when its chrome mentions the product name AND
-        // embeds a literal <eoh> — the prefix check (HTML starts with '<', not
-        // 'ADIF') defeats the contains-both-markers false-accept.
+        assert!(is_eqsl_adif(EQSL_ADIF_CURRENT));
+        // Reject an HTML page even when its chrome mentions the product name and
+        // embeds ADIF-looking markers. Real eQSL exports begin with plain text;
+        // HTML/error responses begin with '<'.
         assert!(!is_eqsl_adif(
-            "<html><title>eQSL.cc DownloadInBox</title><body>oops <eoh> err</body></html>"
+            "<html><title>eQSL.cc DownloadInBox</title><body><PROGRAMID:21>eQSL.cc DownloadInBox <eoh> err</body></html>"
         ));
     }
 
@@ -434,7 +489,7 @@ mod tests {
 
     #[test]
     fn upload_body_carries_creds_in_header_and_encodes() {
-        let body = build_upload_body("KD9TAW", "p@ss&1", "<CALL:5>W1AW/4 <BAND:3>20m <EOR>");
+        let body = build_upload_body("KD9TAW", "p@ss&1", "<CALL:5>W1AW/4 <BAND:3>20m <EOR>", None);
         assert!(body.starts_with("ADIFData="));
         // Credentials are inside the encoded ADIF header (length-prefixed), never raw.
         assert!(body.contains("EQSL_USER%3A6%3EKD9TAW"));
@@ -486,5 +541,36 @@ mod tests {
         let base = format_rcvd_since(1_780_617_600);
         assert_eq!(format_rcvd_since(1_780_617_600 + 59), base);
         assert_eq!(format_rcvd_since(1_780_617_600 + 60), "202606050001");
+    }
+
+    /// The QTH Nickname, both surfaces, spelled as eQSL's own specs spell them:
+    /// `QTHNickname` on DownloadInBox.cfm ("if not logged in, if multiple accounts
+    /// with same callsign"), and `APP_EQSL_QTH_NICKNAME` at the RECORD level on
+    /// ImportADIF. An account with several QTH profiles fails outright without them
+    /// (field report); an account without one must see byte-identical output.
+    #[test]
+    fn qth_nickname_reaches_both_surfaces_only_when_set() {
+        let mut query = q();
+        query.qth_nickname = Some("HomeQTH".into());
+        let url = build_inbox_url(&query);
+        assert!(url.contains("&QTHNickname=HomeQTH"), "{url}");
+        // …and encoded when it needs it.
+        query.qth_nickname = Some("My QTH".into());
+        assert!(build_inbox_url(&query).contains("&QTHNickname=My%20QTH"));
+
+        let body = build_upload_body("KD9TAW", "pw", "<CALL:4>W1AW <eor>", Some("HomeQTH"));
+        let decoded = body
+            .replace("%3C", "<")
+            .replace("%3E", ">")
+            .replace("%3A", ":");
+        assert!(
+            decoded.contains("<APP_EQSL_QTH_NICKNAME:7>HomeQTH<eor>"),
+            "the nickname must sit at record level, before <eor>: {decoded}"
+        );
+
+        // Unset: byte-identical to the pre-nickname builder — single-profile
+        // accounts must see no change at all.
+        let plain = build_upload_body("KD9TAW", "pw", "<CALL:4>W1AW <eor>", None);
+        assert!(!plain.to_ascii_lowercase().contains("nickname"));
     }
 }

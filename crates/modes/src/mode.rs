@@ -9,6 +9,10 @@
 
 use crate::decode::Decode;
 
+/// The JS8 speed enum — owned by `crates/js8`, re-exported by this crate's `lib.rs` so
+/// `tempo-app`/`tempo-audio` write `modes::Js8Speed` without naming the modem crate.
+pub use js8::phy::Speed as Js8Speed;
+
 /// Identity of a concrete mode (for selection, serialization, display). Carries
 /// the per-mode timing metadata (slot length, frame size) so callers can size
 /// clocks/buffers without constructing a [`Mode`].
@@ -77,6 +81,17 @@ pub enum ModeKind {
     /// audio plus a 0.5 s lead-in leaves 0.73 s of slot, less slack than FT1's
     /// 4 s, which already "carries no slack at all".
     Ft2,
+    /// **JS8** (JS8Call-compatible, `crates/js8`) — keyboard-to-keyboard over an FT8-class
+    /// physical layer. **Transmit-capable since B7 (operator gate G1)**: the engine's
+    /// tier-routed planner is the only TX path; the encoder here serves the lab.
+    ///
+    /// Carries its speed for the same reason FST4/Q65 carry a period: the T/R period is
+    /// 30/15/10/6 s and the decode window is `speed.frames_needed()` samples, so both
+    /// [`Self::slot_secs`] and [`Self::frame_samples`] are pure functions of the kind. The
+    /// speed comes from `Settings::js8_speed` (an index into [`Js8Speed::ALL`]).
+    Js8 {
+        speed: Js8Speed,
+    },
     /// WSPR — the propagation-BEACON mode. **RECEIVE-ONLY**.
     ///
     /// Carries nothing: one fixed 2-minute interval, one message form. It is
@@ -89,10 +104,11 @@ pub enum ModeKind {
 
 impl ModeKind {
     /// All modes shipped today, in display order.
-    pub const ALL: [ModeKind; 9] = [
+    pub const ALL: [ModeKind; 10] = [
         ModeKind::Ft8,
         ModeKind::Ft4,
         ModeKind::Ft2,
+        ModeKind::JS8_NORMAL,
         ModeKind::FST4_15,
         ModeKind::Q65_30A,
         ModeKind::MSK144_15,
@@ -111,6 +127,20 @@ impl ModeKind {
     /// MSK144 at 15 s — the period 6 m meteor scatter actually runs on, and
     /// `ALL`'s representative MSK144 entry.
     pub const MSK144_15: ModeKind = ModeKind::Msk144 { period_s: 15 };
+
+    /// JS8 at Normal speed (15 s) — `ALL`'s one representative JS8 entry and the
+    /// degrade-don't-refuse fallback for a stale `js8_speed` index.
+    pub const JS8_NORMAL: ModeKind = ModeKind::Js8 {
+        speed: Js8Speed::Normal,
+    };
+
+    /// Every JS8 speed (Slow, Normal, Fast, Turbo) — the capability invariants hold for
+    /// each, exactly as `q65_all` / `fst4_all` enumerate their families.
+    pub fn js8_all() -> impl Iterator<Item = ModeKind> {
+        Js8Speed::ALL
+            .into_iter()
+            .map(|speed| ModeKind::Js8 { speed })
+    }
 
     /// JT65A — the default submode, and `ALL`'s representative JT65 entry.
     pub const JT65A: ModeKind = ModeKind::Jt65 { submode: 0 };
@@ -242,6 +272,11 @@ impl ModeKind {
             // No period suffix: FT2 has exactly one T/R period, so "FT2" already
             // identifies a signal on the air the way "FST4-60" has to.
             ModeKind::Ft2 => "FT2",
+            // One name for all four speeds: "JS8" is what ALL.TXT, ADIF (as MFSK/JS8), the
+            // UDP status wire and the tier pill all say; the speed rides `Decode.mode` and
+            // the cockpit renders it as a chip. (JS8Call's own ALL.TXT prints the speed as a
+            // separate A/B/C/E column, not in the mode name.)
+            ModeKind::Js8 { .. } => "JS8",
             // FST4/FST4W name themselves by period the way WSJT-X does: "FST4-60",
             // "FST4W-300". The bare family name would not say which slot clock the
             // operator is on, and FST4W at 120 s vs 900 s are different operating
@@ -274,6 +309,8 @@ impl ModeKind {
             // app; `capture_samples` (3.75 × 12000 = 45000) lands exactly on
             // `ft2::NMAX`, so frame == capture here as it does for FT8.
             ModeKind::Ft2 => ft2::TRPERIOD_S,
+            // 30 / 15 / 10 / 6 s — read from the crate's speed table, not restated.
+            ModeKind::Js8 { speed } => speed.period_s() as f32,
             // FST4 supports 15/30/60/120/300/900/1800 s upstream; the C ABI pins 15.
             ModeKind::Fst4 { period_s, .. } => f32::from(period_s),
             // The whole reason the period lives in the kind: slot timing follows it.
@@ -294,6 +331,9 @@ impl ModeKind {
             ModeKind::Ft8 => ft8::NMAX,
             ModeKind::Ft4 => ft4::NMAX,
             ModeKind::Ft2 => ft2::NMAX,
+            // JS8Call's decode moment: floor(79·NSPS + (0.5 + delay)·12000) — the window the
+            // decoder reads from cycle start (315 360 / 163 680 / 103 200 / 54 600).
+            ModeKind::Js8 { speed } => speed.frames_needed(),
             ModeKind::Fst4 { period_s, .. } => fst4::nmax(period_s),
             // ... and so does the buffer contract: period*12000 samples.
             ModeKind::Q65 { period_s, .. } => q65::nmax(period_s),
@@ -313,7 +353,16 @@ impl ModeKind {
     /// ring must hold the WHOLE slot — the decoder then reads its HEAD (leading
     /// Costas sync). Capturing only NMAX keeps the slot TAIL and amputates sync.
     pub fn capture_samples(self) -> usize {
-        (self.slot_secs() * tempo_fast::SAMPLE_RATE) as usize
+        match self {
+            // ⭐ 36 s WHATEVER THE TIER SPEED: the 30 s Slow window plus 6 s of slack. The
+            // multi-speed scheduler slices every enabled speed's window out of this ONE ring
+            // (`RxRing::tail_window`), and the ring is only rebuilt on a tier/period change —
+            // sizing it to the tier speed would amputate Slow's window the moment the operator
+            // picked Turbo. The boundary pass reads `frame_latest_padded(period)` for the same
+            // reason (see `service.rs`).
+            ModeKind::Js8 { .. } => 432_000,
+            _ => (self.slot_secs() * tempo_fast::SAMPLE_RATE) as usize,
+        }
     }
 }
 
@@ -532,6 +581,7 @@ pub fn make_mode(kind: ModeKind) -> Box<dyn Mode> {
         ModeKind::Ft8 => Box::new(Ft8Mode),
         ModeKind::Ft4 => Box::new(Ft4Mode),
         ModeKind::Ft2 => Box::new(Ft2Mode),
+        ModeKind::Js8 { speed } => Box::new(Js8Mode { speed }),
         ModeKind::Fst4 { period_s, wspr } => Box::new(Fst4Mode { period_s, wspr }),
         ModeKind::Q65 { period_s, submode } => Box::new(Q65Mode { period_s, submode }),
         ModeKind::Msk144 { period_s } => Box::new(Msk144Mode { period_s }),
@@ -1076,10 +1126,10 @@ mod tx_capability_tests {
     /// JT65. Beacons are `tx: true` AND `beacon_only: true` — transmit-capable, but
     /// never handed to the QSO sequencer.
     fn rx_only(_kind: ModeKind) -> bool {
-        // EMPTY — every shipped mode transmits. JT65 was listed here in 0.19.17
-        // alone, as a mitigation for a Windows crash fixed in 0.19.18 (xcor.f90).
-        // Kept as a predicate, not deleted: it is the deliberate act that makes the
-        // next receive-only mode silent, and the two-sided test below enforces it.
+        // EMPTY — every shipped mode transmits. JS8 was listed here between B5 and B7
+        // (receive-only staging); JT65 in 0.19.17 alone. Kept as a predicate, not
+        // deleted: it is the deliberate act that makes the next receive-only mode
+        // silent, and the two-sided test below enforces it.
         false
     }
 
@@ -1096,6 +1146,7 @@ mod tx_capability_tests {
             .chain(ModeKind::fst4_all())
             .chain(ModeKind::msk144_all())
             .chain(ModeKind::jt65_all())
+            .chain(ModeKind::js8_all())
             .chain(std::iter::once(ModeKind::Wspr))
         {
             let rx_only = rx_only(kind);
@@ -1182,6 +1233,7 @@ mod tx_capability_tests {
             .chain(ModeKind::fst4_all())
             .chain(ModeKind::msk144_all())
             .chain(ModeKind::jt65_all())
+            .chain(ModeKind::js8_all())
         {
             let caps = make_mode(kind).capabilities();
             let expect_beacon = matches!(kind, ModeKind::Wspr | ModeKind::Fst4 { wspr: true, .. });
@@ -1293,11 +1345,147 @@ mod tx_capability_tests {
             .chain(ModeKind::fst4_all())
             .chain(ModeKind::msk144_all())
             .chain(ModeKind::jt65_all())
+            .chain(ModeKind::js8_all())
             .chain(std::iter::once(ModeKind::Wspr))
         {
             let _ = make_mode(kind); // never refuses
         }
         assert!(!RxOnlyMode.capabilities().tx);
+    }
+
+    #[test]
+    fn js8_registers_as_a_parametric_kind() {
+        // ⭐ B7 (operator gate G1) makes JS8 transmit-capable: `tx_mode` now hands back a
+        // Mode at every speed, so the engine's `tier_is_rx_only` no longer refuses to arm
+        // the latch. The parametric registration (one name, four speeds) is unchanged.
+        for speed in Js8Speed::ALL {
+            let kind = ModeKind::Js8 { speed };
+            let m = make_mode(kind);
+            assert_eq!(
+                m.name(),
+                "JS8",
+                "one name for all four speeds; the speed rides Decode.mode"
+            );
+            assert_eq!(m.slot_secs(), speed.period_s() as f32);
+            assert_eq!(m.frame_samples(), speed.frames_needed());
+            assert_eq!(
+                kind.capture_samples(),
+                432_000,
+                "36 s ring: the 30 s Slow window + slack"
+            );
+            assert_eq!(m.passband(), (100.0, 4000.0));
+            let caps = m.capabilities();
+            assert!(caps.tx, "{}: transmit-capable since B7", kind.as_str());
+            assert!(tx_mode(kind).is_some());
+            assert!(caps.free_text && caps.structured_identity && caps.early_decode);
+            assert!(!caps.beacon_only && !caps.split_reduce && !caps.fox_hound && !caps.contest);
+        }
+        assert_eq!(
+            ModeKind::JS8_NORMAL,
+            ModeKind::Js8 {
+                speed: Js8Speed::Normal
+            }
+        );
+        assert_eq!(ModeKind::js8_all().count(), 4);
+        assert_eq!(ModeKind::ALL.len(), 10);
+        assert!(ModeKind::ALL.contains(&ModeKind::JS8_NORMAL));
+    }
+
+    /// B7 flips JS8 from receive-only to transmit-capable: `tx_mode` must now hand back a
+    /// Mode at every speed (the engine's `tier_is_rx_only` reads this and refuses arming
+    /// while it is None). `structured_identity` stays TRUE — fail-closed identity gate.
+    #[test]
+    fn js8_mode_is_transmit_capable_at_every_speed_and_keeps_the_identity_gate() {
+        for kind in ModeKind::js8_all() {
+            let m = tx_mode(kind).unwrap_or_else(|| panic!("{kind:?} must be tx-capable"));
+            let caps = m.capabilities();
+            assert!(caps.tx && caps.free_text && caps.structured_identity && caps.early_decode);
+            assert!(!caps.beacon_only && !caps.split_reduce && !caps.fox_hound && !caps.contest);
+        }
+    }
+
+    #[test]
+    fn js8_encode_takes_the_lab_text_form_and_decode_returns_the_raw_word() {
+        use js8::proto::alphabet::sixbit_to_string;
+        use js8::{Frame, I3};
+        // A real heartbeat word through the proto layer — the same bytes ALL.TXT would print
+        // as its 12-char + i3 columns.
+        let frame = Frame::Heartbeat {
+            call: "KD9TAW".to_string(),
+            grid: Some("EN52".to_string()),
+            is_cq: false,
+            idx: 0,
+        };
+        let i3 = I3 {
+            first: true,
+            last: true,
+            data: false,
+        };
+        let word = js8::proto::frame::encode_frame(&frame, i3, Js8Speed::Normal).expect("packable");
+        let text = format!(
+            "{} {}",
+            sixbit_to_string(&word.payload72().chars12()),
+            word.i3().to_u8()
+        );
+
+        let m = make_mode(ModeKind::JS8_NORMAL);
+        let tones = m.encode(&text);
+        assert_eq!(tones.len(), 79);
+        // encode_word takes the speed (it selects the Costas triple); Normal here.
+        let expect: Vec<i32> = js8::phy::encode_word(&word, Js8Speed::Normal)
+            .iter()
+            .map(|&t| i32::from(t))
+            .collect();
+        assert_eq!(
+            tones, expect,
+            "Mode::encode must be encode_word over the same Word87"
+        );
+        assert!(m.encode("not twelve chars").is_empty());
+        assert!(
+            m.encode(&format!(
+                "{} 9",
+                sixbit_to_string(&word.payload72().chars12())
+            ))
+            .is_empty(),
+            "i3 > 7"
+        );
+
+        let wave = m.gen_wave(&tones, 12_000.0, 1500.0);
+        let speed = Js8Speed::Normal;
+        assert_eq!(
+            wave.len(),
+            (speed.delay_ms() as usize * 12) + 79 * speed.nsps(),
+            "slot-positioned: delay silence + 79 symbols"
+        );
+        assert!(
+            wave.len() < ModeKind::JS8_NORMAL.frame_samples(),
+            "shorter than the decode window"
+        );
+        assert!(
+            m.gen_wave(&[1, 2, 3], 12_000.0, 1500.0).is_empty(),
+            "a malformed tone vector keys nothing"
+        );
+
+        // Clean signal in a full window → one row carrying the raw word and the rendered line.
+        let mut iwave = vec![0i16; ModeKind::JS8_NORMAL.frame_samples()];
+        for (dst, &s) in iwave.iter_mut().zip(&wave) {
+            *dst = (s * 1000.0).clamp(-32768.0, 32767.0) as i16;
+        }
+        let rows = m.decode_frame(&iwave, 100, 4000, 3, "", "", 0, 0, 0, false, false);
+        assert_eq!(rows.len(), 1, "exactly one decode of the clean frame");
+        assert_eq!(rows[0].raw, Some(*word.as_bytes()));
+        assert_eq!(rows[0].message, frame.render());
+        assert_eq!(rows[0].mode, Some(ModeKind::JS8_NORMAL));
+        assert!(
+            (rows[0].freq - 1500.0).abs() < 2.0,
+            "freq within the sync search bin, got {}",
+            rows[0].freq
+        );
+        // A short buffer is a caller error, never a panic (the F6 review re-decode can hand a
+        // multi-speed slice shorter than this speed's window).
+        assert!(m
+            .decode_frame(&iwave[..1000], 100, 4000, 3, "", "", 0, 0, 0, false, false)
+            .is_empty());
     }
 }
 
@@ -1842,5 +2030,151 @@ impl Mode for WsprMode {
             .into_iter()
             .map(Into::into)
             .collect()
+    }
+}
+
+/// **JS8** (JS8Call-compatible) — the pure-Rust modem in `crates/js8`, one instance per
+/// speed. **Transmit-capable since B7 (operator gate G1)**: the engine's tier-routed
+/// planner is the only TX path; the encoder here serves the lab.
+///
+/// `structured_identity: true` — the FAIL-CLOSED default kept deliberately (judge.md ruling):
+/// JS8 frames carry the callsign, so a blank MYCALL must refuse to build a frame; the JS8
+/// TX planner will call `structured_tx_ready(false)` itself and `compose` refuses a
+/// non-packable call on top. `early_decode: true` only documents that the tier decodes
+/// before the boundary; the multi-speed scheduler replaces the early-pass table entry.
+#[derive(Debug, Clone, Copy)]
+pub struct Js8Mode {
+    /// Slow / Normal / Fast / Turbo — the tier's TX speed and this instance's decode window.
+    pub speed: Js8Speed,
+}
+
+impl Mode for Js8Mode {
+    fn kind(&self) -> ModeKind {
+        ModeKind::Js8 { speed: self.speed }
+    }
+
+    /// JS8Call searches 100–4910 Hz and puts heartbeats in 500–1000 Hz; the default
+    /// 200–2900 is FT8's contract, not JS8's.
+    fn passband(&self) -> (f32, f32) {
+        (100.0, 4000.0)
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        Capabilities {
+            // B7 (operator gate G1 re-confirmed): JS8 transmits. Until B7 this was
+            // `false` so the receive-only tier could not be armed by construction.
+            tx: true,
+            fox_hound: false,
+            ir_harq: false,
+            free_text: true,
+            beacon_only: false,
+            contest: false,
+            // FAIL-CLOSED identity gate: `plan_js8_tx` calls `structured_tx_ready(false)`
+            // itself and `proto::compose` refuses a non-packable MYCALL on top of it.
+            structured_identity: true,
+            early_decode: true,
+            split_reduce: false,
+        }
+    }
+
+    /// The LAB text form only: `"<12 sixbit chars> <i3>"` — ALL.TXT's two columns. The
+    /// engine never calls this (its TX carrier is a typed `Word87`); it exists so the
+    /// trait's `tx_mode` consistency holds and the WAV lab has a `Mode` path. Empty on any
+    /// parse failure, which is the trait's safe direction (an empty tone vector keys nothing).
+    fn encode(&self, msg: &str) -> Vec<i32> {
+        let mut it = msg.split_whitespace();
+        let (Some(chars), Some(i3)) = (it.next(), it.next()) else {
+            return Vec::new();
+        };
+        if it.next().is_some() {
+            return Vec::new();
+        }
+        let Some(c12) = js8::proto::alphabet::sixbit_from_str(chars) else {
+            return Vec::new();
+        };
+        let Ok(i3) = i3.parse::<u8>() else {
+            return Vec::new();
+        };
+        if i3 > 7 {
+            return Vec::new();
+        }
+        let word = js8::Word87::new(js8::Payload72::from_chars12(c12), js8::I3::from_u8(i3));
+        js8::phy::encode_word(&word, self.speed)
+            .iter()
+            .map(|&t| i32::from(t))
+            .collect()
+    }
+
+    /// Slot-positioned per the trait contract: `speed.delay_ms()` of silence, then 79
+    /// symbols of JS8Call's continuous-phase rectangular 8-FSK (`js8::phy::modulate`).
+    /// Always shorter than the period (the slot-fit invariant, pinned in `crates/js8`).
+    fn gen_wave(&self, itone: &[i32], fsample: f32, f0: f32) -> Vec<f32> {
+        if itone.len() != 79 || itone.iter().any(|&t| !(0..=7).contains(&t)) {
+            return Vec::new();
+        }
+        let mut tones = [0u8; 79];
+        for (dst, &src) in tones.iter_mut().zip(itone) {
+            *dst = src as u8;
+        }
+        js8::phy::modulate(&tones, self.speed, f0, fsample)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn decode_frame(
+        &self,
+        iwave: &[i16],
+        nfa: i32,
+        nfb: i32,
+        ndepth: i32,
+        _mycall: &str, // JS8 has no WSJT-X a-priori passes; the word is CRC-12 gated
+        _hiscall: &str,
+        _nqso_progress: i32,
+        _nfqso: i32,
+        _frame_time_ms: i64, // no cross-frame state (no a7, no IR-HARQ)
+        _ap: bool,
+        _ap_cq_only: bool,
+    ) -> Vec<Decode> {
+        // A short buffer is a caller error, never a panic: the engine's F6 review re-decode
+        // replays whatever `last_rx` holds, and the multi-speed ring hands slices of other
+        // speeds' lengths around. `js8::phy::decode` asserts on a short input; gate here.
+        if iwave.len() < self.speed.frames_needed() {
+            return Vec::new();
+        }
+        let params = js8::DecodeParams {
+            nfa: nfa as f32,
+            nfb: nfb as f32,
+            depth: ndepth.clamp(1, 3) as u8,
+            // JS8Call's stock outer-pass count (3 passes, subtraction on 1-2).
+            subtract_passes: 2,
+        };
+        js8::phy::decode(iwave, self.speed, &params)
+            .iter()
+            .map(js8_decode_row)
+            .collect()
+    }
+}
+
+/// One modem hit → the unified record. `message` is JS8Call's display line (byte-exact,
+/// `Frame::render`) so every text consumer works unchanged; `raw` carries the typed word for
+/// the engine's JS8 adapter. A CRC-valid word that fails to unpack (an unknown frame shape)
+/// still produces a row — the operator sees that SOMETHING decoded — rendered as
+/// `<undecodable>` rather than dropped.
+fn js8_decode_row(r: &js8::RawDecode) -> Decode {
+    let message = match js8::proto::frame::decode_word(&r.word, r.speed) {
+        Ok((frame, _i3)) => frame.render(),
+        Err(_) => "<undecodable>".to_string(),
+    };
+    Decode {
+        message,
+        sync: r.sync,
+        snr: r.snr_db,
+        dt: r.dt_s,
+        freq: r.freq_hz,
+        // No a-priori decoding in JS8 (the BP inner passes are not AP hypotheses).
+        nap: 0,
+        qual: r.quality,
+        rv: None,
+        mode: Some(ModeKind::Js8 { speed: r.speed }),
+        raw: Some(*r.word.as_bytes()),
     }
 }

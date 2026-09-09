@@ -7,8 +7,10 @@ modern app should: live dial read-back, a fast colored bandscope, a voice keyer
 for the calls you make over and over, and crash-safe QSO recording, all with your
 logbook and license privileges wired in.
 
-Phone is an opt-in section. Turn it on in the first-run wizard's "which modes?"
-step or in [Settings ▸ Appearance ▸ Features](settings-reference.md#features).
+Phone ships enabled — the wizard turns everything on; there is no mode picker to
+miss it in. No goal profile enables it, though, so if you pick one in
+[Settings ▸ Appearance ▸ Features](settings-reference.md#features), switch Phone
+back on there — or take **Everything (expert)**, which includes it.
 
 ![The Phone cockpit on 15 m: the dial reads 21.2000 MHz, the mode chips show AUTO-FM selected next to USB, LSB and FM, and a rig: USB badge beside them flags that the radio itself is still on USB. The bandscope fills the upper half — a panadapter trace over a scrolling waterfall, with the Full / Voice / Low / High span chips above it — while Band Activity and the six-slot voice keyer, F1 CQ through F6 Again, stack in the left column and the LOG pane runs down the right. PUSH TO TALK and its Lock tick sit in the dock across the bottom; Panels, the Power slider, Tune and Stop TX ride in the header above the scope.](../img/manual/phone-cockpit.webp)
 
@@ -108,6 +110,13 @@ keyer's F-keys are always reachable rather than rendered past the edge. **PTT**,
 
 The voice keyer has six F-key slots: **CQ, My Call, Report, QRZ?, 73, Again**.
 
+![The Voice Keyer pane. Under the line "click or press F1–F6 to send · Esc stops" and a ■ Stop button, six slot cards: F1 CQ, F2 My Call, F3 Report, F4 QRZ?, F5 73 and F6 Again. F2 is outlined and carries a ▶ play arrow; the other five read "record". Each card has a ● record button, an import arrow and a ✕.](../img/manual/phone-voice-keyer.webp)
+
+*The voice keyer in Nexus 1.10.3. **F2 My Call** holds a recording, so it shows a
+▶; an empty slot reads **record** instead. **●** records into the slot, the arrow
+imports a WAV, **✕** clears it, and the pane's **■ Stop** ends whatever is
+playing.*
+
 1. **Record in-app** or **import any WAV** (Nexus resamples and downmixes
    automatically). Choose your recording mic in
    [Settings ▸ Phone](settings-reference.md#phone-ssb--fm) — on a
@@ -130,6 +139,12 @@ no abort button off-screen.
 QSO recording streams the rig's RX audio straight to a timestamped WAV on disk,
 with crash-safe headers and a 2-hour auto-stop, so a long ragchew or a dropped
 session never leaves you with a corrupt file.
+
+![Settings ▸ Logging & Connectors: a Save a WAV per logged QSO toggle, a sentence naming the folder the files land in, an Open recordings folder link, and beside them a Save received audio (.wav per period) dropdown reading None (default).](../img/manual/phone-qso-recording.webp)
+
+*Where the recordings go, in Nexus 1.10.3 — the path shown is this station's, and
+**Open recordings folder** opens yours. The per-period setting next to it is a
+decoder-debugging tool, not a QSO recorder: "All" writes about 2 GB a day.*
 
 ## Field Day and logging
 

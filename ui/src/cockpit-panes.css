@@ -382,3 +382,38 @@
   align-items: center;
   gap: var(--space-1);
 }
+
+/* THE RAIL-BOUND RECALL CARD (#168). The callsign card renders into the Operate cockpit's
+   `.cockpit-side` rail, where it is a content-height flex item sharing the column with the
+   Stations roster — and left unbounded it takes what it wants and the roster takes the
+   remainder, because the card's basis is its content and the roster's is 0.
+
+   MEASURED, in a real layout engine, which is the only reason this number exists: with a
+   realistic card (identity + badges + note + several prior contacts) the roster went from
+   464 px to 71 px — about two rows — at the 1024x768 supported floor, and at 175 % pinned
+   zoom the card was 659 px in a 613 px rail and pushed the roster off the bottom entirely.
+   Nothing was ever trapped (the rail is `overflow-y: auto` and scrolls, and Operate's Stop
+   TX is in the strip above), but an operator who clicks a roster row should not lose the
+   roster they clicked in. A one-row test fixture hides this completely — it was measured
+   with a full card on purpose.
+
+   `min(22em, 45%)`: a share so the bound scales with the rail rather than pinning a px
+   height into a zoom-sensitive column, and an em ceiling so it cannot eat a tall rail on a
+   large display. Written as a CEILING, never a floor — a floor here would sit under the
+   region's own clipping and be the crush mechanism reborn (see the min-height ruling
+   above). Past the ceiling the card scrolls INSIDE itself, which is safe precisely because
+   its prior-contact list already carries its own em ceiling and does not fight a parent.
+
+   ⚠️ A SINGLE FLAT CLASS, APPLIED BY THE HOST — deliberately NOT `.cockpit-side
+   > .recall-card`, which is the obvious spelling and is REFUSED here: this sheet's whole
+   reason for existing is that every selector is (0,1,0)/(0,2,0) so no two structural rules
+   can fight, and the flat guard is run red against a descendant selector before it lands.
+   The scoping that a descendant selector would have bought is bought instead by the class
+   being applied only where it applies: `RecallPanel bounded` (the Operate cockpit), never
+   in the CW/Phone log panes, where the operator asked for the FULL card back on 2026-07-31
+   and the pane body is already its scroller. */
+.cockpit-recall {
+  flex: 0 1 auto;
+  max-height: min(22em, 45%);
+  overflow-y: auto;
+}

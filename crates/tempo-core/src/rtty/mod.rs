@@ -53,4 +53,39 @@ mod tests {
         // A netted-lower center keeps the same ±shift/2 straddle.
         assert_eq!(tone_pair(1500.0, 170.0, false), (1415.0, 1585.0));
     }
+
+    /// REVERSE MUST BE APPLIED EXACTLY ONCE, and 1.9.0 applied it twice on transmit.
+    ///
+    /// `tone_pair` already swaps the pair. Both TX sites then passed `reverse` on to the
+    /// modulator, which swaps again — two swaps cancel, so REVERSE DID NOTHING ON TRANSMIT.
+    /// RX calls `tone_pair` once, so RX and TX disagreed about sense: a reversed rig decoded
+    /// correctly and answered in the wrong sense. At 1.8.1 it applied once.
+    ///
+    /// This pins the arithmetic that makes the double application detectable, so the fix
+    /// (dropping the modulator's second swap) cannot be undone without a red test.
+    #[test]
+    fn reverse_swaps_the_pair_exactly_once() {
+        let (m, s) = tone_pair(2210.0, 170.0, false);
+        assert_eq!(
+            (m, s),
+            (2125.0, 2295.0),
+            "normal sense: mark is the LOWER tone"
+        );
+
+        let (rm, rs) = tone_pair(2210.0, 170.0, true);
+        assert_eq!(
+            (rm, rs),
+            (2295.0, 2125.0),
+            "reverse: mark is the HIGHER tone"
+        );
+
+        // The double-application signature: applying it again returns the original pair, which
+        // is exactly what the modulator was doing on top of this.
+        let (again_m, again_s) = if true { (rs, rm) } else { (rm, rs) };
+        assert_eq!(
+            (again_m, again_s),
+            (m, s),
+            "two swaps cancel — this is why the shipped TX ignored reverse entirely"
+        );
+    }
 }

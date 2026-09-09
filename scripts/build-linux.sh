@@ -94,9 +94,14 @@ ok "ui/node_modules"
 bold "4/4  Nexus GUI app + .deb + AppImage"
 cargo tauri --version >/dev/null 2>&1 || { warn "installing tauri-cli…"; cargo install tauri-cli --version "^2" --locked; }
 [ -f "$REPO/src-tauri/icons/128x128.png" ] || python3 "$REPO/scripts/gen-icons.py"
-# Linux uses the SYSTEM Hamlib (rigctld on PATH / the .deb's libhamlib-utils dependency), so DON'T
-# ship the Windows hamlib .dll/.exe in the Linux bundle. The Windows build re-stages the real
-# binaries via fetch-hamlib.sh, so removing them here is safe.
+# Linux BUNDLES its own Hamlib as of 2026-08-24 — see scripts/fetch-hamlib-unix.sh for why: the
+# AppImage installs nothing by definition, so "apt install libhamlib-utils" was a CAT-dead
+# default for the one package whose whole promise is that you do not have to. The .deb keeps its
+# `depends: libhamlib-utils` as belt-and-braces; the bundled copy wins regardless, because the
+# resolver checks beside-the-executable paths before PATH.
+#
+# The Windows .dll/.exe still must not ride along in a Linux bundle. The Windows build re-stages
+# them via fetch-hamlib.sh, so removing them here is safe.
 #
 # Remove ONLY the untracked Windows binaries. This used to `rm -rf` the whole directory and
 # recreate it with just a README — which DELETED four TRACKED Hamlib license files
@@ -104,6 +109,8 @@ cargo tauri --version >/dev/null 2>&1 || { warn "installing tauri-cli…"; cargo
 # one `git add -A` away from committing the removal of the license texts Hamlib's LGPL requires
 # us to ship. The tracked README.txt is byte-identical to what that heredoc wrote, so nothing
 # was gained by recreating it. Bit us for real on 2026-07-20.
+"$REPO/scripts/fetch-hamlib-unix.sh"
+
 find "$REPO/src-tauri/resources/hamlib" -type f \
   \( -name '*.dll' -o -name '*.exe' -o -name '*.lib' -o -name '*.def' \) -delete
 # Safety net for the delete above: if it ever touches a TRACKED file (the LGPL license
@@ -116,12 +123,21 @@ if git -C "$REPO" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   continue. Those are the LGPL license texts Hamlib requires us to distribute; restore with
   'git checkout -- src-tauri/resources/hamlib/'."
 fi
-# ⚠️ BUILT UNSIGNED ON PURPOSE — the AppImage is repacked below, and a signature made here would
-# be a signature over bytes that no longer exist. `latest.json` is generated FROM the `.sig`, so a
-# stale one does not fail the build: it ships, and every Linux self-update then fails verification.
-# Signing moved to after the repack; see `sign_appimage` at the end of this section.
-( cd "$REPO/src-tauri" && env -u TAURI_SIGNING_PRIVATE_KEY -u TAURI_SIGNING_PRIVATE_KEY_PASSWORD \
-    cargo tauri build --features radio,custom-protocol --bundles deb,appimage )
+# The signature Tauri makes HERE is over bytes the repack below replaces, so it is deleted the
+# moment the build finishes and remade at the end over the final file. `latest.json` is generated
+# FROM the `.sig`, and a stale one does NOT fail anything: it ships, and every Linux self-update
+# then fails verification. Deleting it is what makes that unrepresentable rather than merely
+# avoided — after this point no `.sig` exists until the one made over the shipped bytes.
+#
+# ⚠️ DO NOT go back to withholding the key with `env -u` (which is what this file did until
+# 1.8.0, and it broke the release build). Tauri treats "a pubkey is configured but no private key
+# is present" as a FATAL error, not a warning — it bundles both artifacts and then exits 1 with
+# "A public key has been found, but no private key". Every other platform job passes the key
+# normally; the difference here was never intended.
+( cd "$REPO/src-tauri" && cargo tauri build --features radio,custom-protocol --bundles deb,appimage )
+# Kill the premature signature immediately — before the repack, so there is no window in which a
+# stale one could be picked up by anything.
+find "$REPO/src-tauri/target/release/bundle/appimage" -name '*.AppImage.sig' -delete 2>/dev/null || true
 ok "Nexus .deb + AppImage"
 
 # --- The Wayland client library has to come from the HOST (#138) --------------------------------
@@ -152,13 +168,122 @@ else
 
 work=$(mktemp -d)
 ( cd "$work" && "$appimage" --appimage-extract >/dev/null ) || die "could not unpack the AppImage"
+
+# ─────────────────────────────────────────────────────────────────────────────────────────
+# GSTREAMER PLUGINS — without these every alert tone in the app is silently dead.
+#
+# linuxdeploy bundles GStreamer's ten CORE libraries and ZERO plugins, then unconditionally
+# exports GST_PLUGIN_SYSTEM_PATH_1_0 pointing INSIDE the AppImage at a directory it never
+# created. Setting that variable suppresses GStreamer's default scan, so the host's plugins
+# are not found either: measured on a real machine, 257 plugins visible normally, ONE with
+# the AppImage's environment. The bundled libgstreamer is also relocatable and derives the
+# same missing path on its own, so it is broken twice over.
+#
+# WebKitGTK implements Web Audio on GStreamer — appsrc and autoaudiosink for output, appsink
+# for decodeAudioData — which is exactly the three elements an operator sees it fail to find:
+#     GStreamer element appsink not found. Please install it.
+# The band-edge tones, the alert sounds and the DXped alarm all go through Web Audio, so in
+# the AppImage they simply never sound. RX/TX audio is untouched (that is native cpal).
+#
+# The plugins are COPIED IN rather than pointed at on the host, deliberately: a host with a
+# newer GStreamer than the core libraries linuxdeploy bundled would fail in a different and
+# harder-to-read way. These come from the same machine that supplied the core, so they match.
+# About 1.4 MB against a 116 MB AppImage.
+gst_dst="$work/squashfs-root/usr/lib/gstreamer-1.0"
+if [ -d "$gst_dst" ] && [ -n "$(ls -A "$gst_dst" 2>/dev/null)" ]; then
+  ok "the AppImage already carries GStreamer plugins — leaving them alone"
+else
+  gst_src=""
+  for d in /usr/lib/x86_64-linux-gnu/gstreamer-1.0 /usr/lib64/gstreamer-1.0 /usr/lib/gstreamer-1.0; do
+    [ -d "$d" ] && { gst_src="$d"; break; }
+  done
+  if [ -z "$gst_src" ]; then
+    warn "no host GStreamer plugin directory found — the AppImage will ship without alert"
+    warn "tones. Install gstreamer1.0-plugins-base and gstreamer1.0-plugins-good and rebuild."
+  else
+    mkdir -p "$gst_dst"
+    copied=0
+    for plug in coreelements app autodetect audioconvert audioresample pulseaudio \
+                typefindfunctions playback; do
+      f="$gst_src/libgst$plug.so"
+      [ -f "$f" ] && { cp "$f" "$gst_dst/" && copied=$((copied + 1)); }
+    done
+    # A positive control on the copy: the three elements WebKit asks for by name live in
+    # coreelements (appsink/appsrc come from `app`, autoaudiosink from `autodetect`), so a
+    # count alone would not prove the right ones landed.
+    for need in app autodetect coreelements; do
+      [ -f "$gst_dst/libgst$need.so" ] \
+        || die "libgst$need.so did not reach the AppImage — refusing to ship an AppImage whose
+  alert tones cannot work. Is gstreamer1.0-plugins-base/-good installed on this machine?"
+    done
+    ok "bundled $copied GStreamer plugins ($(du -sh "$gst_dst" | cut -f1)) — alert tones will sound"
+    repack_needed=1
+  fi
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────────────────
+# GST-PLUGIN-SCANNER — the plugins' out-of-process loader, and the second half of the fix
+# above. GStreamer prefers to introspect plugins in a helper CHILD process (a bad plugin
+# then crashes the helper, not WebKit); the bundled relocatable libgstreamer derives the
+# helper's path relative to itself, inside the AppImage, where nothing ever put it. Field
+# report (the same Linux operator who confirmed the file-chooser fix):
+#     GStreamer-WARNING: External plugin loader failed ... You might need to set the
+#     GST_PLUGIN_SCANNER environment variable ...
+# GStreamer falls back to loading plugins IN-PROCESS — which is why the tones work anyway —
+# but the fallback trades away the crash isolation and scares every operator who reads the
+# log. Bundle the helper from the same machine that supplied the plugins, and point
+# GST_PLUGIN_SCANNER at it from the hook AppRun already sources.
+scanner_dst="$work/squashfs-root/usr/libexec/gstreamer-1.0"
+if [ -f "$scanner_dst/gst-plugin-scanner" ]; then
+  ok "the AppImage already carries gst-plugin-scanner — leaving it alone"
+else
+  scanner_src=""
+  for c in /usr/lib/x86_64-linux-gnu/gstreamer1.0/gstreamer-1.0/gst-plugin-scanner            /usr/libexec/gstreamer-1.0/gst-plugin-scanner            /usr/lib64/gstreamer-1.0/gst-plugin-scanner            /usr/lib/gstreamer-1.0/gst-plugin-scanner; do
+    [ -f "$c" ] && { scanner_src="$c"; break; }
+  done
+  if [ -z "$scanner_src" ]; then
+    warn "gst-plugin-scanner not found on this machine — the AppImage will keep GStreamer's"
+    warn "in-process fallback (works, but warns in the log and loses crash isolation)."
+  else
+    mkdir -p "$scanner_dst"
+    cp "$scanner_src" "$scanner_dst/" && chmod +x "$scanner_dst/gst-plugin-scanner"
+    [ -x "$scanner_dst/gst-plugin-scanner" ]       || die "gst-plugin-scanner did not land executable — refusing to repack"
+    # The env var, in the hook AppRun sources (falling back to AppRun itself — it is a
+    # shell script). Idempotent: skip if some earlier run already added it.
+    hook="$work/squashfs-root/apprun-hooks/linuxdeploy-plugin-gtk.sh"
+    [ -f "$hook" ] || hook="$work/squashfs-root/AppRun"
+    if grep -q "GST_PLUGIN_SCANNER" "$hook"; then
+      ok "GST_PLUGIN_SCANNER already exported in $(basename "$hook")"
+    else
+      printf '\nexport GST_PLUGIN_SCANNER="$APPDIR/usr/libexec/gstreamer-1.0/gst-plugin-scanner" # bundled helper — see build-linux.sh\n' >> "$hook"
+      # Positive control: the export must actually be in the file we ship.
+      grep -q 'GST_PLUGIN_SCANNER="\$APPDIR' "$hook"         || die "the GST_PLUGIN_SCANNER export did not reach $(basename "$hook") — refusing to repack"
+    fi
+    ok "bundled gst-plugin-scanner + exported GST_PLUGIN_SCANNER — the loader warning goes away"
+    repack_needed=1
+  fi
+fi
+
 if [ -e "$work/squashfs-root/usr/lib/libwayland-client.so.0" ]; then
-  bold "Repacking the AppImage without the host-owned libwayland-client"
+  bold "Dropping the host-owned libwayland-client"
   rm -f "$work/squashfs-root/usr/lib/libwayland-client.so.0"
   # A positive control on the removal itself: if the file is still there the repack would ship the
   # bug while reporting success, which is the failure mode this whole section exists to prevent.
   [ ! -e "$work/squashfs-root/usr/lib/libwayland-client.so.0" ] \
     || die "libwayland-client.so.0 survived removal — refusing to repack"
+  repack_needed=1
+  ok "libwayland-client.so.0 dropped; the host's copy is used instead"
+else
+  warn "libwayland-client.so.0 is not in this AppImage — nothing to strip (upstream may have"
+  warn "fixed it)."
+fi
+
+# ONE repack for whatever the two steps above changed. This used to hang off the libwayland
+# branch alone, so a bundle that only needed the GStreamer plugins would have been rebuilt in
+# the work directory and then thrown away — the plugins copied, the report cheerful, the
+# shipped file unchanged.
+if [ "${repack_needed:-0}" = "1" ]; then
+  bold "Repacking the AppImage"
   # Tauri already downloaded this during the bundle step, so the repack adds no new dependency and
   # uses the same packer that produced the original.
   packer="$HOME/.cache/tauri/linuxdeploy-plugin-appimage.AppImage"
@@ -169,18 +294,25 @@ if [ -e "$work/squashfs-root/usr/lib/libwayland-client.so.0" ]; then
     || die "repacking the AppImage failed"
   mv "$work/repacked.AppImage" "$appimage"
   chmod +x "$appimage"
-  ok "libwayland-client.so.0 dropped; the host's copy is used instead"
+  ok "AppImage repacked"
 else
-  warn "libwayland-client.so.0 is not in this AppImage — nothing to strip (upstream may have"
-  warn "fixed it). Leaving the bundle exactly as the bundler produced it."
+  ok "nothing to change in this AppImage — leaving it exactly as the bundler produced it"
 fi
 rm -rf "$work"
 
 # --- Sign, now that the bytes are final ---------------------------------------------------------
 # Unsigned when no key is present, which is every developer build and was already true before.
 if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+  # It must not exist yet: the build's own signature was deleted above, so anything here would be
+  # a signature over pre-repack bytes and every Linux self-update would fail verification.
+  [ ! -e "$appimage.sig" ] \
+    || die "a .sig already exists before signing — it would cover pre-repack bytes; refusing"
   ( cd "$REPO/src-tauri" && cargo tauri signer sign "$appimage" >/dev/null )
   [ -s "$appimage.sig" ] || die "signing produced no .sig beside the AppImage"
+  # Newer than the file it signs, which is the only cheap check that catches a signature made
+  # over the wrong bytes.
+  [ "$appimage.sig" -nt "$appimage" ] \
+    || die "the .sig is older than the AppImage it signs — refusing to publish it"
   ok "AppImage signed for self-update"
 else
   warn "no TAURI_SIGNING_PRIVATE_KEY — AppImage published unsigned (developer build)"
@@ -193,5 +325,5 @@ echo "  .deb     : src-tauri/target/release/bundle/deb/*.deb"
 echo "  AppImage : src-tauri/target/release/bundle/appimage/*.AppImage"
 echo "  binary   : src-tauri/target/release/nexus"
 echo
-warn "CAT needs Hamlib: the .deb pulls libhamlib-utils automatically; AppImage users run"
-warn "'sudo apt install libhamlib-utils'. FT8/FT4 audio decode works without it (VOX)."
+hlver="$("$REPO/src-tauri/resources/hamlib/rigctld" --version 2>/dev/null | head -1 | awk '{print $3}')"
+ok "CAT: Hamlib ${hlver:-?} bundled in both artifacts — nothing for the operator to install."

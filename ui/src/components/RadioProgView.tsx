@@ -1065,7 +1065,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
             <input
               ref={importInputRef}
               type="file"
-              accept=".csv,text/csv"
+              accept=".csv"
               hidden
               onChange={(e) => {
                 const f = e.target.files?.[0]

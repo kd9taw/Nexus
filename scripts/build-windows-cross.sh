@@ -61,9 +61,28 @@ if [ -f "$FFTW_MINGW_PREFIX/lib/libfftw3f.a" ]; then
 else
   tmp="$(mktemp -d)"
   ( cd "$tmp"
-    url="http://www.fftw.org/fftw-${FFTW_VER}.tar.gz"
+    # ⚠️ HTTPS AND A PINNED HASH, because of WHERE this runs. The `make` two lines below
+    # executes whatever this tarball contains, and in release.yml it does so inside the same
+    # step that holds TAURI_SIGNING_PRIVATE_KEY and CLUBLOG_API_KEY — and four lines later that
+    # same step runs `cargo tauri build --bundles nsis`. A tampered tarball therefore does not
+    # just run on a runner: it gets statically linked into Nexus.exe and then legitimately
+    # SIGNED and published, and "Verify installer" only checks a size floor. This used to be
+    # plain `http://` with nothing to compare the bytes against, so an on-path attacker, a DNS
+    # spoof, or a compromise of one academic web host was enough.
+    #
+    # The hash was confirmed against a SECOND party rather than just recomputed from what the
+    # site served: Gentoo's sci-libs/fftw Manifest publishes size 4144100 and a SHA512 for
+    # 3.3.10, and both match these bytes. Pinning a hash you only got from the host you are
+    # trying not to trust proves nothing.
+    #
+    # Bump procedure: change FFTW_VER, download over HTTPS, verify the new bytes against an
+    # independent packager (Gentoo's Manifest, Homebrew's formula), THEN update this line.
+    url="https://www.fftw.org/fftw-${FFTW_VER}.tar.gz"
+    fftw_sha256=56c932549852cddcfafdab3820b0200c7742675be92179e59e6215b340e26467
     (command -v curl >/dev/null && curl -fsSL -o fftw.tgz "$url") || wget -qO fftw.tgz "$url" \
       || die "could not download $url"
+    echo "$fftw_sha256  fftw.tgz" | sha256sum -c - \
+      || die "FFTW checksum mismatch — refusing to build. Someone changed the bytes at $url."
     tar xf fftw.tgz && cd "fftw-${FFTW_VER}"
     ./configure --host=x86_64-w64-mingw32 --enable-float --enable-static \
       --disable-shared --prefix="$FFTW_MINGW_PREFIX" >/dev/null
@@ -105,6 +124,25 @@ if [ "$GUI" = 1 ]; then
   ( cd "$REPO/ui" && npm ci >/dev/null )            # deps; cargo tauri runs the build
   [ -f "$REPO/src-tauri/icons/icon.ico" ] || python3 "$REPO/scripts/gen-icons.py"
   bash "$REPO/scripts/fetch-hamlib.sh"              # bundle Hamlib for CAT (no-op if staged)
+
+  # Remove the UNIX Hamlib binaries, the mirror of what build-linux.sh does for the Windows
+  # ones. `src-tauri/resources/hamlib/` is ONE staging directory shared by every target and
+  # tauri.conf.json globs it whole (`resources/hamlib/*`), so whichever platform builds SECOND
+  # ships both. build-linux.sh has always deleted *.dll/*.exe; nothing did the reverse, so a
+  # Linux-then-Windows build put 12.6 MB of ELF binaries inside the installer — files that can
+  # never run there. CI never saw it because it builds each platform on its own runner; it only
+  # bites a local build of both, which is the normal way to cut a tester pair.
+  # Extension-less here means an ELF executable (rigctl/rigctld/rotctl/rotctld). The tracked
+  # LGPL texts are all *.txt and are not matched.
+  find "$REPO/src-tauri/resources/hamlib" -type f \
+    \( -name '*.so' -o -name '*.so.*' -o ! -name '*.*' \) -delete
+  # Same safety net build-linux.sh carries: if that delete ever reaches a TRACKED file — the
+  # licence texts Hamlib's LGPL requires us to ship — stop rather than continue.
+  if git -C "$REPO" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    git -C "$REPO" diff --quiet -- src-tauri/resources/hamlib || \
+      die "build-windows-cross.sh modified TRACKED files under src-tauri/resources/hamlib —
+  refusing to continue. Restore with 'git checkout -- src-tauri/resources/hamlib/'."
+  fi
   # THE SILENT-LOBOTOMY GUARD. The DeepCW engine is a PAIR of gitignored files
   # (weights + metadata sidecar), so a fresh clone — and every git WORKTREE,
   # which checks out tracked files only — builds an installer whose AI CW

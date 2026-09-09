@@ -53,7 +53,7 @@ Nexus launches rigctld internally, connects to it over a local TCP socket on the
 
 The spawned rigctld process is placed in a Windows **Job Object** with the `KILL_ON_JOB_CLOSE` flag. When Nexus exits — including abnormal exits and crashes — the OS kills rigctld automatically and releases the COM port. A stuck port or lingering rigctld after a crash is not expected; if it occurs, file a bug.
 
-On **Linux**, install the system Hamlib once (`libhamlib-utils`; the `.deb` pulls it in for you). On **macOS**, `brew install hamlib` once, then restart Nexus — Nexus probes the Homebrew/MacPorts prefixes (`/opt/homebrew/bin`, `/usr/local/bin`, `/opt/local/bin`) directly, because a Finder-launched app never sees your shell PATH. The bundled binary is not distributed for those platforms.
+Since 1.9.0 the bundled binary IS distributed for those platforms, so **Linux and macOS need nothing installed** either. Should the bundled copy fail to start, Nexus probes the Homebrew/MacPorts prefixes (`/opt/homebrew/bin`, `/usr/local/bin`, `/opt/local/bin`) directly for a system Hamlib, because a Finder-launched app never sees your shell PATH.
 
 ---
 
@@ -261,7 +261,7 @@ Frequency is polled continuously — a manual VFO knob turn is reflected in the 
 ## Limits / Not Yet
 
 - **Rig auto-detection requires the `radio` Cargo feature.** The headless/UI-dev build returns empty lists for ports, audio, and detected rigs.
-- **Bundled Hamlib is Windows-only.** Linux and the Raspberry Pi use the system Hamlib: the `.deb` pulls `libhamlib-utils` in for you, and AppImage users install it once (`sudo apt install libhamlib-utils`). macOS (shipped since 1.5.0) uses Homebrew's: `brew install hamlib` once — Nexus finds it in the Homebrew/MacPorts prefixes itself; putting it "on PATH" does nothing for a Finder-launched app.
+- **Hamlib is bundled everywhere** since 1.9.0 — Windows, Linux (`.deb`, AppImage, both Pi bases) and macOS. Before that it was Windows-only, which left AppImage users with no CAT until they installed `libhamlib-utils` unprompted. A system Hamlib is still the fallback if the bundled copy will not launch; Nexus finds it in the Homebrew/MacPorts prefixes itself, since putting it "on PATH" does nothing for a Finder-launched app.
 - **Generic-cable rigs always need a manual model pick.** Only native-USB rigs that embed a model name in the USB product string auto-match a Hamlib model.
 - **The curated model table is ~50 entries.** Use `rigctl -l` for the full list. Out-of-table rigs can be entered by Hamlib model number but receive no friendly name in the dropdown.
 - **Serial PTT (RTS/DTR) requires the `serial` Cargo feature.** Without it, falls back silently to VOX — no hardware keying, no error shown.

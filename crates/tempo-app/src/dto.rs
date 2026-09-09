@@ -6,6 +6,7 @@
 //! data: they carry no behavior and depend only on `serde`. [`crate::AppState`]
 //! projects the richer `tempo-core` types into these for the UI.
 
+use modes::Js8Speed;
 use modes::ModeKind;
 use serde::{Deserialize, Serialize};
 
@@ -285,13 +286,24 @@ pub enum Tier {
     /// tier, its decodes are propagation reports rather than QSO traffic.
     #[serde(rename = "WSPR")]
     Wspr,
+    /// **JS8** (JS8Call-compatible keyboard-to-keyboard, `crates/js8`). **RECEIVE-ONLY in
+    /// this build** — `Js8Mode` declares `tx: false`, so `tier_is_rx_only` refuses to arm the
+    /// latch; the operator-gated TX batch flips it. The transmit speed (and the slot clock)
+    /// comes from `Settings::js8_speed`; the receiver decodes every speed in
+    /// `Settings::js8_rx_speeds` from one 36 s ring.
+    ///
+    /// NOT a chat tier (`is_chat` unchanged): the Tempo cadence — RR73 ACKs, chunked frames,
+    /// the 120 s window — is on-air incompatible with JS8Call. JS8 has its own adapter
+    /// (`engine::js8`).
+    #[serde(rename = "JS8")]
+    Js8,
 }
 
 impl Tier {
     /// Every variant, in declaration order. The one place a tier list lives, so
     /// a test can drive them all — see `bandplan::tests::tier_all_lists_every_tier`,
     /// which fails to compile if a variant is added without being listed here.
-    pub const ALL: [Tier; 11] = [
+    pub const ALL: [Tier; 12] = [
         Tier::TempoFast,
         Tier::TempoDeep,
         Tier::Ft8,
@@ -303,6 +315,7 @@ impl Tier {
         Tier::Msk144,
         Tier::Jt65,
         Tier::Wspr,
+        Tier::Js8,
     ];
 }
 
@@ -323,6 +336,7 @@ impl Tier {
             Tier::Msk144 => "MSK144",
             Tier::Jt65 => "JT65",
             Tier::Wspr => "WSPR",
+            Tier::Js8 => "JS8",
         }
     }
 
@@ -345,7 +359,8 @@ impl Tier {
     /// to reach `ModeKind` or every buffer sized from that kind would be wrong.
     /// An out-of-range pair falls back to Q65-30A rather than refusing — settings
     /// arriving from an older file or a hand-edited JSON should degrade to a
-    /// working mode, not disable decoding.
+    /// working mode, not disable decoding. `js8_speed` is the same story for JS8:
+    /// an index into `Js8Speed::ALL` that degrades to Normal (see [`Self::js8_kind`]).
     pub fn mode_kind(
         self,
         q65_period_s: u16,
@@ -353,6 +368,7 @@ impl Tier {
         fst4_period_s: u16,
         msk144_period_s: u16,
         jt65_submode: u8,
+        js8_speed: u8,
     ) -> Option<ModeKind> {
         match self {
             Tier::TempoFast => Some(ModeKind::TempoFast),
@@ -367,6 +383,7 @@ impl Tier {
             Tier::Msk144 => Some(Self::msk144_kind(msk144_period_s)),
             Tier::Jt65 => Some(Self::jt65_kind(jt65_submode)),
             Tier::Wspr => Some(ModeKind::Wspr),
+            Tier::Js8 => Some(Self::js8_kind(js8_speed)),
             Tier::TempoDeep => None,
         }
     }
@@ -400,6 +417,16 @@ impl Tier {
         }
     }
 
+    /// A validated `ModeKind::Js8`, falling back to Normal (15 s) on an out-of-range
+    /// index. Same degrade-don't-refuse rule as [`Self::q65_kind`]: a stale settings file
+    /// must still decode.
+    pub fn js8_kind(speed_idx: u8) -> ModeKind {
+        match Js8Speed::from_index(speed_idx) {
+            Some(speed) => ModeKind::Js8 { speed },
+            None => ModeKind::JS8_NORMAL,
+        }
+    }
+
     /// A validated `ModeKind::Q65`, falling back to Q65-30A on anything unsupported.
     pub fn q65_kind(period_s: u16, submode: u8) -> ModeKind {
         let ok = ModeKind::Q65_PERIODS.contains(&period_s) && submode < ModeKind::Q65_SUBMODES;
@@ -430,8 +457,118 @@ impl Tier {
             ModeKind::Msk144 { .. } => Tier::Msk144,
             ModeKind::Jt65 { .. } => Tier::Jt65,
             ModeKind::Wspr => Tier::Wspr,
+            // Every JS8 speed maps back to the one JS8 tier, exactly as Q65's
+            // combinations do: the tier is the operator's selection, the speed a setting.
+            ModeKind::Js8 { .. } => Tier::Js8,
         }
     }
+}
+
+// ---- JS8 (the `get_js8_state` poll; serialised straight to the cockpit) ----
+
+/// The heard-station row, straight from the message layer (serde-derived there).
+pub use js8::proto::station::Heard as Js8Heard;
+/// One inbox row (UNREAD / READ / STORE / DELIVERED), straight from the message layer.
+pub use js8::proto::station::InboxEntry as Js8InboxEntry;
+/// The inbox row state — lowercase on the wire (`"unread" | "read" | "store" | "delivered"`).
+pub use js8::proto::station::InboxState as Js8InboxState;
+
+/// Which automatic origins may actually key RIGHT NOW: `switch && tx_enabled &&
+/// !idle_tripped`, per origin. The cockpit paints "armed" from THIS, never from the
+/// persisted switch alone — a switch that is on while the TX latch is off must never look
+/// armed (the AprsCockpit rule).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Js8Armed {
+    pub autoreply: bool,
+    pub relay: bool,
+    pub hb_ack: bool,
+    pub hb: bool,
+    /// The repeating CQ — armed only when the session switch, the TX latch and a clear idle
+    /// watchdog all agree, exactly like `hb`.
+    pub cq: bool,
+}
+
+/// One activity-pane row: a decoded frame (or a reassembled multi-frame message).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Js8ActivityRow {
+    /// Unix ms of the cycle the frame was decoded in.
+    pub at_ms: u64,
+    pub speed: Js8Speed,
+    pub freq_hz: f32,
+    pub snr_db: i32,
+    pub dt_s: f32,
+    /// The sending station as the frame names it (empty for a continuation data frame).
+    pub from: String,
+    /// JS8Call's display line, byte-exact (`Frame::render`), or the reassembled text.
+    pub text: String,
+    /// Addressed to my call, @ALLCALL, or a group I have joined.
+    pub directed_to_me: bool,
+    /// My own transmission (always false in the receive-only build).
+    pub mine: bool,
+    /// False for a message the reassembler force-closed or dropped incomplete.
+    pub complete: bool,
+    /// Decode quality below JS8Call's 0.17 low-confidence threshold.
+    pub low_conf: bool,
+}
+
+/// One outbox row (empty in the receive-only build).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Js8QueueRow {
+    pub origin: js8::Origin,
+    pub display: String,
+    pub first: bool,
+    pub last: bool,
+}
+
+/// An automatic reply waiting out its countdown (cancellable until `fires_at_ms`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Js8PendingReply {
+    pub origin: js8::Origin,
+    pub to: String,
+    pub display: String,
+    pub fires_at_ms: u64,
+}
+
+/// The live JS8 state the cockpit polls (~500 ms while visible) — `PskRxState`'s role.
+/// Every field is computed from engine truth at poll time; nothing here is cached UI state.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Js8State {
+    /// The TRANSMIT speed (= the slot clock), lowercase on the wire.
+    pub speed: Js8Speed,
+    /// Bitmask of decoded speeds (`Js8Speed::bit()`).
+    pub rx_speeds: u8,
+    pub tx_enabled: bool,
+    pub sending: bool,
+    pub hb_on: bool,
+    pub hb_next_at_ms: Option<u64>,
+    pub hb_interval_min: u16,
+    /// The repeating CQ: session-only (never persisted), its next fire time, and the
+    /// persisted interval that decides whether the cockpit's CQ button is a one-shot
+    /// (0) or JS8Call's checkable auto-repeat with a live countdown (> 0).
+    pub cq_on: bool,
+    pub cq_next_at_ms: Option<u64>,
+    pub cq_interval_min: u16,
+    /// The persisted switches (the second act), echoed so the chips render engine truth.
+    pub autoreply: bool,
+    pub relay: bool,
+    pub hb_ack: bool,
+    pub armed: Js8Armed,
+    pub idle_minutes: u16,
+    pub idle_limit_min: u16,
+    pub idle_tripped: bool,
+    pub activity: Vec<Js8ActivityRow>,
+    pub stations: Vec<Js8Heard>,
+    pub inbox: Vec<Js8InboxEntry>,
+    pub queue: Vec<Js8QueueRow>,
+    pub pending_reply: Option<Js8PendingReply>,
+    /// The last refused verb's reason (a send that would not compose, a forbidden
+    /// destination), cleared by the next successful verb.
+    pub last_error: Option<String>,
 }
 
 /// A single chat message (inbound or outbound) within a conversation.
@@ -582,6 +719,25 @@ pub struct RadioStatus {
     /// QSOs queued for HRD because it was unreachable — 0 when caught up.
     #[serde(default)]
     pub hrd_queued: u32,
+    /// The amplifier on THIS radio's amp port, when one is configured.
+    ///
+    /// THREE STATES, and the `Option` carries the first of them — the three the setting's own
+    /// doc commits to (`settings.rs`, `amp_port`: "unconfigured shows nothing,
+    /// configured-and-silent shows '—'"):
+    ///
+    /// - `None` — no amplifier configured on the active radio. Every amplifier surface renders
+    ///   NOTHING, and the snapshot is unchanged for the overwhelming majority of stations.
+    /// - `Some { linked: false, reason, .. }` — configured and not answering. The surface stays
+    ///   on screen with every reading '—' and the reason named, because a readout that vanishes
+    ///   on a bad poll is the rotator's shipped defect.
+    /// - `Some { linked: true, .. }` — live.
+    ///
+    /// Display-only, and this is a safety statement rather than a note: nothing keys, unkeys,
+    /// retunes or gates a transmission off this. Putting an amplifier in standby is NOT a way
+    /// to stop a transmission (the exciter keeps keying and the drive passes straight through),
+    /// so no field here may ever reach a cockpit's stop-line census.
+    #[serde(default)]
+    pub amp: Option<AmpStatusDto>,
     pub transmitting: bool,
     pub slot: u64,
     pub next_slot_ms: u64,
@@ -695,6 +851,15 @@ pub struct RadioStatus {
     /// Defaults true (Open / no-lockout) so an old snapshot never shows a phantom lock.
     #[serde(default = "default_true")]
     pub tx_allowed: bool,
+    /// The dial the next over would be EMITTED on — the confirmed split TX frequency when the
+    /// rig has acknowledged one, else the operator's dial.
+    ///
+    /// Exists so the lock can NAME the frequency it is judging. "TX locked — this frequency is
+    /// outside your license privileges" was the same sentence on every path and never said
+    /// which frequency, which under split meant it was naming one the operator was not
+    /// transmitting on (field report 2026-08-25). `None` on an old snapshot.
+    #[serde(default)]
+    pub tx_emission_mhz: Option<f64>,
     /// Whether the operator is holding a steady tune carrier (for ATU / amp
     /// tuning). While true the radio plays a continuous f0 sine instead of slots.
     #[serde(default)]
@@ -770,11 +935,46 @@ pub struct RadioStatus {
     /// why the waterfall is blank instead of failing silently.
     #[serde(default)]
     pub audio_error: Option<String>,
+    /// A problem with the RF SCOPE source, separate from `audio_error` on purpose: they have
+    /// different cures and can be true at once. `None` = nothing to say.
+    ///
+    /// The FT-710 case this exists for: the radio only exposes its spectrum once SCU-LAN10 (and the
+    /// external display) are enabled in its EX menu, and Nexus CANNOT set those over CAT — so a
+    /// silent scope is an instruction to the operator, not a fault to retry.
+    pub scope_error: Option<String>,
+    /// Where the rig's own scope currently sits — the `SS` P3 MODE code as the ASCII byte the radio
+    /// sent, widened for JSON. `None` until one has been read.
+    ///
+    /// The UI needs it for two things: to show which of CENTER/CURSOR/FIX is live, and — because
+    /// the FT-710 carries all three positions inside each of three display families — so a request
+    /// to change position can keep the operator in the family they are already using.
+    pub scope_mode_code: Option<u32>,
+    /// The FIX start in force for this band, in MHz.
+    ///
+    /// `None` today in every shipped path: the only writer is `RadioProfile::yaesu_fix_starts`,
+    /// which has no writer of its own yet (see that field), so the loop falls back to
+    /// `yaesu_wf::auto_fix_start` — the measured band edge — and this stays empty. Kept because
+    /// the override is the only escape hatch if the operator moves the window from the front
+    /// panel, which the radio reports nowhere.
+    ///
+    /// Surfaced because the operator cannot otherwise tell a click that landed from one that did
+    /// not: stating a start and seeing the waterfall stay on sound-card audio has two very
+    /// different causes, and the control should say which side of it we are on.
+    pub scope_fix_start_mhz: Option<f64>,
     /// Set when two enabled radios are configured on the SAME serial COM port — the
     /// monitor radio's CAT can't open the busy port and shows a confusing red pill.
     /// A config warning (self-clears once the ports differ); surfaced in the status lane.
     #[serde(default)]
     pub radio_config_warning: Option<String>,
+    /// The radio reports essentially NO RF power while transmit is armed — it will key and put
+    /// nothing on the air. Deliberately a flag rather than a message: the UI owns the wording so
+    /// it can be translated, unlike `radio_config_warning`'s Rust-built string.
+    ///
+    /// This exists because the failure is invisible from the operator's own chair — the rig keys,
+    /// the meter shows TX, the over looks completely normal, and only the far end hears nothing
+    /// (operator, 2026-08-23: an FTDX10 whose per-mode power register sat at zero).
+    #[serde(default)]
+    pub tx_power_zero: bool,
     /// The last per-QSO recording failed, with the full path it failed at. Surfaced in the status
     /// lane and cleared by the next recording that succeeds.
     ///
@@ -884,6 +1084,137 @@ pub struct MeterReadout {
     /// CAT S-meter (dB relative to S9). `None` = the rig reports no STRENGTH (the meter shows
     /// "—" — absence stays absent, never a stale or invented level).
     pub smeter_db: Option<i32>,
+    /// The received CW tone measured in the passband around the operator's pitch, in Hz —
+    /// the CW cockpit's zero-beat indicator. `None` = the zero-beat measurement is off (any
+    /// section but CW) or nothing stands above the noise, and the indicator must then read
+    /// "nothing to tune to". Never a confident zero on a dead band.
+    ///
+    /// ⛔ A DISPLAY ONLY. No command consumes this to move a radio, and none may.
+    pub cw_tone_hz: Option<f32>,
+}
+
+/// The four values `AmpStatusDto::reason` can carry, and the whole vocabulary.
+///
+/// A TOKEN, NOT PROSE. `tx_power_zero` above states the rule for the field next to this one:
+/// "deliberately a flag rather than a message: the UI owns the wording so it can be translated,
+/// unlike `radio_config_warning`'s Rust-built string." An amplifier link's own `std::io::Error`
+/// text is English, is invisible to the hardcoded-string guard (it cannot see Rust `format!`),
+/// and would reach the screen untranslated.
+///
+/// `wrongModel` is the one that earns its place: an EXPERT 1K-FA speaks a different protocol on
+/// a link that is working perfectly, and its owner must not be told "no amplifier".
+pub const AMP_REASONS: [&str; 4] = ["portBusy", "noAnswer", "wrongModel", "malformed"];
+
+/// One amplifier reading, as the UI sees it. Read-only status; there is no write surface.
+///
+/// ⚠️ NEEDS-BENCH. Both codecs behind this are written from vendor specs. Two values are
+/// deliberately NOT here, and both absences are the honest reading:
+///
+/// - **The band is carried as a NAME, never a raw index.** The ladder was an inference from two
+///   published endpoints when this struct was written, which is why the index used to be
+///   withheld. It is now anchored at three: §5's `00` = 160m and `11` = 4m, plus a measured
+///   `01` = 80m from a real 1.5K-FA, and 60m is forced into the middle because without it 4m
+///   cannot land on 11. `band_label` is `None` for an index outside that ladder — a band an
+///   amplifier reports and we cannot name is a newer model, not a bad frame, and a wrong name
+///   in front of a kilowatt is worse than no name.
+/// - **No temperature unit, unless the protocol states one.** SPE's §5 says "Temp in °C or F" —
+///   the amplifier reports whatever its own front panel is set to and the wire does not say
+///   which. `temp_celsius` is therefore per-family and is the ONLY thing that licenses a scale
+///   letter on screen: true for the KPA (`^TM` is documented Celsius), false for SPE. A guessed
+///   °C is a false statement half the time.
+///
+/// ⭐ NO ENUM CROSSES THIS BOUNDARY. `SpeAlarm`/`SpeWarning` each carry an `Unknown(char)`
+/// variant, and serde's external tagging would emit `"none"` for a unit variant and
+/// `{"unknown":"Z"}` for the newtype — one Rust type with two JSON shapes. A TS string union
+/// compiles, never matches the object form, and falls through to its default branch, inverting
+/// the invariant those enums exist to hold: the failure direction of a status decoder in front
+/// of a kilowatt has to be toward reporting a fault, not toward silence. So each flattens to a
+/// camelCase String tag plus a bool precomputed from `is_raised()`, the way
+/// One World Radio League push, flattened for the UI (same shape as the HRDLog DTO).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WrlPushResultDto {
+    /// "accepted" | "duplicate" | "rejected" | "authFail" | "pending".
+    pub result: String,
+    /// Human detail when the service said something worth relaying.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+impl From<tempo_core::logbook::UploadOutcome> for WrlPushResultDto {
+    fn from(o: tempo_core::logbook::UploadOutcome) -> Self {
+        use tempo_core::logbook::UploadOutcome as O;
+        let result = match o {
+            O::Accepted => "accepted",
+            O::Duplicate => "duplicate",
+            O::Rejected => "rejected",
+            O::AuthFail => "authFail",
+            O::Pending => "pending",
+        };
+        Self {
+            result: result.into(),
+            message: None,
+        }
+    }
+}
+
+/// `ClubLogPushResultDto`/`HrdLogPushResultDto` already flatten their result enums.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AmpStatusDto {
+    /// Which protocol family answered: `"spe"` or `"kpa"`. Empty only before the first poll.
+    pub family: String,
+    /// SPE's raw model id as the amplifier reports it (`"13K"`, `"20K"`, and whatever a
+    /// 1.5K-FA calls itself) — kept raw on purpose: an id we do not recognise is a newer
+    /// amplifier, not a bad frame. Empty for the KPA, which does not report one here.
+    pub model: String,
+    /// `true` once a poll has succeeded. Flipped to false only after three CONSECUTIVE misses,
+    /// so one slow poll does not strobe the indicator; the readings below clear on the FIRST
+    /// miss regardless, because a stale number in front of a kilowatt is a lie and an absent
+    /// one is not.
+    pub linked: bool,
+    /// Why the link is down — one of [`AMP_REASONS`]. Empty while linked.
+    pub reason: String,
+    /// `true` = OPERATE, `false` = STANDBY. `None` when there is no reading.
+    pub operate: Option<bool>,
+    /// The amplifier sees the exciter keyed. SPE only — the KPA does not report it.
+    pub transmitting: Option<bool>,
+    /// Measured output power, watts.
+    pub output_watts: Option<u16>,
+    /// The band the amplifier says it is on, named (`"80m"`). `None` when it reports an index
+    /// outside the known ladder — unnamed rather than guessed. The raw index is deliberately
+    /// not on the wire: it means nothing to an operator and invites arithmetic on a value whose
+    /// middle is derived rather than published.
+    pub band_label: Option<String>,
+    /// VSWR at the antenna. `None` when not transmitting — the KPA reads `000` off air, which
+    /// is "no reading", not a 0:1 match no antenna could produce.
+    pub swr: Option<f32>,
+    /// VSWR measured BEFORE the ATU. SPE only.
+    pub swr_atu: Option<f32>,
+    /// PA supply voltage.
+    pub volts: Option<f32>,
+    /// PA supply current.
+    pub amps: Option<f32>,
+    /// Heatsink / PA temperature — a bare number whose scale is `temp_celsius`.
+    pub temp: Option<i16>,
+    /// Is [`Self::temp`] known to be Celsius? True for the KPA ONLY. When false the UI must
+    /// render the number with a degree sign and NO scale letter.
+    pub temp_celsius: bool,
+    /// SPE alarm, flattened to a camelCase tag: `"none"`, `"swrExceedingLimits"`,
+    /// `"amplifierProtection"`, `"inputOverdriving"`, `"excessOverheating"`, `"combinerFault"`,
+    /// or `"unknown"` for a code this firmware reports and the spec does not list. Empty when
+    /// the family does not report alarms.
+    pub alarm: String,
+    /// Precomputed from `SpeAlarm::is_raised()` — an UNKNOWN code counts as raised. The UI
+    /// colours from this and never from a tag comparison, so a new alarm letter shipped by a
+    /// later firmware reads as a fault rather than as silence.
+    pub alarm_raised: bool,
+    /// SPE warning, flattened the same way. Empty when the family does not report warnings.
+    pub warning: String,
+    /// Precomputed from `SpeWarning::is_raised()`.
+    pub warning_raised: bool,
+    /// Elecraft `^FL` fault identifier; `0` = no fault. KPA only.
+    pub kpa_fault: Option<u8>,
 }
 
 /// The operating mode of the live engine.
@@ -977,6 +1308,12 @@ pub struct FieldDayQso {
     /// Scoring class: "DIG" | "CW" | "PH".
     #[serde(default)]
     pub mode: String,
+    /// The ACTUAL on-air mode behind a "DIG" class (ADIF-style, uppercase:
+    /// "FT8", "RTTY"…). Empty = not recorded (legacy rows, and CW/PH where the
+    /// class IS the mode). The interop push reads this so a WFD RTTY contact
+    /// is never pushed to N3FJP/N1MM as "FT8" — a banned mode there.
+    #[serde(default)]
+    pub submode: String,
     /// Unix seconds when logged (drives interop-push timestamps).
     #[serde(default)]
     pub when_unix: u64,
@@ -1014,7 +1351,90 @@ pub struct FieldDayStatus {
     /// powered_points + bonus_points — the claimed total.
     #[serde(default)]
     pub total_score: u32,
+    /// The active-or-next occurrence of this event's window (Unix UTC),
+    /// computed in Rust from the ruleset data — the single source the
+    /// banner/countdown reads. (The TS date math this replaces hardcoded a
+    /// 24 h duration, which dropped SFD's final 3 and WFD's final 6 hours.)
+    #[serde(default)]
+    pub event_start_unix: u64,
+    #[serde(default)]
+    pub event_end_unix: u64,
+    /// The active ruleset's rules year + the rules data's `generated` stamp —
+    /// which parameters are scoring this log (the banner shows both).
+    #[serde(default)]
+    pub rules_year: u16,
+    #[serde(default)]
+    pub rules_generated: String,
+    /// The assistance sources EFFECTIVELY ON right now — the display labels from
+    /// `Settings::assistance_sources()` whose flag is true. The single list the
+    /// warn-only assistance advisory reads: the UI never re-derives what counts
+    /// as assistance from raw toggles (it would get cluster/AI-CW gating wrong).
+    #[serde(default)]
+    pub assistance_on: Vec<String>,
     pub log: Vec<FieldDayQso>,
+    /// Club-sync state (the Nexus↔Nexus event sync) — `None` while neither
+    /// hosting nor joined, so a solo Field Day pays nothing for the feature.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub club: Option<FdClubDto>,
+}
+
+/// One club band-board row — where a position is and how it is doing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FdClubBoardRow {
+    /// This position's identity — stable, unique, and NOT for display. It is the
+    /// row's key; the raw id used to double as the label, which put "9a85f060"
+    /// on the club board where a tent name belongs.
+    pub posid: String,
+    /// Friendly label ("CW tent"). EMPTY when the position has not been named —
+    /// what an unnamed position reads as is prose, so the UI decides it.
+    pub pos_name: String,
+    pub band: String,
+    pub mode: String,
+    pub operator: String,
+    /// Merged rows from this position (raw).
+    pub qsos: u64,
+    /// Merged rows in the trailing 60 min.
+    pub rate: u64,
+    /// Seconds since the host last heard from it — the UI stale-marks
+    /// rows past 15 s (readings are never silently stale).
+    pub last_seen_secs: u64,
+}
+
+/// The club block on [`FieldDayStatus`]: sync honesty + the down-flowed club
+/// state every position holds (host included — it mirrors itself over
+/// loopback, so this block is uniform across roles).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FdClubDto {
+    /// "disabled" | "offline" | "behind" | "synced" — DERIVED from (link
+    /// liveness, queued), so the chip can never disagree with the queue.
+    pub sync_state: String,
+    /// Own rows the host has not acked yet.
+    pub queued: u64,
+    /// Unix seconds the link went down (0 unless offline).
+    pub offline_since_unix: u64,
+    /// True when this instance is the host (fd_host_enable).
+    pub hosting: bool,
+    /// Event name + host callsign from the welcome.
+    pub event: String,
+    pub host_call: String,
+    /// Club counters as pushed down: claimed score, raw merged QSOs,
+    /// distinct sections.
+    pub score: u32,
+    pub qsos: u64,
+    pub sections: u32,
+    /// Local minus host clock (secs) at the last welcome — the UI warns
+    /// above ±30 s ("check this PC's clock"); nothing is ever adjusted.
+    pub skew_secs: i64,
+    /// The last host `error` line, verbatim (version refusal etc.).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+    /// Club dupe keys `(call, band, mode class)` NOT already in the own log —
+    /// the entry fields' while-typing warning checks own ∪ these. Club-only
+    /// keys keep the list small (the own log already ships in `log`).
+    pub dupes: Vec<(String, String, String)>,
+    pub board: Vec<FdClubBoardRow>,
 }
 
 /// Serializable per-source upload status (mirror of `tempo_core` `UploadStatus`).
@@ -1024,6 +1444,15 @@ pub struct UploadStatusDto {
     /// "pending" | "accepted" | "duplicate" | "rejected" | "authfail".
     pub outcome: String,
     pub when_unix: i64,
+    /// The failure CLASS as a token — "credentials" | "cert" | "station-location" | "record"
+    /// | "partial" | "unclassified" | "declared" — exactly like `outcome`, and for the same
+    /// reason. [`tempo_core::logbook::UploadDetail::ALL`] is the set; this list is a reading
+    /// aid and cannot be relied on to be current.
+    ///
+    /// ⛔ Not the service's prose, and not the English sentence either: this DTO round-trips
+    /// back into a `QsoRecord`, so a free string here would be a way to write text into
+    /// `log.adi` from the webview. Anything that is not a known token is dropped on the way
+    /// back. See [`tempo_core::logbook::UploadDetail`].
     pub detail: Option<String>,
 }
 
@@ -1046,7 +1475,7 @@ impl From<tempo_core::logbook::UploadStatus> for UploadStatusDto {
         UploadStatusDto {
             outcome: s.outcome.code().to_string(),
             when_unix: s.when_unix,
-            detail: s.detail,
+            detail: s.detail.map(|d| d.code().to_string()),
         }
     }
 }
@@ -1056,7 +1485,10 @@ impl From<UploadStatusDto> for tempo_core::logbook::UploadStatus {
             outcome: tempo_core::logbook::UploadOutcome::from_code(&s.outcome)
                 .unwrap_or(tempo_core::logbook::UploadOutcome::Rejected),
             when_unix: s.when_unix,
-            detail: s.detail,
+            detail: s
+                .detail
+                .as_deref()
+                .and_then(tempo_core::logbook::UploadDetail::from_code),
         }
     }
 }
@@ -1302,6 +1734,13 @@ impl From<QslSentDto> for tempo_core::logbook::QslSent {
                 .via
                 .and_then(|c| tempo_core::logbook::QslVia::from_code(&c.to_string())),
             date_unix: s.date_unix,
+            // The operator's CLEAR decision is deliberately not on this wire, and does not
+            // need to be. Every path that turns a `LoggedQso` back into a stored record either
+            // creates a NEW contact (never cleared) or goes through `Logbook::update_record`,
+            // which copies the whole `QslSent` off the existing record so an edit form cannot
+            // wipe an operator-declared mark. Carrying it here would only add a breaking wire
+            // field the UI has no use for.
+            cleared_unix: None,
         }
     }
 }
@@ -1315,6 +1754,11 @@ impl From<LoggedQso> for tempo_core::logbook::QsoRecord {
             state: q.state,
             band: q.band,
             freq_mhz: q.freq_mhz,
+            // The SPLIT receive leg is not on this wire and does not need to be: the edit
+            // form has no control for it, and `Logbook::update_record` restores the stored
+            // value when an incoming record leaves it empty (the same rule it applies to
+            // TIME_OFF and the park refs). A manually logged contact has no split leg.
+            freq_rx_mhz: None,
             mode: q.mode,
             rst_sent: q.rst_sent,
             rst_rcvd: q.rst_rcvd,
@@ -1918,6 +2362,11 @@ pub struct AppSnapshot {
     /// Bumped by an inbound UDP Clear — the UI erases its panes on change.
     #[serde(default)]
     pub clear_tick: u32,
+    /// Bumped every time a QSO is logged, by ANY path — the UI fires the
+    /// "clear DX call after logging" wipe on change, so a backend auto-log
+    /// clears the cockpit's DX fields just like a manual log does.
+    #[serde(default)]
+    pub logged_tick: u32,
     /// Pending one-click POTA/SOTA hunt (the next QSO with this call auto-tags
     /// the park). None = not hunting.
     #[serde(default)]
@@ -1943,4 +2392,420 @@ pub struct AppSnapshot {
     pub upload_ok: bool,
     #[serde(default)]
     pub upload_tick: u32,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// Winlink — the mailbox, as the pane reads it.
+//
+// Every mailbox field is `Vec<u8>` in whatever encoding the sender used, and these DTOs are
+// JSON, so the boundary is where bytes become `String`. That conversion is LOSSY and deliberately
+// so: this is the display side, nothing here is written back toward the wire, and a replacement
+// character in a subject is strictly better than refusing to list a message that is sitting on
+// disk. ⚠️ Nothing lossy may go the other way — a MID travelling from the front end back toward
+// the store is matched against the filename alphabet the mailbox enforces, so the round trip is
+// exact by construction.
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+
+/// One row of the Winlink mailbox list.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WinlinkRow {
+    /// The message identifier, and the key every other Winlink command takes.
+    pub mid: String,
+    /// The `From:` header, or empty.
+    pub from: String,
+    /// Every `To:` header, in wire order. Winlink messages routinely carry several.
+    pub to: Vec<String>,
+    /// The `Subject:` header, or empty.
+    pub subject: String,
+    /// The `Date:` header verbatim — the SENDER's clock, not ours. See `arrived_unix`.
+    pub date: String,
+    /// The body's length in bytes.
+    pub body_len: usize,
+    /// Attachment filenames in `File:` order, so a row can show a paperclip without reading
+    /// the payloads.
+    pub attachments: Vec<String>,
+    /// The blob's size on disk, bytes.
+    pub blob_len: usize,
+    /// False when the blob on disk is not a readable B2 message. Such a row is still listed —
+    /// telling the operator the mailbox is empty when it is not is the failure the mailbox's
+    /// whole design avoids.
+    pub parsed: bool,
+    /// Unix seconds THIS station received it. `None` means the arrival is not accountable (no
+    /// journal row), which the UI renders as unknown. **It is never a fabricated value**: see
+    /// `tempo_core::winlink::restore`.
+    pub arrived_unix: Option<i64>,
+    /// Whether the message has an accountable arrival and has never been opened.
+    pub unread: bool,
+}
+
+/// One attachment, as the reader pane shows it. The payload is NOT carried — a Winlink message's
+/// attachments are its large part, and a list of names is what a pane needs to draw.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WinlinkAttachment {
+    /// The filename from the `File:` header.
+    pub name: String,
+    /// The payload's length in bytes.
+    pub len: usize,
+}
+
+/// One message, parsed for display.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WinlinkMessage {
+    /// The message identifier.
+    pub mid: String,
+    /// Every non-structural header, `(name, value)`, in wire order.
+    pub headers: Vec<(String, String)>,
+    /// The readable body. Always plain text on the wire; lossily decoded for display.
+    pub body: String,
+    /// The attachments, names and sizes only.
+    pub attachments: Vec<WinlinkAttachment>,
+}
+
+/// Live state of the Winlink session, for the status chip.
+///
+/// ⚠️ **There is no password field here and there must never be one.** Pinned by
+/// `the_session_dto_cannot_carry_a_password` below, so a field added later fails a test rather
+/// than shipping the operator's account secret into every status poll.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WinlinkSession {
+    /// The TCP connection to the CMS is up.
+    pub connected: bool,
+    /// The telnet pre-login finished — the B2F session has begun.
+    pub logged_in: bool,
+    /// Bytes received this session.
+    pub bytes_in: u64,
+    /// Bytes written this session.
+    pub bytes_out: u64,
+    /// Unix seconds of the most recent byte in either direction, or 0.
+    pub last_byte_unix: i64,
+    /// MIDs stored this session, in arrival order.
+    pub received: Vec<String>,
+    /// Protocol traces, display only.
+    pub traces: Vec<String>,
+    /// How the last session ended, once it has: "complete" | "stopped" | "peerClosed" | "io".
+    pub outcome: Option<String>,
+    /// The first thing that went irrecoverably wrong, rendered.
+    pub failed: Option<String>,
+}
+
+/// The `outcome` vocabulary — a TOKEN the UI switches on, never prose to render.
+///
+/// Named here for the same reason `AMP_REASONS` is: a UI switch can be exhaustive, and a
+/// Rust-authored English sentence can never reach the screen untranslated.
+pub const WINLINK_OUTCOMES: [&str; 4] = ["complete", "stopped", "peerClosed", "io"];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// ⭐ THE WIRE KEYS THE PANE READS, spelled out one at a time.
+    ///
+    /// `rename_all = "camelCase"` is the only thing turning `swr_atu` into `swrAtu`, and
+    /// `ui/src/types.ts` is hand-written — nothing else compares the two sides. A TS author
+    /// writing `swrATU` (the natural English spelling of an acronym) compiles clean on both
+    /// sides and renders "—" forever, which is the same shape as the shipped `decodeFLowHz`
+    /// rename. Each of these is a key whose camelCasing is not obvious from its Rust name.
+    #[test]
+    fn the_amp_status_wire_keys_are_the_exact_ones_the_ui_reads() {
+        let filled = AmpStatusDto {
+            family: "spe".into(),
+            model: "20K".into(),
+            linked: true,
+            reason: String::new(),
+            operate: Some(true),
+            transmitting: Some(false),
+            output_watts: Some(250),
+            band_label: Some("80m".into()),
+            swr: Some(1.5),
+            swr_atu: Some(1.2),
+            volts: Some(48.0),
+            amps: Some(32.5),
+            temp: Some(33),
+            temp_celsius: false,
+            alarm: "none".into(),
+            alarm_raised: false,
+            warning: "none".into(),
+            warning_raised: false,
+            kpa_fault: None,
+        };
+        let json = serde_json::to_string(&filled).unwrap();
+        for key in [
+            "\"swrAtu\"",
+            "\"bandLabel\"",
+            "\"outputWatts\"",
+            "\"tempCelsius\"",
+            "\"alarmRaised\"",
+            "\"warningRaised\"",
+            "\"kpaFault\"",
+        ] {
+            assert!(
+                json.contains(key),
+                "ui/src/types.ts reads {key}; if this key ever disagrees the reading renders \
+                 '—' forever and looks exactly like a dead amplifier. json = {json}"
+            );
+        }
+        // The snake_case spellings must be ABSENT — a `contains` on the camelCase key alone
+        // would pass just as happily if serde emitted both.
+        for wrong in [
+            "swr_atu",
+            "band_label",
+            "output_watts",
+            "temp_celsius",
+            "kpa_fault",
+        ] {
+            assert!(
+                !json.contains(wrong),
+                "snake_case {wrong} reached the wire — the container rename_all was lost"
+            );
+        }
+        // CONTROL: this is a real serialisation, not an empty haystack that would make every
+        // `contains` above vacuously true and every `!contains` vacuously true as well.
+        assert!(
+            json.contains("\"family\":\"spe\"") && json.contains("\"linked\":true"),
+            "control: the plain keys serialise too. json = {json}"
+        );
+    }
+
+    /// The three states the amplifier setting's own doc commits to (`settings.rs` `amp_port`:
+    /// "unconfigured shows nothing, configured-and-silent shows '—'"), pinned on the wire.
+    #[test]
+    fn the_three_amp_states_are_distinguishable_on_the_wire() {
+        // 1. No amplifier configured — the field is absent from the snapshot entirely.
+        let none: Option<AmpStatusDto> = None;
+        assert_eq!(serde_json::to_string(&none).unwrap(), "null");
+
+        // 2. Configured and not answering: present, linked false, every reading absent. A
+        // zeroed reading here would be a fabricated one — `amplifier.rs` forbids it in terms.
+        let silent = AmpStatusDto {
+            family: "kpa".into(),
+            linked: false,
+            reason: "noAnswer".into(),
+            ..AmpStatusDto::default()
+        };
+        let json = serde_json::to_string(&silent).unwrap();
+        assert!(json.contains("\"linked\":false"));
+        assert!(json.contains("\"reason\":\"noAnswer\""));
+        assert!(
+            json.contains("\"outputWatts\":null") && json.contains("\"swr\":null"),
+            "a failed poll clears every reading; it never writes a zero. json = {json}"
+        );
+
+        // 3. Live: linked, with readings.
+        let live = AmpStatusDto {
+            family: "kpa".into(),
+            linked: true,
+            output_watts: Some(500),
+            ..AmpStatusDto::default()
+        };
+        let json = serde_json::to_string(&live).unwrap();
+        assert!(json.contains("\"linked\":true") && json.contains("\"outputWatts\":500"));
+        assert!(
+            json.contains("\"reason\":\"\""),
+            "reason is empty while linked. json = {json}"
+        );
+    }
+
+    /// `reason` is a TOKEN, not prose. The whole vocabulary, so a UI switch can be exhaustive
+    /// and a Rust-authored English sentence can never reach the screen untranslated.
+    #[test]
+    fn the_reason_vocabulary_is_four_camel_case_tokens() {
+        for token in AMP_REASONS {
+            assert!(
+                !token.contains(' ') && token.is_ascii(),
+                "{token} looks like prose; `reason` is switched on by the UI, not rendered"
+            );
+        }
+        assert_eq!(
+            AMP_REASONS,
+            ["portBusy", "noAnswer", "wrongModel", "malformed"]
+        );
+    }
+
+    /// `Tier::Js8`: the wire name the UI switches on, the label, the degrade-don't-refuse
+    /// speed helper, and the mode-kind round trip for every speed.
+    #[test]
+    fn js8_tier_registers_with_the_js8call_speed_table() {
+        use modes::Js8Speed;
+        assert_eq!(serde_json::to_string(&Tier::Js8).unwrap(), "\"JS8\"");
+        assert_eq!(serde_json::from_str::<Tier>("\"JS8\"").unwrap(), Tier::Js8);
+        assert_eq!(Tier::Js8.label(), "JS8");
+        assert!(
+            !Tier::Js8.is_chat(),
+            "the Tempo chat cadence is on-air incompatible with JS8Call"
+        );
+        assert_eq!(Tier::ALL.len(), 12);
+        assert!(Tier::ALL.contains(&Tier::Js8));
+        for (i, speed) in Js8Speed::ALL.into_iter().enumerate() {
+            let kind = Tier::js8_kind(i as u8);
+            assert_eq!(kind, ModeKind::Js8 { speed });
+            assert_eq!(Tier::from_mode_kind(kind), Tier::Js8);
+            assert_eq!(Tier::Js8.mode_kind(60, 0, 120, 15, 0, i as u8), Some(kind));
+        }
+        // A stale or hand-edited index degrades to Normal instead of refusing to decode.
+        assert_eq!(Tier::js8_kind(4), ModeKind::JS8_NORMAL);
+        assert_eq!(Tier::js8_kind(255), ModeKind::JS8_NORMAL);
+    }
+
+    /// `Js8State` is serialised straight to the cockpit (no src-tauri DTO copy): pin the
+    /// camelCase keys the UI reads and the lowercase speed / origin spellings.
+    #[test]
+    fn js8_state_wire_keys_are_the_ones_the_ui_reads() {
+        use modes::Js8Speed;
+        let s = Js8State {
+            speed: Js8Speed::Turbo,
+            rx_speeds: 15,
+            tx_enabled: false,
+            sending: false,
+            hb_on: false,
+            hb_next_at_ms: None,
+            hb_interval_min: 0,
+            cq_on: true,
+            cq_next_at_ms: Some(9_000),
+            cq_interval_min: 5,
+            autoreply: true,
+            relay: true,
+            hb_ack: false,
+            armed: Js8Armed {
+                autoreply: false,
+                relay: false,
+                hb_ack: false,
+                hb: false,
+                cq: false,
+            },
+            idle_minutes: 3,
+            idle_limit_min: 60,
+            idle_tripped: false,
+            activity: vec![Js8ActivityRow {
+                at_ms: 1_000,
+                speed: Js8Speed::Normal,
+                freq_hz: 1500.0,
+                snr_db: -7,
+                dt_s: 0.1,
+                from: "KD2UWR".to_string(),
+                text: "KD2UWR: @HB HEARTBEAT FN30 ".to_string(),
+                directed_to_me: false,
+                mine: false,
+                complete: true,
+                low_conf: false,
+            }],
+            stations: Vec::new(),
+            inbox: Vec::new(),
+            queue: vec![Js8QueueRow {
+                origin: js8::Origin::HbAck,
+                display: "x".to_string(),
+                first: true,
+                last: true,
+            }],
+            pending_reply: None,
+            last_error: None,
+        };
+        let json = serde_json::to_string(&s).unwrap();
+        for k in [
+            "\"speed\":\"turbo\"",
+            "\"rxSpeeds\":15",
+            "\"txEnabled\":false",
+            "\"hbOn\":false",
+            "\"hbNextAtMs\":null",
+            "\"hbIntervalMin\":0",
+            "\"hbAck\":false",
+            "\"armed\":{\"autoreply\":false,\"relay\":false,\"hbAck\":false,\"hb\":false,\"cq\":false}",
+            "\"cqOn\":true",
+            "\"cqNextAtMs\":9000",
+            "\"cqIntervalMin\":5",
+            "\"idleMinutes\":3",
+            "\"idleLimitMin\":60",
+            "\"idleTripped\":false",
+            "\"atMs\":1000",
+            "\"freqHz\":1500.0",
+            "\"snrDb\":-7",
+            "\"dtS\":0.1",
+            "\"directedToMe\":false",
+            "\"lowConf\":false",
+            "\"origin\":\"hbAck\"",
+            "\"pendingReply\":null",
+            "\"lastError\":null",
+        ] {
+            assert!(json.contains(k), "missing {k} in {json}");
+        }
+        let back: Js8State = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, s);
+    }
+}
+
+#[cfg(test)]
+mod winlink_dto_tests {
+    use super::*;
+
+    /// The exact field set of the polled session DTO. **Adding a field here is a decision.**
+    ///
+    /// A `WinlinkSession` is polled every few seconds while a session runs; anything on it reaches
+    /// the front end, every devtools inspector and every serialized crash report with it. So the
+    /// check is the whole key set, not a search for the word "password" — a field named `secret`,
+    /// `token` or `pr` would carry the credential past a substring test with the suite still
+    /// green, which is what an earlier version of this test did while claiming otherwise.
+    ///
+    /// ⚠️ **What this pins is the shape, not the values.** It cannot tell whether `failed` was
+    /// built from a string that echoes a credential; that is enforced where the strings are made —
+    /// `winlink_connect`'s rule that no error message may echo an argument, and `ClientConfig`
+    /// deriving neither `Debug` nor `Serialize`. This is the guard for the field a future edit
+    /// adds without thinking about it.
+    #[test]
+    fn the_session_dto_cannot_carry_a_password() {
+        let s = WinlinkSession {
+            connected: true,
+            logged_in: true,
+            traces: vec!["greeted".into()],
+            ..WinlinkSession::default()
+        };
+        let json: serde_json::Value = serde_json::to_value(&s).unwrap();
+        let mut keys: Vec<&str> = json
+            .as_object()
+            .expect("the session DTO serializes as an object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            [
+                "bytesIn",
+                "bytesOut",
+                "connected",
+                "failed",
+                "lastByteUnix",
+                "loggedIn",
+                "outcome",
+                "received",
+                "traces",
+            ],
+            "the session DTO's field set changed; every field here is polled to the front end"
+        );
+        // `Debug` travels into panics and logs, and it renders field names the same way.
+        let debug = format!("{s:?}");
+        for key in ["password", "secret", "token", "credential"] {
+            assert!(
+                !debug.to_ascii_lowercase().contains(key),
+                "a {key}-shaped field reached the session DTO's Debug: {debug}"
+            );
+        }
+    }
+
+    /// `outcome` is switched on, not rendered — same rule as `AMP_REASONS`.
+    #[test]
+    fn the_outcome_vocabulary_is_four_camel_case_tokens() {
+        for token in WINLINK_OUTCOMES {
+            assert!(
+                !token.contains(' ') && token.is_ascii(),
+                "{token} looks like prose; `outcome` is switched on by the UI, not rendered"
+            );
+        }
+        assert_eq!(
+            WINLINK_OUTCOMES,
+            ["complete", "stopped", "peerClosed", "io"]
+        );
+    }
 }

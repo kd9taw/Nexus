@@ -41,6 +41,7 @@ import {
   setNotchFreq,
   setAgc,
   setScopeSpan,
+  setYaesuScopeMode,
   setScopeRef,
   setFlexPanSpan,
   setFlexPanRef,
@@ -55,13 +56,15 @@ import { pushToast } from '../toast'
 import { RotorStrip } from './RotorStrip'
 import { MemoryStrip } from './MemoryStrip'
 import type { Memory } from '../features/memories'
-import { setFrequency, setSplit, setRigFunc, setSidebandOverride, setFilterWidth, openPanelWindow } from '../api'
+import { setFrequency, setRigFunc, setSidebandOverride, setFilterWidth, openPanelWindow } from '../api'
 import { bandLabelForMhz, sidebandForQsy } from '../band'
 import { isRfScopeSource, NO_NATIVE_SCOPE_REASON } from '../waterfall'
 import { useWheelTune } from '../useWheelTune'
 import { useScopeTune } from '../useScopeTune'
 import { useRegionCols } from '../useRegionCols'
 import { t } from '../i18n'
+import { SplitControl } from './SplitControl'
+import type { MessageKey } from '../i18n'
 
 /** This cockpit's INVARIANT vocabulary — the words that are technical tokens rather than
  *  prose, gathered here so the i18n guard reads them as the deliberate constants they are:
@@ -78,13 +81,24 @@ const BW = 'BW'
 const DB = 'dB'
 const DBM = 'dBm'
 const REC = 'REC'
-const SPLIT_PLATE = 'SPLIT'
 /** The mode picker's AUTO face — the word and the sideband it resolved to, both tokens. */
 const autoPlate = (sideband: string) => `AUTO·${sideband}`
 /** The nudges the two steppers take, as their tooltips print them — figures, so they are
  *  supplied to the message rather than written in it. */
 const FILTER_STEP_HZ = 100
-const SPLIT_STEP_KHZ = 1
+
+/** The AGC chips, in the order `Engine::AGC_SPEEDS` lists them: AUTO left of the three time
+ *  constants, OFF right of them — most-automatic through to no AGC at all. The `id` is the
+ *  token that goes on the wire and the label is a KEY, not a word: `t()` runs when the row
+ *  RENDERS, so a locale switch relabels the chips and the chip is still compared on its id
+ *  (the same split RF_SPANS makes, and for the same reason). */
+const AGC_CHIPS = [
+  { id: 'auto', labelKey: 'phone.rxDsp.agc.auto' },
+  { id: 'fast', labelKey: 'phone.rxDsp.agc.fast' },
+  { id: 'mid', labelKey: 'phone.rxDsp.agc.mid' },
+  { id: 'slow', labelKey: 'phone.rxDsp.agc.slow' },
+  { id: 'off', labelKey: 'phone.rxDsp.agc.off' },
+] as const satisfies readonly { id: string; labelKey: MessageKey }[]
 
 interface Props {
   /** Which panels this cockpit shows or hides (⊞ Panels). Owned by the HOST (App), never
@@ -124,6 +138,9 @@ interface Props {
   /** Open Settings at a section id (see settings/registry.ts). Absent ⇒ the surfaces that
    * point at Settings stay plain text. */
   onOpenSettings?: (target: string) => void
+  /** Open the Logbook filtered to a callsign (#192) — handed to the log strip's recall card,
+   *  whose previous-contact rows become clickable when it is present. Omitted ⇒ inert rows. */
+  onOpenLogbook?: (call: string) => void
 }
 
 /**
@@ -218,7 +235,7 @@ const DSP_FUNCS = [
 ] as const
 
 /** Bandscope span presets — the width of OCCUPIED SIDEBAND to show, because the scope's axis
- *  is the rig's: RF offset from the dial, dial at the 1/4 mark and the sideband filling the
+ *  is the rig's: RF offset from the dial, dial at the 1/9 mark and the sideband filling the
  *  rest (PhoneScope's `carrierCentered`). The engine is asked for exactly 0..width — receiver
  *  audio is one-sided — so the preset is both what is captured and 3/4 of what is shown; the
  *  remaining quarter is scopeView's guard band, which has no data by construction.
@@ -310,6 +327,31 @@ const RF_SPANS = [
   },
 ] as const
 
+/** The FT-710's OWN span ladder (CAT reference, `SS` P2=5) — these command the RADIO, not a crop.
+ *
+ *  The operator's expectation, and it is the right one: the app's panadapter should reflect the
+ *  radio's, its settings and its width. Cropping the row client-side shows a narrower window of the
+ *  SAME sweep — ±5 kHz out of 200 kHz is ~42 of 850 bins stretched across the panel, which is why
+ *  it looked coarse. Asking the RADIO for a 10 kHz sweep puts all 850 bins across it: 12 Hz per bin
+ *  instead of 235.
+ *
+ *  `label` is the radio's own name for the rung (the FT-710 menu says "200 kHz", never "±100k").
+ *  `halfHz` is what goes on the wire, because `setScopeSpan` was written for Icom CI-V 27 15 and its
+ *  argument is ± half the sweep; the backend doubles it back. Every rung the rig has is offered —
+ *  a span it cannot sweep is refused rather than rounded, so the two ladders cannot drift apart. */
+const YAESU_SPANS = [
+  { label: '1k', halfHz: 500 },
+  { label: '2k', halfHz: 1_000 },
+  { label: '5k', halfHz: 2_500 },
+  { label: '10k', halfHz: 5_000 },
+  { label: '20k', halfHz: 10_000 },
+  { label: '50k', halfHz: 25_000 },
+  { label: '100k', halfHz: 50_000 },
+  { label: '200k', halfHz: 100_000 },
+  { label: '500k', halfHz: 250_000 },
+  { label: '1M', halfHz: 500_000 },
+] as const
+
 /** RIG scope-span presets (native Icom CI-V only) — these change the RADIO's real panadapter
  *  sweep width via CI-V 27 15 (± half-width in Hz), from the rig's own span table. Unlike the
  *  client-side RF zoom above, this commands the hardware. */
@@ -334,7 +376,7 @@ const FLEX_SPANS = [
   { label: '2M', hz: 2_000_000 },
 ] as const
 
-export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, fieldDay, phoneMode, wheelSensitivity, spots, needByCall, typeByCall, onWorkSpot, onRecallMemory, onOpenMemories, onOpenSettings, panels }: Props) {
+export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, fieldDay, phoneMode, wheelSensitivity, spots, needByCall, typeByCall, onWorkSpot, onRecallMemory, onOpenMemories, onOpenSettings, onOpenLogbook, panels }: Props) {
   // Live S-meter (shared 100 ms poll, lock-free backend) — used to arrive via the 300 ms
   // snapshot on top of the backend's own sampling, which read as a laggy needle. smeterDb-only
   // subscription: the cockpit re-renders when the S-meter changes, never on RX-level churn.
@@ -416,7 +458,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   const [agcPick, setAgcPick] = useState<string | null>(null)
   const agc =
     agcPick != null && agcPick !== snap.radio.refusedAgc ? agcPick : (snap.radio.agc ?? null)
-  const changeAgc = (sp: 'fast' | 'mid' | 'slow') => {
+  const changeAgc = (sp: 'auto' | 'fast' | 'mid' | 'slow' | 'off') => {
     setAgcPick(sp)
     void setAgc(sp)
       .then((s) => onSnap?.(s))
@@ -450,7 +492,13 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   // badly. The engine-side half of the same bench finding IS fixed: disarming TX now drops a
   // held PTT instead of letting a re-arm re-key it.
 
-
+  /** Mirrors `keyed` for the window key handlers, which capture their closure once per
+   *  effect run — the release must act on what is TRUE when it fires, not on what was true
+   *  when it was bound. See the space-release comment below. */
+  const keyedRef = useRef(false)
+  useEffect(() => {
+    keyedRef.current = keyed
+  }, [keyed])
   // Bandscope span (audio-window zoom within the captured passband — this is
   // soundcard audio, not RF IQ, so "span" means which slice of the passband
   // fills the scope).
@@ -466,6 +514,43 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   // framing (the "RX audio" label and the audio-Hz span chips) so the operator sees ONE unambiguous
   // display — the panadapter — instead of RF spectrum wrapped in audio-passband chrome.
   const nativeRf = scopeFeed != null && isRfScopeSource(scopeFeed.source)
+  // The FT-710 is the one native scope whose SPAN this app can command over plain CAT, so its
+  // control row is the rig's own ladder rather than a client-side crop. Icom/Flex keep the crop:
+  // their hardware span already has its own row (RIG_SPANS / FLEX_SPANS) further down.
+  // TWO DIFFERENT QUESTIONS, and conflating them cost the operator the only way out of FIX.
+  //
+  // `yaesuScope` — does this radio have a scope Nexus is talking to? True as soon as the mode code
+  // has been read over CAT, which happens whether or not the sweep can be PLACED. The controls hang
+  // off this.
+  // `yaesuRf` — are RF rows arriving right now? The view bounds hang off this, because when the feed
+  // falls back to sound-card audio the axis really is audio.
+  //
+  // Gating the controls on the feed made them vanish exactly when they were needed: in FIX with no
+  // start stated no rows flow, so the panadapter block unmounted — and the position select went
+  // with it, leaving no way to get back to Center and no way to see why the panel had emptied.
+  //
+  // The original wording here justified that by a "FIX starts here" button being taken away with
+  // the block. There is no such button: the chip-row input that would have driven one was removed
+  // once the band-edge derivation proved right on the air (see `RadioProfile::yaesu_fix_starts`),
+  // and `Engine::set_yaesu_fix_start` still has no caller. The reason to keep the controls mounted
+  // survives that — it is the position select, not a start button, that must not disappear.
+  const yaesuScope = snap.radio.scopeModeCode != null
+  const yaesuRf = scopeFeed?.source === 'yaesu'
+  // What the radio reports, so the two selects show the rig's state rather than a local guess.
+  // `scopeModeCode` is the `SS` P3 byte widened for JSON; an unknown code shows as Center, which is
+  // the only position this app can place anyway.
+  const yaesuPosition: 'center' | 'cursor' | 'fix' = (() => {
+    switch (snap.radio.scopeModeCode ?? 0x34) {
+      case 0x31: case 0x36: case 0x37: return 'cursor'
+      case 0x32: case 0x39: case 0x41: return 'fix'
+      default: return 'center'
+    }
+  })()
+  // The span the radio is sweeping, matched back onto the ladder for the <select>'s value.
+  const yaesuSpanLabel =
+    YAESU_SPANS.find((sp) => scopeFeed != null && Math.abs((scopeFeed.hiHz - scopeFeed.loHz) - sp.halfHz * 2) < sp.halfHz * 0.1)?.label ??
+    YAESU_SPANS[7].label
+
   // True only when the rig's own Icom scope is streaming (span/ref are Icom CI-V commands; the
   // Flex panadapter has a different control path, so gate on 'civ' specifically, not any RF feed).
   const civScope = scopeFeed?.source === 'civ'
@@ -559,8 +644,11 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   // Transient operator override ("USB"/"LSB"/"FM") or null = AUTO. The COMMANDED mode (canonical
   // for TX/logging + what the rig is set to) is the override when set, else the band-auto sideband.
   const modeOverride = snap.radio.sidebandOverride ?? null
+  // Bands where AM is worked: the HF windows below 10 MHz, and 10 m / 6 m and up. Mirrors the
+  // comment on the picker's filter below.
+  const amBandOk = snap.radio.dialMhz > 0 && (snap.radio.dialMhz < 10 || snap.radio.dialMhz >= 28)
   const commandedMode = modeOverride ?? sidebandAuto
-  const pickMode = (m: 'USB' | 'LSB' | 'FM' | null) =>
+  const pickMode = (m: 'USB' | 'LSB' | 'FM' | 'AM' | null) =>
     void setSidebandOverride(m)
       .then((s) => onSnap?.(s))
       .catch(() => pushToast(t('phone.mode.failed'), 'error'))
@@ -610,39 +698,6 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   // is said. Same chip vocabulary as the mode-mismatch pill beside it — no new pane, no
   // structural size of its own (cockpit-panes.css owns those).
   const micOffForDax = snap.radio.flexDaxTx === true
-
-  // Manual split (casual DX "work up N"): the desired TX dial lives in the snapshot; a plain
-  // retune clears it (backend). Offset is kHz off the RX dial; default +5, the common pileup.
-  const [splitOffsetKhz, setSplitOffsetKhz] = useState(5)
-  const splitTxMhz = snap.radio.splitTxMhz ?? null
-  const splitOn = splitTxMhz != null
-  // When split turns on externally (e.g. a pile-up spot programs it), sync the local offset
-  // to the rig so the display + bumping start from the real value, not a stale default.
-  const wasSplitOn = useRef(false)
-  useEffect(() => {
-    if (splitOn && !wasSplitOn.current && splitTxMhz != null) {
-      setSplitOffsetKhz(Math.round((splitTxMhz - snap.radio.dialMhz) * 1000))
-    }
-    wasSplitOn.current = splitOn
-  }, [splitOn, splitTxMhz, snap.radio.dialMhz])
-  const applySplitTx = (offsetKhz: number) =>
-    setSplit(snap.radio.dialMhz + offsetKhz / 1000)
-      .then((s) => onSnap?.(s))
-      .catch(() => pushToast(t('phone.split.setFailed'), 'error'))
-  const toggleSplit = () =>
-    splitOn
-      ? setSplit(null)
-          .then((s) => onSnap?.(s))
-          .catch(() => pushToast(t('phone.split.clearFailed'), 'error'))
-      : applySplitTx(splitOffsetKhz)
-  // Accumulate on local state (functional updater) so rapid bumps that fire before the
-  // IPC/onSnap round-trip don't all read the same stale value and collapse into one step.
-  const bumpSplit = (delta: number) =>
-    setSplitOffsetKhz((prev) => {
-      const next = Math.max(-90, Math.min(90, prev + delta))
-      if (splitOn) void applySplitTx(next)
-      return next
-    })
 
   // Live snapshot ref so the spacebar PTT handler (bound on `lock` changes, not every render)
   // reads the CURRENT TX-allowed privilege state through key() — not whatever existed when bound.
@@ -739,8 +794,16 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
         key(true)
       }
     }
+    // ⚠️ THE RELEASE ASKS ONLY WHETHER WE ARE KEYED. It used to carry the same
+    // `!isField` guard as the press, on the reasoning that nothing here moves focus by
+    // itself — but the OPERATOR does: hold the space bar to talk, click into the log strip
+    // while still holding, release, and the keyup now targets an INPUT. The old guard
+    // returned, `key(false)` never fired, and the rig stayed keyed with the button still
+    // reading "release to stop", which is exactly what had just been done. An unkey a guard
+    // can swallow is a stuck transmitter. The PRESS keeps its guard — a space typed into a
+    // field must never start a transmission — and the asymmetry is the whole point.
     const up = (e: KeyboardEvent) => {
-      if (e.code === 'Space' && !isField(e.target) && !lock) {
+      if (e.code === 'Space' && keyedRef.current && !lock) {
         e.preventDefault()
         key(false)
       }
@@ -1117,19 +1180,15 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
             {snap.radio.agc != null && (
               <div className="ph-agc" role="group" aria-label={t('phone.rxDsp.agc.aria')} title={t('phone.rxDsp.agc.title')}>
                 <span className="ph-dsplev-lbl">{AGC}</span>
-                {(['fast', 'mid', 'slow'] as const).map((sp) => (
+                {AGC_CHIPS.map(({ id, labelKey }) => (
                   <button
-                    key={sp}
+                    key={id}
                     type="button"
-                    className={`theme-chip${agc === sp ? ' active' : ''}`}
-                    aria-pressed={agc === sp}
-                    onClick={() => changeAgc(sp)}
+                    className={`theme-chip${agc === id ? ' active' : ''}`}
+                    aria-pressed={agc === id}
+                    onClick={() => changeAgc(id)}
                   >
-                    {sp === 'fast'
-                      ? t('phone.rxDsp.agc.fast')
-                      : sp === 'mid'
-                        ? t('phone.rxDsp.agc.mid')
-                        : t('phone.rxDsp.agc.slow')}
+                    {t(labelKey)}
                   </button>
                 ))}
               </div>
@@ -1148,6 +1207,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
           card scrolls inside the log column and can never squeeze the cockpit — the operator
           gets the QRZ photo / bearing / history back while operating. */}
       <LogEntry
+        onOpenLogbook={onOpenLogbook}
         snap={snap}
         mode={commandedMode === 'FM' ? 'FM' : 'SSB'}
         defaultRst="59"
@@ -1173,7 +1233,21 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
         onSnap={onSnap}
         modeIndicator={
           <div className="ph-mode-pick" role="group" aria-label={t('phone.mode.aria')}>
-            {(['AUTO', 'USB', 'LSB', 'FM'] as const).map((m) => {
+            {(['AUTO', 'USB', 'LSB', 'FM', 'AM'] as const)
+              // AM IS OFFERED ONLY WHERE AM IS ACTUALLY WORKED — below 10 MHz (the 1.885,
+              // 3.870-3.890 and 7.290 windows) and at 28 MHz and up (29.0-29.2, 50.4 and above).
+              // 20/17/15/12 m are not AM territory, and a 6 kHz emission there has no room in the
+              // band plan.
+              //
+              // NOT OFFERING it rather than refusing it, deliberately. The cockpit pick is the
+              // operator's own CURRENT action and this app honours those — `sideband_override` is
+              // already cleared by a band change, a cross-band knob QSY, working a spot and an
+              // SSTV tune, so unlike the station-wide `phone_mode` it cannot follow anybody onto a
+              // band they did not choose it for. There is no stale state to protect against here;
+              // the only thing worth doing is not putting a button in front of somebody on a band
+              // where it makes no sense.
+              .filter((m) => m !== 'AM' || amBandOk)
+              .map((m) => {
               const active = m === 'AUTO' ? modeOverride === null : modeOverride === m
               return (
                 <button
@@ -1267,36 +1341,11 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
           </span>
         )}
         {catOk && (
-          <div className={`ph-split ${splitOn ? 'on' : ''}`}>
-            <button
-              className="ph-split-toggle"
-              onClick={toggleSplit}
-              title={
-                splitOn
-                  ? t('phone.split.on.title', { freq: splitTxMhz?.toFixed(3) ?? '' })
-                  : t('phone.split.off.title')
-              }
-            >
-              {SPLIT_PLATE}
-            </button>
-            <button
-              className="ph-split-step"
-              onClick={() => bumpSplit(-SPLIT_STEP_KHZ)}
-              title={t('phone.split.lower.title', { step: SPLIT_STEP_KHZ })}
-            >
-              −
-            </button>
-            <span className="ph-split-amt mono" title={t('phone.split.offset.title')}>
-              {splitOffsetKhz >= 0 ? `+${splitOffsetKhz}` : `${splitOffsetKhz}`}
-            </span>
-            <button
-              className="ph-split-step"
-              onClick={() => bumpSplit(SPLIT_STEP_KHZ)}
-              title={t('phone.split.higher.title', { step: SPLIT_STEP_KHZ })}
-            >
-              +
-            </button>
-          </div>
+          <SplitControl
+            snap={snap}
+            onSnap={onSnap}
+            onError={(m) => pushToast(m, 'error')}
+          />
         )}
         {!catOk && (
           <span
@@ -1433,7 +1482,45 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
           <PalettePicker />
         </div>
         <div className="ph-scope-wrap" ref={scopeRef} title={t('phone.scope.tuneHint')}>
-          {nativeRf ? (
+          {yaesuScope ? (
+            // The FT-710 sweeps its own span and owns where the sweep sits, so these command the RADIO
+            // and the app draws what comes back. Two compact <select>s rather than thirteen chips: the
+            // rig has ten span rungs and three positions, and a chip row that long crowds the scope it
+            // is supposed to serve.
+            <div className="ph-span" role="group" aria-label={t('phone.scope.yaesu.aria')}>
+              <select
+                className="theme-chip"
+                aria-label={t('phone.scope.yaesu.span.aria')}
+                title={t('phone.scope.yaesu.span.title')}
+                value={yaesuSpanLabel}
+                onChange={(e) => {
+                  const sp = YAESU_SPANS.find((x) => x.label === e.target.value)
+                  if (sp) void setScopeSpan(sp.halfHz).then((s) => onSnap?.(s)).catch((e) => pushToast(String(e), 'error'))
+                }}
+              >
+                {YAESU_SPANS.map((sp) => (
+                  <option key={sp.label} value={sp.label}>
+                    {sp.label}Hz
+                  </option>
+                ))}
+              </select>
+              <select
+                className="theme-chip"
+                aria-label={t('phone.scope.yaesu.pos.aria')}
+                title={t('phone.scope.yaesu.pos.title')}
+                value={yaesuPosition}
+                onChange={(e) => {
+                  const pos = e.target.value as 'center' | 'cursor' | 'fix'
+                  void setYaesuScopeMode(pos).then((s) => onSnap?.(s)).catch((e) => pushToast(String(e), 'error'))
+                }}
+              >
+                <option value="center">{t('phone.scope.yaesu.pos.center')}</option>
+                <option value="cursor">{t('phone.scope.yaesu.pos.cursor')}</option>
+                <option value="fix">{t('phone.scope.yaesu.pos.fix')}</option>
+              </select>
+            </div>
+          ) : nativeRf ? (
+
             // Native RF panadapter: RF-width zoom around the dial (not audio-passband slices).
             <div className="ph-span" role="group" aria-label={t('phone.rfZoom.aria')}>
               {RF_SPANS.map((sp) => (
@@ -1469,8 +1556,8 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
             transmitting={snap.radio.transmitting}
             theme={theme}
             smeterDb={smeterDb}
-            viewLoHz={nativeRf ? rfSpan.lo : 0}
-            viewHiHz={nativeRf ? rfSpan.hi : (span.widthHz || Math.min(4000, Math.max(800, filterHz ?? 4000)))}
+            viewLoHz={yaesuRf ? -1e9 : nativeRf ? rfSpan.lo : 0}
+            viewHiHz={yaesuRf ? 1e9 : nativeRf ? rfSpan.hi : (span.widthHz || Math.min(4000, Math.max(800, filterHz ?? 4000)))}
             carrierCentered={!nativeRf}
             sideband={commandedMode}
             dialHz={snap.radio.dialMhz > 0 ? Math.round(snap.radio.dialMhz * 1e6) : null}

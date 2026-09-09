@@ -154,6 +154,9 @@ body:
       description: >-
         A waterfall capture, the decode feed, an ADIF snippet, or a short WAV of
         the received signal. A WAV is the single most useful artefact, because it
-        can be replayed against the decoder here.
+        can be replayed against the decoder here. `nexus-diag.log` is worth
+        attaching too — it sits beside your log file (Settings, Logging, Reveal
+        in folder), Nexus writes it all the time so there is nothing to turn on,
+        and passwords and keys are masked before anything reaches it.
     validations:
       required: false

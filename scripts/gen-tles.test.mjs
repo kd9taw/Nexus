@@ -288,8 +288,8 @@ test('every catalog row carries its classes, with or without elements', () => {
 test('the union publishes elements for exactly the ACTIVE amateur population', () => {
   const { manifest } = build()
   const cat = manifest.catalog
-  assert.equal(cat.length, 18, 'eighteen amateur birds in the fixture')
-  assert.equal(manifest.catalogCount, 18)
+  assert.equal(cat.length, 19, 'nineteen amateur birds in the fixture')
+  assert.equal(manifest.catalogCount, 19)
   const withEls = cat.filter((b) => b.src)
   assert.equal(withEls.length, 12, 'twelve of them are active AND have current elements')
   assert.equal(manifest.count, manifest.elements.length)
@@ -409,6 +409,71 @@ test('every catalog entry with elements agrees with its element line', () => {
     assert.ok(byNorad.has(b.norad), `catalog ${b.norad} claims elements it has not got`)
   }
   assert.equal(byNorad.size, manifest.catalog.filter((b) => b.src).length)
+})
+
+/// Rewrite a TLE line 1's epoch (cols 19–32) and repair its mod-10 checksum,
+/// so ONE committed element can be aged either side of the ceiling without
+/// committing a second bird. A bad checksum here would drop the bird on line
+/// integrity and let the staleness test pass for the wrong reason — the
+/// "published inside the ceiling" assertion below is what rules that out.
+const reEpoch = (line1, epoch) => {
+  const body = line1.slice(0, 18) + epoch + line1.slice(32, 68)
+  let sum = 0
+  for (const c of body) {
+    if (c >= '0' && c <= '9') sum += +c
+    else if (c === '-') sum += 1
+  }
+  return body + String(sum % 10)
+}
+
+test('an element past the staleness ceiling is refused, and its bird is listed without one', () => {
+  // THE POSITIVE CONTROL for MAX_ELEMENT_AGE_DAYS, and the reason it exists.
+  // SatNOGS /api/tle/ is a last-known-value cache with NO EXPIRY: it serves a
+  // bird's final recorded TLE forever. So a bird that drops out of both
+  // Celestrak groups used to be republished every six hours with a frozen
+  // element, one day staler each time — measured on live upstream 2026-09-07,
+  // 39 of 374 published birds, the oldest a 2014 epoch (4534 d), four of them
+  // objects SATCAT says have RE-ENTERED. FROZEN BIRD is exactly that shape:
+  // one source, one element, an epoch from 2014, and an `updated` stamp from
+  // 2023 saying upstream stopped touching the record years ago.
+  const { manifest, log } = build()
+  const row = manifest.catalog.find((b) => b.norad === 62222)
+  assert.ok(row, 'the bird keeps its catalog row — it is in orbit and transmitting')
+  assert.equal(row.status, 'alive')
+  assert.equal(row.amateur, true, 'and its transmitter is live: this is not a dead bird')
+  assert.equal(row.src, undefined, 'but nothing claims to know where it is')
+  assert.ok(
+    !manifest.elements.some((e) => noradOf(e.line1) === 62222),
+    'no element is published for it — a frozen element points an antenna at a fiction',
+  )
+  assert.ok(
+    log.some((l) => /STALE-DROPPED/.test(l) && /FROZEN BIRD \(62222\)/.test(l)),
+    'and the drop is named in the job log, never silent',
+  )
+
+  // BOTH DIRECTIONS: it is the AGE that drops it, not the bird and not a
+  // malformed line. Same record, same single source, one day INSIDE the
+  // ceiling — published.
+  const at = (epoch) => {
+    const sn = JSON.parse(read('satnogs-tle.json')).map((r) =>
+      r.norad_cat_id === 62222 ? { ...r, tle1: reEpoch(r.tle1, epoch) } : r,
+    )
+    return build({ satnogsTle: JSON.stringify(sn) })
+  }
+  const inside = at('26184.00000000') // 29.0 d before the fixture clock
+  assert.equal(
+    inside.manifest.catalog.find((b) => b.norad === 62222).src,
+    'satnogs-tle',
+    'inside the ceiling the very same element publishes',
+  )
+  assert.equal(inside.manifest.count, 13, 'and the bird counts')
+  assert.ok(
+    !inside.log.some((l) => /STALE-DROPPED/.test(l)),
+    'nothing is dropped, so nothing is reported',
+  )
+  const outside = at('26182.00000000') // 31.0 d — one day past
+  assert.equal(outside.manifest.catalog.find((b) => b.norad === 62222).src, undefined)
+  assert.equal(outside.manifest.count, 12)
 })
 
 test('a bird only SatNOGS has elements for is still published', () => {
@@ -609,8 +674,18 @@ test('freshness is median-shaped, and never publishes what the client will refus
   // The client twin (propagation::live::tle::validate_tles) refuses a set
   // unless half its birds are under 3 d old. Publishing one it will refuse
   // ages every install's elements for nothing.
-  rejects({ now: NOW + 40 * 86_400 }, /median/)
+  //
+  // The median clock is +10 d, not the +40 d it used to be: past
+  // MAX_ELEMENT_AGE_DAYS the per-element ceiling now drops the whole set
+  // BEFORE a median exists to judge, so the median gate has to be provoked
+  // from inside the ceiling. It is still a live gate — a feed that stalls for
+  // a week and a half is exactly what it is for.
+  rejects({ now: NOW + 10 * 86_400 }, /median/)
   rejects({ now: NOW + 5 * 86_400 }, /under 3 d/)
+  // …and a feed that has stopped moving ALTOGETHER does not quietly publish a
+  // thin set: the ceiling empties it and the count ratchet refuses the run.
+  // That is the pairing that makes the ceiling safe to add — see gate 3.
+  rejects({ now: NOW + 40 * 86_400 }, /ratchet floor/)
 })
 
 test('one nameless upstream record costs its NAME, never the whole run', () => {
@@ -655,7 +730,7 @@ test('the script publishes from fixtures, and publishes nothing when they degrad
   run(FIX, good)
   const manifest = JSON.parse(readFileSync(join(good, 'tles.json'), 'utf8'))
   assert.equal(manifest.count, 12)
-  assert.equal(manifest.catalog.length, 18)
+  assert.equal(manifest.catalog.length, 19)
   assert.ok(existsSync(join(good, 'tles.txt')), 'the 3LE import path keeps its file')
 
   const bad = mkdtempSync(join(tmpdir(), 'tles-bad-'))

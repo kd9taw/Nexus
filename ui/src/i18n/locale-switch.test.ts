@@ -11,7 +11,9 @@
 //                  the premise that a capability needing configuration is unfinished.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { localeChoices } from './useLocale'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { LOCALE_NATIVE_NAME, localeChoices } from './useLocale'
 import {
   EN,
   getLocale,
@@ -128,5 +130,41 @@ describe('the picker can see a catalog installed after import', () => {
     expect(localeChoices()[0], 'English stays first').toBe('en')
     // The control: a language nobody installed is not offered.
     expect(localeChoices()).not.toContain('qq')
+  })
+})
+
+// A SHIPPED LANGUAGE MUST NOT APPEAR IN THE PICKER AS A BARE TAG.
+//
+// The picker renders `LOCALE_NATIVE_NAME[l] ?? l`, so a language with no entry falls through to
+// its two-letter tag: the operator is offered "es" and "fr" and has to know ISO 639 to pick one.
+// That is what shipped in 1.8.2-test2 — the catalogs were complete and the picker still read
+// like a config file.
+//
+// The `??` is right; a missing name must not blank the option. What was missing is anything
+// making the table's incompleteness visible, so this is that: main.tsx is the one place a
+// language becomes shipped, and every locale it installs needs a name a human reads. Same guard
+// shape as placeholders.test.ts, and for the same reason — the fallback hid the omission until
+// somebody opened the menu.
+describe('every shipped language has a name, not a tag', () => {
+  it('names each locale main.tsx installs', () => {
+    // Resolved from the project root, not import.meta.url: this suite is jsdom, where that
+    // URL is http: and readFileSync refuses it. A wrong path throws here rather than passing
+    // over an empty string, and the length control below pins that either way.
+    const main = readFileSync(resolve(process.cwd(), 'src/main.tsx'), 'utf8')
+    const installed = [...main.matchAll(/installCatalog\(\s*'([a-z-]+)'/g)].map((m) => m[1])
+    expect(installed.length, 'control: main.tsx really does install catalogs').toBeGreaterThan(0)
+    for (const l of ['en', ...installed]) {
+      expect(LOCALE_NATIVE_NAME[l], `${l} would render in the picker as "${l}"`).toBeTruthy()
+    }
+  })
+
+  it('names it in its OWN language, not in English', () => {
+    // The whole point of the table — an operator hunting for their language reads the list in
+    // that language. A row that just repeats the English exonym is the bug wearing a coat.
+    const english: Record<string, string> = { de: 'German', es: 'Spanish', fr: 'French' }
+    for (const [l, exonym] of Object.entries(english)) {
+      if (!LOCALE_NATIVE_NAME[l]) continue
+      expect(LOCALE_NATIVE_NAME[l], `${l} is listed by its English name`).not.toBe(exonym)
+    }
   })
 })

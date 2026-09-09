@@ -38,6 +38,24 @@ pub struct BandChannel {
     pub label: String,
     /// Short note: what it sits near / clearance / privilege flag.
     pub note: String,
+    /// May THIS operator's licence class transmit here? (#184, akhepcat)
+    ///
+    /// ⚠️ FALSE MEANS RECEIVE-ONLY, NOT HIDDEN. The band dropdowns used to drop a band the
+    /// class held no transmit segment for, which applied a TRANSMIT rule to a TUNING list:
+    /// no licence restricts LISTENING, and the radio itself will happily tune there. A US
+    /// General was therefore unable to select 4 m at all, rather than being able to listen
+    /// and being refused the over.
+    ///
+    /// This field is DISPLAY ONLY and the transmit gate does not read it —
+    /// [`crate::privileges::tx_allowed`] is still the only thing that decides whether an
+    /// over may be keyed, and it is unchanged. Defaults true so every existing plan entry
+    /// and any stored JSON keeps its current meaning.
+    #[serde(default = "yes")]
+    pub tx: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 fn ch(band: &str, group: &str, dial_mhz: f64, mode: &str, label: &str, note: &str) -> BandChannel {
@@ -48,6 +66,7 @@ fn ch(band: &str, group: &str, dial_mhz: f64, mode: &str, label: &str, note: &st
         mode: mode.to_string(),
         label: label.to_string(),
         note: note.to_string(),
+        tx: true,
     }
 }
 
@@ -104,16 +123,45 @@ pub fn ft8_band_plan() -> Vec<BandChannel> {
         // `models/FrequencyList.cpp` ships NO 5 MHz row at all, so this value is ours.
         // 5.3715 is the USB dial for the US 60 m channel centred on 5373.0 kHz
         // (suppressed-carrier dial = centre − 1.5 kHz), operator's choice 2026-08-05.
-        // 60 m is CHANNELISED in the US and several other administrations and the channels
-        // differ country to country — an operator outside the US must check their own plan.
+        //
+        // ⭐ #175 SAID THIS TUNES THE WRONG FREQUENCY, AND THE ANSWER IS "NOT ANY MORE".
+        // Researched 2026-09-07 against ARRL "60 Meter Band" (arrl.org/60-meter-band), "60M
+        // Channel Allocation" (arrl.org/60m-channel-allocation) and the ARRL news item "New
+        // 60-Meter Frequencies Available as of February 13"; all three agree. An FCC Report &
+        // Order of December 2025 took effect 0000 EST on 2026-02-13 and split US 60 m in two:
+        // FOUR channels survive at 100 W ERP (centres 5332.0 / 5348.0 / 5373.0 / 5405.0 kHz,
+        // USB dial = centre − 1.5 kHz), and a new 15 kHz segment 5351.5–5366.5 kHz is open to
+        // General and above at 9.15 W ERP (15 W EIRP), 2.8 kHz max. The 5358.5 kHz channel —
+        // the one 5.357 dialled, and where 60 m FT8 lived worldwide — was ELIMINATED as a
+        // channel and folded into the low-power segment.
+        //
+        // So when the report was filed, 5.3715 was the wrong dial and 5.357 was the right one.
+        // Today neither is right for everyone, and the two answers differ by REGION and by
+        // POWER, which is why this stays one row rather than becoming a guess:
+        //   5.3715 — US channel, 100 W ERP, and where US FT8 moved to keep that power after the
+        //            change (w3pie.org, 2026-02-13, read 2026-09-07). US-ONLY: most of the world
+        //            has no allocation at 5373 at all.
+        //   5.357  — inside the WRC-15 segment, which is the allocation most of the world has,
+        //            so it is where the DX is — but 9.15 W ERP for a US station.
+        //
+        // IT STAYS 5.3715. A band button is a TRANSMIT decision, and moving it to 5.357 would
+        // drop a US operator's legal ceiling by roughly 10 dB with nothing on screen saying so —
+        // Nexus cannot know their antenna gain, so it cannot enforce the lower limit either. The
+        // note below states the choice instead of hiding it, and 5.357 is one click away as a
+        // Memories preset (`ui/src/features/packs.ts`, shipped 1.10.3 for this same report).
+        // ⚠️ Do NOT "fix" this to 5.357 without re-reading those sources: on a US channel the
+        // Report & Order also wants the emission CENTRED on the channel centre, i.e. 1500 Hz
+        // audio, which is a real constraint on how FT8 is operated here and a separate question.
         ch(
             "60m",
             "HF",
             5.3715,
             "USB",
             "60 m · FT8",
-            "US 60 m channel at 5373.0 kHz centre (dial = centre - 1.5 kHz); 60 m is channelised \
-             and the channels differ by country - check your own band plan",
+            "US 60 m channel at 5373.0 kHz centre (dial = centre - 1.5 kHz), 100 W ERP - since \
+             13 Feb 2026 this is where US FT8 runs. Outside the US, and for QRP, use 5.357 in \
+             the worldwide 5351.5-5366.5 kHz segment instead (9.15 W ERP): it is a Memories \
+             preset. 60 m differs country to country - check your own band plan",
         ),
         ch("40m", "HF", 7.074, "USB", "40 m · FT8", n),
         ch("30m", "HF", 10.136, "USB", "30 m · FT8", n),
@@ -271,6 +319,7 @@ pub fn band_plan_for(tier: crate::dto::Tier) -> Vec<BandChannel> {
         Tier::Fst4w => fst4w_band_plan(),
         Tier::Jt65 => jt65_band_plan(),
         Tier::Wspr => wspr_band_plan(),
+        Tier::Js8 => js8_band_plan(),
         // TempoFast/TempoDeep use Nexus's native off-cluster plan — new narrow
         // modes that must avoid mutual QRM with the WSJT-X watering holes.
         Tier::TempoFast | Tier::TempoDeep => band_plan(),
@@ -344,6 +393,43 @@ pub fn ft2_band_plan() -> Vec<BandChannel> {
         ch("70cm", "UHF", 432.177000, "USB", "70cm · FT2", n),
         // :367
         ch("23cm", "UHF", 1296.177000, "USB", "23cm · FT2", n),
+    ]
+}
+
+/// **JS8** dial frequencies — JS8Call's own default table (`models/FrequencyList.cpp:29-39`
+/// at js8call/js8call @ a7ff1be0), transcribed as a FACT (NOTICE credits it). 11 rows,
+/// IARU all regions, every one USB: JS8 is an audio-passband mode like FT8 and the
+/// heartbeat sub-band (500–1000 Hz) sits INSIDE the passband, so the dial never moves for
+/// an HB. The plan is what makes JS8 work unconfigured — entering the view retunes to the
+/// row for the current band (`Engine::set_tier`, stay-on-miss like FT8/FT4/FT2).
+///
+/// The rows are 4 kHz above the FT8 watering holes on HF (14.078 vs 14.074): the same
+/// "don't share a passband" placement Decodium and Nexus's native plan use.
+pub fn js8_band_plan() -> Vec<BandChannel> {
+    let n = "JS8Call default dial (from JS8Call's own table, models/FrequencyList.cpp:29-39)";
+    vec![
+        ch("160m", "HF", 1.842000, "USB", "160 m · JS8", n),
+        ch("80m", "HF", 3.578000, "USB", "80 m · JS8", n),
+        ch("40m", "HF", 7.078000, "USB", "40 m · JS8", n),
+        // 30 m: the passband (10.130–10.134) sits BELOW the WSPR guard band 10.1399–10.14032
+        // MHz that JS8Call itself refuses to transmit in (mainwindow.cpp). Said here so an
+        // operator who nudges the dial up knows why JS8Call will not key there.
+        ch(
+            "30m",
+            "HF",
+            10.130000,
+            "USB",
+            "30 m · JS8",
+            "JS8Call default dial (models/FrequencyList.cpp:29-39) — stay below the WSPR \
+             guard band 10.1399–10.14032 MHz, which JS8Call refuses to transmit in",
+        ),
+        ch("20m", "HF", 14.078000, "USB", "20 m · JS8", n),
+        ch("17m", "HF", 18.104000, "USB", "17 m · JS8", n),
+        ch("15m", "HF", 21.078000, "USB", "15 m · JS8", n),
+        ch("12m", "HF", 24.922000, "USB", "12 m · JS8", n),
+        ch("10m", "HF", 28.078000, "USB", "10 m · JS8", n),
+        ch("6m", "VHF", 50.318000, "USB", "6 m · JS8", n),
+        ch("2m", "VHF", 144.178000, "USB", "2 m · JS8", n),
     ]
 }
 
@@ -713,12 +799,13 @@ mod tests {
                 | Tier::Q65
                 | Tier::Msk144
                 | Tier::Jt65
-                | Tier::Wspr => {}
+                | Tier::Wspr
+                | Tier::Js8 => {}
             }
         }
         assert_eq!(
             Tier::ALL.len(),
-            11,
+            12,
             "a tier was added or removed — update Tier::ALL and the match above, \
              then re-check every test that drives every_shipped_channel()"
         );
@@ -1181,6 +1268,41 @@ mod wsjtx_parity_tests {
                 c.note
             );
         }
+    }
+
+    /// JS8Call's default frequency table (`models/FrequencyList.cpp:29-39`, transcribed as
+    /// a fact — NOTICE credits it): the "works unconfigured" watering holes. Every row is
+    /// USB (JS8 is an audio-passband mode like FT8), 20 m is 14.078, and the plan spans
+    /// 160 m–2 m so `stay_on_miss` is the right band-change policy for it.
+    #[test]
+    fn js8_band_plan_is_js8calls_default_table() {
+        let plan = js8_band_plan();
+        let dials: Vec<(String, f64)> = plan.iter().map(|c| (c.band.clone(), c.dial_mhz)).collect();
+        assert_eq!(
+            dials,
+            vec![
+                ("160m".to_string(), 1.842),
+                ("80m".to_string(), 3.578),
+                ("40m".to_string(), 7.078),
+                ("30m".to_string(), 10.130),
+                ("20m".to_string(), 14.078),
+                ("17m".to_string(), 18.104),
+                ("15m".to_string(), 21.078),
+                ("12m".to_string(), 24.922),
+                ("10m".to_string(), 28.078),
+                ("6m".to_string(), 50.318),
+                ("2m".to_string(), 144.178),
+            ]
+        );
+        assert!(plan
+            .iter()
+            .all(|c| c.mode == "USB" && c.tx && c.label.ends_with("· JS8")));
+        assert!(plan.iter().take(9).all(|c| c.group == "HF"));
+        assert!(plan.iter().skip(9).all(|c| c.group == "VHF"));
+        assert_eq!(band_plan_for(crate::dto::Tier::Js8), plan);
+        // 30 m: 10.130 sits ABOVE the WSPR guard band 10.1399–10.14032 MHz that JS8Call
+        // itself refuses to transmit in; the note must say so.
+        assert!(plan[3].note.contains("WSPR"));
     }
 
     /// The regression this whole change exists to prevent: every new tier used to

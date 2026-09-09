@@ -9,6 +9,9 @@ import type { AppSnapshot, RttyState } from '../types'
 vi.mock('../api', () => ({
   getRttyState: vi.fn(),
   rttyArm: vi.fn(),
+  // `rtty_auto_arm` fires on the rising edge of `active`; a hand-kept mock must carry it or
+  // the cockpit throws on mount. Wave-2 backend contract — the UI half is what is exercised here.
+  rttyAutoArm: vi.fn(),
   getLicensedBandPlan: vi.fn(),
   rttySend: vi.fn(),
   rttySetLatched: vi.fn(),
@@ -18,6 +21,10 @@ vi.mock('../api', () => ({
   rttyAfcReset: vi.fn(),
   haltTx: vi.fn(),
 }))
+// The log strip is stubbed: this suite is about the TX/keying wiring, and the real LogEntry
+// reaches the logbook, the park directory and the callbook on mount. RttyCockpit.log.test.tsx
+// renders it for real.
+vi.mock('./LogEntry', () => ({ LogEntry: () => <div data-testid="log-stub" /> }))
 vi.mock('../toast', () => ({
   pushToast: vi.fn(),
   // Pass-through like the real one: run the action, null on failure.
@@ -32,6 +39,7 @@ vi.mock('../toast', () => ({
 
 const getRttyState = api.getRttyState as ReturnType<typeof vi.fn>
 const rttyArm = api.rttyArm as ReturnType<typeof vi.fn>
+const rttyAutoArm = api.rttyAutoArm as ReturnType<typeof vi.fn>
 const getLicensedBandPlan = api.getLicensedBandPlan as ReturnType<typeof vi.fn>
 const rttySend = api.rttySend as ReturnType<typeof vi.fn>
 const rttyStop = api.rttyStop as ReturnType<typeof vi.fn>
@@ -78,6 +86,9 @@ const IDLE: RttyState = {
 beforeEach(() => {
   getRttyState.mockReset().mockResolvedValue(IDLE)
   rttyArm.mockReset().mockResolvedValue({ ...IDLE, armed: true })
+  // The view-entry auto-arm answers with the SAME state the poll would — that is the engine's
+  // contract (it returns RttyState) — so it never blanks what the poll just rendered.
+  rttyAutoArm.mockReset().mockImplementation(() => api.getRttyState())
   getLicensedBandPlan.mockReset().mockResolvedValue([])
   rttySend.mockReset().mockResolvedValue({ ...IDLE, sending: true })
   rttyStop.mockReset().mockResolvedValue(IDLE)

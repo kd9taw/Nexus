@@ -442,25 +442,27 @@ pub fn diagnose(
                       // state is moot once LoTW has matched it.
         }
         let recent = is_recent(now, r.when_unix, cfg.lag_secs);
-        match r.upload.lotw.as_ref().map(|s| (s.outcome, s.detail.clone())) {
+        match r.upload.lotw.as_ref().map(|s| (s.outcome, s.detail)) {
             // R9 — your upload bounced (highest leverage, own-side, Confident). This
             // fires even for an eQSL-confirmed QSO: a bounced LoTW upload is still
             // actionable, and R3 ("get it onto LoTW") can't express "it bounced".
             Some((UploadOutcome::Rejected, detail)) => {
-                let tail = detail
-                    .as_deref()
-                    .map(|d| format!(" ({d})"))
-                    .unwrap_or_default();
+                // The WHY is Nexus's own sentence for the class — see `UploadDetail`. The
+                // service's prose used to be quoted here, and it came out of `log.adi`.
+                let explanation = match detail {
+                    Some(d) => format!("Your LoTW upload of {} bounced. {}", r.call, d.sentence()),
+                    None => format!("Your LoTW upload of {} bounced — fix and re-upload.", r.call),
+                };
                 push_reason(
                     &mut reasons,
                     i,
                     Reason {
                         code: ReasonCode::R9UploadBounced,
                         confidence: Confidence::Confident,
-                        explanation: format!("Your LoTW upload of {} bounced{tail} — fix and re-upload.", r.call),
+                        explanation,
                         action: Action::ReUpload {
                             source: "LoTW".into(),
-                            detail,
+                            detail: detail.map(|d| d.sentence().to_string()),
                         },
                     },
                 );
@@ -552,25 +554,27 @@ pub fn diagnose(
                 track_eqsl,
             ),
         ] {
-            match status.map(|s| (s.outcome, s.detail.clone())) {
+            match status.map(|s| (s.outcome, s.detail)) {
                 Some((UploadOutcome::Rejected, detail)) => {
-                    let tail = detail
-                        .as_deref()
-                        .map(|d| format!(" ({d})"))
-                        .unwrap_or_default();
+                    let explanation = match detail {
+                        Some(d) => {
+                            format!("Your {source} upload of {} bounced. {}", r.call, d.sentence())
+                        }
+                        None => format!(
+                            "Your {source} upload of {} bounced — fix and re-upload.",
+                            r.call
+                        ),
+                    };
                     push_reason(
                         &mut reasons,
                         i,
                         Reason {
                             code: ReasonCode::R9UploadBounced,
                             confidence: Confidence::Confident,
-                            explanation: format!(
-                                "Your {source} upload of {} bounced{tail} — fix and re-upload.",
-                                r.call
-                            ),
+                            explanation,
                             action: Action::ReUpload {
                                 source: source.into(),
-                                detail,
+                                detail: detail.map(|d| d.sentence().to_string()),
                             },
                         },
                     );
@@ -900,7 +904,7 @@ fn bucket_kind(reason: &Reason) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::logbook::{UploadState, UploadStatus};
+    use crate::logbook::{UploadDetail, UploadState, UploadStatus};
 
     fn rec(call: &str, band: &str, mode: &str, day: u64) -> QsoRecord {
         QsoRecord {
@@ -910,6 +914,7 @@ mod tests {
             state: None,
             band: band.into(),
             freq_mhz: 14.074,
+            freq_rx_mhz: None,
             mode: mode.into(),
             rst_sent: None,
             rst_rcvd: None,
@@ -1137,13 +1142,14 @@ mod tests {
 
     #[test]
     fn r9_bounced_rejected_vs_authfail() {
-        // Rejected → ReUpload with the (sanitized) detail; AuthFail → Reauthenticate.
+        // Rejected → ReUpload carrying Nexus's own sentence for the class (never the
+        // service's prose — see `UploadDetail`); AuthFail → Reauthenticate.
         let mut rej = rec("W1AW", "20m", "FT8", 20_000);
         rej.upload = UploadState {
             lotw: Some(UploadStatus {
                 outcome: UploadOutcome::Rejected,
                 when_unix: NOW,
-                detail: Some("bad record".into()),
+                detail: Some(UploadDetail::RecordRefused),
             }),
             ..Default::default()
         };
@@ -1155,7 +1161,8 @@ mod tests {
         assert!(matches!(
             &d0.reasons[0].action,
             Action::ReUpload { source, detail }
-                if source == "LoTW" && detail.as_deref() == Some("bad record")
+                if source == "LoTW"
+                    && detail.as_deref() == Some(UploadDetail::RecordRefused.sentence())
         ));
         let d1 = rep.diagnoses.iter().find(|d| d.index == 1).unwrap();
         assert_eq!(d1.reasons[0].code, ReasonCode::R9UploadBounced);
@@ -1211,7 +1218,7 @@ mod tests {
             lotw: Some(UploadStatus {
                 outcome: UploadOutcome::Rejected,
                 when_unix: NOW,
-                detail: Some("bad band".into()),
+                detail: Some(UploadDetail::Unclassified),
             }),
             ..Default::default()
         };

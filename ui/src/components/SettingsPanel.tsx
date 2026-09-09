@@ -1,19 +1,28 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { SAT_VFO_MAPS } from '../features/satVfo'
+import { JS8_SPEED_LIST } from '../js8Vocab'
 import { confirmDialog } from '../confirm'
 import { checkRigForm, blocks, MULTI_DATA_MODE_ICOMS, NATIVE_CIV_MODELS, nativeCivBlockedReason, type RigCheck } from '../rigFormChecks'
 import {
   confirmSatUplink,
   exportSettingsBundle,
+  fdDiscoverEvents,
+  fdScoreboardStatus,
+  connectWebStatus,
+  type FdScoreboardStatus,
+  type ConnectWebStatus,
+  resetSettings,
   importSettingsBundle,
   saveTextToDownloads,
   setBlockedCalls as apiSetBlockedCalls,
+  type SerialPortInfo,
 } from '../api'
 import type {
   AudioDevices,
   BandChannel,
   CatTestResult,
   DetectedRig,
+  FdEventBeacon,
   RadioStatus,
   RouteMode,
   RoutingRule,
@@ -33,6 +42,7 @@ import {
   downloadLotwReport,
   getAllRigModels,
   getPortlessRigModels,
+  getCatCwUnprovenRigModels,
   getAudioDevices,
   getBandPlan,
   getRigModels,
@@ -43,6 +53,9 @@ import {
   setEqslPassword,
   setHamqthPassword,
   setHrdlogCode,
+  setWrlKey,
+  clearWrlKey,
+  exportGeneralLog,
   setLotwPassword,
   setQrzLogbookKey,
   setQrzPassword,
@@ -90,11 +103,14 @@ import {
   getAssistanceJournal,
   getConnectionLog,
   getCredentialsStatus,
+  CREDENTIALS_CHANGED,
   setUnassistedMode,
 } from '../api'
 import { AssistanceNote } from './AssistanceNote'
 import { fetchLotwUsers, getLotwUsersStatus, type LotwUsersStatus } from '../api'
 import { fetchFccStates, getFccStatesStatus, type FccStatesStatus } from '../api'
+import { fetchCty, getCtyStatus, type CtyStatus } from '../api'
+import { fetchFdRules, getFdRulesStatus, type FdRulesStatus } from '../api'
 import { fetchTlesNow, getTleStatus, importTles, type TleStatus } from '../api'
 import { tleRefreshMessage } from '../features/tleMessages'
 import { elementBandParts } from '../features/elementBands'
@@ -422,10 +438,17 @@ export const baudForRotator = (modelNum: number, currentBaud: number): number | 
  * offered here with a serial-port box and a baud. It could not work as presented, and the brand
  * label steered ARS-USB owners — whose box speaks GS-232 over USB — away from the entry that
  * does work. They belong on **GS-232 (generic)**, which now says so.
+ *
+ * ⚠️ THE SAME TRAP, CAUGHT BEFORE IT BIT (2026-08-29): **DF9GR's Easy-Rotor-Control V4 is
+ * protocol-selectable** — its Service Tool sets GS-232B, GS-232A or DCU-1, and the vendor's
+ * own manual tells program users "Baudrate 9600 and Protocol GS232B". Hamlib's eponymous ERC
+ * backend (404) is the DCU-1 flavour at a FIXED 4800, so an ERC V4 owner following the
+ * vendor's setup who picks the entry with their board's name on it gets a rotator that never
+ * answers. Both labels now say which mode they are; the vendor-recommended path is model 603.
  */
 export const ROTATOR_MODELS: { model: number; label: string }[] = [
   { model: 601, label: 'Yaesu GS-232A (az/el)' },
-  { model: 603, label: 'Yaesu GS-232B (az/el)' },
+  { model: 603, label: 'Yaesu GS-232B (az/el) — also ERC V4 in its recommended mode (9600)' },
   { model: 602, label: 'GS-232 (generic, az/el) — also EA4TX ARS-USB, LVB, ST2' },
   { model: 605, label: 'Yaesu/Kenpro GS-23 (az/el)' },
   { model: 606, label: 'Yaesu/Kenpro GS-232 (az/el)' },
@@ -438,7 +461,7 @@ export const ROTATOR_MODELS: { model: number; label: string }[] = [
   { model: 401, label: 'Idiom Press Rotor-EZ (az)' },
   { model: 403, label: 'Hy-Gain DCU-1/DCU-1X (az)' },
   { model: 406, label: 'Hy-Gain DCU2/DCU3/YRC-1 (az)' },
-  { model: 404, label: 'DF9GR ERC (az)' },
+  { model: 404, label: 'DF9GR ERC, DCU-1 mode (az)' },
   { model: 405, label: 'Green Heron RT-21' },
   { model: 1001, label: 'M2 RC2800 (az/el)' },
   { model: 1701, label: 'Prosistel D (az)' },
@@ -561,6 +584,7 @@ type SettingsTab =
   | 'logging'
   | 'contesting'
   | 'appearance'
+  | 'configurations'
 
 //
 // `label` is the ENGLISH source string and stays literal for the two parsers above. What the
@@ -579,6 +603,7 @@ const SETTINGS_TABS: { id: SettingsTab; label: string; labelKey?: MessageKey }[]
   { id: 'logging', label: 'Logging & Connectors', labelKey: 'settings.tabs.logging' },
   { id: 'contesting', label: 'Contesting', labelKey: 'settings.tabs.contesting' },
   { id: 'appearance', label: 'Appearance', labelKey: 'settings.tabs.appearance' },
+  { id: 'configurations', label: 'Config', labelKey: 'settings.tabs.configurations' },
 ]
 
 /** How the OmniRig connection option is offered, as a function of the platform.
@@ -623,6 +648,10 @@ export function radioPatch(s: Partial<RadioProfilePatch>): RadioProfilePatch {
     rigctldPort: s.rigctldPort ?? 4532,
     icomNativeCat: s.icomNativeCat ?? false,
     dataModesPlainSsb: s.dataModesPlainSsb ?? false,
+    // ⚠️ PER-RADIO, so it MUST be seeded here for the same reason `omnirigSlot` is: the Save
+    // path builds a RadioProfilePatch from this form, and a field the form drops is a field
+    // the patch blanks on the profile it touches.
+    sstvHoldDataSubmode: s.sstvHoldDataSubmode ?? false,
     audioIn: s.audioIn ?? '',
     audioOut: s.audioOut ?? '',
     txLevel: s.txLevel ?? 1,
@@ -633,6 +662,14 @@ export function radioPatch(s: Partial<RadioProfilePatch>): RadioProfilePatch {
     rotatorHost: s.rotatorHost ?? '',
     rotctldPort: s.rotctldPort ?? 4533,
     nativeScope: s.nativeScope ?? 'auto',
+    // ⚠️ SAME CLASS AS THE FLEX THREE BELOW, and found the same way. `icomDataMode` was absent
+    // and Rust defaults it, so every rig-form Save quietly reset the operator's DATA submode to
+    // DATA1. `ampModel`/`ampPort` were absent and Rust does NOT default them, so Save failed
+    // outright with `missing field ampModel`.
+    icomDataMode: s.icomDataMode ?? 1,
+    ampModel: s.ampModel ?? '',
+    ampPort: s.ampPort ?? '',
+    ampFollowBand: s.ampFollowBand ?? false,
     // ⚠️ THE FLEX THREE BELONG HERE, and their absence was silent data loss (2026-08-17 Flex
     // audit). Every save of the rig form while EDITING a non-active radio routes through
     // `persistRadioForm` → `updateRadioProfile(radioPatch(form))`, so a field this function does
@@ -642,6 +679,7 @@ export function radioPatch(s: Partial<RadioProfilePatch>): RadioProfilePatch {
     // that fails when a per-radio field is added without a home in this patch.
     flexRadioIp: s.flexRadioIp ?? '',
     flexNativePan: s.flexNativePan ?? false,
+    yaesuRfScope: s.yaesuRfScope ?? false,
     flexNativeAudio: s.flexNativeAudio ?? false,
   }
 }
@@ -670,6 +708,14 @@ const LOGGER_EXAMPLES = {
   n3fjpHost: '192.168.1.10',
   n1mmAddr: '127.0.0.1:12060',
   clusterNode: 've7cc.net:23',
+} as const
+
+/**
+ * The club-call example on Settings ▸ Contesting ▸ Who's who at this event. A callsign, so it
+ * is invariant — the same characters in every language, and a "localised" one is not a call.
+ */
+const FD_WHO_EXAMPLES = {
+  clubCall: 'W9ABC',
 } as const
 
 /**
@@ -704,6 +750,25 @@ const ROTATOR_EXAMPLES = {
   macPort: '/dev/cu.usbserial-1420',
   port: 'COM7 / /dev/ttyUSB1',
   host: '127.0.0.1:4533',
+} as const
+
+/**
+ * Amplifier family tokens and their names.
+ *
+ * Same category as `ROTATOR_EXAMPLES`: NOT prose. The values are the exact strings Rust stores
+ * in `amp_model` ('' | 'spe' | 'kpa') and the labels are manufacturers' product names, which are
+ * the same in every language — a translated "SPE Expert 1.3K-FA" names no amplifier anyone owns.
+ * The one word that IS prose, "no amplifier", goes through the catalog.
+ */
+const AMP_FAMILIES = [
+  { value: 'spe', label: 'SPE Expert 1.3K-FA / 1.5K-FA / 2K-FA' },
+  { value: 'kpa', label: 'Elecraft KPA500 / KPA1500' },
+] as const
+
+/** Serial-device examples for the amplifier port. Device paths, never translated. */
+const AMP_EXAMPLES = {
+  macPort: '/dev/cu.usbserial-1410',
+  port: 'COM8 / /dev/ttyUSB2',
 } as const
 
 /**
@@ -824,9 +889,45 @@ export function SettingsPanel({
       setForm(fresh)
       setEditingRadioId(fresh.activeRadio)
       dirtyRef.current = false
+      savedRef.current = fresh
       onSaved?.()
       pushToast(t('settings.backup.restore.done'), 'success')
     }, t('settings.backup.restore.failed'))
+  }
+
+  // Reset everything to factory defaults. Destructive, immediate, and the one control in this
+  // block an operator can reach by accident, so it confirms through the same danger dialog the
+  // restore uses — and the wording points AT the backup beside it, because the machinery that
+  // makes this reversible is one button away and there is no excuse not to name it.
+  //
+  // Reloads the form from the backend rather than trusting the returned snapshot: `reset_settings`
+  // runs `ensure_radio_profiles` and friends, so what LANDED is not the bare `Settings::default()`
+  // this asked for, and a form seeded from anything else would show a roster the engine is not
+  // driving.
+  const handleResetConfig = async () => {
+    if (
+      !(await confirmDialog({
+        title: t('settings.backup.reset.confirm.title'),
+        body: t('settings.backup.reset.confirm.body'),
+        confirmLabel: t('settings.backup.reset.confirm.action'),
+        danger: true,
+      }))
+    ) {
+      return
+    }
+    const snap = await withErrorToast(
+      () => resetSettings(),
+      t('settings.backup.reset.failed'),
+    )
+    if (snap) {
+      const fresh = await getSettings()
+      setForm(fresh)
+      setEditingRadioId(fresh.activeRadio)
+      dirtyRef.current = false
+      savedRef.current = fresh
+      onSaved?.()
+      pushToast(t('settings.backup.reset.done'), 'success')
+    }
   }
   const [form, setForm] = useState<Settings | null>(null)
   // The blocklist editor's text — its OWN write path (apiSetBlockedCalls, the narrow
@@ -879,12 +980,23 @@ export function SettingsPanel({
   const [rigChecks, setRigChecks] = useState<RigCheck[]>([])
   /** Models needing no serial port, from the backend. Empty = rule unread; see checkRigForm. */
   const [portlessRigModels, setPortlessRigModels] = useState<number[]>([])
+  /** Models whose CAT CW keyer is unproven and cannot report its own failure, from the backend.
+   *  Empty = rule unread, and no caution is shown. Notice only — never blocks a save. */
+  const [catCwUnprovenModels, setCatCwUnprovenModels] = useState<number[]>([])
   // Port -> USB product label ("USB-Enhanced-SERIAL-B CH342"), so the picker can tell a
   // dual-serial rig's two interfaces apart (Xiegu CAT is on SERIAL-B).
   const [portLabels, setPortLabels] = useState<Record<string, string>>({})
-  const applyPorts = (infos: { name: string; label: string }[]) => {
+  /**
+   * The port rows exactly as the backend sent them, kept ALONGSIDE the names and labels above
+   * rather than replacing them. The pickers keep working on plain strings; only the two pre-save
+   * topology checks read these, and they read optional fields that are absent on every platform
+   * that cannot prove USB topology. See `checkRigForm`.
+   */
+  const [portInfos, setPortInfos] = useState<SerialPortInfo[]>([])
+  const applyPorts = (infos: SerialPortInfo[]) => {
     setSerialPorts(infos.map((i) => i.name))
     setPortLabels(Object.fromEntries(infos.map((i) => [i.name, i.label])))
+    setPortInfos(infos)
   }
   // Native CI-V bus diagnostic log: null = off, string = the log file path while capturing.
   // Transient (not persisted) — a support tool the operator arms to capture a fault. The
@@ -943,7 +1055,10 @@ export function SettingsPanel({
     input: Record<string, string>
     output: Record<string, string>
   }>({ input: {}, output: {} })
+  /** The device rows as sent, for the same-radio check only — see `portInfos` above. */
+  const [audioInfos, setAudioInfos] = useState<AudioDevices>({ input: [], output: [] })
   const applyAudio = (d: AudioDevices) => {
+    setAudioInfos(d)
     setAudio({ input: d.input.map((x) => x.name), output: d.output.map((x) => x.name) })
     setAudioLabels({
       input: Object.fromEntries(d.input.map((x) => [x.name, x.label])),
@@ -980,6 +1095,37 @@ export function SettingsPanel({
   useEffect(() => {
     getFccStatesStatus()
       .then(setFccStates)
+      .catch(() => {})
+  }, [])
+  // AD1C cty.dat country file (DXCC entity resolution) — the resolver is set once at
+  // launch, so a downloaded update applies at the NEXT launch and the row says so.
+  const [ctyStatus, setCtyStatus] = useState<CtyStatus | null>(null)
+  const [ctyFetching, setCtyFetching] = useState(false)
+  useEffect(() => {
+    getCtyStatus()
+      .then(setCtyStatus)
+      .catch(() => {})
+  }, [])
+  // AD1C's `=VER` dates are `yyyymmdd`; show them as ISO dates.
+  const ctyVerDate = (v: string) =>
+    v.length === 8 ? `${v.slice(0, 4)}-${v.slice(4, 6)}-${v.slice(6)}` : v
+  // Field Day rules data — same set-once-at-launch discipline as the country
+  // file: a downloaded update applies at the NEXT launch and the row says so.
+  const [fdRules, setFdRules] = useState<FdRulesStatus | null>(null)
+  const [fdRulesFetching, setFdRulesFetching] = useState(false)
+  // Club-sync discovery ("Find club events"): null = never scanned, [] = a
+  // scan that heard nothing (shown honestly — AP-isolated Wi-Fi eats broadcast,
+  // which is why the manual host:port field always remains).
+  const [fdScan, setFdScan] = useState<FdEventBeacon[] | null>(null)
+  const [fdScanBusy, setFdScanBusy] = useState(false)
+  // The spectator scoreboard's bound state (the URL for the TV / the bind
+  // error). Polled only while the Contesting tab shows the enabled toggle,
+  // so an idle Settings panel costs nothing — the effect sits below the
+  // `tab` declaration it reads.
+  const [fdBoard, setFdBoard] = useState<FdScoreboardStatus | null>(null)
+  useEffect(() => {
+    getFdRulesStatus()
+      .then(setFdRules)
       .catch(() => {})
   }, [])
   // Orbital elements (TLE snapshot) — the satellite currency pipeline's
@@ -1019,10 +1165,10 @@ export function SettingsPanel({
   // The assistance journal is the operator's EVIDENCE of what was running during an event, so
   // it is shown next to the switch rather than hidden in a file. Same poll as the conn log.
   const [assistLog, setAssistLog] = useState<AssistanceEvent[]>([])
+  // The two LOGS are live and belong on a timer: they grow while the operator watches.
   useEffect(() => {
     let live = true
     const load = () => {
-      getCredentialsStatus().then((c) => live && setCreds(c)).catch(() => {})
       getConnectionLog().then((l) => live && setConnLog(l)).catch(() => {})
       getAssistanceJournal().then((l) => live && setAssistLog(l ?? [])).catch(() => {})
     }
@@ -1031,6 +1177,24 @@ export function SettingsPanel({
     return () => {
       live = false
       window.clearInterval(id)
+    }
+  }, [])
+  // ⚠️ CREDENTIAL STATUS IS NOT ON THAT TIMER, and must not go back on it (#154). Answering
+  // "is a password stored?" opens an OS-keychain session PER CONNECTOR; doing it every 5 s
+  // crashed gnome-keyring-daemon on Fedora 44 in a restart loop that lasted as long as the app
+  // was open — the operator's journal caught it aborting in `service_method_open_session`.
+  // The answer changes only when a secret is saved or cleared, and `api.ts` raises
+  // CREDENTIALS_CHANGED when that happens, so this reads once and then only on real news.
+  useEffect(() => {
+    let live = true
+    const pull = () => {
+      getCredentialsStatus().then((c) => live && setCreds(c)).catch(() => {})
+    }
+    pull()
+    window.addEventListener(CREDENTIALS_CHANGED, pull)
+    return () => {
+      live = false
+      window.removeEventListener(CREDENTIALS_CHANGED, pull)
     }
   }, [])
   // LoTW/eQSL passwords are write-only (kept in the OS keychain, never read back),
@@ -1045,6 +1209,7 @@ export function SettingsPanel({
   const [hamqthPw, setHamqthPw] = useState('')
   const [clublogPw, setClublogPw] = useState('')
   const [hrdlogCode, setHrdlogCodeField] = useState('')
+  const [wrlKey, setWrlKeyField] = useState('')
   const [rbToken, setRbTokenField] = useState('')
   const [cloudlogKey, setCloudlogKeyField] = useState('')
   // Where a deep link asked us to land. Resolved once per `target` change so a caller can pass
@@ -1052,6 +1217,49 @@ export function SettingsPanel({
   // unresolvable target leaves the default landing rather than doing nothing.
   const resolvedTarget = useMemo(() => (target ? resolveTarget(target) : null), [target])
   const [tab, setTab] = useState<SettingsTab>(resolvedTarget?.tab ?? 'station')
+  useEffect(() => {
+    if (tab !== 'contesting' || !form?.fdScoreboard) {
+      setFdBoard(null)
+      return
+    }
+    let live = true
+    const read = () => {
+      fdScoreboardStatus()
+        .then((s) => {
+          if (live) setFdBoard(s)
+        })
+        .catch(() => {})
+    }
+    read()
+    const timer = window.setInterval(read, 3000)
+    return () => {
+      live = false
+      window.clearInterval(timer)
+    }
+  }, [tab, form?.fdScoreboard])
+  // Same shape for the Connect LAN page's status row: only while its own tab is open
+  // and the toggle is on, so a closed panel polls nothing.
+  const [connectWeb, setConnectWeb] = useState<ConnectWebStatus | null>(null)
+  useEffect(() => {
+    if (tab !== 'appearance' || !form?.connectWeb) {
+      setConnectWeb(null)
+      return
+    }
+    let live = true
+    const read = () => {
+      connectWebStatus()
+        .then((s) => {
+          if (live) setConnectWeb(s)
+        })
+        .catch(() => {})
+    }
+    read()
+    const timer = window.setInterval(read, 3000)
+    return () => {
+      live = false
+      window.clearInterval(timer)
+    }
+  }, [tab, form?.connectWeb])
   // The section a deep link is pointing at, published to collapsed `SettingsGroup`s so one
   // containing the target opens itself — a target the operator still cannot see is not found.
   const [openTarget, setOpenTarget] = useState<string | null>(resolvedTarget?.section ?? null)
@@ -1112,6 +1320,7 @@ export function SettingsPanel({
       .then((s) => {
         setForm(s)
         dirtyRef.current = false
+      savedRef.current = s
         setEditingRadioId(activeRadioId) // form now mirrors the (new) active radio
       })
       .catch(() => {})
@@ -1125,6 +1334,7 @@ export function SettingsPanel({
         if (mounted) {
           setForm(s)
           dirtyRef.current = false
+      savedRef.current = s
           setStatus('idle')
         }
       })
@@ -1136,6 +1346,12 @@ export function SettingsPanel({
     // the pre-save port check declines to block — see checkRigForm.
     getPortlessRigModels()
       .then((m) => mounted && Array.isArray(m) && setPortlessRigModels(m))
+      .catch(() => {})
+    // The backend's "CAT CW keying is unproven on this model" rule, fetched once. On failure it
+    // stays empty and no caution is shown — a rule that cannot be read must not warn an operator
+    // off a keyer that works for him.
+    getCatCwUnprovenRigModels()
+      .then((m) => mounted && Array.isArray(m) && setCatCwUnprovenModels(m))
       .catch(() => {})
     getSerialPortsDetailed()
       .then((infos) => mounted && applyPorts(infos))
@@ -1236,6 +1452,22 @@ export function SettingsPanel({
   // Tracks unsaved flat-form edits, so switching the active radio (which reloads the form) can warn
   // before discarding them. A ref (not state) — read synchronously in the switch handler, no re-render.
   const dirtyRef = useRef(false)
+  /**
+   * The last SAVED settings — what the form looked like when it last matched disk.
+   *
+   * ⚠️ A VALIDATION THAT FIRES ON STATE REFUSES EVERY SAVE FOREVER. The position-name rule
+   * below must ask "is this save turning club sync ON, or clearing a name that was there?",
+   * not "is the name blank right now?" — because `fd_position_name` ships empty, with no
+   * migration and no wizard step that fills it, so an existing club host who never typed one
+   * would have had EVERY save refused: change an audio device at 02:00 mid-event, get bounced
+   * to a tab you were not on, and your fix is not saved. Kept in step with `dirtyRef`, which
+   * already marks precisely the moments the form equals what is stored.
+   */
+  const savedRef = useRef<Settings | null>(null)
+  /** Marks the position-name box when a save is refused for it — the callsign refusal has
+   *  always marked ITS field, and a refusal that routes you to a tab without saying which box
+   *  is the problem is only half an answer. Cleared as soon as the operator types. */
+  const [posNameInvalid, setPosNameInvalid] = useState(false)
   const markDirty = () => {
     dirtyRef.current = true
     setStatus('idle')
@@ -1291,6 +1523,30 @@ export function SettingsPanel({
   const setWatchCalls = (calls: string[]) => {
     markDirty()
     setForm((prev) => (prev ? { ...prev, aprsIsWatchCalls: calls } : prev))
+  }
+
+  // JS8 @GROUP memberships, edited as one comma-separated field like the APRS-IS budlist
+  // above. Normalised on the way in — upper-case, one leading '@' — so the operator may type
+  // either form; js8::proto::callsign::GROUPS (the wire) is the authority on which names exist,
+  // and the engine's compose refuses an unknown one with a reason.
+  const setJs8Groups = (groups: string[]) => {
+    markDirty()
+    setForm((prev) => (prev ? { ...prev, js8Groups: groups } : prev))
+  }
+  const parseJs8Groups = (raw: string): string[] =>
+    raw
+      .split(',')
+      .map((g) => g.trim().toUpperCase().replace(/^@+/, ''))
+      .filter(Boolean)
+      .map((g) => `@${g}`)
+  // Whole non-negative minutes; junk leaves the stored value alone (never coerces to 0).
+  const updateMinutes = (
+    key: 'js8HbIntervalMin' | 'js8CqIntervalMin' | 'js8IdleWatchdogMin',
+    raw: string,
+  ) => {
+    const n = Number(raw)
+    if (raw.trim() === '' || Number.isNaN(n)) return
+    updateNum(key, Math.max(0, Math.floor(n)))
   }
 
   // The RF digipeater path, edited as one comma-separated field for the same reason as the
@@ -1720,6 +1976,7 @@ export function SettingsPanel({
       void getSettings().then((full) => {
         setForm(full)
         dirtyRef.current = false
+      savedRef.current = full
         setEditingRadioId(id)
       })
       onSaved?.()
@@ -1887,11 +2144,31 @@ export function SettingsPanel({
   // model and audio devices onto the ACTIVE radio's profile — persisted, silent, and
   // unrecoverable. Operator report, 2026-07-25: both radios ended up on one set of comm ports.
   //
+  // ⚠️ TWO WRITES, NOT ONE (#173). Routing the ENTIRE save through the per-radio verb was the
+  // other half of the same mistake: `radioPatch()` carries per-radio CAT/audio/PTT/rotator
+  // fields only, so while the panel was editing a non-active radio EVERY station-wide edit was
+  // discarded — and the panel said "Saved". The reporter's was QRZ auto-upload, made on Logging
+  // & Connectors, where nothing on screen even hints a radio is being edited. That is a SEAM,
+  // not a field: `pttSerialPort`, the Flex three, `omnirigSlot`, `icomDataMode` and
+  // `ampModel`/`ampPort` were each fixed by adding one more name to the patch, and no name
+  // added there could ever have reached a station-wide setting. So send both.
+  //
+  // ORDER MATTERS: station-wide FIRST. A settings payload carries the whole `radios` array, and
+  // the form's copy predates the per-radio patch — sent second it would write the edited radio
+  // back to what it was, trading one silent loss for another.
+  //
   // Takes the form explicitly: setForm is async, so a caller that just built a new form must
   // hand it over rather than let this read a stale closure.
   const persistRadioForm = async (next: NonNullable<typeof form>) => {
     if (editingRadioId != null && editingRadioId !== next.activeRadio) {
       const edited = next.radios?.find((r) => r.id === editingRadioId)
+      // `withActiveRadioConfig` puts the ACTIVE radio's own config back in the flat fields, so
+      // the backend's flat→active fold is a no-op and the edited radio's ports/model/audio
+      // cannot be stamped onto the one being operated (the 2026-07-25 report).
+      await setSettings({
+        ...withActiveRadioConfig(next),
+        mycall: next.mycall.trim().toUpperCase(),
+      })
       await updateRadioProfile(
         editingRadioId,
         radioPatch({
@@ -2017,6 +2294,7 @@ export function SettingsPanel({
     onSaved?.()
     pushToast(t('settings.profiles.loaded', { name: p.name }), 'success')
   }
+
   const handleDeleteProfile = () => {
     if (!selectedProfile) return
     setProfiles(deleteProfile(selectedProfile))
@@ -2285,6 +2563,37 @@ export function SettingsPanel({
     }
   }
 
+  const onSaveWrlKey = async () => {
+    if (!wrlKey) return
+    // set_wrl_key VALIDATES against the live service and resolves the destination
+    // logbook before saving — a bad key fails here with a real message, not on the
+    // first QSO.
+    await withErrorToast(async () => {
+      await setWrlKey(wrlKey)
+      setWrlKeyField('')
+      updateBool('wrlUpload', true)
+      pushToast(t('settings.confirmations.wrl.key.saved'), 'success')
+    }, t('settings.confirmations.wrl.key.saveFailed'))
+  }
+  const onForgetWrlKey = async () => {
+    await withErrorToast(async () => {
+      await clearWrlKey()
+      updateBool('wrlUpload', false)
+      pushToast(t('settings.confirmations.wrl.key.cleared'), 'info')
+    }, t('settings.confirmations.wrl.key.clearFailed'))
+  }
+  // First-time WRL users arrive with an existing log (the operator: 11k QSOs). WRL's
+  // API takes ONE contact per call and caps writes at 5,000/day — their own docs say
+  // bulk history belongs in their ADIF import, so the affordance here is the file,
+  // not a three-day API drip.
+  const onExportForWrl = async () => {
+    await withErrorToast(async () => {
+      const text = await exportGeneralLog('adif')
+      const path = await saveTextToDownloads('nexus-log-for-wrl.adi', text)
+      pushToast(t('settings.confirmations.wrl.export.done', { path }), 'success', 8000)
+    }, t('settings.confirmations.wrl.export.failed'))
+  }
+
   const onSaveRbToken = async () => {
     if (!rbToken) return
     const ok = await withErrorToast(async () => {
@@ -2341,12 +2650,49 @@ export function SettingsPanel({
       setError(t('settings.save.callsignFirst'))
       return
     }
+    // The position name is MANDATORY once club sync is configured, and only then — a station
+    // that never joins a club event owes nobody a tent name. It is what the club band board
+    // shows, and an operator who deliberately clears it has to be told here, at the moment they
+    // do it: the alternative is what the club Field Day report described, a board reading the
+    // name it was joined under (or the raw position id) with nothing on screen explaining why.
+    // Same shape as the callsign refusal above — route to the tab that holds the fix, never a
+    // greyed Save button with no reason.
+    //
+    // ⚠️ ON THE CHANGE, NEVER ON THE STATE. `fd_position_name` ships empty and nothing
+    // backfills it — no migration, no wizard step — so a club host who has been running for
+    // months without one would have had EVERY save refused by a state test: change an audio
+    // device at 02:00 mid-event and get bounced to a tab you were not on, with your fix
+    // unsaved. It also buys nothing there, because an unnamed position already calls itself
+    // by its callsign on the wire. So this asks only whether THIS save turns club sync on, or
+    // takes away a name that was already there. (The shipped settings reference described this
+    // narrower rule all along; the code was the half that overreached.)
+    const wasHosting = savedRef.current?.fdHostEnable === true
+    const hadJoin = (savedRef.current?.fdJoinAddr ?? '').trim() !== ''
+    const hadName = (savedRef.current?.fdPositionName ?? '').trim() !== ''
+    const turningClubSyncOn =
+      (form.fdHostEnable && !wasHosting) || ((form.fdJoinAddr ?? '').trim() !== '' && !hadJoin)
+    const clearingTheName = hadName && (form.fdPositionName ?? '').trim() === ''
+    if (
+      (turningClubSyncOn || clearingTheName) &&
+      (form.fdPositionName ?? '').trim() === ''
+    ) {
+      setTab('contesting')
+      setError(t('settings.save.fdPositionName'))
+      setPosNameInvalid(true)
+      return
+    }
     // Check the RADIO before saving it. Until now the callsign was the only validated field, so
     // every way of getting the rig wrong saved silently and then behaved like broken hardware —
     // the symptom always shows up far from the cause. Errors block and name the fix; warnings are
     // stated and the operator proceeds, because an unusual-but-correct station must never be
     // locked out of its own configuration by a heuristic.
-    const rigProblems = checkRigForm(form, serialPorts, portlessRigModels)
+    const rigProblems = checkRigForm(
+      form,
+      serialPorts,
+      portlessRigModels,
+      portInfos,
+      audioInfos,
+    )
     setRigChecks(rigProblems)
     if (blocks(rigProblems)) {
       setTab('radio')
@@ -2363,6 +2709,7 @@ export function SettingsPanel({
       // re-syncs the flat mirror from the still-active radio). No live rig swap.
       await persistRadioForm(form)
       dirtyRef.current = false
+      savedRef.current = form
       setStatus('saved')
       onSaved?.()
     } catch (err) {
@@ -2570,6 +2917,79 @@ export function SettingsPanel({
         </div>
         <div className="settings-scroll">
           {/* ---- Workspace (UI-only prefs, applied live like the theme) ---- */}
+          {tab === 'configurations' && (
+            <fieldset className="settings-section" id="settings-configurations">
+              <legend>{t('settings.configurations.legend')}</legend>
+              <p className="settings-note">
+                <T k="settings.configurations.note" tags={{ em: <em /> }} />
+              </p>
+              {/* Back up / restore the whole station (#28 item 4). MOVED here from Radio →
+                  Transmit limits & sharing, unchanged: same handlers, same catalog keys, same
+                  markup. Backing up a whole station has nothing to do with transmit limits, and
+                  that mismatch is why operators did not find it — the registry's own comment on
+                  that section already said so. */}
+              <div className="settings-field">
+                <span className="settings-label">{t('settings.transmit.backup.label')}</span>
+                <div className="rig-share-row">
+                  <button
+                    type="button"
+                    className="settings-linkbtn"
+                    onClick={() =>
+                      withErrorToast(async () => {
+                        const text = await exportSettingsBundle()
+                        const stamp = new Date().toISOString().slice(0, 10)
+                        // The FILE NAME is invariant (batch 8): a translated word in it would
+                        // reduce a non-Latin locale's backup to `nexus-settings-.json`.
+                        const path = await saveTextToDownloads(`nexus-settings-${stamp}.json`, text)
+                        pushToast(t('settings.transmit.backup.done', { path }), 'success')
+                      }, t('settings.transmit.backup.failed'))
+                    }
+                    title={t('settings.transmit.backup.title')}
+                  >
+                    {t('settings.transmit.backup.action')}
+                  </button>
+                  <input
+                    ref={backupFileRef}
+                    type="file"
+                    accept=".json"
+                    style={{ display: 'none' }}
+                    onChange={onRestoreBackup}
+                  />
+                  <button
+                    type="button"
+                    className="settings-linkbtn"
+                    onClick={() => backupFileRef.current?.click()}
+                    title={t('settings.transmit.restore.title')}
+                  >
+                    {t('settings.transmit.restore.action')}
+                  </button>
+                </div>
+                <span className="settings-hint">
+                  <T k="settings.transmit.backup.hint" tags={{ b: <strong /> }} />
+                </span>
+              </div>
+
+                {/* Start over. Deliberately the LAST thing in this tab: an operator who arrives
+                    here wanting a clean slate reads the backup affordance on the way past. */}
+              <div className="settings-field">
+                <span className="settings-label">{t('settings.configurations.reset.label')}</span>
+                <div className="rig-share-row">
+                  <button
+                    type="button"
+                    className="settings-linkbtn danger"
+                    onClick={handleResetConfig}
+                    title={t('settings.configurations.reset.title')}
+                  >
+                    {t('settings.configurations.reset.action')}
+                  </button>
+                </div>
+                <span className="settings-hint">
+                  <T k="settings.configurations.reset.hint" tags={{ b: <strong /> }} />
+                </span>
+              </div>
+            </fieldset>
+          )}
+
           {tab === 'appearance' && (
           <fieldset className="settings-section" id="settings-workspace">
             <legend>{t('settings.workspace.legend')}</legend>
@@ -2750,6 +3170,80 @@ export function SettingsPanel({
           </fieldset>
           )}
 
+          {/* ---- Connect on the TV: the read-only LAN page ----
+              The toggle IS the LAN opt-in, so the copy has to say plainly what it
+              exposes and to whom. Its threat model is NOT the Field Day
+              scoreboard's: that one is defensible partly because a contest log is
+              already broadcast in clear on the air, and this is the station's own
+              conditions picture. It carries the callsign, the grid and the
+              propagation nowcast — never the dial, the log or the needs board. */}
+          {tab === 'appearance' && (
+          <fieldset className="settings-section" id="settings-connect-web">
+            <legend>{t('settings.connectWeb.legend')}</legend>
+            <label className="settings-field">
+              <span className="settings-label">{t('settings.connectWeb.label')}</span>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={!!form.connectWeb}
+                className={`toggle${form.connectWeb ? ' on' : ''}`}
+                onClick={() => updateBool('connectWeb', !form.connectWeb)}
+                aria-label={
+                  form.connectWeb
+                    ? t('settings.connectWeb.aria.disable')
+                    : t('settings.connectWeb.aria.enable')
+                }
+              >
+                <span className="toggle-knob" />
+              </button>
+              <span className="settings-hint">{t('settings.connectWeb.hint')}</span>
+            </label>
+            <span className="settings-hint">{t('settings.connectWeb.exposes')}</span>
+            {form.connectWeb && (
+              <div className="settings-grid">
+                <div className="settings-field">
+                  <span className="settings-label">{t('settings.connectWeb.port.label')}</span>
+                  <input
+                    className="settings-input mono"
+                    type="number"
+                    min={1024}
+                    max={65535}
+                    value={form.connectWebPort ?? 7374}
+                    onChange={(e) => {
+                      markDirty()
+                      setForm((prev) =>
+                        prev ? { ...prev, connectWebPort: Number(e.target.value) || 7374 } : prev,
+                      )
+                    }}
+                  />
+                  <span className="settings-hint">{t('settings.connectWeb.port.hint')}</span>
+                </div>
+                <div className="settings-field">
+                  <span className="settings-label">{t('settings.connectWeb.url.label')}</span>
+                  {connectWeb?.running && connectWeb.url ? (
+                    <>
+                      <code className="rig-share-addr mono">{connectWeb.url}</code>
+                      <button
+                        type="button"
+                        className="settings-linkbtn"
+                        onClick={() => {
+                          void navigator.clipboard?.writeText(connectWeb.url ?? '').catch(() => {})
+                        }}
+                      >
+                        {t('settings.connectWeb.url.copy')}
+                      </button>
+                    </>
+                  ) : (
+                    <span className="settings-hint">
+                      {connectWeb?.error ?? t('settings.connectWeb.url.pending')}
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
+          </fieldset>
+          )}
+
           {/* ---- Features (modular toggles + goal profiles) ---- */}
           {tab === 'appearance' && (
           <fieldset className="settings-section" id="settings-features">
@@ -2876,6 +3370,31 @@ export function SettingsPanel({
                 </div>
               )
             })}
+          </fieldset>
+          )}
+
+          {/* ---- App updates: the beta (pre-release) channel opt-in ---- */}
+          {tab === 'appearance' && (
+          <fieldset className="settings-section" id="settings-app-updates">
+            <legend>{t('settings.betaUpdates.legend')}</legend>
+            <label className="settings-field">
+              <span className="settings-label">{t('settings.betaUpdates.label')}</span>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={!!form.betaUpdates}
+                className={`toggle${form.betaUpdates ? ' on' : ''}`}
+                onClick={() => updateBool('betaUpdates', !form.betaUpdates)}
+                aria-label={
+                  form.betaUpdates
+                    ? t('settings.betaUpdates.aria.disable')
+                    : t('settings.betaUpdates.aria.enable')
+                }
+              >
+                <span className="toggle-knob" />
+              </button>
+              <span className="settings-hint">{t('settings.betaUpdates.hint')}</span>
+            </label>
           </fieldset>
           )}
 
@@ -3906,6 +4425,27 @@ export function SettingsPanel({
                 </span>
               </label>
 
+              {/* #130 (PA3GYQ). Beside the plain-SSB switch on purpose: both decide which MODE
+                  WORD this radio is commanded for soundcard audio, and this one inherits the
+                  other's mapping (`plain_ssb_if_configured` sends PKTFM back to plain FM). */}
+              <label className="settings-field">
+                <span className="settings-label">
+                  {t('settings.rigControl.sstvHoldData.label')}
+                </span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={form.sstvHoldDataSubmode ?? false}
+                  className={`toggle${form.sstvHoldDataSubmode ? ' on' : ''}`}
+                  onClick={() => updateBool('sstvHoldDataSubmode', !form.sstvHoldDataSubmode)}
+                >
+                  <span className="toggle-knob" />
+                </button>
+                <span className="settings-hint">
+                  <T k="settings.rigControl.sstvHoldData.hint" tags={{ b: <strong /> }} />
+                </span>
+              </label>
+
               {/* Offered on the ENGINE's question — the model number — not on what the model
                   NAME happens to look like. And when the answer is "this radio qualifies but
                   the connection cannot carry it", the control is DISABLED WITH THE REASON
@@ -3986,6 +4526,29 @@ export function SettingsPanel({
                     </span>
                   </label>
                 )}
+
+              {/* The FT-710's own RF panadapter, per radio. Model-gated: 1049 is the only rig
+                  whose bridge this speaks, and offering it on anything else would be an invitation
+                  to a setting that cannot work. The hint names the TWO preconditions, because a
+                  silent scope has exactly two causes and one of them is not on the radio. */}
+              {form.rigModel === 1049 && (
+                <label className="settings-field">
+                  <span className="settings-label">{t('settings.rigControl.yaesuScope.label')}</span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={form.yaesuRfScope ?? false}
+                    className={`toggle${form.yaesuRfScope ? ' on' : ''}`}
+                    onClick={() => updateBool('yaesuRfScope', !form.yaesuRfScope)}
+                    title={t('settings.rigControl.yaesuScope.title')}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                  <span className="settings-hint">
+                    <T k="settings.rigControl.yaesuScope.hint" tags={{ b: <strong /> }} />
+                  </span>
+                </label>
+              )}
 
               {/* Same model-number gate as the panadapter above — see the note there. */}
               {form.rigConn === 'network' &&
@@ -4082,6 +4645,62 @@ export function SettingsPanel({
                   </span>
                 </label>
               )}
+
+              {/* ⚠️ THE TWO #145 DECLARATIONS — a rig that KEYS THE TRANSMITTER AT APP LAUNCH.
+                  These are not preferences, they are the operator DECLARING something about a
+                  cable only they can see, replacing an inference that has now been wrong three
+                  times. They sit behind this collapsed disclosure on purpose, and both hints
+                  WARN rather than describe, because the failure mode is silent and asymmetric:
+                  Hamlib's `rig_open` refuses `<line>_state` on the line it is keying with,
+                  returns -RIG_ECONF, and rigctld DOES NOT EXIT — it goes on serving a rig it
+                  never opened, so the operator sees CAT connected and a radio that ignores it.
+                  Which backends accept these and which lose CAT to them cannot be determined
+                  here: there is no serial rig on the dev box and CI cannot watch a pin
+                  (NEEDS-BENCH, and rigctld_proc.rs says the same from its end). Both default to
+                  `auto`, which is today's behaviour to the byte, so upgrading changes nothing. */}
+              <label className="settings-field">
+                <span className="settings-label">
+                  {t('settings.rigControl.serialHandshake.label')}
+                </span>
+                <select
+                  className="settings-input"
+                  value={form.catSerialHandshake ?? 'auto'}
+                  onChange={(e) => update('catSerialHandshake', e.target.value)}
+                >
+                  <option value="auto">{t('settings.rigControl.serialHandshake.auto')}</option>
+                  <option value="none">{t('settings.rigControl.serialHandshake.none')}</option>
+                  <option value="hardware">
+                    {t('settings.rigControl.serialHandshake.hardware')}
+                  </option>
+                  <option value="xonxoff">
+                    {t('settings.rigControl.serialHandshake.xonxoff')}
+                  </option>
+                </select>
+                <span className="settings-hint">
+                  {t('settings.rigControl.serialHandshake.hint')}
+                </span>
+              </label>
+
+              <label className="settings-field">
+                <span className="settings-label">
+                  {t('settings.rigControl.pttLineState.label')}
+                </span>
+                <select
+                  className="settings-input"
+                  value={form.catPttLineState ?? 'auto'}
+                  onChange={(e) => update('catPttLineState', e.target.value)}
+                >
+                  <option value="auto">{t('settings.rigControl.pttLineState.auto')}</option>
+                  <option value="untouched">
+                    {t('settings.rigControl.pttLineState.untouched')}
+                  </option>
+                  <option value="low">{t('settings.rigControl.pttLineState.low')}</option>
+                  <option value="high">{t('settings.rigControl.pttLineState.high')}</option>
+                </select>
+                <span className="settings-hint">
+                  {t('settings.rigControl.pttLineState.hint')}
+                </span>
+              </label>
             </SettingsGroup>
             <div className="settings-cat-test">
               <button
@@ -4503,7 +5122,7 @@ export function SettingsPanel({
                 <input
                   ref={tleFileRef}
                   type="file"
-                  accept=".txt,.tle,text/plain"
+                  accept=".txt,.tle"
                   style={{ display: 'none' }}
                   onChange={(e) => {
                     const f = e.target.files?.[0]
@@ -4601,6 +5220,7 @@ export function SettingsPanel({
                   return (
                     <>
                       <select
+                        className="settings-input"
                         value={isOther ? 'other' : modelStr}
                         onChange={(e) => {
                           const v = e.target.value
@@ -4881,6 +5501,73 @@ export function SettingsPanel({
             </div>
           </fieldset>
 
+          {/* The amplifier: a per-radio external device on its own serial port, the same shape
+              as the rotator above. READ-ONLY, and that is a safety decision rather than a
+              scope one — SPE's whole command set is front-panel KEYSTROKES (relative steps and
+              toggles whose meaning depends on a state we learn a poll late), and putting an
+              amplifier in standby is not a way to stop a transmission anyway: the exciter keeps
+              keying and the drive passes straight through. So there is no standby, operate,
+              reset or tune control here and none is planned. */}
+          <fieldset className="settings-section" id="settings-amplifier">
+            <legend>{t('settings.amplifier.legend')}</legend>
+            <p className="settings-note">{t('settings.amplifier.note')}</p>
+            <div className="settings-grid">
+              <div className="settings-field">
+                <span className="settings-label">{t('settings.amplifier.model.label')}</span>
+                <select
+                  className="settings-input"
+                  value={form.ampModel ?? ''}
+                  onChange={(e) => update('ampModel', e.target.value)}
+                  aria-label={t('settings.amplifier.model.label')}
+                >
+                  <option value="">{t('settings.amplifier.model.none')}</option>
+                  {AMP_FAMILIES.map((f) => (
+                    <option key={f.value} value={f.value}>
+                      {f.label}
+                    </option>
+                  ))}
+                </select>
+                <span className="settings-hint">{t('settings.amplifier.model.hint')}</span>
+              </div>
+
+              {/* The port field appears only once a family is picked — the rotator's pattern,
+                  and the reason is the same: an empty port box under "no amplifier" invites an
+                  operator to fill it in and then wonder why nothing happened. */}
+              {(form.ampModel ?? '') !== '' && (
+                <div className="settings-field">
+                  <span className="settings-label">{t('settings.amplifier.port.label')}</span>
+                  <input
+                    className="settings-input"
+                    type="text"
+                    value={form.ampPort ?? ''}
+                    placeholder={IS_MAC ? AMP_EXAMPLES.macPort : AMP_EXAMPLES.port}
+                    onChange={(e) => update('ampPort', e.target.value)}
+                    autoComplete="off"
+                    aria-label={t('settings.amplifier.port.label')}
+                  />
+                  <span className="settings-hint">{t('settings.amplifier.port.hint')}</span>
+                </div>
+              )}
+              {/* Band-follow. Shown only once a port is set, because until then there is no
+                  amplifier to follow anything and the switch would be a promise about nothing.
+                  OFF by default and deliberately so: this is the one amplifier control that
+                  acts without the operator's hand on it. */}
+              {(form.ampModel ?? '') !== '' && (form.ampPort ?? '') !== '' && (
+                <div className="settings-field">
+                  <label className="settings-check">
+                    <input
+                      type="checkbox"
+                      checked={form.ampFollowBand ?? false}
+                      onChange={(e) => updateBool('ampFollowBand', e.target.checked)}
+                    />
+                    <span>{t('settings.amplifier.follow.label')}</span>
+                  </label>
+                  <span className="settings-hint">{t('settings.amplifier.follow.hint')}</span>
+                </div>
+              )}
+            </div>
+          </fieldset>
+
           {/* Everything Rig Control accepted because its NAME had no exclusion criterion. A
               subsystem heading in a radio app admits anything rig-adjacent, so "Rig Control"
               had grown to hold the rotator, band-edge tones, per-mode power caps, the setup
@@ -4957,50 +5644,6 @@ export function SettingsPanel({
 
                 The address existed all along — `rigctld_port` is per-radio and validated
                 unique — and was simply never shown to anyone. That is the whole defect. */}
-            {/* Back up / restore the whole station (#28 item 4). Until now there was no way
-                to keep a copy of any of this: settings.json sits in a config folder most
-                operators never open, and the honest answer to "how do I move to a new laptop"
-                was to go and find it. */}
-            <div className="settings-field">
-              <span className="settings-label">{t('settings.transmit.backup.label')}</span>
-              <div className="rig-share-row">
-                <button
-                  type="button"
-                  className="settings-linkbtn"
-                  onClick={() =>
-                    withErrorToast(async () => {
-                      const text = await exportSettingsBundle()
-                      const stamp = new Date().toISOString().slice(0, 10)
-                      // The FILE NAME is invariant (batch 8): a translated word in it would
-                      // reduce a non-Latin locale's backup to `nexus-settings-.json`.
-                      const path = await saveTextToDownloads(`nexus-settings-${stamp}.json`, text)
-                      pushToast(t('settings.transmit.backup.done', { path }), 'success')
-                    }, t('settings.transmit.backup.failed'))
-                  }
-                  title={t('settings.transmit.backup.title')}
-                >
-                  {t('settings.transmit.backup.action')}
-                </button>
-                <input
-                  ref={backupFileRef}
-                  type="file"
-                  accept=".json,application/json"
-                  style={{ display: 'none' }}
-                  onChange={onRestoreBackup}
-                />
-                <button
-                  type="button"
-                  className="settings-linkbtn"
-                  onClick={() => backupFileRef.current?.click()}
-                  title={t('settings.transmit.restore.title')}
-                >
-                  {t('settings.transmit.restore.action')}
-                </button>
-              </div>
-              <span className="settings-hint">
-                <T k="settings.transmit.backup.hint" tags={{ b: <strong /> }} />
-              </span>
-            </div>
 
             {/* THE share affordance (#53) — one block, and it advertises the CAT BROKER, not the
                 Hamlib daemon's port. The daemon is torn down by Test CAT and every CAT-config
@@ -5081,8 +5724,7 @@ export function SettingsPanel({
                   <span className="settings-hint">{t('settings.transmit.foreignPtt.hint')}</span>
                 </div>
               )}
-            </div>
-          </fieldset>
+            </div>          </fieldset>
           </>
           )}
 
@@ -5199,6 +5841,39 @@ export function SettingsPanel({
                     unattended.
                   </span>
                 </div>
+
+                {/* TUNE POWER (#, the MFJ-loop report). The one control in these two sub-groups
+                    whose strings come from the CATALOG, and deliberately: the English-only rule
+                    above exists because MOVING the FT-mode TX/timing wording risks WSJT-X parity
+                    that CI cannot check. Nothing is being moved here — this control is new, WSJT-X
+                    has no equivalent, and it is on no cockpit's stop-line census. Its hint carries
+                    a correctness warning (it can only turn the rig DOWN) that a German, Spanish or
+                    French operator needs exactly as much as an English one.
+
+                    ⚠️ `Option<u8>`: EMPTY MEANS null, not 0. `None` is load-bearing — the radio
+                    loop declines to touch the power at all rather than guess, because leaving a
+                    rig at 10 W for the rest of a session is a worse bug than the one this fixes.
+                    A 0 here would read as "tune at zero power". */}
+                <div className="settings-field">
+                  <label>
+                    <span className="settings-label">{t('settings.digital.tunePower.label')}</span>
+                    <input
+                      className="settings-input"
+                      type="number"
+                      min={1}
+                      max={100}
+                      value={form.tunePowerPct ?? ''}
+                      onChange={(e) => {
+                        markDirty()
+                        const raw = e.target.value
+                        const pct =
+                          raw === '' ? null : Math.min(100, Math.max(1, Number(raw) || 1))
+                        setForm((prev) => (prev ? { ...prev, tunePowerPct: pct } : prev))
+                      }}
+                    />
+                  </label>
+                  <span className="settings-hint">{t('settings.digital.tunePower.hint')}</span>
+                </div>
               </div>
             </div>
 
@@ -5219,10 +5894,33 @@ export function SettingsPanel({
                     />
                   </label>
                   <span className="settings-hint">
-                    Blank = WSJT-X behavior: CQ repeats until you stop it (the TX watchdog is the
-                    backstop). Set a number to auto-stop an unanswered CQ run after that many calls.
-                    The Tempo chat CQ run always stops (default 10 unanswered) — this number
-                    overrides that budget too.
+                    How many unanswered CQs before Nexus pauses. Default 8, then it waits and calls
+                    again — a run that nobody answers stops holding the frequency. Blank = WSJT-X
+                    behaviour: CQ repeats until you stop it, with the TX watchdog as the only
+                    backstop. The Tempo chat CQ run always stops (default 10 unanswered) — this
+                    number overrides that budget too.
+                  </span>
+                </div>
+
+                <div className="settings-field">
+                  <label>
+                    <span className="settings-label">Wait before calling CQ again</span>
+                    <input
+                      className="settings-input"
+                      type="number"
+                      min={0}
+                      max={3600}
+                      value={form.cqPauseSecs ?? ''}
+                      placeholder="180"
+                      onChange={(e) => updateNullableNum('cqPauseSecs', e.target.value, 0)}
+                    />
+                  </label>
+                  <span className="settings-hint">
+                    Seconds off the air after an unanswered run, before the next one starts.
+                    Default 180 (three minutes). 0 = do not resume: the run just stops, which is
+                    what happened before this setting existed. You are still LISTENING through the
+                    pause — a station that calls you is worked as normal, and answering anyone
+                    resets the count, so a busy run never pauses at all.
                   </span>
                 </div>
 
@@ -5377,6 +6075,24 @@ export function SettingsPanel({
                     </button>
                   </label>
                   <span className="settings-hint">{t('settings.digital.promptToLog.hint')}</span>
+                </div>
+
+                <div className="settings-field">
+                  <label className="settings-toggle">
+                    <span className="settings-label">
+                      {t('settings.digital.reportsToComments.label')}
+                    </span>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={!!form.logReportsToComments}
+                      className={`toggle${form.logReportsToComments ? ' on' : ''}`}
+                      onClick={() => updateBool('logReportsToComments', !form.logReportsToComments)}
+                    >
+                      <span className="toggle-knob" />
+                    </button>
+                  </label>
+                  <span className="settings-hint">{t('settings.digital.reportsToComments.hint')}</span>
                 </div>
 
                 <div className="settings-field">
@@ -6091,6 +6807,17 @@ export function SettingsPanel({
                 <span className="settings-hint">
                   <T k="settings.cw.keyer.hint" tags={{ b: <strong /> }} />
                 </span>
+                {/* CAT KEYING IS UNPROVEN ON THIS RADIO (field report, Yaesu FTX-1: "Try send a
+                    cw, never went to tx"). The rule is the backend's — see
+                    `rigmodels::cat_cw_unproven_rig_models` for the wire measurement behind it.
+                    A NOTICE, not a block: the keyer stays selectable and keeps working if it
+                    works. Shown only when the operator has actually CHOSEN the CAT keyer, so an
+                    FTX-1 owner on a WinKeyer is never nagged about a backend he is not using. */}
+                {(form.cwKeyer ?? 'cat') === 'cat' && catCwUnprovenModels.includes(form.rigModel) && (
+                  <span className="settings-warn" role="status">
+                    ⚠ <T k="settings.cw.keyer.unproven" tags={{ b: <strong /> }} />
+                  </span>
+                )}
               </label>
               <label className="settings-field">
                 <span className="settings-label">{t('settings.cw.pitch.label')}</span>
@@ -6282,6 +7009,26 @@ export function SettingsPanel({
           {tab === 'digital' && (
           <fieldset className="settings-section" id="settings-rtty">
             <legend>{t('settings.rtty.legend')}</legend>
+            {/* RTTY was the ONLY decode mode without an auto-arm — PSK, APRS and SSTV all arm on
+                entering their view, and RTTY's decoder only ever started from the Arm RX button
+                inside a hideable pane. That is very likely what the "RTTY is not decoding"
+                reports were. Same opt-out shape as PSK's, default ON. */}
+            <div className="settings-field">
+              <label className="settings-toggle">
+                <span className="settings-label">{t('settings.rtty.rxAutoArm.label')}</span>
+                <button
+                  type="button"
+                  role="switch"
+                  // ⚠️ `!== false`, not `!!` — the default is ON, so an absent key reads as on.
+                  aria-checked={form.rttyRxAutoArm !== false}
+                  className={`toggle${form.rttyRxAutoArm !== false ? ' on' : ''}`}
+                  onClick={() => updateBool('rttyRxAutoArm', form.rttyRxAutoArm === false)}
+                >
+                  <span className="toggle-knob" />
+                </button>
+              </label>
+              <span className="settings-hint">{t('settings.rtty.rxAutoArm.hint')}</span>
+            </div>
             <div className="settings-featgroup">
               <span className="settings-featgroup-title">{t('settings.rtty.keying.title')}</span>
               <label className="settings-field">
@@ -6400,6 +7147,193 @@ export function SettingsPanel({
                 </button>
               </label>
               <span className="settings-hint">{t('settings.psk.rxAutoArm.hint')}</span>
+            </div>
+          </fieldset>
+          )}
+
+          {/* ---- JS8 — the JS8Call-compatible keyboard mode (2026-09). What is here is what
+               JS8Call keeps in its settings and Nexus cannot infer: the transmit speed, which
+               speeds to decode at once, the heartbeat interval, the three automatic-origin
+               switches (each is the SECOND act — nothing keys without the session TX latch
+               too), the idle watchdog, and the INFO / STATUS / group texts. HB on/off is
+               deliberately NOT here: it is session-only (the cockpit's HB chip) and never
+               persists (spec G3). Speed names are the mode's own vocabulary (js8Vocab). ---- */}
+          {tab === 'digital' && (
+          <fieldset className="settings-section" id="settings-js8">
+            <legend>{t('settings.js8.legend')}</legend>
+            <div className="settings-featgroup">
+              <span className="settings-featgroup-title">{t('settings.js8.receiving.title')}</span>
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.js8.speed.label')}</span>
+                <select
+                  className="settings-input"
+                  value={String(form.js8Speed ?? 1)}
+                  onChange={(e) => updateNum('js8Speed', Number(e.target.value))}
+                >
+                  {JS8_SPEED_LIST.map((s) => (
+                    <option key={s.key} value={s.idx}>
+                      {s.label}
+                    </option>
+                  ))}
+                </select>
+                <span className="settings-hint">{t('settings.js8.speed.hint')}</span>
+              </label>
+              <div className="settings-field">
+                <span className="settings-label">{t('settings.js8.rxSpeeds.label')}</span>
+                <div className="js8-rx-speeds">
+                  {JS8_SPEED_LIST.map((s) => {
+                    const bit = 1 << s.idx
+                    const mask = form.js8RxSpeeds ?? 15
+                    const on = (mask & bit) !== 0
+                    return (
+                      <label key={s.key} className="settings-toggle">
+                        <span className="settings-label">{s.label}</span>
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={on}
+                          aria-label={s.label}
+                          className={`toggle${on ? ' on' : ''}`}
+                          onClick={() => updateNum('js8RxSpeeds', on ? mask & ~bit : mask | bit)}
+                        >
+                          <span className="toggle-knob" />
+                        </button>
+                      </label>
+                    )
+                  })}
+                </div>
+                <span className="settings-hint">{t('settings.js8.rxSpeeds.hint')}</span>
+              </div>
+            </div>
+
+            <div className="settings-featgroup">
+              <span className="settings-featgroup-title">{t('settings.js8.automatic.title')}</span>
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.js8.hbIntervalMin.label')}</span>
+                <input
+                  className="settings-input"
+                  type="number"
+                  inputMode="numeric"
+                  min={0}
+                  value={String(form.js8HbIntervalMin ?? 0)}
+                  placeholder="0"
+                  onChange={(e) => updateMinutes('js8HbIntervalMin', e.target.value)}
+                  autoComplete="off"
+                />
+                <span className="settings-hint">{t('settings.js8.hbIntervalMin.hint')}</span>
+              </label>
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.js8.cqIntervalMin.label')}</span>
+                <input
+                  className="settings-input"
+                  type="number"
+                  inputMode="numeric"
+                  min={0}
+                  value={String(form.js8CqIntervalMin ?? 0)}
+                  placeholder="0"
+                  onChange={(e) => updateMinutes('js8CqIntervalMin', e.target.value)}
+                  autoComplete="off"
+                />
+                <span className="settings-hint">{t('settings.js8.cqIntervalMin.hint')}</span>
+              </label>
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">{t('settings.js8.hbAck.label')}</span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={form.js8HbAck === true}
+                    className={`toggle${form.js8HbAck === true ? ' on' : ''}`}
+                    onClick={() => updateBool('js8HbAck', form.js8HbAck !== true)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">{t('settings.js8.hbAck.hint')}</span>
+              </div>
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">{t('settings.js8.autoreply.label')}</span>
+                  <button
+                    type="button"
+                    role="switch"
+                    // ⚠️ `!== false`, not `!!` — the default is ON (G3), so an absent key reads as on.
+                    aria-checked={form.js8Autoreply !== false}
+                    className={`toggle${form.js8Autoreply !== false ? ' on' : ''}`}
+                    onClick={() => updateBool('js8Autoreply', form.js8Autoreply === false)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">{t('settings.js8.autoreply.hint')}</span>
+              </div>
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">{t('settings.js8.relay.label')}</span>
+                  <button
+                    type="button"
+                    role="switch"
+                    // ⚠️ `!== false` — default ON (G3).
+                    aria-checked={form.js8Relay !== false}
+                    className={`toggle${form.js8Relay !== false ? ' on' : ''}`}
+                    onClick={() => updateBool('js8Relay', form.js8Relay === false)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">{t('settings.js8.relay.hint')}</span>
+              </div>
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.js8.idleWatchdogMin.label')}</span>
+                <input
+                  className="settings-input"
+                  type="number"
+                  inputMode="numeric"
+                  min={0}
+                  value={String(form.js8IdleWatchdogMin ?? 60)}
+                  placeholder="60"
+                  onChange={(e) => updateMinutes('js8IdleWatchdogMin', e.target.value)}
+                  autoComplete="off"
+                />
+                <span className="settings-hint">{t('settings.js8.idleWatchdogMin.hint')}</span>
+              </label>
+            </div>
+
+            <div className="settings-featgroup">
+              <span className="settings-featgroup-title">{t('settings.js8.station.title')}</span>
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.js8.info.label')}</span>
+                <input
+                  className="settings-input"
+                  value={form.js8Info ?? ''}
+                  onChange={(e) => update('js8Info', e.target.value.toUpperCase())}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+                <span className="settings-hint">{t('settings.js8.info.hint')}</span>
+              </label>
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.js8.status.label')}</span>
+                <input
+                  className="settings-input"
+                  value={form.js8Status ?? ''}
+                  onChange={(e) => update('js8Status', e.target.value.toUpperCase())}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+                <span className="settings-hint">{t('settings.js8.status.hint')}</span>
+              </label>
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.js8.groups.label')}</span>
+                <input
+                  className="settings-input"
+                  value={(form.js8Groups ?? []).join(', ')}
+                  onChange={(e) => setJs8Groups(parseJs8Groups(e.target.value))}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+                <span className="settings-hint">{t('settings.js8.groups.hint')}</span>
+              </label>
             </div>
           </fieldset>
           )}
@@ -6988,6 +7922,7 @@ export function SettingsPanel({
             <label className="settings-field">
               <span className="settings-label">{t('settings.pounce.threshold.label')}</span>
               <select
+                className="settings-input"
                 value={form.pounceThreshold ?? 'off'}
                 onChange={(e) => update('pounceThreshold', e.target.value as never)}
               >
@@ -7102,6 +8037,22 @@ export function SettingsPanel({
 
               <div className="settings-field">
                 <label className="settings-toggle">
+                  <span className="settings-label">{t('settings.alerts.confirmTier.label')}</span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={form.alertConfirmTier !== false}
+                    className={`toggle${form.alertConfirmTier !== false ? ' on' : ''}`}
+                    onClick={() => updateBool('alertConfirmTier', form.alertConfirmTier === false)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">{t('settings.alerts.confirmTier.hint')}</span>
+              </div>
+
+              <div className="settings-field">
+                <label className="settings-toggle">
                   <span className="settings-label">{t('settings.alerts.cq.label')}</span>
                   <button
                     type="button"
@@ -7114,6 +8065,28 @@ export function SettingsPanel({
                   </button>
                 </label>
                 <span className="settings-hint">{t('settings.alerts.cq.hint')}</span>
+              </div>
+
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">
+                    {t('settings.alerts.potaNewActivation.label')}
+                  </span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={form.potaNewActivationAlert === true}
+                    className={`toggle${form.potaNewActivationAlert === true ? ' on' : ''}`}
+                    onClick={() =>
+                      updateBool('potaNewActivationAlert', form.potaNewActivationAlert !== true)
+                    }
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">
+                  {t('settings.alerts.potaNewActivation.hint')}
+                </span>
               </div>
 
               {/* Per-type band scopes: all decode alerts fire on the CURRENT band, so the
@@ -7359,7 +8332,7 @@ export function SettingsPanel({
                   {form.hrdLogging && radio?.hrdLinkUp != null && (
                     <span
                       className={`settings-hint ${radio.hrdLinkUp ? 'ok' : 'warn'}`}
-                      style={{ color: radio.hrdLinkUp ? 'var(--ok)' : 'var(--state-weak)' }}
+                      style={{ color: radio.hrdLinkUp ? 'var(--state-good)' : 'var(--state-weak)' }}
                     >
                       {radio.hrdLinkUp
                         ? t('settings.integrations.hrd.linkUp')
@@ -7429,15 +8402,27 @@ export function SettingsPanel({
                     startup, deliberately, because the failures worth diagnosing are the early
                     ones. That is exactly why it needs a line HERE: it was the one
                     operator-facing artefact nothing in the interface named, on a file we ask
-                    people to send us when something goes wrong. */}
+                    people to send us when something goes wrong.
+
+                    #101 (akhepcat) asked for a way to turn it off, and the answer is no —
+                    ruled 2026-09-07 and written into the hint below rather than left as a
+                    silent “Always on”. A log that can be switched off is missing on exactly
+                    the run that needed it, and the switch would have to live in a settings
+                    file the failing launch may never have reached. The tier that IS
+                    switchable is the field underneath. */}
                 <div className="settings-field">
                   <span className="settings-label">Diagnostic log</span>
                   <span className="settings-hint">
-                    Always on. A plain-text record of what Nexus did — startup steps, the CAT and
-                    audio device open, updater checks, and any failure — so a “it won’t start” or
-                    “it stopped decoding” report has something to look at. Passwords, API keys and
-                    tokens are masked before anything is written, so it is safe to attach to a bug
-                    report. Bounded to two files, about 8 MB in total.
+                    Always on, and there is no switch for it — by design. The runs worth
+                    diagnosing are the ones that die during startup, before any setting has been
+                    read, so a log you could turn off would be missing on precisely the launch
+                    you needed it for. It is a plain-text record of what Nexus did — startup
+                    steps, the CAT and audio device open, updater checks, and any failure — so a
+                    “it won’t start” or “it stopped decoding” report has something to look at.
+                    Passwords, API keys and tokens are masked before anything is written, so it
+                    is safe to attach to a bug report. Bounded to two files, about 8 MB in total,
+                    so it cannot grow without limit. What you can turn on and off is the extra
+                    detail below; there is no command-line switch for either.
                     {diagLogPath && (
                       <>
                         {' '}Saved at <code>{diagLogPath}</code>.
@@ -7525,6 +8510,7 @@ export function SettingsPanel({
                     {t('settings.integrations.saveWav.label')}
                   </span>
                   <select
+                    className="settings-input"
                     value={form.saveWav || 'none'}
                     onChange={(e) => update('saveWav', e.target.value)}
                   >
@@ -7689,6 +8675,7 @@ export function SettingsPanel({
                     {t('settings.integrations.propEngine.label')}
                   </span>
                   <select
+                    className="settings-input"
                     value={form.propEngine || 'heuristic'}
                     onChange={(e) => update('propEngine', e.target.value)}
                   >
@@ -8112,6 +9099,76 @@ export function SettingsPanel({
               <span className="settings-hint">{t('settings.callsignState.hint')}</span>
             </div>
           </fieldset>
+
+          <fieldset className="settings-section" id="settings-country-file">
+            <legend>{t('settings.countryFile.legend')}</legend>
+            <div className="settings-field">
+              <div className="lotw-users-row">
+                <button
+                  type="button"
+                  className="settings-test-btn"
+                  disabled={ctyFetching}
+                  onClick={() => {
+                    setCtyFetching(true)
+                    fetchCty()
+                      .then((st) => {
+                        setCtyStatus(st)
+                        const pending =
+                          st.installedVer !== '' && st.installedVer > st.activeVer
+                        pushToast(
+                          pending
+                            ? t('settings.countryFile.update.done', {
+                                ver: ctyVerDate(st.installedVer),
+                              })
+                            : t('settings.countryFile.update.current', {
+                                ver: ctyVerDate(st.activeVer),
+                              }),
+                          'success',
+                          5000,
+                        )
+                      })
+                      .catch((e) =>
+                        pushToast(
+                          t('settings.countryFile.update.failed', {
+                            detail: e instanceof Error ? e.message : String(e),
+                          }),
+                          'error',
+                        ),
+                      )
+                      .finally(() => setCtyFetching(false))
+                  }}
+                >
+                  {ctyFetching
+                    ? t('settings.countryFile.update.busy')
+                    : t('settings.countryFile.update.action')}
+                </button>
+                <span className="settings-hint">
+                  {ctyStatus === null
+                    ? t('settings.countryFile.empty')
+                    : ctyStatus.fetchedAt > 0
+                      ? t('settings.countryFile.status', {
+                          count: ctyStatus.count.toLocaleString(),
+                          ver: ctyVerDate(ctyStatus.activeVer),
+                          date: new Date(ctyStatus.fetchedAt * 1000).toISOString().slice(0, 10),
+                        })
+                      : t('settings.countryFile.statusBuiltIn', {
+                          count: ctyStatus.count.toLocaleString(),
+                          ver: ctyVerDate(ctyStatus.activeVer),
+                        })}
+                </span>
+              </div>
+              {ctyStatus !== null &&
+                ctyStatus.installedVer !== '' &&
+                ctyStatus.installedVer > ctyStatus.activeVer && (
+                  <span className="settings-hint">
+                    {t('settings.countryFile.pending', {
+                      ver: ctyVerDate(ctyStatus.installedVer),
+                    })}
+                  </span>
+                )}
+              <span className="settings-hint">{t('settings.countryFile.hint')}</span>
+            </div>
+          </fieldset>
           <fieldset className="settings-section" id="settings-confirmations">
             <legend>{t('settings.confirmations.legend')}</legend>
             <div className="settings-featgroup">
@@ -8323,6 +9380,24 @@ export function SettingsPanel({
                   />
                   <span className="settings-hint">
                     {t('settings.confirmations.eqsl.username.hint')}
+                  </span>
+                </label>
+
+                <label className="settings-field">
+                  <span className="settings-label">
+                    {t('settings.confirmations.eqsl.qthNickname.label')}
+                  </span>
+                  <input
+                    className="settings-input"
+                    type="text"
+                    value={form.eqslQthNickname ?? ''}
+                    placeholder={t('settings.confirmations.eqsl.qthNickname.placeholder')}
+                    onChange={(e) => update('eqslQthNickname', e.target.value)}
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                  <span className="settings-hint">
+                    {t('settings.confirmations.eqsl.qthNickname.hint')}
                   </span>
                 </label>
 
@@ -8802,6 +9877,72 @@ export function SettingsPanel({
               </div>
             </div>
             <div className="settings-featgroup">
+              <span className="settings-featgroup-title">World Radio League</span>
+              <div className="settings-grid">
+                <label className="settings-field">
+                  <span className="settings-label">
+                    {t('settings.confirmations.wrl.key.label')}
+                  </span>
+                  <div className="settings-input-row">
+                    <input
+                      className="settings-input"
+                      type="password"
+                      value={wrlKey}
+                      placeholder={t('settings.confirmations.wrl.key.placeholder')}
+                      onChange={(e) => setWrlKeyField(e.target.value)}
+                      autoComplete="off"
+                      spellCheck={false}
+                    />
+                    <button
+                      type="button"
+                      className="settings-refresh"
+                      onClick={onSaveWrlKey}
+                      disabled={!wrlKey}
+                    >
+                      {t('settings.confirmations.credential.set.action')}
+                    </button>
+                    <button
+                      type="button"
+                      className="settings-refresh"
+                      onClick={onForgetWrlKey}
+                      title={t('settings.confirmations.wrl.key.forget.title')}
+                    >
+                      {t('settings.confirmations.credential.forget.action')}
+                    </button>
+                  </div>
+                  <span className="settings-hint">{t('settings.confirmations.wrl.key.hint')}</span>
+                </label>
+
+                <div className="settings-field">
+                  <label className="settings-toggle">
+                    <span className="settings-label">
+                      {t('settings.confirmations.wrl.upload.label')}
+                    </span>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={!!form.wrlUpload}
+                      className={`toggle${form.wrlUpload ? ' on' : ''}`}
+                      onClick={() => updateBool('wrlUpload', !form.wrlUpload)}
+                    >
+                      <span className="toggle-knob" />
+                    </button>
+                  </label>
+                  <span className="settings-hint">{t('settings.confirmations.wrl.upload.hint')}</span>
+                </div>
+
+                <div className="settings-field">
+                  <span className="settings-label">
+                    {t('settings.confirmations.wrl.export.label')}
+                  </span>
+                  <button type="button" className="settings-refresh" onClick={onExportForWrl}>
+                    {t('settings.confirmations.wrl.export.action')}
+                  </button>
+                  <span className="settings-hint">{t('settings.confirmations.wrl.export.hint')}</span>
+                </div>
+              </div>
+            </div>
+            <div className="settings-featgroup">
               <span className="settings-featgroup-title">RepeaterBook</span>
               <div className="settings-grid">
                 <label className="settings-field">
@@ -9152,6 +10293,313 @@ export function SettingsPanel({
                 <span className="settings-hint">{t('settings.fieldDay.power.hint')}</span>
               </div>
             </div>
+            {/* Rules data currency (fd-rules.json): the parameters behind scoring, windows,
+                bonuses and sections. No cron — rules change ~yearly, so this pre-event
+                button is the refresh path; a download applies at the NEXT launch. */}
+            <div className="settings-field">
+              <div className="lotw-users-row">
+                <button
+                  type="button"
+                  className="settings-test-btn"
+                  disabled={fdRulesFetching}
+                  onClick={() => {
+                    setFdRulesFetching(true)
+                    fetchFdRules()
+                      .then((st) => {
+                        setFdRules(st)
+                        const pending =
+                          st.installedGenerated !== '' &&
+                          st.installedGenerated > st.activeGenerated
+                        pushToast(
+                          pending
+                            ? t('settings.fdRules.update.done', {
+                                date: st.installedGenerated.slice(0, 10),
+                              })
+                            : t('settings.fdRules.update.current', {
+                                date: st.activeGenerated.slice(0, 10),
+                              }),
+                          'success',
+                          5000,
+                        )
+                      })
+                      .catch((e) =>
+                        pushToast(
+                          t('settings.fdRules.update.failed', {
+                            detail: e instanceof Error ? e.message : String(e),
+                          }),
+                          'error',
+                        ),
+                      )
+                      .finally(() => setFdRulesFetching(false))
+                  }}
+                >
+                  {fdRulesFetching
+                    ? t('settings.fdRules.update.busy')
+                    : t('settings.fdRules.update.action')}
+                </button>
+                <span className="settings-hint">
+                  {fdRules === null
+                    ? t('settings.fdRules.empty')
+                    : t('settings.fdRules.status', {
+                        year: fdRules.rulesYear,
+                        date: fdRules.activeGenerated.slice(0, 10),
+                      })}
+                </span>
+              </div>
+              {fdRules !== null &&
+                fdRules.installedGenerated !== '' &&
+                fdRules.installedGenerated > fdRules.activeGenerated && (
+                  <span className="settings-hint">
+                    {t('settings.fdRules.pending', {
+                      date: fdRules.installedGenerated.slice(0, 10),
+                    })}
+                  </span>
+                )}
+              {fdRules !== null && fdRules.rulesYear < new Date().getUTCFullYear() && (
+                <span className="settings-hint">
+                  {t('settings.fdRules.stale', { year: fdRules.rulesYear })}
+                </span>
+              )}
+              <span className="settings-hint">{t('settings.fdRules.hint')}</span>
+            </div>
+          </fieldset>
+          )}
+          {/* WHO'S WHO — the three identities a club event uses, side by side.
+              A club site answers "who are you?" three ways and they are NOT the same
+              answer: the club call goes on the air, the position is which tent you are
+              sitting in, the operator is who is at the key right now and it changes when
+              people swap. All three already existed as settings; nothing showed them as a
+              set, which is why the position name read as a mystery box (club report,
+              2026-08-30). THIS IS A VIEW, NOT NEW STATE — every row edits the same `form`
+              field its other home does, so a change here saves and shows there. The
+              position name MOVED here from the club-sync section below: a second control
+              for the same field on the same tab would have deepened the confusion. */}
+          {tab === 'contesting' && (
+          <fieldset className="settings-section" id="settings-field-day-identity">
+            <legend>{t('settings.fdWho.legend')}</legend>
+            <p className="settings-note">{t('settings.fdWho.note')}</p>
+            <div className="settings-grid">
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.fdWho.call.label')}</span>
+                <input
+                  className="settings-input"
+                  value={form.mycall}
+                  onChange={(e) => update('mycall', e.target.value)}
+                  placeholder={FD_WHO_EXAMPLES.clubCall}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+                <span className="settings-hint">{t('settings.fdWho.call.hint')}</span>
+              </label>
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.fdWho.position.label')}</span>
+                <input
+                  className={`settings-input${posNameInvalid ? ' invalid' : ''}`}
+                  aria-invalid={posNameInvalid}
+                  value={form.fdPositionName ?? ''}
+                  onChange={(e) => {
+                    setPosNameInvalid(false)
+                    update('fdPositionName', e.target.value)
+                  }}
+                  placeholder={t('settings.fdWho.position.placeholder')}
+                />
+                <span className="settings-hint">{t('settings.fdWho.position.hint')}</span>
+              </label>
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.fdWho.operator.label')}</span>
+                <input
+                  className="settings-input"
+                  value={form.fdOperator ?? ''}
+                  onChange={(e) => update('fdOperator', e.target.value)}
+                  placeholder={t('settings.fdWho.operator.placeholder')}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+                <span className="settings-hint">{t('settings.fdWho.operator.hint')}</span>
+              </label>
+            </div>
+          </fieldset>
+          )}
+          {/* Club sync (Nexus↔Nexus): host one event per club, every position
+              streams its contacts to it over the LAN. HOSTING IS THE ONE
+              DELIBERATE NON-LOOPBACK LISTENER IN THE APP — the toggle's copy
+              says so, and the inbound surface is data-plane only (rows into
+              the club log; nothing can key TX, touch CAT, or change settings). */}
+          {tab === 'contesting' && (
+          <fieldset className="settings-section" id="settings-field-day-club">
+            <legend>{t('settings.fdClub.legend')}</legend>
+            <label className="settings-field">
+              <span className="settings-label">{t('settings.fdClub.host.label')}</span>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={!!form.fdHostEnable}
+                className={`toggle${form.fdHostEnable ? ' on' : ''}`}
+                onClick={() => updateBool('fdHostEnable', !form.fdHostEnable)}
+                aria-label={
+                  form.fdHostEnable
+                    ? t('settings.fdClub.host.aria.disable')
+                    : t('settings.fdClub.host.aria.enable')
+                }
+              >
+                <span className="toggle-knob" />
+              </button>
+              <span className="settings-hint">{t('settings.fdClub.host.hint')}</span>
+            </label>
+            {form.fdHostEnable && (
+              <p className="settings-note">{t('settings.fdClub.host.note')}</p>
+            )}
+            <div className="settings-grid">
+              <div className="settings-field">
+                <span className="settings-label">{t('settings.fdClub.eventName.label')}</span>
+                <input
+                  className="settings-input"
+                  value={form.fdEventName ?? ''}
+                  onChange={(e) => update('fdEventName', e.target.value)}
+                  placeholder={t('settings.fdClub.eventName.placeholder')}
+                />
+                <span className="settings-hint">{t('settings.fdClub.eventName.hint')}</span>
+              </div>
+              <div className="settings-field">
+                <span className="settings-label">{t('settings.fdClub.hostPort.label')}</span>
+                <input
+                  className="settings-input mono"
+                  type="number"
+                  min={1024}
+                  max={65535}
+                  value={form.fdHostPort ?? 42073}
+                  onChange={(e) => {
+                    markDirty()
+                    setForm((prev) =>
+                      prev ? { ...prev, fdHostPort: Number(e.target.value) || 42073 } : prev,
+                    )
+                  }}
+                />
+                <span className="settings-hint">{t('settings.fdClub.hostPort.hint')}</span>
+              </div>
+            </div>
+            <div className="settings-grid">
+              <div className="settings-field">
+                <span className="settings-label">{t('settings.fdClub.join.label')}</span>
+                <input
+                  className="settings-input mono"
+                  value={form.fdJoinAddr ?? ''}
+                  onChange={(e) => update('fdJoinAddr', e.target.value)}
+                  placeholder="192.168.1.10:42073"
+                  disabled={!!form.fdHostEnable}
+                />
+                <span className="settings-hint">
+                  {form.fdHostEnable
+                    ? t('settings.fdClub.join.hostingHint')
+                    : t('settings.fdClub.join.hint')}
+                </span>
+              </div>
+            </div>
+            <div className="settings-field">
+              <button
+                type="button"
+                className="settings-test-btn"
+                disabled={fdScanBusy}
+                onClick={() => {
+                  setFdScanBusy(true)
+                  fdDiscoverEvents()
+                    .then(setFdScan)
+                    .catch(() => setFdScan([]))
+                    .finally(() => setFdScanBusy(false))
+                }}
+              >
+                {fdScanBusy
+                  ? t('settings.fdClub.discover.busy')
+                  : t('settings.fdClub.discover.action')}
+              </button>
+              {fdScan !== null && fdScan.length === 0 && !fdScanBusy && (
+                <span className="settings-hint">{t('settings.fdClub.discover.empty')}</span>
+              )}
+              {(fdScan ?? []).map((b) => (
+                <button
+                  key={b.host}
+                  type="button"
+                  className="settings-test-btn"
+                  onClick={() => update('fdJoinAddr', b.host)}
+                  title={t('settings.fdClub.discover.pick.title', { host: b.host })}
+                >
+                  {t('settings.fdClub.discover.pick.label', {
+                    event: b.event || b.call,
+                    host: b.host,
+                  })}
+                </button>
+              ))}
+            </div>
+            {/* The spectator scoreboard: a read-only page of the club score for
+                a TV/projector on the site LAN, served by the HOST position
+                (tempo_app::fd_scoreboard — GET/HEAD only; the toggle is the
+                LAN opt-in, and the data is what the event already broadcasts
+                on the air). */}
+            <label className="settings-field">
+              <span className="settings-label">{t('settings.fdBoard.label')}</span>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={!!form.fdScoreboard}
+                className={`toggle${form.fdScoreboard ? ' on' : ''}`}
+                onClick={() => updateBool('fdScoreboard', !form.fdScoreboard)}
+                aria-label={
+                  form.fdScoreboard
+                    ? t('settings.fdBoard.aria.disable')
+                    : t('settings.fdBoard.aria.enable')
+                }
+              >
+                <span className="toggle-knob" />
+              </button>
+              <span className="settings-hint">{t('settings.fdBoard.hint')}</span>
+            </label>
+            {form.fdScoreboard && (
+              <div className="settings-grid">
+                <div className="settings-field">
+                  <span className="settings-label">{t('settings.fdBoard.port.label')}</span>
+                  <input
+                    className="settings-input mono"
+                    type="number"
+                    min={1024}
+                    max={65535}
+                    value={form.fdScoreboardPort ?? 7373}
+                    onChange={(e) => {
+                      markDirty()
+                      setForm((prev) =>
+                        prev
+                          ? { ...prev, fdScoreboardPort: Number(e.target.value) || 7373 }
+                          : prev,
+                      )
+                    }}
+                  />
+                  <span className="settings-hint">{t('settings.fdBoard.port.hint')}</span>
+                </div>
+                <div className="settings-field">
+                  <span className="settings-label">{t('settings.fdBoard.url.label')}</span>
+                  {fdBoard?.running && fdBoard.url ? (
+                    <>
+                      <code className="rig-share-addr mono">{fdBoard.url}</code>
+                      <button
+                        type="button"
+                        className="settings-linkbtn"
+                        onClick={() => {
+                          void navigator.clipboard?.writeText(fdBoard.url ?? '').catch(() => {})
+                        }}
+                      >
+                        {t('settings.fdBoard.url.copy')}
+                      </button>
+                    </>
+                  ) : (
+                    <span className="settings-hint">
+                      {fdBoard?.error ?? t('settings.fdBoard.url.pending')}
+                    </span>
+                  )}
+                  {!form.fdHostEnable && (
+                    <span className="settings-hint">{t('settings.fdBoard.hostOnly')}</span>
+                  )}
+                </div>
+              </div>
+            )}
           </fieldset>
           )}
         </div>

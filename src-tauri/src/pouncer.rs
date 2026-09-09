@@ -101,11 +101,7 @@ fn threshold_of(engine: &Arc<Mutex<Engine>>) -> PounceThreshold {
 
 /// Run the detector. `on_fire` is called for each alert that clears the gate — the caller wires
 /// that to the UI (a Tauri event). Blocks; spawn it.
-pub fn run(
-    engine: Arc<Mutex<Engine>>,
-    rx: Receiver<SpotHint>,
-    mut on_fire: impl FnMut(Pounce),
-) {
+pub fn run(engine: Arc<Mutex<Engine>>, rx: Receiver<SpotHint>, mut on_fire: impl FnMut(Pounce)) {
     let mut gate = PounceGate::new();
     let mut needs: Option<(propagation::LogNeeds, Vec<String>)> = None;
     let mut needs_at: i64 = 0;
@@ -178,7 +174,10 @@ mod tests {
     #[test]
     fn pounce_ships_off_on_both_sides() {
         assert_eq!(SettingThreshold::default(), SettingThreshold::Off);
-        assert_eq!(to_scoring(SettingThreshold::default()), PounceThreshold::Off);
+        assert_eq!(
+            to_scoring(SettingThreshold::default()),
+            PounceThreshold::Off
+        );
     }
 
     /// A full queue must DROP rather than block: the producer is the thread reading the cluster

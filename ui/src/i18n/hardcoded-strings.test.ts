@@ -53,6 +53,8 @@ import { EN, type MessageKey } from './index'
  * proven on a real shipped sentence rather than on a fixture.
  */
 const MIGRATED = [
+  'remote-monitor/MonitorApp.tsx',
+  'remote-monitor/preview.tsx',
   'components/SettingsStation.tsx',
   'components/SettingsSearch.tsx',
   'components/OnboardingBanner.tsx',
@@ -108,6 +110,8 @@ const MIGRATED = [
   'components/QsoGlobe.tsx',
   'propViz.ts',
   'openingAlert.ts',
+  'stormAlert.ts',
+  'tv/ConnectTv.tsx',
   'components/DxpeditionsView.tsx',
   'features/dxpedChase.ts',
   'features/dxpedAlarm.ts',
@@ -120,6 +124,7 @@ const MIGRATED = [
   'components/prop/BestBandTable.tsx',
   'components/prop/ChaseFeedPane.tsx',
   'components/prop/ChasePane.tsx',
+  'components/prop/KpOutlookPane.tsx',
   'components/prop/DxpedCalendar.tsx',
   'components/prop/DxpedDigest.tsx',
   'components/prop/DxpedMonth.tsx',
@@ -166,6 +171,10 @@ const MIGRATED = [
   // fixed-width document rather than interface prose.
   'components/PotaSotaView.tsx',
   'components/FieldDayView.tsx',
+  // The warn-only FD advisories (2026-08-29): born migrated — its two banner/header
+  // chips are catalog keys from birth; the mode names, event names and assistance-source
+  // labels it interpolates are invariant tokens.
+  'components/FdAdvisories.tsx',
   'components/ContestCalendarPane.tsx',
   'fdEvent.ts',
   // Batch 7 (2026-08-18) — the Satellites section, the Connect Passes pane and the nine
@@ -355,6 +364,9 @@ const MIGRATED = [
   // word is the only entry, the same split the AI decoder's 400–1200 Hz window and the BW
   // nudge's ±50 Hz take inside their sentences.
   'components/CwCockpit.tsx',
+  // The CW zero-beat indicator (2026-08-28) — born migrated, so it never joins the
+  // un-migrated backlog. Its only invariants are `Hz` and the signed offset it formats.
+  'components/ZeroBeat.tsx',
   // Batch 22 (2026-08-19) — THE SHARED COCKPIT FURNITURE, and the last batch of the phase. The
   // instruments every cockpit hangs on the same frame: the dial readout, the tuning strip, the
   // rig scope and the FT wide graph, the RX and TX meters, the MSK144 Fast Graph, and the
@@ -391,6 +403,12 @@ const MIGRATED = [
   'components/TxMeters.tsx',
   'components/RotorStrip.tsx',
   'components/prop/RotorPane.tsx',
+  'components/prop/AmpPane.tsx',
+  // The amplifier's cockpit strip — fully catalogued from the start. Its only bare literals are
+  // the same invariant tokens AmpPane carries (the unit symbol W, the em dash for an absent
+  // reading) plus the ◀/▶ glyphs, which are direction and not prose: both carry a translated
+  // aria-label, because an arrow names nothing to a screen reader and this one moves a kilowatt.
+  'components/AmpStrip.tsx',
 ]
 
 /**
@@ -473,6 +491,9 @@ const MIGRATED = [
  *   · RTTY and PSK both — the TX-on-air pill's tooltip, which is the wording that states
  *     what Stop TX does to an over in flight (the batch-18 ruling on Operate's TX On/Off
  *     tooltip, verbatim).
+ *   · JS8 (2026-09) — the TX-on-air pill's tooltip only (the batch-19 ruling, verbatim: the
+ *     wording that states what Stop TX does to a frame in flight). Stop TX and Tune are
+ *     drawn by CockpitHeader and deferred there.
  *
  * The TX-ENABLE LATCH is on all three cockpits' censuses and is drawn by `CockpitHeader`,
  * so it is deferred there rather than in any of these files. What DID move is everything
@@ -549,8 +570,13 @@ const PARTIAL = [
   'components/OperateQsoStrip.tsx',
   'components/RttyCockpit.tsx',
   'components/PskCockpit.tsx',
+  'components/Js8Cockpit.tsx',
   'components/SstvView.tsx',
   'components/PhoneCockpit.tsx',
+  // SplitControl.tsx (2026-08-26) — extracted FROM PhoneCockpit when CW and Operate gained a
+  // real split control, so it arrives already fully catalogued. Without it here every
+  // `phone.split.*` entry reads as an orphan, because the strings moved and the scanner did not.
+  'components/SplitControl.tsx',
   'components/VoiceKeyer.tsx',
 ]
 

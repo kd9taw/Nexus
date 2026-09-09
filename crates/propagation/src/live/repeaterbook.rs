@@ -24,6 +24,7 @@
 //! back off". Data is fetched per-user, on demand, for programming that user's
 //! own radios — never redistributed or bundled.
 
+use super::neterr;
 use std::time::Duration;
 
 /// Uniquely-identifying UA per RepeaterBook's API requirements, in their
@@ -143,11 +144,5 @@ pub fn fetch_state(token: &str, state_id: &str) -> Result<String, String> {
 /// Category-only error mapping — the request carries the token in a header, so
 /// we never stringify the transport error (qrz.rs discipline).
 fn redact(e: reqwest::Error) -> String {
-    if e.is_timeout() {
-        "RepeaterBook: request timed out — try again shortly".to_string()
-    } else if e.is_connect() {
-        "RepeaterBook: could not connect — check your network".to_string()
-    } else {
-        "RepeaterBook: request failed".to_string()
-    }
+    neterr::redact("RepeaterBook", &e)
 }

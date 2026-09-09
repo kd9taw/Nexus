@@ -26,7 +26,13 @@ export type ConnState = 'none' | 'paused' | 'failing' | 'off' | 'working' | 'loo
  *
  *  1. No credential beats everything — there is nothing to be healthy about.
  *  2. A kill-switch beats a stale success: while it is set, nothing is being sent at all.
- *  3. A failure NEWER than the last success beats that success.
+ *  3. A failure not OLDER than the last success beats that success. ⚠️ Not older, not newer:
+ *     the stamps are whole seconds, so a success and a failure inside one second compare
+ *     equal, and a strict `>` rendered that tie GREEN — and green stayed until the next
+ *     failure. The tie is reachable (the auto-push worker loops with no spacing between legs
+ *     and a LAN Cloudlog answers in milliseconds) and it resolves red, because a wrong
+ *     `failing` is corrected by the next successful push while a wrong `working` is a
+ *     connector claiming to work at the moment it does not.
  *  4. Deliberately off beats "never verified" — an operator who turned it off is not
  *     looking at a problem.
  *  5. A success with nothing failing since is working.
@@ -38,7 +44,10 @@ export type ConnState = 'none' | 'paused' | 'failing' | 'off' | 'working' | 'loo
 export function connState(c: CredStatus): ConnState {
   if (!c.stored) return 'none'
   if (c.paused) return 'paused'
-  if (c.lastFailureUnix != null && (c.lastSuccessUnix == null || c.lastFailureUnix > c.lastSuccessUnix))
+  if (
+    c.lastFailureUnix != null &&
+    (c.lastSuccessUnix == null || c.lastFailureUnix >= c.lastSuccessUnix)
+  )
     return 'failing'
   if (c.uploads && !c.enabled) return 'off'
   if (c.lastSuccessUnix != null) return 'working'
@@ -100,15 +109,25 @@ export function whenLabel(unix: number | null | undefined, now = Date.now()): st
 }
 
 /** The second line of a row: when it last worked, or when and why it last failed. Empty
- *  when there is nothing honest to say — an empty string renders as no line at all. */
+ *  when there is nothing honest to say — an empty string renders as no line at all.
+ *
+ *  A success names the event that actually happened. #245 gave the QRZ callbook row real
+ *  timestamps for the first time, and it went straight to "last upload 3m ago" — for a
+ *  connector whose `uploads` flag is false and which has never uploaded anything in its life.
+ *  This line is the panel's whole explanation of what the green dot means, so naming the wrong
+ *  event undoes the fix that produced it. */
 export function whenText(c: CredStatus, s: ConnState, now = Date.now()): string {
   if (s === 'failing' || s === 'paused') {
     const when = whenLabel(c.lastFailureUnix, now)
     const why = c.lastFailureDetail?.trim()
     if (!when && !why) return ''
-    // The service's own words. Sanitized upstream (never a raw path or secret).
+    // NOT the service's own words. Every producer of this field hands over one of Nexus's
+    // own sentences — an upload stamp's failure CLASS, or a `ConnDetail` literal off the
+    // conn-health allow-list — so it is safe to render verbatim. It said "the service's own
+    // words, sanitized upstream" until round 5 replaced the prose with a class, and a
+    // comment promising a scrub that no longer exists is how the next scrub gets skipped.
     return `failed ${when}${why ? ` — ${why}` : ''}`.trim()
   }
   const when = whenLabel(c.lastSuccessUnix, now)
-  return when ? `last upload ${when}` : ''
+  return when ? `last ${c.uploads ? 'upload' : 'lookup'} ${when}` : ''
 }

@@ -85,6 +85,19 @@ pub(crate) const WAS_STATES: [&str; 50] = [
     "WV", "WY",
 ];
 
+/// The 13 Canadian provinces and territories, as ADIF Primary Administrative Subdivision codes
+/// for DXCC entity 1 — the same codes `province::province_for_call` returns and the same ones an
+/// ADIF export or a TQSL signing carries, so log and award agree without translation.
+pub(crate) const WAP_PROVINCES: [&str; 13] = [
+    "AB", "BC", "MB", "NB", "NL", "NS", "NT", "NU", "ON", "PE", "QC", "SK", "YT",
+];
+
+/// Canonicalize an ADIF subdivision code to one of the 13 provinces, else `None`.
+pub(crate) fn valid_province(s: &str) -> Option<&'static str> {
+    let up = s.trim().to_ascii_uppercase();
+    WAP_PROVINCES.iter().copied().find(|p| *p == up)
+}
+
 /// Canonicalize an ADIF state code to one of the 50 WAS states, or `None` for a
 /// junk/territory/empty code (which never advances WAS).
 pub(crate) fn valid_state(s: &str) -> Option<&'static str> {
@@ -296,6 +309,21 @@ pub struct WasProgress {
     pub five_band_confirmed: usize,
 }
 
+/// Worked All Provinces progress — the 13 Canadian provinces and territories.
+///
+/// No five-band tier, deliberately: 5BWAS exists because ARRL awards it, and there is no
+/// equivalent standing here to report. Adding a number nobody can claim would be inventing an
+/// award rather than tracking one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct WapProgress {
+    /// Distinct provinces worked / confirmed (13 confirmed = all of them).
+    pub worked: usize,
+    pub confirmed: usize,
+    /// The provinces still to confirm (ADIF codes, sorted) — the chase list.
+    pub needed: Vec<String>,
+}
+
 /// DXCC-first award summary for the dashboard.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -349,6 +377,7 @@ pub struct AwardSummary {
     pub honor_roll: HonorRollProgress,
     /// Worked All States (50 US states) + 5-Band WAS.
     pub was: WasProgress,
+    pub wap: WapProgress,
     /// VUCC — Maidenhead grid squares worked / confirmed, overall and per band.
     pub vucc: VuccProgress,
     /// IOTA — island-group references worked / confirmed.
@@ -382,6 +411,8 @@ pub struct Awards {
     /// US states worked / confirmed (WAS — 50 states), and per-award-band for 5BWAS.
     worked_states: HashSet<&'static str>,
     confirmed_states: HashSet<&'static str>,
+    worked_provinces: HashSet<&'static str>,
+    confirmed_provinces: HashSet<&'static str>,
     worked_state_band: HashSet<(&'static str, Band)>,
     confirmed_state_band: HashSet<(&'static str, Band)>,
     /// VUCC — distinct Maidenhead grid squares (4-char field) worked / confirmed per band.
@@ -525,6 +556,24 @@ impl Awards {
                     if confirmed {
                         self.confirmed_state_band.insert((code, b));
                     }
+                }
+            }
+        }
+        // WAP — Worked All Provinces. Same shape as WAS above and gated the same way, for the
+        // same reason: an ADIF subdivision code is only meaningful INSIDE its entity, and these
+        // collide across countries. "NT" is Northwest Territories here and Australia's Northern
+        // Territory there; "WA" is Washington for WAS and Western Australia elsewhere. Without
+        // the entity gate a VK contact would quietly advance a Canadian award.
+        //
+        // Credit comes from the logged ADIF STATE, never from the callsign hint: a licensee who
+        // moved keeps the old numeral, so `province_for_call` labels a roster row but must not
+        // decide an award (see the note at the top of `province.rs`).
+        let is_canada = resolved.as_ref().is_some_and(|i| i.entity == "Canada");
+        if is_canada {
+            if let Some(code) = state.and_then(valid_province) {
+                self.worked_provinces.insert(code);
+                if confirmed {
+                    self.confirmed_provinces.insert(code);
                 }
             }
         }
@@ -855,6 +904,15 @@ impl Awards {
         let states_on = |set: &HashSet<(&'static str, Band)>, b: Band| {
             set.iter().filter(|(_, sb)| *sb == b).count()
         };
+        let wap = WapProgress {
+            worked: self.worked_provinces.len(),
+            confirmed: self.confirmed_provinces.len(),
+            needed: WAP_PROVINCES
+                .iter()
+                .filter(|p| !self.confirmed_provinces.contains(*p))
+                .map(|p| p.to_string())
+                .collect(),
+        };
         let was = WasProgress {
             worked: self.worked_states.len(),
             confirmed: self.confirmed_states.len(),
@@ -911,6 +969,7 @@ impl Awards {
             waz_confirmed: self.confirmed_zones.len(),
             honor_roll,
             was,
+            wap,
             vucc,
             iota,
             band_targets,
@@ -1105,6 +1164,65 @@ mod tests {
         let s = c.summary();
         assert_eq!(s.dxcc_confirmed, 0);
         assert_eq!(s.dxcc_credited, 0, "credit without confirmation is ignored");
+    }
+
+    #[test]
+    fn wap_provinces_confirmed_needed_and_gated_on_canada() {
+        let mut a = Awards::new();
+        // Four provinces confirmed across the prefix families that all resolve to Canada:
+        // VE (mainland), VO (Newfoundland), VY (the territories/PEI), VA (the second block).
+        a.add_with_credit("VE3ABC", "20m", "FT8", true, false, Some("ON"), None, None);
+        a.add_with_credit("VO1AA", "20m", "CW", true, false, Some("nl"), None, None); // lowercase ok
+        a.add_with_credit("VY1AB", "20m", "FT8", true, false, Some("YT"), None, None);
+        a.add_with_credit("VA7XYZ", "20m", "FT8", true, false, Some("BC"), None, None);
+        // Worked but not confirmed — counts as worked, still needed.
+        a.add_with_credit("VE6QQ", "20m", "FT8", false, false, Some("AB"), None, None);
+        // Junk subdivision code → ignored entirely.
+        a.add_with_credit("VE2ZZ", "20m", "FT8", true, false, Some("XX"), None, None);
+
+        // ⭐ THE COLLISION THE ENTITY GATE EXISTS FOR. "NT" is Northwest Territories in Canada
+        // and Australia's NORTHERN TERRITORY in VK. Without gating on the DXCC entity, this VK8
+        // contact would silently complete a Canadian province the operator has never worked —
+        // the same hazard WAS carries with Australian "WA" against Washington.
+        a.add_with_credit("VK8AA", "20m", "FT8", true, false, Some("NT"), None, None);
+
+        let s = a.summary();
+        assert_eq!(s.wap.confirmed, 4, "ON, NL, YT, BC — VK8/NT rejected");
+        assert_eq!(s.wap.worked, 5, "+ AB worked but unconfirmed");
+        assert_eq!(s.wap.needed.len(), 9, "13 − 4 confirmed");
+        assert!(!s.wap.needed.contains(&"ON".to_string()));
+        assert!(
+            s.wap.needed.contains(&"AB".to_string()),
+            "worked is not confirmed"
+        );
+        assert!(
+            s.wap.needed.contains(&"NT".to_string()),
+            "Northwest Territories must still be needed after the VK8 contact"
+        );
+    }
+
+    /// Credit comes from the logged STATE, never from the callsign's regional numeral. A
+    /// licensee who moves keeps the old call, so the numeral labels a roster row and must not
+    /// decide an award — the rule `province.rs` states and this pins.
+    #[test]
+    fn wap_credit_comes_from_the_log_not_the_callsign_numeral() {
+        let mut a = Awards::new();
+        // A VE3 (Ontario numeral) whose log says Alberta — the operator moved and kept the call.
+        a.add_with_credit("VE3ABC", "20m", "FT8", true, false, Some("AB"), None, None);
+        let s = a.summary();
+        assert!(
+            s.wap.needed.contains(&"ON".to_string()),
+            "the ON numeral must not have credited Ontario"
+        );
+        assert!(
+            !s.wap.needed.contains(&"AB".to_string()),
+            "the LOG said Alberta"
+        );
+
+        // And a Canadian contact with no STATE logged credits nothing at all.
+        let mut b = Awards::new();
+        b.add_with_credit("VE7XYZ", "20m", "FT8", true, false, None, None, None);
+        assert_eq!(b.summary().wap.confirmed, 0, "no STATE, no credit");
     }
 
     #[test]

@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en" data-theme="dark" data-viewport="md">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- MIRRORS ui/index.html line 106 verbatim. This meta is load-bearing for the bug under
+         test: on WebKitGTK the used color-scheme decides which Adwaita form-control chrome
+         gets painted OVER the author background. -->
+    <meta name="color-scheme" content="dark light" />
+    <title>Harness — Setup wizard step 2 (rig &amp; audio) selectors</title>
+    <!-- The REAL sheet, not a copy: a stale copy is how a harness lies. -->
+    <link rel="stylesheet" href="../src/styles.css" />
+    <style>
+      /* Harness-only: the app seeds --ui-zoom from localStorage in index.html. */
+      :root {
+        --ui-zoom: 1;
+      }
+      body {
+        background: var(--bg);
+        margin: 0;
+      }
+      /* The dialog is fixed-position; the harness renders it in flow so a full-page
+         snapshot captures it in both engines. Nothing here touches select paint. */
+      .ui-dialog {
+        position: static;
+        transform: none;
+        margin: 0 auto;
+        max-height: none;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- Structure copied from SetupWizard.tsx step===1 ("2 · RIG & AUDIO"), rendered through
+         ui/Dialog.tsx: portal → .ui-dialog → inner zoom wrapper → wizard content. -->
+    <div class="ui-dialog">
+      <div style="zoom: var(--ui-zoom, 1)">
+        <div class="wizard-dots">
+          <button type="button" class="wizard-dot done"><span class="wizard-dot-n">1</span> Station</button>
+          <button type="button" class="wizard-dot cur"><span class="wizard-dot-n">2</span> Rig &amp; audio</button>
+          <button type="button" class="wizard-dot"><span class="wizard-dot-n">3</span> Logbook</button>
+          <button type="button" class="wizard-dot"><span class="wizard-dot-n">4</span> Finish</button>
+        </div>
+
+        <h2 class="wizard-title">Rig &amp; audio</h2>
+        <p class="wizard-sub">Connect your radio and pick the sound card it uses.</p>
+
+        <div class="wizard-detect">
+          <button type="button" class="wizard-btn">Detect my radio</button>
+        </div>
+
+        <!-- SetupWizard.tsx:778-816 — the RADIO MODEL picker. -->
+        <div class="wizard-fields">
+          <label class="wizard-field">
+            <span>Radio model</span>
+            <select id="sel-model" class="bad" aria-invalid="true">
+              <option value="0" disabled>Pick your radio…</option>
+              <option value="1042" selected>Yaesu FT-991A</option>
+              <option value="1041">Yaesu FTDX10</option>
+              <option value="1040">Yaesu FT-710</option>
+              <option value="2037">Icom IC-7300</option>
+              <option value="2038">Icom IC-705</option>
+            </select>
+            <span class="wizard-field-hint bad" role="alert">An FTDX10 seed was answered — confirm this is really your radio.</span>
+          </label>
+        </div>
+
+        <div class="wizard-rigconn">
+          <button type="button" class="wizard-mode sel">
+            <span class="wizard-mode-label">Serial / USB</span>
+            <span class="wizard-mode-blurb">A cable to the radio.</span>
+          </button>
+          <button type="button" class="wizard-mode">
+            <span class="wizard-mode-label">Network</span>
+            <span class="wizard-mode-blurb">rigctld or a networked radio.</span>
+          </button>
+        </div>
+
+        <!-- SetupWizard.tsx:871-896 — the two AUDIO pickers the operator reported. -->
+        <div class="wizard-fields">
+          <label class="wizard-field">
+            <span>Audio in (from radio)</span>
+            <select id="sel-audio-in">
+              <option value="">System default</option>
+              <option value="usb" selected>USB Audio CODEC Analog Stereo</option>
+              <option value="hda">HDA Intel PCH Line In</option>
+            </select>
+          </label>
+          <label class="wizard-field">
+            <span>Audio out (to radio)</span>
+            <select id="sel-audio-out">
+              <option value="">System default</option>
+              <option value="usb" selected>USB Audio CODEC Analog Stereo</option>
+              <option value="hda">HDA Intel PCH Speakers</option>
+            </select>
+          </label>
+        </div>
+
+        <!-- A text input from the same .wizard-field rule: the CONTROL. It is styled by the
+             identical declaration block, so if the input paints dark and the selects do not,
+             the difference is the engine's form-control theming, not the cascade. -->
+        <div class="wizard-fields">
+          <label class="wizard-field">
+            <span>Control: text input (same CSS rule as the selects)</span>
+            <input type="text" value="COM3 / ttyUSB0" />
+          </label>
+        </div>
+
+        <div class="wizard-actions">
+          <div class="wizard-actions-right">
+            <button type="button" class="wizard-skip">Back</button>
+            <button type="button" class="wizard-go">Next</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      // ?theme=light|dark  ·  ?fix=appearance|colorscheme|both  — the fix probes are applied
+      // here rather than in styles.css so the harness measures the CURRENT sheet by default.
+      const q = new URLSearchParams(location.search)
+      const theme = q.get('theme') === 'light' ? 'light' : 'dark'
+      document.documentElement.setAttribute('data-theme', theme)
+      const fix = q.get('fix') || ''
+      if (fix === 'colorscheme' || fix === 'both') {
+        document.documentElement.style.colorScheme = theme
+      }
+      if (fix === 'bare') {
+        // appearance:none ALONE — does WebKitGTK still draw a dropdown arrow?
+        const b = document.createElement('style')
+        b.textContent = '.wizard-field select{-webkit-appearance:none;appearance:none;}'
+        document.head.appendChild(b)
+      }
+      if (fix === 'appearance' || fix === 'both') {
+        const s = document.createElement('style')
+        s.textContent =
+          '.wizard-field select{-webkit-appearance:none;appearance:none;' +
+          'background-image:linear-gradient(45deg,transparent 50%,var(--text-dim) 50%),' +
+          'linear-gradient(135deg,var(--text-dim) 50%,transparent 50%);' +
+          'background-position:calc(100% - 16px) 50%,calc(100% - 11px) 50%;' +
+          'background-size:5px 5px,5px 5px;background-repeat:no-repeat;padding-right:28px;}'
+        document.head.appendChild(s)
+      }
+
+      // Computed style is what the CASCADE resolved — NOT what the engine painted.
+      // The screenshot pixel sample is the real answer; this is here to prove the
+      // cascade is identical in both engines, isolating the paint as the difference.
+      window.measure = () => {
+        const out = {}
+        for (const id of ['sel-model', 'sel-audio-in', 'sel-audio-out']) {
+          const el = document.getElementById(id)
+          const cs = getComputedStyle(el)
+          const r = el.getBoundingClientRect()
+          out[id] = {
+            background: cs.backgroundColor,
+            color: cs.color,
+            appearance: cs.appearance || cs.webkitAppearance,
+            border: cs.borderTopColor,
+            rect: [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)],
+          }
+        }
+        const inp = document.querySelector('.wizard-field input')
+        const ics = getComputedStyle(inp)
+        const ir = inp.getBoundingClientRect()
+        out.controlInput = {
+          background: ics.backgroundColor,
+          color: ics.color,
+          rect: [Math.round(ir.x), Math.round(ir.y), Math.round(ir.width), Math.round(ir.height)],
+        }
+        out.dpr = window.devicePixelRatio
+        out.innerSize = [window.innerWidth, window.innerHeight]
+        out.rootFontPx = getComputedStyle(document.documentElement).fontSize
+        out.theme = document.documentElement.getAttribute('data-theme')
+        out.usedColorScheme = getComputedStyle(document.documentElement).colorScheme
+        return out
+      }
+    </script>
+  </body>
+</html>

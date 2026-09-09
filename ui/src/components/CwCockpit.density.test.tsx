@@ -62,40 +62,59 @@ const decodeState = {
   name: null as string | null,
 }
 
-vi.mock('../api', () => ({
-  getSettings: vi.fn(async () => ({ macros: { cwProfiles: [], activeCwProfile: 0 } })),
-  setSettings: vi.fn(async () => ({})),
-  sendCw: vi.fn(async () => {}),
-  setCwKeyer: vi.fn(async () => null),
-  setCwWpm: vi.fn(async () => {}),
-  stopCw: vi.fn(async () => {}),
-  cwDecode: vi.fn(async () => decodeState),
-  cwClear: vi.fn(async () => {}),
-  setAiCw: vi.fn(async () => {}),
-  selectPeer: vi.fn(async () => null),
-  previewCw: vi.fn(async (t: string) => t),
-  pointRotatorAtCall: vi.fn(async () => 0),
-  setRigFunc: vi.fn(async () => ({})),
-  setFilterWidth: vi.fn(async () => ({})),
-  setNrLevel: vi.fn(async () => {}),
-  setAgc: vi.fn(async () => ({})),
-  setScopeSpan: vi.fn(async () => ({})),
-  setScopeRef: vi.fn(async () => {}),
-  setFlexPanSpan: vi.fn(async () => ({})),
-  setFlexPanRef: vi.fn(async () => ({})),
-  openPanelWindow: vi.fn(async () => {}),
-  setTune: vi.fn(async () => ({})),
-  setFrequency: vi.fn(async () => ({})),
-  haltTx: vi.fn(async () => ({})),
-  // RotorStrip is a real header child now that the header mock renders children.
-  readRotator: vi.fn(async () => null),
-  stopRotator: vi.fn(async () => {}),
-  getDeclination: vi.fn(async () => 0),
-  getSatTrackStatus: vi.fn(async () => null),
-  getSatTransponder: vi.fn(async () => null),
-  setSatTransponder: vi.fn(async () => {}),
-  stopSatTrack: vi.fn(async () => {}),
-}))
+vi.mock('../api', async (importOriginal) => {
+  // ⭐ DERIVED FROM THE REAL MODULE, not a hand-kept list. A hand-kept mock omits any export
+  // added after it was written, and a component that calls one THROWS ON MOUNT — so the suite
+  // goes red at a seam nothing in the diff explains, and the tempting fix is to make the test
+  // pass rather than ask why. That cost five files one evening when a single API call was added
+  // to the CW cockpit, this one among them.
+  //
+  // Every function the module exports is auto-stubbed here; the entries below override only the
+  // ones this file's assertions actually depend on, so their shapes are unchanged.
+  const actual = await importOriginal<Record<string, unknown>>()
+  const auto: Record<string, unknown> = {}
+  for (const k of Object.keys(actual)) {
+    auto[k] = typeof actual[k] === 'function' ? vi.fn(async () => ({})) : actual[k]
+  }
+  return {
+    ...auto,
+    getSettings: vi.fn(async () => ({ macros: { cwProfiles: [], activeCwProfile: 0 } })),
+    // Hand-kept mock: an export the cockpit calls but this list omits makes it THROW ON MOUNT,
+    // which reads as a layout regression rather than the stale mock it is.
+    getCatCwUnprovenRigModels: vi.fn(async () => []),
+    setSettings: vi.fn(async () => ({})),
+    sendCw: vi.fn(async () => {}),
+    setCwKeyer: vi.fn(async () => null),
+    setCwWpm: vi.fn(async () => {}),
+    stopCw: vi.fn(async () => {}),
+    cwDecode: vi.fn(async () => decodeState),
+    cwClear: vi.fn(async () => {}),
+    setAiCw: vi.fn(async () => {}),
+    selectPeer: vi.fn(async () => null),
+    previewCw: vi.fn(async (t: string) => t),
+    pointRotatorAtCall: vi.fn(async () => 0),
+    setRigFunc: vi.fn(async () => ({})),
+    setFilterWidth: vi.fn(async () => ({})),
+    setNrLevel: vi.fn(async () => {}),
+    setAgc: vi.fn(async () => ({})),
+    setScopeSpan: vi.fn(async () => ({})),
+    setScopeRef: vi.fn(async () => {}),
+    setFlexPanSpan: vi.fn(async () => ({})),
+    setFlexPanRef: vi.fn(async () => ({})),
+    openPanelWindow: vi.fn(async () => {}),
+    setTune: vi.fn(async () => ({})),
+    setFrequency: vi.fn(async () => ({})),
+    haltTx: vi.fn(async () => ({})),
+    // RotorStrip is a real header child now that the header mock renders children.
+    readRotator: vi.fn(async () => null),
+    stopRotator: vi.fn(async () => {}),
+    getDeclination: vi.fn(async () => 0),
+    getSatTrackStatus: vi.fn(async () => null),
+    getSatTransponder: vi.fn(async () => null),
+    setSatTransponder: vi.fn(async () => {}),
+    stopSatTrack: vi.fn(async () => {}),
+  }
+})
 
 // The header, the scope and the log strip are OTHER surfaces' density problems; BandStrip and
 // the DSP rows are REAL here, because their own boxes are what this pass measures.
@@ -460,7 +479,18 @@ describe('the deleted chrome said nothing the frame does not say', () => {
     for (const o of Array.from(sel.options)) {
       expect(o.title.length, `the ${o.value} back-end lost its explanation`).toBeGreaterThan(40)
     }
-    expect(Array.from(sel.options).find((o) => o.value === 'soundcard')!.title).toMatch(/below ALC/)
+    const scTitle = Array.from(sel.options).find((o) => o.value === 'soundcard')!.title
+    expect(scTitle).toMatch(/below ALC/)
+    // FIELD REPORT 2026-08-28 (Yaesu FTX-1): "Soundcard activated caused radio to switch from
+    // CW-U to USB, and had to manually change it back." The mode change is DELIBERATE — a keyed
+    // audio tone cannot be sent in CW, so the rig has to go to the SSB side (as a data mode, so
+    // the tone reaches the transmitter and not the mic jack). What was missing is that nobody
+    // told him, on either surface. This is the COCKPIT half of that copy; Settings ▸ CW is
+    // pinned in SettingsPanel.cwkeyer.test.tsx. It has to carry BOTH halves — that the radio
+    // leaves CW, and that CW comes back — because an operator who thinks the change is
+    // permanent will not try the keyer at all.
+    expect(scTitle, 'the live keyer switch does not say the radio leaves CW').toMatch(/out of CW/i)
+    expect(scTitle, 'it says CW is left, and never that CW comes back').toMatch(/CW mode returns/i)
     expect(sel.parentElement!.getAttribute('title'), 'the active back-end has no explanation').toBe(
       Array.from(sel.options).find((o) => o.value === sel.value)!.title,
     )

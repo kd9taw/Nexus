@@ -27,8 +27,10 @@ export const PER_SURFACE = [
   'nexus-ui-scale-mode',
   'nexus.awardsTab',
   'nexus.connect.config',
+  'nexus.connect.globe3d.layers',
   'nexus.connect.insights.collapsed',
   'nexus.connect.intent',
+  'nexus.connect.layers',
   'nexus.connect.map3d',
   'nexus.connect.projection',
   'nexus.decodes.filter',
@@ -93,10 +95,19 @@ const SHARED = [
   'nexus.cw.tuneStep',
   'nexus.cwAssist',
   'nexus.dev.xray',
+  // The Field Day contacts-per-hour goal. SHARED: a target rate is a statement about how this
+  // operator is running the event, not about one window — a torn-off board showing a different
+  // goal than the cockpit would be two surfaces disagreeing about the same target.
+  'nexus.fd.rateGoal',
   'nexus.dxped.alarms',
   'nexus.dxped.chasing',
   'nexus.features.v1',
   'nexus.features.wizardSeen',
+  // ★-pinned JS8 calls. SHARED, and NOT durable: which calls this operator is holding at the
+  // top of the roster is a fact about the operator rather than a window, but it is about who is
+  // on the band right now — one click to remake, meaningless tomorrow — so it does not join the
+  // watch list and the chase sets in DURABLE_KEYS (features/js8Pins).
+  'nexus.js8.pins',
   'nexus.memory.bank.v1',
   'nexus.memory.bank.v2',
   'nexus.needed.autopop',

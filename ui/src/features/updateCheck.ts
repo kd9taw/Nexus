@@ -29,20 +29,39 @@ export async function maybeCheckForUpdate(): Promise<void> {
   promptDownload(info)
 }
 
-/** The non-expiring "update available" toast with a Download button. Marks the version dismissed
- * only AFTER the browser actually opens, so a failed open surfaces an error instead of silently
- * suppressing the prompt forever. */
+/** The non-expiring "update available" toast with a Download button.
+ *
+ * ⚠️ THE ACTION RETURNS ITS PROMISE, and that is the contract with `Toasts.tsx`: an action that
+ * resolves retires its toast, an action that REJECTS leaves it on screen. Both halves matter
+ * here (R3, shipped in 1.6.x). On Linux the opener used to return Ok the instant `xdg-open` was
+ * spawned, so a failed open reported success — and this function wrote `dismissedVersion` on it,
+ * which `maybeCheckForUpdate` reads on every subsequent launch. One click on a button that did
+ * nothing silenced update notices permanently. The backend now reports the real outcome; nothing
+ * below records a dismissal or closes the prompt on a result we cannot trust, and a failure hands
+ * over the URL rather than a dead end. */
 function promptDownload(info: UpdateInfo): void {
   const latest = info.latest
   if (!latest) return
   pushToast(t('update.available', { latest, current: info.current }), 'info', 0, {
     prominent: true,
     actionLabel: t('update.download'),
-    action: () => {
-      openDownloadPage()
-        .then(() => localStorage.setItem(LS_DISMISSED, latest))
-        .catch(() => pushToast(t('update.downloadFailed'), 'error'))
-    },
+    action: () =>
+      openDownloadPage().then(
+        () => {
+          localStorage.setItem(LS_DISMISSED, latest)
+        },
+        (err: unknown) => {
+          // The operator still needs the build. Give them the address, non-expiring (a URL you
+          // have to read must not time out) and copyable — the copy is the action, so this toast
+          // in turn only closes once the link is really on the clipboard.
+          const url = info.downloadUrl
+          pushToast(t('update.downloadFailed', { url }), 'error', 0, {
+            actionLabel: t('update.copyLink'),
+            action: () => navigator.clipboard?.writeText(url),
+          })
+          throw err // keep the update prompt up — they have not got the download yet
+        },
+      ),
   })
 }
 

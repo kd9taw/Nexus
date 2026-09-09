@@ -15,6 +15,10 @@ import { render, screen, cleanup, fireEvent } from '@testing-library/react'
 import { SettingsPanel } from './SettingsPanel'
 import type { FeaturesApi } from '../useFeatures'
 import defaultSettings from './__fixtures__/defaultSettings.json'
+import { EN } from '../i18n'
+import { DE } from '../i18n/de'
+import { ES } from '../i18n/es'
+import { FR } from '../i18n/fr'
 
 const api = vi.hoisted(() => {
   const spies: Record<string, ReturnType<typeof vi.fn>> = {}
@@ -145,5 +149,136 @@ describe('the keyline hint does not send WinKey owners to the DTR backend', () =
     expect(hint).toMatch(/Navigator/i)
     expect(hint).toMatch(/does\s+not\s+key on DTR/i)
     expect(hint).toMatch(/WinKeyer backend/i)
+  })
+})
+
+/**
+ * ⭐ FIELD REPORT 2026-08-28 (Yaesu FTX-1, via KR4FQG): "Touch Tune and TX is ok. Try send a cw,
+ * never went to tx." PTT and the CAT link were both alive; CW keying specifically did nothing,
+ * and the screen said NOTHING — because it cannot. The FTX-1's own Hamlib backend emits a
+ * different `send_morse` wire form from the newcat one every other modern Yaesu uses, and it
+ * returns `RPRT 0` whether or not the radio keyed, so Nexus's only evidence says "fine".
+ *
+ * A detector we cannot honestly build is replaced by a caution the operator can read BEFORE he
+ * loses an evening. Three rules, one test each: it appears on the flagged model, it stays away
+ * from every other radio, and it never appears for a keyer he did not choose.
+ */
+describe('CAT keying that cannot report its own failure says so up front', () => {
+  /** Open Modes ▸ CW with a keyer AND a rig model, with the backend's flag list stubbed. */
+  async function openCwOnRig(cwKeyer: string, rigModel: number, flagged: number[] = [1051]) {
+    api.get('getCatCwUnprovenRigModels').mockImplementation(() => Promise.resolve(flagged))
+    api.get('getSettings').mockImplementation(() =>
+      Promise.resolve({
+        ...defaultSettings,
+        mycall: 'KD9TAW',
+        mygrid: 'EN52',
+        cwKeyer,
+        rigModel,
+      } as never),
+    )
+    renderPanel()
+    fireEvent.click(await screen.findByRole('tab', { name: 'CW' }))
+    await screen.findByText('Keyer backend')
+  }
+  const caution = () => screen.queryByText(/unproven on this radio/i)
+
+  it('warns on the FTX-1 when the CAT keyer is selected', async () => {
+    await openCwOnRig('cat', 1051)
+    await screen.findByText(/unproven on this radio/i)
+    // It must ROUTE him, not just worry him — the three keyers that do work, by name.
+    const text = caution()?.closest('span')?.textContent ?? ''
+    expect(text).toMatch(/Serial keyline/i)
+    expect(text).toMatch(/WinKeyer/i)
+    expect(text).toMatch(/Soundcard/i)
+  })
+
+  it('stays silent on a rig whose CAT keyer works — no crying wolf', async () => {
+    await openCwOnRig('cat', 1042) // FTDX10: the newcat two-command form, proven
+    expect(caution()).toBeNull()
+  })
+
+  it('stays silent when the operator picked a different keyer on the same radio', async () => {
+    // An FTX-1 owner running a WinKeyer must not be nagged about a backend he is not using.
+    await openCwOnRig('winkeyer', 1051)
+    expect(caution()).toBeNull()
+  })
+
+  it('shows nothing when the rule could not be read', async () => {
+    // Built without the radio feature / the command failed: an unreadable rule must never
+    // warn an operator off a keyer that works for him.
+    await openCwOnRig('cat', 1051, [])
+    expect(caution()).toBeNull()
+  })
+
+  /**
+   * THE COPY MUST NOT NAME A MANUFACTURER, and this is a catalog check rather than a render
+   * check because that is where it would rot. The flag list is keyed on rig MODEL
+   * (`rigmodels::cat_cw_unproven_rig_models`); today's single entry happening to be a Yaesu is
+   * a fact about the entry, not about the rule. Copy that says "other Yaesus" becomes a lie the
+   * moment a non-Yaesu is flagged — and nothing would catch it, because the sentence lives in
+   * four TypeScript catalogs and the list lives in Rust, so the two drift in silence.
+   */
+  it('names no manufacturer — the flag list is by model, not by make', async () => {
+    const makes = /yaesu|icom|kenwood|elecraft|flex(radio)?|xiegu|alinco|ten-?tec/i
+
+    // The control, and it must come first: a regex that finds nothing proves nothing until it
+    // is shown to find something. The `settings.cw.keyer.cat` option DOES name hardware.
+    expect(makes.test('sends a different command from other Yaesus'), 'the detector is dead').toBe(
+      true,
+    )
+
+    for (const [lang, cat] of [
+      ['en', EN],
+      ['de', DE],
+      ['es', ES],
+      ['fr', FR],
+    ] as const) {
+      const s = (cat as Record<string, unknown>)['settings.cw.keyer.unproven']
+      expect(typeof s, `${lang} has no unproven caution at all`).toBe('string')
+      // The second control: the sentence must still carry the clause the operator deliberately
+      // kept, so this cannot pass by the string having been emptied or gutted.
+      expect(s as string, `${lang} lost the Hamlib clause`).toMatch(/Hamlib/)
+      expect(s as string, `${lang} names a make in a caution the list applies by model`).not.toMatch(
+        makes,
+      )
+    }
+
+    // …and the rendered surface agrees with the catalog it was read from.
+    await openCwOnRig('cat', 1051)
+    const text = (await screen.findByText(/unproven on this radio/i)).closest('span')?.textContent ?? ''
+    expect(text).toMatch(/Hamlib/)
+    expect(text).not.toMatch(makes)
+  })
+})
+
+/**
+ * ⭐ THE SAME FIELD REPORT, third symptom: "Soundcard activated caused radio to switch from CW-U
+ * to USB, and had to manually change it back."
+ *
+ * The mode change is DELIBERATE — a keyed audio tone cannot be sent in CW, so the rig has to be
+ * moved to the SSB side (as a data mode, so the tone reaches the transmitter and not the mic
+ * jack). What was missing is that nobody told him. The picker offered "audio tone through SSB —
+ * a workaround" and never mentioned that his radio would leave CW.
+ *
+ * Copy only, and it has to say both halves: that it LEAVES CW, and that CW COMES BACK — an
+ * operator who thinks the change is permanent will not try the keyer at all.
+ */
+describe('the soundcard keyer says that it takes the radio out of CW', () => {
+  const keyerHint = () => screen.getByText(/How Nexus sends CW/).textContent ?? ''
+
+  it('warns that the radio leaves CW, and says CW comes back', async () => {
+    await openCw('soundcard')
+    const hint = keyerHint()
+    expect(hint).toMatch(/takes your radio out of CW/i)
+    expect(hint).toMatch(/data mode/i)
+    expect(hint).toMatch(/comes straight back|comes back/i)
+  })
+
+  it('the option label no longer promises plain SSB', async () => {
+    // "audio tone through SSB" described the old behaviour AND read as harmless. The rig is put
+    // into a DATA submode now, which is the thing an operator sees change on his front panel.
+    await openCw('cat')
+    const option = screen.getByRole('option', { name: /Soundcard/ })
+    expect(option.textContent).toMatch(/data mode/i)
   })
 })

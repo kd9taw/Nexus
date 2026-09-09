@@ -5,12 +5,16 @@ grid. It predicts amateur-satellite passes over your location, schedules your �
 birds 48 h out, plots each pass, lists the working frequencies, and — if you
 have a rotator — can auto-track a bird across the sky through a pass.
 
-Satellites is an opt-in section. Turn it on in the first-run wizard or in
+Satellites ships enabled — the wizard turns everything on — and the
+getting-started and 6m/VHF goal profiles both keep it. If you have trimmed
+sections, switch it back on in
 [Settings ▸ Appearance ▸ Features](settings-reference.md#features). It needs
 your grid set in [Settings ▸ Station](settings-reference.md#station) to compute
 passes.
 
-![The Satellites pass console with BEIDOU-2 M4 open and nothing armed — the arm bar across the top carries only the bird, its NORAD number, an ALIVE badge and the ✕ that closes it. Down the left run the Next and Best 24 h passes, each with a ▶ Work this pass, then the 48 h favorites schedule under its "other birds overhead · 252 workable" disclosure, and the frequencies and transponder panels holding the bottom of the column — the transponder still set to "None — leave the dial to me", so the frequencies panel reads as instructions rather than a live dial. On the right the sky dome — the pass arc drawn with AOS at 273° W, LOS at 176° S and the bird at az 182° el 59° — sits beside the ground-track globe, above the pass timeline reading "IN PASS — 140 min to LOS", then the log strip with its Call, SENT/RCVD and Grid boxes, and the Birds catalog starting below the fold.](../img/manual/satellites-console.webp)
+![The pass column for FO-29: a sky dome with the pass arc drawn from AOS 10° N to LOS 210° SW, a 60° elevation ring marked, beside a ground-track globe with the bird labelled JAS-2 (FO-29) and the operator's position marked to its east. Under them a rise/set line, then the pass timeline reading AOS 20:32, TCA 20:42 max 57°, LOS 20:51 with "next pass in 57 min", and the needed badges for the pass.](../img/manual/satellites-pass-column.webp)
+
+*The pass column in Nexus 1.10.3 — FO-29 open, nothing armed yet.*
 
 ## The tour
 
@@ -21,6 +25,10 @@ globe, the pass timeline and the log strip down to its **Log** button are all
 visible at once. At 1024×768, the smallest window Nexus supports, the last inch
 of the log strip sits just under the fold; see
 [what fits at which window size](#what-fits-at-which-window-size) below.
+
+![The planning column: NEXT lists GREENCUBE (IO-117) and QUAKESAT, BEST 24 H lists AAUSAT 3 and OSCAR 7 (AO-7), each with a "Work this pass" button. Below, the 48-hour favorites schedule — a starred row per pass with the bird, its transmitter type, AOS local time and countdown, maximum elevation, duration, the sky path, needed badges and an alarm bell.](../img/manual/satellites-schedule.webp)
+
+*The Next / Best-24 h passes and the 48-hour favorites schedule, in Nexus 1.10.3.*
 
 Across the top, the **arm bar** says what is armed and what it is driving — the
 bird, which rig is bound, the readiness gates (pass, rotor, transponder, Doppler,
@@ -97,12 +105,32 @@ Arm an alarm on a pass and Nexus reminds you before AOS so you don't miss it.
 [DXpedition wake-me alarm](dxpeditions.md#set-a-wake-me-alarm) — the same alarm
 machinery.)
 
+![Two rows of the favourites schedule, the first with an alarm armed and a fifteen-minute lead selector.](../img/manual/satellites-pass-alarm.webp)
+
+*An armed pass alarm in Nexus 1.10.3. The ⏰ column is per bird: the FO-29 row is armed with a
+**−15m** lead, the SO-50 row under it is not. The clock beside it is the pass's own AOS.
+Fixture passes — nothing here was computed from current orbital elements.*
+
 ### Tune around the passband — and get back on the bird
+
+![The Transponder chooser for FO-29: "None — leave the dial to me" selected, then Mode U CW Beacon (down 435.795), Mode V/U Linear Transponder badged INVERTING (down 435.800–435.900, up 145.900–146.000, LSB) and Mode U Digitalker (down 435.910). A credit line reads "frequencies & status: SatNOGS DB (CC-BY-SA 4.0)".](../img/manual/satellite-transponders.webp)
+
+*The transponder chooser for FO-29 in Nexus 1.10.3, with nothing picked yet.
+Picking a row is what hands the dial to the pass.*
 
 Working a linear bird means chasing a station across the transponder, so turn
 the VFO and Nexus follows: it takes your new dial as your position in the
 passband and moves your uplink to match (mirrored, if the transponder inverts).
 Doppler keeps correcting around wherever you put yourself.
+
+![The Frequencies pane during a pass: Doppler-corrected downlink and uplink, and a passband bar with the two legs marked.](../img/manual/satellites-doppler-passband.webp)
+
+*The passband readout in Nexus 1.10.3 on a **simulated** FO-29 pass. **DOPPLER** prints each
+leg's corrected dial and its shift. **PASSBAND** draws where you are sitting inside the
+transponder — downlink marker above, uplink below, on a ±50 kHz scale from the passband centre
+— and says in words which way an inverting transponder moves. The transponder chooser beside it
+is the pick the readout follows. The pass, the shifts and the marker positions are fixture
+values: no elements were propagated and no radio was tuned.*
 
 Tune *outside* the passband and that stops — you've left the transponder as far
 as Nexus can tell, which is the right call, because the alternative is dragging
@@ -119,6 +147,11 @@ state it is absent in is the one where it would have to guess: with no
 transponder picked there is nothing to put you back onto, and choosing one for
 you would be choosing your uplink.
 
+![The Dial line under the bird's name, offering a Lock on button to put the radio back on the transponder.](../img/manual/satellites-lock-on.webp)
+
+*The **Dial** line in Nexus 1.10.3 — the way back onto the bird, and the whole of it. Simulated
+pass.*
+
 ### Log the contact without leaving the pass
 
 The log strip sits in the pass column under the sky dome and the pass timeline —
@@ -126,6 +159,15 @@ the same log strip the Phone and CW cockpits use, with the same callbook lookup,
 the same recall card and the same prior-contact history. It is there whether or
 not a pass is armed, and it stays there after the bird sets, so you can catch up
 on a contact once your hands are free.
+
+![The pass log strip: call, reports, grid, name, QTH, state, country, comment and notes, above a line saying the contact is not tagged as a satellite QSO.](../img/manual/satellites-log-qso.webp)
+
+*The log strip in Nexus 1.10.3 during a simulated FO-29 pass. It takes the ordinary QSO fields
+and logs at the dial named under it (`SSB · 70cm · 435.856 MHz`). Read the line beneath the
+**Log** button, because it is the answer to the question this section raises: the contact is
+**not** tagged as a satellite QSO — Nexus does not write the ADIF `PROP_MODE`. That is the
+app's own statement, printed on the screen; no ADIF was exported and inspected for this
+capture.*
 
 **Nothing you do in the section can take a half-typed contact away from you.**
 Closing the bird with ✕ or Escape, clicking a different bird, arming a pass, AOS
@@ -170,27 +212,48 @@ Phone and CW strips still carry the picker and the park search. This section ask
 the same strip for a *satellite* exchange, so that row isn't built here — one
 fewer thing between the Doppler readout and the sky dome in this column.
 
-**It logs an ordinary contact, not a satellite contact.** This is worth being
-plain about, because it decides whether a contact can ever earn satellite
-credit. LoTW recognises a satellite QSO by two ADIF fields:
+**It tags a satellite contact for you.** This is worth being plain about,
+because it decides whether a contact can ever earn satellite credit. LoTW
+recognises a satellite QSO by two ADIF fields:
 
 - `PROP_MODE=SAT` — the propagation mode.
 - `SAT_NAME` — the satellite, spelled the way LoTW spells it (`AO-7`, not
   `AO7`).
 
 **Nexus writes both, automatically, when the contact was really through the
-bird.** Log a QSO while a transponder is held **and your dial is inside that
-bird's downlink passband**, and the record gets `PROP_MODE=SAT` plus the
-LoTW-spelled designator (`SO-50`, parsed from the catalog name) — always as a
-pair, because TQSL refuses a half-tag in either direction. The passband check
-is what keeps an ordinary HF contact, made while a bird is still held from an
-earlier pass, from being mistagged. Records that arrive already tagged — a
-foreign import, or one you repaired — are kept untouched.
+bird.** Log a QSO while a transponder is held **and the record's frequency
+sits in that bird's downlink passband** — half the passband width either side
+of centre, plus 20 kHz for residual Doppler and FM fine-tuning — and the
+record gets `PROP_MODE=SAT` plus the LoTW-spelled designator (`SO-50`, parsed
+out of the catalog name `SAUDISAT 1C (SO-50)`). Always as a pair, because TQSL
+refuses a half-tag in either direction and one lone field wedges the whole
+upload batch. The passband check is what keeps an ordinary HF contact, made
+while a bird is still held from an earlier pass, from being mistagged — a 20 m
+QSO with a UHF bird still picked is untouched. Records that arrive already
+carrying either field — a foreign import, or one you repaired — are kept
+verbatim: the stamp writes into blank fields only, and never edits, completes
+or strips what is already there.
 
-**The one bird that stays untagged: the ISS.** Its catalog name carries no
-designator Nexus can safely derive, and a `SAT_NAME` LoTW does not recognise
-gets the whole record rejected — so ISS contacts are logged untagged, and if
-you want credit for one, add both fields yourself before you sign.
+It is the same stamp wherever the contact is logged from, because every log
+path in Nexus runs through one writer. Working a bird on the mic from the
+Phone cockpit with the transponder held gets the same pair.
+
+**The one bird that stays untagged: the ISS.** Its catalog name (`ISS
+(ZARYA)`) carries no designator Nexus can safely derive, and a `SAT_NAME` LoTW
+does not recognise gets the whole record rejected — so ISS contacts are logged
+untagged, and if you want credit for one, add both fields yourself before you
+sign.
+
+⚠️ **The note printed under the log strip in 1.10.3 is out of date.** It still
+reads "Nexus does not write the ADIF PROP_MODE and SAT_NAME fields yet" and
+tells you to add both by hand. That was true before 2026-08-10 and is not true
+now — the stamp above is what the app actually does, and hand-adding the pair
+to a record that already carries it is not needed. Check the Awards screen's
+**Sat VUCC** card, which carries the current wording:
+
+![The Sat VUCC award card: 0 of 100, with the notes "100 more to confirm · 1 grids worked · Sat DXCC 0 confirmed" and "Pass contacts are tagged automatically when logged on the bird's downlink (ISS excepted — no LoTW designator to derive)".](../img/manual/awards-sat-vucc.webp)
+
+*The Sat VUCC card on the Awards screen in Nexus 1.10.3.*
 
 #### One thing this strip does not do yet
 
@@ -251,6 +314,13 @@ meanwhile. It is the same switch as the 🔒 beside the radio selector in the to
 bar, put where you are working the pass. Pinning does not re-tune anything — it
 decides where the *next* pick lands.
 
+![The Radio line of the readiness rail naming the rig, band and mode, with a pin-this-radio button.](../img/manual/satellites-radio-pin.webp)
+
+*The readiness rail's **RADIO** line in Nexus 1.10.3 on a two-radio station: the rig the pick
+routed to, the band and mode class it routed on, both legs' dials, then **🔓 pin this radio**,
+which reads **🔒** once set. Staged configuration — neither radio exists, and nothing was
+tuned.*
+
 ### Auto-track with a rotator
 
 1. Configure your rotator in
@@ -283,8 +353,15 @@ handed to you, so the antenna stays where you left it.
 - Passes are computed for your grid — **set your Maidenhead locator** first or
   the predictions can't run.
 - The bird list is **not everything in orbit** — it is the amateur population:
-  satellites with an amateur transmitter on record. Around 430 birds are
-  listed and around 367 of those carry current orbital elements.
+  satellites with an amateur transmitter on record. It runs to a few hundred
+  birds and the number moves with the catalogue, so read it off the header
+  line rather than from here. That line — "372 birds · 1 past 14 d · 39 sit
+  out past 30 d" on the day these screenshots were taken — counts every bird
+  with a readable element epoch, then how many of those are drifting and how
+  many are held out past the 30-day ceiling. The **Birds** catalog heading
+  further down carries a *different* number, and the difference is the
+  held-out ones: it counts the birds Nexus can actually place, plus any ★ of
+  yours it could not.
 - Rotor auto-track drives an **az/el** rotator through Hamlib `rotctld`
   (elevation is followed through the pass; an azimuth-only rotator is detected
   automatically and driven in azimuth alone); test it with the Dummy model
@@ -305,12 +382,37 @@ under a placeholder number, and for birds CelesTrak has no elements for at all.
 
 The list is rebuilt every six hours by the project's mirror, so **a bird going
 on or offline reaches you within six hours of SatNOGS recording it** — no app
-update needed. Each bird's status rides with it:
+update needed.
 
-- **alive** — in orbit, with something amateur transmitting. These are the
-  birds that carry elements and appear on the map, in the schedule and in the
-  pass list.
-- **alive but silent** — in orbit, but the catalog lists no working amateur
+#### Four separate facts, and none of them is "you can work it"
+
+A bird's row can carry up to four different claims, and they answer different
+questions. Read them apart:
+
+1. **Orbital status** — what the catalogue says about the object itself. The
+   chip beside a bird's name is that word.
+2. **Elements** — whether Nexus has orbital elements for it, and how old they
+   are. No elements means no position, no pass, no Doppler.
+3. **A predicted pass** — geometry, computed from those elements. It says the
+   object will be above your horizon. It says nothing about what is aboard.
+4. **A transponder** — whether the catalogue lists a working amateur
+   transmitter, and on what frequencies. This is the only one of the four that
+   bears on whether there is anything to work.
+
+**A bird in orbit with a predicted pass overhead can still be silent.** That is
+not an edge case: SatNOGS marks amateur payloads dead all the time while the
+object itself keeps orbiting for years. Open the bird and look at its
+**transponder** list before you plan a pass around it — "no transmitters
+listed for this bird (SatNOGS DB)" is the answer that matters.
+
+#### What the status chip says
+
+Nexus does not invent a status. It prints what the catalogue reported, and it
+knows four of SatNOGS's own words:
+
+- **alive** — in orbit. A bird that is alive *and* has a working amateur
+  transmitter gets **no chip at all**: nothing to flag.
+- **silent** — alive in orbit, but the catalogue lists no working amateur
   transmitter any more. The pass geometry would still be real; there is
   nothing to work on it.
 - **dead** — reported silent.
@@ -318,7 +420,16 @@ update needed. Each bird's status rides with it:
   favorite that stops working has a row that says why, then dropped.
 - **pre-launch** — on record but not yet deployed. Nothing to work yet.
 
-Only *alive* birds carry elements, so a bird in any other state shows in the
+**Anything else the catalogue sends is printed as it arrived**, in the amber
+"we cannot judge this" style, with the tooltip "SatNOGS reports this bird's
+status as …". That is honest rather than tidy, and it is what you will
+usually see: in 1.10.3 the mirror is serving `in orbit`, which is not one of
+the four words above, so **every** bird in the catalogue is chipped `IN ORBIT`.
+Read that chip as "the catalogue said something Nexus does not recognise" —
+**it is not a report that the bird works.** Two more chips are Nexus's own,
+about its data rather than the bird: **no elements** and **stale elements**.
+
+Only birds with elements can be placed, so a bird without them shows in the
 list with its status and "no elements" rather than a position. **Your ★ stays
 put either way** — a bird that dies never vanishes out from under its star,
 and search reaches the whole catalog so you can always find it to unstar it.

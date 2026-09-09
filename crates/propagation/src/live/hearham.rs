@@ -5,6 +5,7 @@
 //! ~1 MB gzipped); the shell caches it beside settings.json with a 7-day TTL.
 //! Parsing lives in [`crate::repeaters::parse_hearham_json`].
 
+use super::neterr;
 use std::time::Duration;
 
 const UA: &str = "Nexus (radio programming; https://hamradiotools.io; kd9taw@protonmail.com)";
@@ -29,11 +30,5 @@ pub fn fetch_all() -> Result<String, String> {
 }
 
 fn redact(e: reqwest::Error) -> String {
-    if e.is_timeout() {
-        "hearham: request timed out — try again shortly".to_string()
-    } else if e.is_connect() {
-        "hearham: could not connect — check your network".to_string()
-    } else {
-        "hearham: request failed".to_string()
-    }
+    neterr::redact_following_redirects("hearham", &e)
 }

@@ -10,11 +10,11 @@ Nexus drives rotators through Hamlib's `rotctld` — bundled in the Windows
 installer and launched for you, the same way CAT is. You never run `rotctld` by
 hand.
 
-> **macOS and Linux:** Hamlib is **not** bundled for you. Install it once —
-> `brew install hamlib` on a Mac, `sudo apt install libhamlib-utils` on
-> Debian/Ubuntu (the Nexus `.deb` pulls it in; the AppImage cannot, so it has to
-> be installed by hand). WSJT-X working proves only the Hamlib *library* is
-> there — Nexus needs the `rotctld` *program*.
+> **Every platform now bundles it,** macOS and Linux included, since 1.9.0 — so
+> there is nothing to install. If Nexus ever reports it could not start its own
+> `rotctld`, a system Hamlib is the fallback (`brew install hamlib` /
+> `sudo apt install libhamlib-utils`). Note that WSJT-X working proves only the
+> Hamlib *library* is there — Nexus needs the `rotctld` *program*.
 
 ---
 

@@ -29,6 +29,7 @@ import {
   logQso,
   markLotwUploaded,
   markQslSent,
+  markQslCard,
   purgeLog,
   qrzLookup,
   saveTextToDownloads,
@@ -36,13 +37,20 @@ import {
   uploadLotwReport,
 } from '../api'
 import { pushToast, withErrorToast } from '../toast'
-import { qrzPushQso, clublogPushQso, hrdlogPushQso, openQrzPage, syncQrz, downloadLotwReport, importPotaLog } from '../api'
+import { qrzPushQso, clublogPushQso, hrdlogPushQso, wrlPushQso, openQrzPage, syncQrz, downloadLotwReport, importPotaLog } from '../api'
 
 interface Props {
   /** Default band / freq / mode for new manual entries (from the radio). */
   defaultBand: string
   defaultFreqMhz: number
   defaultMode: string
+  /** Cross-view handoff from a cockpit's recall card (#192): open with this callsign already
+   *  in the search box. `ts` is a nonce, not data — it is what makes a re-click of the SAME
+   *  call refire after the operator has typed over the box (the `pendingWork` idiom). */
+  focusCall?: { call: string; ts: number } | null
+  /** Called once the handoff has been applied, so the parent can clear it — otherwise a later
+   *  trip to the Logbook through the nav would re-apply a filter nobody asked for. */
+  onConsumeFocusCall?: () => void
 }
 
 interface DraftQso {
@@ -104,6 +112,8 @@ const QRZ_LABEL = 'QRZ'
 const EQSL_LABEL = 'eQSL'
 const CLUBLOG_LABEL = 'CL'
 const HRDLOG_LABEL = 'HL'
+// Technical product token, not prose — same ruling as the labels above.
+const WRL_LABEL = 'WRL'
 const QSL_MENU_LABEL = 'QSL▸'
 
 /** Parse a `datetime-local` value as UTC seconds. The browser's own Date parsing treats a
@@ -206,6 +216,8 @@ export function Logbook({
   defaultBand,
   defaultFreqMhz,
   defaultMode,
+  focusCall,
+  onConsumeFocusCall,
 }: Props) {
   const [log, setLog] = useState<LoggedQso[]>([])
   const [showForm, setShowForm] = useState(false)
@@ -255,6 +267,17 @@ export function Logbook({
   // Filtering runs against a DEFERRED copy of the search so typing stays responsive on a 10k log —
   // the input updates instantly; the (memoized) filter/sort catches up a frame later.
   const deferredSearch = useDeferredValue(search)
+  // A previous-contact row in a cockpit's recall card hands the callsign over here (#192,
+  // kr4fqg). Seeding the SEARCH box, not a row selection: a `LoggedQso` has no stable id and
+  // the edit/delete API addresses rows by index, so an index carried across a view switch is
+  // stale by construction. The matcher below already covers `call`, so this needs no new
+  // filtering path — and because it lands in the visible box, the operator can see what is
+  // being filtered and clear it with the ✕ that is already there.
+  useEffect(() => {
+    if (!focusCall) return
+    setSearch(focusCall.call)
+    onConsumeFocusCall?.()
+  }, [focusCall, onConsumeFocusCall])
   // Filter to contacts still lacking an award-eligible confirmation (the DX
   // chaser's "who do I still need a card/LoTW from" view).
   const [needsConfirmOnly, setNeedsConfirmOnly] = useState(false)
@@ -536,13 +559,67 @@ export function Logbook({
     }
   }
 
+  // Manual (re-)push of one logged QSO to World Radio League — same role as the
+  // HRDLog button. A live-logging service, not an ARRL confirmation source.
+  const onPushWrl = async (q: LoggedQso) => {
+    try {
+      const r = await wrlPushQso(q)
+      if (r.result === 'accepted') {
+        pushToast(t('logbook.push.wrl.ok', { call: q.call }), 'success', 4000)
+      } else if (r.result === 'duplicate') {
+        pushToast(t('logbook.push.wrl.duplicate', { call: q.call }), 'success', 5000)
+      } else if (r.result === 'pending') {
+        // Transient by contract (rate limit / server trouble) — the QSO is fine.
+        pushToast(t('logbook.push.wrl.unavailable', { call: q.call }), 'info', 6000)
+      } else {
+        pushToast(
+          t('logbook.push.wrl.rejected', { call: q.call, reason: r.message ?? r.result }),
+          'error',
+          6000,
+        )
+      }
+    } catch (e) {
+      pushToast(t('logbook.push.wrl.failed', { detail: String(e) }), 'error', 6000)
+    }
+  }
+
   // Record an operator-declared QSL request on a contact (a card/request WAS sent,
   // via bureau/direct/electronic). This is NOT a confirmation — it stays in the
   // needs-confirmation filter until the partner actually confirms.
-  const onMarkQslSent = async (q: LoggedQso, i: number, via: 'B' | 'D' | 'E') => {
+  //
+  // `via === null` CLEARS the mark instead (#180). Sending is once-only, so a mis-click
+  // on Bureau/Direct/Electronic used to be permanent from the operator's chair: the three
+  // send entries vanish and nothing put them back. Same reversal the inbound card has had
+  // since #152 — a declaration the operator made by hand, they can unmake by hand.
+  const onMarkQslSent = async (q: LoggedQso, i: number, via: 'B' | 'D' | 'E' | null) => {
     const snap = await withErrorToast(() => markQslSent(i, via), t('logbook.qsl.markFailed'))
     if (snap) {
-      pushToast(t('logbook.qsl.marked', { call: q.call, via: qslViaLabel(via) ?? via }), 'success')
+      // Two literal keys, not one interpolated one — same reason as onMarkQslCard below.
+      pushToast(
+        via
+          ? t('logbook.qsl.marked', { call: q.call, via: qslViaLabel(via) ?? via })
+          : t('logbook.qsl.sentCleared', { call: q.call }),
+        'success',
+      )
+      load()
+    }
+  }
+
+  const onMarkQslCard = async (q: LoggedQso, i: number, received: boolean) => {
+    const snap = await withErrorToast(
+      () => markQslCard(i, received),
+      t('logbook.qsl.markFailed'),
+    )
+    if (snap) {
+      // Two literal keys, not one interpolated one: the i18n orphan guard scans for literal
+      // `t('key')` references and a ternary inside the call is invisible to it — it flagged
+      // both of these as unused catalog entries, which is exactly its job.
+      pushToast(
+        received
+          ? t('logbook.qsl.cardMarked', { call: q.call })
+          : t('logbook.qsl.cardCleared', { call: q.call }),
+        'success',
+      )
       load()
     }
   }
@@ -761,7 +838,7 @@ export function Logbook({
           <input
             ref={fileRef}
             type="file"
-            accept=".adi,.adif,text/plain"
+            accept=".adi,.adif,.txt"
             style={{ display: 'none' }}
             onChange={onImportFile}
           />
@@ -771,7 +848,7 @@ export function Logbook({
           <input
             ref={syncRef}
             type="file"
-            accept=".adi,.adif,text/plain"
+            accept=".adi,.adif,.txt"
             style={{ display: 'none' }}
             onChange={onSyncFile}
           />
@@ -1047,7 +1124,7 @@ export function Logbook({
             <label className="logbook-field">
               <span>{t('logbook.field.when.label')}</span>
               <input
-                className="settings-input"
+                className="settings-input logbook-when"
                 type="datetime-local"
                 value={draft.whenUtc}
                 onChange={(e) => setField('whenUtc', e.target.value)}
@@ -1183,6 +1260,9 @@ export function Logbook({
           {th(t('logbook.column.park'), 'park')}
           {/* The QSL column's header is the Q-code itself, not a word for it. */}
           {th('QSL', 'qsl')}
+          {/* Not sortable: free text, and sorting a log by remark answers no question an
+              operator asks. Plain header cell, same shape as the actions column's. */}
+          <span className="log-cell" role="columnheader">{t('logbook.column.notes')}</span>
           <span className="log-cell" role="columnheader" aria-label={t('logbook.column.actions')}></span>
         </div>
           </div>
@@ -1308,6 +1388,29 @@ export function Logbook({
                     </span>
                   )}
                 </span>
+                {/* Comment + private note. Both were WRITE-ONLY here until 2026-08-23: the edit
+                    form took them and the table never showed them back, so the only way to see
+                    a note was to open the row you already had to guess held one (operator:
+                    "how else do you remember the things you talked about in the last QSOs?").
+                    The comment is short by design and shows inline; the private note is
+                    multi-line and gets a 📝 marker with the text in the tooltip, the same
+                    idiom the callsign-recall card already uses. */}
+                <span
+                  className="log-cell log-note"
+                  title={[
+                    (q.comment ?? '').trim() && `${t('logbook.row.notes.title')}: ${(q.comment ?? '').trim()}`,
+                    (q.notes ?? '').trim() && `${t('logbook.row.notes.private')}: ${(q.notes ?? '').trim()}`,
+                  ]
+                    .filter(Boolean)
+                    .join('\n\n')}
+                >
+                  {(q.notes ?? '').trim() && (
+                    <span className="log-note-flag" aria-label={t('logbook.row.notes.aria')}>
+                      📝
+                    </span>
+                  )}
+                  {(q.comment ?? '').trim() || ((q.notes ?? '').trim() ? '' : '—')}
+                </span>
                 <span className="log-cell log-rowactions">
                   <button
                     type="button"
@@ -1345,25 +1448,76 @@ export function Logbook({
                   >
                     {HRDLOG_LABEL}
                   </button>
-                  {/* QSL-request queue: mark a card/request sent (once) on the
-                      needs-confirmation view. Operator-declared, not a confirmation. */}
-                  {needsConfirmOnly && !q.qslSent?.sent && (
+                  <button
+                    type="button"
+                    className="log-rowbtn"
+                    onClick={() => void onPushWrl(q)}
+                    title={t('logbook.row.pushWrl.title', { call: q.call })}
+                    aria-label={t('logbook.row.pushWrl.aria', { call: q.call })}
+                  >
+                    {WRL_LABEL}
+                  </button>
+                  {/* QSL handling for the row: mark a request SENT (once), and record the
+                      paper card that came BACK. Operator-declared, not a confirmation.
+                      
+                      ⚠️ THE GATE USED TO BE `needsConfirmOnly && !q.qslSent?.sent`, and both
+                      halves were wrong (#152, reported again after the 1.8.0 fix shipped).
+                      
+                      The filter half hid the whole menu unless the "needs confirmation" chip
+                      happened to be on, so the reporter looked in the ordinary Logbook — where
+                      anyone handling a stack of cards is — and found nothing. A fix nobody can
+                      reach is not a fix.
+                      
+                      The sent half is worse: a paper QSL is a ROUND TRIP. You send, you wait
+                      months, a card arrives. Removing the menu the moment you marked one sent
+                      deleted the control for the arrival, so the very card the feature exists
+                      to record could never be recorded. `q.qslSent?.sent` now hides only the
+                      three SEND entries — you still cannot send twice — while the inbound
+                      entries stay reachable for the life of the contact. */}
+                  {(
                     <select
                       className="log-rowbtn"
                       style={{ fontSize: '0.85em' }}
                       value=""
                       onChange={(e) => {
-                        const v = e.target.value as 'B' | 'D' | 'E' | ''
-                        if (v) void onMarkQslSent(q, i, v)
+                        const v = e.target.value as 'B' | 'D' | 'E' | 'R' | 'r' | 's' | ''
+                        // R/r/s are NOT ADIF letters — they are this menu's own entries for
+                        // the RECEIVED card (#152), which has no QSL_SENT_VIA code because it
+                        // is not a send at all, and for CLEARING the send (#180). Kept in the
+                        // same menu because an operator handling a card thinks about one row,
+                        // not two controls.
+                        if (v === 'R') void onMarkQslCard(q, i, true)
+                        else if (v === 'r') void onMarkQslCard(q, i, false)
+                        else if (v === 's') void onMarkQslSent(q, i, null)
+                        else if (v) void onMarkQslSent(q, i, v as 'B' | 'D' | 'E')
                       }}
                       title={t('logbook.row.qslSent.title', { call: q.call })}
                       aria-label={t('logbook.row.qslSent.aria', { call: q.call })}
                     >
                       {/* The VALUES are the ADIF QSL_SENT_VIA letters; only the labels are prose. */}
                       <option value="">{QSL_MENU_LABEL}</option>
-                      <option value="B">{t('logbook.row.qslSent.bureau')}</option>
-                      <option value="D">{t('logbook.row.qslSent.direct')}</option>
-                      <option value="E">{t('logbook.row.qslSent.electronic')}</option>
+                      {/* Sending is once-only; the arrival below is not. */}
+                      {!q.qslSent?.sent && (
+                        <>
+                          <option value="B">{t('logbook.row.qslSent.bureau')}</option>
+                          <option value="D">{t('logbook.row.qslSent.direct')}</option>
+                          <option value="E">{t('logbook.row.qslSent.electronic')}</option>
+                        </>
+                      )}
+                      {/* ...and the way back out of it (#180). It has to be shown on exactly
+                          the condition that HIDES the three above: a clear that disappears
+                          once sent would be the same trap with an extra step in it. */}
+                      {q.qslSent?.sent && (
+                        <option value="s">{t('logbook.row.qslSent.clear')}</option>
+                      )}
+                      {/* INBOUND: the paper card that arrived. Nothing on the internet can
+                          report this, so the operator is the only source — and it is
+                          award-eligible (card OR LoTW), which is why its absence understated
+                          the awards view. The clear entry exists for a mis-tick. */}
+                      <option value="R">{t('logbook.row.qslRcvd.card')}</option>
+                      {q.qslRcvd?.card && (
+                        <option value="r">{t('logbook.row.qslRcvd.clear')}</option>
+                      )}
                     </select>
                   )}
                   <button

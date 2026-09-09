@@ -42,12 +42,12 @@ describe('spots locality filter', () => {
     expect(screen.queryByText('JA1ABC'), 'a far-only spot is filtered').toBeNull()
     // The count rides on the chip — a filter that removes rows silently is how "my spots
     // disappeared" becomes an unanswerable report.
-    expect(screen.getByRole('button', { name: /heard near me · 1 hidden/i })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /heard on my continent · 1 hidden/i })).toBeTruthy()
   })
 
   it('turning it off restores the worldwide feed', () => {
     render(<SpotsPanel spots={[spot('JA1ABC', false), spot('K2DEF', true)]} bandPlan={[]} selectedCall={null} onSelect={() => {}} onWork={() => {}} />)
-    fireEvent.click(screen.getByRole('button', { name: /heard near me/i }))
+    fireEvent.click(screen.getByRole('button', { name: /heard on my continent/i }))
     expect(screen.queryByText('JA1ABC'), 'the operator can always have the firehose').toBeTruthy()
   })
 
@@ -57,6 +57,6 @@ describe('spots locality filter', () => {
     // unfiltered one, and a row must never vanish because we could not classify it.
     render(<SpotsPanel spots={[spot('JA1ABC', undefined)]} bandPlan={[]} selectedCall={null} onSelect={() => {}} onWork={() => {}} />)
     expect(screen.queryByText('JA1ABC')).toBeTruthy()
-    expect(screen.getByRole('button', { name: /^heard near me$/i }), 'nothing hidden ⇒ no count').toBeTruthy()
+    expect(screen.getByRole('button', { name: /^heard on my continent$/i }), 'nothing hidden ⇒ no count').toBeTruthy()
   })
 })

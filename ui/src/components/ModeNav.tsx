@@ -23,8 +23,10 @@ import {
   Image as ImageIcon,
   MapPin,
   RotateCcw,
+  Users,
+  MessagesSquare,
 } from 'lucide-react'
-import { useState, type ButtonHTMLAttributes } from 'react'
+import { Fragment, useState, type ButtonHTMLAttributes } from 'react'
 import { Tooltip, TooltipProvider } from './ui/Tooltip'
 import { t, type MessageKey } from '../i18n'
 import { type FeatureId, type View } from '../features/registry'
@@ -32,7 +34,7 @@ import { orderNav, moveNav, loadNavOrder, saveNavOrder, resetNavOrder } from '..
 
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every button's
 // TOOLTIP is prose and lives in the catalog. Its LABEL is prose only where the section is
-// named for itself: the six mode buttons (FT, Tempo, Phone, CW, RTTY, PSK, SSTV, APRS) and
+// named for itself: the seven mode buttons (FT, Tempo, Phone, CW, RTTY, PSK, SSTV, APRS, JS8) and
 // the two named for an event or a programme (Field Day, POTA / SOTA) carry their names
 // verbatim below, because a mode name and a programme name are the same letters in every
 // language (`i18n/index.ts`, the invariant-token rule).
@@ -55,10 +57,14 @@ interface Props {
    * last FT8/FT4 tier; 'tempo' opens the TempoFast/TempoDeep free-text calling cockpit;
    * 'rtty' / 'sstv' open their sections. */
   onDigitalMode: (m: DigitalMode) => void
+  /** Open the club band board in its own window (the `fdclub` pop-out). It is a WINDOW,
+   * not a `View`, so it takes its own callback rather than an `ITEMS` entry — see the
+   * button below the Field Day item. */
+  onClubBoard: () => void
 }
 
 /** The cockpits grouped under "Digital" in the rail (FT · Tempo · RTTY · PSK · SSTV · APRS). */
-export type DigitalMode = 'digital' | 'tempo' | 'rtty' | 'psk' | 'sstv' | 'aprs'
+export type DigitalMode = 'digital' | 'tempo' | 'rtty' | 'psk' | 'sstv' | 'aprs' | 'js8'
 
 interface DigitalSub {
   mode: DigitalMode
@@ -120,6 +126,15 @@ const DIGITAL_SUBS: DigitalSub[] = [
     icon: MapPin,
     titleKey: 'nav.digital.aprs.title',
     active: (v) => v === 'aprs',
+  },
+  // JS8 shows by default like RTTY/PSK/SSTV/APRS; the filter below hides it only when the
+  // operator turns it off in Settings ▸ Features (its DigitalMode doubles as its FeatureId).
+  {
+    mode: 'js8',
+    label: 'JS8',
+    icon: MessagesSquare,
+    titleKey: 'nav.digital.js8.title',
+    active: (v) => v === 'js8',
   },
 ]
 
@@ -219,7 +234,7 @@ const MODE_LABEL: Record<OpMode, string> = {
   fieldDay: 'FIELD DAY',
 }
 
-export function ModeNav({ view, mode, enabled, onSelect, tier, onDigitalMode }: Props) {
+export function ModeNav({ view, mode, enabled, onSelect, tier, onDigitalMode, onClubBoard }: Props) {
   // Operator's drag-and-drop rail order for the global sections (shared across windows).
   // `order` is the persisted id list; `orderNav` folds it over the shipped ITEMS so a new
   // section is never lost and a deleted one is dropped.
@@ -314,38 +329,60 @@ export function ModeNav({ view, mode, enabled, onSelect, tier, onDigitalMode }: 
           </div>
           {/* Global situational/logging surfaces + opt-in extras — drag to reorder. */}
           {items.map((it) => (
-            <div
-              key={it.id}
-              className={`mode-nav-drag${dragId === it.id ? ' dragging' : ''}${
-                overId === it.id ? ' dragover' : ''
-              }`}
-            >
-              {navBtn(it, {
-                draggable: true,
-                onDragStart: (e) => {
-                  setDragId(it.id)
-                  e.dataTransfer.effectAllowed = 'move'
-                  // Required by some engines (and harmless elsewhere) for the drag to begin.
-                  e.dataTransfer.setData('text/plain', it.id)
-                },
-                onDragOver: (e) => {
-                  if (dragId && dragId !== it.id) {
+            <Fragment key={it.id}>
+              <div
+                className={`mode-nav-drag${dragId === it.id ? ' dragging' : ''}${
+                  overId === it.id ? ' dragover' : ''
+                }`}
+              >
+                {navBtn(it, {
+                  draggable: true,
+                  onDragStart: (e) => {
+                    setDragId(it.id)
+                    e.dataTransfer.effectAllowed = 'move'
+                    // Required by some engines (and harmless elsewhere) for the drag to begin.
+                    e.dataTransfer.setData('text/plain', it.id)
+                  },
+                  onDragOver: (e) => {
+                    if (dragId && dragId !== it.id) {
+                      e.preventDefault()
+                      e.dataTransfer.dropEffect = 'move'
+                      setOverId(it.id)
+                    }
+                  },
+                  onDragLeave: () => setOverId((o) => (o === it.id ? null : o)),
+                  onDrop: (e) => {
                     e.preventDefault()
-                    e.dataTransfer.dropEffect = 'move'
-                    setOverId(it.id)
-                  }
-                },
-                onDragLeave: () => setOverId((o) => (o === it.id ? null : o)),
-                onDrop: (e) => {
-                  e.preventDefault()
-                  dropOn(it.id)
-                },
-                onDragEnd: () => {
-                  setDragId(null)
-                  setOverId(null)
-                },
-              })}
-            </div>
+                    dropOn(it.id)
+                  },
+                  onDragEnd: () => {
+                    setDragId(null)
+                    setOverId(null)
+                  },
+                })}
+              </div>
+              {/* The club band board, straight to its own window. It rides WITH the Field Day
+                  item (including through a drag-reorder) because that is the only place an
+                  operator looks for it, and it is gated on the SAME switch — the FD master
+                  switch, never on club sync. Gating it on sync is what hid it: the board only
+                  existed inside FieldDayView once `fieldDay.club` was non-null, so an operator
+                  who had not already turned sync on had no way to learn it was there. */}
+              {it.id === 'fieldDay' && (
+                <Tooltip content={t('nav.fdClub.title')}>
+                  <button
+                    type="button"
+                    className="mode-btn"
+                    aria-label={t('nav.fdClub.title')}
+                    onClick={onClubBoard}
+                  >
+                    <span className="mode-glyph" aria-hidden="true">
+                      <Users size={18} strokeWidth={1.75} />
+                    </span>
+                    <span className="mode-label">{t('nav.fdClub.label')}</span>
+                  </button>
+                </Tooltip>
+              )}
+            </Fragment>
           ))}
           {customized && (
             <button

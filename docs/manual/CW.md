@@ -75,11 +75,22 @@ On the **CAT** back-end the new WPM reaches the rig via `KEYSPD` at the start of
 
 ## Zero-Beat Scope and Pitch
 
-The scope shows a narrow **300–1100 Hz** AF spectrum with a dashed vertical hairline at your configured pitch frequency. To zero-beat a received CW signal, tune the VFO until the signal's peak lands on the hairline.
+The scope shows a narrow AF spectrum with a dashed vertical hairline at your configured pitch frequency. To zero-beat a received CW signal, tune the VFO until the signal's peak lands on the hairline.
 
 Pitch is adjustable **300–1200 Hz** in 10 Hz steps; default is **600 Hz**. Changing pitch repositions the hairline and updates the soundcard tone frequency in the same call. The pitch setting persists across sessions.
 
-The scope view window (300–1100 Hz) is fixed in this version and is not user-configurable.
+The scope window is **centred on your pitch** and follows your rig's CW filter width (the filter plus a quarter of it in skirt, floored at 300 Hz), so what you are tuned to sits in the middle of the picture the way it does on a rig.
+
+### The zero-beat indicator
+
+Beside the scope title, **ZERO BEAT** reads the tone actually coming in and compares it with your pitch:
+
+- The **light** comes on when you are on pitch. How close counts follows your CW filter — 5% of the filter width, so 25 Hz behind the usual 500 Hz filter, tighter behind a narrow one and never tighter than 15 Hz (below that you would be chasing the measurement rather than the signal).
+- The **needle and the offset in Hz** say which way and how far. The needle runs in the same direction as the scope below it — low audio left, high audio right — so "centre the needle" and "put the peak on the hairline" are the same move. Full scale either way is 400 Hz.
+- With **several signals in the passband** it follows the one nearest the hairline, with the stronger winning a tie. That is deliberate: once you are closing in on somebody, a louder station 300 Hz away must not steal the reading.
+- On a **dead band** it reads *no signal* and draws no needle. It will hold a reading across keying gaps for about two seconds — CW spends most of its time between elements — but a station that has stopped goes blank rather than leaving a number standing.
+
+It is a display only. Nexus never moves your dial to zero-beat for you.
 
 ---
 

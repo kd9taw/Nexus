@@ -6,10 +6,29 @@
 //! unit-tested; [`spawn_rigctld`] launches it and returns a kill-on-drop
 //! [`Child`] so the daemon dies with Tempo.
 
-use std::collections::VecDeque;
 use std::io::BufRead;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
+
+use crate::proc_util::{find_bundled, said_line};
+// `bundled_candidates`/`find_bundled_in` have no production caller here — `find_bundled` (the
+// only one the resolvers call) reaches them internally within `proc_util`. Only the tests below
+// drive them directly, to pin the per-platform layout table without going through `current_exe()`.
+#[cfg(test)]
+use crate::proc_util::{bundled_candidates, find_bundled_in};
+#[cfg(unix)]
+use crate::proc_util::{bundled_if_runnable, find_in_dirs, path_has, runs_ok};
+// `runs_ok_within` (the wait-budget-parameterised core of `runs_ok`) has no production caller
+// here — only the test below drives it directly to pin the verdict logic against a generous
+// budget. Gated to `cfg(test)` too so a non-test build never sees it as unused.
+#[cfg(all(test, unix))]
+use crate::proc_util::runs_ok_within;
+
+/// Re-exported so `tempo_audio::rigctld_proc::init_orphan_ledger`/`kill_leftover_daemons` stay
+/// valid for src-tauri and this module's own internal callers, even though both functions now
+/// live in [`crate::proc_util`]. Not a transitional shim — this is the seam that keeps the
+/// extraction revertible.
+pub use crate::proc_util::{init_orphan_ledger, kill_leftover_daemons};
 
 /// What a serial control line is held at for the whole session (`-C rts_state=…` /
 /// `-C dtr_state=…`), per line, as the operator chose it.
@@ -88,6 +107,82 @@ impl LineState {
             _ => LineState::Low,
         }
     }
+
+    /// Parse `Settings::cat_ptt_line_state` — the KEYING line's idle state (#145), whose safe
+    /// default is the OPPOSITE of [`from_setting`](LineState::from_setting)'s.
+    ///
+    /// The two differ on purpose. For a line Nexus may freely hold, [`Low`](LineState::Low) is
+    /// the safe answer and the 1.0.2 fix. For the line Hamlib is KEYING with, we have never
+    /// emitted anything at all and Hamlib refuses it on most backends anyway, so the safe answer
+    /// is that same silence — [`Untouched`](LineState::Untouched). An unrecognised or empty
+    /// value therefore changes nothing, exactly as it does there.
+    pub fn from_keying_setting(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "low" => LineState::Low,
+            "high" => LineState::High,
+            _ => LineState::Untouched,
+        }
+    }
+}
+
+/// The rig's serial HANDSHAKE as the operator DECLARED it (`Settings::cat_serial_handshake`) —
+/// as distinct from the handshake Nexus INFERS, which is what [`ControlLines::handshake_none`]
+/// carries.
+///
+/// ⚠️ #145 IS WHY A DECLARATION EXISTS AT ALL. The inference has been wrong three times, and its
+/// third failure is structural rather than a mistuned threshold: with serial-RTS PTT on the CAT
+/// port, [`settable_lines_for`] reports RTS unsettable *because it is the keying line*, which
+/// makes `rts_taken_by_handshake` false — so [`resolve_lines`]'s override cannot fire, no
+/// `serial_handshake` is emitted, no `rts_state` is emitted either, and rigctld launches saying
+/// nothing whatever about RTS. A fourth inference would be a fourth guess about a cable only the
+/// operator can see (the [`ControlLines::handshake_none`] ⚠️ has the full history).
+///
+/// #200 AMENDED THE STRUCTURAL HALF (2026-09-01): when the dump positively reports BOTH keyed
+/// RTS and a HARDWARE handshake, the silence itself keyed a TS-2000 from launch to exit on
+/// Windows, and freeing the handshake there is not a cable guess — the operator's own PTT
+/// declaration makes the collision certain. That narrow case now rides
+/// [`SettableLines::keying_rts_on_hardware_handshake`]; the declaration remains the answer for
+/// every other shape, exactly as before.
+///
+/// [`Auto`](Handshake::Auto) is the default and is today's behaviour to the byte.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Handshake {
+    /// Say nothing of our own; let [`resolve_lines`] infer it exactly as before.
+    #[default]
+    Auto,
+    /// `-C serial_handshake=None` — no flow control, so RTS is ours to hold.
+    None,
+    /// `-C serial_handshake=Hardware` — RTS/CTS flow control, RTS is the rig's.
+    Hardware,
+    /// `-C serial_handshake=XONXOFF` — software flow control; RTS is free.
+    XonXoff,
+}
+
+impl Handshake {
+    /// The exact Hamlib `serial_handshake` token, or `None` for "say nothing". The spellings are
+    /// [`HANDSHAKE_RTS_FREE`]/[`HANDSHAKE_RTS_TAKEN`] — Hamlib's own combo vocabulary, which
+    /// `conf.c` matches with `strcmp`, so a wrong case is `Invalid parameter` and rigctld exits 2
+    /// (see [`LineState::value`], which is the same discipline for the same reason).
+    fn value(self) -> Option<&'static str> {
+        match self {
+            Handshake::Auto => Option::None,
+            Handshake::None => Some("None"),
+            Handshake::Hardware => Some("Hardware"),
+            Handshake::XonXoff => Some("XONXOFF"),
+        }
+    }
+
+    /// Parse the operator's stored setting (`Settings::cat_serial_handshake`). Anything
+    /// unrecognised — including the empty string an older settings file or a half-wired UI can
+    /// produce — means [`Auto`](Handshake::Auto), i.e. change nothing.
+    pub fn from_setting(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "none" => Handshake::None,
+            "hardware" => Handshake::Hardware,
+            "xonxoff" => Handshake::XonXoff,
+            _ => Handshake::Auto,
+        }
+    }
 }
 
 /// What the operator wants each of the two control lines held at.
@@ -95,6 +190,28 @@ impl LineState {
 pub struct ControlLines {
     pub rts: LineState,
     pub dtr: LineState,
+    /// The operator's own declaration about this port's flow control — it REPLACES the
+    /// inference below when it is anything but [`Handshake::Auto`]. See [`Handshake`].
+    pub handshake: Handshake,
+    /// What the KEYING line (serial RTS/DTR PTT) is held at while idle
+    /// (`Settings::cat_ptt_line_state`).
+    ///
+    /// ⚠️ THIS IS THE LINE THAT KEYS THE TRANSMITTER (#145), and it is deliberately NOT `rts` /
+    /// `dtr` above: those two are never emitted for the keying line, because Hamlib's `rig_open`
+    /// refuses `<line>_state` on the line it is keying with (refusal #1 in [`SettableLines`]) —
+    /// so today the keying line's idle level is whatever `rig_open` and the USB-serial driver
+    /// leave it at, which on a CP210x can be ASSERTED, i.e. the rig keyed from launch.
+    ///
+    /// [`Untouched`](LineState::Untouched) is the default and means "say nothing", which is
+    /// today's behaviour. Anything else is emitted for the keying line, and that is the
+    /// operator overriding a Hamlib refusal on purpose.
+    ///
+    /// ⚠️ NEEDS-BENCH. Refusal #1 is the SILENT kind — `rig_open` returns `-RIG_ECONF` and
+    /// rigctld does not exit, so it serves a rig it never opened: CAT that connects and does
+    /// nothing. There is no serial rig on this machine and CI cannot reproduce a pin, so which
+    /// backends take it and which lose CAT to it is unknown here. Default-safe is the whole
+    /// design: an operator who never opens the setting cannot reach any of it.
+    pub keying_line: LineState,
     /// Emit `-C serial_handshake=None`, so RTS stops being flow control and CAN be held.
     ///
     /// Set only by [`resolve_lines`], and only when the hardware-handshake declaration is the
@@ -129,11 +246,13 @@ pub struct ControlLines {
 }
 
 impl ControlLines {
-    /// The safety default: both lines held low.
+    /// The safety default: both lines held low, and neither #145 declaration made.
     pub fn hold_low() -> Self {
         Self {
             rts: LineState::Low,
             dtr: LineState::Low,
+            handshake: Handshake::Auto,
+            keying_line: LineState::Untouched,
             handshake_none: false,
         }
     }
@@ -184,6 +303,24 @@ pub struct SettableLines {
     /// a real conflict, and a backend that offers no `rts_state` at all has nothing to set.
     /// Drives [`ControlLines::handshake_none`].
     pub rts_taken_by_handshake: bool,
+    /// The keyed-RTS collision (issue #200): the dump positively said BOTH that RTS is the
+    /// keying line (`ptt_type: RTS`) and that the backend declares HARDWARE handshake. The
+    /// two uses of the pin are incoherent in every configuration — flow control and PTT
+    /// cannot share it — and on Windows the collision is not latent: handshake=Hardware maps
+    /// to `RTS_CONTROL_HANDSHAKE`, the driver asserts RTS (the key line) from the moment the
+    /// daemon opens the port, and Hamlib's own un-key at rig_open (`ser_set_rts(pttp, 0)`)
+    /// is an `EscapeCommFunction(CLRRTS)` the driver refuses and Hamlib's termios shim
+    /// swallows (4.7.1 lib/termios.c:3305-3321, 3590 — returns 0 regardless). A TS-2000 on a
+    /// Digirig sat keyed from launch to exit. Unlike refusal #2's override this needs no
+    /// `rts_deliberate` gate: the operator's own PTT declaration on this very port IS the
+    /// deliberateness, at its strongest.
+    ///
+    /// Not folded into `rts_taken_by_handshake`, which means "the ORDINARY override can lift
+    /// this" and is deliberately false for the keying line (its consumers hold an operator
+    /// WISH for the line; the keyed case has no wish to deliver — only the handshake to
+    /// free). Same stale-vocabulary discipline as everything here: positively `Hardware` per
+    /// the pinned vocabulary, or the field claims nothing.
+    pub keying_rts_on_hardware_handshake: bool,
 }
 
 /// Narrow the operator's wishes to what this rig's Hamlib will actually accept. A line we
@@ -243,10 +380,29 @@ fn resolve_lines(
     // DELIBERATE thing (`rts_deliberate`): the blanket hold-low safety default must never be
     // the reason a rig loses its declared handshake. See [`ControlLines::handshake_none`] —
     // the KD9TAW bench regression (2026-08-09) is why this gate exists.
-    let free_rts = !settable.rts
-        && settable.rts_taken_by_handshake
-        && want.rts != LineState::Untouched
-        && rts_deliberate;
+    //
+    // …unless the operator DECLARED the handshake (#145), in which case their declaration
+    // replaces the whole inference — a declared `None`/`XONXOFF` frees RTS, a declared
+    // `Hardware` says it is the rig's and no override applies. See [`Handshake`] for why a
+    // fourth inference was not the answer.
+    let free_rts = match want.handshake {
+        Handshake::Auto => {
+            (!settable.rts
+                && settable.rts_taken_by_handshake
+                && want.rts != LineState::Untouched
+                && rts_deliberate)
+                // The keyed-RTS collision (#200): hardware flow control on the line the
+                // operator declared as PTT keys the rig from port-open on Windows, and only
+                // freeing the handshake lets rig_open's own un-key move the pin. No
+                // `rts_deliberate` gate — the PTT declaration on this very port is the
+                // deliberateness — and no `want.rts` gate: there is no wish to deliver on a
+                // keying line (rigctld_args refuses `rts_state` for it regardless); the
+                // handshake is the whole trade.
+                || settable.keying_rts_on_hardware_handshake
+        }
+        Handshake::None | Handshake::XonXoff => true,
+        Handshake::Hardware => false,
+    };
     ControlLines {
         rts: if settable.rts || free_rts {
             want.rts
@@ -258,7 +414,12 @@ fn resolve_lines(
         } else {
             LineState::Untouched
         },
-        handshake_none: free_rts,
+        // Both declarations pass through untouched: narrowing them against what the daemon
+        // says it accepts is exactly what silenced the keying line in the first place, and a
+        // declaration the operator made about their own cable is not ours to narrow.
+        handshake: want.handshake,
+        keying_line: want.keying_line,
+        handshake_none: free_rts && want.handshake == Handshake::Auto,
     }
 }
 
@@ -348,9 +509,16 @@ pub fn rigctld_args(
         // applies every -C before rig_open, and rig_open is where both are read — but it reads
         // as the precondition it is, and the daemon's own log line then shows why RTS was
         // settable on a backend that declares otherwise.
-        if lines.handshake_none {
+        // ONE `serial_handshake` argument, whichever decided it: the operator's declaration
+        // first (#145), else the inference's `None` override. They are mutually exclusive by
+        // construction — `resolve_lines` only sets `handshake_none` on the `Auto` arm.
+        if let Some(h) = lines.handshake.value().or(if lines.handshake_none {
+            Some("None")
+        } else {
+            None
+        }) {
             args.push("-C".to_string());
-            args.push("serial_handshake=None".to_string());
+            args.push(format!("serial_handshake={h}"));
         }
         if ptt_line != Some(crate::rig::SerialLine::Rts) {
             if let Some(v) = lines.rts.value() {
@@ -362,6 +530,16 @@ pub fn rigctld_args(
             if let Some(v) = lines.dtr.value() {
                 args.push("-C".to_string());
                 args.push(format!("dtr_state={v}"));
+            }
+        }
+        // …and the KEYING line, which the two guards above deliberately skip (#145). Emitted
+        // ONLY on an explicit declaration — `Untouched` is the default and says nothing, which
+        // is what every release up to now did. See [`ControlLines::keying_line`] for the
+        // NEEDS-BENCH warning: Hamlib refuses this on the line it keys with, silently.
+        if let Some(line) = ptt_line {
+            if let Some(v) = lines.keying_line.value() {
+                args.push("-C".to_string());
+                args.push(format!("{}_state={v}", line_state_param(line)));
             }
         }
     }
@@ -384,6 +562,16 @@ pub fn ptt_type_token(line: crate::rig::SerialLine) -> &'static str {
     match line {
         crate::rig::SerialLine::Rts => "RTS",
         crate::rig::SerialLine::Dtr => "DTR",
+    }
+}
+
+/// The Hamlib conf-parameter NAME for a line's held state — `rts_state` / `dtr_state`. Kept as a
+/// function for the same reason [`ptt_type_token`] is: the spelling is what
+/// [`parse_settable_lines`] looks for in the dump, so it must exist in exactly one place.
+fn line_state_param(line: crate::rig::SerialLine) -> &'static str {
+    match line {
+        crate::rig::SerialLine::Rts => "rts",
+        crate::rig::SerialLine::Dtr => "dtr",
     }
 }
 
@@ -508,26 +696,6 @@ pub(crate) fn explains(line: &str) -> Explains {
     Explains::Plain
 }
 
-/// One stderr line as the ring keeps it — trimmed, `None` if there is nothing left.
-///
-/// **Bytes, not `&str`, and that signature is the fix.** The drain used
-/// `BufRead::lines().map_while(Result::ok)`, and `lines()` yields `Err(InvalidData)` for a line
-/// that is not UTF-8. `map_while` STOPS at the first `Err` — so such a line did not merely go
-/// missing, it ended the drain thread and every line after it for the life of the daemon.
-///
-/// Hamlib emits exactly that line in the one case where it diagnoses a **wrong baud**: it
-/// quotes the rig's own bytes back. Observed against the bundled rigctld 4.7.1 with mis-framed
-/// replies — `newcat_get_cmd: Command is not correctly terminated '…'` followed by ~200 bytes
-/// of the rig's garbage, which is arbitrary and very rarely valid UTF-8 (the capture is
-/// `tests/fixtures/rigctld/wrong_baud.log`, and it is not a UTF-8 file). So the fault Nexus
-/// most needed explaining was the fault that silenced the whole mechanism. `from_utf8_lossy`
-/// keeps the sentence and marks the garbage; the marks are themselves the diagnosis — bytes
-/// came back and they were rubbish, which is what a baud mismatch looks like from here.
-fn said_line(raw: &[u8]) -> Option<String> {
-    let line = String::from_utf8_lossy(raw).trim().to_string();
-    (!line.is_empty()).then_some(line)
-}
-
 /// What the daemon has said about THIS connection attempt: a bounded window of the newest lines,
 /// and — kept out of that window's reach — the best-ranked line of the whole attempt.
 ///
@@ -545,35 +713,28 @@ fn said_line(raw: &[u8]) -> Option<String> {
 /// fallback rather than the answer: `service::with_daemon_error` scans newest-first within a
 /// rank, so while the window still holds a line as good, the LIVE one is what the operator sees
 /// and this slot only speaks when the window has nothing left to say.
-#[derive(Default)]
-pub(crate) struct Said {
-    window: VecDeque<String>,
-    best: Option<(Explains, String)>,
+///
+/// The Hamlib-ranked stderr ring: a [`proc_util::StderrRing`](crate::proc_util::StderrRing)
+/// parameterised by [`explains`], bounded at [`SAID_KEPT`]. The mechanism lives in `proc_util`;
+/// the ranking is ours.
+pub(crate) struct Said(crate::proc_util::StderrRing<Explains>);
+
+impl Default for Said {
+    fn default() -> Self {
+        Said(crate::proc_util::StderrRing::new(SAID_KEPT, explains))
+    }
 }
 
 impl Said {
     fn push(&mut self, line: String) {
-        let rank = explains(&line);
-        if self.best.as_ref().is_none_or(|(best, _)| rank > *best) {
-            self.best = Some((rank, line.clone()));
-        }
-        if self.window.len() == SAID_KEPT {
-            self.window.pop_front();
-        }
-        self.window.push_back(line);
+        self.0.push(line);
     }
 
     /// Everything retained, oldest first — the kept diagnosis, then the window. The retained
     /// line is omitted when the window still holds it, so a short-lived daemon reads exactly as
     /// it did before there was a second half.
     fn lines(&self) -> Vec<String> {
-        self.best
-            .iter()
-            .map(|(_, l)| l)
-            .filter(|l| !self.window.contains(l))
-            .chain(self.window.iter())
-            .cloned()
-            .collect()
+        self.0.lines()
     }
 }
 
@@ -589,7 +750,7 @@ pub fn said_window_len() -> usize {
 pub fn said_ring(raw: &[u8]) -> Vec<String> {
     let mut said = Said::default();
     for line in raw.split_inclusive(|b| *b == b'\n') {
-        if let Some(l) = said_line(line) {
+        if let Some(l) = crate::proc_util::said_line(line) {
             said.push(l);
         }
     }
@@ -650,7 +811,7 @@ impl Drop for RigctldProc {
         // recycle, and a ledger record naming a recyclable pid is exactly what the
         // identity check exists to defuse — better never to write that state at all.
         #[cfg(unix)]
-        orphan_ledger::forget(self.child.id());
+        crate::proc_util::orphan_ledger::forget(self.child.id());
         let _ = self.child.kill();
         let _ = self.child.wait();
         #[cfg(windows)]
@@ -660,386 +821,6 @@ impl Drop for RigctldProc {
             unsafe {
                 windows_sys::Win32::Foundation::CloseHandle(self.job as *mut core::ffi::c_void);
             }
-        }
-    }
-}
-
-/// Place `child` in a new Job Object set to kill its processes when the job
-/// handle closes, so rigctld dies with Tempo (clean exit, crash, or detached-
-/// thread teardown). Returns the job HANDLE as an `isize` (0 on any failure, in
-/// which case we just fall back to the Drop-time kill).
-#[cfg(windows)]
-fn assign_kill_on_close_job(child: &Child) -> isize {
-    use std::os::windows::io::AsRawHandle;
-    use windows_sys::Win32::Foundation::CloseHandle;
-    use windows_sys::Win32::System::JobObjects::{
-        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
-        SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-    };
-    unsafe {
-        let job = CreateJobObjectW(core::ptr::null(), core::ptr::null());
-        if job.is_null() {
-            return 0;
-        }
-        let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = core::mem::zeroed();
-        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-        let set_ok = SetInformationJobObject(
-            job,
-            JobObjectExtendedLimitInformation,
-            &info as *const _ as *const core::ffi::c_void,
-            core::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
-        );
-        if set_ok == 0 || AssignProcessToJobObject(job, child.as_raw_handle()) == 0 {
-            CloseHandle(job);
-            return 0;
-        }
-        job as isize
-    }
-}
-
-/// Startup half of the Unix orphan guarantee: remember where the PID ledger lives and kill
-/// any rigctld/rotctld a PREVIOUS, now-dead Nexus left running (see [`orphan_ledger`]).
-/// Call once, before the first daemon spawn, so a stale daemon's serial/TCP ports are free
-/// again by the time this instance wants them. On Windows this is a no-op — the Job Object
-/// above already guarantees no daemon outlives the process, however it dies.
-pub fn init_orphan_ledger(dir: std::path::PathBuf) {
-    #[cfg(unix)]
-    orphan_ledger::init(dir);
-    #[cfg(not(unix))]
-    let _ = dir;
-}
-
-/// Quit-path half of the Unix orphan guarantee: TERM every daemon this process spawned and
-/// has not dropped (see [`orphan_ledger::kill_leftovers`]). For the wedged quit, where the
-/// radio thread is still blocked in a CAT read holding the [`RigctldProc`] when the process
-/// exits and `Drop` therefore never runs. No-op on Windows (Job Object) and when nothing is
-/// left (the ordinary case — `Drop` already deregistered everything).
-pub fn kill_leftover_daemons() {
-    #[cfg(unix)]
-    orphan_ledger::kill_leftovers();
-}
-
-/// The Unix ledger of spawned daemons — what stands in for the Windows Job Object.
-///
-/// **The gap this closes** (mac QA audit, 2026-08-17): on Windows the daemon dies with the
-/// process *however the process dies*, because the OS closes the kill-on-close job handle.
-/// On macOS/Linux the only teardown was [`RigctldProc`]'s `Drop`, which never runs when
-/// (a) the process dies on a signal — the Fortran-AV crash class presents as SIGSEGV here;
-/// (b) the operator force-quits; (c) the quit path times out with the radio thread still
-/// blocked in a CAT read holding the handle. The orphan then keeps the operator's serial
-/// port open and its TCP port bound, and the NEXT launch can land on it — the crossed-CAT
-/// shape `is_alive` warns about.
-///
-/// Two bounded mechanisms, deliberately NOT a supervisor:
-/// * **The PID ledger.** Every spawn writes `<ledger>/<daemon-pid>.pid` containing
-///   `"<our-pid> <binary-name>"`; `Drop` removes it. [`init`] sweeps the ledger at the next
-///   launch and kills any recorded daemon whose spawning Nexus is gone — covering the three
-///   no-`Drop` deaths above at the exact moment the collision would otherwise happen.
-/// * **The in-process registry.** [`kill_leftovers`] (the quit path, after the radio loop
-///   has been told to stop) TERMs anything not yet dropped — the wedged quit, handled
-///   before the process exits rather than left for the next launch.
-///
-/// PID reuse is the hazard of any kill-by-recorded-pid, and both directions are covered:
-/// * the registry holds only OUR direct children, none of them reaped when we signal
-///   (`Drop` deregisters before it reaps), so those PIDs cannot have been recycled;
-/// * the sweep kills a recorded PID only when `ps` says the process behind it is still the
-///   recorded *binary*; a recycled PID reads as something else and the record is dropped
-///   without a kill. A recycled PARENT pid makes the parent look alive, which merely keeps
-///   the record for a later launch — the conservative failure, never a kill on a guess.
-///
-/// When [`init`] was never called (unit tests, headless tools) nothing is written and the
-/// sweep never runs — behaviour is exactly pre-ledger.
-#[cfg(unix)]
-mod orphan_ledger {
-    use std::path::{Path, PathBuf};
-    use std::sync::{Mutex, OnceLock};
-
-    /// Where the records live. Set once by [`init`]; `None` = ledger disabled.
-    static LEDGER_DIR: OnceLock<PathBuf> = OnceLock::new();
-    /// Daemons this process has spawned and not yet dropped: `(daemon pid, binary name)`.
-    static LIVE: Mutex<Vec<(u32, &'static str)>> = Mutex::new(Vec::new());
-
-    /// The record body: `"<parent-pid> <binary-name>"`. The daemon's own pid is the
-    /// FILENAME (`<pid>.pid`), so concurrent instances can never write the same record.
-    fn format_record(parent_pid: u32, bin: &str) -> String {
-        format!("{parent_pid} {bin}")
-    }
-
-    /// Parse a record body. Anything that is not exactly two fields with a numeric first
-    /// is `None` — a garbled record must never produce a pid to kill.
-    fn parse_record(s: &str) -> Option<(u32, String)> {
-        let mut it = s.split_whitespace();
-        let parent = it.next()?.parse().ok()?;
-        let bin = it.next()?.to_string();
-        if it.next().is_some() {
-            return None;
-        }
-        Some((parent, bin))
-    }
-
-    /// The daemon pid a ledger filename names, or `None` for any file that is not ours.
-    fn pid_of_filename(name: &str) -> Option<u32> {
-        name.strip_suffix(".pid")?.parse().ok()
-    }
-
-    /// What the sweep does with one record. Pure — the whole kill decision in one place.
-    #[derive(Debug, PartialEq, Eq)]
-    enum Verdict {
-        /// The spawning Nexus is still running (a live sibling instance, or a recycled
-        /// parent pid): not ours to touch.
-        Keep,
-        /// The daemon is gone too (or its pid now belongs to some unrelated process):
-        /// nothing to kill, drop the stale record.
-        Drop,
-        /// Parent dead, and the pid still runs the recorded binary: a true orphan.
-        KillAndDrop,
-    }
-
-    /// `daemon_comm` is what `ps -o comm=` reports for the daemon's pid (`None` = no such
-    /// process). Compared by basename because macOS prints the full executable path where
-    /// Linux prints the bare name.
-    fn record_verdict(parent_alive: bool, daemon_comm: Option<&str>, bin: &str) -> Verdict {
-        if parent_alive {
-            return Verdict::Keep;
-        }
-        match daemon_comm {
-            Some(comm) if Path::new(comm).file_name().is_some_and(|f| f == bin) => {
-                Verdict::KillAndDrop
-            }
-            _ => Verdict::Drop,
-        }
-    }
-
-    /// One pass over the ledger. The probes and the kill are parameters so the decision
-    /// path is drivable from a test with no processes involved; [`init`] passes the real
-    /// ones. Files that are not records, and records that do not parse, are cleaned up or
-    /// skipped — the ledger must not accrete junk, and junk must never cause a kill.
-    fn sweep(
-        dir: &Path,
-        parent_alive: &dyn Fn(u32) -> bool,
-        daemon_comm: &dyn Fn(u32) -> Option<String>,
-        kill: &mut dyn FnMut(u32),
-    ) {
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            return;
-        };
-        for entry in entries.flatten() {
-            let name = entry.file_name();
-            let Some(daemon_pid) = name.to_str().and_then(pid_of_filename) else {
-                continue; // not a ledger record — leave foreign files alone
-            };
-            let parsed = std::fs::read_to_string(entry.path())
-                .ok()
-                .and_then(|s| parse_record(s.trim()));
-            let Some((parent, bin)) = parsed else {
-                let _ = std::fs::remove_file(entry.path()); // garbled: unusable, remove
-                continue;
-            };
-            match record_verdict(
-                parent_alive(parent),
-                daemon_comm(daemon_pid).as_deref(),
-                &bin,
-            ) {
-                Verdict::Keep => {}
-                Verdict::Drop => {
-                    let _ = std::fs::remove_file(entry.path());
-                }
-                Verdict::KillAndDrop => {
-                    kill(daemon_pid);
-                    let _ = std::fs::remove_file(entry.path());
-                }
-            }
-        }
-    }
-
-    /// What `ps` calls `pid`, or `None` when no such process exists. `ps -p <pid> -o comm=`
-    /// answers liveness and identity in one portable call (macOS and Linux both have it in
-    /// the launchd/systemd default PATH); a zombie still lists, which for the PARENT check
-    /// is the conservative direction (its records wait for the next launch).
-    fn proc_comm(pid: u32) -> Option<String> {
-        let out = std::process::Command::new("ps")
-            .args(["-p", &pid.to_string(), "-o", "comm="])
-            .output()
-            .ok()?;
-        if !out.status.success() {
-            return None;
-        }
-        let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        (!s.is_empty()).then_some(s)
-    }
-
-    /// Send `sig` (a `kill(1)` signal argument, e.g. `"-TERM"`) to `pid`. Best-effort.
-    fn send_signal(pid: u32, sig: &str) {
-        let _ = std::process::Command::new("kill")
-            .args([sig, &pid.to_string()])
-            .status();
-    }
-
-    /// Kill a confirmed orphan: TERM (rigctld exits promptly and closes the serial port
-    /// cleanly), then a bounded wait so OUR spawn moments later finds the ports actually
-    /// free, then one KILL if it lingered. Bounded because this runs on the startup path.
-    fn kill_stale(pid: u32) {
-        send_signal(pid, "-TERM");
-        for _ in 0..10 {
-            if proc_comm(pid).is_none() {
-                return;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(100));
-        }
-        send_signal(pid, "-KILL");
-    }
-
-    /// Remember the ledger dir and sweep what a previous dead instance left. See the
-    /// module doc; called via [`super::init_orphan_ledger`].
-    pub(super) fn init(dir: PathBuf) {
-        let _ = std::fs::create_dir_all(&dir);
-        sweep(
-            &dir,
-            &|pid| proc_comm(pid).is_some(),
-            &proc_comm,
-            &mut kill_stale,
-        );
-        let _ = LEDGER_DIR.set(dir);
-    }
-
-    /// A daemon was spawned: register it and write its ledger record.
-    pub(super) fn record(daemon_pid: u32, bin: &'static str) {
-        if let Ok(mut live) = LIVE.lock() {
-            live.push((daemon_pid, bin));
-        }
-        if let Some(dir) = LEDGER_DIR.get() {
-            let _ = std::fs::write(
-                dir.join(format!("{daemon_pid}.pid")),
-                format_record(std::process::id(), bin),
-            );
-        }
-    }
-
-    /// A daemon is being dropped (and killed by its `Drop`): deregister + remove the record.
-    pub(super) fn forget(daemon_pid: u32) {
-        if let Ok(mut live) = LIVE.lock() {
-            live.retain(|(pid, _)| *pid != daemon_pid);
-        }
-        if let Some(dir) = LEDGER_DIR.get() {
-            let _ = std::fs::remove_file(dir.join(format!("{daemon_pid}.pid")));
-        }
-    }
-
-    /// TERM everything still registered — the quit path's backstop for handles whose `Drop`
-    /// will never run. Safe against pid reuse (un-reaped children, see the module doc).
-    /// Fire-and-forget: the process is exiting and must not block here; the ledger records
-    /// deliberately STAY on disk, so if a TERM'd daemon somehow lingers, the next launch's
-    /// sweep gets a second, identity-checked look instead of nothing.
-    pub(super) fn kill_leftovers() {
-        let leftovers = LIVE
-            .lock()
-            .map(|mut live| std::mem::take(&mut *live))
-            .unwrap_or_default();
-        for (pid, _) in leftovers {
-            send_signal(pid, "-TERM");
-        }
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-
-        /// The kill decision, exhaustively: a kill may happen only for a dead parent AND a
-        /// pid that still runs the recorded binary. Everything else keeps or drops.
-        #[test]
-        fn a_kill_needs_a_dead_parent_and_a_matching_binary() {
-            // Parent alive (live sibling instance): never touched, even if the daemon looks right.
-            assert_eq!(
-                record_verdict(true, Some("rigctld"), "rigctld"),
-                Verdict::Keep
-            );
-            // True orphan — Linux (bare name) and macOS (full path) comm forms both match.
-            assert_eq!(
-                record_verdict(false, Some("rigctld"), "rigctld"),
-                Verdict::KillAndDrop
-            );
-            assert_eq!(
-                record_verdict(false, Some("/opt/homebrew/bin/rigctld"), "rigctld"),
-                Verdict::KillAndDrop
-            );
-            // Daemon pid recycled by an unrelated process: drop the record, kill NOTHING.
-            assert_eq!(
-                record_verdict(false, Some("firefox"), "rigctld"),
-                Verdict::Drop
-            );
-            // Daemon already gone: just tidy up.
-            assert_eq!(record_verdict(false, None, "rigctld"), Verdict::Drop);
-        }
-
-        /// The record format round-trips, and garble parses to nothing (a garbled record
-        /// must never yield a parent pid to test or a kill).
-        #[test]
-        fn records_round_trip_and_garble_parses_to_none() {
-            assert_eq!(
-                parse_record(&format_record(4242, "rotctld")),
-                Some((4242, "rotctld".to_string()))
-            );
-            assert_eq!(parse_record(""), None);
-            assert_eq!(parse_record("notanumber rigctld"), None);
-            assert_eq!(parse_record("123"), None);
-            assert_eq!(parse_record("123 rigctld extra"), None);
-            // Filenames: only `<pid>.pid` is a record.
-            assert_eq!(pid_of_filename("123.pid"), Some(123));
-            assert_eq!(pid_of_filename("123.tmp"), None);
-            assert_eq!(pid_of_filename("x.pid"), None);
-        }
-
-        /// The sweep against a real directory, with the probes faked: the orphan is killed
-        /// and its record removed; the live sibling's record survives untouched; the
-        /// recycled-pid record is removed without a kill; junk files are left alone.
-        #[test]
-        fn the_sweep_kills_only_the_true_orphan() {
-            let dir = std::env::temp_dir().join(format!(
-                "nexus-orphan-sweep-{}-{:?}",
-                std::process::id(),
-                std::thread::current().id()
-            ));
-            std::fs::create_dir_all(&dir).expect("temp ledger dir");
-            // parent 1000 dead, pid 11 still rigctld  -> kill + drop
-            std::fs::write(dir.join("11.pid"), "1000 rigctld").unwrap();
-            // parent 2000 alive (sibling instance)    -> keep
-            std::fs::write(dir.join("22.pid"), "2000 rigctld").unwrap();
-            // parent 1000 dead, pid 33 now firefox    -> drop, no kill
-            std::fs::write(dir.join("33.pid"), "1000 rotctld").unwrap();
-            // garbled record                          -> drop, no kill
-            std::fs::write(dir.join("44.pid"), "what even is this").unwrap();
-            // not a ledger file                       -> untouched
-            std::fs::write(dir.join("README.txt"), "hands off").unwrap();
-
-            let mut killed: Vec<u32> = Vec::new();
-            sweep(
-                &dir,
-                &|parent| parent == 2000,
-                &|pid| match pid {
-                    11 => Some("/usr/bin/rigctld".to_string()),
-                    33 => Some("firefox".to_string()),
-                    _ => None,
-                },
-                &mut |pid| killed.push(pid),
-            );
-
-            assert_eq!(killed, vec![11], "exactly the one true orphan dies");
-            assert!(!dir.join("11.pid").exists(), "the orphan's record is gone");
-            assert!(
-                dir.join("22.pid").exists(),
-                "the live sibling's record survives"
-            );
-            assert!(
-                !dir.join("33.pid").exists(),
-                "the recycled pid's record is gone"
-            );
-            assert!(!dir.join("44.pid").exists(), "garble is cleaned up");
-            assert!(
-                dir.join("README.txt").exists(),
-                "foreign files are not ours to touch"
-            );
-            std::fs::remove_dir_all(&dir).ok();
         }
     }
 }
@@ -1064,82 +845,6 @@ const HAMLIB_SEARCH_DIRS: &[&str] = &[
     "/usr/local/bin",    // Homebrew, Intel Mac; also a common manual/from-source install prefix
     "/opt/local/bin",    // MacPorts
 ];
-
-/// Return the first `dirs` entry that contains a file named `bin_name`, absolute path — the
-/// search core of [`resolve_rigctld`] / [`resolve_rotctld`] / [`resolve_rigctl`]'s fallback,
-/// factored out so it can be driven by a fixture list in tests instead of the real
-/// [`HAMLIB_SEARCH_DIRS`].
-#[cfg(unix)]
-fn find_in_dirs(dirs: &[&str], bin_name: &str) -> Option<std::ffi::OsString> {
-    dirs.iter()
-        .map(|dir| std::path::Path::new(dir).join(bin_name))
-        .find(|p| p.is_file())
-        .map(std::path::PathBuf::into_os_string)
-}
-
-/// Does `path_var` (a `PATH`-shaped, `:`-joined list of directories) resolve `bin_name`? Takes
-/// the value as a parameter instead of reading the real process environment, so a test can drive
-/// it without mutating global state that other tests (the fixture stand-in below) already depend
-/// on being left alone.
-#[cfg(unix)]
-fn path_has(path_var: &std::ffi::OsStr, bin_name: &str) -> bool {
-    std::env::split_paths(path_var).any(|dir| dir.join(bin_name).is_file())
-}
-
-/// Does `bin` actually RUN, or does it merely exist?
-///
-/// Existence is not usability, and the gap is not hypothetical: a Hamlib built from source and
-/// installed under `~/.local` keeps the configured `--prefix` (`/usr/local/lib/libhamlib.4.dylib`)
-/// as its dylib load path, so every `rigctl*` binary is executable, first on `PATH`, and dies at
-/// `dyld` load with *"Library not loaded"* before `main`. Found on a real station on 2026-08-13:
-/// CAT was dead with no usable diagnosis, because the PATH existence check said yes and the
-/// [`HAMLIB_SEARCH_DIRS`] fallback — which would have found a working Homebrew Hamlib one
-/// directory later — was never consulted.
-///
-/// `--version` is the probe: it touches no serial port, binds no TCP port, and returns at once.
-///
-/// **A NON-ZERO EXIT IS A PASS — only a SIGNAL is a failure.** This is the whole subtlety, and
-/// getting it wrong silently breaks the [`resolve_rigctld`] contract that an operator's or a
-/// test's own binary outranks Nexus's guesses. A wrapper script, a version pin, or the stand-in
-/// in `service`'s `an_ordinary_connect_failure_carries_what_the_daemon_said` need not implement
-/// `--version` at all — that fixture answers only `-vvv` and exits 9 for anything else — and
-/// rejecting them for it would hand Nexus's own guess a veto over a deliberate choice. A binary
-/// whose libraries cannot be loaded fails differently: `dyld` calls `abort()` before `main`, so
-/// the process is KILLED BY SIGABRT rather than returning an exit code (observed: 134, i.e.
-/// 128+6, from the `~/.local` Hamlib above). Signal death, failure to exec at all, and a hang are
-/// the three "this cannot run" verdicts; every ordinary exit status means it ran.
-///
-/// The wait is BOUNDED because this sits on the CAT-connect path: a candidate that hangs must not
-/// hang Nexus, so it is killed and treated as unusable rather than waited on.
-#[cfg(unix)]
-fn runs_ok(bin: &std::ffi::OsStr) -> bool {
-    use std::os::unix::process::ExitStatusExt;
-    use std::process::{Command, Stdio};
-    let mut child = match Command::new(bin)
-        .arg("--version")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-    {
-        Ok(c) => c,
-        Err(_) => return false, // not executable at all (ENOENT / EACCES / bad arch)
-    };
-    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(2_000);
-    loop {
-        match child.try_wait() {
-            // Exited on its own terms — ANY code, see above. Only signal death disqualifies.
-            Ok(Some(status)) => return status.signal().is_none(),
-            Ok(None) if std::time::Instant::now() >= deadline => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return false;
-            }
-            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(20)),
-            Err(_) => return false,
-        }
-    }
-}
 
 /// Resolve a Hamlib binary on Unix: the operator's `PATH` first, then [`HAMLIB_SEARCH_DIRS`],
 /// requiring at each step that the candidate actually runs ([`runs_ok`]).
@@ -1215,27 +920,18 @@ fn resolve_hamlib_bin_in(
 /// `Command` the bare name. Launching the bundled exe by full path lets Windows resolve its
 /// co-located DLLs (libhamlib-4.dll etc.) from the exe's own directory.
 fn resolve_rigctld() -> std::ffi::OsString {
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            for cand in [
-                "hamlib/rigctld.exe",
-                "resources/hamlib/rigctld.exe",
-                "rigctld.exe",
-                "hamlib/rigctld",
-            ] {
-                let p = dir.join(cand);
-                if p.is_file() {
-                    return p.into_os_string();
-                }
-            }
-        }
-    }
     #[cfg(unix)]
     {
+        if let Some(p) = find_bundled("rigctld").and_then(|p| bundled_if_runnable("rigctld", p)) {
+            return p;
+        }
         resolve_hamlib_bin("rigctld")
     }
     #[cfg(not(unix))]
     {
+        if let Some(p) = find_bundled("rigctld") {
+            return p;
+        }
         std::ffi::OsString::from("rigctld")
     }
 }
@@ -1258,18 +954,27 @@ fn resolve_rigctld() -> std::ffi::OsString {
 /// file that was never shipped.
 pub fn hamlib_missing_for(mac: bool, tool: &str, e: &std::io::Error) -> String {
     if e.kind() == std::io::ErrorKind::NotFound {
+        // Nexus SHIPS Hamlib on every platform since 2026-08-24, so reaching this at all means
+        // the bundled copy could not be launched either — a different fault from "you never
+        // installed it", and the sentence has to say so or it sends the operator to install
+        // something they already have. The system-install cure stays as the fallback: it is
+        // still the answer for a source build, a distro package, or a bundle whose Hamlib the
+        // machine refuses (wrong architecture, noexec mount, security policy).
         if mac {
             return format!(
-                "Hamlib's {tool} isn't installed. In Terminal: brew install hamlib, then \
-                 restart Nexus (Homebrew itself is at brew.sh). WSJT-X or a logger working \
-                 proves only the Hamlib LIBRARY is there — Nexus needs the {tool} program. ({e})"
+                "Nexus could not start its own {tool}, and there is no Hamlib {tool} installed \
+                 to fall back on. If you built Nexus yourself, the bundled Hamlib may be \
+                 missing; otherwise install one with: brew install hamlib, then restart Nexus \
+                 (Homebrew is at brew.sh). WSJT-X or a logger working proves only the Hamlib \
+                 LIBRARY is there — Nexus needs the {tool} program. ({e})"
             );
         }
         return format!(
-            "Hamlib's {tool} isn't installed. On Debian/Ubuntu: sudo apt install \
-             libhamlib-utils (the Nexus .deb pulls it in; the AppImage can't, so it has to be \
-             installed once by hand). WSJT-X working proves only the Hamlib LIBRARY is there — \
-             Nexus needs the {tool} program. ({e})"
+            "Nexus could not start its own {tool}, and there is no Hamlib {tool} installed to \
+             fall back on. If you built Nexus yourself, the bundled Hamlib may be missing; \
+             otherwise on Debian/Ubuntu: sudo apt install libhamlib-utils, then restart Nexus. \
+             WSJT-X working proves only the Hamlib LIBRARY is there — Nexus needs the {tool} \
+             program. ({e})"
         );
     }
     format!("Could not launch {tool} (Hamlib): {e}")
@@ -1310,27 +1015,18 @@ pub fn rotctld_args(model: u32, port: &str, baud: u32, tcp_port: u16) -> Vec<Str
 /// The bundled `rotctld` (ships beside rigctld in the Hamlib bundle), then the same
 /// [`HAMLIB_SEARCH_DIRS`] fallback, then PATH — same resolution as [`resolve_rigctld`].
 fn resolve_rotctld() -> std::ffi::OsString {
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            for cand in [
-                "hamlib/rotctld.exe",
-                "resources/hamlib/rotctld.exe",
-                "rotctld.exe",
-                "hamlib/rotctld",
-            ] {
-                let p = dir.join(cand);
-                if p.is_file() {
-                    return p.into_os_string();
-                }
-            }
-        }
-    }
     #[cfg(unix)]
     {
+        if let Some(p) = find_bundled("rotctld").and_then(|p| bundled_if_runnable("rotctld", p)) {
+            return p;
+        }
         resolve_hamlib_bin("rotctld")
     }
     #[cfg(not(unix))]
     {
+        if let Some(p) = find_bundled("rotctld") {
+            return p;
+        }
         std::ffi::OsString::from("rotctld")
     }
 }
@@ -1373,11 +1069,11 @@ pub fn spawn_rotctld(
     let mut child = cmd.spawn()?;
     let said = drain_stderr(&mut child, "rotctld");
     #[cfg(windows)]
-    let job = assign_kill_on_close_job(&child);
+    let job = crate::proc_util::assign_kill_on_close_job(&child);
     // Unix stand-in for the job object: record the spawn so a crash/force-quit/wedged
     // quit cannot orphan the daemon past the next launch (see [`orphan_ledger`]).
     #[cfg(unix)]
-    orphan_ledger::record(child.id(), "rotctld");
+    crate::proc_util::orphan_ledger::record(child.id(), "rotctld");
     Ok(RigctldProc {
         child,
         said,
@@ -1533,27 +1229,18 @@ pub(crate) fn daemon_dump(args: &[&str]) -> Option<String> {
 /// headless `cargo clippy --workspace --all-targets -- -D warnings` CI job fails it as dead code.
 #[cfg(feature = "serial")]
 pub(crate) fn resolve_rigctl() -> std::ffi::OsString {
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            for cand in [
-                "hamlib/rigctl.exe",
-                "resources/hamlib/rigctl.exe",
-                "rigctl.exe",
-                "hamlib/rigctl",
-            ] {
-                let p = dir.join(cand);
-                if p.is_file() {
-                    return p.into_os_string();
-                }
-            }
-        }
-    }
     #[cfg(unix)]
     {
+        if let Some(p) = find_bundled("rigctl").and_then(|p| bundled_if_runnable("rigctl", p)) {
+            return p;
+        }
         resolve_hamlib_bin("rigctl")
     }
     #[cfg(not(unix))]
     {
+        if let Some(p) = find_bundled("rigctl") {
+            return p;
+        }
         std::ffi::OsString::from("rigctl")
     }
 }
@@ -1638,6 +1325,11 @@ fn parse_settable_lines(show_conf: &str) -> SettableLines {
         rts_taken_by_handshake: rts_offered
             && not_keying_rts
             && handshake.is_some_and(|h| HANDSHAKE_RTS_TAKEN.contains(&h)),
+        // The #200 collision — the same positive-Hardware test, on the keyed side of
+        // `not_keying_rts`. `rts_offered` keeps it serial-only, same as everything above.
+        keying_rts_on_hardware_handshake: rts_offered
+            && !not_keying_rts
+            && handshake.is_some_and(|h| HANDSHAKE_RTS_TAKEN.contains(&h)),
     }
 }
 
@@ -1647,6 +1339,119 @@ fn parse_settable_lines(show_conf: &str) -> SettableLines {
 ///
 /// `want` is the operator's per-line control-line choice ([`ControlLines`]); it is narrowed
 /// to what this rig's Hamlib will actually accept before anything is emitted.
+/// What a rigctld found on the process list says it is serving.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ServedRig {
+    /// Hamlib model from `-m`. `None` if the daemon was launched without one.
+    pub model: Option<u32>,
+    /// Serial device (or network address) from `-r` — the fact that separates two IDENTICAL rigs.
+    pub device: Option<String>,
+}
+
+impl ServedRig {
+    /// A phrase for an operator-facing sentence: what this daemon is actually driving.
+    pub fn describe(&self) -> String {
+        match (self.model, &self.device) {
+            (Some(m), Some(d)) => format!("Hamlib model {m} on {d}"),
+            (Some(m), None) => format!("Hamlib model {m}"),
+            (None, Some(d)) => format!("a rig on {d}"),
+            (None, None) => "an unidentified rig".to_string(),
+        }
+    }
+}
+
+/// Run `cmd` and capture its stdout, giving up after `timeout`.
+///
+/// ⚠️ READS AND WAITS TOGETHER, and that is the whole point of it existing. The obvious shape —
+/// spawn, poll `try_wait` to a deadline, then read stdout — DEADLOCKS on any command whose output
+/// exceeds the ~64 KB pipe buffer: the child blocks writing, never exits, and the deadline kills
+/// it. The caller then gets `None` and reads it as "nothing to find".
+///
+/// That is not hypothetical. `daemon_serving_port` shipped with exactly that shape and answered
+/// `None` for EVERY port on a live station — `ps -axo command=` runs well past 64 KB there — so
+/// the crossed-CAT guard silently never fired while all of its unit tests passed, because they
+/// exercise the parser and this is what feeds it.
+///
+/// `output()` drains the pipes while it waits; the bound lives on the receive, so a wedged child
+/// still cannot hold up a rig open (the thread is left to finish on its own).
+fn capture_bounded(cmd: &mut Command, timeout: std::time::Duration) -> Option<String> {
+    let mut owned = Command::new(cmd.get_program());
+    owned.args(cmd.get_args());
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(
+            owned
+                .stdin(Stdio::null())
+                .stderr(Stdio::null())
+                .output()
+                .ok(),
+        );
+    });
+    let out = rx.recv_timeout(timeout).ok().flatten()?;
+    Some(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// Which rig is the local rigctld on `tcp_port` serving, read from ITS OWN LAUNCH ARGUMENTS?
+///
+/// A daemon's argv states both facts that identify a radio: `-m <model>` is the rig type and
+/// `-r <device>` is the physical port. That is strictly more than the protocol can tell us —
+/// `\dump_state` gives the model alone, so it cannot separate two IDENTICAL rigs, and two FT-710s
+/// on one station is an ordinary configuration. They cannot share a serial device.
+///
+/// `None` = no local daemon on that port could be identified, which is NOT the same as "foreign":
+/// a daemon on another machine has no process here to read, and the caller must treat the absence
+/// as "cannot tell" rather than as grounds to refuse.
+///
+/// Unix only for now. Windows would need a process-list call of its own
+/// (`CreateToolhelp32Snapshot`), and until it has one the protocol check in
+/// `service::foreign_daemon_refusal` is what covers it — weaker, but universal.
+#[cfg(unix)]
+pub fn daemon_serving_port(tcp_port: u16) -> Option<ServedRig> {
+    // `ps` rather than a crate: this reads the process list once per CAT open, and it is the one
+    // thing every Unix exposes the same way.
+    let out = capture_bounded(
+        Command::new("ps").args(["-axo", "pid=,command="]),
+        std::time::Duration::from_millis(1_500),
+    )?;
+    parse_ps_for_port(&out, tcp_port)
+}
+
+#[cfg(not(unix))]
+pub fn daemon_serving_port(_tcp_port: u16) -> Option<ServedRig> {
+    None
+}
+
+/// Find the `rigctld` line serving `-t <tcp_port>` in `ps` output and read its `-m` / `-r`.
+///
+/// Split out from the `ps` call so it is testable against fixed text — the parsing, not the
+/// process list, is what a change to the argument order would break.
+pub fn parse_ps_for_port(ps_output: &str, tcp_port: u16) -> Option<ServedRig> {
+    for line in ps_output.lines() {
+        if !line.contains("rigctld") {
+            continue;
+        }
+        let args: Vec<&str> = line.split_whitespace().collect();
+        // `-t <port>` is what makes this the daemon on the port in question. Matched as a
+        // whole token so :4534 never matches :45340.
+        let serves_port = args
+            .windows(2)
+            .any(|w| w[0] == "-t" && w[1].parse::<u16>() == Ok(tcp_port));
+        if !serves_port {
+            continue;
+        }
+        let val = |flag: &str| -> Option<String> {
+            args.windows(2)
+                .find(|w| w[0] == flag)
+                .map(|w| w[1].to_string())
+        };
+        return Some(ServedRig {
+            model: val("-m").and_then(|m| m.parse::<u32>().ok()),
+            device: val("-r"),
+        });
+    }
+    None
+}
+
 pub fn spawn_rigctld(
     model: u32,
     addr: &str,
@@ -1706,11 +1511,11 @@ pub fn spawn_rigctld(
     // On Windows, bind the daemon to a kill-on-close Job Object so it can't
     // outlive Tempo and keep the COM port locked.
     #[cfg(windows)]
-    let job = assign_kill_on_close_job(&child);
+    let job = crate::proc_util::assign_kill_on_close_job(&child);
     // Unix stand-in for the job object: record the spawn so a crash/force-quit/wedged
     // quit cannot orphan the daemon past the next launch (see [`orphan_ledger`]).
     #[cfg(unix)]
-    orphan_ledger::record(child.id(), "rigctld");
+    crate::proc_util::orphan_ledger::record(child.id(), "rigctld");
     Ok(RigctldProc {
         child,
         said,
@@ -1757,25 +1562,84 @@ mod tests {
     fn runs_ok_accepts_a_nonzero_exit_and_rejects_only_a_signal() {
         // Exits 9 for an unknown flag — the shape of the service.rs fixture and of real wrappers.
         let picky = stub_script("picky", "#!/bin/sh\n[ \"$1\" = \"-vvv\" ] || exit 9\n");
+        // A generous budget on purpose — see `runs_ok_within`. This test is about the verdict,
+        // not about how fast a loaded machine can fork a shell.
+        let budget = std::time::Duration::from_secs(30);
+        // ⚠️ IF THIS FAILS, READ THE DIAGNOSIS BEFORE ASSUMING THE VERDICT LOGIC BROKE. This
+        // assertion went red on two consecutive full-workspace runs (2026-08-23) while passing
+        // every way the module could be run on its own — serially, in parallel, and under a
+        // saturated CPU. Neither a wall-clock timeout nor CPU contention reproduced it, so the
+        // cause is still unproven and the next occurrence should not cost another investigation.
+        // Spawning the script directly here separates "the system would not fork" from "the
+        // verdict logic is wrong", which are the two candidates.
+        let diag = match std::process::Command::new(picky.as_os_str())
+            .arg("--version")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        {
+            Ok(mut c) => format!("spawn ok, wait={:?}", c.wait()),
+            Err(e) => format!("SPAWN FAILED: kind={:?} err={e}", e.kind()),
+        };
         assert!(
-            runs_ok(picky.as_os_str()),
+            runs_ok_within(picky.as_os_str(), budget),
             "a stand-in that exits non-zero for --version still RUNS; rejecting it lets Nexus \
-             override an operator's or a test's deliberate choice of binary"
+             override an operator's or a test's deliberate choice of binary. \
+             Direct spawn of the same script says: {diag}"
         );
 
         // Killed by SIGABRT — how a binary whose dylibs cannot be loaded dies.
         let aborts = stub_script("aborts", "#!/bin/sh\nkill -ABRT $$\n");
         assert!(
-            !runs_ok(aborts.as_os_str()),
+            !runs_ok_within(aborts.as_os_str(), budget),
             "signal death is the unloadable-library signature and must be rejected"
         );
 
         // Not executable at all.
         assert!(
-            !runs_ok(std::ffi::OsStr::new("/nonexistent-nexus-test-dir/rigctld")),
+            !runs_ok_within(
+                std::ffi::OsStr::new("/nonexistent-nexus-test-dir/rigctld"),
+                budget
+            ),
             "a path that cannot be spawned is not usable"
         );
 
+        for p in [picky, aborts] {
+            if let Some(d) = p.parent() {
+                let _ = std::fs::remove_dir_all(d);
+            }
+        }
+    }
+
+    /// Repro for the mac 1.10.0 CAT regression: a BUNDLED tool that dies by signal — how
+    /// `dyld` reports an unloadable library, and exactly how the shipped 1.10.0 tools died on
+    /// a Mac without Homebrew's libusb (libhamlib.4.dylib still named
+    /// /opt/homebrew/opt/libusb/lib/libusb-1.0.0.dylib) — must NOT win the resolution, because
+    /// "found the bundled copy" suppresses the PATH/package-dir fallback that would have found
+    /// the operator's own working Hamlib, the one 1.9.2 was happily using. And the other
+    /// verdict matters as much: a candidate that merely exits non-zero for `--version` still
+    /// RUNS (the 2026-08-13 PATH-branch regression class) and must be kept.
+    #[cfg(unix)]
+    #[test]
+    fn a_bundled_tool_that_dies_by_signal_is_skipped_not_resolved() {
+        let aborts = stub_script("bundled-aborts", "#!/bin/sh\nkill -ABRT $$\n");
+        assert_eq!(
+            bundled_if_runnable("rigctld", aborts.clone().into_os_string()),
+            None,
+            "signal death is the unloadable-library signature; admitting this candidate \
+             suppresses the fallback that finds a working Hamlib on the same machine"
+        );
+        let picky = stub_script(
+            "bundled-picky",
+            "#!/bin/sh\n[ \"$1\" = \"-vvv\" ] || exit 9\n",
+        );
+        assert_eq!(
+            bundled_if_runnable("rigctld", picky.clone().into_os_string()).as_deref(),
+            Some(picky.as_os_str()),
+            "a nonzero exit for --version still runs; rejecting it would discard a \
+             perfectly good bundled copy"
+        );
         for p in [picky, aborts] {
             if let Some(d) = p.parent() {
                 let _ = std::fs::remove_dir_all(d);
@@ -2525,6 +2389,189 @@ mod tests {
         assert!(holds(&args, "dtr", "OFF"), "{args:?}");
     }
 
+    /// ⭐ #145 ON THE COMMAND LINE, AS AMENDED BY #200 — the scene the reporter runs: PTT
+    /// method = serial RTS with the PTT port left blank, so keying rides the CAT port.
+    ///
+    /// The first half of this test used to pin the pre-#145 bug itself ("rigctld is launched
+    /// saying nothing whatever about RTS … and it must not change under an upgrade"), on the
+    /// #145 ruling that a fourth inference would be a fourth guess about a cable. #200 (a
+    /// TS-2000 keyed from launch to exit on Windows) is the field proof that for the
+    /// HARDWARE-handshake backends the silence was the transmitter-keying bug, and the
+    /// narrow keyed-RTS exception is not a cable guess: the operator's own PTT declaration
+    /// makes the flow-control collision certain. What still holds from the old pin:
+    /// `rts_state` is never emitted for the keying line — only the handshake is spoken for.
+    #[test]
+    fn keying_on_the_cat_port_frees_the_handshake_and_still_says_no_rts_state() {
+        let ptt = Some(crate::rig::SerialLine::Rts);
+        let settable = parse_settable_lines(&show_conf("RTS", Some("Hardware")));
+        // The shipped hold-low default with neither declaration made: the handshake is freed
+        // (that is the #200 fix), and RTS itself still goes unmentioned.
+        let lines = resolve_lines(settable, ControlLines::hold_low(), true);
+        let args = rigctld_args(1035, "COM5", 38400, 4532, false, ptt, lines);
+        assert!(
+            says_nothing_about(&args, "rts"),
+            "no rts_state on the keying line, ever: {args:?}"
+        );
+        assert!(
+            args.windows(2)
+                .any(|w| w[0] == "-C" && w[1] == "serial_handshake=None"),
+            "the #200 un-key: hardware flow control must not hold the key line up: {args:?}"
+        );
+
+        // THE FIX — the operator declares what only they can see, and both reach the daemon.
+        let declared = ControlLines {
+            handshake: Handshake::None,
+            keying_line: LineState::Low,
+            ..ControlLines::hold_low()
+        };
+        let lines = resolve_lines(settable, declared, true);
+        let args = rigctld_args(1035, "COM5", 38400, 4532, false, ptt, lines);
+        assert!(
+            holds(&args, "rts", "OFF"),
+            "the keying line's idle state is now stated, not left to the driver: {args:?}"
+        );
+        assert!(
+            args.windows(2)
+                .any(|w| w[0] == "-C" && w[1] == "serial_handshake=None"),
+            "and the declared handshake goes with it: {args:?}"
+        );
+        assert_eq!(
+            args.iter()
+                .filter(|a| a.starts_with("serial_handshake="))
+                .count(),
+            1,
+            "exactly ONE serial_handshake argument, whichever decided it: {args:?}"
+        );
+    }
+
+    /// The declaration is a DECLARATION, not another guess: each of the four handshake values
+    /// reaches Hamlib verbatim, `auto` still infers, and `Hardware` refuses to free RTS even
+    /// where the inference would have.
+    #[test]
+    fn a_declared_handshake_replaces_the_inference_in_both_directions() {
+        // The vk6mo case the inference DOES reach: a Digirig-class cable on a hardware-handshake
+        // rig, RTS not the keying line. `auto` still frees RTS, exactly as before.
+        let settable = parse_settable_lines(&show_conf("RIG", Some("Hardware")));
+        let inferred = resolve_lines(settable, ControlLines::hold_low(), true);
+        assert!(
+            inferred.handshake_none,
+            "control: the inference still fires"
+        );
+        assert!(holds(
+            &rigctld_args(1042, "COM5", 38400, 4532, false, None, inferred),
+            "rts",
+            "OFF"
+        ));
+
+        // …and an operator who declares Hardware keeps their flow control, override or not.
+        let hw = resolve_lines(
+            settable,
+            ControlLines {
+                handshake: Handshake::Hardware,
+                ..ControlLines::hold_low()
+            },
+            true,
+        );
+        assert!(
+            !hw.handshake_none,
+            "a declared Hardware handshake is never overridden by the inference"
+        );
+        let args = rigctld_args(1042, "COM5", 38400, 4532, false, None, hw);
+        assert!(
+            args.windows(2)
+                .any(|w| w[0] == "-C" && w[1] == "serial_handshake=Hardware"),
+            "{args:?}"
+        );
+        assert!(
+            says_nothing_about(&args, "rts"),
+            "RTS stays theirs: {args:?}"
+        );
+
+        // Every token is Hamlib's own spelling — `conf.c` matches with `strcmp`, and a wrong
+        // case is `Invalid parameter`, which exits rigctld with status 2 before it listens.
+        for (setting, token) in [
+            ("none", "None"),
+            ("hardware", "Hardware"),
+            ("xonxoff", "XONXOFF"),
+        ] {
+            let lines = ControlLines {
+                handshake: Handshake::from_setting(setting),
+                ..ControlLines::hold_low()
+            };
+            let args = rigctld_args(1042, "COM5", 38400, 4532, false, None, lines);
+            assert!(
+                args.windows(2)
+                    .any(|w| w[0] == "-C" && w[1] == format!("serial_handshake={token}")),
+                "{setting} must reach Hamlib as {token}: {args:?}"
+            );
+        }
+        // Anything unreadable — an empty string, a half-wired UI, a hand-edited file — is
+        // `Auto`, i.e. change nothing.
+        for junk in ["", "  ", "AUTO", "yes please"] {
+            assert_eq!(Handshake::from_setting(junk), Handshake::Auto, "{junk:?}");
+        }
+    }
+
+    /// The keying line's idle state: emitted only for the line we are actually keying with,
+    /// only on an explicit declaration, and never over a transport that has no control lines.
+    #[test]
+    fn the_keying_lines_idle_state_is_emitted_only_where_it_means_something() {
+        let declared = ControlLines {
+            keying_line: LineState::High,
+            ..ControlLines::hold_low()
+        };
+        // DTR keying → `dtr_state`, and RTS keeps the ordinary hold-low.
+        let args = rigctld_args(
+            1035,
+            "COM5",
+            38400,
+            4532,
+            false,
+            Some(crate::rig::SerialLine::Dtr),
+            declared,
+        );
+        assert!(
+            holds(&args, "dtr", "ON"),
+            "the keying line is DTR: {args:?}"
+        );
+        assert!(
+            holds(&args, "rts", "OFF"),
+            "and the non-keying line still takes the operator's own hold: {args:?}"
+        );
+        // No keying line at all: nothing to say about one.
+        let args = rigctld_args(1035, "COM5", 38400, 4532, false, None, declared);
+        assert!(holds(&args, "rts", "OFF") && holds(&args, "dtr", "OFF"));
+        assert_eq!(
+            args.iter().filter(|a| a.contains("_state=")).count(),
+            2,
+            "no third line appears from nowhere: {args:?}"
+        );
+        // A network rig has no control lines — the same gate the other two flags sit behind.
+        let args = rigctld_args(
+            2,
+            "192.168.1.50:4992",
+            38400,
+            4532,
+            true,
+            Some(crate::rig::SerialLine::Rts),
+            declared,
+        );
+        assert!(
+            !args.iter().any(|a| a.contains("_state=")),
+            "a TCP rig has no RTS pin: {args:?}"
+        );
+        // And the default says nothing, which is every release up to now.
+        for junk in ["", "auto", "untouched", "nonsense"] {
+            assert_eq!(
+                LineState::from_keying_setting(junk),
+                LineState::Untouched,
+                "{junk:?}"
+            );
+        }
+        assert_eq!(LineState::from_keying_setting("low"), LineState::Low);
+        assert_eq!(LineState::from_keying_setting("HIGH"), LineState::High);
+    }
+
     /// The `rts_deliberate` answer itself: a Digirig enumerates as a keying interface, a
     /// rig's own USB port does not, and an unknown port claims nothing.
     #[test]
@@ -2582,31 +2629,89 @@ mod tests {
         );
     }
 
-    /// Keying with RTS is refusal #1, and no handshake override can lift it — Hamlib refuses
-    /// `rts_state` on the keying line whatever the flow control is. Trading the operator's
-    /// handshake away here would buy nothing at all.
+    /// Issue #200 (TS-2000 + Digirig, Windows): keying with RTS on a backend that declares
+    /// HARDWARE handshake must free the handshake, or the rig is keyed from the moment the
+    /// port opens. Windows maps handshake=Hardware to RTS_CONTROL_HANDSHAKE — the driver
+    /// asserts RTS (the key line) continuously, and Hamlib's own un-key at rig_open
+    /// (`ser_set_rts(pttp, 0)`) is an EscapeCommFunction the driver refuses and Hamlib's
+    /// termios shim swallows (hamlib-4.7.1 lib/termios.c:3305-3321, 3590). With
+    /// `serial_handshake=None` on the argv, the same rig_open un-key genuinely drives the
+    /// pin, and PTT toggles it from then on. `rts_state` stays unemittable on the keying
+    /// line — that half of the old rule was and is true.
     #[test]
-    fn keying_with_rts_is_not_something_the_override_can_rescue() {
+    fn keying_with_rts_on_a_hardware_handshake_backend_frees_the_handshake() {
         let settable = parse_settable_lines(&show_conf("RTS", Some("Hardware")));
         assert!(
-            !settable.rts_taken_by_handshake,
-            "the handshake is not why this line is unavailable — the keying is"
+            settable.keying_rts_on_hardware_handshake,
+            "the dump positively said both: RTS is the keying line AND the handshake is Hardware"
         );
         let lines = resolve_lines(settable, ControlLines::hold_low(), true);
+        assert!(
+            lines.handshake_none,
+            "the incoherent flow control must be dropped"
+        );
         let args = rigctld_args(
-            1042,
-            "COM5",
-            38400,
+            2014,
+            "COM4",
+            19200,
             4532,
             false,
             Some(crate::rig::SerialLine::Rts),
             lines,
         );
         assert!(
-            !args.iter().any(|a| a.starts_with("serial_handshake")),
-            "no handshake was given up for a line we still cannot set: {args:?}"
+            args.windows(2)
+                .any(|w| w[0] == "-C" && w[1] == "serial_handshake=None"),
+            "the un-key at rig_open only works once RTS stops being flow control: {args:?}"
         );
         assert!(says_nothing_about(&args, "rts"), "{args:?}");
+    }
+
+    /// The #200 override is not a blanket one either. A backend whose handshake already
+    /// leaves RTS free has nothing to drop; an operator-DECLARED Hardware handshake outranks
+    /// the inference (#145 — their declaration is about their cable, not ours to trade); and
+    /// an unclassifiable handshake token claims nothing, exactly as everywhere else in this
+    /// module.
+    #[test]
+    fn the_keyed_rts_handshake_override_fires_only_on_a_positive_hardware_declaration() {
+        // Backend says None: nothing to free.
+        let free = parse_settable_lines(&show_conf("RTS", Some("None")));
+        assert!(!free.keying_rts_on_hardware_handshake);
+        let lines = resolve_lines(free, ControlLines::hold_low(), true);
+        assert!(!lines.handshake_none, "the line was already ours");
+        // Operator declared Hardware: the declaration wins, keyed line or not.
+        let hw = parse_settable_lines(&show_conf("RTS", Some("Hardware")));
+        let declared = resolve_lines(
+            hw,
+            ControlLines {
+                handshake: Handshake::Hardware,
+                ..ControlLines::hold_low()
+            },
+            true,
+        );
+        assert!(
+            !declared.handshake_none,
+            "a declared Hardware handshake is the operator's to keep"
+        );
+        // Unclassifiable token: the stale-vocabulary discipline claims nothing.
+        let odd = show_conf("RTS", Some("Hardware")).replace("Hardware", "RtsCtsPlus");
+        assert!(!parse_settable_lines(&odd).keying_rts_on_hardware_handshake);
+    }
+
+    /// ⚠️ REWRITTEN FOR #200 — the old name here was `keying_with_rts_is_not_something_the_
+    /// override_can_rescue`, and its premise ("trading the operator's handshake away here
+    /// would buy nothing at all") was FALSIFIED by a field report: it buys the un-key at
+    /// rig_open. What SURVIVES of the old rule is pinned above (`rts_state` still never
+    /// emitted for the keying line) and here: `rts_taken_by_handshake` stays false when
+    /// keying with RTS, because that field means "the ORDINARY override can lift this", and
+    /// the keyed case rides its own flag with its own narrower conditions.
+    #[test]
+    fn keying_with_rts_still_does_not_masquerade_as_the_ordinary_handshake_refusal() {
+        let settable = parse_settable_lines(&show_conf("RTS", Some("Hardware")));
+        assert!(
+            !settable.rts_taken_by_handshake,
+            "keyed-RTS is refusal #1, not refusal #2 — it must not enable the ordinary override"
+        );
     }
 
     /// An operator who asked for `Untouched` keeps their flow control. The override exists to
@@ -2618,7 +2723,7 @@ mod tests {
             ControlLines {
                 rts: LineState::Untouched,
                 dtr: LineState::Low,
-                handshake_none: false,
+                ..ControlLines::default()
             },
             true,
         );
@@ -3104,6 +3209,92 @@ mod tests {
         }
         eprintln!("swept every model; keyed by a serial line: {keyed_by_a_line:?}");
     }
+
+    /// THE APPIMAGE SHIPPED HAMLIB'S LICENCE TEXTS AND NO HAMLIB, and this is the test that
+    /// makes that unrepresentable.
+    ///
+    /// The bundled-tool search only ever knew the WINDOWS layout (resources beside the .exe).
+    /// Linux and macOS put them elsewhere, so a bundled rigctld was unreachable no matter what
+    /// the build staged — the resolver fell straight through to PATH, and an AppImage user with
+    /// no `libhamlib-utils` installed had no CAT at all. Both layouts are pinned here against
+    /// fixture trees shaped like the real bundles.
+    #[test]
+    fn finds_a_bundled_tool_in_every_shipped_bundle_layout() {
+        let root = std::env::temp_dir().join(format!(
+            "nexus-bundle-layout-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+
+        // Each entry: the dir holding the executable, and where that bundle puts resources.
+        let layouts: [(&str, &str); 3] = [
+            // Windows NSIS: resources sit beside the .exe.
+            ("win", "win/resources/hamlib"),
+            // Linux .deb + AppImage: usr/bin/Nexus, usr/lib/Nexus/resources/.
+            ("linux/usr/bin", "linux/usr/lib/Nexus/resources/hamlib"),
+            // macOS .app: Contents/MacOS/Nexus, and resources land under
+            // Contents/Resources/**resources**/ — tauri.conf.json maps
+            // "resources/hamlib/*" to "resources/hamlib/", which is relative to the bundle's
+            // own resource dir. The fixture used to say Contents/Resources/hamlib, which is
+            // what the CODE assumed rather than what the BUILD produces, so this test
+            // confirmed the resolver against itself and passed while every fresh macOS
+            // install had no CAT at all (#190). release.yml opens the real shipped .app at
+            // Contents/Resources/resources/deepcw/model.onnx — a sibling entry of identical
+            // shape — which is the layout pinned here.
+            (
+                "mac/Contents/MacOS",
+                "mac/Contents/Resources/resources/hamlib",
+            ),
+        ];
+
+        for (exe_dir, res_dir) in layouts {
+            let exe_dir = root.join(exe_dir);
+            let res_dir = root.join(res_dir);
+            std::fs::create_dir_all(&exe_dir).unwrap();
+            std::fs::create_dir_all(&res_dir).unwrap();
+
+            // The control: nothing staged yet, so nothing is found.
+            assert_eq!(
+                find_bundled_in(&exe_dir, "Nexus", "rigctld"),
+                None,
+                "{exe_dir:?} matched before anything was staged"
+            );
+
+            std::fs::write(res_dir.join("rigctld"), b"#!/bin/sh\n").unwrap();
+            let found = find_bundled_in(&exe_dir, "Nexus", "rigctld")
+                .unwrap_or_else(|| panic!("bundled rigctld unreachable from {exe_dir:?}"));
+            assert_eq!(
+                std::fs::canonicalize(std::path::Path::new(&found)).unwrap(),
+                std::fs::canonicalize(res_dir.join("rigctld")).unwrap(),
+            );
+
+            // A tool that was NOT staged stays a miss — the layout is not a blanket yes.
+            assert_eq!(find_bundled_in(&exe_dir, "Nexus", "rotctld"), None);
+        }
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// The Linux directory is named after the executable, not the string "Nexus" — so the
+    /// candidate has to be built from the running binary's own name.
+    #[test]
+    fn the_linux_resource_dir_follows_the_executable_name() {
+        let cands = bundled_candidates("Nexus", "rigctld");
+        assert!(cands
+            .iter()
+            .any(|c| c == "../lib/Nexus/resources/hamlib/rigctld"));
+        let renamed = bundled_candidates("Tempo", "rigctld");
+        assert!(renamed
+            .iter()
+            .any(|c| c == "../lib/Tempo/resources/hamlib/rigctld"));
+        assert!(
+            !renamed.iter().any(|c| c.contains("/Nexus/")),
+            "the product name was hard-coded"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -3152,5 +3343,41 @@ mod rts_declaration_tests {
             !rts_is_deliberate(None, false, "COM3"),
             "an operator who ticks nothing must get exactly the behaviour they have today"
         );
+    }
+
+    /// A daemon states which radio it serves in its own launch arguments — the model AND the
+    /// device. Real `ps` output from the station this was written on (2026-08-17).
+    const PS: &str = "\
+  501 /Users/x/.local/bin/rigctld -m 1 -T 127.0.0.1 -t 4534
+  502 rigctld -vvv -m 1049 -r /dev/cu.usbserial-01AF7FED0 -s 38400 -T 127.0.0.1 -t 4533
+  503 rigctld -vvv -m 1051 -r /dev/cu.usbserial-01A98F800 -s 38400 -T 127.0.0.1 -t 45340
+  504 /Applications/Nexus.app/Contents/MacOS/Nexus";
+    #[test]
+    fn a_daemons_arguments_say_which_radio_it_is_driving() {
+        let ft710 = parse_ps_for_port(PS, 4533).expect("the daemon on 4533");
+        assert_eq!(ft710.model, Some(1049));
+        assert_eq!(
+            ft710.device.as_deref(),
+            Some("/dev/cu.usbserial-01AF7FED0"),
+            "the DEVICE is what separates two identical rigs"
+        );
+
+        // The stray that caused this: a dummy, launched with no -r at all.
+        let stray = parse_ps_for_port(PS, 4534).expect("the daemon on 4534");
+        assert_eq!(stray.model, Some(1));
+        assert_eq!(stray.device, None);
+        assert_eq!(stray.describe(), "Hamlib model 1");
+
+        // `-t 4534` must not match `-t 45340` — a substring match would have called the FTX-1's
+        // daemon the stray's and refused a perfectly good rig.
+        assert_eq!(
+            parse_ps_for_port(PS, 45340).and_then(|d| d.model),
+            Some(1051)
+        );
+
+        // A port nothing serves is "cannot tell", NOT "foreign".
+        assert!(parse_ps_for_port(PS, 4599).is_none());
+        // And a process list with no rigctld in it at all is the same answer.
+        assert!(parse_ps_for_port("  1 /sbin/launchd\n  2 /usr/bin/ssh-agent", 4533).is_none());
     }
 }

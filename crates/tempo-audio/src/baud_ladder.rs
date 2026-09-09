@@ -113,6 +113,33 @@ pub fn parse_civ_addr(show_conf: &str) -> Option<u8> {
     value.parse::<u8>().ok().filter(|addr| *addr != 0)
 }
 
+/// Can this rig be ASKED where it transmits under split, without the asking disturbing it?
+///
+/// ⭐ THREE STATES, NOT TWO, and the middle one is the whole reason this exists. Hamlib's
+/// capability dump reports each function as `Y`es, `E`mulated or `N`o (its own words,
+/// `dumpcaps.c`: "Status is either 'Y'es, 'E'mulated, 'N'o"), and **emulated means the VFO-swap
+/// dance**: switch to the TX VFO, read, switch back — on a non-targetable Icom it even turns
+/// split OFF and on again, carrying upstream's comment "broken if user changes split on rig".
+/// A privilege gate that asked an `E` rig would move the operator's radio to find out where it
+/// transmits, and a failure mid-sequence leaves it somewhere nobody chose.
+///
+/// So the operator is never asked to guess whether their radio is honest — the radio is asked.
+/// A blind "trust my rig" toggle would be ticked in good faith on an IC-7200, whose backend
+/// returns a zero-filled CACHE with RIG_OK, so "split is off" and "I cannot answer" are
+/// identical bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SplitDetect {
+    /// Reports both split state AND the TX frequency natively, and frequency is targetable —
+    /// the read is a real answer from the radio and may be trusted to GRANT permission.
+    Native,
+    /// Hamlib would emulate the answer by moving the radio. Never poll this; never trust it.
+    Emulated,
+    /// Cannot answer at all. Includes the cache-stub backends, where a confident "split off" is
+    /// indistinguishable from silence.
+    #[default]
+    Absent,
+}
+
 /// The two facts the ladder takes from Hamlib's `--dump-caps`, and nothing else.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RigCaps {
@@ -126,6 +153,10 @@ pub struct RigCaps {
     /// where it cannot receive, so a "frequency" outside every one of them did not come from
     /// this radio.
     pub rx_coverage: Vec<(u64, u64)>,
+    /// Whether the rig's split TX frequency may be READ and trusted — see [`SplitDetect`].
+    /// Requires all three of: `Can get Split VFO: Y`, `Can get Split Freq: Y`, and FREQ in
+    /// `Targetable features`. Anything less is `Emulated` (asking moves the radio) or `Absent`.
+    pub split_detect: SplitDetect,
 }
 
 impl RigCaps {
@@ -169,11 +200,22 @@ pub fn ladder_kind(rig_model: u32) -> LadderKind {
 pub fn parse_caps(dump_caps: &str) -> RigCaps {
     let mut caps = RigCaps::default();
     let mut in_rx = false;
+    // The three facts that together decide whether split may be READ (see `SplitDetect`).
+    let (mut get_vfo, mut get_freq, mut targetable_freq) = (None::<char>, None::<char>, false);
     for line in dump_caps.lines() {
         let line = line.trim_end_matches('\r');
         let indented = line.starts_with([' ', '\t']);
         if !indented {
             in_rx = line.starts_with("RX ranges #") && !line.contains(" status ");
+        }
+        if let Some(rest) = line.trim().strip_prefix("Targetable features:") {
+            targetable_freq = rest.split_whitespace().any(|t| t == "FREQ");
+        }
+        if let Some(rest) = line.trim().strip_prefix("Can get Split VFO:") {
+            get_vfo = rest.trim().chars().next();
+        }
+        if let Some(rest) = line.trim().strip_prefix("Can get Split Freq:") {
+            get_freq = rest.trim().chars().next();
         }
         if let Some(rest) = line.trim().strip_prefix("Serial speed:") {
             let mut halves = rest.trim().split("..");
@@ -193,6 +235,17 @@ pub fn parse_caps(dump_caps: &str) -> RigCaps {
             }
         }
     }
+    // ⚠️ BOTH reads must be NATIVE, and the frequency targetable. `Can get Split VFO: Y` alone
+    // is not enough — the TS-570D in the fixtures reports exactly that while its split FREQUENCY
+    // read is `E`, so Nexus would know the rig is split and have to MOVE IT to learn where.
+    caps.split_detect = match (get_vfo, get_freq) {
+        (Some('Y'), Some('Y')) if targetable_freq => SplitDetect::Native,
+        (Some('E'), _) | (_, Some('E')) => SplitDetect::Emulated,
+        // Native reads on a non-targetable rig still cost a VFO swap underneath.
+        (Some('Y'), Some('Y')) => SplitDetect::Emulated,
+        _ => SplitDetect::Absent,
+    };
+
     caps
 }
 
@@ -581,6 +634,59 @@ pub fn classify_hamlib_probe(read: &RigctlRead, caps: &RigCaps) -> BaudProbe {
 /// three are in the captures under `tests/fixtures/rigctld/`.
 const OPEN_FAILURE_FRAGMENTS: &[&str] = &["does not exist", "is already open", "Unable to open"];
 
+/// Text a serial open produces when the OS refused it for PERMISSIONS rather than because
+/// something else holds it. Lower-cased before matching, so the case a driver chooses does not
+/// decide whether an operator gets the right cure.
+///
+/// ⚠️ **Windows\'s "Access is denied." is DELIBERATELY NOT HERE**, and adding it would be a
+/// regression. On Windows that text is what a port ANOTHER PROGRAM IS HOLDING commonly returns,
+/// so the existing "close WSJT-X/flrig" cure is the right one — pinned by
+/// `an_unopenable_port_reports_the_os_error_not_a_guess`, which caught exactly this when the
+/// first version of this list was too wide. The Unix errno text below is the one that means a
+/// group membership, and it is the only one that should reroute the advice.
+const OPEN_DENIED_FRAGMENTS: &[&str] = &["permission denied"];
+
+/// The cure sentence for a port that would not open, chosen from what the OS actually said.
+///
+/// ⚠️ **Why this is not one sentence.** Until 2026-08-28 every open failure got "usually another
+/// program is holding the port — close WSJT-X/flrig". That is right for the commonest fault and
+/// USELESS for a permission refusal: no amount of closing software grants a group membership. It
+/// was reported from Ubuntu 24.04 with an FT-991A, where the operator was told to close programs
+/// he did not have running, and the same rig worked on Windows on the same machine.
+///
+/// The two are distinguishable, and the evidence is the measured table above [`open_failure_line`]:
+/// a HELD port reports "is already open" / "All pipe instances are busy" and never says "denied".
+/// So denial text is a permission fault on either platform — it is not a held port wearing
+/// different words.
+///
+/// The Unix cure names the group AND THE RE-LOGIN. The re-login is the step people miss: adding
+/// yourself to `dialout` does nothing to a session that is already running, so an operator who
+/// follows half the advice sees the same failure and concludes the advice was wrong.
+pub fn open_failure_cure(os_err: &str) -> &'static str {
+    let lower = os_err.to_ascii_lowercase();
+    if OPEN_DENIED_FRAGMENTS.iter().any(|f| lower.contains(f)) {
+        #[cfg(target_os = "linux")]
+        return "That is a permission refusal, not a busy port — closing other software will not \
+                help. On most Linux systems the serial port belongs to the `dialout` group and \
+                your user is not in it yet. Run `sudo usermod -aG dialout $USER`, then LOG OUT \
+                and back in (a group does not apply to a session that is already running) and \
+                test again.";
+        #[cfg(target_os = "macos")]
+        return "That is a permission refusal, not a busy port — closing other software will not \
+                help. Check that the interface's driver is installed and allowed under System \
+                Settings » Privacy & Security, then test again.";
+        // Windows reaches this only for a literal "permission denied", which is not the
+        // phrasing a held port produces there ("Access is denied." / "All pipe instances are
+        // busy" / "is already open") — so say the neutral thing rather than send them to a
+        // group that does not exist on this platform.
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        return "That is a permission refusal rather than a busy port. Check the port is not \
+                claimed by a driver or a policy, and that Nexus is allowed to use it.";
+    }
+    "Usually another program is holding the port: close other CAT/logging software (WSJT-X, \
+     flrig, N1MM) and test again."
+}
+
 /// The one line of a failed `rigctl` run that says the port could not be opened, if it said so.
 /// A busy COM port is one of the commonest CAT faults and its verdict ("close WSJT-X/flrig") is
 /// completely different from a baud verdict, so it must not be reported as silence.
@@ -791,10 +897,10 @@ pub fn compose_ladder_message(
                 _ => None,
             })
             .unwrap_or("unknown error");
+        let cure = open_failure_cure(os_err);
         return format!(
             "Test CAT could not open {port} at any rate (tried {tried}) — the system said: \
-             {os_err}. Usually another program is holding the port — close other CAT/logging \
-             software (WSJT-X, flrig, RS-BA1) and test again."
+             {os_err}. {cure}"
         );
     }
     let noise = if r
@@ -971,10 +1077,9 @@ pub fn compose_hamlib_ladder_message(r: &LadderReport, model_name: &str) -> Stri
         .iter()
         .find(|(_, o)| matches!(o, BaudProbe::OpenFailed(_)))
     {
+        let cure = open_failure_cure(e);
         return format!(
-            "Test CAT could not open {port} (tried {tried}) — the system said: {e}. Usually \
-             another program is holding the port: close other CAT/logging software (WSJT-X, \
-             flrig, N1MM) and test again."
+            "Test CAT could not open {port} (tried {tried}) — the system said: {e}. {cure}"
         );
     }
     let noise = if r
@@ -1304,6 +1409,78 @@ pub fn run(port: &str, configured_baud: u32, civ_addr: u8) -> LadderReport {
 
 #[cfg(test)]
 mod tests {
+
+    /// A port refused for PERMISSIONS is not a port another program is holding, and the cure is
+    /// not the same one. Reported 2026-08-28 on Ubuntu 24.04 LTS with an FT-991A: Test CAT said
+    /// "permission denied" and then told the operator to close WSJT-X — which cannot grant a
+    /// group membership. They close everything, test again, fail again, and conclude Nexus does
+    /// not do CAT on Linux. The same rig worked on Windows on the same machine.
+    ///
+    /// ⚠️ The two really are distinguishable, and the evidence is the measured table above
+    /// [`open_failure_line`]: a HELD port reports "is already open" / "All pipe instances are
+    /// busy". It never reports "denied". So text that says denied is a permission fault on
+    /// either platform, not a held port.
+    #[test]
+    fn a_permission_refusal_names_the_permission_cure_not_the_other_program() {
+        let denied = LadderReport {
+            port: "/dev/ttyUSB1".into(),
+            configured_baud: 38400,
+            not_tried: Vec::new(),
+            outcomes: vec![(
+                38400,
+                BaudProbe::OpenFailed(
+                    "serial_open: Unable to open /dev/ttyUSB1 - Permission denied".into(),
+                ),
+            )],
+        };
+        let m = compose_hamlib_ladder_message(&denied, "Yaesu FT-991A");
+        assert!(
+            !m.contains("WSJT-X"),
+            "closing WSJT-X cannot grant a permission: {m}"
+        );
+        assert!(
+            m.to_lowercase().contains("permission"),
+            "the verdict must name the fault: {m}"
+        );
+        // THE CURE IS PER-OS, so the assertion has to be too — `open_failure_cure` already
+        // branches on `target_os`, and this gate did not. `#[cfg(unix)]` admits macOS, where the
+        // cure is not the dialout group at all but the driver's Privacy & Security approval, so
+        // this assertion failed on every Mac while passing on Linux and being skipped on Windows.
+        // Splitting it keeps the coverage rather than narrowing the gate and losing it: each
+        // platform now asserts the cure it actually ships, and each names the step people miss.
+        #[cfg(target_os = "linux")]
+        assert!(
+            m.contains("dialout") && m.to_lowercase().contains("log out"),
+            "on Linux the cure is the group AND the re-login, which is the step people miss: {m}"
+        );
+        #[cfg(target_os = "macos")]
+        assert!(
+            m.contains("Privacy & Security"),
+            "on macOS a serial refusal is a driver the system has not been allowed to load, and \
+             the cure is in Settings — the dialout group does not exist here: {m}"
+        );
+
+        // POSITIVE CONTROL — a genuinely HELD port must still get the other-program cure, or
+        // this "fix" would just have deleted advice that is right for the commoner fault.
+        let held = LadderReport {
+            port: "/dev/ttyUSB1".into(),
+            configured_baud: 38400,
+            not_tried: Vec::new(),
+            outcomes: vec![(
+                38400,
+                BaudProbe::OpenFailed("serial_open: /dev/ttyUSB1 is already open".into()),
+            )],
+        };
+        let m = compose_hamlib_ladder_message(&held, "Yaesu FT-991A");
+        assert!(
+            m.contains("WSJT-X"),
+            "a held port still names the cure: {m}"
+        );
+        assert!(
+            !m.to_lowercase().contains("dialout"),
+            "and must not send them chasing a permission they already have: {m}"
+        );
+    }
     use super::*;
     use crate::civ::frame::Frame;
 
@@ -2371,5 +2548,39 @@ mod tests {
         );
         let m = compose_ladder_message(&r, "Icom IC-7610", 0x98, false, true, false);
         assert!(m.contains("not valid CI-V"), "{m}");
+    }
+
+    /// THE THREE-STATE VERDICT, against the two real capability dumps in the fixtures — which
+    /// happen to be a perfect natural pair.
+    ///
+    /// The TS-570D is the case that makes this necessary: it reports `Can get Split VFO: Y` but
+    /// `Can get Split Freq: E`. So Nexus could learn the rig IS split and would then have to
+    /// MOVE THE RADIO to learn where it transmits. Requiring only the VFO line — the obvious
+    /// reading — would have shipped exactly that.
+    #[test]
+    fn split_detection_is_offered_only_when_the_rig_can_answer_without_being_disturbed() {
+        let ft847 = parse_caps(include_str!("../tests/fixtures/rigctld/caps_ft847.log"));
+        assert_eq!(
+            ft847.split_detect,
+            SplitDetect::Native,
+            "FT-847 reports both split reads natively with FREQ targetable — detection is safe"
+        );
+
+        let ts570 = parse_caps(include_str!("../tests/fixtures/rigctld/caps_ts570d.log"));
+        assert_eq!(
+            ts570.split_detect,
+            SplitDetect::Emulated,
+            "TS-570D's split FREQUENCY read is emulated (a VFO swap) — must never be polled"
+        );
+
+        // A dump we could not read at all says nothing, and silence is not permission.
+        assert_eq!(parse_caps("").split_detect, SplitDetect::Absent);
+        // The cache-stub shape: says it can report split, cannot report the frequency.
+        let stub = "Targetable features: FREQ\nCan get Split VFO:\tY\nCan get Split Freq:\tN\n";
+        assert_eq!(parse_caps(stub).split_detect, SplitDetect::Absent);
+        // Native reads but NOT targetable — the read still costs a swap underneath.
+        let untargetable =
+            "Targetable features: MODE\nCan get Split VFO:\tY\nCan get Split Freq:\tY\n";
+        assert_eq!(parse_caps(untargetable).split_detect, SplitDetect::Emulated);
     }
 }

@@ -91,6 +91,14 @@ pub trait AudioBackend {
     fn set_monitor(&mut self, _enabled: bool, _device: &str, _level: f32) -> Result<(), String> {
         Ok(())
     }
+
+    /// Mute the headphone monitor for the duration of a transmission.
+    ///
+    /// The monitor plays what the capture callback hears, and while the rig is keyed that is not
+    /// the band — on many radios it is the rig's own MONI, arriving through the monitor ring and
+    /// therefore DELAYED. Delayed sidetone is hard to talk over. A no-op for backends with no
+    /// monitor.
+    fn set_monitor_tx_mute(&mut self, _muted: bool) {}
     /// Open (`Some(name)`) or close (`None`) a transient SECOND input stream capturing
     /// the operator's voice from a dedicated mic, used only while a recording is in
     /// progress — so "record a voice message" captures the mic, not the shared rig-codec

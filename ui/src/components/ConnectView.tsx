@@ -21,7 +21,7 @@ import type {
   Station,
   WorkableCard,
 } from '../types'
-import type { AlertView, MufStation, NoaaScalesView } from '../types'
+import type { AlertView, AmpStatus, MufStation, NoaaScalesView } from '../types'
 import type { Theme } from '../useTheme'
 import { getPathOutlook, getBandOutlook, getGettingOut, getSpaceWxScales, getKc2gMuf, getXrayNow, getDxpedWindows } from '../api'
 import type { DxpedWindow } from '../types'
@@ -110,6 +110,9 @@ interface Props {
   onPoint?: (call: string) => void
   /** Click a map satellite → open it in the Satellites section (forwarded to MapView). */
   onSelectSat?: (name: string) => void
+  /** The active radio's amplifier status, off App's existing 300 ms snapshot poll. Null when
+   * none is configured (the Amplifier pane then renders nothing). Read-only; it stops nothing. */
+  amp?: AmpStatus | null
   /** Open Connect in its own window (omit when already standalone). */
   onPopOut?: () => void
 }
@@ -124,6 +127,7 @@ export function ConnectView({
   onWorkSpot,
   needByCall,
   needAlerts,
+  amp,
   onPoint,
   onSelectSat,
   onPopOut,
@@ -220,16 +224,37 @@ export function ConnectView({
   // + MUF to a long-haul DX ring. Fetched only when no station is selected; refreshed
   // on the prop cadence so the modeled day tracks the current space weather.
   const [bandOutlook, setBandOutlook] = useState<PathPrediction | null>(null)
+  // ⭐ KEPT WARM UNCONDITIONALLY, on its own cadence — like `getout` below.
+  //
+  // This used to early-return `if (selectedCall) return` and hang off `prop?.asOf`. Both
+  // were written for the ONE consumer visible from here: the map/outlook strip, which
+  // shows `pathPred` instead whenever a station is selected (:419/:441), so it genuinely
+  // does not need this value then. But `bandOutlook` is also read UNCONDITIONALLY by three
+  // panes — Chase (ChasePane.tsx:44), the Chase feed (ChaseFeedPane.tsx:25) and the
+  // band-outlook heatmap (connect/panes.tsx:274/:569) — and for them the guard was
+  // starvation: selecting a station froze their openness/"best window" column at whatever
+  // it last held, indefinitely, while every sibling pane kept updating off its own poll.
+  // That is the operator report ("the Chase section stays stuck on old information"), and it
+  // was never pop-out-specific — the detached window only made it obvious, because it sits
+  // on a second monitor for hours with a selection active.
+  //
+  // The `prop?.asOf` dep was the second half: `asOf` is stamped only on a real SWPC fetch
+  // and served from a 300 s cache (PROP_TTL_SECS, src-tauri/src/lib.rs:1239), so even with
+  // nothing selected this refreshed at most every five minutes rather than on any poll.
+  // A plain interval is both simpler and honest about the cadence.
   useEffect(() => {
-    if (selectedCall) return
     let live = true
-    getBandOutlook()
-      .then((p) => live && setBandOutlook(p))
-      .catch(() => {})
+    const load = () =>
+      getBandOutlook()
+        .then((p) => live && setBandOutlook(p))
+        .catch(() => {})
+    load()
+    const id = window.setInterval(load, 60_000)
     return () => {
       live = false
+      window.clearInterval(id)
     }
-  }, [selectedCall, prop?.asOf])
+  }, [])
   const outlookOpen = bandOutlook?.bands.filter((b) => b.workability !== 'Closed') ?? []
   // "Am I getting out?" — who is hearing me now (observed). Polled on the prop
   // cadence; the backend reads the live PSK Reporter / RBN firehose each call.
@@ -324,6 +349,7 @@ export function ConnectView({
     prov,
     needByCall,
     needAlerts: needAlerts ?? [],
+    amp: amp ?? null,
     selectedCall,
     selStation,
     selSpot,

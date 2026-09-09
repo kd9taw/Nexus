@@ -3,8 +3,11 @@
 Two portable/event workflows live here: **Field Day** (ARRL or Winter Field Day),
 which reshapes the app for the weekend and pushes to the club's master log in
 real time, and the **POTA/SOTA hunter**, which finds activators and tags your
-contact for upload. Both are opt-in sections — enable them in the first-run
-wizard or [Settings ▸ Appearance ▸ Features](settings-reference.md#features).
+contact for upload. The hunter ships enabled — the wizard turns everything on.
+**Field Day mode is the exception**: it stays off until you switch it on in
+[Settings ▸ Appearance ▸ Features](settings-reference.md#features) or
+[Contesting ▸ Field Day Setup](settings-reference.md#field-day-setup), because it
+reshapes the app for a weekend most operators are not having.
 
 ---
 
@@ -17,6 +20,12 @@ mode-class) dupe checking, and a scoreboard.
 <!-- TODO: capture screenshot — Field Day mode — exchange entry, countdown, live scoreboard -->
 
 ### Set it up first
+
+![The Field Day Setup block in Settings: a Field Day mode switch turned off, then Event (ARRL Field Day selected, Winter Field Day beside it), an FD Class box, an ARRL Section box, and a Power multiplier row of ×5 QRP / battery, ×2 ≤100W (selected) and ×1 >100W. A "Check for rules updates" button sits under them beside "2026 rules · data 2026-08-29".](../img/manual/settings-field-day.webp)
+
+*Field Day Setup in Settings ▸ Contesting, Nexus 1.10.3, with Field Day mode
+off. The class, section and multiplier shown are one station's own entries —
+set yours from the rules for the event you are in.*
 
 In [Settings ▸ Contesting ▸ Field Day Setup](settings-reference.md#field-day-setup):
 
@@ -36,6 +45,14 @@ Field Day is **all-mode**: once you initiate a contact, the digital sequencer
 runs the FD exchange autonomously, and the [CW](cw.md) and [Phone](phone.md)
 cockpits' log strips become FD entries with class/section and **shared dupe
 checking** — one laptop covers the whole operation.
+
+![The Field Day header and score panel: class and section, QSO and section counts, the score arithmetic, and the sections board.](../img/manual/fieldday-scoreboard.webp)
+
+*A Field Day **test event** in Nexus 1.10.3 — a fixture, not a submitted entry. The banner
+names the event and the rules year it is scoring against; the counters and the arithmetic line
+show the whole sum (**QSO pts 903 × power ×2 = 1806 + bonuses 400 = 2206**), and the sections
+board marks what has been worked out of 83. The per-contact exchange — class and section — is
+typed in the cockpit log strips and lists under this panel.*
 
 The one strip that does **not** switch is the log strip in the
 [Satellites](satellites.md) section: it is not wired to Field Day yet, so a
@@ -78,6 +95,56 @@ so JTAlert/GridTracker auto-activate their FD behavior too.
 Configure [N3FJP](settings-reference.md#n3fjp-integration-club-master-log) and
 [N1MM+](settings-reference.md#n1mm-integration) in Settings ▸ Logging & Connectors.
 
+### Run the whole club on Nexus (club sync)
+
+![The Field Day Club Sync settings block: a "Host a club event" switch turned off, an Event name box reading "N9WH Field Day 2026", a Host port box reading 42073, a "Join event at" box showing a host:port placeholder, and a "Find club events" button.](../img/manual/settings-club-sync.webp)
+
+*Field Day Club Sync in Settings ▸ Contesting, Nexus 1.10.3. Hosting is off
+here — nothing is listening on the network until you turn it on.*
+
+If every position runs Nexus, you don't need a third-party master log at all.
+One PC at the site turns on **Settings ▸ Contesting ▸ Field Day Club Sync ▸
+Host a club event**; every other position presses **Find club events** (or
+types the host's address) and joins. From then on:
+
+![The club board: a synced chip, the host callsign, club totals, and one row per operating position with band, mode, operator, QSO count and rate.](../img/manual/fieldday-club-board.webp)
+
+*The club board in Nexus 1.10.3, torn off into its own window. The chip beside **Club** is the
+sync state, the host is named next to it, and the club totals sit on the right; each row is one
+operating position, and the greyed **GOTA** row carries a ⚠ because the host has not heard from
+it inside the stale line. **This is fixture state, not two instances that actually synced** —
+no second Nexus was running, so the picture shows what the board looks like, not evidence that
+a club sync worked.*
+
+- Each logged contact streams to the host the moment it lands; the host merges
+  everything into one club log and pushes the club totals back.
+- Every position gets a **club dupe warning while typing** — if another tent
+  already worked that call on this band and mode, you're told before you call.
+  It's a warning, not a lock (N3FJP semantics); your own log's dupes still
+  refuse.
+- A live **band board** shows where every position is (band, mode, operator,
+  rate), stale-marked the moment one goes quiet. It has its own **Club Board**
+  button in the left rail under Field Day, and its own window — one click, on a
+  second monitor or a corner of the big one, in bigger type than the dashboard
+  copy because it is watched from across the tent. **Pop out board** in the club
+  header opens the same window. The rail button is there whenever Field Day is
+  on, before you have switched sync on: with sync off the window names the route
+  that starts it rather than showing an empty board. The web scoreboard below
+  carries the same band and mode per position, so the screen facing the room
+  answers "who's on 20?" too.
+- The sync chip tells the truth: **Synced**, **Behind n**, or **Offline** —
+  contacts logged offline are journaled and re-sent automatically on
+  reconnect. If the host PC dies, enable hosting on any other position;
+  everyone re-joins and nothing is lost.
+- The host exports the merged **club Cabrillo / ADIF**, deduplicated the way
+  the rules score it (earliest contact wins).
+
+Hosting is the one time Nexus listens beyond the local computer, and only
+while the toggle is on. There is no join password — a club site LAN is
+trusted; the connection can only carry log rows, never key a transmitter or
+change a setting. The N3FJP/N1MM pushes above keep working alongside if you
+want both.
+
 ---
 
 ## POTA / SOTA hunter
@@ -85,7 +152,9 @@ Configure [N3FJP](settings-reference.md#n3fjp-integration-club-master-log) and
 The hunter is for **finding activators, not running activations**. It polls the
 official feeds (pota.app and SOTAwatch) every 60 s.
 
-<!-- TODO: capture screenshot — the POTA/SOTA hunter — spot list with NEW PARK and BAND OPEN badges -->
+![The POTA / SOTA hunter: an "I'm activating" row with a program selector and a reference box, a line reading "94,467 parks — searchable in the log" with Update, Import CSV and Import Hunted Parks buttons, then POTA / SOTA / Both toggles, BAND and MODE filter chips, a SORT selector set to "Workable now", and spot rows — callsign, park reference, a NEW PARK badge, the park's name, frequency, band and mode, each with a HUNT button.](../img/manual/pota-hunter.webp)
+
+*The POTA / SOTA hunter in Nexus 1.10.3, showing live activators.*
 
 ### The tour
 
@@ -98,6 +167,14 @@ chips, park names, and two ranking badges:
   the last 15 minutes.
 
 ### Hunt an activator
+
+![The POTA/SOTA panel with an activation banner across the top and a list of activators, each with a Hunt button.](../img/manual/pota-activation.webp)
+
+*POTA / SOTA in Nexus 1.10.3 with an activation of my own running — the green banner counts the
+contacts that will be stamped with the park. Under it the hunter list: **NEW PARK** on
+references never logged, **BAND OPEN** where the band is two-way now, and **HUNT** on every
+row. The tags themselves land in the logbook's **PARK** column. Fixture spots and a fixture
+activation: nothing was hunted, logged or uploaded to POTA.*
 
 1. Click **HUNT** on a spot. Nexus atomically registers the park as a pending
    hunt target, QSYs to the spot's frequency and mode, and opens the right

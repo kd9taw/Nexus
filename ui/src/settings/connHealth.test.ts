@@ -45,6 +45,23 @@ describe('connState covers every row a connector can be in', () => {
     expect(connState(cred({ lastFailureUnix: 100 }))).toBe('failing')
   })
 
+  it('a failure in the SAME SECOND as the success before it is failing', () => {
+    // ⛔ The stamps are whole seconds (`now_unix`), so "newer" and "same second" are not the
+    // same question, and a strict `>` answered the wrong one: an upload that succeeded and
+    // then failed inside one second rendered GREEN and stayed green until the next failure.
+    // Reachable, not theoretical — the auto-push worker loops with no spacing between legs
+    // and a Cloudlog instance on the LAN answers in milliseconds.
+    //
+    // The tie resolves to `failing` because it is the honest half of an unknowable order:
+    // a wrong `failing` is corrected by the next successful push, a wrong `working` is a
+    // connector claiming to work at the moment it does not — the same lie in a new costume,
+    // and #245's whole subject.
+    expect(connState(cred({ lastSuccessUnix: 100, lastFailureUnix: 100 }))).toBe('failing')
+    // The control: the reverse ordering must still recover, or "the tie is red" would be
+    // satisfied by a comparison that simply always reads red.
+    expect(connState(cred({ lastSuccessUnix: 101, lastFailureUnix: 100 }))).toBe('working')
+  })
+
   it('deliberately switched off is not a problem', () => {
     expect(connState(cred({ enabled: false }))).toBe('off')
   })
@@ -109,6 +126,17 @@ describe('whenText says which thing happened', () => {
 
   it('reports the last success when working', () => {
     expect(whenText(cred({ lastSuccessUnix: at(600) }), 'working', now)).toBe('last upload 10m ago')
+  })
+
+  it('says lookup, not upload, for a connector that never uploads', () => {
+    // #245 gave the QRZ callbook row real timestamps for the first time, and the row went
+    // straight to "last upload 3m ago" — for a connector whose own `uploads` flag is false
+    // and which has never uploaded anything. The line is the panel's whole explanation of
+    // what the green dot means, so naming the wrong event undoes the fix it is reporting.
+    const callbook = cred({ id: 'qrz-xml', uploads: false, lastSuccessUnix: at(180) })
+    expect(whenText(callbook, 'working', now)).toBe('last lookup 3m ago')
+    // The control: an uploading connector is unchanged.
+    expect(whenText(cred({ lastSuccessUnix: at(180) }), 'working', now)).toBe('last upload 3m ago')
   })
 
   it('says nothing rather than something empty when there is no history', () => {

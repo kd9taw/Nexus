@@ -56,6 +56,7 @@ fn qso(call: &str, band: &str, mode: &str, when: u64) -> QsoRecord {
         state: None,
         band: band.into(),
         freq_mhz: 14.074,
+        freq_rx_mhz: None,
         mode: mode.into(),
         rst_sent: Some("-10".into()),
         rst_rcvd: Some("-12".into()),

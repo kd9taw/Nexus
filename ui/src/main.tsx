@@ -1,4 +1,4 @@
-import { StrictMode } from 'react'
+import { lazy, StrictMode, Suspense } from 'react'
 import { createRoot } from 'react-dom/client'
 import App from './App'
 import { ErrorBoundary } from './components/ErrorBoundary'
@@ -7,6 +7,9 @@ import { redockAllStalePopouts } from './features/panelState'
 import { loadDurable } from './features/durableStore'
 import { initLocale, installCatalog } from './i18n'
 import { DE } from './i18n/de'
+import { ES } from './i18n/es'
+import { FR } from './i18n/fr'
+import { JA } from './i18n/ja'
 import { installExternalLinkInterceptor } from './externalLinks'
 import { isTauri, openExternalUrl } from './api'
 import { pushToast } from './toast'
@@ -21,6 +24,8 @@ import './cockpit-panes.css'
 // A torn-off window (created by open_panel_window) loads the app at `?panel=<name>`
 // and renders just that panel for multi-monitor use.
 const panel = new URLSearchParams(window.location.search).get('panel')
+// Development-only observer window. The existing main window continues to operate.
+const NativeMonitor = import.meta.env.DEV ? lazy(() => import('./remote-monitor/native')) : null
 
 // Tag the document so per-panel CSS can target one torn-off window. No rule uses it
 // today (the Needed window's font bump was removed when pop-outs stopped being pinned to
@@ -75,7 +80,9 @@ const tree = (
   <StrictMode>
     {panel ? (
       <ErrorBoundary label={t('crash.panelWindow', { panel })} action={reload}>
-        <DetachedPanel panel={panel} />
+        {NativeMonitor && panel === 'remoteMonitor' ? (
+          <Suspense fallback={null}><NativeMonitor /></Suspense>
+        ) : <DetachedPanel panel={panel} />}
       </ErrorBoundary>
     ) : (
       <ErrorBoundary label={APP_NAME} action={reload}>
@@ -104,6 +111,9 @@ void loadDurable().finally(() => {
   // catalog. Static imports, never a fetch: a catalog that arrives over the network is a
   // catalog that is absent in a field-day tent.
   installCatalog('de', DE)
+  installCatalog('es', ES)
+  installCatalog('fr', FR)
+  installCatalog('ja', JA)
   initLocale()
   createRoot(document.getElementById('root')!).render(tree)
 })

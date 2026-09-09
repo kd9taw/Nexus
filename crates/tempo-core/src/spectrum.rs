@@ -247,42 +247,9 @@ pub fn power_spectrum_n(
         return Vec::new();
     }
     let fft_n = win.n();
-    let mut out = FFT_SCRATCH.with(|sc| {
-        let mut buf = sc.borrow_mut();
-        // Load the last fft_n samples (front-zero-padded if we have fewer), applying the Hann window.
-        let n = samples.len().min(fft_n);
-        let pad = fft_n - n;
-        for v in buf[..pad].iter_mut() {
-            *v = 0.0;
-        }
-        let src = &samples[samples.len() - n..];
-        // Remove the DC offset before windowing so a bias in the capture can't leak into the low
-        // bins (the bin-0 skip below only drops the exact-DC/Nyquist bin, not the leakage skirt).
-        let mean = if n > 0 {
-            src.iter().sum::<f32>() / n as f32
-        } else {
-            0.0
-        };
-        for i in 0..n {
-            buf[pad + i] = (src[i] - mean) * hann(pad + i, fft_n);
-        }
-        // In-place real FFT → fft_n/2 complex bins; bin k is centred at k·sr/fft_n Hz. rfft packs
-        // Nyquist into bin 0's imaginary part, so bin 0 (DC + Nyquist) is skipped entirely.
-        //
-        // One arm per length because `microfft` is a FIXED-SIZE kernel — that is why it allocates
-        // nothing and why a second FFT per tick costs ~30 us. `microfft` 0.6 already enables
-        // rfft_256..rfft_4096, so none of this needed a Cargo change.
-        let spec: &mut [microfft::Complex32] = match win {
-            WindowN::Fast => microfft::real::rfft_1024(
-                (&mut buf[..1024]).try_into().expect("scratch covers 1024"),
-            ),
-            WindowN::Balanced => microfft::real::rfft_2048(
-                (&mut buf[..2048]).try_into().expect("scratch covers 2048"),
-            ),
-            WindowN::Sharp => microfft::real::rfft_4096(
-                (&mut buf[..4096]).try_into().expect("scratch covers 4096"),
-            ),
-        };
+    let mut out = with_rfft(samples, win, |spec| {
+        // Bin k is centred at k·sr/fft_n Hz; rfft packs Nyquist into bin 0's imaginary
+        // part, so bin 0 (DC + Nyquist) is skipped entirely.
         let hz_per_bin = sr / fft_n as f32;
         let k_max = (fft_n / 2 - 1) as isize;
         let span = f_hi - f_lo;
@@ -343,6 +310,205 @@ pub fn power_spectrum_n(
         *v = db_display(*v, fft_n);
     }
     out
+}
+
+/// One tone found in the receive audio — the measurement behind the CW zero-beat indicator.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ToneEstimate {
+    /// Centre frequency in Hz, interpolated across the peak's neighbouring bins so the
+    /// reading is far finer than the 5.86 Hz raw grid (see [`dominant_tone`]).
+    pub hz: f32,
+    /// How far the peak stands above the in-band noise floor, in dB. Reported so a caller
+    /// can show CONFIDENCE rather than a bare number.
+    pub snr_db: f32,
+}
+
+/// How far a peak must stand above the band's median bin power to count as a signal, in dB.
+///
+/// ⚠️ THIS NUMBER IS A FALSE-ALARM BUDGET, not a taste setting. Over a ~170-bin search band
+/// of pure noise the LOUDEST bin already sits ~8.7 dB above the median (the expected maximum
+/// of N exponentials is `ln N` times the mean, and the median is `ln 2` times it), so any
+/// threshold near that value paints a confident zero-beat reading on a dead band several
+/// times a minute. At 15 dB the false-alarm probability per measurement is ~1e-7, i.e. never.
+///
+/// What it costs: 15 dB in a 5.86 Hz bin is about -4 dB SNR in a 500 Hz CW filter — a signal
+/// the operator can plainly hear. A signal weaker than that reads as "no signal", which is
+/// the honest answer for a tuning aid: a needle swinging at noise is worse than a blank one.
+pub const MIN_TONE_SNR_DB: f32 = 15.0;
+
+/// Load / DC-remove / Hann / real-FFT — the front half every consumer of this module shares,
+/// handing `f` the packed half-spectrum. Bin `k` is centred at `k·sr/win.n()` Hz; bin 0 holds
+/// DC in its real part and Nyquist in its imaginary part and is never a frequency.
+///
+/// Shared rather than duplicated because the DC removal and the Hann indexing are exactly the
+/// details that drift when copied: two callers with subtly different front ends would put the
+/// zero-beat reading and the waterfall picture on different data. `the_waterfall_row_is_byte_stable`
+/// pins the row across this sharing.
+fn with_rfft<R>(samples: &[f32], win: WindowN, f: impl FnOnce(&[microfft::Complex32]) -> R) -> R {
+    let fft_n = win.n();
+    FFT_SCRATCH.with(|sc| {
+        let mut buf = sc.borrow_mut();
+        // Load the last fft_n samples (front-zero-padded if we have fewer), applying the Hann window.
+        let n = samples.len().min(fft_n);
+        let pad = fft_n - n;
+        for v in buf[..pad].iter_mut() {
+            *v = 0.0;
+        }
+        let src = &samples[samples.len() - n..];
+        // Remove the DC offset before windowing so a bias in the capture can't leak into the low
+        // bins (the bin-0 skip in the callers only drops the exact-DC/Nyquist bin, not the
+        // leakage skirt).
+        let mean = if n > 0 {
+            src.iter().sum::<f32>() / n as f32
+        } else {
+            0.0
+        };
+        for i in 0..n {
+            buf[pad + i] = (src[i] - mean) * hann(pad + i, fft_n);
+        }
+        // In-place real FFT → fft_n/2 complex bins. One arm per length because `microfft` is a
+        // FIXED-SIZE kernel — that is why it allocates nothing and why an FFT costs ~30 us.
+        let spec: &mut [microfft::Complex32] = match win {
+            WindowN::Fast => microfft::real::rfft_1024(
+                (&mut buf[..1024]).try_into().expect("scratch covers 1024"),
+            ),
+            WindowN::Balanced => microfft::real::rfft_2048(
+                (&mut buf[..2048]).try_into().expect("scratch covers 2048"),
+            ),
+            WindowN::Sharp => microfft::real::rfft_4096(
+                (&mut buf[..4096]).try_into().expect("scratch covers 4096"),
+            ),
+        };
+        f(spec)
+    })
+}
+
+/// Hann main-lobe width in raw bins, null to null. Two tones closer than this cannot be told
+/// apart by a 2048-point window at all, so peaks within one lobe of a stronger one are the
+/// SAME signal and are suppressed rather than offered as a second candidate.
+const LOBE_BINS: usize = 4;
+
+/// **THE CW ZERO-BEAT MEASUREMENT.** The dominant tone in `[lo_hz, hi_hz)`, or `None` when
+/// nothing in that band stands `min_snr_db` above the band's own noise floor.
+///
+/// `None` IS A RESULT, and the caller must render it as "nothing to tune to". A CW aid that
+/// invents a confident number on a dead band, or holds the last one it saw, points the
+/// operator at a signal that is not there.
+///
+/// **WHICH SIGNAL, when several are in the band: NEAREST `prefer_hz`, strongest as the
+/// tiebreak.** `prefer_hz` is the operator's own CW pitch — the marker already drawn on the
+/// scope — so the reading follows the station he is closing in on rather than jumping to
+/// whoever is loudest 300 Hz away, which is precisely the moment a tuning aid must not move.
+/// Candidates are qualified by SNR *first*, so "nearest" can never mean a noise bump.
+///
+/// **ACCURACY.** Raw bins are `sr/2048` (5.86 Hz at 12 kHz), and the peak is refined by fitting
+/// a parabola to the log-power of the peak bin and its two neighbours — the standard sub-bin
+/// estimator, and an unusually good fit under a Hann window because the lobe is very nearly
+/// parabolic in dB. Measured against tones generated by [`crate::cw::morse_samples`] the error
+/// is well under 2 Hz, which is finer than any rig's CW tuning step.
+///
+/// The window is fixed at [`WindowN::Balanced`] — the same 171 ms the waterfall row uses — so
+/// the number describes exactly the audio the operator is looking at on the scope.
+pub fn dominant_tone(
+    samples: &[f32],
+    sr: f32,
+    lo_hz: f32,
+    hi_hz: f32,
+    prefer_hz: f32,
+    min_snr_db: f32,
+) -> Option<ToneEstimate> {
+    let win = WindowN::Balanced;
+    let fft_n = win.n();
+    // Spelled out rather than as negated comparisons so a NaN argument is rejected rather
+    // than silently passing one of them (`hi_hz <= lo_hz` is false for NaN).
+    if samples.is_empty()
+        || !sr.is_finite()
+        || sr <= 0.0
+        || !lo_hz.is_finite()
+        || !hi_hz.is_finite()
+        || hi_hz <= lo_hz
+    {
+        return None;
+    }
+    let hz_per_bin = sr / fft_n as f32;
+    let k_top = fft_n / 2 - 1;
+    // Bin 0 is DC+Nyquist and never a frequency, so the search starts at 1 whatever `lo_hz` says.
+    let k_lo = (lo_hz / hz_per_bin).ceil().max(1.0) as usize;
+    let k_hi = ((hi_hz / hz_per_bin).floor().max(0.0) as usize).min(k_top);
+    // A parabolic fit needs a neighbour each side, so a band narrower than a few bins has
+    // nothing this function can honestly answer.
+    if k_hi < k_lo + 2 {
+        return None;
+    }
+
+    let power: Vec<f32> = with_rfft(samples, win, |spec| {
+        (k_lo..=k_hi)
+            .map(|k| {
+                let c = spec[k];
+                c.re * c.re + c.im * c.im
+            })
+            .collect()
+    });
+
+    // The band's own noise floor, as the MEDIAN bin power. Median rather than mean because a
+    // strong carrier drags a mean upward by its own presence — the statistic must describe
+    // the background, not the signal being measured against it.
+    let mut sorted = power.clone();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let noise = sorted[sorted.len() / 2].max(1e-30);
+    let thresh = noise * 10f32.powf(min_snr_db / 10.0);
+
+    // Candidate peaks: a local maximum, above the SNR floor, AND SHAPED LIKE A LOBE. The shape
+    // test is what separates a tone from a hot noise bin: under a Hann window a real tone puts
+    // at least half its peak power into the two neighbouring bins (0.25 + 0.25 for an exactly
+    // bin-centred tone, more for any other offset), while independent noise bins average a
+    // small fraction of a spike. It costs nothing and it is the difference between an
+    // indicator that rests on a quiet band and one that twitches.
+    let mut cands: Vec<(usize, f32)> = Vec::new();
+    for i in 1..power.len() - 1 {
+        let p = power[i];
+        if p < thresh || p <= power[i - 1] || p < power[i + 1] {
+            continue;
+        }
+        if power[i - 1] + power[i + 1] < 0.4 * p {
+            continue; // a one-bin spike, not a lobe
+        }
+        cands.push((i, p));
+    }
+    // One lobe is one signal: keep the strongest peak in each lobe and drop the shoulders.
+    cands.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    let mut kept: Vec<(usize, f32)> = Vec::new();
+    for c in cands {
+        if kept.iter().any(|k| k.0.abs_diff(c.0) < LOBE_BINS) {
+            continue;
+        }
+        kept.push(c);
+    }
+
+    // NEAREST THE MARKER, strongest as the tiebreak.
+    let coarse = |i: usize| (k_lo + i) as f32 * hz_per_bin;
+    let (i, peak) = kept.into_iter().min_by(|a, b| {
+        let da = (coarse(a.0) - prefer_hz).abs();
+        let db = (coarse(b.0) - prefer_hz).abs();
+        da.partial_cmp(&db)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal))
+    })?;
+
+    // Parabolic refinement on log power. The log is what makes the fit good under a Hann
+    // window; its base is irrelevant (a constant scale cancels in the vertex).
+    let lg = |p: f32| p.max(1e-30).log10();
+    let (a, b, c) = (lg(power[i - 1]), lg(power[i]), lg(power[i + 1]));
+    let denom = a - 2.0 * b + c;
+    let delta = if denom.abs() > 1e-12 {
+        (0.5 * (a - c) / denom).clamp(-0.5, 0.5)
+    } else {
+        0.0
+    };
+    Some(ToneEstimate {
+        hz: ((k_lo + i) as f32 + delta) * hz_per_bin,
+        snr_db: 10.0 * (peak / noise).log10(),
+    })
 }
 
 #[cfg(test)]
@@ -723,6 +889,247 @@ mod tests {
         assert!(
             (peak_f - 1500.0).abs() < 40.0,
             "short-input peak near 1500 Hz (got {peak_f} Hz)"
+        );
+    }
+
+    /// THE SHARED FFT FRONT-END DID NOT MOVE THE ROW.
+    ///
+    /// `power_spectrum_n` IS the picture — the FT waterfall, both cockpit scopes and the rig
+    /// scope all read its output — and its front half (load / DC-remove / Hann / rfft) is now
+    /// shared with [`dominant_tone`] through `with_rfft`. Sharing a hot DSP front end is
+    /// exactly the change that moves a display with nothing visibly wrong, so the row is
+    /// pinned here at ALL THREE window lengths against a deterministic input.
+    ///
+    /// ⚠️ WHAT IT DOES NOT PROVE, written down rather than papered over: the Hann window is
+    /// indexed by ABSOLUTE buffer position (`hann(pad + i)`), and during warm-up — fewer
+    /// samples than the window — mis-indexing it to `hann(i)` is NOT OBSERVABLE in the row.
+    /// It moves the signal from under the window's falling tail to under its rising head,
+    /// which is symmetric: measured, the peak lands in the same bin at the same level either
+    /// way. There is no assertion here that would fail on it, and inventing one that only
+    /// looks like it would is worse than saying so.
+    ///
+    /// Pinned with a TOLERANCE, not bit-for-bit: `hann` calls `cos` and the axis calls
+    /// `log10`, and libm differs between platforms — an exact pin would be a false alarm on
+    /// somebody else's CI (the same reasoning as the `rxdsp_reference_row.txt` fixture, which
+    /// pins the shipped Balanced row itself). What a broken front end does is not a rounding
+    /// difference: a wrong Hann index, a lost DC removal or a mis-padded warm-up moves peaks
+    /// between bins and shifts levels by whole dB, which is orders of magnitude above this.
+    #[test]
+    fn the_shared_fft_front_end_did_not_move_the_row() {
+        let sr = 12_000.0;
+        // Three tones at different levels, plus a DC offset so the DC removal is pinned too.
+        let mut audio = tones(&[(700.0, 1.0), (1500.0, 0.1), (2600.0, 0.01)], sr, 4096);
+        for s in audio.iter_mut() {
+            *s += 0.02;
+        }
+        for win in [WindowN::Fast, WindowN::Balanced, WindowN::Sharp] {
+            let row = power_spectrum_n(&audio, sr, 0.0, 4000.0, 512, win);
+            assert_eq!(row.len(), 512);
+            // Each tone peaks in ITS OWN display bin (7.8125 Hz per bin over 0-4000).
+            for (hz, want_db) in [(700.0f32, 0.0f32), (1500.0, -20.0), (2600.0, -40.0)] {
+                let bin = (hz / 4000.0 * 512.0) as usize;
+                let local = row[bin - 1..=bin + 1]
+                    .iter()
+                    .copied()
+                    .fold(f32::MIN, f32::max);
+                // Display value back to dBFS (see `power_to_display`): the reference is a
+                // full-scale sine's own Hann bin, so amplitude A reads 20·log10(A) dBFS.
+                let db = (local - 1.0) * DB_SPAN;
+                assert!(
+                    (db - want_db).abs() < 1.5,
+                    "{win:?}: the {hz} Hz tone reads {db:.2} dBFS, expected about {want_db}"
+                );
+                // …and it is a PEAK, not a plateau: the row falls away either side of it.
+                assert!(
+                    row[bin - 3] < local && row[bin + 3] < local,
+                    "{win:?}: the {hz} Hz peak is not localised"
+                );
+            }
+            // THE DC REMOVAL IS STILL THERE. The input carries a 0.02 offset; unremoved it
+            // would deposit about 20·log10(0.02) = -34 dBFS in the lowest display bin (bin 0
+            // covers 0-7.8 Hz), and that bin measures -52 dBFS with the removal in place —
+            // pure Hann skirt from the 700 Hz tone. -45 sits between the two, so this fails
+            // if the removal is lost and passes on leakage alone.
+            let dc = (row[0] - 1.0) * DB_SPAN;
+            assert!(
+                dc < -45.0,
+                "{win:?}: DC leaked into the row at {dc:.1} dBFS"
+            );
+        }
+    }
+
+    // ---- THE CW ZERO-BEAT TONE ESTIMATOR ----
+    //
+    // These drive `dominant_tone` with tones the app itself generates: `cw::morse_samples`
+    // is the soundcard keyer's own tone source, so "generate CW at 620 Hz, measure it back"
+    // closes the loop through the two halves that have to agree — the pitch the app KEYS and
+    // the pitch it READS. A hand-rolled sine would only test the estimator against itself.
+
+    /// Additive white-ish noise, deterministic (a plain LCG — no rand dependency in this crate).
+    fn noisy(sig: &[f32], amp: f32) -> Vec<f32> {
+        let mut st: u32 = 0x1234_5678;
+        sig.iter()
+            .map(|&s| {
+                st = st.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                let u = (st >> 8) as f32 / (1 << 24) as f32; // 0..1
+                s + (u - 0.5) * 2.0 * amp
+            })
+            .collect()
+    }
+
+    /// The estimator's window's worth of audio ending in a KEY-DOWN, at `pitch`.
+    fn cw_tone(pitch: f32, sr: u32, n: usize) -> Vec<f32> {
+        // "TTTTTTTT" at 5 wpm is a run of long dahs — a window taken from the tail is solid
+        // key-down, which is the state the operator is tuning in.
+        let s = crate::cw::morse_samples("TTTTTTTT", 5, pitch, sr);
+        assert!(s.len() > n, "need a window's worth of keyed tone");
+        s[s.len() - n..].to_vec()
+    }
+
+    /// ACCURACY, pinned against two different sources on purpose.
+    ///
+    /// The parabolic fit resolves a CLEAN tone to a small fraction of a Hz — measured over a
+    /// 300-1000 Hz sweep in 3.7 Hz steps: worst 0.09 Hz, RMS 0.07 Hz, against a raw 5.86 Hz
+    /// bin grid. That is the estimator's own accuracy and the first arm pins it.
+    ///
+    /// The second arm runs the app's OWN keyed-tone generator through it, which is the closed
+    /// loop worth having (the pitch Nexus KEYS and the pitch Nexus READS agree). Its residual
+    /// is ~15x larger — the same sweep gives worst 3.7 Hz, RMS 1.2 Hz — and that difference is
+    /// the GENERATOR, not this: `morse_samples` accumulates its phase in f32 across the whole
+    /// message, which at 5 wpm is ~130k samples and ~43k radians, well past f32's precision.
+    /// Pinning the loop at the tighter number would be pinning that drift. Either way it is far
+    /// finer than any rig's CW tuning step, which is what the reading has to beat.
+    #[test]
+    fn resolves_a_tone_far_inside_one_raw_bin() {
+        let sr = 12_000.0;
+        for pitch in [430.0f32, 600.0, 707.0, 880.3] {
+            // A clean sine, phase accumulated in f64 — the estimator against nothing but itself.
+            let clean: Vec<f32> = (0..2048)
+                .map(|i| {
+                    (std::f64::consts::TAU * f64::from(pitch) * i as f64 / 12_000.0).sin() as f32
+                        * 0.5
+                })
+                .collect();
+            let est = dominant_tone(&clean, sr, 200.0, 1200.0, pitch, MIN_TONE_SNR_DB)
+                .unwrap_or_else(|| panic!("a clean tone at {pitch} Hz must be found"));
+            assert!(
+                (est.hz - pitch).abs() < 0.5,
+                "clean {pitch} Hz measured {} Hz (err {:+.3}) — the sub-bin fit regressed",
+                est.hz,
+                est.hz - pitch
+            );
+
+            // THE CLOSED LOOP: key it with the app's own CW tone generator and read it back.
+            let keyed = cw_tone(pitch, sr as u32, 2048);
+            let est = dominant_tone(&keyed, sr, 200.0, 1200.0, pitch, MIN_TONE_SNR_DB)
+                .unwrap_or_else(|| panic!("a keyed tone at {pitch} Hz must be found"));
+            assert!(
+                (est.hz - pitch).abs() < 4.0,
+                "keyed {pitch} Hz measured {} Hz (err {:+.2})",
+                est.hz,
+                est.hz - pitch
+            );
+            assert!(est.snr_db > 20.0, "a clean tone reads well above the floor");
+        }
+    }
+
+    #[test]
+    fn finds_the_tone_under_noise_and_reports_nothing_on_a_dead_band() {
+        let sr = 12_000.0;
+        // A weak tone (-26 dB) buried in noise: still found, still accurate.
+        let quiet: Vec<f32> = cw_tone(640.0, sr as u32, 2048)
+            .iter()
+            .map(|s| s * 0.05)
+            .collect();
+        let audio = noisy(&quiet, 0.05);
+        let est = dominant_tone(&audio, sr, 200.0, 1200.0, 600.0, MIN_TONE_SNR_DB)
+            .expect("a weak but copyable CW tone is still found under noise");
+        assert!(
+            (est.hz - 640.0).abs() < 5.0,
+            "measured {} Hz for a noisy 640 Hz tone",
+            est.hz
+        );
+
+        // NOISE ONLY — the honest answer is "nothing to tune to", never a confident number.
+        let dead = noisy(&vec![0.0f32; 2048], 0.05);
+        assert!(
+            dominant_tone(&dead, sr, 200.0, 1200.0, 600.0, MIN_TONE_SNR_DB).is_none(),
+            "a dead band must report NOTHING, not an invented zero beat"
+        );
+        // Silence likewise.
+        assert!(
+            dominant_tone(
+                &vec![0.0f32; 2048],
+                sr,
+                200.0,
+                1200.0,
+                600.0,
+                MIN_TONE_SNR_DB
+            )
+            .is_none(),
+            "silence must report nothing"
+        );
+        // POSITIVE CONTROL for the two negatives above: the same call on the same band DOES
+        // answer when a signal is there, so `None` is a verdict and not a broken call.
+        assert!(
+            dominant_tone(
+                &cw_tone(640.0, sr as u32, 2048),
+                sr,
+                200.0,
+                1200.0,
+                600.0,
+                MIN_TONE_SNR_DB
+            )
+            .is_some(),
+            "control: the identical call finds a real tone"
+        );
+    }
+
+    #[test]
+    fn picks_the_signal_nearest_the_marker_not_the_loudest() {
+        let sr = 12_000.0;
+        // The one you are working sits 60 Hz off your pitch; a station 300 Hz away is 12 dB
+        // louder. NEAREST-THE-MARKER: chase the one you are already close to.
+        let near = cw_tone(660.0, sr as u32, 2048);
+        let far = cw_tone(900.0, sr as u32, 2048);
+        let mixed: Vec<f32> = near
+            .iter()
+            .zip(far.iter())
+            .map(|(a, b)| a * 0.25 + b * 1.0)
+            .collect();
+        let est = dominant_tone(&mixed, sr, 200.0, 1200.0, 600.0, MIN_TONE_SNR_DB)
+            .expect("two real signals are present");
+        assert!(
+            (est.hz - 660.0).abs() < 5.0,
+            "must pick the signal NEAREST the marker (600 Hz), got {} Hz",
+            est.hz
+        );
+
+        // Same two signals, marker moved next to the loud one → it picks that one. Proves the
+        // rule is "nearest the marker", not "the quieter one".
+        let est2 = dominant_tone(&mixed, sr, 500.0, 1300.0, 900.0, MIN_TONE_SNR_DB)
+            .expect("two real signals are present");
+        assert!(
+            (est2.hz - 900.0).abs() < 5.0,
+            "marker at 900 Hz must pick the 900 Hz signal, got {} Hz",
+            est2.hz
+        );
+    }
+
+    #[test]
+    fn a_signal_outside_the_search_band_is_not_reported() {
+        let sr = 12_000.0;
+        let audio = cw_tone(1800.0, sr as u32, 2048);
+        // Searching ±400 Hz around a 600 Hz pitch: a 1800 Hz signal is not what you are
+        // tuning, and reporting it would swing the needle at a station you cannot hear.
+        assert!(
+            dominant_tone(&audio, sr, 200.0, 1000.0, 600.0, MIN_TONE_SNR_DB).is_none(),
+            "out-of-band energy must not be reported"
+        );
+        // Control: widen the band and the same signal IS found.
+        assert!(
+            dominant_tone(&audio, sr, 1400.0, 2200.0, 1800.0, MIN_TONE_SNR_DB).is_some(),
+            "control: widening the band finds it"
         );
     }
 }

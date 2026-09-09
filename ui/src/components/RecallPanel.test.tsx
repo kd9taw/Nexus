@@ -209,6 +209,65 @@ describe('RecallPanel — the full card', () => {
     expect(list?.getAttribute('role')).toBe('list') // …and reachable as a list, scrolled by CSS
   })
 
+  // #192 (kr4fqg): "click a previous contact and land in the Logbook filtered to that call."
+  // The rows were entirely inert — the avatar was the only interactive element in the file.
+  //
+  // SEARCH, not "open that exact QSO", and deliberately: a `LoggedQso` carries no stable id and
+  // the edit/delete API addresses rows by INDEX, so an index handed across a view switch is
+  // stale the moment anything is logged or imported. Every row on this card is the same
+  // callsign anyway, so the call IS the whole payload.
+  it('hands the callsign up when a previous contact is clicked', () => {
+    const onOpenLog = vi.fn()
+    const { container } = render(
+      <RecallPanel call="w1abc" band="20m" hist={hist()} onOpenLog={onOpenLog} />,
+    )
+    const row = container.querySelector('.recall-log-row') as HTMLElement
+    expect(row).toBeTruthy()
+    fireEvent.click(row)
+    // Normalised, because the log strip's field is whatever the operator typed.
+    expect(onOpenLog).toHaveBeenCalledWith('W1ABC')
+  })
+
+  // A clickable row that does not SAY it is clickable is the same defect one layer on, so the
+  // affordance is pinned with the behaviour: a pointer cursor + hover (CSS, keyed off
+  // `.clickable`) and a real keyboard path. One Tab stop for the whole list via the shared
+  // roving-tabindex hook — 40 prior contacts must not become 40 tab stops on a list where
+  // every row does the identical thing.
+  it('makes the clickable rows say so, and reaches them from the keyboard', () => {
+    const onOpenLog = vi.fn()
+    const many = Array.from({ length: 4 }, (_, i) =>
+      qso({ whenUnix: Date.UTC(2026, 0, 1) / 1000 - i * 86_400 }),
+    )
+    const { container } = render(
+      <RecallPanel call="W1ABC" band="20m" hist={hist({ qsos: many })} onOpenLog={onOpenLog} />,
+    )
+    const rows = [...container.querySelectorAll('.recall-log-row')] as HTMLElement[]
+    expect(rows).toHaveLength(4)
+    for (const r of rows) {
+      expect(r.classList.contains('clickable')).toBe(true)
+      expect(r.getAttribute('title')).toContain('W1ABC')
+    }
+    // Exactly ONE tab stop; the rest are arrow-reachable (tabIndex -1).
+    expect(rows.filter((r) => r.tabIndex === 0)).toHaveLength(1)
+    expect(rows.filter((r) => r.tabIndex === -1)).toHaveLength(3)
+    // Arrow down to the second row, then activate it with the keyboard alone.
+    const list = container.querySelector('.recall-log-list') as HTMLElement
+    fireEvent.keyDown(list, { key: 'ArrowDown' })
+    fireEvent.keyDown(list, { key: 'Enter' })
+    expect(onOpenLog).toHaveBeenCalledWith('W1ABC')
+  })
+
+  // The handoff is gated on the host wiring it, and App wires it only when the Logbook section
+  // is enabled in this build. A row that would navigate nowhere must not advertise that it can —
+  // no pointer, no tooltip, and out of the tab order entirely.
+  it('leaves the rows inert when no host handles the handoff', () => {
+    const { container } = render(<RecallPanel call="W1ABC" band="20m" hist={hist()} />)
+    const row = container.querySelector('.recall-log-row') as HTMLElement
+    expect(row.classList.contains('clickable')).toBe(false)
+    expect(row.getAttribute('title')).toBeNull()
+    expect(row.hasAttribute('tabindex')).toBe(false)
+  })
+
   it('renders nothing until enough of a call is typed', () => {
     const { container } = render(<RecallPanel call="W1" band="20m" hist={hist()} />)
     expect(container.firstChild).toBeNull()
@@ -362,6 +421,35 @@ describe('RecallPanel — bounded history + compact carcass census (styles.css)'
     // grower inside the pane).
     expect(cap).toBe('12em')
     expect(/overflow-y\s*:\s*auto/.test(declaring[0].body), 'the ceiling must scroll, not clip').toBe(true)
+  })
+
+  // The affordance half of #192, checked as CASCADE and not as presence: the zebra stripe on
+  // `.recall-log-row:nth-child(even)` already paints a background, so a hover rule that does not
+  // outrank it is a hover the operator never sees on half the rows. That is exactly the class of
+  // dead fix a regex-presence CSS test ships twice.
+  it('a clickable prior-contact row shows a pointer, and its hover beats the zebra stripe', () => {
+    const spec = (sel: string) => {
+      // Class/attribute/pseudo-class count is all that separates these selectors — no ids,
+      // no elements. `:nth-child(even)` counts once, like any pseudo-class.
+      return (sel.match(/[.:[]/g) ?? []).length
+    }
+    const cursor = RULES.filter(
+      (r) => r.selector === '.recall-log-row.clickable' && /cursor\s*:\s*pointer/.test(r.body),
+    )
+    expect(cursor.length, 'the clickable row says so with a pointer').toBe(1)
+
+    const hover = RULES.find((r) => r.selector === '.recall-log-row.clickable:hover')
+    expect(hover, 'a clickable row highlights under the pointer').toBeTruthy()
+    expect(/background\s*:/.test(hover!.body)).toBe(true)
+    const stripe = RULES.find((r) => r.selector === '.recall-log-row:nth-child(even)')!
+    expect(spec('.recall-log-row.clickable:hover')).toBeGreaterThan(spec(stripe.selector))
+
+    // The list is a bounded 12em scroller, so the global `:focus-visible` ring (outline-offset
+    // 2px) is clipped by the scroller edge on exactly the first and last rows — where an
+    // arrowing operator lands. Pull it inside.
+    const focus = RULES.find((r) => r.selector === '.recall-log-row.clickable:focus-visible')
+    expect(focus, 'the focused row keeps a visible ring inside the scroller').toBeTruthy()
+    expect(/outline-offset\s*:\s*-2px/.test(focus!.body)).toBe(true)
   })
 
   it('the compact variant CSS is gone, not merely unused', () => {

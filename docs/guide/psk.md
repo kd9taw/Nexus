@@ -3,13 +3,15 @@
 The PSK cockpit is a keyboard station for the classic narrow-band phase-shift modes:
 **PSK31** and **QPSK31**, both at 31.25 baud in about 60 Hz of spectrum. It gives you a live
 decoder with per-character confidence, a waterfall you click to net onto a signal, four F-key
-macros and a type-and-send bar, and a continuous-TX latch that lets you type straight into a
-transmission the way a teleprinter operator does. It is a ragchew station, not a contest
-station: no serials, no dupe check, no log strip — a contact you work here goes in the
-[Logbook](logbook-qsl.md) yourself.
+macros and a type-and-send bar, a continuous-TX latch that lets you type straight into a
+transmission the way a teleprinter operator does, and a log strip for the contact when it is
+done. **PSK31 transmits here** — this is not a monitor. It is a ragchew station, not a
+contest station: no serials and no dupe check outside Field Day.
 
-PSK is an opt-in section. Turn it on in the first-run wizard's "which modes?" step or in
-[Settings ▸ Appearance ▸ Features](settings-reference.md#features).
+PSK ships enabled — the wizard turns everything on; there is no mode picker to miss it
+in. No goal profile enables it, though, so if you pick one in
+[Settings ▸ Appearance ▸ Features](settings-reference.md#features), switch PSK back on
+there — or take **Everything (expert)**, which includes it.
 
 ## The tour
 
@@ -43,9 +45,12 @@ decoder, so the station you netted is the station you answer.
 low-confidence copy — that is the demodulator's own phase-margin metric, not a guess, so
 fading text is a real signal that the copy is getting hard. Its head carries:
 
-- **Arm RX / RX armed** — the decoder. It is receive-only and never keys the rig. It arms
-  itself when you open the screen; if you turn it off, that choice is remembered for the
-  session rather than fought with every time you come back.
+- **Arm RX / RX armed** — the decoder. Arming it starts the receiver and nothing else; it
+  never keys the rig, and transmit is armed separately by the header's TX latch. It arms
+  itself when you open the screen — switch **Start receiving when PSK opens** off in
+  [Settings ▸ Digital ▸ PSK](settings-reference.md#psk) to arm it by hand instead. If you
+  turn it off yourself, that choice is remembered for the session rather than fought with
+  every time you come back.
 - A **carrier** indicator that shows the AFC offset from where you netted. The AFC is
   slew-limited and never pulls more than ±25 Hz, so it tracks a drifting station without
   wandering onto a neighbour.
@@ -53,9 +58,28 @@ fading text is a real signal that the copy is getting hard. Its head carries:
   frequency. Use it when the AFC has pulled onto the wrong signal.
 - **Clear** — empties the transcript.
 
+![The Decoded Text pane head: RX with a dropdown arrow, an RX armed pill, a carrier pill reading −5 Hz, and Re-acquire, over the empty-state line "listening… click a PSK trace on the waterfall to net the decoder".](../img/manual/psk-decoder.webp)
+
+*The decoded-text pane, armed and waiting, in Nexus 1.10.3. The carrier pill is the AFC's
+offset from where you netted; **Re-acquire** rebuilds the demodulator from that frequency.*
+
+**The LOG pane** sits under the transcript — call, sent and received report, name, QTH,
+state, country, a POTA reference and private notes, with a **Log** button. The call you put
+in the dock's **{CALL}** field carries across to it once you stop typing, and the record is
+written with the sub-mode you were actually running (`PSK31` or `QPSK31`), not folded
+together. During [Field Day](contesting-pota.md) the strip becomes the class/section entry
+and the contact routes to the event log, scored as Digital.
+
 **The TX dock**, pinned at the bottom: four macros (**CQ**, **Answer**, **Exchange**, **73**),
 a **{CALL}** field for the station you are working, the compose bar, the continuous-TX latch,
 and **Esc / Stop**.
+
+![The PSK TX dock: a THEIR CALL… field, then F1 CQ, F2 Answer, F3 Exchange, F4 73, a TX button labelled Continuous and an Esc button labelled Stop; below them the compose bar reading "Type PSK31 to send… (Enter)", and under that the line "Keep the rig's ALC near zero — an overdriven PSK31 signal splatters (IMD). Lower TX audio until the ALC meter barely moves."](../img/manual/psk-tx-dock.webp)
+
+*The TX dock in Nexus 1.10.3. **Continuous** is the latch that holds the transmitter up so
+you can type into a live over; **Esc / Stop** cuts it. The drive reminder is printed under
+the compose bar because it is the one thing you cannot see going wrong on your own
+waterfall.*
 
 ## Core workflows
 
@@ -69,14 +93,35 @@ re-click slightly more precisely, or press **Re-acquire**.
 You do not need to tune the radio to work up and down the band. Everything in the passband is
 reachable by clicking, which is why PSK operators park on a watering hole and stay there.
 
+![The PSK Decoded Text pane holding a two-way QSO in plain text, its head showing RX armed, a green carrier pill reading −4 Hz, and Re-acquire. Part of one line prints faint.](../img/manual/psk-decode-netted.webp)
+
+*Netted and printing, in Nexus 1.10.3. The dot on the carrier pill is the quality
+squelch — lit means the demodulator has a signal right now — and the number
+beside it is how far the AFC has walked from where you clicked.*
+
 ### Work a station
 
 Put their call in the **{CALL}** field, then use the macros: **Answer** calls them,
 **Exchange** sends a report, **73** signs. The macros expand `{MYCALL}` and `{CALL}` as they
 are sent. Anything you type in the compose bar and send with Enter goes out as typed.
 
-Every send is gated: your callsign must be set, the TX latch must be on, and the frequency
-must be inside your license privileges. A refusal tells you which.
+Every send is checked before anything is queued, and a refusal names the reason:
+
+- a macro carrying `{MYCALL}` needs your callsign set in
+  [Settings ▸ Station](settings-reference.md#station); one carrying `{CALL}` needs their
+  call in the dock field,
+- the **TX** latch must be on,
+- the dial must be inside your license privileges,
+- the PSK section must own the transmitter — a tune carrier, or another mode's over, holds
+  it,
+- and the text must have something PSK31 can carry (it is filtered to ASCII, case
+  preserved). One over is capped at 500 characters.
+
+Sending while an over is already going out queues behind it; sending while the continuous
+latch is up types into the transmission instead.
+
+When the contact is done, write it in the **LOG** pane — the call carries over from the dock
+field, and the mode is recorded as the sub-mode you were running.
 
 ### Type into a live transmission
 
@@ -92,6 +137,12 @@ hard per-over ceiling bounds it no matter how long you keep typing.
 
 **Esc stops it, from anywhere in this cockpit**, as does **Esc / Stop** in the dock and
 **Stop TX** in the header.
+
+![The PSK TX dock with the TX button reading On air in red and Esc Stop enabled beside it, over a compose bar holding a half-finished sentence to W1AW.](../img/manual/psk-continuous-typing.webp)
+
+*Continuous running in Nexus 1.10.3. Every keystroke goes out as you make it, so
+the field is append-only — backspace, paste and a drop are all refused, because
+there is nothing to un-send.*
 
 ### Drive, and why it matters more here
 
@@ -131,12 +182,17 @@ Normal is USB, the convention this section uses throughout.
 - **No dedicated PSK settings beyond the receive default.** There is one option
   ([Settings ▸ Digital ▸ PSK](settings-reference.md#psk)): whether the decoder arms itself when
   the screen opens. Everything else is on this screen.
+- **One label in the app still calls PSK receive-only.** The PSK entry in
+  [Settings ▸ Appearance ▸ Features](settings-reference.md#features) ends "click a trace, read
+  the ragchew (receive)". That wording is left over from the phase when the decoder shipped
+  ahead of the transmitter. PSK31 and QPSK31 both transmit in 1.10.3 — **Send**, the macros
+  and the continuous latch on this screen all key the rig.
 - **QPSK31's absolute rotation sense is not bench-confirmed.** Loopback proves Nexus agrees
   with itself, which is not the same as agreeing with the rest of the world. If you work a
   QPSK31 station with another program and the polarity is backwards, the **Rev** toggle is the
   fix and a bug report is very welcome.
-- **No screenshot in this chapter yet.** The rest of the manual illustrates its cockpits; this
-  one is owed the same and has not been captured.
+- **No cockpit-wide screenshot yet.** The panes above are captured; a whole-screen tour shot
+  of this cockpit is still owed.
 
 ## Related guides
 

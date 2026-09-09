@@ -32,12 +32,14 @@
 //
 // EACH COCKPIT IS RENDERED WITH THE PROPS APP GIVES IT, and that is load-bearing rather than
 // tidiness: CockpitHeader draws the TX-enable latch (▼ TX On / ■ TX Off) only when it is
-// handed `onSetTxEnabled`, which App passes to RTTY and SSTV and to nothing else — those two
-// cockpits have no other Enable-Tx affordance, the TopBar's being hidden with the digital
-// chrome. The first version of this file omitted the prop, so for RTTY and SSTV the latch was
-// never in the document and the sweep proved nothing about the one control the rule names
-// BY NAME (gating it on a panel id in either cockpit was green). Phone and CW arm elsewhere
-// and legitimately have no latch on screen; their `stopControls` say so by not listing one.
+// handed `onSetTxEnabled`, which App passes to RTTY, PSK, SSTV and JS8 — in JS8 the latch is
+// NOT a stop (slotted mode), so the JS8 case passes the prop for parity with App and lists
+// Stop TX + Tune only. RTTY and SSTV have no other Enable-Tx affordance, the TopBar's being
+// hidden with the digital chrome. The first version of this file omitted the prop, so for
+// RTTY and SSTV the latch was never in the document and the sweep proved nothing about the
+// one control the rule names BY NAME (gating it on a panel id in either cockpit was green).
+// Phone and CW arm elsewhere and legitimately have no latch on screen; their `stopControls`
+// say so by not listing one.
 //
 // WHAT THIS FILE DOES NOT CARE ABOUT: whether a pane can START a transmission. Six can —
 // Operate's Tx messages, its two decode panes and its two rosters, Phone's voice keyer — and
@@ -83,12 +85,18 @@
 //     dock finds it beside the cockpit it guards.
 // What IS computed is that every vocabulary in the app has a sweep at all — the last test
 // in the file, driven off ALL_PANEL_VOCABULARIES, so a sixth cockpit cannot ship without one.
+//
+// FIELD DAY HAS NO SWEEP OF ITS OWN, AND THAT IS NOT AN OMISSION. Field Day is a MODE the app
+// enters, not a screen: the contacts are made in the five cockpits swept below, whose stop
+// lines are the same on the event weekend as off it. The Field Day section itself draws no
+// transmit control at all — it is setup, score, sections, bonuses, the log and the club board.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, act } from '@testing-library/react'
 import { PhoneCockpit } from './PhoneCockpit'
 import { CwCockpit } from './CwCockpit'
 import { RttyCockpit } from './RttyCockpit'
 import { PskCockpit } from './PskCockpit'
+import { Js8Cockpit } from './Js8Cockpit'
 import { SstvView } from './SstvView'
 import {
   ALL_PANEL_VOCABULARIES,
@@ -96,10 +104,11 @@ import {
   CW_PANEL_IDS,
   RTTY_PANEL_IDS,
   PSK_PANEL_IDS,
+  JS8_PANEL_IDS,
   SSTV_PANEL_IDS,
 } from '../features/panelState'
 import type { PanelLayoutApi } from '../features/panelState'
-import type { AppSnapshot, PskState, RttyState, SstvState } from '../types'
+import type { AppSnapshot, FieldDayStatus, Js8State, PskState, RttyState, SstvState } from '../types'
 
 const decodeState = {
   text: 'CQ CQ DE KD9TAW',
@@ -149,6 +158,32 @@ const pskState = {
   keyerError: null,
 } as unknown as PskState
 
+const js8State = {
+  speed: 'normal',
+  rxSpeeds: 15,
+  txEnabled: true,
+  sending: false,
+  hbOn: false,
+  hbNextAtMs: null,
+  hbIntervalMin: 0,
+  cqOn: false,
+  cqNextAtMs: null,
+  cqIntervalMin: 0,
+  autoreply: true,
+  relay: true,
+  hbAck: false,
+  armed: { autoreply: false, relay: false, hbAck: false, hb: false, cq: false },
+  idleMinutes: 0,
+  idleLimitMin: 60,
+  idleTripped: false,
+  activity: [],
+  stations: [],
+  inbox: [],
+  queue: [],
+  pendingReply: null,
+  lastError: null,
+} as unknown as Js8State
+
 const sstvState = {
   armed: false,
   mode: null,
@@ -180,88 +215,128 @@ const sstvState = {
 } as unknown as SstvState
 
 // One api mock for four cockpits — the union of what they call on mount.
-vi.mock('../api', () => ({
-  setPtt: vi.fn(async () => {}),
-  // The PTT row's audio pills read these on mount. A hand-kept mock list goes stale the moment a
-  // cockpit calls a verb nobody added to it (upstream #79 made the same point about SettingsPanel),
-  // and here the failure was a crash inside an effect rather than a missing-mock message.
-  getAudioDevices: vi.fn(async () => ({ input: [], output: [] })),
-  setMonitor: vi.fn(async () => ({})),
-  setRfPower: vi.fn(async () => {}),
-  setMicGain: vi.fn(async () => {}),
-  setNrLevel: vi.fn(async () => {}),
-  setAgc: vi.fn(async () => ({})),
-  setScopeSpan: vi.fn(async () => ({})),
-  setScopeRef: vi.fn(async () => {}),
-  setFlexPanSpan: vi.fn(async () => ({})),
-  setFlexPanRef: vi.fn(async () => ({})),
-  startQsoRecording: vi.fn(async () => ({})),
-  stopQsoRecording: vi.fn(async () => ({})),
-  setTune: vi.fn(async () => ({})),
-  haltTx: vi.fn(async () => ({})),
-  setFrequency: vi.fn(async () => ({})),
-  setSplit: vi.fn(async () => ({})),
-  setRigFunc: vi.fn(async () => ({})),
-  setSidebandOverride: vi.fn(async () => ({})),
-  setFilterWidth: vi.fn(async () => ({})),
-  openPanelWindow: vi.fn(async () => {}),
-  getVoiceMessages: vi.fn(async () => []),
-  playVoiceMessage: vi.fn(async () => ({})),
-  stopVoice: vi.fn(async () => ({})),
-  startVoiceRecording: vi.fn(async () => ({})),
-  stopVoiceRecording: vi.fn(async () => []),
-  cancelVoiceRecording: vi.fn(async () => ({})),
-  clearVoiceMessage: vi.fn(async () => []),
-  importVoiceMessage: vi.fn(async () => []),
-  getSettings: vi.fn(async () => ({ macros: { cwProfiles: [], activeCwProfile: 0 } })),
-  setSettings: vi.fn(async () => ({})),
-  sendCw: vi.fn(async () => {}),
-  setCwKeyer: vi.fn(async () => null),
-  setCwWpm: vi.fn(async () => {}),
-  stopCw: vi.fn(async () => {}),
-  cwDecode: vi.fn(async () => decodeState),
-  cwClear: vi.fn(async () => {}),
-  setAiCw: vi.fn(async () => {}),
-  selectPeer: vi.fn(async () => null),
-  previewCw: vi.fn(async (t: string) => t),
-  pointRotatorAtCall: vi.fn(async () => 0),
-  // The real CockpitHeader hosts RotorStrip, which polls these on mount.
-  readRotator: vi.fn(async () => null),
-  stopRotator: vi.fn(async () => ({})),
-  getDeclination: vi.fn(async () => 0),
-  getSatTrackStatus: vi.fn(async () => null),
-  getSatTransponder: vi.fn(async () => null),
-  setSatTransponder: vi.fn(async () => {}),
-  stopSatTrack: vi.fn(async () => ({})),
-  getRttyState: vi.fn(async () => rttyState),
-  getLicensedBandPlan: vi.fn(async () => []),
-  rttyArm: vi.fn(async () => rttyState),
-  rttySend: vi.fn(async () => rttyState),
-  rttyStop: vi.fn(async () => rttyState),
-  rttyClear: vi.fn(async () => rttyState),
-  rttyAfcReset: vi.fn(async () => rttyState),
-  rttyNet: vi.fn(async () => rttyState),
-  rttySetAuto: vi.fn(async () => rttyState),
-  rttyAutoCq: vi.fn(async () => rttyState),
-  rttyAutoAnswer: vi.fn(async () => rttyState),
-  rttyAutoAbort: vi.fn(async () => rttyState),
-  getPskState: vi.fn(async () => pskState),
-  pskArm: vi.fn(async () => pskState),
-  pskAutoArm: vi.fn(async () => pskState),
-  pskClear: vi.fn(async () => pskState),
-  pskAfcReset: vi.fn(async () => pskState),
-  pskNet: vi.fn(async () => pskState),
-  pskSend: vi.fn(async () => pskState),
-  pskSetLatched: vi.fn(async () => pskState),
-  pskType: vi.fn(async () => pskState),
-  pskStop: vi.fn(async () => pskState),
-  getSstvState: vi.fn(async () => sstvState),
-  sstvArm: vi.fn(async () => sstvState),
-  sstvAutoArm: vi.fn(async () => sstvState),
-  sstvSend: vi.fn(async () => sstvState),
-  sstvStop: vi.fn(async () => sstvState),
-  setOperatingMode: vi.fn(async () => ({})),
-}))
+vi.mock('../api', async (importOriginal) => {
+  // ⭐ DERIVED FROM THE REAL MODULE, not a hand-kept list. A hand-kept mock omits any export
+  // added after it was written, and a component that calls one THROWS ON MOUNT — so the suite
+  // goes red at a seam nothing in the diff explains, and the tempting fix is to make the test
+  // pass rather than ask why. That cost five files one evening when a single API call was added
+  // to the CW cockpit, this one among them.
+  //
+  // Every function the module exports is auto-stubbed here; the entries below override only the
+  // ones this file's assertions actually depend on, so their shapes are unchanged.
+  const actual = await importOriginal<Record<string, unknown>>()
+  const auto: Record<string, unknown> = {}
+  for (const k of Object.keys(actual)) {
+    auto[k] = typeof actual[k] === 'function' ? vi.fn(async () => ({})) : actual[k]
+  }
+  return {
+    ...auto,
+    // Hand-kept mock: an export CwCockpit calls but this list omits makes it THROW ON MOUNT,
+    // which reads as a behaviour regression rather than the stale mock it actually is.
+    getCatCwUnprovenRigModels: vi.fn(async () => []),
+    // The PTT row's audio pills read this ON MOUNT and index .input/.output; the auto-stub
+    // above returns {} for every function, so without this override the pills throw inside
+    // an effect and take the row carrying PTT down with them.
+    getAudioDevices: vi.fn(async () => ({ input: [], output: [] })),
+    setPtt: vi.fn(async () => {}),
+    setRfPower: vi.fn(async () => {}),
+    setMicGain: vi.fn(async () => {}),
+    setNrLevel: vi.fn(async () => {}),
+    setAgc: vi.fn(async () => ({})),
+    setScopeSpan: vi.fn(async () => ({})),
+    setScopeRef: vi.fn(async () => {}),
+    setFlexPanSpan: vi.fn(async () => ({})),
+    setFlexPanRef: vi.fn(async () => ({})),
+    startQsoRecording: vi.fn(async () => ({})),
+    stopQsoRecording: vi.fn(async () => ({})),
+    setTune: vi.fn(async () => ({})),
+    haltTx: vi.fn(async () => ({})),
+    setFrequency: vi.fn(async () => ({})),
+    setSplit: vi.fn(async () => ({})),
+    setRigFunc: vi.fn(async () => ({})),
+    setSidebandOverride: vi.fn(async () => ({})),
+    setFilterWidth: vi.fn(async () => ({})),
+    openPanelWindow: vi.fn(async () => {}),
+    getVoiceMessages: vi.fn(async () => []),
+    playVoiceMessage: vi.fn(async () => ({})),
+    stopVoice: vi.fn(async () => ({})),
+    startVoiceRecording: vi.fn(async () => ({})),
+    stopVoiceRecording: vi.fn(async () => []),
+    cancelVoiceRecording: vi.fn(async () => ({})),
+    clearVoiceMessage: vi.fn(async () => []),
+    importVoiceMessage: vi.fn(async () => []),
+    getSettings: vi.fn(async () => ({ macros: { cwProfiles: [], activeCwProfile: 0 } })),
+    setSettings: vi.fn(async () => ({})),
+    sendCw: vi.fn(async () => {}),
+    setCwKeyer: vi.fn(async () => null),
+    setCwWpm: vi.fn(async () => {}),
+    stopCw: vi.fn(async () => {}),
+    cwDecode: vi.fn(async () => decodeState),
+    cwClear: vi.fn(async () => {}),
+    setAiCw: vi.fn(async () => {}),
+    selectPeer: vi.fn(async () => null),
+    previewCw: vi.fn(async (t: string) => t),
+    pointRotatorAtCall: vi.fn(async () => 0),
+    // The real CockpitHeader hosts RotorStrip, which polls these on mount.
+    readRotator: vi.fn(async () => null),
+    stopRotator: vi.fn(async () => ({})),
+    getDeclination: vi.fn(async () => 0),
+    getSatTrackStatus: vi.fn(async () => null),
+    getSatTransponder: vi.fn(async () => null),
+    setSatTransponder: vi.fn(async () => {}),
+    stopSatTrack: vi.fn(async () => ({})),
+    getRttyState: vi.fn(async () => rttyState),
+    getLicensedBandPlan: vi.fn(async () => []),
+    rttyArm: vi.fn(async () => rttyState),
+    // `rtty_auto_arm` fires on the rising edge of `active`; a hand-kept mock must carry it or
+    // the cockpit throws on mount.
+    rttyAutoArm: vi.fn(async () => rttyState),
+    rttySend: vi.fn(async () => rttyState),
+    rttyStop: vi.fn(async () => rttyState),
+    rttyClear: vi.fn(async () => rttyState),
+    rttyAfcReset: vi.fn(async () => rttyState),
+    rttyNet: vi.fn(async () => rttyState),
+    rttySetAuto: vi.fn(async () => rttyState),
+    rttyAutoCq: vi.fn(async () => rttyState),
+    rttyAutoAnswer: vi.fn(async () => rttyState),
+    rttyAutoAbort: vi.fn(async () => rttyState),
+    getPskState: vi.fn(async () => pskState),
+    pskArm: vi.fn(async () => pskState),
+    pskAutoArm: vi.fn(async () => pskState),
+    pskClear: vi.fn(async () => pskState),
+    pskAfcReset: vi.fn(async () => pskState),
+    pskNet: vi.fn(async () => pskState),
+    pskSend: vi.fn(async () => pskState),
+    pskSetLatched: vi.fn(async () => pskState),
+    pskType: vi.fn(async () => pskState),
+    pskStop: vi.fn(async () => pskState),
+    getJs8State: vi.fn(async () => js8State),
+    // The JS8 roster joins against the logbook (features/callHistory) for its ✓/Name/
+    // Comment columns; the auto-stub's `{}` is not a log this sweep can render against.
+    getLog: vi.fn(async () => []),
+    // `js8_enter` fires on the rising edge of `active`; the auto-stub would answer `{}` and
+    // the cockpit would then render a state with no `armed` — pin the fixture.
+    js8Enter: vi.fn(async () => js8State),
+    js8Arm: vi.fn(async () => js8State),
+    js8Send: vi.fn(async () => js8State),
+    js8SendCommand: vi.fn(async () => js8State),
+    js8CallCq: vi.fn(async () => js8State),
+    js8SetSpeed: vi.fn(async () => js8State),
+    js8Cancel: vi.fn(async () => js8State),
+    js8DropQueue: vi.fn(async () => js8State),
+    js8InboxMark: vi.fn(async () => js8State),
+    js8InboxDelete: vi.fn(async () => js8State),
+    setTxLevel: vi.fn(async () => ({})),
+    setRxOffset: vi.fn(async () => ({})),
+    setTxOffset: vi.fn(async () => ({})),
+    getSstvState: vi.fn(async () => sstvState),
+    sstvArm: vi.fn(async () => sstvState),
+    sstvAutoArm: vi.fn(async () => sstvState),
+    sstvSend: vi.fn(async () => sstvState),
+    sstvStop: vi.fn(async () => sstvState),
+    setOperatingMode: vi.fn(async () => ({})),
+  }
+})
 vi.mock('../toast', () => ({
   pushToast: vi.fn(),
   withErrorToast: vi.fn(async (action: () => Promise<unknown>) => action()),
@@ -328,6 +403,20 @@ const radio = {
 }
 const snap = { mycall: 'KD9TAW', radio } as unknown as AppSnapshot
 
+/** Field Day switched ON, as App hands it to the cockpits during an event — the state that
+ *  swaps their log strip for the FD one. See the Phone case's own note on why it is swept. */
+const fdStatus = {
+  myClass: '3A',
+  mySection: 'WI',
+  running: true,
+  state: 'running',
+  qsoCount: 12,
+  sections: 4,
+  points: 24,
+  workedSections: ['WI', 'EMA'],
+  log: [{ call: 'W1AW', band: '20m', mode: 'PH', class: '3A', section: 'EMA', whenUnix: 100 }],
+} as unknown as FieldDayStatus
+
 /**
  * One cockpit's stop-line case. `stopControls` are accessible-name matchers for the controls
  * that END a transmission AND RENDER OUTSIDE EVERY ⊞-REMOVABLE PANE — the set the guarantee
@@ -362,9 +451,21 @@ const phone: Case<(typeof PHONE_PANEL_IDS)[number]> = {
     ['Stop TX', /^stop tx$/i],
     ['Tune', /^tune$|^tuning…$/i],
   ],
+  // ⚠️ `fieldDay` IS PASSED, and it is not decoration. App passes it whenever the master switch
+  // is on, and it swaps this cockpit's log strip for the Field Day one — a different strip,
+  // with different focus behaviour. Sweeping only the off-event shape left the FD shape of a
+  // SHIPPED cockpit unswept for the whole of the weekend it exists for, which is how a mount
+  // autofocus added for another cockpit reached this one and disarmed its Space PTT.
   render: (panels) =>
     render(
-      <PhoneCockpit snap={snap} theme="dark" onWorkSpot={() => {}} spots={[]} panels={panels} />,
+      <PhoneCockpit
+        snap={snap}
+        theme="dark"
+        onWorkSpot={() => {}}
+        spots={[]}
+        panels={panels}
+        fieldDay={fdStatus}
+      />,
     ),
 }
 
@@ -376,8 +477,19 @@ const cw: Case<(typeof CW_PANEL_IDS)[number]> = {
     ['Stop TX', /^stop tx$/i],
     ['Tune', /^tune$|^tuning…$/i],
   ],
+  // `fieldDay` for the same reason as Phone's case above: the FD log strip is a different
+  // strip, and this cockpit is one of the two that host it during the event.
   render: (panels) =>
-    render(<CwCockpit snap={snap} theme="dark" onWorkSpot={() => {}} spots={[]} panels={panels} />),
+    render(
+      <CwCockpit
+        snap={snap}
+        theme="dark"
+        onWorkSpot={() => {}}
+        spots={[]}
+        panels={panels}
+        fieldDay={fdStatus}
+      />,
+    ),
 }
 
 /** The TX-enable latch as CockpitHeader labels it. `radio.txEnabled` is true and
@@ -456,6 +568,24 @@ const psk: Case<(typeof PSK_PANEL_IDS)[number]> = {
   render: (panels) => render(<PskCockpit snap={snap} panels={panels} onSetTxEnabled={() => {}} />),
 }
 
+const js8: Case<(typeof JS8_PANEL_IDS)[number]> = {
+  cockpit: 'JS8',
+  view: 'js8',
+  ids: JS8_PANEL_IDS,
+  // The OPERATE shape of the census, because JS8 is a SLOTTED mode: Stop TX (→ halt_tx, which
+  // also empties the JS8 queue from B7 on) and Tune, both in the header. NOT LISTED, on
+  // purpose: the TX-enable latch — `set_tx_enabled(false)` deliberately does not arm
+  // slot_tx_abort (the operator's 2026-07-31 ruling: the frame in flight completes), so in a
+  // slotted mode it is not a stop; and the dock's "Drop queue", a SENDER-class control (the
+  // RTTY "TX" ruling) that empties the queue without cutting anything. Esc is keyboard-only
+  // and census-only. `onSetTxEnabled` is still passed, exactly as App passes it.
+  stopControls: [
+    ['Stop TX', /^stop tx$/i],
+    ['Tune', /^tune$|^tuning…$/i],
+  ],
+  render: (panels) => render(<Js8Cockpit snap={snap} panels={panels} onSetTxEnabled={() => {}} />),
+}
+
 const sstv: Case<(typeof SSTV_PANEL_IDS)[number]> = {
   cockpit: 'SSTV',
   view: 'sstv',
@@ -466,7 +596,7 @@ const sstv: Case<(typeof SSTV_PANEL_IDS)[number]> = {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const CASES: Array<Case<any>> = [phone, cw, rtty, psk, sstv]
+const CASES: Array<Case<any>> = [phone, cw, rtty, psk, js8, sstv]
 
 async function settle() {
   await act(async () => {

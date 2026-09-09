@@ -81,13 +81,83 @@ export function effectiveOrientation(
   tag: number,
   intrinsic: { w: number; h: number } | null,
   decoded: { w: number; h: number },
+  decoderApplies?: boolean | null,
 ): number {
-  if (!orientationSwapsAxes(tag)) return tag
-  if (!intrinsic || intrinsic.w <= 0 || intrinsic.h <= 0) return tag
-  const sameWayRound = decoded.w === intrinsic.w && decoded.h === intrinsic.h
-  const swapped = decoded.w === intrinsic.h && decoded.h === intrinsic.w
-  // Only a clean swap is evidence; anything else (a decoder that scaled, a header we
-  // misread) falls back to trusting the tag.
-  if (swapped && !sameWayRound) return 1
+  if (tag === 1) return 1
+  if (orientationSwapsAxes(tag)) {
+    // 5–8 swap the axes, so the decode's own dimensions are direct evidence for THIS
+    // image — the strongest signal, kept as primary.
+    if (intrinsic && intrinsic.w > 0 && intrinsic.h > 0) {
+      const sameWayRound = decoded.w === intrinsic.w && decoded.h === intrinsic.h
+      const swapped = decoded.w === intrinsic.h && decoded.h === intrinsic.w
+      if (swapped && !sameWayRound) return 1 // decoder already rotated
+      if (sameWayRound && !swapped) return tag // decoder left it as stored
+    }
+    // Dimensions ambiguous (square, scaled, or a header we could not read): fall through
+    // to the engine probe, same as the non-swap cases below.
+  }
+  // ⭐ 2, 3, 4 (mirror-H, ROTATE-180/UPSIDE-DOWN, mirror-V) DO NOT change the dimensions,
+  // so the measurement above cannot see them — which is exactly the gap that shipped a
+  // Mac-only upside-down image (orientation 3): WebView2 honours `imageOrientation:'none'`
+  // and the app's own matrix is correct, WebKitGTK ignores it and applies the rotation
+  // itself, so the app's matrix rotated a second time. `decoderApplies` is the one-time
+  // engine probe (`probeDecoderAppliesOrientation`): if the decoder applies EXIF itself,
+  // the picture is already upright and our matrix must be skipped. Unknown → trust the tag,
+  // which is the pre-fix behaviour and correct on the engines that do nothing.
+  if (decoderApplies === true) return 1
   return tag
+}
+
+/** The 2×1 orientation-6 (rotate-90°) JPEG the probe decodes: it comes back 1×2 iff the
+ *  engine applied the orientation. Kept tiny (704 B) and inline so the probe needs no
+ *  network and no asset. */
+const PROBE_JPEG_B64 =
+  '/9j/4AAQSkZJRgABAQAAAQABAAD/4QAiRXhpZgAATU0AKgAAAAgAAQESAAMAAAABAAYAAAAAAAD/2wBDAAMCAgMCAgMDAwMEAwMEBQgFBQQEBQoHBwYIDAoMDAsKCwsNDhIQDQ4RDgsLEBYQERMUFRUVDA8XGBYUGBIUFRT/2wBDAQMEBAUEBQkFBQkUDQsNFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBT/wAARCAABAAIDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwD4H8Q/8h/Uv+vmX/0M0UUV/ptkP/Ipwn/XuH/pKPAzr/kZ4r/r5P8A9KZ//9k='
+
+let probeCache: Promise<boolean | null> | null = null
+
+/**
+ * Does this engine's decode pipeline apply EXIF orientation even when asked not to?
+ *
+ * A property of the ENGINE, not the image: WebView2 (Windows) honours
+ * `createImageBitmap(blob, { imageOrientation: 'none' })` and returns the stored pixels;
+ * WebKitGTK / WKWebView (Linux, macOS) ignores it (or the `<img>` fallback applies
+ * orientation by default). Decoding the 2×1 probe and reading whether it came back 1×2
+ * answers it once. Cached for the session. `null` only when it genuinely cannot decide.
+ *
+ * The dimension-based guard in `effectiveOrientation` already learns this for a 5–8 image,
+ * but a 1–4 image gives it nothing to measure; this probe is that same knowledge, obtained
+ * without waiting for the operator to happen to load a rotated photo.
+ */
+export function probeDecoderAppliesOrientation(): Promise<boolean | null> {
+  if (probeCache) return probeCache
+  probeCache = (async () => {
+    const cib = (
+      globalThis as { createImageBitmap?: (b: Blob, o?: unknown) => Promise<ImageBitmap> }
+    ).createImageBitmap
+    // No createImageBitmap → the decode falls back to an <img>, which applies orientation.
+    if (!cib) return true
+    try {
+      const bytes = Uint8Array.from(atob(PROBE_JPEG_B64), (c) => c.charCodeAt(0))
+      const blob = new Blob([bytes], { type: 'image/jpeg' })
+      let bmp: ImageBitmap
+      try {
+        bmp = await cib(blob, { imageOrientation: 'none' })
+      } catch {
+        bmp = await cib(blob) // option unsupported → the default path, which applies EXIF
+      }
+      if (!bmp || bmp.width === 0) return null
+      if (bmp.width === 1 && bmp.height === 2) return true // rotated → engine applied it
+      if (bmp.width === 2 && bmp.height === 1) return false // as stored → honoured 'none'
+      return null
+    } catch {
+      return null
+    }
+  })()
+  return probeCache
+}
+
+/** Test seam: forget the cached probe so a case can set its own engine behaviour. */
+export function __resetOrientationProbeForTest(): void {
+  probeCache = null
 }

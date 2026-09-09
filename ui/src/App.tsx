@@ -12,9 +12,11 @@ import {
   confirmPendingLog as apiConfirmPendingLog,
   discardPendingLog as apiDiscardPendingLog,
   getBandPlan,
+  getFdRuleset,
   getSettings,
   logOperators,
   getSnapshot,
+  type FdRulesetDto,
   selectPeer as apiSelectPeer,
   archiveConversation as apiArchiveConversation,
   sendMessage as apiSendMessage,
@@ -55,6 +57,7 @@ import { loadWatchlist, type WatchFilter } from './watchlist'
 import { useTheme } from './useTheme'
 import { useFieldMode } from './useFieldMode'
 import { useScale } from './useScale'
+import { useDpiScaleSeed } from './useDpiSeed'
 import { useViewport } from './useViewport'
 import { useDensity } from './useDensity'
 import { useMotion } from './useMotion'
@@ -65,8 +68,8 @@ import { useFeatures } from './useFeatures'
 import { useReveals } from './useReveals'
 import { sectionFeatures, featureById, type FeatureId } from './features/registry'
 import { resolveBootView, coerceArea } from './features/bootView'
-import { visibleNeeds, workTarget, modeClassOf, topNeedByCall, alertsByCall, activityTypeByCall } from './features/needs'
-import { OPERATE_PANELS, CW_PANELS, PHONE_PANELS, PSK_PANELS, RTTY_PANELS, SSTV_PANELS, usePanelLayout } from './features/panelState'
+import { visibleNeeds, boardNeeds, workTarget, modeClassOf, topNeedByCall, alertsByCall, activityTypeByCall } from './features/needs'
+import { OPERATE_PANELS, CW_PANELS, PHONE_PANELS, PSK_PANELS, RTTY_PANELS, SSTV_PANELS, JS8_PANELS, usePanelLayout } from './features/panelState'
 import { surfaceGet, surfaceSet } from './features/windowScope'
 import { usePaneWidths, clampLeft, clampRight } from './usePaneWidths'
 import { TopBar } from './components/TopBar'
@@ -84,6 +87,7 @@ import { CwCockpit } from './components/CwCockpit'
 import { PhoneCockpit } from './components/PhoneCockpit'
 import { RttyCockpit } from './components/RttyCockpit'
 import { PskCockpit } from './components/PskCockpit'
+import { Js8Cockpit } from './components/Js8Cockpit'
 import { SstvView } from './components/SstvView'
 import { AprsCockpit } from './components/AprsCockpit'
 import { PotaSotaView, type OtaSpotClickArg } from './components/PotaSotaView'
@@ -112,6 +116,7 @@ import {
   testCat,
   setOperatingMode,
   workSpot,
+  setHuntTarget,
   setLicenseClass,
   stopQsoRecording,
   pointRotatorAtCall,
@@ -121,6 +126,8 @@ import {
   useSingleRadio,
   resendChat,
   type RadioLaunchInfo,
+  getKpForecast,
+  getOtaMapSpots,
 } from './api'
 import {
   hotkeyRecallTarget,
@@ -132,6 +139,8 @@ import {
 import { dueNetReminders, reminderKey, untilPhrase } from './features/nets'
 import { bandLabelForMhz } from './band'
 import { processFlare, effectiveXray } from './flareAlert'
+import { processPotaAlert } from './features/potaAlert'
+import { processStorm, processStormForecast } from './stormAlert'
 import { processDxpedAlerts } from './features/dxpedChase'
 import { checkDxpedAlarms } from './features/dxpedAlarm'
 import { checkSatAlarms, satAlarmMap } from './features/satAlarm'
@@ -235,6 +244,10 @@ export default function App() {
   // the useScale argument. Global — a fact about the station, like the theme.
   const [fieldMode, setFieldMode] = useFieldMode()
   const { scale, mode: scaleMode, cap: scaleCap, setMode: setScaleMode, setCap: setScaleCap } = useScale(fieldMode)
+  // First launch on a high-density display: raise the auto-fit ceiling so the UI can grow to
+  // the panel. Once only, raise only, and nothing at all on an ordinary 96-dpi monitor or on
+  // a platform whose OS already scales for us. See useDpiSeed.ts.
+  useDpiScaleSeed(setScaleCap)
   // Publishes the zoom-aware `data-viewport` size class on <html> (live on resize
   // AND on scale change) so the layout adapts to the EFFECTIVE width.
   useViewport(scale)
@@ -319,6 +332,12 @@ export default function App() {
   })
   // Bird handed off from a map satellite click — the Satellites section opens on it.
   const [satFocus, setSatFocus] = useState<string | null>(null)
+  // Callsign handed off from a cockpit recall card's previous-contact row (#192) — the Logbook
+  // opens with it in the search box. `pendingWork`'s shape, not `satFocus`'s, and the `ts` nonce
+  // is the reason: the operator can type over the Logbook's search box, go back to the cockpit
+  // and click the same call again, and a bare `string | null` would not refire for that. Cleared
+  // once the Logbook has consumed it, so a later trip through the nav opens unfiltered.
+  const [logFocus, setLogFocus] = useState<{ call: string; ts: number } | null>(null)
   // Bumped when the wizard closes: remounts SettingsPanel so a stale full-struct
   // form under the modal can't Save over what the wizard just persisted.
   const [wizardGen, setWizardGen] = useState(0)
@@ -394,6 +413,23 @@ export default function App() {
       .catch(() => {})
   }, [view])
   const [prop, setProp] = useState<PropagationSnapshot | null>(null)
+  // DXpeditions ON THE AIR NOW that announced SuperFox — a format this version of Nexus has no
+  // decoder for, so the operation never reaches the decode list and Hound mode cannot help.
+  // The Operate header names them beside the Hound button; the calendar already knew, and an
+  // operator who finds out in the middle of the pileup has found out too late. Deduped —
+  // `workableNow` carries one card per needed BAND, so a multi-band operation appears several
+  // times and would otherwise be listed several times.
+  const superFoxCalls = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          (prop?.dxpeditions.workableNow ?? [])
+            .filter((c) => c.ft8Mode === 'SuperFox')
+            .map((c) => c.call),
+        ),
+      ),
+    [prop],
+  )
   // Operate layout mode: Classic (WSJT-X — Band Activity dominant) vs Roster
   // (GridTracker — the Call Roster dominant). Persisted UI pref; Roster is the
   // default (the friendlier at-a-glance view), and die-hards can pick Classic —
@@ -420,6 +456,7 @@ export default function App() {
   const cwPanels = usePanelLayout(CW_PANELS)
   const rttyPanels = usePanelLayout(RTTY_PANELS)
   const pskPanels = usePanelLayout(PSK_PANELS)
+  const js8Panels = usePanelLayout(JS8_PANELS)
 
   // One-shot on launch: check the release feed for a newer version (throttled to once/day + cached,
   // silent when offline). Surfaces a dismissible "update available" toast; nothing auto-downloads.
@@ -494,6 +531,20 @@ export default function App() {
     }
   }, [snap?.radio.audioError])
 
+  // Surface an RF-scope source that is not delivering. WARNING, not critical, and the wording says
+  // what to DO: on an FT-710 the spectrum only exists once SCU-LAN10 and the external display are
+  // enabled in the radio's EX menu, and Nexus cannot set either over CAT — so a blank pane with no
+  // explanation would send the operator hunting through Nexus for a setting that is on the rig.
+  // The waterfall keeps running on sound-card audio throughout, which is why this never blocks.
+  useEffect(() => {
+    const err = snap?.radio.scopeError
+    if (err) {
+      setStatus('scope', { tier: 'warning', message: 'NO RF SCOPE', detail: err })
+    } else {
+      setStatus('scope', null)
+    }
+  }, [snap?.radio.scopeError])
+
   // Surface a serial COM-port collision (two radios on one port) in the status
   // lane — otherwise it only shows as an unexplained red radio pill.
   useEffect(() => {
@@ -503,6 +554,23 @@ export default function App() {
       warn ? { tier: 'warning', message: t('shell.lane.radioConfig.message'), detail: warn } : null,
     )
   }, [snap?.radio.radioConfigWarning])
+
+  // A rig at 0% power KEYS, shows TX, and produces an over that looks entirely normal from the
+  // operator's chair — it is silent only to everyone else, which is why the report it came from
+  // ("opening cat but not sending audio out") cost an evening to chase. Notify, never act: the
+  // lane says so and nothing touches the power.
+  useEffect(() => {
+    setStatus(
+      'txPowerZero',
+      snap?.radio.txPowerZero
+        ? {
+            tier: 'warning',
+            message: t('shell.lane.txPowerZero.message'),
+            detail: t('shell.lane.txPowerZero.detail'),
+          }
+        : null,
+    )
+  }, [snap?.radio.txPowerZero])
 
   // A per-QSO recording that could not be written. The contact IS logged — only the audio failed —
   // so this is a warning in the lane rather than an error on the log action, and it names the full
@@ -534,6 +602,9 @@ export default function App() {
   // Per-(band,mode) last-alert time so a band coming alive toasts once, not every
   // poll (defence in depth — the backend tracker already flags `isNew` once).
   const openingAlertRef = useRef<Map<string, number>>(new Map())
+  // Latest MEASURED Kp, so the forecast watcher below can tell a heads-up from a
+  // storm already in progress.
+  const kpNowRef = useRef<number | null>(null)
   // Freshest fast-lane X-ray reading (60 s poller below) — merged with each prop
   // snapshot so the flare heads-up fires app-wide, whatever view is open.
   const xrayFastRef = useRef<number | null>(null)
@@ -555,6 +626,12 @@ export default function App() {
           setProp(p)
           // Solar-flare heads-up (edge-triggered; flareAlert.ts owns the dedup).
           processFlare(effectiveXray(xrayFastRef.current, p.spaceWx.xrayLong))
+          // Geomagnetic storm heads-up, same edge-triggered shape over the MEASURED
+          // Kp already in this snapshot — no extra fetch. Until this existed a storm
+          // reached the operator only if they had the Space Weather pane in front of
+          // them, which is backwards: a flare is minutes, a storm is days.
+          processStorm(p.spaceWx.kp)
+          kpNowRef.current = p.spaceWx.kp
           // Chased-expedition window alerts (dxpedChase.ts owns the dedup).
           processDxpedAlerts(
             p.dxpeditions.workableNow,
@@ -696,6 +773,24 @@ export default function App() {
       clearInterval(id)
     }
   }, [])
+  // Storm FORECAST heads-up, app-wide. The Kp outlook pane fetches this too, but an
+  // alert that only fires while its own pane is open is not an alert — and the
+  // backend serves both from one 15-minute cache, so the second caller is free.
+  // stormAlert.ts dedups by the predicted onset time, so this announces once per
+  // forecast event however often it is polled.
+  useEffect(() => {
+    let live = true
+    const load = () =>
+      getKpForecast()
+        .then((f) => live && processStormForecast(f, kpNowRef.current))
+        .catch(() => {})
+    load()
+    const id = setInterval(load, 900_000)
+    return () => {
+      live = false
+      clearInterval(id)
+    }
+  }, [])
   // X-ray fast lane (60 s): flare ONSET reaches the operator in ~1 min instead of
   // the 5-min prop-snapshot cadence. Best-effort — a failed fetch just leaves the
   // snapshot's slower value driving the watcher.
@@ -832,6 +927,19 @@ export default function App() {
   // Declared here (rather than beside bandPlan below) because the need gate reads it: the
   // band scopes live in settings and everything derived from `needAlerts` sits right below.
   const [settings, setSettings] = useState<Settings | null>(null)
+  // The active FD event's ruleset FACTS (banned modes + assistance policy) for the
+  // warn-only advisories. get_fd_ruleset reads settings.fd_event itself (and works with
+  // the master switch off), so the fetch just re-runs when the configured event changes.
+  const [fdRuleset, setFdRuleset] = useState<FdRulesetDto | null>(null)
+  useEffect(() => {
+    let live = true
+    getFdRuleset()
+      .then((r) => live && setFdRuleset(r))
+      .catch(() => {})
+    return () => {
+      live = false
+    }
+  }, [settings?.fdEvent])
   // The operator's per-type alert BAND SCOPES (Settings ▸ Spots & Alerts). They gate the
   // need ICONS as well as the sound/toast — "I selected grids, vhf/uhf 6m and up ... and its
   // still showing the grid icons in ft8 in both roster and classic mode when on hf bands"
@@ -844,6 +952,8 @@ export default function App() {
     }),
     [settings?.alertDxccBands, settings?.alertGridBands, settings?.alertRareGridBands],
   )
+  // The Needed board's feed — band scopes honoured, mode-feature gate neutral (see boardNeeds).
+  const boardAlerts = useMemo(() => boardNeeds(needAlerts, needScopes), [needAlerts, needScopes])
   const visibleAlerts = useMemo(
     () => visibleNeeds(needAlerts, { cw: cwEnabled, phone: phoneEnabled }, needScopes),
     [needAlerts, cwEnabled, phoneEnabled, needScopes],
@@ -902,6 +1012,27 @@ export default function App() {
   }, [settings?.operatingMode])
   // Ding/dong when the dial crosses your TX privileges (default on).
   useBandEdgeTones(snap?.radio.txAllowed, settings?.bandEdgeTones ?? true)
+  // Audible new-POTA-activation alert (opt-in, potaAlert.ts owns the dedup/priming): a poll of
+  // its own so the alert reaches the operator whether or not the map's pop-out is open — today
+  // MapView is the ONLY caller of get_ota_map_spots, and that poll dies with the pop-out.
+  // Gated on the setting itself (not just the alert inside it): an operator with this off pays
+  // no interval and no IPC, same politeness rule the map's own Parks layer follows — the backend
+  // serves both from one 120 s cache (OTA_MAP_TTL_SECS), so this poll costs nothing extra to run
+  // alongside the map or the POTA/SOTA board.
+  useEffect(() => {
+    if (!settings?.potaNewActivationAlert) return
+    let live = true
+    const load = () =>
+      getOtaMapSpots()
+        .then((spots) => live && processPotaAlert(spots))
+        .catch(() => {})
+    load()
+    const id = setInterval(load, 120_000)
+    return () => {
+      live = false
+      clearInterval(id)
+    }
+  }, [settings?.potaNewActivationAlert])
   // User watch list (localStorage) — fed to the decode alerter. Re-synced when the manager
   // edits it (it dispatches `nexus:watchlist-changed`), so alerts pick up changes live.
   const [watchlist, setWatchlist] = useState<WatchFilter[]>(() => loadWatchlist())
@@ -1055,7 +1186,7 @@ export default function App() {
   const { alert: pounceAlert, dismiss: dismissPounce } = usePounce()
   // Signed self-update: downloads quietly, installs only on an explicit press that the engine
   // refuses while the radio is busy (see useSelfUpdate / update_install_block).
-  const selfUpdate = useSelfUpdate()
+  const selfUpdate = useSelfUpdate(!!settings?.betaUpdates)
   const handlePounceWork = useCallback(
     (a: PounceAlert) => {
       // Route through the SAME path the needed board uses, so QSY, rig mode and pileup-split
@@ -1114,14 +1245,19 @@ export default function App() {
     [handleWorkspace],
   )
 
-  // Roster/StationCard adapter: a card knows only the callsign + its protocol tier, so it
-  // calls onCall(call, tier). handleCall's other params (grid/message/snr/freq) are only used
-  // by the FT8 call-sequence path, so pass them undefined here and route by tier.
-  const handleWorkStation = useCallback(
-    (call: string, tier?: Tier | null) => handleCall(call, undefined, undefined, undefined, undefined, tier),
-    [handleCall],
-  )
-
+  // The Stations cards take `handleCall` DIRECTLY — there is deliberately no adapter here any
+  // more. A card hands over the callsign, the station's GRID, its audio offset and its
+  // protocol tier, in the shared handler's own argument order, so nothing in between can drop
+  // one. The offset is the RX/TX move, not sequencing data: passing it puts the marks on the
+  // station the same way Band Activity's double-click and the Roster table already do
+  // (WSJT-X: RX always follows, TX follows unless Hold Tx Freq is on).
+  //
+  // What stood here was an adapter that re-typed the callback as (call, tier) and passed
+  // undefined for grid/message/snr/freq, on the stated grounds that "a card knows only the
+  // callsign + its protocol tier". That was wrong — a card is handed the whole Station — and
+  // it is why Work started the QSO but left the markers behind while the other two panes
+  // moved them: one gesture, three behaviours in one cockpit (#183, against 1.7.0–1.9.0).
+  // An adapter is what made the drop possible, so the fix is to not have one.
   // Fire decode alerts (beep + toast) whenever the decode feed changes, gated by the
   // user's alert settings. processDecodes dedups internally. The third arg makes each
   // alert toast click-to-work — working the station is what you almost always want next
@@ -1157,24 +1293,36 @@ export default function App() {
 
   // Bumps when a QSO is logged AND "Clear DX call after logging" is on — the
   // cockpit watches it and wipes its DX Call/Grid fields (stock WSJT-X option).
+  // Driven off the engine's loggedTick so EVERY log path fires it, including a
+  // backend auto-log the frontend never initiated (#210) — the old approach
+  // intercepted only the frontend's own log actions and so missed the auto-log.
   const [dxClearTick, setDxClearTick] = useState(0)
-  const noteLoggedForDxClear = useCallback(() => {
-    if (settings?.clearDxAfterLog) setDxClearTick((t) => t + 1)
-  }, [settings?.clearDxAfterLog])
+  const prevLoggedTick = useRef<number | null>(null)
+  useEffect(() => {
+    const tick = snap?.loggedTick
+    if (tick == null) return
+    if (prevLoggedTick.current == null) {
+      prevLoggedTick.current = tick // adopt the first value — a fresh mount is not a log event
+      return
+    }
+    if (tick !== prevLoggedTick.current) {
+      prevLoggedTick.current = tick
+      if (settings?.clearDxAfterLog) setDxClearTick((t) => t + 1)
+    }
+  }, [snap?.loggedTick, settings?.clearDxAfterLog])
 
   const handleConfirmLog = useCallback(
     (record: LoggedQso) => {
       void withErrorToast(() => apiConfirmPendingLog(record), t('shell.log.failed')).then((s) => {
         if (s) {
           setSnap(s)
-          noteLoggedForDxClear()
           refreshNeeds() // drop the just-worked station from the roster/needs immediately
           // QRZ/ClubLog/eQSL auto-upload happens in the BACKEND log funnel now
           // (every log path, auto-log included); outcomes toast via uploadTick.
         }
       })
     },
-    [noteLoggedForDxClear, refreshNeeds],
+    [refreshNeeds],
   )
 
   const handleDiscardLog = useCallback(() => {
@@ -1700,7 +1848,11 @@ export default function App() {
   // board (workSpot → rig jumps band+mode+freq, cockpit opens). The source-reported
   // mode routes the cockpit: CW→CW, SSB/FM→Phone, FT8/unknown→Digital.
   const handleWorkMapSpot = useCallback(
-    (t: { call: string; band: string; mode: string | null; freqMhz: number | null }) => {
+    (t: { call: string; band: string; mode: string | null; freqMhz: number | null; program?: string; reference?: string }) => {
+      // Tag the hunt target BEFORE the QSY — same order as the POTA/SOTA board's own
+      // setHuntTarget-then-QSY split (handleHuntSpot below) — so a park worked from the
+      // map credits the activator too, not just the QSY.
+      if (t.program && t.reference) void setHuntTarget(t.call, t.program, t.reference).catch(() => {})
       handleWorkNeeded({
         call: t.call,
         entity: '',
@@ -1846,7 +1998,6 @@ export default function App() {
         // and a green "Logged QSO" over one claimed a write that never happened.
         if (r.logged) {
           pushToast(t('shell.toast.logged'), 'success', 2500)
-          noteLoggedForDxClear()
           refreshNeeds() // drop the just-worked station from the roster/needs immediately
           // QRZ/ClubLog/eQSL auto-upload happens in the BACKEND log funnel now
           // (every log path, auto-log included); outcomes toast via uploadTick.
@@ -1855,7 +2006,7 @@ export default function App() {
         }
       }
     })
-  }, [noteLoggedForDxClear, refreshNeeds])
+  }, [refreshNeeds])
 
   // Selecting a view from the nav. QSO / Field Day also request the backend mode
   // (defaulting to the "run" / "chat" role); Settings are pure UI
@@ -1935,6 +2086,13 @@ export default function App() {
         // (always-USB PKTUSB) and re-homes to the band's PSK31 watering hole on
         // a genuine mode change — the same path as CW/Phone/RTTY. The cockpit
         // still auto-arms its RX decoder on entry.
+        setView(m)
+        return
+      }
+      if (m === 'js8') {
+        // Navigate; the [view] rig-mode effect asserts DATA and re-homes (rigModeForView), and
+        // the cockpit's rising `active` edge calls `js8_enter` — set_tier(JS8) + the JS8
+        // watering hole for the band. RX only: nothing here can key.
         setView(m)
         return
       }
@@ -2073,6 +2231,17 @@ export default function App() {
   const navEnabled: Record<FeatureId, boolean> = { ...features.enabled, fieldDay: fdActive }
   const isViewEnabled = (v: View): boolean => navEnabled[v as FeatureId] !== false
 
+  // Recall card → Logbook, filtered to the call (#192, kr4fqg: "click a previous contact and
+  // land in the log"). Same shape as the `onOpenMemories` handoffs below — `undefined` when the
+  // section is switched off in this build, which is what keeps the row from advertising a
+  // navigation that would go nowhere. Every cockpit that mounts a recall card gets it.
+  const openLogbookFor = isViewEnabled('logbook')
+    ? (call: string) => {
+        setLogFocus({ call, ts: Date.now() })
+        setView('logbook')
+      }
+    : undefined
+
   // Defense in depth: if the current view's feature got disabled (e.g. toggled
   // off in Settings while viewing it), fall back to the profile's landing view.
   // The nav already hides disabled sections; this guards a stale selection. Never
@@ -2128,10 +2297,20 @@ export default function App() {
     snap.mycall.trim() === '' // fresh install (the default callsign is empty)
 
   // The Tempo (chat) roster represents who's on the TEMPO protocol — so it shows only
-  // stations last heard on TempoFast, not the FT8/FT4 stations that share the engine's single
-  // roster. Every other view (Operate, Field Day) shows the full roster.
+  // stations last heard on a Tempo tier, not the FT8/FT4 stations that share the engine's
+  // single roster. Every other view (Operate, Field Day) shows the full roster.
+  //
+  // ⚠️ BOTH CHAT TIERS, not just TempoFast. Tempo has two — TempoFast and TempoDeep — and the
+  // backend has said so all along (`Tier::is_chat` is `TempoFast | TempoDeep`, and its comment
+  // spells out that the whole chat cadence runs on both). This filter knew only the first, so
+  // on TempoDeep the roster was STRUCTURALLY always empty: every station heard there was
+  // filtered out of the one view that exists to list them. Found while validating an
+  // unrelated "Tempo not decoding" report (#160) — nobody had reported the roster itself,
+  // which is what an always-empty list gets you: it reads as a quiet band.
   const rosterStations =
-    effectiveView === 'chat' ? snap.stations.filter((s) => s.tier === 'TempoFast') : snap.stations
+    effectiveView === 'chat'
+      ? snap.stations.filter((s) => s.tier === 'TempoFast' || s.tier === 'TempoDeep')
+      : snap.stations
   // Two roster surfaces off one component: the Tempo chat roster keeps the long
   // presence retention (store-and-forward delivery needs it); the FT cockpit's
   // Stations panel flushes after 3 missed decode cycles (the Call Roster rule).
@@ -2147,7 +2326,7 @@ export default function App() {
       band={snap.radio.band}
       feedMode={tier}
       onSelect={handleSelect}
-      onCall={handleWorkStation}
+      onCall={handleCall}
       conversations={snap.conversations}
       onArchive={handleArchive}
       bandActive={activePeer === '*'}
@@ -2167,7 +2346,7 @@ export default function App() {
       band={snap.radio.band}
       feedMode={tier}
       onSelect={handleSelect}
-      onCall={handleWorkStation}
+      onCall={handleCall}
       conversations={snap.conversations}
       onArchive={handleArchive}
       bandActive={activePeer === '*'}
@@ -2274,19 +2453,64 @@ export default function App() {
   let workspace: JSX.Element | null
   switch (effectiveView) {
     case 'fieldDay':
-      workspace = threePane(
-        <FieldDayView fieldDay={snap.fieldDay} onSetMode={handleSetMode} />,
+      // THE FIELD DAY SECTION IS SETUP, SCORE, SECTIONS, BONUSES, LOG AND THE CLUB BOARD.
+      // It is NOT an operating surface, and there is deliberately no second one: Field Day is
+      // a MODE the whole app enters (`Mode::FieldDay`), so the contacts are made in the
+      // primary sections — CW, Phone, RTTY, PSK and the digital Conversation view all take
+      // `fieldDay` and turn their log strips into FD entries with class/section and shared
+      // dupe checking. A parallel Field-Day-only cockpit shipped beside them for one build and
+      // was withdrawn: it was a weaker copy of surfaces that already exist (its digital pane
+      // was a read-only monitor), and it took the operator away from the mode's own features
+      // to get the exchange boxes those sections already draw.
+      //
+      // It does NOT go through `threePane`, and that helper is the reason: it is not a layout,
+      // it is the digital OPERATING workspace, and it hardcodes its furniture. Until
+      // 2026-08-30 this view was drawn inside it — stations/chat rail on the left, waterfall +
+      // band activity + the mesh link pill on the right. It reads and writes none of that.
+      // Operator, mid-event: "what screen is this supposed to represent? Why are theyere
+      // waterfalls in here when its not the primary working area?" The rails also cost it the
+      // width its header strip needs (class/section, RUN vs S&P and four exports), which is
+      // the second half of the same report.
+      //
+      // Nothing is lost by leaving: the waterfall, band activity and the link pill all belong
+      // to the FT surface and are on screen in Operate, which is where digital Field Day
+      // contacts are actually made; the stations rail is the Tempo mesh roster and
+      // conversation picker, which this view never consulted.
+      //
+      // No bespoke shell class, deliberately — this view's root IS a `.panel`, so
+      // `.layout.single > .panel` already gives it the definite height, the deficit valve and
+      // the measure it needs (styles.css; computed in layout-single-deficit.test.tsx and
+      // fdDashboardShell.test.tsx).
+      workspace = (
+        <main className="layout single">
+          <FieldDayView
+            fieldDay={snap.fieldDay}
+            onSetMode={handleSetMode}
+            fdActive={settings?.fdActive ?? false}
+            fdRuleset={fdRuleset}
+            tier={tier}
+          />
+        </main>
       )
       break
     case 'logbook':
       workspace = (
         <main className="layout single">
           <Logbook
+            focusCall={logFocus}
+            onConsumeFocusCall={() => setLogFocus(null)}
             defaultBand={snap.radio.band}
             defaultFreqMhz={snap.radio.dialMhz}
             // Seed manual entries from the mode the operator was ACTUALLY running —
             // a hand-logged SSB/CW QSO must not default to the digital codec tier
             // (that silently wrote "FT8" on phone contacts and corrupted awards).
+            //
+            // 'keyboard' is the PSK cockpit's rig mode (rigModeForView.ts) and it was
+            // missing here, so it fell through the same hole phone once did: a PSK31
+            // contact hand-logged after the cockpit visit came up pre-filled FT8 (#159,
+            // the third of that report's three defects). PSK31 is the sub-mode the cockpit
+            // opens on; a QPSK31 contact is one pick away in the Mode field, which is the
+            // same accuracy the phone branch offers between SSB and FM.
             defaultMode={
               lastOpModeRef.current === 'phone'
                 ? settings?.phoneMode?.toLowerCase() === 'fm'
@@ -2296,7 +2520,9 @@ export default function App() {
                   ? 'CW'
                   : lastOpModeRef.current === 'rtty'
                     ? 'RTTY'
-                    : snap.link.tier
+                    : lastOpModeRef.current === 'keyboard'
+                      ? 'PSK31'
+                      : snap.link.tier
             }
           />
         </main>
@@ -2305,10 +2531,11 @@ export default function App() {
     case 'needed':
       workspace = (
         <NeededPanel
-          // FULL un-gated list: the board's own per-mode toggles decide what shows, so a
-          // disabled CW/Phone *feature* no longer hides those needs here (the operator
-          // controls mode visibility in the Needed filter bar instead).
-          alerts={needAlerts}
+          // Un-gated by MODE FEATURE — the board's own per-mode toggles decide what shows,
+          // so a disabled CW/Phone feature no longer hides those needs here — but STILL
+          // scoped by band: `boardNeeds` is that exact half, and it is a named function so
+          // the scopes cannot be dropped again by swapping this prop.
+          alerts={boardAlerts}
           bandPlan={bandPlan}
           selectedCall={activePeer}
           myGrid={snap.mygrid}
@@ -2362,6 +2589,7 @@ export default function App() {
     case 'cw':
       workspace = (
         <CwCockpit
+          onOpenLogbook={openLogbookFor}
           pitchHz={settings?.cwPitchHz ?? 600}
           wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
           snap={snap}
@@ -2384,6 +2612,7 @@ export default function App() {
     case 'phone':
       workspace = (
         <PhoneCockpit
+          onOpenLogbook={openLogbookFor}
           snap={snap}
           panels={phonePanels}
           theme={theme}
@@ -2450,9 +2679,20 @@ export default function App() {
     case 'psk':
     case 'sstv':
     case 'aprs':
+    case 'js8':
       // Same keep-alive pattern as Operate: RTTY's + PSK's decoded streams,
-      // SSTV's always-armed VIS receiver, and APRS's decode list must survive
-      // navigation, so all four live in persistent hosts below. Nothing in the slot.
+      // SSTV's always-armed VIS receiver, APRS's decode list and JS8's four-speed
+      // activity stream must survive navigation, so all five live in persistent hosts
+      // below. Nothing in the slot.
+      //
+      // ⚠️ A KEEP-ALIVE COCKPIT WITHOUT A CASE HERE FALLS THROUGH TO `default:` AND DRAWS
+      // THE TEMPO WORKSPACE UNDERNEATH ITSELF. 'js8' was missing and did exactly that —
+      // TempoHeader's TempoFast/TempoDeep chips, the Tempo roster + conversation, and the
+      // right rail's FT waterfall beside the cockpit's own, all on the JS8 screen (operator,
+      // 2026-09: "why is there tempo fast and tempo slow listed?", "also bringing in tempo
+      // chats", and a "split waterfall"). It is the 0.4–0.21 two-mains-in-the-shell class
+      // reached from the SWITCH rather than from the CSS that host-hidden.test.ts guards.
+      // Pinned by App.js8workspace.test.tsx, which mounts App and counts what is on screen.
       workspace = null
       break
     case 'connect':
@@ -2467,6 +2707,9 @@ export default function App() {
           needByCall={needByCall}
           onWorkSpot={handleWorkMapSpot}
           needAlerts={visibleAlerts}
+          // The amplifier rides the snapshot App already polls at 300 ms — no fourth poller,
+          // no new command. Absent when none is configured, and the pane then renders nothing.
+          amp={snap?.radio.amp ?? null}
           // Rotor is configured EITHER by picking a model (Nexus launches the
           // bundled rotctld) OR by the advanced external host — host-only was
           // the pre-rotctld gate and silently disabled point-at for model users.
@@ -2507,6 +2750,7 @@ export default function App() {
       workspace = (
         <main className="layout single">
           <SatellitesView
+            onOpenLogbook={openLogbookFor}
             focusSat={satFocus}
             snap={snap}
             onPopOut={() => void openPanelWindow('sats')}
@@ -2530,12 +2774,42 @@ export default function App() {
                   ? settings?.phoneMode === 'fm'
                     ? 'FM'
                     : snap.radio.sideband || 'USB'
-                  : // The tier's own name, not a guess. This was
-                    // `tier === 'FT4' ? 'FT4' : 'FT8'`, which labelled a memory
-                    // saved on Q65/WSPR/JT65 as FT8.
-                    OPERATE_TIERS.includes(tier)
-                    ? tier
-                    : 'FT8'
+                  : lastOpModeRef.current === 'rtty'
+                    ? // Found while fixing its identical sibling below and fixed with it: this
+                      // ladder never had an 'rtty' branch either, so a memory saved from the
+                      // RTTY cockpit was stamped FT8 too. Same consumption path, re-checked
+                      // rather than assumed by analogy: RTTY is already in `DIGITAL_MODES`, so
+                      // `planRecall` routes it digital, and `plan.mode` commands nothing.
+                      'RTTY'
+                    : lastOpModeRef.current === 'keyboard'
+                    ? // The same hole as the Logbook seed above, in the surface that
+                      // WRITES A RECORD THE OPERATOR KEEPS: 'keyboard' is the PSK
+                      // cockpit's rig mode and it was not on this ladder, so a memory
+                      // saved from the PSK watering hole was stamped FT8 — a wrong mode
+                      // on a stored frequency, re-read every time it is recalled.
+                      //
+                      // Safe as a MEMORY mode, checked rather than assumed: `planRecall`
+                      // already knows PSK31 (it is in DIGITAL_MODES), and `plan.mode`
+                      // never reaches CAT — the rig mode on recall comes from the
+                      // 'digital' operating policy, and `plan.mode` is used only for the
+                      // toast and the phone USB/LSB override branch. So this labels the
+                      // memory honestly and commands nothing new.
+                      'PSK31'
+                    : // The tier's own name, not a guess. This was
+                      // `tier === 'FT4' ? 'FT4' : 'FT8'`, which labelled a memory
+                      // saved on Q65/WSPR/JT65 as FT8.
+                      OPERATE_TIERS.includes(tier)
+                      ? tier
+                      : // ⚠️ NOT 'FT8' — ASK THE RADIO. This ladder reads the last OPERATING
+                        // section, and Memories is not one: entering it leaves the ref alone,
+                        // and on a fresh launch it starts at 'digital'. So a memory saved from
+                        // the Memories view itself — the surface whose whole job is saving
+                        // memories — was stamped FT8 no matter what the rig was doing, which is
+                        // the "new memories default to digital modes" report. The rig's own
+                        // reported mode is the honest answer here and is already on the
+                        // snapshot; the tier ladder above still wins wherever an operating
+                        // section really is active, because there the operator IS in that mode.
+                        snap.radio.rigMode?.trim() || snap.radio.sideband || 'USB'
             }
             onRecall={recallMemory}
           />
@@ -2655,6 +2929,7 @@ export default function App() {
           effectiveView === 'psk' ||
           effectiveView === 'sstv' ||
           effectiveView === 'aprs' ||
+          effectiveView === 'js8' ||
           // Satellites: the bird's own surfaces ARE the frequency authority here
           // (transponder cards, passband strip, the binding line). Operator
           // report: "my dropdowns for frequencies are still showing FT8
@@ -2663,15 +2938,24 @@ export default function App() {
           effectiveView === 'sats'
         }
         hideDigitalChrome={
+          // ⚠️ 'fieldDay' IS DELIBERATELY NOT ON THIS LIST. It is not a cockpit at all — it is
+          // the setup / score / log screen, and it draws no header of its own with a Stop TX on
+          // it. Field Day contacts are made in the cockpits below, which are on the list because
+          // each one's own header carries the stop line. Hiding the top bar's TX cluster here
+          // would take the only stop on the screen away from an operator who is parked on the
+          // scoreboard while the rig is keyed from somewhere else.
           effectiveView === 'phone' ||
           effectiveView === 'cw' ||
-          // RTTY/PSK/SSTV/APRS are free-running modes with their OWN band selectors — the
+          // RTTY/PSK/SSTV/APRS/JS8 are free-running modes with their OWN band selectors — the
           // top control is fed the DIGITAL (FT8) plan, and the tier tiles / slot
-          // clock / DT readout are slot-sync furniture that means nothing here.
+          // clock / DT readout are slot-sync furniture that means nothing here (JS8 is
+          // slot-synced, but its header carries its own band select, speed chips and Stop
+          // TX, so the TopBar's cluster is hidden here exactly as for the others).
           effectiveView === 'rtty' ||
           effectiveView === 'psk' ||
           effectiveView === 'sstv' ||
           effectiveView === 'aprs' ||
+          effectiveView === 'js8' ||
           effectiveView === 'sats'
         }
         tier={tier}
@@ -2679,10 +2963,13 @@ export default function App() {
         onOpenGuide={() => setShowGuide(true)}
         field={fieldMode}
         onFieldChange={setFieldMode}
-        // Who is at the key (#25). Absent/empty renders nothing — the single-op case.
+        // Who is at the key (#25). Absent/empty renders nothing — the single-op case —
+        // UNLESS Field Day is on, where the seat swap has to be reachable from every mode
+        // before anyone has claimed the first seat (operator, 2026-08-30).
         operator={settings?.fdOperator ?? ''}
         operatorRoster={opRoster}
         onSetOperator={handleSetOperator}
+        fdActive={settings?.fdActive ?? false}
       />
 
       <UpdateBanner update={selfUpdate} />
@@ -2738,6 +3025,12 @@ export default function App() {
           onSelect={handleView}
           tier={tier}
           onDigitalMode={handleDigitalMode}
+          // The club band board is a WINDOW, not a section: the rail button opens the
+          // `fdclub` pop-out straight onto a second monitor. It rides the Field Day
+          // master switch (navEnabled.fieldDay = fdActive) and NOT club sync — the
+          // board used to be reachable only from inside FieldDayView once sync was
+          // already on, which is exactly why nobody found it.
+          onClubBoard={() => void openPanelWindow('fdclub')}
         />
         {/* CRASH CONTAINMENT — inside `.shell` and AFTER the rail, deliberately.
             A render throw in a view used to unmount the ENTIRE root (0.24.6 field
@@ -2771,7 +3064,11 @@ export default function App() {
               as before) and display:none when hidden. */}
           <div className="operate-host" hidden={effectiveView !== 'operate'}>
             <OperateCockpit
+              onOpenLogbook={openLogbookFor}
               companionAddr={settings?.companionAddr}
+              fdActive={settings?.fdActive ?? false}
+              fdRuleset={fdRuleset}
+              superFoxCalls={superFoxCalls}
               blockedCalls={settings?.blockedCalls ?? []}
               onToggleBlocked={handleToggleBlocked}
               snap={snap}
@@ -2807,6 +3104,10 @@ export default function App() {
               needScopes={needScopes}
               selectedCall={activePeer}
               onSelect={handleSelect}
+              // #204: F4 / Clear has to reach the callsign card, and half of what the card
+              // reads is BACKEND state. `handleMapSelect` already round-trips a null through
+              // `select_peer` — reuse it rather than adding a second deselect path.
+              onClearSelection={() => handleMapSelect(null)}
               layoutMode={operateLayout}
               onLayoutMode={handleOperateLayout}
               panels={operatePanels}
@@ -2822,6 +3123,7 @@ export default function App() {
           {isViewEnabled('rtty') && (
             <div className="rtty-host" hidden={effectiveView !== 'rtty'}>
               <RttyCockpit
+                onOpenLogbook={openLogbookFor}
                 snap={snap}
                 onSnap={setSnap}
                 active={effectiveView === 'rtty'}
@@ -2836,6 +3138,7 @@ export default function App() {
           {isViewEnabled('psk') && (
             <div className="psk-host" hidden={effectiveView !== 'psk'}>
               <PskCockpit
+                onOpenLogbook={openLogbookFor}
                 snap={snap}
                 onSnap={setSnap}
                 active={effectiveView === 'psk'}
@@ -2874,6 +3177,26 @@ export default function App() {
                 radio={snap.radio}
                 onSetTxEnabled={handleSetTxEnabled}
                 onOpenSettings={openSettingsAt}
+              />
+            </div>
+          )}
+          {/* JS8 keep-alive host — same contract as .rtty-host/.psk-host: the engine keeps
+              decoding all four speeds while the operator is on another section; `active`
+              gates the display poll and fires js8_enter on the rising edge. Gated on the
+              feature toggle (JS8 ships ON, so this mounts unless the operator turned it off).
+              `onSetTxEnabled` is the header pill — the only TX latch in this view. */}
+          {isViewEnabled('js8') && (
+            <div className="js8-host" hidden={effectiveView !== 'js8'}>
+              <Js8Cockpit
+                onOpenLogbook={openLogbookFor}
+                snap={snap}
+                onSnap={setSnap}
+                active={effectiveView === 'js8'}
+                onSetFrequency={handleSetFrequency}
+                onSetTxEnabled={handleSetTxEnabled}
+                theme={theme}
+                wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
+                panels={js8Panels}
               />
             </div>
           )}

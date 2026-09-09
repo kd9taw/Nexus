@@ -44,6 +44,13 @@ vi.mock('../toast', () => ({
   withErrorToast: vi.fn(async (fn: () => Promise<unknown>) => fn()),
 }))
 
+/** Newest call to a mocked api verb. (`Array.prototype.at` is outside this project's lib
+ *  target, so index explicitly.) */
+function lastCall(name: string): unknown[] | undefined {
+  const calls = api.get(name).mock.calls
+  return calls.length ? (calls[calls.length - 1] as unknown[]) : undefined
+}
+
 const FTDX10 = {
   id: 0,
   name: 'FTDX10',
@@ -230,9 +237,19 @@ describe('the OmniRig slot travels with the radio it belongs to', () => {
     expect(id).toBe(1)
     expect(patch.rigConn).toBe('omnirig')
     expect(patch.omnirigSlot).toBe(2)
-    // The station-wide write must NOT be the path taken — that is what stamped the edited
-    // radio's config onto the active one (the 2026-07-25 report).
-    expect(api.get('setSettings')).not.toHaveBeenCalled()
+    // ⛔ DO NOT RESTORE `expect(setSettings).not.toHaveBeenCalled()` HERE. That assertion was
+    // #173 written down as a guarantee, and it is why this seam survived six data-loss
+    // bugs: routing the WHOLE save through the per-radio verb discarded every
+    // station-wide setting while the panel reported success, and any correct fix turned
+    // four assertions like this one red and read as a regression.
+    // WHAT IT GUARANTEES NOW: the station-wide write carries the ACTIVE radio's config, so the
+    // edited OmniRig radio's connection can never be stamped onto radio 0 — the 2026-07-25
+    // report's actual failure, stated in a form that survives the save doing its other job.
+    const saved = lastCall('setSettings')![0] as Record<string, unknown>
+    expect(saved.activeRadio).toBe(0)
+    expect(saved.serialPort).toBe('COM3') // the active radio's, never the edited radio's ''
+    expect(saved.rigConn).toBe('serial') // …and certainly not 'omnirig'
+    expect(saved.omnirigSlot).toBe(1)
   })
 })
 

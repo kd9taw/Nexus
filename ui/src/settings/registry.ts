@@ -37,6 +37,7 @@ export type SettingsTabId =
   | 'logging'
   | 'contesting'
   | 'appearance'
+  | 'configurations'
 
 export interface SettingsTabDef {
   id: SettingsTabId
@@ -61,6 +62,7 @@ export const SETTINGS_TABS: SettingsTabDef[] = [
   { id: 'logging', label: 'Logging & Connectors' },
   { id: 'contesting', label: 'Contesting' },
   { id: 'appearance', label: 'Appearance' },
+  { id: 'configurations', label: 'Config' },
 ]
 
 export interface SettingsSectionDef {
@@ -139,7 +141,13 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     advanced: true,
     keywords: ['rigctld port', 'cat broker', 'sharing port', 'native ci-v', 'flex ip',
       'panadapter', 'dax', 'diagnostic log', 'plain ssb', 'data modes', 'no rf', 'red light',
-      'rigblaster', 'mic jack', 'pktusb', 'data-u', 'usb-d'],
+      'rigblaster', 'mic jack', 'pktusb', 'data-u', 'usb-d',
+      // #130: the words the reporter used were the RIG's, not ours — "FM-D", "reverts to FM".
+      'fm-d', 'fmd', 'data-fm', 'pktfm', 'fm data', 'data submode', 'sstv fm', 'hold mode',
+      // The #145 declarations. The words here are the SYMPTOM, not the setting name — an
+      // operator whose rig keys the moment Nexus opens does not search for "handshake".
+      'serial handshake', 'flow control', 'xonxoff', 'rts state', 'dtr state', 'keying line',
+      'keys at launch', 'transmits at startup', 'stuck ptt', 'stuck transmit'],
   },
   {
     id: 'audio',
@@ -152,9 +160,16 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
   },
   {
     id: 'headphone-monitor',
-    label: 'Headphone monitor',
+    // The ID stays `headphone-monitor` — it is a deep-link target and renaming it breaks links
+    // that already exist. The LABEL is what the operator reads, and "monitor" told them the
+    // opposite of what this does; see the note beside these strings in en.ts.
+    label: 'Receive audio on this computer',
     tab: 'radio',
-    keywords: ['headphones', 'monitor', 'listen', 'sidetone out', 'passthrough'],
+    // 'monitor' stays a KEYWORD even though it left the label: an operator who learned the old
+    // name, or who reasons from the rig's MONI control, must still land here — and landing here is
+    // how they discover it is the receive side. Searching for the wrong word is not a wrong search.
+    keywords: ['headphones', 'monitor', 'listen', 'receive audio', 'rx audio', 'speakers',
+      'sidetone out', 'passthrough'],
   },
   {
     id: 'satellite-doppler',
@@ -177,11 +192,30 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'rotctld', 'yaesu g-5500'],
   },
   {
+    id: 'amplifier',
+    label: 'Amplifier',
+    tab: 'radio',
+    // Top-level on the Radio tab, NOT nested under rig-control: an amplifier is a per-radio
+    // EXTERNAL DEVICE on its own serial port, exactly the shape of the rotator above, and
+    // rig-control's own header states the exclusion — "if it is not a model, port, baud,
+    // framing or keying line, it does not belong here".
+    //
+    // Keywords are ENGLISH-ONLY DATA and are never translated (the search matches these
+    // strings, not the rendered legend), and at least one must be a word the label does not
+    // already contain — 'amp' alone is a substring of 'amplifier' and the registry guard
+    // rejects a section whose every keyword is.
+    keywords: ['linear', 'spe', 'expert', '1.3k-fa', '1.5k-fa', '2k-fa', 'elecraft',
+      'kpa500', 'kpa1500', 'swr', 'pa temp', 'watts out'],
+  },
+  {
     id: 'transmit-limits',
     label: 'Transmit limits & sharing',
     tab: 'radio',
+    // Backup, restore and reset all MOVED to the Config tab, so their keywords went with them —
+    // a search term that lands the operator on a section no longer holding the control is worse
+    // than no keyword at all. What stays here is what this section still does.
     keywords: ['band edge', 'edge tone', 'max power', 'power limit', 'watts', 'safety',
-      'backup', 'restore', 'export settings', 'share rig', 'rigctld address', 'other programs',
+      'share rig', 'rigctld address', 'other programs',
       'foreign ptt', 'wsjt-x share', 'n1mm share'],
   },
 
@@ -191,9 +225,14 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     label: 'Digital (FT8/FT4)',
     tab: 'digital',
     neededInHourOne: true,
+    // `tune`/`tune timeout` are here because the Tune timeout — the auto-release on a key-down
+    // carrier — sits in this section's "Transmit & Sequencing" group and had NO searchable word
+    // anywhere in the registry, so search returned nothing and no deep link could name it.
     keywords: ['ft8', 'ft4', 'auto sequence', 'sequencing', 'tx enable', 'watchdog', 'decode',
       'depth', 'deep', 'auto cq', 'cq', 'hound', 'fox', 'dxpedition', 'auto log', 'blocked',
-      'ap decode', 'f low', 'f high'],
+      'ap decode', 'f low', 'f high', 'tune', 'tune timeout', 'tune carrier', 'key down',
+      'tx period', 't/r period', 'disable tx after 73', 'tune power', 'low power tune',
+      'atu power', 'loop antenna', 'db reports', 'comments', 'reports to comments'],
   },
   {
     id: 'jt65',
@@ -253,7 +292,7 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     label: 'RTTY',
     tab: 'digital',
     keywords: ['rtty', 'baudot', 'fsk', 'afsk', 'shift', 'baud', '45.45', '170', 'reverse',
-      'mark', 'space'],
+      'mark', 'space', 'auto arm', 'start receiving', 'not decoding'],
   },
   {
     id: 'psk',
@@ -261,6 +300,14 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     tab: 'digital',
     keywords: ['psk31', 'bpsk', 'varicode', 'keyboard', 'ragchew', 'warble', '14.070',
       'afc', 'auto arm', 'start receiving', 'narrow band', 'digipan'],
+  },
+  {
+    id: 'js8',
+    label: 'JS8',
+    tab: 'digital',
+    keywords: ['js8', 'js8call', 'heartbeat', 'hb', 'autoreply', 'relay', 'inbox',
+      'store and forward', 'slow', 'normal', 'fast', 'turbo', '7.078', '14.078',
+      'idle watchdog', 'allcall'],
   },
   {
     id: 'sstv',
@@ -299,7 +346,7 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     label: 'Alerts',
     tab: 'spots',
     keywords: ['alert', 'notify', 'my call', 'cq', 'new dxcc', 'new grid', 'rare', 'watch list',
-      'wanted', 'sound'],
+      'wanted', 'sound', 'lotw', 'confirm', 'confirmation', 'confirm tier'],
   },
 
   // ---- Logging & Connectors ----------------------------------------------------
@@ -365,13 +412,21 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     keywords: ['fcc', 'state', 'was', 'callsign database', 'us states'],
   },
   {
+    id: 'country-file',
+    label: 'Country file (DXCC)',
+    tab: 'logging',
+    keywords: ['cty', 'cty.dat', 'dxcc', 'country file', 'entities', 'ad1c', 'prefix',
+      'country'],
+  },
+  {
     id: 'confirmations',
     label: 'Confirmations',
     tab: 'logging',
     neededInHourOne: true,
     keywords: ['lotw', 'eqsl', 'qrz', 'clublog', 'club log', 'hrdlog', 'cloudlog', 'wavelog',
       'hamqth', 'qsl', 'upload', 'auto-upload', 'password', 'api key', 'credential', 'login',
-      'callbook', 'repeaterbook', 'tqsl', 'station location'],
+      'callbook', 'repeaterbook', 'tqsl', 'station location',
+      'wrl', 'world radio league', 'qth nickname', 'nickname'],
   },
 
   // ---- Contesting --------------------------------------------------------------
@@ -386,7 +441,34 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     label: 'Field Day Setup',
     tab: 'contesting',
     keywords: ['field day', 'arrl', 'class', 'section', 'exchange', 'power multiplier',
-      'winter field day'],
+      'winter field day', 'rules', 'rules year', 'rules update', 'wfd'],
+  },
+  // A club site answers "who are you?" three different ways — the call that goes on the air,
+  // the tent you are sitting in, and the person at the key — and all three already existed as
+  // settings (`mycall`, `fd_position_name`, `fd_operator`). What did not exist was one place
+  // that showed them as a set: two lived on Station, the third sat under a networking heading
+  // on Contesting, and the club report that produced this section is an operator asking what
+  // the position name was even for. So this is a VIEW of three existing fields, deliberately
+  // not new state, placed where a Field Day operator meets them.
+  {
+    id: 'field-day-identity',
+    label: "Who's who at this event",
+    tab: 'contesting',
+    keywords: ['callsign', 'club call', 'position name', 'position', 'tent', 'trailer',
+      'operator', 'operator at the key', 'multi-op', 'multiop', 'swap seats', 'who is operating',
+      'station name', 'my call'],
+  },
+  {
+    id: 'field-day-club',
+    label: 'Field Day Club Sync',
+    tab: 'contesting',
+    // 'position' and 'tent' moved to `field-day-identity` with the control they name. Search
+    // scores an exact keyword above everything but a label, and ties break alphabetically, so
+    // leaving either word here would have kept sending "position"/"tent" to the networking
+    // section — which is exactly the section the operator could not make sense of.
+    keywords: ['club', 'sync', 'host', 'join', 'multi-op', 'multiop', 'lan',
+      'network', 'band board', 'scoreboard', 'dupe sharing', 'discover', 'find club events',
+      'club log', 'spectator', 'tv', 'projector', 'big screen'],
   },
 
   // ---- Appearance --------------------------------------------------------------
@@ -398,6 +480,17 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'density', 'compact', 'pane', 'layout'],
   },
   {
+    // The read-only LAN page. Filed under Appearance because it is a way of LOOKING at
+    // Connect, not a station or contest setting — and the keywords carry the words an
+    // operator would actually search for ("tv", "chromecast", "cast", "browser").
+    id: 'connect-web',
+    label: 'Connect on a TV',
+    tab: 'appearance',
+    keywords: ['tv', 'television', 'big screen', 'wall display', 'browser', 'lan', 'hamclock',
+      'network', 'web page', 'cast', 'chromecast', 'firestick', 'fire stick', 'tablet',
+      'phone', 'remote view', 'read only', 'shack tv'],
+  },
+  {
     id: 'features',
     label: 'Features',
     tab: 'appearance',
@@ -405,11 +498,31 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'pota', 'setup wizard', 'field day mode'],
   },
   {
+    id: 'app-updates',
+    label: 'App updates',
+    tab: 'appearance',
+    keywords: ['beta', 'update', 'pre-release', 'prerelease', 'channel', 'stable',
+      'auto update', 'early access'],
+  },
+  {
     id: 'accessibility',
     label: 'Accessibility & eyes-free',
     tab: 'appearance',
     keywords: ['screen reader', 'announce', 'blind', 'earcon', 'sound', 'a11y', 'speech',
       'eyes free', 'tick'],
+  },
+
+  // ---- Config ------------------------------------------------------------------
+  // Backup and Restore previously sat under Radio -> "Transmit limits & sharing", which is why
+  // no one found them: backing up a whole station has nothing to do with transmit limits. The
+  // keywords are deliberately wide because this is what an operator searches for in a panic.
+  {
+    id: 'configurations',
+    label: 'Backup & reset',
+    tab: 'configurations',
+    keywords: ['backup', 'back up', 'restore', 'reset', 'factory', 'defaults', 'start over',
+      'export', 'import', 'export settings', 'new computer', 'migrate', 'move to a new laptop',
+      'wipe', 'clean slate', 'start again', 'settings file'],
   },
 ]
 

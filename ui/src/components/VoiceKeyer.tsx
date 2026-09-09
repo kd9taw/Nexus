@@ -346,7 +346,7 @@ export function VoiceKeyer({ txEnabled, keyed, transmitting, fdExchange }: Props
                     fileRefs.current[m.slot] = el
                   }}
                   type="file"
-                  accept=".wav,audio/wav,audio/x-wav"
+                  accept=".wav"
                   hidden
                   onChange={(e) => {
                     const f = e.target.files?.[0]
