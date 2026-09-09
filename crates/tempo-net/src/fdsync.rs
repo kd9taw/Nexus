@@ -395,9 +395,15 @@ fn now_unix() -> u64 {
 ///
 /// ⚠️ The two key lists are chunked by the SAME index range, because the host
 /// builds them index-parallel — entry `n` of `dupes` and entry `n` of `dkeys`
-/// are the same worked station under two rules. `dupes` is empty for a non-Field-Day
-/// club (see [`ClubState::dupes`]), so the range is taken over `dkeys`, which is
-/// the list that is always there.
+/// are the same worked station under two rules.
+///
+/// The range runs to the LONGER of the two, not to `dkeys`. `ClubLog::club_state`
+/// only ever produces `dkeys` at least as long as `dupes`, so today the two are the
+/// same number — but chunking over `dkeys` alone means a `ClubState` with dupes and
+/// no dkeys silently ships nothing, and "unreachable and documented" is one
+/// refactor away from "reachable and silent" on a path whose failure mode is a
+/// tent's dupe warnings quietly not arriving. Taking the max costs one `max` call
+/// and removes the hazard instead of describing it.
 fn write_club_state(w: &mut impl Write, st: ClubState, snap: bool) -> std::io::Result<()> {
     let ClubState {
         reset: _,
@@ -408,14 +414,21 @@ fn write_club_state(w: &mut impl Write, st: ClubState, snap: bool) -> std::io::R
         qsos,
         board,
     } = st;
+    let total = dkeys.len().max(dupes.len());
     let mut first = true;
     let mut start = 0usize;
     loop {
-        let end = (start + SNAP_DUPES_PER_LINE).min(dkeys.len());
+        let end = (start + SNAP_DUPES_PER_LINE).min(total);
         let part = ClubState {
             reset: snap && first,
-            dupes: dupes.get(start..end).unwrap_or(&[]).to_vec(),
-            dkeys: dkeys[start..end].to_vec(),
+            dupes: dupes
+                .get(start..end.min(dupes.len()))
+                .unwrap_or(&[])
+                .to_vec(),
+            dkeys: dkeys
+                .get(start..end.min(dkeys.len()))
+                .unwrap_or(&[])
+                .to_vec(),
             sections: if first { sections.clone() } else { Vec::new() },
             score,
             qsos,
@@ -428,7 +441,7 @@ fn write_club_state(w: &mut impl Write, st: ClubState, snap: bool) -> std::io::R
         };
         w.write_all(encode_line(&msg).as_bytes())?;
         first = false;
-        if end >= dkeys.len() {
+        if end >= total {
             return Ok(());
         }
         start = end;
@@ -1529,6 +1542,110 @@ mod tests {
             [V1_ERROR.to_string()],
             "the old host's own words reach the operator unaltered"
         );
+    }
+
+    /// ⭐ The two key lists survive CHUNKING index-parallel — asserted across a real
+    /// boundary, because `SNAP_DUPES_PER_LINE` is 50 and a club works more than 50
+    /// stations in an hour, so every real event crosses it.
+    ///
+    /// Entry `n` of `dupes` and entry `n` of `dkeys` are the same worked station
+    /// under two rules. If chunking could shift one relative to the other, a
+    /// position would union a `dupes` triple with a `dkeys` key belonging to a
+    /// different contact and warn about the wrong station.
+    #[test]
+    fn chunking_keeps_dupes_and_dkeys_index_parallel_across_the_boundary() {
+        // 120 keys = three chunks at 50, so the seam is exercised twice.
+        let n = 120;
+        let dupes: Vec<(String, String, String)> = (0..n)
+            .map(|i| (format!("W{i}AW"), "20m".into(), "CW".into()))
+            .collect();
+        let dkeys: Vec<Vec<String>> = dupes
+            .iter()
+            .map(|(c, b, m)| vec![c.to_uppercase(), b.to_uppercase(), m.clone()])
+            .collect();
+        let st = ClubState {
+            reset: false,
+            dupes: dupes.clone(),
+            dkeys: dkeys.clone(),
+            sections: vec!["WI".into()],
+            score: 7,
+            qsos: 120,
+            board: Vec::new(),
+        };
+
+        let mut buf: Vec<u8> = Vec::new();
+        write_club_state(&mut buf, st, true).unwrap();
+        let text = String::from_utf8(buf).unwrap();
+        assert_eq!(
+            text.lines().count(),
+            3,
+            "120 keys at 50 per line is 3 lines"
+        );
+        assert!(
+            text.lines().all(|l| l.len() <= MAX_LINE_BYTES),
+            "every chunk stays under the wire's line cap"
+        );
+
+        // Reassemble exactly as a position's mirror does, and check the PAIRING
+        // rather than just the totals — two lists of the right length that had
+        // drifted apart would pass a count check.
+        let mut got_dupes = Vec::new();
+        let mut got_dkeys = Vec::new();
+        for line in text.lines() {
+            let Some(Msg::Snap(part)) = decode_line(line) else {
+                panic!("each chunk is a snap line: {line}");
+            };
+            assert_eq!(
+                part.dupes.len(),
+                part.dkeys.len(),
+                "the two lists are cut at the SAME index in every chunk"
+            );
+            got_dupes.extend(part.dupes);
+            got_dkeys.extend(part.dkeys);
+        }
+        assert_eq!(got_dupes, dupes, "every dupe arrived, in order");
+        assert_eq!(got_dkeys, dkeys, "every generalised key arrived, in order");
+        for (t, k) in got_dupes.iter().zip(&got_dkeys) {
+            assert_eq!(
+                t.0.to_uppercase(),
+                k[0],
+                "entry n of each list is still the same station"
+            );
+        }
+
+        // A `dupes`-only state (the shape a non-Field-Day club would produce if the
+        // legacy projection were ever re-enabled) must not vanish. Chunking over
+        // `dkeys` alone shipped NOTHING here — unreachable from `club_state` today,
+        // one refactor from reachable, and silent when it happens.
+        let mut buf: Vec<u8> = Vec::new();
+        write_club_state(
+            &mut buf,
+            ClubState {
+                dupes: dupes.clone(),
+                dkeys: Vec::new(),
+                ..Default::default()
+            },
+            false,
+        )
+        .unwrap();
+        let shipped: usize = String::from_utf8(buf)
+            .unwrap()
+            .lines()
+            .map(|l| match decode_line(l) {
+                Some(Msg::Club(p)) => p.dupes.len(),
+                _ => panic!("a club line: {l}"),
+            })
+            .sum();
+        assert_eq!(
+            shipped, n,
+            "a dupes-only state ships all its dupes, not none"
+        );
+
+        // …and the empty state still writes exactly one line, which is what tells a
+        // joining position "here is the snapshot, it is empty".
+        let mut buf: Vec<u8> = Vec::new();
+        write_club_state(&mut buf, ClubState::default(), true).unwrap();
+        assert_eq!(String::from_utf8(buf).unwrap().lines().count(), 1);
     }
 
     #[test]

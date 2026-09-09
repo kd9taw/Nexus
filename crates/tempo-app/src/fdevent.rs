@@ -1216,14 +1216,109 @@ mod tests {
 
     // ---- v2: the wire, the journal, and both compatibility directions -----
 
-    /// A REAL 1.x host journal — twelve NDJSON rows written by the shipped
-    /// `MergedRow` (byte-identical between `main` and this branch's base), three
-    /// positions, all three mode classes, two digital submodes, one unrecorded
-    /// operator and one cross-position dupe — with the Cabrillo and ADIF that
-    /// build exported from it.
+    /// A REAL 1.x host journal: twelve NDJSON rows written by the shipped
+    /// `MergedRow`, three positions, all three mode classes, two digital submodes,
+    /// one unrecorded operator and one cross-position dupe — with the Cabrillo and
+    /// ADIF that same build exported from it.
+    ///
+    /// ⭐ **PROVENANCE, and it is checked rather than asserted in prose.** The bytes
+    /// were produced by a build at `f27a2e0a` (this branch's base, pre-batch-4),
+    /// whose `MergedRow` is byte-identical to the one released as **`v1.10.3`** —
+    /// `diff <(git show v1.10.3:crates/tempo-app/src/fdevent.rs) <(git show
+    /// f27a2e0a:…)` over the struct is empty. So these ARE a 1.x host's bytes and a
+    /// 1.x host's exports, not a hand-typed guess at them.
+    ///
+    /// That git check cannot run inside a test, so [`V1MergedRow`] carries the ten
+    /// fields v1.10.3 declared, in its order, and
+    /// `the_fixture_is_what_v1_10_3s_merged_row_wrote` round-trips every line
+    /// through it. The test therefore holds its own definition of what v1 meant
+    /// instead of trusting today's type to have stayed honest about it.
+    ///
+    /// ⚠️ **Two honest caveats.** The twelve contacts are SYNTHETIC — what is real
+    /// is the serialization, not somebody's actual Field Day log. And the `.cbr`
+    /// and `.adi` capture PRE-UPGRADE exporter behaviour, which is precisely the
+    /// property that lets the migration test fail if the migration is wrong.
     const J1X: &str = include_str!("../tests/fixtures/fd-1x-journal/fd_event_1x.jsonl");
     const J1X_CBR: &str = include_str!("../tests/fixtures/fd-1x-journal/fd_event_1x.cbr");
     const J1X_ADI: &str = include_str!("../tests/fixtures/fd-1x-journal/fd_event_1x.adi");
+
+    /// `MergedRow` EXACTLY as `v1.10.3` declared it — the ten fields, in that order,
+    /// with that build's serde attributes. Nothing may be added here: its whole job
+    /// is to be the frozen record of what a 1.x journal line is, so a future edit to
+    /// the live `MergedRow` cannot quietly redefine the thing the fixture is being
+    /// checked against.
+    #[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
+    struct V1MergedRow {
+        posid: String,
+        seq: u64,
+        call: String,
+        class: String,
+        section: String,
+        band: String,
+        mode_class: String,
+        #[serde(default)]
+        submode: String,
+        when_unix: u64,
+        #[serde(default)]
+        operator: String,
+    }
+
+    /// ⭐ The fixture proves its own provenance: every line parses as v1.10.3's
+    /// `MergedRow` and re-serializes to the identical bytes.
+    ///
+    /// Round-tripping is what makes this stronger than "the JSON has no `ex` key".
+    /// A line with a field v1 never declared, a field missing that v1 required, or
+    /// a different field ORDER would all survive a key check and fail here — so
+    /// "these bytes are a 1.x journal" stops being a claim in a report and becomes
+    /// something the suite re-derives on every run.
+    #[test]
+    fn the_fixture_is_what_v1_10_3s_merged_row_wrote() {
+        let mut n = 0;
+        for line in J1X.lines() {
+            let v1: V1MergedRow =
+                serde_json::from_str(line).expect("every line is a v1.10.3 MergedRow");
+            assert_eq!(
+                serde_json::to_string(&v1).unwrap(),
+                line,
+                "the line re-serializes byte-identically under v1.10.3's own shape"
+            );
+            // …and today's type reads the same row out of those same bytes.
+            let now: MergedRow = serde_json::from_str(line).unwrap();
+            assert_eq!(
+                (now.posid, now.seq, now.call, now.class, now.section),
+                (v1.posid, v1.seq, v1.call, v1.class, v1.section),
+                "the v2 type reads a v1 line as the v1 type wrote it"
+            );
+            n += 1;
+        }
+        assert_eq!(n, 12, "the whole fixture was checked, not an empty file");
+
+        // POSITIVE CONTROL — the check discriminates. A v2-shaped line (the fields
+        // this batch ADDED) must NOT round-trip as v1.10.3, or the assertion above
+        // would pass for a regenerated fixture that had quietly become a v2 one.
+        let v2_line = serde_json::to_string(&MergedRow {
+            posid: "aaaa0001".into(),
+            seq: 1,
+            call: "W1AW".into(),
+            class: "2A".into(),
+            section: "CT".into(),
+            ex: fd_fields(FdEvent::ArrlFd, "2A", "CT"),
+            mex: fd_fields(FdEvent::ArrlFd, "3A", "WI"),
+            band: "20m".into(),
+            mode_class: "PH".into(),
+            submode: String::new(),
+            when_unix: 1_782_579_600,
+            operator: "KD9TAW".into(),
+        })
+        .unwrap();
+        let as_v1: V1MergedRow =
+            serde_json::from_str(&v2_line).expect("v1 ignores fields it does not know");
+        assert_ne!(
+            serde_json::to_string(&as_v1).unwrap(),
+            v2_line,
+            "control: a v2 line does NOT round-trip as v1.10.3 — the check can tell them apart"
+        );
+    }
 
     fn scratch(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("fdevent-{tag}-{}", std::process::id()));
