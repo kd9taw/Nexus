@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Remote radio control groundwork:** Mode destinations reuse the station's
+  frequency-memory rules. The internal CAT transaction checks current dial,
+  mode and PTT, preserves native filter settings, and bounds band-stack recovery
+  to one correction. Browser radio tuning remains unavailable until station
+  state, persistence and controller integration are complete. Hardware
+  acceptance is still required.
+
 - **Remote receiver and amplifier controls:** With separate permission granted
   at the station, the browser can use the existing receiver monitor, transcript,
   AFC and PSK mode controls, plus amplifier Operate/Standby and band steps.

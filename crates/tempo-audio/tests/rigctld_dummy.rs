@@ -18,7 +18,11 @@ use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use tempo_audio::rig::Rig;
+use tempo_app::remote_control::{Completion, Outcome, Revocation, WritePermission};
+use tempo_audio::rig::{
+    remote::{Position, Retune},
+    Rig,
+};
 
 /// Locate a usable rigctld, or None (→ tests skip).
 fn rigctld_bin() -> Option<String> {
@@ -148,9 +152,18 @@ impl DummyRig {
             let sock = self.obs.as_mut().unwrap();
             let ok = sock.write_all(format!("{cmd}\n").as_bytes()).is_ok();
             if ok {
+                let mut reply = BufReader::new(&*sock);
                 let mut line = String::new();
-                if BufReader::new(&*sock).read_line(&mut line).is_ok() && !line.trim().is_empty() {
-                    return line.trim().to_string();
+                if reply.read_line(&mut line).is_ok() && !line.trim().is_empty() {
+                    // `m` reports mode and passband on separate lines. Consume
+                    // both before the next observation, even if TCP splits them.
+                    let mut passband = String::new();
+                    if cmd != "m"
+                        || (reply.read_line(&mut passband).is_ok()
+                            && passband.trim().parse::<i32>().is_ok())
+                    {
+                        return line.trim().to_string();
+                    }
                 }
             }
             self.obs = None; // dead/odd socket — reconnect and retry
@@ -214,6 +227,41 @@ fn freq_set_read_roundtrips_against_real_rigctld() {
         "7074000",
         "wire truth matches the client view"
     );
+}
+
+#[test]
+fn remote_retune_roundtrips_real_hamlib_without_committing_station_state() {
+    let bin = require_rigctld!();
+    let _serial = ONE_AT_A_TIME.lock().unwrap_or_else(|p| p.into_inner());
+    let mut d = DummyRig::spawn(&bin);
+    let mut rig = connect_settled(&d.addr);
+    rig.set_mode("USB", 0).unwrap();
+    rig.set_freq(14_240_000).unwrap();
+    rig.ptt(false).unwrap();
+    let authority = Revocation::default();
+    let native = Revocation::default();
+    let mut before = Position::new(14_240_000, "USB").unwrap();
+    for (hz, mode) in [
+        (7_074_000, "PKTUSB"),
+        (7_090_000, "PKTUSB"),
+        (7_030_000, "CW"),
+    ] {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let permit = authority.permit(deadline).unwrap();
+        let completion = Completion::guarded(permit.clone());
+        let permission =
+            WritePermission::new(permit, native.permit(deadline).unwrap(), completion.clone());
+        let target = Position::new(hz, mode).unwrap();
+        let observed = rig
+            .remote_retune(Retune::new(before, target.clone()), &permission)
+            .unwrap();
+        assert_eq!(observed.position(), &target);
+        assert_eq!(d.observe("f"), hz.to_string());
+        assert_eq!(d.observe("m"), mode);
+        assert_eq!(d.observe("t"), "0");
+        assert_eq!(completion.outcome(), Outcome::Pending);
+        before = target;
+    }
 }
 
 #[test]

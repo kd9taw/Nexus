@@ -14,6 +14,7 @@
 //! [`mode`]: Engine::set_mode
 
 mod field_day_display;
+mod mode_entry;
 
 /// A manual Remote log append awaiting storage confirmation. The caller must
 /// release its engine lock before syncing; connector delivery uses its existing pipeline.
@@ -6197,6 +6198,18 @@ impl Engine {
         om: crate::settings::OperatingMode,
     ) -> Option<(f64, String)> {
         let (dial, sideband) = self.freq_memory.get(&(band.to_string(), om))?.clone();
+        self.resolve_dial_memory(band, om, dial, sideband)
+    }
+
+    /// Resolve one memory cell through the same sideband and privilege policy,
+    /// whether it is already banked or still the current operator residency.
+    fn resolve_dial_memory(
+        &self,
+        band: &str,
+        om: crate::settings::OperatingMode,
+        dial: f64,
+        sideband: Option<String>,
+    ) -> Option<(f64, String)> {
         let sideband = match sideband {
             Some(sb) => sb,
             None => self.band_pick_default(band, om).map(|(_, sb)| sb)?,
@@ -6314,6 +6327,9 @@ impl Engine {
     /// manual tune within a mode survives non-operating nav.
     pub fn set_operating_mode(&mut self, mode: &str, follow_freq: bool) {
         use crate::settings::OperatingMode;
+        // Resolve the destination without changing the station. Remote radio
+        // transactions need this same decision before attempting hardware I/O.
+        let entry = self.prepare_mode_entry(mode, follow_freq);
         // Bank the dial being LEFT into its (band, old-mode) memory cell FIRST — before
         // the hold flags (cleared just below) stop distinguishing an operator dial from
         // machinery, and before `settings.operating_mode` stops naming the mode this
@@ -6338,13 +6354,7 @@ impl Engine {
         // (`follow_freq`), `tune_dial` clears it below exactly as any other QSY does.
         self.aprs_fm = false;
         self.fm_channel = false;
-        let om = match mode.to_ascii_lowercase().as_str() {
-            "phone" => OperatingMode::Phone,
-            "cw" => OperatingMode::Cw,
-            "rtty" => OperatingMode::Rtty,
-            "keyboard" => OperatingMode::Keyboard,
-            _ => OperatingMode::Digital,
-        };
+        let om = entry.mode;
         // A mode change invalidates any planned over (commit_tx checks the generation).
         self.tx_gate_gen = self.tx_gate_gen.wrapping_add(1);
         self.remote_actuation.revoke();
@@ -6405,15 +6415,10 @@ impl Engine {
         // Phone → the bird's sideband) via `rig_mode_effective`'s existing arms. This is
         // exactly the behavior the same-mode re-entry (`follow_freq = false`) always had.
         let mut re_homed = false;
-        if follow_freq && self.sat_dial_owner.is_none() {
+        if let Some((dial, sideband)) = entry.frequency {
             let band = self.settings.band.clone();
-            if let Some((dial, sideband)) = self
-                .recall_dial_memory(&band, om)
-                .or_else(|| self.mode_home(om))
-            {
-                self.set_frequency(dial, &band, &sideband); // also flags immediate_retune
-                re_homed = true;
-            }
+            self.set_frequency(dial, &band, &sideband); // also flags immediate_retune
+            re_homed = true;
         }
         // ⭐ THE DIGITAL SECTION RE-DERIVES ITS SIDE EVEN WHEN IT DOES NOT QSY —
         // ISSUE #111 (ve3wej): "double-click puts the Flex in DIGL instead of DIGU".

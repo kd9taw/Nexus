@@ -369,6 +369,27 @@ intent across reload, shares its Web Lock with manual logging, and checks the
 receipt without replaying the action. Local takeover clears both permissions.
 Physical SPE/KPA command and cancellation acceptance remains required.
 
+## Radio transaction preparation
+
+Radio actions remain unsupported at the station-operation boundary. The native
+mode setter now uses a read-only destination decision that includes a pending
+operator memory, sideband resolution and the existing privilege recheck. Merely
+preparing it cannot bank the memory, alter settings or arm the transmitter.
+
+The internal `Rig::remote_retune` consumes one native-resolved request. It checks
+the expected CAT dial/mode and fresh unkeyed PTT, writes mode before frequency,
+and reuses the native band/filter policy. A reported band-stack override permits
+one correction inside that same command; missing or inconsistent readings stop
+the transaction. Permission is rechecked after reads and at every socket write.
+An uncertain operation is never retried. Its returned CAT readback leaves the
+completion pending: it does not establish committed settings or physical RF.
+
+The next integration must bind this transaction to the actual radio owner,
+commit canonical Engine state and persistence under the still-matching native
+context, and prevent any unconfirmed target entering deferred reconciliation.
+Mode/tier/profile transitions, frontend admission and attended hardware/WAN
+acceptance remain incomplete. No new browser capability is advertised here.
+
 ## Local verification
 
 Use Node 24, the repository's pinned Rust toolchain and the Linux dependencies in

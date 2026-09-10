@@ -91,6 +91,12 @@ impl WritePermission {
             .then_some(())
             .ok_or(Reason::HardwareUnconfirmed)
     }
+
+    /// Stop a bounded hardware transaction. Any earlier attempted write makes
+    /// its result unknown; a refused follow-up cannot erase that attempt.
+    pub fn refuse(&self, reason: Reason) {
+        self.completion.refuse(reason);
+    }
 }
 
 impl Permit {

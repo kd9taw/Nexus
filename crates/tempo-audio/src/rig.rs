@@ -14,6 +14,9 @@ use std::net::TcpStream;
 use std::time::Duration;
 use tempo_app::remote_control::WritePermission;
 
+pub mod remote;
+pub(crate) mod tuning;
+
 fn remote_permission_error(reason: tempo_app::remote_control::Reason) -> std::io::Error {
     std::io::Error::new(
         std::io::ErrorKind::PermissionDenied,
