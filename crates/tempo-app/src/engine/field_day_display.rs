@@ -133,12 +133,14 @@ impl Engine {
 mod tests {
     use super::*;
     fn engine(event: &str, count: usize) -> Engine {
-        let mut s = crate::settings::Settings::default();
-        s.fd_active = true;
-        s.fd_event = event.into();
-        s.fd_class = "1D".into();
-        s.fd_section = "EMA".into();
-        s.fd_power_mult = 2;
+        let s = crate::settings::Settings {
+            fd_active: true,
+            fd_event: event.into(),
+            fd_class: "1D".into(),
+            fd_section: "EMA".into(),
+            fd_power_mult: 2,
+            ..Default::default()
+        };
         let mut e = Engine::with_settings(s);
         e.restore_field_day_if_enabled();
         let Mode::FieldDay { station, .. } = &mut e.mode else {
