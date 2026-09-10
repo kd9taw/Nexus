@@ -9,8 +9,9 @@ import { ApplicationStreamClient } from './application-stream-client'
 import { streamTopic } from './application-stream-protocol'
 import { APPLICATION_VERSIONS, applicationCommands, applicationStreamVersion } from './application-capabilities'
 import type { StreamTopic } from './application-stream-protocol'
+import { parseJs8Sample } from './js8'
 import { ApplicationQueryClient } from './application-query-client'
-import { FIELD_DAY_COMMAND, OTA_COMMAND, MEMORIES_COMMAND, DXPEDITIONS_COMMAND, INSIGHTS_COMMAND, QUERY_COMMAND, RECALL_COMMAND, insightCollection } from './application-query-protocol'
+import { JS8_CONTEXT_COMMAND, FIELD_DAY_COMMAND, OTA_COMMAND, MEMORIES_COMMAND, DXPEDITIONS_COMMAND, INSIGHTS_COMMAND, QUERY_COMMAND, RECALL_COMMAND, insightCollection } from './application-query-protocol'
 
 export type ApplicationPhase = 'connecting' | 'ready' | 'updateRequired' | 'unavailable'
 type Job = { command: ApplicationCommand; resolve: (value: unknown) => void; reject: (reason: Error) => void }
@@ -56,6 +57,10 @@ export class ApplicationClient implements ApplicationTransport {
     this.setPhase('unavailable')
   }
   invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+    if (this.phase === 'ready' && this.version >= 11 && command === JS8_CONTEXT_COMMAND) {
+      if (args?.collection !== 'js8Context') return Promise.reject(new Error('applicationUnsupported'))
+      return this.query.read(args, 11) as Promise<T>
+    }
     if (this.phase === 'ready' && this.version >= 10 && command === FIELD_DAY_COMMAND) {
       if (args?.collection !== 'fieldDay') return Promise.reject(new Error('applicationUnsupported'))
       return this.query.read(args, 10) as Promise<T>
@@ -83,6 +88,7 @@ export class ApplicationClient implements ApplicationTransport {
     }
     if (this.phase === 'ready' && this.version >= 2) {
       if (!streamTopic(command, applicationStreamVersion(this.version)) || (args && Object.keys(args).length)) return Promise.reject(new Error('applicationUnsupported'))
+      if (command === 'get_js8_state') return this.stream.invoke<unknown>(command).then(value => parseJs8Sample(value, this.stream.age(command)) as T)
       return this.stream.invoke<T>(command)
     }
     if (!applicationCommand(command) || (args && Object.keys(args).length)) return Promise.reject(new Error('applicationUnsupported'))

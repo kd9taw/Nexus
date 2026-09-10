@@ -141,6 +141,52 @@ impl Engine {
         self.set_tier(Tier::Js8);
     }
 
+    /// Borrow the native heard list for display joins without copying inbox or queue.
+    pub fn js8_heard(&self) -> &[::js8::proto::station::Heard] {
+        self.js8_station.heard()
+    }
+
+    /// A bounded copy of the ordinary display DTO. The station's retained data,
+    /// decoder, idle clock, queue and transmit policy are never changed by a read.
+    pub fn bounded_js8_state(&self) -> Option<Js8State> {
+        const TEXT: usize = 1024;
+        if self.js8_activity.len() > 200
+            || self.js8_station.heard().len() > 500
+            || self.js8_station.inbox().len() > 100
+        {
+            return None;
+        }
+        let mut bytes = self.js8_station.display_queue_budget(2048, TEXT)?;
+        let mut add = |s: &str| {
+            bytes += s.len();
+            s.len() <= TEXT && bytes <= 192 * 1024
+        };
+        for row in &self.js8_activity {
+            if !add(&row.from) || !add(&row.text) {
+                return None;
+            }
+        }
+        for row in self.js8_station.heard() {
+            if row.call.len() > 32 || !add(&row.call) || !add(row.grid.as_deref().unwrap_or("")) {
+                return None;
+            }
+        }
+        for row in self.js8_station.inbox() {
+            if row.path.len() > 8
+                || !add(&row.from)
+                || !add(&row.to)
+                || !add(&row.text)
+                || !row.path.iter().all(|hop| add(hop))
+            {
+                return None;
+            }
+        }
+        if !add(self.js8_last_error.as_deref().unwrap_or("")) {
+            return None;
+        }
+        Some(self.js8_state())
+    }
+
     /// The cockpit poll. Every field is engine truth at poll time; `armed` is
     /// `switch && tx_enabled && !idle_tripped` per origin — never the switch alone.
     pub fn js8_state(&self) -> Js8State {
@@ -829,6 +875,60 @@ mod tests {
     use ::js8::proto::command::Command;
     use ::js8::proto::frame::encode_frame;
     use ::js8::{Frame, I3};
+
+    #[test]
+    fn bounded_observation_preserves_native_js8_state_at_every_speed() {
+        for speed in 0..4 {
+            let mut e = Engine::with_settings(Settings {
+                mycall: "N0CALL".into(),
+                mygrid: "AA00".into(),
+                ..Default::default()
+            });
+            e.js8_set_speed(speed).unwrap();
+            e.js8_ingest(
+                &[row(&hb("W1AW", "FN31"), whole(), Js8Speed::Normal, 1500.0)],
+                1,
+            );
+            e.js8_send(None, "TEST MESSAGE WITH MULTIPLE FRAMES".into())
+                .unwrap();
+            let before = serde_json::to_value(e.js8_state()).unwrap();
+            assert!(!before["activity"].as_array().unwrap().is_empty());
+            assert!(!before["queue"].as_array().unwrap().is_empty());
+            assert_eq!(
+                serde_json::to_value(e.bounded_js8_state().unwrap()).unwrap(),
+                before
+            );
+            assert_eq!(serde_json::to_value(e.js8_state()).unwrap(), before);
+            assert!(!e.snapshot().radio.tx_enabled);
+            let mut oversized = e.js8_activity[0].clone();
+            oversized.text = "x".repeat(1025);
+            e.js8_activity.push_back(oversized);
+            assert!(e.bounded_js8_state().is_none());
+            assert_eq!(e.js8_activity.back().unwrap().text.len(), 1025);
+        }
+    }
+
+    #[test]
+    fn queue_copy_budget_counts_remaining_frames_instead_of_messages() {
+        let mut e = Engine::with_settings(Settings {
+            mycall: "N0CALL".into(),
+            ..Default::default()
+        });
+        e.js8_send(None, "TEST MESSAGE WITH MULTIPLE FRAMES".into())
+            .unwrap();
+        let rows = e.js8_state().queue;
+        assert!(rows.len() > 1);
+        assert_eq!(
+            e.js8_station.display_queue_budget(rows.len() - 1, 1024),
+            None
+        );
+        assert_eq!(
+            e.js8_station.display_queue_budget(rows.len(), 1024),
+            Some(rows.iter().map(|r| r.display.len()).sum())
+        );
+        assert_eq!(e.js8_station.display_queue_budget(rows.len(), 1), None);
+        assert_eq!(e.js8_state().queue.len(), rows.len());
+    }
 
     /// A decode row exactly as `Js8Mode::decode_frame` would emit it for `frame`.
     fn row(frame: &Frame, i3: I3, speed: Js8Speed, freq: f32) -> modes::Decode {

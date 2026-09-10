@@ -57,6 +57,21 @@
 /* A stacked Tx-message column must scroll its content rather than paint over
    the following recall rail when the effective viewport is narrow. */
 .remote-workspace .cockpit-qsocol { overflow-y: auto; }
+/* A large pinned zoom can make the native header taller than a phone. Keep
+   a usable JS8 shell below it and let the application scroll to that shell. */
+.remote-workspace:has(.js8-host:not([hidden])) { overflow: auto; }
+.remote-workspace .shell:has(.js8-host:not([hidden])) {
+  min-height: min(32em, calc(0.7 * var(--vh-eff, 100vh)));
+  min-width: 0;
+}
+/* The transcript's metadata columns must not consume the message on narrow
+   screens. Keep the same fields, with the message on its own full-width row. */
+[data-viewport='xs'] .remote-workspace .js8-row,
+[data-viewport='xs'] .remote-workspace .js8-offset-row {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+[data-viewport='xs'] .remote-workspace .js8-row > .js8-text,
+[data-viewport='xs'] .remote-workspace .js8-offset-row > .js8-text { grid-column: 1 / -1; }
 .app[data-remote-stale="true"] > :not(.remote-application-status) {
   visibility: hidden;
   pointer-events: none;

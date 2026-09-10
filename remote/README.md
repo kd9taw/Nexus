@@ -54,15 +54,21 @@ collection, requiring `x-nexus-application-memories-version: 1` and every preced
 advertisement. Versions 1–7 retain their exact vocabularies.
 Version 9 adds only `get_remote_ota` and the argument-free `ota` collection,
 requiring `x-nexus-application-ota-version: 1` and every preceding advertisement.
-Versions 1–8 retain their exact vocabularies. Application versions 5 and later
-all use the existing version 5 stream; query extensions do not add stream topics.
+Versions 1–8 retain their exact vocabularies.
+Version 10 adds only `get_remote_field_day` and the argument-free `fieldDay`
+collection, requiring `x-nexus-application-field-day-version: 1` and every preceding
+advertisement. Application versions 5 through 10 use the version 5 stream.
+Version 11 adds `get_js8_state` and the argument-free `get_remote_js8_context`
+(`js8Context` collection), requiring `x-nexus-application-js8-version: 1` and every
+preceding advertisement. Its version 11 stream has ten topics. Versions 1–10
+retain their exact vocabularies, including across hibernation.
 An older pilot keeps its existing FT observation; an older monitor-only installer
 reports the workspace update requirement without losing compact observation.
 
 In version 2, existing panel polling renews local interest. Interest changes cross
 the socket; the room combines the interests of approved browsers into one native
 watch. The station batches due topics at 100 ms (spectra), 200 ms (meters/CW/RTTY/PSK),
-500 ms (snapshot) and 1,000 ms (settings/band plan). Interest expires after 2,500 ms
+500 ms (snapshot/JS8) and 1,000 ms (settings/band plan). Interest expires after 2,500 ms
 without a consumer read. No interested browsers means no application values cross
 the station socket.
 Top-level deltas require an exact acknowledged base; a joining observer receives a
@@ -72,7 +78,8 @@ Each native batch spends one room-issued credit; each browser frame spends one
 browser-issued credit. The next credit acknowledges the previous response exactly
 once. Each receiver counts its request's full round trip toward measurement age,
 so delayed packets cannot appear fresh by arrival time or clock synchronization.
-Batches are bounded to 768 KiB, seven topics (nine from version 5) and three seconds. Stale sessions hide
+Batches are bounded to 768 KiB, seven topics (nine at version 5, ten at version 11)
+and three seconds. Stale sessions hide
 station readings and close portaled menus/dialogs. Unavailable scope/decoder data clears
 that readout independently. Session changes discard cached readings and late results.
 
@@ -236,6 +243,25 @@ hides old values. Compose/send, resend, Work/double-click, archive, tier, CQ,
 heartbeat, Roam and frequency-memory shortcuts are guarded in the actual UI as
 well as refused by the transport. Larger-history capacity and live station
 comparison remain outstanding; observation does not enable operation.
+
+JS8 uses the native cockpit, four-speed activity and roster, inbox, queued frames,
+and pending-reply/HB/CQ indicators. Observer navigation never enters JS8 mode.
+The state copy is bounded before cloning: 200 activity rows, 500 heard stations,
+100 inbox messages, 2,048 remaining queued frames, 1,024 UTF-8 bytes per text field,
+192 KiB of display text and 384 KiB for the complete sample. The original queue,
+decoder and transmit timing are unchanged. Relative ages and countdowns account
+for the station clock and conservative transport age without changing native UTC
+timestamps or row identities. Samples expire after three seconds.
+
+The shared roster context joins heard calls against the complete log in bounded
+lock sections and reuses an unchanged log generation. It preserves native latest
+contact semantics, including empty fields, and distinguishes confirmed unworked
+calls from unavailable history. It refuses changed generations, more than one
+million QSOs or a context exceeding 192 KiB. History and the native licensed band
+plan expire after 60 seconds; Refresh and source loss clear old context. Callsign
+selection, pinning and recall stay local to the browser. Inbox changes, queue
+changes, sending, tuning and every transmit latch remain station-local. A
+compatible station build and attended comparison are required for JS8 parity.
 
 FT selection and CW/Phone/RTTY/PSK callsign entry use the existing Nexus recall card;
 its contact rows open the existing filtered Logbook. Stale sessions and changed

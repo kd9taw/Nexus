@@ -1166,6 +1166,29 @@ impl Station {
             .collect()
     }
 
+    /// Cost of the display projection, before cloning any queued frame text.
+    /// One outbox message can have many remaining frames; the message-count cap
+    /// alone is not a bound on the UI queue. Reads never advance a cursor.
+    pub fn display_queue_budget(&self, max_rows: usize, max_text: usize) -> Option<usize> {
+        let mut rows = 0_usize;
+        let mut bytes = 0_usize;
+        for o in &self.outbox {
+            let count = o.frames.len().saturating_sub(o.cursor);
+            rows = rows.checked_add(count)?;
+            if rows > max_rows || o.display.len() > max_text {
+                return None;
+            }
+            bytes = bytes.checked_add(count.checked_mul(o.display.len())?)?;
+        }
+        for p in &self.pending {
+            if p.to.len() > max_text || p.display.len() > max_text {
+                return None;
+            }
+            bytes = bytes.checked_add(p.to.len() + p.display.len())?;
+        }
+        Some(bytes)
+    }
+
     pub fn pending_reply(&self) -> Option<PendingReply> {
         self.pending
             .iter()

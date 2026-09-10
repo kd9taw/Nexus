@@ -62,7 +62,7 @@ async function chrome() {
   } catch(error) { ws?.close(); if(!exited)process.kill(-child.pid,'SIGTERM'); await rm(profile,{recursive:true,force:true,maxRetries:8,retryDelay:100}); throw error }
 }
 
-for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) test(`compiled hosted browser v${applicationVersion} completes PKCE, local device approval, observation and viewport checks`, { timeout: 120000 }, async () => {
+for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]) test(`compiled hosted browser v${applicationVersion} completes PKCE, local device approval, observation and viewport checks`, { timeout: 120000 }, async () => {
   const app=await runtime(), artifacts=process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS ? join(process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS, `v${applicationVersion}`) : undefined
   let browser, station, producing=true, producer, applicationProducer
   const results=[]
@@ -72,7 +72,7 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) test(`compiled
     const shell = await fetch(app.origin,{signal:AbortSignal.timeout(3000)})
     assert.equal(shell.status,200)
     assert.match(await shell.text(), /Nexus Remote/)
-    const stationHeaders = { 'x-nexus-application-version': '1', ...(applicationVersion >= 2 ? { 'x-nexus-application-stream-version': '2' } : {}), ...(applicationVersion >= 3 ? { 'x-nexus-application-query-version': '1' } : {}), ...(applicationVersion >= 4 ? { 'x-nexus-application-recall-version': '1' } : {}), ...(applicationVersion >= 5 ? { 'x-nexus-application-keyboard-version': '1' } : {}), ...(applicationVersion >= 6 ? { 'x-nexus-application-insights-version': '1' } : {}), ...(applicationVersion >= 7 ? { 'x-nexus-application-dxpeditions-version': '1' } : {}), ...(applicationVersion >= 8 ? { 'x-nexus-application-memories-version': '1' } : {}), ...(applicationVersion >= 9 ? { 'x-nexus-application-ota-version': '1' } : {}), ...(applicationVersion >= 10 ? { 'x-nexus-application-field-day-version': '1' } : {}) }
+    const stationHeaders = { 'x-nexus-application-version': '1', ...(applicationVersion >= 2 ? { 'x-nexus-application-stream-version': '2' } : {}), ...(applicationVersion >= 3 ? { 'x-nexus-application-query-version': '1' } : {}), ...(applicationVersion >= 4 ? { 'x-nexus-application-recall-version': '1' } : {}), ...(applicationVersion >= 5 ? { 'x-nexus-application-keyboard-version': '1' } : {}), ...(applicationVersion >= 6 ? { 'x-nexus-application-insights-version': '1' } : {}), ...(applicationVersion >= 7 ? { 'x-nexus-application-dxpeditions-version': '1' } : {}), ...(applicationVersion >= 8 ? { 'x-nexus-application-memories-version': '1' } : {}), ...(applicationVersion >= 9 ? { 'x-nexus-application-ota-version': '1' } : {}), ...(applicationVersion >= 10 ? { 'x-nexus-application-field-day-version': '1' } : {}), ...(applicationVersion >= 11 ? { 'x-nexus-application-js8-version': '1' } : {}) }
     station=await pair.native.open(pair.stationId, undefined, 101, stationHeaders)
     let code=null, oauth=null, exchanges=0, providerFailure=false, exceptions=0, acknowledgements=0, unexpectedMessages=0
     const applicationTraffic = { reads: 0, acks: 0, subscriptions: 0, batches: 0, bytes: 0, byCommand: {}, maxResponseBytes: 0 }
@@ -106,7 +106,7 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) test(`compiled
       try {
         const message = JSON.parse(event.response.payloadData)
         if (message.type === 'ack' && Object.keys(message).sort().join(',') === 'epoch,sequence,type') acknowledgements++
-        else if (message.type === 'applicationHello' && (Object.keys(message).length === 1 || (Object.keys(message).length === 2 && [2,3,4,5,6,7,8,9,10].includes(message.version)))) {}
+        else if (message.type === 'applicationHello' && (Object.keys(message).length === 1 || (Object.keys(message).length === 2 && [2,3,4,5,6,7,8,9,10,11].includes(message.version)))) {}
         else if (message.type === 'applicationRead' && Object.keys(message).length === 4) applicationTraffic.reads++
         else if (message.type === 'applicationQuery' && Object.keys(message).length === 7) applicationTraffic.queries=(applicationTraffic.queries??0)+1
         else if (message.type === 'applicationQueryAck' && Object.keys(message).length === 2) {}
@@ -117,6 +117,9 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) test(`compiled
       } catch { unexpectedMessages++ }
     })
     await browser.call('Page.addScriptToEvaluateOnNewDocument',{source:`
+      // Pin the synthetic main window so auto-fit cannot overwrite the scale
+      // being measured after a viewport resize. No operator storage is used.
+      localStorage.setItem('nexus-ui-scale-mode','100');
       window.__socketClosures=[];window.__protocolTrace=[];const originalWebSocket=window.WebSocket;
       window.WebSocket=class extends originalWebSocket{
         constructor(...args){super(...args);this.addEventListener('close',e=>window.__socketClosures.push({at:performance.now(),code:e.code,reason:e.reason}));this.addEventListener('message',e=>{try{const v=JSON.parse(e.data);if(v.type==='applicationFrame'){window.__protocolTrace.push({at:performance.now(),updates:v.updates.map(u=>({command:u.command,type:u.type,age:u.ageMs,revision:u.revision}))});window.__protocolTrace=window.__protocolTrace.slice(-40)}}catch{}})}
@@ -193,6 +196,17 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) test(`compiled
     const applicationData = await applicationFixture()
     applicationData.get_settings.fdActive = true
     const collections = collectionFixture()
+    const js8Fixture=JSON.parse(await readFile(new URL('../../ui/src/remote-web/__fixtures__/js8.json',import.meta.url),'utf8'))
+    const js8Start=Date.now(), js8Delta=js8Start-js8Fixture.capturedAtMs
+    for(const row of js8Fixture.state.activity)row.atMs+=js8Delta
+    for(const row of js8Fixture.state.stations)row.lastMs+=js8Delta
+    for(const row of js8Fixture.state.inbox)row.atMs+=js8Delta
+    js8Fixture.state.hbNextAtMs+=js8Delta;js8Fixture.state.cqNextAtMs+=js8Delta;js8Fixture.state.pendingReply.firesAtMs+=js8Delta
+    applicationData.get_js8_state=js8Fixture
+    collections.js8Context={rows:[],meta:{plan:[],history:{W1AW:{count:2302,lastUnix:1700000000,grid:'FN31',name:'PRIOR CONTACT',comment:'COMPLETE LOG'},
+      K2ABC:{count:0,lastUnix:null,grid:'',name:'',comment:''}}}}
+    const js8Queries=[]
+    let js8Revision=100_000
     const fieldDay = JSON.parse(await readFile(new URL('../../ui/src/remote-web/__fixtures__/field-day.json', import.meta.url), 'utf8'))
     const fieldDayQueries = []
     collections.fieldDay = { rows: [], meta: fieldDay }
@@ -218,12 +232,13 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) test(`compiled
     const withheld = []
     let streamWatch = null
     const sentAt = new Map(), bases = new Map()
-    const intervals = { get_snapshot:500, get_settings:1000, get_band_plan:1000, get_spectrum_row:100, get_meters:200, get_scope_snapshot:100, get_cw_state:200, get_rtty_state:200, get_psk_state:200 }
+    const intervals = { get_snapshot:500, get_settings:1000, get_band_plan:1000, get_spectrum_row:100, get_meters:200, get_scope_snapshot:100, get_cw_state:200, get_rtty_state:200, get_psk_state:200, get_js8_state:500 }
     applicationProducer=(async()=>{while(producing){const source=station;let request;try{request=await source.take(value=>['applicationRead','applicationWatch','applicationCredit','applicationQuery'].includes(value.type),1000)}catch{continue}
       if(source!==station||source.closed)continue
       if (!applicationAvailable || !producing) { withheld.push({type:request.type,collection:request.collection});continue }
       if (request.type === 'applicationQuery') {
         assert.ok(applicationVersion >= 3)
+        if (request.collection === 'js8Context') { assert.ok(applicationVersion >= 11); js8Queries.push(request.collection) }
         if (request.collection === 'fieldDay') { assert.ok(applicationVersion >= 10); fieldDayQueries.push(request.collection) }
         if (request.collection === 'ota') { assert.ok(applicationVersion >= 9); otaQueries.push(request.collection) }
         if (request.collection === 'memories') { assert.ok(applicationVersion >= 8); memoryQueries.push(request.collection) }
@@ -270,10 +285,12 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) test(`compiled
             updates.push({type:'applicationError',requestId:request.requestId,command,error:'applicationUnavailable'})
             sentAt.set(command,now);bases.delete(command);continue
           }
-          const data=applicationData[command], delta=bases.get(command)===applicationRevision && !Array.isArray(data)
-          updates.push({type:'applicationResult', requestId:request.requestId, command, revision:applicationRevision,
-            baseRevision:delta?applicationRevision:null, ageMs:0, data:delta?{}:data, removed:[]})
-          sentAt.set(command,now);bases.set(command,applicationRevision)
+          if(command==='get_js8_state') { assert.ok(applicationVersion>=11); js8Fixture.capturedAtMs=Date.now() }
+          const revision=command==='get_js8_state'?++js8Revision:applicationRevision
+          const data=applicationData[command], delta=bases.get(command)===revision && !Array.isArray(data)
+          updates.push({type:'applicationResult', requestId:request.requestId, command, revision,
+            baseRevision:delta?revision:null, ageMs:0, data:delta?{}:data, removed:[]})
+          sentAt.set(command,now);bases.set(command,revision)
           applicationTraffic.byCommand[command]=(applicationTraffic.byCommand[command]??0)+1
           }
           // Retain the one credit until a topic is due, as the native tick does.
@@ -779,6 +796,73 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) test(`compiled
       assert.equal(hiddenDisplay, 'none', 'a failed refresh removes the visible score, not only the hidden attribute')
       unavailableCollections.delete('fieldDay');await click(button('Refresh Field Day'))
       await until(`document.querySelector('.fieldday input:not([type=checkbox])')?.value==='K9TEST'`)
+    }
+    await click(button('JS8'))
+    if(applicationVersion<11){
+      await until(`!!document.querySelector('.remote-view-unavailable')`)
+      assert.equal(await evaluate(`!!document.querySelector('.js8-cockpit')`),false)
+      assert.equal(js8Queries.length,0)
+      assert.equal(applicationTraffic.byCommand.get_js8_state??0,0)
+    }else{
+      js8Fixture.state.activity.push(...Array.from({length:76},(_,i)=>({...js8Fixture.state.activity[i%4],text:`JS8 HISTORY ${i+1}`,atMs:js8Start+i,freqHz:600+i*20})))
+      js8Fixture.state.inbox.push(...Array.from({length:39},(_,i)=>({...js8Fixture.state.inbox[0],id:i+2,text:`JS8 MAIL ${i+1}`})))
+      js8Fixture.state.stations.push(...Array.from({length:38},(_,i)=>({...js8Fixture.state.stations[0],call:`K1JS${i}`})))
+      for(const row of js8Fixture.state.stations)collections.js8Context.meta.history[row.call]??={count:0,lastUnix:null,grid:'',name:'',comment:''}
+      js8Fixture.state.queue.push(...Array.from({length:38},(_,i)=>({...js8Fixture.state.queue[1],display:`JS8 QUEUE ${i+1}`})))
+      await until(`document.querySelectorAll('.js8-row').length===80 && document.querySelector('.js8-stations')?.textContent.includes('COMPLETE LOG')`)
+      assert.equal(await evaluate(`document.querySelectorAll('.js8-cockpit').length`),1)
+      assert.equal(await evaluate(`document.querySelectorAll('.js8-cockpit .waterfall-wrap').length`),1)
+      assert.equal(await evaluate(`!!document.querySelector('.grid-stations,.grid-center .conversation')`),false)
+      assert.ok(await evaluate(`[...document.querySelectorAll('.js8-speed-chip,.js8-query,.js8-inbox-act,.js8-send,.js8-cq,.js8-hb,.js8-arm,.js8-cancel,.js8-drop')].length>15 && [...document.querySelectorAll('.js8-speed-chip,.js8-query,.js8-inbox-act,.js8-send,.js8-cq,.js8-hb,.js8-arm,.js8-cancel,.js8-drop')].every(e=>e.disabled)`))
+      await click(`document.querySelector('.js8-station-call')`)
+      await until(`document.querySelector('.js8-to')?.value==='W1AW' && document.querySelector('.js8-cockpit .le-call')?.value==='W1AW'`)
+      await click(`document.querySelector('.js8-pin')`)
+      assert.equal(await evaluate(`document.querySelector('.js8-pin').getAttribute('aria-pressed')`),'true')
+      for(const [width,height,zoom] of [[360,740,1],[390,844,1],[844,390,1],[1024,768,1],[1280,800,1],[1200,1390,1],[3440,1440,1],[1024,768,0.8],[1280,800,1.75],[390,844,1.75]])for(const theme of ['dark','light']){
+        await browser.call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false},session)
+        await evaluate(`document.documentElement.style.setProperty('--ui-zoom','${zoom}');document.documentElement.dataset.theme='${theme}';window.dispatchEvent(new Event('resize'))`)
+        await settledLayout()
+        // Viewport scaling schedules a second ResizeObserver/RAF pass for the
+        // native pane columns. Measurements showed a 2→1 column change AFTER
+        // the first layout wait, which invalidated an already-completed scroll.
+        await settledLayout()
+        for(const target of ['.js8-row:last-child .js8-text','.js8-station:last-child .js8-station-call','.js8-inbox-row:last-child .js8-text','.js8-offset-row:last-child .js8-text','.js8-compose','.js8-queue-item:last-of-type .js8-queue-text']){
+          const beforeScroll=await evaluate(`(()=>{window.__js8ScrollNode=document.querySelector('${target}');window.__js8ScrollNode.scrollIntoView({block:'nearest',inline:'nearest',behavior:'instant'});const chain=[];for(let e=window.__js8ScrollNode;e;e=e.parentElement){const r=e.getBoundingClientRect();chain.push({class:e.className,top:r.top,height:r.height,scroll:e.scrollHeight,client:e.clientHeight,at:e.scrollTop,cols:e.dataset.cols,flow:e.dataset.flow})}return chain})()`)
+          await settledLayout()
+          const shape=await evaluate(`(()=>{const e=document.querySelector('${target}'),r=e.getBoundingClientRect(),x=Math.max(r.left+1,Math.min(r.right-1,r.left+r.width/2)),y=Math.max(1,Math.min(innerHeight-1,r.top+r.height/2));return {zoom:Number(getComputedStyle(document.documentElement).getPropertyValue('--ui-zoom')),docW:document.documentElement.scrollWidth,docH:document.documentElement.scrollHeight,top:r.top,bottom:r.bottom,width:r.width,height:r.height,reachable:e.contains(document.elementFromPoint(x,y))}})()`)
+          const clipped=await evaluate(`(()=>{const result=[];for(let e=document.querySelector('${target}').parentElement;e;e=e.parentElement){const c=getComputedStyle(e);if(['hidden','clip'].includes(c.overflowY)&&e.scrollHeight>e.clientHeight+1)result.push({class:e.className,scroll:e.scrollHeight,client:e.clientHeight})}return result})()`)
+          const reachable=Math.abs(shape.zoom-zoom)<0.001&&shape.docW<=width+1&&shape.docH<=height+1&&shape.width>0&&shape.height>0&&shape.top<height&&shape.bottom>0&&shape.reachable&&clipped.length===0
+          if(!reachable){console.log('JS8 scroll diagnostic',JSON.stringify({before:beforeScroll,after:await evaluate(`(()=>{const chain=[];for(let e=document.querySelector('${target}');e;e=e.parentElement){const r=e.getBoundingClientRect(),c=getComputedStyle(e);chain.push({class:e.className,top:r.top,height:r.height,scroll:e.scrollHeight,client:e.clientHeight,at:e.scrollTop,y:c.overflowY,cols:e.dataset.cols,flow:e.dataset.flow})}return {sameNode:window.__js8ScrollNode===document.querySelector('${target}'),chain}})()`)}));if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-nexus-js8-failure.png'),Buffer.from(shot.data,'base64'))}}
+          assert.ok(reachable,`JS8 content remains reachable: ${JSON.stringify({width,height,zoom,theme,target,shape,clipped})}`)
+          results.push({js8:true,width,height,zoom,theme,target,shape})
+        }
+      }
+      await browser.call('Emulation.setDeviceMetricsOverride',{width:1280,height:800,deviceScaleFactor:1,mobile:false},session)
+      await evaluate(`document.documentElement.style.setProperty('--ui-zoom','1');window.dispatchEvent(new Event('resize'))`)
+      await settledLayout()
+      await click(`document.querySelector('.js8-cockpit .panels-menu-btn')`)
+      const inboxCheck=`[...document.querySelectorAll('.js8-cockpit .panels-menu-check')].find(e=>/inbox/i.test(e.textContent)).querySelector('input')`
+      await click(inboxCheck)
+      assert.equal(await evaluate(`!!document.querySelector('.js8-inbox')`),false)
+      assert.equal(await evaluate(`document.querySelectorAll('.js8-queue-item').length`),40)
+      await click(inboxCheck)
+      await until(`document.querySelectorAll('.js8-inbox-row').length===40`)
+      await click(`document.querySelector('.js8-cockpit .panels-menu-btn')`)
+      await evaluate(`document.querySelector('.js8-cockpit').scrollTop=0`)
+      await settledLayout()
+      if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-nexus-js8.png'),Buffer.from(shot.data,'base64'))}
+      unavailableTopics.add('get_js8_state')
+      await until(`document.querySelectorAll('.js8-row,.js8-inbox-row,.js8-pending-row').length===0`)
+      unavailableTopics.delete('get_js8_state')
+      await until(`document.querySelectorAll('.js8-row').length===80 && document.querySelector('.js8-opcomment')?.textContent==='COMPLETE LOG' && document.querySelector('.js8-history-status button')?.disabled===false`)
+      unavailableCollections.add('js8Context');await click(`document.querySelector('.js8-history-status button')`)
+      await until(`document.querySelector('.js8-history-status')?.textContent.includes('unavailable')`)
+      assert.equal(await evaluate(`!!document.querySelector('.js8-opcomment')`),false)
+      assert.ok(await evaluate(`document.querySelector('.js8-b4')?.textContent==='—'`))
+      unavailableCollections.delete('js8Context');await click(`document.querySelector('.js8-history-status button')`)
+      await until(`document.querySelector('.js8-opcomment')?.textContent==='COMPLETE LOG'`)
+      await browser.call('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape'},session)
+      assert.ok(js8Queries.length>0)
     }
     const beforeTempo = structuredClone(applicationData.get_snapshot)
     for (const tier of ['TempoFast','TempoDeep']) {

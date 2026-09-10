@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 mod dxpeditions;
 mod field_day;
 mod insights;
+mod js8;
 pub(super) mod memories;
 mod ota;
 mod recall;
@@ -33,6 +34,7 @@ pub enum Collection {
     Memories,
     Ota,
     FieldDay,
+    Js8Context,
 }
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -71,6 +73,7 @@ impl Request {
                     | Collection::Memories
                     | Collection::Ota
                     | Collection::FieldDay
+                    | Collection::Js8Context
             ) || self.cursor.is_none())
             && self
                 .cursor
@@ -233,6 +236,7 @@ pub struct Publisher {
     snapshots: VecDeque<Snapshot>,
     pub journal: Arc<Mutex<Journal>>,
     unassisted: bool,
+    js8: js8::Cache,
 }
 impl Publisher {
     pub fn read(
@@ -272,6 +276,7 @@ impl Publisher {
                     | Collection::Memories
                     | Collection::Ota
                     | Collection::FieldDay
+                    | Collection::Js8Context
             ) {
                 0 // Explicit selection/Refresh must see intervening local log changes.
             } else if request.collection == Collection::Decodes {
@@ -357,7 +362,7 @@ impl Publisher {
         }
     }
     fn capture(
-        &self,
+        &mut self,
         request: &Request,
         engine: &crate::SharedEngine,
         sources: Option<&Sources>,
@@ -367,6 +372,9 @@ impl Publisher {
             _ => Err("applicationUnavailable"),
         };
         let rows = match request.collection {
+            Collection::Js8Context => {
+                return Ok((Vec::new(), 0, self.js8.read(engine)?));
+            }
             Collection::FieldDay => {
                 return Ok((Vec::new(), 0, field_day::read_engine(engine)?));
             }

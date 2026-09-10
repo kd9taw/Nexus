@@ -6,6 +6,10 @@
 // names and their ALL.TXT letters, the 32 directed-command texts, callsigns, grids, offsets in
 // Hz, SNR in dB, UTC stamps and the s/m/h age units.
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useStationControl, useStationData } from '../stationAccess'
+import { useJs8Context } from '../remote-web/useJs8Context'
+import { js8DisplayNow } from '../remote-web/js8'
+import { RemoteRecallEntry } from '../remote-web/RemoteRecall'
 import type { AppSnapshot, BandChannel, Js8InboxState, Js8Origin, Js8State, Js8Switch, LoggedQso } from '../types'
 import { CockpitHeader } from './CockpitHeader'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
@@ -147,6 +151,7 @@ export function Js8Cockpit({
   onOpenLogbook,
   panels,
 }: Props) {
+  const canControl = useStationControl(), dataAvailable = useStationData()
   const host = panels
     ? panelHost(panels, {
         menu: JS8_PANEL_IDS,
@@ -161,15 +166,18 @@ export function Js8Cockpit({
   // events). The backend keeps decoding while we're hidden; the first tick on re-activation
   // catches the display up.
   const [js8, setJs8] = useState<Js8State | null>(null)
+  const stationCalls = (js8?.stations ?? []).map((h) => h.call).sort().join(' ')
+  const context = useJs8Context(active, stationCalls)
+  const remote = context.remote
   useEffect(() => {
-    if (!active) return
+    if (!active || (remote && !dataAvailable)) { if (remote) setJs8(null); return }
     let alive = true
     const tick = () => {
       getJs8State()
         .then((s) => {
           if (alive) setJs8(s)
         })
-        .catch(() => {})
+        .catch(() => { if (alive && remote) setJs8(null) })
     }
     tick()
     const id = window.setInterval(tick, 500)
@@ -177,7 +185,7 @@ export function Js8Cockpit({
       alive = false
       window.clearInterval(id)
     }
-  }, [active])
+  }, [active, remote, dataAvailable])
 
   // Rising-edge toast for the idle-watchdog trip: the automatic origins just stood down
   // with no click behind it, so the operator is told ONCE per trip — not on every poll.
@@ -199,18 +207,19 @@ export function Js8Cockpit({
       entered.current = false
       return
     }
-    if (entered.current) return
+    if (remote || !canControl || entered.current) return
     entered.current = true
     void js8Enter()
       .then((s) => setJs8(s))
       .catch(() => {})
-  }, [active])
+  }, [active, canControl, remote])
 
   // JS8 watering holes (JS8Call's FrequencyList), license-filtered.
   const [plan, setPlan] = useState<BandChannel[]>([])
   useEffect(() => {
+    if (remote) return
     void getLicensedBandPlan('js8').then(setPlan).catch(() => {})
-  }, [])
+  }, [remote])
 
   // THE LOGBOOK JOIN behind the roster's ✓ / Name / Comment columns. The log strip and the
   // Operate cockpit answer "have I worked this call" exactly this way — one getLog() into
@@ -219,9 +228,9 @@ export function Js8Cockpit({
   // display join, so a stale-by-one-view read is the right cost for not polling the log.
   const [log, setLog] = useState<LoggedQso[]>([])
   useEffect(() => {
-    if (!active) return
+    if (!active || remote) return
     void getLog().then(setLog).catch(() => {})
-  }, [active])
+  }, [active, remote])
 
   // ★ PINS — an operator hold on a roster that re-sorts under him. Held in state so a write
   // that localStorage refuses still applies for the session (features/js8Pins).
@@ -233,12 +242,14 @@ export function Js8Cockpit({
   }
 
   const commitDial = (mhz: number) => {
+    if (!canControl) return
     onSetFrequency?.(mhz, bandLabelForMhz(mhz), snap?.radio.sideband || 'USB')
   }
 
   // STOP TX → halt_tx: the universal stop (unkeys, arms slot_tx_abort, and — from B7 — empties
   // the JS8 queue, the HB schedule and the pending auto-reply).
   const stop = () => {
+    if (!canControl) return
     void haltTx()
       .then((s) => onSnap?.(s))
       .catch(() => {})
@@ -247,7 +258,7 @@ export function Js8Cockpit({
   // cockpit stays mounted in the keep-alive host, so an unconditional listener would fire
   // Stop TX from inside another section).
   useEffect(() => {
-    if (!active) return
+    if (!active || !canControl) return
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.preventDefault()
@@ -257,7 +268,7 @@ export function Js8Cockpit({
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active])
+  }, [active, canControl])
 
   // --- The dock's addressee + composer. The ENGINE is the authority on every send. ---
   const [toCall, setToCall] = useState('')
@@ -271,6 +282,7 @@ export function Js8Cockpit({
   /** A RECEIVE move only — the offset table's double-click, JS8Call's own behaviour on
    *  tableWidgetRXAll. The TX offset is untouched; nothing here keys. */
   const tuneRx = (hz: number) => {
+    if (!canControl) return
     void setRxOffset(hz)
       .then((sn) => onSnap?.(sn))
       .catch(() => {})
@@ -290,6 +302,7 @@ export function Js8Cockpit({
     return false
   }
   const send = () => {
+    if (!canControl) return
     const body = text.trim()
     const to = toCall.trim().toUpperCase()
     if (cmdId !== null && !to) {
@@ -307,21 +320,25 @@ export function Js8Cockpit({
     })
   }
   const toggleSwitch = (which: Js8Switch, on: boolean) => {
+    if (!canControl) return
     void withErrorToast(() => js8Arm(which, !on), t('js8.toast.arm.failed')).then((s) => {
       if (s) setJs8(s)
     })
   }
   const cancelPending = () => {
+    if (!canControl) return
     void withErrorToast(() => js8Cancel(), t('js8.toast.cancel.failed')).then((s) => {
       if (s) setJs8(s)
     })
   }
   const dropQueue = () => {
+    if (!canControl) return
     void withErrorToast(() => js8DropQueue(), t('js8.toast.drop.failed')).then((s) => {
       if (s) setJs8(s)
     })
   }
   const callCq = () => {
+    if (!canControl) return
     if (refuseIfUnready()) return
     void withErrorToast(() => js8CallCq(cqIdx), t('js8.toast.cq.failed')).then((s) => {
       if (s) setJs8(s)
@@ -330,6 +347,7 @@ export function Js8Cockpit({
   // HB is the SESSION-ONLY schedule (never persisted): the second act for heartbeat frames.
   // Turning it on never keys by itself — the session TX latch is the first act (B7).
   const toggleHb = () => {
+    if (!canControl) return
     void withErrorToast(() => js8Arm('hb', js8?.hbOn !== true), t('js8.toast.arm.failed')).then((s) => {
       if (s) setJs8(s)
     })
@@ -338,27 +356,32 @@ export function Js8Cockpit({
   // a schedule instead of sending once. Session-only and never persisted; keys nothing on
   // its own — the TX latch is the first act and the engine re-reads it every slot.
   const toggleCqRepeat = () => {
+    if (!canControl) return
     void withErrorToast(() => js8CqRepeat(js8?.cqOn !== true, cqIdx), t('js8.toast.arm.failed')).then((s) => {
       if (s) setJs8(s)
     })
   }
   const quickQuery = (call: string, cmd: number) => {
+    if (!canControl) return
     if (refuseIfUnready()) return
     void withErrorToast(() => js8SendCommand(call, cmd, ''), t('js8.toast.command.failed')).then((s) => {
       if (s) setJs8(s)
     })
   }
   const setSpeed = (idx: number) => {
+    if (!canControl) return
     void withErrorToast(() => js8SetSpeed(idx), t('js8.header.speed.failed')).then((s) => {
       if (s) setJs8(s)
     })
   }
   const markInbox = (id: number, state: Js8InboxState) => {
+    if (!canControl) return
     void withErrorToast(() => js8InboxMark(id, state), t('js8.inbox.failed')).then((s) => {
       if (s) setJs8(s)
     })
   }
   const deleteInbox = (id: number) => {
+    if (!canControl) return
     void withErrorToast(() => js8InboxDelete(id), t('js8.inbox.failed')).then((s) => {
       if (s) setJs8(s)
     })
@@ -388,8 +411,8 @@ export function Js8Cockpit({
    *  same, mainwindow.cpp:10325-10345). Keyed on the CALL SET, not the stations array — that
    *  array is a fresh object on every 500 ms poll, and re-scanning the whole log twice a
    *  second per station is not a thing a roster may cost. */
-  const stationCalls = (js8?.stations ?? []).map((h) => h.call).join(' ')
   const logDetail = useMemo(() => {
+    if (remote) return new Map(Object.entries(context.value?.history ?? {}).filter(([,h]) => h.count > 0))
     const out = new Map<string, { count: number; lastUnix: number | null; grid: string; name: string; comment: string }>()
     for (const call of stationCalls.split(' ').filter(Boolean)) {
       // JS8Call's own scope for this column is hasWorkedBefore(call, "") — worked ANYWHERE,
@@ -406,13 +429,13 @@ export function Js8Cockpit({
       })
     }
     return out
-  }, [log, stationCalls])
+  }, [log, stationCalls, remote, context.value])
 
   const sending = js8?.sending === true
   const rxCount = countBits(js8?.rxSpeeds ?? 0)
   const selectedCall = toCall.trim().toUpperCase()
   const selected = js8?.stations.find((h) => h.call === selectedCall) ?? null
-  const now = Date.now()
+  const now = js8DisplayNow(js8)
 
   const hbTitle =
     js8?.hbOn && js8.armed.hb
@@ -498,6 +521,7 @@ export function Js8Cockpit({
       type="button"
       className={`cw-macro rtty-arm js8-arm ${cls}${on ? ' on' : ''}${on && armed ? ' armed' : ''}`}
       aria-pressed={on}
+      disabled={!canControl}
       onClick={() => toggleSwitch(which, on)}
       // Every face carries the two-act note: an armed chip that has not fired reads as a bug
       // to a JS8Call operator, and the sentence that stops it is the one naming the latch.
@@ -597,6 +621,10 @@ export function Js8Cockpit({
       onRemove={panels ? () => panels.setPanelState('stations', 'removed') : undefined}
     >
       <div className="js8-stations">
+        {remote && <div className="js8-history-status" role="status">
+          {!context.value && <span>{context.loading ? t('remote.collectionLoading') : t('remote.collectionUnavailable')}</span>}
+          <button type="button" className="cw-macro" onClick={context.refresh} disabled={!dataAvailable || context.loading}>{t('remote.refreshCollection')}</button>
+        </div>}
         {!js8 || js8.stations.length === 0 ? (
           <div className="cw-decode-idle">{t('js8.station.empty')}</div>
         ) : (
@@ -650,6 +678,7 @@ export function Js8Cockpit({
                   {azText}
                 </span>
               )}
+              {remote && !context.value?.history[h.call.trim().toUpperCase()] && <span className="js8-cell js8-b4" title={t('remote.collectionUnavailable')}>—</span>}
               {det && (
                 <span
                   className="js8-cell js8-b4"
@@ -684,6 +713,7 @@ export function Js8Cockpit({
                     key={q.id}
                     type="button"
                     className="cw-macro js8-query"
+                    disabled={!canControl}
                     onClick={() => quickQuery(h.call, q.id)}
                     title={t('js8.station.query.title', { cmd: q.label, call: h.call })}
                   >
@@ -722,7 +752,8 @@ export function Js8Cockpit({
                 <button
                   type="button"
                   className="cw-macro js8-inbox-act"
-                  onClick={() => markInbox(m.id, 'read')}
+                  disabled={!canControl}
+                    onClick={() => markInbox(m.id, 'read')}
                   title={t('js8.inbox.read.title')}
                 >
                   {t('js8.inbox.read.label')}
@@ -731,7 +762,8 @@ export function Js8Cockpit({
               <button
                 type="button"
                 className="cw-macro js8-inbox-act"
-                onClick={() => deleteInbox(m.id)}
+                disabled={!canControl}
+                    onClick={() => deleteInbox(m.id)}
                 title={t('js8.inbox.delete.title')}
               >
                 {t('js8.inbox.delete.label')}
@@ -752,7 +784,7 @@ export function Js8Cockpit({
       weight={1.5}
       onRemove={panels ? () => panels.setPanelState('log', 'removed') : undefined}
     >
-      <LogEntry
+      {!canControl ? <RemoteRecallEntry snap={snap} mode={JS8} selectedCall={selectedCall} onOpenLog={onOpenLogbook}/> : <LogEntry
         onOpenLogbook={onOpenLogbook}
         snap={snap}
         // The ADIF token: written as MODE=MFSK SUBMODE=JS8 by the logbook (B5).
@@ -768,7 +800,7 @@ export function Js8Cockpit({
         fieldDay={snap.fieldDay ?? null}
         fdMode="DIG"
         fdSubmode={JS8}
-      />
+      />}
     </CockpitPaneFrame>
   )
 
@@ -780,13 +812,14 @@ export function Js8Cockpit({
           onSnap={onSnap}
           txActiveLabel="▲ JS8"
           onStopTx={stop}
-          onSetTxEnabled={onSetTxEnabled}
+          onSetTxEnabled={onSetTxEnabled ? (on) => { if (canControl) onSetTxEnabled(on) } : undefined}
           // TX DRIVE, the FT8 header's control: a configuration control on the transmit
           // path, not a transmit control.
           power={{
             value: snap.radio.txLevel,
             unit: 'drive',
             onChange: (v: number) => {
+              if (!canControl) return
               void setTxLevel(v)
                 .then((s) => onSnap?.(s))
                 .catch(() => {})
@@ -796,9 +829,9 @@ export function Js8Cockpit({
           }}
           // TUNE — a steady carrier; also a stop control (it stops the carrier it started),
           // so it is on this cockpit's stop-line census and its sweep.
-          onTune={(on) => void setTune(on).then((s) => onSnap?.(s))}
+          onTune={(on) => { if (canControl) void setTune(on).then((s) => onSnap?.(s)) }}
           onAtuTune={() =>
-            void atuTune()
+            canControl && void atuTune()
               .then((s) => onSnap?.(s))
               .catch((e) => pushToast(String(e), 'error'))
           }
@@ -815,6 +848,7 @@ export function Js8Cockpit({
                     type="button"
                     className={`rtty-arm js8-speed-chip${js8?.speed === s.key ? ' on' : ''}`}
                     aria-pressed={js8?.speed === s.key}
+                    disabled={!canControl}
                     onClick={() => setSpeed(s.idx)}
                     title={t('js8.header.speed.chip.title', { speed: s.label, period: s.periodS })}
                   >
@@ -839,14 +873,14 @@ export function Js8Cockpit({
           bandControl={
             onSetFrequency ? (
               <FrequencyControl
-                channels={plan}
+                channels={remote ? context.value?.plan ?? [] : plan}
                 dialMhz={snap.radio.dialMhz}
                 band={snap.radio.band}
                 mode={snap.radio.sideband}
                 variant="compact"
                 showReadout={false}
                 showModeToggle={false}
-                onSet={onSetFrequency}
+                onSet={(...args) => { if (canControl) onSetFrequency(...args) }}
               />
             ) : (
               <span className="cockpit-ph-pill" title={t('js8.header.band.title')}>
@@ -882,6 +916,7 @@ export function Js8Cockpit({
           rxOffsetHz={snap?.radio.rxOffsetHz ?? 1500}
           txOffsetHz={snap?.radio.txOffsetHz ?? 1500}
           onTune={(hz, target) => {
+            if (!canControl) return
             if (target !== 'tx')
               void setRxOffset(hz)
                 .then((s) => onSnap?.(s))
@@ -954,7 +989,8 @@ export function Js8Cockpit({
           "armed" only when both agree), a cancel for a reply that has not fired, or Drop
           queue — a SENDER-class control (it empties the queue; a frame already keyed
           finishes) that must never enter the stop-line sweep. */}
-      <div className="cockpit-txdock">
+      <div className={`cockpit-txdock${canControl ? '' : ' remote-observer-dock'}`}>
+        {remote && <div role="status" className="js8-observation-status">{js8 ? t('remote.applicationObserver') : t('remote.collectionUnavailable')}</div>}
         <div className="js8-dock-row js8-compose-row" role="group" aria-label={t('js8.dock.aria')}>
           <input
             className="settings-input rtty-hiscall js8-to"
@@ -1004,7 +1040,7 @@ export function Js8Cockpit({
           <span className={`js8-estimate${overCap ? ' over' : ''}`} title={t('js8.dock.estimate.title')}>
             {estimateText}
           </span>
-          <button type="button" className="cw-send-btn js8-send" onClick={send} disabled={!canSend}>
+          <button type="button" className="cw-send-btn js8-send" onClick={send} disabled={!canControl || !canSend}>
             {t('js8.dock.send.label')}
           </button>
         </div>
@@ -1031,13 +1067,13 @@ export function Js8Cockpit({
               type="button"
               className={`cw-macro rtty-arm js8-arm js8-cq js8-cq-repeat${js8?.cqOn ? ' on' : ''}${js8?.cqOn && js8.armed.cq ? ' armed' : ''}`}
               aria-pressed={js8?.cqOn === true}
-              onClick={toggleCqRepeat}
+              disabled={!canControl} onClick={toggleCqRepeat}
               title={cqRepeatTitle}
             >
               <span className="cw-macro-label">{cqCount ? `${CQ} (${cqCount})` : CQ}</span>
             </button>
           ) : (
-            <button type="button" className="cw-macro js8-cq" onClick={callCq} title={t('js8.dock.cq.title')}>
+            <button type="button" className="cw-macro js8-cq" disabled={!canControl} onClick={callCq} title={t('js8.dock.cq.title')}>
               <span className="cw-macro-label">{CQ}</span>
             </button>
           )}
@@ -1045,6 +1081,7 @@ export function Js8Cockpit({
             type="button"
             className={`cw-macro rtty-arm js8-arm js8-hb${js8?.hbOn ? ' on' : ''}${js8?.hbOn && js8.armed.hb ? ' armed' : ''}`}
             aria-pressed={js8?.hbOn === true}
+            disabled={!canControl}
             onClick={toggleHb}
             title={hbTitle}
           >
@@ -1092,7 +1129,7 @@ export function Js8Cockpit({
                   ? t('js8.dock.pending.txOff', { to: js8.pendingReply.to, text: js8.pendingReply.display })
                   : t('js8.dock.pending.idle', { to: js8.pendingReply.to, text: js8.pendingReply.display })}
             </span>
-            <button type="button" className="cw-macro js8-cancel" onClick={cancelPending} title={t('js8.dock.pending.cancel.title')}>
+            <button type="button" className="cw-macro js8-cancel" disabled={!canControl} onClick={cancelPending} title={t('js8.dock.pending.cancel.title')}>
               {t('js8.dock.pending.cancel.label')}
             </button>
           </div>
@@ -1110,7 +1147,7 @@ export function Js8Cockpit({
                 {r.last && <span className="js8-chip">L</span>}
               </span>
             ))}
-            <button type="button" className="cw-macro js8-drop" onClick={dropQueue} title={t('js8.dock.queue.drop.title')}>
+            <button type="button" className="cw-macro js8-drop" disabled={!canControl} onClick={dropQueue} title={t('js8.dock.queue.drop.title')}>
               {t('js8.dock.queue.drop.label')}
             </button>
           </div>

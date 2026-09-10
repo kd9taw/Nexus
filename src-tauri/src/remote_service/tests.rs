@@ -296,6 +296,26 @@ fn cloud_runtime_probe() {
     std::io::stdout().flush().unwrap();
     for line in lines {
         let value: serde_json::Value = serde_json::from_str(&line.unwrap()).unwrap();
+        if value["type"] == "seedJs8" {
+            let mut e = engine.lock().unwrap();
+            let mut settings = e.settings().clone();
+            settings.mycall = "N0CALL".into();
+            e.apply_settings(settings);
+            e.js8_load_journal(&value["journal"].to_string());
+            e.js8_send(None, "TEST MESSAGE WITH MULTIPLE FRAMES".into())
+                .unwrap();
+            assert!(!e.snapshot().radio.tx_enabled);
+            println!(
+                "REMOTE_TEST:{}",
+                json!({"state":e.js8_state(),"log":e.get_log().into_iter().map(|r| {
+                    let mut q = tempo_app::dto::LoggedQso::from(r);
+                    q.entity = propagation::dxcc::resolve(&q.call).map(|i| i.entity.to_string());
+                    q
+                }).collect::<Vec<_>>()})
+            );
+            std::io::stdout().flush().unwrap();
+            continue;
+        }
         if value["type"] == "seedTempo" {
             let mut e = engine.lock().unwrap();
             e.set_tier(serde_json::from_value(value["tier"].clone()).unwrap());

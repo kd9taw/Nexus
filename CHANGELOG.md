@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Remote JS8 observation:** The browser uses Nexus's existing JS8 cockpit,
+  including four-speed activity, heard stations, inbox, queued frames and pending
+  replies. Worked-before details come from the complete station log; unavailable
+  history remains distinct from an unworked call. Selection, pinning and recall
+  stay local to the browser. A compatible station pilot is required. Sending,
+  tuning, transmit latches, queue changes and inbox changes remain on the station.
+
 - **Remote Tempo conversation observation:** The browser uses Nexus's existing
   Fast/Deep conversation workspace, recent chats, heard stations and message
   delivery indicators. Thread selection and history scrolling stay local to the

@@ -41,7 +41,7 @@ export class ApplicationStreamRelay {
   }
   restore(sessionId: string, saved: StreamCheckpoint): void {
     const peer = this.peers.get(sessionId)
-    if (!peer || !this.station || ![2, 5].includes(saved.version) || saved.version > this.version) throw new Error('invalidApplicationCheckpoint')
+    if (!peer || !this.station || ![2, 5, 11].includes(saved.version) || saved.version > this.version) throw new Error('invalidApplicationCheckpoint')
     streamTopics(saved.topics, saved.version)
     for (const credit of [saved.credit, saved.pending]) if (credit && (!streamId(credit.id) || !Number.isFinite(credit.at))) throw new Error('invalidApplicationCheckpoint')
     if (saved.credit && saved.pending || !Number.isFinite(saved.windowAt) || !Number.isInteger(saved.count) || saved.count < 0 || saved.count > 32) throw new Error('invalidApplicationCheckpoint')

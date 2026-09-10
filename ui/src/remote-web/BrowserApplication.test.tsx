@@ -13,6 +13,11 @@ import { cwDecode, getScopeRow } from '../api'
 import { RttyCockpit } from '../components/RttyCockpit'
 import { PskCockpit } from '../components/PskCockpit'
 import { coerceMemory, memoriesStore } from '../features/memories'
+import js8Fixture from './__fixtures__/js8.json'
+import { parseJs8Sample } from './js8'
+import { RemoteCollections, RemoteCollectionsContext } from './collections'
+import type { ApplicationClient } from './application-client'
+import type { QueryPage } from './application-query-protocol'
 
 const snapshot = {
   mycall: 'N0CALL', mygrid: 'AA00', mode: 'Normal',
@@ -47,6 +52,70 @@ function keyboardSample(mode: string) {
       backend: 'afsk', auto: true, seqState: 'idle', peer: null, peerExchange: [], heardCq: 'W1AW' }
       : { signal: true, centerHz: 1000, mode: 'qpsk31', reverse: true }) }
 }
+
+it('connects exactly one real JS8 cockpit without entry, inbox, send, shortcut or log mutations', async () => {
+  const current=structuredClone(snapshot), settings=projectedSettings(), calls:string[]=[]
+  const state=structuredClone(js8Fixture.state)
+  let stateAvailable=true, js8Reads=0
+  dispose=installApplicationTransport({kind:'remote',invoke:async <T,>(command:string):Promise<T>=>{
+    calls.push(command)
+    if(command==='get_snapshot')return structuredClone(current) as T
+    if(command==='get_settings')return settings as T
+    if(command==='get_band_plan')return [] as T
+    if(command==='get_js8_state'&&stateAvailable){
+      js8Reads++
+      return parseJs8Sample({...js8Fixture,state,capturedAtMs:js8Fixture.capturedAtMs+js8Reads*500},50+(js8Reads%3)*10) as T
+    }
+    if(command==='get_spectrum_row')return {row:[],loHz:0,hiHz:4000,source:'audio'} as T
+    if(command==='get_meters')return {rxLevel:0,smeterDb:null,cwToneHz:null} as T
+    throw new Error('applicationUnsupported')
+  }})
+  const context=new RemoteCollections({supports:()=>false} as unknown as ApplicationClient)
+  vi.spyOn(context,'page').mockImplementation(async()=>({collection:'js8Context',offset:0,total:0,retained:0,rows:[],nextCursor:null,ageMs:0,
+    meta:{capturedAgeMs:0,source:{plan:[],history:{W1AW:{count:2,lastUnix:1700000000,grid:'FN31',name:'PRIOR CONTACT',comment:'COMPLETE LOG'},
+      K2ABC:{count:0,lastUnix:null,grid:'',name:'',comment:''}}}}} as unknown as QueryPage))
+  const view=(available:boolean)=><StationControlContext.Provider value={false}><StationDataContext.Provider value={available}>
+    <RemoteCollectionsContext.Provider value={context}><App remote={{snapshot:current,settings,bandPlan:[],js8:true,status:<div>Observer</div>}}/></RemoteCollectionsContext.Provider>
+  </StationDataContext.Provider></StationControlContext.Provider>
+  const {container,rerender,unmount}=render(view(true))
+  fireEvent.click(screen.getByRole('button',{name:/^JS8 —/}))
+  await waitFor(()=>expect(container.querySelector('.js8-stations')?.textContent).toContain('COMPLETE LOG'))
+  const root=container.querySelector('.js8-cockpit')!
+  expect(container.querySelectorAll('.js8-cockpit')).toHaveLength(1)
+  expect(root.querySelectorAll('.waterfall-wrap')).toHaveLength(1)
+  expect(container.querySelector('.grid-center .conversation')).toBeNull()
+  expect(container.querySelector('.grid-stations')).toBeNull()
+  expect(root.textContent).toContain('STORED REMOTE TEST')
+  expect(root.textContent).toContain('TEST QUEUED FRAMES')
+  const activityRow=root.querySelector('.js8-row'), observedReads=js8Reads
+  await waitFor(()=>expect(js8Reads).toBeGreaterThan(observedReads+1), {timeout:2000})
+  expect(root.querySelector('.js8-row')).toBe(activityRow)
+  const controls=root.querySelectorAll<HTMLButtonElement>('.js8-speed-chip,.js8-query,.js8-inbox-act,.js8-send,.js8-cq,.js8-hb,.js8-arm,.js8-cancel,.js8-drop')
+  expect(controls.length).toBeGreaterThan(15)
+  for(const button of controls){expect(button.disabled).toBe(true);fireEvent.click(button)}
+  fireEvent.doubleClick(root.querySelector('.js8-offset-row')!)
+  fireEvent.change(root.querySelector('.js8-compose')!,{target:{value:'TEST SEND'}})
+  fireEvent.keyDown(root.querySelector('.js8-compose')!,{key:'Enter'})
+  fireEvent.keyDown(window,{key:'Escape'})
+  fireEvent.click(root.querySelector('.js8-station-call')!)
+  expect((root.querySelector('.js8-to') as HTMLInputElement).value).toBe('W1AW')
+  fireEvent.click(root.querySelector('.js8-pin')!)
+  expect(root.querySelector('.js8-pin')?.getAttribute('aria-pressed')).toBe('true')
+  stateAvailable=false
+  await waitFor(()=>expect(root.querySelector('.js8-inbox')?.textContent).not.toContain('STORED REMOTE TEST'))
+  expect(root.querySelector('.js8-pending-row')).toBeNull()
+  stateAvailable=true
+  await waitFor(()=>expect(root.querySelector('.js8-inbox')?.textContent).toContain('STORED REMOTE TEST'))
+  rerender(view(false))
+  await waitFor(()=>expect(root.querySelector('.js8-stations')?.textContent).not.toContain('COMPLETE LOG'))
+  unmount()
+  const reads=['get_snapshot','get_settings','get_band_plan','get_js8_state','get_spectrum_row','get_meters',
+    'app_version','dxcc_entity_locations','get_declination','get_awards','get_journey','radio_launch_info',
+    'check_for_update','get_propagation','sat_track_status','get_tle_status','get_kp_forecast','get_xray_now',
+    'get_dxped_windows','get_feed_health','get_need_alerts','get_all_spots','get_fd_ruleset','log_operators','read_rotator','get_sat_transponder']
+  expect(calls.filter(c=>!reads.includes(c))).toEqual([])
+  for(const forbidden of ['get_log','get_licensed_band_plan','qrz_lookup','resolve_entity','js8_enter','js8_send','js8_inbox_mark']) expect(calls).not.toContain(forbidden)
+})
 
 it.each(['TempoFast', 'TempoDeep'])('browses the actual %s conversations without sending, archiving or changing the station', async tier => {
   const current = structuredClone(snapshot), settings = projectedSettings(), calls: string[] = []

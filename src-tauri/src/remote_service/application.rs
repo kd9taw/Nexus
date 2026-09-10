@@ -29,18 +29,23 @@ pub enum Command {
     Rtty,
     #[serde(rename = "get_psk_state")]
     Psk,
+    #[serde(rename = "get_js8_state")]
+    Js8,
 }
 impl Command {
     pub(super) fn interval(self) -> Duration {
         Duration::from_millis(match self {
-            Self::Snapshot => 500,
+            Self::Snapshot | Self::Js8 => 500,
             Self::Spectrum | Self::Scope => 100,
             Self::Meters | Self::Cw | Self::Rtty | Self::Psk => 200,
             Self::Settings | Self::BandPlan => 1000,
         })
     }
     pub(super) fn legacy(self) -> bool {
-        !matches!(self, Self::Scope | Self::Cw | Self::Rtty | Self::Psk)
+        !matches!(
+            self,
+            Self::Scope | Self::Cw | Self::Rtty | Self::Psk | Self::Js8
+        )
     }
 }
 struct Entry {
@@ -237,6 +242,20 @@ impl Publisher {
                     drop(eng);
                     serde_json::to_value(value)
                 }
+                Command::Js8 => {
+                    let value = eng.bounded_js8_state().ok_or("applicationTooLarge")?;
+                    let captured_at_ms = super::now_ms();
+                    drop(eng);
+                    let value = serde_json::json!({"state": value, "capturedAtMs": captured_at_ms});
+                    if serde_json::to_vec(&value)
+                        .map_err(|_| "applicationUnavailable")?
+                        .len()
+                        > 384 * 1024
+                    {
+                        return Err("applicationTooLarge");
+                    }
+                    Ok(value)
+                }
                 Command::Snapshot => {
                     let value = eng.snapshot();
                     drop(eng);
@@ -365,7 +384,7 @@ impl Stream {
         request: Option<String>,
     ) -> Result<(), &'static str> {
         if !super::transport::identifier(&watch)
-            || topics.len() > 9
+            || topics.len() > 10
             || topics
                 .iter()
                 .enumerate()
@@ -487,6 +506,25 @@ mod tests {
     use super::*;
     use serde_json::json;
     const REQUEST: &str = "8aa041cb-c642-459c-83f3-11a5b720647d";
+    #[test]
+    fn js8_observation_uses_native_state_without_entering_or_arming() {
+        use std::sync::{Arc, Mutex};
+        let engine = tempo_app::engine::Engine::with_settings(Default::default());
+        let expected = serde_json::to_value(engine.js8_state()).unwrap();
+        let settings = serde_json::to_value(engine.settings()).unwrap();
+        let shared = Arc::new(Mutex::new(engine));
+        let command: Command = serde_json::from_value(json!("get_js8_state")).unwrap();
+        assert!(!command.legacy());
+        let data = Publisher::default()
+            .read(&shared, command, REQUEST, None, Instant::now())
+            .unwrap();
+        let reply: Value = serde_json::from_str(&data).unwrap();
+        assert_eq!(reply["data"]["state"], expected);
+        assert!(reply["data"]["capturedAtMs"].as_u64().unwrap() > 0);
+        let engine = shared.lock().unwrap();
+        assert_eq!(serde_json::to_value(engine.settings()).unwrap(), settings);
+        assert!(!engine.snapshot().radio.tx_enabled);
+    }
     #[test]
     fn keyboard_observer_reads_preserve_native_state_and_refuse_busy_engine() {
         use std::sync::{Arc, Mutex};

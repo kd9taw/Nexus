@@ -53,8 +53,9 @@ export function RemoteRecall({ snap, call, mode, bounded, onOpenLog }: RecallPro
 }
 
 /** The existing log pane hosts an observer's local callsign and the same recall card. */
-export function RemoteRecallEntry({ snap, mode, onOpenLog }: Omit<RecallProps, 'call' | 'bounded'>) {
+export function RemoteRecallEntry({ snap, mode, onOpenLog, selectedCall }: Omit<RecallProps, 'call' | 'bounded'> & { selectedCall?: string }) {
   const [call, setCall] = useState('')
+  useEffect(() => { if (selectedCall) setCall(selectedCall) }, [selectedCall])
   return <div className="log-entry">
     <div className="le-row"><input className="settings-input mono le-call" value={call} maxLength={32}
       aria-label={t('logEntry.call.placeholder')} placeholder={t('logEntry.call.placeholder')}

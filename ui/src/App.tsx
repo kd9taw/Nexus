@@ -239,7 +239,7 @@ const OPERATE_TIERS: Tier[] = [
   'WSPR',
 ]
 
-export type BrowserWorkspace = { snapshot: AppSnapshot; settings: Settings; bandPlan: BandChannel[]; status: ReactNode; stale?: boolean; cwPhone?: boolean; keyboard?: boolean; collections?: boolean; insights?: boolean; dxpeditions?: boolean; memories?: boolean; ota?: boolean; fieldDay?: boolean }
+export type BrowserWorkspace = { snapshot: AppSnapshot; settings: Settings; bandPlan: BandChannel[]; status: ReactNode; stale?: boolean; cwPhone?: boolean; keyboard?: boolean; collections?: boolean; insights?: boolean; dxpeditions?: boolean; memories?: boolean; ota?: boolean; fieldDay?: boolean; js8?: boolean }
 import { CollectionStatus, useRemoteCollection } from './remote-web/collections'
 import { RemoteInsights } from './remote-web/RemoteInsights'
 import { RemoteDxpeditions } from './remote-web/RemoteDxpeditions'
@@ -324,7 +324,7 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   const [view, setView] = useState<View>(() => {
     if (remote) {
       const mode = remote.snapshot.radio.operatingMode
-      return mode === 'phone' ? 'phone' : mode === 'cw' ? 'cw' : mode === 'rtty' ? 'rtty' : mode === 'keyboard' ? 'psk' : mode === 'digital' && ['TempoFast', 'TempoDeep'].includes(remote.snapshot.link.tier) ? 'chat' : 'operate'
+      return remote.js8 && remote.snapshot.link.tier === 'JS8' ? 'js8' : mode === 'phone' ? 'phone' : mode === 'cw' ? 'cw' : mode === 'rtty' ? 'rtty' : mode === 'keyboard' ? 'psk' : mode === 'digital' && ['TempoFast', 'TempoDeep'].includes(remote.snapshot.link.tier) ? 'chat' : 'operate'
     }
     // Deeplink > legacy merged-section deeplink > persisted view > profile landing —
     // the precedence and the clamp live in resolveBootView (pure, test-pinned): a
@@ -2268,7 +2268,7 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // A visible navigation item is not evidence that its station API is connected.
   // In particular, never mount SettingsPanel with the projected operating view:
   // it expects complete configuration and could display absent values as defaults.
-  const isRemoteViewAvailable = (v: View): boolean => !remote || v === 'operate' || v === 'chat' || (!!remote.collections && ['needed', 'spots', 'logbook'].includes(v)) || (!!remote.cwPhone && (v === 'cw' || v === 'phone')) || (!!remote.keyboard && (v === 'rtty' || v === 'psk')) || (!!remote.insights && (v === 'awards' || v === 'stats')) || (!!remote.dxpeditions && v === 'dxped') || (!!remote.memories && v === 'memories') || (!!remote.ota && v === 'pota') || (!!remote.fieldDay && v === 'fieldDay')
+  const isRemoteViewAvailable = (v: View): boolean => !remote || v === 'operate' || v === 'chat' || (!!remote.collections && ['needed', 'spots', 'logbook'].includes(v)) || (!!remote.cwPhone && (v === 'cw' || v === 'phone')) || (!!remote.keyboard && (v === 'rtty' || v === 'psk')) || (!!remote.insights && (v === 'awards' || v === 'stats')) || (!!remote.dxpeditions && v === 'dxped') || (!!remote.memories && v === 'memories') || (!!remote.ota && v === 'pota') || (!!remote.fieldDay && v === 'fieldDay') || (!!remote.js8 && v === 'js8')
 
   // Recall card → Logbook, filtered to the call (#192, kr4fqg: "click a previous contact and
   // land in the log"). Same shape as the `onOpenMemories` handoffs below — `undefined` when the
