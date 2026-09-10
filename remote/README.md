@@ -202,6 +202,25 @@ loss or failed refresh while retaining local filters. A compatible station build
 is required; station commands, file operations and live shack comparison remain
 separate work.
 
+Field Day reuses the existing event dashboard, score, worked sections, earned and
+planned bonuses, complete event log and club board. The v10 extension requires
+every prior extension plus `x-nexus-application-field-day-version: 1`. Its closed,
+argument-free `get_remote_field_day` query captures the native display and its
+four scoring/operator settings under one nonblocking engine lock. The normal
+desktop snapshot uses the same display constructor; rule and score calculations
+remain native. The master switch is never enabled by the browser or event date.
+
+The source admits at most 2,048 event contacts, 4,096 club duplicate keys, 128 club
+positions, 1,024 UTF-8 bytes per text field, 128 KiB of status text and 224 KiB for
+the whole query. Excess returns unavailable explicitly; it never presents a
+truncated log as complete. Capture/transit age expires after 60 seconds and ages
+club position readings. Refresh, source failure and station loss clear old data;
+the local bonus disclosure survives refresh. Older pilots show the availability
+message and do not send the query. Navigation never changes the station mode.
+Event setup, QSO/scoring writes, operating, exports and separate club-board windows
+remain station-local. Larger-event pagination and live shack comparison remain
+future verification and parity work; a compatible station build is required.
+
 FT selection and CW/Phone/RTTY/PSK callsign entry use the existing Nexus recall card;
 its contact rows open the existing filtered Logbook. Stale sessions and changed
 callsigns discard old results. QSO entry, cockpit memory recall, rotator and voice-keyer/audio data remain

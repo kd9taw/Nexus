@@ -296,6 +296,25 @@ fn cloud_runtime_probe() {
     std::io::stdout().flush().unwrap();
     for line in lines {
         let value: serde_json::Value = serde_json::from_str(&line.unwrap()).unwrap();
+        if value["type"] == "seedFieldDay" {
+            let mut e = engine.lock().unwrap();
+            let mut settings = e.settings().clone();
+            settings.fd_active = true;
+            settings.fd_event = "arrlfd".into();
+            settings.fd_class = "1D".into();
+            settings.fd_section = "EMA".into();
+            settings.fd_operator = "W1AW".into();
+            settings.fd_power_mult = 2;
+            settings.fd_bonuses = vec!["emergency-power".into()];
+            settings.fd_bonuses_planned = vec!["natural-power".into()];
+            e.apply_settings(settings);
+            e.restore_field_day_if_enabled();
+            assert!(e.fd_log_manual("K1ABC", "2A", "WI", "CW").unwrap());
+            assert!(e.fd_log_manual("K2ABC", "2A", "WI", "PH").unwrap());
+            println!("REMOTE_TEST:{}", json!({"seeded":true}));
+            std::io::stdout().flush().unwrap();
+            continue;
+        }
         if value["type"] == "seedOta" {
             let fixture: serde_json::Value = serde_json::from_str(include_str!(
                 "../../../ui/src/remote-web/__fixtures__/ota.json"

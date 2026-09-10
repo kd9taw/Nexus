@@ -1,3 +1,4 @@
+import type { FdDisplaySettings } from '../fieldDayObservation'
 import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import type { FdClubStatus, FieldDayQso, FieldDayStatus, ModeRequest, Settings } from '../types'
 import { exportLog, fdClubExport, getSettings, setSettings, setFdOperator, openPanelWindow, saveTextToDownloads, type FdRulesetDto } from '../api'
@@ -118,7 +119,9 @@ const FD_POWER_TIERS = [
 
 interface Props {
   fieldDay: FieldDayStatus | null
-  onSetMode: (mode: ModeRequest) => void
+  onSetMode?: (mode: ModeRequest) => void
+  /** A complete ephemeral display capture; native loaders and writes stay disabled. */
+  observation?: FdDisplaySettings
   /** The Field Day master switch (settings.fdActive) — gates the advisories. */
   fdActive?: boolean
   /** The active event's ruleset facts (App fetches get_fd_ruleset once per
@@ -502,7 +505,7 @@ interface FdScore {
 }
 
 /** Score components from the snapshot (new fields); fall back to computed if absent. */
-function computeFdScore(fieldDay: FieldDayStatus | null, settings: Settings | null): FdScore {
+function computeFdScore(fieldDay: FieldDayStatus | null, settings: FdDisplaySettings | null): FdScore {
   const fdPowerMult = settings?.fdPowerMult ?? 1
   const qsoPts = fieldDay?.points ?? 0
   const poweredPoints = fieldDay?.poweredPoints ?? qsoPts * fdPowerMult
@@ -790,11 +793,13 @@ export function FdClubSection({
   onExport,
   busy = false,
   detached = false,
+  readOnly = false,
 }: {
   club: FdClubStatus
   onExport?: (format: 'club-cabrillo' | 'club-adif') => void
   busy?: boolean
   detached?: boolean
+  readOnly?: boolean
 }) {
   // The glance scale. One flag, applied at the handful of places that carry a
   // px size, so the docked board is byte-for-byte what it was.
@@ -855,7 +860,7 @@ export function FdClubSection({
             </button>
           </>
         )}
-        {!detached && (
+        {!detached && !readOnly && (
           <button
             type="button"
             className="export-btn"
@@ -997,11 +1002,13 @@ export function FieldDayScoreboard({
   settings,
   onSaveOperator,
   detached = false,
+  readOnly = false,
 }: {
   fieldDay: FieldDayStatus | null
-  settings: Settings | null
+  settings: FdDisplaySettings | null
   onSaveOperator: (call: string) => void
   detached?: boolean
+  readOnly?: boolean
 }) {
   const log = fieldDay?.log ?? []
   const isWfd = (fieldDay?.event ?? '') === 'wfd'
@@ -1019,6 +1026,7 @@ export function FieldDayScoreboard({
     setOpDraft(settings?.fdOperator ?? '')
   }, [settings?.fdOperator])
   const commitOp = () => {
+    if (readOnly) return
     const v = opDraft.trim()
     if (v === (settings?.fdOperator ?? '')) return
     onSaveOperator(v)
@@ -1034,7 +1042,8 @@ export function FieldDayScoreboard({
             style={OP_INPUT}
             value={opDraft}
             disabled={!settings}
-            onChange={(e) => setOpDraft(e.target.value.toUpperCase())}
+            readOnly={readOnly}
+            onChange={(e) => { if (!readOnly) setOpDraft(e.target.value.toUpperCase()) }}
             onBlur={commitOp}
             onKeyDown={(e) => {
               if (e.key === 'Enter') e.currentTarget.blur()
@@ -1045,7 +1054,7 @@ export function FieldDayScoreboard({
             autoCapitalize="characters"
           />
         </label>
-        {!detached && (
+        {!detached && !readOnly && (
           <button
             type="button"
             style={POPOUT_BTN}
@@ -1109,7 +1118,8 @@ export function FieldDayScoreboard({
   )
 }
 
-export function FieldDayView({ fieldDay, onSetMode, fdActive = false, fdRuleset = null, tier }: Props) {
+export function FieldDayView({ fieldDay, onSetMode, fdActive = false, fdRuleset = null, tier, observation }: Props) {
+  const observed = observation !== undefined
   // Log tail: bottom-pinned via the shared discipline. The old unconditional
   // snap on every logged QSO undid a mid-run scroll-back (checking a call two
   // contacts up) the moment the next contact landed. Pinned follows the run;
@@ -1134,12 +1144,14 @@ export function FieldDayView({ fieldDay, onSetMode, fdActive = false, fdRuleset 
   }, [running])
 
   // Settings round-trip for the bonus checklist (same pattern as specialOp in OperateCockpit).
-  const [settings, setSettingsState] = useState<Settings | null>(null)
+  const [nativeSettings, setSettingsState] = useState<Settings | null>(null)
+  const settings = observation ?? nativeSettings
   useEffect(() => {
+    if (observed) return
     let live = true
     getSettings().then((s) => live && setSettingsState(s)).catch(() => {})
     return () => { live = false }
-  }, [])
+  }, [observed])
 
   const rows = useMemo(() => annotate(log), [log])
   const modes = useMemo(() => modeCounts(log), [log])
@@ -1154,14 +1166,14 @@ export function FieldDayView({ fieldDay, onSetMode, fdActive = false, fdRuleset 
   // each other's state, and the power chips edit the very same `fdPowerMult` the Settings
   // panel does rather than a second copy of it.
   const saveScoringPatch = async (patch: Partial<Settings>) => {
-    if (!settings) return
-    const updated: Settings = { ...settings, ...patch }
+    if (observed || !nativeSettings) return
+    const updated: Settings = { ...nativeSettings, ...patch }
     setSettingsState(updated)
     try {
       await setSettings(updated)
     } catch {
       // Revert optimistic update on failure
-      setSettingsState(settings)
+      setSettingsState(nativeSettings)
     }
   }
   const toggle = (list: string[], id: string) =>
@@ -1180,13 +1192,13 @@ export function FieldDayView({ fieldDay, onSetMode, fdActive = false, fdRuleset 
   // #100 it no longer resets the operating mode, but those two still land on a live contact.
   // The engine trims + uppercases.
   const saveOperator = async (call: string) => {
-    if (!settings) return
+    if (observed || !nativeSettings) return
     const op = call.trim().toUpperCase()
-    setSettingsState({ ...settings, fdOperator: op })
+    setSettingsState({ ...nativeSettings, fdOperator: op })
     try {
       await setFdOperator(op)
     } catch {
-      setSettingsState(settings)
+      setSettingsState(nativeSettings)
     }
   }
 
@@ -1223,6 +1235,7 @@ export function FieldDayView({ fieldDay, onSetMode, fdActive = false, fdRuleset 
   // from the same log the board renders (no backend command). Defined here so it can
   // read the score components computed just above.
   const handleExport = async (format: ExportFormat) => {
+    if (observed) return
     setExportError(null)
     setBusy(format)
     try {
@@ -1313,7 +1326,8 @@ export function FieldDayView({ fieldDay, onSetMode, fdActive = false, fdRuleset 
             type="button"
             className={`fd-role-btn${running ? ' active' : ''}`}
             aria-pressed={running}
-            onClick={() => onSetMode('fieldday-run')}
+            disabled={observed}
+            onClick={() => { if (!observed) onSetMode?.('fieldday-run') }}
           >
             {t('fieldDay.role.running')}
           </button>
@@ -1321,13 +1335,14 @@ export function FieldDayView({ fieldDay, onSetMode, fdActive = false, fdRuleset 
             type="button"
             className={`fd-role-btn${!running ? ' active' : ''}`}
             aria-pressed={!running}
-            onClick={() => onSetMode('fieldday-sp')}
+            disabled={observed}
+            onClick={() => { if (!observed) onSetMode?.('fieldday-sp') }}
           >
             {t('fieldDay.role.sp')}
           </button>
         </div>
         {/* Export buttons */}
-        <div className="fd-export">
+        {!observed && <div className="fd-export">
           {exportError && (
             <span className="log-export-error" role="alert">{exportError}</span>
           )}
@@ -1367,16 +1382,16 @@ export function FieldDayView({ fieldDay, onSetMode, fdActive = false, fdRuleset 
           >
             {busy === 'dupesheet' ? t('fieldDay.export.busy') : t('fieldDay.export.dupeSheet.label')}
           </button>
-        </div>
+        </div>}
       </div>
 
       {/* CLUB SYNC (chip + counters + band board) — only while hosting/joined */}
       {fieldDay?.club && (
-        <FdClubSection club={fieldDay.club} onExport={handleExport} busy={busy !== null} />
+        <FdClubSection club={fieldDay.club} onExport={observed ? undefined : handleExport} busy={busy !== null} readOnly={observed} />
       )}
 
       {/* SCOREBOARD (operator + score tiles + sections board) */}
-      <FieldDayScoreboard fieldDay={fieldDay} settings={settings} onSaveOperator={saveOperator} />
+      <FieldDayScoreboard fieldDay={fieldDay} settings={settings} onSaveOperator={saveOperator} readOnly={observed} />
 
       {/* SCORING: the power multiplier and the bonus chase, in one place.
           Both halves of the score used to live on different screens — the multiplier in
@@ -1431,7 +1446,7 @@ export function FieldDayView({ fieldDay, onSetMode, fdActive = false, fdRuleset 
                     className={`fd-power-chip${fdPowerMult === p.value ? ' active' : ''}`}
                     aria-pressed={fdPowerMult === p.value}
                     title={t(p.hintKey)}
-                    disabled={!settings}
+                    disabled={observed || !settings}
                     onClick={() => void setPowerMult(p.value)}
                   >
                     {t(p.labelKey)}
@@ -1479,6 +1494,7 @@ export function FieldDayView({ fieldDay, onSetMode, fdActive = false, fdRuleset 
                       id={`fd-bonus-${b.id}`}
                       type="checkbox"
                       checked={earned}
+                      disabled={observed}
                       onChange={() => void toggleEarned(b.id)}
                       aria-label={t('fieldDay.bonus.aria', { label: b.label, points: b.points })}
                     />
@@ -1487,6 +1503,7 @@ export function FieldDayView({ fieldDay, onSetMode, fdActive = false, fdRuleset 
                       type="button"
                       className={`fd-bonus-plan${onPlan ? ' on' : ''}`}
                       aria-pressed={onPlan}
+                      disabled={observed}
                       title={t('fieldDay.bonus.plan.title')}
                       aria-label={t('fieldDay.bonus.plan.aria', { label: b.label })}
                       onClick={() => void togglePlanned(b.id)}

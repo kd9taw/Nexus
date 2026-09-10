@@ -10,7 +10,7 @@ import { streamTopic } from './application-stream-protocol'
 import { APPLICATION_VERSIONS, applicationCommands, applicationStreamVersion } from './application-capabilities'
 import type { StreamTopic } from './application-stream-protocol'
 import { ApplicationQueryClient } from './application-query-client'
-import { OTA_COMMAND, MEMORIES_COMMAND, DXPEDITIONS_COMMAND, INSIGHTS_COMMAND, QUERY_COMMAND, RECALL_COMMAND, insightCollection } from './application-query-protocol'
+import { FIELD_DAY_COMMAND, OTA_COMMAND, MEMORIES_COMMAND, DXPEDITIONS_COMMAND, INSIGHTS_COMMAND, QUERY_COMMAND, RECALL_COMMAND, insightCollection } from './application-query-protocol'
 
 export type ApplicationPhase = 'connecting' | 'ready' | 'updateRequired' | 'unavailable'
 type Job = { command: ApplicationCommand; resolve: (value: unknown) => void; reject: (reason: Error) => void }
@@ -56,6 +56,10 @@ export class ApplicationClient implements ApplicationTransport {
     this.setPhase('unavailable')
   }
   invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+    if (this.phase === 'ready' && this.version >= 10 && command === FIELD_DAY_COMMAND) {
+      if (args?.collection !== 'fieldDay') return Promise.reject(new Error('applicationUnsupported'))
+      return this.query.read(args, 10) as Promise<T>
+    }
     if (this.phase === 'ready' && this.version >= 9 && command === OTA_COMMAND) {
       if (args?.collection !== 'ota') return Promise.reject(new Error('applicationUnsupported'))
       return this.query.read(args, 9) as Promise<T>

@@ -13,6 +13,8 @@
 //!
 //! [`mode`]: Engine::set_mode
 
+mod field_day_display;
+
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -746,8 +748,7 @@ impl MeterFeed {
 }
 
 use crate::dto::{
-    AppSnapshot, DecodeRow, FieldDayQso, FieldDayStatus, OpMode, QsoStatus, QsyStatus,
-    RadioSummary, SourceKind, Spectrum, Tier,
+    AppSnapshot, DecodeRow, OpMode, QsoStatus, QsyStatus, RadioSummary, SourceKind, Spectrum, Tier,
 };
 use crate::settings::Settings;
 use crate::station::StationCore;
@@ -16012,65 +16013,9 @@ impl Engine {
             // chrome while `fd_active` is false, so a lingering `Mode::FieldDay`
             // can't strand the operator in Field Day after the master flips off.
             Mode::FieldDay { .. } if !self.settings.fd_active => s.mode = OpMode::Chat,
-            Mode::FieldDay { station, running } => {
+            Mode::FieldDay { .. } => {
                 s.mode = OpMode::FieldDay;
-                let log = &station.log;
-                let rs = tempo_core::fd_rules::ruleset(
-                    log.event,
-                    tempo_core::fd_rules::CURRENT_RULES_YEAR,
-                );
-                let (qso_pts, powered) =
-                    rs.scoring.qso_and_powered(log, self.settings.fd_power_mult);
-                let bonus = rs.bonus_points(&self.settings.fd_bonuses);
-                // The running-or-next event window, from the rules data (the
-                // banner/countdown's single source — no TS date math).
-                let event_window = rs.next_or_running(now_unix_secs());
-                s.field_day = Some(FieldDayStatus {
-                    my_class: log.myexch.class.clone(),
-                    my_section: log.myexch.section.clone(),
-                    running: *running,
-                    state: format!("{:?}", station.state),
-                    dxcall: station.dxcall.clone(),
-                    qso_count: log.qso_count(),
-                    sections: log.sections(),
-                    worked_sections: log.worked_sections(),
-                    points: qso_pts,
-                    event: if matches!(log.event, tempo_core::fieldday::FdEvent::WinterFd) {
-                        "wfd".into()
-                    } else {
-                        "arrlfd".into()
-                    },
-                    powered_points: powered,
-                    bonus_points: bonus,
-                    total_score: powered + bonus,
-                    event_start_unix: event_window.start_unix,
-                    event_end_unix: event_window.end_unix,
-                    rules_year: rs.rules_year,
-                    rules_generated: tempo_core::fd_rules::active_generated().to_string(),
-                    // The effectively-ON assistance sources, by their display
-                    // labels — the advisory UI's single source (never re-derived).
-                    assistance_on: self
-                        .settings
-                        .assistance_sources()
-                        .iter()
-                        .filter(|&&(_, on)| on)
-                        .map(|&(label, _)| label.to_string())
-                        .collect(),
-                    log: log
-                        .qsos()
-                        .iter()
-                        .map(|q| FieldDayQso {
-                            call: q.call.clone(),
-                            class: q.class.clone(),
-                            section: q.section.clone(),
-                            band: q.band.clone(),
-                            mode: q.mode.clone(),
-                            submode: q.submode.clone(),
-                            when_unix: q.when_unix,
-                        })
-                        .collect(),
-                    club: self.fd_club_dto(log),
-                });
+                s.field_day = self.field_day_status();
             }
         }
 

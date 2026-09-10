@@ -61,7 +61,7 @@ async function chrome() {
   } catch(error) { ws?.close(); if(!exited)process.kill(-child.pid,'SIGTERM'); await rm(profile,{recursive:true,force:true,maxRetries:8,retryDelay:100}); throw error }
 }
 
-for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9]) test(`compiled hosted browser v${applicationVersion} completes PKCE, local device approval, observation and viewport checks`, { timeout: 120000 }, async () => {
+for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) test(`compiled hosted browser v${applicationVersion} completes PKCE, local device approval, observation and viewport checks`, { timeout: 120000 }, async () => {
   const app=await runtime(), artifacts=process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS ? join(process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS, `v${applicationVersion}`) : undefined
   let browser, station, producing=true, producer, applicationProducer
   const results=[]
@@ -71,7 +71,7 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9]) test(`compiled hos
     const shell = await fetch(app.origin,{signal:AbortSignal.timeout(3000)})
     assert.equal(shell.status,200)
     assert.match(await shell.text(), /Nexus Remote/)
-    const stationHeaders = { 'x-nexus-application-version': '1', ...(applicationVersion >= 2 ? { 'x-nexus-application-stream-version': '2' } : {}), ...(applicationVersion >= 3 ? { 'x-nexus-application-query-version': '1' } : {}), ...(applicationVersion >= 4 ? { 'x-nexus-application-recall-version': '1' } : {}), ...(applicationVersion >= 5 ? { 'x-nexus-application-keyboard-version': '1' } : {}), ...(applicationVersion >= 6 ? { 'x-nexus-application-insights-version': '1' } : {}), ...(applicationVersion >= 7 ? { 'x-nexus-application-dxpeditions-version': '1' } : {}), ...(applicationVersion >= 8 ? { 'x-nexus-application-memories-version': '1' } : {}), ...(applicationVersion >= 9 ? { 'x-nexus-application-ota-version': '1' } : {}) }
+    const stationHeaders = { 'x-nexus-application-version': '1', ...(applicationVersion >= 2 ? { 'x-nexus-application-stream-version': '2' } : {}), ...(applicationVersion >= 3 ? { 'x-nexus-application-query-version': '1' } : {}), ...(applicationVersion >= 4 ? { 'x-nexus-application-recall-version': '1' } : {}), ...(applicationVersion >= 5 ? { 'x-nexus-application-keyboard-version': '1' } : {}), ...(applicationVersion >= 6 ? { 'x-nexus-application-insights-version': '1' } : {}), ...(applicationVersion >= 7 ? { 'x-nexus-application-dxpeditions-version': '1' } : {}), ...(applicationVersion >= 8 ? { 'x-nexus-application-memories-version': '1' } : {}), ...(applicationVersion >= 9 ? { 'x-nexus-application-ota-version': '1' } : {}), ...(applicationVersion >= 10 ? { 'x-nexus-application-field-day-version': '1' } : {}) }
     station=await pair.native.open(pair.stationId, undefined, 101, stationHeaders)
     let code=null, oauth=null, exchanges=0, providerFailure=false, exceptions=0, acknowledgements=0, unexpectedMessages=0
     const applicationTraffic = { reads: 0, acks: 0, subscriptions: 0, batches: 0, bytes: 0, byCommand: {}, maxResponseBytes: 0 }
@@ -105,7 +105,7 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9]) test(`compiled hos
       try {
         const message = JSON.parse(event.response.payloadData)
         if (message.type === 'ack' && Object.keys(message).sort().join(',') === 'epoch,sequence,type') acknowledgements++
-        else if (message.type === 'applicationHello' && (Object.keys(message).length === 1 || (Object.keys(message).length === 2 && [2,3,4,5,6,7,8,9].includes(message.version)))) {}
+        else if (message.type === 'applicationHello' && (Object.keys(message).length === 1 || (Object.keys(message).length === 2 && [2,3,4,5,6,7,8,9,10].includes(message.version)))) {}
         else if (message.type === 'applicationRead' && Object.keys(message).length === 4) applicationTraffic.reads++
         else if (message.type === 'applicationQuery' && Object.keys(message).length === 7) applicationTraffic.queries=(applicationTraffic.queries??0)+1
         else if (message.type === 'applicationQueryAck' && Object.keys(message).length === 2) {}
@@ -180,7 +180,11 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9]) test(`compiled hos
     let sequence=0
     producer=(async()=>{while(producing){const source=station;let watch;try{watch=await source.take(value=>value.type==='watch'&&value.enabled,1000)}catch{continue}await sleep(200);if(!producing)break;if(source!==station||source.closed)continue;source.send({type:'publication',requestId:watch.requestId,frame:{...fixture,source:'native',sequence:++sequence}})}})()
     const applicationData = await applicationFixture()
+    applicationData.get_settings.fdActive = true
     const collections = collectionFixture()
+    const fieldDay = JSON.parse(await readFile(new URL('../../ui/src/remote-web/__fixtures__/field-day.json', import.meta.url), 'utf8'))
+    const fieldDayQueries = []
+    collections.fieldDay = { rows: [], meta: fieldDay }
     const dxpeditions = JSON.parse(await readFile(new URL('../../ui/src/remote-web/__fixtures__/dxpeditions.json', import.meta.url), 'utf8'))
     dxpeditions.asOf = Math.floor(Date.now()/1000)
     const bank = JSON.parse(await readFile(new URL('../../ui/src/remote-web/__fixtures__/memories.json', import.meta.url), 'utf8'))
@@ -209,6 +213,7 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9]) test(`compiled hos
       if (!applicationAvailable || !producing) { withheld.push({type:request.type,collection:request.collection});continue }
       if (request.type === 'applicationQuery') {
         assert.ok(applicationVersion >= 3)
+        if (request.collection === 'fieldDay') { assert.ok(applicationVersion >= 10); fieldDayQueries.push(request.collection) }
         if (request.collection === 'ota') { assert.ok(applicationVersion >= 9); otaQueries.push(request.collection) }
         if (request.collection === 'memories') { assert.ok(applicationVersion >= 8); memoryQueries.push(request.collection) }
         if (request.collection === 'dxpeditions') { assert.ok(applicationVersion >= 7); dxQueries.push(request.collection) }
@@ -312,6 +317,13 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9]) test(`compiled hos
       await click(button('POTA/SOTA'))
       await until(`!!document.querySelector('.remote-view-unavailable')`)
       assert.equal(otaQueries.length,0)
+      await click(button('FT'))
+    }
+    if (applicationVersion < 10) {
+      await click(button('Field Day'))
+      await until(`!!document.querySelector('.remote-view-unavailable')`)
+      assert.equal(await evaluate(`document.body.textContent.includes('Could not switch mode')`), false)
+      assert.equal(fieldDayQueries.length,0)
       await click(button('FT'))
     }
     const startReads=applicationTraffic.reads, startBytes=applicationTraffic.bytes, started=performance.now()
@@ -701,6 +713,56 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9]) test(`compiled hos
       unavailableCollections.delete('ota'); await click(button('Refresh station data'))
       await until(`document.querySelector('.pota-spot-list')?.textContent.includes('Updated test summit')`)
     }
+    if (applicationVersion >= 10) {
+      await click(button('Field Day'))
+      assert.equal(await evaluate(`document.body.textContent.includes('Could not switch mode')`), false)
+      await until(`document.querySelector('.fieldday')?.textContent.includes('K1ABC')`)
+      await until(`!!document.querySelector('.fd-bonuses-list')`)
+      assert.equal(await evaluate(`document.querySelectorAll('.fieldday .export-btn,.fieldday .fd-role-btn:not(:disabled),.fieldday .fd-power-chip:not(:disabled),.fieldday .fd-bonus-row input:not(:disabled)').length`),0)
+      assert.equal(await evaluate(`document.querySelector('.fieldday input:not([type=checkbox])')?.readOnly`),true)
+      fieldDay.fieldDay.log.push(...Array.from({length:48},(_,i)=>({...fieldDay.fieldDay.log[0],call:`K1FD${i}`})))
+      Object.assign(fieldDay.fieldDay,{qsoCount:50,points:99,poweredPoints:198,totalScore:298})
+      await click(button('Refresh Field Day'))
+      await until(`document.querySelectorAll('.fd-log-row').length===50`)
+      assert.notEqual(await evaluate(`getComputedStyle(document.querySelector('.remote-field-day-bank')).display`), 'none', 'the event is visible with current data')
+      for (const [width,height,zoom] of [[360,740,1],[390,844,1],[844,390,1],[1024,768,1],[1280,800,1],
+        [1200,1390,1],[3440,1440,1],[1024,768,0.8],[1280,800,1.75],[390,844,1.75]]) for (const theme of ['dark','light']) {
+        await browser.call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false},session)
+        await evaluate(`document.documentElement.style.setProperty('--ui-zoom','${zoom}');document.documentElement.dataset.theme='${theme}';window.dispatchEvent(new Event('resize'))`)
+        await settledLayout()
+        for (const target of ['.remote-insights-status button','.fd-bonuses-toggle','.fd-bonus-row:last-child .fd-bonus-label','.fd-log-row:last-child .fd-col.call']) {
+          await evaluate(`document.querySelector('${target}').scrollIntoView({block:'nearest',inline:'nearest'})`)
+          await settledLayout()
+          const shape=await evaluate(`(()=>{const e=document.querySelector('${target}'),r=e.getBoundingClientRect();return {docW:document.documentElement.scrollWidth,docH:document.documentElement.scrollHeight,top:r.top,bottom:r.bottom,width:r.width,height:r.height,reachable:e.contains(document.elementFromPoint(r.left+r.width/2,Math.min(r.bottom,innerHeight-1)-Math.min(r.height/2,20)))}})()`)
+          const clipped=await evaluate(`(()=>{const result=[];for(let e=document.querySelector('${target}').parentElement;e;e=e.parentElement){const c=getComputedStyle(e);if(['hidden','clip'].includes(c.overflowY)&&e.scrollHeight>e.clientHeight+1)result.push({class:e.className,scroll:e.scrollHeight,client:e.clientHeight,y:c.overflowY})}return result})()`)
+          const reachable=shape.docW<=width+1&&shape.docH<=height+1&&shape.width>0&&shape.height>0&&shape.top<height&&shape.bottom>0&&shape.reachable&&clipped.length===0
+          if (!reachable&&artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-nexus-field-day-failure.png'),Buffer.from(shot.data,'base64'))}
+          assert.ok(reachable,`Field Day content remains reachable by user input: ${JSON.stringify({target,width,height,zoom,theme,shape,clipped})}`)
+          results.push({fieldDay:true,target,width,height,zoom,theme,shape})
+        }
+      }
+      await browser.call('Emulation.setDeviceMetricsOverride',{width:1280,height:800,deviceScaleFactor:1,mobile:false},session)
+      await evaluate(`document.documentElement.style.setProperty('--ui-zoom','1');window.dispatchEvent(new Event('resize'))`)
+      await settledLayout()
+      await evaluate(`document.querySelector('.fieldday').scrollTop=0`)
+      await settledLayout()
+      if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-nexus-field-day.png'),Buffer.from(shot.data,'base64'))}
+      await click(`document.querySelector('.fd-bonuses-toggle')`)
+      fieldDay.settings.fdOperator='K9TEST'
+      fieldDay.fieldDay.event='wfd';fieldDay.ruleset.event='wfd'
+      Object.assign(fieldDay.fieldDay,{poweredPoints:99,totalScore:199,eventEndUnix:fieldDay.fieldDay.eventStartUnix+30*3600})
+      await click(button('Refresh Field Day'))
+      await until(`document.querySelector('.fieldday input:not([type=checkbox])')?.value==='K9TEST'`)
+      assert.equal(await evaluate(`!!document.querySelector('.fd-bonuses-list')`),false,'refresh preserves the collapsed disclosure')
+      assert.equal(await evaluate(`document.querySelector('.fd-score-math')?.textContent.toLowerCase().includes('power')`),false,'WFD does not display ARRL multiplier math')
+      unavailableCollections.add('fieldDay');await click(button('Refresh Field Day'))
+      await until(`!document.querySelector('.remote-field-day-bank:not([hidden])')&&!${button('Refresh Field Day')}?.disabled`)
+      const hiddenDisplay = await evaluate(`getComputedStyle(document.querySelector('.remote-field-day-bank')).display`)
+      if(hiddenDisplay!=='none'&&artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-nexus-field-day-unavailable-failure.png'),Buffer.from(shot.data,'base64'))}
+      assert.equal(hiddenDisplay, 'none', 'a failed refresh removes the visible score, not only the hidden attribute')
+      unavailableCollections.delete('fieldDay');await click(button('Refresh Field Day'))
+      await until(`document.querySelector('.fieldday input:not([type=checkbox])')?.value==='K9TEST'`)
+    }
     // Each supported version exercises loss/recovery on its newest actual pane.
     if (applicationVersion === 7) { await click(button('DXped')); await until(`!!document.querySelector('.dxped-view')`) }
     else if (applicationVersion === 6) { await click(button('Stats')); await until(`!!document.querySelector('.stats-summary')`) }
@@ -711,7 +773,8 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9]) test(`compiled hos
     if (applicationVersion === 6) assert.equal(await evaluate(`!!document.querySelector('.stats-summary')`), false, 'lost station data removes the summary')
     if (applicationVersion === 8) assert.equal(await evaluate(`!!document.querySelector('.remote-memory-bank:not([hidden])')`),false,'lost station data removes saved memories')
     if (applicationVersion === 7) assert.equal(await evaluate(`!!document.querySelector('.dxped-view')`), false, 'lost station data removes the DX board')
-    if (applicationVersion >= 9) assert.equal(await evaluate(`!!document.querySelector('.remote-ota-bank:not([hidden])')`),false,'lost station data removes the OTA view')
+    if (applicationVersion === 9) assert.equal(await evaluate(`!!document.querySelector('.remote-ota-bank:not([hidden])')`),false,'lost station data removes the OTA view')
+    if (applicationVersion >= 10) assert.equal(await evaluate(`!!document.querySelector('.remote-field-day-bank:not([hidden])')`),false,'lost station data removes the event')
     applicationAvailable=true;applicationRevision++
     applicationData.get_snapshot.radio.dialMhz=7.074;applicationData.get_snapshot.radio.band='40m'
     // Withholding a station credit can legitimately expire BOTH sockets. The
@@ -724,10 +787,11 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9]) test(`compiled hos
     if (applicationVersion === 6) await until(`document.querySelector('.stats-summary')?.textContent.includes('2013')`)
     if (applicationVersion === 8) await until(`[...document.querySelectorAll('.remote-memory-bank:not([hidden]) .mv-grid input')].some(e=>e.value==='Updated station memory')`)
     if (applicationVersion === 7) await until(`document.querySelector('.dxped-view')?.textContent.includes('Updated test entity')`)
-    if (applicationVersion >= 9) {
+    if (applicationVersion === 9) {
       await until(`document.querySelector('.pota-spot-list')?.textContent.includes('Updated test summit')`)
       assert.equal(await evaluate(`document.querySelector('.pota-controls [role=tab][aria-selected=true]')?.textContent`),'SOTA')
     }
+    if(applicationVersion>=10){await until(`document.querySelector('.fieldday input:not([type=checkbox])')?.value==='K9TEST'`);assert.equal(await evaluate(`!!document.querySelector('.fd-bonuses-list')`),false)}
     assert.equal(exceptions,0,'actual Nexus must render and reconnect without runtime exceptions')
     await click(button('Disconnect and return to stations'))
     await until(`!!${button('Observe station')}`)

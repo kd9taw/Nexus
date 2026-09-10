@@ -1,0 +1,94 @@
+{
+  "active": true,
+  "settings": {
+    "fdOperator": "W1AW",
+    "fdPowerMult": 2,
+    "fdBonuses": [
+      "emergency-power"
+    ],
+    "fdBonusesPlanned": [
+      "natural-power"
+    ]
+  },
+  "ruleset": {
+    "event": "arrlfd",
+    "rulesYear": 2026,
+    "bannedModes": [],
+    "spottingAllowed": true,
+    "clusterAllowed": true,
+    "enforcement": "advisory"
+  },
+  "fieldDay": {
+    "myClass": "1D",
+    "mySection": "EMA",
+    "running": true,
+    "state": "Idle",
+    "dxcall": null,
+    "qsoCount": 2,
+    "sections": 1,
+    "workedSections": [
+      "WI"
+    ],
+    "points": 3,
+    "event": "arrlfd",
+    "poweredPoints": 6,
+    "bonusPoints": 100,
+    "totalScore": 106,
+    "eventStartUnix": 1814032800,
+    "eventEndUnix": 1814130000,
+    "rulesYear": 2026,
+    "rulesGenerated": "2026-08-30T00:00:00Z",
+    "assistanceOn": [],
+    "log": [
+      {
+        "call": "K1ABC",
+        "class": "2A",
+        "section": "WI",
+        "band": "20m",
+        "mode": "CW",
+        "submode": "",
+        "whenUnix": 1782583200
+      },
+      {
+        "call": "K2ABC",
+        "class": "2A",
+        "section": "WI",
+        "band": "40m",
+        "mode": "PH",
+        "submode": "",
+        "whenUnix": 1782583260
+      }
+    ],
+    "club": {
+      "syncState": "synced",
+      "queued": 0,
+      "offlineSinceUnix": 0,
+      "hosting": true,
+      "event": "Test Field Day",
+      "hostCall": "W1AW",
+      "score": 306,
+      "qsos": 8,
+      "sections": 3,
+      "skewSecs": 0,
+      "dupes": [
+        [
+          "K3ABC",
+          "80m",
+          "PH"
+        ]
+      ],
+      "board": [
+        {
+          "posid": "abcdef01",
+          "posName": "CW tent",
+          "band": "20m",
+          "mode": "CW",
+          "operator": "W1AW",
+          "qsos": 5,
+          "rate": 3,
+          "lastSeenSecs": 10
+        }
+      ]
+    }
+  }
+}

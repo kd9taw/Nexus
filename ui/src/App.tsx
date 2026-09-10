@@ -239,10 +239,11 @@ const OPERATE_TIERS: Tier[] = [
   'WSPR',
 ]
 
-export type BrowserWorkspace = { snapshot: AppSnapshot; settings: Settings; bandPlan: BandChannel[]; status: ReactNode; stale?: boolean; cwPhone?: boolean; keyboard?: boolean; collections?: boolean; insights?: boolean; dxpeditions?: boolean; memories?: boolean; ota?: boolean }
+export type BrowserWorkspace = { snapshot: AppSnapshot; settings: Settings; bandPlan: BandChannel[]; status: ReactNode; stale?: boolean; cwPhone?: boolean; keyboard?: boolean; collections?: boolean; insights?: boolean; dxpeditions?: boolean; memories?: boolean; ota?: boolean; fieldDay?: boolean }
 import { CollectionStatus, useRemoteCollection } from './remote-web/collections'
 import { RemoteInsights } from './remote-web/RemoteInsights'
 import { RemoteDxpeditions } from './remote-web/RemoteDxpeditions'
+import { RemoteFieldDay } from './remote-web/RemoteFieldDay'
 import { RemoteOta } from './remote-web/RemoteOta'
 import { RemoteMemories } from './remote-web/RemoteMemories'
 
@@ -2050,13 +2051,14 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     (next: View) => {
       setView(next)
       if (next !== 'settings') setSettingsTarget(undefined)
+      if (remote) return // Opening an observed screen does not change the station mode.
       // Passive-first: entering QSO / Field Day starts in Search-&-Pounce
       // (listen + answer), never auto-calling CQ. The operator hits "Call CQ" /
       // "Running" in the panel to start transmitting.
       if (next === 'chat') handleSetMode('chat')
       else if (next === 'fieldDay') handleSetMode('fieldday-sp')
     },
-    [handleSetMode],
+    [handleSetMode, !!remote],
   )
 
   /**
@@ -2264,7 +2266,7 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // A visible navigation item is not evidence that its station API is connected.
   // In particular, never mount SettingsPanel with the projected operating view:
   // it expects complete configuration and could display absent values as defaults.
-  const isRemoteViewAvailable = (v: View): boolean => !remote || v === 'operate' || (!!remote.collections && ['needed', 'spots', 'logbook'].includes(v)) || (!!remote.cwPhone && (v === 'cw' || v === 'phone')) || (!!remote.keyboard && (v === 'rtty' || v === 'psk')) || (!!remote.insights && (v === 'awards' || v === 'stats')) || (!!remote.dxpeditions && v === 'dxped') || (!!remote.memories && v === 'memories') || (!!remote.ota && v === 'pota')
+  const isRemoteViewAvailable = (v: View): boolean => !remote || v === 'operate' || (!!remote.collections && ['needed', 'spots', 'logbook'].includes(v)) || (!!remote.cwPhone && (v === 'cw' || v === 'phone')) || (!!remote.keyboard && (v === 'rtty' || v === 'psk')) || (!!remote.insights && (v === 'awards' || v === 'stats')) || (!!remote.dxpeditions && v === 'dxped') || (!!remote.memories && v === 'memories') || (!!remote.ota && v === 'pota') || (!!remote.fieldDay && v === 'fieldDay')
 
   // Recall card → Logbook, filtered to the call (#192, kr4fqg: "click a previous contact and
   // land in the log"). Same shape as the `onOpenMemories` handoffs below — `undefined` when the
@@ -2516,7 +2518,7 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       // `.layout.single > .panel` already gives it the definite height, the deficit valve and
       // the measure it needs (styles.css; computed in layout-single-deficit.test.tsx and
       // fdDashboardShell.test.tsx).
-      workspace = (
+      workspace = remote ? <RemoteFieldDay tier={tier} /> : (
         <main className="layout single">
           <FieldDayView
             fieldDay={snap.fieldDay}
@@ -3082,7 +3084,7 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
           // master switch (navEnabled.fieldDay = fdActive) and NOT club sync — the
           // board used to be reachable only from inside FieldDayView once sync was
           // already on, which is exactly why nobody found it.
-          onClubBoard={() => void openPanelWindow('fdclub')}
+          onClubBoard={remote ? undefined : () => void openPanelWindow('fdclub')}
         />
         {/* CRASH CONTAINMENT — inside `.shell` and AFTER the rail, deliberately.
             A render throw in a view used to unmount the ENTIRE root (0.24.6 field

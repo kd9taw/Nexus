@@ -60,7 +60,7 @@ interface Props {
   /** Open the club band board in its own window (the `fdclub` pop-out). It is a WINDOW,
    * not a `View`, so it takes its own callback rather than an `ITEMS` entry — see the
    * button below the Field Day item. */
-  onClubBoard: () => void
+  onClubBoard?: () => void
 }
 
 /** The cockpits grouped under "Digital" in the rail (FT · Tempo · RTTY · PSK · SSTV · APRS). */
@@ -373,6 +373,7 @@ export function ModeNav({ view, mode, enabled, onSelect, tier, onDigitalMode, on
                     type="button"
                     className="mode-btn"
                     aria-label={t('nav.fdClub.title')}
+                    disabled={!onClubBoard}
                     onClick={onClubBoard}
                   >
                     <span className="mode-glyph" aria-hidden="true">

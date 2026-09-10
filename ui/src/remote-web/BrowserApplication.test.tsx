@@ -47,6 +47,35 @@ function keyboardSample(mode: string) {
       : { signal: true, centerHz: 1000, mode: 'qpsk31', reverse: true }) }
 }
 
+it.each(['native', 'older observer', 'Field Day observer'])('%s navigation preserves the station mode boundary', async kind => {
+  localStorage.setItem('nexus.features.wizardSeen', '1')
+  const current = structuredClone(snapshot)
+  const settings = { ...settingsFixture, fdActive: true } as unknown as Settings
+  const calls: { command: string; args: unknown }[] = []
+  dispose = installApplicationTransport({ kind: 'remote', invoke: async <T,>(command: string, args?: Record<string, unknown>): Promise<T> => {
+    calls.push({ command, args })
+    if (command === 'get_snapshot' || command === 'set_mode' || command === 'set_area') return structuredClone(current) as T
+    if (command === 'get_settings') return structuredClone(settings) as T
+    if (command === 'get_band_plan' || command === 'log_operators') return [] as T
+    throw new Error('applicationUnsupported')
+  } })
+  const native = kind === 'native'
+  const { container, unmount } = render(<StationControlContext.Provider value={native}>
+    <App remote={native ? undefined : { snapshot: current, settings, bandPlan: [],
+      fieldDay: kind === 'Field Day observer', status: <div>Observer</div> }} />
+  </StationControlContext.Provider>)
+  fireEvent.click((await screen.findByText('Field Day', { selector: '.mode-label' })).closest('button')!)
+  await waitFor(() => expect(container.querySelector(native ? '.panel.fieldday' : kind === 'older observer'
+    ? '.remote-view-unavailable' : '.remote-field-day-view')).not.toBeNull())
+  const board = (await screen.findByText('Club Board', { selector: '.mode-label' })).closest('button')!
+  expect(board.disabled).toBe(!native)
+  if (!native) fireEvent.click(board)
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)) })
+  const modeCalls = calls.filter(({ command }) => command === 'set_mode')
+  expect(modeCalls).toEqual(native ? [{ command: 'set_mode', args: { mode: 'fieldday-sp' } }] : [])
+  unmount()
+})
+
 it.each(['rtty', 'psk'])('observes the actual %s cockpit without decoder, keyboard, radio or log mutations', async mode => {
   const current = structuredClone(snapshot)
   current.radio.operatingMode = mode === 'rtty' ? 'rtty' : 'keyboard'

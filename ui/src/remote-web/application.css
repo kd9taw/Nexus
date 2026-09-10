@@ -66,6 +66,9 @@
 .remote-memories-view { overflow: auto; }
 .remote-memory-bank { display: contents; }
 .remote-memory-bank[hidden] { display: none; }
+/* The native layout sets display, which overrides the browser's hidden
+   default. An unavailable event must not expose the mounted empty scoreboard. */
+.remote-field-day-bank[hidden] { display: none; }
 .remote-memories-view .memories-view { min-width: 0; min-height: 20rem; flex: 1 0 20rem; }
 .remote-memories-view .mv-row-main { flex-wrap: wrap; white-space: normal; }
 .remote-memories-view .mv-row-name { max-width: 100%; }

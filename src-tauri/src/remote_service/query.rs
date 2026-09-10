@@ -6,6 +6,7 @@ use std::collections::{BinaryHeap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 mod dxpeditions;
+mod field_day;
 mod insights;
 pub(super) mod memories;
 mod ota;
@@ -31,6 +32,7 @@ pub enum Collection {
     Dxpeditions,
     Memories,
     Ota,
+    FieldDay,
 }
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -68,6 +70,7 @@ impl Request {
                     | Collection::Dxpeditions
                     | Collection::Memories
                     | Collection::Ota
+                    | Collection::FieldDay
             ) || self.cursor.is_none())
             && self
                 .cursor
@@ -268,6 +271,7 @@ impl Publisher {
                     | Collection::Dxpeditions
                     | Collection::Memories
                     | Collection::Ota
+                    | Collection::FieldDay
             ) {
                 0 // Explicit selection/Refresh must see intervening local log changes.
             } else if request.collection == Collection::Decodes {
@@ -363,6 +367,9 @@ impl Publisher {
             _ => Err("applicationUnavailable"),
         };
         let rows = match request.collection {
+            Collection::FieldDay => {
+                return Ok((Vec::new(), 0, field_day::read_engine(engine)?));
+            }
             Collection::Ota => {
                 return Ok((
                     Vec::new(),

@@ -1,12 +1,12 @@
 import { APPLICATION_COMMANDS } from './application-protocol'
 import { streamVocabulary } from './application-stream-protocol'
-import { OTA_COMMAND, MEMORIES_COMMAND, DXPEDITIONS_COMMAND, INSIGHTS_COMMAND, QUERY_COMMAND, RECALL_COMMAND } from './application-query-protocol'
+import { FIELD_DAY_COMMAND, OTA_COMMAND, MEMORIES_COMMAND, DXPEDITIONS_COMMAND, INSIGHTS_COMMAND, QUERY_COMMAND, RECALL_COMMAND } from './application-query-protocol'
 
-export const APPLICATION_VERSIONS = [1, 2, 3, 4, 5, 6, 7, 8, 9] as const
+export const APPLICATION_VERSIONS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] as const
 /** Instrument grammar stays v5 when a later application version adds collections. */
 export const applicationStreamVersion = (version: number): 2 | 5 => version >= 5 ? 5 : 2
 /** Query grammar revisions are independent of instrument-stream revisions. */
-export const applicationQueryVersion = (version: number): 3 | 4 | 6 | 7 | 8 | 9 => version >= 9 ? 9 : version >= 8 ? 8 : version >= 7 ? 7 : version >= 6 ? 6 : version >= 4 ? 4 : 3
+export const applicationQueryVersion = (version: number): 3 | 4 | 6 | 7 | 8 | 9 | 10 => version >= 10 ? 10 : version >= 9 ? 9 : version >= 8 ? 8 : version >= 7 ? 7 : version >= 6 ? 6 : version >= 4 ? 4 : 3
 /** Exact command set for each negotiated application version, shared by both ends. */
 export function applicationCommands(version: number): readonly string[] {
   if (version === 1) return APPLICATION_COMMANDS
@@ -17,5 +17,6 @@ export function applicationCommands(version: number): readonly string[] {
   if (version === 7) return [...applicationCommands(6), DXPEDITIONS_COMMAND]
   if (version === 8) return [...applicationCommands(7), MEMORIES_COMMAND]
   if (version === 9) return [...applicationCommands(8), OTA_COMMAND]
+  if (version === 10) return [...applicationCommands(9), FIELD_DAY_COMMAND]
   return []
 }

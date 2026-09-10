@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Remote Field Day observation:** The browser shows Nexus's existing event
+  dashboard, station score, worked sections, earned and planned bonuses, complete
+  event log and club board. ARRL and Winter Field Day retain their native scoring
+  displays. Refresh preserves the bonus disclosure; expired or disconnected
+  readings are hidden. A compatible station pilot is required. Event setup,
+  operating, scoring changes and exports remain on the station.
+
 - **Remote POTA/SOTA observation:** The browser uses Nexus's existing hunter
   cards, filters and sort with the station's spot feeds, worked-park badges and
   activation/hunt context. Feed age and availability are shown separately for
