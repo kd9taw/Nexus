@@ -151,6 +151,9 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]) test(`comp
     async function click(expression) {
       let point
       try {
+        // A positive user action waits for its control to finish loading. Keep
+        // the actual enabled, hit-target and mouse-event checks below intact.
+        await until(`(()=>{const e=${expression};return !!e&&!e.disabled})()`)
         await evaluate(`(()=>{const e=${expression};if(!e||e.disabled)throw Error('missingControl');e.scrollIntoView({block:'nearest',behavior:'instant'})})()`)
         await settledLayout()
         point=await evaluate(`(()=>{const e=${expression};if(!e||e.disabled)throw Error('missingControl');const r=e.getBoundingClientRect(),x=r.x+r.width/2,y=r.y+r.height/2;if(!e.contains(document.elementFromPoint(x,y)))throw Error('occludedControl');return{x,y}})()`)

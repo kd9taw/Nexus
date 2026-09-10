@@ -8,8 +8,10 @@ import type { Js8Context } from './js8'
  * the station's complete-log projection; a missing entry never means unworked. */
 export function useJs8Context(active: boolean, calls: string) {
   const source = useContext(RemoteCollectionsContext), available = useStationData()
-  const [capture,setCapture] = useState<{value:Js8Context;at:number}|null>(null)
+  const [capture,setCapture] = useState<{value:Js8Context;at:number;key:string}|null>(null)
   const [loading,setLoading] = useState(false), [refresh,setRefresh] = useState(0)
+  const key = JSON.stringify([calls,refresh])
+  const [settledKey,setSettledKey] = useState<string|null>(null)
   const [now,setNow] = useState(() => performance.now())
   useEffect(() => {
     if (!source || !active) return
@@ -26,13 +28,15 @@ export function useJs8Context(active: boolean, calls: string) {
       try {
         const page = await source!.page({collection:'js8Context',cursor:null,search:'',unconfirmed:false,after:null})
         const value = parseJs8Context(page)
-        if (live) { setCapture({value,at:started-value.capturedAgeMs-page.ageMs}); setNow(performance.now()) }
+        if (live) { setCapture({value,at:started-value.capturedAgeMs-page.ageMs,key}); setNow(performance.now()) }
       } catch { if (live) setCapture(null) }
-      if (live) { setLoading(false); timer = setTimeout(() => void load(),30_000) }
+      if (live) { setLoading(false); setSettledKey(key); timer = setTimeout(() => void load(),30_000) }
     }
     void load()
     return () => { live=false;clearTimeout(timer) }
-  },[source,active,available,calls,refresh])
-  const value = source && available && capture && now-capture.at < 60_000 ? capture.value : null
-  return { remote:source !== null, value, loading, refresh:() => setRefresh(n=>n+1) }
+  },[source,active,available,key])
+  // A new heard-call set renders before its effect starts the next request.
+  // The previous roster cannot claim to describe that new set in this interval.
+  const value = source && available && capture?.key === key && now-capture.at < 60_000 ? capture.value : null
+  return { remote:source !== null, value, loading:loading || !!source && active && available && settledKey !== key, refresh:() => setRefresh(n=>n+1) }
 }
