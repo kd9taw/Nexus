@@ -45,6 +45,50 @@ pub struct Permit {
     deadline: Instant,
 }
 
+/// Permission carried to the last byte-write boundary of a CAT operation.
+/// Both browser authority and the native station context must still match.
+/// This is never a permission to key a transmitter.
+pub struct WritePermission {
+    authority: Permit,
+    native: Permit,
+    completion: Completion,
+}
+
+impl WritePermission {
+    pub fn new(authority: Permit, native: Permit, completion: Completion) -> Self {
+        Self {
+            authority,
+            native,
+            completion,
+        }
+    }
+
+    pub fn check(&self, now: Instant) -> Result<(), Reason> {
+        let reason = if !self.authority.valid(now) {
+            Some(Reason::AuthorityExpired)
+        } else if !self.native.valid(now) {
+            Some(Reason::ContextChanged)
+        } else if !matches!(self.completion.outcome(), Outcome::Pending) {
+            Some(Reason::HardwareUnconfirmed)
+        } else {
+            None
+        };
+        if let Some(reason) = reason {
+            self.completion.refuse(reason);
+            return Err(reason);
+        }
+        Ok(())
+    }
+
+    pub fn begin_write(&self, now: Instant) -> Result<(), Reason> {
+        self.check(now)?;
+        self.completion
+            .begin_write(now)
+            .then_some(())
+            .ok_or(Reason::HardwareUnconfirmed)
+    }
+}
+
 impl Permit {
     pub fn valid(&self, now: Instant) -> bool {
         now < self.deadline && self.owner.load(Ordering::SeqCst) == self.generation
@@ -165,6 +209,23 @@ impl Completion {
             value.expire(Instant::now());
             if matches!(value.outcome, Outcome::Pending) && !matches!(outcome, Outcome::Pending) {
                 value.outcome = outcome;
+            }
+        }
+    }
+
+    /// A failure after any attempted write is uncertain, even if a later write
+    /// was refused before reaching the wire. Never erase that first attempt.
+    pub fn refuse(&self, reason: Reason) {
+        if let Ok(mut value) = self.0.lock() {
+            value.expire(Instant::now());
+            if matches!(value.outcome, Outcome::Pending) {
+                value.outcome = if value.attempted {
+                    Outcome::Unknown {
+                        reason: Reason::HardwareUnconfirmed,
+                    }
+                } else {
+                    Outcome::Rejected { reason }
+                };
             }
         }
     }
