@@ -19,7 +19,10 @@ vi.mock('../api', () =>
     ].map((n) => [n, vi.fn(async () => null)])
   )
 )
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  vi.useRealTimers()
+})
 const snap = {
   radio: { band: '20m', dialMhz: 14.25 },
   hunt: null,
@@ -29,6 +32,11 @@ const snap = {
 it.each(['receipt', 'checked log'])(
   'resolving by %s in another tab clears only the submitted draft',
   async (how) => {
+    // This fixture replies to explicit actions only. Keep automatic heartbeat
+    // intervals deterministic so a slow render cannot receive the QSO outcome
+    // as the reply to an unrelated state poll. Client and browser tests exercise
+    // the real heartbeat separately; waitFor keeps its real timeout here.
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
     const sent: Record<string, any>[] = [],
       client = new OperationClient(
         (s) => sent.push(JSON.parse(s)),

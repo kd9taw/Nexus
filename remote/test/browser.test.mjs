@@ -426,7 +426,7 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
         if(label==='CW'){
           // A separate real browser tab holds the station's draft lock. A Log
           // gesture must retain its form, send nothing, and never run later.
-          const auxiliary=(await browser.call('Target.createTarget',{url:app.origin+'/api/remote/config'})).targetId
+          const auxiliary=(await browser.call('Target.createTarget',{url:app.origin+'/api/remote/config',background:true})).targetId
           const auxiliarySession=(await browser.call('Target.attachToTarget',{targetId:auxiliary,flatten:true})).sessionId
           let auxiliaryReady=false
           for(let attempt=0;attempt<100;attempt++){
