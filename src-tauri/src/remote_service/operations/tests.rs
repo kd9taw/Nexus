@@ -59,9 +59,13 @@ impl Drop for Fixture {
 }
 
 fn control_state(f: &Fixture, now: Instant) -> Value {
+    control_state_version(f, now, 2)
+}
+
+fn control_state_version(f: &Fixture, now: Instant, version: u8) -> Value {
     f.authority
         .handle_version(
-            (f.connection, 2),
+            (f.connection, version),
             SESSION,
             DEVICE,
             &Request::State { request_id: id() },
@@ -72,15 +76,19 @@ fn control_state(f: &Fixture, now: Instant) -> Value {
 }
 
 fn acquire_controls(f: &Fixture, now: Instant) -> Value {
+    acquire_controls_version(f, now, 2)
+}
+
+fn acquire_controls_version(f: &Fixture, now: Instant, version: u8) -> Value {
     f.authority.permit_station(DEVICE, true).unwrap();
     f.authority
         .handle_version(
-            (f.connection, 2),
+            (f.connection, version),
             SESSION,
             DEVICE,
             &Request::Acquire {
                 request_id: id(),
-                station_boot_id: control_state(f, now)["stationBootId"]
+                station_boot_id: control_state_version(f, now, version)["stationBootId"]
                     .as_str()
                     .unwrap()
                     .into(),
@@ -115,14 +123,14 @@ fn frequency_admission_waits_for_the_radio_owner_and_revoke_cancels_the_pending_
         e.remote_observe_ptt(Some(&read), Some(false));
     }
     let now = Instant::now();
-    let state = acquire_controls(&f, now);
+    let state = acquire_controls_version(&f, now, 3);
     let command = control_request(
         &state,
         json!({"action":"radio.frequency","dialMhz":7.074,"band":"40m","sideband":"USB"}),
     );
     let response = f
         .authority
-        .handle_version((f.connection, 2), SESSION, DEVICE, &command, &f.engine, now)
+        .handle_version((f.connection, 3), SESSION, DEVICE, &command, &f.engine, now)
         .unwrap();
     assert_eq!(response["outcome"], "pending");
     let work = {
@@ -162,14 +170,14 @@ fn mode_admission_is_pending_until_readback_and_duplicate_or_revoked_work_cannot
         };
         sample(14_074_000, "PKTUSB");
         let now = Instant::now();
-        let state = acquire_controls(&f, now);
+        let state = acquire_controls_version(&f, now, 3);
         let command = control_request(
             &state,
             json!({"action":"radio.mode","mode":"cw","followFrequency":true}),
         );
         let run = |request: &Request| {
             f.authority.handle_version(
-                (f.connection, 2),
+                (f.connection, 3),
                 SESSION,
                 DEVICE,
                 request,
@@ -295,6 +303,98 @@ fn an_amplifier_command_has_one_native_receipt_and_needs_later_hardware_confirma
 }
 
 #[test]
+#[cfg(feature = "radio")]
+fn tier_admission_requires_v3_and_keeps_one_native_receipt_through_readback() {
+    use tempo_app::dto::Tier;
+    let f = Fixture::new();
+    let connection = {
+        let mut e = f.engine.lock().unwrap();
+        e.configure_remote_settings_store(f.dir.join("settings.json"));
+        e.set_frequency(14.074, "20m", "USB");
+        e.take_immediate_retune();
+        e.remote_open_radio().unwrap()
+    };
+    let sample = |hz| {
+        let mut e = f.engine.lock().unwrap();
+        let read = e.remote_radio_read(&connection, Instant::now()).unwrap();
+        e.remote_observe_cat(Some(&read), Some(true));
+        e.remote_observe_dial(Some(&read), Some(hz));
+        e.remote_observe_mode(Some(&read), Some("PKTUSB"));
+        e.remote_observe_ptt(Some(&read), Some(false));
+    };
+    sample(14_074_000);
+    let now = Instant::now();
+    let state = acquire_controls_version(&f, now, 3);
+    assert_eq!(
+        state["controls"]["capabilities"],
+        json!(["decoder", "amplifier", "frequency", "mode", "tier"])
+    );
+    let command = control_request(&state, json!({"action":"radio.tier","tier":"FT4"}));
+    let run = |version, request: &Request| {
+        f.authority.handle_version(
+            (f.connection, version),
+            SESSION,
+            DEVICE,
+            request,
+            &f.engine,
+            Instant::now(),
+        )
+    };
+    assert_eq!(run(2, &command), Err("stationUnsupported"));
+    assert!(f.engine.lock().unwrap().take_remote_radio().is_none());
+    let pending = run(3, &command).unwrap();
+    assert_eq!(pending["outcome"], "pending");
+    assert_eq!(run(3, &command).unwrap(), pending);
+    let work = f.engine.lock().unwrap().take_remote_radio().unwrap();
+    assert_eq!(f.engine.lock().unwrap().tier(), Tier::Ft8);
+    assert_eq!(work.target(), (14_080_000, "PKTUSB"));
+    work.permission().begin_write(Instant::now()).unwrap();
+    sample(14_080_000);
+    assert!(work.commit(&mut f.engine.lock().unwrap()));
+    let result = Request::Result {
+        request_id: id(),
+        operation_id: command.id().into(),
+    };
+    let applied = run(3, &result).unwrap();
+    assert_eq!(applied["outcome"], "applied");
+    assert_eq!(applied["evidence"], "radioReadback");
+    assert_eq!(run(3, &command).unwrap(), applied);
+    assert_eq!(
+        run(2, &result).unwrap(),
+        applied,
+        "a legacy refresh may recover an existing receipt"
+    );
+    assert_eq!(f.engine.lock().unwrap().tier(), Tier::Ft4);
+    assert!(!f.engine.lock().unwrap().tx_enabled());
+    assert!(!f.dir.join("settings.json").exists());
+}
+
+#[test]
+#[cfg(feature = "radio")]
+fn legacy_v2_control_state_keeps_its_original_capability_vocabulary() {
+    let f = Fixture::new();
+    let now = Instant::now();
+    acquire_controls(&f, now);
+    let state = f
+        .authority
+        .handle_version(
+            (f.connection, 2),
+            SESSION,
+            DEVICE,
+            &Request::State { request_id: id() },
+            &f.engine,
+            now,
+        )
+        .unwrap();
+    assert_eq!(
+        state["controls"]["capabilities"],
+        json!(["decoder", "amplifier"])
+    );
+    assert_eq!(state["phase"], "controlling");
+    assert_eq!(state["txArmed"], false);
+}
+
+#[test]
 fn logging_and_station_permissions_do_not_grant_each_other() {
     let f = Fixture::new();
     let now = Instant::now();
@@ -314,7 +414,7 @@ fn logging_and_station_permissions_do_not_grant_each_other() {
     #[cfg(feature = "radio")]
     assert_eq!(
         control["controls"]["capabilities"],
-        json!(["decoder", "amplifier", "frequency", "mode"])
+        json!(["decoder", "amplifier"])
     );
     #[cfg(not(feature = "radio"))]
     assert_eq!(control["controls"]["capabilities"], json!(["decoder"]));

@@ -437,7 +437,7 @@ impl Authority {
         session: &str,
         device: &str,
         now: Instant,
-        control: Option<station::Context>,
+        control: Option<(u8, station::Context)>,
     ) -> Result<Value, &'static str> {
         let allowed =
             c.grants.contains(device) || (control.is_some() && c.control_grants.contains(device));
@@ -465,8 +465,8 @@ impl Authority {
             "nextSequence":if owned{c.lease.as_ref().map(|l|l.sequence+1)}else{None},
             "leaseRemainingMs":if owned{c.lease.as_ref().map(|l|l.until.saturating_duration_since(now).as_millis() as u64)}else{None},
             "actions":if c.grants.contains(device){vec!["log.manual"]}else{vec![]},"txArmed":false});
-        if let Some(context) = control {
-            value["controls"] = json!({"context":context,"capabilities":if c.control_grants.contains(device){station::capabilities()}else{vec![]}});
+        if let Some((version, context)) = control {
+            value["controls"] = json!({"context":context,"capabilities":if c.control_grants.contains(device){station::capabilities(version)}else{vec![]}});
         }
         Ok(value)
     }
@@ -490,8 +490,8 @@ impl Authority {
         engine: &crate::SharedEngine,
         now: Instant,
     ) -> Result<Value, &'static str> {
-        if !matches!(version, 1 | 2)
-            || (version < 2 && matches!(request, Request::StationControl { .. }))
+        if !matches!(version, 1..=3)
+            || matches!(request, Request::StationControl { action, .. } if version < action.minimum_version())
         {
             return Err("stationUnsupported");
         }
@@ -507,13 +507,13 @@ impl Authority {
         // queue whose work could migrate into a later radio/profile context.
         let mut engine = engine.try_lock().map_err(|_| "stationBusy")?;
         self.context(&mut c, &engine)?;
-        let control = (version == 2).then(|| station::Context::capture(&engine));
+        let control = (version >= 2).then(|| (version, station::Context::capture(&engine)));
         match request {
             Request::State { .. } => Self::state(&mut c, session, device, now, control),
             Request::Acquire {
                 station_boot_id, ..
             } => {
-                if !(c.grants.contains(device) || version == 2 && c.control_grants.contains(device))
+                if !(c.grants.contains(device) || version >= 2 && c.control_grants.contains(device))
                 {
                     return Err("localPermissionRequired");
                 }
@@ -558,7 +558,7 @@ impl Authority {
             Request::Result { operation_id, .. } => {
                 if !identifier(operation_id)
                     || !(c.grants.contains(device)
-                        || version == 2 && c.control_grants.contains(device))
+                        || version >= 2 && c.control_grants.contains(device))
                 {
                     return Err("localPermissionRequired");
                 }
@@ -567,7 +567,7 @@ impl Authority {
                     .find(|r| {
                         r.id == *operation_id
                             && r.device == device
-                            && (version == 2 || r.control.is_none())
+                            && (version >= 2 || r.control.is_none())
                     })
                     .map(Receipt::value)
                     .ok_or("resultExpired")

@@ -1,4 +1,4 @@
-import { useStationControl } from '../stationAccess'
+import { useStationControl, useStationTierControl } from '../stationAccess'
 // ⚠️ THIS FILE IS **PARTIAL** ON THE i18n LIST (i18n/hardcoded-strings.test.ts), and what is
 // deferred is the TX CLUSTER: TX On/Off (its two tooltip arms state the abort semantics — "an
 // FT over already in flight finishes" — and its labels name the latch), TUNE and STOP TX, which
@@ -225,6 +225,7 @@ export function TopBar({
   hideDigitalChrome,
 }: Props) {
   const control = useStationControl()
+  const tierControl = useStationTierControl(radio)
   const countdown = (radio.nextSlotMs / 1000).toFixed(1)
   const [version, setVersion] = useState('')
   useEffect(() => {
@@ -495,7 +496,7 @@ export function TopBar({
       <>
       <div className="topbar-group tier-toggle" role="group" aria-label={t('topbar.tier.aria')}>
         {TIER_PILLS.map((p) => (
-          <button disabled={!control}
+          <button disabled={!tierControl}
             key={p.tier}
             type="button"
             className={`tier-btn${tier === p.tier ? ' active' : ''}${

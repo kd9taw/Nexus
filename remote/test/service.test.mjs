@@ -609,14 +609,14 @@ test('station replacement retires former observers and rejects stale publication
 })
 
 test('manual operations retain only routing authority across hibernation and preserve legacy refusal',async()=>{
- for(const supported of [0,1,2]){
-  const pair=await app.paired(),live=await admitted(pair,1,supported?{'x-nexus-operation-version':String(supported)}:{})
+ for(const supported of [0,1,2,3]){
+  const pair=await app.paired(),live=await admitted(pair,1,supported?{'x-nexus-operation-version':String(Math.min(supported,2)),...(supported===3?{'x-nexus-operation-max-version':'3'}:{})}:{})
   const requestId=crypto.randomUUID()
-  live.browser.send({type:'operationRequest',...(supported===2?{operationVersion:2}:{}),request:{type:'state',requestId}})
+  live.browser.send({type:'operationRequest',...(supported>=2?{operationVersion:supported}:{}),request:{type:'state',requestId}})
   if(!supported){assert.equal((await live.browser.take(type('operationResponse'))).error,'stationUnsupported');await assert.rejects(live.station.take(type('operationRequest'),100),/timeout/)}
   else{
    const request=await live.station.take(type('operationRequest'));assert.equal(request.sessionId,live.session.sessionId);assert.equal(request.deviceId,live.deviceId)
-   assert.equal(request.operationVersion,supported===2?2:undefined)
+   assert.equal(request.operationVersion,supported>=2?supported:undefined)
    await app.evict(pair.stationId)
    live.station.send({type:'operationResponse',sessionId:request.sessionId,requestId,value:{stationBootId:crypto.randomUUID(),allowed:false,phase:'localPermissionRequired',leaseId:null,revision:1,commandWindowId:null,nextSequence:null,leaseRemainingMs:null,actions:[],txArmed:false}})
    assert.equal((await live.browser.take(type('operationResponse'))).value.phase,'localPermissionRequired')
@@ -627,4 +627,53 @@ test('manual operations retain only routing authority across hibernation and pre
   }
   live.browser.close();live.station.close()
  }
+})
+
+test('expanded operations preserve legacy clients, minimum peer versions and hibernating command routes', async () => {
+  const config = await (await fetch(`${app.origin}/api/remote/config`)).json()
+  assert.equal(config.operationVersion, 2, 'old browsers must keep their original advertisement')
+  assert.equal(config.operationMaxVersion, 3)
+  for (const stationVersion of [1, 2, 3]) for (const browserVersion of [1, 2, 3]) {
+    const pair = await app.paired(), live = await admitted(pair, 1, {
+      'x-nexus-operation-version': String(Math.min(stationVersion, 2)),
+      ...(stationVersion === 3 ? { 'x-nexus-operation-max-version': '3' } : {})
+    })
+    const send = request => live.browser.send({ type: 'operationRequest', ...(browserVersion >= 2 ? { operationVersion: browserVersion } : {}), request })
+    const negotiated = Math.min(stationVersion, browserVersion), requestId = crypto.randomUUID()
+    send({ type: 'state', requestId })
+    const forwarded = await live.station.take(type('operationRequest'))
+    assert.equal(forwarded.operationVersion, negotiated >= 2 ? negotiated : undefined)
+    const state = { stationBootId: crypto.randomUUID(), allowed: true, phase: 'controlling', leaseId: crypto.randomUUID(), revision: 1,
+      commandWindowId: crypto.randomUUID(), nextSequence: 1, leaseRemainingMs: 5000, actions: [], txArmed: false,
+      ...(negotiated >= 2 ? { controls: { context: { radioId: 1, radioConnection: 1, ampConnection: null, ampReadSequence: null }, capabilities: negotiated === 3 ? ['decoder', 'amplifier', 'frequency', 'mode', 'tier'] : ['decoder', 'amplifier'] } } : {}) }
+    await app.evict(pair.stationId)
+    // Simulate a station predating v3 that attached expanded hints under v2.
+    const wire = structuredClone(state)
+    if (negotiated >= 2) wire.controls.capabilities = ['decoder', 'amplifier', 'frequency', 'mode', 'tier']
+    live.station.send({ type: 'operationResponse', sessionId: forwarded.sessionId, requestId, value: wire })
+    assert.deepEqual((await live.browser.take(type('operationResponse'))).value, state)
+    // A v1 client has no station-control envelope. v2 may keep using receiver
+    // controls, while the v3-only decoder transition never reaches an old peer.
+    if (browserVersion >= 2) {
+      for (const action of [{ action: 'radio.tier', tier: 'FT4' }, { action: 'decoder.clear', receiver: 'cw' }]) {
+        const command = { type: 'stationControl', requestId: crypto.randomUUID(), stationBootId: state.stationBootId, leaseId: state.leaseId,
+          expectedRevision: 1, commandWindowId: state.commandWindowId, clientSequence: 1,
+          context: { radioId: 1, radioConnection: 1, ampConnection: null, ampReadSequence: null }, action }
+        send(command)
+        if (negotiated < (action.action === 'radio.tier' ? 3 : 2)) {
+          assert.equal((await live.browser.take(type('operationResponse'))).error, 'stationUnsupported')
+          await assert.rejects(live.station.take(type('operationRequest'), 100), /timeout/)
+        } else {
+          const routed = await live.station.take(type('operationRequest'))
+          assert.deepEqual(routed.request, command); assert.equal(routed.operationVersion, negotiated)
+          await app.evict(pair.stationId)
+          live.station.send({ type: 'operationResponse', sessionId: routed.sessionId, requestId: command.requestId,
+            value: { operation: 'stationControl', operationId: command.requestId, outcome: 'applied', evidence: action.action === 'radio.tier' ? 'radioReadback' : 'receiverState' } })
+          const response = await live.browser.take(type('operationResponse'))
+          assert.equal(response.requestId, command.requestId); assert.equal(response.value.outcome, 'applied')
+        }
+      }
+    }
+    live.browser.close(); live.station.close()
+  }
 })

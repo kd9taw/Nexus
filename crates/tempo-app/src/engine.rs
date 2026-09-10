@@ -5997,7 +5997,10 @@ impl Engine {
     /// the dial of the matching (band, mode) row; a band the stock table lacks
     /// is appended. Empty overrides = stock.
     pub fn band_plan(&self) -> Vec<crate::bandplan::BandChannel> {
-        let tier = self.app.tier();
+        self.band_plan_for_tier(self.app.tier())
+    }
+
+    fn band_plan_for_tier(&self, tier: Tier) -> Vec<crate::bandplan::BandChannel> {
         let mode_name = match tier {
             Tier::Ft8 => "FT8",
             Tier::Ft4 => "FT4",
@@ -10283,6 +10286,16 @@ impl Engine {
         self.app.clear_peer();
     }
     pub fn set_tier(&mut self, tier: Tier) {
+        self.set_tier_with_installer(tier, |engine, source| engine.install_source(source));
+    }
+
+    // Remote already holds the stable decoder mutex at its bounded commit.
+    // The shared transition still owns every native side effect and no-op rule.
+    fn set_tier_with_installer(
+        &mut self,
+        tier: Tier,
+        install: impl FnOnce(&mut Self, Box<dyn SignalSource>),
+    ) {
         // SAME TIER ⇒ COMPLETE NO-OP (the 1.1.0 empty-roster report). The rail's FT
         // button re-issues the tier on every return to the FT view, and without this
         // guard the stale-cycle clears below fired on a plain Logbook→FT round trip —
@@ -10427,7 +10440,7 @@ impl Engine {
                 // Swap the boxed decoder UNDER the lock (waits for any decode in
                 // flight) so the stable serialization mutex is preserved and no
                 // job can be reading the old mode as it's replaced.
-                self.install_source(Box::new(NativeSource::from_kind(kind)));
+                install(self, Box::new(NativeSource::from_kind(kind)));
             }
         }
         // WSJT-X-style: switching the mode moves the rig to the NEW mode's dial for the
@@ -10443,8 +10456,6 @@ impl Engine {
         // rig off a bird the moment the operator reached for FT4. Skip the QSY outright;
         // decoder, slot clock and TX periods still switch above.
         if self.source_kind == SourceKind::Native && self.sat_dial_owner.is_none() {
-            let band = self.settings.band.clone();
-            let plan = self.band_plan();
             // ⭐ FALL BACK TO THE MODE'S PRIMARY CHANNEL when the current band has
             // none. The tier-aware plans are not all all-band: MSK144 and Q65 are
             // VHF+ only, FST4/FST4W are 2200/630/160 m only. `find()` therefore
@@ -10474,16 +10485,8 @@ impl Engine {
             // JS8 joins the stay-on-band family for the same reason FT2 does: its plan
             // (JS8Call's table) spans 160 m–2 m, so a miss is an exotic band and dragging the
             // operator to 160 m would be the same defect.
-            let stay_on_miss = matches!(tier, Tier::Ft8 | Tier::Ft4 | Tier::Ft2 | Tier::Js8);
-            let target = plan
-                .iter()
-                .find(|c| c.band.eq_ignore_ascii_case(&band))
-                .or_else(|| if stay_on_miss { None } else { plan.first() })
-                .cloned();
-            if let Some(ch) = target {
-                if (ch.dial_mhz - self.settings.dial_mhz).abs() > 0.0005 {
-                    self.set_frequency(ch.dial_mhz, &ch.band, &ch.mode);
-                }
+            if let Some(ch) = self.prepare_tier_frequency(tier) {
+                self.set_frequency(ch.dial_mhz, &ch.band, &ch.mode);
             }
         }
     }
@@ -10507,8 +10510,30 @@ impl Engine {
     /// cannot forget it. The lock IS taken here — this is the swap path, which
     /// already waits out any decode in flight, and that is unchanged.
     fn install_source(&mut self, src: Box<dyn SignalSource>) {
+        let source = Arc::clone(&self.source);
+        self.install_source_into(&mut source_lock(&source), src);
+    }
+
+    fn install_source_into(
+        &mut self,
+        slot: &mut Box<dyn SignalSource>,
+        src: Box<dyn SignalSource>,
+    ) {
         self.source_label = src.label();
-        *source_lock(&self.source) = src;
+        *slot = src;
+    }
+
+    fn prepare_tier_frequency(&self, tier: Tier) -> Option<crate::bandplan::BandChannel> {
+        if self.source_kind != SourceKind::Native || self.sat_dial_owner.is_some() {
+            return None;
+        }
+        let plan = self.band_plan_for_tier(tier);
+        let stay_on_miss = matches!(tier, Tier::Ft8 | Tier::Ft4 | Tier::Ft2 | Tier::Js8);
+        plan.iter()
+            .find(|c| c.band.eq_ignore_ascii_case(&self.settings.band))
+            .or_else(|| if stay_on_miss { None } else { plan.first() })
+            .filter(|ch| (ch.dial_mhz - self.settings.dial_mhz).abs() > 0.0005)
+            .cloned()
     }
 
     /// The active RX signal source.

@@ -21,7 +21,7 @@ const snapshot = (radio = {}) => ({ radio: { operatingMode: 'digital', dialMhz: 
 function authority(capabilities: ControlCapability[] = ['mode']) {
   vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
   const frames: any[] = []
-  const client = new OperationClient(s => frames.push(JSON.parse(s)), true, () => 1000, undefined, 2)
+  const client = new OperationClient(s => frames.push(JSON.parse(s)), true, () => 1000, undefined, 3)
   clients.push(client)
   client.open()
   client.receive({ type: 'operationResponse', requestId: frames[frames.length - 1].request.requestId, value: {

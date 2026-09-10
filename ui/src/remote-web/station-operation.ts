@@ -24,7 +24,7 @@ export type ControlContext = {
   ampConnection: number | null
   ampReadSequence: number | null
 }
-export const CONTROL_CAPABILITIES = ['decoder', 'radio', 'amplifier', 'frequency', 'mode'] as const
+export const CONTROL_CAPABILITIES = ['decoder', 'radio', 'amplifier', 'frequency', 'mode', 'tier'] as const
 export type ControlCapability = (typeof CONTROL_CAPABILITIES)[number]
 export const CONTROL_TIERS = [
   'FT8', 'FT4', 'FT2', 'Q65', 'MSK144', 'JT65', 'FST4', 'FST4W', 'WSPR', 'JS8',

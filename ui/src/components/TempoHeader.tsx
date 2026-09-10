@@ -3,7 +3,7 @@
 // ▲ TX indicator is the transmit-state token. Everything else is prose in the catalog.
 import { useState } from 'react'
 import { t, type MessageKey } from '../i18n'
-import { useStationCapability, useStationControl } from '../stationAccess'
+import { useStationCapability, useStationControl, useStationTierControl } from '../stationAccess'
 import type { AppSnapshot, BandChannel, Tier } from '../types'
 import { bandLabelForMhz } from '../band'
 import { CockpitHeader } from './CockpitHeader'
@@ -64,6 +64,7 @@ export function TempoHeader({
 }: Props) {
   const frequencyControl = useStationCapability('frequency')
   const control = useStationControl()
+  const tierControl = useStationTierControl(snap.radio)
   const cq = snap.chatCq ?? 'off'
   const [tuneStep, setTuneStep] = useState(100)
   const commitDial = (mhz: number) => {
@@ -85,8 +86,8 @@ export function TempoHeader({
               type="button"
               className={`cockpit-mode${tier === m.tier ? ' active' : ''}`}
               aria-pressed={tier === m.tier}
-              disabled={!control}
-              onClick={() => { if (control) onTierChange(m.tier) }}
+              disabled={!tierControl}
+              onClick={() => { if (tierControl) onTierChange(m.tier) }}
               title={t(m.titleKey)}
             >
               <span className="cm-name">{m.label}</span>

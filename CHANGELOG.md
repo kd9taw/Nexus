@@ -9,21 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Remote decoder selection:** The existing FT, advanced decoder and Tempo
+  selectors now submit guarded tier changes through the station's radio owner.
+  Native channel choices, decoder settings and offsets are preserved. Same-tier
+  selection does nothing, and a busy decoder refuses without blocking the
+  engine. Transmit stays disarmed. Operation v3 retains older logging and
+  receiver/amplifier clients. Complete Tempo/JS8 workspace entry, radio handoffs
+  and remote transmission still require further work; physical acceptance is
+  pending and a compatible station build is required.
+
 - **Remote operating-mode entry:** “Use this mode” in the existing FT, Phone,
   CW, RTTY, PSK and Tempo headers switches the station using its native mode
   and remembered-frequency policy. Browsing tabs stays passive and entry keeps
   transmit disarmed. CAT mode, frequency and any required power reduction need
   confirmed readback before settings are saved. Local changes cancel pending
   work; uncertain outcomes are never replayed. A compatible station build and
-  attended hardware acceptance are required. Decoder-tier changes, radio
-  handoffs, held channels, FM/split and remote transmission remain incomplete.
+  attended hardware acceptance are required. Radio handoffs, held channels,
+  FM/split and remote transmission remain incomplete.
 
 - **Remote frequency control:** With station permission and the controller
   lease, the existing main dial accepts a typed frequency on the active radio.
   CAT readback and settings persistence must finish before success is shown.
   Local changes cancel pending work; uncertain commands are never repeated.
   The radio must be disarmed, idle and simplex. Radio handoffs, held channels,
-  FM, tier switching and continuous tuning remain outside this increment.
+  FM and continuous tuning remain outside this increment.
   A compatible station build and attended hardware acceptance are required.
 
 - **Remote receiver and amplifier controls:** With separate permission granted

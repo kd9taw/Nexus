@@ -214,7 +214,7 @@ export function operationValue(raw: unknown): OperationValue {
   if ('controls' in v) {
     const controls = object(v.controls, ['context', 'capabilities'])
     controlContext(controls.context)
-    if (!Array.isArray(controls.capabilities) || controls.capabilities.length > CONTROL_CAPABILITIES.length || new Set(controls.capabilities).size !== controls.capabilities.length || controls.capabilities.some(c => !CONTROL_CAPABILITIES.includes(c as ControlCapability))) invalid()
+    if (!Array.isArray(controls.capabilities) || controls.capabilities.length > 64 || new Set(controls.capabilities).size !== controls.capabilities.length || controls.capabilities.some(c => typeof c !== 'string' || !/^[a-z][a-zA-Z0-9]{0,31}$/.test(c))) invalid()
     if (!v.allowed && (controls.capabilities as unknown[]).length) invalid()
   }
   if (
@@ -246,6 +246,12 @@ export function operationValue(raw: unknown): OperationValue {
   )
     invalid()
   if (!v.allowed && (v.actions as unknown[]).length) invalid()
+  if ('controls' in v) {
+    const controls = v.controls as { context: ControlContext; capabilities: string[] }
+    // An unknown bounded capability is only a hint for a newer UI. Ignore it;
+    // never widen the closed action grammar or reject existing capabilities.
+    return { ...v, controls: { ...controls, capabilities: controls.capabilities.filter(c => CONTROL_CAPABILITIES.includes(c as ControlCapability)) } } as OperationState
+  }
   return raw as OperationState
 }
 export const OPERATION_ERRORS = [
@@ -278,6 +284,6 @@ export function operationResponse(raw: unknown): OperationResponse {
   if (r.type !== 'operationResponse' || !operationId(r.requestId)) invalid()
   if ('error' in r) {
     if (!OPERATION_ERRORS.includes(r.error as (typeof OPERATION_ERRORS)[number])) invalid()
-  } else operationValue(r.value)
+  } else return { type: 'operationResponse', requestId: r.requestId as string, value: operationValue(r.value) }
   return raw as OperationResponse
 }

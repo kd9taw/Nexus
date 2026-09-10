@@ -1,14 +1,18 @@
 //! One radio intent owned by the existing radio worker. Preparation never
-//! changes settings; only fresh, matching hardware readings permit the native
-//! QSY and its atomic settings save. A failed/expired intent is never replayed.
+//! changes station state; only fresh, matching hardware readings permit the
+//! native commit. Frequency/section changes also save Settings; tier selection
+//! keeps native live-state semantics. A failed/expired intent is never replayed.
 use super::Engine;
+use crate::dto::Tier;
 use crate::remote_control::{Completion, Evidence, Outcome, Permit, Reason, WritePermission};
 use crate::settings::OperatingMode;
 use std::path::PathBuf;
+use std::sync::TryLockError;
 use std::time::Instant;
 
 enum Intent {
     Frequency,
+    Tier(Tier),
     Mode {
         mode: String,
         follow_frequency: bool,
@@ -204,6 +208,74 @@ impl Engine {
         )
     }
 
+    pub fn queue_remote_tier(
+        &mut self,
+        tier: Tier,
+        connection: u64,
+        permit: Permit,
+    ) -> Result<Completion, Reason> {
+        self.remote_radio_idle()?;
+        if !permit.valid(Instant::now()) {
+            return Err(Reason::AuthorityExpired);
+        }
+        if self.source_kind != crate::dto::SourceKind::Native
+            || self.settings.operating_mode != OperatingMode::Digital
+        {
+            return Err(Reason::UnsupportedAction);
+        }
+        if self.tier() == tier {
+            // Native same-tier selection is a complete no-op, including when
+            // the operator has tuned away from the tier's default channel.
+            if self
+                .remote_radio_command
+                .as_ref()
+                .is_some_and(|r| matches!(r.completion.outcome(), Outcome::Pending))
+            {
+                return Err(Reason::StationBusy);
+            }
+            self.remote_radio_link(connection)?;
+            let receipt = Completion::guarded(permit);
+            receipt.finish(Outcome::Applied {
+                evidence: Evidence::ReceiverState,
+            });
+            return Ok(receipt);
+        }
+        // Decline an already-running decode before any CAT write. A decode can
+        // still start after this check; commit therefore uses try_lock again.
+        if matches!(self.source.try_lock(), Err(TryLockError::WouldBlock)) {
+            return Err(Reason::StationBusy);
+        }
+        let target = self.prepare_tier_frequency(tier);
+        let (dial, band, sideband) = target.as_ref().map_or(
+            (
+                self.settings.dial_mhz,
+                self.settings.band.as_str(),
+                self.settings.sideband.as_str(),
+            ),
+            |ch| (ch.dial_mhz, ch.band.as_str(), ch.mode.as_str()),
+        );
+        if !self.settings.radio_pegged
+            && self
+                .settings
+                .route_radio(band, self.route_mode(band, dial))
+                .is_some_and(|id| id != self.settings.active_radio)
+        {
+            return Err(Reason::UnsupportedAction);
+        }
+        self.queue_remote_target(
+            Target {
+                hz: (dial * 1e6).round() as u64,
+                mode: self.settings.rig_mode_at(dial, sideband),
+                band: band.into(),
+                sideband: sideband.into(),
+                power_limit: None,
+                intent: Intent::Tier(tier),
+            },
+            connection,
+            permit,
+        )
+    }
+
     fn queue_remote_target(
         &mut self,
         target: Target,
@@ -218,9 +290,22 @@ impl Engine {
         {
             return Err(Reason::StationBusy);
         }
-        if target.hz == 0
-            || crate::bandplan::band_for_dial(target.hz as f64 / 1e6) != Some(target.band.as_str())
-        {
+        let named_band = crate::bandplan::band_for_dial(target.hz as f64 / 1e6);
+        // Native FST4/FST4W/WSPR plans include LF/MF channels which the
+        // arbitrary-dial band table intentionally does not resolve. A tier
+        // request carries no client frequency: admit only an exact stock
+        // channel in that case, without widening arbitrary tuning or TX guards.
+        let native_channel = match &target.intent {
+            Intent::Tier(tier) if named_band.is_none() => {
+                crate::bandplan::band_plan_for(*tier).iter().any(|c| {
+                    c.band == target.band
+                        && (c.dial_mhz * 1e6).round() as u64 == target.hz
+                        && c.mode == target.sideband
+                })
+            }
+            _ => false,
+        };
+        if target.hz == 0 || (named_band != Some(target.band.as_str()) && !native_channel) {
             return Err(Reason::InvalidAction);
         }
         // FM's repeater offset/tone reconciliation is a separate transaction.
@@ -274,6 +359,25 @@ impl Engine {
     pub fn take_remote_radio(&mut self) -> Option<Request> {
         self.remote_radio_command.take()
     }
+
+    fn remote_radio_link(&self, connection: u64) -> Result<(), Reason> {
+        let o = self.remote_monitor_observation();
+        let cat = o.radio.readings.cat.ok_or(Reason::ReadingUnavailable)?;
+        let ptt = o.radio.readings.ptt.ok_or(Reason::ReadingUnavailable)?;
+        if cat.connection_generation != connection || ptt.connection_generation != connection {
+            return Err(Reason::ContextChanged);
+        }
+        if o.radio.rig_keyed == Some(true) {
+            return Err(Reason::StationBusy);
+        }
+        if o.radio.cat_connected != Some(true)
+            || o.radio.rig_keyed != Some(false)
+            || ptt.age_ms >= 1000
+        {
+            return Err(Reason::ReadingUnavailable);
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -306,24 +410,7 @@ impl Request {
         {
             return Err(Reason::ContextChanged);
         }
-        let o = engine.remote_monitor_observation();
-        let cat = o.radio.readings.cat.ok_or(Reason::ReadingUnavailable)?;
-        let ptt = o.radio.readings.ptt.ok_or(Reason::ReadingUnavailable)?;
-        if cat.connection_generation != self.connection
-            || ptt.connection_generation != self.connection
-        {
-            return Err(Reason::ContextChanged);
-        }
-        if o.radio.rig_keyed == Some(true) {
-            return Err(Reason::StationBusy);
-        }
-        if o.radio.cat_connected != Some(true)
-            || o.radio.rig_keyed != Some(false)
-            || ptt.age_ms >= 1000
-        {
-            return Err(Reason::ReadingUnavailable);
-        }
-        Ok(())
+        engine.remote_radio_link(self.connection)
     }
 
     /// Called under the same Engine mutex used by local controls, after the
@@ -369,7 +456,32 @@ impl Request {
             self.refuse(reason);
             return false;
         }
+        // Do not wait behind an in-flight decoder after the final permission
+        // check. Keep the original serialization mutex, with native poison recovery.
+        let source = engine.source.clone();
+        let mut source_slot = if matches!(&self.intent, Intent::Tier(_)) {
+            let slot = match source.try_lock() {
+                Ok(slot) => slot,
+                Err(TryLockError::Poisoned(error)) => error.into_inner(),
+                Err(TryLockError::WouldBlock) => {
+                    self.refuse(Reason::StationBusy);
+                    return false;
+                }
+            };
+            Some(slot)
+        } else {
+            None
+        };
+        if let Err(reason) = self.permission.check(Instant::now()) {
+            self.refuse(reason);
+            return false;
+        }
+        let persist = !matches!(&self.intent, Intent::Tier(_));
         match self.intent {
+            Intent::Tier(tier) => engine.set_tier_with_installer(tier, |engine, decoder| {
+                engine
+                    .install_source_into(source_slot.as_mut().expect("tier decoder lock"), decoder);
+            }),
             Intent::Frequency => {
                 engine.set_frequency(self.target_hz as f64 / 1e6, &self.band, &self.sideband)
             }
@@ -389,12 +501,18 @@ impl Request {
         // This QSY has ALREADY reached the radio. Consuming its one-shot under
         // the lock cannot consume a later local gesture's retune request.
         engine.take_immediate_retune();
-        let saved = engine.settings.save(
-            engine
-                .remote_settings_path
-                .as_ref()
-                .expect("validated store"),
-        );
+        // The native tier verb changes live tier/decoder state and does not
+        // persist Settings. Frequency and section gestures retain their save.
+        let saved = if persist {
+            engine.settings.save(
+                engine
+                    .remote_settings_path
+                    .as_ref()
+                    .expect("validated store"),
+            )
+        } else {
+            Ok(())
+        };
         self.completion.finish(if saved.is_ok() {
             Outcome::Applied {
                 evidence: Evidence::RadioReadback,

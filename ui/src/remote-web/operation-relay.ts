@@ -3,6 +3,7 @@
 import type { Peer } from '../remote-monitor/relay'
 import { object } from './display-validation'
 import { operationId, operationRequest, operationResponse } from './operation-protocol'
+import { controlVersion, parseOperationVersion, type OperationVersion } from './operation-version'
 type Browser = { sessionId: string; deviceId: string; peer: Peer }
 type Pending = {
   requestId: string
@@ -10,10 +11,11 @@ type Pending = {
   deviceId: string
   at: number
   mutation: boolean
+  operationVersion?: OperationVersion
 }
 export type OperationCheckpoint = {
   version: 1
-  pending: { requestId: string; at: number; mutation: boolean }[]
+  pending: { requestId: string; at: number; mutation: boolean; operationVersion?: OperationVersion }[]
 }
 // Socket close notifications can race revocation. A lost send must close its
 // peer without aborting the authoritative revocation/checkpoint operation.
@@ -63,7 +65,8 @@ export class OperationRelay {
       const versioned = !!raw && typeof raw === 'object' && 'operationVersion' in raw
       const wire = object(raw, ['type', 'request', ...(versioned ? ['operationVersion'] : [])])
       if (wire.type !== 'operationRequest') throw Error()
-      if (versioned && wire.operationVersion !== 2) throw Error()
+      const browserVersion = versioned ? parseOperationVersion(wire.operationVersion) : 1
+      if (!browserVersion || versioned && browserVersion === 1) throw Error()
       const request = operationRequest(wire.request)
       if (request.type === 'stationControl' && !versioned) throw Error()
       const p = {
@@ -77,7 +80,9 @@ export class OperationRelay {
         this.error(p, 'stationUnsupported')
         return
       }
-      if (request.type === 'stationControl' && this.station.operationVersion !== 2) {
+      const stationVersion = parseOperationVersion(this.station.operationVersion) ?? 1
+      const version = Math.min(browserVersion, stationVersion) as OperationVersion
+      if (request.type === 'stationControl' && version < controlVersion(request.action)) {
         this.error(p, 'stationUnsupported')
         return
       }
@@ -93,7 +98,7 @@ export class OperationRelay {
       }
       rate.push(now)
       this.rates.set(sessionId, rate)
-      this.pending.set(p.requestId, p)
+      this.pending.set(p.requestId, { ...p, operationVersion: version })
       if (
         !deliver(
           this.station.peer,
@@ -101,7 +106,7 @@ export class OperationRelay {
             type: 'operationRequest',
             sessionId,
             deviceId: browser.deviceId,
-            ...(versioned && this.station.operationVersion === 2 ? { operationVersion: 2 } : {}),
+            ...(version >= 2 ? { operationVersion: version } : {}),
             request
           })
         )
@@ -128,6 +133,14 @@ export class OperationRelay {
       if (!p) return
       if (p.sessionId !== sessionId) throw Error()
       this.pending.delete(response.requestId)
+      if ('value' in response && 'controls' in response.value && response.value.controls) {
+        // Keep capability vocabulary compatible even with pre-v3 stations that
+        // advertised extra hints under v2. This only removes hints; it cannot
+        // grant a command. Historical checkpoints predate v3 and default to v2.
+        const version = p.operationVersion ?? 2
+        if (version === 1) delete response.value.controls
+        else if (version === 2) response.value.controls.capabilities = response.value.controls.capabilities.filter(c => ['decoder', 'radio', 'amplifier'].includes(c))
+      }
       const peer = this.browsers.get(sessionId)?.peer
       if (peer) deliver(peer, JSON.stringify(response))
     } catch {
@@ -151,7 +164,7 @@ export class OperationRelay {
       version: 1,
       pending: [...this.pending.values()]
         .filter((p) => p.sessionId === sessionId)
-        .map(({ requestId, at, mutation }) => ({ requestId, at, mutation }))
+        .map(({ requestId, at, mutation, operationVersion }) => ({ requestId, at, mutation, ...(operationVersion ? { operationVersion } : {}) }))
     }
   }
   restore(sessionId: string, raw: OperationCheckpoint): void {
@@ -159,12 +172,13 @@ export class OperationRelay {
     if (!b || raw.version !== 1 || !Array.isArray(raw.pending) || raw.pending.length > 2)
       throw Error('invalidOperationCheckpoint')
     for (const p of raw.pending) {
-      object(p, ['requestId', 'at', 'mutation'])
+      object(p, ['requestId', 'at', 'mutation', ...('operationVersion' in p ? ['operationVersion'] : [])])
       if (
         !operationId(p.requestId) ||
         !Number.isSafeInteger(p.at) ||
         p.at < 0 ||
         typeof p.mutation !== 'boolean' ||
+        ('operationVersion' in p && !parseOperationVersion(p.operationVersion)) ||
         this.pending.has(p.requestId)
       )
         throw Error('invalidOperationCheckpoint')

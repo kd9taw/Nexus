@@ -3,8 +3,8 @@
 This service connects an approved browser to an outbound Nexus desktop connection.
 It reuses the existing Nexus application for station observation and adds
 separately authorized manual general-log QSO entry, receiver/amplifier controls
-and bounded frequency changes on the active radio.
-Mode/radio handoffs and transmitter commands, receive/browser microphone audio, payment collection and a native mobile
+and bounded frequency, section and decoder changes on the active radio.
+Radio handoffs and transmitter commands, receive/browser microphone audio, payment collection and a native mobile
 application remain outside the implemented pilot. A compatible station build is
 required for each negotiated feature; browser deployment does not upgrade Nexus
 at the shack.
@@ -259,7 +259,7 @@ Thread/band selection, roster filtering and history scrolling are browser-local.
 Arriving messages preserve the native follow-newest behavior and leave an operator
 reading older history in place. The existing 768 KiB whole-snapshot ceiling refuses
 oversized sources rather than silently shortening conversations. Station loss
-hides old values. Compose/send, resend, Work/double-click, archive, tier, CQ,
+hides old values. Compose/send, resend, Work/double-click, archive, CQ,
 heartbeat, Roam and frequency-memory shortcuts are guarded in the actual UI as
 well as refused by the transport. Larger-history capacity and live station
 comparison remain outstanding; observation does not enable operation.
@@ -372,7 +372,17 @@ Physical SPE/KPA command and cancellation acceptance remains required.
 
 ## Frequency and mode operations
 
-The operation-v2 `frequency` capability admits only `radio.frequency`, separately
+Operation v3 adds frequency, mode and tier capabilities. The native header and
+public configuration retain `x-nexus-operation-version: 2` / `operationVersion: 2`,
+with explicit `x-nexus-operation-max-version: 3` / `operationMaxVersion: 3` for
+new peers. Absence preserves the older version. The relay forwards the lower
+browser/station version; v1 logging and v2 receiver/amplifier controls remain
+usable. Native admission refuses v3 actions through v2, and both station and
+relay project capabilities for the negotiated version. Routing checkpoints
+retain that version through room hibernation. Bounded unknown capability hints
+are ignored, while action names and arguments remain a closed vocabulary.
+
+The `frequency` capability admits only `radio.frequency`, separately
 from the future `radio` capability. The existing main dial on FT, Phone, CW,
 RTTY, PSK and Tempo accepts typed MHz; FT/Tempo channel selects use the same
 intent. Other controls retain their own permissions. Opening a cockpit never
@@ -389,7 +399,7 @@ mode” in the FT, Phone, CW, RTTY, PSK and Tempo headers enters the station's
 Digital, Phone, CW, RTTY or Keyboard section using native remembered-frequency
 and sideband policy. Tab navigation remains passive. Mode entry also requires
 the native source, an idle disarmed station and the same active-radio limits.
-Tier/decoder selection is a separate action and remains unavailable.
+Tier/decoder selection uses its own capability and action.
 
 Preparation resolves CAT mode, dial and routing without changing settings or
 banking a memory. Canonical commit calls the shared native section-entry verb
@@ -419,10 +429,36 @@ rolls back a whole settings snapshot over local preferences. The browser waits
 for a later station sample after an applied receipt. Unknown outcomes require
 checking the station, never automatic replay.
 
-Tier/profile transitions, FM/repeater and satellite/split transactions,
+Profile/radio transitions, complete Tempo/JS8 workspace entry, FM/repeater and satellite/split transactions,
 band-memory/spot shortcuts, continuous wheel/scope tuning and attended hardware/WAN
 acceptance remain incomplete. A compatible station build is required; this
 source increment does not update existing installations or establish paid readiness.
+
+## Decoder selection
+
+The `tier` capability admits `radio.tier` from the existing FT8/FT4/FT2,
+advanced decoder and Tempo Fast/Deep selectors. The station must use the native
+digital receiver, remain disarmed and idle, and keep the same radio. Native
+`set_tier` owns decoder replacement, decode/roster clearing, JS8 entry/exit,
+Field Day submode, MSK144/WSPR offsets and configured periods. Destination
+preparation shares native working-frequency overrides, specialty-mode channel
+fallback and the 500 Hz no-QSY threshold. LF/MF channels absent from the
+arbitrary-dial band table are admitted only as exact native stock channels;
+this does not widen arbitrary tuning or TX guards.
+
+Selecting the current tier remains a complete no-op, including an off-default
+dial or a busy decoder. A different tier uses the same CAT/readback transaction
+as the other radio intents. Decoder installation tries the stable source mutex
+before admission and again at commit; it never waits behind a long decode while
+holding the Engine lock. If the decoder starts during CAT work, an uncommitted
+outcome is unknown and is not replayed. The shared source mutex is retained to
+serialize native decoder jobs. Like the local tier verb, this changes live state
+without adding a settings-file save. Local armed tier changes retain their
+existing behavior; Remote does not alter FT sequencing or grant transmission.
+
+Tier selection alone does not establish complete Tempo/JS8 workspace behavior,
+message sending or a complete remote operating mode. Physical radio acceptance
+and the remaining operational contracts still apply.
 
 ## Local verification
 

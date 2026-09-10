@@ -30,9 +30,13 @@ run through the active RadioLoop before normal settings reconciliation: fresh
 CAT readback precedes the native QSY and atomic settings save under the Engine
 mutex. Explicit section entry shares native memories and power policy, remains
 disarmed, and confirms any power reduction within the same CAT transaction.
-Unconfirmed targets never become deferred local retunes. Login,
-entitlement and browser approval remain separate checks. Tier/radio handoffs and
-remote transmission remain unavailable; no arbitrary Tauri bridge exists.
+Decoder selection shares native tier/channel policy and the stable decoder
+mutex; a busy decode refuses the remote transition without blocking the Engine.
+Same-tier selection remains a complete no-op. Operation v3 adds the radio
+capabilities while preserving v1 logging and v2 receiver/amplifier clients.
+Unconfirmed targets never become deferred local retunes. Login, entitlement and
+browser approval remain separate checks. Radio handoffs, complete workspace
+entry and remote transmission remain incomplete; no arbitrary Tauri bridge exists.
 See [the Remote contract and limits](remote/README.md#existing-nexus-workspace).
 
 ## Crates (roles, not an exhaustive list)

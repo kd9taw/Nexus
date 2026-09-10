@@ -2,6 +2,7 @@ import { pendingLogStorage } from './operation-storage'
 import { pendingControlStorage } from './control-storage'
 import { OperationClient } from './operation-client'
 import { OPERATION_REQUEST_BYTES, OPERATION_RESPONSE_BYTES } from './operation-protocol'
+import { advertisedOperationVersion, parseOperationVersion } from './operation-version'
 import { Auth0Client } from '@auth0/auth0-spa-js'
 import { ageFrame, MAX_FRAME_BYTES, parseFrame, STALE_MS } from '../remote-monitor/protocol'
 import type { MonitorFrame } from '../remote-monitor/protocol'
@@ -35,7 +36,7 @@ async function boundedJson<T>(path: string, options: RequestInit): Promise<T> {
 export class BrowserClient {
   constructor(private readonly auth: Auth0Client, readonly applicationVersion = 1, readonly operationVersion = 0) {}
   static async load(): Promise<BrowserClient | null> {
-    const config = await boundedJson<{ issuer: string; audience: string; clientId: string; ready: boolean; applicationVersion?: number; operationVersion?: number }>(
+    const config = await boundedJson<{ issuer: string; audience: string; clientId: string; ready: boolean; applicationVersion?: number; operationVersion?: number; operationMaxVersion?: number }>(
       '/api/remote/config', { cache: 'no-store', credentials: 'omit' })
     if (!config.ready) return null
     const issuer = new URL(config.issuer)
@@ -50,7 +51,7 @@ export class BrowserClient {
     } else {
       try { await auth.checkSession() } catch { /* interactive login stays available */ }
     }
-    return new BrowserClient(auth, APPLICATION_VERSIONS.find(version=>version===config.applicationVersion)??1, config.operationVersion===2?2:config.operationVersion===1?1:0)
+    return new BrowserClient(auth, APPLICATION_VERSIONS.find(version=>version===config.applicationVersion)??1, advertisedOperationVersion(config.operationVersion, config.operationMaxVersion))
   }
   authenticated(): Promise<boolean> { return this.auth.isAuthenticated() }
   signIn(): Promise<void> { return this.auth.loginWithRedirect() }
@@ -105,7 +106,7 @@ export class HostedConnection {
     this.operations = new OperationClient(message=>{
       if(!this.applicationMode||this.socket?.readyState!==WebSocket.OPEN||this.socket.bufferedAmount+new TextEncoder().encode(message).length>OPERATION_REQUEST_BYTES)throw new RemoteError(503)
       this.socket.send(message)
-    },applicationMode&&client.operationVersion>=1,()=>performance.now(),pendingLogStorage(()=>localStorage,stationId),client.operationVersion===2?2:1,pendingControlStorage(()=>localStorage,stationId))
+    },applicationMode&&client.operationVersion>=1,()=>performance.now(),pendingLogStorage(()=>localStorage,stationId),parseOperationVersion(client.operationVersion)??1,pendingControlStorage(()=>localStorage,stationId))
     this.source = { id: `hosted-${stationId}`, kind: 'native', read: async signal => {
       if (signal.aborted || this.disposed || this.socket?.readyState !== WebSocket.OPEN || !this.latest) throw new RemoteError(503)
       return ageFrame(this.latest.frame, performance.now() - this.latest.at)

@@ -13,6 +13,11 @@ export function controlTransport(reads: ApplicationTransport, client: Applicatio
     async invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
       let action: StationAction | null = null, read = ''
       switch (command) {
+        case 'set_tier':
+          action = stationAction({ action: 'radio.tier', tier: args?.tier })
+          if (!args || Object.keys(args).some(k => k !== 'tier')) throw Error('invalidOperation')
+          read = 'get_snapshot'
+          break
         case 'set_operating_mode':
           action = stationAction({ action: 'radio.mode', mode: args?.mode, followFrequency: args?.followFreq })
           if (!args || Object.keys(args).some(k => !['mode', 'followFreq'].includes(k))) throw Error('invalidOperation')

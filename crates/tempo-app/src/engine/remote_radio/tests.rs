@@ -90,11 +90,211 @@ impl Station {
                 .unwrap(),
         )
     }
+    fn queue_tier(&mut self, tier: Tier) -> Result<Completion, Reason> {
+        let connection = self
+            .engine
+            .remote_monitor_observation()
+            .radio
+            .readings
+            .cat
+            .unwrap()
+            .connection_generation;
+        self.engine.queue_remote_tier(
+            tier,
+            connection,
+            self.authority
+                .permit(Instant::now() + Duration::from_secs(5))
+                .unwrap(),
+        )
+    }
 }
 impl Drop for Station {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(self.path.parent().unwrap());
     }
+}
+
+#[test]
+fn remote_tiers_reuse_native_channel_decoder_and_offset_transitions() {
+    for tier in Tier::ALL {
+        let mut s = Station::new(OperatingMode::Digital);
+        s.engine.settings.q65_period_s = 30;
+        s.engine.settings.q65_submode = 2;
+        s.engine.settings.fst4_period_s = 300;
+        s.engine.settings.msk144_period_s = 30;
+        s.engine.settings.jt65_submode = 1;
+        let from = if tier == Tier::Ft8 {
+            Tier::Ft4
+        } else {
+            Tier::Ft8
+        };
+        s.engine.set_tier(from);
+        s.engine.take_immediate_retune();
+        s.sample(s.engine.settings.dial_hz(), &s.engine.rig_mode_effective());
+        let source = s.engine.source.clone();
+        let before = serde_json::to_value(s.engine.settings()).unwrap();
+        let mut native = Engine::with_settings(s.engine.settings.clone());
+        native.set_tier(from);
+        native.set_tier(tier);
+        let receipt = s.queue_tier(tier).unwrap();
+        assert_eq!(s.engine.tier(), from, "admission cannot select the decoder");
+        assert_eq!(serde_json::to_value(s.engine.settings()).unwrap(), before);
+        let request = s.engine.take_remote_radio().unwrap();
+        assert_eq!(request.target().0, native.settings.dial_hz());
+        assert_eq!(request.target().1, native.rig_mode_effective());
+        if tier == Tier::Ft4 {
+            assert_eq!(request.target().0, 14_080_000);
+        }
+        if tier == Tier::Msk144 {
+            assert_eq!(request.target().0, 50_260_000);
+        }
+        request.permission().begin_write(Instant::now()).unwrap();
+        s.sample(request.target().0, request.target().1);
+        assert!(request.commit(&mut s.engine));
+        assert_eq!(s.engine.tier(), tier);
+        assert_eq!(
+            serde_json::to_value(s.engine.settings()).unwrap(),
+            serde_json::to_value(native.settings()).unwrap()
+        );
+        assert_eq!(s.engine.source_label, native.source_label);
+        assert_eq!(s.engine.rx_offset_hz, native.rx_offset_hz);
+        assert_eq!(s.engine.tx_offset_hz, native.tx_offset_hz);
+        assert!(std::sync::Arc::ptr_eq(&source, &s.engine.source));
+        assert!(!s.engine.tx_enabled());
+        assert!(!s.engine.take_immediate_retune());
+        assert!(
+            !s.path.exists(),
+            "native tier selection does not save Settings"
+        );
+        assert_eq!(
+            receipt.outcome(),
+            Outcome::Applied {
+                evidence: Evidence::RadioReadback
+            }
+        );
+    }
+}
+
+#[test]
+fn same_remote_tier_is_a_complete_noop_even_during_decode_away_from_the_default_dial() {
+    let mut s = Station::new(OperatingMode::Digital);
+    s.engine.set_frequency(14.076, "20m", "USB");
+    s.engine.take_immediate_retune();
+    s.sample(14_076_000, "PKTUSB");
+    let before = serde_json::to_value(s.engine.settings()).unwrap();
+    let epoch = s.engine.decode_epoch;
+    let source = s.engine.source.clone();
+    let _decode = super::super::source_lock(&source);
+    let receipt = s.queue_tier(Tier::Ft8).unwrap();
+    assert_eq!(
+        receipt.outcome(),
+        Outcome::Applied {
+            evidence: Evidence::ReceiverState
+        }
+    );
+    assert!(s.engine.take_remote_radio().is_none());
+    assert_eq!(s.engine.decode_epoch, epoch);
+    assert_eq!(serde_json::to_value(s.engine.settings()).unwrap(), before);
+    assert!(!s.path.exists());
+}
+
+#[test]
+fn tier_admission_honors_custom_channels_and_refuses_a_busy_decoder_before_cat() {
+    let mut s = Station::new(OperatingMode::Digital);
+    s.engine
+        .settings
+        .working_frequencies
+        .push(crate::settings::WorkingFreq {
+            band: "20m".into(),
+            mode: "FT4".into(),
+            mhz: 14.082,
+        });
+    let source = s.engine.source.clone();
+    let guard = super::super::source_lock(&source);
+    assert!(matches!(s.queue_tier(Tier::Ft4), Err(Reason::StationBusy)));
+    assert!(s.engine.take_remote_radio().is_none());
+    assert_eq!(s.engine.tier(), Tier::Ft8);
+    drop(guard);
+    let receipt = s.queue_tier(Tier::Ft4).unwrap();
+    let request = s.engine.take_remote_radio().unwrap();
+    assert_eq!(request.target(), (14_082_000, "PKTUSB"));
+    request.permission().begin_write(Instant::now()).unwrap();
+    s.sample(14_082_000, "PKTUSB");
+    assert!(request.commit(&mut s.engine));
+    assert_eq!(s.engine.settings.dial_hz(), 14_082_000);
+    assert_eq!(s.engine.tier(), Tier::Ft4);
+    assert!(matches!(receipt.outcome(), Outcome::Applied { .. }));
+}
+
+#[test]
+fn decoder_starting_during_cat_cannot_block_or_commit_the_remote_tier() {
+    let mut s = Station::new(OperatingMode::Digital);
+    let receipt = s.queue_tier(Tier::Ft4).unwrap();
+    let request = s.engine.take_remote_radio().unwrap();
+    request.permission().begin_write(Instant::now()).unwrap();
+    s.sample(14_080_000, "PKTUSB");
+    let source = s.engine.source.clone();
+    let guard = super::super::source_lock(&source);
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::scope(|scope| {
+        let handle = scope.spawn(|| tx.send(request.commit(&mut s.engine)).unwrap());
+        let prompt = rx.recv_timeout(Duration::from_millis(250));
+        // Always release and join, even if a regression used a blocking lock.
+        drop(guard);
+        handle.join().unwrap();
+        assert_eq!(prompt, Ok(false));
+    });
+    assert_eq!(
+        receipt.outcome(),
+        Outcome::Unknown {
+            reason: Reason::HardwareUnconfirmed
+        }
+    );
+    assert_eq!(s.engine.tier(), Tier::Ft8);
+    assert_eq!(s.engine.settings.dial_hz(), 14_074_000);
+    assert!(!s.engine.take_immediate_retune());
+    assert!(s.engine.take_remote_radio().is_none());
+    assert!(!s.path.exists());
+}
+
+#[test]
+fn a_tier_cannot_mislabel_a_custom_dial_or_borrow_a_retired_cat_connection() {
+    let mut s = Station::new(OperatingMode::Digital);
+    s.engine
+        .settings
+        .working_frequencies
+        .push(crate::settings::WorkingFreq {
+            band: "20m".into(),
+            mode: "FT4".into(),
+            mhz: 7.074,
+        });
+    assert!(matches!(
+        s.queue_tier(Tier::Ft4),
+        Err(Reason::InvalidAction)
+    ));
+    let stale = s
+        .engine
+        .remote_monitor_observation()
+        .radio
+        .readings
+        .cat
+        .unwrap()
+        .connection_generation
+        + 1;
+    let result = s.engine.queue_remote_tier(
+        Tier::Ft8,
+        stale,
+        s.authority
+            .permit(Instant::now() + Duration::from_secs(5))
+            .unwrap(),
+    );
+    assert!(
+        matches!(result, Err(Reason::ContextChanged)),
+        "a no-op still requires its current radio binding"
+    );
+    assert!(s.engine.take_remote_radio().is_none());
+    assert_eq!(s.engine.tier(), Tier::Ft8);
+    assert!(!s.path.exists());
 }
 
 #[test]

@@ -91,7 +91,7 @@ pub enum Action {
         follow_frequency: bool,
     },
     #[serde(rename = "radio.tier")]
-    Tier { tier: String },
+    Tier { tier: tempo_app::dto::Tier },
     #[serde(rename = "radio.select")]
     Radio {
         #[serde(rename = "radioId")]
@@ -199,6 +199,14 @@ pub fn execute(
             );
         }
         #[cfg(feature = "radio")]
+        Action::Tier { tier } => {
+            return engine.queue_remote_tier(
+                *tier,
+                context.radio_connection.ok_or(Reason::ReadingUnavailable)?,
+                permit,
+            );
+        }
+        #[cfg(feature = "radio")]
         Action::AmpOperate {
             expected_operate,
             operate,
@@ -285,13 +293,29 @@ pub fn execute(
     Ok(result)
 }
 
-pub fn capabilities() -> Vec<&'static str> {
+impl Action {
+    pub fn minimum_version(&self) -> u8 {
+        match self {
+            Self::Frequency { .. } | Self::Mode { .. } | Self::Tier { .. } | Self::Radio { .. } => {
+                3
+            }
+            _ => 2,
+        }
+    }
+}
+
+pub fn capabilities(version: u8) -> Vec<&'static str> {
     #[cfg(feature = "radio")]
     {
-        vec!["decoder", "amplifier", "frequency", "mode"]
+        if version == 2 {
+            vec!["decoder", "amplifier"]
+        } else {
+            vec!["decoder", "amplifier", "frequency", "mode", "tier"]
+        }
     }
     #[cfg(not(feature = "radio"))]
     {
+        let _ = version;
         vec!["decoder"]
     }
 }

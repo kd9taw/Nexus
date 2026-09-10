@@ -1,5 +1,5 @@
 import { RemoteRecall } from '../remote-web/RemoteRecall'
-import { useStationControl } from '../stationAccess'
+import { useStationControl, useStationTierControl } from '../stationAccess'
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every reading in this
 // cockpit is DATA and stays in the code — the dial, the audio offsets in Hz, the band, the
 // tier, the decode depth, the split TX frequency, the next-slot seconds — and so does the
@@ -353,6 +353,7 @@ export function OperateCockpit({
   wheelSensitivity,
 }: Props) {
   const control = useStationControl()
+  const tierControl = useStationTierControl(snap.radio)
   // Container the waterfall-height splitter measures + writes its CSS var on.
   const bodyRef = useRef<HTMLDivElement>(null)
   // The two resizable side-rail panes in roster mode (Band Activity above, Rx Frequency
@@ -888,7 +889,7 @@ export function OperateCockpit({
         modeIndicator={
           <div className="cockpit-modes" role="group" aria-label={t('operate.header.modes.aria')}>
             {MODES.map((m) => (
-              <button disabled={!control}
+              <button disabled={!tierControl}
                 key={m.tier}
                 type="button"
                 className={`cockpit-mode${tier === m.tier ? ' active' : ''}`}

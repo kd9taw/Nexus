@@ -5,6 +5,7 @@ import { pendingControlStorage } from './control-storage'
 import { pendingLogStorage, type ReceiptLock } from './operation-storage'
 import type { OperationState } from './operation-protocol'
 import type { ControlCapability } from './station-operation'
+import type { OperationVersion } from './operation-version'
 import { controlTransport } from './control-transport'
 import type { ApplicationClient } from './application-client'
 import type { ApplicationTransport } from '../applicationTransport'
@@ -21,13 +22,13 @@ function storage() {
   }
   return { data, lock }
 }
-function setup(store = storage(), capabilities: ControlCapability[] = ['decoder', 'amplifier']) {
+function setup(store = storage(), capabilities: ControlCapability[] = ['decoder', 'amplifier'], version: OperationVersion = capabilities.some(c => ['frequency', 'mode', 'tier'].includes(c)) ? 3 : 2) {
   vi.useFakeTimers()
   let now = 1000
   const sent: any[] = []
   const controls = pendingControlStorage(() => store.data, 'station', store.lock)
   const logs = pendingLogStorage(() => store.data, 'station', store.lock)
-  const client = new OperationClient(s => sent.push(JSON.parse(s)), true, () => now, logs, 2, controls)
+  const client = new OperationClient(s => sent.push(JSON.parse(s)), true, () => now, logs, version, controls)
   const s: OperationState = {
     stationBootId: crypto.randomUUID(), allowed: true, phase: 'controlling', leaseId: crypto.randomUUID(),
     revision: 1, commandWindowId: crypto.randomUUID(), nextSequence: 1, leaseRemainingMs: 5000,
@@ -89,7 +90,7 @@ it('adapts explicit mode entry separately from frequency and waits for a later s
 
 it('a receiver grant cannot tune and an uncertain frequency is never sent again', async () => {
   const a = { action: 'radio.frequency', dialMhz: 7.074, band: '40m', sideband: 'USB' } as const
-  const receiver = setup()
+  const receiver = setup(storage(), ['decoder', 'amplifier'], 3)
   await expect(receiver.client.control(a)).rejects.toThrow('notController')
   receiver.client.disconnected()
   const h = setup(storage(), ['frequency']), result = h.client.control(a)
@@ -100,6 +101,32 @@ it('a receiver grant cannot tune and an uncertain frequency is never sent again'
   await expect(h.client.control(a)).rejects.toThrow('operationUnknown')
   expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(1)
   h.client.disconnected()
+})
+
+it('adapts the existing tier selector through its own v3 capability and later snapshot', async () => {
+  const h = setup(storage(), ['tier'])
+  let sampleAge = Infinity
+  const read = vi.fn(async () => ({ link: { tier: 'FT4' } }))
+  const transport = controlTransport({ kind: 'remote', invoke: read } as ApplicationTransport, { age: () => sampleAge } as unknown as ApplicationClient, h.client)
+  const result = transport.invoke('set_tier', { tier: 'FT4' })
+  await Promise.resolve()
+  const frame = h.sent[h.sent.length - 1], request = frame.request
+  expect(frame.operationVersion).toBe(3)
+  expect(request.action).toEqual({ action: 'radio.tier', tier: 'FT4' })
+  h.reply({ operation: 'stationControl', operationId: request.requestId, outcome: 'applied', evidence: 'radioReadback' })
+  await h.advance(100)
+  expect(read).not.toHaveBeenCalled()
+  sampleAge = 0
+  await h.advance(50)
+  expect(await result).toEqual({ link: { tier: 'FT4' } })
+  expect(read).toHaveBeenCalledExactlyOnceWith('get_snapshot')
+  for (const args of [{ tier: 'FT4', arm: true }, { tier: 'future' }, {}]) await expect(transport.invoke('set_tier', args)).rejects.toThrow('invalidOperation')
+  await expect(h.client.control({ action: 'radio.mode', mode: 'cw', followFrequency: true })).rejects.toThrow('notController')
+  h.client.disconnected()
+  const legacy = setup(storage(), ['tier'], 2)
+  await expect(legacy.client.control({ action: 'radio.tier', tier: 'FT4' })).rejects.toThrow('stationUnsupported')
+  expect(legacy.sent.filter(f => f.request.type === 'stationControl')).toHaveLength(0)
+  legacy.client.disconnected()
 })
 
 it('sends one explicit intent and retains it until a later native readback', async () => {

@@ -260,6 +260,12 @@ pub async fn connected(
         "x-nexus-operation-version",
         "2".parse().map_err(|_| "invalidResponse")?,
     );
+    // Older cloud builds still see the v2 baseline. A compatible cloud can
+    // negotiate expanded radio actions without removing legacy operations.
+    request.headers_mut().insert(
+        "x-nexus-operation-max-version",
+        "3".parse().map_err(|_| "invalidResponse")?,
+    );
     let config = WebSocketConfig::default()
         .max_message_size(Some(8192))
         .max_frame_size(Some(8192))

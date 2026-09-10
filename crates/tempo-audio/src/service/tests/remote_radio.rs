@@ -100,6 +100,24 @@ impl Station {
         )
         .unwrap()
     }
+    fn queue_tier(&mut self, tier: tempo_app::dto::Tier) -> Completion {
+        let mut e = engine_lock(&self.engine);
+        let connection = e
+            .remote_monitor_observation()
+            .radio
+            .readings
+            .cat
+            .unwrap()
+            .connection_generation;
+        e.queue_remote_tier(
+            tier,
+            connection,
+            self.authority
+                .permit(Instant::now() + Duration::from_secs(5))
+                .unwrap(),
+        )
+        .unwrap()
+    }
     fn step(&mut self) {
         self.state
             .step(
@@ -114,6 +132,111 @@ impl Station {
             )
             .unwrap();
     }
+}
+
+#[test]
+fn tier_entry_uses_the_actual_owner_once_and_same_tier_never_sends_a_command() {
+    use tempo_app::dto::Tier;
+    let peer = retuning_peer(14_074_000, "PKTUSB", |_, _| None);
+    let mut s = Station::new(&peer);
+    let unchanged = s.queue_tier(Tier::Ft8);
+    assert_eq!(
+        unchanged.outcome(),
+        Outcome::Applied {
+            evidence: Evidence::ReceiverState
+        }
+    );
+    s.step();
+    assert!(writes(&peer).is_empty());
+    let receipt = s.queue_tier(Tier::Ft4);
+    assert_eq!(engine_lock(&s.engine).tier(), Tier::Ft8);
+    s.step();
+    assert_eq!(
+        receipt.outcome(),
+        Outcome::Applied {
+            evidence: Evidence::RadioReadback
+        }
+    );
+    assert_eq!(engine_lock(&s.engine).tier(), Tier::Ft4);
+    assert_eq!(engine_lock(&s.engine).settings().dial_hz(), 14_080_000);
+    assert_eq!(writes(&peer), ["M PKTUSB -1", "F 14080000"]);
+    s.authority.revoke();
+    for _ in 0..3 {
+        s.step();
+    }
+    assert_eq!(writes(&peer), ["M PKTUSB -1", "F 14080000"]);
+    assert!(!engine_lock(&s.engine).tx_enabled());
+    assert!(
+        !s.path.exists(),
+        "native set_tier is a live transition, not a settings save"
+    );
+}
+
+#[test]
+fn a_failed_tier_qsy_keeps_the_old_decoder_and_does_not_retry_the_frequency() {
+    use tempo_app::dto::Tier;
+    let peer = retuning_peer(14_074_000, "PKTUSB", |line, _| {
+        line.starts_with("F ").then(|| "RPRT -1\n".into())
+    });
+    let mut s = Station::new(&peer);
+    let receipt = s.queue_tier(Tier::Ft4);
+    s.step();
+    assert_eq!(
+        receipt.outcome(),
+        Outcome::Unknown {
+            reason: Reason::HardwareUnconfirmed
+        }
+    );
+    assert_eq!(engine_lock(&s.engine).tier(), Tier::Ft8);
+    assert_eq!(engine_lock(&s.engine).settings().dial_hz(), 14_074_000);
+    for _ in 0..3 {
+        s.step();
+    }
+    assert_eq!(writes(&peer), ["M PKTUSB -1", "F 14080000"]);
+    assert!(!s.path.exists());
+}
+
+#[test]
+fn local_same_frequency_tier_round_trip_cancels_remote_tier_completion() {
+    use tempo_app::dto::Tier;
+    let change: Arc<Mutex<Option<Arc<Mutex<Engine>>>>> = Default::default();
+    let local = change.clone();
+    let peer = retuning_peer(14_074_000, "PKTUSB", move |line, _| {
+        if line.starts_with("M ") {
+            let engine = local.lock().unwrap().take();
+            if let Some(engine) = engine {
+                let mut e = engine_lock(&engine);
+                e.set_tier(Tier::Ft4);
+                e.set_tier(Tier::Ft8);
+            }
+        }
+        None
+    });
+    let mut s = Station::configured(&peer, |settings| {
+        settings
+            .working_frequencies
+            .push(tempo_app::settings::WorkingFreq {
+                band: "20m".into(),
+                mode: "FT4".into(),
+                mhz: 14.074,
+            })
+    });
+    *change.lock().unwrap() = Some(s.engine.clone());
+    let receipt = s.queue_tier(Tier::Ft4);
+    s.step();
+    assert_eq!(
+        receipt.outcome(),
+        Outcome::Unknown {
+            reason: Reason::HardwareUnconfirmed
+        }
+    );
+    assert_eq!(engine_lock(&s.engine).tier(), Tier::Ft8);
+    assert_eq!(engine_lock(&s.engine).settings().dial_hz(), 14_074_000);
+    for _ in 0..3 {
+        s.step();
+    }
+    assert_eq!(writes(&peer), ["M PKTUSB -1"]);
+    assert!(!s.path.exists());
 }
 
 #[test]

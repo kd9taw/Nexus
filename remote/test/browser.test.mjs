@@ -75,7 +75,7 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
     const shell = await fetch(app.origin,{signal:AbortSignal.timeout(3000)})
     assert.equal(shell.status,200)
     assert.match(await shell.text(), /Nexus Remote/)
-    const stationHeaders = { 'x-nexus-application-version': '1',...(operating?{'x-nexus-operation-version':'2'}:{}), ...(applicationVersion >= 2 ? { 'x-nexus-application-stream-version': '2' } : {}), ...(applicationVersion >= 3 ? { 'x-nexus-application-query-version': '1' } : {}), ...(applicationVersion >= 4 ? { 'x-nexus-application-recall-version': '1' } : {}), ...(applicationVersion >= 5 ? { 'x-nexus-application-keyboard-version': '1' } : {}), ...(applicationVersion >= 6 ? { 'x-nexus-application-insights-version': '1' } : {}), ...(applicationVersion >= 7 ? { 'x-nexus-application-dxpeditions-version': '1' } : {}), ...(applicationVersion >= 8 ? { 'x-nexus-application-memories-version': '1' } : {}), ...(applicationVersion >= 9 ? { 'x-nexus-application-ota-version': '1' } : {}), ...(applicationVersion >= 10 ? { 'x-nexus-application-field-day-version': '1' } : {}), ...(applicationVersion >= 11 ? { 'x-nexus-application-js8-version': '1' } : {}), ...(applicationVersion >= 12 ? {'x-nexus-application-station-modes-version':'1'} : {}), ...(applicationVersion >= 13 ? {'x-nexus-application-navigation-version':'1'} : {}), ...(applicationVersion >= 14 ? {'x-nexus-application-configuration-version':'1'} : {}) }
+    const stationHeaders = { 'x-nexus-application-version': '1',...(operating?{'x-nexus-operation-version':'2','x-nexus-operation-max-version':'3'}:{}), ...(applicationVersion >= 2 ? { 'x-nexus-application-stream-version': '2' } : {}), ...(applicationVersion >= 3 ? { 'x-nexus-application-query-version': '1' } : {}), ...(applicationVersion >= 4 ? { 'x-nexus-application-recall-version': '1' } : {}), ...(applicationVersion >= 5 ? { 'x-nexus-application-keyboard-version': '1' } : {}), ...(applicationVersion >= 6 ? { 'x-nexus-application-insights-version': '1' } : {}), ...(applicationVersion >= 7 ? { 'x-nexus-application-dxpeditions-version': '1' } : {}), ...(applicationVersion >= 8 ? { 'x-nexus-application-memories-version': '1' } : {}), ...(applicationVersion >= 9 ? { 'x-nexus-application-ota-version': '1' } : {}), ...(applicationVersion >= 10 ? { 'x-nexus-application-field-day-version': '1' } : {}), ...(applicationVersion >= 11 ? { 'x-nexus-application-js8-version': '1' } : {}), ...(applicationVersion >= 12 ? {'x-nexus-application-station-modes-version':'1'} : {}), ...(applicationVersion >= 13 ? {'x-nexus-application-navigation-version':'1'} : {}), ...(applicationVersion >= 14 ? {'x-nexus-application-configuration-version':'1'} : {}) }
     station=await pair.native.open(pair.stationId, undefined, 101, stationHeaders)
     let code=null, oauth=null, exchanges=0, providerFailure=false, exceptions=0, acknowledgements=0, unexpectedMessages=0
     const applicationTraffic = { reads: 0, acks: 0, subscriptions: 0, batches: 0, bytes: 0, byCommand: {}, maxResponseBytes: 0 }
@@ -115,7 +115,7 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
         const message = JSON.parse(event.response.payloadData)
         if (message.type === 'ack' && Object.keys(message).sort().join(',') === 'epoch,sequence,type') acknowledgements++
         else if (message.type === 'applicationHello' && (Object.keys(message).length === 1 || (Object.keys(message).length === 2 && [2,3,4,5,6,7,8,9,10,11,12,13,14].includes(message.version)))) {}
-        else if(message.type==='operationRequest'&&((Object.keys(message).length===2)||Object.keys(message).length===3&&message.operationVersion===2)&&['state','acquire','heartbeat','release','result','logManual','stationControl'].includes(message.request?.type)){if(!operating)assert.equal(message.request.type,'state');operationWire.push({at:performance.now(),direction:'out',type:message.request.type,requestId:message.request.requestId})}
+        else if(message.type==='operationRequest'&&((Object.keys(message).length===2)||Object.keys(message).length===3&&[2,3].includes(message.operationVersion))&&['state','acquire','heartbeat','release','result','logManual','stationControl'].includes(message.request?.type)){if(!operating)assert.equal(message.request.type,'state');operationWire.push({at:performance.now(),direction:'out',type:message.request.type,requestId:message.request.requestId})}
         else if (message.type === 'applicationRead' && Object.keys(message).length === 4) applicationTraffic.reads++
         else if (message.type === 'applicationQuery' && Object.keys(message).length === 7) applicationTraffic.queries=(applicationTraffic.queries??0)+1
         else if (message.type === 'applicationQueryAck' && Object.keys(message).length === 2) {}
@@ -282,7 +282,7 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
           loggedRequests.push(r);value={outcome:'applied',evidence:'fileSynced',uploads:'stationPipeline',operationId:r.requestId};loggingReceipts.set(r.requestId,value);loggingRevision++
           if(loseLogReply)continue
         }else if(r.type==='stationControl'){
-          assert.equal(request.operationVersion,2);assert.ok(stationControls&&loggingLease&&r.leaseId===loggingLease)
+          assert.equal(request.operationVersion,3);assert.ok(stationControls&&loggingLease&&r.leaseId===loggingLease)
           assert.equal(r.expectedRevision,loggingRevision);assert.equal(r.clientSequence,loggingSequence+1);loggingSequence++
           assert.deepEqual(r.context,{radioId:1,radioConnection:1,ampConnection:1,ampReadSequence:1})
           stationRequests.push(r);const a=r.action
@@ -298,6 +298,13 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
             assert.ok(dial);assert.equal(a.followFrequency,true)
             applicationData.get_snapshot.radio.operatingMode=a.mode;applicationData.get_snapshot.radio.dialMhz=dial
             assert.equal(applicationData.get_snapshot.radio.txEnabled,false)
+          }else if(a.action==='radio.tier'){
+            assert.ok(['FT8','FT4','FT2','WSPR','Q65','MSK144','JT65','FST4','FST4W','TempoFast','TempoDeep'].includes(a.tier))
+            assert.equal(applicationData.get_snapshot.radio.operatingMode,'digital')
+            // The provider proves the real UI/relay gesture and later snapshot.
+            // Native engine/worker tests separately prove channel/source policy.
+            applicationData.get_snapshot.link.tier=a.tier
+            assert.equal(applicationData.get_snapshot.radio.txEnabled,false)
           }else if(a.action==='decoder.clear'){
             const state=applicationData[`get_${a.receiver}_state`];state.text='';if(state.charConf)state.charConf=[]
           }else if(a.action==='decoder.afcReset')applicationData[`get_${a.receiver}_state`].afcHz=0
@@ -312,7 +319,7 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
           value={operation:'stationControl',operationId:r.requestId,outcome:'applied',evidence:a.action.startsWith('radio.')?'radioReadback':a.action.startsWith('amplifier.')?'amplifierReadback':'receiverState'}
           loggingReceipts.set(r.requestId,value);loggingRevision++;applicationRevision++
         }else if(r.type==='result'){value=loggingReceipts.get(r.operationId);if(!value)error='resultExpired'}
-        else value={stationBootId:loggingBoot,allowed:loggingAllowed||stationControls,phase:loggingLease?'controlling':loggingAllowed||stationControls?'available':'localPermissionRequired',leaseId:loggingLease,revision:loggingRevision,commandWindowId:loggingLease?loggingWindow:null,nextSequence:loggingLease?loggingSequence+1:null,leaseRemainingMs:loggingLease?5000:null,actions:loggingAllowed?['log.manual']:[],txArmed:false,...(stationControls?{controls:{context:{radioId:1,radioConnection:1,ampConnection:1,ampReadSequence:1},capabilities:['decoder','amplifier','frequency','mode']}}:{})}
+        else value={stationBootId:loggingBoot,allowed:loggingAllowed||stationControls,phase:loggingLease?'controlling':loggingAllowed||stationControls?'available':'localPermissionRequired',leaseId:loggingLease,revision:loggingRevision,commandWindowId:loggingLease?loggingWindow:null,nextSequence:loggingLease?loggingSequence+1:null,leaseRemainingMs:loggingLease?5000:null,actions:loggingAllowed?['log.manual']:[],txArmed:false,...(stationControls?{controls:{context:{radioId:1,radioConnection:1,ampConnection:1,ampReadSequence:1},capabilities:request.operationVersion>=3?['decoder','amplifier','frequency','mode','tier']:['decoder','amplifier']}}:{})}
         source.send({type:'operationResponse',sessionId:request.sessionId,requestId:r.requestId,...(error?{error}:{value})});continue
       }
       if (request.type === 'applicationQuery') {
@@ -609,6 +616,33 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
         await until(`!document.querySelector('${selector}')`)
         assert.equal(applicationData.get_snapshot.radio.txEnabled,false)
       }
+      let tierGeometry=0
+      for(const [tab,root,index,tier] of [
+        ['FT','.operate-cockpit .cockpit-modes',2,'FT4'],['FT','.operate-cockpit .cockpit-modes',3,'FT2'],['FT','.operate-cockpit .cockpit-modes',1,'FT8'],
+        ...[[6,'WSPR'],[7,'Q65'],[8,'MSK144'],[9,'JT65'],[10,'FST4'],[11,'FST4W']].map(([index,tier])=>['FT','.topbar-group.tier-toggle:not(.tx-period)',index,tier]),
+        ['Tempo','.grid-header .cockpit-modes',2,'TempoDeep'],['Tempo','.grid-header .cockpit-modes',1,'TempoFast']
+      ]){
+        const before=stationRequests.length,selector=`${root} > button:nth-child(${index})`
+        await click(button(tab));await settledLayout()
+        assert.equal(stationRequests.length,before,'visiting a tier selector cannot select a decoder')
+        for(const [width,height,zoom]of [[390,844,1],[1280,800,1],[390,844,1.75],[1280,800,1.75]])for(const theme of ['dark','light']){
+          await browser.call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false},session)
+          await evaluate(`document.documentElement.style.setProperty('--ui-zoom','${zoom}');document.documentElement.dataset.theme='${theme}';window.dispatchEvent(new Event('resize'))`);await settledLayout();await settledLayout()
+          await until(`!!document.querySelector('${selector}')&&!document.querySelector('${selector}').disabled`)
+          await evaluate(`document.querySelector('${selector}').scrollIntoView({block:'center',behavior:'instant'})`);await settledLayout()
+          const shape=await evaluate(`(()=>{const e=document.querySelector('${selector}'),r=e.getBoundingClientRect(),hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);return{rect:r.toJSON(),hit:hit?.outerHTML.slice(0,300),docW:document.documentElement.scrollWidth,docH:document.documentElement.scrollHeight,good:r.width>0&&r.height>0&&e.contains(hit)&&document.documentElement.scrollWidth<=innerWidth+1&&document.documentElement.scrollHeight<=innerHeight+1}})()`)
+          if(!shape.good&&artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'tier-layout-failure.png'),Buffer.from(shot.data,'base64'));await writeFile(join(artifacts,'tier-layout-failure.json'),JSON.stringify({tab,tier,width,height,zoom,theme,shape},null,2))}
+          assert.equal(shape.good,true,`Tier selector reachable ${tier} ${width} ${zoom}: ${JSON.stringify(shape)}`);tierGeometry++
+          if(artifacts&&width===390&&zoom===1.75&&theme==='dark'&&['FT4','WSPR','TempoDeep'].includes(tier)){
+            const shot=await browser.call('Page.captureScreenshot',{format:'png'},session)
+            await writeFile(join(artifacts,`tier-${tier}-390-175.png`),Buffer.from(shot.data,'base64'))
+          }
+        }
+        await gesture(selector,'radio.tier')
+        assert.deepEqual(stationRequests.at(-1).action,{action:'radio.tier',tier})
+        await until(`document.querySelector('${selector}').getAttribute('aria-pressed')==='true'`)
+        assert.equal(applicationData.get_snapshot.radio.txEnabled,false)
+      }
       await click(button('CW'));await settledLayout()
       let controlGeometry=0
       for(const [width,height,zoom]of [[390,844,1],[1280,800,1],[390,844,1.75],[1280,800,1.75]])for(const theme of ['dark','light']){
@@ -626,8 +660,8 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
       stationControls=false;loggingLease=null
       await until(`document.querySelector('.cw-cockpit .amp-op').disabled`)
       assert.equal(loggedRequests.length,5);assert.equal(unexpectedMessages,0);assert.equal(exceptions,0)
-      if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-manual-logging.png'),Buffer.from(shot.data,'base64'));await writeFile(join(artifacts,'operation-results.json'),JSON.stringify({count:loggedRequests.length,stationActions:stationRequests.map(r=>r.action),controlGeometry,modeGeometry,modes:loggedRequests.map(r=>r.record.mode),lostResultResolved:true,wholePageReloadResolved:true,crossTabLockRefusal:true,geometry:16,exceptions,unexpectedMessages},null,2))}
-      console.log('Compiled browser: five logging forms, five dial, six mode and nine receiver/amplifier gestures, separate grants, recovery and 80 geometry cases passed');return
+      if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-manual-logging.png'),Buffer.from(shot.data,'base64'));await writeFile(join(artifacts,'operation-results.json'),JSON.stringify({count:loggedRequests.length,stationActions:stationRequests.map(r=>r.action),controlGeometry,modeGeometry,tierGeometry,modes:loggedRequests.map(r=>r.record.mode),lostResultResolved:true,wholePageReloadResolved:true,crossTabLockRefusal:true,geometry:16,exceptions,unexpectedMessages},null,2))}
+      console.log('Compiled browser: five logging forms, five dial, six mode, eleven tier and nine receiver/amplifier gestures, separate grants, recovery and 168 geometry cases passed');return
     }
     const startReads=applicationTraffic.reads, startBytes=applicationTraffic.bytes, started=performance.now()
     for(const [width,height] of [[1024,768],[1280,800],[1366,768],[1200,1390],[3440,1440]])for(const zoom of [1,1.75])for(const theme of ['dark','light']) {

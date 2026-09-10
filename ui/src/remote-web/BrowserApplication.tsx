@@ -83,7 +83,7 @@ export function BrowserApplication({ connection, disconnect }: { connection: Hos
   const status = <div className="remote-application-status" role="status">
     <strong>{t('remote.browserWorkspace')}</strong>
     {connection.operations&&<LoggingAuthority client={connection.operations}/>}
-    <span>{stale ? t('remote.applicationUnavailable') : connection.operations?.operationVersion === 2 ? t('remote.controlPreview') : connection.operations?.enabled ? t('remote.applicationLoggingPreview') : t('remote.applicationObserver')}</span>
+    <span>{stale ? t('remote.applicationUnavailable') : (connection.operations?.operationVersion ?? 0) >= 2 ? t('remote.controlPreview') : connection.operations?.enabled ? t('remote.applicationLoggingPreview') : t('remote.applicationObserver')}</span>
     <button type="button" className="remote-button" onClick={disconnect}>{t('remote.disconnect')}</button>
   </div>
   if (!boot) return <div className="app remote-monitor-app remote-service-app">
