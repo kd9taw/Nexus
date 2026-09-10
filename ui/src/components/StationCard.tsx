@@ -107,7 +107,7 @@ export function StationCard({
         chip ? ` needed need-${chip.cls}` : ''
       }`}
       onDoubleClick={() => workThisStation()}
-      title={t(control ? 'roster.card.doubleClick' : 'roster.card.open', { call: station.call })}
+      title={control ? t('roster.card.doubleClick', { call: station.call }) : t('roster.card.open', { call: station.call })}
     >
       <button
         type="button"

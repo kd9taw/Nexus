@@ -117,8 +117,11 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) test(`compiled
       } catch { unexpectedMessages++ }
     })
     await browser.call('Page.addScriptToEvaluateOnNewDocument',{source:`
-      window.__socketClosures=[];const originalWebSocket=window.WebSocket;
-      window.WebSocket=class extends originalWebSocket{constructor(...args){super(...args);this.addEventListener('close',e=>window.__socketClosures.push({code:e.code,reason:e.reason}))}};
+      window.__socketClosures=[];window.__protocolTrace=[];const originalWebSocket=window.WebSocket;
+      window.WebSocket=class extends originalWebSocket{
+        constructor(...args){super(...args);this.addEventListener('close',e=>window.__socketClosures.push({at:performance.now(),code:e.code,reason:e.reason}));this.addEventListener('message',e=>{try{const v=JSON.parse(e.data);if(v.type==='applicationFrame'){window.__protocolTrace.push({at:performance.now(),updates:v.updates.map(u=>({command:u.command,type:u.type,age:u.ageMs,revision:u.revision}))});window.__protocolTrace=window.__protocolTrace.slice(-40)}}catch{}})}
+        close(...args){window.__socketClosures.push({at:performance.now(),requested:true,code:args[0],reason:args[1]});return super.close(...args)}
+      };
       window.__frameDelay=0;
       const originalRaf=window.requestAnimationFrame.bind(window),originalCancel=window.cancelAnimationFrame.bind(window),delayedFrames=new Map();
       window.requestAnimationFrame=callback=>{const id=originalRaf(time=>{if(!window.__frameDelay){callback(time);return}delayedFrames.set(id,setTimeout(()=>{delayedFrames.delete(id);callback(performance.now())},window.__frameDelay))});return id};
@@ -139,10 +142,17 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) test(`compiled
     // measure the previous viewport on a busy renderer. Wait through the update
     // and its layout frame; all pixel/overflow assertions below stay unchanged.
     const settledLayout=()=>evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(true))))')
+    const sessionDiagnostic=()=>evaluate(`(()=>{const e=document.querySelector('.app');let fiber=e?.[Object.keys(e).find(k=>k.startsWith('__reactFiber$'))],client;while(fiber){client=fiber.memoizedProps?.connection?.application;if(client)break;fiber=fiber.return}return {now:performance.now(),stale:e?.dataset.remoteStale,phase:client?.getPhase(),snapshotAge:client?.age('get_snapshot'),topics:client?.stream?.topics,waiting:client?.stream?.waiting?[...client.stream.waiting.keys()]:null,interests:client?.stream?.interests?[...client.stream.interests].map(([name,at])=>({name,age:performance.now()-at})):null,closures:window.__socketClosures,trace:window.__protocolTrace}})()`)
     async function until(expression) { for(let i=0;i<120;i++){ if(providerFailure)throw new Error('Simulated provider failed'); if(await evaluate(expression))return;await sleep(100) } throw new Error('Expected browser state did not appear') }
     const button=name=>`[...document.querySelectorAll('button')].find(e=>e.textContent===${JSON.stringify(name)})`
     async function click(expression) {
-      const point=await evaluate(`(()=>{const e=${expression};if(!e||e.disabled)throw Error('missingControl');e.scrollIntoView({block:'nearest'});const r=e.getBoundingClientRect(),x=r.x+r.width/2,y=r.y+r.height/2;if(!e.contains(document.elementFromPoint(x,y)))throw Error('occludedControl');return{x,y}})()`)
+      let point
+      try {
+        await evaluate(`(()=>{const e=${expression};if(!e||e.disabled)throw Error('missingControl');e.scrollIntoView({block:'nearest',behavior:'instant'})})()`)
+        await settledLayout()
+        point=await evaluate(`(()=>{const e=${expression};if(!e||e.disabled)throw Error('missingControl');const r=e.getBoundingClientRect(),x=r.x+r.width/2,y=r.y+r.height/2;if(!e.contains(document.elementFromPoint(x,y)))throw Error('occludedControl');return{x,y}})()`)
+      }
+      catch(error){console.log('Click diagnostic',expression,await evaluate(`(()=>{const e=${expression},r=e?.getBoundingClientRect();return {stale:document.querySelector('.app')?.dataset.remoteStale,status:document.querySelector('.remote-application-status')?.textContent,rect:r?.toJSON(),hit:r?document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)?.outerHTML.slice(0,600):null}})()`));if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-click-failure.png'),Buffer.from(shot.data,'base64'))}throw error}
       await browser.call('Input.dispatchMouseEvent',{type:'mousePressed',...point,button:'left',clickCount:1},session)
       await browser.call('Input.dispatchMouseEvent',{type:'mouseReleased',...point,button:'left',clickCount:1},session)
       await sleep(50)
@@ -374,7 +384,9 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) test(`compiled
         const scopeRow=applicationData.get_scope_snapshot.row
         applicationData.get_scope_snapshot.row=[];applicationRevision++
         await until(`getComputedStyle(document.querySelector('.ph-scope canvas')).visibility==='hidden' && document.querySelector('.ph-scope').textContent.includes('Scope data unavailable.')`)
-        assert.equal(await evaluate(`document.querySelector('.app')?.dataset.remoteStale==='true'`),false,'scope absence is distinct from station/session loss')
+        const staleScope=await evaluate(`document.querySelector('.app')?.dataset.remoteStale==='true'`)
+        if(staleScope)console.log('Scope session diagnostic',JSON.stringify(await sessionDiagnostic()))
+        assert.equal(staleScope,false,'scope absence is distinct from station/session loss')
         applicationData.get_scope_snapshot.row=scopeRow;applicationRevision++
         await until(`getComputedStyle(document.querySelector('.ph-scope canvas')).visibility==='visible'`)
         await browser.call('Emulation.setDeviceMetricsOverride',{width:1280,height:800,deviceScaleFactor:1,mobile:false},session)
@@ -794,10 +806,12 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) test(`compiled
             // A real wheel gesture leaves the native "follow newest" state
             // before inspecting old history while live snapshots keep arriving.
             await evaluate(`document.querySelector('.message-scroll').scrollIntoView({block:'center',behavior:'instant'})`)
-            const point=await evaluate(`(()=>{const e=document.querySelector('.message-scroll'),r=e.getBoundingClientRect(),x=r.left+r.width/2;for(let y=Math.max(1,r.top+1);y<Math.min(innerHeight-1,r.bottom);y+=5)if(e.contains(document.elementFromPoint(x,y)))return {x,y};return null})()`)
+            await settledLayout()
+            const point=await evaluate(`(()=>{const e=document.querySelector('.message-scroll'),r=e.getBoundingClientRect(),x=r.left+r.width/2,ys=[];for(let y=Math.max(1,r.top+1);y<Math.min(innerHeight-1,r.bottom);y+=5)if(e.contains(document.elementFromPoint(x,y)))ys.push(y);return ys.length?{x,y:ys[Math.floor(ys.length/2)]}:null})()`)
             assert.ok(point,'the conversation has a reachable wheel-scroll surface')
             await browser.call('Input.dispatchMouseEvent',{type:'mouseWheel',...point,deltaX:0,deltaY:-180},session)
-            await until(`(()=>{const e=document.querySelector('.message-scroll');return e.scrollHeight-e.clientHeight-e.scrollTop>50})()`)
+            try { await until(`(()=>{const e=document.querySelector('.message-scroll');return e.scrollHeight-e.clientHeight-e.scrollTop>50})()`) }
+            catch(error){console.log('Wheel diagnostic',JSON.stringify({width,height,zoom,theme,point,session:await sessionDiagnostic(),state:await evaluate(`(()=>{const e=document.querySelector('.message-scroll');return {top:e.scrollTop,client:e.clientHeight,height:e.scrollHeight}})()`)}));throw error}
           }
           // Match the native pin helper's instant positioning. A smooth trip
           // through 52 messages is not settled by a layout-only animation frame.
@@ -806,7 +820,7 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) test(`compiled
           const shape=await evaluate(`(()=>{const e=document.querySelector('${target}'),r=e.getBoundingClientRect();return {docW:document.documentElement.scrollWidth,docH:document.documentElement.scrollHeight,top:r.top,bottom:r.bottom,width:r.width,height:r.height,reachable:e.contains(document.elementFromPoint(r.left+r.width/2,Math.min(r.bottom,innerHeight-1)-Math.min(r.height/2,20)))}})()`)
           const clipped=await evaluate(`(()=>{const result=[];for(let e=document.querySelector('${target}').parentElement;e;e=e.parentElement){const c=getComputedStyle(e);if(['hidden','clip'].includes(c.overflowY)&&e.scrollHeight>e.clientHeight+1)result.push({class:e.className,scroll:e.scrollHeight,client:e.clientHeight,y:c.overflowY})}return result})()`)
           const reachable=shape.docW<=width+1&&shape.docH<=height+1&&shape.width>0&&shape.height>0&&shape.top<height&&shape.bottom>0&&shape.reachable&&clipped.length===0
-          if(!reachable){console.log('Tempo observation diagnostic',withheld,applicationTraffic,await evaluate(`({stale:document.querySelector('.app')?.dataset.remoteStale,status:document.querySelector('.remote-application-status')?.textContent,closures:window.__socketClosures})`));if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-nexus-tempo-failure.png'),Buffer.from(shot.data,'base64'))}}
+          if(!reachable){console.log('Tempo observation diagnostic',withheld,{...applicationTraffic,nativeSnapshotAge:performance.now()-(sentAt.get('get_snapshot')??0)},JSON.stringify(await sessionDiagnostic()));if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-nexus-tempo-failure.png'),Buffer.from(shot.data,'base64'))}}
           assert.ok(reachable,`Tempo content remains reachable by user input: ${JSON.stringify({target,width,height,zoom,theme,shape,clipped})}`)
           results.push({tempo:true,target,width,height,zoom,theme,shape})
         }
@@ -850,7 +864,13 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) test(`compiled
       assert.equal(await evaluate(`!!document.querySelector('.fd-bonuses-list')`),false)
     }
     else if(applicationVersion===9)await click(button('POTA/SOTA'))
-    else if(applicationVersion===8)await click(button('Memories'))
+    else if(applicationVersion===8){
+      await click(button('Memories'))
+      await until(`document.querySelector('.remote-memory-bank:not([hidden]) .mv-list')?.textContent.includes('Updated station memory')`)
+      // Grid is local to the native view mount, like the event disclosure.
+      await click(`[...document.querySelectorAll('.mv-toolbar button')].find(b=>b.textContent.includes('Grid'))`)
+      await until(`[...document.querySelectorAll('.mv-grid input')].some(e=>e.value==='Updated station memory')`)
+    }
     // Each supported version exercises loss/recovery on its newest actual pane.
     if (applicationVersion === 7) { await click(button('DXped')); await until(`!!document.querySelector('.dxped-view')`) }
     else if (applicationVersion === 6) { await click(button('Stats')); await until(`!!document.querySelector('.stats-summary')`) }
