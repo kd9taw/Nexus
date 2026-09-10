@@ -40,13 +40,13 @@
 /* The unchanged Nexus header can wrap above a phone-height viewport at pinned
    zoom. Keep the app bounded, and let that excess scroll while retaining a
    usable summary pane and the visible connection/authority status. */
-.remote-workspace:has(.remote-insights-view) { overflow: auto; }
-.remote-workspace:has(.remote-insights-view) > .remote-application-status {
+.remote-workspace:has(.remote-insights-view, [data-three-pane]) { overflow: auto; }
+.remote-workspace:has(.remote-insights-view, [data-three-pane]) > .remote-application-status {
   position: sticky;
   top: 0;
   z-index: 50;
 }
-.remote-workspace .shell:has(.remote-insights-view) {
+.remote-workspace .shell:has(.remote-insights-view, [data-three-pane]) {
   min-height: min(32em, calc(0.7 * var(--vh-eff, 100vh)));
   min-width: 0;
 }
@@ -85,3 +85,13 @@
 [data-viewport='xs'] .remote-memories-view .memories-view { flex-direction: column; min-height: 28rem; flex-basis: 28rem; }
 [data-viewport='xs'] .remote-memories-view .mv-row-name { flex-basis: 100%; }
 [data-viewport='xs'] .remote-memories-view .mv-side { flex: 0 0 auto; max-height: 9rem; }
+/* The collapsed native grid removes named areas; reset each hosted child's
+   placement too so the waterfall cannot overlap the conversation. */
+:is([data-viewport='sm'], [data-viewport='xs']) .remote-workspace .layout[data-three-pane]
+  > :is(.grid-header, .grid-stations, .grid-center, .grid-waterfall) { grid-area: auto; }
+:is([data-viewport='sm'], [data-viewport='xs']) .remote-workspace .layout[data-three-pane] { grid-auto-rows: max-content; }
+:is([data-viewport='sm'], [data-viewport='xs']) .remote-workspace .grid-center { height: max(20em, calc(0.6 * var(--vh-eff, 100vh))); }
+:is([data-viewport='sm'], [data-viewport='xs']) .remote-workspace .grid-center > .conversation { height: 100%; min-height: 0; }
+:is([data-viewport='sm'], [data-viewport='xs']) .remote-workspace .grid-waterfall { height: 420px; }
+:is([data-viewport='sm'], [data-viewport='xs']) .remote-workspace .station-list { overflow-y: auto; }
+:is([data-viewport='sm'], [data-viewport='xs']) .remote-workspace .station-list > * { flex-shrink: 0; }

@@ -11,6 +11,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import WebSocket from 'ws'
 import { runtime } from './runtime.mjs'
 import { applicationFixture, collectionFixture, recallFixture } from './application-fixture.mjs'
+import { tempoConversations } from './tempo-fixture.mjs'
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 async function chrome() {
@@ -313,6 +314,10 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) test(`compiled
     assert.ok(await evaluate(`[...document.querySelectorAll('.amp-strip button')].every(button=>button.disabled)`),'observer amp controls must visibly refuse operating authority')
     await until(`window.__waterfallDraws > 2`)
     assert.ok(await evaluate(`[...document.querySelectorAll('.cockpit-qso button, .tuning-nudge, .cockpit-mode, .tier-btn, .cs-opt, .ph-split button')].every(button=>button.disabled)`),'station controls in the existing workspace must show observer authority')
+    await click(button('Tempo'))
+    await until(`!!document.querySelector('.empty-conv .cq-btn')`)
+    assert.ok(await evaluate(`[...document.querySelectorAll('.empty-conv button')].length>3 && [...document.querySelectorAll('.empty-conv button')].every(e=>e.disabled)`))
+    await click(button('FT'))
     if (applicationVersion < 9) {
       await click(button('POTA/SOTA'))
       await until(`!!document.querySelector('.remote-view-unavailable')`)
@@ -763,6 +768,89 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) test(`compiled
       unavailableCollections.delete('fieldDay');await click(button('Refresh Field Day'))
       await until(`document.querySelector('.fieldday input:not([type=checkbox])')?.value==='K9TEST'`)
     }
+    const beforeTempo = structuredClone(applicationData.get_snapshot)
+    for (const tier of ['TempoFast','TempoDeep']) {
+      Object.assign(applicationData.get_snapshot, {mode:'chat',activePeer:'W1AW',chatCq:'paused',
+        conversations:tempoConversations(tier,44),
+        stations:['TempoFast','TempoDeep','FT8'].map((mode,i)=>({call:['W1AW','K2ABC','K3FT'][i],grid:'FN31',
+          tier:mode,snr:-8,lastHeardSlot:beforeTempo.radio.slot,heardCount:1,presence:'active',worked:false}))})
+      applicationData.get_snapshot.radio.operatingMode='digital'
+      applicationData.get_snapshot.link.tier=tier
+      applicationRevision++
+      await click(button('Tempo'))
+      await until(`document.querySelector('.grid-header .cockpit-mode.active')?.textContent.includes('${tier==='TempoFast'?'Fast':'Deep'}') && document.querySelectorAll('.bubble-row').length===52`)
+      for (const stage of ['held','sending','confirmed','delivered','no-ack','abandoned']) assert.ok(await evaluate(`!!document.querySelector('.delivery.${stage}')`),stage)
+      assert.ok(await evaluate(`document.querySelector('.bubble-incomplete')?.textContent.includes('2 of 3')`))
+      assert.equal(await evaluate(`!!document.querySelector('.bubble.resendable')`),false)
+      assert.deepEqual(await evaluate(`[...document.querySelectorAll('.station-call')].map(e=>e.textContent)`),['W1AW','K2ABC'])
+      assert.ok(await evaluate(`[...document.querySelectorAll('.conversation button,.cq-run button,.recent-archive,.station-work,.grid-header .cockpit-mode,.composer-input')].length>10 && [...document.querySelectorAll('.conversation button,.cq-run button,.recent-archive,.station-work,.grid-header .cockpit-mode,.composer-input')].every(e=>e.disabled)`))
+      if (tier==='TempoFast') for (const [width,height,zoom] of [[360,740,1],[390,844,1],[844,390,1],[1024,768,1],[1280,800,1],
+        [1200,1390,1],[3440,1440,1],[1024,768,0.8],[1280,800,1.75],[390,844,1.75]]) for (const theme of ['dark','light']) {
+        await browser.call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false},session)
+        await evaluate(`document.documentElement.style.setProperty('--ui-zoom','${zoom}');document.documentElement.dataset.theme='${theme}';window.dispatchEvent(new Event('resize'))`)
+        await settledLayout()
+        for (const target of ['.message-scroll .bubble-row:first-child .bubble-text','.message-scroll .bubble-row:last-child .bubble-text','.grid-stations .station-open','.composer-input']) {
+          if(target.includes('first-child')) {
+            // A real wheel gesture leaves the native "follow newest" state
+            // before inspecting old history while live snapshots keep arriving.
+            await evaluate(`document.querySelector('.message-scroll').scrollIntoView({block:'center',behavior:'instant'})`)
+            const point=await evaluate(`(()=>{const e=document.querySelector('.message-scroll'),r=e.getBoundingClientRect(),x=r.left+r.width/2;for(let y=Math.max(1,r.top+1);y<Math.min(innerHeight-1,r.bottom);y+=5)if(e.contains(document.elementFromPoint(x,y)))return {x,y};return null})()`)
+            assert.ok(point,'the conversation has a reachable wheel-scroll surface')
+            await browser.call('Input.dispatchMouseEvent',{type:'mouseWheel',...point,deltaX:0,deltaY:-180},session)
+            await until(`(()=>{const e=document.querySelector('.message-scroll');return e.scrollHeight-e.clientHeight-e.scrollTop>50})()`)
+          }
+          // Match the native pin helper's instant positioning. A smooth trip
+          // through 52 messages is not settled by a layout-only animation frame.
+          await evaluate(`document.querySelector('${target}').scrollIntoView({block:'nearest',inline:'nearest',behavior:'instant'})`)
+          await settledLayout()
+          const shape=await evaluate(`(()=>{const e=document.querySelector('${target}'),r=e.getBoundingClientRect();return {docW:document.documentElement.scrollWidth,docH:document.documentElement.scrollHeight,top:r.top,bottom:r.bottom,width:r.width,height:r.height,reachable:e.contains(document.elementFromPoint(r.left+r.width/2,Math.min(r.bottom,innerHeight-1)-Math.min(r.height/2,20)))}})()`)
+          const clipped=await evaluate(`(()=>{const result=[];for(let e=document.querySelector('${target}').parentElement;e;e=e.parentElement){const c=getComputedStyle(e);if(['hidden','clip'].includes(c.overflowY)&&e.scrollHeight>e.clientHeight+1)result.push({class:e.className,scroll:e.scrollHeight,client:e.clientHeight,y:c.overflowY})}return result})()`)
+          const reachable=shape.docW<=width+1&&shape.docH<=height+1&&shape.width>0&&shape.height>0&&shape.top<height&&shape.bottom>0&&shape.reachable&&clipped.length===0
+          if(!reachable){console.log('Tempo observation diagnostic',withheld,applicationTraffic,await evaluate(`({stale:document.querySelector('.app')?.dataset.remoteStale,status:document.querySelector('.remote-application-status')?.textContent,closures:window.__socketClosures})`));if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-nexus-tempo-failure.png'),Buffer.from(shot.data,'base64'))}}
+          assert.ok(reachable,`Tempo content remains reachable by user input: ${JSON.stringify({target,width,height,zoom,theme,shape,clipped})}`)
+          results.push({tempo:true,target,width,height,zoom,theme,shape})
+        }
+      }
+      await browser.call('Emulation.setDeviceMetricsOverride',{width:1280,height:800,deviceScaleFactor:1,mobile:false},session)
+      await evaluate(`document.documentElement.style.setProperty('--ui-zoom','1');window.dispatchEvent(new Event('resize'))`)
+      await settledLayout()
+      if(tier==='TempoFast') {
+        await evaluate(`document.querySelector('.message-scroll').scrollIntoView({block:'center',behavior:'instant'})`)
+        const point=await evaluate(`(()=>{const r=document.querySelector('.message-scroll').getBoundingClientRect();return {x:r.left+r.width/2,y:r.top+r.height/2}})()`)
+        await browser.call('Input.dispatchMouseEvent',{type:'mouseWheel',...point,deltaX:0,deltaY:-180},session)
+        await until(`(()=>{const e=document.querySelector('.message-scroll');return e.scrollTop>0&&e.scrollHeight-e.clientHeight-e.scrollTop>50})()`)
+        await settledLayout()
+        const top=await evaluate(`document.querySelector('.message-scroll').scrollTop`)
+        const messages=applicationData.get_snapshot.conversations[0].messages
+        messages.push({...messages.at(-1),text:'NEW WHILE READING',slot:100});applicationRevision++
+        await until(`document.querySelectorAll('.bubble-row').length===53`)
+        assert.ok(Math.abs(await evaluate(`document.querySelector('.message-scroll').scrollTop`)-top)<2,'an arriving message does not pull the reader away from history')
+      }
+      if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,`remote-nexus-${tier}.png`),Buffer.from(shot.data,'base64'))}
+    }
+    await click(`document.querySelectorAll('.station-open')[1]`)
+    await until(`document.querySelector('.conv-peer')?.textContent==='K2ABC'`)
+    applicationData.get_snapshot.activePeer='W1AW';applicationRevision++
+    await until(`document.querySelector('.bubble-text')?.textContent==='SECOND THREAD'`)
+    await click(`document.querySelector('.band-row')`)
+    await until(`document.querySelector('.bubble-text')?.textContent==='BAND MESSAGE'`)
+    applicationAvailable=false
+    await until(`document.querySelector('.app')?.dataset.remoteStale==='true'`)
+    assert.equal(await evaluate(`getComputedStyle(document.querySelector('.message-scroll')).visibility`),'hidden')
+    applicationAvailable=true;applicationRevision++
+    station.close();station=await pair.native.open(pair.stationId,undefined,101,stationHeaders)
+    await until(`document.querySelector('.app')?.dataset.remoteStale!=='true' && document.querySelector('.bubble-text')?.textContent==='BAND MESSAGE'`)
+    Object.assign(applicationData.get_snapshot,beforeTempo);applicationRevision++
+    if(applicationVersion>=10){
+      await click(button('Field Day'))
+      await until(`!!document.querySelector('.fd-bonuses-list')`)
+      // Leaving for Tempo unmounted the native event view. Establish the
+      // operator's collapsed choice on this new mount before testing loss.
+      await click(`document.querySelector('.fd-bonuses-toggle')`)
+      assert.equal(await evaluate(`!!document.querySelector('.fd-bonuses-list')`),false)
+    }
+    else if(applicationVersion===9)await click(button('POTA/SOTA'))
+    else if(applicationVersion===8)await click(button('Memories'))
     // Each supported version exercises loss/recovery on its newest actual pane.
     if (applicationVersion === 7) { await click(button('DXped')); await until(`!!document.querySelector('.dxped-view')`) }
     else if (applicationVersion === 6) { await click(button('Stats')); await until(`!!document.querySelector('.stats-summary')`) }

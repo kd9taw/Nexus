@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Remote Tempo conversation observation:** The browser uses Nexus's existing
+  Fast/Deep conversation workspace, recent chats, heard stations and message
+  delivery indicators. Thread selection and history scrolling stay local to the
+  browser; incoming messages preserve the reader's position. Sending, resending,
+  CQ, heartbeat, Roam, tuning and deleting conversations remain on the station.
+  This view uses the existing observation protocol without a new station build.
+
 - **Remote Field Day observation:** The browser shows Nexus's existing event
   dashboard, station score, worked sections, earned and planned bonuses, complete
   event log and club board. ARRL and Winter Field Day retain their native scoring

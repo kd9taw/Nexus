@@ -8,6 +8,7 @@
 import type { NeedTag, Station, Tier } from '../types'
 import { openQrzPage } from '../api'
 import { t } from '../i18n'
+import { useStationControl } from '../stationAccess'
 import { withErrorToast } from '../toast'
 import { azimuthLabel, azimuthTitle, azimuthTo, distanceLabel } from '../grid'
 import { useEntityCentroids } from '../features/entityCentroids'
@@ -75,6 +76,7 @@ export function StationCard({
   onSelect,
   onCall,
 }: Props) {
+  const control = useStationControl()
   const units = useUnits()
   const centroids = useEntityCentroids()
   const dist = distanceLabel(myGrid, station.grid, units)
@@ -88,7 +90,8 @@ export function StationCard({
   // and the double-click. They were two separate argument lists before, which is how they
   // could have drifted apart; a caller that gets one right and the other wrong is exactly the
   // bug #183 was, one level down.
-  const workThisStation = () =>
+  const workThisStation = () => {
+    if (!control) return
     onCall(
       station.call,
       station.grid ?? undefined,
@@ -97,13 +100,14 @@ export function StationCard({
       station.freqHz ?? undefined,
       station.tier,
     )
+  }
   return (
     <div
       className={`station-card${selected ? ' selected' : ''}${station.worked ? ' worked' : ''}${
         chip ? ` needed need-${chip.cls}` : ''
       }`}
       onDoubleClick={() => workThisStation()}
-      title={t('roster.card.doubleClick', { call: station.call })}
+      title={t(control ? 'roster.card.doubleClick' : 'roster.card.open', { call: station.call })}
     >
       <button
         type="button"
@@ -161,6 +165,7 @@ export function StationCard({
       <button
         type="button"
         className="station-work"
+        disabled={!control}
         onClick={() => workThisStation()}
         title={t('roster.card.work.title', { call: station.call })}
       >

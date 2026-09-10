@@ -296,6 +296,19 @@ fn cloud_runtime_probe() {
     std::io::stdout().flush().unwrap();
     for line in lines {
         let value: serde_json::Value = serde_json::from_str(&line.unwrap()).unwrap();
+        if value["type"] == "seedTempo" {
+            let mut e = engine.lock().unwrap();
+            e.set_tier(serde_json::from_value(value["tier"].clone()).unwrap());
+            e.load_conversations(serde_json::from_value(value["conversations"].clone()).unwrap());
+            let snapshot = e.snapshot();
+            assert!(!snapshot.radio.tx_enabled);
+            println!(
+                "REMOTE_TEST:{}",
+                json!({"conversations":snapshot.conversations,"tier":snapshot.link.tier})
+            );
+            std::io::stdout().flush().unwrap();
+            continue;
+        }
         if value["type"] == "seedFieldDay" {
             let mut e = engine.lock().unwrap();
             let mut settings = e.settings().clone();

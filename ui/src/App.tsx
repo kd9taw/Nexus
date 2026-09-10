@@ -324,7 +324,7 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   const [view, setView] = useState<View>(() => {
     if (remote) {
       const mode = remote.snapshot.radio.operatingMode
-      return mode === 'phone' ? 'phone' : mode === 'cw' ? 'cw' : mode === 'rtty' ? 'rtty' : mode === 'keyboard' ? 'psk' : 'operate'
+      return mode === 'phone' ? 'phone' : mode === 'cw' ? 'cw' : mode === 'rtty' ? 'rtty' : mode === 'keyboard' ? 'psk' : mode === 'digital' && ['TempoFast', 'TempoDeep'].includes(remote.snapshot.link.tier) ? 'chat' : 'operate'
     }
     // Deeplink > legacy merged-section deeplink > persisted view > profile landing —
     // the precedence and the clamp live in resolveBootView (pure, test-pinned): a
@@ -1188,6 +1188,7 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // have messages, so there is no empty-thread case to skip. The copy names the
   // non-obvious consequence — deleting also cancels still-queued outbound traffic.
   const handleArchive = useCallback(async (peer: string) => {
+    if (remote) return
     if (
       !(await confirmDialog({
         title: t('shell.conversation.delete.title', { peer }),
@@ -1201,7 +1202,7 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       () => apiArchiveConversation(peer),
       t('shell.conversation.delete.failed'),
     ).then((s) => s && setSnap(s))
-  }, [])
+  }, [!!remote])
 
   // The Map and the roster share ONE selection: the active peer. Clicking a map
   // dot selects (or, if already selected, clears) that station — and the roster
@@ -1654,6 +1655,7 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // retunes (same behavior as the Needed board's work-click).
   const recallMemory = useCallback(
     (m: Memory) => {
+      if (remote) return
       const plan = planRecall(m)
       const target = plan.view
       const opMode: 'digital' | 'phone' | 'cw' = target === 'operate' ? 'digital' : target
@@ -1733,7 +1735,7 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
         }
       })()
     },
-    [cwEnabled, phoneEnabled],
+    [cwEnabled, phoneEnabled, !!remote],
   )
 
   // Global quick-recall hotkeys: Ctrl+1..9 (or ⌘+1..9 — the native chord on macOS, where
@@ -2266,7 +2268,7 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // A visible navigation item is not evidence that its station API is connected.
   // In particular, never mount SettingsPanel with the projected operating view:
   // it expects complete configuration and could display absent values as defaults.
-  const isRemoteViewAvailable = (v: View): boolean => !remote || v === 'operate' || (!!remote.collections && ['needed', 'spots', 'logbook'].includes(v)) || (!!remote.cwPhone && (v === 'cw' || v === 'phone')) || (!!remote.keyboard && (v === 'rtty' || v === 'psk')) || (!!remote.insights && (v === 'awards' || v === 'stats')) || (!!remote.dxpeditions && v === 'dxped') || (!!remote.memories && v === 'memories') || (!!remote.ota && v === 'pota') || (!!remote.fieldDay && v === 'fieldDay')
+  const isRemoteViewAvailable = (v: View): boolean => !remote || v === 'operate' || v === 'chat' || (!!remote.collections && ['needed', 'spots', 'logbook'].includes(v)) || (!!remote.cwPhone && (v === 'cw' || v === 'phone')) || (!!remote.keyboard && (v === 'rtty' || v === 'psk')) || (!!remote.insights && (v === 'awards' || v === 'stats')) || (!!remote.dxpeditions && v === 'dxped') || (!!remote.memories && v === 'memories') || (!!remote.ota && v === 'pota') || (!!remote.fieldDay && v === 'fieldDay')
 
   // Recall card → Logbook, filtered to the call (#192, kr4fqg: "click a previous contact and
   // land in the log"). Same shape as the `onOpenMemories` handoffs below — `undefined` when the

@@ -6,6 +6,7 @@ import { useState } from 'react'
 import type { FieldDayStatus, OpMode, Settings } from '../types'
 import { clampToFrames } from '../freetext'
 import { t } from '../i18n'
+import { useStationControl } from '../stationAccess'
 import { FreetextMeter } from './FreetextMeter'
 
 interface Props {
@@ -52,6 +53,7 @@ function quickRepliesFor(
 }
 
 export function Composer({ peer, mode, fieldDay, macros, onSend, broadcast = false, mycall }: Props) {
+  const control = useStationControl()
   const [text, setText] = useState('')
   const quickReplies = quickRepliesFor(mode, fieldDay, macros, broadcast)
   // The WFD Field Day exchange (Class + Section) is the primary one-tap action in
@@ -72,7 +74,7 @@ export function Composer({ peer, mode, fieldDay, macros, onSend, broadcast = fal
 
   const submit = (value: string) => {
     const v = value.trim()
-    if (!v) return
+    if (!control || !v) return
     onSend(v)
     setText('')
   }
@@ -99,6 +101,7 @@ export function Composer({ peer, mode, fieldDay, macros, onSend, broadcast = fal
                   : undefined
               }
               title={isFdExchange ? t('tempo.composer.fdExchange.title') : undefined}
+              disabled={!control}
               onClick={() => submit(q)}
             >
               {q}
@@ -115,9 +118,10 @@ export function Composer({ peer, mode, fieldDay, macros, onSend, broadcast = fal
       >
         <input
           className="composer-input"
+          disabled={!control}
           type="text"
           value={text}
-          onChange={(e) => setText(clampToFrames(e.target.value, prefix))}
+          onChange={(e) => { if (control) setText(clampToFrames(e.target.value, prefix)) }}
           placeholder={
             broadcast
               ? t('tempo.composer.placeholder.broadcast', { call: mycall ?? '' })
@@ -131,7 +135,7 @@ export function Composer({ peer, mode, fieldDay, macros, onSend, broadcast = fal
           autoComplete="off"
         />
         <FreetextMeter text={text} prefix={prefix} />
-        <button type="submit" className="send-btn" disabled={!text.trim()}>
+        <button type="submit" className="send-btn" disabled={!control || !text.trim()}>
           {t('tempo.composer.send')}
         </button>
       </form>

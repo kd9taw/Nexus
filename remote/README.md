@@ -221,6 +221,22 @@ Event setup, QSO/scoring writes, operating, exports and separate club-board wind
 remain station-local. Larger-event pagination and live shack comparison remain
 future verification and parity work; a compatible station build is required.
 
+Tempo reuses the native Fast/Deep conversation workspace, recent chats, heard
+stations, composer, waterfall and radio header. Existing snapshots already carry
+complete conversations and native delivery fields, so this view works with every
+application observation version without a new query or station producer. Held,
+sending, confirmed, delivered, no-ACK, abandoned, partial and legacy messages keep
+their native meaning; the browser does not infer new acknowledgement semantics.
+
+Thread/band selection, roster filtering and history scrolling are browser-local.
+Arriving messages preserve the native follow-newest behavior and leave an operator
+reading older history in place. The existing 768 KiB whole-snapshot ceiling refuses
+oversized sources rather than silently shortening conversations. Station loss
+hides old values. Compose/send, resend, Work/double-click, archive, tier, CQ,
+heartbeat, Roam and frequency-memory shortcuts are guarded in the actual UI as
+well as refused by the transport. Larger-history capacity and live station
+comparison remain outstanding; observation does not enable operation.
+
 FT selection and CW/Phone/RTTY/PSK callsign entry use the existing Nexus recall card;
 its contact rows open the existing filtered Logbook. Stale sessions and changed
 callsigns discard old results. QSO entry, cockpit memory recall, rotator and voice-keyer/audio data remain

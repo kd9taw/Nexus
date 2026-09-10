@@ -20,6 +20,7 @@ import { MessageBubble, type DeliveryStage } from './MessageBubble'
 import { Composer } from './Composer'
 import { usePinnedScroll } from '../usePinnedScroll'
 import { t } from '../i18n'
+import { useStationControl } from '../stationAccess'
 import { T } from '../i18n/T'
 
 /** What a CQ says before the station is set up. Both are on-air stand-ins, not prose. */
@@ -111,6 +112,7 @@ export function Conversation({
   onToggleRoam,
   onRoamSettings,
 }: Props) {
+  const control = useStationControl()
   // Bottom-pinned via the shared discipline — this pane is a CHAT CLIENT
   // (Trillian ruling): pinned-at-bottom follows new messages; an operator
   // scrolled up reading history is NEVER yanked. The old snap was keyed on
@@ -162,7 +164,7 @@ export function Conversation({
               />
             </p>
           )}
-          <button type="button" className="cq-btn" onClick={onCallCq}>
+          <button type="button" className="cq-btn" disabled={!control} onClick={() => { if (control) onCallCq() }}>
             {t('tempo.cq.button')}
           </button>
           <p className="cq-onair">
@@ -171,7 +173,7 @@ export function Conversation({
           <button
             type="button"
             className={`heartbeat-btn${beaconOn ? ' on' : ''}`}
-            onClick={onToggleBeacon}
+            disabled={!control} onClick={() => { if (control) onToggleBeacon() }}
             aria-pressed={beaconOn}
             title={t('tempo.heartbeat.launch.title')}
           >
@@ -185,7 +187,7 @@ export function Conversation({
               <button
                 type="button"
                 className={`heartbeat-btn roam-toggle${roamEnabled ? ' on' : ''}`}
-                onClick={onToggleRoam}
+                disabled={!control} onClick={() => { if (control) onToggleRoam() }}
                 aria-pressed={roamEnabled}
                 title={t('roam.chip.title')}
               >
@@ -200,7 +202,7 @@ export function Conversation({
                 <button
                   type="button"
                   className="heartbeat-btn roam-gear"
-                  onClick={onRoamSettings}
+                  disabled={!control} onClick={() => { if (control) onRoamSettings() }}
                   title={t('roam.chip.settings.title')}
                 >
                   {t('roam.chip.settings.label')}
@@ -214,7 +216,8 @@ export function Conversation({
                 key={`${q}-${i}`}
                 type="button"
                 className="quick-chip"
-                onClick={() => onBroadcast(q)}
+                disabled={!control}
+                onClick={() => { if (control) onBroadcast(q) }}
               >
                 {q}
               </button>
@@ -240,7 +243,7 @@ export function Conversation({
         <button
           type="button"
           className={`heartbeat-chip${beaconOn ? ' on' : ''}`}
-          onClick={onToggleBeacon}
+          disabled={!control} onClick={() => { if (control) onToggleBeacon() }}
           aria-pressed={beaconOn}
           title={t('tempo.heartbeat.chip.title')}
         >
@@ -250,7 +253,7 @@ export function Conversation({
           <button
             type="button"
             className={`heartbeat-chip roam-toggle${roamEnabled ? ' on' : ''}`}
-            onClick={onToggleRoam}
+            disabled={!control} onClick={() => { if (control) onToggleRoam() }}
             aria-pressed={roamEnabled}
             title={t('roam.chip.title')}
           >
@@ -266,7 +269,7 @@ export function Conversation({
           <button
             type="button"
             className="heartbeat-chip roam-gear"
-            onClick={onRoamSettings}
+            disabled={!control} onClick={() => { if (control) onRoamSettings() }}
             title={t('roam.chip.settings.title')}
             aria-label={t('roam.chip.settings.aria')}
           >
@@ -304,7 +307,7 @@ export function Conversation({
                 ? deliveryStage(conversation, i, radio.transmitting)
                 : undefined
             }
-            onResend={onResend}
+            onResend={control ? onResend : undefined}
           />
         ))}
       </div>

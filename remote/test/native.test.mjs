@@ -1,6 +1,8 @@
 import { test } from 'node:test'
 import { readFile } from 'node:fs/promises'
 import assert from 'node:assert/strict'
+import { tempoConversations } from './tempo-fixture.mjs'
+import { setTimeout as delay } from 'node:timers/promises'
 import { spawn } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import { runtime, roomStatus } from './runtime.mjs'
@@ -97,6 +99,7 @@ test('actual native controller pairs, stores authority, publishes real DTOs, dis
     const capabilities = await socket.take(value => value.type === 'applicationCapabilities')
     assert.equal(capabilities.version, 1)
     assert.deepEqual(capabilities.commands, ['get_snapshot', 'get_settings', 'get_band_plan', 'get_spectrum_row', 'get_meters'])
+    let originalTier
     for (const command of capabilities.commands) {
       const requestId = crypto.randomUUID()
       socket.send({ type: 'applicationRead', requestId, command, revision: null })
@@ -106,6 +109,7 @@ test('actual native controller pairs, stores authority, publishes real DTOs, dis
       assert.equal(result.baseRevision, null)
       assert.ok(result.ageMs < 3000)
       if (command === 'get_snapshot') {
+        originalTier = result.data.link.tier
         assert.equal(result.data.mycall, 'N0CALL')
         assert.equal(result.data.radio.txEnabled, false)
         assert.ok(Array.isArray(result.data.stations))
@@ -120,6 +124,21 @@ test('actual native controller pairs, stores authority, publishes real DTOs, dis
       else assert.deepEqual(Object.keys(result.data).sort(), ['hiHz','loHz','row','source'])
       socket.send({ type: 'applicationAck', requestId })
     }
+    for (const tier of ['TempoFast','TempoDeep']) {
+      const native = await probe.send({type:'seedTempo',tier,conversations:tempoConversations(tier)})
+      await delay(550) // The existing snapshot producer shares one sample per 500 ms.
+      const requestId=crypto.randomUUID()
+      socket.send({type:'applicationRead',requestId,command:'get_snapshot',revision:null})
+      const result=await socket.take(value=>value.requestId===requestId)
+      assert.equal(result.type,'applicationResult')
+      assert.equal(result.data.link.tier,tier)
+      assert.deepEqual(result.data.conversations,native.conversations,'the original v1 stream preserves every native delivery field and legacy message')
+      assert.ok(native.conversations.some(c=>c.messages.some(m=>m.delivered)))
+      assert.ok(native.conversations.some(c=>c.messages.some(m=>m.confirmed)))
+      assert.equal(result.data.radio.txEnabled,false)
+      socket.send({type:'applicationAck',requestId})
+    }
+    await probe.send({type:'seedTempo',tier:originalTier,conversations:[]})
     const { value: streamTicket } = await browser.post(`stations/${stationId}/ticket`)
     const stream = await browser.open(stationId, streamTicket.ticket)
     await stream.take(value => value.type === 'session')

@@ -5,13 +5,14 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import App from '../App'
 import { installApplicationTransport } from '../applicationTransport'
-import type { AppSnapshot, Settings } from '../types'
+import type { AppSnapshot, ChatMessage, Settings, Station, Tier } from '../types'
 import settingsFixture from '../components/__fixtures__/defaultSettings.json'
 import { StationControlContext, StationDataContext } from '../stationAccess'
 import { Dialog } from '../components/ui/Dialog'
 import { cwDecode, getScopeRow } from '../api'
 import { RttyCockpit } from '../components/RttyCockpit'
 import { PskCockpit } from '../components/PskCockpit'
+import { coerceMemory, memoriesStore } from '../features/memories'
 
 const snapshot = {
   mycall: 'N0CALL', mygrid: 'AA00', mode: 'Normal',
@@ -36,7 +37,7 @@ beforeEach(() => {
   window.matchMedia = ((media: string) => ({ matches: false, media, addEventListener() {}, removeEventListener() {},
     addListener() {}, removeListener() {} })) as unknown as typeof window.matchMedia
 })
-afterEach(() => { cleanup(); dispose?.(); vi.unstubAllGlobals() })
+afterEach(() => { cleanup(); dispose?.(); vi.unstubAllGlobals(); vi.restoreAllMocks() })
 
 function keyboardSample(mode: string) {
   const text = 'CQ W1AW'
@@ -46,6 +47,75 @@ function keyboardSample(mode: string) {
       backend: 'afsk', auto: true, seqState: 'idle', peer: null, peerExchange: [], heardCq: 'W1AW' }
       : { signal: true, centerHz: 1000, mode: 'qpsk31', reverse: true }) }
 }
+
+it.each(['TempoFast', 'TempoDeep'])('browses the actual %s conversations without sending, archiving or changing the station', async tier => {
+  const current = structuredClone(snapshot), settings = projectedSettings(), calls: string[] = []
+  current.link.tier = tier as Tier
+  current.activePeer = 'W1AW'
+  const favorite = coerceMemory({ id:'observer-favorite',name:'Test memory',rxMhz:14.074,mode:'FT8',favorite:true })!
+  expect(favorite.favorite).toBe(true)
+  vi.spyOn(memoriesStore,'get').mockReturnValue({...memoriesStore.get(),memories:[favorite]})
+  const message = (text: string, extra: Partial<ChatMessage> = {}): ChatMessage => ({
+    from: 'N0CALL', to: 'W1AW', text, slot: 10, directedToMe: false, outbound: true,
+    snr: -8, freqHz: 1500, dtSec: 0.1, tier: tier as Tier, ...extra,
+  })
+  current.conversations = [{ peer: 'W1AW', messages: [
+    message('HELD', { stored: true }), message('SENDING', { attempts: 2 }),
+    message('CONFIRMED', { confirmed: true }), message('DELIVERED', { delivered: true }),
+    message('NO ACK', { noAck: true }), message('ABANDONED', { abandoned: true }),
+    message('PARTIAL', { from: 'W1AW', outbound: false, incomplete: [2, 3] }),
+    message('LEGACY', { from: 'W1AW', outbound: false, tier: null }),
+  ] }, { peer: '*', messages: [message('BAND MESSAGE', { outbound: false, to: null })] }]
+  current.stations = ['TempoFast', 'TempoDeep', 'FT8'].map((mode, i) => ({
+    call: ['W1AW', 'K2ABC', 'K3FT'][i], grid: 'FN31', tier: mode, snr: -8,
+    lastHeardSlot: 0, heardCount: 1, presence: 'active', worked: false,
+  })) as Station[]
+  dispose = installApplicationTransport({ kind: 'remote', invoke: async <T,>(command: string): Promise<T> => {
+    calls.push(command)
+    if (command === 'get_snapshot') return structuredClone(current) as T
+    if (command === 'get_settings') return structuredClone(settings) as T
+    if (command === 'get_band_plan') return [] as T
+    if (command === 'get_spectrum_row' || command === 'get_scope_snapshot') return { row: [], loHz: 0, hiHz: 4000, source: 'audio' } as T
+    if (command === 'get_meters') return { rxLevel: 0.2, smeterDb: -12, cwToneHz: null } as T
+    throw new Error('applicationUnsupported')
+  } })
+  const { container, unmount } = render(<StationControlContext.Provider value={false}>
+    <App remote={{ snapshot: current, settings, bandPlan: [], status: <div>Observer</div> }} />
+  </StationControlContext.Provider>)
+  await waitFor(() => expect(container.querySelector('.bubble-text')?.textContent).toBe('HELD'))
+  for (const stage of ['held', 'sending', 'confirmed', 'delivered', 'no-ack', 'abandoned']) {
+    expect(container.querySelector(`.delivery.${stage}`), stage).not.toBeNull()
+  }
+  expect(container.querySelector('.bubble-incomplete')?.textContent).toContain('2 of 3')
+  expect(screen.getByText('LEGACY', { selector: '.bubble-text' })).toBeTruthy()
+  expect(container.querySelector('.bubble.resendable')).toBeNull()
+  expect([...container.querySelectorAll('.station-call')].map(e => e.textContent)).toEqual(['W1AW', 'K2ABC'])
+  const actions = container.querySelectorAll<HTMLButtonElement>('.conversation button,.cq-run button,.recent-archive,.station-work,.cockpit-mode')
+  expect(actions.length).toBeGreaterThan(10)
+  for (const button of actions) { expect(button.disabled, button.className).toBe(true);fireEvent.click(button) }
+  const input = container.querySelector<HTMLInputElement>('.composer-input')!
+  expect(input.disabled).toBe(true)
+  fireEvent.change(input,{target:{value:'TEST'}})
+  fireEvent.submit(input.closest('form')!)
+  for (const bubble of container.querySelectorAll('.bubble')) { fireEvent.click(bubble);fireEvent.keyDown(bubble,{key:'Enter'}) }
+  for (const card of container.querySelectorAll('.station-card')) fireEvent.doubleClick(card)
+  fireEvent.click(container.querySelectorAll('.station-open')[1])
+  await waitFor(() => expect(container.querySelector('.conv-peer')?.textContent).toBe('K2ABC'))
+  fireEvent.click(container.querySelector('.band-row')!)
+  await screen.findByText('BAND MESSAGE', { selector: '.bubble-text' })
+  fireEvent.click((await screen.findByText('FT',{selector:'.mode-label'})).closest('button')!)
+  fireEvent.click((await screen.findByText('Tempo',{selector:'.mode-label'})).closest('button')!)
+  await screen.findByText('BAND MESSAGE', { selector: '.bubble-text' })
+  fireEvent.keyDown(window,{key:'1',code:'Digit1',ctrlKey:true})
+  await act(async () => { await new Promise(resolve => setTimeout(resolve,20)) })
+  unmount()
+  const reads = ['get_snapshot','get_settings','get_band_plan','get_spectrum_row','get_scope_snapshot','get_meters',
+    'app_version','dxcc_entity_locations','get_declination','get_awards','get_journey','radio_launch_info',
+    'check_for_update','get_propagation','sat_track_status','get_tle_status','get_kp_forecast','get_xray_now',
+    'get_dxped_windows','get_feed_health','get_need_alerts','get_all_spots','get_fd_ruleset','log_operators',
+    'read_rotator','get_sat_transponder']
+  expect(calls.filter(command => !reads.includes(command))).toEqual([])
+})
 
 it.each(['native', 'older observer', 'Field Day observer'])('%s navigation preserves the station mode boundary', async kind => {
   localStorage.setItem('nexus.features.wizardSeen', '1')
