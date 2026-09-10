@@ -4,6 +4,13 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import App from '../App'
+import navigationConnect from './__fixtures__/navigation-connect.json'
+import navigationPath from './__fixtures__/navigation-path.json'
+import navigationSatellites from './__fixtures__/navigation-satellites.json'
+import navigationSatellite from './__fixtures__/navigation-satellite.json'
+import navigationLive from './__fixtures__/navigation-satellite-live.json'
+import { navigationPages } from './__fixtures__/navigation-page'
+import { parseSatelliteLive } from './navigation'
 import { installApplicationTransport } from '../applicationTransport'
 import type { AppSnapshot, ChatMessage, Settings, Station, Tier } from '../types'
 import settingsFixture from '../components/__fixtures__/defaultSettings.json'
@@ -544,5 +551,57 @@ it('connects the real APRS roster and keeps tune, beacon, message and settings a
   available=false;rerender(view(true))
   await waitFor(()=>expect(container.querySelector('.aprs-health')?.textContent).not.toContain('Receiving'))
   for(const forbidden of ['aprs_auto_arm','aprs_arm','aprs_send_beacon','aprs_send_message','aprs_tune','get_aprs_stations','set_settings'])expect(calls).not.toContain(forbidden)
+  unmount();context.dispose()
+})
+
+
+it.each(['connect','sats'] as const)('connects the actual %s section, keeps its selections usable and clears lost station data',async(section)=>{
+  const current=structuredClone(snapshot),settings=projectedSettings(),calls:string[]=[],queries:string[]=[]
+  let available=true
+  const read=async <T,>(command:string):Promise<T>=>{
+    calls.push(command)
+    if(command==='get_snapshot')return current as T
+    if(command==='get_settings')return settings as T
+    if(command==='get_band_plan')return [] as T
+    if(command==='get_remote_satellite_state'&&available)return parseSatelliteLive(structuredClone(navigationLive),0) as T
+    if(command==='get_spectrum_row')return {row:[],loHz:0,hiHz:4000,source:'audio'} as T
+    if(command==='get_meters')return {rxLevel:0,smeterDb:null,cwToneHz:null} as T
+    throw new Error('applicationUnsupported')
+  }
+  dispose=installApplicationTransport({kind:'remote',invoke:read})
+  const context=new RemoteCollections({supports:()=>false,invoke:read} as unknown as ApplicationClient)
+  vi.spyOn(context,'page').mockImplementation(async args=>{
+    queries.push(args.collection)
+    if(!available)throw new Error('applicationUnavailable')
+    const data={connect:navigationConnect,path:navigationPath,satellites:navigationSatellites,satellite:navigationSatellite}[args.collection as 'connect']
+    if(!data)throw new Error('applicationUnsupported')
+    const pages=navigationPages(args.collection,data,args.search)
+    return pages[args.cursor?Number(args.cursor.split(':')[1]):0]
+  })
+  const view=(live:boolean)=><StationControlContext.Provider value={false}><StationDataContext.Provider value={live}>
+    <RemoteCollectionsContext.Provider value={context}><App remote={{snapshot:current,settings,bandPlan:[],navigation:true,status:<div>Observer</div>}}/></RemoteCollectionsContext.Provider>
+  </StationDataContext.Provider></StationControlContext.Provider>
+  const {container,rerender,unmount}=render(view(true))
+  fireEvent.click(screen.getByRole('button',{name:section==='connect'?/^Connect —/:/^Satellites —/}))
+  if(section==='connect'){
+    await waitFor(()=>expect(container.querySelector('.connect-header')?.textContent).toContain('Station data · Read only'))
+    expect(container.querySelectorAll('.connect-shell')).toHaveLength(1)
+    const intents=container.querySelectorAll<HTMLButtonElement>('.connect-intent button')
+    expect(intents.length).toBe(4);fireEvent.click(intents[2]);expect(intents[2].classList.contains('active')).toBe(true)
+    expect(queries).toContain('connect')
+    for(const command of ['get_band_outlook','get_getting_out','get_space_wx_scales','get_path_outlook'])expect(calls).not.toContain(command)
+  }else{
+    await waitFor(()=>expect(container.querySelector('.sats-view')?.textContent).toContain('ISS (ZARYA)'))
+    const pick=container.querySelector<HTMLButtonElement>('.sat-pick')!;expect(pick).not.toBeNull();fireEvent.click(pick)
+    await waitFor(()=>expect(queries).toContain('satellite'))
+    const controls=container.querySelectorAll<HTMLButtonElement>('.sat-track')
+    expect(controls.length).toBeGreaterThan(0)
+    for(const control of controls){expect(control.disabled).toBe(true);fireEvent.click(control)}
+    expect(container.querySelector<HTMLInputElement>('input.sats-search')).not.toBeNull();expect(container.querySelector<HTMLInputElement>('input.sats-search')!.disabled).toBe(false)
+  }
+  available=false;rerender(view(false))
+  if(section==='connect')expect(container.querySelector('.connect-header')?.textContent).not.toContain('Station data')
+  else expect(container.querySelector('.sat-transponders')).toBeNull()
+  for(const command of ['select_peer','set_sat_transponder','start_sat_track','stop_sat_track','set_settings','confirm_sat_uplink','fetch_tles_now','set_peg_lock'])expect(calls).not.toContain(command)
   unmount();context.dispose()
 })

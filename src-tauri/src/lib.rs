@@ -3265,7 +3265,6 @@ async fn get_band_outlook(
     state: State<'_, SharedEngine>,
     cache: State<'_, PropCache>,
 ) -> Result<propagation::PathPrediction, String> {
-    const RING_TTL_SECS: u64 = 6 * 3600;
     let (mygrid, prop_engine, station_power_w, ant_gain_dbi) = {
         let eng = engine_lock(&state);
         let st = eng.settings();
@@ -3305,6 +3304,29 @@ async fn get_band_outlook(
             .unwrap_or_default()
     };
     let t = now_unix();
+    ring_prediction(
+        mygrid,
+        prop_engine,
+        station_power_w,
+        ant_gain_dbi,
+        me,
+        wx,
+        t,
+    )
+    .await
+}
+
+async fn ring_prediction(
+    mygrid: String,
+    prop_engine: String,
+    station_power_w: Option<f64>,
+    ant_gain_dbi: f64,
+    me: (f64, f64),
+    wx: propagation::SpaceWx,
+    t: i64,
+) -> Result<propagation::PathPrediction, String> {
+    const RING_TTL_SECS: u64 = 6 * 3600;
+    let p533 = prop_engine == "p533";
     // 8 azimuths at ~9000 km — direction-agnostic "best band to ANY far DX now".
     if !p533 {
         let eng = propagation::HeuristicEngine::new(Some(me));
@@ -4611,7 +4633,10 @@ enum TleSnapshotOnDisk {
 /// but a decade of shipped builds is a long time).
 fn load_tle_snapshot_from(path: &std::path::Path) -> Option<TleSnapshot> {
     let text = std::fs::read_to_string(path).ok()?;
-    match serde_json::from_str::<TleSnapshotOnDisk>(&text).ok()? {
+    parse_tle_snapshot(&text)
+}
+fn parse_tle_snapshot(text: &str) -> Option<TleSnapshot> {
+    match serde_json::from_str::<TleSnapshotOnDisk>(text).ok()? {
         TleSnapshotOnDisk::Snapshot(s) => Some(s),
         TleSnapshotOnDisk::Legacy(v) if !v.is_empty() => Some(TleSnapshot {
             schema: 1,
@@ -5015,11 +5040,44 @@ fn view_passes(
 /// when no usable elements exist at all — the UI draws nothing.
 #[tauri::command]
 async fn get_satellites(state: State<'_, SharedEngine>) -> Result<Option<SatView>, String> {
-    const VIEW_TTL_SECS: u64 = 600;
     let mygrid = {
         let eng = engine_lock(&state);
         eng.settings().mygrid.clone()
     };
+    satellite_view_for_grid(mygrid).await
+}
+
+async fn satellite_view_for_grid(mygrid: String) -> Result<Option<SatView>, String> {
+    let tles = tle_snapshot();
+    let (fetched, source) = tle_provenance();
+    satellite_view_from_inputs(mygrid, tles, fetched, source, tle_catalog()).await
+}
+
+// A successful SGP4 calculation can still place a decaying orbit below the
+// Earth's surface. That has no valid radio footprint and serializes acos(NaN)
+// as JSON null. Keep it in the existing noPosition disclosure, not on the map.
+fn satellite_map_position(tle: &propagation::sat::Tle, now: i64) -> Option<(f64, f64, f64, f64)> {
+    const RE_KM: f64 = 6371.0;
+    let (lat, lon, alt) = propagation::sat::subpoint(tle, now)?;
+    if ![lat, lon, alt].iter().all(|v| v.is_finite())
+        || !(-90.0..=90.0).contains(&lat)
+        || !(-180.0..=180.0).contains(&lon)
+        || alt < 0.0
+    {
+        return None;
+    }
+    let footprint = RE_KM * (RE_KM / (RE_KM + alt)).acos();
+    footprint.is_finite().then_some((lat, lon, alt, footprint))
+}
+
+async fn satellite_view_from_inputs(
+    mygrid: String,
+    tles: Vec<propagation::sat::Tle>,
+    tle_fetched_at: i64,
+    tle_source: String,
+    catalog: std::collections::HashMap<u32, propagation::live::tle::SatCatalogEntry>,
+) -> Result<Option<SatView>, String> {
+    const VIEW_TTL_SECS: u64 = 600;
     let now = now_unix();
     let key = format!("{}|{}", now / (VIEW_TTL_SECS as i64), mygrid);
     let cached_passes = {
@@ -5028,17 +5086,13 @@ async fn get_satellites(state: State<'_, SharedEngine>) -> Result<Option<SatView
             (*k == key && when.elapsed().as_secs() < VIEW_TTL_SECS).then(|| v.clone())
         })
     };
-    let tles = tle_snapshot();
     if tles.is_empty() {
         return Ok(None); // never had elements — honest no-data
     }
-    let (tle_fetched_at, tle_source) = tle_provenance();
-    let catalog = tle_catalog();
     let observer = propagation::geo::maidenhead_to_latlon(mygrid.trim());
     let need_passes = cached_passes.is_none();
     let out = tauri::async_runtime::spawn_blocking(move || {
         use propagation::sat;
-        const RE_KM: f64 = 6371.0;
         // Staleness is PER BIRD (the spec's rule): a decaying cubesat with a
         // month-old epoch drops out alone — it must never blank the fresh
         // majority (review catch: the old max-age gate killed the whole view).
@@ -5072,8 +5126,7 @@ async fn get_satellites(state: State<'_, SharedEngine>) -> Result<Option<SatView
         // than silently dropped.
         let mut drawn: std::collections::HashSet<u32> = std::collections::HashSet::new();
         for t in &fresh {
-            if let Some((lat, lon, alt_km)) = sat::subpoint(t, now) {
-                let footprint_km = RE_KM * (RE_KM / (RE_KM + alt_km)).acos();
+            if let Some((lat, lon, alt_km, footprint_km)) = satellite_map_position(t, now) {
                 // 10 min of trail + 25 min of projection at 1-min steps — one
                 // TLE parse per bird (the batch fn), ~ms for the whole flock.
                 let track = sat::track(t, now, 600, 1_500, 60);
@@ -5114,13 +5167,18 @@ async fn get_satellites(state: State<'_, SharedEngine>) -> Result<Option<SatView
                 }
             }
         }
-        let passes = match cached_passes {
+        let mut passes = match cached_passes {
             Some(p) => p,
             None => {
                 computed_passes.sort_by_key(|p| p.aos_unix);
                 computed_passes
             }
         };
+        // Cached pass geometry cannot retain a bird whose current orbit no
+        // longer produces a usable map position.
+        let positioned: std::collections::HashSet<&str> =
+            birds.iter().map(|b| b.name.as_str()).collect();
+        passes.retain(|p| positioned.contains(p.name.as_str()));
         // Every bird that did NOT get a row, with why. Elements we hold but
         // that aged past the 30 d ceiling first (they have a name to show),
         // then catalog birds nothing carried elements for at all.
@@ -6429,37 +6487,50 @@ async fn get_sat_pass_needs(
         if let Some(sn) = satnogs_snapshot(norads) {
             status_by_norad.extend(sn.statuses.into_iter().map(|st| (st.norad, st.status)));
         }
-        let mut passes = Vec::new();
-        for (label, t) in mine {
-            let norad = sat::norad_id(&t.line1);
-            let status = norad.and_then(|n| status_by_norad.get(&n).cloned());
-            // Same 6 h backscan as the schedule so an in-progress pass keeps
-            // its real AOS (and both surfaces agree on row identity).
-            for p in sat::passes(t, obs, now - 21_600, hours + 6) {
-                if p.los_unix <= now {
-                    continue;
-                }
-                let earn = propagation::pass_earn(t, p.aos_unix, p.los_unix, &sat_needs);
-                passes.push(SatPassDto {
-                    name: label.clone(),
-                    norad,
-                    aos_unix: p.aos_unix,
-                    los_unix: p.los_unix,
-                    max_el_deg: p.max_el_deg,
-                    aos_az_deg: p.aos_az_deg,
-                    los_az_deg: p.los_az_deg,
-                    status: status.clone(),
-                    earn: Some(earn),
-                    aos_clamped: false, // favourites wire frozen — see get_sat_schedule
-                });
-            }
-        }
-        passes.sort_by_key(|p| p.aos_unix);
-        passes
+        satellite_needs_passes(obs, &mine, hours, &sat_needs, &status_by_norad, now)
     })
     .await
     .map_err(|e| e.to_string())?;
     Ok(out)
+}
+
+/// One pure fold shared by the native schedule and the bounded Remote planner.
+fn satellite_needs_passes(
+    obs: (f64, f64),
+    mine: &[(String, &propagation::sat::Tle)],
+    hours: u32,
+    sat_needs: &propagation::SatNeeds<'_>,
+    status_by_norad: &std::collections::HashMap<u32, String>,
+    now: i64,
+) -> Vec<SatPassDto> {
+    use propagation::sat;
+    let mut passes = Vec::new();
+    for (label, t) in mine {
+        let norad = sat::norad_id(&t.line1);
+        let status = norad.and_then(|n| status_by_norad.get(&n).cloned());
+        // Same 6 h backscan as the schedule so an in-progress pass keeps
+        // its real AOS (and both surfaces agree on row identity).
+        for p in sat::passes(t, obs, now - 21_600, hours + 6) {
+            if p.los_unix <= now {
+                continue;
+            }
+            let earn = propagation::pass_earn(t, p.aos_unix, p.los_unix, &sat_needs);
+            passes.push(SatPassDto {
+                name: label.clone(),
+                norad,
+                aos_unix: p.aos_unix,
+                los_unix: p.los_unix,
+                max_el_deg: p.max_el_deg,
+                aos_az_deg: p.aos_az_deg,
+                los_az_deg: p.los_az_deg,
+                status: status.clone(),
+                earn: Some(earn),
+                aos_clamped: false, // favourites wire frozen — see get_sat_schedule
+            });
+        }
+    }
+    passes.sort_by_key(|p| p.aos_unix);
+    passes
 }
 
 /// The ISS's current-or-next pass over the operator's QTH, or `None`. Keyed on
@@ -6692,9 +6763,30 @@ async fn get_sat_detail(
         let eng = engine_lock(&state);
         eng.settings().mygrid.clone()
     };
-    let obs = propagation::geo::maidenhead_to_latlon(mygrid.trim());
+    satellite_detail_for_grid(mygrid, name).await
+}
+
+async fn satellite_detail_for_grid(mygrid: String, name: String) -> Result<SatDetailDto, String> {
     let tles = tle_snapshot();
     let aliases = tle_aliases();
+    let norad =
+        resolve_bird(&tles, &aliases, &name).and_then(|t| propagation::sat::norad_id(&t.line1));
+    // Disk-backed native catalog reads retain their blocking-worker boundary.
+    let snap =
+        tauri::async_runtime::spawn_blocking(move || satnogs_snapshot(norad.into_iter().collect()))
+            .await
+            .map_err(|e| e.to_string())?;
+    satellite_detail_from_inputs(mygrid, name, tles, aliases, snap).await
+}
+
+async fn satellite_detail_from_inputs(
+    mygrid: String,
+    name: String,
+    tles: Vec<propagation::sat::Tle>,
+    aliases: std::collections::HashMap<String, u32>,
+    snap: Option<SatnogsSnapshot>,
+) -> Result<SatDetailDto, String> {
+    let obs = propagation::geo::maidenhead_to_latlon(mygrid.trim());
     let now = now_unix();
     let out = tauri::async_runtime::spawn_blocking(move || -> Result<SatDetailDto, String> {
         use propagation::sat;
@@ -6710,7 +6802,6 @@ async fn get_sat_detail(
             None => None,
         };
         let norad = tle.and_then(|t| sat::norad_id(&t.line1));
-        let snap = satnogs_snapshot(norad.into_iter().collect());
         let status = norad.and_then(|n| {
             snap.as_ref()
                 .and_then(|sn| sn.statuses.iter().find(|st| st.norad == n))
@@ -7971,6 +8062,10 @@ fn get_sat_transponder(
     state: State<'_, SharedEngine>,
 ) -> Result<Option<SatTransponderHeldDto>, String> {
     let eng = engine_lock(&state);
+    Ok(satellite_held(&eng))
+}
+
+fn satellite_held(eng: &tempo_app::engine::Engine) -> Option<SatTransponderHeldDto> {
     let binding = eng.sat_binding().map(|b| SatBindingDto {
         radio_id: b.radio_id,
         radio_name: b.radio_name.clone(),
@@ -7983,7 +8078,7 @@ fn get_sat_transponder(
         pending_uplink_mhz: b.pending_uplink_mhz,
         note: b.note.clone(),
     });
-    Ok(eng.sat_transponder_held().map(|(label, index)| {
+    eng.sat_transponder_held().map(|(label, index)| {
         // The engine label is "BIRD|description" (see set_sat_transponder).
         let (name, description) = label
             .split_once('|')
@@ -7995,7 +8090,7 @@ fn get_sat_transponder(
             description,
             binding,
         }
-    }))
+    })
 }
 
 /// The NOAA planetary-K outlook — what the disturbance is doing over the next three
@@ -21942,6 +22037,12 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             health: d.health.clone(),
             propagation: d.prop_cache.clone(),
             memories: Default::default(),
+            navigation: remote_service::query::navigation::Source::new(
+                d.aurora_cache.clone(),
+                d.kc2g_cache.clone(),
+                d.proton_cache.clone(),
+                d.scales_cache.clone(),
+            ),
             sstv: remote_service::sstv::Source::new(vec![
                 sstv_gallery_dir(),
                 legacy_sstv_gallery_dir(),

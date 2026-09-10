@@ -35,6 +35,8 @@ pub enum Command {
     Sstv,
     #[serde(rename = "get_remote_aprs_state")]
     Aprs,
+    #[serde(rename = "get_remote_satellite_state")]
+    Satellite,
 }
 impl Command {
     pub(super) fn interval(self) -> Duration {
@@ -42,13 +44,20 @@ impl Command {
             Self::Snapshot | Self::Js8 => 500,
             Self::Spectrum | Self::Scope => 100,
             Self::Meters | Self::Cw | Self::Rtty | Self::Psk => 200,
-            Self::Settings | Self::BandPlan | Self::Sstv | Self::Aprs => 1000,
+            Self::Settings | Self::BandPlan | Self::Sstv | Self::Aprs | Self::Satellite => 1000,
         })
     }
     pub(super) fn legacy(self) -> bool {
         !matches!(
             self,
-            Self::Scope | Self::Cw | Self::Rtty | Self::Psk | Self::Js8 | Self::Sstv | Self::Aprs
+            Self::Scope
+                | Self::Cw
+                | Self::Rtty
+                | Self::Psk
+                | Self::Js8
+                | Self::Sstv
+                | Self::Aprs
+                | Self::Satellite
         )
     }
 }
@@ -230,6 +239,7 @@ impl Publisher {
             // Clone the typed result while locked; encoding and diffing belong
             // outside the engine lock, independently of the radio loop.
             let value = match command {
+                Command::Satellite => Ok(super::query::navigation::live(&eng)?),
                 Command::Aprs => Ok(super::aprs::live(&eng)?),
                 Command::Meters => return Err("applicationUnavailable"), // handled without the engine above
                 Command::Sstv => {
@@ -405,7 +415,7 @@ impl Stream {
         request: Option<String>,
     ) -> Result<(), &'static str> {
         if !super::transport::identifier(&watch)
-            || topics.len() > 12
+            || topics.len() > 13
             || topics
                 .iter()
                 .enumerate()

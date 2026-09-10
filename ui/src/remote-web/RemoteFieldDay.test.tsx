@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { RemoteFieldDay } from './RemoteFieldDay'
 import { RemoteCollections, RemoteCollectionsContext } from './collections'
 import type { ApplicationClient } from './application-client'
@@ -22,7 +22,7 @@ it('uses the real event boards and disclosures without native loaders or station
   expect(screen.getByText('CW tent')).toBeTruthy()
   expect(test.container.querySelector('.fd-score-math')?.textContent).toContain('106')
   const op=screen.getByRole('textbox',{name:t('fieldDay.operator.aria')}) as HTMLInputElement
-  expect(op.value).toBe('W1AW');expect(op.readOnly).toBe(true)
+  await waitFor(()=>expect(op.value).toBe('W1AW'));expect(op.readOnly).toBe(true)
   fireEvent.change(op,{target:{value:'K9NEW'}});fireEvent.blur(op)
   expect(test.container.querySelector('.fd-export')).toBeNull()
   const actions=[...test.container.querySelectorAll<HTMLButtonElement>('.fd-role-btn,.fd-power-chip,.fd-bonus-plan')]

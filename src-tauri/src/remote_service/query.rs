@@ -11,6 +11,7 @@ mod field_day;
 mod insights;
 mod js8;
 pub(super) mod memories;
+pub(crate) mod navigation;
 mod ota;
 mod recall;
 
@@ -38,6 +39,10 @@ pub enum Collection {
     Js8Context,
     SstvImage,
     Aprs,
+    Connect,
+    Path,
+    Satellites,
+    Satellite,
 }
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -62,6 +67,8 @@ impl Request {
                         .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'/')
                     && !self.unconfirmed
                     && self.cursor.is_none()
+            } else if navigation::collection(self.collection) {
+                navigation::valid_search(self.collection, &self.search) && !self.unconfirmed
             } else if self.collection == Collection::SstvImage {
                 super::sstv::identifier(&self.search) && !self.unconfirmed
             } else {
@@ -114,6 +121,7 @@ pub struct Sources {
     pub memories: memories::Bank,
     pub parks: crate::SharedParks,
     pub sstv: super::sstv::Source,
+    pub navigation: navigation::Source,
 }
 
 // Display-only journal from the existing Remote snapshot producer. The engine's
@@ -266,7 +274,11 @@ impl Publisher {
             self.snapshots.retain(|s| {
                 !matches!(
                     s.collection,
-                    Collection::Needs | Collection::Spots | Collection::Dxpeditions
+                    Collection::Needs
+                        | Collection::Spots
+                        | Collection::Dxpeditions
+                        | Collection::Connect
+                        | Collection::Path
                 )
             });
             self.unassisted = unassisted;
@@ -290,6 +302,10 @@ impl Publisher {
                     | Collection::FieldDay
                     | Collection::Js8Context
                     | Collection::SstvImage
+                    | Collection::Connect
+                    | Collection::Path
+                    | Collection::Satellites
+                    | Collection::Satellite
             ) {
                 0 // Explicit selection/Refresh must see intervening local log changes.
             } else if request.collection == Collection::Decodes {
@@ -309,7 +325,8 @@ impl Publisher {
                 (s.id.clone(), 0)
             } else {
                 let (mut rows, total, meta) = self.capture(request, engine, sources)?;
-                if matches!(request.collection, Collection::SstvImage | Collection::Aprs)
+                if (matches!(request.collection, Collection::SstvImage | Collection::Aprs)
+                    || navigation::collection(request.collection))
                     && (rows.len() != total
                         || rows.len() > MAX_ROWS
                         || meta.to_string().len()
@@ -365,6 +382,12 @@ impl Publisher {
                     && s.after == request.after
             })
             .ok_or("queryExpired")?;
+        if navigation::collection(request.collection) {
+            sources
+                .ok_or("applicationUnavailable")?
+                .navigation
+                .validate(engine, &s.meta)?;
+        }
         if offset > 0 && offset >= s.rows.len() {
             return Err("queryExpired");
         }
@@ -372,6 +395,11 @@ impl Publisher {
         // constructing a page never repeatedly serializes the entire image.
         let page_rows = if request.collection == Collection::SstvImage {
             3
+        } else if navigation::collection(request.collection) {
+            // Seven 16-KiB UTF-8 chunks fit even at worst-case JSON escaping.
+            // Do not serialize a whole satellite catalog repeatedly while
+            // decrementing from the generic 128-row page limit.
+            7
         } else {
             128
         };
@@ -401,6 +429,13 @@ impl Publisher {
             _ => Err("applicationUnavailable"),
         };
         let rows = match request.collection {
+            Collection::Connect
+            | Collection::Path
+            | Collection::Satellites
+            | Collection::Satellite => {
+                let sources = sources.ok_or("applicationUnavailable")?;
+                return sources.navigation.read(request, engine, sources);
+            }
             Collection::Aprs => return super::aprs::capture(engine),
             Collection::SstvImage => {
                 return super::sstv::capture(

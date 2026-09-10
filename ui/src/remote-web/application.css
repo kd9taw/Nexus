@@ -139,3 +139,18 @@
 :is([data-viewport='sm'], [data-viewport='xs']) .remote-workspace .grid-waterfall { height: 420px; }
 :is([data-viewport='sm'], [data-viewport='xs']) .remote-workspace .station-list { overflow-y: auto; }
 :is([data-viewport='sm'], [data-viewport='xs']) .remote-workspace .station-list > * { flex-shrink: 0; }
+
+/* Planning pages share the native shell. Preserve a usable page below its
+   wrapped header, and let the hosted workspace scroll to it at pinned zoom. */
+.remote-workspace:has(.connect-shell, .sats-view) { overflow: auto; }
+.remote-workspace .shell:has(.connect-shell, .sats-view) {
+  min-height: min(38em, calc(0.8 * var(--vh-eff, 100vh)));
+  min-width: 0;
+}
+.remote-workspace .layout.single:has(> .connect-shell) { overflow-y: auto; }
+.remote-workspace .connect-shell { min-height: min(34em, calc(0.75 * var(--vh-eff, 100vh))); }
+/* The map toolbar and planning panes need real space even in a short landscape
+   window. The surrounding native page scrolls this deficit; its canvas stays
+   within its own grid cell and never paints over the planning strip. */
+.remote-workspace .connect-header { flex-shrink: 0; }
+.remote-workspace .connect { min-height: 38em; flex-shrink: 0; }

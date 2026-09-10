@@ -103,18 +103,20 @@ export async function runtime({ bindings = {} } = {}) {
 
 export function socket(ws) {
   const queue = [], pending = []
-  let closed = false, closeCode = null
+  let closed = false, closeCode = null, closeReason = null, acknowledgeObservation = false
   function publish(value) {
+    if(acknowledgeObservation&&value.type==='observation')ws.send(JSON.stringify({type:'ack',epoch:value.frame.epoch,sequence:value.frame.sequence}))
     const index = pending.findIndex(waiter => waiter.predicate(value))
     if (index < 0) queue.push(value)
     else { const waiter = pending.splice(index, 1)[0]; clearTimeout(waiter.timer); waiter.resolve(value) }
   }
   ws.addEventListener('message', event => { try { publish(JSON.parse(event.data)) } catch { publish(event.data) } })
-  ws.addEventListener('close', event => { closed = true; closeCode = event.code; publish({ type: 'closed', code: event.code }) })
+  ws.addEventListener('close', event => { closed = true; closeCode = event.code; closeReason=event.reason; publish({ type: 'closed', code: event.code }) })
   if (typeof ws.accept === 'function') ws.accept()
   return {
-    ws, get closed() { return closed }, get closeCode() { return closeCode },
+    ws, get closed() { return closed }, get closeCode() { return closeCode }, get closeReason() { return closeReason },
     send(value) { ws.send(typeof value === 'string' ? value : JSON.stringify(value)) },
+    ackObservations() { acknowledgeObservation=true;for(const value of queue)if(value.type==='observation')ws.send(JSON.stringify({type:'ack',epoch:value.frame.epoch,sequence:value.frame.sequence})) },
     close() { ws.close(1000, 'testComplete') },
     take(predicate, timeout = 2000) {
       const index = queue.findIndex(predicate)

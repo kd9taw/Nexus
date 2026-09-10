@@ -64,6 +64,25 @@ describe('MapView layer persistence round-trip', () => {
   beforeEach(() => localStorage.clear())
   afterEach(() => cleanup())
 
+  it('attaches to a canvas that appears after station location arrives, including recovery', () => {
+    const observe=vi.spyOn(RO.prototype,'observe'),disconnect=vi.spyOn(RO.prototype,'disconnect')
+    try {
+      const base=props('casual')
+      const view=render(<MapView {...base} myGrid="" />)
+      expect(view.container.querySelector('canvas')).toBeNull()
+      for(let attempt=0;attempt<2;attempt++){
+        view.rerender(<MapView {...base} myGrid="FN31" />)
+        const wrap=view.container.querySelector('.map-canvas-wrap')
+        expect(wrap).not.toBeNull()
+        expect(observe).toHaveBeenLastCalledWith(wrap)
+        expect(observe).toHaveBeenCalledTimes(attempt+1)
+        view.rerender(<MapView {...base} myGrid="" />)
+        expect(view.container.querySelector('canvas')).toBeNull()
+        expect(disconnect).toHaveBeenCalledTimes(attempt+1)
+      }
+    } finally { observe.mockRestore();disconnect.mockRestore() }
+  })
+
   it('first mount keeps the restored pick against the intent preset', async () => {
     localStorage.setItem(LAYERS_KEY, RESTORED)
     await act(async () => {

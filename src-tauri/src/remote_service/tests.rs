@@ -281,6 +281,7 @@ fn cloud_runtime_probe() {
         health: Default::default(),
         propagation: prop_cache.clone(),
         memories: Default::default(),
+        navigation: Default::default(),
         sstv: sstv_files.source(),
     };
     let ota_cache = sources.ota.clone();
@@ -298,6 +299,36 @@ fn cloud_runtime_probe() {
     std::io::stdout().flush().unwrap();
     for line in lines {
         let value: serde_json::Value = serde_json::from_str(&line.unwrap()).unwrap();
+        if value["type"] == "seedNavigation" {
+            let (call, grid, log) = {
+                let e = engine.lock().unwrap();
+                (
+                    e.settings().mycall.clone(),
+                    e.settings().mygrid.clone(),
+                    e.log_read_token(),
+                )
+            };
+            let mut prop = propagation::offline(crate::now_unix(), &call, &grid);
+            prop.source = "live".into();
+            *prop_cache.lock().unwrap() = Some((
+                Instant::now(),
+                prop.clone(),
+                crate::PropContext { call, grid, log },
+            ));
+            let seed = query::navigation::test_fresh_catalog();
+            let expected_tles = seed.elements.len();
+            assert!(expected_tles > 300);
+            *crate::TLES.lock().unwrap() = Some(seed);
+            *crate::SATNOGS.lock().unwrap() = Some(Default::default());
+            let e = engine.lock().unwrap();
+            assert!(!e.snapshot().radio.tx_enabled);
+            println!(
+                "REMOTE_TEST:{}",
+                json!({"prop":serde_json::from_slice::<serde_json::Value>(&serde_json::to_vec(&prop).unwrap()).unwrap(),"tleCount":expected_tles,"logCount":e.log_records().len(),"live":query::navigation::live(&e).unwrap()})
+            );
+            std::io::stdout().flush().unwrap();
+            continue;
+        }
         if value["type"] == "seedStationModes" {
             let mut e = engine.lock().unwrap();
             sstv_files.seed(&mut e);

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import App from '../App'
 import { RemoteCollections, RemoteCollectionsContext, RemoteHistoryContext } from './collections'
 import type { HistoryRow, RemoteHistory } from './collections'
-import { SSTV_IMAGE_COMMAND, APRS_COMMAND, JS8_CONTEXT_COMMAND, FIELD_DAY_COMMAND, OTA_COMMAND, MEMORIES_COMMAND, DXPEDITIONS_COMMAND, INSIGHTS_COMMAND, QUERY_COMMAND } from './application-query-protocol'
+import { NAVIGATION_COMMAND, SSTV_IMAGE_COMMAND, APRS_COMMAND, JS8_CONTEXT_COMMAND, FIELD_DAY_COMMAND, OTA_COMMAND, MEMORIES_COMMAND, DXPEDITIONS_COMMAND, INSIGHTS_COMMAND, QUERY_COMMAND } from './application-query-protocol'
 import type { AppSnapshot, BandChannel, Settings } from '../types'
 import { installApplicationTransport } from '../applicationTransport'
 import { ErrorBoundary } from '../components/ErrorBoundary'
@@ -13,7 +13,7 @@ import type { HostedConnection } from './client'
 import '../cockpit-panes.css'
 import './application.css'
 
-type Bootstrap = { snapshot: AppSnapshot; settings: Settings; bandPlan: BandChannel[]; cwPhone: boolean; keyboard: boolean; collections: boolean; insights: boolean; dxpeditions: boolean; memories: boolean; ota: boolean; fieldDay: boolean; js8: boolean; stationModes: boolean }
+type Bootstrap = { snapshot: AppSnapshot; settings: Settings; bandPlan: BandChannel[]; cwPhone: boolean; keyboard: boolean; collections: boolean; insights: boolean; dxpeditions: boolean; memories: boolean; ota: boolean; fieldDay: boolean; js8: boolean; stationModes: boolean; navigation: boolean }
 export function BrowserApplication({ connection, disconnect }: { connection: HostedConnection; disconnect: () => void }) {
   const client = connection.application
   const collections = useMemo(() => new RemoteCollections(client), [client])
@@ -67,7 +67,7 @@ export function BrowserApplication({ connection, disconnect }: { connection: Hos
         ])
         if (live) {
           setBoot({ snapshot, settings, bandPlan, cwPhone: client.supports('get_cw_state') && client.supports('get_scope_snapshot'),
-            keyboard: client.supports('get_rtty_state') && client.supports('get_psk_state'), collections: client.supports(QUERY_COMMAND), insights: client.supports(INSIGHTS_COMMAND), dxpeditions: client.supports(DXPEDITIONS_COMMAND), memories: client.supports(MEMORIES_COMMAND), ota: client.supports(OTA_COMMAND), fieldDay: client.supports(FIELD_DAY_COMMAND), js8: client.supports('get_js8_state') && client.supports(JS8_CONTEXT_COMMAND), stationModes: client.supports('get_sstv_state') && client.supports(SSTV_IMAGE_COMMAND) && client.supports('get_remote_aprs_state') && client.supports(APRS_COMMAND) })
+            keyboard: client.supports('get_rtty_state') && client.supports('get_psk_state'), collections: client.supports(QUERY_COMMAND), insights: client.supports(INSIGHTS_COMMAND), dxpeditions: client.supports(DXPEDITIONS_COMMAND), memories: client.supports(MEMORIES_COMMAND), ota: client.supports(OTA_COMMAND), fieldDay: client.supports(FIELD_DAY_COMMAND), js8: client.supports('get_js8_state') && client.supports(JS8_CONTEXT_COMMAND), navigation: client.supports(NAVIGATION_COMMAND) && client.supports('get_remote_satellite_state'), stationModes: client.supports('get_sstv_state') && client.supports(SSTV_IMAGE_COMMAND) && client.supports('get_remote_aprs_state') && client.supports(APRS_COMMAND) })
           setError(false); timer = setTimeout(() => void load(), 2000)
         }
       } catch {

@@ -12,6 +12,7 @@ import WebSocket from 'ws'
 import { runtime } from './runtime.mjs'
 import { applicationFixture, collectionFixture, recallFixture } from './application-fixture.mjs'
 import { stationModesFixture } from './station-modes-fixture.mjs'
+import { navigationFixture } from './navigation-fixture.mjs'
 import { tempoConversations } from './tempo-fixture.mjs'
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
@@ -63,17 +64,18 @@ async function chrome() {
   } catch(error) { ws?.close(); if(!exited)process.kill(-child.pid,'SIGTERM'); await rm(profile,{recursive:true,force:true,maxRetries:8,retryDelay:100}); throw error }
 }
 
-for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]) test(`compiled hosted browser v${applicationVersion} completes PKCE, local device approval, observation and viewport checks`, { timeout: 120000 }, async () => {
+for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]) test(`compiled hosted browser v${applicationVersion} completes PKCE, local device approval, observation and viewport checks`, { timeout: applicationVersion >= 13 ? 300000 : 180000 }, async () => {
   const app=await runtime(), artifacts=process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS ? join(process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS, `v${applicationVersion}`) : undefined
   let browser, station, producing=true, producer, applicationProducer
   const results=[]
   try {
     browser=await chrome()
+    if(artifacts){await mkdir(artifacts,{recursive:true});await writeFile(join(artifacts,'chrome-version.json'),JSON.stringify(await browser.call('Browser.getVersion'),null,2)+'\n')}
     const pair=await app.paired(), subject=JSON.parse(Buffer.from(pair.browser.jwt.split('.')[1],'base64url')).sub
     const shell = await fetch(app.origin,{signal:AbortSignal.timeout(3000)})
     assert.equal(shell.status,200)
     assert.match(await shell.text(), /Nexus Remote/)
-    const stationHeaders = { 'x-nexus-application-version': '1', ...(applicationVersion >= 2 ? { 'x-nexus-application-stream-version': '2' } : {}), ...(applicationVersion >= 3 ? { 'x-nexus-application-query-version': '1' } : {}), ...(applicationVersion >= 4 ? { 'x-nexus-application-recall-version': '1' } : {}), ...(applicationVersion >= 5 ? { 'x-nexus-application-keyboard-version': '1' } : {}), ...(applicationVersion >= 6 ? { 'x-nexus-application-insights-version': '1' } : {}), ...(applicationVersion >= 7 ? { 'x-nexus-application-dxpeditions-version': '1' } : {}), ...(applicationVersion >= 8 ? { 'x-nexus-application-memories-version': '1' } : {}), ...(applicationVersion >= 9 ? { 'x-nexus-application-ota-version': '1' } : {}), ...(applicationVersion >= 10 ? { 'x-nexus-application-field-day-version': '1' } : {}), ...(applicationVersion >= 11 ? { 'x-nexus-application-js8-version': '1' } : {}), ...(applicationVersion >= 12 ? {'x-nexus-application-station-modes-version':'1'} : {}) }
+    const stationHeaders = { 'x-nexus-application-version': '1', ...(applicationVersion >= 2 ? { 'x-nexus-application-stream-version': '2' } : {}), ...(applicationVersion >= 3 ? { 'x-nexus-application-query-version': '1' } : {}), ...(applicationVersion >= 4 ? { 'x-nexus-application-recall-version': '1' } : {}), ...(applicationVersion >= 5 ? { 'x-nexus-application-keyboard-version': '1' } : {}), ...(applicationVersion >= 6 ? { 'x-nexus-application-insights-version': '1' } : {}), ...(applicationVersion >= 7 ? { 'x-nexus-application-dxpeditions-version': '1' } : {}), ...(applicationVersion >= 8 ? { 'x-nexus-application-memories-version': '1' } : {}), ...(applicationVersion >= 9 ? { 'x-nexus-application-ota-version': '1' } : {}), ...(applicationVersion >= 10 ? { 'x-nexus-application-field-day-version': '1' } : {}), ...(applicationVersion >= 11 ? { 'x-nexus-application-js8-version': '1' } : {}), ...(applicationVersion >= 12 ? {'x-nexus-application-station-modes-version':'1'} : {}), ...(applicationVersion >= 13 ? {'x-nexus-application-navigation-version':'1'} : {}) }
     station=await pair.native.open(pair.stationId, undefined, 101, stationHeaders)
     let code=null, oauth=null, exchanges=0, providerFailure=false, exceptions=0, acknowledgements=0, unexpectedMessages=0
     const applicationTraffic = { reads: 0, acks: 0, subscriptions: 0, batches: 0, bytes: 0, byCommand: {}, maxResponseBytes: 0 }
@@ -107,7 +109,7 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]) test(`
       try {
         const message = JSON.parse(event.response.payloadData)
         if (message.type === 'ack' && Object.keys(message).sort().join(',') === 'epoch,sequence,type') acknowledgements++
-        else if (message.type === 'applicationHello' && (Object.keys(message).length === 1 || (Object.keys(message).length === 2 && [2,3,4,5,6,7,8,9,10,11,12].includes(message.version)))) {}
+        else if (message.type === 'applicationHello' && (Object.keys(message).length === 1 || (Object.keys(message).length === 2 && [2,3,4,5,6,7,8,9,10,11,12,13].includes(message.version)))) {}
         else if (message.type === 'applicationRead' && Object.keys(message).length === 4) applicationTraffic.reads++
         else if (message.type === 'applicationQuery' && Object.keys(message).length === 7) applicationTraffic.queries=(applicationTraffic.queries??0)+1
         else if (message.type === 'applicationQueryAck' && Object.keys(message).length === 2) {}
@@ -149,7 +151,7 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]) test(`
     // and its layout frame; all pixel/overflow assertions below stay unchanged.
     const settledLayout=()=>evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(true))))')
     const sessionDiagnostic=()=>evaluate(`(()=>{const e=document.querySelector('.app');let fiber=e?.[Object.keys(e).find(k=>k.startsWith('__reactFiber$'))],client;while(fiber){client=fiber.memoizedProps?.connection?.application;if(client)break;fiber=fiber.return}return {now:performance.now(),stale:e?.dataset.remoteStale,phase:client?.getPhase(),snapshotAge:client?.age('get_snapshot'),topics:client?.stream?.topics,waiting:client?.stream?.waiting?[...client.stream.waiting.keys()]:null,interests:client?.stream?.interests?[...client.stream.interests].map(([name,at])=>({name,age:performance.now()-at})):null,closures:window.__socketClosures,trace:window.__protocolTrace}})()`)
-    async function until(expression) { for(let i=0;i<120;i++){ if(providerFailure)throw new Error('Simulated provider failed'); if(await evaluate(expression))return;await sleep(100) } throw new Error('Expected browser state did not appear') }
+    async function until(expression,timeout=12000) { for(let i=0;i<Math.ceil(timeout/100);i++){ if(providerFailure)throw new Error('Simulated provider failed'); if(await evaluate(expression))return;await sleep(100) } throw new Error('Expected browser state did not appear') }
     const button=name=>`[...document.querySelectorAll('button')].find(e=>e.textContent===${JSON.stringify(name)})`
     async function click(expression) {
       let point
@@ -202,6 +204,8 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]) test(`
     const applicationData = await applicationFixture()
     applicationData.get_settings.fdActive = true
     const collections = collectionFixture()
+    const navigation=await navigationFixture(),navigationQueries=[]
+    applicationData.get_remote_satellite_state=navigation.live
     const stationModes=await stationModesFixture()
     applicationData.get_sstv_state=stationModes.sstv;applicationData.get_remote_aprs_state=stationModes.aprs
     collections.aprs=stationModes.roster
@@ -241,12 +245,13 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]) test(`
     const withheld = []
     let streamWatch = null
     const sentAt = new Map(), bases = new Map()
-    const intervals = { get_snapshot:500, get_settings:1000, get_band_plan:1000, get_spectrum_row:100, get_meters:200, get_scope_snapshot:100, get_cw_state:200, get_rtty_state:200, get_psk_state:200, get_js8_state:500, get_sstv_state:1000, get_remote_aprs_state:1000 }
+    const intervals = { get_snapshot:500, get_settings:1000, get_band_plan:1000, get_spectrum_row:100, get_meters:200, get_scope_snapshot:100, get_cw_state:200, get_rtty_state:200, get_psk_state:200, get_js8_state:500, get_sstv_state:1000, get_remote_aprs_state:1000, get_remote_satellite_state:1000 }
     applicationProducer=(async()=>{while(producing){const source=station;let request;try{request=await source.take(value=>['applicationRead','applicationWatch','applicationCredit','applicationQuery'].includes(value.type),1000)}catch{continue}
       if(source!==station||source.closed)continue
       if (!applicationAvailable || !producing) { withheld.push({type:request.type,collection:request.collection});continue }
       if (request.type === 'applicationQuery') {
         assert.ok(applicationVersion >= 3)
+        if(['connect','path','satellites','satellite'].includes(request.collection)){assert.ok(applicationVersion>=13);navigationQueries.push({collection:request.collection,search:request.search})}
         if (['sstvImage','aprs'].includes(request.collection)) assert.ok(applicationVersion>=12)
         if (request.collection === 'js8Context') { assert.ok(applicationVersion >= 11); js8Queries.push(request.collection) }
         if (request.collection === 'fieldDay') { assert.ok(applicationVersion >= 10); fieldDayQueries.push(request.collection) }
@@ -265,7 +270,7 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]) test(`
         const [givenId, offsetText] = (request.cursor??'').split(':')
         const offset = Number(offsetText??0), snapshotId=givenId||crypto.randomUUID()
         if (!givenId) {
-          const collection = request.collection === 'sstvImage' ? stationModes.images.get(request.search) : request.collection === 'recall' ? recallFixture(request.search) : collections[request.collection]
+          const collection = request.collection === 'sstvImage' ? stationModes.images.get(request.search) : request.collection === 'recall' ? recallFixture(request.search) : ['connect','path','satellites','satellite'].includes(request.collection)?navigation.collection(request.collection,request.search):collections[request.collection]
           let rows=collection.rows
           if(request.collection==='log') rows=rows.filter(q=>(!request.unconfirmed||!q.awardConfirmed)&&(!request.search||q.call.toLowerCase().includes(request.search.toLowerCase())))
           if(request.collection==='decodes'&&request.after!==null) rows=rows.filter(q=>q.sequence>request.after)
@@ -297,7 +302,8 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]) test(`
           }
           if(command==='get_js8_state') { assert.ok(applicationVersion>=11); js8Fixture.capturedAtMs=Date.now() }
           if(['get_sstv_state','get_remote_aprs_state'].includes(command)){assert.ok(applicationVersion>=12);applicationData[command].capturedAtMs=Date.now()}
-          const revision=['get_js8_state','get_sstv_state','get_remote_aprs_state'].includes(command)?++js8Revision:applicationRevision
+          if(command==='get_remote_satellite_state'){assert.ok(applicationVersion>=13);applicationData[command].capturedAtMs=Date.now()}
+          const revision=['get_js8_state','get_sstv_state','get_remote_aprs_state','get_remote_satellite_state'].includes(command)?++js8Revision:applicationRevision
           const data=applicationData[command], delta=bases.get(command)===revision && !Array.isArray(data)
           updates.push({type:'applicationResult', requestId:request.requestId, command, revision,
             baseRevision:delta?revision:null, ageMs:0, data:delta?{}:data, removed:[]})
@@ -912,15 +918,63 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]) test(`
         }
       }
       await browser.call('Emulation.setDeviceMetricsOverride',{width:1280,height:800,deviceScaleFactor:1,mobile:false},session)
-      await evaluate(`document.documentElement.style.setProperty('--ui-zoom','1');window.dispatchEvent(new Event('resize'));document.querySelector('.remote-workspace').scrollTop=0;for(const e of [document.querySelector('${root}'),...document.querySelectorAll('${root} *')])if(e&&/auto|scroll/.test(getComputedStyle(e).overflowY))e.scrollTop=0`)
+      await evaluate(`document.documentElement.style.setProperty('--ui-zoom','1');window.dispatchEvent(new Event('resize'));document.querySelector('.remote-workspace').scrollTop=0;for(const e of document.querySelectorAll('.remote-workspace *'))if(/auto|scroll/.test(getComputedStyle(e).overflowY))e.scrollTop=0`)
       await settledLayout();await settledLayout()
       if(sstv)await until(`document.querySelector('.sstv-thumb-img')?.complete===true&&document.querySelector('.sstv-thumb-img')?.naturalWidth===320`)
+      else { const map=await evaluate(`(()=>{const e=document.querySelector('.aprs-map canvas'),r=e.getBoundingClientRect(),d=e.getContext('2d').getImageData(0,0,e.width,e.height).data,colors=new Set();for(let i=0;i<d.length;i+=Math.max(4,Math.floor(d.length/4000/4)*4))colors.add(Array.from(d.slice(i,i+4)).join(','));return {width:e.width,height:e.height,rect:r.toJSON(),colors:colors.size}})()`);assert.ok(map.rect.width>100&&map.rect.height>100&&map.width>300&&map.height>150&&map.colors>8,'APRS map actually painted: '+JSON.stringify(map)) }
       if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,`remote-nexus-${mode.toLowerCase()}.png`),Buffer.from(shot.data,'base64'))}
       const topic=sstv?'get_sstv_state':'get_remote_aprs_state'
       unavailableTopics.add(topic)
       await until(sstv?`!document.querySelector('.sstv-live-canvas')&&document.querySelectorAll('.sstv-thumb').length===0`:`document.querySelector('.aprs-health')?.textContent.includes('unavailable')`)
       unavailableTopics.delete(topic)
       await until(sstv?`document.querySelectorAll('.sstv-thumb').length===40`:`!document.querySelector('.aprs-health')?.textContent.includes('unavailable')`)
+    }
+
+    for(const label of ['Connect','Satellites']){
+      await click(button(label))
+      if(applicationVersion<13){await until(`!!document.querySelector('.remote-view-unavailable')`);assert.equal(navigationQueries.length,0);continue}
+      const connect=label==='Connect',root=connect?'.connect-shell':'.sats-view'
+      await until(connect?`document.querySelector('.connect-header')?.textContent.includes('Station data · Read only')`:`document.querySelectorAll('.sat-pick').length===40`)
+      if(connect){
+        // The 2-D renderer is available even on headless/software-only hardware.
+        if(await evaluate(`!!document.querySelector('.connect-header button')&&[...document.querySelectorAll('.connect-header button')].some(e=>e.textContent.includes('3D'))`))await click(`[...document.querySelectorAll('.connect-header button')].find(e=>e.textContent.includes('3D'))`)
+        await until(`document.querySelector('.connect-map canvas')?.width>300`)
+        await click(`[...document.querySelectorAll('.connect-intent button')][2]`)
+        assert.equal(await evaluate(`document.querySelectorAll('.connect-intent button')[2].classList.contains('active')`),true)
+      }else{
+        await click(`[...document.querySelectorAll('.sat-pick')].find(e=>e.textContent.includes('ISS (ZARYA)'))`)
+        await until(`document.querySelector('.sats-arm-id')?.textContent.includes('ISS (ZARYA)')`)
+        const actions=await evaluate(`[...document.querySelectorAll('.sat-track,.sat-work,input[name="sat-transponder"],.sat-chip.quiet')].map(e=>e.disabled)`)
+        assert.ok(actions.length>0&&actions.every(Boolean),'station actions remain guarded until control is explicitly supported')
+      }
+      const targets=connect?['.connect-header','.connect-map canvas','.connect-strip']:['.sats-head','.sats-arm-id','.sats-radio','.sats-search','.sats-favmgr li:last-child .sat-pick']
+      for(const [width,height,zoom] of [[360,740,1],[390,844,1],[844,390,1],[1024,768,1],[1280,800,1],[1200,1390,1],[3440,1440,1],[1024,768,0.8],[1280,800,1.75],[390,844,1.75]])for(const theme of ['dark','light']){
+        await browser.call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false},session)
+        await evaluate(`document.documentElement.style.setProperty('--ui-zoom','${zoom}');document.documentElement.dataset.theme='${theme}';window.dispatchEvent(new Event('resize'))`)
+        await settledLayout();await settledLayout()
+        for(const target of targets){
+          await evaluate(`document.querySelector('${target}').scrollIntoView({block:'nearest',inline:'nearest',behavior:'instant'})`)
+          await settledLayout();await settledLayout()
+          const shape=await evaluate(`(()=>{const e=document.querySelector('${target}'),r=e.getBoundingClientRect(),x=Math.max(r.left+1,Math.min(r.right-1,r.left+r.width/2)),y=Math.max(1,Math.min(innerHeight-1,r.top+r.height/2)),clipped=[];for(let p=e.parentElement;p;p=p.parentElement){const c=getComputedStyle(p);if(['hidden','clip'].includes(c.overflowY)&&p.scrollHeight>p.clientHeight+1)clipped.push({class:p.className,scroll:p.scrollHeight,client:p.clientHeight})}let exposed=0;if(e.tagName==='CANVAS')for(let py=Math.max(1,r.top+8);py<Math.min(innerHeight-1,r.bottom-8);py+=16)for(let px=Math.max(1,r.left+8);px<Math.min(innerWidth-1,r.right-8);px+=16)if(e.contains(document.elementFromPoint(px,py)))exposed++;return {zoom:Number(getComputedStyle(document.documentElement).getPropertyValue('--ui-zoom')),docW:document.documentElement.scrollWidth,docH:document.documentElement.scrollHeight,rect:r.toJSON(),reachable:e.tagName==='CANVAS'?exposed>=4:e.contains(document.elementFromPoint(x,y)),exposed,clipped}})()`)
+          const good=Math.abs(shape.zoom-zoom)<0.001&&shape.docW<=width+1&&shape.docH<=height+1&&shape.rect.width>0&&shape.rect.height>0&&shape.rect.top<height&&shape.rect.bottom>0&&shape.reachable&&shape.clipped.length===0
+          if(!good&&artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,`remote-${label.toLowerCase()}-failure.png`),Buffer.from(shot.data,'base64'))}
+          assert.ok(good,`${label} content remains reachable: ${JSON.stringify({width,height,zoom,theme,target,shape})}`)
+          results.push({navigation:label,width,height,zoom,theme,target,shape})
+        }
+      }
+      await browser.call('Emulation.setDeviceMetricsOverride',{width:1280,height:800,deviceScaleFactor:1,mobile:false},session)
+      await evaluate(`document.documentElement.style.setProperty('--ui-zoom','1');window.dispatchEvent(new Event('resize'));document.querySelector('.remote-workspace').scrollTop=0;for(const e of document.querySelectorAll('.remote-workspace *'))if(/auto|scroll/.test(getComputedStyle(e).overflowY))e.scrollTop=0`)
+      await settledLayout();await settledLayout()
+      if(connect){
+        const canvas=await evaluate(`(()=>{const e=document.querySelector('.connect-map canvas'),d=e.getContext('2d').getImageData(0,0,e.width,e.height).data,colors=new Set();for(let i=0;i<d.length;i+=Math.max(4,Math.floor(d.length/4000/4)*4))colors.add(Array.from(d.slice(i,i+4)).join(','));return {width:e.width,height:e.height,colors:colors.size}})()`)
+        assert.ok(canvas.width>300&&canvas.height>100&&canvas.colors>8,'Connect renders its actual map: '+JSON.stringify(canvas))
+      }
+      if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,`remote-nexus-${label.toLowerCase()}.png`),Buffer.from(shot.data,'base64'))}
+      const collection=connect?'connect':'satellites'
+      unavailableCollections.add(collection)
+      await until(connect?`!document.querySelector('.connect-header')?.textContent.includes('Station data · Read only')`:`document.querySelectorAll('.sat-pick').length===0`,35000)
+      unavailableCollections.delete(collection)
+      await until(connect?`document.querySelector('.connect-header')?.textContent.includes('Station data · Read only')`:`document.querySelectorAll('.sat-pick').length===40`)
     }
     const beforeTempo = structuredClone(applicationData.get_snapshot)
     for (const tier of ['TempoFast','TempoDeep']) {

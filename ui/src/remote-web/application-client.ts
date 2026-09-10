@@ -12,8 +12,9 @@ import type { StreamTopic } from './application-stream-protocol'
 import { parseJs8Sample } from './js8'
 import { parseSstvSample } from './sstv'
 import { parseAprsLive } from './aprs'
+import { parseSatelliteLive } from './navigation'
 import { ApplicationQueryClient } from './application-query-client'
-import { SSTV_IMAGE_COMMAND, APRS_COMMAND, JS8_CONTEXT_COMMAND, FIELD_DAY_COMMAND, OTA_COMMAND, MEMORIES_COMMAND, DXPEDITIONS_COMMAND, INSIGHTS_COMMAND, QUERY_COMMAND, RECALL_COMMAND, insightCollection } from './application-query-protocol'
+import { NAVIGATION_COMMAND, navigationCollection, SSTV_IMAGE_COMMAND, APRS_COMMAND, JS8_CONTEXT_COMMAND, FIELD_DAY_COMMAND, OTA_COMMAND, MEMORIES_COMMAND, DXPEDITIONS_COMMAND, INSIGHTS_COMMAND, QUERY_COMMAND, RECALL_COMMAND, insightCollection } from './application-query-protocol'
 
 export type ApplicationPhase = 'connecting' | 'ready' | 'updateRequired' | 'unavailable'
 type Job = { command: ApplicationCommand; resolve: (value: unknown) => void; reject: (reason: Error) => void }
@@ -59,6 +60,10 @@ export class ApplicationClient implements ApplicationTransport {
     this.setPhase('unavailable')
   }
   invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+    if (this.phase === 'ready' && this.version >= 13 && command === NAVIGATION_COMMAND) {
+      if (!navigationCollection(args?.collection)) return Promise.reject(new Error('applicationUnsupported'))
+      return this.query.read(args!, 13) as Promise<T>
+    }
     if (this.phase === 'ready' && this.version >= 12 && (command === SSTV_IMAGE_COMMAND || command === APRS_COMMAND)) {
       if (args?.collection !== (command === SSTV_IMAGE_COMMAND ? 'sstvImage' : 'aprs')) return Promise.reject(new Error('applicationUnsupported'))
       return this.query.read(args, 12) as Promise<T>
@@ -94,6 +99,7 @@ export class ApplicationClient implements ApplicationTransport {
     }
     if (this.phase === 'ready' && this.version >= 2) {
       if (!streamTopic(command, applicationStreamVersion(this.version)) || (args && Object.keys(args).length)) return Promise.reject(new Error('applicationUnsupported'))
+      if (command === 'get_remote_satellite_state') return this.stream.invoke<unknown>(command).then(value => parseSatelliteLive(value, this.stream.age(command)) as T)
       if (command === 'get_sstv_state') return this.stream.invoke<unknown>(command).then(value => parseSstvSample(value, this.stream.age(command)) as T)
       if (command === 'get_remote_aprs_state') return this.stream.invoke<unknown>(command).then(value => parseAprsLive(value, this.stream.age(command)) as T)
       if (command === 'get_js8_state') return this.stream.invoke<unknown>(command).then(value => parseJs8Sample(value, this.stream.age(command)) as T)
