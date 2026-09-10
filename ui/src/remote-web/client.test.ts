@@ -175,7 +175,7 @@ it.each([
   if(accepted){
     expect(socket.readyState).toBe(Socket.OPEN)
     await expect(remote.source.read(new AbortController().signal)).resolves.toBeTruthy()
-    expect(JSON.parse(socket.sent.at(-1)!)).toMatchObject({type:'ack',sequence:1})
+    expect(JSON.parse(socket.sent[socket.sent.length - 1]!)).toMatchObject({type:'ack',sequence:1})
   }else{
     expect(socket.readyState).toBe(2)
     await expect(remote.source.read(new AbortController().signal)).rejects.toThrow()
