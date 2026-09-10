@@ -109,10 +109,18 @@ impl DummyRig {
                         if BufReader::new(&s).read_line(&mut line).is_ok()
                             && line.trim().parse::<u64>().is_ok()
                         {
+                            // Keep the readiness socket as our independent
+                            // observer. Closing it as the Rig client connects
+                            // can trigger Hamlib 4.7.1's socket-close race and
+                            // abort the daemon before the test sends a command.
+                            s.set_read_timeout(Some(Duration::from_millis(1000)))
+                                .expect("observer read timeout");
+                            s.set_write_timeout(Some(Duration::from_millis(1000)))
+                                .expect("observer write timeout");
                             return DummyRig {
                                 child,
                                 addr,
-                                obs: None,
+                                obs: Some(s),
                             };
                         }
                     }
