@@ -2492,7 +2492,7 @@ pub struct Engine {
     /// read ONLY while keyed, `None` while receiving or when the rig doesn't report them.
     /// SWR ratio (1.0–6.0), ALC 0.0–1.0, Po in watts, COMP in dB. Observed-only.
     /// The rig keyed by something that is NOT Nexus (mic PTT / straight key), read back
-    /// over CAT — see [`Self::observe_rig_ptt`]. Display-only.
+    /// over CAT — see [`Self::observe_rig_ptt`]. Also vetoes amplifier changes.
     rig_keyed: bool,
     rig_tx_swr: Option<f32>,
     rig_tx_alc: Option<f32>,
@@ -7770,10 +7770,15 @@ impl Engine {
     /// watts, COMP dB. Each is independently `Some`/`None` so a rig that reports only some of
     /// them still shows those. The poll reads these ONLY while keyed, mirroring the S-meter.
     /// The rig's OWN PTT, as read back over CAT (#57): TRUE means the transmitter is keyed
-    /// by something that is not Nexus — mic PTT, a straight key at the radio. Display-only
-    /// state: it feeds the cockpit TX badge and lets the TX-meter pane show a mic-keyed
-    /// over; it gates nothing and keys nothing (the radio loop's read is `t`, never `T`).
+    /// by something that is not Nexus — mic PTT, a straight key at the radio.
+    /// It feeds the cockpit TX badge/meters and cancels pending amplifier/radio
+    /// changes. It never keys the radio or changes FT sequencing/arming.
     pub fn observe_rig_ptt(&mut self, on: bool) {
+        if on && !self.rig_keyed {
+            // Cancel pending hardware changes; this does not change TX timing,
+            // the arming latch, or the transmitter's sequence generation.
+            self.remote_actuation.revoke();
+        }
         self.rig_keyed = on;
     }
 
@@ -9008,6 +9013,56 @@ impl Engine {
         deadline: std::time::Instant,
     ) -> Option<crate::remote_control::Permit> {
         self.remote_actuation.permit(deadline)
+    }
+
+    /// Native amplifier buttons and follow-band use the same completed serial
+    /// poll. An SPE idle flag remains sufficient without CAT; KPA has no such
+    /// flag and needs a fresh physical PTT read from the current exciter link.
+    /// No amplifier state is used to arm or stop the transmitter.
+    pub fn native_amplifier_permit(
+        &self,
+        read: &crate::remote_monitor::provenance::Read,
+        deadline: std::time::Instant,
+    ) -> Option<crate::remote_control::Permit> {
+        let now = std::time::Instant::now();
+        let (amp, age) = self.remote_readings.amp_for_read(read, now)?;
+        // A thread can be descheduled after releasing Engine. Its permission
+        // must expire with the readings, rather than renewing their freshness.
+        // Subtract one millisecond because projected ages round down.
+        let mut deadline = deadline.min(
+            now + std::time::Duration::from_millis(
+                crate::remote_monitor::MEASUREMENT_STALE_MS.saturating_sub(age.age_ms + 1),
+            ),
+        );
+        let profile = self.settings.active_profile()?;
+        if !profile.amp_model.trim().eq_ignore_ascii_case(&amp.family)
+            || profile.amp_port.trim().is_empty()
+            || !amp.linked
+            || amp.transmitting == Some(true)
+            || amp.output_watts.is_some_and(|w| w > 0)
+            || self.tx_owner().is_some()
+            || self.rig_keyed
+            || self.sat_inferred_keyed
+        {
+            return None;
+        }
+        let radio = self.remote_monitor_observation_at(now).radio;
+        if radio.rig_keyed == Some(true) {
+            return None;
+        }
+        if amp.transmitting.is_none() {
+            let cat = radio.readings.cat?;
+            let ptt = radio.readings.ptt?;
+            if radio.cat_connected != Some(true)
+                || radio.rig_keyed != Some(false)
+                || ptt.connection_generation != cat.connection_generation
+                || ptt.age_ms >= 1000
+            {
+                return None;
+            }
+            deadline = deadline.min(now + std::time::Duration::from_millis(999 - ptt.age_ms));
+        }
+        self.remote_actuation_permit(deadline)
     }
 
     pub fn queue_remote_amp(
@@ -15910,7 +15965,12 @@ impl Engine {
         read: Option<&crate::remote_monitor::provenance::Read>,
         value: Option<bool>,
     ) {
-        self.remote_readings.ptt(read, value);
+        let became_keyed = self.remote_readings.ptt(read, value);
+        // Only an accepted current reading may cancel work. A delayed sample
+        // from a retired link cannot acquire the current radio's authority.
+        if became_keyed {
+            self.remote_actuation.revoke();
+        }
     }
 
     pub fn remote_observe_amp(

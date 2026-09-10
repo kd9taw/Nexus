@@ -361,6 +361,17 @@ disabled. Manual band steps also require follow-band disabled. Unsupported band
 endpoints refuse; the shared SPE 15K model token cannot establish 4 m capability
 across hardware series. No wrap-around is inferred. Standby never means Stop TX.
 
+The shared native button/follow worker also rechecks the completed poll's opaque
+connection before writing. Changing a profile/port during serial I/O retires its
+old reply; follow uses the current saved setting and band. A local button takes
+precedence over an automatic step. Native KPA writes require a current CAT idle
+reading because KPA supplies no transmit flag; SPE can use its own idle flag,
+while observed physical radio keying always vetoes a change. Write permission
+expires with the supporting readings and serial I/O never holds Engine. These
+guards do not deliver remote follow-setting writes yet and do not prove an RF
+interlock against keying that has not been observed. Attended bench verification
+remains required before release.
+
 Each hardware intent has a fixed deadline bounded by the five-second lease,
 independent of later heartbeats. Native context changes and revocation reach the
 worker after it releases the Engine lock. A later measurement on the same link

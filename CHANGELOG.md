@@ -220,6 +220,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Amplifier follow-band and local controls:** Recheck the active configuration
+  and completed poll before each serial write. Disabling follow or changing a
+  port during polling cancels the old work; manual radio keying also prevents
+  amplifier changes. KPA needs a fresh CAT idle reading, and SPE follow-band
+  respects the model's established band limit. Manual commands take priority
+  over automatic steps. Physical bench verification remains pending.
+
 - **Remote Satellites refresh timing:** Slow favorites refreshes start earlier,
   accounting for the time needed to collect each bird's schedule. Temporary
   congestion retains a still-valid schedule; unavailable or expired data is

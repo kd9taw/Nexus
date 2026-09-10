@@ -78,15 +78,20 @@ struct Sample<T> {
 }
 
 impl<T> Sample<T> {
-    fn accept(slot: &mut Option<Self>, channel: &Channel, read: Option<&Read>, value: Option<T>) {
+    fn accept(
+        slot: &mut Option<Self>,
+        channel: &Channel,
+        read: Option<&Read>,
+        value: Option<T>,
+    ) -> bool {
         let Some(read) = read.filter(|r| channel.accepts(&r.connection)) else {
-            return;
+            return false;
         };
         if slot
             .as_ref()
             .is_some_and(|old| old.read.sequence >= read.sequence)
         {
-            return;
+            return false;
         }
         // Keep a tombstone for a failed/unsupported read: a delayed older success
         // must not resurrect it. Each field has its own order and measurement age.
@@ -94,6 +99,7 @@ impl<T> Sample<T> {
             read: read.clone(),
             value,
         });
+        true
     }
 
     fn current(&self, channel: &Channel, now: Instant, limit_ms: u64) -> Option<(&T, ReadAge)> {
@@ -181,12 +187,34 @@ impl Observations {
         Sample::accept(&mut self.mode, &self.radio, read, value.map(bounded));
     }
 
-    pub(crate) fn ptt(&mut self, read: Option<&Read>, value: Option<bool>) {
-        Sample::accept(&mut self.ptt, &self.radio, read, value);
+    /// Reports an accepted transition to keyed, not another poll of steady PTT.
+    pub(crate) fn ptt(&mut self, read: Option<&Read>, value: Option<bool>) -> bool {
+        let was_keyed = self
+            .ptt
+            .as_ref()
+            .is_some_and(|s| self.radio.accepts(&s.read.connection) && s.value == Some(true));
+        Sample::accept(&mut self.ptt, &self.radio, read, value) && value == Some(true) && !was_keyed
     }
 
     pub(crate) fn amp(&mut self, read: Option<&Read>, value: AmpStatusDto) {
         Sample::accept(&mut self.amplifier, &self.amp, read, Some(value));
+    }
+
+    /// The exact completed poll, still owned by this connection. A matching
+    /// model/port string cannot revive a retired read after an away-and-back edit.
+    pub(crate) fn amp_for_read(
+        &self,
+        read: &Read,
+        now: Instant,
+    ) -> Option<(&AmpStatusDto, ReadAge)> {
+        if !self.amp.accepts(&read.connection) {
+            return None;
+        }
+        let sample = self.amplifier.as_ref()?;
+        if sample.read.sequence != read.sequence {
+            return None;
+        }
+        sample.current(&self.amp, now, MEASUREMENT_STALE_MS)
     }
 
     pub(crate) fn project_radio(&self, radio: &mut super::Radio, now: Instant) {

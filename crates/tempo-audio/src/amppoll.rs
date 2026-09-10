@@ -9,7 +9,7 @@
 //! ⛔ **NOTHING HERE GATES A TRANSMISSION, AND NOTHING HERE MAY EVER BECOME A STOP.** Putting an
 //! amplifier in standby is not a way to stop a transmission — the exciter keeps keying and the
 //! drive passes straight through — so no reading this thread produces may enter a cockpit's
-//! stop-line census, and no TX decision may be conditioned on one. It is a display.
+//! stop-line census, and no exciter TX decision may be conditioned on one.
 //!
 //! # Why its own thread
 //!
@@ -189,6 +189,17 @@ fn follow_step(dto: &AmpStatusDto, radio_band: &str) -> Option<crate::amplifier:
     use crate::amplifier::{band_index_for_label, AmpIntent};
     let target = band_index_for_label(radio_band)?;
     let current = dto.band_label.as_deref().and_then(band_index_for_label)?;
+    // KPA documents 160–6 m. SPE's shared 15K token does not identify a
+    // 4 m-capable series; only the explicit 13K model establishes that step.
+    let maximum = match dto.family.as_str() {
+        FAMILY_KPA => 10,
+        FAMILY_SPE if dto.model == "13K" => 11,
+        FAMILY_SPE => 10,
+        _ => return None,
+    };
+    if current > maximum || target > maximum {
+        return None;
+    }
     match target.cmp(&current) {
         std::cmp::Ordering::Equal => None,
         std::cmp::Ordering::Greater => Some(AmpIntent::BandUp),
@@ -196,18 +207,18 @@ fn follow_step(dto: &AmpStatusDto, radio_band: &str) -> Option<crate::amplifier:
     }
 }
 
-#[cfg(all(feature = "device", feature = "serial"))]
+#[cfg(any(test, all(feature = "device", feature = "serial")))]
 /// Take everything queued. Used by the poll thread only.
 fn take_pending() -> Vec<crate::amplifier::AmpIntent> {
     std::mem::take(&mut *PENDING.lock().unwrap_or_else(|e| e.into_inner()))
 }
 
-#[cfg(all(feature = "device", feature = "serial"))]
+#[cfg(any(test, all(feature = "device", feature = "serial")))]
 fn has_pending() -> bool {
     !PENDING.lock().unwrap_or_else(|e| e.into_inner()).is_empty()
 }
 
-#[cfg(all(feature = "device", feature = "serial"))]
+#[cfg(any(test, all(feature = "device", feature = "serial")))]
 /// Drop everything queued, without sending. Used when the link goes away — a command aimed at
 /// an amplifier that has since stopped answering must not be delivered to whatever answers next.
 fn drop_pending() {
@@ -356,14 +367,95 @@ fn dispatch_remote(
     }
 }
 
+/// Consume the native queue against the exact completed poll, with fresh
+/// station state immediately before each write. No Engine lock spans serial I/O.
+/// Follow is a saved station choice; it is never a browser lease or a TX stop.
+#[cfg(any(test, all(feature = "device", feature = "serial")))]
+fn dispatch_native(
+    engine: &std::sync::Arc<std::sync::Mutex<tempo_app::engine::Engine>>,
+    dto: &AmpStatusDto,
+    read: Option<&tempo_app::remote_monitor::provenance::Read>,
+    remote_turn: bool,
+    mut send: impl FnMut(crate::amplifier::AmpIntent) -> std::io::Result<()>,
+) -> bool {
+    use std::time::Instant;
+    use tempo_app::engine::engine_lock;
+    let Some(read) = read else {
+        drop_pending();
+        return false;
+    };
+    let (permit, automatic, intents) = {
+        let native = engine_lock(engine);
+        let Some(permit) =
+            native.native_amplifier_permit(read, Instant::now() + Duration::from_secs(5))
+        else {
+            // Unknown/keyed/retired inputs drop gestures, never defer them until
+            // a later idle reading or newly opened amplifier makes them usable.
+            drop_pending();
+            return false;
+        };
+        if remote_turn {
+            return false;
+        }
+        // A local Nexus button wins this poll. Never add an automatic
+        // step to a batch of manual commands derived from the same old reading.
+        let automatic = !has_pending()
+            && native
+                .settings()
+                .active_profile()
+                .is_some_and(|p| p.amp_follow_band);
+        if automatic {
+            if let Some(step) = follow_step(dto, &native.settings().band) {
+                queue_amp_command(step);
+            }
+        }
+        (permit, automatic, take_pending())
+    };
+    for intent in intents {
+        if !permit.valid(Instant::now()) {
+            // A newer local gesture may be waiting. It keeps its next fresh
+            // poll; only this already-extracted batch is cancelled here.
+            return false;
+        }
+        let current = {
+            let native = engine_lock(engine);
+            if automatic
+                && (!native
+                    .settings()
+                    .active_profile()
+                    .is_some_and(|p| p.amp_follow_band)
+                    || follow_step(dto, &native.settings().band) != Some(intent))
+            {
+                return false;
+            }
+            native.native_amplifier_permit(read, permit.deadline())
+        };
+        let Some(current) = current else {
+            drop_pending();
+            return false;
+        };
+        if !permit.valid(Instant::now()) || !current.valid(Instant::now()) {
+            return false;
+        }
+        if send(intent).is_err() {
+            drop_pending();
+            return true;
+        }
+    }
+    false
+}
+
+#[cfg(test)]
+#[path = "amppoll/native_tests.rs"]
+mod native_tests;
+
 /// The port-owning half. Needs `serial` for the links themselves and `device` for the process
 /// shutdown flag; neither alone is enough, and src-tauri's `radio` feature turns on both.
 #[cfg(all(feature = "device", feature = "serial"))]
 mod imp {
     use super::{
-        backoff_ms, dispatch_remote, drop_pending, follow_step, has_pending, kpa_dto,
-        queue_amp_command, reason_for, remote_amp_read, spe_dto, take_pending, FAMILY_KPA,
-        FAMILY_SPE, POLL,
+        backoff_ms, dispatch_native, dispatch_remote, drop_pending, has_pending, kpa_dto,
+        reason_for, remote_amp_read, spe_dto, FAMILY_KPA, FAMILY_SPE, POLL,
     };
     use crate::amplifier::{KpaLink, KpaStatus, SpeLink};
     use crate::service::SHUTDOWN;
@@ -411,23 +503,10 @@ mod imp {
             }
             std::thread::sleep(POLL);
 
-            // ONE brief lock: read the active radio's amplifier config, and — when there is
-            // none — drop its cache in the same guard rather than taking the mutex twice.
-            // Band-follow inputs, read in the SAME guard as the rest of the config below and
-            // declared here so each pass gets its own — they are a snapshot of this tick, never
-            // state carried between them.
-            let follow;
-            let radio_band;
+            // Capture the port's configured owner. Follow/band are read only
+            // after the serial poll, at the common native write boundary.
             let cfg: Option<Cfg> = {
                 let mut e = engine_lock(&engine);
-                // The follow switch and the radio's own band ride along in this guard rather
-                // than taking the mutex a second time — the whole point of this block is that a
-                // disarmed station costs one lock per second, not several.
-                follow = e
-                    .settings()
-                    .active_profile()
-                    .is_some_and(|p| p.amp_follow_band);
-                radio_band = e.snapshot().radio.band.clone();
                 let want = e.settings().active_profile().map(|p| {
                     (
                         p.id,
@@ -597,71 +676,15 @@ mod imp {
                             drop_pending();
                         }
                     }
-                    // ⛔ THE INTERLOCK, ENFORCED HERE AND NOT ONLY IN THE UI. Stepping an
-                    // amplifier's band under drive pits relays and can take out a PA, and
-                    // dropping to standby mid-over passes full drive straight through. The
-                    // buttons are disabled while keyed, but a disabled button is a rendering
-                    // decision and this is a kilowatt: the backend refuses too, using the
-                    // amplifier's OWN transmit flag — the most direct evidence available, read
-                    // one moment ago from the frame we are holding.
-                    //
-                    // Commands are DROPPED rather than deferred. A band step that arrives after
-                    // the over it was meant for is a command the operator is no longer watching.
-                    // ⛔ THE INTERLOCK, AND ITS FALLBACK. `dto.transmitting` is the amplifier's
-                    // OWN flag and the most direct evidence there is — but only SPE reports one.
-                    // On a KPA it is `None`, and `None != Some(true)` would have taken the send
-                    // branch while the operator was keyed: a guard that exists and can never fire
-                    // on that family, which is worse than no guard because it reads as covered.
-                    // So when the amplifier does not say, the RADIO does: `radio.transmitting` is
-                    // what the engine already knows about the exciter driving it.
-                    let keyed = dto
-                        .transmitting
-                        .unwrap_or_else(|| engine_lock(&engine).snapshot().radio.transmitting);
-                    // ⭐ BAND-FOLLOW, and it is queued as an ORDINARY INTENT rather than sent
-                    // directly. That is the whole safety argument: it goes through the same
-                    // transmit interlock, the same per-family translation and the same bounded
-                    // queue as a button press, so there is no second path to an amplifier's wire
-                    // that the interlock does not cover.
-                    //
-                    // ONE STEP PER POLL, never a burst. SPE can only step, so a 160m→10m move is
-                    // nine commands; issuing them together would fire them blind, without seeing
-                    // whether the amplifier moved between any two. At one per second it converges
-                    // in under ten seconds and every step is confirmed by the reading that
-                    // follows it. If the amplifier stops moving — a band it does not have, a
-                    // command it ignored — this simply stops making progress instead of walking
-                    // the ladder forever.
-                    if follow && !keyed && !remote_turn {
-                        if let Some(step) = follow_step(&dto, &radio_band) {
-                            queue_amp_command(step);
+                    if dispatch_native(&engine, &dto, remote_read.as_ref(), remote_turn, |intent| {
+                        match (link.as_mut(), kpa_now.as_ref()) {
+                            (Some(Link::Spe(l)), _) => l.send_intent(intent),
+                            (Some(Link::Kpa(l)), Some(now)) => l.send_intent(intent, now),
+                            (Some(Link::Kpa(_)), None) => Ok(()),
+                            (None, _) => Ok(()),
                         }
-                    }
-
-                    if keyed {
-                        drop_pending();
-                    } else if !remote_turn {
-                        for intent in take_pending() {
-                            // Each family translates the SAME intent its own way, here rather
-                            // than in the UI, because this is where the current state is known:
-                            // SPE flips with a keystroke, Elecraft names the state it wants and
-                            // needs the reading to know which.
-                            let sent = match (link.as_mut(), kpa_now.as_ref()) {
-                                (Some(Link::Spe(l)), _) => l.send_intent(intent),
-                                (Some(Link::Kpa(l)), Some(now)) => l.send_intent(intent, now),
-                                // A KPA with no reading yet: nothing to compute a SET from, and
-                                // guessing a band number is how an amplifier ends up somewhere
-                                // nobody asked for. Dropped, not deferred.
-                                (Some(Link::Kpa(_)), None) => Ok(()),
-                                (None, _) => break,
-                            };
-                            // A failed send drops the link so the next cycle reopens it, exactly
-                            // as a failed poll does. Nothing is retried: a command replayed onto
-                            // a recovered link is a click nobody made.
-                            if sent.is_err() {
-                                link = None;
-                                drop_pending();
-                                break;
-                            }
-                        }
+                    }) {
+                        link = None;
                     }
                     let mut eng = engine_lock(&engine);
                     eng.remote_observe_amp(
@@ -948,9 +971,13 @@ mod tests {
             "10m → 40m is downward"
         );
 
-        // ONE step, not the whole distance: 160m to 4m is eleven bands and must still queue one.
+        // ONE step, not the whole distance. This explicit model supports 4 m.
+        let amp_13k = AmpStatusDto {
+            model: "13K".into(),
+            ..amp_on(Some("160m"))
+        };
         assert_eq!(
-            follow_step(&amp_on(Some("160m")), "4m"),
+            follow_step(&amp_13k, "4m"),
             Some(AmpIntent::BandUp),
             "one step per poll, never a burst of commands"
         );

@@ -34,6 +34,10 @@ Decoder selection shares native tier/channel policy and the stable decoder
 mutex; a busy decode refuses the remote transition without blocking the Engine.
 Same-tier selection remains a complete no-op. Operation v3 adds the radio
 capabilities while preserving v1 logging and v2 receiver/amplifier clients.
+Native amplifier buttons and saved follow-band also validate the exact completed
+serial poll after I/O. Current settings, observed physical PTT and read expiry
+bound each write; local gestures take precedence over automatic steps. These
+checks never use an amplifier as a transmitter stop or alter FT sequencing.
 Unconfirmed targets never become deferred local retunes. Login, entitlement and
 browser approval remain separate checks. Radio handoffs, complete workspace
 entry and remote transmission remain incomplete; no arbitrary Tauri bridge exists.
