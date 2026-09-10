@@ -147,9 +147,11 @@ export function RemoteLogEntry({
   }
   async function resolve() {
     setError(null)
+    setLogged(false)
     try {
       const result = await client.resolve()
-      if (result.outcome === 'unknown') setError('unconfirmed')
+      if (result.outcome === 'applied') setLogged(true)
+      else setError(result.outcome === 'rejected' ? 'rejected' : 'unconfirmed')
     } catch {
       setError('unconfirmed')
     }

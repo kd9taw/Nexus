@@ -239,13 +239,18 @@ export class OperationClient {
       })
     } else {
       this.finished = r.value
+      const retain =
+        r.value.outcome === 'unknown' ||
+        (p.request.type === 'result' && r.value.outcome === 'rejected')
       this.update({
         busy: false,
         submitting: false,
         state: null,
         fresh: false,
         error: null,
-        unresolved: r.value.outcome === 'unknown' ? r.value.operationId : null,
+        // A reopened form has no editable copy of a refused submission. Keep
+        // those fields until the operator explicitly checks the station log.
+        unresolved: retain ? r.value.operationId : null,
         ...(p.request.type === 'result' ? { resolved: r.value } : {})
       })
       this.polledAt = -Infinity

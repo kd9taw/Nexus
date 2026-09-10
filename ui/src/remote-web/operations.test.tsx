@@ -155,3 +155,90 @@ it('shows every retained submitted field after reload without making a new entry
   expect(send).not.toHaveBeenCalled()
   client.disconnected()
 })
+
+it.each(['applied', 'rejected', 'unknown'] as const)(
+  'shows a recovered %s receipt after reload and retains an unconfirmed submitted record',
+  async (outcome) => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    const operationId = crypto.randomUUID()
+    const record = {
+      call: 'W1AW',
+      grid: 'FN31',
+      country: null,
+      state: null,
+      band: '20m',
+      freqMhz: 14.25,
+      mode: 'CW',
+      rstSent: '599',
+      rstRcvd: '579',
+      name: null,
+      qth: null,
+      comment: null,
+      notes: 'Retain this unconfirmed note',
+      whenUnix: null,
+      confirmed: false as const,
+      awardConfirmed: false as const
+    }
+    let saved: string | null = operationId
+    const sent: Record<string, any>[] = []
+    const client = new OperationClient(
+      (raw) => sent.push(JSON.parse(raw)),
+      true,
+      () => 1000,
+      {
+        read: () => saved,
+        readDraft: () => record,
+        write: (next) => {
+          saved = next
+        }
+      }
+    )
+    const reply = (value: unknown) =>
+      client.receive({
+        type: 'operationResponse',
+        requestId: sent[sent.length - 1].request.requestId,
+        value
+      })
+    client.open()
+    reply({
+      stationBootId: crypto.randomUUID(),
+      allowed: true,
+      phase: 'available',
+      leaseId: null,
+      revision: 1,
+      commandWindowId: null,
+      nextSequence: null,
+      leaseRemainingMs: null,
+      actions: ['log.manual'],
+      txArmed: false
+    })
+    try {
+      render(<RemoteLogEntry client={client} snap={snap} mode="CW" />)
+      expect(screen.getByText(record.notes)).toBeTruthy()
+      fireEvent.click(screen.getByRole('button', { name: 'Check submitted QSO result' }))
+      expect(sent[sent.length - 1].request.type).toBe('result')
+      await act(async () =>
+        reply(
+          outcome === 'applied'
+            ? { outcome, operationId, evidence: 'fileSynced', uploads: 'stationPipeline' }
+            : {
+                outcome,
+                operationId,
+                reason: outcome === 'rejected' ? 'alreadyPresent' : 'persistenceUnconfirmed'
+              }
+        )
+      )
+      if (outcome === 'applied') {
+        expect(screen.getByText(/QSO saved to the station log file/)).toBeTruthy()
+        expect(saved).toBeNull()
+      } else {
+        expect(screen.getByText(record.notes)).toBeTruthy()
+        expect(saved).toBe(operationId)
+        expect(client.getSnapshot().unresolved).toBe(operationId)
+      }
+      expect(sent.filter((value) => value.request.type === 'logManual')).toHaveLength(0)
+    } finally {
+      client.disconnected()
+    }
+  }
+)

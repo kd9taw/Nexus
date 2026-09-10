@@ -91,7 +91,10 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
         assert.equal(url.searchParams.get('redirect_uri'),app.origin)
         code=randomBytes(32).toString('hex'); oauth={challenge:url.searchParams.get('code_challenge'),nonce:url.searchParams.get('nonce')}
         const redirect=new URL(app.origin);redirect.searchParams.set('code',code);redirect.searchParams.set('state',url.searchParams.get('state'))
-        responseCode=302;headers.push({name:'location',value:redirect.href})
+        if(url.searchParams.get('response_mode')==='web_message'){
+          headers[0].value='text/html';
+          body='<script>window.parent.postMessage('+JSON.stringify({type:'authorization_response',response:{code,state:url.searchParams.get('state')}})+','+JSON.stringify(app.origin)+')</script>';
+        }else{responseCode=302;headers.push({name:'location',value:redirect.href})}
       } else if(url.pathname==='/oauth/token') {
         const raw=event.request.postData||'', input=raw.startsWith('{')?JSON.parse(raw):Object.fromEntries(new URLSearchParams(raw))
         assert.ok(code && input.code===code,'one-use authorization code must match')
@@ -122,7 +125,7 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
         else { unexpectedMessages++; console.error('Unreviewed browser message', message) }
       } catch { unexpectedMessages++ }
     })
-    await browser.call('Page.addScriptToEvaluateOnNewDocument',{source:`
+    await browser.call('Page.addScriptToEvaluateOnNewDocument',{source:`if(window===window.top){
       // Pin the synthetic main window so auto-fit cannot overwrite the scale
       // being measured after a viewport resize. No operator storage is used.
       localStorage.setItem('nexus-ui-scale-mode','100');
@@ -143,7 +146,7 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
       Object.defineProperty(window,'visualViewport',{value:area});
       window.__waterfallDraws=0;const draw=CanvasRenderingContext2D.prototype.putImageData;
       CanvasRenderingContext2D.prototype.putImageData=function(...args){if(this.canvas.classList.contains('waterfall-canvas'))window.__waterfallDraws++;return draw.apply(this,args)};
-    `},session)
+    }`},session)
     const evaluate=async expression=>{
       const value=await browser.call('Runtime.evaluate',{expression,returnByValue:true,awaitPromise:true},session)
       if(value.exceptionDetails)throw new Error('Browser evaluation failed: '+String(value.exceptionDetails.exception?.description??value.exceptionDetails.text).split('\n')[0])
@@ -463,7 +466,17 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
           await until(`document.querySelector('${selector} .remote-log-entry button')!==null`)
           assert.equal(loggedRequests[loggedRequests.length-1].record.call,call)
           const count=loggedRequests.length;await sleep(1500);assert.equal(loggedRequests.length,count)
-          loseLogReply=false;await click(`[...document.querySelectorAll('${selector} button')].find(e=>e.textContent==='Check submitted QSO result')`)
+          loseLogReply=false;
+          await browser.call('Page.reload',{},session);
+          await until(`!!${button('Open Nexus')}`,15000);
+          await click(button('Open Nexus'));
+          await until(`!!${button('PSK')}`);await click(button('PSK'));
+          await until(`document.querySelector('.psk-cockpit .remote-log-entry')?.textContent.includes('K4OPS')`);
+          assert.equal(loggedRequests.length,count,'page reload must not resend a QSO');
+          const retained=await evaluate(`JSON.parse(localStorage.getItem('nexus.remote.pending-log.${pair.stationId}'))`);
+          assert.equal(retained.record.call,call);assert.equal(retained.operationId,loggedRequests.at(-1).requestId);
+          await click(`[...document.querySelectorAll('${selector} button')].find(e=>e.textContent==='Check submitted QSO result')`);
+          console.log('RELOAD RECOVERY',JSON.stringify({storedCall:retained.record.call,operationId:retained.operationId,requestsBeforeReload:count,requestsAfterReload:loggedRequests.length}));
         }
         await until(`document.querySelector('${selector} .remote-log-entry')?.textContent.includes('QSO saved to the station log file')`)
         assert.equal(await evaluate(`document.querySelector('${selector} .le-call').value`),'')
@@ -486,7 +499,7 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
       await until(`!document.querySelector('.remote-logging-authority')?.textContent.includes('control active')`)
       assert.equal(await evaluate(`document.querySelector('.psk-cockpit .le-log-btn').disabled`),true)
       assert.equal(loggedRequests.length,5);assert.equal(unexpectedMessages,0);assert.equal(exceptions,0)
-      if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-manual-logging.png'),Buffer.from(shot.data,'base64'));await writeFile(join(artifacts,'operation-results.json'),JSON.stringify({count:loggedRequests.length,modes:loggedRequests.map(r=>r.record.mode),lostResultResolved:true,crossTabLockRefusal:true,geometry:16,exceptions,unexpectedMessages},null,2))}
+      if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-manual-logging.png'),Buffer.from(shot.data,'base64'));await writeFile(join(artifacts,'operation-results.json'),JSON.stringify({count:loggedRequests.length,modes:loggedRequests.map(r=>r.record.mode),lostResultResolved:true,wholePageReloadResolved:true,crossTabLockRefusal:true,geometry:16,exceptions,unexpectedMessages},null,2))}
       console.log('Compiled browser: explicit logging lease, five native forms, retained unknown result, local revocation and 16 geometry cases passed');return
     }
     const startReads=applicationTraffic.reads, startBytes=applicationTraffic.bytes, started=performance.now()
