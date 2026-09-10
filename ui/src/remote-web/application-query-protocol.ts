@@ -7,6 +7,8 @@ import { streamExact, streamId } from './application-stream-protocol'
 export const QUERY_COMMAND = 'get_remote_page'
 export const RECALL_COMMAND = 'get_remote_recall'
 export const INSIGHTS_COMMAND = 'get_remote_insights'
+export const SSTV_IMAGE_COMMAND = 'get_remote_sstv_image'
+export const APRS_COMMAND = 'get_remote_aprs'
 export const JS8_CONTEXT_COMMAND = 'get_remote_js8_context'
 export const FIELD_DAY_COMMAND = 'get_remote_field_day'
 export const OTA_COMMAND = 'get_remote_ota'
@@ -14,7 +16,7 @@ export const MEMORIES_COMMAND = 'get_remote_memories'
 export const DXPEDITIONS_COMMAND = 'get_remote_dxpeditions'
 export const COLLECTIONS = ['decodes', 'needs', 'spots', 'log', 'entities', 'health'] as const
 export type InsightCollection = 'awards' | 'statistics'
-export type Collection = typeof COLLECTIONS[number] | 'recall' | InsightCollection | 'dxpeditions' | 'memories' | 'ota' | 'fieldDay' | 'js8Context'
+export type Collection = typeof COLLECTIONS[number] | 'recall' | InsightCollection | 'dxpeditions' | 'memories' | 'ota' | 'fieldDay' | 'js8Context' | 'sstvImage' | 'aprs'
 export const QUERY_MAX_BYTES = 256 * 1024
 export const QUERY_ROWS = 128
 export const QUERY_MAX_ROWS = 3000
@@ -25,7 +27,8 @@ export type QueryPage = { type: 'applicationPage'; requestId: string; collection
   offset: number; total: number; retained: number; nextCursor: string | null; ageMs: number; rows: Json[]; meta: Json }
 export const insightCollection = (v: unknown): v is InsightCollection => v === 'awards' || v === 'statistics'
 export const collection = (v: unknown, version = 3): v is Collection => COLLECTIONS.includes(v as typeof COLLECTIONS[number]) ||
-  ([4, 6, 7, 8, 9, 10, 11].includes(version) && v === 'recall') || ([6, 7, 8, 9, 10, 11].includes(version) && insightCollection(v)) || ([7, 8, 9, 10, 11].includes(version) && v === 'dxpeditions') || ([8, 9, 10, 11].includes(version) && v === 'memories') || ([9, 10, 11].includes(version) && v === 'ota') || ([10, 11].includes(version) && v === 'fieldDay') || (version === 11 && v === 'js8Context')
+  ([4, 6, 7, 8, 9, 10, 11, 12].includes(version) && v === 'recall') || ([6, 7, 8, 9, 10, 11, 12].includes(version) && insightCollection(v)) || ([7, 8, 9, 10, 11, 12].includes(version) && v === 'dxpeditions') || ([8, 9, 10, 11, 12].includes(version) && v === 'memories') || ([9, 10, 11, 12].includes(version) && v === 'ota') || ([10, 11, 12].includes(version) && v === 'fieldDay') || ([11, 12].includes(version) && v === 'js8Context') || (version === 12 && (v === 'sstvImage' || v === 'aprs'))
+export const sstvImageId = (v: unknown): v is string => typeof v === 'string' && /\.(png|bmp)$/.test(v) && streamId(v.slice(0,-4))
 const integer = (v: unknown) => Number.isSafeInteger(v) && Number(v) >= 0
 export function queryCursor(v: unknown): v is string {
   if (typeof v !== 'string') return false
@@ -39,7 +42,7 @@ export function queryRequest(v: Record<string, unknown>, version = 3): QueryRequ
     (v.cursor !== null && !queryCursor(v.cursor)) || typeof v.search !== 'string' || new TextEncoder().encode(v.search).length > 96 ||
     /[\p{Cc}\uD800-\uDFFF]/u.test(v.search) || typeof v.unconfirmed !== 'boolean' ||
     (v.collection === 'recall' ? !/^[A-Z0-9/]{3,32}$/.test(v.search) || v.unconfirmed || v.cursor !== null :
-      v.collection !== 'log' && (v.search !== '' || v.unconfirmed)) ||
+      v.collection === 'sstvImage' ? !sstvImageId(v.search) || v.unconfirmed : v.collection !== 'log' && (v.search !== '' || v.unconfirmed)) ||
     ((insightCollection(v.collection) || v.collection === 'dxpeditions' || v.collection === 'memories' || v.collection === 'ota' || v.collection === 'fieldDay' || v.collection === 'js8Context') && v.cursor !== null) ||
     (v.after !== null && (v.collection !== 'decodes' || !integer(v.after)))) throw new Error('invalidApplicationQuery')
   return v as QueryRequest

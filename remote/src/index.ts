@@ -35,7 +35,7 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
     issuer: env.AUTH0_ISSUER, audience: env.AUTH0_AUDIENCE, clientId: env.AUTH0_CLIENT_ID,
     ready: env.AUTH0_CLIENT_ID !== 'unconfigured',
     revision: env.REMOTE_BUILD_REVISION ?? 'local',
-    applicationVersion: 11,
+    applicationVersion: 12,
   })
   const match = /^stations\/([0-9a-f-]{36})\/(.+)$/.exec(path)
   if (request.method === 'GET' && match && ['connect', 'observe'].includes(match[2])) {
@@ -53,7 +53,7 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
                   ? request.headers.get('x-nexus-application-memories-version') === '1'
                     ? request.headers.get('x-nexus-application-ota-version') === '1'
                       ? request.headers.get('x-nexus-application-field-day-version') === '1'
-                        ? request.headers.get('x-nexus-application-js8-version') === '1' ? 11 : 10 : 9 : 8 : 7 : 6
+                        ? request.headers.get('x-nexus-application-js8-version') === '1' ? request.headers.get('x-nexus-application-station-modes-version') === '1' ? 12 : 11 : 10 : 9 : 8 : 7 : 6
                 : 5
               : 4
             : 3
@@ -256,7 +256,9 @@ export default {
       const socketOrigin = env.PUBLIC_REMOTE_ORIGIN.replace(/^http/, 'ws')
       response.headers.set('content-security-policy', [
         "default-src 'none'", "script-src 'self'", "style-src 'self' 'unsafe-inline'",
-        "img-src 'self' data:", `connect-src 'self' ${socketOrigin} ${issuer}`,
+        // Received SSTV files and the local composer use validated Blob images.
+        // This permission is image-only; scripts and objects retain their policy.
+        "img-src 'self' data: blob:", `connect-src 'self' ${socketOrigin} ${issuer}`,
         `frame-src ${issuer}`, "worker-src 'self'", "form-action 'self'",
         "frame-ancestors 'none'", "base-uri 'none'", "object-src 'none'",
       ].join('; '))

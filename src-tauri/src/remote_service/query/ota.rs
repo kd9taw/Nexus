@@ -257,6 +257,7 @@ mod tests {
             health: Default::default(),
             propagation: Default::default(),
             memories: Default::default(),
+            sstv: Default::default(),
             parks: Default::default(),
         }
     }

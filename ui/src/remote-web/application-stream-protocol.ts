@@ -10,9 +10,10 @@ export const STREAM_TOPICS = [...APPLICATION_COMMANDS, 'get_scope_snapshot', 'ge
 // keyboard-mode samples; v3/v4 continue to use the original seven topics.
 export const KEYBOARD_STREAM_TOPICS = [...STREAM_TOPICS, 'get_rtty_state', 'get_psk_state'] as const
 export const JS8_STREAM_TOPICS = [...KEYBOARD_STREAM_TOPICS, 'get_js8_state'] as const
-export type StreamTopic = typeof JS8_STREAM_TOPICS[number]
-export type StreamVersion = 2 | 5 | 11
-export const streamVocabulary = (version = 2): readonly StreamTopic[] => version === 11 ? JS8_STREAM_TOPICS : [5, 6, 7, 8].includes(version) ? KEYBOARD_STREAM_TOPICS : STREAM_TOPICS
+export const STATION_MODES_STREAM_TOPICS = [...JS8_STREAM_TOPICS, 'get_sstv_state', 'get_remote_aprs_state'] as const
+export type StreamTopic = typeof STATION_MODES_STREAM_TOPICS[number]
+export type StreamVersion = 2 | 5 | 11 | 12
+export const streamVocabulary = (version = 2): readonly StreamTopic[] => version === 12 ? STATION_MODES_STREAM_TOPICS : version === 11 ? JS8_STREAM_TOPICS : [5, 6, 7, 8].includes(version) ? KEYBOARD_STREAM_TOPICS : STREAM_TOPICS
 export type StreamSample = ApplicationReply<StreamTopic>
 export type StreamError = { type: 'applicationError'; requestId: string; command: StreamTopic; error: ApplicationErrorCode }
 export type StreamUpdate = StreamSample | StreamError
@@ -20,7 +21,7 @@ export const STREAM_INTEREST_MS = 2500
 export const STREAM_INTERVAL: Record<StreamTopic, number> = {
   get_snapshot: 500, get_settings: 1000, get_band_plan: 1000, get_spectrum_row: 100,
   get_meters: 200, get_scope_snapshot: 100, get_cw_state: 200,
-  get_rtty_state: 200, get_psk_state: 200, get_js8_state: 500,
+  get_rtty_state: 200, get_psk_state: 200, get_js8_state: 500, get_sstv_state: 1000, get_remote_aprs_state: 1000,
 }
 export const streamTopic = (v: unknown, version = 2): v is StreamTopic => streamVocabulary(version).includes(v as StreamTopic)
 export const streamId = (v: unknown): v is string => typeof v === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(v)

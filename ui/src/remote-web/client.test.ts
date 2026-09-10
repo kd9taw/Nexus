@@ -20,7 +20,7 @@ class Socket {
 }
 let sockets: Socket[] = []
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); sockets = [] })
-async function connection() {
+async function connection(applicationMode = false) {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'performance'] })
   vi.stubGlobal('WebSocket', Socket)
   const ticket = crypto.randomUUID().replace(/-/g, '') + crypto.randomUUID().replace(/-/g, '')
@@ -29,7 +29,7 @@ async function connection() {
     const startedAt = performance.now()
     return { body: await post(`stations/${stationId}/ticket`, {}, signal), startedAt }
   }
-  const remote = new HostedConnection({ post, observationTicket } as unknown as BrowserClient, crypto.randomUUID())
+  const remote = new HostedConnection({ post, observationTicket } as unknown as BrowserClient, crypto.randomUUID(), applicationMode)
   remote.start(); await vi.advanceTimersByTimeAsync(0)
   return { remote, post, ticket, socket: sockets[sockets.length - 1] }
 }
@@ -159,4 +159,27 @@ it.each(['deadline', 'disconnect'])('cancels an HTTP body stalled after headers 
   else await vi.advanceTimersByTimeAsync(10000)
   expect(requestSignal?.aborted).toBe(true)
   await expect(request).resolves.toBe('aborted')
+})
+
+
+it.each([
+  {applicationMode:false,buffered:300,accepted:true},
+  {applicationMode:false,buffered:513,accepted:false},
+  {applicationMode:true,buffered:700,accepted:true},
+  {applicationMode:true,buffered:1900,accepted:true},
+  {applicationMode:true,buffered:2049,accepted:false},
+])('uses the multiplexed socket budget for observation ACKs: %j',async({applicationMode,buffered,accepted})=>{
+  const {remote,socket}=await connection(applicationMode)
+  socket.bufferedAmount=buffered
+  socket.receive(publication())
+  if(accepted){
+    expect(socket.readyState).toBe(Socket.OPEN)
+    await expect(remote.source.read(new AbortController().signal)).resolves.toBeTruthy()
+    expect(JSON.parse(socket.sent.at(-1)!)).toMatchObject({type:'ack',sequence:1})
+  }else{
+    expect(socket.readyState).toBe(2)
+    await expect(remote.source.read(new AbortController().signal)).rejects.toThrow()
+    expect(socket.sent).toHaveLength(0)
+  }
+  remote.stop()
 })

@@ -231,6 +231,10 @@ pub async fn connected(
         "x-nexus-application-js8-version",
         "1".parse().map_err(|_| "invalidResponse")?,
     );
+    request.headers_mut().insert(
+        "x-nexus-application-station-modes-version",
+        "1".parse().map_err(|_| "invalidResponse")?,
+    );
     let config = WebSocketConfig::default()
         .max_message_size(Some(512))
         .max_frame_size(Some(512))
@@ -261,6 +265,11 @@ pub async fn connected(
     let mut application =
         super::application::Publisher::with_feeds(feeds.spectrum.clone(), feeds.meters.clone());
     let queries = std::sync::Arc::new(std::sync::Mutex::new(super::query::Publisher::default()));
+    application.sstv_images = queries
+        .lock()
+        .map_err(|_| "applicationUnavailable")?
+        .sstv_images
+        .clone();
     application.journal = Some(
         queries
             .lock()

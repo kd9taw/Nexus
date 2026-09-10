@@ -1,5 +1,6 @@
 //! Bounded, immutable collection snapshots. Runs on a blocking worker, never on
-//! the socket/live-instrument loop. This module has no file, vault or TX access.
+//! the socket/live-instrument loop. Only the scoped SSTV resource reader accesses
+//! image files; no collection has vault or TX access.
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BinaryHeap, VecDeque};
@@ -35,6 +36,8 @@ pub enum Collection {
     Ota,
     FieldDay,
     Js8Context,
+    SstvImage,
+    Aprs,
 }
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -59,6 +62,8 @@ impl Request {
                         .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'/')
                     && !self.unconfirmed
                     && self.cursor.is_none()
+            } else if self.collection == Collection::SstvImage {
+                super::sstv::identifier(&self.search) && !self.unconfirmed
             } else {
                 self.collection == Collection::Log || (self.search.is_empty() && !self.unconfirmed)
             })
@@ -87,7 +92,7 @@ fn parse_cursor(cursor: &str) -> Option<(&str, usize)> {
     (super::transport::identifier(id) && n > 0 && n < MAX_ROWS && n.to_string() == offset)
         .then_some((id, n))
 }
-fn snapshot_id() -> Result<String, &'static str> {
+pub(super) fn snapshot_id() -> Result<String, &'static str> {
     let s = super::transport::random_secret()?;
     Ok(format!(
         "{}-{}-{}-{}-{}",
@@ -108,6 +113,7 @@ pub struct Sources {
     pub propagation: crate::PropCache,
     pub memories: memories::Bank,
     pub parks: crate::SharedParks,
+    pub sstv: super::sstv::Source,
 }
 
 // Display-only journal from the existing Remote snapshot producer. The engine's
@@ -237,6 +243,7 @@ pub struct Publisher {
     pub journal: Arc<Mutex<Journal>>,
     unassisted: bool,
     js8: js8::Cache,
+    pub(super) sstv_images: super::sstv::SharedImages,
 }
 impl Publisher {
     pub fn read(
@@ -248,6 +255,11 @@ impl Publisher {
     ) -> Result<String, &'static str> {
         if !request.valid() {
             return Err("applicationUnsupported");
+        }
+        if request.collection == Collection::SstvImage {
+            // Validate a retained cursor too. Removing an image locally ends its
+            // read capability even if an immutable page snapshot still exists.
+            super::sstv::check_current(&self.sstv_images, &request.search, engine)?;
         }
         let unassisted = crate::unassisted();
         if self.unassisted != unassisted {
@@ -277,6 +289,7 @@ impl Publisher {
                     | Collection::Ota
                     | Collection::FieldDay
                     | Collection::Js8Context
+                    | Collection::SstvImage
             ) {
                 0 // Explicit selection/Refresh must see intervening local log changes.
             } else if request.collection == Collection::Decodes {
@@ -296,6 +309,15 @@ impl Publisher {
                 (s.id.clone(), 0)
             } else {
                 let (mut rows, total, meta) = self.capture(request, engine, sources)?;
+                if matches!(request.collection, Collection::SstvImage | Collection::Aprs)
+                    && (rows.len() != total
+                        || rows.len() > MAX_ROWS
+                        || meta.to_string().len()
+                            + rows.iter().map(|r| r.to_string().len()).sum::<usize>()
+                            > SNAPSHOT_BYTES)
+                {
+                    return Err("applicationTooLarge");
+                }
                 rows.truncate(MAX_ROWS);
                 let mut bytes = meta.to_string().len();
                 let mut retained = 0;
@@ -346,7 +368,14 @@ impl Publisher {
         if offset > 0 && offset >= s.rows.len() {
             return Err("queryExpired");
         }
-        let mut end = (offset + 128).min(s.rows.len());
+        // Image chunks have a known 64-KiB encoded ceiling. Start at three so
+        // constructing a page never repeatedly serializes the entire image.
+        let page_rows = if request.collection == Collection::SstvImage {
+            3
+        } else {
+            128
+        };
+        let mut end = (offset + page_rows).min(s.rows.len());
         loop {
             let reply = json!({ "type": "applicationPage", "requestId": request.request_id, "collection": request.collection,
                 "snapshotId": s.id, "offset": offset, "total": s.total, "retained": s.rows.len(),
@@ -372,6 +401,15 @@ impl Publisher {
             _ => Err("applicationUnavailable"),
         };
         let rows = match request.collection {
+            Collection::Aprs => return super::aprs::capture(engine),
+            Collection::SstvImage => {
+                return super::sstv::capture(
+                    &self.sstv_images,
+                    &request.search,
+                    engine,
+                    &sources.ok_or("applicationUnavailable")?.sstv,
+                );
+            }
             Collection::Js8Context => {
                 return Ok((Vec::new(), 0, self.js8.read(engine)?));
             }

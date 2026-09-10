@@ -15,8 +15,13 @@ export async function insightsReference() {
     })
     return exports
   }
+  const protocol=await module('remote-web/application-protocol.ts')
+  const stream=await module('remote-web/application-stream-protocol.ts',{'./application-protocol':protocol})
+  const query=await module('remote-web/application-query-protocol.ts',{'./application-protocol':protocol,'./application-stream-protocol':stream})
+  const display=await module('remote-web/display-validation.ts')
   const statistics = await module('features/logStats.ts')
-  return { ...statistics, ...await module('remote-web/insights.ts', { '../features/logStats': statistics }),
+  return { ...statistics, ...await module('remote-web/sstv.ts',{'./application-query-protocol':query,'./display-validation':display}),
+    ...await module('remote-web/aprs.ts',{'./display-validation':display}), ...await module('remote-web/insights.ts', { '../features/logStats': statistics }),
     ...await module('remote-web/dxpeditions.ts'),
     ...await module('remote-web/ota.ts'),
     ...await module('remote-web/field-day.ts'),

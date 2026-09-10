@@ -13067,6 +13067,43 @@ impl Engine {
         self.aprs_heard.clone()
     }
 
+    /// Check the complete display projection before a remote reader clones it.
+    /// This never prunes either native store or changes its independent aging.
+    pub fn aprs_display_within_budget(&self, text_budget: usize) -> bool {
+        if self.aprs_heard.len() > APRS_HEARD_CAP || self.aprs_stations.len() > APRS_STATION_CAP {
+            return false;
+        }
+        let mut bytes = 0usize;
+        let mut text = |s: &str, max: usize| {
+            bytes = bytes.saturating_add(s.len());
+            s.len() <= max && bytes <= text_budget
+        };
+        for h in &self.aprs_heard {
+            if !text(&h.source, 80)
+                || !text(&h.dest, 80)
+                || !text(&h.text, 1024)
+                || !text(&h.raw, 2048)
+                || h.path.len() > 16
+                || !h.path.iter().all(|p| text(p, 80))
+                || !text(h.addressee.as_deref().unwrap_or(""), 80)
+                || !text(h.msg_id.as_deref().unwrap_or(""), 80)
+            {
+                return false;
+            }
+        }
+        for s in self.aprs_stations.values() {
+            if !text(&s.call, 80)
+                || !text(&s.text, 1024)
+                || !text(&s.raw, 2048)
+                || s.path.len() > 16
+                || !s.path.iter().all(|p| text(p, 80))
+            {
+                return false;
+            }
+        }
+        true
+    }
+
     /// The up-front APRS-TX gate: every reason a beacon would be refused, checked before anything is
     /// queued so the operator learns WHY. No operating-mode gate (a beacon is a one-shot manual
     /// action on whatever the rig is set to — typically FM on 144.390); [`Engine::tx_owner`]

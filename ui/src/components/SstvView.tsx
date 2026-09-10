@@ -6,7 +6,12 @@
 // catalog under `sstv.*`; the mode names, rasters, key-down seconds, VIS codes, dial
 // readings, callsigns, FSK IDs and the picture's own painted text are invariant tokens and
 // stay in the code.
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useContext, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useStationControl, useStationData } from '../stationAccess'
+import { RemoteCollectionsContext } from '../remote-web/collections'
+import { sstvPlan, loadSstvImage } from '../remote-web/sstv'
+import { useSstvImage } from '../remote-web/useSstvImage'
+import { displayNow } from '../remote-web/display-validation'
 import { confirmDialog } from '../confirm'
 import type { AppSnapshot, BandChannel, SstvGalleryEntry, SstvHealth, SstvState } from '../types'
 import { Waterfall } from './Waterfall'
@@ -479,8 +484,8 @@ function fmtUtc(iso: string): string {
  * deleted file) would silently draw nothing — a blank box that looks exactly like the bug it
  * would be hiding. Anything not .bmp keeps the broken-image indicator, which is at least
  * honest. Outside the shell (tests) → caption-only card. */
-function GalleryThumb({ entry }: { entry: SstvGalleryEntry }) {
-  const src = assetUrl(entry.path)
+function GalleryThumb({ entry, remoteSrc }: { entry: SstvGalleryEntry; remoteSrc?: string | null }) {
+  const src = remoteSrc === undefined ? assetUrl(entry.path) : remoteSrc
   const isBmp = /\.bmp$/i.test(entry.path)
   const [fallback, setFallback] = useState(false)
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -512,6 +517,18 @@ function GalleryThumb({ entry }: { entry: SstvGalleryEntry }) {
   )
 }
 
+function ReceivedThumb({entry,active}: {entry:SstvGalleryEntry;active:boolean}) {
+  const source=useContext(RemoteCollectionsContext), available=useStationData()
+  const ref=useRef<HTMLDivElement>(null)
+  const image=useSstvImage(source,entry.path,ref,active&&available)
+  if(!source)return <GalleryThumb entry={entry}/>
+  const mode=SSTV_TX_MODES.find(m=>m.name===entry.mode)
+  return <div ref={ref} className="sstv-remote-image" style={{aspectRatio:mode?`${mode.width} / ${mode.height}`:'4 / 3'}}>
+    {image.url ? <GalleryThumb entry={entry} remoteSrc={image.url}/> : <span role="status" className="dim">{image.failed?t('remote.sstvImageUnavailable'):t('remote.collectionLoading')}</span>}
+    {image.failed && <button type="button" className="cw-macro" onClick={image.retry}>{t('remote.refreshCollection')}</button>}
+  </div>
+}
+
 /**
  * SSTV view (Digital rail: FT · Tempo · RTTY · SSTV) — LIVE RX-first: arm the
  * receiver and any VIS header heard auto-decodes; the in-flight image renders
@@ -521,6 +538,7 @@ function GalleryThumb({ entry }: { entry: SstvGalleryEntry }) {
  * txState=false: nothing here transmits.
  */
 export function SstvView({ snap, theme = 'default', onSnap, active = true, onSetFrequency, onSetTxEnabled, wheelSensitivity, txModeDefault, txPowerPct, panels, onOpenSettings }: Props) {
+  const canControl=useStationControl(), dataAvailable=useStationData(), source=useContext(RemoteCollectionsContext), remote=!!source
   // Panels (Phase 3): the RX canvas + the TX bar are pinned chrome (never panels); only the
   // Transmit composer and the Gallery are removable (⊞ menu). They render through
   // CockpitPaneFrame with ROLES — the composer is fit="content" (a drop zone cannot use
@@ -544,19 +562,20 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
   const snapRef = useRef(snap)
   snapRef.current = snap
   useEffect(() => {
-    if (!active) return
+    if (!active || (remote && !dataAvailable)) { if (remote) {setSstv(null);setPlan([]);setPollError(true)};return }
     let alive = true
     const tick = () => {
-      setNow(Math.floor(Date.now() / 1000))
+      if (!remote) setNow(Math.floor(Date.now() / 1000))
       getSstvState()
         .then((s) => {
           if (alive) {
             setSstv(s)
+            if (remote) { setPlan(sstvPlan(s)); setNow(Math.floor(displayNow(s)/1000)) }
             setPollError(false)
           }
         })
         .catch(() => {
-          if (alive) setPollError(true)
+          if (alive) { setPollError(true); if(remote){setSstv(null);setPlan([])} }
         })
     }
     tick()
@@ -565,7 +584,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
       alive = false
       window.clearInterval(id)
     }
-  }, [active])
+  }, [active, remote, dataAvailable])
 
   // ⭐ START THE RECEIVER ON ENTERING THE VIEW, so SSTV does not open on a screen
   // that will never decode anything. Rising edge of `active`, not mount — this view
@@ -579,6 +598,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
   // than in a ref here so a remount cannot lose it.
   const autoArmed = useRef(false)
   useEffect(() => {
+    if (remote) return
     if (!active) {
       autoArmed.current = false
       return
@@ -592,10 +612,11 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
       .then(() => getSstvState())
       .then(setSstv)
       .catch(() => {})
-  }, [active])
+  }, [active, remote])
 
   const armed = sstv?.armed === true
   const toggleArm = () => {
+    if (!canControl) return
     void sstvArm(!armed)
       .then(setSstv)
       .catch(() => pushToast(t('sstv.arm.failed'), 'error'))
@@ -623,12 +644,14 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
     setTxPower(Math.min(100, Math.max(0, Math.round(txPowerPct))))
   }, [txPowerPct])
   useEffect(() => {
+    if (remote) return
     void getLicensedBandPlan('sstv').then(setPlan).catch(() => {})
-  }, [])
+  }, [remote])
 
   // Commit a typed dial from the shared header readout; rejects out-of-plan
   // frequencies with a toast (same as the other cockpits).
   const commitDial = (mhz: number) => {
+    if (!canControl) return
     // An EMPTY band label is not a refusal: listening off the ham bands is first-class (operator,
     // 2026-08-13), so a typed WWV/shortwave/inter-band frequency tunes there. This used to toast
     // "outside the band plan" and discard the entry.
@@ -780,6 +803,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
   // "are you sure", so the operator can tell which one they are about to lose — the tiles are
   // small and several look alike.
   const deleteImage = async (g: { path: string; mode: string; finishedUtc: string }) => {
+    if (!canControl) return
     if (
       !(await confirmDialog({
         title: t('sstv.gallery.delete.confirm.title', {
@@ -802,10 +826,10 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
    *  the BMP fallback already proved) and run it through the ORDINARY loadImage path,
    *  so sniffing, orientation and the ident treat it like any dropped file. */
   const editAndResend = async (g: SstvGalleryEntry) => {
-    const src = assetUrl(g.path)
-    if (!src) return
+    const src = source ? null : assetUrl(g.path)
+    if (!source && !src) return
     await withErrorToast(async () => {
-      const buf = await (await fetch(src)).arrayBuffer()
+      const buf = source ? await (await loadSstvImage(source,g.path,()=>dataAvailable)).arrayBuffer() : await (await fetch(src!)).arrayBuffer()
       // A FILE NAME is never built from a translated word (the batch-8 ruling).
       const name = g.path.split(/[\\/]/).pop() ?? 'received-image'
       await loadImage(new File([buf], name))
@@ -1352,6 +1376,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
   }
 
   const sendImage = () => {
+    if (!canControl) return
     if (!packed || sending) return
     // ⚠️ NO CALLSIGN, NO TRANSMISSION. The picture IS the identification here, so an
     // empty call is not a cosmetic gap. The backend refuses the same way and is the
@@ -1438,6 +1463,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
   }
 
   const stopTx = () => {
+    if (!canControl) return
     void sstvStop()
       .then((s) => {
         setSstv(s)
@@ -1510,6 +1536,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
             value: txPower,
             unit: '%',
             onChange: (pct: number) => {
+              if (!canControl) return
               // The drag IS the operator's latest word on drive, and it has already reached
               // the rig — Send must not overwrite it with the Settings default.
               powerTouched.current = true
@@ -1519,13 +1546,13 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
             label: t('sstv.header.power.label'),
             title: t('sstv.header.power.title'),
           }}
-          onTune={(on) => void setTune(on).then((st) => onSnap?.(st))}
+          onTune={(on) => { if(canControl) void setTune(on).then((st) => onSnap?.(st)) }}
           onAtuTune={() =>
-            void atuTune()
+            canControl && void atuTune()
               .then((st) => onSnap?.(st))
               .catch((e) => pushToast(String(e), 'error'))
           }
-          onStopTx={() => void haltTx()}
+          onStopTx={() => { if(canControl) void haltTx() }}
           modeIndicator={
             <span className="cw-mode-badge" title={t('sstv.header.mode.title')}>
               {modeBadge}
@@ -1592,6 +1619,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
             type="button"
             className={`sstv-arm${armed ? ' on' : ''}`}
             aria-pressed={armed}
+            disabled={!canControl}
             onClick={toggleArm}
             title={armed ? t('sstv.arm.on.title') : t('sstv.arm.off.title')}
           >
@@ -2019,11 +2047,11 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
         <CockpitPaneFrame title={t('sstv.panel.gallery')} paneId="gallery">
           <div className="sstv-gallery-grid">
             {gallery.length === 0 ? (
-              <div className="sstv-gallery-empty">{t('sstv.gallery.empty')}</div>
+              <div className="sstv-gallery-empty">{remote && !sstv ? (pollError ? t('remote.collectionUnavailable') : t('remote.collectionLoading')) : t('sstv.gallery.empty')}</div>
             ) : (
               gallery.map((g) => (
-                <figure key={g.path} className="sstv-thumb" title={g.path}>
-                  <GalleryThumb entry={g} />
+                <figure key={g.path} className="sstv-thumb" title={remote ? undefined : g.path}>
+                  <ReceivedThumb entry={g} active={active} />
                   {/* Irreversible — a received picture is the only copy of something somebody
                       sent you, and there is no re-download. Confirmed before it happens, but a
                       plain confirm rather than the Logbook's type-the-word dialog: one image is
@@ -2037,6 +2065,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
                       when: fmtUtc(g.finishedUtc),
                     })}
                     title={t('sstv.gallery.delete.title')}
+                    disabled={!canControl}
                     onClick={() => void deleteImage(g)}
                   >
                     ✕
@@ -2079,7 +2108,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
           stay parked — mid-column it scrolled off the TOP on the way to the gallery. */}
       {/* ⚠️ THE BAR'S OWN ACCESSIBLE NAME IS NOT MIGRATED — it names the stop control it
           holds, and it moves with the stop line in the transmit-path batch. */}
-      <div className="sstv-tx-bar" aria-label="SSTV transmit controls">
+      <div className={`sstv-tx-bar${!canControl ? ' remote-observer-dock' : ''}`} aria-label="SSTV transmit controls">
         <label className="sstv-tx-mode">
           <span>{t('sstv.tx.mode.label')}</span>
           <select
@@ -2104,7 +2133,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
             type="button"
             className="sstv-tx-send"
             onClick={sendImage}
-            disabled={!packed || sending || !callsign}
+            disabled={!canControl || !packed || sending || !callsign}
             title={
               !packed
                 ? t('sstv.tx.send.noImage.title')
@@ -2122,7 +2151,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
             type="button"
             className="sstv-tx-stop"
             onClick={stopTx}
-            disabled={!sending}
+            disabled={!canControl || !sending}
             title="Stop the transmission in progress and unkey"
           >
             Stop

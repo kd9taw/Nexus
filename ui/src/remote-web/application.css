@@ -58,9 +58,9 @@
    the following recall rail when the effective viewport is narrow. */
 .remote-workspace .cockpit-qsocol { overflow-y: auto; }
 /* A large pinned zoom can make the native header taller than a phone. Keep
-   a usable JS8 shell below it and let the application scroll to that shell. */
-.remote-workspace:has(.js8-host:not([hidden])) { overflow: auto; }
-.remote-workspace .shell:has(.js8-host:not([hidden])) {
+   a usable mode shell below it and let the application scroll to that shell. */
+.remote-workspace:has(:is(.js8-host, .sstv-host, .aprs-host):not([hidden])) { overflow: auto; }
+.remote-workspace .shell:has(:is(.js8-host, .sstv-host, .aprs-host):not([hidden])) {
   min-height: min(32em, calc(0.7 * var(--vh-eff, 100vh)));
   min-width: 0;
 }
@@ -72,6 +72,35 @@
 }
 [data-viewport='xs'] .remote-workspace .js8-row > .js8-text,
 [data-viewport='xs'] .remote-workspace .js8-offset-row > .js8-text { grid-column: 1 / -1; }
+/* The APRS rail wraps its native form labels. Inputs have an intrinsic minimum
+   width which can otherwise paint across the next label on a phone. */
+.remote-workspace .aprs-beacon label { max-width: 100%; }
+.remote-workspace .aprs-beacon input { min-width: 0; }
+.remote-workspace .aprs-beacon-comment { flex: 1 1 16em; }
+/* Give the map and rail usable height below a wrapped header. The rail owns
+   vertical scrolling; its table must not shrink to a zero-height scroller. */
+.remote-workspace .aprs-body { min-height: min(28em, calc(0.7 * var(--vh-eff, 100vh))); }
+.remote-workspace .aprs-rail > * { flex-shrink: 0; }
+/* Reserve a received picture's space while its authenticated bytes arrive.
+   Loading thumbnails must not move captions out from under a scroll or tap. */
+.sstv-remote-image {
+  position: relative;
+  flex: 0 0 auto;
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+.sstv-remote-image .sstv-thumb-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
 .app[data-remote-stale="true"] > :not(.remote-application-status) {
   visibility: hidden;
   pointer-events: none;

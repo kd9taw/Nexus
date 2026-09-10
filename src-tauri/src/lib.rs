@@ -21942,6 +21942,10 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             health: d.health.clone(),
             propagation: d.prop_cache.clone(),
             memories: Default::default(),
+            sstv: remote_service::sstv::Source::new(vec![
+                sstv_gallery_dir(),
+                legacy_sstv_gallery_dir(),
+            ]),
         }),
     );
     tauri::Builder::default()

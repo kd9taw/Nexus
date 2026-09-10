@@ -1,7 +1,9 @@
 //! Local approval and the Remote background task. Engine access is restricted to
 //! bounded observation and reviewed application reads; no operating commands.
 mod application;
+mod aprs;
 pub(crate) mod query;
+pub(crate) mod sstv;
 #[cfg(test)]
 mod tests;
 mod transport;

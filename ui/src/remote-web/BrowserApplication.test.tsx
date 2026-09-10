@@ -13,6 +13,11 @@ import { cwDecode, getScopeRow } from '../api'
 import { RttyCockpit } from '../components/RttyCockpit'
 import { PskCockpit } from '../components/PskCockpit'
 import { coerceMemory, memoriesStore } from '../features/memories'
+import sstvFixture from './__fixtures__/sstv.json'
+import aprsFixture from './__fixtures__/aprs.json'
+import aprsRosterFixture from './__fixtures__/aprs-roster.json'
+import { parseSstvSample } from './sstv'
+import { parseAprsLive } from './aprs'
 import js8Fixture from './__fixtures__/js8.json'
 import { parseJs8Sample } from './js8'
 import { RemoteCollections, RemoteCollectionsContext } from './collections'
@@ -463,4 +468,81 @@ it('closes a portaled station dialog when station data becomes unavailable', () 
   rerender(content(false))
   expect(screen.queryByRole('dialog')).toBeNull()
   expect(document.body.style.pointerEvents).not.toBe('none')
+})
+
+it('connects the real SSTV cockpit, clears failed samples, and keeps composition local',async()=>{
+  const current=structuredClone(snapshot),settings=projectedSettings(),calls:string[]=[]
+  let available=true
+  dispose=installApplicationTransport({kind:'remote',invoke:async <T,>(command:string):Promise<T>=>{
+    calls.push(command)
+    if(command==='get_snapshot')return current as T
+    if(command==='get_settings')return settings as T
+    if(command==='get_band_plan')return [] as T
+    if(command==='get_sstv_state'&&available)return parseSstvSample(structuredClone(sstvFixture),0) as T
+    if(command==='get_spectrum_row')return {row:[],loHz:0,hiHz:4000,source:'audio'} as T
+    if(command==='get_meters')return {rxLevel:0,smeterDb:null,cwToneHz:null} as T
+    throw new Error('applicationUnsupported')
+  }})
+  const context=new RemoteCollections({supports:()=>false} as unknown as ApplicationClient)
+  vi.spyOn(context,'page').mockRejectedValue(new Error('applicationUnavailable'))
+  const view=(live:boolean)=><StationControlContext.Provider value={false}><StationDataContext.Provider value={live}>
+    <RemoteCollectionsContext.Provider value={context}><App remote={{snapshot:current,settings,bandPlan:[],stationModes:true,status:<div>Observer</div>}}/></RemoteCollectionsContext.Provider>
+  </StationDataContext.Provider></StationControlContext.Provider>
+  const {container,rerender,unmount}=render(view(true))
+  fireEvent.click(screen.getByRole('button',{name:/^SSTV —/}))
+  await waitFor(()=>expect(container.querySelector('.sstv-thumb-call')?.textContent).toBe('W1AW'))
+  expect(container.querySelectorAll('.sstv-view')).toHaveLength(1)
+  expect(container.querySelector('.sstv-live-canvas')).not.toBeNull()
+  const controls=container.querySelectorAll<HTMLButtonElement>('.sstv-arm,.sstv-tx-send,.sstv-tx-stop,.sstv-thumb-del')
+  expect(controls.length).toBe(4)
+  for(const button of controls){expect(button.disabled).toBe(true);fireEvent.click(button)}
+  const mode=container.querySelector('.sstv-tx-mode select') as HTMLSelectElement
+  const alternate=[...mode.options].find(o=>o.value!==mode.value)!.value
+  fireEvent.change(mode,{target:{value:alternate}});expect(mode.value).toBe(alternate)
+  available=false
+  await waitFor(()=>expect(container.querySelector('.sstv-live-canvas')).toBeNull(),{timeout:2000})
+  expect(container.querySelector('.sstv-thumb')).toBeNull()
+  available=true
+  await waitFor(()=>expect(container.querySelector('.sstv-thumb')).not.toBeNull(),{timeout:2000})
+  rerender(view(false));expect(container.querySelector('.sstv-live-canvas')).toBeNull()
+  for(const forbidden of ['sstv_auto_arm','sstv_arm','sstv_send','sstv_stop','sstv_delete_image','set_rf_power','get_licensed_band_plan'])expect(calls).not.toContain(forbidden)
+  unmount();context.dispose()
+})
+
+it('connects the real APRS roster and keeps tune, beacon, message and settings actions disabled',async()=>{
+  const current=structuredClone(snapshot),settings=projectedSettings(),calls:string[]=[]
+  let available=true
+  const read=async <T,>(command:string):Promise<T>=>{
+    calls.push(command)
+    if(command==='get_snapshot')return current as T
+    if(command==='get_settings')return settings as T
+    if(command==='get_band_plan')return [] as T
+    if(command==='get_remote_aprs_state'&&available)return parseAprsLive(structuredClone(aprsFixture),0) as T
+    if(command==='get_spectrum_row')return {row:[],loHz:0,hiHz:4000,source:'audio'} as T
+    if(command==='get_meters')return {rxLevel:0,smeterDb:null,cwToneHz:null} as T
+    throw new Error('applicationUnsupported')
+  }
+  dispose=installApplicationTransport({kind:'remote',invoke:read})
+  const context=new RemoteCollections({supports:()=>false,invoke:read} as unknown as ApplicationClient)
+  vi.spyOn(context,'page').mockImplementation(async()=>({collection:'aprs',offset:0,total:6,retained:6,rows:aprsRosterFixture.rows,nextCursor:null,ageMs:0,
+    snapshotId:'8aa041cb-c642-459c-83f3-11a5b720647d',meta:{capturedAgeMs:0,source:aprsRosterFixture.meta}} as unknown as QueryPage))
+  const view=(live:boolean)=><StationControlContext.Provider value={false}><StationDataContext.Provider value={live}>
+    <RemoteCollectionsContext.Provider value={context}><App remote={{snapshot:current,settings,bandPlan:[],stationModes:true,status:<div>Observer</div>}}/></RemoteCollectionsContext.Provider>
+  </StationDataContext.Provider></StationControlContext.Provider>
+  const {container,rerender,unmount}=render(view(true))
+  fireEvent.click(screen.getByRole('button',{name:/^APRS —/}))
+  await waitFor(()=>expect(container.querySelector('.aprs-cockpit')?.textContent).toContain('K2ABC'))
+  expect(container.querySelectorAll('.aprs-cockpit')).toHaveLength(1)
+  await waitFor(()=>expect(container.querySelector<HTMLInputElement>('.aprs-beacon-comment input')?.value).toBe('Nexus station'))
+  const controls=container.querySelectorAll<HTMLButtonElement>('.aprs-retune,.aprs-beacon-send')
+  expect(controls.length).toBeGreaterThanOrEqual(2)
+  for(const button of controls){expect(button.disabled).toBe(true);fireEvent.click(button)}
+  const message=container.querySelector<HTMLInputElement>('.aprs-message-compose .aprs-beacon-comment input')!
+  fireEvent.change(message,{target:{value:'TEST MESSAGE'}});fireEvent.keyDown(message,{key:'Enter'})
+  expect(message.value).toBe('TEST MESSAGE')
+  rerender(view(false));expect(container.querySelector('.aprs-cockpit')?.textContent).not.toContain('K2ABC')
+  available=false;rerender(view(true))
+  await waitFor(()=>expect(container.querySelector('.aprs-health')?.textContent).not.toContain('Receiving'))
+  for(const forbidden of ['aprs_auto_arm','aprs_arm','aprs_send_beacon','aprs_send_message','aprs_tune','get_aprs_stations','set_settings'])expect(calls).not.toContain(forbidden)
+  unmount();context.dispose()
 })

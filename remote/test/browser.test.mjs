@@ -11,6 +11,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import WebSocket from 'ws'
 import { runtime } from './runtime.mjs'
 import { applicationFixture, collectionFixture, recallFixture } from './application-fixture.mjs'
+import { stationModesFixture } from './station-modes-fixture.mjs'
 import { tempoConversations } from './tempo-fixture.mjs'
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
@@ -62,7 +63,7 @@ async function chrome() {
   } catch(error) { ws?.close(); if(!exited)process.kill(-child.pid,'SIGTERM'); await rm(profile,{recursive:true,force:true,maxRetries:8,retryDelay:100}); throw error }
 }
 
-for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]) test(`compiled hosted browser v${applicationVersion} completes PKCE, local device approval, observation and viewport checks`, { timeout: 120000 }, async () => {
+for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]) test(`compiled hosted browser v${applicationVersion} completes PKCE, local device approval, observation and viewport checks`, { timeout: 120000 }, async () => {
   const app=await runtime(), artifacts=process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS ? join(process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS, `v${applicationVersion}`) : undefined
   let browser, station, producing=true, producer, applicationProducer
   const results=[]
@@ -72,7 +73,7 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]) test(`comp
     const shell = await fetch(app.origin,{signal:AbortSignal.timeout(3000)})
     assert.equal(shell.status,200)
     assert.match(await shell.text(), /Nexus Remote/)
-    const stationHeaders = { 'x-nexus-application-version': '1', ...(applicationVersion >= 2 ? { 'x-nexus-application-stream-version': '2' } : {}), ...(applicationVersion >= 3 ? { 'x-nexus-application-query-version': '1' } : {}), ...(applicationVersion >= 4 ? { 'x-nexus-application-recall-version': '1' } : {}), ...(applicationVersion >= 5 ? { 'x-nexus-application-keyboard-version': '1' } : {}), ...(applicationVersion >= 6 ? { 'x-nexus-application-insights-version': '1' } : {}), ...(applicationVersion >= 7 ? { 'x-nexus-application-dxpeditions-version': '1' } : {}), ...(applicationVersion >= 8 ? { 'x-nexus-application-memories-version': '1' } : {}), ...(applicationVersion >= 9 ? { 'x-nexus-application-ota-version': '1' } : {}), ...(applicationVersion >= 10 ? { 'x-nexus-application-field-day-version': '1' } : {}), ...(applicationVersion >= 11 ? { 'x-nexus-application-js8-version': '1' } : {}) }
+    const stationHeaders = { 'x-nexus-application-version': '1', ...(applicationVersion >= 2 ? { 'x-nexus-application-stream-version': '2' } : {}), ...(applicationVersion >= 3 ? { 'x-nexus-application-query-version': '1' } : {}), ...(applicationVersion >= 4 ? { 'x-nexus-application-recall-version': '1' } : {}), ...(applicationVersion >= 5 ? { 'x-nexus-application-keyboard-version': '1' } : {}), ...(applicationVersion >= 6 ? { 'x-nexus-application-insights-version': '1' } : {}), ...(applicationVersion >= 7 ? { 'x-nexus-application-dxpeditions-version': '1' } : {}), ...(applicationVersion >= 8 ? { 'x-nexus-application-memories-version': '1' } : {}), ...(applicationVersion >= 9 ? { 'x-nexus-application-ota-version': '1' } : {}), ...(applicationVersion >= 10 ? { 'x-nexus-application-field-day-version': '1' } : {}), ...(applicationVersion >= 11 ? { 'x-nexus-application-js8-version': '1' } : {}), ...(applicationVersion >= 12 ? {'x-nexus-application-station-modes-version':'1'} : {}) }
     station=await pair.native.open(pair.stationId, undefined, 101, stationHeaders)
     let code=null, oauth=null, exchanges=0, providerFailure=false, exceptions=0, acknowledgements=0, unexpectedMessages=0
     const applicationTraffic = { reads: 0, acks: 0, subscriptions: 0, batches: 0, bytes: 0, byCommand: {}, maxResponseBytes: 0 }
@@ -106,7 +107,7 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]) test(`comp
       try {
         const message = JSON.parse(event.response.payloadData)
         if (message.type === 'ack' && Object.keys(message).sort().join(',') === 'epoch,sequence,type') acknowledgements++
-        else if (message.type === 'applicationHello' && (Object.keys(message).length === 1 || (Object.keys(message).length === 2 && [2,3,4,5,6,7,8,9,10,11].includes(message.version)))) {}
+        else if (message.type === 'applicationHello' && (Object.keys(message).length === 1 || (Object.keys(message).length === 2 && [2,3,4,5,6,7,8,9,10,11,12].includes(message.version)))) {}
         else if (message.type === 'applicationRead' && Object.keys(message).length === 4) applicationTraffic.reads++
         else if (message.type === 'applicationQuery' && Object.keys(message).length === 7) applicationTraffic.queries=(applicationTraffic.queries??0)+1
         else if (message.type === 'applicationQueryAck' && Object.keys(message).length === 2) {}
@@ -123,8 +124,10 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]) test(`comp
       window.__socketClosures=[];window.__protocolTrace=[];const originalWebSocket=window.WebSocket;
       window.WebSocket=class extends originalWebSocket{
         constructor(...args){super(...args);this.addEventListener('close',e=>window.__socketClosures.push({at:performance.now(),code:e.code,reason:e.reason}));this.addEventListener('message',e=>{try{const v=JSON.parse(e.data);if(v.type==='applicationFrame'){window.__protocolTrace.push({at:performance.now(),updates:v.updates.map(u=>({command:u.command,type:u.type,age:u.ageMs,revision:u.revision}))});window.__protocolTrace=window.__protocolTrace.slice(-40)}}catch{}})}
-        close(...args){window.__socketClosures.push({at:performance.now(),requested:true,code:args[0],reason:args[1]});return super.close(...args)}
+        send(raw){try{const v=JSON.parse(raw);window.__protocolTrace.push({at:performance.now(),out:v.type,requestId:v.requestId,topics:v.topics,buffered:this.bufferedAmount});window.__protocolTrace=window.__protocolTrace.slice(-80)}catch{}return super.send(raw)}
+        close(...args){window.__socketClosures.push({at:performance.now(),requested:true,code:args[0],reason:args[1],buffered:this.bufferedAmount});return super.close(...args)}
       };
+      window.__imagePolicyViolations=[];window.addEventListener('securitypolicyviolation',e=>{if(e.violatedDirective.startsWith('img-src'))window.__imagePolicyViolations.push({directive:e.violatedDirective,scheme:e.blockedURI.split(':')[0]})});
       window.__frameDelay=0;
       const originalRaf=window.requestAnimationFrame.bind(window),originalCancel=window.cancelAnimationFrame.bind(window),delayedFrames=new Map();
       window.requestAnimationFrame=callback=>{const id=originalRaf(time=>{if(!window.__frameDelay){callback(time);return}delayedFrames.set(id,setTimeout(()=>{delayedFrames.delete(id);callback(performance.now())},window.__frameDelay))});return id};
@@ -158,7 +161,7 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]) test(`comp
         await settledLayout()
         point=await evaluate(`(()=>{const e=${expression};if(!e||e.disabled)throw Error('missingControl');const r=e.getBoundingClientRect(),x=r.x+r.width/2,y=r.y+r.height/2;if(!e.contains(document.elementFromPoint(x,y)))throw Error('occludedControl');return{x,y}})()`)
       }
-      catch(error){console.log('Click diagnostic',expression,await evaluate(`(()=>{const e=${expression},r=e?.getBoundingClientRect();return {stale:document.querySelector('.app')?.dataset.remoteStale,status:document.querySelector('.remote-application-status')?.textContent,rect:r?.toJSON(),hit:r?document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)?.outerHTML.slice(0,600):null}})()`));if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-click-failure.png'),Buffer.from(shot.data,'base64'))}throw error}
+      catch(error){console.log('Application session diagnostic',JSON.stringify(await sessionDiagnostic()),{...applicationTraffic,nativeSnapshotAge:performance.now()-(sentAt.get('get_snapshot')??0),stationClosed:station.closed});console.log('Click diagnostic',expression,await evaluate(`(()=>{const e=${expression},r=e?.getBoundingClientRect();return {stale:document.querySelector('.app')?.dataset.remoteStale,status:document.querySelector('.remote-application-status')?.textContent,rect:r?.toJSON(),hit:r?document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)?.outerHTML.slice(0,600):null}})()`));if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-click-failure.png'),Buffer.from(shot.data,'base64'))}throw error}
       await browser.call('Input.dispatchMouseEvent',{type:'mousePressed',...point,button:'left',clickCount:1},session)
       await browser.call('Input.dispatchMouseEvent',{type:'mouseReleased',...point,button:'left',clickCount:1},session)
       await sleep(50)
@@ -199,6 +202,9 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]) test(`comp
     const applicationData = await applicationFixture()
     applicationData.get_settings.fdActive = true
     const collections = collectionFixture()
+    const stationModes=await stationModesFixture()
+    applicationData.get_sstv_state=stationModes.sstv;applicationData.get_remote_aprs_state=stationModes.aprs
+    collections.aprs=stationModes.roster
     const js8Fixture=JSON.parse(await readFile(new URL('../../ui/src/remote-web/__fixtures__/js8.json',import.meta.url),'utf8'))
     const js8Start=Date.now(), js8Delta=js8Start-js8Fixture.capturedAtMs
     for(const row of js8Fixture.state.activity)row.atMs+=js8Delta
@@ -235,12 +241,13 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]) test(`comp
     const withheld = []
     let streamWatch = null
     const sentAt = new Map(), bases = new Map()
-    const intervals = { get_snapshot:500, get_settings:1000, get_band_plan:1000, get_spectrum_row:100, get_meters:200, get_scope_snapshot:100, get_cw_state:200, get_rtty_state:200, get_psk_state:200, get_js8_state:500 }
+    const intervals = { get_snapshot:500, get_settings:1000, get_band_plan:1000, get_spectrum_row:100, get_meters:200, get_scope_snapshot:100, get_cw_state:200, get_rtty_state:200, get_psk_state:200, get_js8_state:500, get_sstv_state:1000, get_remote_aprs_state:1000 }
     applicationProducer=(async()=>{while(producing){const source=station;let request;try{request=await source.take(value=>['applicationRead','applicationWatch','applicationCredit','applicationQuery'].includes(value.type),1000)}catch{continue}
       if(source!==station||source.closed)continue
       if (!applicationAvailable || !producing) { withheld.push({type:request.type,collection:request.collection});continue }
       if (request.type === 'applicationQuery') {
         assert.ok(applicationVersion >= 3)
+        if (['sstvImage','aprs'].includes(request.collection)) assert.ok(applicationVersion>=12)
         if (request.collection === 'js8Context') { assert.ok(applicationVersion >= 11); js8Queries.push(request.collection) }
         if (request.collection === 'fieldDay') { assert.ok(applicationVersion >= 10); fieldDayQueries.push(request.collection) }
         if (request.collection === 'ota') { assert.ok(applicationVersion >= 9); otaQueries.push(request.collection) }
@@ -258,7 +265,7 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]) test(`comp
         const [givenId, offsetText] = (request.cursor??'').split(':')
         const offset = Number(offsetText??0), snapshotId=givenId||crypto.randomUUID()
         if (!givenId) {
-          const collection = request.collection === 'recall' ? recallFixture(request.search) : collections[request.collection]
+          const collection = request.collection === 'sstvImage' ? stationModes.images.get(request.search) : request.collection === 'recall' ? recallFixture(request.search) : collections[request.collection]
           let rows=collection.rows
           if(request.collection==='log') rows=rows.filter(q=>(!request.unconfirmed||!q.awardConfirmed)&&(!request.search||q.call.toLowerCase().includes(request.search.toLowerCase())))
           if(request.collection==='decodes'&&request.after!==null) rows=rows.filter(q=>q.sequence>request.after)
@@ -267,7 +274,7 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]) test(`comp
         }
         const capture=querySnapshots.get(snapshotId)
         assert.ok(capture,'browser must keep a valid sealed cursor')
-        const rows=capture.rows.slice(offset,offset+128), end=offset+rows.length
+        const rows=capture.rows.slice(offset,offset+(request.collection==='sstvImage'?3:128)), end=offset+rows.length
         source.send({type:'applicationPage',requestId:request.requestId,collection:request.collection,snapshotId,offset,
           total:capture.total??capture.rows.length,retained:capture.rows.length,nextCursor:end<capture.rows.length?`${snapshotId}:${end}`:null,
           ageMs:0,rows,meta:{capturedAgeMs:0,source:capture.meta}})
@@ -289,7 +296,8 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]) test(`comp
             sentAt.set(command,now);bases.delete(command);continue
           }
           if(command==='get_js8_state') { assert.ok(applicationVersion>=11); js8Fixture.capturedAtMs=Date.now() }
-          const revision=command==='get_js8_state'?++js8Revision:applicationRevision
+          if(['get_sstv_state','get_remote_aprs_state'].includes(command)){assert.ok(applicationVersion>=12);applicationData[command].capturedAtMs=Date.now()}
+          const revision=['get_js8_state','get_sstv_state','get_remote_aprs_state'].includes(command)?++js8Revision:applicationRevision
           const data=applicationData[command], delta=bases.get(command)===revision && !Array.isArray(data)
           updates.push({type:'applicationResult', requestId:request.requestId, command, revision,
             baseRevision:delta?revision:null, ageMs:0, data:delta?{}:data, removed:[]})
@@ -867,6 +875,52 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]) test(`comp
       await browser.call('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape'},session)
       assert.ok(js8Queries.length>0)
     }
+    for(const mode of ['SSTV','APRS']) {
+      await click(button(mode))
+      if(applicationVersion<12){await until(`!!document.querySelector('.remote-view-unavailable')`);continue}
+      const sstv=mode==='SSTV',root=sstv?'.sstv-view':'.aprs-cockpit'
+      await until(sstv?`document.querySelectorAll('.sstv-thumb').length===40`:`document.querySelector('.aprs-cockpit')?.textContent.includes('K36LAY')`)
+      const controls=sstv?'.sstv-arm,.sstv-tx-send,.sstv-tx-stop,.sstv-thumb-del':'.aprs-retune,.aprs-beacon-send'
+      assert.ok(await evaluate(`[...document.querySelectorAll('${controls}')].length>1&&[...document.querySelectorAll('${controls}')].every(e=>e.disabled)`))
+      if(sstv){
+        await settledLayout();await settledLayout()
+        await evaluate(`document.querySelector('.sstv-thumb').scrollIntoView({block:'nearest',behavior:'instant'})`)
+        await settledLayout();await settledLayout()
+        try { await until(`(()=>{const e=document.querySelector('.sstv-thumb-img');return e?.complete&&e.naturalWidth===320&&e.src.startsWith('blob:')})()`) }
+        catch(error){console.log('SSTV image diagnostic',await evaluate(`(()=>{const e=document.querySelector('.sstv-thumb'),r=e.getBoundingClientRect();return {html:e.innerHTML,rect:r.toJSON(),hit:document.elementFromPoint(r.x+r.width/2,Math.min(innerHeight-1,r.y+r.height/2))?.className,violations:window.__imagePolicyViolations}})()`));throw error}
+
+        assert.equal(await evaluate(`document.querySelector('.sstv-thumb').getAttribute('title')`),null)
+      }
+      const targets=sstv?['.sstv-live-caption','.sstv-tx-mode select','.sstv-thumb:last-child .sstv-thumb-caption','.sstv-tx-drop']:
+        ['.aprs-health','.aprs-beacon-comment input','.aprs-message-compose input','.aprs-table tbody tr:last-child .aprs-from','.aprs-map']
+      for(const [width,height,zoom] of [[360,740,1],[390,844,1],[844,390,1],[1024,768,1],[1280,800,1],[1200,1390,1],[3440,1440,1],[1024,768,0.8],[1280,800,1.75],[390,844,1.75]])for(const theme of ['dark','light']){
+        await browser.call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false},session)
+        await evaluate(`document.documentElement.style.setProperty('--ui-zoom','${zoom}');document.documentElement.dataset.theme='${theme}';window.dispatchEvent(new Event('resize'))`)
+        await settledLayout();await settledLayout()
+        for(const target of targets){
+          await evaluate(`document.querySelector('${target}').scrollIntoView({block:'nearest',inline:'nearest',behavior:'instant'})`)
+          await settledLayout()
+          const shape=await evaluate(`(()=>{const e=document.querySelector('${target}'),r=e.getBoundingClientRect(),x=Math.max(r.left+1,Math.min(r.right-1,r.left+r.width/2)),y=Math.max(1,Math.min(innerHeight-1,r.top+r.height/2));return {zoom:Number(getComputedStyle(document.documentElement).getPropertyValue('--ui-zoom')),docW:document.documentElement.scrollWidth,docH:document.documentElement.scrollHeight,top:r.top,bottom:r.bottom,width:r.width,height:r.height,reachable:e.contains(document.elementFromPoint(x,y))}})()`)
+          const clipped=await evaluate(`(()=>{const result=[];for(let e=document.querySelector('${target}').parentElement;e;e=e.parentElement){const c=getComputedStyle(e);if(['hidden','clip'].includes(c.overflowY)&&e.scrollHeight>e.clientHeight+1)result.push({class:e.className,scroll:e.scrollHeight,client:e.clientHeight})}return result})()`)
+          const reachable=Math.abs(shape.zoom-zoom)<0.001&&shape.docW<=width+1&&shape.docH<=height+1&&shape.width>0&&shape.height>0&&shape.top<height&&shape.bottom>0&&shape.reachable&&clipped.length===0
+          if(!reachable){
+            console.log('Station mode geometry diagnostic',JSON.stringify(await evaluate(`(()=>{const target=document.querySelector('${target}'),r=target.getBoundingClientRect(),hit=document.elementFromPoint(Math.max(r.left+1,Math.min(r.right-1,r.left+r.width/2)),Math.max(1,Math.min(innerHeight-1,r.top+r.height/2))),chain=[];for(let e=target;e;e=e.parentElement){const r=e.getBoundingClientRect(),c=getComputedStyle(e);chain.push({class:e.className,rect:r.toJSON(),height:e.scrollHeight,at:e.scrollTop,width:e.scrollWidth,x:c.overflowX,y:c.overflowY,display:c.display})}return {hit:hit?.outerHTML.slice(0,500),chain}})()`)))
+            if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,`remote-${mode.toLowerCase()}-failure.png`),Buffer.from(shot.data,'base64'))}
+          }
+          assert.ok(reachable,`${mode} content remains reachable: ${JSON.stringify({width,height,zoom,theme,target,shape,clipped})}`)
+          results.push({stationMode:mode,width,height,zoom,theme,target,shape})
+        }
+      }
+      await browser.call('Emulation.setDeviceMetricsOverride',{width:1280,height:800,deviceScaleFactor:1,mobile:false},session)
+      await evaluate(`document.documentElement.style.setProperty('--ui-zoom','1');window.dispatchEvent(new Event('resize'));document.querySelector('${root}').scrollTop=0`)
+      await settledLayout();await settledLayout()
+      if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,`remote-nexus-${mode.toLowerCase()}.png`),Buffer.from(shot.data,'base64'))}
+      const topic=sstv?'get_sstv_state':'get_remote_aprs_state'
+      unavailableTopics.add(topic)
+      await until(sstv?`!document.querySelector('.sstv-live-canvas')&&document.querySelectorAll('.sstv-thumb').length===0`:`document.querySelector('.aprs-health')?.textContent.includes('unavailable')`)
+      unavailableTopics.delete(topic)
+      await until(sstv?`document.querySelectorAll('.sstv-thumb').length===40`:`!document.querySelector('.aprs-health')?.textContent.includes('unavailable')`)
+    }
     const beforeTempo = structuredClone(applicationData.get_snapshot)
     for (const tier of ['TempoFast','TempoDeep']) {
       Object.assign(applicationData.get_snapshot, {mode:'chat',activePeer:'W1AW',chatCq:'paused',
@@ -987,6 +1041,7 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]) test(`comp
       assert.equal(await evaluate(`document.querySelector('.pota-controls [role=tab][aria-selected=true]')?.textContent`),'SOTA')
     }
     if(applicationVersion>=10){await until(`document.querySelector('.fieldday input:not([type=checkbox])')?.value==='K9TEST'`);assert.equal(await evaluate(`!!document.querySelector('.fd-bonuses-list')`),false)}
+    assert.equal(await evaluate('window.__imagePolicyViolations.length'),0,'all rendered image sources satisfy the hosted image policy')
     assert.equal(exceptions,0,'actual Nexus must render and reconnect without runtime exceptions')
     await click(button('Disconnect and return to stations'))
     await until(`!!${button('Observe station')}`)
@@ -994,6 +1049,7 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]) test(`comp
     await until(`document.querySelector('.rm-frequency')?.textContent.includes('14.074000')`)
     await pair.native.post(`stations/${pair.stationId}/native/revoke-device`,{deviceId:device.id})
     await until(`document.querySelector('.rm-frequency')?.textContent.startsWith('—')`)
+    assert.equal(await evaluate('window.__imagePolicyViolations.length'),0,'all rendered image sources satisfy the hosted image policy')
     assert.equal(exceptions,0,'the compiled browser must not raise runtime exceptions')
     assert.ok(acknowledgements >= 2,'real observation ACKs must cross the browser socket')
     assert.equal(unexpectedMessages,0,'only reviewed read messages and observation ACKs may leave the browser socket')

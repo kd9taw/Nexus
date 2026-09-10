@@ -1,0 +1,52 @@
+{
+  "capturedAtMs": 1789020000000,
+  "plan": [
+    {
+      "band": "20m",
+      "group": "HF",
+      "dialMhz": 14.23,
+      "mode": "USB",
+      "label": "20m",
+      "note": "SSTV",
+      "tx": true
+    }
+  ],
+  "state": {
+    "armed": true,
+    "mode": "Scottie 1",
+    "linesDone": 128,
+    "linesTotal": 256,
+    "previewRgbBase64": "8B4eHsgeHh7c3Nzc",
+    "previewWidth": 2,
+    "previewHeight": 2,
+    "hedrShiftHz": 15,
+    "gallery": [
+      {
+        "path": "8aa041cb-c642-459c-83f3-11a5b720647d.png",
+        "mode": "Scottie 1",
+        "finishedUtc": "2026-09-10T05:55:00Z",
+        "freqMhz": 14.23,
+        "lines": 256,
+        "fskId": "W1AW"
+      }
+    ],
+    "health": {
+      "armed": true,
+      "audioPeak": 0.25,
+      "lastAudioUnix": 1789020000,
+      "drains": 20,
+      "visSeen": 1,
+      "lastVisUnix": 1789019970,
+      "unknownVis": 0,
+      "lastUnknownVisCode": null,
+      "lastUnknownVisUnix": null,
+      "images": 1,
+      "lastImageUnix": 1789019700
+    },
+    "sending": false,
+    "txMode": null,
+    "txProgress": 0,
+    "txElapsedSecs": 0,
+    "txTotalSecs": 0
+  }
+}

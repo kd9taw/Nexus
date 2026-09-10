@@ -31,6 +31,10 @@ pub enum Command {
     Psk,
     #[serde(rename = "get_js8_state")]
     Js8,
+    #[serde(rename = "get_sstv_state")]
+    Sstv,
+    #[serde(rename = "get_remote_aprs_state")]
+    Aprs,
 }
 impl Command {
     pub(super) fn interval(self) -> Duration {
@@ -38,13 +42,13 @@ impl Command {
             Self::Snapshot | Self::Js8 => 500,
             Self::Spectrum | Self::Scope => 100,
             Self::Meters | Self::Cw | Self::Rtty | Self::Psk => 200,
-            Self::Settings | Self::BandPlan => 1000,
+            Self::Settings | Self::BandPlan | Self::Sstv | Self::Aprs => 1000,
         })
     }
     pub(super) fn legacy(self) -> bool {
         !matches!(
             self,
-            Self::Scope | Self::Cw | Self::Rtty | Self::Psk | Self::Js8
+            Self::Scope | Self::Cw | Self::Rtty | Self::Psk | Self::Js8 | Self::Sstv | Self::Aprs
         )
     }
 }
@@ -57,6 +61,7 @@ struct Entry {
 #[derive(Default)]
 pub struct Publisher {
     pub(super) journal: Option<std::sync::Arc<std::sync::Mutex<super::query::Journal>>>,
+    pub(super) sstv_images: super::sstv::SharedImages,
     entries: HashMap<Command, Entry>,
     revision: u64,
     spectrum: Option<tempo_app::engine::SpectrumFeed>,
@@ -225,7 +230,23 @@ impl Publisher {
             // Clone the typed result while locked; encoding and diffing belong
             // outside the engine lock, independently of the radio loop.
             let value = match command {
+                Command::Aprs => Ok(super::aprs::live(&eng)?),
                 Command::Meters => return Err("applicationUnavailable"), // handled without the engine above
+                Command::Sstv => {
+                    super::sstv::preflight(&eng)?;
+                    let mut state = crate::sstv_state_dto(&eng);
+                    let class = eng.settings().license_class;
+                    let captured_at_ms = super::now_ms();
+                    drop(eng);
+                    self.sstv_images.try_lock().map_err(|_| "applicationBusy")?.project(&mut state.gallery)?;
+                    let plan: Vec<_> = tempo_app::bandplan::sstv_band_plan().into_iter().map(|mut c| {
+                        c.tx = tempo_app::privileges::tx_allowed(class, c.dial_mhz, tempo_app::settings::OperatingMode::Phone);
+                        c
+                    }).collect();
+                    let value = serde_json::json!({"state":state,"capturedAtMs":captured_at_ms,"plan":plan});
+                    if value.to_string().len() > 256 * 1024 { return Err("applicationTooLarge"); }
+                    Ok(value)
+                }
                 Command::Scope => return Err("applicationUnavailable"), // no active scope request for observers
                 Command::Cw => {
                     let value = crate::read_cw_state(&eng);
@@ -384,7 +405,7 @@ impl Stream {
         request: Option<String>,
     ) -> Result<(), &'static str> {
         if !super::transport::identifier(&watch)
-            || topics.len() > 10
+            || topics.len() > 12
             || topics
                 .iter()
                 .enumerate()

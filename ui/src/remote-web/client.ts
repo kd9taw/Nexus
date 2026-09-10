@@ -45,7 +45,7 @@ export class BrowserClient {
     } else {
       try { await auth.checkSession() } catch { /* interactive login stays available */ }
     }
-    return new BrowserClient(auth, config.applicationVersion === 11 ? 11 : config.applicationVersion === 10 ? 10 : config.applicationVersion === 9 ? 9 : config.applicationVersion === 8 ? 8 : config.applicationVersion === 7 ? 7 : config.applicationVersion === 6 ? 6 : config.applicationVersion === 5 ? 5 : config.applicationVersion === 4 ? 4 : config.applicationVersion === 3 ? 3 : config.applicationVersion === 2 ? 2 : 1)
+    return new BrowserClient(auth, config.applicationVersion === 12 ? 12 : config.applicationVersion === 11 ? 11 : config.applicationVersion === 10 ? 10 : config.applicationVersion === 9 ? 9 : config.applicationVersion === 8 ? 8 : config.applicationVersion === 7 ? 7 : config.applicationVersion === 6 ? 6 : config.applicationVersion === 5 ? 5 : config.applicationVersion === 4 ? 4 : config.applicationVersion === 3 ? 3 : config.applicationVersion === 2 ? 2 : 1)
   }
   authenticated(): Promise<boolean> { return this.auth.isAuthenticated() }
   signIn(): Promise<void> { return this.auth.loginWithRedirect() }
@@ -87,7 +87,7 @@ export class HostedConnection {
 
   constructor(private client: BrowserClient, private stationId: string, private readonly applicationMode = false) {
     this.application = new ApplicationClient(message => {
-      if (!this.applicationMode || this.socket?.readyState !== WebSocket.OPEN || this.socket.bufferedAmount > 2048) throw new RemoteError(503)
+      if (!this.applicationMode || this.socket?.readyState !== WebSocket.OPEN || this.socket.bufferedAmount + new TextEncoder().encode(message).length > 2048) throw new RemoteError(503)
       this.socket.send(message)
     }, () => this.socket?.close(1000, 'applicationUnavailable'), client.applicationVersion)
     this.source = { id: `hosted-${stationId}`, kind: 'native', read: async signal => {
@@ -147,8 +147,12 @@ export class HostedConnection {
             if (transit < 0 || transit >= STALE_MS) throw new RemoteError(503)
             const frame = ageFrame(parseFrame(message.frame, 'native'), transit)
             this.latest = { frame, at: received }; this.attempt = 0
-            if (socket.bufferedAmount > 512) throw new RemoteError(503)
-            socket.send(JSON.stringify({ type: 'ack', epoch: frame.epoch, sequence: frame.sequence }))
+            const ack = JSON.stringify({ type: 'ack', epoch: frame.epoch, sequence: frame.sequence })
+            // The full workspace shares this socket with its bounded reads and
+            // subscriptions. An observation ACK must use that same queue budget.
+            // Include the pending write; neither mode may grow its queue freely.
+            if (socket.bufferedAmount + new TextEncoder().encode(ack).length > (this.applicationMode ? 2048 : 512)) throw new RemoteError(503)
+            socket.send(ack)
           } else throw new RemoteError(403)
         } catch { this.latest = null; this.application.disconnected(); socket.close(1000, 'invalidObservation') }
       }

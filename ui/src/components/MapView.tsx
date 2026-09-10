@@ -168,6 +168,8 @@ interface Props {
   /** Minutes of silence after which a station fades / is dropped, from the same backend read. */
   aprsFadeAfterMin?: number
   aprsTtlMin?: number
+  /** Remote capture clock, for APRS ages only. Native wall-clock behavior stays default. */
+  aprsNowSec?: number
   /** Click an APRS station icon. Omitted = hover-only. */
   onSelectAprs?: (call: string) => void
   /** Highlighted APRS station (the list selection), drawn accented. */
@@ -517,6 +519,7 @@ export function MapView({
   selectedAprs,
   aprsFadeAfterMin = 20,
   aprsTtlMin = 60,
+  aprsNowSec,
   focusBand = null,
   onFocusBand,
   outlook = null,
@@ -1335,7 +1338,7 @@ export function MapView({
       const sel = selectedAprs ? selectedAprs.toUpperCase() : null
       // Symbols only once the view is local enough for them to be legible; see SYMBOL_MIN_ZOOM.
       const drawSymbols = showSymbolAt(view.zoom)
-      const drawNowSec = Date.now() / 1000
+      const drawNowSec = aprsNowSec ?? Date.now() / 1000
       ctx.font = `500 10px ${cssVar('--font-mono') || 'monospace'}`
       ctx.textAlign = 'left'
       ctx.textBaseline = 'middle'
@@ -2130,7 +2133,7 @@ export function MapView({
     // theme is a draw dependency so colors refresh on theme switch (the cssVar
     // memo is emptied at the top of this effect).
     void theme
-  }, [me, myQth, showQth, kind, colorBy, pathMode, view, size, layers, placed, placedSpots, placedDxped, mufStations, auroraPts, pca, cqzones, sats, reliefReady, prop, selStation, selectedCall, needByCall, theme, nowMs, focusBand, pulseTick, xrayEff, flareActive, flareHafNow, hoverKey, focusSat, coverageDim, coverageGridGeo, workedZones, aprs, selectedAprs, aprsFadeAfterMin, aprsTtlMin, aprsTick, satFav, satChaseRev])
+  }, [me, myQth, showQth, kind, colorBy, pathMode, view, size, layers, placed, placedSpots, placedDxped, mufStations, auroraPts, pca, cqzones, sats, reliefReady, prop, selStation, selectedCall, needByCall, theme, nowMs, focusBand, pulseTick, xrayEff, flareActive, flareHafNow, hoverKey, focusSat, coverageDim, coverageGridGeo, workedZones, aprs, selectedAprs, aprsFadeAfterMin, aprsTtlMin, aprsNowSec, aprsTick, satFav, satChaseRev])
 
   // THE SUN + RADIATING ENERGY — the flare layer's animated half, on its own
   // transparent canvas at ~20 fps, mounted ONLY while a flare is active and the
@@ -2451,7 +2454,7 @@ export function MapView({
     if (hit.kind === 'aprs') {
       const a = aprs?.find((x) => x.call === hit.name)
       if (!a) return hit.name
-      const age = Math.max(0, Math.round(Date.now() / 1000 - a.lastHeardUnix))
+      const age = Math.max(0, Math.round((aprsNowSec ?? Date.now() / 1000) - a.lastHeardUnix))
       const when =
         age < 60
           ? t('map.hover.aprs.ageSecs', { secs: age })

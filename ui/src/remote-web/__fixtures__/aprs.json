@@ -1,0 +1,45 @@
+{
+  "capturedAtMs": 1789020000000,
+  "health": {
+    "arm": "auto",
+    "audioPeak": 0.25,
+    "lastAudioUnix": 1789020000,
+    "drains": 20,
+    "framesSeen": 10,
+    "framesDecoded": 8,
+    "lastDecodeUnix": 1789019997,
+    "lastFrameSeenUnix": 1789019997,
+    "framePeak": 0.3,
+    "maxFramePeak": 0.4,
+    "frameClippedSamples": 0,
+    "radioName": "Station VHF",
+    "bandRadioCount": 1
+  },
+  "isStatus": {
+    "enabled": true,
+    "connected": true,
+    "verified": false,
+    "packets": 200,
+    "lastPacketUnix": 1789019999,
+    "uplinkEnabled": false,
+    "uploaded": 0,
+    "gateRejected": 0,
+    "lastReject": null
+  },
+  "settings": {
+    "mygrid": "FN31",
+    "aprsChannelMhz": 144.39,
+    "aprsComment": "Nexus station",
+    "aprsPath": [
+      "WIDE1-1",
+      "WIDE2-1"
+    ],
+    "aprsSymbolTable": "/",
+    "aprsSymbolCode": ">",
+    "aprsIsEnabled": true,
+    "aprsIsRadiusKm": 150,
+    "aprsIsWatchCalls": [
+      "W1AW"
+    ]
+  }
+}

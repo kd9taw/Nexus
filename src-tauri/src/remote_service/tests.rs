@@ -271,6 +271,7 @@ fn cloud_runtime_probe() {
     });
     let vault = MemoryVault::default();
     let prop_cache: crate::PropCache = Default::default();
+    let sstv_files = sstv::fixture::Gallery::new();
     let sources = query::Sources {
         spots: Default::default(),
         live_paths: Default::default(),
@@ -280,6 +281,7 @@ fn cloud_runtime_probe() {
         health: Default::default(),
         propagation: prop_cache.clone(),
         memories: Default::default(),
+        sstv: sstv_files.source(),
     };
     let ota_cache = sources.ota.clone();
     let mut service = Service::start(
@@ -296,6 +298,21 @@ fn cloud_runtime_probe() {
     std::io::stdout().flush().unwrap();
     for line in lines {
         let value: serde_json::Value = serde_json::from_str(&line.unwrap()).unwrap();
+        if value["type"] == "seedStationModes" {
+            let mut e = engine.lock().unwrap();
+            sstv_files.seed(&mut e);
+            aprs::seed(&mut e);
+            let images:Vec<_>=e.sstv_gallery().iter().map(|g| json!({"extension":std::path::Path::new(&g.path).extension().unwrap().to_str().unwrap(),
+                "base64":crate::b64_encode(&std::fs::read(&g.path).unwrap())})).collect();
+            assert!(!e.snapshot().radio.tx_enabled);
+            println!(
+                "REMOTE_TEST:{}",
+                json!({"sstv":crate::sstv_state_dto(&e),"aprs":aprs::live(&e).unwrap(),
+                "heard":e.aprs_heard(),"roster":e.aprs_stations(crate::now_unix()),"images":images})
+            );
+            std::io::stdout().flush().unwrap();
+            continue;
+        }
         if value["type"] == "seedJs8" {
             let mut e = engine.lock().unwrap();
             let mut settings = e.settings().clone();
