@@ -33,6 +33,9 @@
 import type { PartialCatalog } from './index'
 
 export const ES: PartialCatalog = {
+  "remote.configurationObserver": "Ajustes de la estación · Solo lectura. La apariencia y la lista de seguimiento se aplican a este navegador.",
+  "remote.configurationLocal": "Gestiona las cuentas, copias de seguridad y el acceso remoto en Nexus en la estación.",
+  "remote.programmingObserver": "Canales guardados de la estación · Solo lectura. La búsqueda, edición, exportación y las acciones del equipo aún no están conectadas.",
   // Hosted Remote observation and local station approval.
   "remote.aprsSnapshot": "Lista de estaciones APRS capturada hace {{seconds}} s.",
   "remote.aprsUnavailable": "Lecturas APRS no disponibles",

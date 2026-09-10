@@ -23,6 +23,9 @@
 import type { PartialCatalog } from './index'
 
 export const JA: PartialCatalog = {
+  "remote.configurationObserver": "局の設定 · 読み取り専用。表示とウォッチリストの設定はこのブラウザーに適用されます。",
+  "remote.configurationLocal": "アカウント、バックアップ、リモートアクセスは局側の Nexus で管理してください。",
+  "remote.programmingObserver": "局に保存されたチャンネル · 読み取り専用。検索、編集、エクスポート、無線機の操作はまだ接続されていません。",
   // Hosted Remote observation and local station approval.
   "remote.aprsSnapshot": "APRS局リストは{{seconds}}秒前に取得されました。",
   "remote.aprsUnavailable": "APRSの測定値を取得できません",

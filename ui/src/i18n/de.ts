@@ -18,6 +18,9 @@
 import type { PartialCatalog } from './index'
 
 export const DE: PartialCatalog = {
+  "remote.configurationObserver": "Stationseinstellungen · Schreibgeschützt. Darstellung und Beobachtungsliste gelten für diesen Browser.",
+  "remote.configurationLocal": "Konten, Sicherungen und Fernzugriff in Nexus an der Station verwalten.",
+  "remote.programmingObserver": "Gespeicherte Stationskanäle · Schreibgeschützt. Suche, Bearbeitung, Export und Funkgeräteaktionen sind noch nicht angebunden.",
   // Hosted Remote observation and local station approval.
   "remote.aprsSnapshot": "APRS-Stationsliste vor {{seconds}} s erfasst.",
   "remote.aprsUnavailable": "APRS-Messwerte nicht verfügbar",

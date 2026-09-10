@@ -33,6 +33,9 @@
 import type { PartialCatalog } from './index'
 
 export const FR: PartialCatalog = {
+  "remote.configurationObserver": "Réglages de la station · Lecture seule. L’apparence et la liste de suivi s’appliquent à ce navigateur.",
+  "remote.configurationLocal": "Gérez les comptes, sauvegardes et accès distant dans Nexus à la station.",
+  "remote.programmingObserver": "Canaux enregistrés de la station · Lecture seule. Recherche, modification, exportation et commandes radio ne sont pas encore disponibles.",
   // Hosted Remote observation and local station approval.
   "remote.aprsSnapshot": "Liste des stations APRS relevée il y a {{seconds}} s.",
   "remote.aprsUnavailable": "Mesures APRS indisponibles",
