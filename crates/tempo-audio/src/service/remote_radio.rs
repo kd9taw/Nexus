@@ -1,11 +1,11 @@
 //! Remote uses this existing radio owner, before ordinary settings reconciliation.
-//! Only a confirmed QSY enters settings; unknown work never becomes a local retry.
+//! Only confirmed dial/mode/power enter settings; unknown work never becomes a local retry.
 use super::*;
 use crate::rig::remote::{Position, Retune};
 use tempo_app::remote_control::Reason;
 
 impl RadioLoop {
-    pub(super) fn apply_remote_frequency(
+    pub(super) fn apply_remote_radio(
         &mut self,
         engine: &Arc<Mutex<Engine>>,
         rig: &mut Rig,
@@ -13,7 +13,7 @@ impl RadioLoop {
     ) {
         let request = {
             let mut eng = engine_lock(engine);
-            let Some(request) = eng.take_remote_frequency() else {
+            let Some(request) = eng.take_remote_radio() else {
                 return;
             };
             let mut want = Transport::from_settings(eng.settings());
@@ -46,10 +46,11 @@ impl RadioLoop {
             let (hz, mode) = request.expected();
             let expected = Position::new(hz, mode)?;
             let (hz, mode) = request.target();
-            rig.remote_retune(
-                Retune::new(expected, Position::new(hz, mode)?),
-                request.permission(),
-            )
+            let mut retune = Retune::new(expected, Position::new(hz, mode)?);
+            if let Some(limit) = request.power_limit() {
+                retune = retune.with_power_limit(limit)?;
+            }
+            rig.remote_retune(retune, request.permission())
         })();
         let readback = match result {
             Ok(readback) => readback,
@@ -68,7 +69,7 @@ impl RadioLoop {
         eng.remote_observe_dial(read.as_ref(), Some(position.dial_hz()));
         eng.remote_observe_mode(read.as_ref(), Some(position.mode()));
         eng.remote_observe_ptt(read.as_ref(), Some(false));
-        if request.commit(&mut eng) {
+        if request.commit_readback(&mut eng, readback.power()) {
             self.last_dial = position.dial_hz();
             self.last_mode = position.mode().into();
             self.rig_asserted = true;
@@ -77,6 +78,10 @@ impl RadioLoop {
             self.mode_saw_reject = false;
             self.dial_giveup = None;
             self.dial_fail_count = 0;
+            if let Some(power) = readback.power() {
+                self.last_rf_power = Some(power);
+                self.rf_power_giveup = None;
+            }
             // The transaction already obtained the immediate hardware sample.
             self.last_rig_poll = now;
             self.last_freq_poll = now;

@@ -1350,6 +1350,7 @@ export function CwCockpit({
         }
         bandControl={<BandPicker snap={snap} mode="cw" onSnap={onSnap} />}
         remoteFrequency
+        remoteMode="cw"
         onCommitDial={commitDial}
         actions={
           host && panels ? (

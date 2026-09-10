@@ -370,7 +370,7 @@ intent across reload, shares its Web Lock with manual logging, and checks the
 receipt without replaying the action. Local takeover clears both permissions.
 Physical SPE/KPA command and cancellation acceptance remains required.
 
-## Frequency operations and remaining radio work
+## Frequency and mode operations
 
 The operation-v2 `frequency` capability admits only `radio.frequency`, separately
 from the future `radio` capability. The existing main dial on FT, Phone, CW,
@@ -384,9 +384,21 @@ pending local tuning/VFO/offset requests, split and FM refuse this increment.
 Normal RX tuning is not restricted to the operator's TX privileges; transmit
 guards remain in the native engine.
 
-Preparation resolves the current section's CAT mode and sideband policy without
-changing settings. The native mode setter also has a shared read-only destination
-decision for future section changes; preparation cannot bank a memory or arm TX.
+The separate `mode` capability admits explicit `radio.mode` requests. “Use this
+mode” in the FT, Phone, CW, RTTY, PSK and Tempo headers enters the station's
+Digital, Phone, CW, RTTY or Keyboard section using native remembered-frequency
+and sideband policy. Tab navigation remains passive. Mode entry also requires
+the native source, an idle disarmed station and the same active-radio limits.
+Tier/decoder selection is a separate action and remains unavailable.
+
+Preparation resolves CAT mode, dial and routing without changing settings or
+banking a memory. Canonical commit calls the shared native section-entry verb
+with manual arming disabled. The local desktop keeps its existing arming policy.
+When entering a capped mode, the transaction requires readable RF power before
+the first write, applies any necessary reduction after mode/dial selection, and
+confirms the reported power. It carries an already-lower level forward and never
+raises power to a ceiling. Unreadable or unconfirmed power leaves the operation
+rejected or unknown; it cannot become a deferred power change.
 
 The internal `Rig::remote_retune` consumes one native-resolved request. It checks
 the expected CAT dial/mode, fresh unkeyed PTT and simplex, writes mode before frequency,
@@ -399,15 +411,15 @@ completion pending: it does not establish committed settings or physical RF.
 The existing RadioLoop consumes the intent once, before normal reconciliation,
 using its owned CAT connection outside the Engine mutex. It publishes the final
 readback, rechecks the original permission and station context, then calls the
-native frequency setter and saves the current settings under that mutex. It
-consumes only its own retune flag and adopts the confirmed position, so neither
+native frequency or section setter and saves the current settings under that mutex. It
+consumes only its own retune flag and adopts the confirmed position and power, so neither
 lease expiry nor a failed save causes a subsequent CAT retry. A save failure
 keeps the confirmed live position but reports an unknown outcome; it never
 rolls back a whole settings snapshot over local preferences. The browser waits
 for a later station sample after an applied receipt. Unknown outcomes require
 checking the station, never automatic replay.
 
-Mode/tier/profile transitions, FM/repeater and satellite/split transactions,
+Tier/profile transitions, FM/repeater and satellite/split transactions,
 band-memory/spot shortcuts, continuous wheel/scope tuning and attended hardware/WAN
 acceptance remain incomplete. A compatible station build is required; this
 source increment does not update existing installations or establish paid readiness.

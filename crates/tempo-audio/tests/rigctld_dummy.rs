@@ -265,6 +265,42 @@ fn remote_retune_roundtrips_real_hamlib_without_committing_station_state() {
 }
 
 #[test]
+fn remote_power_limit_is_observed_by_real_hamlib_and_never_raises_a_lower_setting() {
+    let bin = require_rigctld!();
+    let _serial = ONE_AT_A_TIME.lock().unwrap_or_else(|p| p.into_inner());
+    let mut d = DummyRig::spawn(&bin);
+    let mut rig = connect_settled(&d.addr);
+    let authority = Revocation::default();
+    let native = Revocation::default();
+    for initial in [0.8, 0.2] {
+        rig.set_mode("USB", 0).unwrap();
+        rig.set_freq(14_240_000).unwrap();
+        rig.set_power(initial).unwrap();
+        rig.ptt(false).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let permit = authority.permit(deadline).unwrap();
+        let completion = Completion::guarded(permit.clone());
+        let permission =
+            WritePermission::new(permit, native.permit(deadline).unwrap(), completion.clone());
+        let target = Position::new(14_074_000, "PKTUSB").unwrap();
+        let observed = rig
+            .remote_retune(
+                Retune::new(Position::new(14_240_000, "USB").unwrap(), target.clone())
+                    .with_power_limit(0.4)
+                    .unwrap(),
+                &permission,
+            )
+            .unwrap();
+        assert_eq!(observed.position(), &target);
+        assert!((observed.power().unwrap() - initial.min(0.4)).abs() < 0.001);
+        let independent: f32 = d.observe("l RFPOWER").parse().unwrap();
+        assert!((independent - initial.min(0.4)).abs() < 0.001);
+        assert_eq!(d.observe("t"), "0");
+        assert_eq!(completion.outcome(), Outcome::Pending);
+    }
+}
+
+#[test]
 fn pktusb_the_digital_mode_token_is_accepted_by_real_hamlib() {
     // Mode arming forces PKTUSB on digital entry (TX-safety: never TX on a
     // wrong sideband). That only works if the token is one Hamlib accepts —

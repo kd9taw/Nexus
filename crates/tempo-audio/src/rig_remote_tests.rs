@@ -159,9 +159,121 @@ pub(crate) fn writes(peer: &Peer) -> Vec<String> {
         .lock()
         .unwrap()
         .iter()
-        .filter(|s| s.starts_with("M ") || s.starts_with("F ") || s.starts_with("T "))
+        .filter(|s| {
+            s.starts_with("M ") || s.starts_with("F ") || s.starts_with("T ") || s.starts_with("L ")
+        })
         .cloned()
         .collect()
+}
+
+pub(crate) fn power_peer(initial: f32) -> Peer {
+    let power = Mutex::new(initial);
+    retuning_peer(14_074_000, "USB", move |line, _| {
+        let mut power = power.lock().unwrap();
+        if line == "l RFPOWER" {
+            return Some(format!("{power}\n"));
+        }
+        if let Some(value) = line.strip_prefix("L RFPOWER ") {
+            *power = value.parse().unwrap();
+            return Some("RPRT 0\n".into());
+        }
+        None
+    })
+}
+
+#[test]
+fn a_mode_power_ceiling_is_confirmed_after_retune_and_never_raises_an_existing_lower_level() {
+    for before in [0.8, 0.2] {
+        let peer = power_peer(before);
+        let mut rig = Rig::rigctld(&peer.address);
+        let (permit, receipt) = permission(&Revocation::default(), &Revocation::default());
+        let target = retune((14_074_000, "USB"), (14_080_000, "PKTUSB"))
+            .with_power_limit(0.4)
+            .unwrap();
+        let read = rig.remote_retune(target, &permit).unwrap();
+        assert_eq!(read.power(), Some(before.min(0.4)));
+        let mut expected = vec!["M PKTUSB 3000", "F 14080000"];
+        if before > 0.4 {
+            expected.push("L RFPOWER 0.400");
+        }
+        assert_eq!(writes(&peer), expected);
+        assert_eq!(receipt.outcome(), Outcome::Pending);
+    }
+}
+
+#[test]
+fn unreadable_power_refuses_a_capped_mode_before_any_cat_write() {
+    for reply in ["RPRT -1\n", "NaN\n", "-0.1\n", "1.1\n"] {
+        let peer = retuning_peer(14_074_000, "USB", move |line, _| {
+            (line == "l RFPOWER").then(|| reply.into())
+        });
+        let mut rig = Rig::rigctld(&peer.address);
+        let (permit, receipt) = permission(&Revocation::default(), &Revocation::default());
+        let target = retune((14_074_000, "USB"), (14_080_000, "PKTUSB"))
+            .with_power_limit(0.4)
+            .unwrap();
+        assert!(matches!(
+            rig.remote_retune(target, &permit),
+            Err(Reason::ReadingUnavailable)
+        ));
+        assert!(writes(&peer).is_empty());
+        assert!(matches!(receipt.outcome(), Outcome::Rejected { .. }));
+    }
+}
+
+#[test]
+fn refused_or_unconfirmed_power_keeps_a_mode_transaction_unknown() {
+    for reply in ["RPRT -1\n", "RPRT 0\n"] {
+        let peer = retuning_peer(14_074_000, "USB", move |line, _| {
+            if line == "l RFPOWER" {
+                Some("0.8\n".into())
+            } else {
+                line.starts_with("L RFPOWER ").then(|| reply.into())
+            }
+        });
+        let mut rig = Rig::rigctld(&peer.address);
+        let (permit, receipt) = permission(&Revocation::default(), &Revocation::default());
+        let target = retune((14_074_000, "USB"), (14_080_000, "PKTUSB"))
+            .with_power_limit(0.4)
+            .unwrap();
+        assert!(matches!(
+            rig.remote_retune(target, &permit),
+            Err(Reason::HardwareUnconfirmed)
+        ));
+        assert!(matches!(receipt.outcome(), Outcome::Unknown { .. }));
+        assert_eq!(
+            writes(&peer),
+            ["M PKTUSB 3000", "F 14080000", "L RFPOWER 0.400"]
+        );
+    }
+}
+
+#[test]
+fn authority_lost_during_the_last_power_read_prevents_the_power_write() {
+    let authority = Arc::new(Revocation::default());
+    let cancel = authority.clone();
+    let reads = std::sync::atomic::AtomicUsize::new(0);
+    let peer = retuning_peer(14_074_000, "USB", move |line, _| {
+        if line == "l RFPOWER" {
+            if reads.fetch_add(1, Ordering::SeqCst) == 1 {
+                cancel.revoke();
+            }
+            Some("0.8\n".into())
+        } else {
+            None
+        }
+    });
+    let mut rig = Rig::rigctld(&peer.address);
+    let (permit, receipt) = permission(&authority, &Revocation::default());
+    let target = retune((14_074_000, "USB"), (14_080_000, "PKTUSB"))
+        .with_power_limit(0.4)
+        .unwrap();
+    assert!(matches!(
+        rig.remote_retune(target, &permit),
+        Err(Reason::AuthorityExpired)
+    ));
+    assert_eq!(writes(&peer), ["M PKTUSB 3000", "F 14080000"]);
+    assert!(matches!(receipt.outcome(), Outcome::Unknown { .. }));
 }
 
 #[test]

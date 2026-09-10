@@ -6337,6 +6337,12 @@ impl Engine {
     /// `lastOpModeRef` guard means a `follow_freq` QSY only fires on a real mode change, so a
     /// manual tune within a mode survives non-operating nav.
     pub fn set_operating_mode(&mut self, mode: &str, follow_freq: bool) {
+        self.set_operating_mode_with_arming(mode, follow_freq, true);
+    }
+
+    // Remote entry shares every native section/memory/power decision but cannot
+    // acquire transmit authority as a side effect. Local entry keeps its latch.
+    fn set_operating_mode_with_arming(&mut self, mode: &str, follow_freq: bool, arm_manual: bool) {
         use crate::settings::OperatingMode;
         // Resolve the destination without changing the station. Remote radio
         // transactions need this same decision before attempting hardware I/O.
@@ -6493,7 +6499,9 @@ impl Engine {
                 | OperatingMode::Rtty
                 | OperatingMode::Keyboard
         ) {
-            self.set_tx_enabled(true);
+            if arm_manual {
+                self.set_tx_enabled(true);
+            }
         } else if left_a_manual_mode {
             // …AND DISARM ON THE WAY BACK. Field incident 2026-08-19: PSK31 → FT8 → pick 20 m
             // → "it started transmitting on its own". Arming above had no counterpart, so an
@@ -7045,6 +7053,15 @@ impl Engine {
     /// A mirror would instead route a repeater click made DURING a pass on SSB, which is the
     /// disagreement the invariant is about, pointing the other way.
     pub fn route_mode(&self, band: &str, dial_mhz: f64) -> crate::settings::RouteMode {
+        self.route_mode_for(band, dial_mhz, self.settings.operating_mode)
+    }
+
+    fn route_mode_for(
+        &self,
+        band: &str,
+        dial_mhz: f64,
+        operating_mode: crate::settings::OperatingMode,
+    ) -> crate::settings::RouteMode {
         use crate::settings::{OperatingMode, RouteMode};
         if self.aprs_fm && band.eq_ignore_ascii_case("2m") {
             return RouteMode::Fm;
@@ -7060,7 +7077,7 @@ impl Engine {
         if self.sat_fm() && dial_mhz >= 29.0 {
             return RouteMode::Fm;
         }
-        match self.settings.operating_mode {
+        match operating_mode {
             OperatingMode::Cw => RouteMode::Cw,
             OperatingMode::Rtty => RouteMode::Rtty,
             // Keyboard modes route as Digital: soundcard audio through a DATA
@@ -7500,6 +7517,7 @@ impl Engine {
     }
 
     pub fn set_rf_power(&mut self, frac: f32) {
+        self.remote_actuation.revoke();
         // SAFETY CEILING: never command the rig above the current mode's per-mode cap (FT8/FT4/
         // RTTY duty-cycle protection). The single chokepoint — every power set, from any UI path,
         // passes through here — so the cap cannot be bypassed.

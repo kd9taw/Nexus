@@ -512,6 +512,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
             )
           }
           remoteFrequency
+          remoteMode="rtty"
           onCommitDial={frequencyControl && onSetFrequency ? commitDial : undefined}
           digitTune={control && onSetFrequency != null}
           wheelSensitivity={wheelSensitivity}

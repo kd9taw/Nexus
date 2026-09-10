@@ -63,11 +63,25 @@ fn supported_mode(mode: &str) -> bool {
 pub struct Retune {
     expected: Position,
     target: Position,
+    power_limit: Option<f32>,
 }
 
 impl Retune {
     pub fn new(expected: Position, target: Position) -> Self {
-        Self { expected, target }
+        Self {
+            expected,
+            target,
+            power_limit: None,
+        }
+    }
+
+    /// A mode-entry ceiling, not a request to raise the radio's current power.
+    pub fn with_power_limit(mut self, limit: f32) -> Result<Self, Reason> {
+        if !limit.is_finite() || !(0.0..=1.0).contains(&limit) {
+            return Err(Reason::InvalidAction);
+        }
+        self.power_limit = Some(limit);
+        Ok(self)
     }
 }
 
@@ -77,6 +91,7 @@ impl Retune {
 pub struct Readback {
     position: Position,
     sampled_at: Instant,
+    power: Option<f32>,
 }
 
 impl Readback {
@@ -87,9 +102,49 @@ impl Readback {
     pub fn sampled_at(&self) -> Instant {
         self.sampled_at
     }
+    pub fn power(&self) -> Option<f32> {
+        self.power
+    }
 }
 
 impl Rig {
+    fn remote_read_power(&mut self, permission: &WritePermission) -> Result<f32, Reason> {
+        permission.check(Instant::now())?;
+        let value = self.read_level("RFPOWER");
+        permission.check(Instant::now())?;
+        value
+            .ok()
+            .filter(|p| p.is_finite() && (0.0..=1.0).contains(p))
+            .ok_or(Reason::ReadingUnavailable)
+    }
+
+    fn remote_limit_power(
+        &mut self,
+        limit: f32,
+        permission: &WritePermission,
+    ) -> Result<f32, Reason> {
+        self.remote_require_idle(permission)?;
+        let before = self.remote_read_power(permission)?;
+        if before > limit + 0.001 {
+            self.remote_require_idle(permission)?;
+            let reply = self
+                .command_permitted(
+                    &super::level_line("RFPOWER", &format!("{:.3}", limit)),
+                    None,
+                    Some(permission),
+                )
+                .map_err(|_| Reason::HardwareUnconfirmed)?;
+            if !super::reply_ok(&reply) {
+                return Err(Reason::HardwareUnconfirmed);
+            }
+        }
+        let after = self.remote_read_power(permission)?;
+        if after > limit + 0.001 {
+            return Err(Reason::HardwareUnconfirmed);
+        }
+        Ok(after)
+    }
+
     fn remote_reported_mode(&mut self, permission: &WritePermission) -> Result<String, Reason> {
         permission.check(Instant::now())?;
         let mode = self.read_mode();
@@ -164,6 +219,11 @@ impl Rig {
             return Err(Reason::ContextChanged);
         }
         self.remote_require_idle(permission)?;
+        // Prove power can be observed before any mode/dial mutation. Some rigs
+        // cannot report this level; they cannot confirm a capped transition.
+        if retune.power_limit.is_some() {
+            self.remote_read_power(permission)?;
+        }
         let target = retune.target;
         let mode_changed = target.mode != before.mode;
         self.remote_set_mode(
@@ -198,7 +258,13 @@ impl Rig {
                     .map_err(|_| Reason::HardwareUnconfirmed)?;
             }
         }
+        // Mode/band registers may recall a power level. Apply the ceiling only
+        // after reaching the target, and carry any already-lower level forward.
         let sampled_at = Instant::now();
+        let power = retune
+            .power_limit
+            .map(|limit| self.remote_limit_power(limit, permission))
+            .transpose()?;
         let after = self.remote_reported_position(permission)?;
         if after != target {
             return Err(Reason::HardwareUnconfirmed);
@@ -207,6 +273,7 @@ impl Rig {
         Ok(Readback {
             position: after,
             sampled_at,
+            power,
         })
     }
 }

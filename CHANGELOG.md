@@ -9,12 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Remote operating-mode entry:** “Use this mode” in the existing FT, Phone,
+  CW, RTTY, PSK and Tempo headers switches the station using its native mode
+  and remembered-frequency policy. Browsing tabs stays passive and entry keeps
+  transmit disarmed. CAT mode, frequency and any required power reduction need
+  confirmed readback before settings are saved. Local changes cancel pending
+  work; uncertain outcomes are never replayed. A compatible station build and
+  attended hardware acceptance are required. Decoder-tier changes, radio
+  handoffs, held channels, FM/split and remote transmission remain incomplete.
+
 - **Remote frequency control:** With station permission and the controller
   lease, the existing main dial accepts a typed frequency on the active radio.
   CAT readback and settings persistence must finish before success is shown.
   Local changes cancel pending work; uncertain commands are never repeated.
   The radio must be disarmed, idle and simplex. Radio handoffs, held channels,
-  FM, mode/tier switching and continuous tuning remain outside this increment.
+  FM, tier switching and continuous tuning remain outside this increment.
   A compatible station build and attended hardware acceptance are required.
 
 - **Remote receiver and amplifier controls:** With separate permission granted

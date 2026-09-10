@@ -112,6 +112,8 @@ export const EN = {
   "remote.controlAllow": "Allow station controls",
   "remote.controlRevoke": "Revoke station controls",
   "remote.controlActive": "Station control active",
+  "remote.modeEntry.label": "Use this mode",
+  "remote.modeEntry.title": "Switch the station to this mode and its remembered frequency. Transmit remains off.",
   "remote.controlAvailable": "Station control permitted",
   "remote.controlRequired": "Allow station controls for this browser in Nexus at the station.",
   "remote.controlOccupied": "Another browser controls the station.",

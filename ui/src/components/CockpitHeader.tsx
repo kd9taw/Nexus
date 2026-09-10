@@ -1,4 +1,5 @@
 import { useStationControl } from '../stationAccess'
+import { ModeEntry, type OperatingSection } from '../remote-web/ModeEntry'
 // ⚠️ THIS FILE IS **PARTIAL** ON THE i18n LIST (i18n/hardcoded-strings.test.ts), and what is
 // deferred is the whole reason this batch exists: THE TX-ENABLE LATCH, TUNE, ATU AND STOP TX
 // stay written here. This one header draws them for SIX cockpits — Phone, CW, RTTY, PSK, SSTV
@@ -65,6 +66,8 @@ export interface CockpitHeaderProps {
   /** Commit a typed dial (MHz). Omit ⇒ the readout is display-only. */
   onCommitDial?: (mhz: number) => void
   remoteFrequency?: boolean
+  /** Explicit Remote station entry; opening the cockpit itself stays passive. */
+  remoteMode?: OperatingSection
   /** Enable mouse-wheel tuning over the readout (Phone/CW). */
   wheelTune?: boolean
   /** PER-DIGIT wheel tuning on the readout (operator request): hover the 100 Hz digit and one
@@ -143,6 +146,7 @@ export function CockpitHeader({
   bandControl,
   onCommitDial,
   remoteFrequency = false,
+  remoteMode,
   wheelTune = false,
   digitTune = false,
   wheelStepHz = 100,
@@ -234,7 +238,7 @@ export function CockpitHeader({
 
   return (
     <div className="cockpit-header">
-      <div className="ch-identity">{modeIndicator}</div>
+      <div className="ch-identity">{modeIndicator}<ModeEntry snap={snap} mode={remoteMode} onSnap={onSnap} /></div>
 
       <div className="ch-freq">
         <div

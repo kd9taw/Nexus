@@ -72,11 +72,167 @@ impl Station {
                 .unwrap(),
         )
     }
+    fn queue_mode(&mut self, mode: &str, follow_frequency: bool) -> Result<Completion, Reason> {
+        let connection = self
+            .engine
+            .remote_monitor_observation()
+            .radio
+            .readings
+            .cat
+            .unwrap()
+            .connection_generation;
+        self.engine.queue_remote_mode(
+            mode,
+            follow_frequency,
+            connection,
+            self.authority
+                .permit(Instant::now() + Duration::from_secs(5))
+                .unwrap(),
+        )
+    }
 }
 impl Drop for Station {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(self.path.parent().unwrap());
     }
+}
+
+#[test]
+fn remote_section_targets_match_native_entry_and_do_not_arm_transmit() {
+    for from in [
+        OperatingMode::Digital,
+        OperatingMode::Phone,
+        OperatingMode::Cw,
+        OperatingMode::Rtty,
+        OperatingMode::Keyboard,
+    ] {
+        for mode in ["digital", "phone", "cw", "rtty", "keyboard"] {
+            for follow in [false, true] {
+                let mut s = Station::new(from);
+                assert_eq!(s.engine.settings.operating_mode, from);
+                let before = serde_json::to_value(s.engine.settings()).unwrap();
+                let mut native = Engine::with_settings(s.engine.settings.clone());
+                native.set_operating_mode(mode, follow);
+                assert_eq!(
+                    native.tx_enabled(),
+                    mode != "digital",
+                    "local arming stays native"
+                );
+                let receipt = s.queue_mode(mode, follow).unwrap();
+                assert_eq!(serde_json::to_value(s.engine.settings()).unwrap(), before);
+                assert!(!s.engine.tx_enabled());
+                assert!(!s.path.exists());
+                let request = s.engine.take_remote_radio().unwrap();
+                assert_eq!(
+                    request.target(),
+                    (
+                        native.settings.dial_hz(),
+                        native.rig_mode_effective().as_str()
+                    )
+                );
+                request.permission().begin_write(Instant::now()).unwrap();
+                s.sample(request.target().0, request.target().1);
+                assert!(request.commit(&mut s.engine));
+                assert_eq!(
+                    serde_json::to_value(s.engine.settings()).unwrap(),
+                    serde_json::to_value(native.settings()).unwrap()
+                );
+                assert!(
+                    !s.engine.tx_enabled(),
+                    "Remote section entry cannot grant transmit"
+                );
+                assert!(!s.engine.take_immediate_retune());
+                assert!(matches!(receipt.outcome(), Outcome::Applied { .. }));
+            }
+        }
+    }
+}
+
+#[test]
+fn remote_mode_restores_native_session_memory_and_saves_current_preferences() {
+    let mut s = Station::new(OperatingMode::Phone);
+    s.engine.set_frequency(14.240, "20m", "USB");
+    s.engine.set_operating_mode("cw", true);
+    s.engine.set_tx_enabled(false);
+    s.engine.take_immediate_retune();
+    s.sample(s.engine.settings.dial_hz(), &s.engine.rig_mode_effective());
+    let receipt = s.queue_mode("phone", true).unwrap();
+    let request = s.engine.take_remote_radio().unwrap();
+    assert_eq!(request.target(), (14_240_000, "USB"));
+    let other = s.engine.settings.active_radio;
+    s.engine.rename_radio(other, "Main station");
+    request.permission().begin_write(Instant::now()).unwrap();
+    s.sample(14_240_000, "USB");
+    assert!(request.commit(&mut s.engine));
+    assert!(matches!(receipt.outcome(), Outcome::Applied { .. }));
+    let saved = Settings::load(&s.path);
+    assert_eq!(saved.operating_mode, OperatingMode::Phone);
+    assert_eq!(saved.dial_hz(), 14_240_000);
+    assert_eq!(saved.active_profile().unwrap().name, "Main station");
+    assert!(!s.engine.tx_enabled());
+}
+
+#[test]
+fn capped_remote_mode_needs_confirmed_lower_power_and_never_queues_an_increase() {
+    for observed in [
+        None,
+        Some(0.8),
+        Some(f32::NAN),
+        Some(-0.1),
+        Some(0.4),
+        Some(0.2),
+    ] {
+        let mut s = Station::new(OperatingMode::Phone);
+        s.engine.settings.max_power_digital = Some(0.4);
+        s.engine.set_rf_power(0.8);
+        let receipt = s.queue_mode("digital", false).unwrap();
+        let request = s.engine.take_remote_radio().unwrap();
+        assert_eq!(request.power_limit(), Some(0.4));
+        request.permission().begin_write(Instant::now()).unwrap();
+        s.sample(14_074_000, "PKTUSB");
+        let good = observed.is_some_and(|p| p == 0.4 || p == 0.2);
+        assert_eq!(request.commit_readback(&mut s.engine, observed), good);
+        if good {
+            assert_eq!(s.engine.rf_power(), observed);
+            assert_eq!(s.engine.rf_power_to_command(), observed.map(|p| (p, false)));
+            assert!(!s.engine.tx_enabled());
+            assert!(!s.engine.take_immediate_retune());
+            assert!(matches!(receipt.outcome(), Outcome::Applied { .. }));
+        } else {
+            assert_eq!(s.engine.settings.operating_mode, OperatingMode::Phone);
+            assert_eq!(s.engine.rf_power(), Some(0.8));
+            assert!(matches!(receipt.outcome(), Outcome::Unknown { .. }));
+            assert!(!s.path.exists());
+        }
+    }
+}
+
+#[test]
+fn local_power_gesture_cancels_remote_mode_even_if_returned_to_same_level() {
+    let mut s = Station::new(OperatingMode::Phone);
+    s.engine.settings.max_power_digital = Some(0.4);
+    s.engine.set_rf_power(0.8);
+    s.queue_mode("digital", false).unwrap();
+    let request = s.engine.take_remote_radio().unwrap();
+    s.engine.set_rf_power(0.2);
+    s.engine.set_rf_power(0.8);
+    assert_eq!(request.validate(&s.engine), Err(Reason::ContextChanged));
+    assert!(!s.path.exists());
+}
+
+#[test]
+fn mode_save_failure_keeps_confirmed_section_disarmed_without_retry() {
+    let mut s = Station::new(OperatingMode::Digital);
+    std::fs::create_dir_all(&s.path).unwrap();
+    let receipt = s.queue_mode("cw", true).unwrap();
+    let request = s.engine.take_remote_radio().unwrap();
+    request.permission().begin_write(Instant::now()).unwrap();
+    s.sample(request.target().0, request.target().1);
+    assert!(request.commit(&mut s.engine));
+    assert!(matches!(receipt.outcome(), Outcome::Unknown { .. }));
+    assert_eq!(s.engine.settings.operating_mode, OperatingMode::Cw);
+    assert!(!s.engine.tx_enabled());
+    assert!(!s.engine.take_immediate_retune());
 }
 
 #[test]
@@ -94,7 +250,7 @@ fn frequency_preparation_preserves_live_settings_and_uses_native_mode_policy() {
         assert_eq!(serde_json::to_value(s.engine.settings()).unwrap(), before);
         assert!(!s.path.exists());
         assert_eq!(receipt.outcome(), Outcome::Pending);
-        let request = s.engine.take_remote_frequency().unwrap();
+        let request = s.engine.take_remote_radio().unwrap();
         let prepared = request.target().1.to_string();
         s.engine.set_frequency(7.074, "40m", "USB");
         assert_eq!(prepared, s.engine.rig_mode_effective());
@@ -107,7 +263,7 @@ fn confirmed_frequency_saves_current_settings_and_has_no_deferred_cat_retry() {
     let mut s = Station::new(OperatingMode::Phone);
     let other = s.engine.add_radio();
     let receipt = s.queue().unwrap();
-    let request = s.engine.take_remote_frequency().unwrap();
+    let request = s.engine.take_remote_radio().unwrap();
     assert!(request.permission().begin_write(Instant::now()).is_ok());
     // A concurrent unrelated preference must survive; no old whole-settings
     // clone may overwrite it at the transaction's persistence boundary.
@@ -152,7 +308,7 @@ fn persistence_failure_keeps_confirmed_live_position_but_never_claims_success_or
     let mut s = Station::new(OperatingMode::Digital);
     std::fs::create_dir_all(&s.path).unwrap(); // atomic rename cannot replace a directory
     let receipt = s.queue().unwrap();
-    let request = s.engine.take_remote_frequency().unwrap();
+    let request = s.engine.take_remote_radio().unwrap();
     request.permission().begin_write(Instant::now()).unwrap();
     s.sample(7_074_000, "PKTUSB");
     assert!(request.commit(&mut s.engine));
@@ -217,7 +373,7 @@ fn local_changes_cancel_a_pending_frequency_even_after_returning_to_the_old_valu
     for change in changes {
         let mut s = Station::new(OperatingMode::Digital);
         s.queue().unwrap();
-        let request = s.engine.take_remote_frequency().unwrap();
+        let request = s.engine.take_remote_radio().unwrap();
         assert!(
             request.validate(&s.engine).is_ok(),
             "positive control: valid before gesture"
@@ -234,7 +390,7 @@ fn late_or_wrong_readback_cannot_commit_a_target_or_erase_a_local_gesture() {
     for failure in 0..5 {
         let mut s = Station::new(OperatingMode::Digital);
         let receipt = s.queue().unwrap();
-        let request = s.engine.take_remote_frequency().unwrap();
+        let request = s.engine.take_remote_radio().unwrap();
         request.permission().begin_write(Instant::now()).unwrap();
         match failure {
             0 => s.sample(7_074_000, "CW"),
@@ -277,7 +433,7 @@ fn pending_local_tunes_and_held_channels_are_refused_without_mutation() {
         }
         assert!(matches!(s.queue(), Err(Reason::StationBusy)));
         assert_eq!(s.engine.settings.dial_hz(), 14_074_000);
-        assert!(s.engine.take_remote_frequency().is_none());
+        assert!(s.engine.take_remote_radio().is_none());
     }
 }
 
@@ -290,7 +446,7 @@ fn radio_handoffs_and_fm_contexts_require_their_own_transaction() {
     // The same target is legal on the operator's pegged active radio.
     s.engine.set_radio_pegged(true);
     s.queue().unwrap();
-    s.engine.take_remote_frequency().unwrap();
+    s.engine.take_remote_radio().unwrap();
     s.engine.request_sideband_override(Some("FM"));
     s.engine.take_immediate_retune();
     assert!(matches!(s.queue(), Err(Reason::UnsupportedAction)));
@@ -328,7 +484,7 @@ fn the_station_rejects_invalid_frequency_payloads_without_queuing_or_saving() {
             ),
             Err(Reason::InvalidAction)
         ));
-        assert!(s.engine.take_remote_frequency().is_none());
+        assert!(s.engine.take_remote_radio().is_none());
     }
     assert_eq!(s.engine.settings.dial_hz(), 14_074_000);
     assert!(!s.path.exists());

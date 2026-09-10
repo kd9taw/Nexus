@@ -426,7 +426,7 @@ export class OperationClient {
     const s = this.view.state, until = this.stateUntil, intent = structuredClone(stationAction(action))
     if (!this.controlStorage) throw Error('receiptStorageUnavailable')
     if (this.view.unresolved || this.view.controlPending || this.controlIntent || this.loggingIntent) throw Error('operationUnknown')
-    const capability = action.action === 'radio.frequency' ? 'frequency' : action.action.startsWith('decoder.') ? 'decoder' : action.action.startsWith('amplifier.') ? 'amplifier' : 'radio'
+    const capability = action.action === 'radio.frequency' ? 'frequency' : action.action === 'radio.mode' ? 'mode' : action.action.startsWith('decoder.') ? 'decoder' : action.action.startsWith('amplifier.') ? 'amplifier' : 'radio'
     if (!s || !this.view.fresh || s.phase !== 'controlling' || !s.leaseId || !s.commandWindowId || s.nextSequence === null || !s.controls?.capabilities.includes(capability)) throw Error('notController')
     const request: OperationRequest = { type: 'stationControl', requestId: crypto.randomUUID(), stationBootId: s.stationBootId,
       leaseId: s.leaseId, expectedRevision: s.revision, commandWindowId: s.commandWindowId, clientSequence: s.nextSequence,

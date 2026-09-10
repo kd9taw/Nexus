@@ -63,6 +63,30 @@ it('adapts a frequency gesture through its own capability and returns only a lat
   h.client.disconnected()
 })
 
+it('adapts explicit mode entry separately from frequency and waits for a later station sample', async () => {
+  const h = setup(storage(), ['mode'])
+  let sampleAge = Infinity
+  const getSnapshot = vi.fn(async () => ({ radio: { operatingMode: 'cw', txEnabled: false } }))
+  const reads = { kind: 'remote', invoke: getSnapshot } as ApplicationTransport
+  const transport = controlTransport(reads, { age: () => sampleAge } as unknown as ApplicationClient, h.client)
+  const result = transport.invoke('set_operating_mode', { mode: 'cw', followFreq: true })
+  await Promise.resolve()
+  const request = h.sent[h.sent.length - 1].request
+  expect(request.action).toEqual({ action: 'radio.mode', mode: 'cw', followFrequency: true })
+  h.reply({ operation: 'stationControl', operationId: request.requestId, outcome: 'applied', evidence: 'radioReadback' })
+  await h.advance(100)
+  expect(getSnapshot).not.toHaveBeenCalled()
+  sampleAge = 0
+  await h.advance(50)
+  expect(await result).toEqual({ radio: { operatingMode: 'cw', txEnabled: false } })
+  for (const args of [{ mode: 'cw', followFreq: true, arm: true }, { mode: 'cw' }, { mode: 'future', followFreq: true }]) {
+    await expect(transport.invoke('set_operating_mode', args)).rejects.toThrow('invalidOperation')
+  }
+  await expect(h.client.control({ action: 'radio.frequency', dialMhz: 7.074, band: '40m', sideband: 'USB' })).rejects.toThrow('notController')
+  expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(1)
+  h.client.disconnected()
+})
+
 it('a receiver grant cannot tune and an uncertain frequency is never sent again', async () => {
   const a = { action: 'radio.frequency', dialMhz: 7.074, band: '40m', sideband: 'USB' } as const
   const receiver = setup()

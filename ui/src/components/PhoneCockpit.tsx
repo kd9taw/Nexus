@@ -1236,6 +1236,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
         }
         bandControl={<BandPicker snap={snap} mode="phone" onSnap={onSnap} />}
         remoteFrequency
+        remoteMode="phone"
         onCommitDial={commitDial}
         actions={
           host && panels ? (

@@ -19,5 +19,5 @@ export function useStationCapability(capability: ControlCapability): boolean {
   const client = useContext(RemoteOperationsContext)
   const view = useSyncExternalStore(client?.subscribe ?? idleSubscribe, client?.getSnapshot ?? idleSnapshot)
   return local || !!(available && view?.fresh && view.connected && !view.unresolved && !view.controlPending &&
-    view.state?.phase === 'controlling' && (capability !== 'frequency' || !view.state.txArmed) && view.state.controls?.capabilities.includes(capability))
+    view.state?.phase === 'controlling' && (!['frequency', 'mode'].includes(capability) || !view.state.txArmed) && view.state.controls?.capabilities.includes(capability))
 }

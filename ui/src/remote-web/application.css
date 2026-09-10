@@ -64,8 +64,8 @@
 .remote-workspace .cockpit-qsocol { overflow-y: auto; }
 /* A large pinned zoom can make the native header taller than a phone. Keep
    a usable mode shell below it and let the application scroll to that shell. */
-.remote-workspace:has(.cw-cockpit, .phone-cockpit, :is(.js8-host, .sstv-host, .aprs-host, .rtty-host, .psk-host):not([hidden])) { overflow: auto; }
-.remote-workspace .shell:has(.cw-cockpit, .phone-cockpit, :is(.js8-host, .sstv-host, .aprs-host, .rtty-host, .psk-host):not([hidden])) {
+.remote-workspace:has(.cw-cockpit, .phone-cockpit, :is(.operate-host, .js8-host, .sstv-host, .aprs-host, .rtty-host, .psk-host):not([hidden])) { overflow: auto; }
+.remote-workspace .shell:has(.cw-cockpit, .phone-cockpit, :is(.operate-host, .js8-host, .sstv-host, .aprs-host, .rtty-host, .psk-host):not([hidden])) {
   min-height: min(32em, calc(0.7 * var(--vh-eff, 100vh)));
   min-width: 0;
 }

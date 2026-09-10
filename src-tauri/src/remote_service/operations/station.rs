@@ -187,6 +187,18 @@ pub fn execute(
             );
         }
         #[cfg(feature = "radio")]
+        Action::Mode {
+            mode,
+            follow_frequency,
+        } => {
+            return engine.queue_remote_mode(
+                mode,
+                *follow_frequency,
+                context.radio_connection.ok_or(Reason::ReadingUnavailable)?,
+                permit,
+            );
+        }
+        #[cfg(feature = "radio")]
         Action::AmpOperate {
             expected_operate,
             operate,
@@ -276,7 +288,7 @@ pub fn execute(
 pub fn capabilities() -> Vec<&'static str> {
     #[cfg(feature = "radio")]
     {
-        vec!["decoder", "amplifier", "frequency"]
+        vec!["decoder", "amplifier", "frequency", "mode"]
     }
     #[cfg(not(feature = "radio"))]
     {

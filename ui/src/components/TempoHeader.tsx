@@ -108,6 +108,7 @@ export function TempoHeader({
         />
       }
       remoteFrequency
+      remoteMode="digital"
       onCommitDial={commitDial}
       // Per-digit wheel tuning, the same as the other five main dials. Tempo was the one cockpit
       // rendering this header without it, so its readout was the only one that did not respond to

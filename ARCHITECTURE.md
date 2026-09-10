@@ -25,11 +25,13 @@ a separate versioned operation contract. Nexus at the shack owns distinct local
 logging and station-control grants, the shared controller lease, expiring
 context-bound commands, deduplication and durable append receipts. Receiver
 gestures call native Engine verbs; amplifier commands reach the existing port
-owner with revocable permission and later readback receipts. Frequency intents
+owner with revocable permission and later readback receipts. Frequency and mode intents
 run through the active RadioLoop before normal settings reconciliation: fresh
 CAT readback precedes the native QSY and atomic settings save under the Engine
-mutex. Unconfirmed targets never become deferred local retunes. Login,
-entitlement and browser approval remain separate checks. Mode/radio handoffs and
+mutex. Explicit section entry shares native memories and power policy, remains
+disarmed, and confirms any power reduction within the same CAT transaction.
+Unconfirmed targets never become deferred local retunes. Login,
+entitlement and browser approval remain separate checks. Tier/radio handoffs and
 remote transmission remain unavailable; no arbitrary Tauri bridge exists.
 See [the Remote contract and limits](remote/README.md#existing-nexus-workspace).
 

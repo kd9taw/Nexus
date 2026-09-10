@@ -1,4 +1,4 @@
-//! One frequency intent owned by the existing radio worker. Preparation never
+//! One radio intent owned by the existing radio worker. Preparation never
 //! changes settings; only fresh, matching hardware readings permit the native
 //! QSY and its atomic settings save. A failed/expired intent is never replayed.
 use super::Engine;
@@ -7,6 +7,23 @@ use crate::settings::OperatingMode;
 use std::path::PathBuf;
 use std::time::Instant;
 
+enum Intent {
+    Frequency,
+    Mode {
+        mode: String,
+        follow_frequency: bool,
+    },
+}
+
+struct Target {
+    hz: u64,
+    mode: String,
+    band: String,
+    sideband: String,
+    power_limit: Option<f32>,
+    intent: Intent,
+}
+
 pub struct Request {
     expected_hz: u64,
     expected_mode: String,
@@ -14,6 +31,9 @@ pub struct Request {
     target_mode: String,
     band: String,
     sideband: String,
+    power_limit: Option<f32>,
+    expected_power: Option<f32>,
+    intent: Intent,
     radio: u32,
     connection: u64,
     prior_read: u64,
@@ -29,7 +49,7 @@ impl Engine {
         self.remote_settings_path = Some(path);
     }
 
-    fn remote_frequency_idle(&self) -> Result<(), Reason> {
+    fn remote_radio_idle(&self) -> Result<(), Reason> {
         if self.tx_enabled() || self.tx_owner().is_some() || self.sstv_in_flight() {
             return Err(Reason::StationBusy);
         }
@@ -67,14 +87,7 @@ impl Engine {
         connection: u64,
         permit: Permit,
     ) -> Result<Completion, Reason> {
-        if self
-            .remote_radio_command
-            .as_ref()
-            .is_some_and(|r| matches!(r.completion.outcome(), Outcome::Pending))
-        {
-            return Err(Reason::StationBusy);
-        }
-        self.remote_frequency_idle()?;
+        self.remote_radio_idle()?;
         if !dial_mhz.is_finite()
             || !(0.0..=250000.0).contains(&dial_mhz)
             || crate::bandplan::band_for_dial(dial_mhz) != Some(band)
@@ -103,9 +116,116 @@ impl Engine {
             } else {
                 self.settings.rig_mode_at(dial_mhz, sideband)
             };
+        self.queue_remote_target(
+            Target {
+                hz: target_hz,
+                mode: target_mode,
+                band: band.into(),
+                sideband: sideband.into(),
+                power_limit: None,
+                intent: Intent::Frequency,
+            },
+            connection,
+            permit,
+        )
+    }
+
+    pub fn queue_remote_mode(
+        &mut self,
+        mode: &str,
+        follow_frequency: bool,
+        connection: u64,
+        permit: Permit,
+    ) -> Result<Completion, Reason> {
+        self.remote_radio_idle()?;
+        if !matches!(mode, "digital" | "phone" | "cw" | "rtty" | "keyboard") {
+            return Err(Reason::InvalidAction);
+        }
+        if self.source_kind != crate::dto::SourceKind::Native {
+            return Err(Reason::UnsupportedAction);
+        }
+        let entry = self.prepare_mode_entry(mode, follow_frequency);
+        // A temporary policy projection only: never apply/save this clone over
+        // the live station. Commit calls the existing native verb under its lock.
+        let mut projected = self.settings.clone();
+        projected.operating_mode = entry.mode;
+        if let Some((dial, sideband)) = entry.frequency {
+            projected.dial_mhz = dial;
+            projected.sideband = sideband;
+        } else if entry.mode == OperatingMode::Digital
+            && projected.sideband.eq_ignore_ascii_case("LSB")
+        {
+            projected.sideband = "USB".into();
+        }
+        let mode_override = (entry.mode == OperatingMode::Phone)
+            .then_some(self.sideband_override.as_deref())
+            .flatten();
+        let target_mode = mode_override
+            .map(str::to_string)
+            .unwrap_or_else(|| projected.rig_mode());
+        if !projected.radio_pegged
+            && projected
+                .route_radio(
+                    &projected.band,
+                    self.route_mode_for(&projected.band, projected.dial_mhz, entry.mode),
+                )
+                .is_some_and(|id| id != projected.active_radio)
+        {
+            return Err(Reason::UnsupportedAction);
+        }
+        let ceiling = if mode_override.is_some_and(|m| m.eq_ignore_ascii_case("AM")) {
+            projected.rf_power_ceiling_am()
+        } else {
+            projected.rf_power_ceiling()
+        };
+        let power_limit = (ceiling < 1.0).then(|| {
+            self.rf_power
+                .or(self.rig_rf_power)
+                .unwrap_or(ceiling)
+                .min(ceiling)
+        });
+        if power_limit.is_some_and(|p| !p.is_finite() || !(0.0..=1.0).contains(&p)) {
+            return Err(Reason::ReadingUnavailable);
+        }
+        self.queue_remote_target(
+            Target {
+                hz: projected.dial_hz(),
+                mode: target_mode,
+                band: projected.band,
+                sideband: projected.sideband,
+                power_limit,
+                intent: Intent::Mode {
+                    mode: mode.into(),
+                    follow_frequency,
+                },
+            },
+            connection,
+            permit,
+        )
+    }
+
+    fn queue_remote_target(
+        &mut self,
+        target: Target,
+        connection: u64,
+        permit: Permit,
+    ) -> Result<Completion, Reason> {
+        self.remote_radio_idle()?;
+        if self
+            .remote_radio_command
+            .as_ref()
+            .is_some_and(|r| matches!(r.completion.outcome(), Outcome::Pending))
+        {
+            return Err(Reason::StationBusy);
+        }
+        if target.hz == 0
+            || crate::bandplan::band_for_dial(target.hz as f64 / 1e6) != Some(target.band.as_str())
+        {
+            return Err(Reason::InvalidAction);
+        }
         // FM's repeater offset/tone reconciliation is a separate transaction.
         // Do not complete a QSY that leaves unguarded FM writes for the next tick.
-        if matches!(target_mode.as_str(), "FM" | "PKTFM")
+        if matches!(target.mode.as_str(), "FM" | "PKTFM")
             || matches!(self.rig_mode_effective().as_str(), "FM" | "PKTFM")
         {
             return Err(Reason::UnsupportedAction);
@@ -116,10 +236,13 @@ impl Engine {
         let request = Request {
             expected_hz: self.settings.dial_hz(),
             expected_mode: self.rig_mode_effective(),
-            target_hz,
-            target_mode,
-            band: band.into(),
-            sideband: sideband.into(),
+            target_hz: target.hz,
+            target_mode: target.mode,
+            band: target.band,
+            sideband: target.sideband,
+            power_limit: target.power_limit,
+            expected_power: self.rf_power,
+            intent: target.intent,
             radio: self.settings.active_radio,
             connection,
             prior_read: [
@@ -148,7 +271,7 @@ impl Engine {
 
     /// Only the active radio worker consumes this slot, before its settings
     /// reconciliation. There is no retry or transfer to a different worker.
-    pub fn take_remote_frequency(&mut self) -> Option<Request> {
+    pub fn take_remote_radio(&mut self) -> Option<Request> {
         self.remote_radio_command.take()
     }
 }
@@ -166,16 +289,20 @@ impl Request {
     pub fn permission(&self) -> &WritePermission {
         &self.permission
     }
+    pub fn power_limit(&self) -> Option<f32> {
+        self.power_limit
+    }
     pub fn refuse(&self, reason: Reason) {
         self.completion.refuse(reason);
     }
 
     pub fn validate(&self, engine: &Engine) -> Result<(), Reason> {
         self.permission.check(Instant::now())?;
-        engine.remote_frequency_idle()?;
+        engine.remote_radio_idle()?;
         if engine.settings.active_radio != self.radio
             || engine.settings.dial_hz() != self.expected_hz
             || engine.rig_mode_effective() != self.expected_mode
+            || (self.power_limit.is_some() && engine.rf_power != self.expected_power)
         {
             return Err(Reason::ContextChanged);
         }
@@ -204,8 +331,19 @@ impl Request {
     /// even if saving failed (the receipt then remains uncertain). The worker
     /// must adopt that confirmed position without scheduling another CAT write.
     pub fn commit(self, engine: &mut Engine) -> bool {
+        self.commit_readback(engine, None)
+    }
+
+    /// Power is the owning worker's later CAT readback, not a browser argument.
+    /// Mode entry may lower it to the new native ceiling, never raise it.
+    pub fn commit_readback(self, engine: &mut Engine, power: Option<f32>) -> bool {
         let confirmed = (|| {
             self.validate(engine)?;
+            if let Some(limit) = self.power_limit {
+                if !power.is_some_and(|p| p.is_finite() && p >= 0.0 && p <= limit + 0.001) {
+                    return Err(Reason::HardwareUnconfirmed);
+                }
+            }
             let o = engine.remote_monitor_observation();
             for read in [
                 o.radio.readings.dial,
@@ -231,7 +369,23 @@ impl Request {
             self.refuse(reason);
             return false;
         }
-        engine.set_frequency(self.target_hz as f64 / 1e6, &self.band, &self.sideband);
+        match self.intent {
+            Intent::Frequency => {
+                engine.set_frequency(self.target_hz as f64 / 1e6, &self.band, &self.sideband)
+            }
+            Intent::Mode {
+                mode,
+                follow_frequency,
+            } => {
+                engine.set_operating_mode_with_arming(&mode, follow_frequency, false);
+                if let Some(power) = power.filter(|_| self.power_limit.is_some()) {
+                    // Carry the actual lower level if the radio's mode register
+                    // recalled one. Do not queue a later power increase to a cap.
+                    engine.rf_power = Some(power);
+                    engine.observe_rig_power(power);
+                }
+            }
+        }
         // This QSY has ALREADY reached the radio. Consuming its one-shot under
         // the lock cannot consume a later local gesture's retune request.
         engine.take_immediate_retune();

@@ -129,7 +129,7 @@ fn frequency_admission_waits_for_the_radio_owner_and_revoke_cancels_the_pending_
         let mut e = f.engine.lock().unwrap();
         assert_eq!(e.settings().dial_hz(), 14_074_000);
         assert!(!e.take_immediate_retune());
-        e.take_remote_frequency().unwrap()
+        e.take_remote_radio().unwrap()
     };
     assert_eq!(work.target(), (7_074_000, "PKTUSB"));
     assert!(work.permission().check(Instant::now()).is_ok());
@@ -137,6 +137,83 @@ fn frequency_admission_waits_for_the_radio_owner_and_revoke_cancels_the_pending_
     f.authority.permit_station(DEVICE, false).unwrap();
     assert!(work.permission().begin_write(Instant::now()).is_err());
     assert_eq!(f.engine.lock().unwrap().settings().dial_hz(), 14_074_000);
+}
+
+#[test]
+#[cfg(feature = "radio")]
+fn mode_admission_is_pending_until_readback_and_duplicate_or_revoked_work_cannot_replay() {
+    for revoke in [false, true] {
+        let f = Fixture::new();
+        let radio = {
+            let mut e = f.engine.lock().unwrap();
+            e.configure_remote_settings_store(f.dir.join("settings.json"));
+            e.set_tx_enabled(false);
+            e.set_frequency(14.074, "20m", "USB");
+            e.take_immediate_retune();
+            e.remote_open_radio().unwrap()
+        };
+        let sample = |hz, mode: &str| {
+            let mut e = f.engine.lock().unwrap();
+            let read = e.remote_radio_read(&radio, Instant::now()).unwrap();
+            e.remote_observe_cat(Some(&read), Some(true));
+            e.remote_observe_dial(Some(&read), Some(hz));
+            e.remote_observe_mode(Some(&read), Some(mode));
+            e.remote_observe_ptt(Some(&read), Some(false));
+        };
+        sample(14_074_000, "PKTUSB");
+        let now = Instant::now();
+        let state = acquire_controls(&f, now);
+        let command = control_request(
+            &state,
+            json!({"action":"radio.mode","mode":"cw","followFrequency":true}),
+        );
+        let run = |request: &Request| {
+            f.authority.handle_version(
+                (f.connection, 2),
+                SESSION,
+                DEVICE,
+                request,
+                &f.engine,
+                Instant::now(),
+            )
+        };
+        let response = run(&command).unwrap();
+        assert_eq!(response["outcome"], "pending");
+        assert_eq!(run(&command).unwrap(), response);
+        let work = {
+            let mut e = f.engine.lock().unwrap();
+            assert_eq!(e.settings().dial_hz(), 14_074_000);
+            assert!(!e.tx_enabled());
+            let work = e.take_remote_radio().unwrap();
+            assert!(e.take_remote_radio().is_none());
+            work
+        };
+        assert_eq!(work.target(), (14_030_000, "CW"));
+        assert!(!f.dir.join("settings.json").exists());
+        if revoke {
+            f.authority.permit_station(DEVICE, false).unwrap();
+            assert!(work.permission().begin_write(Instant::now()).is_err());
+            assert_eq!(f.engine.lock().unwrap().settings().dial_hz(), 14_074_000);
+        } else {
+            work.permission().begin_write(Instant::now()).unwrap();
+            sample(work.target().0, work.target().1);
+            assert!(work.commit(&mut f.engine.lock().unwrap()));
+            let result = run(&Request::Result {
+                request_id: id(),
+                operation_id: command.id().into(),
+            })
+            .unwrap();
+            assert_eq!(result["outcome"], "applied");
+            assert_eq!(result["evidence"], "radioReadback");
+            assert_eq!(run(&command).unwrap(), result);
+            let mut e = f.engine.lock().unwrap();
+            assert_eq!(e.settings().dial_hz(), 14_030_000);
+            assert!(!e.tx_enabled());
+            assert!(!e.take_immediate_retune());
+            assert!(e.take_remote_radio().is_none());
+            assert!(f.dir.join("settings.json").exists());
+        }
+    }
 }
 
 #[test]
@@ -237,7 +314,7 @@ fn logging_and_station_permissions_do_not_grant_each_other() {
     #[cfg(feature = "radio")]
     assert_eq!(
         control["controls"]["capabilities"],
-        json!(["decoder", "amplifier", "frequency"])
+        json!(["decoder", "amplifier", "frequency", "mode"])
     );
     #[cfg(not(feature = "radio"))]
     assert_eq!(control["controls"]["capabilities"], json!(["decoder"]));

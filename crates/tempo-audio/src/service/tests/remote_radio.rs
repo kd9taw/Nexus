@@ -17,6 +17,9 @@ struct Station {
 }
 impl Station {
     fn new(peer: &Peer) -> Self {
+        Self::configured(peer, |_| {})
+    }
+    fn configured(peer: &Peer, configure: impl FnOnce(&mut Settings)) -> Self {
         let path = std::env::temp_dir()
             .join(format!(
                 "nexus-worker-frequency-{}-{}",
@@ -24,12 +27,14 @@ impl Station {
                 NEXT.fetch_add(1, Ordering::Relaxed)
             ))
             .join("settings.json");
-        let mut e = Engine::with_settings(Settings {
+        let mut settings = Settings {
             dial_mhz: 14.074,
             band: "20m".into(),
             sideband: "USB".into(),
             ..test_settings()
-        });
+        };
+        configure(&mut settings);
+        let mut e = Engine::with_settings(settings);
         e.set_tx_enabled(false);
         e.configure_remote_settings_store(path.clone());
         let engine = Arc::new(Mutex::new(e));
@@ -37,14 +42,14 @@ impl Station {
         state.applied = Transport::from_settings(engine_lock(&engine).settings());
         state.remote_radio_id = Some(engine_lock(&engine).settings().active_radio);
         state.last_dial = 14_074_000;
-        state.last_mode = "PKTUSB".into();
+        state.last_mode = engine_lock(&engine).rig_mode_effective();
         state.rig_asserted = true;
         let read = state.remote_read(&engine).unwrap();
         {
             let mut e = engine_lock(&engine);
             e.remote_observe_cat(Some(&read), Some(true));
             e.remote_observe_dial(Some(&read), Some(14_074_000));
-            e.remote_observe_mode(Some(&read), Some("PKTUSB"));
+            e.remote_observe_mode(Some(&read), Some(&state.last_mode));
             e.remote_observe_ptt(Some(&read), Some(false));
         }
         Self {
@@ -76,6 +81,25 @@ impl Station {
         )
         .unwrap()
     }
+    fn queue_mode(&mut self, mode: &str, follow: bool) -> Completion {
+        let mut e = engine_lock(&self.engine);
+        let connection = e
+            .remote_monitor_observation()
+            .radio
+            .readings
+            .cat
+            .unwrap()
+            .connection_generation;
+        e.queue_remote_mode(
+            mode,
+            follow,
+            connection,
+            self.authority
+                .permit(Instant::now() + Duration::from_secs(5))
+                .unwrap(),
+        )
+        .unwrap()
+    }
     fn step(&mut self) {
         self.state
             .step(
@@ -90,6 +114,103 @@ impl Station {
             )
             .unwrap();
     }
+}
+
+#[test]
+fn mode_entry_crosses_the_actual_worker_without_arming_or_deferred_retune() {
+    let peer = retuning_peer(14_074_000, "PKTUSB", |_, _| None);
+    let mut s = Station::new(&peer);
+    let receipt = s.queue_mode("cw", true);
+    s.step();
+    assert!(matches!(receipt.outcome(), Outcome::Applied { .. }));
+    assert_eq!(
+        Settings::load(&s.path).operating_mode,
+        tempo_app::settings::OperatingMode::Cw
+    );
+    assert_eq!(writes(&peer), ["M CW -1", "F 14030000"]);
+    s.authority.revoke();
+    for _ in 0..3 {
+        s.step();
+    }
+    assert_eq!(writes(&peer), ["M CW -1", "F 14030000"]);
+    assert!(!engine_lock(&s.engine).tx_enabled());
+}
+
+#[test]
+fn mode_worker_adopts_confirmed_power_without_raising_or_reissuing_it() {
+    for (initial, save_failure) in [(0.8, false), (0.2, false), (0.8, true)] {
+        let peer = crate::rig::remote_tests::power_peer(initial);
+        let mut s = Station::configured(&peer, |settings| {
+            settings.operating_mode = tempo_app::settings::OperatingMode::Phone;
+            settings.max_power_digital = Some(0.4);
+        });
+        {
+            let mut e = engine_lock(&s.engine);
+            e.observe_rig_power(initial);
+            e.set_rf_power(initial);
+        }
+        s.state.last_rf_power = Some(initial);
+        if save_failure {
+            std::fs::create_dir_all(&s.path).unwrap();
+        }
+        let receipt = s.queue_mode("digital", false);
+        s.step();
+        if save_failure {
+            assert!(matches!(receipt.outcome(), Outcome::Unknown { .. }));
+        } else {
+            assert!(matches!(receipt.outcome(), Outcome::Applied { .. }));
+        }
+        let mut expected = vec!["M PKTUSB 3000", "F 14074000"];
+        if initial > 0.4 {
+            expected.push("L RFPOWER 0.400");
+        }
+        assert_eq!(writes(&peer), expected);
+        s.authority.revoke();
+        for _ in 0..3 {
+            s.step();
+        }
+        assert_eq!(writes(&peer), expected);
+        let e = engine_lock(&s.engine);
+        assert_eq!(e.rf_power(), Some(initial.min(0.4)));
+        assert_eq!(
+            e.settings().operating_mode,
+            tempo_app::settings::OperatingMode::Digital
+        );
+        assert!(!e.tx_enabled());
+    }
+}
+
+#[test]
+fn unconfirmed_power_does_not_commit_mode_or_defer_a_radio_retry() {
+    let peer = retuning_peer(14_074_000, "USB", |line, _| {
+        match line {
+            "l RFPOWER" => Some("0.8\n".into()),
+            "L RFPOWER 0.400" => Some("RPRT 0\n".into()), // accepted but ignored
+            _ => None,
+        }
+    });
+    let mut s = Station::configured(&peer, |settings| {
+        settings.operating_mode = tempo_app::settings::OperatingMode::Phone;
+        settings.max_power_digital = Some(0.4);
+    });
+    engine_lock(&s.engine).set_rf_power(0.8);
+    s.state.last_rf_power = Some(0.8);
+    let receipt = s.queue_mode("digital", false);
+    s.step();
+    assert!(matches!(receipt.outcome(), Outcome::Unknown { .. }));
+    let expected = ["M PKTUSB 3000", "F 14074000", "L RFPOWER 0.400"];
+    assert_eq!(writes(&peer), expected);
+    s.authority.revoke();
+    for _ in 0..3 {
+        s.step();
+    }
+    assert_eq!(writes(&peer), expected);
+    assert_eq!(
+        engine_lock(&s.engine).settings().operating_mode,
+        tempo_app::settings::OperatingMode::Phone
+    );
+    assert!(!engine_lock(&s.engine).tx_enabled());
+    assert!(!s.path.exists());
 }
 impl Drop for Station {
     fn drop(&mut self) {
