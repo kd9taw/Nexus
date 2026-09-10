@@ -329,6 +329,39 @@ fn a_retired_worker_connection_cannot_use_a_new_connection_permission() {
 }
 
 #[test]
+fn local_source_selection_between_mode_and_dial_stops_the_remote_transaction() {
+    let change: Arc<Mutex<Option<Arc<Mutex<Engine>>>>> = Default::default();
+    let local = change.clone();
+    let peer = retuning_peer(14_074_000, "PKTUSB", move |line, _| {
+        if line.starts_with("M ") {
+            if let Some(engine) = local.lock().unwrap().take() {
+                engine_lock(&engine)
+                    .set_source(tempo_app::dto::SourceKind::Native)
+                    .unwrap();
+            }
+        }
+        None
+    });
+    let mut s = Station::new(&peer);
+    *change.lock().unwrap() = Some(s.engine.clone());
+    let receipt = s.queue_mode("cw", true);
+    s.step();
+    assert!(matches!(receipt.outcome(), Outcome::Unknown { .. }));
+    assert_eq!(writes(&peer), ["M CW -1"]);
+    s.authority.revoke();
+    for _ in 0..3 {
+        s.step();
+    }
+    assert_eq!(writes(&peer), ["M CW -1"]);
+    assert_eq!(
+        engine_lock(&s.engine).settings().operating_mode,
+        tempo_app::settings::OperatingMode::Digital
+    );
+    assert!(!s.path.exists());
+    assert!(!engine_lock(&s.engine).tx_enabled());
+}
+
+#[test]
 fn a_local_qsy_between_cat_commands_cancels_the_remote_tail() {
     let change: Arc<Mutex<Option<Arc<Mutex<Engine>>>>> = Default::default();
     let local = change.clone();

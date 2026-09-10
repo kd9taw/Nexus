@@ -10296,6 +10296,10 @@ impl Engine {
         if tier == self.app.tier() {
             return;
         }
+        // A local decoder choice supersedes a pending Remote radio operation,
+        // even when both tiers use the same dial. Revoke before a decoder swap
+        // can wait on the source lock while the CAT worker is outside this lock.
+        self.remote_actuation.revoke();
         // Tier switch changes the slot period (FT8 15 s / FT4 7.5 s) — slot indices
         // from the old tier are meaningless for answer parity. Flush the context.
         self.clear_decode_context();
@@ -10516,6 +10520,7 @@ impl Engine {
     /// companion stream over UDP. Companion binds [`Settings::companion_addr`];
     /// returns `Err` (and stays on the previous source) if the socket can't bind.
     pub fn set_source(&mut self, kind: SourceKind) -> Result<(), String> {
+        self.remote_actuation.revoke();
         // Source switch invalidates the decode context — in particular a stale
         // Native early-pass marker would silently filter the first Companion
         // boundary's decodes, and history/parity belong to the old stream.

@@ -98,6 +98,47 @@ impl Drop for Station {
 }
 
 #[test]
+fn local_decoder_or_source_changes_cancel_a_pending_mode_even_if_the_dial_returns() {
+    use crate::dto::{SourceKind, Tier};
+    for change_source in [false, true] {
+        let mut s = Station::new(OperatingMode::Digital);
+        // Both native tiers deliberately use the current dial. A frequency
+        // callback cannot accidentally provide the cancellation being tested.
+        s.engine
+            .settings
+            .working_frequencies
+            .push(crate::settings::WorkingFreq {
+                band: "20m".into(),
+                mode: "FT4".into(),
+                mhz: 14.074,
+            });
+        let receipt = s.queue_mode("cw", true).unwrap();
+        let request = s.engine.take_remote_radio().unwrap();
+        request.permission().check(Instant::now()).unwrap();
+        if change_source {
+            // Rebuilding Native is also a local source choice; no UDP port or
+            // network provider is needed to exercise the actual source setter.
+            s.engine.set_source(SourceKind::Native).unwrap();
+        } else {
+            s.engine.set_tier(Tier::Ft4);
+            assert_eq!(s.engine.tier(), Tier::Ft4);
+            s.engine.set_tier(Tier::Ft8);
+        }
+        assert_eq!(s.engine.settings.dial_hz(), 14_074_000);
+        assert!(request.permission().begin_write(Instant::now()).is_err());
+        request.refuse(Reason::ContextChanged);
+        assert_eq!(
+            receipt.outcome(),
+            Outcome::Rejected {
+                reason: Reason::ContextChanged
+            }
+        );
+        assert!(!s.path.exists());
+        assert!(!s.engine.tx_enabled());
+    }
+}
+
+#[test]
 fn remote_section_targets_match_native_entry_and_do_not_arm_transmit() {
     for from in [
         OperatingMode::Digital,
