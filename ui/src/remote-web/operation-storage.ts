@@ -1,7 +1,17 @@
 // This browser retains the one submitted QSO until its outcome is resolved.
 // The relay's hibernation checkpoint continues to contain routing metadata only.
 import { manualRecord, operationId, type ManualRecord } from './operation-protocol'
+export type ReceiptLock = <T>(key: string, action: () => T | Promise<T>) => Promise<T>
+const browserReceiptLock: ReceiptLock = async (key, action) => {
+  const locks = globalThis.navigator?.locks
+  if (!locks) throw Error('receiptStorageUnavailable')
+  return locks.request(key, { mode: 'exclusive', ifAvailable: true }, async (lock) => {
+    if (!lock) throw Error('remoteBusy')
+    return action()
+  })
+}
 export type ReceiptStorage = {
+  exclusive?: <T>(action: () => T | Promise<T>) => Promise<T>
   read: () => string | null
   readDraft?: () => ManualRecord | null
   write: (id: string | null, record?: ManualRecord) => void
@@ -9,10 +19,12 @@ export type ReceiptStorage = {
 type Entry = { version: 1; operationId: string; record: ManualRecord | null }
 export function pendingLogStorage(
   storage: () => Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>,
-  stationId: string
+  stationId: string,
+  lock: ReceiptLock = browserReceiptLock
 ): ReceiptStorage {
   const key = `nexus.remote.pending-log.${stationId}`
   let owned: string | null = null
+  let held = false
   function current(): Entry | null {
     const raw = storage().getItem(key)
     if (raw === null) return null
@@ -36,6 +48,15 @@ export function pendingLogStorage(
     }
   }
   return {
+    exclusive: (action) =>
+      lock(key, async () => {
+        held = true
+        try {
+          return await action()
+        } finally {
+          held = false
+        }
+      }),
     read: () => {
       const e = current()
       owned = e?.operationId ?? null
@@ -46,6 +67,10 @@ export function pendingLogStorage(
       return e?.operationId === owned ? e.record : null
     },
     write: (id, record) => {
+      // localStorage has no read/modify/write transaction across tabs. Every
+      // mutation is protected by the same origin/station Web Lock, including
+      // resolving and dismissing old receipts. Contention refuses, never queues.
+      if (!held) throw Error('receiptStorageUnavailable')
       const e = current()
       if (id === null) {
         // Another tab may have started a later contact. An old result must never

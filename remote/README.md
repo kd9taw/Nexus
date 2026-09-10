@@ -1,10 +1,12 @@
 # Nexus Remote browser pilot
 
 This service connects an approved browser to an outbound Nexus desktop connection.
-It displays radio and SPE/KPA amplifier observations and provides an observer
-preview of the existing Nexus Operate workspace. Remote operating commands,
-receive audio, QSO writes, payment collection and a native mobile application
-are not implemented in this pilot.
+It reuses the existing Nexus application for station observation and adds
+separately authorized manual general-log QSO entry. Radio, amplifier and transmitter
+commands, receive/browser microphone audio, payment collection and a native mobile
+application remain outside the implemented pilot. A compatible station build is
+required for each negotiated feature; browser deployment does not upgrade Nexus
+at the shack.
 
 The browser uses Auth0 Authorization Code + PKCE. The Worker validates RS256 tokens
 against a pinned issuer, API audience and SPA client, then maps `(issuer, subject)`
@@ -62,6 +64,21 @@ Version 11 adds `get_js8_state` and the argument-free `get_remote_js8_context`
 (`js8Context` collection), requiring `x-nexus-application-js8-version: 1` and every
 preceding advertisement. Its version 11 stream has ten topics. Versions 1–10
 retain their exact vocabularies, including across hibernation.
+Version 12 adds the closed SSTV/APRS state and authenticated image/roster reads,
+requiring `x-nexus-application-station-modes-version: 1`. Version 13 adds
+`get_remote_navigation` for Connect, Path and Satellites, requiring
+`x-nexus-application-navigation-version: 1`. Version 14 adds
+`get_remote_configuration` for Settings and saved Radio Programming, requiring
+`x-nexus-application-configuration-version: 1`. Each version preserves the earlier
+vocabularies. Navigation/configuration documents are capped at 2 MiB, chunked and
+paged under a station-issued capture identity, with explicit source expiry.
+
+The full existing Settings view uses an explicit native projection that withholds
+secrets and private paths. Its startup effects and individual write controls stay
+guarded. Programming reads the saved channel bank; it does not read/write a radio,
+run a shell command or expose arbitrary files. SSTV images are opaque authenticated
+PNG/BMP resources, and APRS retains its native map and independent RF/Internet health.
+
 An older pilot keeps its existing FT observation; an older monitor-only installer
 reports the workspace update requirement without losing compact observation.
 
@@ -265,23 +282,59 @@ compatible station build and attended comparison are required for JS8 parity.
 
 FT selection and CW/Phone/RTTY/PSK callsign entry use the existing Nexus recall card;
 its contact rows open the existing filtered Logbook. Stale sessions and changed
-callsigns discard old results. QSO entry, cockpit memory recall, rotator and voice-keyer/audio data remain
-unavailable and are identified in their existing panes. Other navigation destinations display
-their availability limit, and the full Settings panel is not mounted with partial
-settings. Station controls, including the existing amplifier controls, are
-disabled; all mutation names are also refused by the transport and native parser.
+callsigns discard old results. Manual QSO entry uses the separate operation contract
+below. Cockpit memory recall, rotator, voice-keyer/audio and other hardware controls
+remain unavailable in their existing panes. The read transport continues to refuse
+all mutation names; the operation parser admits only the closed logging grammar.
 Opening a workspace or navigating it never selects the shack's operating mode.
 The original **Observe station** view remains available.
 
-This read adapter is an incremental integration boundary, not paid-service
-completion. Before enabling remote operation, the protocol needs explicit station
-control leases, expiring and deduplicated commands, native authorization at
-execution, and attended transmitter/amplifier acceptance. Full read parity also
+This adapter is an incremental integration boundary, not paid-service completion.
+Logging authority does not authorize transmitter or amplifier commands. Hardware
+operation still needs generation-bound execution and cancellation at the actual
+station hardware owner, fresh readback, and attended transmitter/amplifier acceptance. Full read parity also
 needs additional history sources and remaining per-feature data contracts. Shared
 subscriptions require measured load and WAN acceptance before commercial capacity
 claims. Audio needs its own negotiated media path. Billing must
 materialize service entitlement separately from browser trust and station control;
 payment or account recovery must never arm a radio.
+
+## Manual general-log operations
+
+The native station advertises `x-nexus-operation-version: 1` independently of the
+application read version. An approved browser needs a separate local logging grant
+and explicitly acquires the station's single logging lease. Grants start empty
+after restart. The station owns the boot identity, connection/lease generations,
+1-second heartbeat, 5-second lease, 2-second command window, context revision,
+sequence and bounded result history. Local takeover, observation disable and
+revocation invalidate authority; reconnect never reacquires it.
+
+CW, Phone/SSB, RTTY, PSK/QPSK and JS8 reuse the existing manual LogEntry form. The
+station chooses the normal QSO time at append; an explicit UTC override is retained.
+Field Day and QSO WAV recording configurations refuse this path. FT current-QSO
+and pending-log confirmation, editing/import/export, lookup, and all hardware/TX
+operations remain separate work. Global station-control permission stays false.
+
+Manual append reuses native enrichment, deduplication and connector queues. The
+actual open file is synchronized after releasing the engine lock. `fileSynced`
+confirms local persistence, not external delivery. Failed append/sync and a lost
+reply can be uncertain; no automatic retransmission occurs. The station retains
+at most 1,024 receipts for ten minutes and refuses old sequences after expiry.
+
+Before submission the browser retains its operation ID and bounded contact fields.
+Station-specific Web Locks protect writes, result recovery and explicit dismissal
+across tabs. Contention or unavailable locking refuses the gesture; it never queues
+a later log action. The original command deadline/context remains binding while
+acquiring that lock or waiting briefly for an overlapping heartbeat. Reload can
+show the submitted fields and query the receipt without resending. An expired
+receipt requires checking the actual station log before dismissing the saved check.
+
+The cloud validates and routes a closed request grammar, injects authenticated
+session/device identity, and retains only bounded routing metadata during
+hibernation. It cannot report native application or persistence success. It does
+not store QSO fields in D1. Logging permission is not an end-to-end TX authorization
+claim; hosted-origin compromise, operator permits, media, hardware cancellation
+and commercial acceptance require their own review before a paid operating release.
 
 ## Local verification
 

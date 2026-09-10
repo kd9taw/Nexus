@@ -191,8 +191,10 @@ export function RemoteLogEntry({
             className="remote-button"
             disabled={view.busy}
             onClick={() => {
-              client.acknowledgeAfterCheckingLog()
-              setError(null)
+              void client
+                .acknowledgeAfterCheckingLog()
+                .then(() => setError(null))
+                .catch(() => setError('unconfirmed'))
             }}
           >
             {t('remote.loggingCheckedLog')}

@@ -273,3 +273,71 @@ fn manual_logging_uses_station_time_unless_the_operator_explicitly_overrides_it(
     let qso = &engine.log_records()[0];
     assert!(qso.when_unix >= before && qso.when_unix <= super::super::now_ms() / 1000);
 }
+
+#[test]
+fn expired_receipt_never_reopens_an_old_sequence_under_a_live_lease() {
+    let f = Fixture::new();
+    let now = Instant::now();
+    let state = f.acquire(now);
+    let request = f.command(&state);
+    assert_eq!(f.run(&request, now).unwrap()["outcome"], "applied");
+    let adif = std::fs::read(f.dir.join("contacts.adi")).unwrap();
+    let lease_id = state["leaseId"].as_str().unwrap().to_string();
+    // Keep the same controller alive while the bounded result history expires.
+    // A receipt's absence must never turn an old action into a new append.
+    for second in 1..=601 {
+        let heartbeat = Request::Heartbeat {
+            request_id: id(),
+            lease_id: lease_id.clone(),
+        };
+        assert_eq!(
+            f.run(&heartbeat, now + Duration::from_secs(second))
+                .unwrap()["phase"],
+            "controlling"
+        );
+    }
+    let later = now + Duration::from_secs(601);
+    assert_eq!(
+        f.run(
+            &Request::Result {
+                request_id: id(),
+                operation_id: request.id().into()
+            },
+            later
+        ),
+        Err("resultExpired")
+    );
+    assert_eq!(f.run(&request, later), Err("resultExpired"));
+    assert_eq!(f.engine.lock().unwrap().log_records().len(), 1);
+    assert_eq!(std::fs::read(f.dir.join("contacts.adi")).unwrap(), adif);
+}
+
+#[test]
+fn a_desktop_log_collision_and_a_returned_profile_do_not_repeat_remote_work() {
+    let f = Fixture::new();
+    let now = Instant::now();
+    let request = f.command(&f.acquire(now));
+    if let Request::LogManual { record, .. } = &request {
+        f.engine
+            .lock()
+            .unwrap()
+            .log_qso(record.record().unwrap().into());
+    }
+    let adif = std::fs::read(f.dir.join("contacts.adi")).unwrap();
+    let result = f.run(&request, now).unwrap();
+    assert_eq!(result["outcome"], "rejected");
+    assert_eq!(result["reason"], "alreadyPresent");
+    assert_eq!(f.engine.lock().unwrap().log_records().len(), 1);
+    assert_eq!(std::fs::read(f.dir.join("contacts.adi")).unwrap(), adif);
+    let next = f.command(&f.state(now));
+    {
+        let mut engine = f.engine.lock().unwrap();
+        let original = engine.settings().clone();
+        let mut changed = original.clone();
+        changed.mycall = "W2XYZ".into();
+        engine.apply_settings(changed);
+        engine.apply_settings(original);
+    }
+    assert_eq!(f.run(&next, now), Err("staleContext"));
+    assert_eq!(std::fs::read(f.dir.join("contacts.adi")).unwrap(), adif);
+}

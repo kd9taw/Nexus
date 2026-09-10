@@ -289,6 +289,11 @@ export class OperationClient {
       })
     })
   }
+  private withReceiptLock<T>(action: () => T | Promise<T>): Promise<T> {
+    return this.receiptStorage?.exclusive
+      ? this.receiptStorage.exclusive(action)
+      : Promise.resolve(action())
+  }
   async log(record: ManualRecord, onSubmitted?: (id: string) => void): Promise<OperationOutcome> {
     const s = this.view.state,
       until = this.stateUntil,
@@ -304,29 +309,34 @@ export class OperationClient {
       s.nextSequence === null
     )
       throw new Error('notController')
+    const intent = {
+      stationBootId: s.stationBootId,
+      leaseId: s.leaseId,
+      commandWindowId: s.commandWindowId,
+      expectedRevision: s.revision,
+      clientSequence: s.nextSequence
+    }
     this.loggingIntent = true
     try {
-      // An automatic heartbeat can begin between pointer-down and click. Wait at
-      // most half a second for that READ; retain the click's original context,
-      // window and payload. Never let the gesture migrate to a new station state.
-      if (this.pending) await this.waitForHeartbeat(until)
-      if (this.now() >= until) throw new Error('windowExpired')
-      if (this.view.state?.leaseId !== s.leaseId || this.view.state.revision !== s.revision)
-        throw new Error('staleContext')
-      const requestId = crypto.randomUUID()
-      onSubmitted?.(requestId)
-      const r = await this.request({
-        type: 'logManual',
-        requestId,
-        stationBootId: s.stationBootId,
-        leaseId: s.leaseId,
-        commandWindowId: s.commandWindowId,
-        expectedRevision: s.revision,
-        clientSequence: s.nextSequence,
-        record: draft
+      return await this.withReceiptLock(async () => {
+        // An automatic heartbeat can begin between pointer-down and click. Wait at
+        // most half a second for that READ; retain the click's original context,
+        // window and payload. Never let the gesture migrate to a new station state.
+        if (this.pending) await this.waitForHeartbeat(until)
+        if (this.now() >= until) throw new Error('windowExpired')
+        if (this.view.state?.leaseId !== s.leaseId || this.view.state.revision !== s.revision)
+          throw new Error('staleContext')
+        const requestId = crypto.randomUUID()
+        onSubmitted?.(requestId)
+        const r = await this.request({
+          type: 'logManual',
+          requestId,
+          ...intent,
+          record: draft
+        })
+        if (!('outcome' in r)) throw new Error('invalidRequest')
+        return r
       })
-      if (!('outcome' in r)) throw new Error('invalidRequest')
-      return r
     } finally {
       this.loggingIntent = false
     }
@@ -334,17 +344,24 @@ export class OperationClient {
   async resolve(): Promise<OperationOutcome> {
     const id = this.view.unresolved
     if (!id) throw new Error('resultExpired')
-    const r = await this.request({
-      type: 'result',
-      requestId: crypto.randomUUID(),
-      operationId: id
+    return this.withReceiptLock(async () => {
+      if (this.view.unresolved !== id) throw Error('resultExpired')
+      const r = await this.request({
+        type: 'result',
+        requestId: crypto.randomUUID(),
+        operationId: id
+      })
+      if (!('outcome' in r)) throw new Error('invalidRequest')
+      return r
     })
-    if (!('outcome' in r)) throw new Error('invalidRequest')
-    return r
   }
-  acknowledgeAfterCheckingLog() {
-    if (this.view.busy) return
-    this.update({ dismissed: this.view.unresolved, unresolved: null, error: null })
+  async acknowledgeAfterCheckingLog() {
+    const id = this.view.unresolved
+    if (this.view.busy || !id) return
+    return this.withReceiptLock(() => {
+      if (this.view.busy || this.view.unresolved !== id) return
+      this.update({ dismissed: id, unresolved: null, error: null })
+    })
   }
   getLastOutcome() {
     return this.finished

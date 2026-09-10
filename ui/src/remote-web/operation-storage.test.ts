@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import { pendingLogStorage } from './operation-storage'
+import { pendingLogStorage, type ReceiptLock } from './operation-storage'
 import { OperationClient } from './operation-client'
 import type { ManualRecord } from './operation-protocol'
 const record: ManualRecord = {
@@ -22,7 +22,18 @@ const record: ManualRecord = {
 }
 function storage() {
   const values = new Map<string, string>()
+  const held = new Set<string>()
+  const lock: ReceiptLock = async (key, action) => {
+    if (held.has(key)) throw Error('remoteBusy')
+    held.add(key)
+    try {
+      return await action()
+    } finally {
+      held.delete(key)
+    }
+  }
   return {
+    lock,
     values,
     getItem: (key: string) => values.get(key) ?? null,
     setItem: (key: string, value: string) => {
@@ -41,7 +52,7 @@ it('retains the exact submitted draft across a fresh client without resubmission
       (raw) => sent.push(JSON.parse(raw)),
       true,
       () => 1000,
-      pendingLogStorage(() => disk, stationId)
+      pendingLogStorage(() => disk, stationId, disk.lock)
     )
   first.open()
   first.receive({
@@ -70,39 +81,41 @@ it('retains the exact submitted draft across a fresh client without resubmission
     },
     true,
     () => 1000,
-    pendingLogStorage(() => disk, stationId)
+    pendingLogStorage(() => disk, stationId, disk.lock)
   )
   expect(second.getSnapshot().unresolved).toBe(id)
   expect(second.getSnapshot().pendingDraft).toEqual(record)
   expect(sent.filter((v) => v.request.type === 'logManual')).toHaveLength(1)
   second.disconnected()
 })
-it('refuses another tab overwrite and prevents an old receipt from erasing a newer draft', () => {
+it('refuses another tab overwrite and prevents an old receipt from erasing a newer draft', async () => {
   const disk = storage(),
     station = crypto.randomUUID(),
-    first = pendingLogStorage(() => disk, station),
-    second = pendingLogStorage(() => disk, station),
+    first = pendingLogStorage(() => disk, station, disk.lock),
+    second = pendingLogStorage(() => disk, station, disk.lock),
     a = crypto.randomUUID(),
     b = crypto.randomUUID()
   first.read()
   second.read()
-  first.write(a, record)
-  expect(() => second.write(b, { ...record, call: 'K2ABC' })).toThrow()
+  await first.exclusive!(() => first.write(a, record))
+  await expect(
+    second.exclusive!(() => second.write(b, { ...record, call: 'K2ABC' }))
+  ).rejects.toThrow()
   expect(second.read()).toBe(a)
-  first.write(null)
-  first.write(b, { ...record, call: 'K2ABC' })
-  second.write(null)
-  const reopened = pendingLogStorage(() => disk, station)
+  await first.exclusive!(() => first.write(null))
+  await first.exclusive!(() => first.write(b, { ...record, call: 'K2ABC' }))
+  await second.exclusive!(() => second.write(null))
+  const reopened = pendingLogStorage(() => disk, station, disk.lock)
   expect(reopened.read()).toBe(b)
   expect(reopened.readDraft?.()?.call).toBe('K2ABC')
-  const other = pendingLogStorage(() => disk, crypto.randomUUID())
+  const other = pendingLogStorage(() => disk, crypto.randomUUID(), disk.lock)
   expect(other.read()).toBeNull()
 })
 it('retains malformed or inaccessible storage and refuses writes instead of discarding it', () => {
   const disk = storage(),
     station = crypto.randomUUID(),
     key = `nexus.remote.pending-log.${station}`,
-    saved = pendingLogStorage(() => disk, station)
+    saved = pendingLogStorage(() => disk, station, disk.lock)
   disk.setItem(key, 'damaged retained draft')
   expect(() => saved.read()).toThrow()
   expect(() => saved.write(crypto.randomUUID(), record)).toThrow()
@@ -111,4 +124,46 @@ it('retains malformed or inaccessible storage and refuses writes instead of disc
     throw Error('storage denied')
   }, station)
   expect(() => denied.write(crypto.randomUUID(), record)).toThrow()
+})
+
+it('refuses overlapping cross-tab receipt changes instead of queuing a later write', async () => {
+  const disk = storage(),
+    station = crypto.randomUUID(),
+    first = pendingLogStorage(() => disk, station, disk.lock),
+    second = pendingLogStorage(() => disk, station, disk.lock),
+    another = pendingLogStorage(() => disk, crypto.randomUUID(), disk.lock),
+    a = crypto.randomUUID(),
+    b = crypto.randomUUID()
+  await first.exclusive!(async () => {
+    first.write(a, record)
+    second.read()
+    await expect(second.exclusive!(() => second.write(null))).rejects.toThrow('remoteBusy')
+    await expect(second.exclusive!(() => second.write(b, record))).rejects.toThrow('remoteBusy')
+    // The lock belongs to one station; a different station remains independent.
+    await another.exclusive!(() => another.write(crypto.randomUUID(), record))
+    first.write(null)
+    first.write(b, { ...record, call: 'K2ABC' })
+  })
+  await Promise.resolve()
+  const reopened = pendingLogStorage(() => disk, station, disk.lock)
+  expect(reopened.read()).toBe(b)
+  expect(reopened.readDraft!()?.call).toBe('K2ABC')
+  await second.exclusive!(() => second.write(null))
+  expect(reopened.read()).toBe(b)
+  expect(() => first.write(null)).toThrow('receiptStorageUnavailable')
+})
+it('does not mutate receipts when the browser cannot provide an exclusive lock', async () => {
+  const disk = storage(),
+    station = crypto.randomUUID()
+  const saved = pendingLogStorage(
+    () => disk,
+    station,
+    async () => {
+      throw Error('receiptStorageUnavailable')
+    }
+  )
+  await expect(saved.exclusive!(() => saved.write(crypto.randomUUID(), record))).rejects.toThrow(
+    'receiptStorageUnavailable'
+  )
+  expect(disk.values.size).toBe(0)
 })

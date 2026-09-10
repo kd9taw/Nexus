@@ -423,6 +423,29 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
         // prior robot case submitted five messages in 850 ms and correctly
         // received remoteBusy; protocol tests retain that refusal.
         await sleep(1100)
+        if(label==='CW'){
+          // A separate real browser tab holds the station's draft lock. A Log
+          // gesture must retain its form, send nothing, and never run later.
+          const auxiliary=(await browser.call('Target.createTarget',{url:app.origin+'/api/remote/config'})).targetId
+          const auxiliarySession=(await browser.call('Target.attachToTarget',{targetId:auxiliary,flatten:true})).sessionId
+          let auxiliaryReady=false
+          for(let attempt=0;attempt<100;attempt++){
+            const ready=await browser.call('Runtime.evaluate',{expression:`location.origin===${JSON.stringify(app.origin)}&&!!navigator.locks`,returnByValue:true},auxiliarySession)
+            if(ready.result?.value===true){auxiliaryReady=true;break}
+            await sleep(50)
+          }
+          assert.equal(auxiliaryReady,true,'the second tab must share the station storage origin')
+          const lockKey=`nexus.remote.pending-log.${pair.stationId}`
+          const held=await browser.call('Runtime.evaluate',{expression:`new Promise(resolve=>{void navigator.locks.request(${JSON.stringify(lockKey)},async()=>{resolve(true);await new Promise(release=>window.__releaseReceiptLock=release)})})`,returnByValue:true,awaitPromise:true},auxiliarySession)
+          assert.equal(held.result?.value,true)
+          await click(`document.querySelector('${selector} .le-log-btn')`)
+          await until(`document.querySelector('${selector} .remote-log-entry')?.dataset.operationError==='remoteBusy'`)
+          assert.equal(loggedRequests.length,0)
+          assert.equal(await evaluate(`document.querySelector('${selector} .le-call').value`),call)
+          await browser.call('Runtime.evaluate',{expression:'window.__releaseReceiptLock();true'},auxiliarySession)
+          await browser.call('Target.closeTarget',{targetId:auxiliary})
+          await sleep(1100);assert.equal(loggedRequests.length,0,'releasing a draft lock must not replay the refused gesture')
+        }
         if(label==='PSK')loseLogReply=true
         await click(`document.querySelector('${selector} .le-log-btn')`)
         if(label==='PSK'){
@@ -454,7 +477,7 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
       await until(`!document.querySelector('.remote-logging-authority')?.textContent.includes('control active')`)
       assert.equal(await evaluate(`document.querySelector('.psk-cockpit .le-log-btn').disabled`),true)
       assert.equal(loggedRequests.length,5);assert.equal(unexpectedMessages,0);assert.equal(exceptions,0)
-      if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-manual-logging.png'),Buffer.from(shot.data,'base64'));await writeFile(join(artifacts,'operation-results.json'),JSON.stringify({count:loggedRequests.length,modes:loggedRequests.map(r=>r.record.mode),lostResultResolved:true,geometry:16,exceptions,unexpectedMessages},null,2))}
+      if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-manual-logging.png'),Buffer.from(shot.data,'base64'));await writeFile(join(artifacts,'operation-results.json'),JSON.stringify({count:loggedRequests.length,modes:loggedRequests.map(r=>r.record.mode),lostResultResolved:true,crossTabLockRefusal:true,geometry:16,exceptions,unexpectedMessages},null,2))}
       console.log('Compiled browser: explicit logging lease, five native forms, retained unknown result, local revocation and 16 geometry cases passed');return
     }
     const startReads=applicationTraffic.reads, startBytes=applicationTraffic.bytes, started=performance.now()
