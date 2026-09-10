@@ -193,6 +193,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Remote Satellites refresh timing:** Slow favorites refreshes start earlier,
+  accounting for the time needed to collect each bird's schedule. Temporary
+  congestion retains a still-valid schedule; unavailable or expired data is
+  hidden. This prevents routine refreshes from collapsing rows under the reader.
+
 - **The JS8 screen was drawing the Tempo screen underneath it.** Opening JS8 rendered the whole
   Tempo workspace below the cockpit: its Fast and Deep tier buttons, its station roster, its
   conversation pane, and a second waterfall beside JS8's own. Every other digital cockpit is

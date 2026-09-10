@@ -7,6 +7,12 @@ import type { DocumentCollection } from './application-query-protocol'
 import type { SatView } from '../types'
 
 export const NavigationMapContext=createContext<{connect:ConnectData|null;satellites:SatView|null;track:SatelliteLive['track'];ageMs:number}|null>(null)
+// Leave time to assemble the next document (or whole favorites set). A fixed
+// two-second lead let slow, healthy refreshes expire the displayed schedule and
+// collapse the page underneath the operator. Expiry itself is never extended.
+function refreshDelay(remaining:number,transferMs:number){
+  return Math.min(25_000,Math.max(1000,remaining-Math.max(2000,transferMs*2)))
+}
 export function useNavigation<T>(kind:DocumentCollection,search='',active=true){
   const source=useContext(RemoteCollectionsContext),available=useStationData()
   const [capture,setCapture]=useState<{doc:NavigationDocument<T>;at:number;key:string}|null>(null)
@@ -18,13 +24,14 @@ export function useNavigation<T>(kind:DocumentCollection,search='',active=true){
     if(!source||!available||!active)return
     let live=true,timer:ReturnType<typeof setTimeout>
     async function read(){
+      const started=performance.now()
       let next=2000
       try{
         const doc=await loadNavigation<T>(source!,kind,search,()=>live)
         if(live){setCapture({doc,at:performance.now()-doc.ageMs,key});setLoading(false)}
         // Planning documents can contain the full catalog. Refresh before their
         // source deadline instead of retransmitting megabytes every two seconds.
-        next=Math.min(25_000,Math.max(1000,doc.validForMs-doc.ageMs-2000))
+        next=refreshDelay(doc.validForMs-doc.ageMs,performance.now()-started)
       }catch(error){
         if(live&&(!(error instanceof Error)||error.message!=='applicationBusy')){setCapture(null);setLoading(false)}
       }
@@ -66,6 +73,7 @@ export function useSatelliteSchedule(namesKey:string){
     let live=true,timer:ReturnType<typeof setTimeout>
     const names=namesKey?namesKey.split(','):[]
     async function read(){
+      const started=performance.now()
       let next=2000
       try{
         if(names.length>64)throw new Error('applicationTooLarge')
@@ -83,8 +91,12 @@ export function useSatelliteSchedule(namesKey:string){
         if(performance.now()>=until)throw new Error('queryExpired')
         rows.sort((a,b)=>a.aosUnix-b.aosUnix)
         setCapture({rows,key:namesKey,grid,until});setLoading(false)
-        next=Math.min(25_000,Math.max(1000,until-performance.now()-2000))
-      }catch(error){if(live){setCapture(null);if(!(error instanceof Error)||error.message!=='applicationBusy')setLoading(false)}}
+        next=refreshDelay(until-performance.now(),performance.now()-started)
+      }catch(error){
+        // Congestion does not invalidate a still-fresh, coherent capture. The
+        // original deadline and station availability checks continue to hide it.
+        if(live&&(!(error instanceof Error)||error.message!=='applicationBusy')){setCapture(null);setLoading(false)}
+      }
       if(live){setNow(performance.now());timer=setTimeout(()=>void read(),next)}
     }
     void read();return()=>{live=false;clearTimeout(timer)}
