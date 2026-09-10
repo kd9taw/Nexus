@@ -97,7 +97,7 @@ describe('FrequencyReadout', () => {
   it('allows an approved remote dial gesture and cancels an edit when authority disappears', () => {
     const onCommit = vi.fn()
     let view = { fresh: true, connected: true, state: { phase: 'controlling', controls: { capabilities: ['frequency'] } } }
-    const client = { subscribe: () => () => {}, getSnapshot: () => view } as unknown as OperationClient
+    const client = { operationVersion: 3, subscribe: () => () => {}, getSnapshot: () => view } as unknown as OperationClient
     const display = () => <StationControlContext.Provider value={false}><RemoteOperationsContext.Provider value={client}>
       <FrequencyReadout dialMhz={14.074} editable remoteFrequency onCommit={onCommit} />
     </RemoteOperationsContext.Provider></StationControlContext.Provider>
@@ -112,5 +112,18 @@ describe('FrequencyReadout', () => {
     fireEvent.keyDown(container.querySelector('input')!, { key: 'Enter' })
     expect(onCommit).toHaveBeenCalledTimes(1)
     expect(screen.queryByRole('button')).toBeNull()
+  })
+
+  it.each([undefined, 1, 2])('keeps older operation version %s read-only even with an expanded frequency hint', (operationVersion) => {
+    const onCommit = vi.fn()
+    const view = { fresh: true, connected: true, state: { phase: 'controlling', controls: { capabilities: ['frequency'] } } }
+    const client = { operationVersion, subscribe: () => () => {}, getSnapshot: () => view } as unknown as OperationClient
+    const { container } = render(<StationControlContext.Provider value={false}><RemoteOperationsContext.Provider value={client}>
+      <FrequencyReadout dialMhz={14.074} editable remoteFrequency onCommit={onCommit} />
+    </RemoteOperationsContext.Provider></StationControlContext.Provider>)
+    expect(screen.queryByRole('button')).toBeNull()
+    fireEvent.click(container.querySelector('.readout')!)
+    expect(container.querySelector('input')).toBeNull()
+    expect(onCommit).not.toHaveBeenCalled()
   })
 })
