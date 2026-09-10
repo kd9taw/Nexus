@@ -192,8 +192,8 @@ fn revocation_and_reconnect_cannot_replay_or_promote_a_sent_toggle() {
 }
 
 #[test]
-fn link_replacement_after_the_last_poll_cancels_the_unsent_command() {
-    for link in ["radio", "amplifier", "closed-radio"] {
+fn local_gestures_and_link_replacement_after_poll_cancel_the_unsent_command() {
+    for link in ["radio", "amplifier", "closed-radio", "local-amplifier"] {
         let mut s = Station::new("spe");
         let mut request = s.request().unwrap();
         s.sample(false, false, Some(false), Instant::now());
@@ -205,6 +205,7 @@ fn link_replacement_after_the_last_poll_cancels_the_unsent_command() {
             "amplifier" => {
                 s.engine.remote_open_amp();
             }
+            "local-amplifier" => s.engine.note_local_amplifier_command(),
             _ => s.engine.remote_close_radio(),
         }
         assert!(

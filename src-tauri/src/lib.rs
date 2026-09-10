@@ -11503,23 +11503,33 @@ fn get_cat_cw_unproven_rig_models() -> Vec<u32> {
 /// The transmit interlock is NOT here. It lives in the poll thread, which holds a status frame
 /// from a moment earlier and so knows whether the amplifier is keyed; this layer has no reading
 /// of its own and a check written here would be a guess wearing a guard's clothes.
-#[tauri::command]
-fn amp_command(_which: String) -> bool {
+#[tauri::command(async)]
+fn amp_command(_which: String, _state: State<'_, SharedEngine>) -> bool {
     #[cfg(feature = "radio")]
     {
-        use tempo_audio::amplifier::AmpIntent;
-        let cmd = match _which.as_str() {
-            "bandDown" => AmpIntent::BandDown,
-            "bandUp" => AmpIntent::BandUp,
-            "operate" => AmpIntent::ToggleOperate,
-            _ => return false,
-        };
-        tempo_audio::amppoll::queue_amp_command(cmd)
+        queue_local_amp_command(&_which, &_state)
     }
     #[cfg(not(feature = "radio"))]
     {
         false
     }
+}
+
+#[cfg(feature = "radio")]
+fn queue_local_amp_command(which: &str, engine: &SharedEngine) -> bool {
+    use tempo_audio::amplifier::AmpIntent;
+    let cmd = match which {
+        "bandDown" => AmpIntent::BandDown,
+        "bandUp" => AmpIntent::BandUp,
+        "operate" => AmpIntent::ToggleOperate,
+        _ => return false,
+    };
+    // Revoke before enqueueing, even when the local queue is full. Keep the
+    // engine until admission so a Remote request cannot slip between the two.
+    // The port owner rechecks cancellation after releasing this same mutex.
+    let native = engine.lock().unwrap();
+    native.note_local_amplifier_command();
+    tempo_audio::amppoll::queue_amp_command(cmd)
 }
 
 // The band-plan channel list drives BOTH the band selector AND the frequency-preset dropdown —
@@ -23140,6 +23150,32 @@ fn winlink_disconnect() -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+
+    #[cfg(feature = "radio")]
+    #[test]
+    fn local_amp_gesture_revokes_remote_permission_without_changing_tx() {
+        use std::time::{Duration, Instant};
+        for armed in [false, true] {
+            let mut native =
+                tempo_app::engine::Engine::with_settings(tempo_app::settings::Settings::default());
+            native.set_tx_enabled(armed);
+            let tx_generation = native.remote_log_context_generation();
+            let permit = native
+                .remote_actuation_permit(Instant::now() + Duration::from_secs(5))
+                .unwrap();
+            let engine = std::sync::Arc::new(std::sync::Mutex::new(native));
+            assert!(!super::queue_local_amp_command("unknown", &engine));
+            assert!(permit.valid(Instant::now()), "invalid names do nothing");
+            assert!(super::queue_local_amp_command("operate", &engine));
+            assert!(
+                !permit.valid(Instant::now()),
+                "a queued local gesture must cancel the older Remote command"
+            );
+            let native = engine.lock().unwrap();
+            assert_eq!(native.tx_enabled(), armed);
+            assert_eq!(native.remote_log_context_generation(), tx_generation);
+        }
+    }
 
     /// ⛔ QRZ'S `FETCH REASON` IS NOT A THING THAT MAY BE PRINTED.
     ///

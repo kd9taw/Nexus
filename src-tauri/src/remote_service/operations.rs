@@ -409,6 +409,7 @@ impl Authority {
         let value = json!([
             engine.remote_log_context_generation(),
             engine.remote_receiver_context_generation(),
+            engine.remote_actuation_context_generation(),
             s.active_radio,
             s.mycall,
             s.mygrid,
