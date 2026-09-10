@@ -3,7 +3,7 @@ import type { ApplicationTransport } from '../applicationTransport'
 import type { DecodeRow, Tier } from '../types'
 import { t } from '../i18n'
 import type { Json } from './application-protocol'
-import { MEMORIES_COMMAND, DXPEDITIONS_COMMAND, INSIGHTS_COMMAND, QUERY_COMMAND, RECALL_COMMAND, insightCollection } from './application-query-protocol'
+import { OTA_COMMAND, MEMORIES_COMMAND, DXPEDITIONS_COMMAND, INSIGHTS_COMMAND, QUERY_COMMAND, RECALL_COMMAND, insightCollection } from './application-query-protocol'
 import type { Collection, QueryArgs, QueryPage } from './application-query-protocol'
 import type { ApplicationClient } from './application-client'
 
@@ -51,7 +51,7 @@ export class RemoteCollections implements ApplicationTransport {
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
         if (!this.live || generation !== this.generation) throw new Error('applicationUnavailable')
-        const page = await this.client.invoke<QueryPage>(args.collection === 'memories' ? MEMORIES_COMMAND : args.collection === 'dxpeditions' ? DXPEDITIONS_COMMAND : args.collection === 'recall' ? RECALL_COMMAND : insightCollection(args.collection) ? INSIGHTS_COMMAND : QUERY_COMMAND, args)
+        const page = await this.client.invoke<QueryPage>(args.collection === 'ota' ? OTA_COMMAND : args.collection === 'memories' ? MEMORIES_COMMAND : args.collection === 'dxpeditions' ? DXPEDITIONS_COMMAND : args.collection === 'recall' ? RECALL_COMMAND : insightCollection(args.collection) ? INSIGHTS_COMMAND : QUERY_COMMAND, args)
         if (!this.live || generation !== this.generation) throw new Error('applicationUnavailable')
         return page
       }

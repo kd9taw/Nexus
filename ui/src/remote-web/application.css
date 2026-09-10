@@ -74,8 +74,11 @@
 .remote-memories-view .mv-star:disabled { opacity: 1; cursor: default; }
 .remote-memories-view .mv-cell[readonly] { cursor: text; }
 .remote-memory-note { margin: 0; padding: 0 12px 8px; overflow-wrap: anywhere; white-space: pre-wrap; }
-@media (max-width: 700px) {
-  .remote-memories-view .memories-view { flex-direction: column; min-height: 28rem; flex-basis: 28rem; }
-  .remote-memories-view .mv-row-name { flex-basis: 100%; }
-  .remote-memories-view .mv-side { flex: 0 0 auto; max-height: 9rem; }
-}
+/* The native hunter panel is now nested below an observation header. Give its
+   full list a user-scrollable owner instead of the summary wrapper's clip. */
+.remote-ota-view { overflow: auto; }
+.remote-ota-bank { flex: 0 0 auto; min-width: 0; }
+.remote-ota-feeds { display: flex; flex: 0 0 auto; flex-wrap: wrap; gap: 0.25em 1em; padding: 0 1em 0.5em; }
+[data-viewport='xs'] .remote-memories-view .memories-view { flex-direction: column; min-height: 28rem; flex-basis: 28rem; }
+[data-viewport='xs'] .remote-memories-view .mv-row-name { flex-basis: 100%; }
+[data-viewport='xs'] .remote-memories-view .mv-side { flex: 0 0 auto; max-height: 9rem; }

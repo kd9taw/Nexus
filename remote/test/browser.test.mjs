@@ -61,7 +61,7 @@ async function chrome() {
   } catch(error) { ws?.close(); if(!exited)process.kill(-child.pid,'SIGTERM'); await rm(profile,{recursive:true,force:true,maxRetries:8,retryDelay:100}); throw error }
 }
 
-for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8]) test(`compiled hosted browser v${applicationVersion} completes PKCE, local device approval, observation and viewport checks`, { timeout: 120000 }, async () => {
+for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9]) test(`compiled hosted browser v${applicationVersion} completes PKCE, local device approval, observation and viewport checks`, { timeout: 120000 }, async () => {
   const app=await runtime(), artifacts=process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS ? join(process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS, `v${applicationVersion}`) : undefined
   let browser, station, producing=true, producer, applicationProducer
   const results=[]
@@ -71,7 +71,7 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8]) test(`compiled hosted
     const shell = await fetch(app.origin,{signal:AbortSignal.timeout(3000)})
     assert.equal(shell.status,200)
     assert.match(await shell.text(), /Nexus Remote/)
-    const stationHeaders = { 'x-nexus-application-version': '1', ...(applicationVersion >= 2 ? { 'x-nexus-application-stream-version': '2' } : {}), ...(applicationVersion >= 3 ? { 'x-nexus-application-query-version': '1' } : {}), ...(applicationVersion >= 4 ? { 'x-nexus-application-recall-version': '1' } : {}), ...(applicationVersion >= 5 ? { 'x-nexus-application-keyboard-version': '1' } : {}), ...(applicationVersion >= 6 ? { 'x-nexus-application-insights-version': '1' } : {}), ...(applicationVersion >= 7 ? { 'x-nexus-application-dxpeditions-version': '1' } : {}), ...(applicationVersion >= 8 ? { 'x-nexus-application-memories-version': '1' } : {}) }
+    const stationHeaders = { 'x-nexus-application-version': '1', ...(applicationVersion >= 2 ? { 'x-nexus-application-stream-version': '2' } : {}), ...(applicationVersion >= 3 ? { 'x-nexus-application-query-version': '1' } : {}), ...(applicationVersion >= 4 ? { 'x-nexus-application-recall-version': '1' } : {}), ...(applicationVersion >= 5 ? { 'x-nexus-application-keyboard-version': '1' } : {}), ...(applicationVersion >= 6 ? { 'x-nexus-application-insights-version': '1' } : {}), ...(applicationVersion >= 7 ? { 'x-nexus-application-dxpeditions-version': '1' } : {}), ...(applicationVersion >= 8 ? { 'x-nexus-application-memories-version': '1' } : {}), ...(applicationVersion >= 9 ? { 'x-nexus-application-ota-version': '1' } : {}) }
     station=await pair.native.open(pair.stationId, undefined, 101, stationHeaders)
     let code=null, oauth=null, exchanges=0, providerFailure=false, exceptions=0, acknowledgements=0, unexpectedMessages=0
     const applicationTraffic = { reads: 0, acks: 0, subscriptions: 0, batches: 0, bytes: 0, byCommand: {}, maxResponseBytes: 0 }
@@ -105,14 +105,14 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8]) test(`compiled hosted
       try {
         const message = JSON.parse(event.response.payloadData)
         if (message.type === 'ack' && Object.keys(message).sort().join(',') === 'epoch,sequence,type') acknowledgements++
-        else if (message.type === 'applicationHello' && (Object.keys(message).length === 1 || (Object.keys(message).length === 2 && [2,3,4,5,6,7,8].includes(message.version)))) {}
+        else if (message.type === 'applicationHello' && (Object.keys(message).length === 1 || (Object.keys(message).length === 2 && [2,3,4,5,6,7,8,9].includes(message.version)))) {}
         else if (message.type === 'applicationRead' && Object.keys(message).length === 4) applicationTraffic.reads++
         else if (message.type === 'applicationQuery' && Object.keys(message).length === 7) applicationTraffic.queries=(applicationTraffic.queries??0)+1
         else if (message.type === 'applicationQueryAck' && Object.keys(message).length === 2) {}
         else if (message.type === 'applicationAck' && Object.keys(message).length === 2) applicationTraffic.acks++
         else if (message.type === 'applicationSubscribe' && Object.keys(message).length === 3) applicationTraffic.subscriptions++
         else if (message.type === 'applicationFrameAck' && Object.keys(message).length === 3) applicationTraffic.acks++
-        else unexpectedMessages++
+        else { unexpectedMessages++; console.error('Unreviewed browser message', message) }
       } catch { unexpectedMessages++ }
     })
     await browser.call('Page.addScriptToEvaluateOnNewDocument',{source:`
@@ -184,6 +184,9 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8]) test(`compiled hosted
     const dxpeditions = JSON.parse(await readFile(new URL('../../ui/src/remote-web/__fixtures__/dxpeditions.json', import.meta.url), 'utf8'))
     dxpeditions.asOf = Math.floor(Date.now()/1000)
     const bank = JSON.parse(await readFile(new URL('../../ui/src/remote-web/__fixtures__/memories.json', import.meta.url), 'utf8'))
+    const ota = JSON.parse(await readFile(new URL('../../ui/src/remote-web/__fixtures__/ota.json', import.meta.url), 'utf8'))
+    const otaQueries = []
+    collections.ota = { rows: [], meta: ota }
     const memoryQueries = []
     collections.memories = { rows: [], meta: { bank, sourceAgeMs: 250 } }
     const dxQueries = []
@@ -206,6 +209,7 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8]) test(`compiled hosted
       if (!applicationAvailable || !producing) { withheld.push({type:request.type,collection:request.collection});continue }
       if (request.type === 'applicationQuery') {
         assert.ok(applicationVersion >= 3)
+        if (request.collection === 'ota') { assert.ok(applicationVersion >= 9); otaQueries.push(request.collection) }
         if (request.collection === 'memories') { assert.ok(applicationVersion >= 8); memoryQueries.push(request.collection) }
         if (request.collection === 'dxpeditions') { assert.ok(applicationVersion >= 7); dxQueries.push(request.collection) }
         if (request.collection === 'recall') assert.ok(applicationVersion >= 4)
@@ -304,6 +308,12 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8]) test(`compiled hosted
     assert.ok(await evaluate(`[...document.querySelectorAll('.amp-strip button')].every(button=>button.disabled)`),'observer amp controls must visibly refuse operating authority')
     await until(`window.__waterfallDraws > 2`)
     assert.ok(await evaluate(`[...document.querySelectorAll('.cockpit-qso button, .tuning-nudge, .cockpit-mode, .tier-btn, .cs-opt, .ph-split button')].every(button=>button.disabled)`),'station controls in the existing workspace must show observer authority')
+    if (applicationVersion < 9) {
+      await click(button('POTA/SOTA'))
+      await until(`!!document.querySelector('.remote-view-unavailable')`)
+      assert.equal(otaQueries.length,0)
+      await click(button('FT'))
+    }
     const startReads=applicationTraffic.reads, startBytes=applicationTraffic.bytes, started=performance.now()
     for(const [width,height] of [[1024,768],[1280,800],[1366,768],[1200,1390],[3440,1440]])for(const zoom of [1,1.75])for(const theme of ['dark','light']) {
       await browser.call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false},session)
@@ -368,7 +378,12 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8]) test(`compiled hosted
         assert.equal(applicationTraffic.byCommand[`get_${mode}_state`] ?? 0, 0, 'older stations keep their closed read contract')
         continue
       }
-      await until(`document.querySelector('.${mode}-cockpit .cw-decode-text')?.textContent==='CQ W1AW'`)
+      try { await until(`document.querySelector('.${mode}-cockpit .cw-decode-text')?.textContent==='CQ W1AW'`) }
+      catch (error) {
+        console.log('Keyboard observation diagnostic', {applicationVersion,mode,byCommand:applicationTraffic.byCommand},await evaluate(`({body:document.querySelector('.${mode}-cockpit')?.textContent,status:document.querySelector('.remote-application-status')?.textContent,unavailable:document.querySelector('.remote-view-unavailable')?.textContent,closures:window.__socketClosures})`))
+        if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-nexus-keyboard-failure.png'),Buffer.from(shot.data,'base64'))}
+        throw error
+      }
       assert.ok(await evaluate(`document.querySelector('.${mode}-cockpit .amp-strip')?.textContent.includes('80m')`))
       const controls = await evaluate(`Array.from(document.querySelectorAll('.${mode}-cockpit .rtty-arm, .${mode}-cockpit .cw-macro, .${mode}-cockpit .cw-type, .${mode}-cockpit .cw-decode-clear')).map(e=>e.disabled)`)
       assert.ok(controls.length > 8 && controls.every(Boolean))
@@ -406,7 +421,12 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8]) test(`compiled hosted
       assert.equal(await evaluate(`document.querySelector('.app')?.dataset.remoteStale==='true'`), false)
       assert.ok(!await evaluate(`document.querySelector('.${mode}-cockpit .cw-decode-text')?.textContent.includes('CQ W1AW')`))
       unavailableTopics.delete(`get_${mode}_state`); state.armed = true; applicationRevision++
-      await until(`document.querySelector('.${mode}-cockpit .cw-decode-text')?.textContent==='CQ W1AW'`)
+      try { await until(`document.querySelector('.${mode}-cockpit .cw-decode-text')?.textContent==='CQ W1AW'`) }
+      catch (error) {
+        console.log('Keyboard observation diagnostic', {applicationVersion,mode,byCommand:applicationTraffic.byCommand},await evaluate(`({body:document.querySelector('.${mode}-cockpit')?.textContent,status:document.querySelector('.remote-application-status')?.textContent,unavailable:document.querySelector('.remote-view-unavailable')?.textContent,closures:window.__socketClosures})`))
+        if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-nexus-keyboard-failure.png'),Buffer.from(shot.data,'base64'))}
+        throw error
+      }
       await browser.call('Emulation.setDeviceMetricsOverride', { width:1280,height:800,deviceScaleFactor:1,mobile:false }, session)
       await evaluate(`document.documentElement.style.setProperty('--ui-zoom','1');window.dispatchEvent(new Event('resize'))`)
       await settledLayout()
@@ -623,6 +643,64 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8]) test(`compiled hosted
       unavailableCollections.delete('memories'); await click(button('Refresh memories'))
       await until(`[...document.querySelectorAll('.remote-memory-bank:not([hidden]) .mv-grid input')].some(e=>e.value==='Updated station memory')`)
     }
+    if (applicationVersion >= 9) {
+      await click(button('POTA/SOTA'))
+      await until(`document.querySelector('.pota-view')?.textContent.includes('Logged park')`)
+      assert.equal(await evaluate(`document.querySelectorAll('.pota-hunt-btn,.pota-hunt-clear,.pota-act-start,.pota-popout,.pota-view input[type=file]').length`),0)
+      const reads=otaQueries.length
+      await click(`[...document.querySelectorAll('.pota-controls [role=tab]')].find(b=>b.textContent==='Both')`)
+      await until(`document.querySelector('.pota-spot-list')?.textContent.includes('Test summit')`)
+      await click(`[...document.querySelectorAll('.pota-filter-row button')].find(b=>b.textContent==='CW')`)
+      await until(`document.querySelector('.pota-spot-list')?.children.length===1`)
+      assert.ok(await evaluate(`document.querySelector('.pota-spot-list')?.textContent.includes('Imported park')`))
+      await click(`[...document.querySelectorAll('.pota-filter-row')].find(e=>e.getAttribute('aria-label')?.toLowerCase().includes('mode'))?.querySelector('button')`)
+      await until(`document.querySelector('.pota-spot-list')?.children.length===4`)
+      assert.equal(otaQueries.length,reads,'local filtering must not fetch or act on the station')
+      // A short feed fits without exercising the list's real scroll owner.
+      ota.feeds[0].spots.push(...Array.from({length:40},(_,i)=>({...ota.feeds[0].spots[0],reference:`US-${1000+i}`,name:`Long station park name ${i} with additional location detail`})))
+      await click(button('Refresh station data'))
+      await until(`document.querySelector('.pota-spot-list')?.children.length===44`)
+      for (const [width,height,zoom] of [[360,740,1],[390,844,1],[844,390,1],[1024,768,1],[1280,800,1],
+        [1200,1390,1],[3440,1440,1],[1024,768,0.8],[1280,800,1.75],[390,844,1.75]]) for (const theme of ['dark','light']) {
+        await browser.call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false},session)
+        await evaluate(`document.documentElement.style.setProperty('--ui-zoom','${zoom}');document.documentElement.dataset.theme='${theme}';window.dispatchEvent(new Event('resize'))`)
+        await settledLayout()
+        for (const target of ['.remote-insights-status button','.pota-sort-pick','.pota-spot-list .pota-spot:last-child .pota-spot-meta']) {
+          await evaluate(`document.querySelector('${target}').scrollIntoView({block:'nearest',inline:'nearest'})`)
+          await settledLayout()
+          const shape=await evaluate(`(()=>{const e=document.querySelector('${target}'),r=e.getBoundingClientRect();return {docW:document.documentElement.scrollWidth,docH:document.documentElement.scrollHeight,top:r.top,bottom:r.bottom,width:r.width,height:r.height,reachable:e.contains(document.elementFromPoint(r.left+r.width/2,Math.min(r.bottom,innerHeight-1)-Math.min(r.height/2,20)))}})()`)
+          const clipped=await evaluate(`(()=>{const result=[];for(let e=document.querySelector('${target}').parentElement;e;e=e.parentElement){const c=getComputedStyle(e);if(['hidden','clip'].includes(c.overflowY)&&e.scrollHeight>e.clientHeight+1)result.push({class:e.className,scroll:e.scrollHeight,client:e.clientHeight,y:c.overflowY})}return result})()`)
+          assert.deepEqual(clipped,[],`POTA/SOTA scrolling must remain available to user input: ${JSON.stringify({target,width,height,zoom,theme})}`)
+          const reachable=shape.docW<=width+1&&shape.docH<=height+1&&shape.width>0&&shape.height>0&&shape.top<height&&shape.bottom>0&&shape.reachable
+          if (!reachable) console.log('OTA geometry diagnostic',await evaluate(`(()=>{const chain=[];for(let e=document.querySelector('${target}');e;e=e.parentElement){const c=getComputedStyle(e),r=e.getBoundingClientRect();chain.push({class:e.className,top:r.top,bottom:r.bottom,height:r.height,scroll:e.scrollHeight,client:e.clientHeight,x:c.overflowX,y:c.overflowY})}return chain})()`))
+          if (!reachable&&artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-nexus-ota-failure.png'),Buffer.from(shot.data,'base64'))}
+          assert.ok(reachable,`POTA/SOTA content remains reachable: ${JSON.stringify({target,width,height,zoom,theme,shape})}`)
+          results.push({ota:true,target,width,height,zoom,theme,shape})
+        }
+      }
+      await browser.call('Emulation.setDeviceMetricsOverride',{width:1280,height:800,deviceScaleFactor:1,mobile:false},session)
+      await evaluate(`document.documentElement.style.setProperty('--ui-zoom','1');window.dispatchEvent(new Event('resize'))`)
+      await settledLayout()
+      await evaluate(`document.querySelector('.remote-ota-view').scrollTop=0`)
+      await settledLayout()
+      if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-nexus-ota.png'),Buffer.from(shot.data,'base64'))}
+      ota.feeds[0].spots.splice(3)
+      await click(`[...document.querySelectorAll('.pota-controls [role=tab]')].find(b=>b.textContent==='SOTA')`)
+      ota.feeds[1].spots[0].name='Updated test summit'
+      await click(button('Refresh station data'))
+      await until(`document.querySelector('.pota-spot-list')?.textContent.includes('Updated test summit')`)
+      assert.equal(await evaluate(`document.querySelector('.pota-controls [role=tab][aria-selected=true]')?.textContent`),'SOTA')
+      const originalSpots=ota.feeds[0].spots
+      Object.assign(ota.feeds[0],{status:'expired',sourceAgeMs:900000,spots:[]})
+      await click(button('Refresh station data'))
+      await until(`document.querySelector('.remote-ota-feeds')?.textContent.includes('expired')`)
+      assert.ok(await evaluate(`document.querySelector('.pota-spot-list')?.textContent.includes('Updated test summit')`))
+      Object.assign(ota.feeds[0],{status:'ready',sourceAgeMs:0,spots:originalSpots})
+      unavailableCollections.add('ota'); await click(button('Refresh station data'))
+      await until(`!document.querySelector('.remote-ota-bank:not([hidden])')&&!${button('Refresh station data')}?.disabled`)
+      unavailableCollections.delete('ota'); await click(button('Refresh station data'))
+      await until(`document.querySelector('.pota-spot-list')?.textContent.includes('Updated test summit')`)
+    }
     // Each supported version exercises loss/recovery on its newest actual pane.
     if (applicationVersion === 7) { await click(button('DXped')); await until(`!!document.querySelector('.dxped-view')`) }
     else if (applicationVersion === 6) { await click(button('Stats')); await until(`!!document.querySelector('.stats-summary')`) }
@@ -631,8 +709,9 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8]) test(`compiled hosted
     await until(`document.querySelector('.app')?.dataset.remoteStale==='true'`)
     assert.equal(await evaluate(`getComputedStyle(document.querySelector('.operate-host')).visibility`),'hidden','stale operating values must be hidden')
     if (applicationVersion === 6) assert.equal(await evaluate(`!!document.querySelector('.stats-summary')`), false, 'lost station data removes the summary')
-    if (applicationVersion >= 8) assert.equal(await evaluate(`!!document.querySelector('.remote-memory-bank:not([hidden])')`),false,'lost station data removes saved memories')
+    if (applicationVersion === 8) assert.equal(await evaluate(`!!document.querySelector('.remote-memory-bank:not([hidden])')`),false,'lost station data removes saved memories')
     if (applicationVersion === 7) assert.equal(await evaluate(`!!document.querySelector('.dxped-view')`), false, 'lost station data removes the DX board')
+    if (applicationVersion >= 9) assert.equal(await evaluate(`!!document.querySelector('.remote-ota-bank:not([hidden])')`),false,'lost station data removes the OTA view')
     applicationAvailable=true;applicationRevision++
     applicationData.get_snapshot.radio.dialMhz=7.074;applicationData.get_snapshot.radio.band='40m'
     // Withholding a station credit can legitimately expire BOTH sockets. The
@@ -643,8 +722,12 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8]) test(`compiled hosted
     try { await until(`document.querySelector('.app')?.dataset.remoteStale!=='true' && document.body.textContent.includes('7.074')`) }
     catch (error) { console.log('Station recovery diagnostic',withheld,await evaluate(`({closures:window.__socketClosures,stale:document.querySelector('.app')?.dataset.remoteStale,status:document.querySelector('.remote-application-status')?.textContent})`));throw error }
     if (applicationVersion === 6) await until(`document.querySelector('.stats-summary')?.textContent.includes('2013')`)
-    if (applicationVersion >= 8) await until(`[...document.querySelectorAll('.remote-memory-bank:not([hidden]) .mv-grid input')].some(e=>e.value==='Updated station memory')`)
+    if (applicationVersion === 8) await until(`[...document.querySelectorAll('.remote-memory-bank:not([hidden]) .mv-grid input')].some(e=>e.value==='Updated station memory')`)
     if (applicationVersion === 7) await until(`document.querySelector('.dxped-view')?.textContent.includes('Updated test entity')`)
+    if (applicationVersion >= 9) {
+      await until(`document.querySelector('.pota-spot-list')?.textContent.includes('Updated test summit')`)
+      assert.equal(await evaluate(`document.querySelector('.pota-controls [role=tab][aria-selected=true]')?.textContent`),'SOTA')
+    }
     assert.equal(exceptions,0,'actual Nexus must render and reconnect without runtime exceptions')
     await click(button('Disconnect and return to stations'))
     await until(`!!${button('Observe station')}`)

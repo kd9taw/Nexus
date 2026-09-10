@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { ApplicationClient } from './application-client'
 import { ApplicationRelay } from './application-relay'
+import { APPLICATION_VERSIONS } from './application-capabilities'
 import { STREAM_TOPICS, streamTopics, streamUpdates } from './application-stream-protocol'
 
 afterEach(() => vi.useRealTimers())
@@ -10,6 +11,27 @@ const keyboard = ['get_rtty_state', 'get_psk_state']
 const sample = (requestId: string, command: string, revision = 1, baseRevision: number | null = null) => ({
   type: 'applicationResult', requestId, command, revision, baseRevision, ageMs: 0,
   data: { text: 'CQ W1AW', armed: true }, removed: [],
+})
+
+it('delivers keyboard reads in all modern application versions through the existing v5 stream', async () => {
+  vi.useFakeTimers()
+  for (const version of APPLICATION_VERSIONS.filter(v => v >= 5)) {
+    const station = peer(), browser = peer(), relay = new ApplicationRelay()
+    relay.sync({ peer: station, version }, [{ sessionId: 'one', peer: browser }], 0)
+    const client = new ApplicationClient(s => relay.receiveBrowser('one', JSON.parse(s), 0), vi.fn(), version)
+    client.open(); client.receive(last(browser))
+    const reads = keyboard.map(command => client.invoke(command).catch(error => ({ error: error.message })))
+    try {
+      vi.advanceTimersByTime(1)
+      expect(station.send, `v${version} must dispatch its advertised keyboard reads`).toHaveBeenCalled()
+      const watch = last(station)
+      expect(watch.topics).toEqual(keyboard)
+      relay.receiveStation({ type: 'applicationBatch', watchId: watch.watchId, requestId: watch.requestId,
+        updates: keyboard.map(command => sample(watch.requestId, command)) }, 2)
+      client.receive(last(browser))
+      for (const value of await Promise.all(reads)) expect(value).toEqual({ text: 'CQ W1AW', armed: true })
+    } finally { client.disconnected(); await Promise.all(reads) }
+  }
 })
 
 it('negotiates keyboard observation only when both station and browser support v5', async () => {

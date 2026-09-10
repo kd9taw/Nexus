@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Remote POTA/SOTA observation:** The browser uses Nexus's existing hunter
+  cards, filters and sort with the station's spot feeds, worked-park badges and
+  activation/hunt context. Feed age and availability are shown separately for
+  POTA and SOTA; Refresh preserves browser filter choices. A compatible station
+  pilot is required. Hunt/QSY, activation changes and file operations remain on
+  the station.
+
 - **Remote Memories observation:** The browser uses Nexus's existing channel
   list/grid, groups, favorites and search with a current snapshot from the
   station's main window. Refresh preserves the selected group and display mode;

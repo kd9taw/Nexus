@@ -21,7 +21,7 @@ import {
   importHuntedParksCsv,
 } from '../api'
 import { pushToast, withErrorToast } from '../toast'
-import { bandFromKhz, spotModeClass } from '../otaHunt'
+import { bandFromKhz, spotModeClass, type ObservedOta } from '../otaHunt'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
 import { t } from '../i18n'
 import { T } from '../i18n/T'
@@ -131,16 +131,19 @@ interface Props {
   snap: AppSnapshot
   /** Called when the operator clicks HUNT on a spot row.
    * App.tsx wires this to setHuntTarget + the same QSY path as handleWorkNeeded. */
-  onHunt: (arg: OtaSpotClickArg) => void
+  onHunt?: (arg: OtaSpotClickArg) => void
   /** Called after clearHuntTarget completes so App can apply the fresh snapshot. */
-  onSnap: (s: AppSnapshot) => void
+  onSnap?: (s: AppSnapshot) => void
   /** True in the torn-off window — hides the pop-out button there (the
    *  FieldDayScoreboard shape: the view opens its own window directly, so the
    *  docked and detached mounts stay one component). */
   detached?: boolean
+  /** Ephemeral station data; native loaders and all station/file actions are disabled. */
+  observation?: ObservedOta
 }
 
-export function PotaSotaView({ snap, onHunt, onSnap, detached = false }: Props) {
+export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observation }: Props) {
+  const observed = observation !== undefined
   // Program + band filter persist for the same reason the sort and mode do: the operator
   // filed "leaving and returning resets all filters" as a bug. A stale/hand-edited value
   // falls back to the default rather than throwing.
@@ -150,7 +153,8 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false }: Props) 
     const raw = surfaceGet('nexus.ota.program')
     return raw === 'POTA' || raw === 'SOTA' || raw === 'Both' ? raw : 'POTA'
   })
-  const [spots, setSpots] = useState<OtaSpot[]>([])
+  const [nativeSpots, setSpots] = useState<OtaSpot[]>([])
+  const spots = observation ? observation.feeds.flatMap(f => f.spots) : nativeSpots
   const [loading, setLoading] = useState(false)
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
   // Band filter — set of band strings; empty = All.
@@ -195,6 +199,7 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false }: Props) 
   }, [modeFilter])
 
   const loadSpots = useCallback(async (p: Program) => {
+    if (observed) return
     setLoading(true)
     let loaded: OtaSpot[] = []
     if (p === 'Both') {
@@ -216,22 +221,23 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false }: Props) 
     setLoading(false)
     setSpots(loaded)
     setLastUpdated(new Date())
-  }, [])
+  }, [observed])
 
   // Initial load
   useEffect(() => {
-    void loadSpots(program)
-  }, [program, loadSpots])
+    if (!observed) void loadSpots(program)
+  }, [program, loadSpots, observed])
 
   // Auto-poll every 60 s
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   useEffect(() => {
+    if (observed) return
     if (intervalRef.current) clearInterval(intervalRef.current)
     intervalRef.current = setInterval(() => void loadSpots(program), 60_000)
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current)
     }
-  }, [program, loadSpots])
+  }, [program, loadSpots, observed])
 
   // Derive the set of distinct bands in the current spot list (for filter chips).
   const availableBands = (() => {
@@ -271,20 +277,23 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false }: Props) 
     sortAsc,
   )
 
-  const hunt = snap.hunt ?? null
+  const hunt = (observation ? observation.hunt : snap.hunt) ?? null
 
   // My-side activation: the backend stamps my park ref onto every QSO I log while active.
-  const [act, setAct] = useState<Activation | null>(null)
+  const [nativeAct, setAct] = useState<Activation | null>(null)
+  const act = observation ? observation.activation : nativeAct
   const [actRef, setActRef] = useState('')
   const [actProg, setActProg] = useState('POTA')
   useEffect(() => {
+    if (observed) return
     void getActivation()
       .then(setAct)
       .catch(() => {})
-  }, [])
+  }, [observed])
   const activating = act != null && act.reference != null
 
   const handleStartActivation = async () => {
+    if (observed) return
     const ref = actRef.trim().toUpperCase()
     if (!ref) return
     const a = await withErrorToast(
@@ -301,6 +310,7 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false }: Props) 
     }
   }
   const handleStopActivation = async () => {
+    if (observed) return
     const a = await withErrorToast(() => clearActivation(), t('ota.activation.stopFailed'))
     if (a) {
       setAct(a)
@@ -310,13 +320,16 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false }: Props) 
   }
 
   // Local park directory — download once / import a CSV, then search it offline in the log form.
-  const [parkN, setParkN] = useState(0)
+  const [nativeParkN, setParkN] = useState(0)
   const [parkBusy, setParkBusy] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
   // Imported "Hunted Parks.CSV" — marks parks worked so new-park flags are right on CW hunts.
-  const [huntedN, setHuntedN] = useState(0)
+  const [nativeHuntedN, setHuntedN] = useState(0)
+  const parkN = observation ? observation.parkCount : nativeParkN
+  const huntedN = observation ? observation.huntedCount : nativeHuntedN
   const huntedFileRef = useRef<HTMLInputElement>(null)
   useEffect(() => {
+    if (observed) return
     void parksCount()
       .then(setParkN)
       .catch(() => {})
@@ -325,8 +338,9 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false }: Props) 
     void huntedParksCount()
       .then(setHuntedN)
       .catch(() => {})
-  }, [])
+  }, [observed])
   const handleDownloadParks = async () => {
+    if (observed) return
     setParkBusy(true)
     const n = await withErrorToast(() => downloadParks(), t('ota.parks.downloadFailed'))
     setParkBusy(false)
@@ -338,6 +352,7 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false }: Props) 
     }
   }
   const handleImportFile = async (file: File) => {
+    if (observed) return
     setParkBusy(true)
     try {
       const csv = await file.text()
@@ -352,6 +367,7 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false }: Props) 
   }
 
   const handleImportHuntedFile = async (file: File) => {
+    if (observed) return
     setParkBusy(true)
     try {
       const csv = await file.text()
@@ -367,6 +383,7 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false }: Props) 
   }
 
   const handleClearHunt = async () => {
+    if (observed || !onSnap) return
     const s = await withErrorToast(() => clearHuntTarget(), t('ota.hunt.clearFailed'))
     if (s) {
       onSnap(s)
@@ -375,6 +392,7 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false }: Props) 
   }
 
   const handleHunt = async (s: OtaSpot) => {
+    if (observed || !onHunt || !onSnap) return
     const freqMhz = s.freqKhz / 1000
     const band = bandFromKhz(s.freqKhz)
     const modeClass = spotModeClass(s.mode)
@@ -414,7 +432,7 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false }: Props) 
         {/* Multi-monitor tear-off — the pop-out the per-surface filter records were
             built for: a POTA board beside a SOTA board, each keeping its own
             program/filter/sort. Hidden in the already-torn-off window. */}
-        {!detached && (
+        {!detached && !observed && (
           <button
             type="button"
             className="pota-popout"
@@ -437,7 +455,7 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false }: Props) 
               vals={{ reference: hunt.reference, call: hunt.call }}
             />
           </span>
-          <button
+          {!observed && <button
             type="button"
             className="pota-hunt-clear"
             onClick={() => void handleClearHunt()}
@@ -445,12 +463,12 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false }: Props) 
             aria-label={t('ota.hunt.clear')}
           >
             <X size={13} aria-hidden="true" />
-          </button>
+          </button>}
         </div>
       )}
 
       {/* My activation — while active, every QSO I log is stamped with MY park (my_ref). */}
-      <div className={`pota-activation${activating ? ' active' : ''}`}>
+      {(!observed || activating) && <div className={`pota-activation${activating ? ' active' : ''}`}>
         {activating ? (
           <>
             <span className="pota-act-text">
@@ -465,9 +483,9 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false }: Props) 
               />
             </span>
             {/* Ends the ACTIVATION — the park stamp on what you log — never a transmission. */}
-            <button type="button" className="pota-hunt-clear" onClick={() => void handleStopActivation()} title={t('ota.activation.stop.title')}>
+            {!observed && <button type="button" className="pota-hunt-clear" onClick={() => void handleStopActivation()} title={t('ota.activation.stop.title')}>
               <X size={13} aria-hidden="true" /> {t('ota.activation.stop.label')}
-            </button>
+            </button>}
           </>
         ) : (
           <>
@@ -495,7 +513,7 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false }: Props) 
             </button>
           </>
         )}
-      </div>
+      </div>}
 
       {/* Local park directory — download/import once, then search offline in the log form. */}
       <div className="pota-parklist">
@@ -504,6 +522,8 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false }: Props) 
             ? t('ota.parks.have', { formatted: parkN.toLocaleString() })
             : t('ota.parks.none')}
         </span>
+        {observed && <span className="pota-parklist-status">{t('ota.hunted.have', { formatted: huntedN.toLocaleString() })}</span>}
+        {!observed && <>
         <button type="button" className="pota-act-start" onClick={() => void handleDownloadParks()} disabled={parkBusy}>
           {parkBusy ? '…' : parkN > 0 ? t('ota.parks.update') : t('ota.parks.download')}
         </button>
@@ -543,6 +563,7 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false }: Props) 
             e.target.value = ''
           }}
         />
+        </>}
       </div>
 
       {/* Program toggle + band/mode filters + refresh */}
@@ -566,7 +587,7 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false }: Props) 
           </div>
 
           {/* Refresh + timestamp */}
-          <div className="pota-refresh-row">
+          {!observed && <div className="pota-refresh-row">
             <button
               type="button"
               className="filter-chip pota-refresh-btn"
@@ -581,7 +602,7 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false }: Props) 
             {lastUpdatedLabel && (
               <span className="pota-last-updated">{lastUpdatedLabel}</span>
             )}
-          </div>
+          </div>}
         </div>
 
         {/* Band filter chips */}
@@ -670,6 +691,8 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false }: Props) 
         <p className="aw-empty pota-empty">
           {loading
             ? t('ota.loading')
+            : observation && observation.feeds.some(f => (program === 'Both' || f.program === program) && f.status !== 'ready')
+              ? t('remote.collectionUnavailable')
             : bandFilter.length > 0 || modeFilter !== 'All'
               ? t('ota.empty.filtered')
               : t('ota.empty', {
@@ -737,7 +760,7 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false }: Props) 
                     </span>
                   </div>
                 </div>
-                <button
+                {!observed && <button
                   type="button"
                   className="pota-hunt-btn"
                   onClick={() => void handleHunt(s)}
@@ -749,16 +772,16 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false }: Props) 
                   aria-label={t('ota.hunt.button.aria', { call: s.activator })}
                 >
                   {t('ota.hunt.label')}
-                </button>
+                </button>}
               </li>
             )
           })}
         </ul>
       )}
 
-      <p className="settings-hint pota-source-hint">
+      {!observed && <p className="settings-hint pota-source-hint">
         {t('ota.source.hint', { source: SOURCES[program] })}
-      </p>
+      </p>}
     </section>
   )
 }

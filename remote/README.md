@@ -52,6 +52,10 @@ hibernation recovery.
 Version 8 adds only `get_remote_memories` and the argument-free `memories`
 collection, requiring `x-nexus-application-memories-version: 1` and every preceding
 advertisement. Versions 1–7 retain their exact vocabularies.
+Version 9 adds only `get_remote_ota` and the argument-free `ota` collection,
+requiring `x-nexus-application-ota-version: 1` and every preceding advertisement.
+Versions 1–8 retain their exact vocabularies. Application versions 5 and later
+all use the existing version 5 stream; query extensions do not add stream topics.
 An older pilot keeps its existing FT observation; an older monitor-only installer
 reports the workspace update requirement without losing compact observation.
 
@@ -179,6 +183,24 @@ preserves browser filtering and list/grid choice. The browser never adopts the
 station bank into its own memory store. Tuning/recall, edits, reorder, imports,
 exports, starter packs and net alarms remain station-local. Full entry details,
 write round trips, hardware tuning and live station comparison remain separate.
+
+POTA/SOTA reuses the existing hunter cards, program/band/mode filters and sort.
+The read projects the station's existing per-program spot caches, activation and
+hunt context, complete-log activation count, park directory/import counts, and
+canonical worked-park and own-call open-band badges. It triggers no feed fetch,
+prediction, file operation, Hunt/QSY or activation change. The native POTA/SOTA
+feed remains separate from the cluster/RBN unassisted switch, as on the desktop.
+
+Each feed admits at most 512 spots, 1,024 bytes per text field and 128 KiB of raw
+text; the complete source is limited to 192 KiB. Feed data expires after 15 minutes,
+independently for POTA and SOTA. Missing caches remain unavailable until the
+station's normal feed owner loads them. An empty successful feed is distinct from
+an unavailable or expired feed. Activation counting uses bounded log chunks with
+profile, activation and log-change checks. The browser includes capture/transit
+age, expires the whole observation after 60 seconds, and clears it on station
+loss or failed refresh while retaining local filters. A compatible station build
+is required; station commands, file operations and live shack comparison remain
+separate work.
 
 FT selection and CW/Phone/RTTY/PSK callsign entry use the existing Nexus recall card;
 its contact rows open the existing filtered Logbook. Stale sessions and changed

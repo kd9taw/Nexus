@@ -18,6 +18,7 @@ export async function insightsReference() {
   const statistics = await module('features/logStats.ts')
   return { ...statistics, ...await module('remote-web/insights.ts', { '../features/logStats': statistics }),
     ...await module('remote-web/dxpeditions.ts'),
+    ...await module('remote-web/ota.ts'),
     ...await module('remote-web/memories.ts', { '../remote-native/memoryBank': await module('remote-native/memoryBank.ts') }) }
 }
 export function insightsAdif() {

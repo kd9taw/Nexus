@@ -276,10 +276,12 @@ fn cloud_runtime_probe() {
         live_paths: Default::default(),
         region_paths: crate::SharedRegionPaths(Default::default()),
         ota: Default::default(),
+        parks: Default::default(),
         health: Default::default(),
         propagation: prop_cache.clone(),
         memories: Default::default(),
     };
+    let ota_cache = sources.ota.clone();
     let mut service = Service::start(
         origin.clone(),
         Box::new(vault.clone()),
@@ -294,6 +296,34 @@ fn cloud_runtime_probe() {
     std::io::stdout().flush().unwrap();
     for line in lines {
         let value: serde_json::Value = serde_json::from_str(&line.unwrap()).unwrap();
+        if value["type"] == "seedOta" {
+            let fixture: serde_json::Value = serde_json::from_str(include_str!(
+                "../../../ui/src/remote-web/__fixtures__/ota.json"
+            ))
+            .unwrap();
+            let mut cache = ota_cache.lock().unwrap();
+            cache.clear();
+            for feed in fixture["feeds"].as_array().unwrap() {
+                let program = feed["program"].as_str().unwrap();
+                if value["missing"].as_str() == Some(program) {
+                    continue;
+                }
+                let rows: Vec<propagation::OtaSpot> =
+                    serde_json::from_value(feed["spots"].clone()).unwrap();
+                cache.insert(
+                    program.into(),
+                    (crate::now_unix() - value["age"].as_i64().unwrap_or(0), rows),
+                );
+            }
+            drop(cache);
+            let mut e = engine.lock().unwrap();
+            e.set_hunted_parks_import(vec!["US-0003".into()]);
+            e.set_activation("POTA", "US-0001").unwrap();
+            e.set_hunt_target("K2ABC", "POTA", "US-0004").unwrap();
+            println!("REMOTE_TEST:{}", json!({ "seeded": true }));
+            std::io::stdout().flush().unwrap();
+            continue;
+        }
         if value["type"] == "publishMemories" {
             let generation = service
                 .status()

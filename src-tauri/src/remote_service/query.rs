@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 mod dxpeditions;
 mod insights;
 pub(super) mod memories;
+mod ota;
 mod recall;
 
 const PAGE_BYTES: usize = 256 * 1024;
@@ -29,6 +30,7 @@ pub enum Collection {
     Statistics,
     Dxpeditions,
     Memories,
+    Ota,
 }
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -65,6 +67,7 @@ impl Request {
                     | Collection::Statistics
                     | Collection::Dxpeditions
                     | Collection::Memories
+                    | Collection::Ota
             ) || self.cursor.is_none())
             && self
                 .cursor
@@ -98,6 +101,7 @@ pub struct Sources {
     pub health: crate::SharedHealth,
     pub propagation: crate::PropCache,
     pub memories: memories::Bank,
+    pub parks: crate::SharedParks,
 }
 
 // Display-only journal from the existing Remote snapshot producer. The engine's
@@ -263,6 +267,7 @@ impl Publisher {
                     | Collection::Statistics
                     | Collection::Dxpeditions
                     | Collection::Memories
+                    | Collection::Ota
             ) {
                 0 // Explicit selection/Refresh must see intervening local log changes.
             } else if request.collection == Collection::Decodes {
@@ -358,6 +363,13 @@ impl Publisher {
             _ => Err("applicationUnavailable"),
         };
         let rows = match request.collection {
+            Collection::Ota => {
+                return Ok((
+                    Vec::new(),
+                    0,
+                    ota::read_engine(engine, sources.ok_or("applicationUnavailable")?)?,
+                ));
+            }
             Collection::Memories => {
                 return Ok((
                     Vec::new(),

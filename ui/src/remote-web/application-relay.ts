@@ -8,13 +8,13 @@ import type { ApplicationCommand } from './application-protocol'
 import type { Peer } from '../remote-monitor/relay'
 import { ApplicationStreamRelay } from './application-stream-relay'
 import type { StreamCheckpoint } from './application-stream-relay'
-import { APPLICATION_VERSIONS, applicationCommands, applicationQueryVersion } from './application-capabilities'
+import { APPLICATION_VERSIONS, applicationCommands, applicationQueryVersion, applicationStreamVersion } from './application-capabilities'
 import { ApplicationQueryRelay } from './application-query-relay'
 import type { QueryCheckpoint } from './application-query-relay'
 
 type Pending = { requestId: string; forwardId: string; command: ApplicationCommand; at: number; delivered: boolean }
 type LegacyCheckpoint = { version: 1; ready: boolean; windowAt: number; count: number; pending: Pending | null }
-export type ApplicationCheckpoint = LegacyCheckpoint | (StreamCheckpoint & { version: 2 }) | { version: 3 | 4 | 5 | 6 | 7 | 8; stream: StreamCheckpoint; query: QueryCheckpoint }
+export type ApplicationCheckpoint = LegacyCheckpoint | (StreamCheckpoint & { version: 2 }) | { version: 3 | 4 | 5 | 6 | 7 | 8 | 9; stream: StreamCheckpoint; query: QueryCheckpoint }
 type Browser = LegacyCheckpoint & { peer: Peer }
 export class ApplicationRelay {
   private station: { peer: Peer; version: number } | null = null
@@ -35,12 +35,12 @@ export class ApplicationRelay {
       this.browsers.set(sessionId, { peer, version: 1, ready: false, windowAt: now, count: 0, pending: null })
     }
     this.expire(now)
-    this.stream.sync(station && station.version >= 2 ? station.peer : null, observers, now, (station?.version ?? 0) >= 5 ? 5 : 2)
+    this.stream.sync(station && station.version >= 2 ? station.peer : null, observers, now, applicationStreamVersion(station?.version ?? 0))
     this.query.sync(station && station.version >= 3 ? station.peer : null, observers, now, station?.version ?? 0)
   }
   restore(sessionId: string, saved: ApplicationCheckpoint): void {
-    if (saved.version === 3 || saved.version === 4 || saved.version === 5 || saved.version === 6 || saved.version === 7 || saved.version === 8) {
-      if (saved.stream.version !== (saved.version >= 5 ? 5 : 2) || (saved.query.version ?? 3) !== applicationQueryVersion(saved.version)) throw new Error('invalidApplicationCheckpoint')
+    if (saved.version === 3 || saved.version === 4 || saved.version === 5 || saved.version === 6 || saved.version === 7 || saved.version === 8 || saved.version === 9) {
+      if (saved.stream.version !== applicationStreamVersion(saved.version) || (saved.query.version ?? 3) !== applicationQueryVersion(saved.version)) throw new Error('invalidApplicationCheckpoint')
       this.stream.restore(sessionId, saved.stream); this.query.restore(sessionId, saved.query); return
     }
     if (saved.version === 2) { this.stream.restore(sessionId, saved); return }
@@ -51,7 +51,7 @@ export class ApplicationRelay {
   checkpoint(sessionId: string): ApplicationCheckpoint | undefined {
     const stream = this.stream.checkpoint(sessionId)
     const query = this.query.checkpoint(sessionId)
-    if (stream && query) return { version: query.version === 8 ? 8 : query.version === 7 ? 7 : query.version === 6 ? 6 : stream.version === 5 ? 5 : query.version ?? 3, stream, query }
+    if (stream && query) return { version: query.version === 9 ? 9 : query.version === 8 ? 8 : query.version === 7 ? 7 : query.version === 6 ? 6 : stream.version === 5 ? 5 : query.version ?? 3, stream, query }
     if (stream?.version === 2) return { ...stream, version: 2 }
     const browser = this.browsers.get(sessionId)
     if (!browser) return
@@ -69,7 +69,7 @@ export class ApplicationRelay {
         if (browser.ready) throw new Error('applicationAlreadyNegotiated')
         browser.ready = true
         const version = Math.min(Number(message.version ?? 1), this.station?.version ?? 0)
-        if (version >= 2) this.stream.add(sessionId, now, version >= 5 ? 5 : 2)
+        if (version >= 2) this.stream.add(sessionId, now, applicationStreamVersion(version))
         if (version >= 3) this.query.add(sessionId, now, applicationQueryVersion(version))
         browser.peer.send(JSON.stringify({ type: 'applicationCapabilities', version,
           commands: applicationCommands(version) }))

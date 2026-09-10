@@ -21938,6 +21938,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             live_paths: d.live_paths.clone(),
             region_paths: d.region_paths.clone(),
             ota: d.ota_spots.clone(),
+            parks: d.parks.clone(),
             health: d.health.clone(),
             propagation: d.prop_cache.clone(),
             memories: Default::default(),

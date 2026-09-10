@@ -301,6 +301,29 @@ test('actual native controller pairs, stores authority, publishes real DTOs, dis
       memories.send({ type: 'applicationQueryAck', requestId })
     }
     memories.close()
+    const { value: otaTicket } = await browser.post(`stations/${stationId}/ticket`)
+    const ota = await browser.open(stationId, otaTicket.ticket)
+    await ota.take(value => value.type === 'session')
+    ota.send({ type: 'applicationHello', version: 9 })
+    assert.ok((await ota.take(value => value.type === 'applicationCapabilities')).commands.includes('get_remote_ota'))
+    for (const [age, missing] of [[0, null], [900, 'SOTA'], [0, null]]) {
+      assert.equal((await probe.send({ type: 'seedOta', age, missing })).seeded, true)
+      const requestId = crypto.randomUUID()
+      ota.send({ type: 'applicationQuery', requestId, collection: 'ota', cursor: null, search: '', unconfirmed: false, after: null })
+      const page = await ota.take(value => value.requestId === requestId)
+      assert.equal(page.type, 'applicationPage')
+      const value = statsReference.parseOta(page)
+      assert.equal(value.feeds[0].status, age ? 'expired' : 'ready')
+      assert.equal(value.feeds[1].status, missing ? 'unavailable' : 'ready')
+      if (!age) {
+        assert.equal(value.feeds[0].spots.length, 3)
+        assert.equal(value.feeds[0].spots[1].newPark, false, 'station imported hunted parks remain worked')
+        assert.equal(value.hunt.reference, 'US-0004')
+        assert.equal(value.activation.reference, 'US-0001')
+      }
+      ota.send({ type: 'applicationQueryAck', requestId })
+    }
+    ota.close()
     const second = await socket.take(value => value.type === 'observation')
     assert.ok(second.frame.sequence > first.frame.sequence)
     assert.equal((await probe.send({ type: 'disable' })).ok, true)
