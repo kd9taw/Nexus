@@ -13,7 +13,7 @@
 }
 .remote-application-status span { flex: 1 1 18em; }
 .remote-application-status button { min-height: 48px; }
-.remote-application-status:has(.remote-control-result) {
+.remote-application-status {
   max-height: min(18em, calc(.4 * var(--vh-eff, 100vh)));
   overflow: auto;
 }
@@ -46,7 +46,7 @@
    zoom. Keep the app bounded, and let that excess scroll while retaining a
    usable summary pane and the visible connection/authority status. */
 .remote-workspace:has(.remote-insights-view, [data-three-pane]) { overflow: auto; }
-.remote-workspace:has(.remote-insights-view, [data-three-pane]) > .remote-application-status {
+.remote-workspace > .remote-application-status {
   position: sticky;
   top: 0;
   z-index: 50;

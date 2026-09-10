@@ -334,7 +334,8 @@ fn local_source_selection_between_mode_and_dial_stops_the_remote_transaction() {
     let local = change.clone();
     let peer = retuning_peer(14_074_000, "PKTUSB", move |line, _| {
         if line.starts_with("M ") {
-            if let Some(engine) = local.lock().unwrap().take() {
+            let engine = local.lock().unwrap().take();
+            if let Some(engine) = engine {
                 engine_lock(&engine)
                     .set_source(tempo_app::dto::SourceKind::Native)
                     .unwrap();

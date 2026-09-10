@@ -18,6 +18,8 @@
 import type { PartialCatalog } from './index'
 
 export const DE: PartialCatalog = {
+  "remote.modeEntry.label": "Modus verwenden",
+  "remote.modeEntry.title": "Station auf diesen Modus und die gespeicherte Frequenz umschalten. Senden bleibt ausgeschaltet.",
   "remote.configurationObserver": "Stationseinstellungen · Schreibgeschützt. Darstellung und Beobachtungsliste gelten für diesen Browser.",
   "remote.configurationLocal": "Konten, Sicherungen und Fernzugriff in Nexus an der Station verwalten.",
   "remote.programmingObserver": "Gespeicherte Stationskanäle · Schreibgeschützt. Suche, Bearbeitung, Export und Funkgeräteaktionen sind noch nicht angebunden.",
