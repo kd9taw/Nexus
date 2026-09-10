@@ -415,14 +415,23 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
       loggingAllowed=true
       await until(`!!${button('Take logging control')}`);await click(button('Take logging control'))
       await until(`document.querySelector('.remote-logging-authority')?.textContent.includes('control active')`)
+      const freshLoggingWindow=async()=>{
+        const after=performance.now()
+        for(let attempt=0;attempt<100;attempt++){
+          const reply=operationWire.findLast(v=>v.direction==='in'&&v.phase==='controlling')
+          if(reply&&reply.at>after&&performance.now()-reply.at<150)return
+          await sleep(50)
+        }
+        assert.fail('A fresh native logging window must precede the positive-control gesture')
+      }
       for(const [label,selector,call,mode] of [['CW','.cw-cockpit','K1OPS','CW'],['Phone','.phone-cockpit','K2OPS','SSB'],['RTTY','.rtty-cockpit','K3OPS','RTTY'],['PSK','.psk-cockpit','K4OPS','QPSK31'],['JS8','.js8-cockpit','K5OPS','JS8']]){
         console.log('Logging form',label);await click(button(label));
         if(label==='JS8'){await until(`!!${button('Take logging control')}`);await click(button('Take logging control'))}await until(`!!document.querySelector('${selector} .remote-log-entry .le-call')`)
         await click(`document.querySelector('${selector} .remote-log-entry .le-call')`);await browser.call('Input.insertText',{text:call},session)
-        // Typing a contact is paced outside the four-request burst budget. A
-        // prior robot case submitted five messages in 850 ms and correctly
-        // received remoteBusy; protocol tests retain that refusal.
-        await sleep(1100)
+        // Wait for an actual new native reply, rather than an arbitrary delay
+        // that can land the positive control on the old window's last instant.
+        // Expiry and burst refusal remain separate client/relay test cases.
+        await freshLoggingWindow()
         if(label==='CW'){
           // A separate real browser tab holds the station's draft lock. A Log
           // gesture must retain its form, send nothing, and never run later.
@@ -444,7 +453,7 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
           assert.equal(await evaluate(`document.querySelector('${selector} .le-call').value`),call)
           await browser.call('Runtime.evaluate',{expression:'window.__releaseReceiptLock();true'},auxiliarySession)
           await browser.call('Target.closeTarget',{targetId:auxiliary})
-          await sleep(1100);assert.equal(loggedRequests.length,0,'releasing a draft lock must not replay the refused gesture')
+          await freshLoggingWindow();assert.equal(loggedRequests.length,0,'releasing a draft lock must not replay the refused gesture')
         }
         if(label==='PSK')loseLogReply=true
         await click(`document.querySelector('${selector} .le-log-btn')`)
