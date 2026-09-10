@@ -3,7 +3,7 @@
 // ▲ TX indicator is the transmit-state token. Everything else is prose in the catalog.
 import { useState } from 'react'
 import { t, type MessageKey } from '../i18n'
-import { useStationControl } from '../stationAccess'
+import { useStationCapability, useStationControl } from '../stationAccess'
 import type { AppSnapshot, BandChannel, Tier } from '../types'
 import { bandLabelForMhz } from '../band'
 import { CockpitHeader } from './CockpitHeader'
@@ -62,11 +62,12 @@ export function TempoHeader({
   onToggleCqRun,
   onResumeCqRun,
 }: Props) {
+  const frequencyControl = useStationCapability('frequency')
   const control = useStationControl()
   const cq = snap.chatCq ?? 'off'
   const [tuneStep, setTuneStep] = useState(100)
   const commitDial = (mhz: number) => {
-    if (!control) return
+    if (!frequencyControl) return
     // An EMPTY band label is not a refusal: listening off the ham bands is first-class (operator,
     // 2026-08-13), so a typed WWV/shortwave/inter-band frequency tunes there. This used to
     // discard the typed value in SILENCE — the worst of the six, because nothing said why.
@@ -95,7 +96,7 @@ export function TempoHeader({
         </div>
       }
       bandControl={
-        <FrequencyControl
+        <FrequencyControl remoteFrequency
           channels={bandPlan}
           dialMhz={snap.radio.dialMhz}
           band={snap.radio.band}
@@ -106,6 +107,7 @@ export function TempoHeader({
           onSet={onSetFrequency}
         />
       }
+      remoteFrequency
       onCommitDial={commitDial}
       // Per-digit wheel tuning, the same as the other five main dials. Tempo was the one cockpit
       // rendering this header without it, so its readout was the only one that did not respond to

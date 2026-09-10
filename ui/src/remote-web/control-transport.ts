@@ -13,6 +13,12 @@ export function controlTransport(reads: ApplicationTransport, client: Applicatio
     async invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
       let action: StationAction | null = null, read = ''
       switch (command) {
+        case 'set_frequency':
+          action = stationAction({ action: 'radio.frequency', dialMhz: args?.dialMhz, band: args?.band, sideband: args?.mode })
+          // Refuse extra arguments instead of silently dropping an unreviewed intent.
+          if (!args || Object.keys(args).some(k => !['dialMhz', 'band', 'mode'].includes(k))) throw Error('invalidOperation')
+          read = 'get_snapshot'
+          break
         case 'rtty_arm': case 'psk_arm': case 'sstv_arm': {
           const receiver = command.slice(0, -4)
           action = stationAction({ action: 'decoder.arm', receiver, ...args })

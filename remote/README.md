@@ -2,8 +2,9 @@
 
 This service connects an approved browser to an outbound Nexus desktop connection.
 It reuses the existing Nexus application for station observation and adds
-separately authorized manual general-log QSO entry and receiver/amplifier controls.
-Radio tuning and transmitter commands, receive/browser microphone audio, payment collection and a native mobile
+separately authorized manual general-log QSO entry, receiver/amplifier controls
+and bounded frequency changes on the active radio.
+Mode/radio handoffs and transmitter commands, receive/browser microphone audio, payment collection and a native mobile
 application remain outside the implemented pilot. A compatible station build is
 required for each negotiated feature; browser deployment does not upgrade Nexus
 at the shack.
@@ -294,7 +295,7 @@ The original **Observe station** view remains available.
 This adapter is an incremental integration boundary, not paid-service completion.
 Logging authority does not authorize station controls. The amplifier worker
 requires generation-bound execution, cancellation and fresh readback. Attended
-amplifier acceptance, radio tuning and transmitter operation remain incomplete. Full read parity also
+radio/amplifier acceptance, remaining tuning gestures and transmitter operation remain incomplete. Full read parity also
 needs additional history sources and remaining per-feature data contracts. Shared
 subscriptions require measured load and WAN acceptance before commercial capacity
 claims. Audio needs its own negotiated media path. Billing must
@@ -369,26 +370,47 @@ intent across reload, shares its Web Lock with manual logging, and checks the
 receipt without replaying the action. Local takeover clears both permissions.
 Physical SPE/KPA command and cancellation acceptance remains required.
 
-## Radio transaction preparation
+## Frequency operations and remaining radio work
 
-Radio actions remain unsupported at the station-operation boundary. The native
-mode setter now uses a read-only destination decision that includes a pending
-operator memory, sideband resolution and the existing privilege recheck. Merely
-preparing it cannot bank the memory, alter settings or arm the transmitter.
+The operation-v2 `frequency` capability admits only `radio.frequency`, separately
+from the future `radio` capability. The existing main dial on FT, Phone, CW,
+RTTY, PSK and Tempo accepts typed MHz; FT/Tempo channel selects use the same
+intent. Other controls retain their own permissions. Opening a cockpit never
+changes the station's operating mode. An idle, disarmed station, a current radio
+connection and fresh unkeyed PTT are required. The requested named band must
+match the native band plan, and the existing routing policy must keep the active
+radio (including the operator's peg choice). Held satellite/channel contexts,
+pending local tuning/VFO/offset requests, split and FM refuse this increment.
+Normal RX tuning is not restricted to the operator's TX privileges; transmit
+guards remain in the native engine.
+
+Preparation resolves the current section's CAT mode and sideband policy without
+changing settings. The native mode setter also has a shared read-only destination
+decision for future section changes; preparation cannot bank a memory or arm TX.
 
 The internal `Rig::remote_retune` consumes one native-resolved request. It checks
-the expected CAT dial/mode and fresh unkeyed PTT, writes mode before frequency,
+the expected CAT dial/mode, fresh unkeyed PTT and simplex, writes mode before frequency,
 and reuses the native band/filter policy. A reported band-stack override permits
 one correction inside that same command; missing or inconsistent readings stop
 the transaction. Permission is rechecked after reads and at every socket write.
 An uncertain operation is never retried. Its returned CAT readback leaves the
 completion pending: it does not establish committed settings or physical RF.
 
-The next integration must bind this transaction to the actual radio owner,
-commit canonical Engine state and persistence under the still-matching native
-context, and prevent any unconfirmed target entering deferred reconciliation.
-Mode/tier/profile transitions, frontend admission and attended hardware/WAN
-acceptance remain incomplete. No new browser capability is advertised here.
+The existing RadioLoop consumes the intent once, before normal reconciliation,
+using its owned CAT connection outside the Engine mutex. It publishes the final
+readback, rechecks the original permission and station context, then calls the
+native frequency setter and saves the current settings under that mutex. It
+consumes only its own retune flag and adopts the confirmed position, so neither
+lease expiry nor a failed save causes a subsequent CAT retry. A save failure
+keeps the confirmed live position but reports an unknown outcome; it never
+rolls back a whole settings snapshot over local preferences. The browser waits
+for a later station sample after an applied receipt. Unknown outcomes require
+checking the station, never automatic replay.
+
+Mode/tier/profile transitions, FM/repeater and satellite/split transactions,
+band-memory/spot shortcuts, continuous wheel/scope tuning and attended hardware/WAN
+acceptance remain incomplete. A compatible station build is required; this
+source increment does not update existing installations or establish paid readiness.
 
 ## Local verification
 

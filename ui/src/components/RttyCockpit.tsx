@@ -157,6 +157,7 @@ function seqLabel(s: string): string {
  * operator is on another section.
  */
 export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSetTxEnabled, theme = 'dark', wheelSensitivity, onOpenLogbook, panels }: Props) {
+  const frequencyControl = useStationCapability('frequency')
   const control = useStationControl(), receiverControl = useStationCapability('decoder')
   const dataAvailable = useStationData()
   // Panels (Phase 3): the waterfall, the header, the auto-seq strip, the macros and the compose
@@ -288,7 +289,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   // Commit a typed dial from the shared header readout (same path as the
   // band-plan QSY); rejects out-of-plan frequencies with a toast.
   const commitDial = (mhz: number) => {
-    if (!control) return
+    if (!frequencyControl) return
     // An EMPTY band label is not a refusal: listening off the ham bands is first-class (operator,
     // 2026-08-13), so a typed WWV/shortwave/inter-band frequency tunes there. This used to toast
     // "outside the band plan" and discard the entry.
@@ -510,7 +511,8 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
               </span>
             )
           }
-          onCommitDial={control && onSetFrequency ? commitDial : undefined}
+          remoteFrequency
+          onCommitDial={frequencyControl && onSetFrequency ? commitDial : undefined}
           digitTune={control && onSetFrequency != null}
           wheelSensitivity={wheelSensitivity}
           actions={

@@ -3183,7 +3183,7 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
                 snap={snap}
                 onSnap={setSnap}
                 active={effectiveView === 'rtty'}
-                onSetFrequency={remote ? undefined : handleSetFrequency}
+                onSetFrequency={handleSetFrequency}
                 onSetTxEnabled={remote ? undefined : handleSetTxEnabled}
                 theme={theme}
                 wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
@@ -3198,7 +3198,7 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
                 snap={snap}
                 onSnap={setSnap}
                 active={effectiveView === 'psk'}
-                onSetFrequency={remote ? undefined : handleSetFrequency}
+                onSetFrequency={handleSetFrequency}
                 onSetTxEnabled={remote ? undefined : handleSetTxEnabled}
                 theme={theme}
                 wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}

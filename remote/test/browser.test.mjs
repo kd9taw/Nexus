@@ -290,6 +290,9 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
             if(a.receiver==='sstv'){applicationData.get_sstv_state.state.armed=a.on;applicationData.get_sstv_state.state.health.armed=a.on}
             else if(a.receiver==='aprs')applicationData.get_remote_aprs_state.health.arm=a.on?'auto':'off'
             else applicationData[`get_${a.receiver}_state`].armed=a.on
+          }else if(a.action==='radio.frequency'){
+            assert.ok(a.dialMhz>0);assert.equal(a.band,'40m');assert.ok(['USB','LSB'].includes(a.sideband))
+            applicationData.get_snapshot.radio.dialMhz=a.dialMhz;applicationData.get_snapshot.radio.band=a.band;applicationData.get_snapshot.radio.sideband=a.sideband
           }else if(a.action==='decoder.clear'){
             const state=applicationData[`get_${a.receiver}_state`];state.text='';if(state.charConf)state.charConf=[]
           }else if(a.action==='decoder.afcReset')applicationData[`get_${a.receiver}_state`].afcHz=0
@@ -301,10 +304,10 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
             assert.equal(a.expectedBand,applicationData.get_snapshot.radio.amp.bandLabel)
             const ladder=['160m','80m','60m','40m','30m','20m','17m','15m','12m','10m','6m','4m'];applicationData.get_snapshot.radio.amp.bandLabel=ladder[ladder.indexOf(a.expectedBand)+a.direction]
           }else assert.fail(`Unreviewed station action ${a.action}`)
-          value={operation:'stationControl',operationId:r.requestId,outcome:'applied',evidence:a.action.startsWith('amplifier.')?'amplifierReadback':'receiverState'}
+          value={operation:'stationControl',operationId:r.requestId,outcome:'applied',evidence:a.action==='radio.frequency'?'radioReadback':a.action.startsWith('amplifier.')?'amplifierReadback':'receiverState'}
           loggingReceipts.set(r.requestId,value);loggingRevision++;applicationRevision++
         }else if(r.type==='result'){value=loggingReceipts.get(r.operationId);if(!value)error='resultExpired'}
-        else value={stationBootId:loggingBoot,allowed:loggingAllowed||stationControls,phase:loggingLease?'controlling':loggingAllowed||stationControls?'available':'localPermissionRequired',leaseId:loggingLease,revision:loggingRevision,commandWindowId:loggingLease?loggingWindow:null,nextSequence:loggingLease?loggingSequence+1:null,leaseRemainingMs:loggingLease?5000:null,actions:loggingAllowed?['log.manual']:[],txArmed:false,...(stationControls?{controls:{context:{radioId:1,radioConnection:1,ampConnection:1,ampReadSequence:1},capabilities:['decoder','amplifier']}}:{})}
+        else value={stationBootId:loggingBoot,allowed:loggingAllowed||stationControls,phase:loggingLease?'controlling':loggingAllowed||stationControls?'available':'localPermissionRequired',leaseId:loggingLease,revision:loggingRevision,commandWindowId:loggingLease?loggingWindow:null,nextSequence:loggingLease?loggingSequence+1:null,leaseRemainingMs:loggingLease?5000:null,actions:loggingAllowed?['log.manual']:[],txArmed:false,...(stationControls?{controls:{context:{radioId:1,radioConnection:1,ampConnection:1,ampReadSequence:1},capabilities:['decoder','amplifier','frequency']}}:{})}
         source.send({type:'operationResponse',sessionId:request.sessionId,requestId:r.requestId,...(error?{error}:{value})});continue
       }
       if (request.type === 'applicationQuery') {
@@ -563,6 +566,26 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
       await gesture('.cw-cockpit .amp-op','amplifier.operate')
       await until(`document.querySelector('.cw-cockpit .amp-op').classList.contains('on')`)
       await gesture('.cw-cockpit .amp-band-step:last-child','amplifier.band')
+      // The ordinary main dial, on each core cockpit. Navigation itself must
+      // remain read-only; every submitted frequency is one explicit gesture.
+      for(const [tab,root,mhz] of [['FT','.operate-cockpit',7.075],['Phone','.phone-cockpit',7.076],['CW','.cw-cockpit',7.077],['RTTY','.rtty-cockpit',7.078],['PSK','.psk-cockpit',7.079]]){
+        const count=stationRequests.length
+        await click(button(tab));await settledLayout()
+        assert.equal(stationRequests.length,count,'navigation cannot command the radio')
+        const dial=`document.querySelector('${root} .ch-readout .readout[role="button"]')`
+        await until(`!!${dial}`);await freshLoggingWindow();await click(dial)
+        const input=`document.querySelector('${root} .readout-input')`
+        await until(`!!${input}`)
+        await evaluate(`(()=>{const e=${input};Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(e,'${mhz}');e.dispatchEvent(new Event('input',{bubbles:true}))})()`)
+        await browser.call('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter',windowsVirtualKeyCode:13},session)
+        await browser.call('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter',windowsVirtualKeyCode:13},session)
+        for(let i=0;i<100&&stationRequests.length===count;i++)await sleep(100)
+        assert.equal(stationRequests.length,count+1,`one ${tab} dial gesture`)
+        assert.equal(stationRequests.at(-1).action.action,'radio.frequency');assert.equal(stationRequests.at(-1).action.dialMhz,mhz)
+        await until(`document.querySelector('.remote-control-result')?.textContent.includes('confirmed')`)
+        await until(`document.querySelector('${root} .ch-readout .readout-val')?.textContent.includes('${mhz.toFixed(4)}')`)
+      }
+      await click(button('CW'));await settledLayout()
       let controlGeometry=0
       for(const [width,height,zoom]of [[390,844,1],[1280,800,1],[390,844,1.75],[1280,800,1.75]])for(const theme of ['dark','light']){
         await browser.call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false},session)
@@ -580,7 +603,7 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
       await until(`document.querySelector('.cw-cockpit .amp-op').disabled`)
       assert.equal(loggedRequests.length,5);assert.equal(unexpectedMessages,0);assert.equal(exceptions,0)
       if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-manual-logging.png'),Buffer.from(shot.data,'base64'));await writeFile(join(artifacts,'operation-results.json'),JSON.stringify({count:loggedRequests.length,stationActions:stationRequests.map(r=>r.action),controlGeometry,modes:loggedRequests.map(r=>r.record.mode),lostResultResolved:true,wholePageReloadResolved:true,crossTabLockRefusal:true,geometry:16,exceptions,unexpectedMessages},null,2))}
-      console.log('Compiled browser: logging, receiver and amplifier gestures, separate grants, recovery and 16 geometry cases passed');return
+      console.log('Compiled browser: five logging forms, five dial and nine receiver/amplifier gestures, separate grants, recovery and 32 geometry cases passed');return
     }
     const startReads=applicationTraffic.reads, startBytes=applicationTraffic.bytes, started=performance.now()
     for(const [width,height] of [[1024,768],[1280,800],[1366,768],[1200,1390],[3440,1440]])for(const zoom of [1,1.75])for(const theme of ['dark','light']) {

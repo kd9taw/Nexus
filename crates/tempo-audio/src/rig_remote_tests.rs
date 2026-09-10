@@ -10,9 +10,9 @@ use tempo_app::remote_control::{Completion, Evidence, Outcome, Reason, Revocatio
 
 use super::remote::{Position, Retune};
 
-struct Peer {
-    address: String,
-    lines: Arc<Mutex<Vec<String>>>,
+pub(crate) struct Peer {
+    pub(crate) address: String,
+    pub(crate) lines: Arc<Mutex<Vec<String>>>,
     stop: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
@@ -93,14 +93,14 @@ fn permission(authority: &Revocation, native: &Revocation) -> (WritePermission, 
     )
 }
 
-struct RadioState {
-    dial: u64,
-    mode: String,
-    keyed: bool,
-    band_stack: bool,
+pub(crate) struct RadioState {
+    pub(crate) dial: u64,
+    pub(crate) mode: String,
+    pub(crate) keyed: bool,
+    pub(crate) band_stack: bool,
 }
 
-fn retuning_peer(
+pub(crate) fn retuning_peer(
     dial: u64,
     mode: &str,
     intercept: impl Fn(&str, &mut RadioState) -> Option<String> + Send + 'static,
@@ -120,6 +120,7 @@ fn retuning_peer(
             "f" => format!("{}\n", state.dial),
             "m" => format!("{}\n2400\n", state.mode),
             "t" => format!("{}\n", u8::from(state.keyed)),
+            "s" => "0\nVFOB\n".into(),
             "T 0" => {
                 state.keyed = false;
                 "RPRT 0\n".into()
@@ -153,7 +154,7 @@ fn retune(from: (u64, &str), to: (u64, &str)) -> Retune {
     )
 }
 
-fn writes(peer: &Peer) -> Vec<String> {
+pub(crate) fn writes(peer: &Peer) -> Vec<String> {
     peer.lines
         .lock()
         .unwrap()
@@ -182,6 +183,25 @@ fn remote_retune_preserves_mode_before_dial_and_requires_a_separate_station_comm
         .remote_retune(retune((14_030_000, "CW"), (14_240_000, "USB")), &permission,)
         .is_err());
     assert_eq!(writes(&peer), ["M CW -1", "F 14030000"]);
+}
+
+#[test]
+fn remote_retune_requires_fresh_simplex_before_writing() {
+    for split in ["1\nVFOB\n", "RPRT -1\n"] {
+        let peer = retuning_peer(14_074_000, "PKTUSB", move |line, _| {
+            (line == "s").then(|| split.to_string())
+        });
+        let mut rig = Rig::rigctld(&peer.address);
+        let (permission, completion) = permission(&Revocation::default(), &Revocation::default());
+        assert!(rig
+            .remote_retune(
+                retune((14_074_000, "PKTUSB"), (7_074_000, "PKTUSB")),
+                &permission
+            )
+            .is_err());
+        assert!(writes(&peer).is_empty());
+        assert!(matches!(completion.outcome(), Outcome::Rejected { .. }));
+    }
 }
 
 #[test]

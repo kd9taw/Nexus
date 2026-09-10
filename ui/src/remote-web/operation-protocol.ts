@@ -214,7 +214,7 @@ export function operationValue(raw: unknown): OperationValue {
   if ('controls' in v) {
     const controls = object(v.controls, ['context', 'capabilities'])
     controlContext(controls.context)
-    if (!Array.isArray(controls.capabilities) || controls.capabilities.length > 3 || new Set(controls.capabilities).size !== controls.capabilities.length || controls.capabilities.some(c => !CONTROL_CAPABILITIES.includes(c as ControlCapability))) invalid()
+    if (!Array.isArray(controls.capabilities) || controls.capabilities.length > CONTROL_CAPABILITIES.length || new Set(controls.capabilities).size !== controls.capabilities.length || controls.capabilities.some(c => !CONTROL_CAPABILITIES.includes(c as ControlCapability))) invalid()
     if (!v.allowed && (controls.capabilities as unknown[]).length) invalid()
   }
   if (

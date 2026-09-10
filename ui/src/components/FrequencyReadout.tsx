@@ -9,7 +9,7 @@ import { useEffect, useRef, useState } from 'react'
 import { announce } from '../announce'
 import { parseOperatorNumber } from '../numInput'
 import { t } from '../i18n'
-import { useStationControl } from '../stationAccess'
+import { useStationCapability, useStationControl } from '../stationAccess'
 
 /** The unit printed beside the dial. A unit symbol, not a word. */
 const MHZ = 'MHz'
@@ -57,6 +57,8 @@ function stepLabel(decade: number): string {
 }
 
 interface Props {
+  /** Only hosts wired to the reviewed set_frequency transport opt in. */
+  remoteFrequency?: boolean
   dialMhz: number
   /** Band chip label rendered beside the number; omit to hide (e.g. when the caller shows its own). */
   band?: string
@@ -108,9 +110,12 @@ export function FrequencyReadout({
   disabled = false,
   digitTune = false,
   onTuneHz,
+  remoteFrequency = false,
 }: Props) {
-  const control = useStationControl()
-  disabled = disabled || !control
+  const control = useStationControl(), frequencyControl = useStationCapability('frequency')
+  disabled = disabled || !(control || (remoteFrequency && frequencyControl))
+  // Continuous/coalesced tuning needs its own Remote gesture contract.
+  digitTune = digitTune && control
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
   const canEdit = editable && !disabled
@@ -144,6 +149,7 @@ export function FrequencyReadout({
     // silently tuning the rig to 14 MHz.
     const v = parseOperatorNumber(draft)
     setEditing(false)
+    if (!canEdit) return
     // Skip a no-op commit (opened + Enter/blur without changing) so it never fires a spurious QSY.
     if (Number.isFinite(v) && v > 0 && Math.abs(v - dialMhz) >= UNCHANGED_EPS) onCommit?.(v)
   }

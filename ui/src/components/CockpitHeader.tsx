@@ -64,6 +64,7 @@ export interface CockpitHeaderProps {
   bandControl: ReactNode
   /** Commit a typed dial (MHz). Omit ⇒ the readout is display-only. */
   onCommitDial?: (mhz: number) => void
+  remoteFrequency?: boolean
   /** Enable mouse-wheel tuning over the readout (Phone/CW). */
   wheelTune?: boolean
   /** PER-DIGIT wheel tuning on the readout (operator request): hover the 100 Hz digit and one
@@ -141,6 +142,7 @@ export function CockpitHeader({
   modeIndicator,
   bandControl,
   onCommitDial,
+  remoteFrequency = false,
   wheelTune = false,
   digitTune = false,
   wheelStepHz = 100,
@@ -260,6 +262,7 @@ export function CockpitHeader({
             // that a frequency table cannot see (a General on 14.010 read as fine before).
             txBlocked={!radio.txAllowed}
             onCommit={onCommitDial}
+            remoteFrequency={remoteFrequency}
             digitTune={digitTune}
             onTuneHz={tuneBy}
           />

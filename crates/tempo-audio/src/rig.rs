@@ -26,7 +26,7 @@ fn remote_permission_error(reason: tempo_app::remote_control::Reason) -> std::io
 
 #[cfg(test)]
 #[path = "rig_remote_tests.rs"]
-mod remote_tests;
+pub(crate) mod remote_tests;
 
 /// Which serial control line keys the transmitter for [`PttMode::Serial`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

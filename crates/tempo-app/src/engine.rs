@@ -15,6 +15,7 @@
 
 mod field_day_display;
 mod mode_entry;
+pub mod remote_radio;
 
 /// A manual Remote log append awaiting storage confirmation. The caller must
 /// release its engine lock before syncing; connector delivery uses its existing pipeline.
@@ -2225,6 +2226,8 @@ pub struct Engine {
     remote_receiver_gen: u64,
     remote_actuation: crate::remote_control::Revocation,
     remote_amp_command: Option<crate::remote_control::amplifier::Request>,
+    remote_radio_command: Option<remote_radio::Request>,
+    remote_settings_path: Option<std::path::PathBuf>,
     /// The transponder the operator selected for the tracked bird, plus their
     /// position inside its passband and what was last written to the radio.
     /// `None` = no satellite tuning in force, which is every terrestrial path.
@@ -4283,6 +4286,8 @@ impl Engine {
             remote_receiver_gen: 0,
             remote_actuation: Default::default(),
             remote_amp_command: None,
+            remote_radio_command: None,
+            remote_settings_path: None,
             sat_tune: None,
             sat_dial_owner: None,
             sat_last_rate: None,
@@ -5250,6 +5255,7 @@ impl Engine {
 
     /// Peg-lock: when on, band selection never auto-switches the active radio (P4). Light setter.
     pub fn set_radio_pegged(&mut self, on: bool) {
+        self.remote_actuation.revoke();
         self.settings.radio_pegged = on;
     }
 
@@ -5301,11 +5307,13 @@ impl Engine {
     /// Creating a roster entry and choosing which rig you OPERATE are different acts, and the
     /// second is TX-relevant. "Make active" already exists as a deliberate button.
     pub fn add_radio(&mut self) -> u32 {
+        self.remote_actuation.revoke();
         self.settings.add_radio_profile()
     }
 
     /// Remove a radio from the roster (no-op on the active or last radio). Pure roster edit.
     pub fn remove_radio(&mut self, id: u32) -> bool {
+        self.remote_actuation.revoke();
         self.settings.remove_radio_profile(id)
     }
 
@@ -5318,6 +5326,7 @@ impl Engine {
 
     /// Set a radio's band-coverage set (empty = covers everything) for auto-routing (P4). Pure edit.
     pub fn set_radio_bands(&mut self, id: u32, bands: Vec<String>) {
+        self.remote_actuation.revoke();
         if let Some(p) = self.settings.radios.iter_mut().find(|p| p.id == id) {
             p.bands = bands;
         }
@@ -5327,6 +5336,7 @@ impl Engine {
     /// at a radio that doesn't exist are dropped — a rule that can never fire is worse than no rule.
     /// Live verb, NOT part of the settings form: like the roster it must survive a stale-form Save.
     pub fn set_routing_rules(&mut self, rules: Vec<crate::settings::RoutingRule>) {
+        self.remote_actuation.revoke();
         self.settings.routing_rules = rules;
         self.settings.ensure_routing_targets();
     }
@@ -5334,6 +5344,7 @@ impl Engine {
     /// Set (or clear) the fallback radio for band+mode combinations no rule and no band coverage
     /// claims. `None` = stay on the active radio. Live verb, same reason as `set_routing_rules`.
     pub fn set_default_radio(&mut self, id: Option<u32>) {
+        self.remote_actuation.revoke();
         self.settings.default_radio = id;
         self.settings.ensure_routing_targets();
     }
@@ -6614,6 +6625,7 @@ impl Engine {
 
     /// Request a RIT (receive incremental tuning) offset in Hz (0 = off); the radio loop applies it.
     pub fn request_rit(&mut self, hz: i32) {
+        self.remote_actuation.revoke();
         self.rit_hz = hz;
         self.rit_dirty = true;
     }
@@ -6626,6 +6638,7 @@ impl Engine {
     }
     /// Request an XIT (transmit incremental tuning) offset in Hz (0 = off).
     pub fn request_xit(&mut self, hz: i32) {
+        self.remote_actuation.revoke();
         self.xit_hz = hz;
         self.xit_dirty = true;
     }
@@ -6637,11 +6650,13 @@ impl Engine {
     }
     /// Select VFO A (`false`) or B (`true`).
     pub fn request_vfo(&mut self, vfo_b: bool) {
+        self.remote_actuation.revoke();
         self.active_vfo_b = vfo_b;
         self.vfo_dirty = true;
     }
     /// Swap the active VFO (A↔B).
     pub fn request_swap_vfo(&mut self) {
+        self.remote_actuation.revoke();
         self.active_vfo_b = !self.active_vfo_b;
         self.vfo_dirty = true;
     }
@@ -6731,6 +6746,7 @@ impl Engine {
     /// the radio loop applies it on the next cycle (same path the pile-up "UP n" uses). `None`
     /// returns to simplex. Marks the request dirty so `take_split_request` picks it up.
     pub fn request_split(&mut self, tx_mhz: Option<f64>) {
+        self.remote_actuation.revoke();
         self.split_tx_mhz = tx_mhz;
         self.split_dirty = true;
         // A NEW request retires the old acknowledgement immediately — the rig has not answered
@@ -6743,6 +6759,7 @@ impl Engine {
     /// from the cockpit picker; the radio loop applies it next cycle via `rig_mode_effective`. A
     /// band change clears it (see `set_frequency`), so a QSY re-asserts the band-auto sideband.
     pub fn request_sideband_override(&mut self, mode: Option<&str>) {
+        self.remote_actuation.revoke();
         // Whitelist the Phone voice modes — a broker/devtools caller can't smuggle "CW" etc. in.
         self.sideband_override = mode
             .map(|m| m.trim().to_ascii_uppercase())
@@ -7294,6 +7311,7 @@ impl Engine {
     /// Choose the CW keyer back-end ("cat" or "soundcard") + tone pitch (Hz; ignored
     /// if <= 0). Soundcard flips the CW rig-mode to USB; the radio loop re-applies it.
     pub fn set_cw_keyer(&mut self, backend: &str, pitch_hz: f32) {
+        self.remote_actuation.revoke();
         use crate::settings::CwKeyerBackend;
         self.cw_keyer_error = None; // a keyer change invalidates a prior keyer error
         self.settings.cw_keyer = match backend.to_ascii_lowercase().as_str() {
@@ -15227,6 +15245,7 @@ impl Engine {
     /// [`Self::ack_cat_port_released`]; the hold self-expires after 20 s so a prober
     /// that dies can never leave CAT torn down.
     pub fn hold_cat_port(&mut self) {
+        self.remote_actuation.revoke();
         self.cat_port_hold_until =
             Some(std::time::Instant::now() + std::time::Duration::from_secs(20));
         self.cat_port_released = false;

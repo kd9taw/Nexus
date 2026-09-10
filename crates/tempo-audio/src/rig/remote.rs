@@ -76,11 +76,16 @@ impl Retune {
 #[derive(Debug)]
 pub struct Readback {
     position: Position,
+    sampled_at: Instant,
 }
 
 impl Readback {
     pub fn position(&self) -> &Position {
         &self.position
+    }
+
+    pub fn sampled_at(&self) -> Instant {
+        self.sampled_at
     }
 }
 
@@ -115,6 +120,15 @@ impl Rig {
         match keyed {
             Some(false) => Ok(()),
             Some(true) => Err(Reason::StationBusy),
+            None => Err(Reason::ReadingUnavailable),
+        }?;
+        // A cached simplex flag cannot protect a selected-VFO write. Read the
+        // actual split state on this same connection at every retune boundary.
+        let split = self.read_split();
+        permission.check(Instant::now())?;
+        match split {
+            Some((false, _)) => Ok(()),
+            Some((true, _)) => Err(Reason::StationBusy),
             None => Err(Reason::ReadingUnavailable),
         }
     }
@@ -184,11 +198,15 @@ impl Rig {
                     .map_err(|_| Reason::HardwareUnconfirmed)?;
             }
         }
+        let sampled_at = Instant::now();
         let after = self.remote_reported_position(permission)?;
         if after != target {
             return Err(Reason::HardwareUnconfirmed);
         }
         self.remote_require_idle(permission)?;
-        Ok(Readback { position: after })
+        Ok(Readback {
+            position: after,
+            sampled_at,
+        })
     }
 }

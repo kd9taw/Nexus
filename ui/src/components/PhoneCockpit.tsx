@@ -1,6 +1,6 @@
 import { RemoteRecallEntry } from '../remote-web/RemoteRecall'
 import { CollectionStatus, useRemoteCollection } from '../remote-web/collections'
-import { useStationControl } from '../stationAccess'
+import { useStationCapability, useStationControl } from '../stationAccess'
 // ⚠️ THIS FILE IS ON THE **PARTIAL** LIST (i18n/hardcoded-strings.test.ts), and for one
 // reason only: THE PTT ROW, the pinned dock row this cockpit's stop line rests on, is still
 // written in English here — the button's four labels (which ARE the accessible name
@@ -375,6 +375,7 @@ const FLEX_SPANS = [
 ] as const
 
 export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, fieldDay, phoneMode, wheelSensitivity, spots, needByCall, typeByCall, onWorkSpot, onRecallMemory, onOpenMemories, onOpenSettings, onOpenLogbook, panels }: Props) {
+  const frequencyControl = useStationCapability('frequency')
   const control = useStationControl()
   const spotsRead = useRemoteCollection('spots')
   // Live S-meter (shared 100 ms poll, lock-free backend) — used to arrive via the 300 ms
@@ -717,7 +718,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   // TuningStrip nudge/wheel (keeps the current sideband so an in-band entry
   // never flips the mode); rejects out-of-plan frequencies with a toast.
   const commitDial = (mhz: number) => {
-    if (!control) return
+    if (!frequencyControl) return
     // An EMPTY band label is not a refusal: listening off the ham bands is first-class (operator,
     // 2026-08-13), so a typed WWV/shortwave/inter-band frequency tunes there. This used to toast
     // "outside the band plan" and discard the entry.
@@ -1234,6 +1235,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
           </div>
         }
         bandControl={<BandPicker snap={snap} mode="phone" onSnap={onSnap} />}
+        remoteFrequency
         onCommitDial={commitDial}
         actions={
           host && panels ? (

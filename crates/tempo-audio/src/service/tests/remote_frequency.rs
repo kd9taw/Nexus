@@ -1,0 +1,236 @@
+//! Drive the actual step (including the following native reconciliation), not
+//! just its Remote helper. CAT is an isolated loopback peer; no audio/RF devices.
+use super::*;
+use crate::rig::remote_tests::{retuning_peer, writes, Peer};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use tempo_app::remote_control::{Completion, Evidence, Outcome, Reason, Revocation};
+
+static NEXT: AtomicUsize = AtomicUsize::new(0);
+struct Station {
+    engine: Arc<Mutex<Engine>>,
+    state: RadioLoop,
+    rig: Rig,
+    backend: MockBackend,
+    authority: Revocation,
+    path: PathBuf,
+}
+impl Station {
+    fn new(peer: &Peer) -> Self {
+        let path = std::env::temp_dir()
+            .join(format!(
+                "nexus-worker-frequency-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ))
+            .join("settings.json");
+        let mut e = Engine::with_settings(Settings {
+            dial_mhz: 14.074,
+            band: "20m".into(),
+            sideband: "USB".into(),
+            ..test_settings()
+        });
+        e.set_tx_enabled(false);
+        e.configure_remote_settings_store(path.clone());
+        let engine = Arc::new(Mutex::new(e));
+        let mut state = loop_state();
+        state.applied = Transport::from_settings(engine_lock(&engine).settings());
+        state.remote_radio_id = Some(engine_lock(&engine).settings().active_radio);
+        state.last_dial = 14_074_000;
+        state.last_mode = "PKTUSB".into();
+        state.rig_asserted = true;
+        let read = state.remote_read(&engine).unwrap();
+        {
+            let mut e = engine_lock(&engine);
+            e.remote_observe_cat(Some(&read), Some(true));
+            e.remote_observe_dial(Some(&read), Some(14_074_000));
+            e.remote_observe_mode(Some(&read), Some("PKTUSB"));
+            e.remote_observe_ptt(Some(&read), Some(false));
+        }
+        Self {
+            engine,
+            state,
+            rig: Rig::rigctld(&peer.address),
+            backend: MockBackend::new(),
+            authority: Revocation::default(),
+            path,
+        }
+    }
+    fn queue(&mut self) -> Completion {
+        let mut e = engine_lock(&self.engine);
+        let connection = e
+            .remote_monitor_observation()
+            .radio
+            .readings
+            .cat
+            .unwrap()
+            .connection_generation;
+        e.queue_remote_frequency(
+            7.074,
+            "40m",
+            "USB",
+            connection,
+            self.authority
+                .permit(Instant::now() + Duration::from_secs(5))
+                .unwrap(),
+        )
+        .unwrap()
+    }
+    fn step(&mut self) {
+        self.state
+            .step(
+                &self.engine,
+                &mut self.backend,
+                &mut self.rig,
+                &no_sinks(),
+                0.0,
+                &mut mock_reopen_audio(),
+                &mut mock_reopen_rig(),
+                &mut StationSinks::new(),
+            )
+            .unwrap();
+    }
+}
+impl Drop for Station {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(self.path.parent().unwrap());
+    }
+}
+
+#[test]
+fn frequency_crosses_the_actual_worker_once_then_persists_without_native_replay() {
+    let peer = retuning_peer(14_074_000, "PKTUSB", |_, _| None);
+    let mut s = Station::new(&peer);
+    let receipt = s.queue();
+    assert_eq!(engine_lock(&s.engine).settings().dial_hz(), 14_074_000);
+    s.step();
+    assert_eq!(
+        receipt.outcome(),
+        Outcome::Applied {
+            evidence: Evidence::RadioReadback
+        }
+    );
+    assert_eq!(Settings::load(&s.path).dial_hz(), 7_074_000);
+    assert_eq!(writes(&peer), ["M PKTUSB 3000", "F 7074000"]);
+    s.authority.revoke();
+    for _ in 0..3 {
+        s.step();
+    }
+    assert_eq!(writes(&peer), ["M PKTUSB 3000", "F 7074000"]);
+    assert!(!engine_lock(&s.engine).tx_enabled());
+    assert_eq!(s.rig.read_freq().unwrap(), 7_074_000);
+}
+
+#[test]
+fn failed_frequency_does_not_leave_a_target_for_ordinary_worker_retries() {
+    let peer = retuning_peer(14_074_000, "PKTUSB", |line, _| {
+        line.starts_with("F ").then(|| "RPRT -1\n".into())
+    });
+    let mut s = Station::new(&peer);
+    let receipt = s.queue();
+    s.step();
+    assert!(matches!(receipt.outcome(), Outcome::Unknown { .. }));
+    for _ in 0..3 {
+        s.step();
+    }
+    assert_eq!(writes(&peer), ["M PKTUSB 3000", "F 7074000"]);
+    assert_eq!(engine_lock(&s.engine).settings().dial_hz(), 14_074_000);
+    assert!(!s.path.exists());
+}
+
+#[test]
+fn worker_save_failure_is_unknown_and_does_not_reissue_the_confirmed_qsy() {
+    let peer = retuning_peer(14_074_000, "PKTUSB", |_, _| None);
+    let mut s = Station::new(&peer);
+    std::fs::create_dir_all(&s.path).unwrap();
+    let receipt = s.queue();
+    s.step();
+    assert!(matches!(receipt.outcome(), Outcome::Unknown { .. }));
+    for _ in 0..3 {
+        s.step();
+    }
+    assert_eq!(engine_lock(&s.engine).settings().dial_hz(), 7_074_000);
+    assert_eq!(writes(&peer), ["M PKTUSB 3000", "F 7074000"]);
+}
+
+#[test]
+fn expired_or_wrong_owner_request_never_reaches_cat() {
+    for wrong_owner in [false, true] {
+        let peer = retuning_peer(14_074_000, "PKTUSB", |_, _| None);
+        let mut s = Station::new(&peer);
+        let receipt = s.queue();
+        if wrong_owner {
+            s.state.remote_radio_id = None;
+        } else {
+            s.authority.revoke();
+        }
+        s.step();
+        assert!(matches!(
+            receipt.outcome(),
+            Outcome::Rejected {
+                reason: Reason::AuthorityExpired | Reason::ContextChanged
+            }
+        ));
+        assert!(writes(&peer).is_empty());
+        assert!(!s.path.exists());
+        // The native setter still operates on this same loop and socket.
+        engine_lock(&s.engine).set_frequency(14.075, "20m", "USB");
+        s.step();
+        assert!(writes(&peer).iter().any(|w| w == "F 14075000"));
+    }
+}
+
+#[test]
+fn a_retired_worker_connection_cannot_use_a_new_connection_permission() {
+    let peer = retuning_peer(14_074_000, "PKTUSB", |_, _| None);
+    let mut s = Station::new(&peer);
+    // Reopen BEFORE admission: the new permit is valid, but this worker still
+    // owns the retired connection. Equal profile/transport values do not bind it.
+    {
+        let mut e = engine_lock(&s.engine);
+        let current = e.remote_open_radio().unwrap();
+        let read = e.remote_radio_read(&current, Instant::now()).unwrap();
+        e.remote_observe_cat(Some(&read), Some(true));
+        e.remote_observe_dial(Some(&read), Some(14_074_000));
+        e.remote_observe_mode(Some(&read), Some("PKTUSB"));
+        e.remote_observe_ptt(Some(&read), Some(false));
+    }
+    let receipt = s.queue();
+    s.step();
+    assert!(writes(&peer).is_empty());
+    assert!(matches!(
+        receipt.outcome(),
+        Outcome::Rejected {
+            reason: Reason::ContextChanged
+        }
+    ));
+    assert!(!s.path.exists());
+}
+
+#[test]
+fn a_local_qsy_between_cat_commands_cancels_the_remote_tail() {
+    let change: Arc<Mutex<Option<Arc<Mutex<Engine>>>>> = Default::default();
+    let local = change.clone();
+    let peer = retuning_peer(14_074_000, "PKTUSB", move |line, _| {
+        if line.starts_with("M ") {
+            let engine = local.lock().unwrap().take();
+            if let Some(engine) = engine {
+                engine_lock(&engine).set_frequency(14.075, "20m", "USB");
+            }
+        }
+        None
+    });
+    let mut s = Station::new(&peer);
+    *change.lock().unwrap() = Some(s.engine.clone());
+    let receipt = s.queue();
+    s.step();
+    assert!(matches!(receipt.outcome(), Outcome::Unknown { .. }));
+    let commands = writes(&peer);
+    assert!(!commands.iter().any(|w| w == "F 7074000"));
+    assert!(
+        commands.iter().any(|w| w == "F 14075000"),
+        "the local QSY must still reach the radio"
+    );
+    assert_eq!(engine_lock(&s.engine).settings().dial_hz(), 14_075_000);
+    assert!(!s.path.exists());
+}

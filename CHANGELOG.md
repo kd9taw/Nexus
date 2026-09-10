@@ -9,19 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Remote radio control groundwork:** Mode destinations reuse the station's
-  frequency-memory rules. The internal CAT transaction checks current dial,
-  mode and PTT, preserves native filter settings, and bounds band-stack recovery
-  to one correction. Browser radio tuning remains unavailable until station
-  state, persistence and controller integration are complete. Hardware
-  acceptance is still required.
+- **Remote frequency control:** With station permission and the controller
+  lease, the existing main dial accepts a typed frequency on the active radio.
+  CAT readback and settings persistence must finish before success is shown.
+  Local changes cancel pending work; uncertain commands are never repeated.
+  The radio must be disarmed, idle and simplex. Radio handoffs, held channels,
+  FM, mode/tier switching and continuous tuning remain outside this increment.
+  A compatible station build and attended hardware acceptance are required.
 
 - **Remote receiver and amplifier controls:** With separate permission granted
   at the station, the browser can use the existing receiver monitor, transcript,
   AFC and PSK mode controls, plus amplifier Operate/Standby and band steps.
   Amplifier changes require a disarmed, idle radio and later hardware readback;
   an uncertain command is never automatically repeated. A compatible station
-  pilot is required. Radio tuning and remote transmission remain unavailable,
+  pilot is required. Remote transmission remains unavailable,
   and physical amplifier acceptance is still required.
 
 - **Remote JS8 observation:** The browser uses Nexus's existing JS8 cockpit,
@@ -35,7 +36,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Fast/Deep conversation workspace, recent chats, heard stations and message
   delivery indicators. Thread selection and history scrolling stay local to the
   browser; incoming messages preserve the reader's position. Sending, resending,
-  CQ, heartbeat, Roam, tuning and deleting conversations remain on the station.
+  CQ, heartbeat, Roam and deleting conversations remain on the station. Typed
+  dial entry and channel selection use the separate frequency capability.
   This view uses the existing observation protocol without a new station build.
 
 - **Remote Field Day observation:** The browser shows Nexus's existing event

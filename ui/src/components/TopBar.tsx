@@ -349,7 +349,7 @@ export function TopBar({
 
       {!hideFrequencyControl && (
         <div className="topbar-group radio-readout">
-          <FrequencyControl
+          <FrequencyControl remoteFrequency
             channels={bandPlan}
             dialMhz={radio.dialMhz}
             band={radio.band}

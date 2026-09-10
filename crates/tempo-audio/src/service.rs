@@ -37,6 +37,8 @@ use crate::rig::tuning::{passband_for, retune_passband, same_named_band};
 use crate::rig::{PttMode, Rig, SerialLine, ATU_START_TUNE};
 use crate::rigctld_proc::{spawn_rigctld, RigctldProc};
 
+mod remote_frequency;
+
 /// The daemon serving the rigctld protocol on a radio's TCP port: Hamlib's spawned
 /// `rigctld` (classic), or Nexus's own native CI-V daemon (`icom_native_cat` — same
 /// protocol on the same port, plus the scope waveform + transceive the Hamlib path
@@ -4911,6 +4913,8 @@ impl RadioLoop {
             }
             _ => {}
         }
+
+        self.apply_remote_frequency(engine, rig, now);
 
         // --- Live rig/PTT/audio reconfiguration (operator hit Save) + Test-CAT
         // re-probe. Read settings under a short lock, do the slow rig/audio
@@ -11723,6 +11727,7 @@ fn probe_cat_or_explain(rig: &mut Rig, t: &Transport) -> (Option<bool>, String) 
 
 #[cfg(test)]
 mod tests {
+    mod remote_frequency;
     use super::should_command_rf_power;
 
     #[test]

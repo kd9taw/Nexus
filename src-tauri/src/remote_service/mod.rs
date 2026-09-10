@@ -148,6 +148,8 @@ impl Service {
         meters: tempo_app::engine::MeterFeed,
         sources: Option<query::Sources>,
     ) -> Self {
+        tempo_app::engine::engine_lock(&engine)
+            .configure_remote_settings_store(crate::settings_path());
         Self::start(
             REMOTE_ORIGIN.to_string(),
             Box::new(SystemVault),

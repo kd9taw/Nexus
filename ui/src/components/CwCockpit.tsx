@@ -354,6 +354,7 @@ export function CwCockpit({
   onOpenLogbook,
   panels,
 }: Props) {
+  const frequencyControl = useStationCapability('frequency')
   const control = useStationControl(), receiverControl = useStationCapability('decoder')
   const spotsRead = useRemoteCollection('spots')
   // Live S-meter (shared 100 ms poll, lock-free backend) — used to arrive via the 300 ms
@@ -843,7 +844,7 @@ export function CwCockpit({
   // TuningStrip nudge/wheel (keeps the current sideband so an in-band entry
   // never flips the mode); rejects out-of-plan frequencies with a toast.
   const commitDial = (mhz: number) => {
-    if (!control) return
+    if (!frequencyControl) return
     // An EMPTY band label is not a refusal: listening off the ham bands is first-class (operator,
     // 2026-08-13), so a typed WWV/shortwave/inter-band frequency tunes there. This used to toast
     // "outside the band plan" and discard the entry.
@@ -1348,6 +1349,7 @@ export function CwCockpit({
           </span>
         }
         bandControl={<BandPicker snap={snap} mode="cw" onSnap={onSnap} />}
+        remoteFrequency
         onCommitDial={commitDial}
         actions={
           host && panels ? (

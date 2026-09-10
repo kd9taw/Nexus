@@ -137,6 +137,7 @@ function fmtAfc(hz: number): string {
  * accumulating while the operator is on another section.
  */
 export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetTxEnabled, theme = 'dark', wheelSensitivity, onOpenLogbook, panels }: Props) {
+  const frequencyControl = useStationCapability('frequency')
   const control = useStationControl(), receiverControl = useStationCapability('decoder')
   const dataAvailable = useStationData()
   const host = panels
@@ -243,7 +244,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
   // Commit a typed dial from the shared header readout. An EMPTY band label is
   // not a refusal: listening off the ham bands is first-class (the RTTY rule).
   const commitDial = (mhz: number) => {
-    if (!control) return
+    if (!frequencyControl) return
     onSetFrequency?.(mhz, bandLabelForMhz(mhz), snap?.radio.sideband || 'USB')
   }
 
@@ -496,7 +497,8 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
               </span>
             )
           }
-          onCommitDial={control && onSetFrequency ? commitDial : undefined}
+          remoteFrequency
+          onCommitDial={frequencyControl && onSetFrequency ? commitDial : undefined}
           digitTune={control && onSetFrequency != null}
           wheelSensitivity={wheelSensitivity}
           actions={

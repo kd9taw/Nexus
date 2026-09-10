@@ -920,7 +920,7 @@ export function OperateCockpit({
           </div>
         }
         bandControl={
-          <FrequencyControl
+          <FrequencyControl remoteFrequency
             channels={bandPlan}
             dialMhz={snap.radio.dialMhz}
             band={snap.radio.band}
@@ -931,6 +931,7 @@ export function OperateCockpit({
             onSet={onSetFrequency}
           />
         }
+        remoteFrequency
         onCommitDial={commitDial}
         digitTune
         wheelSensitivity={wheelSensitivity}

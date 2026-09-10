@@ -4527,6 +4527,12 @@ impl Settings {
     }
 
     pub fn rig_mode(&self) -> String {
+        self.rig_mode_at(self.dial_mhz, &self.sideband)
+    }
+
+    /// Resolve the existing section policy for a proposed dial without changing
+    /// settings. Remote preparation and the native loop share this decision.
+    pub(crate) fn rig_mode_at(&self, dial_mhz: f64, sideband: &str) -> String {
         // FM is BAND-GATED, and that gate is a bug fix, not a preference. `phone_mode`
         // is one station-wide field: nothing resets it when the operator changes band or
         // switches radios (`sync_flat_from_active` does not touch it, and RadioProfile
@@ -4544,7 +4550,7 @@ impl Settings {
         // `fm_does_not_follow_the_operator_down_to_hf`.
         if self.operating_mode == OperatingMode::Phone
             && self.phone_mode.eq_ignore_ascii_case("fm")
-            && self.dial_mhz >= 29.0
+            && dial_mhz >= 29.0
         {
             return "FM".to_string(); // FM voice (10 m FM segment, VHF/UHF simplex + repeaters)
         }
@@ -4553,12 +4559,12 @@ impl Settings {
         // (FT8 on 40 m is USB-side — the band convention would say LSB and be wrong),
         // while Phone and CW follow the hard band convention (LSB below 10 MHz).
         let lsb = match self.operating_mode {
-            OperatingMode::Digital => self.sideband.trim().eq_ignore_ascii_case("LSB"),
+            OperatingMode::Digital => sideband.trim().eq_ignore_ascii_case("LSB"),
             // Keyboard modes are ALWAYS USB-side: the PSK31 convention is USB on
             // every band (80/40 m included — unlike RTTY's LSB and phone's
             // below-10-MHz rule), so the band fallthrough would be wrong here.
             OperatingMode::Keyboard => false,
-            _ => self.dial_mhz < 10.0,
+            _ => dial_mhz < 10.0,
         };
         self.rig_mode_on_sideband(lsb)
     }
