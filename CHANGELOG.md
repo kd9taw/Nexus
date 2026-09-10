@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Remote receiver and amplifier controls:** With separate permission granted
+  at the station, the browser can use the existing receiver monitor, transcript,
+  AFC and PSK mode controls, plus amplifier Operate/Standby and band steps.
+  Amplifier changes require a disarmed, idle radio and later hardware readback;
+  an uncertain command is never automatically repeated. A compatible station
+  pilot is required. Radio tuning and remote transmission remain unavailable,
+  and physical amplifier acceptance is still required.
+
 - **Remote JS8 observation:** The browser uses Nexus's existing JS8 cockpit,
   including four-speed activity, heard stations, inbox, queued frames and pending
   replies. Worked-before details come from the complete station log; unavailable

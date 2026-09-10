@@ -167,7 +167,7 @@ impl Request {
             let o = self.context(engine)?;
             let amp = o.amplifier.ok_or(Reason::ReadingUnavailable)?;
             let read = amp.reading.ok_or(Reason::ReadingUnavailable)?;
-            if !self.sent_read.is_some_and(|sent| read.read_sequence > sent) {
+            if self.sent_read.is_none_or(|sent| read.read_sequence <= sent) {
                 return Err(Reason::HardwareUnconfirmed);
             }
             match &self.target {

@@ -2,8 +2,8 @@
 
 This service connects an approved browser to an outbound Nexus desktop connection.
 It reuses the existing Nexus application for station observation and adds
-separately authorized manual general-log QSO entry. Radio, amplifier and transmitter
-commands, receive/browser microphone audio, payment collection and a native mobile
+separately authorized manual general-log QSO entry and receiver/amplifier controls.
+Radio tuning and transmitter commands, receive/browser microphone audio, payment collection and a native mobile
 application remain outside the implemented pilot. A compatible station build is
 required for each negotiated feature; browser deployment does not upgrade Nexus
 at the shack.
@@ -105,8 +105,9 @@ observation leaves the desktop averaging window and analysis requests intact. Th
 CW getter observes decoder state without changing sensitivity. RTTY/PSK getters
 copy the existing native DTOs and 4,000-character text rings, including character
 confidence, AFC and reported TX state. These sampled rings are not lossless text
-history. Browsing never arms a decoder, clears text, changes tuning or sends text;
-start the decoder locally in Nexus. A stopped decoder and unavailable data have
+history. Browsing never arms a decoder, clears text, changes tuning or sends text.
+Explicit receiver gestures require the separate station-control grant below.
+A stopped decoder and unavailable data have
 separate messages. Reported TX activity does not confirm RF output. Encoding runs outside
 the engine lock, and busy engine reads are refused without queuing. Room socket
 attachments contain only bounded authority and routing metadata, never these
@@ -167,7 +168,8 @@ Operate, CW, Phone, RTTY and PSK have partial observation support in this previe
 the decoder transcript, sent-text history and callsign candidates. CW/Phone share
 the station scope, meters, settings, amplifier status and observed band activity.
 RTTY/PSK retain their existing cockpit, waterfall, decoder transcript and amplifier
-strip, with station-local decoder and transmit controls disabled.
+strip. Supported decoder controls require a station-control grant; transmit
+controls remain disabled.
 Needed, Spots and the paged Logbook now support read-only browsing. Existing QRZ
 profile links open in the browser, without contacting the station or its vault.
 DXpeditions reuses the existing station board, work-now cards, calendar and
@@ -285,14 +287,14 @@ its contact rows open the existing filtered Logbook. Stale sessions and changed
 callsigns discard old results. Manual QSO entry uses the separate operation contract
 below. Cockpit memory recall, rotator, voice-keyer/audio and other hardware controls
 remain unavailable in their existing panes. The read transport continues to refuse
-all mutation names; the operation parser admits only the closed logging grammar.
+all mutation names; the operation parser admits only its closed, versioned grammar.
 Opening a workspace or navigating it never selects the shack's operating mode.
 The original **Observe station** view remains available.
 
 This adapter is an incremental integration boundary, not paid-service completion.
-Logging authority does not authorize transmitter or amplifier commands. Hardware
-operation still needs generation-bound execution and cancellation at the actual
-station hardware owner, fresh readback, and attended transmitter/amplifier acceptance. Full read parity also
+Logging authority does not authorize station controls. The amplifier worker
+requires generation-bound execution, cancellation and fresh readback. Attended
+amplifier acceptance, radio tuning and transmitter operation remain incomplete. Full read parity also
 needs additional history sources and remaining per-feature data contracts. Shared
 subscriptions require measured load and WAN acceptance before commercial capacity
 claims. Audio needs its own negotiated media path. Billing must
@@ -301,8 +303,8 @@ payment or account recovery must never arm a radio.
 
 ## Manual general-log operations
 
-The native station advertises `x-nexus-operation-version: 1` independently of the
-application read version. An approved browser needs a separate local logging grant
+Operation version 1 remains supported; version 2 is advertised independently of
+the application read version. An approved browser needs a separate local logging grant
 and explicitly acquires the station's single logging lease. Grants start empty
 after restart. The station owns the boot identity, connection/lease generations,
 1-second heartbeat, 5-second lease, 2-second command window, context revision,
@@ -312,8 +314,9 @@ revocation invalidate authority; reconnect never reacquires it.
 CW, Phone/SSB, RTTY, PSK/QPSK and JS8 reuse the existing manual LogEntry form. The
 station chooses the normal QSO time at append; an explicit UTC override is retained.
 Field Day and QSO WAV recording configurations refuse this path. FT current-QSO
-and pending-log confirmation, editing/import/export, lookup, and all hardware/TX
-operations remain separate work. Global station-control permission stays false.
+and pending-log confirmation, editing/import/export, lookup, and radio/TX
+operations remain separate work. Global UI control permission stays false;
+individual receiver/amplifier affordances use the narrow capability grants.
 
 Manual append reuses native enrichment, deduplication and connector queues. The
 actual open file is synchronized after releasing the engine lock. `fileSynced`
@@ -335,6 +338,36 @@ hibernation. It cannot report native application or persistence success. It does
 not store QSO fields in D1. Logging permission is not an end-to-end TX authorization
 claim; hosted-origin compromise, operator permits, media, hardware cancellation
 and commercial acceptance require their own review before a paid operating release.
+
+## Receiver and amplifier operations
+
+`x-nexus-operation-version: 2` adds a closed `stationControl` request. A browser
+needs approval, an explicit per-browser **Allow station controls** grant at the
+shack, and the shared controller lease. Grants reset after a station restart.
+Logging permission and payment never grant these controls. Older stations retain
+their logging/observation contract and refuse station-control requests.
+
+The existing RTTY, PSK, SSTV and APRS monitor buttons operate native receivers.
+CW/RTTY/PSK Clear, RTTY/PSK AFC reset and waterfall netting, and PSK mode/reverse
+use the same Engine verbs as local gestures. APRS Remote monitoring is receive
+only and cannot upgrade the automatic-ack interlock. Navigation does not arm a
+receiver or change the station's operating mode.
+
+The existing amplifier Operate/Standby and band-step buttons submit one intent
+with the displayed precondition. The port owner needs a newer sample from the
+same amplifier connection, fresh unkeyed radio PTT, an idle station and TX
+disabled. Manual band steps also require follow-band disabled. Unsupported band
+endpoints refuse; the shared SPE 15K model token cannot establish 4 m capability
+across hardware series. No wrap-around is inferred. Standby never means Stop TX.
+
+Each hardware intent has a fixed deadline bounded by the five-second lease,
+independent of later heartbeats. Native context changes and revocation reach the
+worker after it releases the Engine lock. A later measurement on the same link
+confirms application; accepting a queue entry or a wire acknowledgement does not.
+Results are pending, applied, rejected or unknown. The browser retains uncertain
+intent across reload, shares its Web Lock with manual logging, and checks the
+receipt without replaying the action. Local takeover clears both permissions.
+Physical SPE/KPA command and cancellation acceptance remains required.
 
 ## Local verification
 

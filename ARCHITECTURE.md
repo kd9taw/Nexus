@@ -21,10 +21,13 @@ rebuilt from Rust state (do not assume a UI field is stale-frozen — it usually
 The hosted Remote pilot reuses `App.tsx` through `applicationTransport.ts` beneath
 `api.ts`. `remote/` supplies the authenticated Cloudflare station room; the outbound
 native session in `src-tauri/src/remote_service/` owns closed, versioned reads and
-a separate manual general-log operation contract. Nexus at the shack owns local
-logging grants, the controller lease, expiring context-bound commands, deduplication
-and durable append receipts. Login, entitlement and browser approval remain separate
-checks. Hardware/TX commands remain unavailable; no arbitrary Tauri bridge exists.
+a separate versioned operation contract. Nexus at the shack owns distinct local
+logging and station-control grants, the shared controller lease, expiring
+context-bound commands, deduplication and durable append receipts. Receiver
+gestures call native Engine verbs; amplifier commands reach the existing port
+owner with revocable permission and later readback receipts. Login, entitlement
+and browser approval remain separate checks. Radio tuning and remote transmission
+remain unavailable; no arbitrary Tauri bridge exists.
 See [the Remote contract and limits](remote/README.md#existing-nexus-workspace).
 
 ## Crates (roles, not an exhaustive list)

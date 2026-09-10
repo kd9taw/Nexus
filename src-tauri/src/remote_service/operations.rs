@@ -512,8 +512,7 @@ impl Authority {
             Request::Acquire {
                 station_boot_id, ..
             } => {
-                if !c.grants.contains(device)
-                    && !(version == 2 && c.control_grants.contains(device))
+                if !(c.grants.contains(device) || version == 2 && c.control_grants.contains(device))
                 {
                     return Err("localPermissionRequired");
                 }
@@ -557,8 +556,8 @@ impl Authority {
             }
             Request::Result { operation_id, .. } => {
                 if !identifier(operation_id)
-                    || (!c.grants.contains(device)
-                        && !(version == 2 && c.control_grants.contains(device)))
+                    || !(c.grants.contains(device)
+                        || version == 2 && c.control_grants.contains(device))
                 {
                     return Err("localPermissionRequired");
                 }
