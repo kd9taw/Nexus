@@ -1,3 +1,6 @@
+import { pendingLogStorage } from './operation-storage'
+import { OperationClient } from './operation-client'
+import { OPERATION_REQUEST_BYTES, OPERATION_RESPONSE_BYTES } from './operation-protocol'
 import { Auth0Client } from '@auth0/auth0-spa-js'
 import { ageFrame, MAX_FRAME_BYTES, parseFrame, STALE_MS } from '../remote-monitor/protocol'
 import type { MonitorFrame } from '../remote-monitor/protocol'
@@ -29,9 +32,9 @@ async function boundedJson<T>(path: string, options: RequestInit): Promise<T> {
   finally { clearTimeout(timer); options.signal?.removeEventListener('abort', cancel) }
 }
 export class BrowserClient {
-  constructor(private readonly auth: Auth0Client, readonly applicationVersion = 1) {}
+  constructor(private readonly auth: Auth0Client, readonly applicationVersion = 1, readonly operationVersion = 0) {}
   static async load(): Promise<BrowserClient | null> {
-    const config = await boundedJson<{ issuer: string; audience: string; clientId: string; ready: boolean; applicationVersion?: number }>(
+    const config = await boundedJson<{ issuer: string; audience: string; clientId: string; ready: boolean; applicationVersion?: number; operationVersion?: number }>(
       '/api/remote/config', { cache: 'no-store', credentials: 'omit' })
     if (!config.ready) return null
     const issuer = new URL(config.issuer)
@@ -46,7 +49,7 @@ export class BrowserClient {
     } else {
       try { await auth.checkSession() } catch { /* interactive login stays available */ }
     }
-    return new BrowserClient(auth, APPLICATION_VERSIONS.find(version=>version===config.applicationVersion)??1)
+    return new BrowserClient(auth, APPLICATION_VERSIONS.find(version=>version===config.applicationVersion)??1, config.operationVersion===1?1:0)
   }
   authenticated(): Promise<boolean> { return this.auth.isAuthenticated() }
   signIn(): Promise<void> { return this.auth.loginWithRedirect() }
@@ -56,6 +59,9 @@ export class BrowserClient {
   }
   observationTicket(stationId: string, signal: AbortSignal): Promise<{ body: { ticket: string; serverNow: number }; startedAt: number }> {
     return this.request(`stations/${stationId}/ticket`, {}, signal)
+  }
+  renewObservation(stationId:string,sessionId:string,signal:AbortSignal):Promise<{body:{ok:boolean;serverNow?:number};startedAt:number}> {
+    return this.request(`stations/${stationId}/renew`,{sessionId},signal)
   }
   private async request<T>(path: string, body: object, signal?: AbortSignal): Promise<{ body: T; startedAt: number }> {
     let token: string
@@ -76,6 +82,7 @@ export class BrowserClient {
 export class HostedConnection {
   readonly source: MonitorSource
   readonly application: ApplicationClient
+  readonly operations: OperationClient
   private socket: WebSocket | null = null
   private latest: { frame: MonitorFrame; at: number } | null = null
   private disposed = false
@@ -84,13 +91,20 @@ export class HostedConnection {
   private renewal: ReturnType<typeof setInterval> | undefined
   private abort = new AbortController()
   private renewing = false
+  private sessionId: string | null = null
+  private lastClockRenewal = -Infinity
+  private clockFailures = 0
   private anchor: { server: number; start: number } | null = null
 
   constructor(private client: BrowserClient, private stationId: string, private readonly applicationMode = false) {
     this.application = new ApplicationClient(message => {
-      if (!this.applicationMode || this.socket?.readyState !== WebSocket.OPEN || this.socket.bufferedAmount + new TextEncoder().encode(message).length > 2048) throw new RemoteError(503)
+      if (!this.applicationMode || this.socket?.readyState !== WebSocket.OPEN || this.socket.bufferedAmount + new TextEncoder().encode(message).length > (client.operationVersion===1?OPERATION_REQUEST_BYTES:2048)) throw new RemoteError(503)
       this.socket.send(message)
     }, () => this.socket?.close(1000, 'applicationUnavailable'), client.applicationVersion)
+    this.operations = new OperationClient(message=>{
+      if(!this.applicationMode||this.socket?.readyState!==WebSocket.OPEN||this.socket.bufferedAmount+new TextEncoder().encode(message).length>OPERATION_REQUEST_BYTES)throw new RemoteError(503)
+      this.socket.send(message)
+    },applicationMode&&client.operationVersion===1,()=>performance.now(),pendingLogStorage(()=>localStorage,stationId))
     this.source = { id: `hosted-${stationId}`, kind: 'native', read: async signal => {
       if (signal.aborted || this.disposed || this.socket?.readyState !== WebSocket.OPEN || !this.latest) throw new RemoteError(503)
       return ageFrame(this.latest.frame, performance.now() - this.latest.at)
@@ -98,17 +112,38 @@ export class HostedConnection {
   }
   start(): void { void this.connect() }
   stop(): void {
-    this.application.disconnected()
+    this.application.disconnected(); this.operations.disconnected()
     this.disposed = true; this.abort.abort(); this.latest = null
     clearTimeout(this.reconnectTimer); clearInterval(this.renewal)
     this.socket?.close(1000, 'disconnected'); this.socket = null
   }
   private retry(): void {
-    this.application.disconnected()
+    this.application.disconnected(); this.operations.disconnected()
     this.latest = null; clearInterval(this.renewal)
     if (this.disposed || this.reconnectTimer) return
     const delay = Math.min(30000, 1000 * 2 ** Math.min(this.attempt++, 5))
     this.reconnectTimer = setTimeout(() => { this.reconnectTimer = undefined; void this.connect() }, delay)
+  }
+  private async renew(socket:WebSocket,clock=false):Promise<void> {
+    if(this.renewing||this.disposed||this.socket!==socket||!this.sessionId)return
+    const now=performance.now()
+    if(clock&&now-this.lastClockRenewal<1000)return
+    if(clock){this.lastClockRenewal=now;if(++this.clockFailures>3){socket.close(1000,'clockUnavailable');return}}
+    this.renewing=true
+    try {
+      // Tests and old adapters can supply only post; normal BrowserClient
+      // supplies the request-start clock after obtaining its account token.
+      const startedAt=performance.now()
+      const result=typeof this.client.renewObservation==='function'
+        ? await this.client.renewObservation(this.stationId,this.sessionId,this.abort.signal)
+        : {body:await this.client.post<{ok:boolean;serverNow?:number}>(`stations/${this.stationId}/renew`,{sessionId:this.sessionId},this.abort.signal),startedAt}
+      if(this.socket!==socket||this.disposed)return
+      if(result.body.serverNow!==undefined){
+        if(!Number.isSafeInteger(result.body.serverNow)||result.body.serverNow<0)throw new RemoteError(503)
+        this.anchor={server:result.body.serverNow,start:result.startedAt}
+      }else if(clock)socket.close(1000,'clockUnavailable')
+    }catch{if(this.socket===socket)socket.close(1000,'accessEnded')}
+    finally{this.renewing=false}
   }
   private async connect(): Promise<void> {
     if (this.disposed) return
@@ -116,7 +151,7 @@ export class HostedConnection {
       const { body: ticket, startedAt: start } = await this.client.observationTicket(this.stationId, this.abort.signal)
       if (this.disposed) return
       if (!/^[0-9a-f]{64}$/.test(ticket.ticket) || !Number.isSafeInteger(ticket.serverNow)) throw new RemoteError(403)
-      this.anchor = { server: ticket.serverNow, start }
+      this.anchor = { server: ticket.serverNow, start };this.sessionId=null;this.clockFailures=0;this.lastClockRenewal=-Infinity
       const url = new URL(`/api/remote/stations/${this.stationId}/observe`, window.location.origin)
       url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
       const socket = new WebSocket(url, ['nexus-observe-v1', `ticket.${ticket.ticket}`])
@@ -126,39 +161,42 @@ export class HostedConnection {
         try {
           if (typeof event.data !== 'string' || new TextEncoder().encode(event.data).length > (this.applicationMode ? APPLICATION_MAX_BYTES : MAX_FRAME_BYTES + 256)) throw new RemoteError(403)
           const message = JSON.parse(event.data) as Record<string, unknown>
+          if(this.applicationMode&&message.type==='operationResponse'){if(new TextEncoder().encode(event.data).length>OPERATION_RESPONSE_BYTES)throw new RemoteError(403);this.operations.receive(message);return}
           if (this.applicationMode && typeof message.type === 'string' && message.type.startsWith('application')) {
             this.application.receive(message); return
           }
           if (new TextEncoder().encode(event.data).length > MAX_FRAME_BYTES + 256) throw new RemoteError(403)
           if (message.type === 'session' && Object.keys(message).length === 2 && typeof message.sessionId === 'string' && /^[0-9a-f-]{36}$/.test(message.sessionId)) {
-            if (this.applicationMode) this.application.open()
-            const sessionId = message.sessionId
+            if (this.applicationMode) { this.application.open(); this.operations.open() }
+            this.sessionId = message.sessionId
             clearInterval(this.renewal)
-            this.renewal = setInterval(() => {
-              if (this.renewing || this.disposed) return
-              this.renewing = true
-              void this.client.post(`stations/${this.stationId}/renew`, { sessionId }, this.abort.signal)
-                .catch(() => socket.close(1000, 'accessEnded')).finally(() => { this.renewing = false })
-            }, 30000)
+            this.renewal = setInterval(() => {void this.renew(socket)},30000)
           } else if (message.type === 'observation' && Object.keys(message).length === 3 && Number.isSafeInteger(message.sentAtMs) && this.anchor) {
             const received = performance.now()
             // HTTP request start is a conservative clock anchor. This includes
             // delivery delay without trusting the phone's wall clock.
             const transit = received - this.anchor.start - (Number(message.sentAtMs) - this.anchor.server)
-            if (transit < 0 || transit >= STALE_MS) throw new RemoteError(503)
-            const frame = ageFrame(parseFrame(message.frame, 'native'), transit)
-            this.latest = { frame, at: received }; this.attempt = 0
+            if (transit >= STALE_MS) throw new RemoteError(503)
+            const parsed=parseFrame(message.frame,'native')
+            // A wall-clock correction can invalidate the HTTP-to-monotonic
+            // mapping without invalidating this socket's application replies.
+            // Hide observation until authenticated renewal establishes a new
+            // anchor. ACK only the structurally validated receipt, never data
+            // shown as current. No clock tolerance weakens the freshness gate.
+            if(transit<0){this.latest=null;if(this.sessionId)void this.renew(socket,true);else socket.close(1000,'clockUnavailable')}
+            else {this.latest={frame:ageFrame(parsed,transit),at:received};this.attempt=0;this.clockFailures=0}
+            const frame=parsed
             const ack = JSON.stringify({ type: 'ack', epoch: frame.epoch, sequence: frame.sequence })
             // The full workspace shares this socket with its bounded reads and
             // subscriptions. An observation ACK must use that same queue budget.
             // Include the pending write; neither mode may grow its queue freely.
-            if (socket.bufferedAmount + new TextEncoder().encode(ack).length > (this.applicationMode ? 2048 : 512)) throw new RemoteError(503)
+            if (socket.bufferedAmount + new TextEncoder().encode(ack).length > (this.applicationMode ? (this.operations.enabled?OPERATION_REQUEST_BYTES:2048) : 512)) throw new RemoteError(503)
             socket.send(ack)
           } else throw new RemoteError(403)
-        } catch { this.latest = null; this.application.disconnected(); socket.close(1000, 'invalidObservation') }
+        } catch { this.latest = null; this.application.disconnected(); this.operations.disconnected(); socket.close(1000, 'invalidObservation') }
       }
       socket.onclose = () => { if (this.socket === socket) { this.socket = null; this.retry() } }
-      socket.onerror = () => { this.latest = null; this.application.disconnected() }
+      socket.onerror = () => { this.latest = null; this.application.disconnected(); this.operations.disconnected() }
     } catch (error) {
       if (error instanceof RemoteError && [401, 403].includes(error.status)) { this.latest = null; return }
       this.retry()

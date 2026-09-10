@@ -1,7 +1,8 @@
 //! Local approval and the Remote background task. Engine access is restricted to
-//! bounded observation and reviewed application reads; no operating commands.
+//! bounded observation, reviewed application reads and separately approved manual logging.
 mod application;
 mod aprs;
+mod operations;
 pub(crate) mod query;
 pub(crate) mod sstv;
 #[cfg(test)]
@@ -29,6 +30,8 @@ pub struct Status {
     devices: Vec<Device>,
     error: Option<&'static str>,
     observation_generation: Option<String>,
+    logging_permissions: Vec<String>,
+    logging_controller: Option<String>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -42,6 +45,12 @@ struct Device {
 #[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
 // Empty struct variants preserve deny_unknown_fields; Serde unit variants ignore extra fields.
 pub enum Action {
+    LoggingPermission {
+        #[serde(rename = "deviceId")]
+        device_id: String,
+        allow: bool,
+    },
+    TakeOverLogging {},
     Begin {
         name: String,
     },
@@ -65,6 +74,7 @@ pub enum Action {
 type Reply = oneshot::Sender<Result<(), &'static str>>;
 #[derive(Default)]
 struct Control {
+    operations: Arc<operations::Authority>,
     memories: query::memories::Bank,
     enabled: bool,
     cancel: Option<watch::Sender<bool>>,
@@ -72,6 +82,7 @@ struct Control {
 }
 impl Control {
     fn stop(&mut self) {
+        self.operations.invalidate();
         self.enabled = false;
         if let Ok(mut bank) = self.memories.lock() {
             *bank = None;
@@ -228,6 +239,10 @@ impl Service {
             .clone();
         let control = self.control.lock().map_err(|_| "serviceUnavailable")?;
         let enabled = control.enabled;
+        let operations = control.operations.local_status();
+        status.logging_permissions =
+            serde_json::from_value(operations["devices"].clone()).unwrap_or_default();
+        status.logging_controller = operations["controller"].as_str().map(str::to_string);
         status.observation_generation = enabled.then(|| control.generation.to_string());
         if !enabled && ["connected", "connecting", "reconnecting"].contains(&status.phase.as_str())
         {
@@ -252,9 +267,43 @@ impl Service {
         cache.is_some()
     }
     pub async fn action(&self, action: Action) -> Result<Status, &'static str> {
+        match &action {
+            Action::LoggingPermission { device_id, allow } => {
+                let status = self.status()?;
+                if *allow
+                    && (status.observation_generation.is_none()
+                        || !status
+                            .devices
+                            .iter()
+                            .any(|d| d.id == *device_id && d.approved == 1))
+                {
+                    return Err("accessDenied");
+                }
+                let operations = self
+                    .control
+                    .lock()
+                    .map_err(|_| "serviceUnavailable")?
+                    .operations
+                    .clone();
+                operations.permit(device_id, *allow)?;
+                return self.status();
+            }
+            Action::TakeOverLogging {} => {
+                self.control
+                    .lock()
+                    .map_err(|_| "serviceUnavailable")?
+                    .operations
+                    .invalidate();
+                return self.status();
+            }
+            _ => {}
+        }
         let (reply, response) = oneshot::channel();
         {
             let mut control = self.control.lock().map_err(|_| "serviceUnavailable")?;
+            if matches!(&action, Action::Device { approve: false, .. }) {
+                control.operations.invalidate();
+            }
             if matches!(
                 action,
                 Action::Disable {} | Action::Forget {} | Action::Cancel {}
@@ -357,6 +406,9 @@ impl Controller {
     }
     async fn handle(&mut self, action: Action, generation: u64) -> Result<(), &'static str> {
         match action {
+            Action::LoggingPermission { .. } | Action::TakeOverLogging {} => {
+                return Err("invalidRequest")
+            }
             Action::Begin { name } => {
                 if self.binding.is_some() || self.pending.is_some() || !valid_name(&name) {
                     return Err("invalidRequest");

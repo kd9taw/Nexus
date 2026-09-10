@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import App from '../App'
+import {LoggingAuthority,RemoteOperationsContext} from './operations'
 import { RemoteCollections, RemoteCollectionsContext, RemoteHistoryContext } from './collections'
 import type { HistoryRow, RemoteHistory } from './collections'
 import { CONFIGURATION_COMMAND, NAVIGATION_COMMAND, SSTV_IMAGE_COMMAND, APRS_COMMAND, JS8_CONTEXT_COMMAND, FIELD_DAY_COMMAND, OTA_COMMAND, MEMORIES_COMMAND, DXPEDITIONS_COMMAND, INSIGHTS_COMMAND, QUERY_COMMAND } from './application-query-protocol'
@@ -80,7 +81,8 @@ export function BrowserApplication({ connection, disconnect }: { connection: Hos
   const stale = phase !== 'ready' || client.age('get_snapshot') >= APPLICATION_TIMEOUT_MS
   const status = <div className="remote-application-status" role="status">
     <strong>{t('remote.browserWorkspace')}</strong>
-    <span>{stale ? t('remote.applicationUnavailable') : t('remote.applicationObserver')}</span>
+    {connection.operations&&<LoggingAuthority client={connection.operations}/>}
+    <span>{stale ? t('remote.applicationUnavailable') : connection.operations?.enabled ? t('remote.applicationLoggingPreview') : t('remote.applicationObserver')}</span>
     <button type="button" className="remote-button" onClick={disconnect}>{t('remote.disconnect')}</button>
   </div>
   if (!boot) return <div className="app remote-monitor-app remote-service-app">
@@ -96,7 +98,7 @@ export function BrowserApplication({ connection, disconnect }: { connection: Hos
       <StationDataContext.Provider value={!stale}>
         <RemoteCollectionsContext.Provider value={boot.collections ? collections : null}>
           <RemoteHistoryContext.Provider value={boot.collections ? history : null}>
-            <App remote={{ ...boot, status, stale }} />
+            <RemoteOperationsContext.Provider value={connection.operations??null}><App remote={{ ...boot, status, stale }} /></RemoteOperationsContext.Provider>
           </RemoteHistoryContext.Provider>
         </RemoteCollectionsContext.Provider>
       </StationDataContext.Provider>

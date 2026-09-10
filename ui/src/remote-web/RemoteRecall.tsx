@@ -1,3 +1,4 @@
+import { RemoteLogEntry, useRemoteOperations } from './operations'
 import { useContext, useEffect, useState } from 'react'
 import type { AppSnapshot } from '../types'
 import { RecallPanel } from '../components/RecallPanel'
@@ -53,7 +54,7 @@ export function RemoteRecall({ snap, call, mode, bounded, onOpenLog }: RecallPro
 }
 
 /** The existing log pane hosts an observer's local callsign and the same recall card. */
-export function RemoteRecallEntry({ snap, mode, onOpenLog, selectedCall }: Omit<RecallProps, 'call' | 'bounded'> & { selectedCall?: string }) {
+export function ObserverRecallEntry({ snap, mode, onOpenLog, selectedCall }: Omit<RecallProps, 'call' | 'bounded'> & { selectedCall?: string }) {
   const [call, setCall] = useState('')
   useEffect(() => { if (selectedCall) setCall(selectedCall) }, [selectedCall])
   return <div className="log-entry">
@@ -63,4 +64,9 @@ export function RemoteRecallEntry({ snap, mode, onOpenLog, selectedCall }: Omit<
     <p className="dim">{t('remote.recallObserver')}</p>
     <RemoteRecall snap={snap} call={call} mode={mode} onOpenLog={onOpenLog} />
   </div>
+}
+
+export function RemoteRecallEntry(props:Omit<RecallProps,'call'|'bounded'>&{selectedCall?:string}) {
+  const operations=useRemoteOperations()
+  return operations?.enabled?<RemoteLogEntry {...props} client={operations}/>:<ObserverRecallEntry {...props}/>
 }

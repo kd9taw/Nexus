@@ -64,8 +64,8 @@ async function chrome() {
   } catch(error) { ws?.close(); if(!exited)process.kill(-child.pid,'SIGTERM'); await rm(profile,{recursive:true,force:true,maxRetries:8,retryDelay:100}); throw error }
 }
 
-for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]) test(`compiled hosted browser v${applicationVersion} completes PKCE, local device approval, observation and viewport checks`, { timeout: applicationVersion >= 14 ? 360000 : applicationVersion >= 13 ? 300000 : 180000 }, async () => {
-  const app=await runtime(), artifacts=process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS ? join(process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS, `v${applicationVersion}`) : undefined
+for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,14].map(applicationVersion=>({applicationVersion,operating:false})),{applicationVersion:14,operating:true}]) test(`compiled hosted browser ${operating?'operations':`v${applicationVersion}`} completes PKCE, local device approval, observation and viewport checks`, { timeout: applicationVersion >= 14 ? 540000 : applicationVersion >= 13 ? 420000 : 180000 }, async () => {
+  const app=await runtime(), artifacts=process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS ? join(process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS, operating?'operations':`v${applicationVersion}`) : undefined
   let browser, station, producing=true, producer, applicationProducer
   const results=[]
   try {
@@ -75,7 +75,7 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
     const shell = await fetch(app.origin,{signal:AbortSignal.timeout(3000)})
     assert.equal(shell.status,200)
     assert.match(await shell.text(), /Nexus Remote/)
-    const stationHeaders = { 'x-nexus-application-version': '1', ...(applicationVersion >= 2 ? { 'x-nexus-application-stream-version': '2' } : {}), ...(applicationVersion >= 3 ? { 'x-nexus-application-query-version': '1' } : {}), ...(applicationVersion >= 4 ? { 'x-nexus-application-recall-version': '1' } : {}), ...(applicationVersion >= 5 ? { 'x-nexus-application-keyboard-version': '1' } : {}), ...(applicationVersion >= 6 ? { 'x-nexus-application-insights-version': '1' } : {}), ...(applicationVersion >= 7 ? { 'x-nexus-application-dxpeditions-version': '1' } : {}), ...(applicationVersion >= 8 ? { 'x-nexus-application-memories-version': '1' } : {}), ...(applicationVersion >= 9 ? { 'x-nexus-application-ota-version': '1' } : {}), ...(applicationVersion >= 10 ? { 'x-nexus-application-field-day-version': '1' } : {}), ...(applicationVersion >= 11 ? { 'x-nexus-application-js8-version': '1' } : {}), ...(applicationVersion >= 12 ? {'x-nexus-application-station-modes-version':'1'} : {}), ...(applicationVersion >= 13 ? {'x-nexus-application-navigation-version':'1'} : {}), ...(applicationVersion >= 14 ? {'x-nexus-application-configuration-version':'1'} : {}) }
+    const stationHeaders = { 'x-nexus-application-version': '1',...(operating?{'x-nexus-operation-version':'1'}:{}), ...(applicationVersion >= 2 ? { 'x-nexus-application-stream-version': '2' } : {}), ...(applicationVersion >= 3 ? { 'x-nexus-application-query-version': '1' } : {}), ...(applicationVersion >= 4 ? { 'x-nexus-application-recall-version': '1' } : {}), ...(applicationVersion >= 5 ? { 'x-nexus-application-keyboard-version': '1' } : {}), ...(applicationVersion >= 6 ? { 'x-nexus-application-insights-version': '1' } : {}), ...(applicationVersion >= 7 ? { 'x-nexus-application-dxpeditions-version': '1' } : {}), ...(applicationVersion >= 8 ? { 'x-nexus-application-memories-version': '1' } : {}), ...(applicationVersion >= 9 ? { 'x-nexus-application-ota-version': '1' } : {}), ...(applicationVersion >= 10 ? { 'x-nexus-application-field-day-version': '1' } : {}), ...(applicationVersion >= 11 ? { 'x-nexus-application-js8-version': '1' } : {}), ...(applicationVersion >= 12 ? {'x-nexus-application-station-modes-version':'1'} : {}), ...(applicationVersion >= 13 ? {'x-nexus-application-navigation-version':'1'} : {}), ...(applicationVersion >= 14 ? {'x-nexus-application-configuration-version':'1'} : {}) }
     station=await pair.native.open(pair.stationId, undefined, 101, stationHeaders)
     let code=null, oauth=null, exchanges=0, providerFailure=false, exceptions=0, acknowledgements=0, unexpectedMessages=0
     const applicationTraffic = { reads: 0, acks: 0, subscriptions: 0, batches: 0, bytes: 0, byCommand: {}, maxResponseBytes: 0 }
@@ -104,12 +104,15 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
     const target=(await browser.call('Target.createTarget',{url:'about:blank'})).targetId
     const session=(await browser.call('Target.attachToTarget',{targetId:target,flatten:true})).sessionId
     for(const method of ['Page.enable','Runtime.enable','Network.enable'])await browser.call(method,{},session)
+    const operationWire=[]
+    browser.on('Network.webSocketFrameReceived',event=>{try{const v=JSON.parse(event.response.payloadData);if(v.type==='operationResponse')operationWire.push({at:performance.now(),direction:'in',requestId:v.requestId,error:v.error,phase:v.value?.phase})}catch{}})
     browser.on('Network.webSocketFrameSent', event => {
       if (event.response.opcode !== 1) return
       try {
         const message = JSON.parse(event.response.payloadData)
         if (message.type === 'ack' && Object.keys(message).sort().join(',') === 'epoch,sequence,type') acknowledgements++
         else if (message.type === 'applicationHello' && (Object.keys(message).length === 1 || (Object.keys(message).length === 2 && [2,3,4,5,6,7,8,9,10,11,12,13,14].includes(message.version)))) {}
+        else if(message.type==='operationRequest'&&Object.keys(message).length===2&&['state','acquire','heartbeat','release','result','logManual'].includes(message.request?.type)){if(!operating)assert.equal(message.request.type,'state');operationWire.push({at:performance.now(),direction:'out',type:message.request.type,requestId:message.request.requestId})}
         else if (message.type === 'applicationRead' && Object.keys(message).length === 4) applicationTraffic.reads++
         else if (message.type === 'applicationQuery' && Object.keys(message).length === 7) applicationTraffic.queries=(applicationTraffic.queries??0)+1
         else if (message.type === 'applicationQueryAck' && Object.keys(message).length === 2) {}
@@ -151,17 +154,22 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
     // and its layout frame; all pixel/overflow assertions below stay unchanged.
     const settledLayout=()=>evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(true))))')
     const sessionDiagnostic=()=>evaluate(`(()=>{const e=document.querySelector('.app');let fiber=e?.[Object.keys(e).find(k=>k.startsWith('__reactFiber$'))],client;while(fiber){client=fiber.memoizedProps?.connection?.application;if(client)break;fiber=fiber.return}return {now:performance.now(),stale:e?.dataset.remoteStale,phase:client?.getPhase(),snapshotAge:client?.age('get_snapshot'),topics:client?.stream?.topics,waiting:client?.stream?.waiting?[...client.stream.waiting.keys()]:null,interests:client?.stream?.interests?[...client.stream.interests].map(([name,at])=>({name,age:performance.now()-at})):null,closures:window.__socketClosures,trace:window.__protocolTrace}})()`)
-    async function until(expression,timeout=12000) { for(let i=0;i<Math.ceil(timeout/100);i++){ if(providerFailure)throw new Error('Simulated provider failed'); if(await evaluate(expression))return;await sleep(100) } throw new Error('Expected browser state did not appear') }
+    async function until(expression,timeout=12000) { for(let i=0;i<Math.ceil(timeout/100);i++){ if(providerFailure)throw new Error('Simulated provider failed'); if(await evaluate(expression))return;await sleep(100) } if(operating)console.log('Operation diagnostic',expression,operationWire.slice(-30),loggedRequests.map(r=>({call:r.record.call,mode:r.record.mode})),await evaluate(`({status:document.querySelector('.remote-application-status')?.textContent,entries:[...document.querySelectorAll('.remote-log-entry')].map(e=>({text:e.textContent,error:e.dataset.operationError}))})`));throw new Error('Expected browser state did not appear') }
     const button=name=>`[...document.querySelectorAll('button')].find(e=>e.textContent===${JSON.stringify(name)})`
     async function click(expression) {
       let point
       try {
         // A positive user action waits for its control to finish loading. Keep
         // the actual enabled, hit-target and mouse-event checks below intact.
-        await until(`(()=>{const e=${expression};return !!e&&!e.disabled})()`)
-        await evaluate(`(()=>{const e=${expression};if(!e||e.disabled)throw Error('missingControl');e.scrollIntoView({block:'nearest',behavior:'instant'})})()`)
-        await settledLayout()
-        point=await evaluate(`(()=>{const e=${expression};if(!e||e.disabled)throw Error('missingControl');const r=e.getBoundingClientRect(),x=r.x+r.width/2,y=r.y+r.height/2;if(!e.contains(document.elementFromPoint(x,y)))throw Error('occludedControl');return{x,y}})()`)
+        for(let attempt=0;attempt<30&&!point;attempt++){
+          await until(`(()=>{const e=${expression};return !!e&&!e.disabled})()`)
+          await evaluate(`(()=>{const e=${expression};if(e&&!e.disabled)e.scrollIntoView({block:'nearest',behavior:'instant'})})()`)
+          await settledLayout()
+          // A heartbeat can disable the control between CDP read turns. Wait
+          // again BEFORE the single mouse gesture; never retry a sent click.
+          point=await evaluate(`(()=>{const e=${expression};if(!e||e.disabled)return null;const r=e.getBoundingClientRect(),x=r.x+r.width/2,y=r.y+r.height/2;if(!e.contains(document.elementFromPoint(x,y)))throw Error('occludedControl');return{x,y}})()`)
+        }
+        assert.ok(point,'control must become enabled before the single mouse gesture')
       }
       catch(error){console.log('Application session diagnostic',JSON.stringify(await sessionDiagnostic()),{...applicationTraffic,nativeSnapshotAge:performance.now()-(sentAt.get('get_snapshot')??0),stationClosed:station.closed});console.log('Click diagnostic',expression,await evaluate(`(()=>{const e=${expression},r=e?.getBoundingClientRect();return {stale:document.querySelector('.app')?.dataset.remoteStale,status:document.querySelector('.remote-application-status')?.textContent,rect:r?.toJSON(),hit:r?document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)?.outerHTML.slice(0,600):null}})()`));if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-click-failure.png'),Buffer.from(shot.data,'base64'))}throw error}
       await browser.call('Input.dispatchMouseEvent',{type:'mousePressed',...point,button:'left',clickCount:1},session)
@@ -238,6 +246,11 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
     collections.statistics = { rows: [], meta: { logCount: 2301, statistics: insights.statistics, geography: insights.geography } }
     if (applicationVersion >= 4) applicationData.get_snapshot.stations = [{ call:'W1AW', grid:'FN31', snr:-8, lastHeardSlot:0,
       heardCount:2, presence:'heard', worked:true, workedBand:false, country:'United States', tier:'FT8', freqHz:1500 }]
+    // This actor supplies synthetic native outcomes to the compiled UI. The
+    // separate real-native/workerd test proves the ADIF append and durability.
+    let loggingLeaseUntil=0
+    let loggingAllowed=false,loggingLease=null,loggingRevision=1,loggingSequence=0,loseLogReply=false
+    const loggingBoot=crypto.randomUUID(),loggingWindow=crypto.randomUUID(),loggedRequests=[],loggingReceipts=new Map()
     const querySnapshots = new Map()
     let applicationRevision = 1, applicationAvailable = true
     const unavailableTopics = new Set()
@@ -246,9 +259,27 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
     let streamWatch = null
     const sentAt = new Map(), bases = new Map()
     const intervals = { get_snapshot:500, get_settings:1000, get_band_plan:1000, get_spectrum_row:100, get_meters:200, get_scope_snapshot:100, get_cw_state:200, get_rtty_state:200, get_psk_state:200, get_js8_state:500, get_sstv_state:1000, get_remote_aprs_state:1000, get_remote_satellite_state:1000 }
-    applicationProducer=(async()=>{while(producing){const source=station;let request;try{request=await source.take(value=>['applicationRead','applicationWatch','applicationCredit','applicationQuery'].includes(value.type),1000)}catch{continue}
+    applicationProducer=(async()=>{while(producing){const source=station;let request;try{request=await source.take(value=>['applicationRead','applicationWatch','applicationCredit','applicationQuery','operationRequest','operationDisconnect'].includes(value.type),1000)}catch{continue}
       if(source!==station||source.closed)continue
       if (!applicationAvailable || !producing) { withheld.push({type:request.type,collection:request.collection});continue }
+      if(request.type==='operationDisconnect'){loggingLease=null;continue}
+      if(request.type==='operationRequest'){
+        assert.ok(operating);const r=request.request;let value,error
+        if(loggingLease&&performance.now()>=loggingLeaseUntil)loggingLease=null
+        assert.equal(request.deviceId,device.id)
+        if(r.type==='acquire'){if(!loggingAllowed)error='localPermissionRequired';else{loggingLease=crypto.randomUUID();loggingLeaseUntil=performance.now()+5000}}
+        if(r.type==='heartbeat'&&loggingLease&&r.leaseId===loggingLease)loggingLeaseUntil=performance.now()+5000
+        if(r.type==='release')loggingLease=null
+        if(!loggingAllowed)loggingLease=null
+        if(r.type==='logManual'){
+          assert.ok(loggingAllowed&&loggingLease&&r.leaseId===loggingLease)
+          assert.equal(r.expectedRevision,loggingRevision);assert.equal(r.clientSequence,loggingSequence+1);loggingSequence++
+          loggedRequests.push(r);value={outcome:'applied',evidence:'fileSynced',uploads:'stationPipeline',operationId:r.requestId};loggingReceipts.set(r.requestId,value);loggingRevision++
+          if(loseLogReply)continue
+        }else if(r.type==='result'){value=loggingReceipts.get(r.operationId);if(!value)error='resultExpired'}
+        else value={stationBootId:loggingBoot,allowed:loggingAllowed,phase:loggingLease?'controlling':loggingAllowed?'available':'localPermissionRequired',leaseId:loggingLease,revision:loggingRevision,commandWindowId:loggingLease?loggingWindow:null,nextSequence:loggingLease?loggingSequence+1:null,leaseRemainingMs:loggingLease?5000:null,actions:loggingAllowed?['log.manual']:[],txArmed:false}
+        source.send({type:'operationResponse',sessionId:request.sessionId,requestId:r.requestId,...(error?{error}:{value})});continue
+      }
       if (request.type === 'applicationQuery') {
         assert.ok(applicationVersion >= 3)
         if(['settings','programming'].includes(request.collection))assert.ok(applicationVersion>=14)
@@ -280,7 +311,7 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
         }
         const capture=querySnapshots.get(snapshotId)
         assert.ok(capture,'browser must keep a valid sealed cursor')
-        const rows=capture.rows.slice(offset,offset+(request.collection==='sstvImage'?3:128)), end=offset+rows.length
+        const rows=capture.rows.slice(offset,offset+(request.collection==='sstvImage'?3:['connect','path','satellites','satellite','settings','programming'].includes(request.collection)?7:128)), end=offset+rows.length
         source.send({type:'applicationPage',requestId:request.requestId,collection:request.collection,snapshotId,offset,
           total:capture.total??capture.rows.length,retained:capture.rows.length,nextCursor:end<capture.rows.length?`${snapshotId}:${end}`:null,
           ageMs:0,rows,meta:{capturedAgeMs:0,source:capture.meta}})
@@ -375,6 +406,56 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
       assert.equal(await evaluate(`document.body.textContent.includes('Could not switch mode')`), false)
       assert.equal(fieldDayQueries.length,0)
       await click(button('FT'))
+    }
+    if(operating){
+      await click(button('CW'))
+      await until(`!!document.querySelector('.cw-cockpit .remote-log-entry .le-log-btn')`)
+      assert.equal(await evaluate(`document.querySelector('.cw-cockpit .le-log-btn').disabled`),true)
+      assert.equal(await evaluate(`!!${button('Take logging control')}`),false)
+      loggingAllowed=true
+      await until(`!!${button('Take logging control')}`);await click(button('Take logging control'))
+      await until(`document.querySelector('.remote-logging-authority')?.textContent.includes('control active')`)
+      for(const [label,selector,call,mode] of [['CW','.cw-cockpit','K1OPS','CW'],['Phone','.phone-cockpit','K2OPS','SSB'],['RTTY','.rtty-cockpit','K3OPS','RTTY'],['PSK','.psk-cockpit','K4OPS','QPSK31'],['JS8','.js8-cockpit','K5OPS','JS8']]){
+        console.log('Logging form',label);await click(button(label));
+        if(label==='JS8'){await until(`!!${button('Take logging control')}`);await click(button('Take logging control'))}await until(`!!document.querySelector('${selector} .remote-log-entry .le-call')`)
+        await click(`document.querySelector('${selector} .remote-log-entry .le-call')`);await browser.call('Input.insertText',{text:call},session)
+        // Typing a contact is paced outside the four-request burst budget. A
+        // prior robot case submitted five messages in 850 ms and correctly
+        // received remoteBusy; protocol tests retain that refusal.
+        await sleep(1100)
+        if(label==='PSK')loseLogReply=true
+        await click(`document.querySelector('${selector} .le-log-btn')`)
+        if(label==='PSK'){
+          await until(`document.querySelector('${selector} .remote-log-entry')?.textContent.includes('may already be logged')`,12000)
+          assert.equal(await evaluate(`document.querySelector('${selector} .le-call').value`),call)
+          await until(`document.querySelector('${selector} .remote-log-entry button')!==null`)
+          assert.equal(loggedRequests[loggedRequests.length-1].record.call,call)
+          const count=loggedRequests.length;await sleep(1500);assert.equal(loggedRequests.length,count)
+          loseLogReply=false;await click(`[...document.querySelectorAll('${selector} button')].find(e=>e.textContent==='Check submitted QSO result')`)
+        }
+        await until(`document.querySelector('${selector} .remote-log-entry')?.textContent.includes('QSO saved to the station log file')`)
+        assert.equal(await evaluate(`document.querySelector('${selector} .le-call').value`),'')
+        assert.equal(loggedRequests[loggedRequests.length-1].record.call,call)
+        assert.equal(loggedRequests[loggedRequests.length-1].record.mode,mode)
+        assert.equal(await evaluate(`document.querySelectorAll('${selector} .amp-strip button:not(:disabled)').length`),0)
+      }
+      await click(button('PSK'));await until(`!!document.querySelector('.psk-cockpit .remote-log-entry .le-call')`)
+      for(const [width,height,zoom]of [[390,844,1],[1280,800,1],[390,844,1.75],[1280,800,1.75]])for(const theme of ['dark','light']){
+        await browser.call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false},session)
+        await evaluate(`document.documentElement.style.setProperty('--ui-zoom','${zoom}');document.documentElement.dataset.theme='${theme}';window.dispatchEvent(new Event('resize'))`);await settledLayout();await settledLayout()
+        for(const selector of ['.psk-cockpit .le-call','.psk-cockpit .le-log-btn']){
+          await evaluate(`document.querySelector('${selector}').scrollIntoView({block:'center',behavior:'instant'})`);await settledLayout()
+          const shape=await evaluate(`(()=>{const e=document.querySelector('${selector}'),r=e.getBoundingClientRect(),hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2),chain=[];for(let p=e;p;p=p.parentElement){const r=p.getBoundingClientRect(),c=getComputedStyle(p);chain.push({class:p.className,rect:r.toJSON(),scroll:p.scrollHeight,client:p.clientHeight,at:p.scrollTop,y:c.overflowY})}return {rect:r.toJSON(),hit:hit?.outerHTML.slice(0,300),chain,docW:document.documentElement.scrollWidth,docH:document.documentElement.scrollHeight,good:r.width>0&&r.height>0&&e.contains(hit)&&document.documentElement.scrollWidth<=innerWidth+1&&document.documentElement.scrollHeight<=innerHeight+1}})()`)
+          if(!shape.good&&artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'logging-layout-failure.png'),Buffer.from(shot.data,'base64'));await writeFile(join(artifacts,'logging-layout-failure.json'),JSON.stringify({selector,width,height,zoom,theme,shape},null,2))}
+          assert.equal(shape.good,true,`Logging control reachable ${selector} ${width} ${zoom}: ${JSON.stringify(shape)}`)
+        }
+      }
+      loggingAllowed=false
+      await until(`!document.querySelector('.remote-logging-authority')?.textContent.includes('control active')`)
+      assert.equal(await evaluate(`document.querySelector('.psk-cockpit .le-log-btn').disabled`),true)
+      assert.equal(loggedRequests.length,5);assert.equal(unexpectedMessages,0);assert.equal(exceptions,0)
+      if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-manual-logging.png'),Buffer.from(shot.data,'base64'));await writeFile(join(artifacts,'operation-results.json'),JSON.stringify({count:loggedRequests.length,modes:loggedRequests.map(r=>r.record.mode),lostResultResolved:true,geometry:16,exceptions,unexpectedMessages},null,2))}
+      console.log('Compiled browser: explicit logging lease, five native forms, retained unknown result, local revocation and 16 geometry cases passed');return
     }
     const startReads=applicationTraffic.reads, startBytes=applicationTraffic.bytes, started=performance.now()
     for(const [width,height] of [[1024,768],[1280,800],[1366,768],[1200,1390],[3440,1440]])for(const zoom of [1,1.75])for(const theme of ['dark','light']) {
@@ -956,7 +1037,7 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
         for(const target of targets){
           await evaluate(`document.querySelector('${target}').scrollIntoView({block:'nearest',inline:'nearest',behavior:'instant'})`)
           await settledLayout();await settledLayout()
-          const shape=await evaluate(`(()=>{const e=document.querySelector('${target}'),r=e.getBoundingClientRect(),x=Math.max(r.left+1,Math.min(r.right-1,r.left+r.width/2)),y=Math.max(1,Math.min(innerHeight-1,r.top+r.height/2)),clipped=[];for(let p=e.parentElement;p;p=p.parentElement){const c=getComputedStyle(p);if(['hidden','clip'].includes(c.overflowY)&&p.scrollHeight>p.clientHeight+1)clipped.push({class:p.className,scroll:p.scrollHeight,client:p.clientHeight})}let exposed=0;if(e.tagName==='CANVAS')for(let py=Math.max(1,r.top+8);py<Math.min(innerHeight-1,r.bottom-8);py+=16)for(let px=Math.max(1,r.left+8);px<Math.min(innerWidth-1,r.right-8);px+=16)if(e.contains(document.elementFromPoint(px,py)))exposed++;return {zoom:Number(getComputedStyle(document.documentElement).getPropertyValue('--ui-zoom')),docW:document.documentElement.scrollWidth,docH:document.documentElement.scrollHeight,rect:r.toJSON(),reachable:e.tagName==='CANVAS'?exposed>=4:e.contains(document.elementFromPoint(x,y)),exposed,clipped}})()`)
+          const shape=await evaluate(`(()=>{const e=document.querySelector('${target}'),r=e.getBoundingClientRect(),x=Math.max(r.left+1,Math.min(r.right-1,r.left+r.width/2)),y=Math.max(1,Math.min(innerHeight-1,r.top+r.height/2)),clipped=[];for(let p=e.parentElement;p;p=p.parentElement){const c=getComputedStyle(p);if(['hidden','clip'].includes(c.overflowY)&&p.scrollHeight>p.clientHeight+1)clipped.push({class:p.className,scroll:p.scrollHeight,client:p.clientHeight})}let exposed=0;if(e.tagName==='CANVAS')for(let py=Math.max(1,r.top+8);py<Math.min(innerHeight-1,r.bottom-8);py+=16)for(let px=Math.max(1,r.left+8);px<Math.min(innerWidth-1,r.right-8);px+=16)if(e.contains(document.elementFromPoint(px,py)))exposed++;return {zoom:Number(getComputedStyle(document.documentElement).getPropertyValue('--ui-zoom')),docW:document.documentElement.scrollWidth,docH:document.documentElement.scrollHeight,rect:r.toJSON(),hit:document.elementFromPoint(x,y)?.outerHTML.slice(0,500),reachable:e.tagName==='CANVAS'?exposed>=4:e.contains(document.elementFromPoint(x,y)),exposed,clipped}})()`)
           const good=Math.abs(shape.zoom-zoom)<0.001&&shape.docW<=width+1&&shape.docH<=height+1&&shape.rect.width>0&&shape.rect.height>0&&shape.rect.top<height&&shape.rect.bottom>0&&shape.reachable&&shape.clipped.length===0
           if(!good&&artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,`remote-${label.toLowerCase()}-failure.png`),Buffer.from(shot.data,'base64'))}
           assert.ok(good,`${label} content remains reachable: ${JSON.stringify({width,height,zoom,theme,target,shape})}`)
@@ -1001,7 +1082,7 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
         for(const target of targets){
           await evaluate(`document.querySelector('${target}').scrollIntoView({block:'nearest',inline:'nearest',behavior:'instant'})`)
           await settledLayout();await settledLayout()
-          const shape=await evaluate(`(()=>{const e=document.querySelector('${target}'),r=e.getBoundingClientRect(),x=Math.max(r.left+1,Math.min(r.right-1,r.left+r.width/2)),y=Math.max(1,Math.min(innerHeight-1,r.top+r.height/2)),clipped=[];for(let p=e.parentElement;p;p=p.parentElement){const c=getComputedStyle(p);if(['hidden','clip'].includes(c.overflowY)&&p.scrollHeight>p.clientHeight+1)clipped.push({class:p.className,scroll:p.scrollHeight,client:p.clientHeight})}let exposed=0;if(e.tagName==='CANVAS')for(let py=Math.max(1,r.top+8);py<Math.min(innerHeight-1,r.bottom-8);py+=16)for(let px=Math.max(1,r.left+8);px<Math.min(innerWidth-1,r.right-8);px+=16)if(e.contains(document.elementFromPoint(px,py)))exposed++;return {zoom:Number(getComputedStyle(document.documentElement).getPropertyValue('--ui-zoom')),docW:document.documentElement.scrollWidth,docH:document.documentElement.scrollHeight,rect:r.toJSON(),reachable:e.tagName==='CANVAS'?exposed>=4:e.contains(document.elementFromPoint(x,y)),exposed,clipped}})()`)
+          const shape=await evaluate(`(()=>{const e=document.querySelector('${target}'),r=e.getBoundingClientRect(),x=Math.max(r.left+1,Math.min(r.right-1,r.left+r.width/2)),y=Math.max(1,Math.min(innerHeight-1,r.top+r.height/2)),clipped=[];for(let p=e.parentElement;p;p=p.parentElement){const c=getComputedStyle(p);if(['hidden','clip'].includes(c.overflowY)&&p.scrollHeight>p.clientHeight+1)clipped.push({class:p.className,scroll:p.scrollHeight,client:p.clientHeight})}let exposed=0;if(e.tagName==='CANVAS')for(let py=Math.max(1,r.top+8);py<Math.min(innerHeight-1,r.bottom-8);py+=16)for(let px=Math.max(1,r.left+8);px<Math.min(innerWidth-1,r.right-8);px+=16)if(e.contains(document.elementFromPoint(px,py)))exposed++;return {zoom:Number(getComputedStyle(document.documentElement).getPropertyValue('--ui-zoom')),docW:document.documentElement.scrollWidth,docH:document.documentElement.scrollHeight,rect:r.toJSON(),hit:document.elementFromPoint(x,y)?.outerHTML.slice(0,500),reachable:e.tagName==='CANVAS'?exposed>=4:e.contains(document.elementFromPoint(x,y)),exposed,clipped}})()`)
           const good=Math.abs(shape.zoom-zoom)<0.001&&shape.docW<=width+1&&shape.docH<=height+1&&shape.rect.width>0&&shape.rect.height>0&&shape.rect.top<height&&shape.rect.bottom>0&&shape.reachable&&shape.clipped.length===0
           if(!good&&artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,`remote-${label.toLowerCase()}-failure.png`),Buffer.from(shot.data,'base64'))}
           assert.ok(good,`${label} content remains reachable: ${JSON.stringify({width,height,zoom,theme,target,shape})}`)

@@ -26,7 +26,7 @@ export function RemoteStation() {
   }, [])
   async function act(action: RemoteStationAction) {
     // Disable cancels the native socket even while an HTTP request is pending.
-    if (pending.current && action.type !== 'disable') return
+    if (pending.current && action.type !== 'disable' && action.type !== 'takeOverLogging') return
     pending.current = true; setBusy(true); setError(null)
     try { const next = await remoteStationAction(action); if (mounted.current) setStatus(next) }
     catch (error) { if (mounted.current) setError(typeof error === 'string' ? error : 'serviceUnavailable') }
@@ -62,12 +62,15 @@ export function RemoteStation() {
           {connected ? t('remote.disable') : t('remote.enable')}</button>
         <button type="button" className="remote-button" disabled={busy} onClick={() => void act({ type: 'refresh' })}>{t('remote.refreshDevices')}</button>
       </div>
+      {status.loggingPermissions && <><p>{t('remote.loggingLocalHint')}</p><button type="button" className="remote-button" onClick={()=>void act({type:'takeOverLogging'})}>{t('remote.loggingTakeOver')}</button></>}
       <h3>{t('remote.browserApprovals')}</h3><p>{t('remote.browserMatch')}</p>
       {status.devices.length === 0 && <p>{t('remote.noBrowsers')}</p>}
       {status.devices.map(device => <div key={device.id}>
         <p>{device.name} <code>{device.id.slice(-6)}</code></p>
         <button type="button" className="remote-button" disabled={busy} onClick={() => void act({ type: 'device', deviceId: device.id, approve: device.approved !== 1 })}>
           {device.approved === 1 ? t('remote.revokeBrowser') : t('remote.approveBrowser')}</button>
+        {device.approved===1&&status.loggingPermissions&&<button type="button" className="remote-button" disabled={busy||!connected} onClick={()=>void act({type:'loggingPermission',deviceId:device.id,allow:!status.loggingPermissions!.includes(device.id)})}>{status.loggingPermissions.includes(device.id)?t('remote.loggingRevoke'):t('remote.loggingAllow')}</button>}
+        {status.loggingController===device.id&&<p role="status">{t('remote.loggingController')}</p>}
       </div>)}
       <details><summary>{t('remote.stationAccess')}</summary><p>{t('remote.revokeHint')}</p>
         <button type="button" className="remote-button" disabled={busy} onClick={() => void act({ type: 'forget' })}>{t('remote.revokeStation')}</button>

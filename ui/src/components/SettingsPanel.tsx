@@ -2752,7 +2752,7 @@ export function SettingsPanel({
         <div className="panel-header">
           <h2>{t('settings.panel.title')}</h2>
         </div>
-        <p className="empty" role="status">{t(remote ? configuration.loading ? 'remote.collectionLoading' : 'remote.collectionUnavailable' : 'settings.panel.loading')}</p>
+        <p className="empty" role="status">{remote ? configuration.loading ? t('remote.collectionLoading') : t('remote.collectionUnavailable') : t('settings.panel.loading')}</p>
       </section>
     )
   }

@@ -15,6 +15,16 @@
 
 mod field_day_display;
 
+/// A manual Remote log append awaiting storage confirmation. The caller must
+/// release its engine lock before syncing; connector delivery uses its existing pipeline.
+/// Unconfirmed retains the contact in memory and may also have written bytes.
+#[derive(Debug)]
+pub enum LogWriteOutcome {
+    PendingSync(Vec<tempo_core::logbook::LogAppendReceipt>),
+    Unconfirmed,
+    Duplicate,
+}
+
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -8912,7 +8922,24 @@ impl Engine {
         (!call.is_empty()).then(|| call.to_ascii_uppercase())
     }
 
-    pub fn log_qso(&mut self, mut rec: QsoRecord) {
+    pub fn log_qso(&mut self, rec: QsoRecord) {
+        let _ = self.log_qso_inner(rec, false);
+    }
+
+    /// Changes with native operating/profile changes, including value-identical
+    /// changes away and back. Meter ticks do not invalidate a manual log draft.
+    pub fn remote_log_context_generation(&self) -> u64 {
+        self.tx_gate_gen
+    }
+
+    /// Manual Remote logging uses the existing contact enrichment, memory-first
+    /// append and connector funnel, but receives open file handles to sync outside the engine lock. This does
+    /// not change FT sequencing, pending-log semantics or desktop append timing.
+    pub fn log_qso_for_sync(&mut self, rec: QsoRecord) -> LogWriteOutcome {
+        self.log_qso_inner(rec, true)
+    }
+
+    fn log_qso_inner(&mut self, mut rec: QsoRecord, sync: bool) -> LogWriteOutcome {
         // Every log path funnels through here, so this is the one place that can tell the UI a
         // contact was written — including a backend auto-log the frontend never initiated.
         self.logged_tick = self.logged_tick.wrapping_add(1);
@@ -9000,7 +9027,7 @@ impl Engine {
                 && rec.when_unix.abs_diff(r.when_unix) <= DEDUP_WINDOW_SECS
         });
         if is_dup {
-            return;
+            return LogWriteOutcome::Duplicate;
         }
         // WHO WAS AT THE KEY (#25). `QsoRecord::operator` has existed since the logbook was
         // written, is exported as ADIF `OPERATOR`, is parsed on import, and was never once
@@ -9110,7 +9137,9 @@ impl Engine {
         // log's freshness fingerprint moves with the file. Skip it and the recovery
         // gate misses on the next upload stamp / Needed-board poll and re-parses the
         // whole log — once per contact, on every contact.
-        self.station.append_to_log(std::slice::from_ref(&rec));
+        let persisted = self
+            .station
+            .append_to_log_checked(std::slice::from_ref(&rec), sync);
         self.push_to_hrd(&rec);
         self.push_to_n1mm(&rec);
         // ...and to the WSJT-X UDP sink, which is the one a logger actually logs from. The
@@ -9140,6 +9169,10 @@ impl Engine {
             retry_after_unix: 0, // due now — a fresh log has no prior failure to back off from
         });
         self.station.refresh_worked_index();
+        match persisted {
+            Some(receipts) if sync => LogWriteOutcome::PendingSync(receipts),
+            _ => LogWriteOutcome::Unconfirmed,
+        }
     }
 
     /// Push a logged QSO to Ham Radio Deluxe Logbook over its QSO-Forwarding UDP

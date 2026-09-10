@@ -1596,7 +1596,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
           have no id in the panel vocabulary (unrepresentable beats guarded); the TX
           meters DO keep their ⊞ id — a readout, not a control — but render here, beside
           the button that keys the rig (they appear only while keyed). */}
-      <div className="cockpit-txdock">
+      <div className={`cockpit-txdock${control ? '' : ' remote-observer-dock'}`}>
       {/* Transmit meters (SWR/ALC/Po/COMP) — appear only while keyed. At the TOP of the
           dock, exactly as in CW: the dock is bottom-anchored (sticky bottom), so a child
           mounting BELOW the PTT row would grow the dock upward and shift the button out

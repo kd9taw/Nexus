@@ -606,7 +606,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
         <span className="awards-sub">{t('program.sub')}</span>
       </div>
 
-      {remote && <p className="settings-note" role="status">{t(configuration.value?'remote.programmingObserver':configuration.loading?'remote.collectionLoading':'remote.collectionUnavailable')}</p>}
+      {remote && <p className="settings-note" role="status">{configuration.value ? t('remote.programmingObserver') : configuration.loading ? t('remote.collectionLoading') : t('remote.collectionUnavailable')}</p>}
       <div className="rp-body" hidden={remote&&!configuration.value}>
         {/* ── SOURCE pane: the query tool ── */}
         <div className="rp-source">

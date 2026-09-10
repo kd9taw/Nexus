@@ -1409,20 +1409,44 @@ impl Logbook {
     /// Append one record to the ADIF file (creating it with a header if new).
     /// Keeps the in-memory copy in sync — call after [`Logbook::add`].
     pub fn append(path: &Path, rec: &QsoRecord) -> std::io::Result<()> {
+        Self::append_impl(path, rec, false).map(drop)
+    }
+
+    /// Retain the exact appended file for a later sync. Callers must release
+    /// station/engine locks before waiting for storage. A failed append or sync
+    /// may have written bytes; never automatically repeat the append.
+    pub fn append_for_sync(path: &Path, rec: &QsoRecord) -> std::io::Result<LogAppendReceipt> {
+        Self::append_impl(path, rec, true)
+    }
+
+    fn append_impl(
+        path: &Path,
+        rec: &QsoRecord,
+        receipt: bool,
+    ) -> std::io::Result<LogAppendReceipt> {
         use std::io::Write;
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
         let new = !path.exists();
-        let mut f = std::fs::OpenOptions::new()
+        let mut file = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(path)?;
         if new {
-            f.write_all(adif_header().as_bytes())?;
+            file.write_all(adif_header().as_bytes())?;
         }
-        f.write_all(adif_record(rec).as_bytes())?;
-        Ok(())
+        file.write_all(adif_record(rec).as_bytes())?;
+        let mut parent = None;
+        #[cfg(unix)]
+        if receipt && new {
+            if let Some(dir) = path.parent() {
+                parent = Some(std::fs::File::open(dir)?);
+            }
+        }
+        #[cfg(not(unix))]
+        let _ = (receipt, new, &mut parent);
+        Ok(LogAppendReceipt { file, parent })
     }
 
     /// Rewrite the entire ADIF file from the in-memory records (write-tmp +
@@ -3020,6 +3044,23 @@ fn unix_from_ymdhms(y: i32, m: u32, d: u32, h: u32, mi: u32, s: u32) -> u64 {
     let days = era * 146_097 + doe - 719_468;
     let secs = days * 86_400 + (h as i64) * 3600 + (mi as i64) * 60 + s as i64;
     secs.max(0) as u64
+}
+
+/// A specific append's open file handles, never a path to reopen later. This
+/// receipt can cross out of the engine lock before its potentially slow sync.
+#[derive(Debug)]
+pub struct LogAppendReceipt {
+    file: std::fs::File,
+    parent: Option<std::fs::File>,
+}
+impl LogAppendReceipt {
+    pub fn sync(self) -> std::io::Result<()> {
+        self.file.sync_all()?;
+        if let Some(parent) = self.parent {
+            parent.sync_all()?;
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]

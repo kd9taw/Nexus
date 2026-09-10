@@ -299,6 +299,24 @@ fn cloud_runtime_probe() {
     std::io::stdout().flush().unwrap();
     for line in lines {
         let value: serde_json::Value = serde_json::from_str(&line.unwrap()).unwrap();
+        if value["type"] == "seedLogging" || value["type"] == "loggingEvidence" {
+            let path = std::path::Path::new(config["configurationRoot"].as_str().unwrap())
+                .join("remote-manual.adi");
+            let mut e = engine.lock().unwrap();
+            if value["type"] == "seedLogging" {
+                let mut settings = e.settings().clone();
+                settings.fd_active = false;
+                settings.save_qso_wav = false;
+                e.apply_settings(settings);
+                e.set_log_path(path.clone());
+            }
+            println!(
+                "REMOTE_TEST:{}",
+                json!({"count":e.log_records().len(),"adif":std::fs::read_to_string(path).unwrap_or_default(),"txEnabled":e.snapshot().radio.tx_enabled})
+            );
+            std::io::stdout().flush().unwrap();
+            continue;
+        }
         if value["type"] == "seedConfiguration" {
             let root = std::path::Path::new(config["configurationRoot"].as_str().unwrap());
             let path = crate::radioprog_path();

@@ -1756,7 +1756,7 @@ export function CwCockpit({
           keep their ⊞ id (`txmeters` in CW_PANEL_IDS — a readout, not a control) and render at
           the TOP of the dock: they mount only while keyed, and growing the dock downward would
           shift the Send button under the operator's pointer mid-QSO. */}
-      <div className="cockpit-txdock">
+      <div className={`cockpit-txdock${control ? '' : ' remote-observer-dock'}`}>
         {/* Live transmit meters (SWR / ALC / Po / COMP) — self-gating: shown only while keyed,
             and only the meters the rig reports. A CW op wants SWR + Po as they send. */}
         {shown('txmeters') && <TxMeters radio={snap.radio} />}

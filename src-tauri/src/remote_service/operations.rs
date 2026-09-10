@@ -1,0 +1,603 @@
+//! Station-owned authority for the first non-RF operating action: manual logging.
+//! Cloud admission routes an approved browser; only a local, boot-scoped grant
+//! permits a lease. No Tauri command names, TX grants, hardware writes or retries.
+//! A log append already begun cannot be rolled back on disconnect. Its bounded
+//! receipt remains queryable by the same device while locally permitted.
+use super::transport::identifier;
+use ring::digest::{digest, SHA256};
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use std::collections::{BTreeSet, VecDeque};
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Mutex,
+};
+use std::time::{Duration, Instant};
+
+const LEASE: Duration = Duration::from_secs(5);
+const WINDOW: Duration = Duration::from_secs(2);
+const RESULT_AGE: Duration = Duration::from_secs(600);
+const MAX_COUNTER: u64 = 9_007_199_254_740_991;
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
+pub enum Request {
+    State {
+        #[serde(rename = "requestId")]
+        request_id: String,
+    },
+    Acquire {
+        #[serde(rename = "requestId")]
+        request_id: String,
+        #[serde(rename = "stationBootId")]
+        station_boot_id: String,
+    },
+    Heartbeat {
+        #[serde(rename = "requestId")]
+        request_id: String,
+        #[serde(rename = "leaseId")]
+        lease_id: String,
+    },
+    Release {
+        #[serde(rename = "requestId")]
+        request_id: String,
+        #[serde(rename = "leaseId")]
+        lease_id: String,
+    },
+    Result {
+        #[serde(rename = "requestId")]
+        request_id: String,
+        #[serde(rename = "operationId")]
+        operation_id: String,
+    },
+    LogManual {
+        #[serde(rename = "requestId")]
+        request_id: String,
+        #[serde(rename = "stationBootId")]
+        station_boot_id: String,
+        #[serde(rename = "leaseId")]
+        lease_id: String,
+        #[serde(rename = "expectedRevision")]
+        expected_revision: u64,
+        #[serde(rename = "commandWindowId")]
+        command_window_id: String,
+        #[serde(rename = "clientSequence")]
+        client_sequence: u64,
+        record: Box<ManualRecord>,
+    },
+}
+impl Request {
+    pub fn id(&self) -> &str {
+        match self {
+            Self::State { request_id }
+            | Self::Acquire { request_id, .. }
+            | Self::Heartbeat { request_id, .. }
+            | Self::Release { request_id, .. }
+            | Self::Result { request_id, .. }
+            | Self::LogManual { request_id, .. } => request_id,
+        }
+    }
+}
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ManualRecord {
+    call: String,
+    grid: Option<String>,
+    country: Option<String>,
+    state: Option<String>,
+    band: String,
+    freq_mhz: f64,
+    mode: String,
+    rst_sent: Option<String>,
+    rst_rcvd: Option<String>,
+    name: Option<String>,
+    qth: Option<String>,
+    comment: Option<String>,
+    notes: Option<String>,
+    when_unix: Option<u64>,
+    confirmed: bool,
+    award_confirmed: bool,
+    #[serde(default)]
+    ota: Option<ManualOta>,
+}
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ManualOta {
+    their_program: String,
+    their_ref: String,
+}
+impl ManualRecord {
+    fn valid(&self, now_unix: u64) -> bool {
+        let text = |s: &str, max: usize| {
+            s.len() <= max && !s.chars().any(|c| c.is_control() && c != '\n' && c != '\t')
+        };
+        let field = |s: &Option<String>, max| s.as_ref().is_none_or(|s| text(s, max));
+        self.call.len() >= 3
+            && self.call.len() <= 32
+            && self
+                .call
+                .bytes()
+                .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == b'/')
+            && !self.confirmed
+            && !self.award_confirmed
+            && self.freq_mhz.is_finite()
+            && self.freq_mhz > 0.0
+            && self.freq_mhz <= 250_000.0
+            && self
+                .when_unix
+                .is_none_or(|at| at > 0 && at <= now_unix.saturating_add(300))
+            && text(&self.band, 16)
+            && !self.band.is_empty()
+            && text(&self.mode, 32)
+            && !self.mode.is_empty()
+            && field(&self.grid, 16)
+            && field(&self.country, 96)
+            && field(&self.state, 16)
+            && field(&self.rst_sent, 16)
+            && field(&self.rst_rcvd, 16)
+            && field(&self.name, 128)
+            && field(&self.qth, 256)
+            && field(&self.comment, 512)
+            && field(&self.notes, 1024)
+            && self.ota.as_ref().is_none_or(|o| {
+                ["POTA", "SOTA"].contains(&o.their_program.as_str())
+                    && !o.their_ref.is_empty()
+                    && o.their_ref.len() <= 32
+                    && o.their_ref
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'/' || b == b'-')
+            })
+    }
+    fn record(&self) -> Result<tempo_app::dto::LoggedQso, &'static str> {
+        let mut value = serde_json::to_value(self).map_err(|_| "invalidRequest")?;
+        value["whenUnix"] = json!(self.when_unix.unwrap_or_else(|| super::now_ms() / 1000));
+        if self.ota.is_none() {
+            value.as_object_mut().ok_or("invalidRequest")?.remove("ota");
+        }
+        serde_json::from_value(value).map_err(|_| "invalidRequest")
+    }
+}
+struct Window {
+    id: String,
+    at: Instant,
+}
+struct Lease {
+    id: String,
+    session: String,
+    device: String,
+    until: Instant,
+    sequence: u64,
+}
+struct Receipt {
+    id: String,
+    session: String,
+    device: String,
+    fingerprint: Vec<u8>,
+    at: Instant,
+    value: Value,
+}
+struct Core {
+    epoch: u64,
+    connection: u64,
+    lease_epoch: u64,
+    boot: Option<String>,
+    grants: BTreeSet<String>,
+    lease: Option<Lease>,
+    revision: u64,
+    context: Option<Vec<u8>>,
+    windows: VecDeque<Window>,
+    receipts: VecDeque<Receipt>,
+}
+impl Default for Core {
+    fn default() -> Self {
+        Self {
+            epoch: 0,
+            connection: 0,
+            lease_epoch: 0,
+            boot: super::query::snapshot_id().ok(),
+            grants: BTreeSet::new(),
+            lease: None,
+            revision: 0,
+            context: None,
+            windows: VecDeque::new(),
+            receipts: VecDeque::new(),
+        }
+    }
+}
+#[derive(Default)]
+pub struct Authority {
+    epoch: AtomicU64,
+    connection: AtomicU64,
+    lease_epoch: AtomicU64,
+    core: Mutex<Core>,
+    #[cfg(test)]
+    before_sync: Option<Box<dyn Fn() + Send + Sync>>,
+}
+impl Authority {
+    /// Synchronous invalidation does not wait for an in-flight file operation.
+    /// Its epoch is reconciled before any next request or local grant.
+    pub fn invalidate(&self) {
+        let _ = self
+            .epoch
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_add(1));
+    }
+    pub fn start_connection(&self) -> u64 {
+        self.connection
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_add(1))
+            .map_or(u64::MAX, |n| n + 1)
+    }
+    pub fn retire_connection(&self, id: u64) {
+        let _ = self.connection.compare_exchange(
+            id,
+            id.saturating_add(1),
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        );
+    }
+    fn reconcile(&self, c: &mut Core, now: Instant) -> Result<(), &'static str> {
+        let epoch = self.epoch.load(Ordering::SeqCst);
+        if epoch == u64::MAX {
+            return Err("authorityUnavailable");
+        }
+        let connection = self.connection.load(Ordering::SeqCst);
+        let lease_epoch = self.lease_epoch.load(Ordering::SeqCst);
+        if connection == u64::MAX || lease_epoch == u64::MAX {
+            return Err("authorityUnavailable");
+        }
+        if c.connection != connection || c.lease_epoch != lease_epoch {
+            c.lease_epoch = lease_epoch;
+            c.connection = connection;
+            c.lease = None;
+            c.windows.clear();
+            Self::advance(c)?;
+        }
+        if c.epoch != epoch {
+            c.epoch = epoch;
+            c.grants.clear();
+            c.lease = None;
+            c.windows.clear();
+            c.context = None;
+            Self::advance(c)?;
+        }
+        if c.lease.as_ref().is_some_and(|l| now >= l.until) {
+            c.lease = None;
+            c.windows.clear();
+            Self::advance(c)?;
+        }
+        while c
+            .windows
+            .front()
+            .is_some_and(|w| now.saturating_duration_since(w.at) >= WINDOW)
+        {
+            c.windows.pop_front();
+        }
+        while c
+            .receipts
+            .front()
+            .is_some_and(|r| now.saturating_duration_since(r.at) >= RESULT_AGE)
+        {
+            c.receipts.pop_front();
+        }
+        Ok(())
+    }
+    fn advance(c: &mut Core) -> Result<(), &'static str> {
+        if c.revision >= MAX_COUNTER {
+            c.lease = None;
+            return Err("authorityUnavailable");
+        }
+        c.revision += 1;
+        Ok(())
+    }
+    pub fn permit(&self, device: &str, allow: bool) -> Result<(), &'static str> {
+        if !identifier(device) {
+            return Err("invalidRequest");
+        }
+        let mut c = self.core.try_lock().map_err(|_| "remoteBusy")?;
+        self.reconcile(&mut c, Instant::now())?;
+        if allow {
+            if c.grants.len() >= 16 && !c.grants.contains(device) {
+                return Err("remoteBusy");
+            }
+            c.grants.insert(device.to_string());
+        } else {
+            c.grants.remove(device);
+            if c.lease.as_ref().is_some_and(|l| l.device == device) {
+                c.lease = None;
+                c.windows.clear();
+                Self::advance(&mut c)?;
+            }
+        }
+        Ok(())
+    }
+    /// Any admitted browser departure ends the shared logging lease. This is
+    /// deliberately conservative and cannot wait behind a file append. Grants
+    /// survive; a controller must explicitly acquire a fresh lease afterward.
+    pub fn disconnect_session(&self, session: &str) {
+        if identifier(session) {
+            let _ = self
+                .lease_epoch
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_add(1));
+        }
+    }
+    pub fn local_status(&self) -> Value {
+        let Ok(mut c) = self.core.try_lock() else {
+            return json!({"devices":[],"controller":null});
+        };
+        if self.reconcile(&mut c, Instant::now()).is_err() {
+            return json!({"devices":[],"controller":null});
+        }
+        json!({"devices":c.grants,"controller":c.lease.as_ref().map(|l|l.device.as_str())})
+    }
+    fn context(c: &mut Core, engine: &tempo_app::engine::Engine) -> Result<(), &'static str> {
+        let s = engine.settings();
+        let value = json!([
+            engine.remote_log_context_generation(),
+            s.active_radio,
+            s.mycall,
+            s.mygrid,
+            s.fd_operator,
+            s.fd_active,
+            s.dial_mhz,
+            s.band,
+            s.operating_mode
+        ]);
+        let next = digest(
+            &SHA256,
+            &serde_json::to_vec(&value).map_err(|_| "authorityUnavailable")?,
+        )
+        .as_ref()
+        .to_vec();
+        if c.context.as_ref() != Some(&next) {
+            c.context = Some(next);
+            c.windows.clear();
+            Self::advance(c)?;
+        }
+        Ok(())
+    }
+    fn state(
+        c: &mut Core,
+        session: &str,
+        device: &str,
+        now: Instant,
+    ) -> Result<Value, &'static str> {
+        let allowed = c.grants.contains(device);
+        let owned = c
+            .lease
+            .as_ref()
+            .is_some_and(|l| l.session == session && l.device == device);
+        if owned
+            && c.windows
+                .back()
+                .is_none_or(|w| now.saturating_duration_since(w.at) >= Duration::from_millis(500))
+        {
+            c.windows.push_back(Window {
+                id: super::query::snapshot_id()?,
+                at: now,
+            });
+            while c.windows.len() > 4 {
+                c.windows.pop_front();
+            }
+        }
+        Ok(
+            json!({"stationBootId":c.boot.as_deref().ok_or("authorityUnavailable")?,"allowed":allowed,
+            "phase":if owned{"controlling"}else if c.lease.is_some(){"occupied"}else if allowed{"available"}else{"localPermissionRequired"},
+            "leaseId":if owned{c.lease.as_ref().map(|l|l.id.as_str())}else{None},"revision":c.revision,
+            "commandWindowId":if owned{c.windows.back().map(|w|w.id.as_str())}else{None},
+            "nextSequence":if owned{c.lease.as_ref().map(|l|l.sequence+1)}else{None},
+            "leaseRemainingMs":if owned{c.lease.as_ref().map(|l|l.until.saturating_duration_since(now).as_millis() as u64)}else{None},
+            "actions":if allowed{vec!["log.manual"]}else{vec![]},"txArmed":false}),
+        )
+    }
+    pub fn handle(
+        &self,
+        connection: u64,
+        session: &str,
+        device: &str,
+        request: &Request,
+        engine: &crate::SharedEngine,
+        now: Instant,
+    ) -> Result<Value, &'static str> {
+        if connection != self.connection.load(Ordering::SeqCst) {
+            return Err("staleConnection");
+        }
+        if !identifier(session) || !identifier(device) || !identifier(request.id()) {
+            return Err("invalidRequest");
+        }
+        let mut c = self.core.try_lock().map_err(|_| "remoteBusy")?;
+        self.reconcile(&mut c, now)?;
+        // Capture context and execute under the same engine lock. There is no
+        // queue whose work could migrate into a later radio/profile context.
+        let mut engine = engine.try_lock().map_err(|_| "stationBusy")?;
+        Self::context(&mut c, &engine)?;
+        match request {
+            Request::State { .. } => Self::state(&mut c, session, device, now),
+            Request::Acquire {
+                station_boot_id, ..
+            } => {
+                if !c.grants.contains(device) {
+                    return Err("localPermissionRequired");
+                }
+                if c.boot.as_deref() != Some(station_boot_id.as_str()) {
+                    return Err("staleStation");
+                }
+                if let Some(l) = &c.lease {
+                    if l.session != session || l.device != device {
+                        return Err("controllerBusy");
+                    }
+                } else {
+                    c.lease = Some(Lease {
+                        id: super::query::snapshot_id()?,
+                        session: session.into(),
+                        device: device.into(),
+                        until: now + LEASE,
+                        sequence: 0,
+                    });
+                    Self::advance(&mut c)?;
+                }
+                Self::state(&mut c, session, device, now)
+            }
+            Request::Heartbeat { lease_id, .. } => {
+                let l = c.lease.as_mut().ok_or("leaseExpired")?;
+                if l.id != *lease_id || l.session != session || l.device != device {
+                    return Err("notController");
+                }
+                l.until = now + LEASE;
+                Self::state(&mut c, session, device, now)
+            }
+            Request::Release { lease_id, .. } => {
+                if c.lease.as_ref().is_some_and(|l| {
+                    l.id == *lease_id && l.session == session && l.device == device
+                }) {
+                    c.lease = None;
+                    c.windows.clear();
+                    Self::advance(&mut c)?;
+                }
+                Self::state(&mut c, session, device, now)
+            }
+            Request::Result { operation_id, .. } => {
+                if !identifier(operation_id) || !c.grants.contains(device) {
+                    return Err("localPermissionRequired");
+                }
+                c.receipts
+                    .iter()
+                    .find(|r| r.id == *operation_id && r.device == device)
+                    .map(|r| r.value.clone())
+                    .ok_or("resultExpired")
+            }
+            Request::LogManual {
+                station_boot_id,
+                lease_id,
+                expected_revision,
+                command_window_id,
+                client_sequence,
+                record,
+                ..
+            } => {
+                if !c.grants.contains(device) {
+                    return Err("localPermissionRequired");
+                }
+                let bytes = serde_json::to_vec(request).map_err(|_| "invalidRequest")?;
+                if bytes.len() > 4096 {
+                    return Err("invalidRequest");
+                }
+                let fingerprint = digest(&SHA256, &bytes).as_ref().to_vec();
+                if let Some(r) = c.receipts.iter().find(|r| r.id == request.id()) {
+                    return if r.session == session
+                        && r.device == device
+                        && r.fingerprint == fingerprint
+                    {
+                        Ok(r.value.clone())
+                    } else {
+                        Err("requestConflict")
+                    };
+                }
+                if c.boot.as_deref() != Some(station_boot_id.as_str()) {
+                    return Err("staleStation");
+                }
+                let l = c.lease.as_ref().ok_or("leaseExpired")?;
+                if l.id != *lease_id || l.session != session || l.device != device {
+                    return Err("notController");
+                }
+                if *client_sequence == 0 || *client_sequence > MAX_COUNTER {
+                    return Err("invalidRequest");
+                }
+                if *client_sequence <= l.sequence {
+                    return Err("resultExpired");
+                }
+                if *client_sequence != l.sequence + 1 {
+                    return Err("sequenceConflict");
+                }
+                if *expected_revision != c.revision {
+                    return Err("staleContext");
+                }
+                let window = c
+                    .windows
+                    .iter()
+                    .find(|w| w.id == *command_window_id)
+                    .ok_or("windowExpired")?;
+                let current = now.max(Instant::now());
+                if current.saturating_duration_since(window.at) >= WINDOW
+                    || current >= l.until
+                    || self.epoch.load(Ordering::SeqCst) != c.epoch
+                    || connection != self.connection.load(Ordering::SeqCst)
+                    || c.lease_epoch != self.lease_epoch.load(Ordering::SeqCst)
+                {
+                    return Err("windowExpired");
+                }
+                if !record.valid(super::now_ms() / 1000) {
+                    return Err("invalidRecord");
+                }
+                if engine.settings().fd_active {
+                    return Err("fieldDayUnsupported");
+                }
+                if engine.settings().save_qso_wav {
+                    return Err("recordingUnsupported");
+                }
+                let rec = record.record()?;
+                // This is the operation's commit boundary. After this point an
+                // append may exist even if its response or file sync is lost.
+                Self::advance(&mut c)?;
+                c.lease.as_mut().ok_or("leaseExpired")?.sequence = *client_sequence;
+                let outcome = engine.log_qso_for_sync(rec.into());
+                drop(engine);
+                let value = match outcome {
+                    tempo_app::engine::LogWriteOutcome::PendingSync(receipts) => {
+                        #[cfg(test)]
+                        if let Some(probe) = &self.before_sync {
+                            probe();
+                        }
+                        if receipts
+                            .into_iter()
+                            .try_for_each(|receipt| receipt.sync())
+                            .is_ok()
+                        {
+                            json!({"outcome":"applied","evidence":"fileSynced","uploads":"stationPipeline","operationId":request.id()})
+                        } else {
+                            json!({"outcome":"unknown","reason":"persistenceUnconfirmed","operationId":request.id()})
+                        }
+                    }
+                    tempo_app::engine::LogWriteOutcome::Unconfirmed => {
+                        json!({"outcome":"unknown","reason":"persistenceUnconfirmed","operationId":request.id()})
+                    }
+                    tempo_app::engine::LogWriteOutcome::Duplicate => {
+                        json!({"outcome":"rejected","reason":"alreadyPresent","operationId":request.id()})
+                    }
+                };
+                c.receipts.push_back(Receipt {
+                    id: request.id().into(),
+                    session: session.into(),
+                    device: device.into(),
+                    fingerprint,
+                    at: current,
+                    value: value.clone(),
+                });
+                while c.receipts.len() > 1024 {
+                    c.receipts.pop_front();
+                }
+                c.windows.clear();
+                Ok(value)
+            }
+        }
+    }
+}
+
+/// Retire the lease on every socket exit, including malformed input and timeout.
+/// Local device permission survives a network interruption; a lease never does.
+pub struct Connection {
+    pub authority: std::sync::Arc<Authority>,
+    pub id: u64,
+}
+impl Connection {
+    pub fn new(authority: std::sync::Arc<Authority>) -> Self {
+        let id = authority.start_connection();
+        Self { authority, id }
+    }
+}
+impl Drop for Connection {
+    fn drop(&mut self) {
+        self.authority.retire_connection(self.id)
+    }
+}
+
+#[cfg(test)]
+mod tests;

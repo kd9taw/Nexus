@@ -1,5 +1,7 @@
 // One hibernating room per station. Socket attachments carry admission and bounded
 // ordering/ACK state; neither D1 nor Durable Object storage receives observations.
+import { OperationRelay, type OperationCheckpoint } from '../../ui/src/remote-web/operation-relay'
+import { OPERATION_REQUEST_BYTES } from '../../ui/src/remote-web/operation-protocol'
 import { DurableObject } from 'cloudflare:workers'
 import { ObservationRelay } from '../../ui/src/remote-monitor/relay'
 import type { BrowserIdentity, Entitlement, ObserverCheckpoint, Peer, StationAccess, StationIdentity } from '../../ui/src/remote-monitor/relay'
@@ -13,10 +15,10 @@ import { APPLICATION_MAX_BYTES, APPLICATION_REQUEST_BYTES } from '../../ui/src/r
 
 type Saved = { access: StationAccess; order: FrameOrderState }
 type Sample = { requestId: string; at: number }
-type StationAttachment = { version: 1; role: 'station'; identity: StationIdentity; order: FrameOrderState; sample: Sample | null; applicationVersion?: number }
-type BrowserAttachment = Omit<ObserverCheckpoint, 'peer'> & { version: 1; role: 'browser'; application?: ApplicationCheckpoint }
+type StationAttachment = { version: 1; role: 'station'; identity: StationIdentity; order: FrameOrderState; sample: Sample | null; applicationVersion?: number; operationVersion?: number }
+type BrowserAttachment = Omit<ObserverCheckpoint, 'peer'> & { version: 1; role: 'browser'; application?: ApplicationCheckpoint; operations?: OperationCheckpoint }
 type Attachment = StationAttachment | BrowserAttachment
-type Admission = { access: StationAccess; identity: StationIdentity & BrowserIdentity; entitlement: Entitlement; sessionId: string; applicationVersion?: number }
+type Admission = { access: StationAccess; identity: StationIdentity & BrowserIdentity; entitlement: Entitlement; sessionId: string; applicationVersion?: number; operationVersion?: number }
 
 export class StationRoom extends DurableObject<RemoteEnv> {
   private relay: ObservationRelay | null = null
@@ -25,6 +27,8 @@ export class StationRoom extends DurableObject<RemoteEnv> {
   private saved: Saved | undefined
   private alarmAt: number | null = null
   private application = new ApplicationRelay()
+  private operations = new OperationRelay()
+  private operationVersions = new Map<WebSocket,number>()
   private applicationVersions = new Map<WebSocket, number>()
   private applicationPeers = new Map<WebSocket, Peer>()
 
@@ -44,6 +48,7 @@ export class StationRoom extends DurableObject<RemoteEnv> {
         for (const ws of sockets) {
           const attachment = ws.deserializeAttachment() as Attachment
           if (attachment?.version !== 1) throw new Error('invalidCheckpoint')
+          if(attachment.role==='station')this.operationVersions.set(ws,attachment.operationVersion===1?1:0)
           if (attachment.role === 'station' && attachment.sample) this.samples.set(ws, attachment.sample)
           const peer = this.peer(ws, attachment.role)
           if (attachment.role === 'station') {
@@ -61,12 +66,14 @@ export class StationRoom extends DurableObject<RemoteEnv> {
         for (const saved of applicationSaved) {
           if (this.application.checkpoint(saved.sessionId)) this.application.restore(saved.sessionId, saved.value)
         }
+        for(const ws of sockets){const a=ws.deserializeAttachment() as Attachment;if(a.role==='browser'&&a.operations)this.operations.restore(a.sessionId,a.operations)}
         await this.checkpoint()
       } catch {
         for (const ws of sockets) ws.close(1011, 'authorityUnavailable')
         this.peers.clear()
         this.samples.clear(); this.applicationPeers.clear(); this.applicationVersions.clear()
         this.application = new ApplicationRelay()
+        this.operations = new OperationRelay();this.operationVersions.clear()
         this.relay = new ObservationRelay(this.saved.access)
       }
     })
@@ -93,7 +100,7 @@ export class StationRoom extends DurableObject<RemoteEnv> {
       }, close: (code, reason) => {
         if (!buffer?.pending) ws.close(code, reason)
         this.peers.delete(ws); this.samples.delete(ws)
-        this.applicationVersions.delete(ws); this.applicationPeers.delete(ws)
+        this.applicationVersions.delete(ws); this.applicationPeers.delete(ws);this.operationVersions.delete(ws)
       } }
       this.peers.set(ws, peer)
     }
@@ -139,6 +146,7 @@ export class StationRoom extends DurableObject<RemoteEnv> {
       const pair = new WebSocketPair(), server = pair[1]
       const buffered = { pending: true, messages: [] as string[] }
       const peer = this.peer(server, path === '/station' ? 'station' : 'browser', buffered)
+      if(path==='/station')this.operationVersions.set(server,input.operationVersion===1?1:0)
       if (path === '/station') this.applicationVersions.set(server, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14].includes(input.applicationVersion ?? 0) ? input.applicationVersion! : 0)
       try {
         if (path === '/station') relay.connectStation(input.identity, peer, now)
@@ -167,13 +175,18 @@ export class StationRoom extends DurableObject<RemoteEnv> {
     // Bounds apply before parsing. The larger envelope is available only to an
     // authenticated station that advertised this application protocol version.
     const limit = attachment.role === 'station' && [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14].includes(this.applicationVersions.get(ws) ?? 0)
-      ? APPLICATION_MAX_BYTES : attachment.role === 'station' ? MAX_FRAME_BYTES + 256 : APPLICATION_REQUEST_BYTES
+      ? APPLICATION_MAX_BYTES : attachment.role === 'station' ? MAX_FRAME_BYTES + 256 : Math.max(APPLICATION_REQUEST_BYTES,OPERATION_REQUEST_BYTES)
     if (new TextEncoder().encode(message).length > limit) {
       ws.close(1008, 'invalidMessage'); await this.disconnected(ws); return
     }
     let parsed: Record<string, unknown>
     try { parsed = JSON.parse(message) as Record<string, unknown> }
     catch { ws.close(1008, 'invalidMessage'); await this.disconnected(ws); return }
+    if(parsed&&typeof parsed==='object'&&typeof parsed.type==='string'&&parsed.type.startsWith('operation')){
+      if(attachment.role==='station')this.operations.receiveStation(parsed)
+      else this.operations.receiveBrowser(attachment.sessionId,parsed,Date.now())
+      await this.checkpoint();return
+    }
     if (parsed && typeof parsed === 'object' && typeof parsed.type === 'string' && parsed.type.startsWith('application')) {
       if (attachment.role === 'station') this.application.receiveStation(parsed, Date.now())
       else this.application.receiveBrowser(attachment.sessionId, parsed, Date.now())
@@ -232,10 +245,10 @@ export class StationRoom extends DurableObject<RemoteEnv> {
     const state = this.relay.checkpoint()
     for (const [ws, peer] of this.peers) {
       let attachment: Attachment | undefined
-      if (state.station?.peer === peer) attachment = { version: 1, role: 'station', identity: state.station.identity, order: state.order, sample: this.samples.get(ws) ?? null, applicationVersion: this.applicationVersions.get(ws) ?? 0 }
+      if (state.station?.peer === peer) attachment = { version: 1, role: 'station', identity: state.station.identity, order: state.order, sample: this.samples.get(ws) ?? null, applicationVersion: this.applicationVersions.get(ws) ?? 0, operationVersion:this.operationVersions.get(ws)??0 }
       else {
         const observer = state.observers.find(o => o.peer === peer)
-        if (observer) { const { peer: _peer, ...saved } = observer; attachment = { version: 1, role: 'browser', ...saved, application: this.application.checkpoint(observer.sessionId) } }
+        if (observer) { const { peer: _peer, ...saved } = observer; attachment = { version: 1, role: 'browser', ...saved, application: this.application.checkpoint(observer.sessionId),operations:this.operations.checkpoint(observer.sessionId) } }
       }
       if (!attachment) { ws.close(1001, 'disconnected'); this.peers.delete(ws); continue }
       if (new TextEncoder().encode(JSON.stringify(attachment)).length > 2048) {
@@ -252,6 +265,8 @@ export class StationRoom extends DurableObject<RemoteEnv> {
     const deadlines = [...this.samples.values()].map(sample => sample.at + STALE_MS)
     const coreDeadline = this.relay.nextDeadline()
     if (coreDeadline !== null) deadlines.push(coreDeadline)
+    const operationDeadline=this.operations.nextDeadline()
+    if(operationDeadline!==null)deadlines.push(operationDeadline)
     const applicationDeadline = this.application.nextDeadline()
     if (applicationDeadline !== null) deadlines.push(applicationDeadline)
     const next = deadlines.length ? Math.min(...deadlines) : null
@@ -288,8 +303,9 @@ export class StationRoom extends DurableObject<RemoteEnv> {
           close: (code, reason) => this.relay?.disconnectObserver(observer.sessionId, code, reason) }
         this.applicationPeers.set(socket, peer)
       }
-      return [{ sessionId: observer.sessionId, peer }]
+      return [{ sessionId: observer.sessionId, deviceId:observer.identity.deviceId, peer }]
     })
     this.application.sync(station, observers, now)
+    this.operations.sync(station?{peer:station.peer,supported:!!stationSocket&&this.operationVersions.get(stationSocket)===1}:null,observers,now)
   }
 }

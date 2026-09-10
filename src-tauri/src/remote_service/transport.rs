@@ -111,6 +111,17 @@ impl Client {
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
 enum ServerMessage {
+    OperationDisconnect {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+    },
+    OperationRequest {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        #[serde(rename = "deviceId")]
+        device_id: String,
+        request: super::operations::Request,
+    },
     ApplicationQuery {
         #[serde(flatten)]
         request: super::query::Request,
@@ -243,9 +254,13 @@ pub async fn connected(
         "x-nexus-application-navigation-version",
         "1".parse().map_err(|_| "invalidResponse")?,
     );
+    request.headers_mut().insert(
+        "x-nexus-operation-version",
+        "1".parse().map_err(|_| "invalidResponse")?,
+    );
     let config = WebSocketConfig::default()
-        .max_message_size(Some(512))
-        .max_frame_size(Some(512))
+        .max_message_size(Some(8192))
+        .max_frame_size(Some(8192))
         .write_buffer_size(0)
         .max_write_buffer_size(super::application::MAX_BYTES + 1024);
     let connect = tokio_tungstenite::connect_async_with_config(request, Some(config), false);
@@ -263,6 +278,14 @@ pub async fn connected(
     if *stop.borrow() {
         return Ok(());
     }
+    let authority = status
+        .control
+        .lock()
+        .map_err(|_| "serviceUnavailable")?
+        .operations
+        .clone();
+    let operation_connection = super::operations::Connection::new(authority);
+    let mut operation_task: Option<tokio::task::JoinHandle<String>> = None;
     status.set("connected", None);
     let mut tick = tokio::time::interval(Duration::from_millis(tempo_app::remote_monitor::POLL_MS));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -293,10 +316,31 @@ pub async fn connected(
         tokio::select! {
             biased;
             _ = stop.changed() => { let _ = tokio::time::timeout(Duration::from_secs(1), socket.close(None)).await; return Ok(()); }
+            response = async { operation_task.as_mut().expect("guarded operation task").await }, if operation_task.is_some() => {
+                operation_task=None;
+                let data=response.map_err(|_|"serviceUnavailable")?;
+                tokio::time::timeout(Duration::from_secs(2),socket.send(Message::Text(data.into()))).await.map_err(|_|"serviceUnavailable")?.map_err(|_|"serviceUnavailable")?;
+            }
             message = socket.next() => match message {
                 Some(Ok(Message::Text(text))) => {
                     let message: ServerMessage = serde_json::from_str(&text).map_err(|_| "invalidResponse")?;
                     match message {
+                        ServerMessage::OperationDisconnect{session_id}=>{if !identifier(&session_id){return Err("invalidResponse")}operation_connection.authority.disconnect_session(&session_id);},
+                        ServerMessage::OperationRequest{session_id,device_id,request}=>{
+                            if !identifier(&session_id)||!identifier(&device_id)||!identifier(request.id()){return Err("invalidResponse")}
+                            if operation_task.is_some(){
+                                let data=json!({"type":"operationResponse","sessionId":session_id,"requestId":request.id(),"error":"stationBusy"}).to_string();
+                                tokio::time::timeout(Duration::from_secs(2),socket.send(Message::Text(data.into()))).await.map_err(|_|"serviceUnavailable")?.map_err(|_|"serviceUnavailable")?;
+                            }else{
+                                let authority=operation_connection.authority.clone();let connection=operation_connection.id;let engine=engine.clone();
+                                operation_task=Some(tokio::task::spawn_blocking(move||{
+                                    match authority.handle(connection,&session_id,&device_id,&request,&engine,Instant::now()){
+                                        Ok(value)=>json!({"type":"operationResponse","sessionId":session_id,"requestId":request.id(),"value":value}),
+                                        Err(error)=>json!({"type":"operationResponse","sessionId":session_id,"requestId":request.id(),"error":error}),
+                                    }.to_string()
+                                }));
+                            }
+                        },
                         ServerMessage::ApplicationQuery { request } => {
                             if !request.valid() { return Err("invalidResponse"); }
                             if query_task.is_some() {

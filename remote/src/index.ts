@@ -36,6 +36,7 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
     ready: env.AUTH0_CLIENT_ID !== 'unconfigured',
     revision: env.REMOTE_BUILD_REVISION ?? 'local',
     applicationVersion: 14,
+    operationVersion: 1,
   })
   const match = /^stations\/([0-9a-f-]{36})\/(.+)$/.exec(path)
   if (request.method === 'GET' && match && ['connect', 'observe'].includes(match[2])) {
@@ -59,6 +60,7 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
             : 3
           : request.headers.get('x-nexus-application-stream-version') === '2' ? 2
           : ['1', '2'].includes(request.headers.get('x-nexus-application-version') ?? '') ? Number(request.headers.get('x-nexus-application-version')) : 0,
+        operationVersion: request.headers.get('x-nexus-operation-version')==='1'?1:0,
         identity: { stationId, accountId: row.account_id, generation: row.generation, expiresAt: now + 86400000 } })
     }
     browserOrigin(request, env)
@@ -218,7 +220,7 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
       const response = await room(env, row.id, 'renew', { access: policy,
         sessionId: id(input.sessionId), identity: browser, entitlement })
       requireValue(response.ok, 'sessionNotApproved')
-      return json({ ok: true })
+      return json({ ok: true, serverNow: now })
     }
     await rate(env, `ticket:${row.id}:${current.id}`, now, 12)
     const ticket = secret()

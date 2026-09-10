@@ -512,7 +512,35 @@ test('actual native controller pairs, stores authority, publishes real DTOs, dis
     assert.equal(restarted.status.phase, 'disabled')
     assert.equal((await roomStatus(room)).online, false)
     const forgotten = await probe.send({ type: 'forget' })
-    assert.equal(forgotten.ok, true); assert.equal(forgotten.status.stationId, null)
+    assert.equal(forgotten.ok, true, JSON.stringify(forgotten)); assert.equal(forgotten.status.stationId, null)
     assert.equal((await app.db.prepare('SELECT enabled FROM stations WHERE id=?').bind(stationId).first()).enabled, 0)
   } finally { try { await probe.stop() } finally { await app.mf.dispose() } }
+})
+
+
+test('actual cloud and native logging permission produce one durable QSO, preserve receipts and refuse local takeover', {timeout:60000},async()=>{
+ assert.ok(process.env.NEXUS_REMOTE_TEST_BINARY)
+ const app=await runtime(),probe=await nativeProbe(process.env.NEXUS_REMOTE_TEST_BINARY,app.origin)
+ let socket
+ try{
+  await probe.ready();const browser=await app.owner();const begin=await probe.send({type:'begin',name:'Logging synthetic bench'}),stationId=begin.status.pairingId
+  await browser.post('pair/claim',{code:begin.status.pairingCode});await probe.send({type:'refresh'});assert.equal((await probe.send({type:'approve',enrollmentId:stationId,accountId:browser.accountId})).ok,true)
+  const {value:device,response}=await browser.post(`stations/${stationId}/device`,{name:'Logging browser'});browser.setCookie(response.headers.get('set-cookie'));await probe.send({type:'refresh'});await probe.send({type:'device',deviceId:device.deviceId,approve:true});await probe.send({type:'enable'})
+  const roomNamespace=await app.mf.getDurableObjectNamespace('STATIONS'),room=roomNamespace.get(roomNamespace.idFromName(stationId));for(let i=0;i<30&&!(await roomStatus(room)).online;i++)await delay(100);assert.equal((await roomStatus(room)).online,true)
+  assert.deepEqual(await probe.send({type:'seedLogging'}),{count:0,adif:'',txEnabled:false})
+  const ticket=(await browser.post(`stations/${stationId}/ticket`)).value;socket=await browser.open(stationId,ticket.ticket);await socket.take(v=>v.type==='session')
+  const operation=async args=>{await delay(270);const request={requestId:crypto.randomUUID(),...args};socket.send({type:'operationRequest',request});return {request,response:await socket.take(v=>v.type==='operationResponse'&&v.requestId===request.requestId)}}
+  let state=(await operation({type:'state'})).response.value;assert.equal(state.phase,'localPermissionRequired');assert.equal((await operation({type:'acquire',stationBootId:state.stationBootId})).response.error,'localPermissionRequired')
+  await probe.send({type:'refresh'});const permission=await probe.send({type:'loggingPermission',deviceId:device.deviceId,allow:true});assert.equal(permission.ok,true,permission.error);assert.deepEqual(permission.status.loggingPermissions,[device.deviceId])
+  state=(await operation({type:'acquire',stationBootId:state.stationBootId})).response.value;assert.equal(state.phase,'controlling');assert.equal(state.txArmed,false)
+  const record={call:'W1AW',grid:'FN31',country:null,state:null,band:'20m',freqMhz:14.25,mode:'SSB',rstSent:'59',rstRcvd:'57',name:'Joe',qth:'Newington',comment:'Cloud/native append test',notes:'Do not duplicate',whenUnix:Math.floor(Date.now()/1000),confirmed:false,awardConfirmed:false}
+  const logged=await operation({type:'logManual',stationBootId:state.stationBootId,leaseId:state.leaseId,expectedRevision:state.revision,commandWindowId:state.commandWindowId,clientSequence:state.nextSequence,record});assert.equal(logged.response.value.outcome,'applied');assert.equal(logged.response.value.evidence,'fileSynced')
+  const evidence=await probe.send({type:'loggingEvidence'});assert.equal(evidence.count,1);assert.match(evidence.adif,/W1AW/);assert.match(evidence.adif,/Do not duplicate/);assert.equal(evidence.txEnabled,false)
+  await delay(270);socket.send({type:'operationRequest',request:logged.request});const replay=await socket.take(v=>v.type==='operationResponse'&&v.requestId===logged.request.requestId);assert.deepEqual(replay,logged.response);assert.deepEqual(await probe.send({type:'loggingEvidence'}),evidence)
+  const current=(await operation({type:'heartbeat',leaseId:state.leaseId})).response.value;assert.equal(current.phase,'controlling')
+  assert.equal((await probe.send({type:'takeOverLogging'})).ok,true);const refused=await operation({...logged.request,requestId:crypto.randomUUID(),expectedRevision:current.revision,commandWindowId:current.commandWindowId,clientSequence:current.nextSequence,record:{...record,call:'K2ABC'}});assert.equal(refused.response.error,'localPermissionRequired');assert.deepEqual(await probe.send({type:'loggingEvidence'}),evidence)
+  await probe.send({type:'loggingPermission',deviceId:device.deviceId,allow:true});assert.equal((await operation({type:'result',operationId:logged.request.requestId})).response.value.outcome,'applied')
+  socket.close();socket=null
+  const restarted=await probe.send({type:'restart'});assert.equal(restarted.status.phase,'disabled');assert.deepEqual(restarted.status.loggingPermissions,[]);assert.equal(restarted.status.loggingController,null)
+ }finally{socket?.close();try{await probe.stop()}finally{await app.mf.dispose()}}
 })

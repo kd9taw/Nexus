@@ -607,3 +607,23 @@ test('station replacement retires former observers and rejects stale publication
   assert.equal((await browser.take(type('observation'))).frame.sequence, 3)
   browser.close(); replacement.close()
 })
+
+test('manual operations retain only routing authority across hibernation and preserve legacy refusal',async()=>{
+ for(const supported of [false,true]){
+  const pair=await app.paired(),live=await admitted(pair,1,supported?{'x-nexus-operation-version':'1'}:{})
+  const requestId=crypto.randomUUID()
+  live.browser.send({type:'operationRequest',request:{type:'state',requestId}})
+  if(!supported){assert.equal((await live.browser.take(type('operationResponse'))).error,'stationUnsupported');await assert.rejects(live.station.take(type('operationRequest'),100),/timeout/)}
+  else{
+   const request=await live.station.take(type('operationRequest'));assert.equal(request.sessionId,live.session.sessionId);assert.equal(request.deviceId,live.deviceId)
+   await app.evict(pair.stationId)
+   live.station.send({type:'operationResponse',sessionId:request.sessionId,requestId,value:{stationBootId:crypto.randomUUID(),allowed:false,phase:'localPermissionRequired',leaseId:null,revision:1,commandWindowId:null,nextSequence:null,leaseRemainingMs:null,actions:[],txArmed:false}})
+   assert.equal((await live.browser.take(type('operationResponse'))).value.phase,'localPermissionRequired')
+   // A paired browser cannot supply the authenticated device identity itself.
+   live.browser.send({type:'operationRequest',deviceId:crypto.randomUUID(),request:{type:'state',requestId:crypto.randomUUID()}})
+   await live.browser.take(type('closed'));await live.station.take(type('operationDisconnect'))
+   await assert.rejects(live.station.take(type('operationRequest'),100),/timeout/)
+  }
+  live.browser.close();live.station.close()
+ }
+})
