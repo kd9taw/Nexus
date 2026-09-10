@@ -1,6 +1,7 @@
-//! Station-owned authority for the first non-RF operating action: manual logging.
+//! Station-owned authority for manual logging and typed station controls.
 //! Cloud admission routes an approved browser; only a local, boot-scoped grant
-//! permits a lease. No Tauri command names, TX grants, hardware writes or retries.
+//! permits a lease. No Tauri command tunnel or transmit grant. Deferred hardware
+//! writes carry a revocable permit and a separate completion receipt.
 //! A log append already begun cannot be rolled back on disconnect. Its bounded
 //! receipt remains queryable by the same device while locally permitted.
 use super::transport::identifier;
@@ -13,6 +14,9 @@ use std::sync::{
     Mutex,
 };
 use std::time::{Duration, Instant};
+use tempo_app::remote_control::{Completion, Outcome, Revocation};
+
+mod station;
 
 const LEASE: Duration = Duration::from_secs(5);
 const WINDOW: Duration = Duration::from_secs(2);
@@ -65,6 +69,22 @@ pub enum Request {
         client_sequence: u64,
         record: Box<ManualRecord>,
     },
+    StationControl {
+        #[serde(rename = "requestId")]
+        request_id: String,
+        #[serde(rename = "stationBootId")]
+        station_boot_id: String,
+        #[serde(rename = "leaseId")]
+        lease_id: String,
+        #[serde(rename = "expectedRevision")]
+        expected_revision: u64,
+        #[serde(rename = "commandWindowId")]
+        command_window_id: String,
+        #[serde(rename = "clientSequence")]
+        client_sequence: u64,
+        context: station::Context,
+        action: station::Action,
+    },
 }
 impl Request {
     pub fn id(&self) -> &str {
@@ -74,7 +94,8 @@ impl Request {
             | Self::Heartbeat { request_id, .. }
             | Self::Release { request_id, .. }
             | Self::Result { request_id, .. }
-            | Self::LogManual { request_id, .. } => request_id,
+            | Self::LogManual { request_id, .. }
+            | Self::StationControl { request_id, .. } => request_id,
         }
     }
 }
@@ -175,6 +196,23 @@ struct Receipt {
     fingerprint: Vec<u8>,
     at: Instant,
     value: Value,
+    control: Option<Completion>,
+}
+impl Receipt {
+    fn value(&self) -> Value {
+        if let Some(control) = &self.control {
+            control_value(&self.id, control.outcome())
+        } else {
+            self.value.clone()
+        }
+    }
+}
+fn control_value(id: &str, outcome: Outcome) -> Value {
+    let mut value = serde_json::to_value(outcome)
+        .unwrap_or_else(|_| json!({"outcome":"unknown","reason":"hardwareUnconfirmed"}));
+    value["operation"] = json!("stationControl");
+    value["operationId"] = json!(id);
+    value
 }
 struct Core {
     epoch: u64,
@@ -182,6 +220,7 @@ struct Core {
     lease_epoch: u64,
     boot: Option<String>,
     grants: BTreeSet<String>,
+    control_grants: BTreeSet<String>,
     lease: Option<Lease>,
     revision: u64,
     context: Option<Vec<u8>>,
@@ -196,6 +235,7 @@ impl Default for Core {
             lease_epoch: 0,
             boot: super::query::snapshot_id().ok(),
             grants: BTreeSet::new(),
+            control_grants: BTreeSet::new(),
             lease: None,
             revision: 0,
             context: None,
@@ -210,6 +250,7 @@ pub struct Authority {
     connection: AtomicU64,
     lease_epoch: AtomicU64,
     core: Mutex<Core>,
+    hardware: Revocation,
     #[cfg(test)]
     before_sync: Option<Box<dyn Fn() + Send + Sync>>,
 }
@@ -217,22 +258,25 @@ impl Authority {
     /// Synchronous invalidation does not wait for an in-flight file operation.
     /// Its epoch is reconciled before any next request or local grant.
     pub fn invalidate(&self) {
+        self.hardware.revoke();
         let _ = self
             .epoch
             .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_add(1));
     }
     pub fn start_connection(&self) -> u64 {
+        self.hardware.revoke();
         self.connection
             .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_add(1))
             .map_or(u64::MAX, |n| n + 1)
     }
     pub fn retire_connection(&self, id: u64) {
-        let _ = self.connection.compare_exchange(
-            id,
-            id.saturating_add(1),
-            Ordering::SeqCst,
-            Ordering::SeqCst,
-        );
+        if self
+            .connection
+            .compare_exchange(id, id.saturating_add(1), Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+        {
+            self.hardware.revoke();
+        }
     }
     fn reconcile(&self, c: &mut Core, now: Instant) -> Result<(), &'static str> {
         let epoch = self.epoch.load(Ordering::SeqCst);
@@ -249,20 +293,22 @@ impl Authority {
             c.connection = connection;
             c.lease = None;
             c.windows.clear();
-            Self::advance(c)?;
+            self.advance(c)?;
         }
         if c.epoch != epoch {
             c.epoch = epoch;
             c.grants.clear();
+            c.control_grants.clear();
             c.lease = None;
             c.windows.clear();
             c.context = None;
-            Self::advance(c)?;
+            self.advance(c)?;
         }
         if c.lease.as_ref().is_some_and(|l| now >= l.until) {
+            self.hardware.revoke();
             c.lease = None;
             c.windows.clear();
-            Self::advance(c)?;
+            self.advance(c)?;
         }
         while c
             .windows
@@ -280,8 +326,10 @@ impl Authority {
         }
         Ok(())
     }
-    fn advance(c: &mut Core) -> Result<(), &'static str> {
+    fn advance(&self, c: &mut Core) -> Result<(), &'static str> {
         if c.revision >= MAX_COUNTER {
+            self.hardware.revoke();
+            c.windows.clear();
             c.lease = None;
             return Err("authorityUnavailable");
         }
@@ -302,9 +350,32 @@ impl Authority {
         } else {
             c.grants.remove(device);
             if c.lease.as_ref().is_some_and(|l| l.device == device) {
+                self.hardware.revoke();
                 c.lease = None;
                 c.windows.clear();
-                Self::advance(&mut c)?;
+                self.advance(&mut c)?;
+            }
+        }
+        Ok(())
+    }
+    pub fn permit_station(&self, device: &str, allow: bool) -> Result<(), &'static str> {
+        if !identifier(device) {
+            return Err("invalidRequest");
+        }
+        let mut c = self.core.try_lock().map_err(|_| "remoteBusy")?;
+        self.reconcile(&mut c, Instant::now())?;
+        if allow {
+            if c.control_grants.len() >= 16 && !c.control_grants.contains(device) {
+                return Err("remoteBusy");
+            }
+            c.control_grants.insert(device.to_string());
+        } else {
+            c.control_grants.remove(device);
+            if c.lease.as_ref().is_some_and(|l| l.device == device) {
+                self.hardware.revoke();
+                c.lease = None;
+                c.windows.clear();
+                self.advance(&mut c)?;
             }
         }
         Ok(())
@@ -314,6 +385,7 @@ impl Authority {
     /// survive; a controller must explicitly acquire a fresh lease afterward.
     pub fn disconnect_session(&self, session: &str) {
         if identifier(session) {
+            self.hardware.revoke();
             let _ = self
                 .lease_epoch
                 .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_add(1));
@@ -326,12 +398,17 @@ impl Authority {
         if self.reconcile(&mut c, Instant::now()).is_err() {
             return json!({"devices":[],"controller":null});
         }
-        json!({"devices":c.grants,"controller":c.lease.as_ref().map(|l|l.device.as_str())})
+        json!({"devices":c.grants,"controlDevices":c.control_grants,"controller":c.lease.as_ref().map(|l|l.device.as_str())})
     }
-    fn context(c: &mut Core, engine: &tempo_app::engine::Engine) -> Result<(), &'static str> {
+    fn context(
+        &self,
+        c: &mut Core,
+        engine: &tempo_app::engine::Engine,
+    ) -> Result<(), &'static str> {
         let s = engine.settings();
         let value = json!([
             engine.remote_log_context_generation(),
+            engine.remote_receiver_context_generation(),
             s.active_radio,
             s.mycall,
             s.mygrid,
@@ -350,7 +427,7 @@ impl Authority {
         if c.context.as_ref() != Some(&next) {
             c.context = Some(next);
             c.windows.clear();
-            Self::advance(c)?;
+            self.advance(c)?;
         }
         Ok(())
     }
@@ -359,12 +436,14 @@ impl Authority {
         session: &str,
         device: &str,
         now: Instant,
+        control: Option<station::Context>,
     ) -> Result<Value, &'static str> {
-        let allowed = c.grants.contains(device);
-        let owned = c
-            .lease
-            .as_ref()
-            .is_some_and(|l| l.session == session && l.device == device);
+        let allowed =
+            c.grants.contains(device) || (control.is_some() && c.control_grants.contains(device));
+        let owned = allowed
+            && c.lease
+                .as_ref()
+                .is_some_and(|l| l.session == session && l.device == device);
         if owned
             && c.windows
                 .back()
@@ -378,15 +457,17 @@ impl Authority {
                 c.windows.pop_front();
             }
         }
-        Ok(
-            json!({"stationBootId":c.boot.as_deref().ok_or("authorityUnavailable")?,"allowed":allowed,
+        let mut value = json!({"stationBootId":c.boot.as_deref().ok_or("authorityUnavailable")?,"allowed":allowed,
             "phase":if owned{"controlling"}else if c.lease.is_some(){"occupied"}else if allowed{"available"}else{"localPermissionRequired"},
             "leaseId":if owned{c.lease.as_ref().map(|l|l.id.as_str())}else{None},"revision":c.revision,
             "commandWindowId":if owned{c.windows.back().map(|w|w.id.as_str())}else{None},
             "nextSequence":if owned{c.lease.as_ref().map(|l|l.sequence+1)}else{None},
             "leaseRemainingMs":if owned{c.lease.as_ref().map(|l|l.until.saturating_duration_since(now).as_millis() as u64)}else{None},
-            "actions":if allowed{vec!["log.manual"]}else{vec![]},"txArmed":false}),
-        )
+            "actions":if c.grants.contains(device){vec!["log.manual"]}else{vec![]},"txArmed":false});
+        if let Some(context) = control {
+            value["controls"] = json!({"context":context,"capabilities":if c.control_grants.contains(device){station::capabilities()}else{vec![]}});
+        }
+        Ok(value)
     }
     pub fn handle(
         &self,
@@ -397,6 +478,22 @@ impl Authority {
         engine: &crate::SharedEngine,
         now: Instant,
     ) -> Result<Value, &'static str> {
+        self.handle_version((connection, 1), session, device, request, engine, now)
+    }
+    pub fn handle_version(
+        &self,
+        (connection, version): (u64, u8),
+        session: &str,
+        device: &str,
+        request: &Request,
+        engine: &crate::SharedEngine,
+        now: Instant,
+    ) -> Result<Value, &'static str> {
+        if !matches!(version, 1 | 2)
+            || (version < 2 && matches!(request, Request::StationControl { .. }))
+        {
+            return Err("stationUnsupported");
+        }
         if connection != self.connection.load(Ordering::SeqCst) {
             return Err("staleConnection");
         }
@@ -408,13 +505,16 @@ impl Authority {
         // Capture context and execute under the same engine lock. There is no
         // queue whose work could migrate into a later radio/profile context.
         let mut engine = engine.try_lock().map_err(|_| "stationBusy")?;
-        Self::context(&mut c, &engine)?;
+        self.context(&mut c, &engine)?;
+        let control = (version == 2).then(|| station::Context::capture(&engine));
         match request {
-            Request::State { .. } => Self::state(&mut c, session, device, now),
+            Request::State { .. } => Self::state(&mut c, session, device, now, control),
             Request::Acquire {
                 station_boot_id, ..
             } => {
-                if !c.grants.contains(device) {
+                if !c.grants.contains(device)
+                    && !(version == 2 && c.control_grants.contains(device))
+                {
                     return Err("localPermissionRequired");
                 }
                 if c.boot.as_deref() != Some(station_boot_id.as_str()) {
@@ -432,9 +532,9 @@ impl Authority {
                         until: now + LEASE,
                         sequence: 0,
                     });
-                    Self::advance(&mut c)?;
+                    self.advance(&mut c)?;
                 }
-                Self::state(&mut c, session, device, now)
+                Self::state(&mut c, session, device, now, control)
             }
             Request::Heartbeat { lease_id, .. } => {
                 let l = c.lease.as_mut().ok_or("leaseExpired")?;
@@ -442,26 +542,34 @@ impl Authority {
                     return Err("notController");
                 }
                 l.until = now + LEASE;
-                Self::state(&mut c, session, device, now)
+                Self::state(&mut c, session, device, now, control)
             }
             Request::Release { lease_id, .. } => {
                 if c.lease.as_ref().is_some_and(|l| {
                     l.id == *lease_id && l.session == session && l.device == device
                 }) {
+                    self.hardware.revoke();
                     c.lease = None;
                     c.windows.clear();
-                    Self::advance(&mut c)?;
+                    self.advance(&mut c)?;
                 }
-                Self::state(&mut c, session, device, now)
+                Self::state(&mut c, session, device, now, control)
             }
             Request::Result { operation_id, .. } => {
-                if !identifier(operation_id) || !c.grants.contains(device) {
+                if !identifier(operation_id)
+                    || (!c.grants.contains(device)
+                        && !(version == 2 && c.control_grants.contains(device)))
+                {
                     return Err("localPermissionRequired");
                 }
                 c.receipts
                     .iter()
-                    .find(|r| r.id == *operation_id && r.device == device)
-                    .map(|r| r.value.clone())
+                    .find(|r| {
+                        r.id == *operation_id
+                            && r.device == device
+                            && (version == 2 || r.control.is_none())
+                    })
+                    .map(Receipt::value)
                     .ok_or("resultExpired")
             }
             Request::LogManual {
@@ -470,10 +578,22 @@ impl Authority {
                 expected_revision,
                 command_window_id,
                 client_sequence,
-                record,
+                ..
+            }
+            | Request::StationControl {
+                station_boot_id,
+                lease_id,
+                expected_revision,
+                command_window_id,
+                client_sequence,
                 ..
             } => {
-                if !c.grants.contains(device) {
+                let is_control = matches!(request, Request::StationControl { .. });
+                if !(if is_control {
+                    c.control_grants.contains(device)
+                } else {
+                    c.grants.contains(device)
+                }) {
                     return Err("localPermissionRequired");
                 }
                 let bytes = serde_json::to_vec(request).map_err(|_| "invalidRequest")?;
@@ -486,7 +606,7 @@ impl Authority {
                         && r.device == device
                         && r.fingerprint == fingerprint
                     {
-                        Ok(r.value.clone())
+                        Ok(r.value())
                     } else {
                         Err("requestConflict")
                     };
@@ -524,6 +644,51 @@ impl Authority {
                 {
                     return Err("windowExpired");
                 }
+                if c.receipts.iter().any(|r| {
+                    r.control
+                        .as_ref()
+                        .is_some_and(|r| r.outcome() == Outcome::Pending)
+                }) {
+                    return Err("remoteBusy");
+                }
+                if let Request::StationControl {
+                    action, context, ..
+                } = request
+                {
+                    let deadline = (current + Duration::from_secs(5)).min(l.until);
+                    let permit = self
+                        .hardware
+                        .permit(deadline)
+                        .ok_or("authorityUnavailable")?;
+                    self.advance(&mut c)?;
+                    c.lease.as_mut().ok_or("leaseExpired")?.sequence = *client_sequence;
+                    let completion = match station::execute(&mut engine, context, action, permit) {
+                        Ok(result) => result,
+                        Err(reason) => {
+                            let result = Completion::default();
+                            result.finish(Outcome::Rejected { reason });
+                            result
+                        }
+                    };
+                    let value = control_value(request.id(), completion.outcome());
+                    c.receipts.push_back(Receipt {
+                        id: request.id().into(),
+                        session: session.into(),
+                        device: device.into(),
+                        fingerprint,
+                        at: current,
+                        value: value.clone(),
+                        control: Some(completion),
+                    });
+                    while c.receipts.len() > 1024 {
+                        c.receipts.pop_front();
+                    }
+                    c.windows.clear();
+                    return Ok(value);
+                }
+                let Request::LogManual { record, .. } = request else {
+                    return Err("invalidRequest");
+                };
                 if !record.valid(super::now_ms() / 1000) {
                     return Err("invalidRecord");
                 }
@@ -536,7 +701,7 @@ impl Authority {
                 let rec = record.record()?;
                 // This is the operation's commit boundary. After this point an
                 // append may exist even if its response or file sync is lost.
-                Self::advance(&mut c)?;
+                self.advance(&mut c)?;
                 c.lease.as_mut().ok_or("leaseExpired")?.sequence = *client_sequence;
                 let outcome = engine.log_qso_for_sync(rec.into());
                 drop(engine);
@@ -570,6 +735,7 @@ impl Authority {
                     fingerprint,
                     at: current,
                     value: value.clone(),
+                    control: None,
                 });
                 while c.receipts.len() > 1024 {
                     c.receipts.pop_front();

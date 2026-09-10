@@ -29,11 +29,11 @@ function deliver(peer: Peer, message: string): boolean {
   }
 }
 export class OperationRelay {
-  private station: { peer: Peer; supported: boolean } | null = null
+  private station: { peer: Peer; supported: boolean; operationVersion?: number } | null = null
   private browsers = new Map<string, Browser>()
   private pending = new Map<string, Pending>()
   private rates = new Map<string, number[]>()
-  sync(station: { peer: Peer; supported: boolean } | null, browsers: Browser[], now: number): void {
+  sync(station: { peer: Peer; supported: boolean; operationVersion?: number } | null, browsers: Browser[], now: number): void {
     const next = new Map(browsers.map((b) => [b.sessionId, b]))
     for (const [id] of this.browsers)
       if (!next.has(id)) {
@@ -60,17 +60,24 @@ export class OperationRelay {
     const browser = this.browsers.get(sessionId)
     if (!browser) return
     try {
-      const wire = object(raw, ['type', 'request'])
+      const versioned = !!raw && typeof raw === 'object' && 'operationVersion' in raw
+      const wire = object(raw, ['type', 'request', ...(versioned ? ['operationVersion'] : [])])
       if (wire.type !== 'operationRequest') throw Error()
+      if (versioned && wire.operationVersion !== 2) throw Error()
       const request = operationRequest(wire.request)
+      if (request.type === 'stationControl' && !versioned) throw Error()
       const p = {
         requestId: request.requestId,
         sessionId,
         deviceId: browser.deviceId,
         at: now,
-        mutation: request.type === 'logManual'
+        mutation: request.type === 'logManual' || request.type === 'stationControl'
       }
       if (!this.station?.supported) {
+        this.error(p, 'stationUnsupported')
+        return
+      }
+      if (request.type === 'stationControl' && this.station.operationVersion !== 2) {
         this.error(p, 'stationUnsupported')
         return
       }
@@ -94,6 +101,7 @@ export class OperationRelay {
             type: 'operationRequest',
             sessionId,
             deviceId: browser.deviceId,
+            ...(versioned && this.station.operationVersion === 2 ? { operationVersion: 2 } : {}),
             request
           })
         )

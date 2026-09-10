@@ -2,7 +2,7 @@
 // The relay's hibernation checkpoint continues to contain routing metadata only.
 import { manualRecord, operationId, type ManualRecord } from './operation-protocol'
 export type ReceiptLock = <T>(key: string, action: () => T | Promise<T>) => Promise<T>
-const browserReceiptLock: ReceiptLock = async (key, action) => {
+export const browserReceiptLock: ReceiptLock = async (key, action) => {
   const locks = globalThis.navigator?.locks
   if (!locks) throw Error('receiptStorageUnavailable')
   return locks.request(key, { mode: 'exclusive', ifAvailable: true }, async (lock) => {
@@ -79,6 +79,7 @@ export function pendingLogStorage(
         owned = null
         return
       }
+      if (storage().getItem(`nexus.remote.pending-control.${stationId}`) !== null) throw Error('operationUnknown')
       if (!operationId(id) || (e && e.operationId !== id)) throw Error('receiptStorageUnavailable')
       const draft = record ? manualRecord(record) : (e?.record ?? null)
       if (!draft) throw Error('receiptStorageUnavailable')

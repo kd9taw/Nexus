@@ -1,6 +1,6 @@
 import { RemoteRecallEntry } from '../remote-web/RemoteRecall'
 import { CollectionStatus, useRemoteCollection } from '../remote-web/collections'
-import { useStationControl } from '../stationAccess'
+import { useStationCapability, useStationControl } from '../stationAccess'
 // ⚠️ THIS FILE IS ON THE **MIGRATED** LIST (i18n/hardcoded-strings.test.ts): every
 // operator-visible string in it is in the catalog under `cw.*`. Nothing was deferred —
 // CW's stop line is Stop TX (→ stopCw + haltTx) and Tune, both drawn by CockpitHeader, plus
@@ -354,7 +354,7 @@ export function CwCockpit({
   onOpenLogbook,
   panels,
 }: Props) {
-  const control = useStationControl()
+  const control = useStationControl(), receiverControl = useStationCapability('decoder')
   const spotsRead = useRemoteCollection('spots')
   // Live S-meter (shared 100 ms poll, lock-free backend) — used to arrive via the 300 ms
   // snapshot on top of the backend's own sampling, which read as a laggy needle. smeterDb-only
@@ -992,17 +992,25 @@ export function CwCockpit({
       {snap.aiCw?.enabled && snap.aiCw.status && (
         <span className="cw-ai-status">{snap.aiCw.status}</span>
       )}
-      <button disabled={!control}
+      <button disabled={!receiverControl}
         className="cw-decode-clear"
         onClick={() => {
-          void cwClear()
-          setDecoded({ text: '', wpm: 0 })
-          setSent([])
-          // A wipe re-pins both panes (same as Operate's Erase): an emptied
-          // transcript must follow the next copy even if the operator had
-          // scrolled up before clearing.
-          decodePin.repin()
-          sentPin.repin()
+          if (!receiverControl) return
+          const repin = () => {
+            // A wipe re-pins both panes so the next copy stays visible.
+            decodePin.repin()
+            sentPin.repin()
+          }
+          if (control) {
+            void cwClear()
+            setDecoded({ text: '', wpm: 0 })
+            setSent([])
+            repin()
+          } else {
+            // Remote keeps the actual station transcript; a later sample may
+            // already contain new copy by the time completion reaches us.
+            void cwClear().then(repin).catch(() => {})
+          }
         }}
         title={t('cw.decode.clear.title')}
       >

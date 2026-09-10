@@ -1,13 +1,10 @@
 //! The amplifier status poll thread — one serial link, read once a second, into the snapshot.
 //!
-//! # READ-ONLY, and that is the whole design
+//! # One port owner for polling and the existing amplifier controls
 //!
-//! The only bytes this thread ever puts on the wire are `SPE_CMD_STATUS` (0x90) and the six
-//! Elecraft read verbs `^OS ^BN ^TM ^VI ^WS ^FL`. There is no write surface here and none is
-//! planned: SPE's command set is front-panel KEYSTROKES — relative steps and toggles whose
-//! meaning depends on a state we learn a poll late — so every write is a guess about a state
-//! that has already moved. See `crate::amplifier`'s header for the worked example (Hamlib's
-//! "standby" byte *is* the switch-off byte).
+//! Local commands retain their bounded intent queue. Remote commands use a
+//! separate station-bound slot with a fixed deadline, a fresh pre-write check
+//! and a later readback receipt. A sent keystroke is never retried on reconnect.
 //!
 //! ⛔ **NOTHING HERE GATES A TRANSMISSION, AND NOTHING HERE MAY EVER BECOME A STOP.** Putting an
 //! amplifier in standby is not a way to stop a transmission — the exciter keeps keying and the
@@ -30,8 +27,8 @@
 //! is already keyed by radio id, so this extends to a pool the way the radio monitor did —
 //! nothing here has to change shape for SO2R, only the reconcile.
 //!
-//! ⚠️ NEEDS-BENCH: both codecs are written from vendor specs and no field below has ever been
-//! read from a real amplifier.
+//! ⚠️ NEEDS-BENCH: Remote command completion and cancellation require physical
+//! SPE/KPA verification in addition to the simulated port tests.
 
 use std::time::Duration;
 
@@ -206,6 +203,11 @@ fn take_pending() -> Vec<crate::amplifier::AmpIntent> {
 }
 
 #[cfg(all(feature = "device", feature = "serial"))]
+fn has_pending() -> bool {
+    !PENDING.lock().unwrap_or_else(|e| e.into_inner()).is_empty()
+}
+
+#[cfg(all(feature = "device", feature = "serial"))]
 /// Drop everything queued, without sending. Used when the link goes away — a command aimed at
 /// an amplifier that has since stopped answering must not be delivered to whatever answers next.
 fn drop_pending() {
@@ -314,19 +316,61 @@ fn remote_amp_read(
         .and_then(|c| engine.remote_amp_read(c, now))
 }
 
+/// The actual Remote write boundary, shared by the port owner and fake-wire
+/// tests. The callback runs without the Engine lock. A failed write is terminal.
+#[cfg(any(test, all(feature = "device", feature = "serial")))]
+fn dispatch_remote(
+    mut request: tempo_app::remote_control::amplifier::Request,
+    engine: &std::sync::Arc<std::sync::Mutex<tempo_app::engine::Engine>>,
+    local_pending: bool,
+    send: impl FnOnce(crate::amplifier::AmpIntent) -> std::io::Result<()>,
+) -> (Option<tempo_app::remote_control::amplifier::Request>, bool) {
+    use crate::amplifier::AmpIntent;
+    use tempo_app::{
+        engine::engine_lock,
+        remote_control::{amplifier::Target, Reason},
+    };
+    let admission = if local_pending {
+        Err(Reason::ContextChanged)
+    } else {
+        request.begin(&engine_lock(engine))
+    };
+    if let Err(reason) = admission {
+        request.refuse(reason);
+        return (None, false);
+    }
+    if !request.begin_write() {
+        request.refuse(Reason::AuthorityExpired);
+        return (None, false);
+    }
+    let intent = match request.target {
+        Target::Operate { .. } => AmpIntent::ToggleOperate,
+        Target::Band { direction: -1, .. } => AmpIntent::BandDown,
+        Target::Band { .. } => AmpIntent::BandUp,
+    };
+    if send(intent).is_ok() {
+        (Some(request), false)
+    } else {
+        request.refuse(Reason::HardwareUnconfirmed);
+        (None, true)
+    }
+}
+
 /// The port-owning half. Needs `serial` for the links themselves and `device` for the process
 /// shutdown flag; neither alone is enough, and src-tauri's `radio` feature turns on both.
 #[cfg(all(feature = "device", feature = "serial"))]
 mod imp {
     use super::{
-        backoff_ms, drop_pending, follow_step, kpa_dto, queue_amp_command, reason_for,
-        remote_amp_read, spe_dto, take_pending, FAMILY_KPA, FAMILY_SPE, POLL,
+        backoff_ms, dispatch_remote, drop_pending, follow_step, has_pending, kpa_dto,
+        queue_amp_command, reason_for, remote_amp_read, spe_dto, take_pending, FAMILY_KPA,
+        FAMILY_SPE, POLL,
     };
     use crate::amplifier::{KpaLink, KpaStatus, SpeLink};
     use crate::service::SHUTDOWN;
     use std::sync::{Arc, Mutex};
     use std::time::Instant;
     use tempo_app::engine::{engine_lock, Engine};
+    use tempo_app::remote_control::{amplifier::Request as RemoteRequest, Reason};
 
     /// One open amplifier, whichever family it is.
     enum Link {
@@ -353,12 +397,16 @@ mod imp {
         let mut open_failures: u32 = 0;
         let mut retry_after = Instant::now();
         let mut reason = "noAnswer";
+        let mut awaiting: Option<RemoteRequest> = None;
 
         loop {
             if SHUTDOWN.load(std::sync::atomic::Ordering::Relaxed) {
                 // Drops the port explicitly rather than at unwind, so a restart within the same
                 // process does not race a still-open exclusive handle.
                 drop(link);
+                if let Some(request) = awaiting.take() {
+                    request.refuse(Reason::HardwareUnavailable);
+                }
                 return;
             }
             std::thread::sleep(POLL);
@@ -410,6 +458,9 @@ mod imp {
                     engine_lock(&engine).forget_amp(old);
                 }
                 link = None;
+                if let Some(request) = awaiting.take() {
+                    request.refuse(Reason::ContextChanged);
+                }
                 open_failures = 0;
                 continue;
             };
@@ -420,6 +471,9 @@ mod imp {
             // synchronously and this is the only thread that touches it.
             if applied.as_ref() != Some(&cfg) {
                 link = None;
+                if let Some(request) = awaiting.take() {
+                    request.refuse(Reason::ContextChanged);
+                }
                 open_failures = 0;
                 retry_after = Instant::now();
                 // The radio changed under us: the previous radio's reading is not this radio's,
@@ -489,6 +543,9 @@ mod imp {
             // SETs name the state they want, so translating an intent needs to know which state
             // the amplifier is in. The SPE needs no such thing — its OPERATE is a flip.
             let mut kpa_now: Option<KpaStatus> = None;
+            // Take only before a new read. A gesture arriving during this poll
+            // waits for the next one; its state check cannot predate the click.
+            let mut remote_command = engine_lock(&engine).take_remote_amp();
             let remote_read = remote_amp_read(
                 &mut engine_lock(&engine),
                 id,
@@ -510,6 +567,36 @@ mod imp {
             // Re-lock only to hand over the result.
             match read {
                 Ok(dto) => {
+                    {
+                        let mut eng = engine_lock(&engine);
+                        eng.remote_observe_amp(remote_read.as_ref(), dto.clone());
+                    }
+                    // A local front-panel intent wins over a Remote intent, and
+                    // over an outstanding readback. Never reinterpret its result.
+                    if let Some(request) = awaiting.take() {
+                        if has_pending() {
+                            request.refuse(Reason::ContextChanged);
+                        } else {
+                            request.confirm(&engine_lock(&engine));
+                        }
+                    }
+                    let mut remote_turn = false;
+                    if let Some(request) = remote_command.take() {
+                        let (next, failed) =
+                            dispatch_remote(request, &engine, has_pending(), |intent| {
+                                match (link.as_mut(), kpa_now.as_ref()) {
+                                    (Some(Link::Spe(l)), _) => l.send_intent(intent),
+                                    (Some(Link::Kpa(l)), Some(now)) => l.send_intent(intent, now),
+                                    _ => Err(std::io::Error::other("amplifier unavailable")),
+                                }
+                            });
+                        remote_turn = next.is_some() || failed;
+                        awaiting = next;
+                        if failed {
+                            link = None;
+                            drop_pending();
+                        }
+                    }
                     // ⛔ THE INTERLOCK, ENFORCED HERE AND NOT ONLY IN THE UI. Stepping an
                     // amplifier's band under drive pits relays and can take out a PA, and
                     // dropping to standby mid-over passes full drive straight through. The
@@ -543,7 +630,7 @@ mod imp {
                     // follows it. If the amplifier stops moving — a band it does not have, a
                     // command it ignored — this simply stops making progress instead of walking
                     // the ladder forever.
-                    if follow && !keyed {
+                    if follow && !keyed && !remote_turn {
                         if let Some(step) = follow_step(&dto, &radio_band) {
                             queue_amp_command(step);
                         }
@@ -551,7 +638,7 @@ mod imp {
 
                     if keyed {
                         drop_pending();
-                    } else {
+                    } else if !remote_turn {
                         for intent in take_pending() {
                             // Each family translates the SAME intent its own way, here rather
                             // than in the UI, because this is where the current state is known:
@@ -592,6 +679,12 @@ mod imp {
                     eng.observe_amp_status(id, dto);
                 }
                 Err(e) => {
+                    if let Some(request) = remote_command.take() {
+                        request.refuse(Reason::HardwareUnavailable);
+                    }
+                    if let Some(request) = awaiting.take() {
+                        request.refuse(Reason::HardwareUnavailable);
+                    }
                     reason = reason_for(&e);
                     // Drop the link so the next cycle reopens it. A desynced or unplugged port
                     // is not recovered by asking it again on the same handle, and the backoff
@@ -623,6 +716,125 @@ pub use imp::spawn_amp_poll;
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn remote_amp_dispatch_uses_the_port_owner_once_without_holding_the_engine() {
+        use std::{
+            sync::{Arc, Mutex},
+            time::{Duration, Instant},
+        };
+        use tempo_app::{
+            engine::Engine,
+            remote_control::{
+                amplifier::{Request, Target},
+                Evidence, Outcome, Reason, Revocation,
+            },
+            settings::Settings,
+        };
+        let mut settings = Settings {
+            amp_model: "spe".into(),
+            amp_port: "fake-wire-amp".into(),
+            ..Default::default()
+        };
+        settings.ensure_radio_profiles();
+        let mut e = Engine::with_settings(settings);
+        e.set_tx_enabled(false);
+        let radio = e.remote_open_radio().unwrap();
+        let amp = e.remote_open_amp().unwrap();
+        let sample = |e: &mut Engine, operate| {
+            let r = e.remote_radio_read(&radio, Instant::now()).unwrap();
+            e.remote_observe_cat(Some(&r), Some(true));
+            e.remote_observe_ptt(Some(&r), Some(false));
+            let r = e.remote_amp_read(&amp, Instant::now()).unwrap();
+            e.remote_observe_amp(
+                Some(&r),
+                super::AmpStatusDto {
+                    family: "spe".into(),
+                    linked: true,
+                    operate: Some(operate),
+                    transmitting: Some(false),
+                    output_watts: Some(0),
+                    band_label: Some("20m".into()),
+                    ..Default::default()
+                },
+            );
+        };
+        sample(&mut e, false);
+        let authority = Revocation::default();
+        let make = |e: &Engine| {
+            let o = e.remote_monitor_observation();
+            let a = o.amplifier.unwrap().reading.unwrap();
+            Request::new(
+                e,
+                Target::Operate {
+                    expected: false,
+                    desired: true,
+                },
+                o.radio.readings.cat.unwrap().connection_generation,
+                a.connection_generation,
+                a.read_sequence,
+                authority
+                    .permit(Instant::now() + Duration::from_secs(5))
+                    .unwrap(),
+            )
+            .unwrap()
+        };
+        let request = make(&e);
+        let receipt = request.completion.clone();
+        sample(&mut e, false);
+        let shared = Arc::new(Mutex::new(e));
+        let mut writes = Vec::new();
+        let (awaiting, failed) = super::dispatch_remote(request, &shared, false, |intent| {
+            assert!(
+                shared.try_lock().is_ok(),
+                "serial I/O must not block the radio loop's engine"
+            );
+            writes.push(intent);
+            Ok(())
+        });
+        assert!(!failed);
+        assert_eq!(writes, vec![crate::amplifier::AmpIntent::ToggleOperate]);
+        assert_eq!(receipt.outcome(), Outcome::Pending);
+        sample(&mut shared.lock().unwrap(), true);
+        awaiting.unwrap().confirm(&shared.lock().unwrap());
+        assert_eq!(
+            receipt.outcome(),
+            Outcome::Applied {
+                evidence: Evidence::AmplifierReadback
+            }
+        );
+
+        sample(&mut shared.lock().unwrap(), false);
+        let request = make(&shared.lock().unwrap());
+        let receipt = request.completion.clone();
+        sample(&mut shared.lock().unwrap(), false);
+        let (awaiting, failed) = super::dispatch_remote(request, &shared, true, |_| {
+            panic!("a local command takes priority")
+        });
+        assert!(awaiting.is_none());
+        assert!(!failed);
+        assert_eq!(
+            receipt.outcome(),
+            Outcome::Rejected {
+                reason: Reason::ContextChanged
+            }
+        );
+
+        let request = make(&shared.lock().unwrap());
+        let receipt = request.completion.clone();
+        sample(&mut shared.lock().unwrap(), false);
+        let (awaiting, failed) = super::dispatch_remote(request, &shared, false, |_| {
+            Err(std::io::Error::other("lost reply"))
+        });
+        assert!(awaiting.is_none());
+        assert!(failed);
+        assert_eq!(
+            receipt.outcome(),
+            Outcome::Unknown {
+                reason: Reason::HardwareUnconfirmed
+            }
+        );
+    }
+
     #[test]
     fn remote_amp_binding_rejects_wrong_ports_and_delayed_replies_after_reconnect() {
         let mut settings = tempo_app::settings::Settings {

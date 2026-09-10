@@ -1,4 +1,6 @@
 import type { ReceiptStorage } from './operation-storage'
+import type { ControlStorage, PendingControl } from './control-storage'
+import { stationAction, type StationAction, type ControlOutcome } from './station-operation'
 import {
   manualRecord,
   operationId,
@@ -7,7 +9,8 @@ import {
   type ManualRecord,
   type OperationOutcome,
   type OperationRequest,
-  type OperationState
+  type OperationState,
+  type OperationValue
 } from './operation-protocol'
 export type OperationView = {
   supported: boolean
@@ -21,12 +24,15 @@ export type OperationView = {
   resolved: OperationOutcome | null
   dismissed: string | null
   error: string | null
+  controlPending: PendingControl | null
+  controlResult: ControlOutcome | null
+  controlError: string | null
 }
 type Pending = {
   request: OperationRequest
   started: number
   timer: ReturnType<typeof setTimeout>
-  resolve: (value: OperationState | OperationOutcome) => void
+  resolve: (value: OperationValue) => void
   reject: (error: Error) => void
 }
 /** One explicit operation at a time. Neither a reconnect nor a timeout can
@@ -44,7 +50,10 @@ export class OperationClient {
     pendingDraft: null,
     resolved: null,
     dismissed: null,
-    error: null
+    error: null,
+    controlPending: null,
+    controlResult: null,
+    controlError: null
   }
   private pending: Pending | null = null
   private timer: ReturnType<typeof setInterval> | undefined
@@ -52,11 +61,15 @@ export class OperationClient {
   private polledAt = 0
   private finished: OperationOutcome | null = null
   private loggingIntent = false
+  private controlIntent = false
+  private controlPolledAt = -Infinity
   constructor(
     private send: (message: string) => void,
     readonly enabled: boolean,
     private now = () => performance.now(),
-    private receiptStorage?: ReceiptStorage
+    private receiptStorage?: ReceiptStorage,
+    readonly operationVersion: 1 | 2 = 1,
+    private controlStorage?: ControlStorage
   ) {
     try {
       const id = receiptStorage?.read()
@@ -69,6 +82,8 @@ export class OperationClient {
     } catch {
       this.view = { ...this.view, error: 'receiptStorageUnavailable' }
     }
+    try { this.view = { ...this.view, controlPending: controlStorage?.read() ?? null } }
+    catch { this.view = { ...this.view, error: 'receiptStorageUnavailable' } }
   }
   subscribe = (f: () => void) => {
     this.listeners.add(f)
@@ -122,11 +137,9 @@ export class OperationClient {
       !this.view.connected ||
       this.pending ||
       this.loggingIntent ||
-      this.view.error === 'stationUnsupported' ||
-      now - this.polledAt < 1000
+      this.view.error === 'stationUnsupported'
     )
       return
-    this.polledAt = now
     const s = this.view.state
     // Hidden pages cannot retain a control lease. Expiry is also enforced by the
     // native monotonic clock when a browser suspends timers altogether.
@@ -134,13 +147,21 @@ export class OperationClient {
       void this.release()
       return
     }
+    if (now - this.polledAt < 1000) {
+      if (this.view.controlPending && this.view.controlResult?.outcome !== 'unknown' && now - this.controlPolledAt >= 1000) {
+        this.controlPolledAt = now
+        void this.refreshControl().catch(() => {})
+      }
+      return
+    }
+    this.polledAt = now
     const request: OperationRequest =
       s?.phase === 'controlling' && s.leaseId
         ? { type: 'heartbeat', requestId: crypto.randomUUID(), leaseId: s.leaseId }
         : { type: 'state', requestId: crypto.randomUUID() }
     void this.request(request).catch(() => {})
   }
-  private request(request: OperationRequest): Promise<OperationState | OperationOutcome> {
+  private request(request: OperationRequest): Promise<OperationValue> {
     if (!this.view.connected) return Promise.reject(new Error('stationUnavailable'))
     if (this.pending) return Promise.reject(new Error('remoteBusy'))
     operationRequest(request)
@@ -153,14 +174,14 @@ export class OperationClient {
         timer: setTimeout(() => {
           if (this.pending !== p) return
           this.pending = null
-          const mutation = request.type === 'logManual'
+          const mutation = request.type === 'logManual' || request.type === 'stationControl'
           this.update({
             busy: false,
             submitting: false,
             state: null,
             fresh: false,
             error: mutation ? 'operationUnknown' : 'stationUnavailable',
-            ...(mutation ? { unresolved: request.requestId } : {})
+            ...(request.type === 'logManual' ? { unresolved: request.requestId } : {})
           })
           reject(new Error(mutation ? 'operationUnknown' : 'stationUnavailable'))
         }, 7500)
@@ -180,7 +201,7 @@ export class OperationClient {
       this.pending = p
       this.update({ busy: true, submitting: request.type === 'logManual', error: null })
       try {
-        this.send(JSON.stringify({ type: 'operationRequest', request }))
+        this.send(JSON.stringify({ type: 'operationRequest', ...(this.operationVersion === 2 ? { operationVersion: 2 } : {}), request }))
       } catch {
         clearTimeout(p.timer)
         this.pending = null
@@ -201,7 +222,7 @@ export class OperationClient {
       p = this.pending
     if (!p || p.request.requestId !== r.requestId) return
     if ('value' in r) {
-      const expectsOutcome = p.request.type === 'logManual' || p.request.type === 'result'
+      const expectsOutcome = p.request.type === 'logManual' || p.request.type === 'stationControl' || p.request.type === 'result'
       if (expectsOutcome !== 'outcome' in r.value) throw new Error('invalidOperation')
       if (
         'outcome' in r.value &&
@@ -209,11 +230,19 @@ export class OperationClient {
           (p.request.type === 'result' ? p.request.operationId : p.request.requestId)
       )
         throw new Error('invalidOperation')
+      if ('outcome' in r.value) {
+        const control = p.request.type === 'stationControl' ||
+          (p.request.type === 'result' && p.request.operationId === this.view.controlPending?.operationId)
+        if (control !== ('operation' in r.value)) throw Error('invalidOperation')
+      }
     }
     clearTimeout(p.timer)
     this.pending = null
     if ('error' in r) {
       const unknown = p.request.type === 'logManual' && r.error === 'operationUnknown'
+      if (p.request.type === 'stationControl' && r.error !== 'operationUnknown') {
+        try { this.controlStorage?.write(null); this.update({ controlPending: null }) } catch {}
+      }
       this.update({
         busy: false,
         submitting: false,
@@ -237,7 +266,20 @@ export class OperationClient {
         fresh: this.now() < this.stateUntil,
         error: null
       })
+    } else if ('operation' in r.value) {
+      const result = r.value
+      if (p.request.type === 'logManual') throw Error('invalidOperation')
+      const terminal = result.outcome === 'applied' || result.outcome === 'rejected'
+      let cleared = false
+      if (terminal) {
+        try { this.controlStorage?.write(null); cleared = true } catch {}
+      }
+      this.update({ busy: false, submitting: false, controlResult: result, controlError: null,
+        ...(cleared ? { controlPending: null } : {}),
+        ...(p.request.type === 'stationControl' ? { state: null, fresh: false } : {}), error: null })
+      if (p.request.type === 'stationControl') this.polledAt = -Infinity
     } else {
+      if (p.request.type === 'stationControl') throw Error('invalidOperation')
       this.finished = r.value
       const retain =
         r.value.outcome === 'unknown' ||
@@ -304,6 +346,7 @@ export class OperationClient {
       until = this.stateUntil,
       draft = structuredClone(manualRecord(record))
     if (this.view.unresolved) throw new Error('operationUnknown')
+    if (this.view.controlPending || this.controlIntent) throw new Error('operationUnknown')
     if (this.loggingIntent) throw new Error('remoteBusy')
     if (
       !s ||
@@ -311,7 +354,7 @@ export class OperationClient {
       s.phase !== 'controlling' ||
       !s.leaseId ||
       !s.commandWindowId ||
-      s.nextSequence === null
+      s.nextSequence === null || !s.actions.includes('log.manual')
     )
       throw new Error('notController')
     const intent = {
@@ -339,7 +382,7 @@ export class OperationClient {
           ...intent,
           record: draft
         })
-        if (!('outcome' in r)) throw new Error('invalidRequest')
+        if (!('outcome' in r) || 'operation' in r) throw new Error('invalidRequest')
         return r
       })
     } finally {
@@ -356,7 +399,7 @@ export class OperationClient {
         requestId: crypto.randomUUID(),
         operationId: id
       })
-      if (!('outcome' in r)) throw new Error('invalidRequest')
+      if (!('outcome' in r) || 'operation' in r) throw new Error('invalidRequest')
       return r
     })
   }
@@ -370,5 +413,66 @@ export class OperationClient {
   }
   getLastOutcome() {
     return this.finished
+  }
+  async control(action: StationAction): Promise<ControlOutcome> {
+    this.update({ controlError: null })
+    try { return await this.executeControl(action) }
+    catch (error) {
+      this.update({ controlError: error instanceof Error ? error.message : 'stationUnavailable' })
+      throw error
+    }
+  }
+  private async executeControl(action: StationAction): Promise<ControlOutcome> {
+    const s = this.view.state, until = this.stateUntil, intent = structuredClone(stationAction(action))
+    if (!this.controlStorage) throw Error('receiptStorageUnavailable')
+    if (this.view.unresolved || this.view.controlPending || this.controlIntent || this.loggingIntent) throw Error('operationUnknown')
+    const capability = action.action.startsWith('decoder.') ? 'decoder' : action.action.startsWith('amplifier.') ? 'amplifier' : 'radio'
+    if (!s || !this.view.fresh || s.phase !== 'controlling' || !s.leaseId || !s.commandWindowId || s.nextSequence === null || !s.controls?.capabilities.includes(capability)) throw Error('notController')
+    const request: OperationRequest = { type: 'stationControl', requestId: crypto.randomUUID(), stationBootId: s.stationBootId,
+      leaseId: s.leaseId, expectedRevision: s.revision, commandWindowId: s.commandWindowId, clientSequence: s.nextSequence,
+      context: structuredClone(s.controls.context), action: intent }
+    this.controlIntent = true
+    try {
+      const first = await this.controlStorage.exclusive(async () => {
+        if (this.pending) await this.waitForHeartbeat(until)
+        if (this.now() >= until) throw Error('windowExpired')
+        if (this.view.state?.leaseId !== s.leaseId || this.view.state.revision !== s.revision) throw Error('staleContext')
+        const saved = { operationId: request.requestId, action: intent }
+        this.controlStorage!.write(saved)
+        this.update({ controlPending: saved, controlResult: null })
+        const result = await this.request(request)
+        if (!('operation' in result)) throw Error('invalidOperation')
+        return result
+      })
+      if (first.outcome !== 'pending') return first
+      return await new Promise<ControlOutcome>((resolve, reject) => {
+        const finish = (result?: ControlOutcome) => { clearTimeout(timer); unsubscribe(); result ? resolve(result) : reject(Error('operationUnknown')) }
+        const timer = setTimeout(() => finish(), 7500)
+        const check = () => {
+          const r = this.view.controlResult
+          if (r?.operationId === request.requestId && r.outcome !== 'pending') finish(r)
+          else if (!this.view.connected) finish()
+        }
+        const unsubscribe = this.subscribe(check)
+        check()
+      })
+    } finally { this.controlIntent = false }
+  }
+  async refreshControl(): Promise<ControlOutcome> {
+    const entry = this.view.controlPending
+    if (!entry || !this.controlStorage) throw Error('resultExpired')
+    return this.controlStorage.exclusive(async () => {
+      const result = await this.request({ type: 'result', requestId: crypto.randomUUID(), operationId: entry.operationId })
+      if (!('operation' in result)) throw Error('invalidOperation')
+      return result
+    })
+  }
+  async acknowledgeControl() {
+    if (this.view.busy || !this.view.controlPending || !this.controlStorage) return
+    await this.controlStorage.exclusive(() => {
+      if (this.view.busy) throw Error('remoteBusy')
+      this.controlStorage!.write(null)
+      this.update({ controlPending: null, controlResult: null, controlError: null, error: null })
+    })
   }
 }

@@ -1,4 +1,5 @@
 import { pendingLogStorage } from './operation-storage'
+import { pendingControlStorage } from './control-storage'
 import { OperationClient } from './operation-client'
 import { OPERATION_REQUEST_BYTES, OPERATION_RESPONSE_BYTES } from './operation-protocol'
 import { Auth0Client } from '@auth0/auth0-spa-js'
@@ -49,7 +50,7 @@ export class BrowserClient {
     } else {
       try { await auth.checkSession() } catch { /* interactive login stays available */ }
     }
-    return new BrowserClient(auth, APPLICATION_VERSIONS.find(version=>version===config.applicationVersion)??1, config.operationVersion===1?1:0)
+    return new BrowserClient(auth, APPLICATION_VERSIONS.find(version=>version===config.applicationVersion)??1, config.operationVersion===2?2:config.operationVersion===1?1:0)
   }
   authenticated(): Promise<boolean> { return this.auth.isAuthenticated() }
   signIn(): Promise<void> { return this.auth.loginWithRedirect() }
@@ -98,13 +99,13 @@ export class HostedConnection {
 
   constructor(private client: BrowserClient, private stationId: string, private readonly applicationMode = false) {
     this.application = new ApplicationClient(message => {
-      if (!this.applicationMode || this.socket?.readyState !== WebSocket.OPEN || this.socket.bufferedAmount + new TextEncoder().encode(message).length > (client.operationVersion===1?OPERATION_REQUEST_BYTES:2048)) throw new RemoteError(503)
+      if (!this.applicationMode || this.socket?.readyState !== WebSocket.OPEN || this.socket.bufferedAmount + new TextEncoder().encode(message).length > (client.operationVersion>=1?OPERATION_REQUEST_BYTES:2048)) throw new RemoteError(503)
       this.socket.send(message)
     }, () => this.socket?.close(1000, 'applicationUnavailable'), client.applicationVersion)
     this.operations = new OperationClient(message=>{
       if(!this.applicationMode||this.socket?.readyState!==WebSocket.OPEN||this.socket.bufferedAmount+new TextEncoder().encode(message).length>OPERATION_REQUEST_BYTES)throw new RemoteError(503)
       this.socket.send(message)
-    },applicationMode&&client.operationVersion===1,()=>performance.now(),pendingLogStorage(()=>localStorage,stationId))
+    },applicationMode&&client.operationVersion>=1,()=>performance.now(),pendingLogStorage(()=>localStorage,stationId),client.operationVersion===2?2:1,pendingControlStorage(()=>localStorage,stationId))
     this.source = { id: `hosted-${stationId}`, kind: 'native', read: async signal => {
       if (signal.aborted || this.disposed || this.socket?.readyState !== WebSocket.OPEN || !this.latest) throw new RemoteError(503)
       return ageFrame(this.latest.frame, performance.now() - this.latest.at)

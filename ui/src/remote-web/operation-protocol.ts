@@ -1,6 +1,7 @@
 // Manual logging has a separate grammar from application observation. An
 // authenticated relay can route a request; it cannot issue a native grant.
 import { object, finite, integer, text } from './display-validation'
+import { controlContext, controlOutcome, stationAction, CONTROL_CAPABILITIES, type ControlCapability, type ControlContext, type ControlOutcome, type StationAction } from './station-operation'
 export const OPERATION_REQUEST_BYTES = 6144
 export const OPERATION_RESPONSE_BYTES = 4096
 export type ManualRecord = {
@@ -37,6 +38,17 @@ export type OperationRequest =
       clientSequence: number
       record: ManualRecord
     }
+  | {
+      type: 'stationControl'
+      requestId: string
+      stationBootId: string
+      leaseId: string
+      expectedRevision: number
+      commandWindowId: string
+      clientSequence: number
+      context: ControlContext
+      action: StationAction
+    }
 export type OperationState = {
   stationBootId: string
   allowed: boolean
@@ -48,6 +60,7 @@ export type OperationState = {
   leaseRemainingMs: number | null
   actions: 'log.manual'[]
   txArmed: false
+  controls?: { context: ControlContext; capabilities: ControlCapability[] }
 }
 export type OperationOutcome =
   | { outcome: 'applied'; evidence: 'fileSynced'; uploads: 'stationPipeline'; operationId: string }
@@ -56,8 +69,9 @@ export type OperationOutcome =
       reason: 'persistenceUnconfirmed' | 'alreadyPresent'
       operationId: string
     }
+export type OperationValue = OperationState | OperationOutcome | ControlOutcome
 export type OperationResponse =
-  | { type: 'operationResponse'; requestId: string; value: OperationState | OperationOutcome }
+  | { type: 'operationResponse'; requestId: string; value: OperationValue }
   | { type: 'operationResponse'; requestId: string; error: string }
 export const operationId = (v: unknown): v is string =>
   typeof v === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(v)
@@ -134,6 +148,7 @@ export function operationRequest(raw: unknown): OperationRequest {
     heartbeat: ['leaseId'],
     release: ['leaseId'],
     result: ['operationId'],
+    stationControl: ['stationBootId', 'leaseId', 'expectedRevision', 'commandWindowId', 'clientSequence', 'context', 'action'],
     logManual: [
       'stationBootId',
       'leaseId',
@@ -148,7 +163,7 @@ export function operationRequest(raw: unknown): OperationRequest {
   if (!operationId(r.requestId)) invalid()
   for (const key of ['stationBootId', 'leaseId', 'operationId', 'commandWindowId'])
     if (key in r && !operationId(r[key])) invalid()
-  if (r.type === 'logManual') {
+  if (r.type === 'logManual' || r.type === 'stationControl') {
     if (
       !integer(r.expectedRevision) ||
       r.expectedRevision < 0 ||
@@ -156,14 +171,16 @@ export function operationRequest(raw: unknown): OperationRequest {
       r.clientSequence < 1
     )
       invalid()
-    manualRecord(r.record)
+    if (r.type === 'logManual') manualRecord(r.record)
+    else { controlContext(r.context); stationAction(r.action) }
   }
   if (new TextEncoder().encode(JSON.stringify(r)).length > 4096) invalid()
   return raw as OperationRequest
 }
-export function operationValue(raw: unknown): OperationState | OperationOutcome {
+export function operationValue(raw: unknown): OperationValue {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) invalid()
   const v = raw as Record<string, unknown>
+  if ('operation' in v) return controlOutcome(v)
   if ('outcome' in v) {
     object(
       v,
@@ -191,8 +208,15 @@ export function operationValue(raw: unknown): OperationState | OperationOutcome 
     'nextSequence',
     'leaseRemainingMs',
     'actions',
-    'txArmed'
+    'txArmed',
+    ...('controls' in v ? ['controls'] : [])
   ])
+  if ('controls' in v) {
+    const controls = object(v.controls, ['context', 'capabilities'])
+    controlContext(controls.context)
+    if (!Array.isArray(controls.capabilities) || controls.capabilities.length > 3 || new Set(controls.capabilities).size !== controls.capabilities.length || controls.capabilities.some(c => !CONTROL_CAPABILITIES.includes(c as ControlCapability))) invalid()
+    if (!v.allowed && (controls.capabilities as unknown[]).length) invalid()
+  }
   if (
     !operationId(v.stationBootId) ||
     typeof v.allowed !== 'boolean' ||

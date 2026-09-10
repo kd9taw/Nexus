@@ -75,7 +75,7 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
     const shell = await fetch(app.origin,{signal:AbortSignal.timeout(3000)})
     assert.equal(shell.status,200)
     assert.match(await shell.text(), /Nexus Remote/)
-    const stationHeaders = { 'x-nexus-application-version': '1',...(operating?{'x-nexus-operation-version':'1'}:{}), ...(applicationVersion >= 2 ? { 'x-nexus-application-stream-version': '2' } : {}), ...(applicationVersion >= 3 ? { 'x-nexus-application-query-version': '1' } : {}), ...(applicationVersion >= 4 ? { 'x-nexus-application-recall-version': '1' } : {}), ...(applicationVersion >= 5 ? { 'x-nexus-application-keyboard-version': '1' } : {}), ...(applicationVersion >= 6 ? { 'x-nexus-application-insights-version': '1' } : {}), ...(applicationVersion >= 7 ? { 'x-nexus-application-dxpeditions-version': '1' } : {}), ...(applicationVersion >= 8 ? { 'x-nexus-application-memories-version': '1' } : {}), ...(applicationVersion >= 9 ? { 'x-nexus-application-ota-version': '1' } : {}), ...(applicationVersion >= 10 ? { 'x-nexus-application-field-day-version': '1' } : {}), ...(applicationVersion >= 11 ? { 'x-nexus-application-js8-version': '1' } : {}), ...(applicationVersion >= 12 ? {'x-nexus-application-station-modes-version':'1'} : {}), ...(applicationVersion >= 13 ? {'x-nexus-application-navigation-version':'1'} : {}), ...(applicationVersion >= 14 ? {'x-nexus-application-configuration-version':'1'} : {}) }
+    const stationHeaders = { 'x-nexus-application-version': '1',...(operating?{'x-nexus-operation-version':'2'}:{}), ...(applicationVersion >= 2 ? { 'x-nexus-application-stream-version': '2' } : {}), ...(applicationVersion >= 3 ? { 'x-nexus-application-query-version': '1' } : {}), ...(applicationVersion >= 4 ? { 'x-nexus-application-recall-version': '1' } : {}), ...(applicationVersion >= 5 ? { 'x-nexus-application-keyboard-version': '1' } : {}), ...(applicationVersion >= 6 ? { 'x-nexus-application-insights-version': '1' } : {}), ...(applicationVersion >= 7 ? { 'x-nexus-application-dxpeditions-version': '1' } : {}), ...(applicationVersion >= 8 ? { 'x-nexus-application-memories-version': '1' } : {}), ...(applicationVersion >= 9 ? { 'x-nexus-application-ota-version': '1' } : {}), ...(applicationVersion >= 10 ? { 'x-nexus-application-field-day-version': '1' } : {}), ...(applicationVersion >= 11 ? { 'x-nexus-application-js8-version': '1' } : {}), ...(applicationVersion >= 12 ? {'x-nexus-application-station-modes-version':'1'} : {}), ...(applicationVersion >= 13 ? {'x-nexus-application-navigation-version':'1'} : {}), ...(applicationVersion >= 14 ? {'x-nexus-application-configuration-version':'1'} : {}) }
     station=await pair.native.open(pair.stationId, undefined, 101, stationHeaders)
     let code=null, oauth=null, exchanges=0, providerFailure=false, exceptions=0, acknowledgements=0, unexpectedMessages=0
     const applicationTraffic = { reads: 0, acks: 0, subscriptions: 0, batches: 0, bytes: 0, byCommand: {}, maxResponseBytes: 0 }
@@ -115,7 +115,7 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
         const message = JSON.parse(event.response.payloadData)
         if (message.type === 'ack' && Object.keys(message).sort().join(',') === 'epoch,sequence,type') acknowledgements++
         else if (message.type === 'applicationHello' && (Object.keys(message).length === 1 || (Object.keys(message).length === 2 && [2,3,4,5,6,7,8,9,10,11,12,13,14].includes(message.version)))) {}
-        else if(message.type==='operationRequest'&&Object.keys(message).length===2&&['state','acquire','heartbeat','release','result','logManual'].includes(message.request?.type)){if(!operating)assert.equal(message.request.type,'state');operationWire.push({at:performance.now(),direction:'out',type:message.request.type,requestId:message.request.requestId})}
+        else if(message.type==='operationRequest'&&((Object.keys(message).length===2)||Object.keys(message).length===3&&message.operationVersion===2)&&['state','acquire','heartbeat','release','result','logManual','stationControl'].includes(message.request?.type)){if(!operating)assert.equal(message.request.type,'state');operationWire.push({at:performance.now(),direction:'out',type:message.request.type,requestId:message.request.requestId})}
         else if (message.type === 'applicationRead' && Object.keys(message).length === 4) applicationTraffic.reads++
         else if (message.type === 'applicationQuery' && Object.keys(message).length === 7) applicationTraffic.queries=(applicationTraffic.queries??0)+1
         else if (message.type === 'applicationQueryAck' && Object.keys(message).length === 2) {}
@@ -253,6 +253,8 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
     // separate real-native/workerd test proves the ADIF append and durability.
     let loggingLeaseUntil=0
     let loggingAllowed=false,loggingLease=null,loggingRevision=1,loggingSequence=0,loseLogReply=false
+    let stationControls=false
+    const stationRequests=[]
     const loggingBoot=crypto.randomUUID(),loggingWindow=crypto.randomUUID(),loggedRequests=[],loggingReceipts=new Map()
     const querySnapshots = new Map()
     let applicationRevision = 1, applicationAvailable = true
@@ -270,17 +272,39 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
         assert.ok(operating);const r=request.request;let value,error
         if(loggingLease&&performance.now()>=loggingLeaseUntil)loggingLease=null
         assert.equal(request.deviceId,device.id)
-        if(r.type==='acquire'){if(!loggingAllowed)error='localPermissionRequired';else{loggingLease=crypto.randomUUID();loggingLeaseUntil=performance.now()+5000}}
+        if(r.type==='acquire'){if(!loggingAllowed&&!stationControls)error='localPermissionRequired';else{loggingLease=crypto.randomUUID();loggingLeaseUntil=performance.now()+5000}}
         if(r.type==='heartbeat'&&loggingLease&&r.leaseId===loggingLease)loggingLeaseUntil=performance.now()+5000
         if(r.type==='release')loggingLease=null
-        if(!loggingAllowed)loggingLease=null
+        if(!loggingAllowed&&!stationControls)loggingLease=null
         if(r.type==='logManual'){
           assert.ok(loggingAllowed&&loggingLease&&r.leaseId===loggingLease)
           assert.equal(r.expectedRevision,loggingRevision);assert.equal(r.clientSequence,loggingSequence+1);loggingSequence++
           loggedRequests.push(r);value={outcome:'applied',evidence:'fileSynced',uploads:'stationPipeline',operationId:r.requestId};loggingReceipts.set(r.requestId,value);loggingRevision++
           if(loseLogReply)continue
+        }else if(r.type==='stationControl'){
+          assert.equal(request.operationVersion,2);assert.ok(stationControls&&loggingLease&&r.leaseId===loggingLease)
+          assert.equal(r.expectedRevision,loggingRevision);assert.equal(r.clientSequence,loggingSequence+1);loggingSequence++
+          assert.deepEqual(r.context,{radioId:1,radioConnection:1,ampConnection:1,ampReadSequence:1})
+          stationRequests.push(r);const a=r.action
+          if(a.action==='decoder.arm'){
+            if(a.receiver==='sstv'){applicationData.get_sstv_state.state.armed=a.on;applicationData.get_sstv_state.state.health.armed=a.on}
+            else if(a.receiver==='aprs')applicationData.get_remote_aprs_state.health.arm=a.on?'auto':'off'
+            else applicationData[`get_${a.receiver}_state`].armed=a.on
+          }else if(a.action==='decoder.clear'){
+            const state=applicationData[`get_${a.receiver}_state`];state.text='';if(state.charConf)state.charConf=[]
+          }else if(a.action==='decoder.afcReset')applicationData[`get_${a.receiver}_state`].afcHz=0
+          else if(a.action==='decoder.pskMode'){applicationData.get_psk_state.mode=a.mode.toLowerCase();applicationData.get_psk_state.reverse=a.reverse}
+          else if(a.action==='amplifier.operate'){
+            assert.equal(a.expectedOperate,applicationData.get_snapshot.radio.amp.operate);assert.notEqual(a.expectedOperate,a.operate)
+            applicationData.get_snapshot.radio.amp.operate=a.operate
+          }else if(a.action==='amplifier.band'){
+            assert.equal(a.expectedBand,applicationData.get_snapshot.radio.amp.bandLabel)
+            const ladder=['160m','80m','60m','40m','30m','20m','17m','15m','12m','10m','6m','4m'];applicationData.get_snapshot.radio.amp.bandLabel=ladder[ladder.indexOf(a.expectedBand)+a.direction]
+          }else assert.fail(`Unreviewed station action ${a.action}`)
+          value={operation:'stationControl',operationId:r.requestId,outcome:'applied',evidence:a.action.startsWith('amplifier.')?'amplifierReadback':'receiverState'}
+          loggingReceipts.set(r.requestId,value);loggingRevision++;applicationRevision++
         }else if(r.type==='result'){value=loggingReceipts.get(r.operationId);if(!value)error='resultExpired'}
-        else value={stationBootId:loggingBoot,allowed:loggingAllowed,phase:loggingLease?'controlling':loggingAllowed?'available':'localPermissionRequired',leaseId:loggingLease,revision:loggingRevision,commandWindowId:loggingLease?loggingWindow:null,nextSequence:loggingLease?loggingSequence+1:null,leaseRemainingMs:loggingLease?5000:null,actions:loggingAllowed?['log.manual']:[],txArmed:false}
+        else value={stationBootId:loggingBoot,allowed:loggingAllowed||stationControls,phase:loggingLease?'controlling':loggingAllowed||stationControls?'available':'localPermissionRequired',leaseId:loggingLease,revision:loggingRevision,commandWindowId:loggingLease?loggingWindow:null,nextSequence:loggingLease?loggingSequence+1:null,leaseRemainingMs:loggingLease?5000:null,actions:loggingAllowed?['log.manual']:[],txArmed:false,...(stationControls?{controls:{context:{radioId:1,radioConnection:1,ampConnection:1,ampReadSequence:1},capabilities:['decoder','amplifier']}}:{})}
         source.send({type:'operationResponse',sessionId:request.sessionId,requestId:r.requestId,...(error?{error}:{value})});continue
       }
       if (request.type === 'applicationQuery') {
@@ -495,12 +519,68 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
           assert.equal(shape.good,true,`Logging control reachable ${selector} ${width} ${zoom}: ${JSON.stringify(shape)}`)
         }
       }
-      loggingAllowed=false
-      await until(`!document.querySelector('.remote-logging-authority')?.textContent.includes('control active')`)
+      loggingAllowed=false;loggingLease=null;loggingRevision++
+      await until(`document.querySelector('.remote-logging-authority')?.textContent.includes('Allow remote logging')`)
       assert.equal(await evaluate(`document.querySelector('.psk-cockpit .le-log-btn').disabled`),true)
+      // A separate local grant enables existing receiver/amp buttons, while
+      // the manual log and all TX senders remain unavailable without their grant.
+      stationControls=true
+      await until(`!!${button('Take station control')}`);await click(button('Take station control'))
+      await until(`document.querySelector('.remote-logging-authority')?.textContent.includes('Station control active')`)
+      await browser.call('Emulation.setDeviceMetricsOverride',{width:1280,height:800,deviceScaleFactor:1,mobile:false},session)
+      await evaluate(`document.documentElement.style.setProperty('--ui-zoom','1');window.dispatchEvent(new Event('resize'))`)
+      const gesture=async(selector,expected)=>{
+        await until(`!!document.querySelector(${JSON.stringify(selector)})&&!document.querySelector(${JSON.stringify(selector)}).disabled`)
+        const before=stationRequests.length;await freshLoggingWindow();await click(`document.querySelector(${JSON.stringify(selector)})`)
+        for(let i=0;i<100&&stationRequests.length===before;i++)await sleep(100)
+        assert.equal(stationRequests.length,before+1,`one gesture must send one ${expected} action`)
+        assert.equal(stationRequests.at(-1).action.action,expected)
+        await until(`document.querySelector('.remote-control-result')?.textContent.includes('confirmed')`)
+      }
+      for(const [tab,root,selector,receiver] of [
+        ['RTTY','.rtty-cockpit','.cw-decode-head .rtty-arm','rtty'],
+        ['PSK','.psk-cockpit','.cw-decode-head .rtty-arm','psk'],
+        ['SSTV','.sstv-view','.sstv-arm','sstv'],
+        ['APRS','.aprs-cockpit','.np-chip[aria-pressed]','aprs']
+      ]){
+        await click(button(tab));await settledLayout()
+        const target=receiver==='aprs'?'.aprs-cockpit button[title*="Receive-only"]':root+' '+selector
+        // Find the existing monitor toggle by its class/pressed state; no test-only UI.
+        const actual=receiver==='aprs'?'.aprs-cockpit .np-chip[aria-pressed]:not(.tx-toggle)':target
+        const before=stationRequests.length
+        if(receiver==='aprs'){
+          await until(`!![...document.querySelectorAll('.aprs-cockpit .np-chip[aria-pressed]')].find(e=>e.textContent.includes('Monitoring')||e.textContent.includes('Monitor'))`)
+          const monitor=`[...document.querySelectorAll('.aprs-cockpit .np-chip[aria-pressed]')].find(e=>e.textContent.includes('Monitoring')||e.textContent.includes('Monitor'))`
+          await freshLoggingWindow();await click(monitor)
+          for(let i=0;i<100&&stationRequests.length===before;i++)await sleep(100)
+          assert.equal(stationRequests.length,before+1);assert.equal(stationRequests.at(-1).action.receiver,'aprs')
+        }else await gesture(actual,'decoder.arm')
+        assert.equal(stationRequests.at(-1).action.receiver,receiver)
+      }
+      await click(button('RTTY'));await gesture('.rtty-cockpit .cw-decode-clear','decoder.clear')
+      await click(button('PSK'));await gesture('.psk-cockpit .cw-decode-clear','decoder.clear')
+      await click(button('CW'));await gesture('.cw-cockpit .cw-decode-clear','decoder.clear')
+      await gesture('.cw-cockpit .amp-op','amplifier.operate')
+      await until(`document.querySelector('.cw-cockpit .amp-op').classList.contains('on')`)
+      await gesture('.cw-cockpit .amp-band-step:last-child','amplifier.band')
+      let controlGeometry=0
+      for(const [width,height,zoom]of [[390,844,1],[1280,800,1],[390,844,1.75],[1280,800,1.75]])for(const theme of ['dark','light']){
+        await browser.call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false},session)
+        await evaluate(`document.documentElement.style.setProperty('--ui-zoom','${zoom}');document.documentElement.dataset.theme='${theme}';window.dispatchEvent(new Event('resize'))`);await settledLayout();await settledLayout()
+        for(const selector of ['.cw-cockpit .amp-op','.cw-cockpit .cw-decode-clear']){
+          await evaluate(`document.querySelector('${selector}').scrollIntoView({block:'center',behavior:'instant'})`);await settledLayout()
+          const shape=await evaluate(`(()=>{const e=document.querySelector('${selector}'),r=e.getBoundingClientRect(),hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);return{rect:r.toJSON(),hit:hit?.outerHTML.slice(0,300),docW:document.documentElement.scrollWidth,docH:document.documentElement.scrollHeight,good:r.width>0&&r.height>0&&e.contains(hit)&&document.documentElement.scrollWidth<=innerWidth+1&&document.documentElement.scrollHeight<=innerHeight+1}})()`)
+          if(!shape.good&&artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'control-layout-failure.png'),Buffer.from(shot.data,'base64'));await writeFile(join(artifacts,'control-layout-failure.json'),JSON.stringify({selector,width,height,zoom,theme,shape},null,2))}
+          assert.equal(shape.good,true,`Station control reachable ${selector} ${width} ${zoom}: ${JSON.stringify(shape)}`);controlGeometry++
+        }
+      }
+      assert.equal(applicationData.get_snapshot.radio.txEnabled,false)
+      assert.ok(await evaluate(`[...document.querySelectorAll('.cockpit-txdock button')].every(e=>e.disabled)`),'receiver/amp permission cannot enable TX')
+      stationControls=false;loggingLease=null
+      await until(`document.querySelector('.cw-cockpit .amp-op').disabled`)
       assert.equal(loggedRequests.length,5);assert.equal(unexpectedMessages,0);assert.equal(exceptions,0)
-      if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-manual-logging.png'),Buffer.from(shot.data,'base64'));await writeFile(join(artifacts,'operation-results.json'),JSON.stringify({count:loggedRequests.length,modes:loggedRequests.map(r=>r.record.mode),lostResultResolved:true,wholePageReloadResolved:true,crossTabLockRefusal:true,geometry:16,exceptions,unexpectedMessages},null,2))}
-      console.log('Compiled browser: explicit logging lease, five native forms, retained unknown result, local revocation and 16 geometry cases passed');return
+      if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-manual-logging.png'),Buffer.from(shot.data,'base64'));await writeFile(join(artifacts,'operation-results.json'),JSON.stringify({count:loggedRequests.length,stationActions:stationRequests.map(r=>r.action),controlGeometry,modes:loggedRequests.map(r=>r.record.mode),lostResultResolved:true,wholePageReloadResolved:true,crossTabLockRefusal:true,geometry:16,exceptions,unexpectedMessages},null,2))}
+      console.log('Compiled browser: logging, receiver and amplifier gestures, separate grants, recovery and 16 geometry cases passed');return
     }
     const startReads=applicationTraffic.reads, startBytes=applicationTraffic.bytes, started=performance.now()
     for(const [width,height] of [[1024,768],[1280,800],[1366,768],[1200,1390],[3440,1440]])for(const zoom of [1,1.75])for(const theme of ['dark','light']) {

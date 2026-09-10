@@ -120,6 +120,8 @@ enum ServerMessage {
         session_id: String,
         #[serde(rename = "deviceId")]
         device_id: String,
+        #[serde(rename = "operationVersion")]
+        operation_version: Option<u8>,
         request: super::operations::Request,
     },
     ApplicationQuery {
@@ -256,7 +258,7 @@ pub async fn connected(
     );
     request.headers_mut().insert(
         "x-nexus-operation-version",
-        "1".parse().map_err(|_| "invalidResponse")?,
+        "2".parse().map_err(|_| "invalidResponse")?,
     );
     let config = WebSocketConfig::default()
         .max_message_size(Some(8192))
@@ -326,7 +328,7 @@ pub async fn connected(
                     let message: ServerMessage = serde_json::from_str(&text).map_err(|_| "invalidResponse")?;
                     match message {
                         ServerMessage::OperationDisconnect{session_id}=>{if !identifier(&session_id){return Err("invalidResponse")}operation_connection.authority.disconnect_session(&session_id);},
-                        ServerMessage::OperationRequest{session_id,device_id,request}=>{
+                        ServerMessage::OperationRequest{session_id,device_id,operation_version,request}=>{
                             if !identifier(&session_id)||!identifier(&device_id)||!identifier(request.id()){return Err("invalidResponse")}
                             if operation_task.is_some(){
                                 let data=json!({"type":"operationResponse","sessionId":session_id,"requestId":request.id(),"error":"stationBusy"}).to_string();
@@ -334,7 +336,8 @@ pub async fn connected(
                             }else{
                                 let authority=operation_connection.authority.clone();let connection=operation_connection.id;let engine=engine.clone();
                                 operation_task=Some(tokio::task::spawn_blocking(move||{
-                                    match authority.handle(connection,&session_id,&device_id,&request,&engine,Instant::now()){
+                                    let result=if let Some(version)=operation_version { authority.handle_version((connection,version),&session_id,&device_id,&request,&engine,Instant::now()) } else { authority.handle(connection,&session_id,&device_id,&request,&engine,Instant::now()) };
+                                    match result{
                                         Ok(value)=>json!({"type":"operationResponse","sessionId":session_id,"requestId":request.id(),"value":value}),
                                         Err(error)=>json!({"type":"operationResponse","sessionId":session_id,"requestId":request.id(),"error":error}),
                                     }.to_string()

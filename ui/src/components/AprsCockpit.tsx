@@ -9,14 +9,14 @@
 // symbol codes and their table, digipeater paths, the channel list and every dial reading,
 // dBFS levels, positions, grids, distances, bearings, speeds, the packet kind, and the
 // region names the channel list carries — all data, interpolated as values.
-import { useStationControl } from '../stationAccess'
+import { RemoteOperationsContext, useStationCapability, useStationControl } from '../stationAccess'
 import { useAprs } from '../remote-web/useAprs'
 import { displayNow } from '../remote-web/display-validation'
 import { MapView } from './MapView'
 import { AprsStationCard } from './AprsStationCard'
 import type { NeedTag, Station } from '../types'
 import type { Theme } from '../useTheme'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useContext, useEffect, useMemo, useRef, useState } from 'react'
 
 import {
   aprsArm,
@@ -603,7 +603,8 @@ export function AprsCockpit({
    * where the rest of the APRS settings live without offering to open them. */
   onOpenSettings?: (target: string) => void
 }) {
-  const canControl = useStationControl(), observation = useAprs(active), remote = observation.remote
+  const canControl = useStationControl(), receiverControl = useStationCapability('decoder'), observation = useAprs(active), remote = observation.remote
+  const operations = useContext(RemoteOperationsContext)
   // NO local `armed` state. Arming lives on the ENGINE and is session state that outlives this
   // component, so a local copy drifts: a remount came back up saying "Monitor" while the decoder
   // was still running, and its first click then sent arm(true) at an already-armed engine. The
@@ -885,7 +886,13 @@ export function AprsCockpit({
   const armed = arm !== 'off'
 
   const toggleArm = () => {
-    if (!canControl) return
+    if (!receiverControl) return
+    if (remote) {
+      // Remote RX does not grant the local Explicit arm's auto-ACK capability.
+      // The existing Remote sample supplies health and roster after completion.
+      void operations?.control({ action: 'decoder.arm', receiver: 'aprs', on: !armed }).catch(() => {})
+      return
+    }
     // A plain start/stop toggle. Clicking it while armed ALWAYS stops — including when the
     // decoder was auto-armed on view entry. It deliberately does NOT "upgrade" an auto-arm to an
     // explicit one: the button reads "● Monitoring", so a click is the operator reaching for
@@ -1097,7 +1104,7 @@ export function AprsCockpit({
           type="button"
           className={`np-chip${armed ? ' active' : ''}`}
           aria-pressed={armed}
-          disabled={!canControl}
+          disabled={!receiverControl}
           onClick={toggleArm}
           title={
             arm === 'explicit'

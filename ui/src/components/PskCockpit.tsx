@@ -40,7 +40,7 @@ import { usePinnedScroll } from '../usePinnedScroll'
 import { confidenceRuns } from '../transcript'
 import { PSK_MODES, PSK_MODE_BY_SLUG } from '../pskModes'
 import { t } from '../i18n'
-import { useStationControl, useStationData } from '../stationAccess'
+import { useStationCapability, useStationControl, useStationData } from '../stationAccess'
 import { RemoteRecallEntry } from '../remote-web/RemoteRecall'
 
 interface Props {
@@ -137,7 +137,7 @@ function fmtAfc(hz: number): string {
  * accumulating while the operator is on another section.
  */
 export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetTxEnabled, theme = 'dark', wheelSensitivity, onOpenLogbook, panels }: Props) {
-  const control = useStationControl()
+  const control = useStationControl(), receiverControl = useStationCapability('decoder')
   const dataAvailable = useStationData()
   const host = panels
     ? panelHost(panels, { menu: PSK_PANEL_IDS, side: [], main: 'stream', labels: pskPanelLabels() })
@@ -194,7 +194,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
 
   const armed = psk?.armed === true
   const toggleArm = () => {
-    if (!control) return
+    if (!receiverControl) return
     void pskArm(!armed)
       .then(setPsk)
       .catch(() => pushToast(t('psk.arm.failed'), 'error'))
@@ -209,7 +209,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
   const reverse = psk?.reverse === true
   const mode = PSK_MODE_BY_SLUG[modeSlug] ?? PSK_MODES[0]
   const setMode = (slug: string, rev: boolean) => {
-    if (!control) return
+    if (!receiverControl) return
     void withErrorToast(() => pskSetMode(slug, rev), t('psk.mode.failed')).then((s) => {
       if (s) setPsk(s)
     })
@@ -438,9 +438,9 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
               </span>
               {PSK_MODES.length > 1 ? (
                 <select
-                  disabled={!control}
+                  disabled={!receiverControl}
                   className="settings-input psk-mode-select"
-                  value={!control && !psk ? '' : modeSlug}
+                  value={!receiverControl && !psk ? '' : modeSlug}
                   onChange={(e) => setMode(e.target.value, reverse)}
                   aria-label={t('psk.header.mode.aria')}
                 >
@@ -458,7 +458,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
                   sense. Normal = USB, the Keyboard section's convention. */}
               {modeSlug === 'qpsk31' && (
                 <button
-                  disabled={!control}
+                  disabled={!receiverControl}
                   type="button"
                   className={`rtty-arm psk-rev${reverse ? ' on' : ''}`}
                   aria-pressed={reverse}
@@ -529,8 +529,8 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
           rxOffsetHz={centerHz}
           txOffsetHz={0}
           cursors={[{ hz: centerHz, color: '#3ddc8c', label: 'RX' }]}
-          hint={control ? t('psk.waterfall.hint') : t('remote.keyboardFollowsStation')}
-          onTune={control ? (hz) => void pskNet(hz).then(setPsk).catch(() => {}) : undefined}
+          hint={receiverControl ? t('psk.waterfall.hint') : t('remote.keyboardFollowsStation')}
+          onTune={receiverControl ? (hz) => void pskNet(hz).then(setPsk).catch(() => {}) : undefined}
         />
       )}
 
@@ -551,7 +551,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
             <div className="cw-decode-head">
               <span className="cw-decode-label">{RX_PLATE}</span>
               <button
-                disabled={!control}
+                disabled={!receiverControl}
                 type="button"
                 className={`rtty-arm${armed ? ' on' : ''}`}
                 aria-pressed={armed}
@@ -571,11 +571,11 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
               )}
               {armed && (
                 <button
-                  disabled={!control}
+                  disabled={!receiverControl}
                   type="button"
                   className="rtty-arm"
                   onClick={() => {
-                    if (!control) return
+                    if (!receiverControl) return
                     void pskAfcReset()
                       .then(setPsk)
                       .catch(() => {})
@@ -586,10 +586,10 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
                 </button>
               )}
               <button
-                disabled={!control}
+                disabled={!receiverControl}
                 className="cw-decode-clear"
                 onClick={() => {
-                  if (!control) return
+                  if (!receiverControl) return
                   void pskClear()
                     .then(setPsk)
                     .catch(() => {})

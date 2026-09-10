@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import App from '../App'
 import {LoggingAuthority,RemoteOperationsContext} from './operations'
+import { controlTransport } from './control-transport'
 import { RemoteCollections, RemoteCollectionsContext, RemoteHistoryContext } from './collections'
 import type { HistoryRow, RemoteHistory } from './collections'
 import { CONFIGURATION_COMMAND, NAVIGATION_COMMAND, SSTV_IMAGE_COMMAND, APRS_COMMAND, JS8_CONTEXT_COMMAND, FIELD_DAY_COMMAND, OTA_COMMAND, MEMORIES_COMMAND, DXPEDITIONS_COMMAND, INSIGHTS_COMMAND, QUERY_COMMAND } from './application-query-protocol'
@@ -25,9 +26,9 @@ export function BrowserApplication({ connection, disconnect }: { connection: Hos
   const [, setTick] = useState(0)
   useEffect(() => {
     collections.activate()
-    const uninstall = installApplicationTransport(collections)
+    const uninstall = installApplicationTransport(connection.operations ? controlTransport(collections, client, connection.operations) : collections)
     return () => { uninstall(); collections.dispose() }
-  }, [collections])
+  }, [collections, client, connection.operations])
   useEffect(() => {
     if (phase !== 'ready' || !client.supports(QUERY_COMMAND)) { setHistory(null); collections.invalidate(); return }
     let signature = ''
@@ -82,7 +83,7 @@ export function BrowserApplication({ connection, disconnect }: { connection: Hos
   const status = <div className="remote-application-status" role="status">
     <strong>{t('remote.browserWorkspace')}</strong>
     {connection.operations&&<LoggingAuthority client={connection.operations}/>}
-    <span>{stale ? t('remote.applicationUnavailable') : connection.operations?.enabled ? t('remote.applicationLoggingPreview') : t('remote.applicationObserver')}</span>
+    <span>{stale ? t('remote.applicationUnavailable') : connection.operations?.operationVersion === 2 ? t('remote.controlPreview') : connection.operations?.enabled ? t('remote.applicationLoggingPreview') : t('remote.applicationObserver')}</span>
     <button type="button" className="remote-button" onClick={disconnect}>{t('remote.disconnect')}</button>
   </div>
   if (!boot) return <div className="app remote-monitor-app remote-service-app">

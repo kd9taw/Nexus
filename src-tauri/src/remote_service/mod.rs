@@ -31,6 +31,7 @@ pub struct Status {
     error: Option<&'static str>,
     observation_generation: Option<String>,
     logging_permissions: Vec<String>,
+    station_permissions: Vec<String>,
     logging_controller: Option<String>,
 }
 #[derive(Clone, Serialize, Deserialize)]
@@ -46,6 +47,11 @@ struct Device {
 // Empty struct variants preserve deny_unknown_fields; Serde unit variants ignore extra fields.
 pub enum Action {
     LoggingPermission {
+        #[serde(rename = "deviceId")]
+        device_id: String,
+        allow: bool,
+    },
+    StationPermission {
         #[serde(rename = "deviceId")]
         device_id: String,
         allow: bool,
@@ -243,6 +249,8 @@ impl Service {
         status.logging_permissions =
             serde_json::from_value(operations["devices"].clone()).unwrap_or_default();
         status.logging_controller = operations["controller"].as_str().map(str::to_string);
+        status.station_permissions =
+            serde_json::from_value(operations["controlDevices"].clone()).unwrap_or_default();
         status.observation_generation = enabled.then(|| control.generation.to_string());
         if !enabled && ["connected", "connecting", "reconnecting"].contains(&status.phase.as_str())
         {
@@ -268,7 +276,8 @@ impl Service {
     }
     pub async fn action(&self, action: Action) -> Result<Status, &'static str> {
         match &action {
-            Action::LoggingPermission { device_id, allow } => {
+            Action::LoggingPermission { device_id, allow }
+            | Action::StationPermission { device_id, allow } => {
                 let status = self.status()?;
                 if *allow
                     && (status.observation_generation.is_none()
@@ -285,7 +294,11 @@ impl Service {
                     .map_err(|_| "serviceUnavailable")?
                     .operations
                     .clone();
-                operations.permit(device_id, *allow)?;
+                if matches!(&action, Action::StationPermission { .. }) {
+                    operations.permit_station(device_id, *allow)?;
+                } else {
+                    operations.permit(device_id, *allow)?;
+                }
                 return self.status();
             }
             Action::TakeOverLogging {} => {
@@ -406,9 +419,9 @@ impl Controller {
     }
     async fn handle(&mut self, action: Action, generation: u64) -> Result<(), &'static str> {
         match action {
-            Action::LoggingPermission { .. } | Action::TakeOverLogging {} => {
-                return Err("invalidRequest")
-            }
+            Action::LoggingPermission { .. }
+            | Action::StationPermission { .. }
+            | Action::TakeOverLogging {} => return Err("invalidRequest"),
             Action::Begin { name } => {
                 if self.binding.is_some() || self.pending.is_some() || !valid_name(&name) {
                     return Err("invalidRequest");

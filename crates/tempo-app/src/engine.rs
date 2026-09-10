@@ -2221,6 +2221,9 @@ pub struct Engine {
     /// arming/QSY verbs so `commit_tx` refuses an over planned before them —
     /// see [`TxGateStamp`].
     tx_gate_gen: u64,
+    remote_receiver_gen: u64,
+    remote_actuation: crate::remote_control::Revocation,
+    remote_amp_command: Option<crate::remote_control::amplifier::Request>,
     /// The transponder the operator selected for the tracked bird, plus their
     /// position inside its passband and what was last written to the radio.
     /// `None` = no satellite tuning in force, which is every terrestrial path.
@@ -4276,6 +4279,9 @@ impl Engine {
             last_wire_decodes: Vec::new(),
             tx_dial_shift_hz: 0,
             tx_gate_gen: 0,
+            remote_receiver_gen: 0,
+            remote_actuation: Default::default(),
+            remote_amp_command: None,
             sat_tune: None,
             sat_dial_owner: None,
             sat_last_rate: None,
@@ -4629,6 +4635,7 @@ impl Engine {
         // offsets, license class) — an over planned before it must not key
         // (commit_tx checks the generation).
         self.tx_gate_gen = self.tx_gate_gen.wrapping_add(1);
+        self.remote_actuation.revoke();
         // Boundary rule (same as set_frequency / with_settings): the stored band
         // is always the canonical award/ADIF identity, never a channel token —
         // an old UI state or stale profile can hand one in through a save.
@@ -5337,6 +5344,7 @@ impl Engine {
     /// its flat mirror) are left completely untouched. `active_radio` is never changed here.
     pub fn update_radio_profile(&mut self, id: u32, patch: crate::settings::RadioProfilePatch) {
         // Port collision repair can also change the active profile when editing another.
+        self.remote_actuation.revoke();
         self.remote_readings.invalidate();
         if let Some(p) = self.settings.radios.iter_mut().find(|p| p.id == id) {
             patch.apply_to(p);
@@ -5582,6 +5590,7 @@ impl Engine {
         // against the old dial: privileges are not uniform within a band, and
         // commit_tx re-checks nothing else (the stamp + generation are the check).
         self.tx_gate_gen = self.tx_gate_gen.wrapping_add(1);
+        self.remote_actuation.revoke();
         self.settings.dial_mhz = dial_mhz;
         self.settings.band = band.to_string();
         self.settings.sideband = mode.to_string();
@@ -6338,6 +6347,7 @@ impl Engine {
         };
         // A mode change invalidates any planned over (commit_tx checks the generation).
         self.tx_gate_gen = self.tx_gate_gen.wrapping_add(1);
+        self.remote_actuation.revoke();
         // …and it ends RTTY's continuous-TX latch. Leaving the section is what
         // stops RTTY today — `poll_rtty_one` simply stops being called, so the
         // queue is held and nothing keys. A LATCHED transmitter is already keyed,
@@ -6495,6 +6505,7 @@ impl Engine {
             }
             self.tx_enabled = false;
             self.tx_gate_gen = self.tx_gate_gen.wrapping_add(1);
+            self.remote_actuation.revoke();
         }
     }
 
@@ -8932,6 +8943,41 @@ impl Engine {
         self.tx_gate_gen
     }
 
+    pub fn remote_receiver_context_generation(&self) -> u64 {
+        self.remote_receiver_gen
+    }
+
+    /// Revoked by the existing native TX/context transitions. Workers can check
+    /// this after releasing the engine, without holding its mutex across I/O.
+    pub fn remote_actuation_permit(
+        &self,
+        deadline: std::time::Instant,
+    ) -> Option<crate::remote_control::Permit> {
+        self.remote_actuation.permit(deadline)
+    }
+
+    pub fn queue_remote_amp(
+        &mut self,
+        request: crate::remote_control::amplifier::Request,
+    ) -> Result<crate::remote_control::Completion, crate::remote_control::Reason> {
+        use crate::remote_control::{Outcome, Reason};
+        if self
+            .remote_amp_command
+            .as_ref()
+            .is_some_and(|r| matches!(r.completion.outcome(), Outcome::Pending))
+        {
+            return Err(Reason::StationBusy);
+        }
+        let receipt = request.completion.clone();
+        self.remote_amp_command = Some(request);
+        Ok(receipt)
+    }
+
+    /// Only the existing amplifier port owner consumes this slot.
+    pub fn take_remote_amp(&mut self) -> Option<crate::remote_control::amplifier::Request> {
+        self.remote_amp_command.take()
+    }
+
     /// Manual Remote logging uses the existing contact enrichment, memory-first
     /// append and connector funnel, but receives open file handles to sync outside the engine lock. This does
     /// not change FT sequencing, pending-log semantics or desktop append timing.
@@ -10521,6 +10567,7 @@ impl Engine {
         // Kill any over planned before this instant — even one whose gate values
         // all match again by commit time (commit_tx checks the generation).
         self.tx_gate_gen = self.tx_gate_gen.wrapping_add(1);
+        self.remote_actuation.revoke();
         // Stop transmitting AND stay stopped: disable TX so the auto-sequencer
         // doesn't immediately re-arm on the next slot (WSJT-X "Halt Tx" also
         // unchecks Enable Tx). Drop any tune carrier and queued audio too.
@@ -10856,6 +10903,7 @@ impl Engine {
         // Arm state changed hands: an over planned under the old state must not
         // key (commit_tx checks the generation).
         self.tx_gate_gen = self.tx_gate_gen.wrapping_add(1);
+        self.remote_actuation.revoke();
         // Read-only launch: arming TX is the moment the operator commits to
         // transmitting — arm a retune NOW so the mode assert runs a tick BEFORE the
         // key on the normal FT8 path (on a slow-serial rig an assert at the key
@@ -11059,6 +11107,7 @@ impl Engine {
             // A change of ownership IS a state change: an over planned under
             // the old regime must not key under the new one.
             self.tx_gate_gen = self.tx_gate_gen.wrapping_add(1);
+            self.remote_actuation.revoke();
             self.sat_dial_owner = owner;
         }
     }
@@ -12533,6 +12582,7 @@ impl Engine {
     pub fn set_tune(&mut self, on: bool) {
         // A tune toggle invalidates any planned over (commit_tx checks the generation).
         self.tx_gate_gen = self.tx_gate_gen.wrapping_add(1);
+        self.remote_actuation.revoke();
         // Tune is the one keying path that bypasses poll_tx (the loop keys PTT directly), so
         // the privilege lockout must gate it here: never arm a tune carrier outside privileges.
         self.tuning = on && self.tx_allowed();
@@ -12722,6 +12772,7 @@ impl Engine {
 
     /// Clear the streaming CW decoder's accumulated transcript (the cockpit's Clear button).
     pub fn cw_clear(&mut self) {
+        self.remote_receiver_gen = self.remote_receiver_gen.saturating_add(1);
         self.cw_stream.clear();
         self.cw_sent.clear();
         self.ai_cw_text.clear();
@@ -12741,6 +12792,7 @@ impl Engine {
     /// never launches armed). Arming starts a fresh transcript; disarming keeps
     /// the transcript readable but stops the audio tap immediately.
     pub fn set_rtty_armed(&mut self, on: bool) {
+        self.remote_receiver_gen = self.remote_receiver_gen.saturating_add(1);
         if on && !self.rtty_armed {
             self.rtty_chars.clear();
             self.rtty_afc_hz = 0.0;
@@ -12804,6 +12856,7 @@ impl Engine {
     /// here would claim an operator act that never happened — use [`Engine::aprs_auto_arm`] for
     /// view entry, which applies the policy rather than trusting its caller.
     pub fn set_aprs_arm(&mut self, arm: AprsArm) {
+        self.remote_receiver_gen = self.remote_receiver_gen.saturating_add(1);
         if arm == AprsArm::Off {
             self.aprs_audio.clear();
             // An operator who stopped the decoder has made a decision. Remember it for the rest of
@@ -12817,6 +12870,23 @@ impl Engine {
             ..Default::default()
         };
         self.aprs_arm = arm;
+    }
+
+    /// An explicit Remote receive gesture has no acknowledgement/transmit
+    /// permission. It may start receive-only monitoring after an earlier Stop,
+    /// without upgrading the APRS two-act interlock to an explicit TX arm.
+    pub fn set_aprs_receive_only(&mut self, on: bool) {
+        self.remote_receiver_gen = self.remote_receiver_gen.saturating_add(1);
+        if !on {
+            self.set_aprs_arm(AprsArm::Off);
+        } else if self.aprs_arm == AprsArm::Off {
+            self.aprs_auto_arm_declined = false;
+            self.aprs_health = AprsHealth {
+                arm: AprsArm::Auto,
+                ..Default::default()
+            };
+            self.aprs_arm = AprsArm::Auto;
+        }
     }
 
     /// Arm the decoder because the operator ENTERED the APRS view — receive-only, never
@@ -13539,6 +13609,7 @@ impl Engine {
     /// Clear the decoded-RTTY transcript (the cockpit's Clear button). RX display
     /// only — the demodulator keeps running.
     pub fn rtty_clear(&mut self) {
+        self.remote_receiver_gen = self.remote_receiver_gen.saturating_add(1);
         self.rtty_chars.clear();
     }
 
@@ -13546,6 +13617,7 @@ impl Engine {
     /// its demod and builds a fresh one — the recovery for an acquire-then-freeze
     /// AFC frozen on the wrong neighbor. RX only; no TX path touches this.
     pub fn request_rtty_afc_reset(&mut self) {
+        self.remote_receiver_gen = self.remote_receiver_gen.saturating_add(1);
         self.rtty_afc_reset = true;
         self.rtty_afc_hz = 0.0;
         self.rtty_afc_locked = false;
@@ -13569,6 +13641,7 @@ impl Engine {
     /// center the same clean acquire-then-freeze way an AFC reset does. RX-only
     /// decoder state, so this is safe during TX and needs no privilege gate.
     pub fn rtty_net(&mut self, hz: f32) {
+        self.remote_receiver_gen = self.remote_receiver_gen.saturating_add(1);
         self.rtty_center = Some(hz.clamp(300.0, 3700.0));
         // Rebuild the demod around the new center (zeros AFC + arms the reset).
         self.request_rtty_afc_reset();
@@ -13584,6 +13657,7 @@ impl Engine {
     /// immediately, and is REMEMBERED for the session (the decline memory), so
     /// re-entering the view cannot restart the decoder behind the operator.
     pub fn set_psk_armed(&mut self, on: bool) {
+        self.remote_receiver_gen = self.remote_receiver_gen.saturating_add(1);
         if on && !self.psk_armed {
             self.psk_chars.clear();
             self.psk_afc_hz = 0.0;
@@ -13680,6 +13754,7 @@ impl Engine {
     /// Clear the decoded-PSK transcript (the cockpit's Clear button). RX display
     /// only — the demodulator keeps running.
     pub fn psk_clear(&mut self) {
+        self.remote_receiver_gen = self.remote_receiver_gen.saturating_add(1);
         self.psk_chars.clear();
     }
 
@@ -13687,6 +13762,7 @@ impl Engine {
     /// thread drops its demod and builds a fresh one — a clean AFC pull from the
     /// netted center. RX only.
     pub fn request_psk_afc_reset(&mut self) {
+        self.remote_receiver_gen = self.remote_receiver_gen.saturating_add(1);
         self.psk_afc_reset = true;
         self.psk_afc_hz = 0.0;
         self.psk_signal = false;
@@ -13710,6 +13786,7 @@ impl Engine {
     /// audio passband, then rebuilds the demod around the new center. RX-only
     /// decoder state, so this is safe during TX and needs no privilege gate.
     pub fn psk_net(&mut self, hz: f32) {
+        self.remote_receiver_gen = self.remote_receiver_gen.saturating_add(1);
         self.psk_center = Some(hz.clamp(300.0, 3700.0));
         self.request_psk_afc_reset();
     }
@@ -13732,6 +13809,7 @@ impl Engine {
         mode: tempo_core::psk::PskModeKind,
         reverse: bool,
     ) -> Result<(), String> {
+        self.remote_receiver_gen = self.remote_receiver_gen.saturating_add(1);
         if (mode, reverse) == (self.psk_mode, self.psk_reverse) {
             return Ok(());
         }
@@ -14813,6 +14891,7 @@ impl Engine {
     /// Disarming drops the audio tap and any in-flight decode progress; the
     /// gallery is untouched.
     pub fn set_sstv_armed(&mut self, on: bool) {
+        self.remote_receiver_gen = self.remote_receiver_gen.saturating_add(1);
         if on {
             // ⚠️ An explicit Arm is the operator's LATEST decision, so it retires an earlier
             // Stop. Without this the refusal outlives the act that caused it: stop, arm
@@ -15690,14 +15769,17 @@ impl Engine {
     /// The caller must bind the actual owned transport before starting I/O.
     /// Reopening retires all previous measurements, even for the same radio ID.
     pub fn remote_open_radio(&mut self) -> Option<crate::remote_monitor::provenance::Connection> {
+        self.remote_actuation.revoke();
         self.remote_readings.open_radio(self.settings.active_radio)
     }
 
     pub fn remote_close_radio(&mut self) {
+        self.remote_actuation.revoke();
         self.remote_readings.invalidate_radio();
     }
 
     pub fn remote_open_amp(&mut self) -> Option<crate::remote_monitor::provenance::Connection> {
+        self.remote_actuation.revoke();
         self.remote_readings.open_amp(self.settings.active_radio)
     }
 

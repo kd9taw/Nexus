@@ -1,9 +1,9 @@
-import { useState } from 'react'
+import { useContext, useState } from 'react'
 import { ampCommand } from '../api'
 import { t } from '../i18n'
 import { T } from '../i18n/T'
 import type { AmpStatus } from '../types'
-import { useStationControl } from '../stationAccess'
+import { RemoteOperationsContext, useStationCapability, useStationControl } from '../stationAccess'
 
 /**
  * The amplifier's own controls, in every cockpit header that has an amplifier behind it.
@@ -37,6 +37,8 @@ export function AmpStrip({
   // keystroke the operator watched themselves make and that silently vanished reads as broken.
   const [refused, setRefused] = useState(false)
   const control = useStationControl()
+  const amplifierControl = useStationCapability('amplifier')
+  const operations = useContext(RemoteOperationsContext)
 
   // Almost every station. No amplifier configured → this surface does not exist.
   if (amp == null) return null
@@ -50,11 +52,28 @@ export function AmpStrip({
   // happen on that family. When the amplifier does not say, fall back to the radio, which is
   // the exciter driving it. The backend refuses on the same rule; this is the visible half.
   const keyed = amp.transmitting ?? radioTransmitting
-  const usable = control && live && !keyed
+  const usable = amplifierControl && live && !keyed
 
   const send = async (which: 'bandDown' | 'bandUp' | 'operate') => {
-    const ok = await ampCommand(which)
-    setRefused(!ok)
+    if (!usable) return
+    try {
+      if (control) {
+        const ok = await ampCommand(which)
+        setRefused(!ok)
+      } else if (operations) {
+        // Capture the displayed precondition at the click. Never send a blind
+        // toggle or turn a queue acknowledgement into an applied state.
+        if (which === 'operate' && amp.operate == null || which !== 'operate' && !amp.bandLabel) return
+        setRefused(false)
+        await operations.control(which === 'operate'
+          ? { action: 'amplifier.operate', expectedOperate: amp.operate!, operate: !amp.operate }
+          : { action: 'amplifier.band', expectedBand: amp.bandLabel!, direction: which === 'bandDown' ? -1 : 1 })
+        // The common station status presents pending/refused/unknown results;
+        // this strip continues to display only amplifier measurements.
+      }
+    } catch {
+      if (control) setRefused(true)
+    }
   }
 
   return (
@@ -68,7 +87,7 @@ export function AmpStrip({
       <button
         type="button"
         className={`amp-op${amp.operate ? ' on' : ''}`}
-        disabled={!usable}
+        disabled={!usable || (!control && amp.operate == null)}
         onClick={() => void send('operate')}
         title={
           keyed
@@ -85,7 +104,7 @@ export function AmpStrip({
         <button
           type="button"
           className="amp-band-step"
-          disabled={!usable}
+          disabled={!usable || (!control && !amp.bandLabel)}
           onClick={() => void send('bandDown')}
           // A bare "◀" names nothing to a screen reader, and this one moves a kilowatt.
           aria-label={t('amp.strip.bandDown.aria')}
@@ -99,7 +118,7 @@ export function AmpStrip({
         <button
           type="button"
           className="amp-band-step"
-          disabled={!usable}
+          disabled={!usable || (!control && !amp.bandLabel)}
           onClick={() => void send('bandUp')}
           aria-label={t('amp.strip.bandUp.aria')}
           title={keyed ? t('amp.strip.keyed.title') : t('amp.strip.bandUp.aria')}

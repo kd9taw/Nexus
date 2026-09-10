@@ -48,7 +48,7 @@ export class StationRoom extends DurableObject<RemoteEnv> {
         for (const ws of sockets) {
           const attachment = ws.deserializeAttachment() as Attachment
           if (attachment?.version !== 1) throw new Error('invalidCheckpoint')
-          if(attachment.role==='station')this.operationVersions.set(ws,attachment.operationVersion===1?1:0)
+          if(attachment.role==='station')this.operationVersions.set(ws,[1,2].includes(attachment.operationVersion??0)?attachment.operationVersion!:0)
           if (attachment.role === 'station' && attachment.sample) this.samples.set(ws, attachment.sample)
           const peer = this.peer(ws, attachment.role)
           if (attachment.role === 'station') {
@@ -146,7 +146,7 @@ export class StationRoom extends DurableObject<RemoteEnv> {
       const pair = new WebSocketPair(), server = pair[1]
       const buffered = { pending: true, messages: [] as string[] }
       const peer = this.peer(server, path === '/station' ? 'station' : 'browser', buffered)
-      if(path==='/station')this.operationVersions.set(server,input.operationVersion===1?1:0)
+      if(path==='/station')this.operationVersions.set(server,[1,2].includes(input.operationVersion??0)?input.operationVersion!:0)
       if (path === '/station') this.applicationVersions.set(server, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14].includes(input.applicationVersion ?? 0) ? input.applicationVersion! : 0)
       try {
         if (path === '/station') relay.connectStation(input.identity, peer, now)
@@ -306,6 +306,6 @@ export class StationRoom extends DurableObject<RemoteEnv> {
       return [{ sessionId: observer.sessionId, deviceId:observer.identity.deviceId, peer }]
     })
     this.application.sync(station, observers, now)
-    this.operations.sync(station?{peer:station.peer,supported:!!stationSocket&&this.operationVersions.get(stationSocket)===1}:null,observers,now)
+    this.operations.sync(station?{peer:station.peer,supported:!!stationSocket&&[1,2].includes(this.operationVersions.get(stationSocket)??0),operationVersion:stationSocket?this.operationVersions.get(stationSocket):0}:null,observers,now)
   }
 }

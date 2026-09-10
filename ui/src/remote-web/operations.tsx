@@ -1,33 +1,34 @@
-import { createContext, useContext, useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useContext, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { LogEntry } from '../components/LogEntry'
 import { t } from '../i18n'
-import { useStationData } from '../stationAccess'
+import { useStationData, RemoteOperationsContext } from '../stationAccess'
+export { RemoteOperationsContext } from '../stationAccess'
 import type { LoggedQso } from '../types'
 import { manualRecord, type ManualRecord } from './operation-protocol'
 import type { OperationClient } from './operation-client'
 import { ObserverRecallEntry, RemoteRecall, type RecallProps } from './RemoteRecall'
 // Radio units are invariant protocol tokens, never translated or locale-formatted.
 const FREQUENCY_UNIT = 'MHz'
-export const RemoteOperationsContext = createContext<OperationClient | null>(null)
 export function LoggingAuthority({ client }: { client: OperationClient }) {
   const view = useSyncExternalStore(client.subscribe, client.getSnapshot)
   if (!client.enabled) return null
   const phase = view.state?.phase
+  const station = !!view.state?.controls || !!view.controlPending || !!view.controlResult || !!view.controlError
   const label = !view.connected
-    ? t('remote.loggingOffline')
+    ? station ? t('remote.controlOffline') : t('remote.loggingOffline')
     : !view.state && view.supported
       ? t('remote.loggingStatusUnavailable')
       : view.error === 'stationUnsupported'
         ? t('remote.loggingUnsupported')
         : phase === 'controlling'
           ? view.fresh
-            ? t('remote.loggingActive')
+            ? station ? t('remote.controlActive') : t('remote.loggingActive')
             : t('remote.loggingStatusUnavailable')
           : phase === 'occupied'
-            ? t('remote.loggingOccupied')
+            ? station ? t('remote.controlOccupied') : t('remote.loggingOccupied')
             : phase === 'available'
-              ? t('remote.loggingAvailable')
-              : t('remote.loggingPermissionRequired')
+              ? station ? t('remote.controlAvailable') : t('remote.loggingAvailable')
+              : station ? t('remote.controlRequired') : t('remote.loggingPermissionRequired')
   return (
     <div className="remote-logging-authority">
       <span role="status">{label}</span>
@@ -38,7 +39,7 @@ export function LoggingAuthority({ client }: { client: OperationClient }) {
           disabled={!view.fresh || view.busy}
           onClick={() => void client.acquire().catch(() => {})}
         >
-          {t('remote.loggingAcquire')}
+          {station ? t('remote.controlAcquire') : t('remote.loggingAcquire')}
         </button>
       )}
       {phase === 'controlling' && (
@@ -48,9 +49,19 @@ export function LoggingAuthority({ client }: { client: OperationClient }) {
           disabled={view.busy}
           onClick={() => void client.release()}
         >
-          {t('remote.loggingRelease')}
+          {station ? t('remote.controlRelease') : t('remote.loggingRelease')}
         </button>
       )}
+      {(view.controlPending || view.controlResult || view.controlError) && <div className="remote-control-result">
+        {view.controlError && !view.controlPending ? <span role="alert">{t('remote.controlRequestFailed')}</span> :
+        <span role="status">{view.controlResult?.outcome === 'applied' ? t('remote.controlApplied')
+          : view.controlResult?.outcome === 'rejected' ? t('remote.controlRefused')
+          : view.controlResult?.outcome === 'pending' && view.connected ? t('remote.controlPending') : t('remote.controlUnknown')}</span>}
+        {view.controlPending && <>
+          <button type="button" className="remote-button" disabled={view.busy || !view.connected} onClick={() => void client.refreshControl().catch(() => {})}>{t('remote.controlCheckResult')}</button>
+          <button type="button" className="remote-button" disabled={view.busy || view.controlResult?.outcome === 'pending'} onClick={() => void client.acknowledgeControl().catch(() => {})}>{t('remote.controlCheckedStation')}</button>
+        </>}
+      </div>}
     </div>
   )
 }
@@ -123,7 +134,7 @@ export function RemoteLogEntry({
     }
   }, [view.resolved, view.dismissed])
   const canSubmit =
-    available && view.fresh && view.state?.phase === 'controlling' && !view.unresolved
+    available && view.fresh && view.state?.phase === 'controlling' && view.state.actions.includes('log.manual') && !view.unresolved && !view.controlPending
   async function submit(record: LoggedQso, time: 'station' | 'explicit') {
     setError(null)
     setLogged(false)

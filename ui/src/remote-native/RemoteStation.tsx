@@ -62,7 +62,8 @@ export function RemoteStation() {
           {connected ? t('remote.disable') : t('remote.enable')}</button>
         <button type="button" className="remote-button" disabled={busy} onClick={() => void act({ type: 'refresh' })}>{t('remote.refreshDevices')}</button>
       </div>
-      {status.loggingPermissions && <><p>{t('remote.loggingLocalHint')}</p><button type="button" className="remote-button" onClick={()=>void act({type:'takeOverLogging'})}>{t('remote.loggingTakeOver')}</button></>}
+      {status.loggingPermissions && <><p>{t('remote.loggingLocalHint')}</p><button type="button" className="remote-button" onClick={()=>void act({type:'takeOverLogging'})}>{status.stationPermissions ? t('remote.controlTakeOver') : t('remote.loggingTakeOver')}</button></>}
+      {status.stationPermissions && <p>{t('remote.controlLocalHint')}</p>}
       <h3>{t('remote.browserApprovals')}</h3><p>{t('remote.browserMatch')}</p>
       {status.devices.length === 0 && <p>{t('remote.noBrowsers')}</p>}
       {status.devices.map(device => <div key={device.id}>
@@ -70,7 +71,8 @@ export function RemoteStation() {
         <button type="button" className="remote-button" disabled={busy} onClick={() => void act({ type: 'device', deviceId: device.id, approve: device.approved !== 1 })}>
           {device.approved === 1 ? t('remote.revokeBrowser') : t('remote.approveBrowser')}</button>
         {device.approved===1&&status.loggingPermissions&&<button type="button" className="remote-button" disabled={busy||!connected} onClick={()=>void act({type:'loggingPermission',deviceId:device.id,allow:!status.loggingPermissions!.includes(device.id)})}>{status.loggingPermissions.includes(device.id)?t('remote.loggingRevoke'):t('remote.loggingAllow')}</button>}
-        {status.loggingController===device.id&&<p role="status">{t('remote.loggingController')}</p>}
+        {device.approved===1&&status.stationPermissions&&<button type="button" className="remote-button" disabled={busy||!connected} onClick={()=>void act({type:'stationPermission',deviceId:device.id,allow:!status.stationPermissions!.includes(device.id)})}>{status.stationPermissions.includes(device.id)?t('remote.controlRevoke'):t('remote.controlAllow')}</button>}
+        {status.loggingController===device.id&&<p role="status">{status.stationPermissions?.includes(device.id)?t('remote.controlActive'):t('remote.loggingController')}</p>}
       </div>)}
       <details><summary>{t('remote.stationAccess')}</summary><p>{t('remote.revokeHint')}</p>
         <button type="button" className="remote-button" disabled={busy} onClick={() => void act({ type: 'forget' })}>{t('remote.revokeStation')}</button>

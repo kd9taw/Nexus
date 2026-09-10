@@ -7,7 +7,7 @@
 // readings, callsigns, FSK IDs and the picture's own painted text are invariant tokens and
 // stay in the code.
 import { useContext, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { useStationControl, useStationData } from '../stationAccess'
+import { useStationCapability, useStationControl, useStationData } from '../stationAccess'
 import { RemoteCollectionsContext } from '../remote-web/collections'
 import { sstvPlan, loadSstvImage } from '../remote-web/sstv'
 import { useSstvImage } from '../remote-web/useSstvImage'
@@ -538,7 +538,7 @@ function ReceivedThumb({entry,active}: {entry:SstvGalleryEntry;active:boolean}) 
  * txState=false: nothing here transmits.
  */
 export function SstvView({ snap, theme = 'default', onSnap, active = true, onSetFrequency, onSetTxEnabled, wheelSensitivity, txModeDefault, txPowerPct, panels, onOpenSettings }: Props) {
-  const canControl=useStationControl(), dataAvailable=useStationData(), source=useContext(RemoteCollectionsContext), remote=!!source
+  const canControl=useStationControl(), receiverControl=useStationCapability('decoder'), dataAvailable=useStationData(), source=useContext(RemoteCollectionsContext), remote=!!source
   // Panels (Phase 3): the RX canvas + the TX bar are pinned chrome (never panels); only the
   // Transmit composer and the Gallery are removable (⊞ menu). They render through
   // CockpitPaneFrame with ROLES — the composer is fit="content" (a drop zone cannot use
@@ -616,7 +616,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
 
   const armed = sstv?.armed === true
   const toggleArm = () => {
-    if (!canControl) return
+    if (!receiverControl) return
     void sstvArm(!armed)
       .then(setSstv)
       .catch(() => pushToast(t('sstv.arm.failed'), 'error'))
@@ -1619,7 +1619,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
             type="button"
             className={`sstv-arm${armed ? ' on' : ''}`}
             aria-pressed={armed}
-            disabled={!canControl}
+            disabled={!receiverControl}
             onClick={toggleArm}
             title={armed ? t('sstv.arm.on.title') : t('sstv.arm.off.title')}
           >

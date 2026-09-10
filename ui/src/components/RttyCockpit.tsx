@@ -42,7 +42,7 @@ import { pushToast, withErrorToast } from '../toast'
 import { IS_MAC, FN_KEY_HINT } from '../platform'
 import { usePinnedScroll } from '../usePinnedScroll'
 import { t } from '../i18n'
-import { useStationControl, useStationData } from '../stationAccess'
+import { useStationCapability, useStationControl, useStationData } from '../stationAccess'
 import { RemoteRecallEntry } from '../remote-web/RemoteRecall'
 
 interface Props {
@@ -157,7 +157,7 @@ function seqLabel(s: string): string {
  * operator is on another section.
  */
 export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSetTxEnabled, theme = 'dark', wheelSensitivity, onOpenLogbook, panels }: Props) {
-  const control = useStationControl()
+  const control = useStationControl(), receiverControl = useStationCapability('decoder')
   const dataAvailable = useStationData()
   // Panels (Phase 3): the waterfall, the header, the auto-seq strip, the macros and the compose
   // bar are pinned; only the decoded-text stream is removable, filling the space between them.
@@ -223,7 +223,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
 
   const armed = rtty?.armed === true
   const toggleArm = () => {
-    if (!control) return
+    if (!receiverControl) return
     void rttyArm(!armed)
       .then(setRtty)
       .catch(() => pushToast(t('rtty.arm.failed'), 'error'))
@@ -555,8 +555,8 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
             { hz: rtty.markHz, color: '#3ddc8c', label: 'M' },
             { hz: rtty.spaceHz, color: '#ffb347', label: 'S' },
           ]}
-          hint={control ? t('rtty.waterfall.hint') : t('remote.keyboardFollowsStation')}
-          onTune={control ? (hz) => void rttyNet(hz).then(setRtty).catch(() => {}) : undefined}
+          hint={receiverControl ? t('rtty.waterfall.hint') : t('remote.keyboardFollowsStation')}
+          onTune={receiverControl ? (hz) => void rttyNet(hz).then(setRtty).catch(() => {}) : undefined}
         />
       )}
 
@@ -596,7 +596,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
         <div className="cw-decode-head">
           <span className="cw-decode-label">{RX_PLATE}</span>
           <button
-            disabled={!control}
+            disabled={!receiverControl}
             type="button"
             className={`rtty-arm${armed ? ' on' : ''}`}
             aria-pressed={armed}
@@ -635,11 +635,11 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           )}
           {armed && (
             <button
-              disabled={!control}
+              disabled={!receiverControl}
               type="button"
               className="rtty-arm"
               onClick={() => {
-                if (!control) return
+                if (!receiverControl) return
                 void rttyAfcReset()
                   .then(setRtty)
                   .catch(() => {})
@@ -650,10 +650,10 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
             </button>
           )}
           <button
-            disabled={!control}
+            disabled={!receiverControl}
             className="cw-decode-clear"
             onClick={() => {
-              if (!control) return
+              if (!receiverControl) return
               void rttyClear()
                 .then(setRtty)
                 .catch(() => {})

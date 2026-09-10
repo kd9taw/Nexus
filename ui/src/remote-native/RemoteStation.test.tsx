@@ -56,3 +56,22 @@ it('keeps logging approval local, per browser, and provides immediate local take
  await screen.findByRole('button',{name:'Allow remote logging'})
  expect(actions).toEqual([{type:'loggingPermission',deviceId,allow:true},{type:'takeOverLogging'}])
 })
+
+it('keeps station control permission separate from logging and clears both on takeover',async()=>{
+ const deviceId=crypto.randomUUID(),actions:RemoteStationAction[]=[]
+ let status:RemoteStationStatus={phase:'connected',origin:'https://remote-staging.hamradiotools.io',stationId:crypto.randomUUID(),accountId:crypto.randomUUID(),pairingId:null,pairingCode:null,expiresAt:null,devices:[{id:deviceId,name:'Approved browser',approved:1,expiresAt:Date.now()+600000}],error:null,loggingPermissions:[],stationPermissions:[],loggingController:null}
+ window.__TAURI_INTERNALS__={invoke:(async(command:string,input:unknown)=>{
+  if(command==='get_remote_station_status')return status
+  if(command!=='remote_station_action')throw Error('unexpectedCommand')
+  const action=(input as {action:RemoteStationAction}).action;actions.push(action)
+  if(action.type==='stationPermission')status={...status,stationPermissions:action.allow?[deviceId]:[]}
+  if(action.type==='takeOverLogging')status={...status,stationPermissions:[],loggingPermissions:[],loggingController:null}
+  return status
+ }) as NonNullable<Window['__TAURI_INTERNALS__']>['invoke']}
+ render(<RemoteStation/>);fireEvent.click(await screen.findByRole('button',{name:'Allow station controls'}))
+ await screen.findByRole('button',{name:'Revoke station controls'})
+ expect(screen.getByRole('button',{name:'Allow remote logging'})).toBeTruthy()
+ fireEvent.click(screen.getByRole('button',{name:'End remote control and clear permissions'}))
+ await screen.findByRole('button',{name:'Allow station controls'})
+ expect(actions).toEqual([{type:'stationPermission',deviceId,allow:true},{type:'takeOverLogging'}])
+})

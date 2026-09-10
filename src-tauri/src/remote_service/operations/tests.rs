@@ -57,6 +57,319 @@ impl Drop for Fixture {
         std::fs::remove_dir_all(&self.dir).unwrap();
     }
 }
+
+fn control_state(f: &Fixture, now: Instant) -> Value {
+    f.authority
+        .handle_version(
+            (f.connection, 2),
+            SESSION,
+            DEVICE,
+            &Request::State { request_id: id() },
+            &f.engine,
+            now,
+        )
+        .unwrap()
+}
+
+fn acquire_controls(f: &Fixture, now: Instant) -> Value {
+    f.authority.permit_station(DEVICE, true).unwrap();
+    f.authority
+        .handle_version(
+            (f.connection, 2),
+            SESSION,
+            DEVICE,
+            &Request::Acquire {
+                request_id: id(),
+                station_boot_id: control_state(f, now)["stationBootId"]
+                    .as_str()
+                    .unwrap()
+                    .into(),
+            },
+            &f.engine,
+            now,
+        )
+        .unwrap()
+}
+
+fn control_request(state: &Value, action: Value) -> Request {
+    serde_json::from_value(json!({"type":"stationControl", "requestId":id(), "stationBootId":state["stationBootId"],
+        "leaseId":state["leaseId"], "expectedRevision":state["revision"], "commandWindowId":state["commandWindowId"],
+        "clientSequence":state["nextSequence"], "context":state["controls"]["context"], "action":action})).unwrap()
+}
+
+#[test]
+#[cfg(feature = "radio")]
+fn an_amplifier_command_has_one_native_receipt_and_needs_later_hardware_confirmation() {
+    let f = Fixture::new();
+    let (radio, amp) = {
+        let mut e = f.engine.lock().unwrap();
+        let mut settings = e.settings().clone();
+        settings.ensure_radio_profiles();
+        let active = settings.active_radio;
+        let p = settings.radios.iter_mut().find(|p| p.id == active).unwrap();
+        p.amp_model = "spe".into();
+        p.amp_port = "fake-remote-amp".into();
+        settings.sync_flat_from_active();
+        e.apply_settings(settings);
+        e.set_tx_enabled(false);
+        (e.remote_open_radio().unwrap(), e.remote_open_amp().unwrap())
+    };
+    let sample = |operate| {
+        let mut e = f.engine.lock().unwrap();
+        let r = e.remote_radio_read(&radio, Instant::now()).unwrap();
+        e.remote_observe_cat(Some(&r), Some(true));
+        e.remote_observe_ptt(Some(&r), Some(false));
+        let r = e.remote_amp_read(&amp, Instant::now()).unwrap();
+        e.remote_observe_amp(
+            Some(&r),
+            tempo_app::dto::AmpStatusDto {
+                family: "spe".into(),
+                linked: true,
+                operate: Some(operate),
+                transmitting: Some(false),
+                output_watts: Some(0),
+                band_label: Some("20m".into()),
+                ..Default::default()
+            },
+        );
+    };
+    sample(false);
+    let now = Instant::now();
+    let state = acquire_controls(&f, now);
+    let command = control_request(
+        &state,
+        json!({"action":"amplifier.operate","expectedOperate":false,"operate":true}),
+    );
+    let run = |request: &Request| {
+        f.authority.handle_version(
+            (f.connection, 2),
+            SESSION,
+            DEVICE,
+            request,
+            &f.engine,
+            Instant::now(),
+        )
+    };
+    let first = run(&command).unwrap();
+    assert_eq!(first["outcome"], "pending");
+    assert_eq!(run(&command).unwrap(), first);
+    let mut request = f.engine.lock().unwrap().take_remote_amp().unwrap();
+    assert!(
+        f.engine.lock().unwrap().take_remote_amp().is_none(),
+        "a duplicate cannot enqueue a second toggle"
+    );
+    let result = Request::Result {
+        request_id: id(),
+        operation_id: command.id().into(),
+    };
+    assert_eq!(run(&result).unwrap()["outcome"], "pending");
+    sample(false);
+    request.begin(&f.engine.lock().unwrap()).unwrap();
+    assert!(request.begin_write());
+    sample(true);
+    request.confirm(&f.engine.lock().unwrap());
+    let confirmed = run(&result).unwrap();
+    assert_eq!(confirmed["outcome"], "applied");
+    assert_eq!(confirmed["evidence"], "amplifierReadback");
+    assert_eq!(run(&command).unwrap(), confirmed);
+    assert!(!f.engine.lock().unwrap().tx_enabled());
+}
+
+#[test]
+fn logging_and_station_permissions_do_not_grant_each_other() {
+    let f = Fixture::new();
+    let now = Instant::now();
+    f.acquire(now);
+    let command = control_request(
+        &control_state(&f, now),
+        json!({"action":"decoder.arm","receiver":"rtty","on":true}),
+    );
+    assert_eq!(
+        f.authority
+            .handle_version((f.connection, 2), SESSION, DEVICE, &command, &f.engine, now),
+        Err("localPermissionRequired")
+    );
+    assert!(!f.engine.lock().unwrap().rtty_armed());
+    f.authority.permit(DEVICE, false).unwrap();
+    let control = acquire_controls(&f, now);
+    #[cfg(feature = "radio")]
+    assert_eq!(
+        control["controls"]["capabilities"],
+        json!(["decoder", "amplifier"])
+    );
+    #[cfg(not(feature = "radio"))]
+    assert_eq!(control["controls"]["capabilities"], json!(["decoder"]));
+    assert_eq!(control["actions"], json!([]));
+    assert_eq!(control["txArmed"], false);
+    assert_eq!(
+        f.run(&f.command(&control), now),
+        Err("localPermissionRequired")
+    );
+    assert_eq!(
+        f.run(
+            &control_request(&control, json!({"action":"decoder.clear","receiver":"cw"})),
+            now
+        ),
+        Err("stationUnsupported")
+    );
+}
+
+#[test]
+fn remote_receiver_gestures_use_real_native_state_without_arming_transmit() {
+    let f = Fixture::new();
+    let now = Instant::now();
+    acquire_controls(&f, now);
+    for receiver in ["rtty", "psk", "sstv", "aprs"] {
+        for on in [true, false, true] {
+            let request = control_request(
+                &control_state(&f, now),
+                json!({"action":"decoder.arm","receiver":receiver,"on":on}),
+            );
+            let r = f
+                .authority
+                .handle_version((f.connection, 2), SESSION, DEVICE, &request, &f.engine, now)
+                .unwrap();
+            assert_eq!(r["outcome"], "applied");
+            assert_eq!(r["evidence"], "receiverState");
+            let engine = f.engine.lock().unwrap();
+            let armed = match receiver {
+                "rtty" => engine.rtty_armed(),
+                "psk" => engine.psk_armed(),
+                "sstv" => engine.sstv_armed(),
+                _ => engine.aprs_armed(),
+            };
+            assert_eq!(armed, on);
+            assert!(!engine.tx_enabled());
+            if receiver == "aprs" && on {
+                assert_eq!(engine.aprs_arm_source(), tempo_app::engine::AprsArm::Auto);
+            }
+        }
+    }
+}
+
+#[test]
+fn a_replayed_clear_does_not_erase_text_received_after_the_original_gesture() {
+    let f = Fixture::new();
+    let now = Instant::now();
+    let state = acquire_controls(&f, now);
+    let request = control_request(&state, json!({"action":"decoder.clear","receiver":"rtty"}));
+    let applied = f
+        .authority
+        .handle_version((f.connection, 2), SESSION, DEVICE, &request, &f.engine, now)
+        .unwrap();
+    f.engine.lock().unwrap().push_rtty_decode(
+        &[tempo_core::textmode::DecodedChar {
+            ch: 'X',
+            confidence: 1.0,
+        }],
+        0.0,
+        false,
+    );
+    let replay = f
+        .authority
+        .handle_version((f.connection, 2), SESSION, DEVICE, &request, &f.engine, now)
+        .unwrap();
+    assert_eq!(replay, applied);
+    assert_eq!(f.engine.lock().unwrap().rtty_state().text, "X");
+}
+
+#[test]
+fn receiver_net_reacquire_and_psk_mode_reach_the_decoder_without_changing_local_tx() {
+    let f = Fixture::new();
+    let now = Instant::now();
+    f.engine.lock().unwrap().set_tx_enabled(true);
+    acquire_controls(&f, now);
+    for receiver in ["rtty", "psk"] {
+        for action in [
+            json!({"action":"decoder.net","receiver":receiver,"hz":1625.0}),
+            json!({"action":"decoder.afcReset","receiver":receiver}),
+        ] {
+            let request = control_request(&control_state(&f, now), action);
+            let result = f
+                .authority
+                .handle_version((f.connection, 2), SESSION, DEVICE, &request, &f.engine, now)
+                .unwrap();
+            assert_eq!(result["outcome"], "applied");
+            let mut e = f.engine.lock().unwrap();
+            if receiver == "rtty" {
+                assert_eq!(e.rtty_center_hz(), 1625.0);
+                assert!(e.take_rtty_afc_reset());
+            } else {
+                assert_eq!(e.psk_center_hz(), 1625.0);
+                assert!(e.take_psk_afc_reset());
+            }
+            assert!(e.tx_enabled());
+        }
+    }
+    let request = control_request(
+        &control_state(&f, now),
+        json!({"action":"decoder.pskMode","mode":"QPSK31","reverse":true}),
+    );
+    let result = f
+        .authority
+        .handle_version((f.connection, 2), SESSION, DEVICE, &request, &f.engine, now)
+        .unwrap();
+    assert_eq!(result["outcome"], "applied");
+    assert_eq!(
+        f.engine.lock().unwrap().psk_mode(),
+        (tempo_core::psk::PskModeKind::Qpsk31, true)
+    );
+    let invalid = control_request(
+        &control_state(&f, now),
+        json!({"action":"decoder.net","receiver":"psk","hz":1.0}),
+    );
+    let result = f
+        .authority
+        .handle_version((f.connection, 2), SESSION, DEVICE, &invalid, &f.engine, now)
+        .unwrap();
+    assert_eq!(result["outcome"], "rejected");
+    assert_eq!(result["reason"], "invalidAction");
+    assert_eq!(f.engine.lock().unwrap().psk_center_hz(), 1625.0);
+}
+
+#[test]
+fn receiver_control_refuses_local_takeover_and_an_old_click_context() {
+    let f = Fixture::new();
+    let now = Instant::now();
+    let state = acquire_controls(&f, now);
+    let request = control_request(
+        &state,
+        json!({"action":"decoder.arm","receiver":"psk","on":true}),
+    );
+    f.engine.lock().unwrap().set_frequency(7.074, "40m", "USB");
+    assert_eq!(
+        f.authority
+            .handle_version((f.connection, 2), SESSION, DEVICE, &request, &f.engine, now),
+        Err("staleContext")
+    );
+    assert!(!f.engine.lock().unwrap().psk_armed());
+    let request = control_request(
+        &control_state(&f, now),
+        json!({"action":"decoder.arm","receiver":"psk","on":true}),
+    );
+    f.authority.invalidate();
+    assert_eq!(
+        f.authority
+            .handle_version((f.connection, 2), SESSION, DEVICE, &request, &f.engine, now),
+        Err("localPermissionRequired")
+    );
+    assert!(!f.engine.lock().unwrap().psk_armed());
+}
+
+#[test]
+fn a_receive_only_aprs_gesture_never_upgrades_the_ack_interlock() {
+    let mut engine = tempo_app::engine::Engine::new("W9XYZ", "EN52", 0);
+    engine.set_tx_enabled(true);
+    for _ in 0..2 {
+        engine.set_aprs_receive_only(false);
+        engine.set_aprs_receive_only(true);
+        assert_eq!(engine.aprs_arm_source(), tempo_app::engine::AprsArm::Auto);
+        assert!(
+            engine.tx_enabled(),
+            "a receiver gesture preserves the existing local TX choice"
+        );
+    }
+}
 #[test]
 fn manual_logging_requires_local_permission_and_one_controller() {
     let f = Fixture::new();
@@ -238,6 +551,27 @@ fn manual_logging_refuses_busy_engine_instead_of_queueing_and_counter_wrap() {
             .handle(u64::MAX, SESSION, DEVICE, &command, &f.engine, now),
         Err("authorityUnavailable")
     );
+}
+
+#[test]
+fn authority_counter_exhaustion_revokes_already_issued_hardware_permission() {
+    let f = Fixture::new();
+    let now = Instant::now();
+    acquire_controls(&f, now);
+    let permit = f
+        .authority
+        .hardware
+        .permit(now + Duration::from_secs(5))
+        .unwrap();
+    assert!(permit.valid(now));
+    {
+        let mut core = f.authority.core.lock().unwrap();
+        core.revision = MAX_COUNTER;
+        assert_eq!(f.authority.advance(&mut core), Err("authorityUnavailable"));
+        assert!(core.lease.is_none());
+        assert!(core.windows.is_empty());
+    }
+    assert!(!permit.valid(now));
 }
 
 #[test]
