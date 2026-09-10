@@ -123,7 +123,9 @@ pub fn execute(
     if !context.matches_radio(engine) {
         return Err(Reason::ContextChanged);
     }
-    if engine.remote_receiver_context_generation() == u64::MAX {
+    if engine.remote_receiver_context_generation() == u64::MAX
+        || engine.remote_actuation_context_generation() == u64::MAX
+    {
         return Err(Reason::ContextChanged);
     }
     match action {

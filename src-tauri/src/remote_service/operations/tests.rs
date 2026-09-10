@@ -357,6 +357,37 @@ fn receiver_control_refuses_local_takeover_and_an_old_click_context() {
 }
 
 #[test]
+fn local_amp_gestures_invalidate_old_windows_without_changing_the_tx_context() {
+    let f = Fixture::new();
+    let now = Instant::now();
+    let state = acquire_controls(&f, now);
+    let action = json!({"action":"decoder.arm","receiver":"psk","on":true});
+    let request = control_request(&state, action.clone());
+    {
+        let e = f.engine.lock().unwrap();
+        let tx_generation = e.remote_log_context_generation();
+        let actuation = e.remote_actuation_context_generation();
+        e.note_local_amplifier_command();
+        e.note_local_amplifier_command();
+        assert_eq!(e.remote_log_context_generation(), tx_generation);
+        assert_eq!(e.remote_actuation_context_generation(), actuation + 2);
+    }
+    assert_eq!(
+        f.authority
+            .handle_version((f.connection, 2), SESSION, DEVICE, &request, &f.engine, now),
+        Err("staleContext")
+    );
+    assert!(!f.engine.lock().unwrap().psk_armed());
+    let fresh = control_request(&control_state(&f, now), action);
+    let result = f
+        .authority
+        .handle_version((f.connection, 2), SESSION, DEVICE, &fresh, &f.engine, now)
+        .unwrap();
+    assert_eq!(result["outcome"], "applied");
+    assert!(f.engine.lock().unwrap().psk_armed());
+}
+
+#[test]
 fn a_receive_only_aprs_gesture_never_upgrades_the_ack_interlock() {
     let mut engine = tempo_app::engine::Engine::new("W9XYZ", "EN52", 0);
     engine.set_tx_enabled(true);

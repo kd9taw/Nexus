@@ -8947,6 +8947,16 @@ impl Engine {
         self.remote_receiver_gen
     }
 
+    pub fn remote_actuation_context_generation(&self) -> u64 {
+        self.remote_actuation.generation()
+    }
+
+    /// A local amplifier gesture supersedes pending Remote hardware work. This
+    /// does not alter the local TX latch or transmit sequence generation.
+    pub fn note_local_amplifier_command(&self) {
+        self.remote_actuation.revoke();
+    }
+
     /// Revoked by the existing native TX/context transitions. Workers can check
     /// this after releasing the engine, without holding its mutex across I/O.
     pub fn remote_actuation_permit(

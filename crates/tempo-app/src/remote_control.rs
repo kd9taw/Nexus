@@ -18,6 +18,10 @@ pub mod amplifier;
 pub struct Revocation(Arc<AtomicU64>);
 
 impl Revocation {
+    pub fn generation(&self) -> u64 {
+        self.0.load(Ordering::SeqCst)
+    }
+
     pub fn revoke(&self) {
         // Exhaustion permanently refuses new permits rather than wrapping into
         // an earlier controller's generation.
