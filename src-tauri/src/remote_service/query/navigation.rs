@@ -21,12 +21,20 @@ const VALID_MS: u64 = 30_000;
 pub(super) fn collection(c: Collection) -> bool {
     matches!(
         c,
-        Collection::Connect | Collection::Path | Collection::Satellites | Collection::Satellite
+        Collection::Settings
+            | Collection::Programming
+            | Collection::Connect
+            | Collection::Path
+            | Collection::Satellites
+            | Collection::Satellite
     )
 }
 pub(super) fn valid_search(c: Collection, search: &str) -> bool {
     match c {
-        Collection::Connect | Collection::Satellites => search.is_empty(),
+        Collection::Settings
+        | Collection::Programming
+        | Collection::Connect
+        | Collection::Satellites => search.is_empty(),
         Collection::Path => {
             let b = search.as_bytes();
             matches!(b.len(), 4 | 6 | 8)
@@ -254,12 +262,12 @@ impl Write for Bounded {
         Ok(())
     }
 }
-fn bounded(value: &impl Serialize) -> Result<Vec<u8>, &'static str> {
+pub(super) fn bounded(value: &impl Serialize) -> Result<Vec<u8>, &'static str> {
     let mut out = Bounded(Vec::new());
     serde_json::to_writer(&mut out, value).map_err(|_| "applicationTooLarge")?;
     Ok(out.0)
 }
-fn value(value: &impl Serialize) -> Result<Value, &'static str> {
+pub(super) fn value(value: &impl Serialize) -> Result<Value, &'static str> {
     serde_json::from_slice(&bounded(value)?).map_err(|_| "applicationUnavailable")
 }
 fn encode(
@@ -306,6 +314,7 @@ fn build(
     sources: &Sources,
 ) -> Result<Value, &'static str> {
     match kind {
+        Collection::Settings | Collection::Programming => super::configuration::build(kind, engine),
         Collection::Connect | Collection::Path => connect(kind, search, context, engine, sources),
         Collection::Satellites => satellites(context, engine),
         Collection::Satellite => satellite(search, context, engine),

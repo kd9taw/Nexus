@@ -236,6 +236,10 @@ pub async fn connected(
         "1".parse().map_err(|_| "invalidResponse")?,
     );
     request.headers_mut().insert(
+        "x-nexus-application-configuration-version",
+        "1".parse().map_err(|_| "invalidResponse")?,
+    );
+    request.headers_mut().insert(
         "x-nexus-application-navigation-version",
         "1".parse().map_err(|_| "invalidResponse")?,
     );

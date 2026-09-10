@@ -154,3 +154,7 @@
    within its own grid cell and never paints over the planning strip. */
 .remote-workspace .connect-header { flex-shrink: 0; }
 .remote-workspace .connect { min-height: 38em; flex-shrink: 0; }
+
+/* The native grid display overrides HTML hidden without this explicit rule. */
+.remote-workspace .rp-body[hidden] { display: none; }
+.remote-workspace .settings-panel[data-remote-configuration] { min-width: 0; }

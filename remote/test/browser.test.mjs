@@ -64,7 +64,7 @@ async function chrome() {
   } catch(error) { ws?.close(); if(!exited)process.kill(-child.pid,'SIGTERM'); await rm(profile,{recursive:true,force:true,maxRetries:8,retryDelay:100}); throw error }
 }
 
-for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]) test(`compiled hosted browser v${applicationVersion} completes PKCE, local device approval, observation and viewport checks`, { timeout: applicationVersion >= 13 ? 300000 : 180000 }, async () => {
+for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]) test(`compiled hosted browser v${applicationVersion} completes PKCE, local device approval, observation and viewport checks`, { timeout: applicationVersion >= 14 ? 360000 : applicationVersion >= 13 ? 300000 : 180000 }, async () => {
   const app=await runtime(), artifacts=process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS ? join(process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS, `v${applicationVersion}`) : undefined
   let browser, station, producing=true, producer, applicationProducer
   const results=[]
@@ -75,7 +75,7 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]) te
     const shell = await fetch(app.origin,{signal:AbortSignal.timeout(3000)})
     assert.equal(shell.status,200)
     assert.match(await shell.text(), /Nexus Remote/)
-    const stationHeaders = { 'x-nexus-application-version': '1', ...(applicationVersion >= 2 ? { 'x-nexus-application-stream-version': '2' } : {}), ...(applicationVersion >= 3 ? { 'x-nexus-application-query-version': '1' } : {}), ...(applicationVersion >= 4 ? { 'x-nexus-application-recall-version': '1' } : {}), ...(applicationVersion >= 5 ? { 'x-nexus-application-keyboard-version': '1' } : {}), ...(applicationVersion >= 6 ? { 'x-nexus-application-insights-version': '1' } : {}), ...(applicationVersion >= 7 ? { 'x-nexus-application-dxpeditions-version': '1' } : {}), ...(applicationVersion >= 8 ? { 'x-nexus-application-memories-version': '1' } : {}), ...(applicationVersion >= 9 ? { 'x-nexus-application-ota-version': '1' } : {}), ...(applicationVersion >= 10 ? { 'x-nexus-application-field-day-version': '1' } : {}), ...(applicationVersion >= 11 ? { 'x-nexus-application-js8-version': '1' } : {}), ...(applicationVersion >= 12 ? {'x-nexus-application-station-modes-version':'1'} : {}), ...(applicationVersion >= 13 ? {'x-nexus-application-navigation-version':'1'} : {}) }
+    const stationHeaders = { 'x-nexus-application-version': '1', ...(applicationVersion >= 2 ? { 'x-nexus-application-stream-version': '2' } : {}), ...(applicationVersion >= 3 ? { 'x-nexus-application-query-version': '1' } : {}), ...(applicationVersion >= 4 ? { 'x-nexus-application-recall-version': '1' } : {}), ...(applicationVersion >= 5 ? { 'x-nexus-application-keyboard-version': '1' } : {}), ...(applicationVersion >= 6 ? { 'x-nexus-application-insights-version': '1' } : {}), ...(applicationVersion >= 7 ? { 'x-nexus-application-dxpeditions-version': '1' } : {}), ...(applicationVersion >= 8 ? { 'x-nexus-application-memories-version': '1' } : {}), ...(applicationVersion >= 9 ? { 'x-nexus-application-ota-version': '1' } : {}), ...(applicationVersion >= 10 ? { 'x-nexus-application-field-day-version': '1' } : {}), ...(applicationVersion >= 11 ? { 'x-nexus-application-js8-version': '1' } : {}), ...(applicationVersion >= 12 ? {'x-nexus-application-station-modes-version':'1'} : {}), ...(applicationVersion >= 13 ? {'x-nexus-application-navigation-version':'1'} : {}), ...(applicationVersion >= 14 ? {'x-nexus-application-configuration-version':'1'} : {}) }
     station=await pair.native.open(pair.stationId, undefined, 101, stationHeaders)
     let code=null, oauth=null, exchanges=0, providerFailure=false, exceptions=0, acknowledgements=0, unexpectedMessages=0
     const applicationTraffic = { reads: 0, acks: 0, subscriptions: 0, batches: 0, bytes: 0, byCommand: {}, maxResponseBytes: 0 }
@@ -251,6 +251,7 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]) te
       if (!applicationAvailable || !producing) { withheld.push({type:request.type,collection:request.collection});continue }
       if (request.type === 'applicationQuery') {
         assert.ok(applicationVersion >= 3)
+        if(['settings','programming'].includes(request.collection))assert.ok(applicationVersion>=14)
         if(['connect','path','satellites','satellite'].includes(request.collection)){assert.ok(applicationVersion>=13);navigationQueries.push({collection:request.collection,search:request.search})}
         if (['sstvImage','aprs'].includes(request.collection)) assert.ok(applicationVersion>=12)
         if (request.collection === 'js8Context') { assert.ok(applicationVersion >= 11); js8Queries.push(request.collection) }
@@ -270,7 +271,7 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]) te
         const [givenId, offsetText] = (request.cursor??'').split(':')
         const offset = Number(offsetText??0), snapshotId=givenId||crypto.randomUUID()
         if (!givenId) {
-          const collection = request.collection === 'sstvImage' ? stationModes.images.get(request.search) : request.collection === 'recall' ? recallFixture(request.search) : ['connect','path','satellites','satellite'].includes(request.collection)?navigation.collection(request.collection,request.search):collections[request.collection]
+          const collection = request.collection === 'sstvImage' ? stationModes.images.get(request.search) : request.collection === 'recall' ? recallFixture(request.search) : ['connect','path','satellites','satellite','settings','programming'].includes(request.collection)?navigation.collection(request.collection,request.search):collections[request.collection]
           let rows=collection.rows
           if(request.collection==='log') rows=rows.filter(q=>(!request.unconfirmed||!q.awardConfirmed)&&(!request.search||q.call.toLowerCase().includes(request.search.toLowerCase())))
           if(request.collection==='decodes'&&request.after!==null) rows=rows.filter(q=>q.sequence>request.after)
@@ -975,6 +976,47 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]) te
       await until(connect?`!document.querySelector('.connect-header')?.textContent.includes('Station data · Read only')`:`document.querySelectorAll('.sat-pick').length===0`,35000)
       unavailableCollections.delete(collection)
       await until(connect?`document.querySelector('.connect-header')?.textContent.includes('Station data · Read only')`:`document.querySelectorAll('.sat-pick').length===40`)
+    }
+    for(const label of ['Settings','Program']){
+      await click(button(label))
+      if(applicationVersion<14){await until(`!!document.querySelector('.remote-view-unavailable')`);continue}
+      const settings=label==='Settings'
+      await until(settings?`!!document.querySelector('.settings-tabs')`:`document.querySelectorAll('.rp-chan-name').length===1200`)
+      if(settings){
+        const tabs=await evaluate(`[...document.querySelectorAll('.settings-tab')].map(e=>e.textContent)`)
+        assert.ok(tabs.length>5)
+        for(const name of tabs){await click(`[...document.querySelectorAll('.settings-tab')].find(e=>e.textContent===${JSON.stringify(name)})`);assert.equal(await evaluate(`!!document.querySelector('input[type="password"]')`),false)}
+        await click(`[...document.querySelectorAll('.settings-tab')].find(e=>e.textContent==='Station')`)
+        await until(`document.querySelector('#settings-operator-radio input')?.value==='W1AW'`)
+        assert.ok(await evaluate(`[...document.querySelectorAll('#settings-operator-radio input,#settings-operator-radio select')].every(e=>e.matches(':disabled'))`))
+      }else{
+        assert.equal(await evaluate(`document.querySelector('.rp-chan-row:last-child .rp-chan-name')?.value`),'CH1199')
+        assert.ok(await evaluate(`[...document.querySelectorAll('.radioprog button,.radioprog input,.radioprog select')].length>1000&&[...document.querySelectorAll('.radioprog button,.radioprog input,.radioprog select')].every(e=>e.disabled)`))
+      }
+      const targets=settings?['.settings-tab:last-child','#settings-operator-radio input','#settings-remote-access']:['.rp-origin','.rp-chan-row:first-child .rp-chan-name','.rp-chan-row:last-child .rp-chan-name','.rp-export-chirp']
+      for(const [width,height,zoom] of [[360,740,1],[390,844,1],[844,390,1],[1024,768,1],[1280,800,1],[1200,1390,1],[3440,1440,1],[1024,768,0.8],[1280,800,1.75],[390,844,1.75]])for(const theme of ['dark','light']){
+        await browser.call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false},session)
+        await evaluate(`document.documentElement.style.setProperty('--ui-zoom','${zoom}');document.documentElement.dataset.theme='${theme}';window.dispatchEvent(new Event('resize'))`)
+        await settledLayout();await settledLayout()
+        for(const target of targets){
+          await evaluate(`document.querySelector('${target}').scrollIntoView({block:'nearest',inline:'nearest',behavior:'instant'})`)
+          await settledLayout();await settledLayout()
+          const shape=await evaluate(`(()=>{const e=document.querySelector('${target}'),r=e.getBoundingClientRect(),x=Math.max(r.left+1,Math.min(r.right-1,r.left+r.width/2)),y=Math.max(1,Math.min(innerHeight-1,r.top+r.height/2)),clipped=[];for(let p=e.parentElement;p;p=p.parentElement){const c=getComputedStyle(p);if(['hidden','clip'].includes(c.overflowY)&&p.scrollHeight>p.clientHeight+1)clipped.push({class:p.className,scroll:p.scrollHeight,client:p.clientHeight})}let exposed=0;if(e.tagName==='CANVAS')for(let py=Math.max(1,r.top+8);py<Math.min(innerHeight-1,r.bottom-8);py+=16)for(let px=Math.max(1,r.left+8);px<Math.min(innerWidth-1,r.right-8);px+=16)if(e.contains(document.elementFromPoint(px,py)))exposed++;return {zoom:Number(getComputedStyle(document.documentElement).getPropertyValue('--ui-zoom')),docW:document.documentElement.scrollWidth,docH:document.documentElement.scrollHeight,rect:r.toJSON(),reachable:e.tagName==='CANVAS'?exposed>=4:e.contains(document.elementFromPoint(x,y)),exposed,clipped}})()`)
+          const good=Math.abs(shape.zoom-zoom)<0.001&&shape.docW<=width+1&&shape.docH<=height+1&&shape.rect.width>0&&shape.rect.height>0&&shape.rect.top<height&&shape.rect.bottom>0&&shape.reachable&&shape.clipped.length===0
+          if(!good&&artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,`remote-${label.toLowerCase()}-failure.png`),Buffer.from(shot.data,'base64'))}
+          assert.ok(good,`${label} content remains reachable: ${JSON.stringify({width,height,zoom,theme,target,shape})}`)
+          results.push({navigation:label,width,height,zoom,theme,target,shape})
+        }
+      }
+      await browser.call('Emulation.setDeviceMetricsOverride',{width:1280,height:800,deviceScaleFactor:1,mobile:false},session)
+      await evaluate(`document.documentElement.style.setProperty('--ui-zoom','1');window.dispatchEvent(new Event('resize'));document.querySelector('.remote-workspace').scrollTop=0;for(const e of document.querySelectorAll('.remote-workspace *'))if(/auto|scroll/.test(getComputedStyle(e).overflowY))e.scrollTop=0`)
+      await settledLayout();await settledLayout()
+      if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,`remote-nexus-${label.toLowerCase()}.png`),Buffer.from(shot.data,'base64'))}
+      const collection=settings?'settings':'programming'
+      unavailableCollections.add(collection)
+      await until(settings?`!document.querySelector('.settings-tabs')`:`document.querySelector('.rp-body')?.hidden===true`,35000)
+      unavailableCollections.delete(collection)
+      await until(settings?`!!document.querySelector('.settings-tabs')`:`document.querySelectorAll('.rp-chan-name').length===1200`)
     }
     const beforeTempo = structuredClone(applicationData.get_snapshot)
     for (const tier of ['TempoFast','TempoDeep']) {

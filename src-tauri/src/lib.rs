@@ -6514,7 +6514,7 @@ fn satellite_needs_passes(
             if p.los_unix <= now {
                 continue;
             }
-            let earn = propagation::pass_earn(t, p.aos_unix, p.los_unix, &sat_needs);
+            let earn = propagation::pass_earn(t, p.aos_unix, p.los_unix, sat_needs);
             passes.push(SatPassDto {
                 name: label.clone(),
                 norad,

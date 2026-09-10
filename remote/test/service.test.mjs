@@ -52,6 +52,58 @@ async function admitted(pair, applicationVersion = 0, extensions = {}) {
   const session = await browser.take(type('session'))
   return { station, browser, deviceId, session, ticket }
 }
+test('configuration requires all extensions, preserves v13 refusal and survive hibernation', async () => {
+  const headers = { 'x-nexus-application-stream-version': '2', 'x-nexus-application-query-version': '1',
+    'x-nexus-application-recall-version': '1', 'x-nexus-application-keyboard-version': '1',
+    'x-nexus-application-insights-version': '1', 'x-nexus-application-dxpeditions-version': '1', 'x-nexus-application-memories-version': '1', 'x-nexus-application-ota-version': '1', 'x-nexus-application-field-day-version': '1', 'x-nexus-application-js8-version': '1', 'x-nexus-application-station-modes-version':'1', 'x-nexus-application-navigation-version':'1', 'x-nexus-application-configuration-version':'1' }
+  for (const [missing, expected] of [[null, 14], ['configuration',13], ['navigation',12], ['station-modes',11], ['js8', 10], ['field-day', 9], ['ota', 8], ['memories', 7], ['dxpeditions', 6], ['insights', 5], ['keyboard', 4], ['recall', 3], ['query', 2], ['stream', 1]]) {
+    const advertisement = { ...headers }
+    if (missing) delete advertisement[`x-nexus-application-${missing}-version`]
+    const pair = await app.paired(), live = await admitted(pair, 1, advertisement)
+    live.browser.send({ type: 'applicationHello', version: 14 })
+    const capabilities = await live.browser.take(type('applicationCapabilities'))
+    assert.equal(capabilities.version, expected)
+    assert.equal(capabilities.commands.includes('get_remote_configuration'), expected === 14)
+    const requestId = crypto.randomUUID()
+    live.browser.send({ type: 'applicationQuery', requestId, collection: 'settings', cursor: null, search: '', unconfirmed: false, after: null })
+    if (expected === 14) {
+      const request = await live.station.take(type('applicationQuery'))
+      await app.evict(pair.stationId)
+      live.station.send({ type: 'applicationPage', requestId: request.requestId, collection: 'settings', snapshotId: crypto.randomUUID(),
+        offset: 0, total: 0, retained: 0, nextCursor: null, ageMs: 0, rows: [], meta: { source: { testCall: 'CONFIGURATION-FIXTURE' } } })
+      const page = await live.browser.take(type('applicationPage'))
+      assert.equal(page.requestId, requestId); assert.equal(page.meta.source.testCall, 'CONFIGURATION-FIXTURE')
+      live.browser.send({ type: 'applicationQueryAck', requestId })
+    } else await live.browser.take(type('closed'))
+    live.browser.close(); live.station.close()
+  }
+})
+test('navigation requires all extensions, preserves v12 refusal and survive hibernation', async () => {
+  const headers = { 'x-nexus-application-stream-version': '2', 'x-nexus-application-query-version': '1',
+    'x-nexus-application-recall-version': '1', 'x-nexus-application-keyboard-version': '1',
+    'x-nexus-application-insights-version': '1', 'x-nexus-application-dxpeditions-version': '1', 'x-nexus-application-memories-version': '1', 'x-nexus-application-ota-version': '1', 'x-nexus-application-field-day-version': '1', 'x-nexus-application-js8-version': '1', 'x-nexus-application-station-modes-version':'1', 'x-nexus-application-navigation-version':'1' }
+  for (const [missing, expected] of [[null, 13], ['navigation',12], ['station-modes',11], ['js8', 10], ['field-day', 9], ['ota', 8], ['memories', 7], ['dxpeditions', 6], ['insights', 5], ['keyboard', 4], ['recall', 3], ['query', 2], ['stream', 1]]) {
+    const advertisement = { ...headers }
+    if (missing) delete advertisement[`x-nexus-application-${missing}-version`]
+    const pair = await app.paired(), live = await admitted(pair, 1, advertisement)
+    live.browser.send({ type: 'applicationHello', version: 13 })
+    const capabilities = await live.browser.take(type('applicationCapabilities'))
+    assert.equal(capabilities.version, expected)
+    assert.equal(capabilities.commands.includes('get_remote_navigation'), expected === 13)
+    const requestId = crypto.randomUUID()
+    live.browser.send({ type: 'applicationQuery', requestId, collection: 'connect', cursor: null, search: '', unconfirmed: false, after: null })
+    if (expected === 13) {
+      const request = await live.station.take(type('applicationQuery'))
+      await app.evict(pair.stationId)
+      live.station.send({ type: 'applicationPage', requestId: request.requestId, collection: 'connect', snapshotId: crypto.randomUUID(),
+        offset: 0, total: 0, retained: 0, nextCursor: null, ageMs: 0, rows: [], meta: { source: { testCall: 'NAVIGATION-FIXTURE' } } })
+      const page = await live.browser.take(type('applicationPage'))
+      assert.equal(page.requestId, requestId); assert.equal(page.meta.source.testCall, 'NAVIGATION-FIXTURE')
+      live.browser.send({ type: 'applicationQueryAck', requestId })
+    } else await live.browser.take(type('closed'))
+    live.browser.close(); live.station.close()
+  }
+})
 test('SSTV and APRS require all extensions, preserve v11 refusal and survive hibernation', async () => {
   const headers = { 'x-nexus-application-stream-version': '2', 'x-nexus-application-query-version': '1',
     'x-nexus-application-recall-version': '1', 'x-nexus-application-keyboard-version': '1',
@@ -303,7 +355,7 @@ test('v2 subscriptions share native samples across approved browsers and recover
 
 test('keyboard observation needs the complete native advertisement and survives room hibernation', async () => {
   const config = await (await fetch(`${app.origin}/api/remote/config`)).json()
-  assert.equal(config.applicationVersion, 12)
+  assert.equal(config.applicationVersion, 14)
   const headers = { 'x-nexus-application-stream-version': '2', 'x-nexus-application-query-version': '1',
     'x-nexus-application-recall-version': '1', 'x-nexus-application-keyboard-version': '1' }
   for (const [missing, expected] of [[null, 5], ['keyboard', 4], ['recall', 3], ['query', 2], ['stream', 1]]) {

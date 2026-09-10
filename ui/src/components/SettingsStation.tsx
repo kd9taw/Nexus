@@ -98,6 +98,7 @@ const LICENSE_CLASSES: { value: string; labelKey: MessageKey }[] = [
 const placeholderFor = (e: Example): string => ('token' in e ? e.token : t(e.prose))
 
 interface Props {
+  readOnly?: boolean
   form: Settings
   /** The panel's live save error. Drives the invalid styling on an empty callsign. */
   error: string | null
@@ -107,9 +108,9 @@ interface Props {
   onSetFreq: (dialMhz: number, band: string, mode: string) => void
 }
 
-export function SettingsStation({ form, error, bandPlan, onUpdate, onSetFreq }: Props) {
+export function SettingsStation({ readOnly=false, form, error, bandPlan, onUpdate, onSetFreq }: Props) {
   return (
-    <fieldset className="settings-section" id="settings-operator-radio">
+    <fieldset disabled={readOnly} className="settings-section" id="settings-operator-radio">
       <legend>{t('settings.station.legend')}</legend>
       <div className="settings-grid">
         {STATION_FIELDS.map((f) => {

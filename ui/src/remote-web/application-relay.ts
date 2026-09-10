@@ -14,7 +14,7 @@ import type { QueryCheckpoint } from './application-query-relay'
 
 type Pending = { requestId: string; forwardId: string; command: ApplicationCommand; at: number; delivered: boolean }
 type LegacyCheckpoint = { version: 1; ready: boolean; windowAt: number; count: number; pending: Pending | null }
-export type ApplicationCheckpoint = LegacyCheckpoint | (StreamCheckpoint & { version: 2 }) | { version: 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13; stream: StreamCheckpoint; query: QueryCheckpoint }
+export type ApplicationCheckpoint = LegacyCheckpoint | (StreamCheckpoint & { version: 2 }) | { version: 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14; stream: StreamCheckpoint; query: QueryCheckpoint }
 type Browser = LegacyCheckpoint & { peer: Peer }
 export class ApplicationRelay {
   private station: { peer: Peer; version: number } | null = null
@@ -39,7 +39,7 @@ export class ApplicationRelay {
     this.query.sync(station && station.version >= 3 ? station.peer : null, observers, now, station?.version ?? 0)
   }
   restore(sessionId: string, saved: ApplicationCheckpoint): void {
-    if (saved.version === 3 || saved.version === 4 || saved.version === 5 || saved.version === 6 || saved.version === 7 || saved.version === 8 || saved.version === 9 || saved.version === 10 || saved.version === 11 || saved.version === 12 || saved.version === 13) {
+    if (saved.version === 3 || saved.version === 4 || saved.version === 5 || saved.version === 6 || saved.version === 7 || saved.version === 8 || saved.version === 9 || saved.version === 10 || saved.version === 11 || saved.version === 12 || saved.version === 13 || saved.version === 14) {
       if (saved.stream.version !== applicationStreamVersion(saved.version) || (saved.query.version ?? 3) !== applicationQueryVersion(saved.version)) throw new Error('invalidApplicationCheckpoint')
       this.stream.restore(sessionId, saved.stream); this.query.restore(sessionId, saved.query); return
     }
@@ -51,7 +51,7 @@ export class ApplicationRelay {
   checkpoint(sessionId: string): ApplicationCheckpoint | undefined {
     const stream = this.stream.checkpoint(sessionId)
     const query = this.query.checkpoint(sessionId)
-    if (stream && query) return { version: query.version === 13 ? 13 : query.version === 12 ? 12 : query.version === 11 ? 11 : query.version === 10 ? 10 : query.version === 9 ? 9 : query.version === 8 ? 8 : query.version === 7 ? 7 : query.version === 6 ? 6 : stream.version === 5 ? 5 : query.version ?? 3, stream, query }
+    if (stream && query) return { version: query.version === 14 ? 14 : query.version === 13 ? 13 : query.version === 12 ? 12 : query.version === 11 ? 11 : query.version === 10 ? 10 : query.version === 9 ? 9 : query.version === 8 ? 8 : query.version === 7 ? 7 : query.version === 6 ? 6 : stream.version === 5 ? 5 : query.version ?? 3, stream, query }
     if (stream?.version === 2) return { ...stream, version: 2 }
     const browser = this.browsers.get(sessionId)
     if (!browser) return

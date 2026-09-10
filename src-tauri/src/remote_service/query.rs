@@ -6,6 +6,7 @@ use serde_json::{json, Value};
 use std::collections::{BinaryHeap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+mod configuration;
 mod dxpeditions;
 mod field_day;
 mod insights;
@@ -39,6 +40,8 @@ pub enum Collection {
     Js8Context,
     SstvImage,
     Aprs,
+    Settings,
+    Programming,
     Connect,
     Path,
     Satellites,
@@ -429,7 +432,9 @@ impl Publisher {
             _ => Err("applicationUnavailable"),
         };
         let rows = match request.collection {
-            Collection::Connect
+            Collection::Settings
+            | Collection::Programming
+            | Collection::Connect
             | Collection::Path
             | Collection::Satellites
             | Collection::Satellite => {
@@ -788,4 +793,13 @@ mod tests {
         assert_eq!(journal.snapshot(None).0.len(), MAX_ROWS);
         assert!(journal.snapshot(None).2["dropped"].as_u64().unwrap() > 0);
     }
+}
+
+#[cfg(test)]
+pub(super) fn configuration_probe(
+    engine: &crate::SharedEngine,
+) -> Result<serde_json::Value, &'static str> {
+    Ok(
+        serde_json::json!({"settings":configuration::build(Collection::Settings,engine)?,"programming":configuration::build(Collection::Programming,engine)?}),
+    )
 }

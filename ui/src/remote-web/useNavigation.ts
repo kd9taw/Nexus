@@ -3,11 +3,11 @@ import { useStationData } from '../stationAccess'
 import { RemoteCollectionsContext } from './collections'
 import { loadNavigation } from './navigation'
 import type { ConnectData, NavigationDocument, SatelliteLive } from './navigation'
-import type { NAVIGATION_COLLECTIONS } from './application-query-protocol'
+import type { DocumentCollection } from './application-query-protocol'
 import type { SatView } from '../types'
 
 export const NavigationMapContext=createContext<{connect:ConnectData|null;satellites:SatView|null;track:SatelliteLive['track'];ageMs:number}|null>(null)
-export function useNavigation<T>(kind:typeof NAVIGATION_COLLECTIONS[number],search='',active=true){
+export function useNavigation<T>(kind:DocumentCollection,search='',active=true){
   const source=useContext(RemoteCollectionsContext),available=useStationData()
   const [capture,setCapture]=useState<{doc:NavigationDocument<T>;at:number;key:string}|null>(null)
   const [loading,setLoading]=useState(true),[refresh,setRefresh]=useState(0),[now,setNow]=useState(()=>performance.now())

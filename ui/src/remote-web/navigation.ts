@@ -1,11 +1,12 @@
 import type { GettingOut, PathPrediction, PropagationSnapshot, NoaaScalesView, AlertView, MufStation, SatView, SatDetail, SatTrackStatus, SatTransponderHeld, SatVfoMap, PcaView, AuroraPoint, SatPass } from '../types'
 import type { RemoteCollections } from './collections'
-import type { NAVIGATION_COLLECTIONS } from './application-query-protocol'
+import { configurationCollection, type DocumentCollection } from './application-query-protocol'
 import { captureClock, finite, integer, object, text } from './display-validation'
 import { SAT_VFO_MAPS } from '../features/satVfo'
 import { streamId } from './application-stream-protocol'
 
-type Kind = typeof NAVIGATION_COLLECTIONS[number]
+import { parseConfiguration } from './configuration'
+type Kind = DocumentCollection
 export type Feed<T> = { value:T; ageMs:number; validForMs:number }
 export type ConnectData = {mycall:string;mygrid:string;prop:PropagationSnapshot;sourceAgeMs:number;sourceValidForMs:number;
   bandOutlook:PathPrediction|null;gettingOut:GettingOut;scales:Feed<[NoaaScalesView,AlertView[]]>|null;muf:Feed<MufStation[]>|null;
@@ -20,7 +21,7 @@ const encoder=new TextEncoder()
 const bad=():never=>{throw new Error('invalidNavigation')}
 /** Display payloads contain no executable values, prototype keys, deep trees or
  * unbounded strings/collections. Exact source DTO roots select the renderer. */
-function boundedTree(raw:unknown):void {
+function boundedTree(raw:unknown,maxKeys=128):void {
   let nodes=0,bytes=0
   function visit(v:unknown,depth:number):void {
     if(++nodes>240_000||depth>16)bad()
@@ -28,7 +29,7 @@ function boundedTree(raw:unknown):void {
     if(v===null||typeof v==='boolean')return
     if(typeof v==='number'){if(!finite(v))bad();return}
     if(Array.isArray(v)){if(v.length>65_536)bad();for(const x of v)visit(x,depth+1);return}
-    if(typeof v!=='object'||!v||Object.keys(v).length>128)bad()
+    if(typeof v!=='object'||!v||Object.keys(v).length>maxKeys)bad()
     for(const [key,x]of Object.entries(v as object)){
       if(['__proto__','prototype','constructor'].includes(key)||!text(key,128))bad()
       visit(x,depth+1)
@@ -69,8 +70,9 @@ function satelliteView(v:unknown):void {
   array(s.passes).forEach(pass)
   for(const raw of array(s.excluded,4096)){const e=record(raw);if(!text(e.name,80)||!text(e.reason,80))bad()}
 }
-function parse(raw:unknown,kind:Kind,search:string):ConnectData|PathData|SatelliteData|SatelliteDetailData{
-  boundedTree(raw)
+function parse(raw:unknown,kind:Kind,search:string):unknown{
+  boundedTree(raw,configurationCollection(kind)?512:128)
+  if(configurationCollection(kind))return parseConfiguration(raw,kind)
   if(kind==='connect'){
     const v=object(raw,['mycall','mygrid','prop','sourceAgeMs','sourceValidForMs','bandOutlook','gettingOut','scales','muf','aurora','pca','declination','coverage','xray'])
     if(!text(v.mycall,64)||!text(v.mygrid,16)||!integer(v.sourceAgeMs)||!integer(v.sourceValidForMs)||v.sourceValidForMs>300_000)bad()
@@ -133,6 +135,6 @@ export async function loadNavigation<T>(source:RemoteCollections,kind:Kind,searc
   if(age>=Number(meta.validForMs))throw new Error('queryExpired')
   const value=parse(JSON.parse(chunks.join('')),kind,search)
   if((kind==='connect'||kind==='path')&&Number((value as ConnectData).sourceAgeMs)+age>=300_000)throw new Error('queryExpired')
-  captureClock(value,Number(meta.capturedAtMs),age)
+  captureClock(value as object,Number(meta.capturedAtMs),age)
   return {value:value as T,ageMs:age,validForMs:Math.min(Number(meta.validForMs),(kind==='connect'||kind==='path')?300_000-Number((value as ConnectData).sourceAgeMs):Infinity),capturedAtMs:Number(meta.capturedAtMs),stationContextId:String(meta.stationContextId)}
 }

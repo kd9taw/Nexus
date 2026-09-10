@@ -14,7 +14,7 @@ import { parseSstvSample } from './sstv'
 import { parseAprsLive } from './aprs'
 import { parseSatelliteLive } from './navigation'
 import { ApplicationQueryClient } from './application-query-client'
-import { NAVIGATION_COMMAND, navigationCollection, SSTV_IMAGE_COMMAND, APRS_COMMAND, JS8_CONTEXT_COMMAND, FIELD_DAY_COMMAND, OTA_COMMAND, MEMORIES_COMMAND, DXPEDITIONS_COMMAND, INSIGHTS_COMMAND, QUERY_COMMAND, RECALL_COMMAND, insightCollection } from './application-query-protocol'
+import { CONFIGURATION_COMMAND, configurationCollection, NAVIGATION_COMMAND, navigationCollection, SSTV_IMAGE_COMMAND, APRS_COMMAND, JS8_CONTEXT_COMMAND, FIELD_DAY_COMMAND, OTA_COMMAND, MEMORIES_COMMAND, DXPEDITIONS_COMMAND, INSIGHTS_COMMAND, QUERY_COMMAND, RECALL_COMMAND, insightCollection } from './application-query-protocol'
 
 export type ApplicationPhase = 'connecting' | 'ready' | 'updateRequired' | 'unavailable'
 type Job = { command: ApplicationCommand; resolve: (value: unknown) => void; reject: (reason: Error) => void }
@@ -60,6 +60,10 @@ export class ApplicationClient implements ApplicationTransport {
     this.setPhase('unavailable')
   }
   invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+    if (this.phase === 'ready' && this.version >= 14 && command === CONFIGURATION_COMMAND) {
+      if (!configurationCollection(args?.collection)) return Promise.reject(new Error('applicationUnsupported'))
+      return this.query.read(args!, 14) as Promise<T>
+    }
     if (this.phase === 'ready' && this.version >= 13 && command === NAVIGATION_COMMAND) {
       if (!navigationCollection(args?.collection)) return Promise.reject(new Error('applicationUnsupported'))
       return this.query.read(args!, 13) as Promise<T>

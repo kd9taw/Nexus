@@ -4,6 +4,10 @@ import { validApplicationJson, APPLICATION_TIMEOUT_MS } from './application-prot
 import type { Json } from './application-protocol'
 import { streamExact, streamId } from './application-stream-protocol'
 
+export const CONFIGURATION_COMMAND = 'get_remote_configuration'
+export const CONFIGURATION_COLLECTIONS = ['settings', 'programming'] as const
+export const configurationCollection = (v: unknown): v is typeof CONFIGURATION_COLLECTIONS[number] => CONFIGURATION_COLLECTIONS.includes(v as never)
+export type DocumentCollection = typeof NAVIGATION_COLLECTIONS[number] | typeof CONFIGURATION_COLLECTIONS[number]
 export const NAVIGATION_COMMAND = 'get_remote_navigation'
 export const NAVIGATION_COLLECTIONS = ['connect', 'path', 'satellites', 'satellite'] as const
 export const navigationCollection = (v: unknown): v is typeof NAVIGATION_COLLECTIONS[number] => NAVIGATION_COLLECTIONS.includes(v as never)
@@ -19,7 +23,7 @@ export const MEMORIES_COMMAND = 'get_remote_memories'
 export const DXPEDITIONS_COMMAND = 'get_remote_dxpeditions'
 export const COLLECTIONS = ['decodes', 'needs', 'spots', 'log', 'entities', 'health'] as const
 export type InsightCollection = 'awards' | 'statistics'
-export type Collection = typeof COLLECTIONS[number] | 'recall' | InsightCollection | 'dxpeditions' | 'memories' | 'ota' | 'fieldDay' | 'js8Context' | 'sstvImage' | 'aprs' | typeof NAVIGATION_COLLECTIONS[number]
+export type Collection = typeof COLLECTIONS[number] | 'recall' | InsightCollection | 'dxpeditions' | 'memories' | 'ota' | 'fieldDay' | 'js8Context' | 'sstvImage' | 'aprs' | DocumentCollection
 export const QUERY_MAX_BYTES = 256 * 1024
 export const QUERY_ROWS = 128
 export const QUERY_MAX_ROWS = 3000
@@ -30,7 +34,7 @@ export type QueryPage = { type: 'applicationPage'; requestId: string; collection
   offset: number; total: number; retained: number; nextCursor: string | null; ageMs: number; rows: Json[]; meta: Json }
 export const insightCollection = (v: unknown): v is InsightCollection => v === 'awards' || v === 'statistics'
 export const collection = (v: unknown, version = 3): v is Collection => COLLECTIONS.includes(v as typeof COLLECTIONS[number]) ||
-  ([4, 6, 7, 8, 9, 10, 11, 12, 13].includes(version) && v === 'recall') || ([6, 7, 8, 9, 10, 11, 12, 13].includes(version) && insightCollection(v)) || ([7, 8, 9, 10, 11, 12, 13].includes(version) && v === 'dxpeditions') || ([8, 9, 10, 11, 12, 13].includes(version) && v === 'memories') || ([9, 10, 11, 12, 13].includes(version) && v === 'ota') || ([10, 11, 12, 13].includes(version) && v === 'fieldDay') || ([11, 12, 13].includes(version) && v === 'js8Context') || ([12, 13].includes(version) && (v === 'sstvImage' || v === 'aprs')) || (version === 13 && navigationCollection(v))
+  ([4, 6, 7, 8, 9, 10, 11, 12, 13, 14].includes(version) && v === 'recall') || ([6, 7, 8, 9, 10, 11, 12, 13, 14].includes(version) && insightCollection(v)) || ([7, 8, 9, 10, 11, 12, 13, 14].includes(version) && v === 'dxpeditions') || ([8, 9, 10, 11, 12, 13, 14].includes(version) && v === 'memories') || ([9, 10, 11, 12, 13, 14].includes(version) && v === 'ota') || ([10, 11, 12, 13, 14].includes(version) && v === 'fieldDay') || ([11, 12, 13, 14].includes(version) && v === 'js8Context') || ([12, 13, 14].includes(version) && (v === 'sstvImage' || v === 'aprs')) || ([13,14].includes(version) && navigationCollection(v)) || (version === 14 && configurationCollection(v))
 export const sstvImageId = (v: unknown): v is string => typeof v === 'string' && /\.(png|bmp)$/.test(v) && streamId(v.slice(0,-4))
 const integer = (v: unknown) => Number.isSafeInteger(v) && Number(v) >= 0
 export function queryCursor(v: unknown): v is string {

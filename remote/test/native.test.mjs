@@ -1,5 +1,7 @@
 import { test } from 'node:test'
-import { readFile } from 'node:fs/promises'
+import { readFile, mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import assert from 'node:assert/strict'
 import { tempoConversations } from './tempo-fixture.mjs'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -9,8 +11,9 @@ import { runtime, roomStatus } from './runtime.mjs'
 import { recallReference, recallAdif } from './recall-reference.mjs'
 import { insightsReference, insightsAdif } from './insights-reference.mjs'
 
-function nativeProbe(binary, origin) {
-  const child = spawn(binary, ['--ignored', '--exact', 'remote_service::tests::cloud_runtime_probe', '--nocapture'], { stdio: ['pipe', 'pipe', 'pipe'] })
+async function nativeProbe(binary, origin) {
+  const profile=await mkdtemp(join(tmpdir(),'nexus-native-profile-'))
+  const child = spawn(binary, ['--ignored', '--exact', 'remote_service::tests::cloud_runtime_probe', '--nocapture'], { stdio: ['pipe', 'pipe', 'pipe'], env:{...process.env,XDG_CONFIG_HOME:profile,APPDATA:profile,NEXUS_DATA_DIR:join(profile,'shared'),NEXUS_PROFILE:''} })
   const queue = [], waiting = []
   // Never forward raw probe output: its pipe includes the one-time pairing code.
   child.stderr.resume()
@@ -31,7 +34,7 @@ function nativeProbe(binary, origin) {
     const waiter = waiting.shift()
     if (waiter) { clearTimeout(waiter.timer); waiter.resolve(value) } else queue.push(value)
   })
-  child.stdin.write(JSON.stringify({ origin }) + '\n')
+  child.stdin.write(JSON.stringify({ origin, configurationRoot:profile }) + '\n')
   async function receive() {
     if (queue.length) return queue.shift()
     if (exited) throw new Error('native probe exited')
@@ -48,6 +51,7 @@ function nativeProbe(binary, origin) {
       if (!exited) child.stdin.end('{"type":"exit"}\n')
       const timer = setTimeout(() => child.kill('SIGTERM'), 5000)
       const code = await exit; clearTimeout(timer)
+      await rm(profile,{recursive:true,force:true})
       assert.equal(code, 0, 'native probe must exit successfully')
     },
   }
@@ -56,7 +60,7 @@ function nativeProbe(binary, origin) {
 test('actual native controller pairs, stores authority, publishes real DTOs, disables and revokes through workerd', { timeout: 60000 }, async () => {
   assert.ok(process.env.NEXUS_REMOTE_TEST_BINARY, 'run npm run test:native to build the actual native probe')
   const app = await runtime()
-  const probe = nativeProbe(process.env.NEXUS_REMOTE_TEST_BINARY, app.origin)
+  const probe = await nativeProbe(process.env.NEXUS_REMOTE_TEST_BINARY, app.origin)
   try {
     assert.equal((await probe.ready()).ready, true)
     const browser = await app.owner()
@@ -405,9 +409,9 @@ test('actual native controller pairs, stores authority, publishes real DTOs, dis
     const modes=await browser.open(stationId,modesTicket.ticket)
     modes.ackObservations()
     await modes.take(value=>value.type==='session')
-    modes.send({type:'applicationHello',version:13})
+    modes.send({type:'applicationHello',version:14})
     const modesCapabilities=await modes.take(value=>value.type==='applicationCapabilities')
-    assert.equal(modesCapabilities.version,13)
+    assert.equal(modesCapabilities.version,14)
     assert.ok(modesCapabilities.commands.includes('get_remote_navigation'))
     const modesRequest=crypto.randomUUID()
     modes.send({type:'applicationSubscribe',topics:['get_sstv_state','get_remote_aprs_state'],requestId:modesRequest})
@@ -489,6 +493,13 @@ test('actual native controller pairs, stores authority, publishes real DTOs, dis
     assert.equal(satellite.value.detail.name,'ISS (ZARYA)')
     assert.equal(satellite.value.logCount,nativeNavigation.logCount)
     assert.equal(satellite.stationContextId,connect.stationContextId)
+    const programFixture=JSON.parse(await readFile(new URL('../../ui/src/remote-web/__fixtures__/configuration-programming.json',import.meta.url),'utf8'))
+    const nativeConfiguration=await probe.send({type:'seedConfiguration',projects:programFixture.projects})
+    const settingsDoc=await statsReference.loadNavigation(navigationSource,'settings','',()=>true)
+    assert.deepEqual(settingsDoc.value,nativeConfiguration.settings)
+    const programmingDoc=await statsReference.loadNavigation(navigationSource,'programming','',()=>true)
+    assert.deepEqual(programmingDoc.value,nativeConfiguration.programming)
+    assert.equal(programmingDoc.value.projects[0].channels.length,1200)
     navigation.close()
     const second = await socket.take(value => value.type === 'observation')
     assert.ok(second.frame.sequence > first.frame.sequence)

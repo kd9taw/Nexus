@@ -2,6 +2,7 @@ import { Auth0Client } from '@auth0/auth0-spa-js'
 import { ageFrame, MAX_FRAME_BYTES, parseFrame, STALE_MS } from '../remote-monitor/protocol'
 import type { MonitorFrame } from '../remote-monitor/protocol'
 import type { MonitorSource } from '../remote-monitor/session'
+import { APPLICATION_VERSIONS } from './application-capabilities'
 import { ApplicationClient } from './application-client'
 import { APPLICATION_MAX_BYTES } from './application-protocol'
 
@@ -45,7 +46,7 @@ export class BrowserClient {
     } else {
       try { await auth.checkSession() } catch { /* interactive login stays available */ }
     }
-    return new BrowserClient(auth, config.applicationVersion === 13 ? 13 : config.applicationVersion === 12 ? 12 : config.applicationVersion === 11 ? 11 : config.applicationVersion === 10 ? 10 : config.applicationVersion === 9 ? 9 : config.applicationVersion === 8 ? 8 : config.applicationVersion === 7 ? 7 : config.applicationVersion === 6 ? 6 : config.applicationVersion === 5 ? 5 : config.applicationVersion === 4 ? 4 : config.applicationVersion === 3 ? 3 : config.applicationVersion === 2 ? 2 : 1)
+    return new BrowserClient(auth, APPLICATION_VERSIONS.find(version=>version===config.applicationVersion)??1)
   }
   authenticated(): Promise<boolean> { return this.auth.isAuthenticated() }
   signIn(): Promise<void> { return this.auth.loginWithRedirect() }

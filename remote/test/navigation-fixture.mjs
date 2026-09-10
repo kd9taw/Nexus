@@ -27,7 +27,9 @@ export async function navigationFixture() {
     satellites.view.passes.push({...structuredClone(pass),name:`LAYOUT-${i}`,norad:90000+i,aosUnix:pass.aosUnix+i*90,losUnix:pass.losUnix+i*90})
   }
   satellites.view.usableCount=40
-  const documents={connect,path,satellites,satellite}
+  const configuration=async kind=>JSON.parse(await readFile(new URL(`../../ui/src/remote-web/__fixtures__/configuration-${kind}.json`,import.meta.url),'utf8'))
+  const settings=await configuration('settings'),programming=await configuration('programming')
+  const documents={connect,path,satellites,satellite,settings,programming}
   function collection(kind,search='') {
     const value=structuredClone(documents[kind])
     if(kind==='path')value.grid=search

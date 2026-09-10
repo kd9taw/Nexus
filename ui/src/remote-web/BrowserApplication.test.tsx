@@ -4,6 +4,8 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import App from '../App'
+import configurationSettings from './__fixtures__/configuration-settings.json'
+import configurationProgramming from './__fixtures__/configuration-programming.json'
 import navigationConnect from './__fixtures__/navigation-connect.json'
 import navigationPath from './__fixtures__/navigation-path.json'
 import navigationSatellites from './__fixtures__/navigation-satellites.json'
@@ -604,4 +606,57 @@ it.each(['connect','sats'] as const)('connects the actual %s section, keeps its 
   else expect(container.querySelector('.sat-transponders')).toBeNull()
   for(const command of ['select_peer','set_sat_transponder','start_sat_track','stop_sat_track','set_settings','confirm_sat_uplink','fetch_tles_now','set_peg_lock'])expect(calls).not.toContain(command)
   unmount();context.dispose()
+})
+
+
+it.each(['settings','program'] as const)('connects the actual %s section with saved station values, usable navigation and no native side effects',async section=>{
+  const current=structuredClone(snapshot),settings=projectedSettings(),calls:string[]=[]
+  const read=async <T,>(command:string):Promise<T>=>{
+    calls.push(command)
+    if(command==='get_snapshot')return current as T
+    if(command==='get_settings')return settings as T
+    if(command==='get_band_plan')return [] as T
+    if(command==='get_spectrum_row')return {row:[],loHz:0,hiHz:4000,source:'audio'} as T
+    if(command==='get_meters')return {rxLevel:0,smeterDb:null,cwToneHz:null} as T
+    throw new Error('applicationUnsupported')
+  }
+  dispose=installApplicationTransport({kind:'remote',invoke:read})
+  const context=new RemoteCollections({supports:()=>false,invoke:read} as unknown as ApplicationClient)
+  const pages=navigationPages(section==='settings'?'settings':'programming',section==='settings'?configurationSettings:configurationProgramming)
+  vi.spyOn(context,'page').mockImplementation(async args=>pages[args.cursor?Number(args.cursor.split(':')[1]):0])
+  const view=(live:boolean)=><StationControlContext.Provider value={false}><StationDataContext.Provider value={live}>
+    <RemoteCollectionsContext.Provider value={context}><App remote={{snapshot:current,settings,bandPlan:[],configuration:true,status:<div>Observer</div>}}/></RemoteCollectionsContext.Provider>
+  </StationDataContext.Provider></StationControlContext.Provider>
+  const {container,rerender,unmount}=render(view(true))
+  fireEvent.click(screen.getByRole('button',{name:section==='settings'?/^Settings$/:/^Program —/}))
+  if(section==='settings'){
+    await waitFor(()=>expect(container.querySelector('.settings-panel')?.textContent).toContain('Station settings'))
+    expect(container.querySelectorAll('.settings-panel')).toHaveLength(1)
+    const tabs=[...container.querySelectorAll<HTMLButtonElement>('.settings-tab')]
+    expect(tabs.length).toBeGreaterThan(5)
+    let checkedInputs=0
+    for(const tab of tabs){
+      expect(tab.disabled).toBe(false);fireEvent.click(tab)
+      for(const disclosure of container.querySelectorAll<HTMLButtonElement>('.settings-group-toggle'))fireEvent.click(disclosure)
+      for(const input of container.querySelectorAll<HTMLInputElement>('.settings-scroll input,.settings-scroll select,.settings-scroll textarea')){
+        if(input.closest('.settings-search,.theme-switcher,.watchlist'))continue
+        checkedInputs++;expect(input.matches(':disabled'),input.outerHTML).toBe(true)
+      }
+    }
+    expect(checkedInputs).toBeGreaterThan(60)
+    expect(container.querySelector('input[type="password"]')).toBeNull()
+    expect(container.textContent).not.toContain('must-not-leave-station')
+  }else{
+    await waitFor(()=>expect(container.querySelector<HTMLInputElement>('.rp-chan-row:last-child .rp-chan-name')?.value).toBe('CH1199'),{timeout:4000})
+    expect(container.querySelectorAll('.radioprog')).toHaveLength(1)
+    const controls=container.querySelectorAll<HTMLButtonElement>('.radioprog button')
+    expect(controls.length).toBeGreaterThan(10)
+    for(const control of controls){expect(control.disabled,control.outerHTML).toBe(true);fireEvent.click(control)}
+  }
+  rerender(view(false))
+  if(section==='settings')expect(container.querySelector('.settings-tabs')).toBeNull()
+  else expect(container.querySelector('.rp-body')?.hasAttribute('hidden')).toBe(true)
+  unmount();context.dispose()
+  for(const command of ['get_credentials_status','serial_ports','radioprog_list_projects','radioprog_save_projects','radioprog_search','set_settings','get_audio_devices','set_dial_mhz','set_operating_mode','list_configs','remote_service_status'])expect(calls).not.toContain(command)
+  expect(calls.filter(c=>/^(set_|save_|radioprog_|amp_command|start_|stop_|halt_|log_manual|store_|delete_|remote_)/.test(c))).toEqual([])
 })

@@ -299,6 +299,25 @@ fn cloud_runtime_probe() {
     std::io::stdout().flush().unwrap();
     for line in lines {
         let value: serde_json::Value = serde_json::from_str(&line.unwrap()).unwrap();
+        if value["type"] == "seedConfiguration" {
+            let root = std::path::Path::new(config["configurationRoot"].as_str().unwrap());
+            let path = crate::radioprog_path();
+            assert!(
+                path.starts_with(root),
+                "the actual station sidecar must resolve inside the isolated probe profile"
+            );
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let file: crate::RadioProgFile =
+                serde_json::from_value(json!({"version":1,"projects":value["projects"]})).unwrap();
+            let bytes = serde_json::to_vec(&file).unwrap();
+            std::fs::write(&path, &bytes).unwrap();
+            let result = query::configuration_probe(&engine).unwrap();
+            assert_eq!(std::fs::read(&path).unwrap(), bytes);
+            assert!(!engine.lock().unwrap().snapshot().radio.tx_enabled);
+            println!("REMOTE_TEST:{}", result);
+            std::io::stdout().flush().unwrap();
+            continue;
+        }
         if value["type"] == "seedNavigation" {
             let (call, grid, log) = {
                 let e = engine.lock().unwrap();
