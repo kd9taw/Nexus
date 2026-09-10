@@ -1,4 +1,4 @@
-import { expect, it } from 'vitest'
+import { expect, it, vi } from 'vitest'
 import { pendingLogStorage, type ReceiptLock } from './operation-storage'
 import { OperationClient } from './operation-client'
 import type { ManualRecord } from './operation-protocol'
@@ -111,19 +111,25 @@ it('refuses another tab overwrite and prevents an old receipt from erasing a new
   const other = pendingLogStorage(() => disk, crypto.randomUUID(), disk.lock)
   expect(other.read()).toBeNull()
 })
-it('retains malformed or inaccessible storage and refuses writes instead of discarding it', () => {
+it('retains malformed or inaccessible storage and refuses writes instead of discarding it', async () => {
   const disk = storage(),
     station = crypto.randomUUID(),
     key = `nexus.remote.pending-log.${station}`,
     saved = pendingLogStorage(() => disk, station, disk.lock)
   disk.setItem(key, 'damaged retained draft')
   expect(() => saved.read()).toThrow()
-  expect(() => saved.write(crypto.randomUUID(), record)).toThrow()
+  await expect(saved.exclusive!(() => saved.write(crypto.randomUUID(), record))).rejects.toThrow()
   expect(disk.getItem(key)).toBe('damaged retained draft')
-  const denied = pendingLogStorage(() => {
-    throw Error('storage denied')
-  }, station)
-  expect(() => denied.write(crypto.randomUUID(), record)).toThrow()
+  const denied = pendingLogStorage(
+    () => {
+      throw Error('storage denied')
+    },
+    station,
+    disk.lock
+  )
+  await expect(denied.exclusive!(() => denied.write(crypto.randomUUID(), record))).rejects.toThrow(
+    'storage denied'
+  )
 })
 
 it('refuses overlapping cross-tab receipt changes instead of queuing a later write', async () => {
@@ -155,15 +161,14 @@ it('refuses overlapping cross-tab receipt changes instead of queuing a later wri
 it('does not mutate receipts when the browser cannot provide an exclusive lock', async () => {
   const disk = storage(),
     station = crypto.randomUUID()
-  const saved = pendingLogStorage(
-    () => disk,
-    station,
-    async () => {
-      throw Error('receiptStorageUnavailable')
-    }
-  )
-  await expect(saved.exclusive!(() => saved.write(crypto.randomUUID(), record))).rejects.toThrow(
-    'receiptStorageUnavailable'
-  )
-  expect(disk.values.size).toBe(0)
+  vi.stubGlobal('navigator', {})
+  try {
+    const saved = pendingLogStorage(() => disk, station)
+    await expect(saved.exclusive!(() => saved.write(crypto.randomUUID(), record))).rejects.toThrow(
+      'receiptStorageUnavailable'
+    )
+    expect(disk.values.size).toBe(0)
+  } finally {
+    vi.unstubAllGlobals()
+  }
 })
