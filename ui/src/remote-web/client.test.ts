@@ -183,3 +183,33 @@ it.each([
   }
   remote.stop()
 })
+
+it('recalibrates negative clock drift without displaying it or dropping independent application data',async()=>{
+ const {remote,post,socket}=await connection(true)
+ socket.receive({type:'session',sessionId:crypto.randomUUID()})
+ const disconnected=vi.spyOn(remote.application,'disconnected')
+ await vi.advanceTimersByTimeAsync(100)
+ socket.receive(publication(1,'native',1000))
+ expect(await remote.source.read(new AbortController().signal)).toBeTruthy()
+ post.mockResolvedValueOnce({ticket:'unused',serverNow:1120})
+ socket.receive(publication(2,'native',1120))
+ await expect(remote.source.read(new AbortController().signal)).rejects.toThrow()
+ await vi.advanceTimersByTimeAsync(0)
+ expect(socket.readyState).toBe(1);expect(disconnected).not.toHaveBeenCalled()
+ expect(post.mock.calls[post.mock.calls.length-1][0]).toMatch(/renew$/)
+ socket.receive(publication(3,'native',1120))
+ const frame=await remote.source.read(new AbortController().signal) as typeof fixtures.spe
+ expect(frame.station.radio.readings.dial.ageMs).toBe(fixtures.spe.station.radio.readings.dial.ageMs)
+ expect(disconnected).not.toHaveBeenCalled();remote.stop()
+})
+it('bounds unsuccessful clock recalibration and never exposes future readings',async()=>{
+ const {remote,socket}=await connection()
+ socket.receive({type:'session',sessionId:crypto.randomUUID()})
+ for(let i=1;i<=4;i++){
+  await vi.advanceTimersByTimeAsync(1000)
+  socket.receive(publication(i,'native',1000000+i))
+  await expect(remote.source.read(new AbortController().signal)).rejects.toThrow()
+  await vi.advanceTimersByTimeAsync(0)
+ }
+ expect(socket.readyState).toBe(2);remote.stop()
+})

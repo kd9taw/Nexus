@@ -158,3 +158,16 @@
 /* The native grid display overrides HTML hidden without this explicit rule. */
 .remote-workspace .rp-body[hidden] { display: none; }
 .remote-workspace .settings-panel[data-remote-configuration] { min-width: 0; }
+
+/* The native header can consume a narrow browser's height. Preserve real
+   configuration scrollports below it; the outer workspace scrolls the deficit. */
+.remote-workspace:has(.settings-panel[data-remote-configuration], .radioprog[data-remote-configuration]) { overflow: auto; }
+.remote-workspace .shell:has(.settings-panel[data-remote-configuration], .radioprog[data-remote-configuration]) {
+  min-height: min(38em, calc(0.8 * var(--vh-eff, 100vh)));
+  min-width: 0;
+}
+.remote-workspace .settings-panel[data-remote-configuration] .settings-form { min-height: 32em; }
+.remote-workspace .settings-panel[data-remote-configuration] .settings-scroll { min-height: 16em; }
+.remote-workspace .radioprog[data-remote-configuration] .rp-body { min-height: 40em; }
+.remote-workspace .radioprog[data-remote-configuration] .rp-source { overflow-y: auto; }
+.remote-workspace .radioprog[data-remote-configuration] .rp-source > * { flex-shrink: 0; }

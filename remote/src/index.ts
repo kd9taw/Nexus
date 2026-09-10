@@ -218,7 +218,7 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
       const response = await room(env, row.id, 'renew', { access: policy,
         sessionId: id(input.sessionId), identity: browser, entitlement })
       requireValue(response.ok, 'sessionNotApproved')
-      return json({ ok: true })
+      return json({ ok: true, serverNow: now })
     }
     await rate(env, `ticket:${row.id}:${current.id}`, now, 12)
     const ticket = secret()

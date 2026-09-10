@@ -57,6 +57,9 @@ export class BrowserClient {
   observationTicket(stationId: string, signal: AbortSignal): Promise<{ body: { ticket: string; serverNow: number }; startedAt: number }> {
     return this.request(`stations/${stationId}/ticket`, {}, signal)
   }
+  renewObservation(stationId:string,sessionId:string,signal:AbortSignal):Promise<{body:{ok:boolean;serverNow?:number};startedAt:number}> {
+    return this.request(`stations/${stationId}/renew`,{sessionId},signal)
+  }
   private async request<T>(path: string, body: object, signal?: AbortSignal): Promise<{ body: T; startedAt: number }> {
     let token: string
     try { token = await this.auth.getTokenSilently() } catch { throw new RemoteError(401) }
@@ -84,6 +87,9 @@ export class HostedConnection {
   private renewal: ReturnType<typeof setInterval> | undefined
   private abort = new AbortController()
   private renewing = false
+  private sessionId: string | null = null
+  private lastClockRenewal = -Infinity
+  private clockFailures = 0
   private anchor: { server: number; start: number } | null = null
 
   constructor(private client: BrowserClient, private stationId: string, private readonly applicationMode = false) {
@@ -110,13 +116,34 @@ export class HostedConnection {
     const delay = Math.min(30000, 1000 * 2 ** Math.min(this.attempt++, 5))
     this.reconnectTimer = setTimeout(() => { this.reconnectTimer = undefined; void this.connect() }, delay)
   }
+  private async renew(socket:WebSocket,clock=false):Promise<void> {
+    if(this.renewing||this.disposed||this.socket!==socket||!this.sessionId)return
+    const now=performance.now()
+    if(clock&&now-this.lastClockRenewal<1000)return
+    if(clock){this.lastClockRenewal=now;if(++this.clockFailures>3){socket.close(1000,'clockUnavailable');return}}
+    this.renewing=true
+    try {
+      // Tests and old adapters can supply only post; normal BrowserClient
+      // supplies the request-start clock after obtaining its account token.
+      const startedAt=performance.now()
+      const result=typeof this.client.renewObservation==='function'
+        ? await this.client.renewObservation(this.stationId,this.sessionId,this.abort.signal)
+        : {body:await this.client.post<{ok:boolean;serverNow?:number}>(`stations/${this.stationId}/renew`,{sessionId:this.sessionId},this.abort.signal),startedAt}
+      if(this.socket!==socket||this.disposed)return
+      if(result.body.serverNow!==undefined){
+        if(!Number.isSafeInteger(result.body.serverNow)||result.body.serverNow<0)throw new RemoteError(503)
+        this.anchor={server:result.body.serverNow,start:result.startedAt}
+      }else if(clock)socket.close(1000,'clockUnavailable')
+    }catch{if(this.socket===socket)socket.close(1000,'accessEnded')}
+    finally{this.renewing=false}
+  }
   private async connect(): Promise<void> {
     if (this.disposed) return
     try {
       const { body: ticket, startedAt: start } = await this.client.observationTicket(this.stationId, this.abort.signal)
       if (this.disposed) return
       if (!/^[0-9a-f]{64}$/.test(ticket.ticket) || !Number.isSafeInteger(ticket.serverNow)) throw new RemoteError(403)
-      this.anchor = { server: ticket.serverNow, start }
+      this.anchor = { server: ticket.serverNow, start };this.sessionId=null;this.clockFailures=0;this.lastClockRenewal=-Infinity
       const url = new URL(`/api/remote/stations/${this.stationId}/observe`, window.location.origin)
       url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
       const socket = new WebSocket(url, ['nexus-observe-v1', `ticket.${ticket.ticket}`])
@@ -132,22 +159,24 @@ export class HostedConnection {
           if (new TextEncoder().encode(event.data).length > MAX_FRAME_BYTES + 256) throw new RemoteError(403)
           if (message.type === 'session' && Object.keys(message).length === 2 && typeof message.sessionId === 'string' && /^[0-9a-f-]{36}$/.test(message.sessionId)) {
             if (this.applicationMode) this.application.open()
-            const sessionId = message.sessionId
+            this.sessionId = message.sessionId
             clearInterval(this.renewal)
-            this.renewal = setInterval(() => {
-              if (this.renewing || this.disposed) return
-              this.renewing = true
-              void this.client.post(`stations/${this.stationId}/renew`, { sessionId }, this.abort.signal)
-                .catch(() => socket.close(1000, 'accessEnded')).finally(() => { this.renewing = false })
-            }, 30000)
+            this.renewal = setInterval(() => {void this.renew(socket)},30000)
           } else if (message.type === 'observation' && Object.keys(message).length === 3 && Number.isSafeInteger(message.sentAtMs) && this.anchor) {
             const received = performance.now()
             // HTTP request start is a conservative clock anchor. This includes
             // delivery delay without trusting the phone's wall clock.
             const transit = received - this.anchor.start - (Number(message.sentAtMs) - this.anchor.server)
-            if (transit < 0 || transit >= STALE_MS) throw new RemoteError(503)
-            const frame = ageFrame(parseFrame(message.frame, 'native'), transit)
-            this.latest = { frame, at: received }; this.attempt = 0
+            if (transit >= STALE_MS) throw new RemoteError(503)
+            const parsed=parseFrame(message.frame,'native')
+            // A wall-clock correction can invalidate the HTTP-to-monotonic
+            // mapping without invalidating this socket's application replies.
+            // Hide observation until authenticated renewal establishes a new
+            // anchor. ACK only the structurally validated receipt, never data
+            // shown as current. No clock tolerance weakens the freshness gate.
+            if(transit<0){this.latest=null;if(this.sessionId)void this.renew(socket,true);else socket.close(1000,'clockUnavailable')}
+            else {this.latest={frame:ageFrame(parsed,transit),at:received};this.attempt=0;this.clockFailures=0}
+            const frame=parsed
             const ack = JSON.stringify({ type: 'ack', epoch: frame.epoch, sequence: frame.sequence })
             // The full workspace shares this socket with its bounded reads and
             // subscriptions. An observation ACK must use that same queue budget.
