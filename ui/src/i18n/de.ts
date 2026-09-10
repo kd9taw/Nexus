@@ -19,6 +19,9 @@ import type { PartialCatalog } from './index'
 
 export const DE: PartialCatalog = {
   // Hosted Remote observation and local station approval.
+  "remote.aprsSnapshot": "APRS-Stationsliste vor {{seconds}} s erfasst.",
+  "remote.aprsUnavailable": "APRS-Messwerte nicht verfügbar",
+  "remote.sstvImageUnavailable": "Empfangenes Bild nicht verfügbar.",
   "remote.settingsLegend": "Fernzugriff",
   "remote.stations": "Deine Stationen",
   "remote.pilotIntro": "Beobachte Funkgerät und Verstärker in einem freigegebenen Browser. Dieser Pilot zeigt nur Statuswerte.",

@@ -24,6 +24,9 @@ import type { PartialCatalog } from './index'
 
 export const JA: PartialCatalog = {
   // Hosted Remote observation and local station approval.
+  "remote.aprsSnapshot": "APRS局リストは{{seconds}}秒前に取得されました。",
+  "remote.aprsUnavailable": "APRSの測定値を取得できません",
+  "remote.sstvImageUnavailable": "受信画像を取得できません。",
   "remote.settingsLegend": "リモートアクセス",
   "remote.stations": "自分の局",
   "remote.pilotIntro": "承認済みのブラウザーで無線機とアンプの状態を確認できます。この試験サービスは状態の表示のみです。",
