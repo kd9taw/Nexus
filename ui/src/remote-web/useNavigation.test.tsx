@@ -10,14 +10,28 @@ import type { QueryArgs } from './application-query-protocol'
 
 afterEach(() => { cleanup(); vi.useRealTimers() })
 
-function fixture() {
+function fixture(reuseNativeCache = false, earlierSecondBird = false) {
   vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout', 'performance'] })
   let failure: string | null = null
+  const captures = new Map<string, { at: number; id: string }>()
+  if (earlierSecondBird) captures.set('AO-91', { at: -8000, id: crypto.randomUUID() })
   const page = vi.fn(async (args: QueryArgs) => {
     if (failure) throw new Error(failure)
     const value = { ...satellite, name: args.search, detail: { ...satellite.detail, name: args.search },
       schedule: satellite.schedule.map(p => ({ ...p, name: args.search })) }
     const pages = navigationPages('satellite', value, args.search)
+    // The native planning worker reuses a document for 20 seconds while its
+    // cursor remains valid for 30 seconds. A refresh can return that same age.
+    let capture = captures.get(args.search)
+    if (!reuseNativeCache || !capture || performance.now() - capture.at >= 20_000) {
+      capture = { at: performance.now(), id: crypto.randomUUID() }; captures.set(args.search, capture)
+    }
+    for (const p of pages) {
+      const meta = (p.meta as { source: { documentAgeMs: number; contextId: string; capturedAtMs: number } }).source
+      meta.documentAgeMs = performance.now() - capture.at
+      meta.contextId = capture.id
+      meta.capturedAtMs += capture.at
+    }
     await new Promise(resolve => setTimeout(resolve, 2000))
     return { ...pages[0], rows: pages.flatMap(p => p.rows), nextCursor: null }
   })
@@ -58,6 +72,17 @@ it('keeps a still-valid schedule during temporary congestion, then hides it at i
   fail(null)
   await advance(8500)
   expect(result.current.value?.rows.length).toBe(satellite.schedule.length * 3)
+})
+
+it.each([false, true])('does not waste the refresh window rereading unchanged native captures (older second bird: %s)', async (earlierSecondBird) => {
+  const { result } = fixture(true, earlierSecondBird)
+  await advance(6000)
+  const count = satellite.schedule.length * 3
+  expect(result.current.value?.rows).toHaveLength(count)
+  for (let elapsed = 0; elapsed < 70_000; elapsed += 500) {
+    await advance(500)
+    expect(result.current.value?.rows, `cached schedule disappeared at ${performance.now()} ms`).toHaveLength(count)
+  }
 })
 
 it('clears the schedule when a refresh reports unavailable data', async () => {

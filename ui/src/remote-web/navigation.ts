@@ -16,7 +16,7 @@ export type SatelliteData = {mygrid:string;view:SatView|null}
 export type SatelliteDetailData = {mygrid:string;name:string;detail:SatDetail;schedule:SatPass[];logCount:number}
 export type SatelliteSettings = {mygrid:string;rotatorConfigured:boolean;satDopplerOff:boolean;satVfoMap:SatVfoMap;radioPegged:boolean}
 export type SatelliteLive = {track:SatTrackStatus|null;held:SatTransponderHeld|null;settings:SatelliteSettings}
-export type NavigationDocument<T> = {value:T;ageMs:number;validForMs:number;capturedAtMs:number;stationContextId:string}
+export type NavigationDocument<T> = {value:T;ageMs:number;validForMs:number;capturedAtMs:number;stationContextId:string;documentId:string}
 const encoder=new TextEncoder()
 const bad=():never=>{throw new Error('invalidNavigation')}
 /** Display payloads contain no executable values, prototype keys, deep trees or
@@ -136,5 +136,5 @@ export async function loadNavigation<T>(source:RemoteCollections,kind:Kind,searc
   const value=parse(JSON.parse(chunks.join('')),kind,search)
   if((kind==='connect'||kind==='path')&&Number((value as ConnectData).sourceAgeMs)+age>=300_000)throw new Error('queryExpired')
   captureClock(value as object,Number(meta.capturedAtMs),age)
-  return {value:value as T,ageMs:age,validForMs:Math.min(Number(meta.validForMs),(kind==='connect'||kind==='path')?300_000-Number((value as ConnectData).sourceAgeMs):Infinity),capturedAtMs:Number(meta.capturedAtMs),stationContextId:String(meta.stationContextId)}
+  return {value:value as T,ageMs:age,validForMs:Math.min(Number(meta.validForMs),(kind==='connect'||kind==='path')?300_000-Number((value as ConnectData).sourceAgeMs):Infinity),capturedAtMs:Number(meta.capturedAtMs),stationContextId:String(meta.stationContextId),documentId:String(meta.contextId)}
 }
