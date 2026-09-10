@@ -663,7 +663,7 @@ export function AprsCockpit({
   useEffect(() => {
     const s = observation.sample?.settings
     if (!remote || !s) return
-    setFreq(resolveAprsChannel(s.aprsChannelMhz, myGrid || s.mygrid))
+    setFreq(resolveAprsChannel(s.aprsChannelMhz, s.mygrid))
     setComment(s.aprsComment ?? '')
     setPath((s.aprsPath ?? []).join(', '))
     const ll = gridToLatLon(s.mygrid)
@@ -752,7 +752,7 @@ export function AprsCockpit({
   // operator saving one, while `settings` here is the copy fetched when this view mounted and
   // goes stale the moment they fix it on the Station tab — which is exactly the case this
   // re-derive exists to serve.
-  const derivedGrid = myGrid || settings?.mygrid || ''
+  const derivedGrid = (remote ? settings?.mygrid : myGrid || settings?.mygrid) || ''
   const pinnedChannel = settings?.aprsChannelMhz
   useEffect(() => {
     // Gated on `settings` having ARRIVED, not on the prefill having been kicked off: the ref is
@@ -1455,7 +1455,7 @@ export function AprsCockpit({
             aprsNowSec={remote ? now : undefined}
             selectedAprs={selected}
             onSelectAprs={setSelected}
-            myGrid={myGrid}
+            myGrid={derivedGrid}
             theme={theme}
             stations={noStations}
             prop={null}

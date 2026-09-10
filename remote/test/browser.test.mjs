@@ -912,8 +912,9 @@ for (const applicationVersion of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]) test(`
         }
       }
       await browser.call('Emulation.setDeviceMetricsOverride',{width:1280,height:800,deviceScaleFactor:1,mobile:false},session)
-      await evaluate(`document.documentElement.style.setProperty('--ui-zoom','1');window.dispatchEvent(new Event('resize'));document.querySelector('${root}').scrollTop=0`)
+      await evaluate(`document.documentElement.style.setProperty('--ui-zoom','1');window.dispatchEvent(new Event('resize'));document.querySelector('.remote-workspace').scrollTop=0;for(const e of [document.querySelector('${root}'),...document.querySelectorAll('${root} *')])if(e&&/auto|scroll/.test(getComputedStyle(e).overflowY))e.scrollTop=0`)
       await settledLayout();await settledLayout()
+      if(sstv)await until(`document.querySelector('.sstv-thumb-img')?.complete===true&&document.querySelector('.sstv-thumb-img')?.naturalWidth===320`)
       if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,`remote-nexus-${mode.toLowerCase()}.png`),Buffer.from(shot.data,'base64'))}
       const topic=sstv?'get_sstv_state':'get_remote_aprs_state'
       unavailableTopics.add(topic)
