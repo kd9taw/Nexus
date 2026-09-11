@@ -555,7 +555,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout} of [...[1,2,
       await click(button('FT'))
     }
     if(quickLayout){
-      loggingAllowed=true;stationAllowed=true
+      loggingAllowed=true;stationControls=true
       await until(`!!${button('Take station control')}`);await click(button('Take station control'))
       await until(`document.querySelector('.remote-logging-authority')?.textContent.includes('Station control active')`)
       await click(button('Phone'))
