@@ -35,6 +35,7 @@ import type { PartialCatalog } from './index'
 export const ES: PartialCatalog = {
   "remote.modeEntry.label": "Usar este modo",
   "remote.modeEntry.title": "Cambia la estación a este modo y a su frecuencia guardada. La transmisión permanece desactivada.",
+  "remote.workspaceEntry.title": "Cambiar el modo y el decodificador de la estación a este espacio de trabajo. La transmisión permanece desactivada.",
   "remote.configurationObserver": "Ajustes de la estación · Solo lectura. La apariencia y la lista de seguimiento se aplican a este navegador.",
   "remote.configurationLocal": "Gestiona las cuentas, copias de seguridad y el acceso remoto en Nexus en la estación.",
   "remote.programmingObserver": "Canales guardados de la estación · Solo lectura. La búsqueda, edición, exportación y las acciones del equipo aún no están conectadas.",

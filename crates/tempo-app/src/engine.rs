@@ -9627,6 +9627,28 @@ impl Engine {
     /// mode when they're incompatible with the area, so re-entering an area never
     /// resets a live QSO or chat.
     pub fn set_area(&mut self, area: &str) {
+        self.set_area_with_installer(area, |engine, source| engine.install_source(source));
+    }
+
+    /// The area's remembered decoder choice, without changing a radio, source,
+    /// conversation or QSO. The native setter and Remote preparation share it.
+    fn area_tier(&self, area: &str) -> Tier {
+        match area {
+            "msg" if !self.app.tier().is_chat() => self.last_msg_tier.unwrap_or(Tier::TempoFast),
+            "msg" => self.app.tier(),
+            _ if self.app.tier().is_chat() => self.last_dx_tier.unwrap_or(Tier::Ft8),
+            _ => self.app.tier(),
+        }
+    }
+
+    // Remote holds the stable decoder mutex at commit, just as for a tier
+    // transaction. Keep every native area side effect in this shared path.
+    fn set_area_with_installer(
+        &mut self,
+        area: &str,
+        install: impl FnOnce(&mut Self, Box<dyn SignalSource>),
+    ) {
+        let target = self.area_tier(area);
         match area {
             "msg" => {
                 // MSG = FT1/DX1 free-text paradigm. Remember which structured
@@ -9636,7 +9658,7 @@ impl Engine {
                 // hand-kept tier list.
                 if !self.app.tier().is_chat() {
                     self.last_dx_tier = Some(self.app.tier());
-                    self.set_tier(self.last_msg_tier.unwrap_or(Tier::TempoFast));
+                    self.set_tier_with_installer(target, install);
                 }
                 if !matches!(self.mode, Mode::Chat) {
                     let _ = self.set_mode("chat");
@@ -9656,7 +9678,7 @@ impl Engine {
                 // that cannot transmit.
                 if self.app.tier().is_chat() {
                     self.last_msg_tier = Some(self.app.tier());
-                    self.set_tier(self.last_dx_tier.unwrap_or(Tier::Ft8));
+                    self.set_tier_with_installer(target, install);
                 }
                 if matches!(self.mode, Mode::Chat) {
                     let _ = self.set_mode("qso-monitor");

@@ -646,17 +646,17 @@ test('expanded operations preserve legacy clients, minimum peer versions and hib
     assert.equal(forwarded.operationVersion, negotiated >= 2 ? negotiated : undefined)
     const state = { stationBootId: crypto.randomUUID(), allowed: true, phase: 'controlling', leaseId: crypto.randomUUID(), revision: 1,
       commandWindowId: crypto.randomUUID(), nextSequence: 1, leaseRemainingMs: 5000, actions: [], txArmed: false,
-      ...(negotiated >= 2 ? { controls: { context: { radioId: 1, radioConnection: 1, ampConnection: null, ampReadSequence: null }, capabilities: negotiated === 3 ? ['decoder', 'amplifier', 'frequency', 'mode', 'tier', 'ampFollowBand'] : ['decoder', 'amplifier'] } } : {}) }
+      ...(negotiated >= 2 ? { controls: { context: { radioId: 1, radioConnection: 1, ampConnection: null, ampReadSequence: null }, capabilities: negotiated === 3 ? ['decoder', 'amplifier', 'frequency', 'mode', 'tier', 'ampFollowBand', 'workspace'] : ['decoder', 'amplifier'] } } : {}) }
     await app.evict(pair.stationId)
     // Simulate a station predating v3 that attached expanded hints under v2.
     const wire = structuredClone(state)
-    if (negotiated >= 2) wire.controls.capabilities = ['decoder', 'amplifier', 'frequency', 'mode', 'tier', 'ampFollowBand']
+    if (negotiated >= 2) wire.controls.capabilities = ['decoder', 'amplifier', 'frequency', 'mode', 'tier', 'ampFollowBand', 'workspace']
     live.station.send({ type: 'operationResponse', sessionId: forwarded.sessionId, requestId, value: wire })
     assert.deepEqual((await live.browser.take(type('operationResponse'))).value, state)
     // A v1 client has no station-control envelope. v2 may keep using receiver
     // controls, while the v3-only decoder transition never reaches an old peer.
     if (browserVersion >= 2) {
-      for (const action of [{ action: 'radio.tier', tier: 'FT4' }, { action: 'amplifier.followBand', radioId: 1, expectedSettingsRevision: 'a'.repeat(64), expectedFollow: true, follow: false }, { action: 'decoder.clear', receiver: 'cw' }]) {
+      for (const action of [{ action: 'radio.tier', tier: 'FT4' }, { action: 'radio.workspace', workspace: 'js8' }, { action: 'amplifier.followBand', radioId: 1, expectedSettingsRevision: 'a'.repeat(64), expectedFollow: true, follow: false }, { action: 'decoder.clear', receiver: 'cw' }]) {
         await delay(270)
         const command = { type: 'stationControl', requestId: crypto.randomUUID(), stationBootId: state.stationBootId, leaseId: state.leaseId,
           expectedRevision: 1, commandWindowId: state.commandWindowId, clientSequence: 1,
@@ -670,7 +670,7 @@ test('expanded operations preserve legacy clients, minimum peer versions and hib
           assert.deepEqual(routed.request, command); assert.equal(routed.operationVersion, negotiated)
           await app.evict(pair.stationId)
           live.station.send({ type: 'operationResponse', sessionId: routed.sessionId, requestId: command.requestId,
-            value: { operation: 'stationControl', operationId: command.requestId, outcome: 'applied', evidence: action.action === 'amplifier.followBand' ? 'settingsSaved' : action.action === 'radio.tier' ? 'radioReadback' : 'receiverState' } })
+            value: { operation: 'stationControl', operationId: command.requestId, outcome: 'applied', evidence: action.action === 'amplifier.followBand' ? 'settingsSaved' : action.action.startsWith('radio.') ? 'radioReadback' : 'receiverState' } })
           const response = await live.browser.take(type('operationResponse'))
           assert.equal(response.requestId, command.requestId); assert.equal(response.value.outcome, 'applied')
         }

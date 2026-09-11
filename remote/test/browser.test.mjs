@@ -267,6 +267,8 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
     let loggingAllowed=false,loggingLease=null,loggingRevision=1,loggingSequence=0,loseLogReply=false
     let stationControls=false
     const stationRequests=[]
+    let lastDxTier='FT8',lastMsgTier='TempoFast'
+    if(operating)applicationData.get_snapshot.mode='qso'
     const loggingBoot=crypto.randomUUID(),loggingWindow=crypto.randomUUID(),loggedRequests=[],loggingReceipts=new Map()
     const querySnapshots = new Map()
     let applicationRevision = 1, applicationAvailable = true
@@ -310,6 +312,19 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
             assert.ok(dial);assert.equal(a.followFrequency,true)
             applicationData.get_snapshot.radio.operatingMode=a.mode;applicationData.get_snapshot.radio.dialMhz=dial
             assert.equal(applicationData.get_snapshot.radio.txEnabled,false)
+          }else if(a.action==='radio.workspace'){
+            const snap=applicationData.get_snapshot,chat=['TempoFast','TempoDeep'].includes(snap.link.tier)
+            if(a.workspace==='tempo'){
+              if(!chat){lastDxTier=snap.link.tier;snap.link.tier=lastMsgTier}
+              snap.mode='chat'
+            }else if(a.workspace==='ft'){
+              if(chat){lastMsgTier=snap.link.tier;snap.link.tier=lastDxTier}
+              if(snap.link.tier==='JS8')snap.link.tier='FT8'
+              snap.mode='qso'
+            }else if(a.workspace==='js8')snap.link.tier='JS8'
+            else assert.fail(`Unreviewed workspace ${a.workspace}`)
+            snap.radio.operatingMode='digital';snap.radio.dialMhz=7.074
+            assert.equal(snap.radio.txEnabled,false)
           }else if(a.action==='radio.tier'){
             assert.ok(['FT8','FT4','FT2','WSPR','Q65','MSK144','JT65','FST4','FST4W','TempoFast','TempoDeep'].includes(a.tier))
             assert.equal(applicationData.get_snapshot.radio.operatingMode,'digital')
@@ -340,7 +355,7 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
           value={operation:'stationControl',operationId:r.requestId,outcome:'applied',evidence:a.action==='amplifier.followBand'?'settingsSaved':a.action.startsWith('radio.')?'radioReadback':a.action.startsWith('amplifier.')?'amplifierReadback':'receiverState'}
           loggingReceipts.set(r.requestId,value);loggingRevision++;applicationRevision++
         }else if(r.type==='result'){value=loggingReceipts.get(r.operationId);if(!value)error='resultExpired'}
-        else value={stationBootId:loggingBoot,allowed:loggingAllowed||stationControls,phase:loggingLease?'controlling':loggingAllowed||stationControls?'available':'localPermissionRequired',leaseId:loggingLease,revision:loggingRevision,commandWindowId:loggingLease?loggingWindow:null,nextSequence:loggingLease?loggingSequence+1:null,leaseRemainingMs:loggingLease?5000:null,actions:loggingAllowed?['log.manual']:[],txArmed:false,...(stationControls?{controls:{context:{radioId:1,radioConnection:1,ampConnection:1,ampReadSequence:1},capabilities:request.operationVersion>=3?['decoder','amplifier','frequency','mode','tier','ampFollowBand']:['decoder','amplifier']}}:{})}
+        else value={stationBootId:loggingBoot,allowed:loggingAllowed||stationControls,phase:loggingLease?'controlling':loggingAllowed||stationControls?'available':'localPermissionRequired',leaseId:loggingLease,revision:loggingRevision,commandWindowId:loggingLease?loggingWindow:null,nextSequence:loggingLease?loggingSequence+1:null,leaseRemainingMs:loggingLease?5000:null,actions:loggingAllowed?['log.manual']:[],txArmed:false,...(stationControls?{controls:{context:{radioId:1,radioConnection:1,ampConnection:1,ampReadSequence:1},capabilities:request.operationVersion>=3?['decoder','amplifier','frequency','mode','tier','ampFollowBand','workspace']:['decoder','amplifier']}}:{})}
         source.send({type:'operationResponse',sessionId:request.sessionId,requestId:r.requestId,...(error?{error}:{value})});continue
       }
       if (request.type === 'applicationQuery') {
@@ -654,7 +669,7 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
         await until(`document.querySelector('${root} .ch-readout .readout-val')?.textContent.includes('${mhz.toFixed(4)}')`)
       }
       let modeGeometry=0
-      for(const [tab,root,mode] of [['CW','.cw-cockpit','cw'],['FT','.operate-cockpit','digital'],['Phone','.phone-cockpit','phone'],['RTTY','.rtty-cockpit','rtty'],['PSK','.psk-cockpit','keyboard'],['Tempo','.grid-header','digital']]){
+      for(const [tab,root,mode,workspace] of [['CW','.cw-cockpit','cw'],['FT','.operate-cockpit','digital','ft'],['Phone','.phone-cockpit','phone'],['RTTY','.rtty-cockpit','rtty'],['PSK','.psk-cockpit','keyboard'],['Tempo','.grid-header','digital','tempo'],['JS8','.js8-cockpit','digital','js8'],['FT','.operate-cockpit','digital','ft']]){
         const before=stationRequests.length,selector=root+' .remote-mode-entry'
         await click(button(tab));await settledLayout()
         await until(`!!document.querySelector('${selector}')&&!document.querySelector('${selector}').disabled`)
@@ -667,8 +682,9 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
           if(!shape.good&&artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'mode-layout-failure.png'),Buffer.from(shot.data,'base64'));await writeFile(join(artifacts,'mode-layout-failure.json'),JSON.stringify({tab,width,height,zoom,theme,shape},null,2))}
           assert.equal(shape.good,true,`Mode entry reachable ${tab} ${width} ${zoom}: ${JSON.stringify(shape)}`);modeGeometry++
         }
-        await gesture(selector,'radio.mode')
-        assert.deepEqual(stationRequests.at(-1).action,{action:'radio.mode',mode,followFrequency:true})
+        const expected=workspace?{action:'radio.workspace',workspace}:{action:'radio.mode',mode,followFrequency:true}
+        await gesture(selector,expected.action)
+        assert.deepEqual(stationRequests.at(-1).action,expected)
         await until(`!document.querySelector('${selector}')`)
         assert.equal(applicationData.get_snapshot.radio.txEnabled,false)
       }
@@ -717,7 +733,7 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
       await until(`document.querySelector('.cw-cockpit .amp-op').disabled`)
       assert.equal(loggedRequests.length,5);assert.equal(unexpectedMessages,0);assert.equal(exceptions,0)
       if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-manual-logging.png'),Buffer.from(shot.data,'base64'));await writeFile(join(artifacts,'operation-results.json'),JSON.stringify({count:loggedRequests.length,stationActions:stationRequests.map(r=>r.action),controlGeometry,modeGeometry,tierGeometry,followGeometry,modes:loggedRequests.map(r=>r.record.mode),lostResultResolved:true,wholePageReloadResolved:true,crossTabLockRefusal:true,geometry:16,exceptions,unexpectedMessages},null,2))}
-      console.log('Compiled browser: five logging forms, five dial, six mode, eleven tier, nine receiver/amplifier and two saved follow gestures, separate grants, recovery and 184 geometry cases passed');return
+      console.log('Compiled browser: five logging forms, five dial, four mode, four workspace, eleven tier, nine receiver/amplifier and two saved follow gestures, separate grants, recovery and 200 geometry cases passed');return
     }
     const startReads=applicationTraffic.reads, startBytes=applicationTraffic.bytes, started=performance.now()
     for(const [width,height] of [[1024,768],[1280,800],[1366,768],[1200,1390],[3440,1440]])for(const zoom of [1,1.75])for(const theme of ['dark','light']) {

@@ -92,6 +92,10 @@ pub enum Action {
     },
     #[serde(rename = "radio.tier")]
     Tier { tier: tempo_app::dto::Tier },
+    #[serde(rename = "radio.workspace")]
+    Workspace {
+        workspace: tempo_app::engine::remote_radio::Workspace,
+    },
     #[serde(rename = "radio.select")]
     Radio {
         #[serde(rename = "radioId")]
@@ -192,6 +196,14 @@ pub fn execute(
                 *dial_mhz,
                 band,
                 sideband,
+                context.radio_connection.ok_or(Reason::ReadingUnavailable)?,
+                permit,
+            );
+        }
+        #[cfg(feature = "radio")]
+        Action::Workspace { workspace } => {
+            return engine.queue_remote_workspace(
+                *workspace,
                 context.radio_connection.ok_or(Reason::ReadingUnavailable)?,
                 permit,
             );
@@ -357,6 +369,7 @@ impl Action {
             Self::Frequency { .. }
             | Self::Mode { .. }
             | Self::Tier { .. }
+            | Self::Workspace { .. }
             | Self::Radio { .. }
             | Self::AmpFollowBand { .. } => 3,
             _ => 2,
@@ -377,6 +390,7 @@ pub fn capabilities(version: u8) -> Vec<&'static str> {
                 "mode",
                 "tier",
                 "ampFollowBand",
+                "workspace",
             ]
         }
     }

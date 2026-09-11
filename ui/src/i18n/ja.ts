@@ -25,6 +25,7 @@ import type { PartialCatalog } from './index'
 export const JA: PartialCatalog = {
   "remote.modeEntry.label": "このモードを使用",
   "remote.modeEntry.title": "局をこのモードと保存した周波数に切り替えます。送信は無効のままです。",
+  "remote.workspaceEntry.title": "ステーションのモードとデコーダーをこのワークスペースに切り替えます。送信はオフのままです。",
   "remote.configurationObserver": "局の設定 · 読み取り専用。表示とウォッチリストの設定はこのブラウザーに適用されます。",
   "remote.configurationLocal": "アカウント、バックアップ、リモートアクセスは局側の Nexus で管理してください。",
   "remote.programmingObserver": "局に保存されたチャンネル · 読み取り専用。検索、編集、エクスポート、無線機の操作はまだ接続されていません。",

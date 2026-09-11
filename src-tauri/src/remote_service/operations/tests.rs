@@ -3,6 +3,9 @@ use std::sync::Arc;
 #[cfg(feature = "radio")]
 #[path = "amp_follow_tests.rs"]
 mod amp_follow;
+#[cfg(feature = "radio")]
+#[path = "workspace_tests.rs"]
+mod workspace;
 const DEVICE: &str = "10000000-0000-4000-8000-000000000001";
 const SESSION: &str = "20000000-0000-4000-8000-000000000001";
 const OTHER: &str = "30000000-0000-4000-8000-000000000001";
@@ -336,7 +339,8 @@ fn tier_admission_requires_v3_and_keeps_one_native_receipt_through_readback() {
             "frequency",
             "mode",
             "tier",
-            "ampFollowBand"
+            "ampFollowBand",
+            "workspace"
         ])
     );
     let command = control_request(&state, json!({"action":"radio.tier","tier":"FT4"}));

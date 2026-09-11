@@ -10,9 +10,21 @@ use std::path::PathBuf;
 use std::sync::TryLockError;
 use std::time::Instant;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Workspace {
+    Ft,
+    Tempo,
+    Js8,
+}
+
 enum Intent {
     Frequency,
     Tier(Tier),
+    Workspace {
+        workspace: Workspace,
+        tier: Tier,
+    },
     Mode {
         mode: String,
         follow_frequency: bool,
@@ -276,6 +288,81 @@ impl Engine {
         )
     }
 
+    /// Explicit entry into a complete digital workspace. Opening a browser tab
+    /// never calls this. Resolve the native destination before any state change.
+    pub fn queue_remote_workspace(
+        &mut self,
+        workspace: Workspace,
+        connection: u64,
+        permit: Permit,
+    ) -> Result<Completion, Reason> {
+        self.remote_radio_idle()?;
+        if self.source_kind != crate::dto::SourceKind::Native {
+            return Err(Reason::UnsupportedAction);
+        }
+        if matches!(self.source.try_lock(), Err(TryLockError::WouldBlock)) {
+            return Err(Reason::StationBusy);
+        }
+        let tier = match workspace {
+            Workspace::Ft => match self.area_tier("dx") {
+                Tier::Js8 => Tier::Ft8, // JS8 owns its own cockpit, outside FT.
+                tier => tier,
+            },
+            Workspace::Tempo => self.area_tier("msg"),
+            Workspace::Js8 => Tier::Js8,
+        };
+        let mut projected = self.settings.clone();
+        projected.operating_mode = OperatingMode::Digital;
+        // A same-tier return preserves an operator-tuned channel, like the
+        // native setter. A changed tier uses its existing override/fallback rule.
+        if tier != self.tier() {
+            if let Some(channel) = self.prepare_tier_frequency(tier) {
+                projected.dial_mhz = channel.dial_mhz;
+                projected.band = channel.band;
+                projected.sideband = channel.mode;
+            }
+        }
+        if projected.sideband.eq_ignore_ascii_case("LSB") {
+            projected.sideband = "USB".into();
+        }
+        if !projected.radio_pegged
+            && projected
+                .route_radio(
+                    &projected.band,
+                    self.route_mode_for(
+                        &projected.band,
+                        projected.dial_mhz,
+                        OperatingMode::Digital,
+                    ),
+                )
+                .is_some_and(|id| id != projected.active_radio)
+        {
+            return Err(Reason::UnsupportedAction);
+        }
+        let ceiling = projected.rf_power_ceiling();
+        let power_limit = (ceiling < 1.0).then(|| {
+            self.rf_power
+                .or(self.rig_rf_power)
+                .unwrap_or(ceiling)
+                .min(ceiling)
+        });
+        if power_limit.is_some_and(|p| !p.is_finite() || !(0.0..=1.0).contains(&p)) {
+            return Err(Reason::ReadingUnavailable);
+        }
+        self.queue_remote_target(
+            Target {
+                hz: projected.dial_hz(),
+                mode: projected.rig_mode(),
+                band: projected.band,
+                sideband: projected.sideband,
+                power_limit,
+                intent: Intent::Workspace { workspace, tier },
+            },
+            connection,
+            permit,
+        )
+    }
+
     fn queue_remote_target(
         &mut self,
         target: Target,
@@ -296,7 +383,7 @@ impl Engine {
         // request carries no client frequency: admit only an exact stock
         // channel in that case, without widening arbitrary tuning or TX guards.
         let native_channel = match &target.intent {
-            Intent::Tier(tier) if named_band.is_none() => {
+            Intent::Tier(tier) | Intent::Workspace { tier, .. } if named_band.is_none() => {
                 crate::bandplan::band_plan_for(*tier).iter().any(|c| {
                     c.band == target.band
                         && (c.dial_mhz * 1e6).round() as u64 == target.hz
@@ -459,7 +546,8 @@ impl Request {
         // Do not wait behind an in-flight decoder after the final permission
         // check. Keep the original serialization mutex, with native poison recovery.
         let source = engine.source.clone();
-        let mut source_slot = if matches!(&self.intent, Intent::Tier(_)) {
+        let mut source_slot = if matches!(&self.intent, Intent::Tier(_) | Intent::Workspace { .. })
+        {
             let slot = match source.try_lock() {
                 Ok(slot) => slot,
                 Err(TryLockError::Poisoned(error)) => error.into_inner(),
@@ -484,6 +572,32 @@ impl Request {
             }),
             Intent::Frequency => {
                 engine.set_frequency(self.target_hz as f64 / 1e6, &self.band, &self.sideband)
+            }
+            Intent::Workspace { workspace, .. } => {
+                engine.set_operating_mode_with_arming("digital", false, false);
+                let mut install = |engine: &mut Engine, decoder| {
+                    engine.install_source_into(
+                        source_slot.as_mut().expect("workspace decoder lock"),
+                        decoder,
+                    );
+                };
+                match workspace {
+                    Workspace::Ft => {
+                        engine.set_area_with_installer("dx", &mut install);
+                        if engine.tier() == Tier::Js8 {
+                            engine.set_tier_with_installer(Tier::Ft8, &mut install);
+                        }
+                    }
+                    Workspace::Tempo => engine.set_area_with_installer("msg", &mut install),
+                    Workspace::Js8 => {
+                        engine.js8_start_session();
+                        engine.set_tier_with_installer(Tier::Js8, &mut install);
+                    }
+                }
+                if let Some(power) = power.filter(|_| self.power_limit.is_some()) {
+                    engine.rf_power = Some(power);
+                    engine.observe_rig_power(power);
+                }
             }
             Intent::Mode {
                 mode,

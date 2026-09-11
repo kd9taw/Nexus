@@ -1,6 +1,6 @@
 import type { ReceiptStorage } from './operation-storage'
 import type { ControlStorage, PendingControl } from './control-storage'
-import { controlContext, stationAction, type StationAction, type ControlOutcome, type ControlContext } from './station-operation'
+import { actionCapability, controlContext, stationAction, type StationAction, type ControlOutcome, type ControlContext } from './station-operation'
 import { controlVersion, type OperationVersion } from './operation-version'
 import {
   manualRecord,
@@ -428,7 +428,7 @@ export class OperationClient {
     if (this.operationVersion < controlVersion(intent)) throw Error('stationUnsupported')
     if (!this.controlStorage) throw Error('receiptStorageUnavailable')
     if (this.view.unresolved || this.view.controlPending || this.controlIntent || this.loggingIntent) throw Error('operationUnknown')
-    const capability = action.action === 'radio.frequency' ? 'frequency' : action.action === 'radio.mode' ? 'mode' : action.action === 'radio.tier' ? 'tier' : action.action === 'amplifier.followBand' ? 'ampFollowBand' : action.action.startsWith('decoder.') ? 'decoder' : action.action.startsWith('amplifier.') ? 'amplifier' : 'radio'
+    const capability = actionCapability(intent)
     if (!s || !this.view.fresh || s.phase !== 'controlling' || !s.leaseId || !s.commandWindowId || s.nextSequence === null || !s.controls?.capabilities.includes(capability)) throw Error('notController')
     const context = structuredClone(controlContext(displayed ?? s.controls.context))
     const sameConnection = (current: ControlContext | undefined) => !!current &&

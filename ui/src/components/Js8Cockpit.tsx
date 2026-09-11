@@ -810,6 +810,7 @@ export function Js8Cockpit({
         <CockpitHeader
           snap={snap}
           onSnap={onSnap}
+          remoteWorkspace="js8"
           txActiveLabel="▲ JS8"
           onStopTx={stop}
           onSetTxEnabled={onSetTxEnabled ? (on) => { if (canControl) onSetTxEnabled(on) } : undefined}

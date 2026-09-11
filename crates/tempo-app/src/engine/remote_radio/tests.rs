@@ -107,11 +107,177 @@ impl Station {
                 .unwrap(),
         )
     }
+
+    fn queue_workspace(&mut self, workspace: Workspace) -> Result<Completion, Reason> {
+        let connection = self
+            .engine
+            .remote_monitor_observation()
+            .radio
+            .readings
+            .cat
+            .unwrap()
+            .connection_generation;
+        self.engine.queue_remote_workspace(
+            workspace,
+            connection,
+            self.authority
+                .permit(Instant::now() + Duration::from_secs(5))
+                .unwrap(),
+        )
+    }
 }
 impl Drop for Station {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(self.path.parent().unwrap());
     }
+}
+
+#[test]
+fn workspace_entry_uses_native_area_memories_and_js8_session_policy() {
+    let mut s = Station::new(OperatingMode::Digital);
+    let mut native = Station::new(OperatingMode::Digital);
+    for station in [&mut s, &mut native] {
+        station.engine.set_tier(Tier::Ft4);
+        station.engine.take_immediate_retune();
+        let hz = station.engine.settings.dial_hz();
+        let mode = station.engine.rig_mode_effective();
+        station.sample(hz, &mode);
+    }
+    let source = s.engine.source.clone();
+    for workspace in [
+        Workspace::Tempo,
+        Workspace::Ft,
+        Workspace::Js8,
+        Workspace::Tempo,
+        Workspace::Js8,
+        Workspace::Ft,
+    ] {
+        let before = serde_json::to_value(s.engine.settings()).unwrap();
+        let generation = s.engine.tx_gate_gen;
+        let receipt = s.queue_workspace(workspace).unwrap();
+        assert_eq!(serde_json::to_value(s.engine.settings()).unwrap(), before);
+        assert_eq!(s.engine.tx_gate_gen, generation, "preparation is passive");
+
+        // The ordinary public native gestures are the operator-visible oracle.
+        native.engine.set_operating_mode("digital", false);
+        match workspace {
+            Workspace::Tempo => native.engine.set_area("msg"),
+            Workspace::Ft => {
+                native.engine.set_area("dx");
+                if native.engine.tier() == Tier::Js8 {
+                    native.engine.set_tier(Tier::Ft8);
+                }
+            }
+            Workspace::Js8 => native.engine.js8_enter(),
+        }
+        native.engine.take_immediate_retune();
+        let request = s.engine.take_remote_radio().unwrap();
+        assert_eq!(request.target_hz, native.engine.settings.dial_hz());
+        assert_eq!(request.target_mode, native.engine.rig_mode_effective());
+        s.sample(request.target_hz, &request.target_mode);
+        let power = request.power_limit;
+        assert!(request.commit_readback(&mut s.engine, power));
+        assert_eq!(
+            receipt.outcome(),
+            Outcome::Applied {
+                evidence: Evidence::RadioReadback
+            }
+        );
+        assert_eq!(s.engine.tier(), native.engine.tier());
+        assert_eq!(
+            serde_json::to_value(s.engine.snapshot().mode).unwrap(),
+            serde_json::to_value(native.engine.snapshot().mode).unwrap()
+        );
+        assert_eq!(
+            serde_json::to_value(s.engine.settings()).unwrap(),
+            serde_json::to_value(native.engine.settings()).unwrap()
+        );
+        assert_eq!(s.engine.last_dx_tier, native.engine.last_dx_tier);
+        assert_eq!(s.engine.last_msg_tier, native.engine.last_msg_tier);
+        assert_eq!(s.engine.tx_gate_gen, native.engine.tx_gate_gen);
+        assert!(std::sync::Arc::ptr_eq(&source, &s.engine.source));
+        assert!(!s.engine.tx_enabled());
+        assert!(!s.engine.take_immediate_retune());
+        let saved: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&s.path).unwrap()).unwrap();
+        assert_eq!(saved, serde_json::to_value(s.engine.settings()).unwrap());
+    }
+}
+
+#[test]
+fn a_workspace_entry_never_waits_on_a_decoder_or_changes_state_before_confirmation() {
+    let mut s = Station::new(OperatingMode::Digital);
+    let source = s.engine.source.clone();
+    let held = source.lock().unwrap();
+    let before = serde_json::to_value(s.engine.settings()).unwrap();
+    assert!(matches!(
+        s.queue_workspace(Workspace::Js8),
+        Err(Reason::StationBusy)
+    ));
+    assert_eq!(serde_json::to_value(s.engine.settings()).unwrap(), before);
+    assert!(s.engine.take_remote_radio().is_none());
+    drop(held);
+    let receipt = s.queue_workspace(Workspace::Js8).unwrap();
+    let request = s.engine.take_remote_radio().unwrap();
+    s.sample(request.target_hz, &request.target_mode);
+    let power = request.power_limit;
+    let held = source.lock().unwrap();
+    assert!(!request.commit_readback(&mut s.engine, power));
+    assert!(matches!(
+        receipt.outcome(),
+        Outcome::Rejected {
+            reason: Reason::StationBusy
+        }
+    ));
+    assert_eq!(serde_json::to_value(s.engine.settings()).unwrap(), before);
+    assert!(!s.path.exists());
+    drop(held);
+}
+
+#[test]
+fn a_local_operating_spec_change_retires_pending_radio_work_with_the_same_cat_context() {
+    for workspace in [false, true] {
+        let mut s = Station::new(OperatingMode::Digital);
+        s.engine.set_mode("qso-monitor").unwrap();
+        let receipt = if workspace {
+            s.queue_workspace(Workspace::Tempo)
+        } else {
+            s.queue()
+        }
+        .unwrap();
+        let request = s.engine.take_remote_radio().unwrap();
+        // The public native verb resets the local operating spec even if its
+        // label and CAT mode are unchanged. That newer operator action wins.
+        s.engine.set_mode("qso-monitor").unwrap();
+        let local = serde_json::to_value(s.engine.settings()).unwrap();
+        s.sample(request.target_hz, &request.target_mode);
+        let power = request.power_limit;
+        assert!(
+            !request.commit_readback(&mut s.engine, power),
+            "workspace={workspace}"
+        );
+        assert!(matches!(
+            receipt.outcome(),
+            Outcome::Rejected {
+                reason: Reason::ContextChanged
+            }
+        ));
+        assert_eq!(serde_json::to_value(s.engine.settings()).unwrap(), local);
+        assert!(!s.path.exists());
+    }
+    let mut s = Station::new(OperatingMode::Digital);
+    let receipt = s.queue_workspace(Workspace::Tempo).unwrap();
+    let request = s.engine.take_remote_radio().unwrap();
+    assert!(s.engine.set_mode("not-a-mode").is_err());
+    s.sample(request.target_hz, &request.target_mode);
+    let power = request.power_limit;
+    assert!(request.commit_readback(&mut s.engine, power));
+    assert_eq!(
+        receipt.outcome(),
+        Outcome::Applied {
+            evidence: Evidence::RadioReadback
+        }
+    );
 }
 
 #[test]

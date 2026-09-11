@@ -6,7 +6,7 @@ import type { ControlContext } from './station-operation'
 // Reuse the authenticated observation stream already carried by this hosted
 // connection. The displayed amp and its opaque hardware binding come together.
 export const RemoteObservationContext = createContext<MonitorState>(initialState)
-export function useRemoteAmplifier(radioId: number | undefined) {
+export function useRemoteStation(radioId: number | undefined) {
   const observation = useContext(RemoteObservationContext), available = useStationData()
   const frame = observation.frame
   const station = available && observation.status === 'current' && frame && frame.station.radio.id === radioId
@@ -18,6 +18,12 @@ export function useRemoteAmplifier(radioId: number | undefined) {
     ampConnection: amp?.reading?.connectionGeneration ?? null,
     ampReadSequence: amp?.reading?.readSequence ?? null
   } : null
+  return { station, context }
+}
+
+export function useRemoteAmplifier(radioId: number | undefined) {
+  const { station, context } = useRemoteStation(radioId)
+  const radio = station?.radio, amp = station?.amplifier ?? null
   const idle = !!(radio?.catConnected && radio.rigKeyed === false && !radio.nexusBusy &&
     radio.readings.ptt && radio.readings.ptt.ageMs < 1000 && amp?.linked && amp.reading &&
     amp.transmitting !== true && (amp.outputWatts === null || amp.outputWatts === 0))

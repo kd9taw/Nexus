@@ -933,7 +933,7 @@ export function OperateCockpit({
           />
         }
         remoteFrequency
-        remoteMode="digital"
+        remoteWorkspace="ft"
         onCommitDial={commitDial}
         digitTune
         wheelSensitivity={wheelSensitivity}

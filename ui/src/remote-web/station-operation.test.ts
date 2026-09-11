@@ -1,7 +1,21 @@
 import { describe, expect, it } from 'vitest'
-import { controlContext, controlOutcome, stationAction } from './station-operation'
+import { actionCapability, controlContext, controlOutcome, stationAction } from './station-operation'
 
 describe('closed station operating requests', () => {
+  it('admits complete workspace intents without accepting embedded commands, settings or transmit choices', () => {
+    for (const workspace of ['ft', 'tempo', 'js8']) {
+      const action = stationAction({ action: 'radio.workspace', workspace })
+      expect(action).toEqual({ action: 'radio.workspace', workspace })
+      expect(actionCapability(action)).toBe('workspace')
+    }
+    for (const action of [
+      { action: 'radio.workspace', workspace: 'FT' }, { action: 'radio.workspace', workspace: 'cw' },
+      { action: 'radio.workspace', workspace: 'js8', txEnabled: true },
+      { action: 'radio.workspace', workspace: 'ft', tier: 'WSPR' },
+      { action: 'radio.workspace', workspace: 'tempo', settings: {} },
+      { action: 'radio.workspace', workspace: 'js8', command: 'js8_enter' }
+    ]) expect(() => stationAction(action)).toThrow('invalidOperation')
+  })
   it('accepts only a changed follow choice with the displayed profile and exact Settings revision', () => {
     const intent = { action: 'amplifier.followBand', radioId: 3, expectedSettingsRevision: 'a'.repeat(64), expectedFollow: false, follow: true }
     expect(stationAction(intent)).toEqual(intent)

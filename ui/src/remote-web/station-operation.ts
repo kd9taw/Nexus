@@ -8,6 +8,7 @@ export type StationAction =
   | { action: 'radio.frequency'; dialMhz: number; band: string; sideband: 'USB' | 'LSB' | 'FM' | 'AM' }
   | { action: 'radio.mode'; mode: 'digital' | 'phone' | 'cw' | 'rtty' | 'keyboard'; followFrequency: boolean }
   | { action: 'radio.tier'; tier: string }
+  | { action: 'radio.workspace'; workspace: 'ft' | 'tempo' | 'js8' }
   | { action: 'radio.select'; radioId: number }
   | { action: 'radio.disarm' }
   | { action: 'decoder.arm'; receiver: Receiver; on: boolean }
@@ -25,8 +26,17 @@ export type ControlContext = {
   ampConnection: number | null
   ampReadSequence: number | null
 }
-export const CONTROL_CAPABILITIES = ['decoder', 'radio', 'amplifier', 'frequency', 'mode', 'tier', 'ampFollowBand'] as const
+export const CONTROL_CAPABILITIES = ['decoder', 'radio', 'amplifier', 'frequency', 'mode', 'tier', 'ampFollowBand', 'workspace'] as const
 export type ControlCapability = (typeof CONTROL_CAPABILITIES)[number]
+// A new action cannot silently inherit a broader capability by its prefix.
+const ACTION_CAPABILITY: Record<StationAction['action'], ControlCapability> = {
+  'radio.disarm': 'radio', 'radio.select': 'radio', 'radio.frequency': 'frequency',
+  'radio.mode': 'mode', 'radio.tier': 'tier', 'radio.workspace': 'workspace',
+  'decoder.arm': 'decoder', 'decoder.clear': 'decoder', 'decoder.afcReset': 'decoder',
+  'decoder.net': 'decoder', 'decoder.pskMode': 'decoder',
+  'amplifier.operate': 'amplifier', 'amplifier.band': 'amplifier', 'amplifier.followBand': 'ampFollowBand'
+}
+export const actionCapability = (action: StationAction): ControlCapability => ACTION_CAPABILITY[action.action]
 export const CONTROL_TIERS = [
   'FT8', 'FT4', 'FT2', 'Q65', 'MSK144', 'JT65', 'FST4', 'FST4W', 'WSPR', 'JS8',
   'TempoFast', 'TempoDeep'
@@ -60,6 +70,10 @@ export function stationAction(raw: unknown): StationAction {
     case 'radio.mode':
       object(a, ['action', 'mode', 'followFrequency'])
       if (!oneOf(a.mode, ['digital', 'phone', 'cw', 'rtty', 'keyboard']) || typeof a.followFrequency !== 'boolean') invalid()
+      break
+    case 'radio.workspace':
+      object(a, ['action', 'workspace'])
+      if (!oneOf(a.workspace, ['ft', 'tempo', 'js8'])) invalid()
       break
     case 'radio.tier':
       object(a, ['action', 'tier'])

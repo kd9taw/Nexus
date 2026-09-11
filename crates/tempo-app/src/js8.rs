@@ -133,12 +133,18 @@ impl Engine {
     /// (stay-on-miss). KEYS NOTHING: the TX latch is untouched and `tier_is_rx_only`
     /// refuses to arm it anyway.
     pub fn js8_enter(&mut self) {
+        self.js8_start_session();
+        self.set_tier(Tier::Js8);
+    }
+
+    /// Shared session-entry effects before the native decoder transition.
+    /// Remote performs that transition under the existing decoder mutex too.
+    pub(crate) fn js8_start_session(&mut self) {
         self.js8_apply_station_config();
         // Entering the view is the session start: seed the idle-watchdog baseline to now so
         // the operator's first decode doesn't read as decades idle and trip the watchdog
         // (a freshly built Station has `last_activity_ms == 0`).
         self.js8_station.mark_active(now_unix_secs() * 1000);
-        self.set_tier(Tier::Js8);
     }
 
     /// Borrow the native heard list for display joins without copying inbox or queue.
