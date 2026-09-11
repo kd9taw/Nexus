@@ -220,6 +220,7 @@ mod tests {
                 std::thread::yield_now();
             };
             let mut resets = 0;
+            let modem = std::cell::RefCell::new(&mut a7);
             guarded.enter_remote_workspace_with_decoder(
                 workspace,
                 follow,
@@ -227,11 +228,11 @@ mod tests {
                     DecoderMutation::Install(source) => {
                         engine.install_source_into(&mut slot, source)
                     }
-                    DecoderMutation::ResetHarq => Engine::harq_reset_serialized(&slot),
+                    DecoderMutation::ResetHarq => modem.borrow_mut().reset_tempo_harq_held(),
                 },
                 || {
                     resets += 1;
-                    a7.reset_held();
+                    modem.borrow_mut().reset_held();
                 },
             );
             assert!(modes::Ft8A7ResetGuard::try_acquire().is_none());

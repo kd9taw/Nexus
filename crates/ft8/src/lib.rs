@@ -300,6 +300,15 @@ impl A7ResetGuard {
             tempo_fast_sys::ft8_a7_reset();
         }
     }
+
+    /// Tempo HARQ shares this same process-wide modem lock with FT8/FT4.
+    /// A compound native workspace transition must not acquire it a second time.
+    pub fn reset_tempo_harq_held(&mut self) {
+        let _guard = &self.0;
+        unsafe {
+            tempo_fast_sys::ft1_harq_reset();
+        }
+    }
 }
 
 #[cfg(test)]
@@ -312,6 +321,8 @@ fn repeated_native_a7_resets_keep_the_original_serialization_guard() {
         std::thread::yield_now();
     };
     for _ in 0..2 {
+        guard.reset_held();
+        guard.reset_tempo_harq_held();
         guard.reset_held();
         assert!(
             A7ResetGuard::try_acquire().is_none(),

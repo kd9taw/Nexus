@@ -570,6 +570,9 @@ impl Request {
         let incoming = self.settings().active_radio;
         if let Some(tune) = &self.tune {
             if let Some(entry) = &tune.workspace {
+                // Both synchronous callbacks use the same held modem lock.
+                // RefCell coordinates Rust borrows; it never reacquires MODEM_LOCK.
+                let modem = std::cell::RefCell::new(&mut decoder);
                 engine.enter_remote_workspace_with_decoder(
                     entry.workspace,
                     entry.follow_frequency,
@@ -578,11 +581,12 @@ impl Request {
                             source_slot.as_mut().expect("workspace source lock"),
                             source,
                         ),
-                        super::DecoderMutation::ResetHarq => Engine::harq_reset_serialized(
-                            source_slot.as_ref().expect("workspace source lock"),
-                        ),
+                        super::DecoderMutation::ResetHarq => {
+                            let _source = source_slot.as_ref().expect("workspace source lock");
+                            modem.borrow_mut().reset_tempo_harq_held();
+                        }
                     },
-                    || decoder.reset_held(),
+                    || modem.borrow_mut().reset_held(),
                 );
             } else if let Some((tier, _)) = tune.tier {
                 engine.set_tier_with_installer_and_reset(
