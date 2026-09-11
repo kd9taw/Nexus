@@ -39,6 +39,13 @@ use crate::rigctld_proc::{spawn_rigctld, RigctldProc};
 
 mod monitor_claims;
 mod remote_radio;
+// This owner is being connected to the selection request path. Keep its
+// integration warning explicit until that caller lands.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "Remote selection request integration in progress")
+)]
+mod selection_connection;
 use monitor_claims::RadioClaims;
 
 /// The daemon serving the rigctld protocol on a radio's TCP port: Hamlib's spawned
@@ -1819,6 +1826,16 @@ struct MonitorConn {
 }
 
 impl MonitorConn {
+    fn open_backoff(controlled: bool, prior_failures: u32, now_ms: f64) -> (u32, f64) {
+        if controlled {
+            (0, 0.0)
+        } else {
+            let failures = prior_failures.saturating_add(1);
+            let delay = (1000.0 * 2.0_f64.powi(failures.min(7) as i32 - 1)).min(60_000.0);
+            (failures, now_ms + delay)
+        }
+    }
+
     fn keep_for(&mut self, transport: &Transport, now_ms: f64) -> bool {
         if self.transport.rig_differs(transport) {
             return false;
@@ -2082,19 +2099,14 @@ fn reconcile_pool_with_open(
         // an unreachable radio settles to one probe a minute instead of one every
         // 850 ms. A SUCCESSFUL open clears it, so a radio that comes back on line
         // is adopted at the next reconcile.
-        let (open_failures, retry_after_ms) = if rig.has_control() {
-            (0, 0.0)
-        } else {
-            let n = prior_failures.saturating_add(1);
-            let wait = (1000.0_f64 * 2.0_f64.powi(n.min(7) as i32 - 1)).min(60_000.0);
-            if n == 1 || n % 8 == 0 {
-                crate::civ::diag::note(&format!(
-                    "monitor radio {id}: CAT open failed ({n}x) — retrying in {:.0}s",
-                    wait / 1000.0
-                ));
-            }
-            (n, now_ms + wait)
-        };
+        let (open_failures, retry_after_ms) =
+            MonitorConn::open_backoff(rig.has_control(), prior_failures, now_ms);
+        if open_failures == 1 || (open_failures != 0 && open_failures % 8 == 0) {
+            crate::civ::diag::note(&format!(
+                "monitor radio {id}: CAT open failed ({open_failures}x) — retrying in {:.0}s",
+                (retry_after_ms - now_ms) / 1000.0
+            ));
+        }
         let mut p = pool.lock().unwrap_or_else(|e| e.into_inner());
         // A handoff may have inserted this id meanwhile (old active → pool); don't double-open.
         if !p.iter().any(|c| c.id == id) {
