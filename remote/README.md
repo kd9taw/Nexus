@@ -524,6 +524,29 @@ keeps confirmed live state with an uncertain receipt and no deferred CAT retry.
 No entry arms transmit. This does not complete message sending, QSO operation,
 radio handoffs, FM/split/satellite contexts, remote audio or hardware acceptance.
 
+## Decoder settings
+
+Operation v3 advertises `decoderSettings` separately from receiver controls and
+tier/workspace entry. Its closed `decoder.js8Speed` and `decoder.msk144Period`
+intents carry the displayed prior value and one new native choice. The existing
+JS8 speed chips and MSK144 period selector send only explicit gestures, bound to
+the displayed station connection. They keep displaying actual station samples;
+a saved receipt cannot invent the new decoder state. Older peers remain passive.
+
+The station requires the matching active tier, native digital source, idle
+disarmed radio, fresh known-unkeyed observation and current authority. JS8 speed
+uses the shared native installer beneath the existing source mutex, acquired
+without waiting behind a decode. MSK144 retains its native narrow setter; no
+full Settings apply, QSO reset, queue clearing or new slot policy is introduced.
+Valid local speed/period gestures invalidate old pending remote hardware work.
+
+The native host atomically saves the current full Settings with only the one
+field changed, then applies the existing runtime verb. Save failure leaves both
+runtime and persisted choice unchanged. Once admitted, the saved choice survives
+later disconnection; duplicate and result requests recover the same receipt
+without repeating the mutation. The JS8 receive-speed mask, other decoder form
+settings, transmit operations and physical acceptance remain separate work.
+
 ## Local verification
 
 Use Node 24, the repository's pinned Rust toolchain and the Linux dependencies in

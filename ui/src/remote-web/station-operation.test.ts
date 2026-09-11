@@ -2,6 +2,21 @@ import { describe, expect, it } from 'vitest'
 import { actionCapability, controlContext, controlOutcome, stationAction } from './station-operation'
 
 describe('closed station operating requests', () => {
+  it('accepts only exact, changed decoder choices and requires their own capability', () => {
+    const choices = [
+      { action: 'decoder.js8Speed', expectedSpeed: 1, speed: 3 },
+      { action: 'decoder.msk144Period', expectedPeriodSecs: 15, periodSecs: 5 }
+    ]
+    for (const choice of choices) {
+      expect(stationAction(choice)).toEqual(choice)
+      expect(actionCapability(stationAction(choice))).toBe('decoderSettings')
+      for (const extra of ['settings', 'command', 'txEnabled', 'radioId']) expect(() => stationAction({ ...choice, [extra]: true })).toThrow()
+    }
+    for (const speed of [-1, 1, 4, 2.5, '3', null, NaN, Infinity]) expect(() => stationAction({ ...choices[0], speed })).toThrow()
+    for (const expectedSpeed of [-1, 3, 4, '1', null]) expect(() => stationAction({ ...choices[0], expectedSpeed })).toThrow()
+    for (const periodSecs of [0, 14, 15, 60, '5', null, NaN]) expect(() => stationAction({ ...choices[1], periodSecs })).toThrow()
+    for (const expectedPeriodSecs of [0, 5, 14, '15', null]) expect(() => stationAction({ ...choices[1], expectedPeriodSecs })).toThrow()
+  })
   it('admits complete workspace intents without accepting embedded commands, settings or transmit choices', () => {
     for (const workspace of ['ft', 'tempo', 'js8']) {
       const action = stationAction({ action: 'radio.workspace', workspace })

@@ -8,6 +8,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useStationControl, useStationData } from '../stationAccess'
 import { useJs8Context } from '../remote-web/useJs8Context'
+import { useDecoderSettings } from '../remote-web/useDecoderSettings'
 import { js8DisplayNow } from '../remote-web/js8'
 import { RemoteRecallEntry } from '../remote-web/RemoteRecall'
 import type { AppSnapshot, BandChannel, Js8InboxState, Js8Origin, Js8State, Js8Switch, LoggedQso } from '../types'
@@ -152,6 +153,7 @@ export function Js8Cockpit({
   panels,
 }: Props) {
   const canControl = useStationControl(), dataAvailable = useStationData()
+  const decoderSettings = useDecoderSettings(snap, 'JS8')
   const host = panels
     ? panelHost(panels, {
         menu: JS8_PANEL_IDS,
@@ -369,7 +371,10 @@ export function Js8Cockpit({
     })
   }
   const setSpeed = (idx: number) => {
-    if (!canControl) return
+    if (!canControl) {
+      if (js8 && JS8_SPEEDS[js8.speed].idx !== idx) decoderSettings.change({ action: 'decoder.js8Speed', expectedSpeed: JS8_SPEEDS[js8.speed].idx, speed: idx })
+      return
+    }
     void withErrorToast(() => js8SetSpeed(idx), t('js8.header.speed.failed')).then((s) => {
       if (s) setJs8(s)
     })
@@ -849,7 +854,7 @@ export function Js8Cockpit({
                     type="button"
                     className={`rtty-arm js8-speed-chip${js8?.speed === s.key ? ' on' : ''}`}
                     aria-pressed={js8?.speed === s.key}
-                    disabled={!canControl}
+                    disabled={!canControl && (!decoderSettings.allowed || !js8)}
                     onClick={() => setSpeed(s.idx)}
                     title={t('js8.header.speed.chip.title', { speed: s.label, period: s.periodS })}
                   >

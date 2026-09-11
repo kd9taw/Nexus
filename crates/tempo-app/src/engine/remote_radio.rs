@@ -66,7 +66,7 @@ impl Engine {
         self.remote_settings_path = Some(path);
     }
 
-    fn remote_radio_idle(&self) -> Result<(), Reason> {
+    pub(super) fn remote_radio_idle(&self) -> Result<(), Reason> {
         if self.tx_enabled() || self.tx_owner().is_some() || self.sstv_in_flight() {
             return Err(Reason::StationBusy);
         }
@@ -466,7 +466,7 @@ impl Engine {
         self.remote_radio_command.take()
     }
 
-    fn remote_radio_link(&self, connection: u64) -> Result<(), Reason> {
+    pub(super) fn remote_radio_link(&self, connection: u64) -> Result<(), Reason> {
         let o = self.remote_monitor_observation();
         let cat = o.radio.readings.cat.ok_or(Reason::ReadingUnavailable)?;
         let ptt = o.radio.readings.ptt.ok_or(Reason::ReadingUnavailable)?;

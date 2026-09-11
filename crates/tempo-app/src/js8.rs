@@ -455,11 +455,22 @@ impl Engine {
     /// slot clock at the new period (the audio loop follows `active_slot_secs`), and the
     /// station at the new countdown. The latch is untouched. The command layer persists.
     pub fn js8_set_speed(&mut self, speed_idx: u8) -> Result<(), String> {
+        self.js8_set_speed_with_installer(speed_idx, |engine, source| engine.install_source(source))
+    }
+
+    /// Remote may already hold the same decoder lock. Keep the native speed
+    /// policy here; the caller only supplies the serialized installation point.
+    pub(super) fn js8_set_speed_with_installer(
+        &mut self,
+        speed_idx: u8,
+        mut install: impl FnMut(&mut Engine, Box<dyn super::SignalSource>),
+    ) -> Result<(), String> {
         if Js8Speed::from_index(speed_idx).is_none() {
             return Err(format!(
                 "JS8 speed index {speed_idx} is not 0..=3 (Slow/Normal/Fast/Turbo)"
             ));
         }
+        self.remote_actuation.revoke();
         if self.settings.js8_speed == speed_idx {
             return Ok(());
         }
@@ -470,7 +481,7 @@ impl Engine {
             if let Some(kind) = self.tier_mode_kind(Tier::Js8) {
                 // Swap UNDER the lock and flush the context, exactly as `apply_settings`
                 // does for a Q65 period change — the epoch bump is the load-bearing part.
-                self.install_source(Box::new(modes::NativeSource::from_kind(kind)));
+                install(self, Box::new(modes::NativeSource::from_kind(kind)));
                 self.clear_decode_context();
             }
         }

@@ -16,6 +16,8 @@ export type StationAction =
   | { action: 'decoder.afcReset'; receiver: 'rtty' | 'psk' }
   | { action: 'decoder.net'; receiver: 'rtty' | 'psk'; hz: number }
   | { action: 'decoder.pskMode'; mode: 'PSK31' | 'QPSK31'; reverse: boolean }
+  | { action: 'decoder.js8Speed'; expectedSpeed: number; speed: number }
+  | { action: 'decoder.msk144Period'; expectedPeriodSecs: number; periodSecs: number }
   | { action: 'amplifier.operate'; expectedOperate: boolean; operate: boolean }
   | { action: 'amplifier.band'; expectedBand: string; direction: -1 | 1 }
   | { action: 'amplifier.followBand'; radioId: number; expectedSettingsRevision: string; expectedFollow: boolean; follow: boolean }
@@ -26,7 +28,7 @@ export type ControlContext = {
   ampConnection: number | null
   ampReadSequence: number | null
 }
-export const CONTROL_CAPABILITIES = ['decoder', 'radio', 'amplifier', 'frequency', 'mode', 'tier', 'ampFollowBand', 'workspace'] as const
+export const CONTROL_CAPABILITIES = ['decoder', 'radio', 'amplifier', 'frequency', 'mode', 'tier', 'ampFollowBand', 'workspace', 'decoderSettings'] as const
 export type ControlCapability = (typeof CONTROL_CAPABILITIES)[number]
 // A new action cannot silently inherit a broader capability by its prefix.
 const ACTION_CAPABILITY: Record<StationAction['action'], ControlCapability> = {
@@ -34,6 +36,7 @@ const ACTION_CAPABILITY: Record<StationAction['action'], ControlCapability> = {
   'radio.mode': 'mode', 'radio.tier': 'tier', 'radio.workspace': 'workspace',
   'decoder.arm': 'decoder', 'decoder.clear': 'decoder', 'decoder.afcReset': 'decoder',
   'decoder.net': 'decoder', 'decoder.pskMode': 'decoder',
+  'decoder.js8Speed': 'decoderSettings', 'decoder.msk144Period': 'decoderSettings',
   'amplifier.operate': 'amplifier', 'amplifier.band': 'amplifier', 'amplifier.followBand': 'ampFollowBand'
 }
 export const actionCapability = (action: StationAction): ControlCapability => ACTION_CAPABILITY[action.action]
@@ -105,6 +108,14 @@ export function stationAction(raw: unknown): StationAction {
     case 'decoder.pskMode':
       object(a, ['action', 'mode', 'reverse'])
       if (!oneOf(a.mode, ['PSK31', 'QPSK31']) || typeof a.reverse !== 'boolean') invalid()
+      break
+    case 'decoder.js8Speed':
+      object(a, ['action', 'expectedSpeed', 'speed'])
+      if (!integer(a.expectedSpeed) || !integer(a.speed) || a.expectedSpeed < 0 || a.expectedSpeed > 3 || a.speed < 0 || a.speed > 3 || a.expectedSpeed === a.speed) invalid()
+      break
+    case 'decoder.msk144Period':
+      object(a, ['action', 'expectedPeriodSecs', 'periodSecs'])
+      if (!integer(a.expectedPeriodSecs) || !integer(a.periodSecs) || ![5, 10, 15, 30].includes(a.expectedPeriodSecs) || ![5, 10, 15, 30].includes(a.periodSecs) || a.expectedPeriodSecs === a.periodSecs) invalid()
       break
     case 'amplifier.operate':
       object(a, ['action', 'expectedOperate', 'operate'])

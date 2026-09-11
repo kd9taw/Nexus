@@ -331,7 +331,16 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
             // The provider proves the real UI/relay gesture and later snapshot.
             // Native engine/worker tests separately prove channel/source policy.
             applicationData.get_snapshot.link.tier=a.tier
+            if(a.tier==='MSK144')applicationData.get_snapshot.link.periodSecs=15
             assert.equal(applicationData.get_snapshot.radio.txEnabled,false)
+          }else if(a.action==='decoder.js8Speed'){
+            const speeds=['slow','normal','fast','turbo'];assert.equal(applicationData.get_snapshot.link.tier,'JS8')
+            assert.equal(a.expectedSpeed,speeds.indexOf(js8Fixture.state.speed));assert.notEqual(a.expectedSpeed,a.speed)
+            js8Fixture.state.speed=speeds[a.speed];applicationData.get_snapshot.link.periodSecs=[30,15,10,6][a.speed]
+          }else if(a.action==='decoder.msk144Period'){
+            assert.equal(applicationData.get_snapshot.link.tier,'MSK144')
+            assert.equal(a.expectedPeriodSecs,applicationData.get_snapshot.link.periodSecs);assert.notEqual(a.expectedPeriodSecs,a.periodSecs)
+            assert.ok([5,10,15,30].includes(a.periodSecs));applicationData.get_snapshot.link.periodSecs=a.periodSecs
           }else if(a.action==='decoder.clear'){
             const state=applicationData[`get_${a.receiver}_state`];state.text='';if(state.charConf)state.charConf=[]
           }else if(a.action==='decoder.afcReset')applicationData[`get_${a.receiver}_state`].afcHz=0
@@ -352,10 +361,10 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
             doc.revision=createHash('sha256').update(JSON.stringify(doc.settings)).digest('hex')
             fixture.station.amplifier.followBand=a.follow
           }else assert.fail(`Unreviewed station action ${a.action}`)
-          value={operation:'stationControl',operationId:r.requestId,outcome:'applied',evidence:a.action==='amplifier.followBand'?'settingsSaved':a.action.startsWith('radio.')?'radioReadback':a.action.startsWith('amplifier.')?'amplifierReadback':'receiverState'}
+          value={operation:'stationControl',operationId:r.requestId,outcome:'applied',evidence:['amplifier.followBand','decoder.js8Speed','decoder.msk144Period'].includes(a.action)?'settingsSaved':a.action.startsWith('radio.')?'radioReadback':a.action.startsWith('amplifier.')?'amplifierReadback':'receiverState'}
           loggingReceipts.set(r.requestId,value);loggingRevision++;applicationRevision++
         }else if(r.type==='result'){value=loggingReceipts.get(r.operationId);if(!value)error='resultExpired'}
-        else value={stationBootId:loggingBoot,allowed:loggingAllowed||stationControls,phase:loggingLease?'controlling':loggingAllowed||stationControls?'available':'localPermissionRequired',leaseId:loggingLease,revision:loggingRevision,commandWindowId:loggingLease?loggingWindow:null,nextSequence:loggingLease?loggingSequence+1:null,leaseRemainingMs:loggingLease?5000:null,actions:loggingAllowed?['log.manual']:[],txArmed:false,...(stationControls?{controls:{context:{radioId:1,radioConnection:1,ampConnection:1,ampReadSequence:1},capabilities:request.operationVersion>=3?['decoder','amplifier','frequency','mode','tier','ampFollowBand','workspace']:['decoder','amplifier']}}:{})}
+        else value={stationBootId:loggingBoot,allowed:loggingAllowed||stationControls,phase:loggingLease?'controlling':loggingAllowed||stationControls?'available':'localPermissionRequired',leaseId:loggingLease,revision:loggingRevision,commandWindowId:loggingLease?loggingWindow:null,nextSequence:loggingLease?loggingSequence+1:null,leaseRemainingMs:loggingLease?5000:null,actions:loggingAllowed?['log.manual']:[],txArmed:false,...(stationControls?{controls:{context:{radioId:1,radioConnection:1,ampConnection:1,ampReadSequence:1},capabilities:request.operationVersion>=3?['decoder','amplifier','frequency','mode','tier','ampFollowBand','workspace','decoderSettings']:['decoder','amplifier']}}:{})}
         source.send({type:'operationResponse',sessionId:request.sessionId,requestId:r.requestId,...(error?{error}:{value})});continue
       }
       if (request.type === 'applicationQuery') {
@@ -593,7 +602,7 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
         for(let i=0;i<100&&stationRequests.length===before;i++)await sleep(100)
         assert.equal(stationRequests.length,before+1,`one gesture must send one ${expected} action`)
         assert.equal(stationRequests.at(-1).action.action,expected)
-        await until(`document.querySelector('.remote-control-result')?.textContent.includes('${expected==='amplifier.followBand'?'saved':'confirmed'}')`)
+        await until(`document.querySelector('.remote-control-result')?.textContent.includes('${['amplifier.followBand','decoder.js8Speed','decoder.msk144Period'].includes(expected)?'saved':'confirmed'}')`)
       }
       for(const [tab,root,selector,receiver] of [
         ['RTTY','.rtty-cockpit','.cw-decode-head .rtty-arm','rtty'],
@@ -721,6 +730,45 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
         await until(`document.querySelector('${selector}').getAttribute('aria-pressed')==='true'`)
         assert.equal(applicationData.get_snapshot.radio.txEnabled,false)
       }
+      let decoderGeometry=0
+      const decoderLayout=async(selector,name)=>{
+        for(const [width,height,zoom]of [[390,844,1],[1280,800,1],[390,844,1.75],[1280,800,1.75]])for(const theme of ['dark','light']){
+          await browser.call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false},session)
+          await evaluate(`document.documentElement.style.setProperty('--ui-zoom','${zoom}');document.documentElement.dataset.theme='${theme}';window.dispatchEvent(new Event('resize'))`);await settledLayout();await settledLayout()
+          await until(`!!document.querySelector('${selector}')&&!document.querySelector('${selector}').disabled`)
+          await evaluate(`document.querySelector('${selector}').scrollIntoView({block:'center',behavior:'instant'})`);await settledLayout()
+          const shape=await evaluate(`(()=>{const e=document.querySelector('${selector}'),r=e.getBoundingClientRect(),hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);return{rect:r.toJSON(),hit:hit?.outerHTML.slice(0,300),good:r.width>0&&r.height>0&&e.contains(hit)&&document.documentElement.scrollWidth<=innerWidth+1&&document.documentElement.scrollHeight<=innerHeight+1}})()`)
+          assert.equal(shape.good,true,`Decoder control reachable ${name} ${width} ${zoom}: ${JSON.stringify(shape)}`);decoderGeometry++
+          if(artifacts&&width===390&&zoom===1.75){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,`decoder-${name}-390-175-${theme}.png`),Buffer.from(shot.data,'base64'))}
+        }
+      }
+      await click(button('JS8'));await gesture('.js8-cockpit .remote-mode-entry','radio.workspace')
+      await until(`!document.querySelector('.js8-cockpit .remote-mode-entry')`)
+      await decoderLayout('.js8-cockpit .js8-speed-chip:last-child','js8')
+      for(const speed of [0,2,3,1]){
+        const expectedSpeed=['slow','normal','fast','turbo'].indexOf(js8Fixture.state.speed)
+        const selector=`.js8-cockpit .js8-speed-chip:nth-child(${speed+1})`
+        await gesture(selector,'decoder.js8Speed')
+        assert.deepEqual(stationRequests.at(-1).action,{action:'decoder.js8Speed',expectedSpeed,speed})
+        await until(`document.querySelector('${selector}').getAttribute('aria-pressed')==='true'`)
+      }
+      await click(button('FT'));await gesture('.topbar-group.tier-toggle:not(.tx-period) > button:nth-child(8)','radio.tier')
+      await until(`!!document.querySelector('.operate-cockpit .cm-trperiod')`)
+      await until(`document.querySelector('.operate-cockpit .cm-trperiod').value==='15'`)
+      const periodSelector='.operate-cockpit .cm-trperiod'
+      await decoderLayout(periodSelector,'msk144')
+      for(const periodSecs of [5,10,30,15]){
+        const expectedPeriodSecs=applicationData.get_snapshot.link.periodSecs,before=stationRequests.length
+        await freshLoggingWindow();await click(`document.querySelector('${periodSelector}')`)
+        assert.equal(await evaluate(`document.activeElement===document.querySelector('${periodSelector}')`),true)
+        const keys=[['Home',36],...Array.from({length:[5,10,15,30].indexOf(periodSecs)},()=>['ArrowDown',40]),['Enter',13]]
+        for(const [key,code]of keys)for(const type of ['keyDown','keyUp'])await browser.call('Input.dispatchKeyEvent',{type,key,code:key,windowsVirtualKeyCode:code},session)
+        for(let i=0;i<100&&stationRequests.length===before;i++)await sleep(100)
+        assert.equal(stationRequests.length,before+1,'one committed MSK144 choice')
+        assert.deepEqual(stationRequests.at(-1).action,{action:'decoder.msk144Period',expectedPeriodSecs,periodSecs})
+        await until(`document.querySelector('.remote-control-result')?.textContent.includes('saved')`)
+        await until(`document.querySelector('${periodSelector}').value==='${periodSecs}'`)
+      }
       await click(button('CW'));await settledLayout()
       let controlGeometry=0
       for(const [width,height,zoom]of [[390,844,1],[1280,800,1],[390,844,1.75],[1280,800,1.75]])for(const theme of ['dark','light']){
@@ -738,8 +786,8 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
       stationControls=false;loggingLease=null
       await until(`document.querySelector('.cw-cockpit .amp-op').disabled`)
       assert.equal(loggedRequests.length,5);assert.equal(unexpectedMessages,0);assert.equal(exceptions,0)
-      if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-manual-logging.png'),Buffer.from(shot.data,'base64'));await writeFile(join(artifacts,'operation-results.json'),JSON.stringify({count:loggedRequests.length,stationActions:stationRequests.map(r=>r.action),controlGeometry,modeGeometry,tierGeometry,followGeometry,modes:loggedRequests.map(r=>r.record.mode),lostResultResolved:true,wholePageReloadResolved:true,crossTabLockRefusal:true,geometry:16,exceptions,unexpectedMessages},null,2))}
-      console.log('Compiled browser: five logging forms, five dial, four mode, four workspace, eleven tier, nine receiver/amplifier and two saved follow gestures, separate grants, recovery and 200 geometry cases passed');return
+      if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-manual-logging.png'),Buffer.from(shot.data,'base64'));await writeFile(join(artifacts,'operation-results.json'),JSON.stringify({count:loggedRequests.length,stationActions:stationRequests.map(r=>r.action),controlGeometry,modeGeometry,tierGeometry,followGeometry,decoderGeometry,modes:loggedRequests.map(r=>r.record.mode),lostResultResolved:true,wholePageReloadResolved:true,crossTabLockRefusal:true,geometry:16,exceptions,unexpectedMessages},null,2))}
+      console.log('Compiled browser: five logging forms, 45 station gestures including eight saved decoder choices, separate grants, recovery and 216 geometry cases passed');return
     }
     const startReads=applicationTraffic.reads, startBytes=applicationTraffic.bytes, started=performance.now()
     for(const [width,height] of [[1024,768],[1280,800],[1366,768],[1200,1390],[3440,1440]])for(const zoom of [1,1.75])for(const theme of ['dark','light']) {

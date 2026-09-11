@@ -75,6 +75,19 @@ pub enum Action {
     ReceiverNet { receiver: KeyboardReceiver, hz: f32 },
     #[serde(rename = "decoder.pskMode")]
     PskMode { mode: String, reverse: bool },
+    #[serde(rename = "decoder.js8Speed")]
+    Js8Speed {
+        #[serde(rename = "expectedSpeed")]
+        expected_speed: u8,
+        speed: u8,
+    },
+    #[serde(rename = "decoder.msk144Period")]
+    Msk144Period {
+        #[serde(rename = "expectedPeriodSecs")]
+        expected_period_secs: u16,
+        #[serde(rename = "periodSecs")]
+        period_secs: u16,
+    },
     #[serde(rename = "radio.disarm")]
     Disarm {},
     #[serde(rename = "radio.frequency")]
@@ -143,6 +156,40 @@ pub fn execute(
         return Err(Reason::ContextChanged);
     }
     match action {
+        #[cfg(feature = "radio")]
+        Action::Js8Speed {
+            expected_speed,
+            speed,
+        } => {
+            engine.save_remote_js8_speed(
+                *expected_speed,
+                *speed,
+                context.radio_connection.ok_or(Reason::ReadingUnavailable)?,
+                &permit,
+            )?;
+            let result = Completion::default();
+            result.finish(Outcome::Applied {
+                evidence: Evidence::SettingsSaved,
+            });
+            return Ok(result);
+        }
+        #[cfg(feature = "radio")]
+        Action::Msk144Period {
+            expected_period_secs,
+            period_secs,
+        } => {
+            engine.save_remote_msk144_period(
+                *expected_period_secs,
+                *period_secs,
+                context.radio_connection.ok_or(Reason::ReadingUnavailable)?,
+                &permit,
+            )?;
+            let result = Completion::default();
+            result.finish(Outcome::Applied {
+                evidence: Evidence::SettingsSaved,
+            });
+            return Ok(result);
+        }
         Action::ReceiverArm { receiver, on } => match receiver {
             Receiver::Rtty => engine.set_rtty_armed(*on),
             Receiver::Psk => engine.set_psk_armed(*on),
@@ -370,6 +417,8 @@ impl Action {
             | Self::Mode { .. }
             | Self::Tier { .. }
             | Self::Workspace { .. }
+            | Self::Js8Speed { .. }
+            | Self::Msk144Period { .. }
             | Self::Radio { .. }
             | Self::AmpFollowBand { .. } => 3,
             _ => 2,
@@ -391,6 +440,7 @@ pub fn capabilities(version: u8) -> Vec<&'static str> {
                 "tier",
                 "ampFollowBand",
                 "workspace",
+                "decoderSettings",
             ]
         }
     }

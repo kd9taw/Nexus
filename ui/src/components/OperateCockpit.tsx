@@ -1,5 +1,6 @@
 import { RemoteRecall } from '../remote-web/RemoteRecall'
 import { useStationControl, useStationTierControl } from '../stationAccess'
+import { useDecoderSettings } from '../remote-web/useDecoderSettings'
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every reading in this
 // cockpit is DATA and stays in the code — the dial, the audio offsets in Hz, the band, the
 // tier, the decode depth, the split TX frequency, the next-slot seconds — and so does the
@@ -354,6 +355,7 @@ export function OperateCockpit({
 }: Props) {
   const control = useStationControl()
   const tierControl = useStationTierControl(snap.radio)
+  const decoderSettings = useDecoderSettings(snap, 'MSK144')
   // Container the waterfall-height splitter measures + writes its CSS var on.
   const bodyRef = useRef<HTMLDivElement>(null)
   // The two resizable side-rail panes in roster mode (Band Activity above, Rx Frequency
@@ -906,12 +908,16 @@ export function OperateCockpit({
                  (sbTR, mainwindow.cpp:8387) — the period is an operating decision on
                  meteor scatter, not configuration, so it lives here and not only in
                  Settings. Narrow write: a full settings apply is the #54 mid-QSO reset. */
-              <select disabled={!control}
+              <select disabled={!control && (!decoderSettings.allowed || ![5, 10, 15, 30].includes(snap.link.periodSecs))}
                 className="cockpit-mode cm-trperiod"
                 aria-label={t('operate.header.msk144Period.aria')}
                 title={t('operate.header.msk144Period.title')}
                 value={String(snap.link.periodSecs || 15)}
-                onChange={(e) => void setMsk144Period(Number(e.target.value)).then((s2) => onSnap?.(s2))}
+                onChange={(e) => {
+                  const secs = Number(e.target.value)
+                  if (control) void setMsk144Period(secs).then((s2) => onSnap?.(s2))
+                  else decoderSettings.change({ action: 'decoder.msk144Period', expectedPeriodSecs: snap.link.periodSecs, periodSecs: secs })
+                }}
               >
                 {[5, 10, 15, 30].map((p) => (
                   <option key={p} value={p}>{`${p}s`}</option>

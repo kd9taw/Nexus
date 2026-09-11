@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Remote decoder choices:** The existing JS8 speed chips and MSK144 period
+  selector save through the station's native controls. A stale displayed choice,
+  unavailable reading or failed save cannot silently replace the current
+  preference. Requires a compatible station with the decoder-settings capability
+  and an idle, disarmed radio. Other decoder settings and transmit operations
+  remain separate work.
+
 - **Remote FT, Tempo and JS8 entry:** “Use this mode” in the existing cockpit
   selects the complete native operating workspace, including its decoder,
   remembered FT/Tempo choice and JS8 session entry. FT and JS8 restore the

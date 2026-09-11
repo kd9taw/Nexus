@@ -40,6 +40,12 @@ the existing radio owner commits after CAT/power readback. Decoder installation
 and HARQ reset use the same held serialization guard, avoiding a nested lock
 while preserving the native transition effects. Newer valid local operating
 specs retire older remote work even when the dial and CAT mode are unchanged.
+The separate `decoderSettings` capability connects the existing JS8 speed chips
+and MSK144 period selector. Exact prior values and idle native context guard an
+atomic one-field Settings save before the shared native runtime setter. JS8
+installation uses the same stable source lock without blocking Engine; MSK144
+keeps its narrow period semantics. A failed save publishes no runtime change,
+and a receipt never substitutes for the later station sample.
 Native amplifier buttons and saved follow-band also validate the exact completed
 serial poll after I/O. Current settings, observed physical PTT and read expiry
 bound each write; local gestures take precedence over automatic steps. These

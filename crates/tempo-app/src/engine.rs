@@ -11202,6 +11202,7 @@ impl Engine {
         } else {
             15
         };
+        self.remote_actuation.revoke();
         self.settings.msk144_period_s = secs;
     }
 
