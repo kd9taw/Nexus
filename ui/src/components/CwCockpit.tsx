@@ -215,6 +215,8 @@ const keyerHelp = (): Record<'cat' | 'soundcard' | 'winkeyer' | 'serial', string
 })
 
 interface Props {
+  /** Pause display subscriptions while a remote contact draft is kept hidden. */
+  active?: boolean
   snap: AppSnapshot
   theme: string
   /** CW sidetone pitch (Hz) — the scope's zero-beat marker. */
@@ -336,6 +338,7 @@ const CW_DSP_FUNCS = [
 ] as const
 
 export function CwCockpit({
+  active = true,
   snap,
   theme,
   pitchHz = 600,
@@ -362,7 +365,7 @@ export function CwCockpit({
   // Live S-meter (shared 100 ms poll, lock-free backend) — used to arrive via the 300 ms
   // snapshot on top of the backend's own sampling, which read as a laggy needle. smeterDb-only
   // subscription: the cockpit re-renders when the S-meter changes, never on RX-level churn.
-  const smeterDb = useSmeterDb()
+  const smeterDb = useSmeterDb(active)
   const catOk = snap.radio.catOk === true
   // Wheel-to-tune over the CW scope, sharing the tuning strip's step selector.
   // Tuning step, persisted per cockpit ('nexus.cw.tuneStep'): the cockpit unmounts on every
@@ -584,12 +587,12 @@ export function CwCockpit({
   }, [decoded.text])
   useEffect(() => {
     const backlog = decoded.text.length - revealLen
-    if (backlog <= 0) return
+    if (!active || backlog <= 0) return
     const id = window.setInterval(() => {
       setRevealLen((n) => Math.min(decoded.text.length, n + Math.max(1, Math.ceil((decoded.text.length - n) / 40))))
     }, 50)
     return () => window.clearInterval(id)
-  }, [decoded.text, revealLen])
+  }, [active, decoded.text, revealLen])
   const revealedText = decoded.text.slice(0, revealLen)
   // TX echo — what we've actually transmitted (macros expanded), polled alongside the decode.
   // Same pin discipline: during an F-key macro run the operator must be able to
@@ -675,6 +678,7 @@ export function CwCockpit({
   )
   const [activeProfile, setActiveProfile] = useState(0)
   useEffect(() => {
+    if (!active) return
     let alive = true
     void getSettings()
       .then((s) => {
@@ -692,7 +696,7 @@ export function CwCockpit({
     return () => {
       alive = false
     }
-  }, [])
+  }, [active, control])
   const profileMacros = profiles[activeProfile]?.macros
   // Typed as CwMacro[] so the row renderer reads ONE shape: a profile macro's label is the
   // operator's own words, a built-in's is either on-air shorthand or a catalog key.
@@ -731,6 +735,7 @@ export function CwCockpit({
     }
   }, [guide.workedCall, macros])
   useEffect(() => {
+    if (!active) return
     let alive = true
     const tick = () => {
       cwDecode(sensitivityRef.current)
@@ -768,7 +773,7 @@ export function CwCockpit({
       alive = false
       window.clearInterval(id)
     }
-  }, [])
+  }, [active, control])
   // Initialize the keyer toggle from the engine's ACTUAL setting (the snapshot is the source
   // of truth) — not a hard-coded 'cat'. A stale local default showed CAT while the backend was
   // on Soundcard, so CW silently went to USB (Soundcard keying = rig in SSB) with no clue why.
@@ -1616,7 +1621,7 @@ export function CwCockpit({
               pane, no ⊞ id — and it is a display only: nothing here can move the radio. It
               goes with the scope when the strip is hidden, which is right, because it is
               the other half of that picture. */}
-          <ZeroBeat targetHz={pitch} filterHz={filterHz} />
+          <ZeroBeat active={active} targetHz={pitch} filterHz={filterHz} />
           <span className="ph-scope-head-label">{t('cw.scope.colors.label')}</span>
           <PalettePicker />
         </div>
@@ -1680,6 +1685,7 @@ export function CwCockpit({
             scope is streaming, in which case we show the real RF spectrum around the dial. The
             dashed hairline is YOUR pitch, and it now sits mid-screen where a rig puts it. */}
         <PhoneScope
+          active={active}
           transmitting={snap.radio.transmitting}
           theme={theme}
           smeterDb={smeterDb}

@@ -90,8 +90,8 @@
 .remote-workspace .cockpit-qsocol { overflow-y: auto; }
 /* A large pinned zoom can make the native header taller than a phone. Keep
    a usable mode shell below it and let the application scroll to that shell. */
-.remote-workspace:has(.cw-cockpit, .phone-cockpit, :is(.operate-host, .js8-host, .sstv-host, .aprs-host, .rtty-host, .psk-host):not([hidden])) { overflow: auto; }
-.remote-workspace .shell:has(.cw-cockpit, .phone-cockpit, :is(.operate-host, .js8-host, .sstv-host, .aprs-host, .rtty-host, .psk-host):not([hidden])) {
+.remote-workspace:has(:is(.remote-contact-host, .operate-host, .js8-host, .sstv-host, .aprs-host, .rtty-host, .psk-host):not([hidden])) { overflow: auto; }
+.remote-workspace .shell:has(:is(.remote-contact-host, .operate-host, .js8-host, .sstv-host, .aprs-host, .rtty-host, .psk-host):not([hidden])) {
   min-height: min(32em, calc(0.7 * var(--vh-eff, 100vh)));
   min-width: 0;
 }
@@ -224,3 +224,7 @@
 .remote-log-submitted { min-width: 0; overflow-wrap: anywhere; }
 .remote-log-submitted dd { margin: 0 0 .5em; white-space: pre-wrap; }
 .remote-log-submitted dt { color: var(--text-dim); }
+
+/* Keep the original Phone/CW forms mounted across remote navigation. */
+.remote-contact-host { display: contents; }
+.remote-contact-host[hidden] { display: none; }

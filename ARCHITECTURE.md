@@ -73,6 +73,13 @@ browser approval remain separate checks. Radio handoffs, mode-specific operating
 actions and remote transmission remain incomplete; no arbitrary Tauri bridge exists.
 See [the Remote contract and limits](remote/README.md#existing-nexus-workspace).
 
+Remote Phone and CW contact forms mount on first visit and retain their component
+identity across workspace navigation. Hidden hosts pause scopes, meters, CW display
+polls and collection reads, and cannot acquire gesture authority from the shared
+session. Returning resumes display interest without logging, retuning or replacing
+the controller lease. Drafts stay in the existing forms; this does not add durable
+draft storage. Native cockpit mounting and transmitter cleanup remain unchanged.
+
 The receive-audio foundation is local to `tempo-audio`: the sole `RxDsp` capture
 consumer offers bounded device-rate mono copies through `receive_audio.rs`, before
 display resampling. It never consumes the decoder ring or gives media a CAT/TX

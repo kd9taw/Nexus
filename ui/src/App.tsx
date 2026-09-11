@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
+import { StationDataContext } from './stationAccess'
 import type { AppSnapshot, BandChannel, LoggedQso, ModeRequest, Settings, SourceKind, Tier } from './types'
 import { rigModeTransition, type RigMode } from './rigModeForView'
 import {
@@ -2296,6 +2297,15 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // the master is off) → operate.
   const fallbackView: View = isViewEnabled(features.landing) ? features.landing : 'operate'
   const effectiveView: View = isViewEnabled(view) ? view : fallbackView
+  // The remote contact forms stay in their original component tree while the
+  // operator checks a needed station or the log. Mount only after first use;
+  // hidden hosts lose data interest and gesture authority, not the QSO draft.
+  // The native cockpit lifecycle (including its TX cleanup) is unchanged.
+  const [remoteContacts, setRemoteContacts] = useState({ cw: false, phone: false })
+  useEffect(() => {
+    if (!remote?.cwPhone || (effectiveView !== 'cw' && effectiveView !== 'phone')) return
+    setRemoteContacts((seen) => seen[effectiveView] ? seen : { ...seen, [effectiveView]: true })
+  }, [remote?.cwPhone, effectiveView])
   // Where the crash panel's escape button goes. The landing view normally — unless the
   // landing view is the one that just crashed (a vhf profile lands on Connect), in which
   // case Operate: it is a core section, so it can never be the disabled one.
@@ -2497,6 +2507,51 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     </main>
   )
 
+  const cwWorkspace = (
+    <CwCockpit
+      active={!remote || (effectiveView === 'cw' && !remote.stale)}
+      onOpenLogbook={openLogbookFor}
+      pitchHz={settings?.cwPitchHz ?? 600}
+      wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
+      snap={snap}
+      theme={theme}
+      pendingWork={pendingWork?.view === 'cw' ? pendingWork : null}
+      onConsumeWork={() => setPendingWork(null)}
+      onSnap={setSnap}
+      fieldDay={snap.fieldDay}
+      spots={allSpots}
+      needByCall={needByCall}
+      typeByCall={typeByCall}
+      onWorkSpot={workSpotHereCw}
+      onRecallMemory={isViewEnabled('memories') ? recallMemory : undefined}
+      onOpenMemories={isViewEnabled('memories') ? () => setView('memories') : undefined}
+      onOpenSettings={openSettingsAt}
+      panels={cwPanels}
+    />
+  )
+  const phoneWorkspace = (
+    <PhoneCockpit
+      active={!remote || (effectiveView === 'phone' && !remote.stale)}
+      onOpenLogbook={openLogbookFor}
+      snap={snap}
+      panels={phonePanels}
+      theme={theme}
+      pendingWork={pendingWork?.view === 'phone' ? pendingWork : null}
+      onConsumeWork={() => setPendingWork(null)}
+      onSnap={setSnap}
+      fieldDay={snap.fieldDay}
+      phoneMode={settings?.phoneMode}
+      wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
+      spots={allSpots}
+      needByCall={needByCall}
+      typeByCall={typeByCall}
+      onWorkSpot={workSpotHerePhone}
+      onRecallMemory={isViewEnabled('memories') ? recallMemory : undefined}
+      onOpenMemories={isViewEnabled('memories') ? () => setView('memories') : undefined}
+      onOpenSettings={openSettingsAt}
+    />
+  )
+
   let workspace: JSX.Element | null
   switch (effectiveView) {
     case 'fieldDay':
@@ -2634,50 +2689,10 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       workspace = remote ? <RemoteInsights kind="statistics" /> : <StatsView />
       break
     case 'cw':
-      workspace = (
-        <CwCockpit
-          onOpenLogbook={openLogbookFor}
-          pitchHz={settings?.cwPitchHz ?? 600}
-          wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
-          snap={snap}
-          theme={theme}
-          pendingWork={pendingWork?.view === 'cw' ? pendingWork : null}
-          onConsumeWork={() => setPendingWork(null)}
-          onSnap={setSnap}
-          fieldDay={snap.fieldDay}
-          spots={allSpots}
-          needByCall={needByCall}
-          typeByCall={typeByCall}
-          onWorkSpot={workSpotHereCw}
-          onRecallMemory={isViewEnabled('memories') ? recallMemory : undefined}
-          onOpenMemories={isViewEnabled('memories') ? () => setView('memories') : undefined}
-          onOpenSettings={openSettingsAt}
-          panels={cwPanels}
-        />
-      )
+      workspace = remote ? null : cwWorkspace
       break
     case 'phone':
-      workspace = (
-        <PhoneCockpit
-          onOpenLogbook={openLogbookFor}
-          snap={snap}
-          panels={phonePanels}
-          theme={theme}
-          pendingWork={pendingWork?.view === 'phone' ? pendingWork : null}
-          onConsumeWork={() => setPendingWork(null)}
-          onSnap={setSnap}
-          fieldDay={snap.fieldDay}
-          phoneMode={settings?.phoneMode}
-          wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
-          spots={allSpots}
-          needByCall={needByCall}
-          typeByCall={typeByCall}
-          onWorkSpot={workSpotHerePhone}
-          onRecallMemory={isViewEnabled('memories') ? recallMemory : undefined}
-          onOpenMemories={isViewEnabled('memories') ? () => setView('memories') : undefined}
-          onOpenSettings={openSettingsAt}
-        />
-      )
+      workspace = remote ? null : phoneWorkspace
       break
     case 'pota':
       workspace = remote ? <RemoteOta snap={snap} /> : (
@@ -3179,6 +3194,20 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
               active={effectiveView === 'operate'}
             />
           </div>
+          {remote?.cwPhone && isViewEnabled('cw') && (remoteContacts.cw || effectiveView === 'cw') && (
+            <div className="remote-contact-host" hidden={effectiveView !== 'cw'}>
+              <StationDataContext.Provider value={effectiveView === 'cw' && !remote.stale}>
+                {cwWorkspace}
+              </StationDataContext.Provider>
+            </div>
+          )}
+          {remote?.cwPhone && isViewEnabled('phone') && (remoteContacts.phone || effectiveView === 'phone') && (
+            <div className="remote-contact-host" hidden={effectiveView !== 'phone'}>
+              <StationDataContext.Provider value={effectiveView === 'phone' && !remote.stale}>
+                {phoneWorkspace}
+              </StationDataContext.Provider>
+            </div>
+          )}
           {/* RTTY + SSTV keep-alive hosts (same pattern as .operate-host): the decoded
               RTTY stream and the always-armed SSTV VIS receiver keep accumulating in
               the backend while the operator is on another section; `active` gates only

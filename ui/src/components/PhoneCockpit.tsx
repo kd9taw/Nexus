@@ -102,6 +102,8 @@ const AGC_CHIPS = [
 ] as const satisfies readonly { id: string; labelKey: MessageKey }[]
 
 interface Props {
+  /** Pause display subscriptions while a remote contact draft is kept hidden. */
+  active?: boolean
   /** Which panels this cockpit shows or hides (⊞ Panels). Owned by the HOST (App), never
    * here — the cockpit remounts on nav and would drop the record. Absent ⇒ every panel shows
    * and the menu hides, so nothing here can hide a transmit control. */
@@ -377,7 +379,7 @@ const FLEX_SPANS = [
   { label: '2M', hz: 2_000_000 },
 ] as const
 
-export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, fieldDay, phoneMode, wheelSensitivity, spots, needByCall, typeByCall, onWorkSpot, onRecallMemory, onOpenMemories, onOpenSettings, onOpenLogbook, panels }: Props) {
+export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsumeWork, onSnap, fieldDay, phoneMode, wheelSensitivity, spots, needByCall, typeByCall, onWorkSpot, onRecallMemory, onOpenMemories, onOpenSettings, onOpenLogbook, panels }: Props) {
   const frequencyControl = useStationCapability('frequency')
   const scopeClick = useRemoteScopeClick(snap)
   const dspControl = useReceiverDsp(snap, 'phone')
@@ -387,7 +389,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   // Live S-meter (shared 100 ms poll, lock-free backend) — used to arrive via the 300 ms
   // snapshot on top of the backend's own sampling, which read as a laggy needle. smeterDb-only
   // subscription: the cockpit re-renders when the S-meter changes, never on RX-level churn.
-  const smeterDb = useSmeterDb()
+  const smeterDb = useSmeterDb(active)
   const [power, setPower] = useState(100) // % — only pushed to the rig once touched
   // Mirror the RIG's real level (CAT read-back / last commanded) so the slider
   // never lies at a guessed 100% — but never fight an in-flight drag.
@@ -1407,7 +1409,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
         {/* No visible 'RX': the meter is a role="meter" already named "RX audio level", and
             the label element keeps the same string as its tooltip. */}
         <label className="ph-rxmeter" title={t('phone.rxMeter.label')}>
-          <LiveLevelMeter label={t('phone.rxMeter.label')} variant="compact" />
+          <LiveLevelMeter active={active} label={t('phone.rxMeter.label')} variant="compact" />
         </label>
       </CockpitHeader>
 
@@ -1529,6 +1531,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
             </div>
           )}
           <PhoneScope
+            active={active}
             transmitting={snap.radio.transmitting}
             theme={theme}
             smeterDb={smeterDb}
