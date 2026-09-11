@@ -12,12 +12,48 @@ use std::time::Instant;
 enum DecoderSetting {
     Js8Speed { expected: u8, speed: u8 },
     Msk144Period { expected: u16, secs: u16 },
+    Depth { tier: Tier, expected: u8, depth: u8 },
+    RxOffset { tier: Tier, expected: f32, hz: f32 },
 }
 
 #[cfg(test)]
 mod tests;
 
 impl Engine {
+    pub fn save_remote_decode_depth(
+        &mut self,
+        tier: Tier,
+        expected: u8,
+        depth: u8,
+        connection: u64,
+        permit: &Permit,
+    ) -> Result<(), Reason> {
+        self.save_remote_decoder_setting(
+            DecoderSetting::Depth {
+                tier,
+                expected,
+                depth,
+            },
+            connection,
+            permit,
+        )
+    }
+
+    pub fn save_remote_rx_offset(
+        &mut self,
+        tier: Tier,
+        expected: f32,
+        hz: f32,
+        connection: u64,
+        permit: &Permit,
+    ) -> Result<(), Reason> {
+        self.save_remote_decoder_setting(
+            DecoderSetting::RxOffset { tier, expected, hz },
+            connection,
+            permit,
+        )
+    }
+
     pub fn save_remote_js8_speed(
         &mut self,
         expected: u8,
@@ -61,6 +97,34 @@ impl Engine {
         }
         let mut next = self.settings.clone();
         match setting {
+            DecoderSetting::Depth {
+                tier,
+                expected,
+                depth,
+            } => {
+                // Match the native snapshot's clamped value, including a
+                // legacy preference outside the supported depth range.
+                if !(1..=3).contains(&expected) || !(1..=3).contains(&depth) || expected == depth {
+                    return Err(Reason::InvalidAction);
+                }
+                if self.tier() != tier || self.settings.decode_depth.clamp(1, 3) != expected {
+                    return Err(Reason::ContextChanged);
+                }
+                next.decode_depth = depth;
+            }
+            DecoderSetting::RxOffset { tier, expected, hz } => {
+                if !expected.is_finite()
+                    || !hz.is_finite()
+                    || !(200.0..=4000.0).contains(&hz)
+                    || expected == hz
+                {
+                    return Err(Reason::InvalidAction);
+                }
+                if self.tier() != tier || self.rx_offset_hz() != expected {
+                    return Err(Reason::ContextChanged);
+                }
+                next.rx_offset_hz = hz;
+            }
             DecoderSetting::Js8Speed { expected, speed } => {
                 if modes::Js8Speed::from_index(expected).is_none()
                     || modes::Js8Speed::from_index(speed).is_none()
@@ -89,8 +153,8 @@ impl Engine {
             }
         }
         // Speed replacement must use the existing stable source mutex, without
-        // parking Engine behind an active decode. MSK144's native narrow period
-        // verb does not replace the source or reset any QSO/queue/slot policy.
+        // parking Engine behind an active decode. The other native narrow
+        // receiver verbs do not replace the source or reset QSO/queue/slot policy.
         let source = self.source.clone();
         let mut slot = if matches!(setting, DecoderSetting::Js8Speed { .. }) {
             Some(match source.try_lock() {
@@ -122,6 +186,8 @@ impl Engine {
                 })
                 .expect("speed validated before saving"),
             DecoderSetting::Msk144Period { secs, .. } => self.set_msk144_period(secs),
+            DecoderSetting::Depth { depth, .. } => self.set_decode_depth(depth),
+            DecoderSetting::RxOffset { hz, .. } => self.set_rx_offset(hz),
         }
         Ok(())
     }

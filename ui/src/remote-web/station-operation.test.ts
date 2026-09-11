@@ -2,6 +2,22 @@ import { describe, expect, it } from 'vitest'
 import { actionCapability, controlContext, controlOutcome, stationAction } from './station-operation'
 
 describe('closed station operating requests', () => {
+  it('binds receive choices to the displayed tier and prior value without accepting TX or form fields', () => {
+    const depth = { action: 'decoder.depth', expectedTier: 'FT8', expectedDepth: 3, depth: 1 }
+    const rx = { action: 'receiver.rxOffset', expectedTier: 'JS8', expectedHz: 1500, hz: 725.25 }
+    for (const choice of [depth, rx]) {
+      expect(stationAction(choice)).toEqual(choice)
+      expect(actionCapability(stationAction(choice))).toBe('receiverSettings')
+      for (const extra of ['settings', 'command', 'txOffsetHz', 'radioId', 'target']) expect(() => stationAction({ ...choice, [extra]: true })).toThrow()
+      for (const expectedTier of [null, 'unknown', 'cw', 1]) expect(() => stationAction({ ...choice, expectedTier })).toThrow()
+    }
+    for (const value of [0, 3, 4, 2.5, '2', null, NaN]) expect(() => stationAction({ ...depth, depth: value })).toThrow()
+    for (const value of [0, 1, 4, 255, '3', NaN]) expect(() => stationAction({ ...depth, expectedDepth: value })).toThrow()
+    for (const value of [NaN, Infinity, -Infinity, 199, 4001, 1500, '725', null]) expect(() => stationAction({ ...rx, hz: value })).toThrow()
+    for (const value of [NaN, Infinity, '1500', null, 725.25]) expect(() => stationAction({ ...rx, expectedHz: value })).toThrow()
+    expect(stationAction({ ...depth, expectedDepth: 2 })).toMatchObject({ expectedDepth: 2 })
+    expect(stationAction({ ...rx, expectedHz: 50 })).toMatchObject({ expectedHz: 50 })
+  })
   it('accepts only exact, changed decoder choices and requires their own capability', () => {
     const choices = [
       { action: 'decoder.js8Speed', expectedSpeed: 1, speed: 3 },

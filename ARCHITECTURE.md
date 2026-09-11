@@ -46,6 +46,13 @@ atomic one-field Settings save before the shared native runtime setter. JS8
 installation uses the same stable source lock without blocking Engine; MSK144
 keeps its narrow period semantics. A failed save publishes no runtime change,
 and a receipt never substitutes for the later station sample.
+The separate `receiverSettings` capability connects decode depth and RX-only
+audio offsets through the same atomic persistence path. It binds the displayed
+tier and prior value, then uses the native narrow setters without replacing the
+decoder or changing TX offsets, timing, queues or permission. FT/JS8/Tempo keep
+their existing waterfall gestures, and FT's RX field discards a draft if the
+local value changes or authority is lost. TX and combined-marker gestures
+require their own future capability; receive permission cannot enable them.
 Native amplifier buttons and saved follow-band also validate the exact completed
 serial poll after I/O. Current settings, observed physical PTT and read expiry
 bound each write; local gestures take precedence over automatic steps. These

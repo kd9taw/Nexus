@@ -65,7 +65,7 @@ it('projects older station capability hints for each browser version after room 
     // A pre-v3 native build may have advertised frequency/mode under v2.
     // Cloud upgrades must keep that hint from breaking a legacy parser.
     const wire = state()
-    wire.controls!.capabilities = ['decoder', 'amplifier', 'frequency', 'mode', 'tier', 'ampFollowBand', 'workspace', 'decoderSettings']
+    wire.controls!.capabilities = ['decoder', 'amplifier', 'frequency', 'mode', 'tier', 'ampFollowBand', 'workspace', 'decoderSettings','receiverSettings']
     restored.receiveStation({ type: 'operationResponse', sessionId, requestId, value: wire })
     expect(browser.frames).toHaveLength(1)
     if (version === 1) expect(browser.frames[0].value.controls).toBeUndefined()

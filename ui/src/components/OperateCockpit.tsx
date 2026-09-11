@@ -1,6 +1,7 @@
 import { RemoteRecall } from '../remote-web/RemoteRecall'
 import { useStationControl, useStationTierControl } from '../stationAccess'
 import { useDecoderSettings } from '../remote-web/useDecoderSettings'
+import { useReceiverSettings } from '../remote-web/useReceiverSettings'
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every reading in this
 // cockpit is DATA and stays in the code — the dial, the audio offsets in Hz, the band, the
 // tier, the decode depth, the split TX frequency, the next-slot seconds — and so does the
@@ -356,6 +357,7 @@ export function OperateCockpit({
   const control = useStationControl()
   const tierControl = useStationTierControl(snap.radio)
   const decoderSettings = useDecoderSettings(snap, 'MSK144')
+  const receiverSettings = useReceiverSettings(snap, tier)
   // Container the waterfall-height splitter measures + writes its CSS var on.
   const bodyRef = useRef<HTMLDivElement>(null)
   // The two resizable side-rail panes in roster mode (Band Activity above, Rx Frequency
@@ -961,11 +963,13 @@ export function OperateCockpit({
                   type="button"
                   className={`cockpit-depth-chip${snap.radio.decodeDepth === d ? ' active' : ''}`}
                   aria-pressed={snap.radio.decodeDepth === d}
-                  onClick={() =>
+                  disabled={!control && !receiverSettings.depthAllowed}
+                  onClick={() => {
+                    if (!control) { receiverSettings.setDepth(d); return }
                     void setDecodeDepth(d)
                       .then((s) => onSnap?.(s))
                       .catch(() => {})
-                  }
+                  }}
                 >
                   {label}
                 </button>
@@ -1094,7 +1098,9 @@ export function OperateCockpit({
           {/* DF readouts: type an exact audio offset and commit on Enter/blur
               (clamped to the 200–4000 Hz passband) — WSJT-X's Rx/Tx Hz spinners. */}
           <div className="cockpit-offsets" role="group" aria-label={t('operate.header.offsets.aria')}>
-            <DfField label={DF_RX} hz={snap.radio.rxOffsetHz} onCommit={(hz) => onTune(hz, 'rx')} />
+            <DfField key={control ? 'rx' : `rx-${snap.activeRadioId}-${tier}`} label={DF_RX} hz={snap.radio.rxOffsetHz}
+              remoteReceive={receiverSettings.rxAllowed}
+              onCommit={(hz) => control ? onTune(hz, 'rx') : receiverSettings.tuneRx(hz)} />
             <DfField label={DF_TX} hz={snap.radio.txOffsetHz} onCommit={(hz) => onTune(hz, 'tx')} />
           </div>
           {/* Decode button — re-run the decoder over the last period's audio (F6). */}
@@ -1237,7 +1243,10 @@ export function OperateCockpit({
                   rxOffsetHz={snap.radio.rxOffsetHz}
                   txOffsetHz={snap.radio.txOffsetHz}
                   theme={theme}
-                  onTune={onTune}
+                  onTune={(hz, target) => {
+                    if (control) onTune(hz, target)
+                    else if (target === 'rx') receiverSettings.tuneRx(hz)
+                  }}
                   active={active}
                   paletteScope={FT_PALETTE_SCOPE}
                   // An FT over is 13 s: the dark band reads as "that was us", and there is
@@ -1711,14 +1720,17 @@ function DfField({
   label,
   hz,
   onCommit,
+  remoteReceive = false,
 }: {
   label: string
   hz: number
   onCommit: (hz: number) => void
+  remoteReceive?: boolean
 }) {
   const control = useStationControl()
   const [text, setText] = useState(() => String(Math.round(hz)))
   const [editing, setEditing] = useState(false)
+  const editHz = useRef(hz)
   const editingRef = useRef(editing)
   editingRef.current = editing
   // Track the live prop ONLY when it actually changes — keying the effect on
@@ -1727,12 +1739,19 @@ function DfField({
   useEffect(() => {
     if (!editingRef.current) setText(String(Math.round(hz)))
   }, [hz])
+  useEffect(() => {
+    if (!control && !remoteReceive) { setEditing(false); setText(String(Math.round(hz))) }
+  }, [control, remoteReceive, hz])
   const commit = () => {
     setEditing(false)
+    if (!control && (!remoteReceive || editHz.current !== hz)) {
+      setText(String(Math.round(hz)))
+      return
+    }
     const n = Number(text)
     if (text.trim() !== '' && Number.isFinite(n)) {
       const clamped = clampOffsetHz(n)
-      setText(String(clamped))
+      setText(String(control ? clamped : Math.round(hz)))
       if (clamped !== Math.round(hz)) onCommit(clamped)
     } else {
       setText(String(Math.round(hz))) // revert garbage
@@ -1741,7 +1760,7 @@ function DfField({
   return (
     <label className="df-field" title={t('operate.header.df.title', { label })}>
       <span className="df-label">{label}</span>
-      <input disabled={!control}
+      <input disabled={!control && !remoteReceive}
         type="number"
         inputMode="numeric"
         min={200}
@@ -1749,7 +1768,7 @@ function DfField({
         step={1}
         value={text}
         aria-label={t('operate.header.df.aria', { label })}
-        onFocus={() => setEditing(true)}
+        onFocus={() => { editHz.current = hz; setEditing(true) }}
         onChange={(e) => setText(e.target.value)}
         onBlur={commit}
         onKeyDown={(e) => {

@@ -88,6 +88,22 @@ pub enum Action {
         #[serde(rename = "periodSecs")]
         period_secs: u16,
     },
+    #[serde(rename = "decoder.depth")]
+    DecodeDepth {
+        #[serde(rename = "expectedTier")]
+        expected_tier: tempo_app::dto::Tier,
+        #[serde(rename = "expectedDepth")]
+        expected_depth: u8,
+        depth: u8,
+    },
+    #[serde(rename = "receiver.rxOffset")]
+    RxOffset {
+        #[serde(rename = "expectedTier")]
+        expected_tier: tempo_app::dto::Tier,
+        #[serde(rename = "expectedHz")]
+        expected_hz: f32,
+        hz: f32,
+    },
     #[serde(rename = "radio.disarm")]
     Disarm {},
     #[serde(rename = "radio.frequency")]
@@ -156,6 +172,44 @@ pub fn execute(
         return Err(Reason::ContextChanged);
     }
     match action {
+        #[cfg(feature = "radio")]
+        Action::DecodeDepth {
+            expected_tier,
+            expected_depth,
+            depth,
+        } => {
+            engine.save_remote_decode_depth(
+                *expected_tier,
+                *expected_depth,
+                *depth,
+                context.radio_connection.ok_or(Reason::ReadingUnavailable)?,
+                &permit,
+            )?;
+            let result = Completion::default();
+            result.finish(Outcome::Applied {
+                evidence: Evidence::SettingsSaved,
+            });
+            return Ok(result);
+        }
+        #[cfg(feature = "radio")]
+        Action::RxOffset {
+            expected_tier,
+            expected_hz,
+            hz,
+        } => {
+            engine.save_remote_rx_offset(
+                *expected_tier,
+                *expected_hz,
+                *hz,
+                context.radio_connection.ok_or(Reason::ReadingUnavailable)?,
+                &permit,
+            )?;
+            let result = Completion::default();
+            result.finish(Outcome::Applied {
+                evidence: Evidence::SettingsSaved,
+            });
+            return Ok(result);
+        }
         #[cfg(feature = "radio")]
         Action::Js8Speed {
             expected_speed,
@@ -419,6 +473,8 @@ impl Action {
             | Self::Workspace { .. }
             | Self::Js8Speed { .. }
             | Self::Msk144Period { .. }
+            | Self::DecodeDepth { .. }
+            | Self::RxOffset { .. }
             | Self::Radio { .. }
             | Self::AmpFollowBand { .. } => 3,
             _ => 2,
@@ -441,6 +497,7 @@ pub fn capabilities(version: u8) -> Vec<&'static str> {
                 "ampFollowBand",
                 "workspace",
                 "decoderSettings",
+                "receiverSettings",
             ]
         }
     }

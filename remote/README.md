@@ -547,6 +547,26 @@ later disconnection; duplicate and result requests recover the same receipt
 without repeating the mutation. The JS8 receive-speed mask, other decoder form
 settings, transmit operations and physical acceptance remain separate work.
 
+## Receiver settings
+
+Operation v3 advertises `receiverSettings` independently from `decoderSettings`.
+Closed `decoder.depth` and `receiver.rxOffset` intents include the displayed
+tier and prior value. Depth uses the native snapshot's 1..3 fallback; RX uses
+the displayed finite frequency and a new value in the native 200..4000 Hz range.
+The host requires the same fresh, matching idle native digital radio and local
+authority as the other saved decoder choices. It saves only that projection
+before the shared native setter. Local adjustments invalidate pending Remote
+hardware work without changing TX generation. Other preferences/profiles,
+source identity, slots and TX markers remain under their native policy.
+
+The browser uses the actual depth chips, FT RX entry, FT/JS8/Tempo waterfall
+and JS8 offset rows. A saved receipt does not manufacture a new station sample.
+An RX draft is discarded if the local value changes during editing or permission
+is lost. Only the RX gesture is admitted; right/Shift and Ctrl/Command cannot
+move TX or both markers with receive permission. Older peers remain passive.
+RX gain, other Settings forms, TX/QSO/media operations and physical acceptance
+remain separate work.
+
 ## Local verification
 
 Use Node 24, the repository's pinned Rust toolchain and the Linux dependencies in

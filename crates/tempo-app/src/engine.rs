@@ -7328,6 +7328,7 @@ impl Engine {
     /// the operator can trade CPU/battery for weak-signal decodes mid-session (a POTA field lever),
     /// not only from Settings. The decoder reads `settings.decode_depth` on the next slot.
     pub fn set_decode_depth(&mut self, depth: u8) {
+        self.remote_actuation.revoke();
         self.settings.decode_depth = depth.clamp(1, 3);
     }
 
@@ -15570,8 +15571,7 @@ impl Engine {
         self.tx_offset_hz = hz.clamp(lo, hi);
         self.settings.tx_offset_hz = self.tx_offset_hz;
     }
-    /// Set the receive audio offset (Hz) — the green waterfall marker. When
-    /// "Hold Tx Freq" is off, the TX offset follows it (the common case).
+    /// Set the receive audio offset (Hz) — the green waterfall marker.
     /// Move the RX marker, and ONLY the RX marker.
     ///
     /// ⚠️ This used to drag TX along whenever Hold Tx Freq was off, and that was issue #38: a
@@ -15586,6 +15586,7 @@ impl Engine {
     /// setter made it apply to every caller, including the one gesture that must never move TX,
     /// and a function called `set_rx_offset` that also set TX could not be read as what it said.
     pub fn set_rx_offset(&mut self, hz: f32) {
+        self.remote_actuation.revoke();
         self.rx_offset_hz = hz.clamp(200.0, 4000.0);
         self.settings.rx_offset_hz = self.rx_offset_hz;
     }

@@ -9,6 +9,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useStationControl, useStationData } from '../stationAccess'
 import { useJs8Context } from '../remote-web/useJs8Context'
 import { useDecoderSettings } from '../remote-web/useDecoderSettings'
+import { useReceiverSettings } from '../remote-web/useReceiverSettings'
 import { js8DisplayNow } from '../remote-web/js8'
 import { RemoteRecallEntry } from '../remote-web/RemoteRecall'
 import type { AppSnapshot, BandChannel, Js8InboxState, Js8Origin, Js8State, Js8Switch, LoggedQso } from '../types'
@@ -154,6 +155,7 @@ export function Js8Cockpit({
 }: Props) {
   const canControl = useStationControl(), dataAvailable = useStationData()
   const decoderSettings = useDecoderSettings(snap, 'JS8')
+  const receiverSettings = useReceiverSettings(snap, 'JS8')
   const host = panels
     ? panelHost(panels, {
         menu: JS8_PANEL_IDS,
@@ -284,7 +286,7 @@ export function Js8Cockpit({
   /** A RECEIVE move only — the offset table's double-click, JS8Call's own behaviour on
    *  tableWidgetRXAll. The TX offset is untouched; nothing here keys. */
   const tuneRx = (hz: number) => {
-    if (!canControl) return
+    if (!canControl) { receiverSettings.tuneRx(hz); return }
     void setRxOffset(hz)
       .then((sn) => onSnap?.(sn))
       .catch(() => {})
@@ -912,7 +914,7 @@ export function Js8Cockpit({
       )}
 
       {/* THE BAND WATERFALL — ⊞-hideable (SCOPE_PANEL_ID). The RX/TX cursors are the engine's
-          audio offsets: a click sets RX, right-click TX, Shift both (the Operate convention).
+          audio offsets: a click sets RX, right-click/Shift TX, Ctrl/Command both.
           It hosts no stop control and no sender. */}
       {shown('scope') && (
         <Waterfall
@@ -922,7 +924,10 @@ export function Js8Cockpit({
           rxOffsetHz={snap?.radio.rxOffsetHz ?? 1500}
           txOffsetHz={snap?.radio.txOffsetHz ?? 1500}
           onTune={(hz, target) => {
-            if (!canControl) return
+            if (!canControl) {
+              if (target === 'rx') receiverSettings.tuneRx(hz)
+              return
+            }
             if (target !== 'tx')
               void setRxOffset(hz)
                 .then((s) => onSnap?.(s))

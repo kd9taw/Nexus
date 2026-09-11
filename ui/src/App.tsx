@@ -47,6 +47,7 @@ import {
   subscribeSnapshot,
 } from './api'
 import { withErrorToast, pushToast } from './toast'
+import { useReceiverSettings } from './remote-web/useReceiverSettings'
 import { t } from './i18n'
 import { setUnitsMirror } from './units'
 import { doubleBeep, processDecodes, txEarcon } from './alerts'
@@ -284,6 +285,9 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   const { commitLeft, commitRight, resetWidths } = usePaneWidths(scale)
   const layoutRef = useRef<HTMLElement>(null)
   const [snap, setSnap] = useState<AppSnapshot | null>(remote?.snapshot ?? null)
+  const receiverSettings = useReceiverSettings(snap, snap?.link.tier)
+  const receiverSettingsRef = useRef(receiverSettings)
+  receiverSettingsRef.current = receiverSettings
   // Two-radio launch picker: shown only when simultaneous-radios is on, ≥2 radios are configured,
   // and this window launched without a profile. `null` = not a picker launch (the common case),
   // so a single-radio station never sees any of this.
@@ -1606,9 +1610,13 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     })
   }, [])
 
-  // Waterfall click: left-click sets the RX offset (green marker); shift-click
-  // sets the TX offset (red marker). TX follows RX unless "Hold Tx" is on.
+  // Waterfall click: left-click sets RX only; shift/right-click sets TX;
+  // Ctrl/Command sets both. Hold Tx belongs to decode/QSO selection, not this click.
   const handleTune = useCallback((hz: number, target: 'tx' | 'rx' | 'both') => {
+    if (remote) {
+      if (target === 'rx') receiverSettingsRef.current.tuneRx(hz)
+      return
+    }
     // Stock WSJT-X gestures (Waterfall dispatches): 'rx' = click, 'tx' = Shift, 'both' = Ctrl.
     const call =
       target === 'rx'
@@ -1619,7 +1627,7 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     void withErrorToast(call, t('shell.offset.failed')).then((s) => {
       if (s) setSnap(s)
     })
-  }, [])
+  }, [remote])
 
   // QSY from the Needed panel: move the rig to that band's channel and listen.
   const handleQsy = useCallback(

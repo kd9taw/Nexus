@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Remote receiver adjustments:** The existing decode-depth buttons, FT RX
+  frequency field, FT/JS8/Tempo waterfalls and JS8 offset table can save receive
+  choices through a compatible station with receiver-settings permission.
+  Requests check the displayed mode and prior value; failed saves retain the
+  station's settings. The RX field discards a draft after a local frequency
+  change or lost permission. RX-only gestures preserve the TX marker and keep
+  transmit disarmed; radio/audio and physical acceptance remain pending.
+
 - **Remote decoder choices:** The existing JS8 speed chips and MSK144 period
   selector save through the station's native controls. A stale displayed choice,
   unavailable reading or failed save cannot silently replace the current
