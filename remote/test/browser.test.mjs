@@ -291,6 +291,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         if(!loggingAllowed&&!stationControls)loggingLease=null
         if(r.type==='stopTransmit'){
           assert.equal(request.operationVersion,4)
+          if(!(transmitAllowed&&loggingLease&&r.leaseId===loggingLease))console.log('FT Stop authority diagnostic',JSON.stringify({now:performance.now(),loggingLeaseUntil,loggingLease,requestedLease:r.leaseId,transmitAllowed,wire:operationWire.slice(-40),actions:stationRequests.map(r=>r.action)}))
           assert.ok(transmitAllowed&&loggingLease&&r.leaseId===loggingLease)
           assert.equal(r.transmitEpoch,transmitEpoch)
           stopRequests.push(r);transmitEpoch=(BigInt('0x'+transmitEpoch)+1n).toString(16).padStart(16,'0')
@@ -2677,6 +2678,9 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
     assert.equal(unexpectedMessages,0,'only reviewed read messages and observation ACKs may leave the browser socket')
     console.log(`Compiled browser: PKCE exchange, browser approval, live observation, revocation, ${results.length} geometry cases and overflow positive control passed`)
     if(artifacts)await writeFile(join(artifacts,'remote-browser-results.json'),JSON.stringify({exchanges,exceptions,acknowledgements,unexpectedMessages,applicationTraffic,geometry:results},null,2)+'\n')
+  } catch(error) {
+    console.error('Compiled browser primary failure',error)
+    throw error
   } finally {
     await stop()
   }
