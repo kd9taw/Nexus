@@ -1,5 +1,5 @@
 //! Exercise the real lease/heartbeat authority around native FT ownership.
-//! The test enters CQ directly; no browser transmit command exists yet.
+//! Direct ownership tests and closed browser CQ/TX/Stop requests share native policy.
 use super::*;
 
 fn armed() -> (Fixture, Instant, Value) {

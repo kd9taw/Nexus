@@ -840,3 +840,30 @@ own reviewed behavior and operating tests.
 
 Nexus remains GPL-3.0-only. See root `NOTICE`, `COPYING`, and
 `licenses/remote/THIRD-PARTY.txt`; the hosted build emits `remote-licenses.txt`.
+
+### FT8/FT4 operating controls (operation v4)
+
+Compatible peers opt into operation v4 with `x-nexus-operation-ft-version: 1`.
+The existing FT cockpit CQ and TX On/Off buttons use the `ftOperate` capability.
+Nexus at the shack must grant this browser station control and separate transmit
+permission. The grant is boot-scoped; granting it does not start transmission.
+CQ and TX enable carry the displayed tier, radio context and transmit generation,
+and the station requires current radio readings before calling the existing FT
+verbs. Native sequencing, message generation and timing remain authoritative.
+
+TX Off retains native behavior: an over already in flight may finish. Stop TX
+uses a separate `stopTransmit` request that revokes the current generation without
+waiting for the Engine, ordinary commands or receipt storage. A delayed command
+from before Stop cannot rearm that generation. Stop stays visible and clickable
+when station display data becomes unavailable. Its acknowledgement confirms
+revocation, not physical RF cessation. Later local arming belongs to the local
+operator and cannot be stopped by a former remote owner.
+
+Local transmit revocation also bypasses pending durable file operations. The
+station reconciles the removed grant before accepting subsequent commands;
+older settings refreshes cannot restore the revoked grant's display. Older
+operation versions retain their existing capability vocabulary and cannot arm FT.
+
+This covers CQ, the enable latch and Stop. Station selection/Call, complete QSO
+progression and logging, other modes, browser audio and hardware/WAN acceptance
+remain incomplete. Source verification is not installation or deployment.

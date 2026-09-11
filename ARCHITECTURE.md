@@ -150,8 +150,7 @@ separate from receiver/CAT write permission. It can enter CQ through the existin
 FT8/FT4 native verb and binds renewal to the original unexpired authority. The
 radio loop and both FT plan/commit boundaries check expiry; native halt supplies
 the existing abort and unkey path. Explicit native rearming takes ownership, so
-a previous Remote session cannot stop a later local transmission. This internal
-foundation exposes no browser transmit action. The native local-service API now
+a previous Remote session cannot stop a later local transmission. The native local-service API now
 holds a separate, boot-scoped transmit grant that also requires station-control
 permission. Only a valid controller heartbeat can renew an existing permit;
 release, disconnect, connection replacement and local revocation retire it.
@@ -171,7 +170,9 @@ and radio connection; revocation invalidates even a previously captured command
 whose ordinary window remains valid. The separate local transmit permission is
 managed in the existing Remote settings section, remains boot-scoped and can be
 revoked during a pending refresh. Older refresh results cannot restore its display.
-Stop remains independent of stale observations and command/storage locks. Call
+Stop remains independent of stale observations and command/storage locks. The
+stale-workspace visibility rule preserves an enabled Stop while hiding readings;
+a compiled-browser click checks its actual hit target. Call
 selection, full QSO workflows and hardware/WAN acceptance remain pending.
 
 The receive-audio foundation is local to `tempo-audio`: the sole `RxDsp` capture

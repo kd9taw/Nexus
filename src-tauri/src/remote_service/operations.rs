@@ -1,7 +1,7 @@
 //! Station-owned authority for manual logging and typed station controls.
 //! Cloud admission routes an approved browser; only a local, boot-scoped grant
-//! permits a lease. Transmit permission is separately granted locally; no browser
-//! transmit command is exposed by this authority foundation. Deferred hardware
+//! permits a lease. FT8/FT4 CQ and TX On/Off require a separate local transmit
+//! grant; Stop has independent admission. Deferred hardware
 //! writes carry a revocable permit and a separate completion receipt.
 //! A log append already begun cannot be rolled back on disconnect. Its bounded
 //! receipt remains queryable by the same device while locally permitted.
