@@ -50,6 +50,11 @@ pub trait AudioBackend {
     fn spectrum_tap(&self) -> Option<(std::sync::Arc<crate::monitor::SpscRing>, u32)> {
         None
     }
+    /// Resolved decode input at open, if the backend can identify it. This is
+    /// metadata only: asking for it cannot open or change a device.
+    fn capture_input(&self) -> Option<crate::receive_audio::CaptureInput> {
+        None
+    }
     /// Set the TX audio level (0.0–1.0) applied to played samples. No-op default
     /// for non-hardware backends (the real sound card overrides it).
     fn set_tx_level(&mut self, _level: f32) {}

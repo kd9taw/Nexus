@@ -20555,6 +20555,7 @@ pub fn run() {
         // loop, so blocking CAT can no longer starve it — see tempo-audio/src/rxtap.rs.
         spectrum_feed: spectrum_feed.clone(),
         rx_tap: std::sync::Arc::new(tempo_audio::rxtap::RxTap::new()),
+        capture_radio_id: Some(settings.active_radio),
         meter_feed: meter_feed.clone(),
         ptt_method: settings.ptt_method.clone(),
         // The operator's D1/D2/D3 choice, from the ACTIVE radio's profile. Without this the

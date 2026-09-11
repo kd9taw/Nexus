@@ -31,6 +31,44 @@ impl ReceiveSource {
     }
 }
 
+/// The resolved capture stream's device label, obtained by its backend at open.
+/// This identifies the opened OS endpoint, not the physical cable or upstream
+/// routing of a virtual device. Kept local; not part of any browser DTO.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CaptureInput {
+    pub device: String,
+    pub system_default: bool,
+}
+
+/// Native ownership at capture open. The requested choice is retained even when
+/// startup recovery opened System default instead. A descriptor is not a grant.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReceiveOrigin {
+    pub radio_id: u32,
+    pub requested_input: String,
+    pub input: CaptureInput,
+}
+impl ReceiveOrigin {
+    pub fn from_open(
+        radio_id: Option<u32>,
+        requested_input: &str,
+        input: Option<CaptureInput>,
+    ) -> Option<Self> {
+        let input = input.filter(|input| !input.device.trim().is_empty())?;
+        Some(Self {
+            radio_id: radio_id?,
+            requested_input: requested_input.to_owned(),
+            input,
+        })
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReceiveDescription {
+    pub source: ReceiveSource,
+    pub origin: Option<ReceiveOrigin>,
+}
+
 #[derive(Debug)]
 pub struct ReceiveBlock {
     pub source: ReceiveSource,
@@ -50,6 +88,7 @@ pub enum ReceiveError {
 #[derive(Default)]
 struct State {
     source: Option<ReceiveSource>,
+    origin: Option<ReceiveOrigin>,
     next_reader: u64,
     reader: Option<u64>,
     primed: bool,
@@ -81,6 +120,16 @@ pub struct ReceiveAudioFeed {
 impl ReceiveAudioFeed {
     pub fn source(&self) -> Option<ReceiveSource> {
         self.state.lock().ok().and_then(|state| state.source)
+    }
+
+    /// One atomic snapshot of source generation and native capture ownership.
+    /// An unnamed/mock backend can serve local DSP without media provenance.
+    pub fn describe(&self) -> Option<ReceiveDescription> {
+        let state = self.state.lock().ok()?;
+        Some(ReceiveDescription {
+            source: state.source?,
+            origin: state.origin.clone(),
+        })
     }
 
     /// One reader per local feed. Source identity must come from this station;
@@ -117,9 +166,18 @@ impl ReceiveAudioFeed {
 
     /// Called with the capture-source publication, never from an audio callback.
     pub(crate) fn replace_source(&self, source: Option<ReceiveSource>) {
+        self.replace_source_with_origin(source, None);
+    }
+
+    pub(crate) fn replace_source_with_origin(
+        &self,
+        source: Option<ReceiveSource>,
+        origin: Option<ReceiveOrigin>,
+    ) {
         if let Ok(mut state) = self.state.lock() {
             state.retire();
             state.source = source.filter(|source| source.valid());
+            state.origin = state.source.and(origin);
             self.active.store(false, Ordering::Release);
         } else {
             self.active.store(false, Ordering::Release);
@@ -215,6 +273,59 @@ mod tests {
         };
         feed.replace_source(Some(source));
         (feed, source, Instant::now())
+    }
+
+    #[test]
+    fn descriptions_keep_the_requested_choice_and_actual_open_together_without_starting_media() {
+        let (feed, source, now) = fixture();
+        let actual = CaptureInput {
+            device: "System microphone".into(),
+            system_default: true,
+        };
+        let origin =
+            ReceiveOrigin::from_open(Some(7), "Radio codec", Some(actual.clone())).unwrap();
+        feed.replace_source_with_origin(Some(source), Some(origin.clone()));
+        assert_eq!(
+            feed.describe(),
+            Some(ReceiveDescription {
+                source,
+                origin: Some(origin)
+            })
+        );
+        feed.publish(source, now, &[0.5; 960]);
+        assert!(!feed.active.load(Ordering::Acquire));
+        assert!(feed.state.lock().unwrap().blocks.is_empty());
+        assert!(ReceiveOrigin::from_open(None, "Radio codec", Some(actual.clone())).is_none());
+        assert!(ReceiveOrigin::from_open(Some(7), "Radio codec", None).is_none());
+        assert!(ReceiveOrigin::from_open(
+            Some(7),
+            "Radio codec",
+            Some(CaptureInput {
+                device: " ".into(),
+                system_default: false
+            })
+        )
+        .is_none());
+        let next = ReceiveSource {
+            epoch: source.epoch + 1,
+            rate: 44_100,
+        };
+        let reader = feed.subscribe(source).unwrap();
+        feed.replace_source_with_origin(Some(next), None);
+        assert!(matches!(reader.read(now), Err(ReceiveError::Ended)));
+        assert_eq!(
+            feed.describe(),
+            Some(ReceiveDescription {
+                source: next,
+                origin: None
+            })
+        );
+        feed.replace_source_with_origin(
+            Some(ReceiveSource { epoch: 0, rate: 0 }),
+            ReceiveOrigin::from_open(Some(7), "", Some(actual)),
+        );
+        assert!(feed.describe().is_none());
+        assert!(feed.state.lock().unwrap().origin.is_none());
     }
 
     #[test]

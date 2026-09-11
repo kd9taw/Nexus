@@ -1074,6 +1074,8 @@ pub struct RadioConfig {
     pub spectrum_feed: tempo_app::engine::SpectrumFeed,
     /// The wait-free capture tee the rx-dsp thread drains (rxtap.rs).
     pub rx_tap: Arc<crate::rxtap::RxTap>,
+    /// Radio whose settings produced this capture-open request, not a later UI selection.
+    pub capture_radio_id: Option<u32>,
     /// The live meter bus (RX audio level + CAT S-meter) — written by the rx-dsp thread and
     /// this loop, read lock-free by the UI's `get_meters`. Defaulted so existing
     /// constructions (tests, tools) need no change.
@@ -1140,6 +1142,7 @@ impl Default for RadioConfig {
         Self {
             spectrum_feed: tempo_app::engine::SpectrumFeed::default(),
             rx_tap: Arc::new(crate::rxtap::RxTap::new()),
+            capture_radio_id: None,
             meter_feed: tempo_app::engine::MeterFeed::default(),
             ptt_method: "vox".to_string(),
             radio_label: String::new(),
@@ -1515,7 +1518,15 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
     // Hand the capture tee to the waterfall producer and start it. From here the row is made on
     // ITS thread, so this loop's blocking CAT can no longer starve the waterfall (rxtap.rs).
     if let Some((ring, rate)) = backend.spectrum_tap() {
-        cfg.rx_tap.publish_card(ring, rate);
+        cfg.rx_tap.publish_card_with_origin(
+            ring,
+            rate,
+            crate::receive_audio::ReceiveOrigin::from_open(
+                cfg.capture_radio_id,
+                in_name.as_deref().unwrap_or(""),
+                backend.capture_input(),
+            ),
+        );
     }
     crate::rxdsp::spawn(
         cfg.rx_tap.clone(),
@@ -1681,6 +1692,7 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
             // is bounded (`flexspectrum::reap_workers`, ~600 ms worst case) well inside that 3 s
             // budget. No-op when native Flex audio was never on.
             state.dax_src = None;
+            cfg.rx_tap.retire_receive_audio();
             SHUTDOWN_DONE.store(true, std::sync::atomic::Ordering::Relaxed);
             return Ok(());
         }
@@ -5428,6 +5440,7 @@ impl RadioLoop {
                 // common case impossible, and they are changing devices precisely because
                 // the current one is not what they want. The retry already recovers a card
                 // another app holds momentarily.
+                self.rx_tap.retire_receive_audio();
                 backend.release_device();
                 match reopen_audio(&want) {
                     Ok(b) => {
@@ -5466,7 +5479,15 @@ impl RadioLoop {
                         // New stream, new ring: republish so the producer rebuilds its resampler
                         // and clears its window rather than smearing two sample rates together.
                         if let Some((ring, rate)) = backend.spectrum_tap() {
-                            self.rx_tap.publish_card(ring, rate);
+                            self.rx_tap.publish_card_with_origin(
+                                ring,
+                                rate,
+                                crate::receive_audio::ReceiveOrigin::from_open(
+                                    Some(remote_want_radio),
+                                    &want.audio_in,
+                                    backend.capture_input(),
+                                ),
+                            );
                         }
                         // ⚠️ AN OPEN IS NOT A RECOVERY — the banner stays up until the card
                         // DELIVERS. Clearing it here (which is what this did) reported success
@@ -11719,6 +11740,7 @@ fn probe_cat_or_explain(rig: &mut Rig, t: &Transport) -> (Option<bool>, String) 
 
 #[cfg(test)]
 mod tests {
+    mod receive_source;
     mod remote_radio;
     use super::should_command_rf_power;
 

@@ -96,6 +96,12 @@ replacement ends subscriptions. Its age limit measures DSP publication, not phys
 capture time. This seam does not authorize a browser or provide playback, signaling,
 codecs or a relay. A future media adapter must bind the actual input and radio to a
 local grant, including the service's possible System default recovery fallback.
+Capture descriptions now retain the radio and requested input from the open
+request alongside the resolved backend label and explicit System default flag.
+They travel atomically with the source epoch, stay local and grant no access.
+Capture teardown retires media before releasing the old device; an unsuccessful
+reopen keeps local retry behavior and cannot resume the old media reader. An OS
+endpoint label does not prove the physical source behind virtual/default routing.
 
 ## Crates (roles, not an exhaustive list)
 
