@@ -75,12 +75,12 @@ export class WheelTuning {
   /** Capture at pointer-down; a later release may submit one absolute native
    * scope target. It cannot borrow authority renewed during the gesture. */
   captureTarget(source: WheelSource): ((dialHz: number) => boolean) | null {
-    if (!this.ready() || this.burst || !Number.isFinite(source.dialMhz) || source.dialMhz <= 0 || source.dialMhz > 250000 ||
+    if (!this.ready() || !this.matchesSource(source) || this.burst || !Number.isFinite(source.dialMhz) || source.dialMhz <= 0 || source.dialMhz > 250000 ||
       !['USB', 'LSB', 'AM', 'FM'].includes(source.sideband)) return null
     const fromHz = Math.round(source.dialMhz * 1e6), context = this.context(), input = this.inputContext()
     const state = this.operations.getSnapshot().state!
-    const b: Burst = { ...source, fromHz, targetHz: fromHz, context, radioId: state.controls!.context.radioId,
-      edgeSaid: false, owners: new Set(source.owner ? [source.owner] : []), send: this.operations.prepareControl() }
+    const b: Burst = { ...source, fromHz, targetHz: fromHz, authority: context, radioId: state.controls!.context.radioId,
+      edgeSaid: false, owners: new Set(source.owner ? [source.owner] : []), send: this.operations.prepareControl(source.context!) }
     let consumed = false
     return (dialHz: number) => {
       if (consumed) return false

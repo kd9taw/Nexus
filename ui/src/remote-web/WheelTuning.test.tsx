@@ -17,6 +17,7 @@ import { RemoteObservationContext } from './amplifier-observation'
 import frames from '../remote-monitor/fixtures.v2.json'
 import type { MonitorState } from '../remote-monitor/session'
 import type { MonitorFrame } from '../remote-monitor/protocol'
+import { useRemoteScopeClick } from './useRemoteScopeClick'
 
 vi.mock('../api', async original => ({ ...await original<Record<string, unknown>>(), setFrequency: vi.fn(async () => null) }))
 vi.mock('../toast', () => ({ pushToast: vi.fn() }))
@@ -125,6 +126,21 @@ it.each(['radio', 'connection'] as const)('does not retarget an older displayed 
   act(() => h.finish()); await tick()
 })
 
+it.each(['radio', 'connection'] as const)('rejects both an old scope press and a new press on a stale displayed %s', async changed => {
+  const h = fixture(), displayed = h.source(), old = h.tuning.captureTarget(displayed)!
+  const context = { ...h.state.controls!.context, ...(changed === 'radio' ? { radioId: 2 } : { radioConnection: 8 }) }
+  await tick(1000)
+  h.setSnapshot({ ...h.getSnapshot(), activeRadioId: context.radioId })
+  act(() => h.reply({ ...h.state, revision: 2, controls: { ...h.state.controls!, context } })); await tick()
+  expect(old(7_205_000)).toBe(false)
+  expect(h.tuning.captureTarget(displayed)).toBeNull()
+  expect(h.writes()).toHaveLength(0)
+  const fresh = h.tuning.captureTarget({ ...displayed, context })!
+  expect(fresh(7_205_000)).toBe(true); await tick()
+  expect(h.writes()).toHaveLength(1); expect(h.writes()[0].request.context).toEqual(context)
+  act(() => h.finish()); await tick()
+})
+
 it('coalesces readout and scope input once and queues nothing behind a submitted command', async () => {
   const h = fixture(), readout = {}, scope = {}
   expect(h.tuning.nudge(100, { ...h.source(), owner: readout })).toBe(true)
@@ -206,6 +222,29 @@ function Scope({ snap }: { snap: AppSnapshot }) {
   useWheelTune(ref, { ...snap.radio, radioId: snap.activeRadioId, enabled: true, stepHz: 100, remoteFrequency: true })
   return <div ref={ref} data-testid="scope"/>
 }
+function ScopeClick({ snap }: { snap: AppSnapshot }) {
+  const scope = useRemoteScopeClick(snap), held = useRef<((hz: number) => boolean) | null>(null)
+  return <button disabled={!scope.allowed} onMouseDown={() => { held.current = scope.begin() }}
+    onMouseUp={() => { held.current?.(7_201_000); held.current = null }}>Signal</button>
+}
+it('the scope hook uses the displayed observation when a connection is replaced at the same dial', async () => {
+  const h = fixture()
+  const page = (observation = h.observation) => <StationControlContext.Provider value={false}><StationDataContext.Provider value={true}>
+    <RemoteOperationsContext.Provider value={h.client}><RemoteWheelTuningContext.Provider value={h.tuning}>
+      <RemoteObservationContext.Provider value={observation}><ScopeClick snap={h.getSnapshot()}/></RemoteObservationContext.Provider>
+    </RemoteWheelTuningContext.Provider></RemoteOperationsContext.Provider>
+  </StationDataContext.Provider></StationControlContext.Provider>
+  const ui = render(page()); await tick(1000)
+  act(() => h.reply({ ...h.state, revision: 2, controls: { ...h.state.controls!, context: { ...h.state.controls!.context, radioConnection: 8 } } })); await tick()
+  fireEvent.mouseDown(ui.getByRole('button')); fireEvent.mouseUp(ui.getByRole('button')); await tick()
+  expect(h.writes()).toHaveLength(0)
+  const fresh = structuredClone(h.observation); fresh.frame!.station.radio.readings.cat!.connectionGeneration = 8
+  ui.rerender(page(fresh)); await tick()
+  fireEvent.mouseDown(ui.getByRole('button')); fireEvent.mouseUp(ui.getByRole('button')); await tick()
+  expect(h.writes()).toHaveLength(1); expect(h.writes()[0].request.context.radioConnection).toBe(8)
+  act(() => h.finish()); await tick()
+})
+
 it('the mounted native readout waits for its displayed radio and observation to catch up after handoff', async () => {
   const h = fixture(), displayed = h.getSnapshot()
   const page = (snap = displayed, observation = h.observation) => <StationControlContext.Provider value={false}><StationDataContext.Provider value={true}>

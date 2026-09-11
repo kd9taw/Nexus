@@ -12,7 +12,10 @@ beforeEach(() => {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'performance'] })
   vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => setTimeout(() => cb(performance.now()), 16))
   vi.stubGlobal('cancelAnimationFrame', clearTimeout)
-  vi.stubGlobal('PointerEvent', MouseEvent)
+  vi.stubGlobal('PointerEvent', class extends MouseEvent {
+    pointerId: number
+    constructor(type: string, init: PointerEventInit = {}) { super(type, init); this.pointerId = init.pointerId ?? 1 }
+  })
   vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
   vi.stubGlobal('ImageData', class {
     constructor(public data: Uint8ClampedArray, public width: number, public height: number) {}
@@ -32,7 +35,7 @@ async function draw(ms = 150) { await act(async () => { await vi.advanceTimersBy
 
 it.each(['USB', 'LSB', 'CW', 'CW-L'])('keeps the actual %s native signal target with a captured remote click', async sideband => {
   const native = vi.fn(), first = vi.fn(), later = vi.fn(), begin = vi.fn(() => first)
-  const base = { sideband, dialHz: 14_074_000, active: true, interactive: true, theme: 'dark' as const, onTune: native }
+  const base = { sideband, dialHz: 14_074_000, transmitting: false, active: true, interactive: true, theme: 'dark' as const, onTune: native }
   const ui = render(<PhoneScope {...base}/>); await draw()
   const canvas = () => ui.container.querySelector('canvas')!
   const press = () => fireEvent.pointerDown(canvas(), { button: 0, clientX: 400, clientY: 100 })
@@ -53,7 +56,7 @@ it.each(['USB', 'LSB', 'CW', 'CW-L'])('keeps the actual %s native signal target 
 
 it.each(['move', 'edge', 'cancel', 'capture lost', 'blur', 'escape', 'disabled', 'unmount'])('a remote %s cannot fall through to native drag or resume its click', async event => {
   const native = vi.fn(), click = vi.fn(), begin = () => click
-  const base = { sideband: 'USB', dialHz: 14_074_000, active: true, interactive: true, theme: 'dark' as const, onTune: native, onBeginClick: begin }
+  const base = { sideband: 'USB', dialHz: 14_074_000, transmitting: false, active: true, interactive: true, theme: 'dark' as const, onTune: native, onBeginClick: begin }
   const ui = render(<PhoneScope {...base}/>); await draw()
   const canvas = ui.container.querySelector('canvas')!
   fireEvent.pointerDown(canvas, { button: 0, clientX: 400, clientY: 100 })
@@ -76,7 +79,7 @@ it.each(['move', 'edge', 'cancel', 'capture lost', 'blur', 'escape', 'disabled',
 
 it('a refused press creates no capture and cannot use the later callback', async () => {
   const native = vi.fn(), later = vi.fn()
-  const base = { sideband: 'USB', dialHz: 14_074_000, active: true, interactive: true, theme: 'dark' as const, onTune: native }
+  const base = { sideband: 'USB', dialHz: 14_074_000, transmitting: false, active: true, interactive: true, theme: 'dark' as const, onTune: native }
   const ui = render(<PhoneScope {...base} onBeginClick={() => null}/>); await draw()
   const canvas = ui.container.querySelector('canvas')!
   fireEvent.pointerDown(canvas, { button: 0, clientX: 400, clientY: 100 })
@@ -84,4 +87,34 @@ it('a refused press creates no capture and cannot use the later callback', async
   ui.rerender(<PhoneScope {...base} onBeginClick={() => later}/>); await draw(16)
   fireEvent.pointerUp(canvas, { button: 0, clientX: 400, clientY: 100 })
   expect(later).not.toHaveBeenCalled(); expect(native).not.toHaveBeenCalled()
+})
+
+it.each([
+  { sideband: 'LSB' }, { dialHz: 14_075_000 }, { pitchHz: 900 },
+  { viewLoHz: 300, viewHiHz: 1100 }, { filterWidthHz: 1800 },
+])('a changed scope mapping cancels the old press: %j', async change => {
+  const native = vi.fn(), click = vi.fn()
+  const base = { sideband: 'USB', dialHz: 14_074_000, transmitting: false, active: true, interactive: true,
+    theme: 'dark', onTune: native, onBeginClick: () => click }
+  const ui = render(<PhoneScope {...base}/>); await draw()
+  const canvas = ui.container.querySelector('canvas')!
+  const press = () => fireEvent.pointerDown(canvas, { button: 0, clientX: 400, clientY: 100 })
+  const release = () => fireEvent.pointerUp(canvas, { button: 0, clientX: 400, clientY: 100 })
+  press(); ui.rerender(<PhoneScope {...base} {...change}/>); await draw()
+  release(); expect(click).not.toHaveBeenCalled(); expect(native).not.toHaveBeenCalled()
+  press(); release(); expect(click).toHaveBeenCalledOnce()
+})
+
+it('another pointer cannot replace or release the original signal press', async () => {
+  const native = vi.fn(), click = vi.fn(), begin = vi.fn(() => click)
+  const ui = render(<PhoneScope sideband="USB" dialHz={14_074_000} transmitting={false} active interactive
+    theme="dark" onTune={native} onBeginClick={begin}/>); await draw()
+  const canvas = ui.container.querySelector('canvas')!
+  fireEvent.pointerDown(canvas, { button: 0, pointerId: 1, clientX: 400, clientY: 100 })
+  fireEvent.pointerDown(canvas, { button: 0, pointerId: 2, clientX: 600, clientY: 100 })
+  fireEvent.pointerMove(canvas, { pointerId: 2, clientX: 799, clientY: 100 })
+  fireEvent.pointerUp(canvas, { button: 0, pointerId: 2, clientX: 600, clientY: 100 })
+  expect(begin).toHaveBeenCalledOnce(); expect(click).not.toHaveBeenCalled()
+  fireEvent.pointerUp(canvas, { button: 0, pointerId: 1, clientX: 400, clientY: 100 })
+  expect(click).toHaveBeenCalledOnce(); expect(native).not.toHaveBeenCalled()
 })
