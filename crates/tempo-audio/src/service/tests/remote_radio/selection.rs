@@ -1550,11 +1550,12 @@ fn workspace_return_retains_the_original_connection_and_confirms_before_native_c
             before_poll
                 .iter()
                 .filter(|line| line.starts_with("F "))
+                .map(String::as_str)
                 .collect::<Vec<_>>(),
             if scenario == "revoked_before" {
                 vec![]
             } else {
-                vec![&"F 50260000".to_string()]
+                vec!["F 50260000"]
             }
         );
         if adopted {
