@@ -19,6 +19,7 @@ pub mod radio_selection;
 pub mod remote_radio;
 pub mod remote_selection;
 mod remote_settings;
+pub mod remote_transmit;
 
 /// A manual Remote log append awaiting storage confirmation. The caller must
 /// release its engine lock before syncing; connector delivery uses its existing pipeline.
@@ -2241,6 +2242,7 @@ pub struct Engine {
     remote_radio_selection: Option<remote_selection::Request>,
     remote_settings_path: Option<std::path::PathBuf>,
     remote_selection_host_ready: bool,
+    remote_transmit: Option<crate::remote_control::transmit::TransmitPermit>,
     /// The transponder the operator selected for the tracked bird, plus their
     /// position inside its passband and what was last written to the radio.
     /// `None` = no satellite tuning in force, which is every terrestrial path.
@@ -4303,6 +4305,7 @@ impl Engine {
             remote_radio_selection: None,
             remote_settings_path: None,
             remote_selection_host_ready: false,
+            remote_transmit: None,
             sat_tune: None,
             sat_dial_owner: None,
             sat_last_rate: None,
@@ -10871,6 +10874,7 @@ impl Engine {
     /// clear the TX indicator. Wired to the WSJT-X UDP "HaltTx" control so a
     /// logger / JTAlert can stop Tempo keying.
     pub fn halt_tx(&mut self) {
+        self.remote_transmit = None;
         // Kill any over planned before this instant — even one whose gate values
         // all match again by commit time (commit_tx checks the generation).
         self.tx_gate_gen = self.tx_gate_gen.wrapping_add(1);
@@ -11206,6 +11210,12 @@ impl Engine {
         // tier that can never key. DISARMING is always honoured.
         if on && self.tier_is_rx_only(self.app.tier()) {
             return;
+        }
+        // An explicit native arm owns the next transmission. Remote entry uses
+        // this same verb, then binds its separate permit after the native action.
+        // A plain TX Off retains ownership through the current FT over.
+        if on {
+            self.remote_transmit = None;
         }
         // Arm state changed hands: an over planned under the old state must not
         // key (commit_tx checks the generation).
@@ -16948,6 +16958,7 @@ impl Engine {
     }
 
     pub fn plan_tx(&mut self, slot: u64) -> Option<TxPlan> {
+        self.poll_remote_transmit(std::time::Instant::now());
         // Coordinated QSY: execute a scheduled move the moment it comes due,
         // regardless of TX/RX/mute state (no-op while the feature is disabled).
         self.qsy_execute_due(slot);
@@ -17556,6 +17567,7 @@ impl Engine {
     /// emission, precisely what the transmit guards exist to prevent. The check is
     /// cheap and makes the race unrepresentable rather than merely unlikely.
     pub fn commit_tx(&mut self, plan: &TxPlan, wave: Vec<f32>, current_slot: u64) -> Vec<Vec<f32>> {
+        self.poll_remote_transmit(std::time::Instant::now());
         // WHOLE-plan validity, not just the tier. Everything the gate read when
         // planning — dial, sideband, TX offset, operating mode, plus the arming
         // verbs via the generation — can move while the engine is unlocked for

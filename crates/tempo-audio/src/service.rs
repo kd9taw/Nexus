@@ -4928,6 +4928,10 @@ impl RadioLoop {
         // uses (slot index, next-slot countdown, TX-hold deadlines) consistently.
         let now = now - self.clock_offset_ms as f64;
 
+        // Remote TX expiry is station-owned and does not depend on the host
+        // receiving another socket message. Native operation has no permit.
+        engine_lock(engine).poll_remote_transmit(Instant::now());
+
         // Continuously fold captured audio into the rolling RX window. Always drain the soundcard
         // ring (so it can't overflow), but when native Flex DAX RX audio is the active source, use
         // its 12 kHz stream as the RX audio instead of the soundcard.

@@ -1,0 +1,73 @@
+//! A separate process-local authority for transmitting. Receiver/CAT write
+//! permits cannot be converted into this type. Only the native host may issue
+//! it after its distinct local transmit grant and controller checks.
+use super::{Permit, Revocation};
+use std::sync::Arc;
+use std::time::Instant;
+
+#[derive(Default)]
+pub struct TransmitAuthority(Revocation);
+
+impl TransmitAuthority {
+    pub fn revoke(&self) {
+        self.0.revoke();
+    }
+
+    pub fn permit(&self, deadline: Instant) -> Option<TransmitPermit> {
+        self.0.permit(deadline).map(TransmitPermit)
+    }
+}
+
+#[derive(Clone)]
+pub struct TransmitPermit(Permit);
+
+impl TransmitPermit {
+    pub fn valid(&self, now: Instant) -> bool {
+        self.0.valid(now)
+    }
+
+    /// Renewal cannot resurrect an expired/revoked session or transfer it to
+    /// another controller. The host must already have admitted the heartbeat.
+    pub fn renew(&mut self, next: Self, now: Instant) -> bool {
+        if !self.valid(now)
+            || !next.valid(now)
+            || !Arc::ptr_eq(&self.0.owner, &next.0.owner)
+            || self.0.generation != next.0.generation
+            || next.0.deadline < self.0.deadline
+        {
+            return false;
+        }
+        *self = next;
+        true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn renewal_requires_the_live_original_authority_and_never_revives_expiry() {
+        let now = Instant::now();
+        let authority = TransmitAuthority::default();
+        let other = TransmitAuthority::default();
+        let mut permit = authority.permit(now + Duration::from_secs(5)).unwrap();
+        assert!(!permit.renew(other.permit(now + Duration::from_secs(8)).unwrap(), now));
+        assert!(!permit.renew(authority.permit(now + Duration::from_secs(4)).unwrap(), now));
+        assert!(permit.renew(authority.permit(now + Duration::from_secs(8)).unwrap(), now));
+        assert!(permit.valid(now + Duration::from_secs(7)));
+        assert!(!permit.renew(
+            authority.permit(now + Duration::from_secs(12)).unwrap(),
+            now + Duration::from_secs(8)
+        ));
+        assert!(!permit.valid(now + Duration::from_secs(8)));
+        let mut permit = authority.permit(now + Duration::from_secs(10)).unwrap();
+        authority.revoke();
+        assert!(!permit.valid(now));
+        assert!(!permit.renew(
+            authority.permit(now + Duration::from_secs(12)).unwrap(),
+            now
+        ));
+    }
+}

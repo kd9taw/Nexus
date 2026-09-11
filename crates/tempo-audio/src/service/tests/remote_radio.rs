@@ -678,3 +678,68 @@ fn band_selection_uses_the_actual_radio_owner_and_never_replays_the_native_pick(
         }
     }
 }
+
+#[test]
+fn remote_ft_authority_loss_flushes_the_owned_over_but_not_a_native_rearm() {
+    use tempo_app::remote_control::transmit::TransmitAuthority;
+    for local_rearm in [false, true] {
+        let peer = retuning_peer(14_074_000, "PKTUSB", |line, state| {
+            if line == "T 1" {
+                state.keyed = true;
+                Some("RPRT 0\n".into())
+            } else {
+                None
+            }
+        });
+        let mut s = Station::configured(&peer, |settings| {
+            settings.mycall = "KD9TAW".into();
+            settings.mygrid = "EN52".into();
+        });
+        let authority = TransmitAuthority::default();
+        {
+            let mut e = engine_lock(&s.engine);
+            e.take_immediate_retune();
+            e.start_remote_ft_cq(
+                authority
+                    .permit(Instant::now() + Duration::from_secs(5))
+                    .unwrap(),
+                None,
+            )
+            .unwrap();
+            if local_rearm {
+                e.set_tx_enabled(true);
+            }
+            // Represent the already-asserted, currently playing FT over.
+            e.take_immediate_retune();
+            e.take_slot_tx_abort();
+            e.take_immediate_tx();
+        }
+        s.rig.ptt(true).unwrap();
+        s.state.tx_until_ms = Some(999_999.0);
+        s.state.slot_tx_until_ms = 999_000.0;
+        authority.revoke();
+        s.state
+            .step(
+                &s.engine,
+                &mut s.backend,
+                &mut s.rig,
+                &no_sinks(),
+                100.0,
+                &mut |_| panic!("this test must not stop TX through a device rebuild"),
+                &mut |_, _| panic!("this test must not stop TX through a radio rebuild"),
+                &mut StationSinks::new(),
+            )
+            .unwrap();
+        assert_eq!(s.rig.keyed, local_rearm);
+        assert_eq!(s.state.tx_until_ms.is_some(), local_rearm);
+        assert_eq!(engine_lock(&s.engine).tx_enabled(), local_rearm);
+        if local_rearm {
+            assert_eq!(s.backend.flush_calls, 0);
+            assert_eq!(writes(&peer), ["T 1"]);
+        } else {
+            assert!(s.backend.flush_calls > 0);
+            assert_eq!(writes(&peer), ["T 1", "T 0"]);
+        }
+        assert!(s.backend.played.is_empty());
+    }
+}

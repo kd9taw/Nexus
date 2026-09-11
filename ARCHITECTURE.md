@@ -145,6 +145,15 @@ pause folded scopes. Presentation changes neither pane preferences nor authority
 and cannot resubmit an unconfirmed QSO. Other modes retain their existing layouts;
 Quick is not yet complete mobile or operating parity.
 
+A native Remote FT authority foundation uses a distinct transmit permit type,
+separate from receiver/CAT write permission. It can enter CQ through the existing
+FT8/FT4 native verb and binds renewal to the original unexpired authority. The
+radio loop and both FT plan/commit boundaries check expiry; native halt supplies
+the existing abort and unkey path. Explicit native rearming takes ownership, so
+a previous Remote session cannot stop a later local transmission. This internal
+foundation exposes no browser transmit action: local transmit grants, host and
+browser contracts, full QSO workflows and hardware/WAN acceptance remain pending.
+
 The receive-audio foundation is local to `tempo-audio`: the sole `RxDsp` capture
 consumer offers bounded device-rate mono copies through `receive_audio.rs`, before
 display resampling. It never consumes the decoder ring or gives media a CAT/TX
