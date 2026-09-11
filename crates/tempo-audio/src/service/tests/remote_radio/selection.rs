@@ -9,7 +9,6 @@ fn station(peer: &Peer) -> Station {
 
 fn configured_station(peer: &Peer, configure: impl FnOnce(&mut Settings)) -> Station {
     Station::configured(peer, |settings| {
-        configure(settings);
         settings.ensure_radio_profiles();
         let mut incoming = settings.radios[0].clone();
         incoming.id = 1;
@@ -21,6 +20,7 @@ fn configured_station(peer: &Peer, configure: impl FnOnce(&mut Settings)) -> Sta
         incoming.last_band = "40m".into();
         incoming.last_sideband = "USB".into();
         settings.radios.push(incoming);
+        configure(settings);
         // Match settings load: normalize CAT/rotator/broker ports before the
         // active owner opens them, rather than inventing a live collision.
         settings.ensure_distinct_radio_ports();
@@ -48,6 +48,10 @@ fn connection(s: &Station, peer: &Peer) -> MonitorConn {
 }
 
 fn queue(s: &Station, id: u32) -> Completion {
+    queue_with_authority(s, id, &s.authority)
+}
+
+fn queue_with_authority(s: &Station, id: u32, authority: &Revocation) -> Completion {
     let mut e = engine_lock(&s.engine);
     let generation = e
         .remote_monitor_observation()
@@ -59,7 +63,7 @@ fn queue(s: &Station, id: u32) -> Completion {
     e.queue_remote_radio_selection(
         id,
         generation,
-        s.authority
+        authority
             .permit(Instant::now() + Duration::from_secs(5))
             .unwrap(),
     )
@@ -218,16 +222,17 @@ fn selection_worker_failed_incoming_confirmation_preserves_outgoing_and_has_no_d
 fn selection_worker_revocation_after_incoming_write_returns_unknown_without_adoption_or_retry() {
     let outgoing = retuning_peer(14_074_000, "PKTUSB", |_, _| None);
     let mut s = station(&outgoing);
-    let authority = s.authority.clone();
+    let authority = Arc::new(Revocation::default());
+    let revoke = authority.clone();
     let incoming = retuning_peer(7_100_000, "LSB", move |line, _| {
         if line.starts_with("F ") {
-            authority.revoke();
+            revoke.revoke();
         }
         None
     });
     let pool = Arc::new(MonitorConnections::new(vec![connection(&s, &incoming)]));
     let original = engine_lock(&s.engine).settings().clone();
-    let receipt = queue(&s, 1);
+    let receipt = queue_with_authority(&s, 1, &authority);
     apply(&mut s, &pool, |_| panic!("warm radio must be reused"));
     assert!(matches!(receipt.outcome(), Outcome::Unknown { .. }));
     assert_eq!(engine_lock(&s.engine).settings(), &original);
@@ -279,9 +284,9 @@ fn selection_worker_failed_save_keeps_actual_adoption_and_never_replays_configur
 
 #[test]
 fn selection_worker_confirms_fm_repeater_settings_and_does_not_replay_them() {
-    let outgoing = retuning_peer(14_074_000, "FM", |_, _| None);
+    let outgoing = retuning_peer(14_074_000, "USB", |_, _| None);
     let repeater = Mutex::new(("None".to_string(), 0i64, 0u32));
-    let incoming = retuning_peer(7_100_000, "LSB", move |line, _| {
+    let incoming = retuning_peer(145_500_000, "LSB", move |line, _| {
         let mut values = repeater.lock().unwrap();
         match line {
             "r" => return Some(format!("{}\n", values.0)),
@@ -306,6 +311,10 @@ fn selection_worker_confirms_fm_repeater_settings_and_does_not_replay_them() {
         settings.rptr_shift = "plus".into();
         settings.rptr_offset_override_hz = 600_000;
         settings.ctcss_tone_hz = 88.5;
+        // Native Phone FM policy is band-gated: HF stays SSB, while this
+        // incoming 2 m profile uses the station's saved FM/repeater choice.
+        settings.radios[1].last_dial_mhz = 147.06;
+        settings.radios[1].last_band = "2m".into();
     });
     let pool = Arc::new(MonitorConnections::new(vec![connection(&s, &incoming)]));
     let receipt = queue(&s, 1);
