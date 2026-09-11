@@ -67,7 +67,13 @@ fn remote_phone_mode_owner_changes_the_actual_mode_then_restores_the_exact_dial_
         );
         let mut e = engine_lock(&s.engine);
         assert_eq!(e.snapshot().radio.sideband_override.as_deref(), Some(mode));
-        assert_eq!(e.snapshot().radio.rig_mode.as_deref(), Some(mode));
+        // This test clock does not advance the ordinary meter poll. Check
+        // the transaction's actual provenance stream, which supplies its
+        // confirmation, separately from the later native snapshot poll.
+        assert_eq!(
+            e.remote_monitor_observation().radio.rig_mode.as_deref(),
+            Some(mode)
+        );
         assert_eq!(e.snapshot().radio.dial_mhz, 7.22);
         assert!(!e.take_immediate_retune());
         assert!(!e.tx_enabled());

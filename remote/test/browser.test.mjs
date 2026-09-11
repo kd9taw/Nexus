@@ -797,6 +797,16 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
           if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,`band-picker-${mode}-1280-175-light.png`),Buffer.from(shot.data,'base64'))}
         }
         if(mode==='phone'){
+          // The original synthetic station omitted actual CAT mode. An app
+          // sideband and a working link cannot substitute for that reading.
+          assert.equal(applicationData.get_snapshot.radio.rigMode,undefined)
+          const first=root+' .ph-mode-pick > button:nth-of-type(2)',count=stationRequests.length
+          await freshLoggingWindow();await until(`document.querySelector('${first}')?.disabled===true`)
+          await click(`document.querySelector('${first}')`);await sleep(200)
+          assert.equal(stationRequests.length,count,'missing actual mode cannot command Phone selection')
+          // Supply the physical reading through the normal station stream.
+          // The following four picks are the fresh positive control.
+          applicationData.get_snapshot.radio.rigMode='LSB'
           for(const [pick,index]of [['USB',2],['LSB',3],['AM',5],['auto',1]]){
             const selector=root+` .ph-mode-pick > button:nth-of-type(${index})`
             for(const [width,height,zoom]of [[390,844,1],[1280,800,1],[390,844,1.75],[1280,800,1.75]])for(const theme of ['dark','light']){

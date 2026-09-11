@@ -52,7 +52,11 @@ impl Engine {
         if matches!(expected_cat_mode.as_str(), "FM" | "PKTFM") {
             return Err(Reason::UnsupportedAction);
         }
-        let ceiling = self.settings.rf_power_ceiling();
+        let ceiling = if target_mode == "AM" {
+            self.settings.rf_power_ceiling_am()
+        } else {
+            self.settings.rf_power_ceiling()
+        };
         let power_limit = (ceiling < 1.0).then(|| {
             self.rf_power
                 .or(self.rig_rf_power)
