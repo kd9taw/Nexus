@@ -4087,6 +4087,7 @@ impl Settings {
         self.rotator_port = p.rotator_port;
         self.amp_model = p.amp_model;
         self.amp_port = p.amp_port;
+        self.amp_follow_band = p.amp_follow_band;
         self.rotator_baud = p.rotator_baud;
         self.rotator_host = p.rotator_host;
         // The Flex three ride the SAME mirror as every other rig field, so every existing consumer
@@ -4129,6 +4130,7 @@ impl Settings {
             rotator_host,
             amp_model,
             amp_port,
+            amp_follow_band,
             flex_radio_ip,
             flex_native_pan,
             flex_native_audio,
@@ -4157,6 +4159,7 @@ impl Settings {
             self.rotator_host.clone(),
             self.amp_model.clone(),
             self.amp_port.clone(),
+            self.amp_follow_band,
             self.flex_radio_ip.clone(),
             self.flex_native_pan,
             self.flex_native_audio,
@@ -4186,6 +4189,7 @@ impl Settings {
             p.rotator_host = rotator_host;
             p.amp_model = amp_model;
             p.amp_port = amp_port;
+            p.amp_follow_band = amp_follow_band;
             p.flex_radio_ip = flex_radio_ip;
             p.flex_native_pan = flex_native_pan;
             p.flex_native_audio = flex_native_audio;

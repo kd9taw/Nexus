@@ -227,6 +227,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   respects the model's established band limit. Manual commands take priority
   over automatic steps. Physical bench verification remains pending.
 
+- **Follow-band settings:** Copy the saved choice between the Settings form and
+  its radio profile in both directions. Save, restart and radio switching now
+  retain and display the profile's actual follow setting. Existing profile
+  choices are preserved; the checkbox no longer diverges from the worker.
+
 - **Remote Satellites refresh timing:** Slow favorites refreshes start earlier,
   accounting for the time needed to collect each bird's schedule. Temporary
   congestion retains a still-valid schedule; unavailable or expired data is
