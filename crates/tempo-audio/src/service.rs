@@ -1945,6 +1945,17 @@ fn reconcile_pool(
     engine: &Arc<Mutex<Engine>>,
     now_ms: f64,
 ) {
+    reconcile_pool_with_open(pool, want, active, engine, now_ms, open_monitor);
+}
+
+fn reconcile_pool_with_open(
+    pool: &MonitorPool,
+    want: &[(u32, Transport)],
+    active: u32,
+    engine: &Arc<Mutex<Engine>>,
+    now_ms: f64,
+    mut open: impl FnMut(&Transport) -> (Rig, Option<CatDaemon>, Option<bool>),
+) {
     let (to_open, to_close): (Vec<(u32, Transport)>, Vec<u32>) = {
         let mut p = pool.lock().unwrap_or_else(|e| e.into_inner());
         let mut to_open = Vec::new();
@@ -2009,7 +2020,7 @@ fn reconcile_pool(
         }
     }
     for (id, t) in to_open {
-        let (rig, proc, ok) = open_monitor(&t); // slow (spawn) — pool lock NOT held
+        let (rig, proc, ok) = open(&t); // slow (spawn) — pool lock NOT held
         {
             let mut e = engine_lock(engine);
             e.observe_radio_cat(id, ok);
@@ -15226,6 +15237,43 @@ mod tests {
         assert!(
             pool.lock().unwrap().is_empty(),
             "the zombie conn was dropped (daemon reaped), not adopted"
+        );
+    }
+
+    #[test]
+    fn monitor_open_backoff_survives_reconciliation_and_accumulates_failures() {
+        let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+        let pool: MonitorPool = Arc::new(Mutex::new(Vec::new()));
+        let (id, transport) = {
+            let mut e = engine.lock().unwrap();
+            let id = e.add_radio();
+            e.set_active_radio(0);
+            let profile = e.settings().radios.iter().find(|p| p.id == id).unwrap();
+            (id, Transport::from_profile(profile))
+        };
+        let want = [(id, transport)];
+        let opens = std::cell::Cell::new(0);
+        let fail = |_: &Transport| {
+            opens.set(opens.get() + 1);
+            (Rig::vox(), None, Some(false))
+        };
+        reconcile_pool_with_open(&pool, &want, 0, &engine, 0.0, fail);
+        assert_eq!(opens.get(), 1);
+        for now in [150.0, 300.0, 999.0] {
+            reconcile_pool_with_open(&pool, &want, 0, &engine, now, fail);
+            let conns = pool.lock().unwrap();
+            assert_eq!(conns.len(), 1, "retain the failed-open retry deadline");
+            assert_eq!(conns[0].open_failures, 1);
+            assert_eq!(conns[0].retry_after_ms, 1000.0);
+            assert_eq!(opens.get(), 1, "no spawn before the retry deadline");
+        }
+        reconcile_pool_with_open(&pool, &want, 0, &engine, 1000.0, fail);
+        assert_eq!(opens.get(), 2, "positive control: retry when due");
+        let conns = pool.lock().unwrap();
+        assert_eq!(conns[0].open_failures, 2);
+        assert_eq!(
+            conns[0].retry_after_ms, 3000.0,
+            "second failure waits two seconds"
         );
     }
 
