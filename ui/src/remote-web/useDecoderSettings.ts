@@ -10,7 +10,7 @@ type DecoderSetting = Extract<StationAction, { action: 'decoder.js8Speed' | 'dec
 
 /** The existing cockpit widgets keep displaying station samples. A receipt
  * confirms the saved choice; it never manufactures a decoder state locally. */
-export function useDecoderSettings(snap: AppSnapshot | null, tier: Tier) {
+export function useDecoderSettings(snap: AppSnapshot | null | undefined, tier: Tier) {
   const client = useContext(RemoteOperationsContext), capability = useStationCapability('decoderSettings')
   const observation = useRemoteStation(snap?.activeRadioId), radio = observation.station?.radio
   const allowed = !!(capability && client && observation.context && snap?.link.tier === tier &&
