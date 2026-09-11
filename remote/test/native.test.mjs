@@ -600,6 +600,18 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
        assert.equal(contact.qso.dxcall,'W1AW');assert.equal(contact.qso.dxgrid,'FN31')
        // N0CALL has a nonstandard FT suffix: preserve the native hashed-call form.
        assert.equal(contact.owned,true);assert.equal(contact.qso.txNow,'<W1AW> N0CALL')
+       for(const change of [{kind:'resend'},{kind:'freeText',text:'TNX 73'},{kind:'monitor'}]){
+         const before=(await probe.send({type:'ftCallEvidence'})).qso
+         ft=await ftState();assert.ok(ft.controls.capabilities.includes('ftExchange'))
+         const expectedQso={dxcall:before.dxcall,state:before.state,txNow:before.txNow,cqRunning:before.cqRunning}
+         const result=await action(ft,{action:'ft.exchange',expectedTier:tier,expectedQso,change})
+         assert.equal(result.response.value?.outcome,'applied',JSON.stringify(result.response))
+         const after=await probe.send({type:'ftCallEvidence'})
+         assert.equal(after.owned,true)
+         if(change.kind==='freeText')assert.equal(after.qso.txNow,'W1AW N0CALL TNX 73')
+         if(change.kind==='monitor'){assert.equal(after.qso.dxcall,null);assert.equal(after.qso.cqRunning,false)}
+         assert.deepEqual(await probe.send({type:'loggingEvidence'}),evidence)
+       }
        ft = await ftState()
        assert.deepEqual((await operation({type:'stopTransmit',stationBootId:ft.stationBootId,
          leaseId:ft.leaseId,transmitEpoch:ft.transmitEpoch})).response.value,{stop:'accepted'})
