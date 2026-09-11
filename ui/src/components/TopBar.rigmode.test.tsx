@@ -110,4 +110,40 @@ describe('TopBar mode readout', () => {
     renderBar(radio({ sideband: 'USB', rigMode: 'FM', rigConfirmed: false }))
     expect(screen.queryByText(/^rig:/)).toBeNull()
   })
+
+  // ⭐ CW-R IS A MISMATCH AGAINST CW — this is the guard for the line removed on 2026-09-11
+  // (`modeFamily` used to answer `if (m === 'CWR') return 'CW'`).
+  //
+  // THE COLLAPSE IS WHY THE IC-7300 REPORT HAD TO COME FROM THE RADIO'S FRONT PANEL. Nexus was
+  // commanding CWR below 10 MHz under the old band-aware ruling, the rig obediently showed CW-R,
+  // and this bar said the two were the same mode — so nothing in Nexus ever mentioned it. The
+  // maintainer likewise never saw the same rule putting their own rig in CW-U above 10 MHz.
+  //
+  // It is NOT the data-variant case two tests up. PKTUSB-vs-USB is one emission under two vendor
+  // names; CW-vs-CW-R is a real difference in what the rig is doing — the operator hears the
+  // opposite pitch swing tuning past a signal — and it is exactly what `Settings::cw_reverse`
+  // now selects, so the bar must show it.
+  it('flags a rig sitting in CW-R while Nexus believes plain CW', () => {
+    renderBar(radio({ sideband: 'CW', rigMode: 'CWR', rigConfirmed: true }))
+    expect(screen.getByText('rig: CWR')).toBeTruthy()
+  })
+
+  // The other direction, which is the `cw_reverse` ON case: the operator asked for reverse CW
+  // and the rig is in plain CW — the mode ladder's CWR→CW fallback landing on a rig that has no
+  // CWR at all (SmartSDR, PowerSDR, Thetis). Honest, and worth showing for the same reason.
+  it('flags a rig sitting in plain CW while Nexus believes CW-R', () => {
+    renderBar(radio({ sideband: 'CWR', rigMode: 'CW', rigConfirmed: true }))
+    expect(screen.getByText('rig: CW')).toBeTruthy()
+  })
+
+  // THE NEGATIVE HALF, so the guard is not just "everything CW flags": agreement is still quiet,
+  // on both settings. Without this the two assertions above would pass on a `modeFamily` that
+  // had been broken to return the raw string for every input.
+  it('stays quiet when the rig agrees about CW, reverse or not', () => {
+    renderBar(radio({ sideband: 'CW', rigMode: 'CW', rigConfirmed: true }))
+    expect(screen.queryByText(/^rig:/)).toBeNull()
+    cleanup()
+    renderBar(radio({ sideband: 'CWR', rigMode: 'CWR', rigConfirmed: true }))
+    expect(screen.queryByText(/^rig:/)).toBeNull()
+  })
 })

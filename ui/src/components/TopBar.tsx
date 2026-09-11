@@ -140,7 +140,26 @@ function modeFamily(mode: string): string {
   if (/^(PKT|DATA[- ]?)?W?FM/.test(m) || m === 'FM-D') return 'FM'
   if (/^(PKT|DATA[- ]?)?USB/.test(m) || m === 'USB-D') return 'USB'
   if (/^(PKT|DATA[- ]?)?LSB/.test(m) || m === 'LSB-D') return 'LSB'
-  if (m === 'CWR') return 'CW'
+  // ⭐ CW AND CWR ARE **NOT** COLLAPSED — this arm used to read `if (m === 'CWR') return 'CW'`,
+  // and removing it (operator 2026-09-11) is half the fix for the IC-7300 report.
+  //
+  // The collapse was the reason the old band-aware CW ruling was INVISIBLE in Nexus. Nexus was
+  // commanding CWR below 10 MHz; the rig obediently showed CW-R; and this line told the top bar
+  // that CW-R and CW were the same thing, so the mismatch pill never appeared. The reporter had
+  // to read it off the radio's own front panel, and the maintainer never saw that the same rule
+  // was putting HIS rig in CW-U above 10 MHz. A display that hides the distinction a setting
+  // controls is not acceptable next to a setting that controls it (`Settings::cw_reverse`).
+  //
+  // It is NOT the same case as the families above. PKTUSB-vs-USB and FMN-vs-FM are one emission
+  // wearing two vendor names, so flagging them would be noise. CW-vs-CWR is a real difference in
+  // what the rig is doing — the operator hears a different pitch on the same signal — and is
+  // exactly what the new setting selects, so it is a disagreement worth showing.
+  //
+  // ⚠️ KNOWN, ACCEPTED NOISE: an operator who turns `cw_reverse` ON and runs a rig with no CWR
+  // at all (2036 SmartSDR CAT, 23005 SmartSDR native, 2048 PowerSDR, 2054 Thetis) now gets a
+  // standing pill. That is the mode ladder's CWR→CW fallback landing honestly, and the pill is
+  // telling the truth: the rig is not in reverse and cannot be. Silence there would be the
+  // defect this line was removed for.
   if (m === 'RTTYR') return 'RTTY'
   return m
 }

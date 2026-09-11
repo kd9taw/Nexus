@@ -624,6 +624,17 @@ with the radio.
   — a workaround; set drive so ALC reads zero.
 - **Sidetone pitch (Hz)** — 300–1200 Hz. Sets the soundcard keyer tone and the CW
   scope zero-beat marker.
+- **Reverse CW (CW-R)** (not shown for the Soundcard keyer) — off by default, and
+  while it is off Nexus asks for plain CW on every band, so your radio stays in
+  whichever CW its own menu defines. Turn it on and Nexus commands the rig's
+  reverse CW (CW-R / CW-L) on every band instead. It changes only the pitch you
+  hear on a signal — CW and CW-R transmit identically and the station you work
+  cannot tell — so treat it as a personal preference, not a band convention.
+  Which sideband it actually selects is up to the radio: on a Yaesu it is CW-L,
+  while an Icom follows its own **CW Normal Side** menu item (which ships set to
+  LSB), so the same setting lands on opposite sidebands on the two brands. That
+  is exactly why Nexus no longer picks for you by band. The Soundcard keyer
+  ignores it, because that keyer never puts the rig in CW at all.
 - **WinKeyer port** — "For the WinKeyer CW keyer (select it above). 1200 baud."
 - **Keyline serial port** (serial keyline only) — the USB-to-serial into your
   keying interface (Buxcomm, US Navigator, a homebrew DTR cable) that plugs into

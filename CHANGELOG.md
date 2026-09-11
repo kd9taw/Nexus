@@ -75,6 +75,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+<<<<<<< HEAD
 - **A long over went silent partway through and left the rig keyed.** WSPR transmitted for about
   twenty seconds, the audio stopped, the power meter fell to zero — and the radio stayed on the air
   for the remaining ninety seconds of the over, every over. Reported on an FTdx10 under Ubuntu.
@@ -95,6 +96,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   FT8, FT4, FT2, MSK144 and the 15-second Q65 and FST4 periods always fitted and were never
   affected. SSTV, CW, RTTY and the tune carrier feed the card as they go and were never affected
   either.
+=======
+- **Nexus no longer switches your radio to CW-R on 40 m.** Moving to 40, 80 or 160 m put the rig in
+  reverse CW, and moving back to 20 m put it in normal CW — on every band change, undoing it if you
+  set it back by hand. Nexus now asks for plain CW on every band, so your radio stays in whichever
+  CW its own menu defines, and a new **Reverse CW (CW-R)** checkbox under Settings → CW turns the
+  reverse mode on everywhere if you prefer it. It is off by default.
+
+  This was deliberate and it was wrong. Nexus was applying the 40/80/160 m LSB convention to CW, and
+  that convention is real for voice but does not exist for CW — CW and CW-R transmit identically, so
+  the station you work cannot tell the difference; the only thing that changes is the pitch you hear
+  when you tune past a signal. Worse, the two words do not mean the same thing on every radio. On a
+  Yaesu, reverse CW is CW-L, the lower side. On an Icom it depends on that rig's own **CW Normal
+  Side** menu item, which ships set to LSB — so an IC-7300 asked for reverse CW goes to the *upper*
+  side, the exact opposite of what the rule intended, and its normal CW on 20 m went to the lower
+  side. Thanks to the operator who reported it from an IC-7300 on 40 m under Linux.
+
+  The top bar now flags CW against CW-R as a mode mismatch instead of treating them as the same
+  mode. That collapse is why none of this was visible inside Nexus and had to be spotted on the
+  radio's own display. If you turn reverse CW on and your rig has no reverse CW at all (FlexRadio
+  SmartSDR, PowerSDR, Thetis), expect a standing mismatch pill: Nexus falls back to plain CW on
+  those and the pill is telling you so.
+
+  The soundcard keyer is unchanged. It keys an audio tone through a data mode rather than putting
+  the rig in CW, so the sideband there really does follow the band, exactly as it does for FT8.
+>>>>>>> investigate/cw-sideband-convention
 
 - **An AM contact was logged as SSB.** Work someone on AM from the Phone screen and Nexus wrote the
   QSO to your logbook as SSB — including on 14.286, the 20 m AM calling frequency. The Phone screen

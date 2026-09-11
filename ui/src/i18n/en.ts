@@ -5387,6 +5387,10 @@ export const EN = {
   'settings.cw.pitch.label': 'Sidetone pitch (Hz)',
   'settings.cw.pitch.hint':
     'CW tone pitch (300–1200 Hz) — the soundcard keyer tone and the CW scope zero-beat marker.',
+  'settings.cw.reverse.label': 'Reverse CW (CW-R)',
+  'settings.cw.reverse.aria': 'Use reverse CW on every band',
+  'settings.cw.reverse.hint':
+    "Put your radio in its <b>reverse</b> CW mode (CW-R / CW-L) instead of its normal CW, on <b>every band</b>. Off by default, so Nexus asks for plain CW and your radio stays where its own menu puts it. This changes only the pitch you hear on a signal — CW and CW-R transmit identically, and the station you work cannot tell — so it is a personal preference, not a band rule. Which sideband it actually selects depends on the radio: on a Yaesu it is CW-L, while on an Icom it follows that rig's own <b>CW Normal Side</b> menu. The Soundcard keyer ignores this, because it never puts the rig in CW at all.",
   'settings.cw.winkeyerPort.label': 'WinKeyer port',
   'settings.cw.winkeyerPort.placeholder': '{{example}} — K1EL WinKeyer serial port',
   'settings.cw.winkeyerPort.hint':

@@ -1136,6 +1136,28 @@ pub struct Settings {
     /// per-radio would split a single toolbar across two persistence scopes.
     #[serde(default = "default_cw_wpm")]
     pub cw_wpm: u32,
+    /// Command the rig's REVERSE CW mode (Hamlib `CWR`) instead of plain `CW`, on every band.
+    /// Off by default. Only the rig-shaped keyers (CAT/WinKeyer/Serial) consult it — the
+    /// soundcard keyer is not in CW at all. See [`rig_mode_on_sideband`](Self::rig_mode_on_sideband).
+    ///
+    /// A PREFERENCE, NOT A BAND RULE (operator 2026-09-11, reversing the 2026-07-24 ruling).
+    /// It is deliberately a plain on/off with no band term, because the thing it selects has no
+    /// band meaning: `CW` and `CWR` are the same emission on the same dial frequency and differ
+    /// only in which side of the carrier the RECEIVER's BFO sits — which is why `lib.rs` classes
+    /// both as `CatFamily::Cw` with no side, and why the IC-7300 manual calls CW-R a tool for
+    /// when "interfering signals are near a desired signal".
+    ///
+    /// ⚠️ IT CANNOT MEAN A SIDEBAND, and that is the whole reason this is a checkbox rather than
+    /// the 10 MHz rule it replaced. Hamlib's `CWR` is "CW *reverse* sideband" RELATIVE TO THE
+    /// RIG's own normal — `rig.h` names no side. Yaesu resolves it absolutely (mode char '7' is
+    /// CW-L, the LSB side); Icom does not, because its normal side is a user menu item —
+    /// **"CW Normal Side (Default: LSB)"**, IC-7300 manual 12-8 SET MODE → Function — so a
+    /// factory-default Icom's CW-R is the *USB* side. The same word means opposite sidebands on
+    /// the two brands, so no band rule expressed in `CW`/`CWR` can be right for both. The old
+    /// rule commanded `CWR` below 10 MHz to get CW-L and handed a default IC-7300 CW-U instead
+    /// — the exact inversion of its intent (reported by an IC-7300 operator on 40 m, 2026-09-11).
+    #[serde(default)]
+    pub cw_reverse: bool,
     /// How RTTY is keyed: "afsk" (default — soundcard two-tone audio through the rig in
     /// LSB; soundcard-clocked, the timing-cleanest path) or "fsk" (true FSK — bit-bang a
     /// serial control line into the rig's FSK input, rig in RTTY mode, unlocking its
@@ -3540,10 +3562,11 @@ impl Default for Settings {
             cw_key_line: default_cw_key_line(),
             cw_pitch_hz: 600.0,
             cw_wpm: default_cw_wpm(),
+            cw_reverse: false, // plain CW on every band; reverse is an opt-in preference
             rtty_backend: default_rtty_backend(), // "afsk" — soundcard-clocked, the robust default
             rtty_fsk_line: default_rtty_fsk_line(), // "dtr" (RTS stays free for PTT)
-            rtty_fsk_port: String::new(),         // "" = the CAT serial port
-            rtty_baud: default_rtty_baud(),       // true 45.45, never 45
+            rtty_fsk_port: String::new(), // "" = the CAT serial port
+            rtty_baud: default_rtty_baud(), // true 45.45, never 45
             rtty_shift_hz: default_rtty_shift_hz(), // 170 Hz — the HF standard
             rtty_reverse: false,
             ai_cw_enabled: true,
@@ -4732,13 +4755,30 @@ impl Settings {
                 // shapes the envelope); only the soundcard keyer keys an audio tone, so that
                 // one needs the rig on the SSB side — as a DATA submode, see its arm below.
                 //
-                // BAND-AWARE CW SIDEBAND (operator 2026-07-24, "40 m sets CW-U, should be
-                // CW-L"): same 10 MHz convention as the sideband rules below — CW-L
-                // (Hamlib `CWR`, Icom 0x07, Yaesu CW-L) on 160/80/40 m, CW-U (plain `CW`)
-                // at 30 m and up. The waterfall/zero-beat math already signs CWR as
-                // LSB-side, and the mode-apply helpers treat CWR exactly like CW.
+                // ⭐ PLAIN `CW` ON EVERY BAND — the rig's OWN normal CW (operator 2026-09-11,
+                // reversing the band-aware ruling of 2026-07-24, "40 m sets CW-U, should be
+                // CW-L"). `cw_reverse` is the opt-in that restores reverse CW, everywhere, for
+                // an operator who prefers it; it deliberately carries no band term.
+                //
+                // ⚠️ THE 10 MHz RULE IS GONE FROM THIS ARM ONLY, and it had to be: the rule was
+                // written in `CW`/`CWR`, and those two words do not name a sideband. Hamlib's
+                // `rig.h` calls them CW "normal"/"reverse" sideband — quoted, RELATIVE to the
+                // rig, naming no side. Yaesu resolves it absolutely (mode char '7' = CW-L, the
+                // LSB side). Icom does not: its normal side is a user menu item, "CW Normal
+                // Side (Default: LSB)" (IC-7300 manual 12-8 SET MODE → Function), so a
+                // factory-default Icom's CW-R is the UPPER side. Commanding `CWR` below 10 MHz
+                // to get CW-L therefore handed an IC-7300 exactly the CW-U the rule existed to
+                // prevent — and plain `CW` above 10 MHz handed it CW-L. Inverted on both bands,
+                // which is the field report this reversed (IC-7300 on 40 m, 2026-09-11).
+                //
+                // Plain `CW` is the one answer that is right on every brand, because it means
+                // "the rig's own normal CW" by definition — including on the four catalog
+                // models that carry no `CWR` at all (see `fallback_sideband` in tempo-audio).
+                // Nothing on the air changes either way: `CW` and `CWR` are the same emission
+                // on the same dial, which is why `lib.rs` classes both as `CatFamily::Cw` with
+                // no side, and the mode-apply helpers treat CWR exactly like CW.
                 CwKeyerBackend::Cat | CwKeyerBackend::WinKeyer | CwKeyerBackend::Serial => {
-                    if lsb { "CWR" } else { "CW" }.to_string()
+                    if self.cw_reverse { "CWR" } else { "CW" }.to_string()
                 }
                 // SOUNDCARD: a DATA submode, exactly like every other soundcard-audio path
                 // here (Digital, Keyboard, RTTY-AFSK, and SSTV's `PKTFM`) — and for their
@@ -4747,9 +4787,19 @@ impl Settings {
                 // the USB codec never reaches the modulator and the over radiates ZERO RF.
                 // That is the "keys but no audio" field report (Yaesu FTX-1, 2026-08-28).
                 //
-                // The SIDE is unchanged — the CW convention above still picks it — so this
-                // moves USB→PKTUSB and LSB→PKTLSB and nothing else, and it inherits the
-                // `data_modes_plain_ssb` opt-out that mic-jack interfaces need.
+                // The SIDE is the shared `lsb` — LSB below 10 MHz — so this moves USB→PKTUSB
+                // and LSB→PKTLSB and nothing else, and it inherits the `data_modes_plain_ssb`
+                // opt-out that mic-jack interfaces need.
+                //
+                // ⭐ THIS ARM KEEPS THE 10 MHz RULE THAT THE CW ARM ABOVE LOST (operator
+                // 2026-09-11), and the split is the point rather than an oversight: this path
+                // is not in CW at all. It keys an AUDIO TONE through a DATA submode, so the
+                // side genuinely decides where that tone lands relative to the dial — the same
+                // question RTTY-AFSK and FT8 answer, under the real, documented SSB/data
+                // convention. What the CW arm lost was a rule written in `CW`/`CWR`, two words
+                // that name no sideband on an Icom; `PKTLSB`/`PKTUSB` name one on every rig.
+                // `cw_reverse` is therefore NOT consulted here and must not be: it selects a
+                // BFO side in the rig's own CW mode, which this arm never enters.
                 //
                 // ⚠️ NEEDS-BENCH (no rig on this box). What is proven here is the MODE WORD
                 // Nexus commands. What is NOT proven is a radio putting RF out in DATA-U
@@ -5643,26 +5693,188 @@ mod tests {
         );
     }
 
+    /// ⭐ CW DOES NOT FOLLOW A BAND SIDEBAND CONVENTION — THERE ISN'T ONE.
+    ///
+    /// **This test asserted the opposite until 2026-09-11.** It was written for the operator's
+    /// 2026-07-24 ruling ("40 m CW must command CW-L (Hamlib CWR), not CW-U; same 10 MHz rule as
+    /// phone LSB/USB"), and the operator reversed that ruling on 2026-09-11 after an IC-7300
+    /// operator reported their 40 m CW being switched to CW-R. It is updated rather than deleted
+    /// so the reversal is legible: the assertions below are the same lines, inverted on purpose.
+    ///
+    /// **Why the old rule could not be right.** It was expressed in `CW`/`CWR`, and those two
+    /// words do not name a sideband. Hamlib's `rig.h` defines them as CW "normal"/"reverse"
+    /// sideband — quoted, relative to the rig, naming no side. Yaesu resolves it absolutely
+    /// (CAT mode char '7' = CW-L, the LSB side). Icom does not: its normal side is a user menu
+    /// item, "CW Normal Side (Default: LSB)" (IC-7300 instruction manual, 12-8 SET MODE →
+    /// Function), so a factory-default Icom's CW-R is the UPPER side. `CWR` below 10 MHz —
+    /// intended as CW-L — therefore handed a default IC-7300 exactly the CW-U the rule existed
+    /// to prevent, and plain `CW` at 20 m handed it CW-L. Inverted on both bands. No band rule
+    /// written in these two words can be right for both brands at once.
+    ///
+    /// Nothing on the air changes either way (`CW` and `CWR` are the same emission on the same
+    /// dial), so this is a receive preference — which is how the rig manuals and N1MM both
+    /// model it, and why it is now a checkbox with no band term.
     #[test]
-    fn cw_follows_the_band_sideband_convention() {
-        // Operator 2026-07-24: 40 m CW must command CW-L (Hamlib CWR), not CW-U.
-        // Same 10 MHz rule as phone LSB/USB and the soundcard-keyer arm.
+    fn cw_commands_the_rigs_own_normal_cw_on_every_band() {
         let mut s = Settings::default();
         s.operating_mode = OperatingMode::Cw;
         s.cw_keyer = CwKeyerBackend::Cat;
-        s.dial_mhz = 7.030; // 40 m
-        assert_eq!(s.rig_mode(), "CWR", "40 m CW is CW-L");
-        s.dial_mhz = 3.550; // 80 m
-        assert_eq!(s.rig_mode(), "CWR", "80 m CW is CW-L");
+        // The default is OFF, and THIS IS THE REPORTER'S CASE: a two-day-old user on the
+        // default keyer who changed nothing gets plain CW on 40 m, not CW-R.
+        assert!(!s.cw_reverse, "reverse CW is opt-in, never the default");
+        s.dial_mhz = 7.030; // 40 m — was "CWR" under the 2026-07-24 ruling
+        assert_eq!(s.rig_mode(), "CW", "40 m CW is the rig's own normal CW");
+        s.dial_mhz = 3.550; // 80 m — was "CWR"
+        assert_eq!(s.rig_mode(), "CW", "80 m CW is the rig's own normal CW");
         s.dial_mhz = 14.030; // 20 m
-        assert_eq!(s.rig_mode(), "CW", "20 m CW is CW-U");
-        s.dial_mhz = 10.110; // 30 m — at/above the 10 MHz line
-        assert_eq!(s.rig_mode(), "CW", "30 m CW is CW-U");
-        // The soundcard keyer keeps the same SIDE (audio-tone keying) — as the DATA submode
-        // its siblings use, see `the_soundcard_cw_keyer_commands_a_data_submode_…`.
+        assert_eq!(s.rig_mode(), "CW", "20 m CW is the rig's own normal CW");
+        s.dial_mhz = 10.110; // 30 m — the old 10 MHz line, now meaningless here
+        assert_eq!(s.rig_mode(), "CW", "30 m CW is the rig's own normal CW");
+        s.dial_mhz = 1.820; // 160 m — the far side of the old line
+        assert_eq!(s.rig_mode(), "CW", "160 m CW is the rig's own normal CW");
+        // The soundcard keyer is NOT in CW — it keys an audio tone through a DATA submode, so
+        // it keeps the 10 MHz rule. Pinned in full by
+        // `the_soundcard_cw_keyer_keeps_the_band_rule_the_cw_arm_lost`.
         s.cw_keyer = CwKeyerBackend::Soundcard;
         s.dial_mhz = 7.030;
         assert_eq!(s.rig_mode(), "PKTLSB");
+    }
+
+    /// The opt-in that replaced the band rule: ON means reverse CW on EVERY band, because the
+    /// operator's stated preference (2026-09-11) is CW-L everywhere, not below 10 MHz.
+    ///
+    /// The band coverage here is the point — a three-line checkbox that quietly kept a band term
+    /// would be the old ruling wearing a new name, and the 20 m row is the one that would catch
+    /// it. The old rule was handing this operator CW-U above 10 MHz all along, which is half of
+    /// why it was reversed.
+    #[test]
+    fn reverse_cw_is_an_opt_in_preference_with_no_band_term() {
+        let mut s = Settings::default();
+        s.operating_mode = OperatingMode::Cw;
+        s.cw_reverse = true;
+        for keyer in [
+            CwKeyerBackend::Cat,
+            CwKeyerBackend::WinKeyer,
+            CwKeyerBackend::Serial,
+        ] {
+            s.cw_keyer = keyer;
+            for mhz in [1.820, 3.550, 7.030, 10.110, 14.030, 21.030, 28.030] {
+                s.dial_mhz = mhz;
+                assert_eq!(
+                    s.rig_mode(),
+                    "CWR",
+                    "{keyer:?} at {mhz} MHz — reverse CW carries no band term"
+                );
+            }
+        }
+        // …and the soundcard keyer does not consult it AT ALL: it never enters the rig's CW
+        // mode, so there is no BFO side for the preference to select.
+        s.cw_keyer = CwKeyerBackend::Soundcard;
+        s.dial_mhz = 7.030;
+        assert_eq!(
+            s.rig_mode(),
+            "PKTLSB",
+            "soundcard ignores cw_reverse (40 m)"
+        );
+        s.dial_mhz = 14.030;
+        assert_eq!(
+            s.rig_mode(),
+            "PKTUSB",
+            "soundcard ignores cw_reverse (20 m)"
+        );
+    }
+
+    /// The preference has to SURVIVE A RESTART, and the seam it crosses is the one
+    /// `reference-settings-plumbing` warns about: a serde default turns a loud failure into a
+    /// silent reset. An operator who ticks this once and finds it off every launch is worse off
+    /// than before the setting existed, because now they think they have fixed it.
+    ///
+    /// The second half is the UPGRADE case, which is every existing station: a settings file
+    /// written before the field existed must load as OFF — the reversal's whole point — rather
+    /// than as anything the container-level `#[serde(default)]` might be talked into.
+    #[test]
+    fn reverse_cw_round_trips_and_a_pre_field_settings_file_loads_it_off() {
+        let dir = std::env::temp_dir().join("tempo_settings_cw_reverse");
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("settings.json");
+
+        let s = Settings {
+            cw_reverse: true,
+            ..Settings::default()
+        };
+        s.save(&path).unwrap();
+        assert!(
+            Settings::load(&path).cw_reverse,
+            "a ticked box must come back ticked"
+        );
+
+        // A pre-field file: the key is simply absent, which is exactly what every upgrading
+        // station's settings.json looks like.
+        std::fs::write(&path, br#"{"mycall":"W9XYZ"}"#).unwrap();
+        let back = Settings::load(&path);
+        assert_eq!(
+            back.mycall, "W9XYZ",
+            "the control — this file really did load"
+        );
+        assert!(
+            !back.cw_reverse,
+            "an upgrading station gets plain CW, not the old band rule's reverse"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// THE CONTROL FOR THE CHANGE ABOVE: the edit removed a band rule from ONE arm of a `match`
+    /// whose other arms read the SAME `lsb` boolean, so the thing worth proving is that it did
+    /// not leak sideways. Phone and the soundcard CW keyer must still follow the 10 MHz rule.
+    ///
+    /// Without this, `cw_commands_the_rigs_own_normal_cw_on_every_band` going green would be
+    /// consistent with having deleted the shared derivation outright.
+    #[test]
+    fn the_soundcard_cw_keyer_keeps_the_band_rule_the_cw_arm_lost() {
+        let mut s = Settings::default();
+
+        // Soundcard CW: a DATA submode, still LSB-side below 10 MHz and USB-side above —
+        // with the reverse preference BOTH off and on, since it must ignore it either way.
+        s.operating_mode = OperatingMode::Cw;
+        s.cw_keyer = CwKeyerBackend::Soundcard;
+        for reverse in [false, true] {
+            s.cw_reverse = reverse;
+            s.dial_mhz = 1.820;
+            assert_eq!(
+                s.rig_mode(),
+                "PKTLSB",
+                "160 m soundcard CW (reverse={reverse})"
+            );
+            s.dial_mhz = 7.030;
+            assert_eq!(
+                s.rig_mode(),
+                "PKTLSB",
+                "40 m soundcard CW (reverse={reverse})"
+            );
+            s.dial_mhz = 10.110;
+            assert_eq!(
+                s.rig_mode(),
+                "PKTUSB",
+                "30 m soundcard CW (reverse={reverse})"
+            );
+            s.dial_mhz = 14.030;
+            assert_eq!(
+                s.rig_mode(),
+                "PKTUSB",
+                "20 m soundcard CW (reverse={reverse})"
+            );
+        }
+
+        // Phone: the real, documented convention, untouched — and `cw_reverse` must not reach
+        // it, so it is asserted with the preference ON.
+        s.operating_mode = OperatingMode::Phone;
+        s.cw_reverse = true;
+        s.dial_mhz = 3.750;
+        assert_eq!(s.rig_mode(), "LSB", "80 m phone is still LSB");
+        s.dial_mhz = 7.200;
+        assert_eq!(s.rig_mode(), "LSB", "40 m phone is still LSB");
+        s.dial_mhz = 14.250;
+        assert_eq!(s.rig_mode(), "USB", "20 m phone is still USB");
     }
 
     /// ⭐ THE SOUNDCARD CW KEYER WAS THE ONE SOUNDCARD PATH THAT SKIPPED THE DATA SUBMODE
@@ -5722,11 +5934,14 @@ mod tests {
             s.cw_keyer = k;
             s.dial_mhz = 14.050;
             assert_eq!(s.rig_mode(), "CW", "{k:?} keys the rig in CW");
+            // Was "CWR" here until 2026-09-11 — the band rule this arm carried is gone; see
+            // `cw_commands_the_rigs_own_normal_cw_on_every_band`. What this test is about is
+            // unchanged: these three keyers command the rig's CW mode, never a DATA submode.
             s.dial_mhz = 7.030;
             assert_eq!(
                 s.rig_mode(),
-                "CWR",
-                "{k:?} keys the rig in CW-L below 10 MHz"
+                "CW",
+                "{k:?} keys the rig in CW below 10 MHz too"
             );
         }
     }

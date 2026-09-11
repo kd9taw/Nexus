@@ -17354,12 +17354,16 @@ mod tests {
         };
 
         for (dial, band, cw, data) in [
-            (7.030, "40m", "M CWR -1", "M PKTLSB 3000"),
+            // 40 m was `M CWR -1` until 2026-09-11, when the operator reversed the band-aware
+            // CW ruling: the rig-shaped keyers now command the rig's OWN normal CW on every
+            // band (`Settings::cw_reverse` is the opt-in that brings `CWR` back, everywhere).
+            // The DATA column is unchanged — that arm KEEPS the 10 MHz rule, which is why the
+            // two columns now differ in shape rather than matching.
+            (7.030, "40m", "M CW -1", "M PKTLSB 3000"),
             (14.030, "20m", "M CW -1", "M PKTUSB 3000"),
         ] {
             // The three TRUE-CW backends: the rig keys itself in CW, so the section commands
-            // the rig's own CW mode at its own default width (`-1`), band-aware — CW-L below
-            // 10 MHz, CW-U at 30 m and up (the operator's 2026-07-24 ruling).
+            // the rig's own CW mode at its own default width (`-1`).
             for keyer in [
                 CwKeyerBackend::Cat,
                 CwKeyerBackend::WinKeyer,

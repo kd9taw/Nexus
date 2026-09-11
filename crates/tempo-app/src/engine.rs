@@ -40851,10 +40851,28 @@ mod tests {
         // USB") would break FT8 through a GEO transponder: plain USB on a
         // normally-wired rig takes TX audio from the MIC and radiates zero RF.
         use crate::settings::OperatingMode;
+        // ⚠️ CW IS THE ONE ROW WHERE THE BIRD DOES NOT NAME A SIDE, and it stopped naming one
+        // on 2026-09-11 — it read `(Cw, "CW", "CWR")` until then. This is a CONSEQUENCE of the
+        // terrestrial reversal, not a separate satellite decision: `rig_mode_effective` reaches
+        // the bird's side through `Settings::rig_mode_on_sideband`, the very function whose CW
+        // arm stopped consulting `lsb`, so there is no separate satellite arm that could have
+        // been left alone. Preserving the old answer would have meant threading a parameter
+        // through that function purely to keep a behaviour carrying the same defect.
+        //
+        // And the defect applies here verbatim: `CWR` does not name a sideband. It is CW
+        // "reverse" RELATIVE TO THE RIG (Hamlib `rig.h`) — Yaesu's CW-L is the LSB side, but a
+        // factory-default Icom's CW-R is the UPPER side ("CW Normal Side (Default: LSB)",
+        // IC-7300 manual). An inverting transponder reverses the DOWNLINK SPECTRUM, which the
+        // dial and the Doppler math already handle; which side the receiver's BFO sits on is a
+        // pitch preference, not something the bird can dictate. So CW takes the same answer on
+        // both classes, and `Settings::cw_reverse` is what moves it.
+        //
+        // The claim this test exists to make is untouched: Phone and Digital still take the
+        // side FROM THE BIRD, and the section still names the form.
         for (om, usb_bird, lsb_bird) in [
             (OperatingMode::Phone, "USB", "LSB"),
             (OperatingMode::Digital, "PKTUSB", "PKTLSB"),
-            (OperatingMode::Cw, "CW", "CWR"),
+            (OperatingMode::Cw, "CW", "CW"),
         ] {
             for (class, want) in [(SSB_BIRD, usb_bird), (LSB_BIRD, lsb_bird)] {
                 let (mut e, _, _) = sat_station();
@@ -40871,6 +40889,26 @@ mod tests {
                 e.sat_tune_nominal(class, 1_000_000);
                 assert_eq!(e.rig_mode_effective(), want, "{om:?} on a {class:?} bird");
             }
+        }
+
+        // ⭐ ONE CW RULE IN THE TREE, NO SATELLITE SPECIAL CASE (operator 2026-09-11).
+        //
+        // The rows above prove CW ignores the BIRD's side. This proves the other half: it still
+        // obeys the OPERATOR's `cw_reverse`, on both bird classes, exactly as the terrestrial
+        // path does. Without it "CW takes the same answer on both classes" would also be
+        // satisfied by a satellite arm that had been hard-wired to `"CW"` and stopped listening
+        // to the preference at all — which is the special case this change exists to remove.
+        for class in [SSB_BIRD, LSB_BIRD] {
+            let (mut e, _, _) = sat_station();
+            e.set_operating_mode("cw", false);
+            e.settings.cw_reverse = true;
+            e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
+            e.sat_tune_nominal(class, 1_000_000);
+            assert_eq!(
+                e.rig_mode_effective(),
+                "CWR",
+                "reverse CW reaches a {class:?} bird on the same terms as every band"
+            );
         }
     }
 
