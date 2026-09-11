@@ -1996,6 +1996,8 @@ for (const {applicationVersion,operating,sessionLayout} of [...[1,2,3,4,5,6,7,8,
     if(applicationVersion>=10){await until(`document.querySelector('.fieldday input:not([type=checkbox])')?.value==='K9TEST'`);assert.equal(await evaluate(`!!document.querySelector('.fd-bonuses-list')`),false)}
     assert.equal(await evaluate('window.__imagePolicyViolations.length'),0,'all rendered image sources satisfy the hosted image policy')
     assert.equal(exceptions,0,'actual Nexus must render and reconnect without runtime exceptions')
+    await click(`document.querySelector('.remote-session-toggle')`)
+    await until(`document.querySelector('.remote-session-toggle')?.getAttribute('aria-expanded')==='true'`)
     await click(button('Disconnect and return to stations'))
     await until(`!!${button('Observe station')}`)
     await click(button('Observe station'))
