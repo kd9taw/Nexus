@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import App from '../App'
-import {LoggingAuthority,RemoteOperationsContext} from './operations'
+import {RemoteOperationsContext} from './operations'
+import { SessionStatus } from './SessionStatus'
 import { controlTransport } from './control-transport'
 import { WheelTuning } from './wheel-tuning'
 import { RemoteWheelTuningContext } from './wheel-tuning-context'
@@ -91,12 +92,7 @@ export function BrowserApplication({ connection, disconnect }: { connection: Hos
   }, [client, phase])
   const stale = phase !== 'ready' || client.age('get_snapshot') >= APPLICATION_TIMEOUT_MS
   useEffect(() => { if (stale) tuning?.cancel() }, [stale, tuning])
-  const status = <div className="remote-application-status" role="status">
-    <strong>{t('remote.browserWorkspace')}</strong>
-    {connection.operations&&<LoggingAuthority client={connection.operations}/>}
-    <span>{stale ? t('remote.applicationUnavailable') : (connection.operations?.operationVersion ?? 0) >= 2 ? t('remote.controlPreview') : connection.operations?.enabled ? t('remote.applicationLoggingPreview') : t('remote.applicationObserver')}</span>
-    <button type="button" className="remote-button" onClick={disconnect}>{t('remote.disconnect')}</button>
-  </div>
+  const status = <SessionStatus client={connection.operations} stale={stale} disconnect={disconnect} />
   if (!boot) return <div className="app remote-monitor-app remote-service-app">
     {status}
     <main className="rm-scroll"><div className="rm-content">

@@ -1,23 +1,30 @@
 /* Session status joins the existing app's flex column; the Nexus cockpit owns
    its layout and scroll regions. Stale data stays mounted to preserve UI state. */
 .remote-application-status {
-  display: flex;
-  align-items: center;
   flex: 0 0 auto;
-  flex-wrap: wrap;
-  gap: 0.5em 1em;
+  min-width: 0;
   padding: 0.45em 0.8em;
   color: var(--text);
   background: var(--panel);
   border-bottom: 1px solid var(--border);
 }
-.remote-application-status span { flex: 1 1 18em; }
 .remote-application-status button { min-height: 48px; }
 .remote-application-status {
   max-height: min(18em, calc(.4 * var(--vh-eff, 100vh)));
   overflow: auto;
 }
-.remote-control-result { display: flex; flex-wrap: wrap; gap: .5em; min-width: 0; }
+.remote-session-row { display: flex; align-items: flex-start; gap: .5em; min-width: 0; }
+.remote-session-row > :first-child { flex: 1 1 0; min-width: 0; }
+.remote-session-row .remote-logging-authority { min-width: 0; }
+.remote-session-row .remote-logging-authority button { min-width: 0; white-space: normal; }
+.remote-session-toggle { display: flex; align-items: center; justify-content: center; gap: .5em; flex: 0 0 auto; }
+.remote-session-toggle svg { flex: 0 0 auto; }
+.remote-session-info { padding-top: .5em; min-width: 0; }
+.remote-session-info p, .remote-session-unavailable { margin: .5em 0; overflow-wrap: anywhere; }
+.remote-session-info[hidden] { display: none; }
+[data-viewport='xs'] .remote-session-toggle { width: 48px; padding-inline: 0; }
+[data-viewport='xs'] .remote-session-toggle > span { display: none; }
+.remote-control-result { display: flex; flex: 1 1 100%; flex-wrap: wrap; gap: .5em; min-width: 0; }
 .remote-view-unavailable { padding: 1em; overflow: auto; }
 .remote-insights-view {
   display: flex;

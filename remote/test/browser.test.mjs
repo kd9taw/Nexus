@@ -567,21 +567,21 @@ for (const {applicationVersion,operating,sessionLayout} of [...[1,2,3,4,5,6,7,8,
         if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,`session-${width}-${zoom}-${theme}.png`),Buffer.from(shot.data,'base64'));await writeFile(join(artifacts,`session-${width}-${zoom}-${theme}.json`),JSON.stringify(shape,null,2))}
         assert.ok(shape.height<=Math.min(200,height/4),`Session status must leave at least three quarters of the screen for Nexus: ${JSON.stringify({width,height,zoom,theme,shape})}`)
         assert.ok(shape.releaseVisible&&shape.docW<=width+1&&shape.docH<=height+1,'control release must remain visible without scrolling')
-        assert.equal(await evaluate(`document.querySelector('.remote-logging-authority')?.closest('details')===null`),true)
-        const info=`document.querySelector('.remote-session-info > summary')`
-        await click(info);await until(`document.querySelector('.remote-session-info')?.open===true`)
+        assert.equal(await evaluate(`document.querySelector('.remote-logging-authority')?.closest('.remote-session-info')===null`),true)
+        const info=`document.querySelector('.remote-session-toggle')`
+        await click(info);await until(`document.querySelector('.remote-session-toggle')?.getAttribute('aria-expanded')==='true'`)
         const disconnect=`document.querySelector('.remote-session-info button')`
         await evaluate(`${disconnect}.scrollIntoView({block:'center',behavior:'instant'})`);await settledLayout()
         assert.equal(await evaluate(`(()=>{const b=${disconnect},r=b.getBoundingClientRect();return b.textContent==='Disconnect and return to stations'&&b.contains(document.elementFromPoint(r.left+r.width/2,r.top+r.height/2))})()`),true)
         assert.equal(await evaluate(`document.querySelector('.remote-session-info')?.textContent.includes('Remote transmission remains unavailable')`),true)
-        await click(info);await until(`document.querySelector('.remote-session-info')?.open===false`)
+        await click(info);await until(`document.querySelector('.remote-session-toggle')?.getAttribute('aria-expanded')==='false'`)
         assert.equal(loggingLease,lease,'presentation cannot release or replace authority')
         assert.equal(await evaluate(`document.querySelector('.app')===window.__sessionApp`),true,'session details must preserve the Nexus component tree')
         checks.push({width,height,zoom,theme,shape})
       }
       applicationAvailable=false
       await until(`document.querySelector('.app')?.dataset.remoteStale==='true'`)
-      const loss=await evaluate(`(()=>{const e=document.querySelector('.remote-application-status'),warning=e.querySelector('.remote-session-unavailable');return {visible:!!warning&&warning.getBoundingClientRect().height>0&&warning.closest('details')===null,text:e.textContent}})()`)
+      const loss=await evaluate(`(()=>{const e=document.querySelector('.remote-application-status'),warning=e.querySelector('.remote-session-unavailable');return {visible:!!warning&&warning.getBoundingClientRect().height>0&&warning.closest('.remote-session-info')===null,text:e.textContent}})()`)
       assert.ok(loss.visible&&loss.text.includes('Station data unavailable'),'loss must remain visible outside the collapsed details')
       applicationAvailable=true
       await until(`document.querySelector('.app')?.dataset.remoteStale!=='true'`)
