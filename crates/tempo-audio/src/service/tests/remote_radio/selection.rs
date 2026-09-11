@@ -578,21 +578,54 @@ fn routed_frequency_uses_one_confirmed_handoff_and_never_queues_the_incoming_pro
             assert!(!outgoing_writes
                 .iter()
                 .any(|line| line.starts_with("F ") || line.starts_with("M ")));
-            for now in [200.0, 400.0, 800.0, 1600.0, 2400.0] {
+            let active_peer = if confirmed { &incoming } else { &outgoing };
+            let reads = active_peer
+                .lines
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|line| *line == "f")
+                .count();
+            let started = now_unix_ms();
+            for delta in [200.0, 400.0, 800.0, 1600.0, 2400.0] {
                 s.state
                     .step(
                         &s.engine,
                         &mut s.backend,
                         &mut s.rig,
                         &no_sinks(),
-                        now,
+                        started + delta,
                         &mut mock_reopen_audio(),
                         &mut mock_reopen_rig(),
                         &mut StationSinks::new(),
                     )
                     .unwrap();
             }
-            assert_eq!(super::fm::writes(&incoming), incoming_writes);
+            assert!(
+                active_peer
+                    .lines
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|line| *line == "f")
+                    .count()
+                    > reads,
+                "the subsequent native ticks must perform actual dial polling"
+            );
+            let without_unkey = |lines: Vec<String>| {
+                lines
+                    .into_iter()
+                    .filter(|line| line != "T 0")
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(
+                without_unkey(super::fm::writes(&incoming)),
+                without_unkey(incoming_writes)
+            );
+            assert_eq!(
+                without_unkey(super::fm::writes(&outgoing)),
+                without_unkey(outgoing_writes)
+            );
             let e = engine_lock(&s.engine);
             assert_eq!(e.settings().active_radio, if confirmed { 1 } else { 0 });
             if confirmed {
