@@ -64,8 +64,8 @@ async function chrome() {
   } catch(error) { ws?.close(); if(!exited)process.kill(-child.pid,'SIGTERM'); await rm(profile,{recursive:true,force:true,maxRetries:8,retryDelay:100}); throw error }
 }
 
-for (const {applicationVersion,operating,sessionLayout,quickLayout,contactContinuity} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,14].map(applicationVersion=>({applicationVersion,operating:false})),{applicationVersion:14,operating:true},{applicationVersion:14,operating:true,sessionLayout:true},{applicationVersion:14,operating:true,quickLayout:true},{applicationVersion:14,operating:true,contactContinuity:true}]) test(`compiled hosted browser ${contactContinuity?'contact continuity':quickLayout?'quick layout':sessionLayout?'session layout':operating?'operations':`v${applicationVersion}`} completes PKCE, local device approval, observation and viewport checks`, { timeout: applicationVersion >= 14 ? 540000 : applicationVersion >= 13 ? 420000 : 180000 }, async () => {
-  const app=await runtime(), artifacts=process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS ? join(process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS, contactContinuity?'contact-continuity':quickLayout?'quick-layout':sessionLayout?'session-layout':operating?'operations':`v${applicationVersion}`) : undefined
+for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='phone',contactContinuity} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,14].map(applicationVersion=>({applicationVersion,operating:false})),{applicationVersion:14,operating:true},{applicationVersion:14,operating:true,sessionLayout:true},{applicationVersion:14,operating:true,quickLayout:true},{applicationVersion:14,operating:true,quickLayout:true,quickMode:'cw'},{applicationVersion:14,operating:true,contactContinuity:true}]) test(`compiled hosted browser ${contactContinuity?'contact continuity':quickLayout?`quick layout${quickMode==='cw'?' CW':''}`:sessionLayout?'session layout':operating?'operations':`v${applicationVersion}`} completes PKCE, local device approval, observation and viewport checks`, { timeout: applicationVersion >= 14 ? 540000 : applicationVersion >= 13 ? 420000 : 180000 }, async () => {
+  const app=await runtime(), artifacts=process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS ? join(process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS, contactContinuity?'contact-continuity':quickLayout?`quick-layout${quickMode==='cw'?'-cw':''}`:sessionLayout?'session-layout':operating?'operations':`v${applicationVersion}`) : undefined
   let browser, station, producing=true, pauseObservations=false, producer, applicationProducer
   const results=[]
   try {
@@ -558,12 +558,12 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,contactContin
       loggingAllowed=true;stationControls=true
       await until(`!!${button('Take station control')}`);await click(button('Take station control'))
       await until(`document.querySelector('.remote-logging-authority')?.textContent.includes('Station control active')`)
-      await click(button('Phone'))
-      const call='.phone-cockpit .remote-log-entry .le-call'
+      await click(button(quickMode==='cw'?'CW':'Phone'))
+      const call=`.${quickMode}-cockpit .remote-log-entry .le-call`
       await until(`!!document.querySelector('${call}')`);await click(`document.querySelector('${call}')`)
       await browser.call('Input.insertText',{text:'N2QUICK'},session)
       const lease=loggingLease
-      await evaluate(`void(window.__quickNodes={app:document.querySelector('.app'),cockpit:document.querySelector('.phone-cockpit'),call:document.querySelector('${call}')})`)
+      await evaluate(`void(window.__quickNodes={app:document.querySelector('.app'),cockpit:document.querySelector('.${quickMode}-cockpit'),call:document.querySelector('${call}')})`)
       assert.equal(await evaluate(`document.querySelector('.app').dataset.remotePresentation??'full'`),'full','a new browser starts with the full Nexus interface')
       await click(`document.querySelector('.remote-session-toggle')`)
       await until(`!!${button('Quick Operate')}`)
@@ -574,8 +574,8 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,contactContin
       for(const [width,height,zoom]of [[390,844,1],[1280,800,1],[390,844,1.75],[1280,800,1.75]])for(const theme of ['dark','light']){
         await browser.call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false},session)
         await evaluate(`document.documentElement.style.setProperty('--ui-zoom','${zoom}');document.documentElement.dataset.theme='${theme}';window.dispatchEvent(new Event('resize'))`);await settledLayout();await settledLayout()
-        await evaluate(`document.querySelector('.app').scrollTop=0;document.querySelector('.shell').scrollTop=0;document.querySelector('.phone-cockpit').scrollTop=0`);await settledLayout()
-        const shape=await evaluate(`(()=>{const e=document.querySelector('${call}'),r=e.getBoundingClientRect(),nav=document.querySelector('.remote-quick-nav'),buttons=[...nav.querySelectorAll('button')];return {call:r.toJSON(),nav:nav.getBoundingClientRect().toJSON(),buttons:buttons.map(b=>{const r=b.getBoundingClientRect();return {name:b.getAttribute('aria-label')||b.textContent,visible:r.width>0&&r.height>0&&b.contains(document.elementFromPoint(r.left+r.width/2,r.top+r.height/2))}}),value:e.value,sameApp:document.querySelector('.app')===window.__quickNodes.app,sameCockpit:document.querySelector('.phone-cockpit')===window.__quickNodes.cockpit,sameInput:e===window.__quickNodes.call,horizontal:[...document.querySelectorAll('.phone-cockpit, .phone-cockpit *')].filter(e=>e.clientWidth>0&&e.scrollWidth>e.clientWidth+1&&/auto|scroll/.test(getComputedStyle(e).overflowX)).map(e=>({class:e.className,width:e.clientWidth,scrollWidth:e.scrollWidth})),vertical:[...document.querySelectorAll('.phone-cockpit, .phone-cockpit *')].filter(e=>e.clientHeight>0&&e.scrollHeight>e.clientHeight+1&&/auto|scroll/.test(getComputedStyle(e).overflowY)).map(e=>({class:e.className,height:e.clientHeight,scrollHeight:e.scrollHeight})),header:[...document.querySelector('.phone-cockpit .cockpit-header').children].map(e=>({class:e.className,text:e.textContent,rect:e.getBoundingClientRect().toJSON()})),docW:document.documentElement.scrollWidth,docH:document.documentElement.scrollHeight}})()`)
+        await evaluate(`document.querySelector('.app').scrollTop=0;document.querySelector('.shell').scrollTop=0;document.querySelector('.${quickMode}-cockpit').scrollTop=0`);await settledLayout()
+        const shape=await evaluate(`(()=>{const e=document.querySelector('${call}'),r=e.getBoundingClientRect(),nav=document.querySelector('.remote-quick-nav'),buttons=[...nav.querySelectorAll('button')];return {call:r.toJSON(),nav:nav.getBoundingClientRect().toJSON(),buttons:buttons.map(b=>{const r=b.getBoundingClientRect();return {name:b.getAttribute('aria-label')||b.textContent,visible:r.width>0&&r.height>0&&b.contains(document.elementFromPoint(r.left+r.width/2,r.top+r.height/2))}}),value:e.value,sameApp:document.querySelector('.app')===window.__quickNodes.app,sameCockpit:document.querySelector('.${quickMode}-cockpit')===window.__quickNodes.cockpit,sameInput:e===window.__quickNodes.call,horizontal:[...document.querySelectorAll('.${quickMode}-cockpit, .${quickMode}-cockpit *')].filter(e=>e.clientWidth>0&&e.scrollWidth>e.clientWidth+1&&/auto|scroll/.test(getComputedStyle(e).overflowX)).map(e=>({class:e.className,width:e.clientWidth,scrollWidth:e.scrollWidth})),vertical:[...document.querySelectorAll('.${quickMode}-cockpit, .${quickMode}-cockpit *')].filter(e=>e.clientHeight>0&&e.scrollHeight>e.clientHeight+1&&/auto|scroll/.test(getComputedStyle(e).overflowY)).map(e=>({class:e.className,height:e.clientHeight,scrollHeight:e.scrollHeight})),header:[...document.querySelector('.${quickMode}-cockpit .cockpit-header').children].map(e=>({class:e.className,text:e.textContent,rect:e.getBoundingClientRect().toJSON()})),docW:document.documentElement.scrollWidth,docH:document.documentElement.scrollHeight}})()`)
         if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,`quick-${width}-${zoom}-${theme}.png`),Buffer.from(shot.data,'base64'));await writeFile(join(artifacts,`quick-${width}-${zoom}-${theme}.json`),JSON.stringify(shape,null,2))}
         assert.ok(shape.sameApp&&shape.sameCockpit&&shape.sameInput&&shape.value==='N2QUICK','changing presentation must preserve the actual contact form and draft')
         assert.ok(shape.buttons.every(b=>b.visible)&&shape.docW<=width+1&&shape.docH<=height+1,'all Quick destinations and return to Full Nexus must be reachable')
@@ -594,19 +594,19 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,contactContin
         assert.fail(`Quick scope demand did not become ${present}`)
       }
       await waitScope(false)
-      await click(`document.querySelector('.phone-cockpit .remote-quick-details')`)
-      await until(`document.querySelector('.phone-cockpit .remote-quick-details')?.getAttribute('aria-expanded')==='true'`)
+      await click(`document.querySelector('.${quickMode}-cockpit .remote-quick-details')`)
+      await until(`document.querySelector('.${quickMode}-cockpit .remote-quick-details')?.getAttribute('aria-expanded')==='true'`)
       await waitScope(true)
-      const scope=`document.querySelector('.phone-cockpit .ph-scope canvas')`
+      const scope=`document.querySelector('.${quickMode}-cockpit .ph-scope canvas')`
       await evaluate(`${scope}.scrollIntoView({block:'center',behavior:'instant'})`);await settledLayout()
       assert.equal(await evaluate(`(()=>{const r=${scope}.getBoundingClientRect();return r.width>0&&r.height>0})()`),true)
-      await click(`document.querySelector('.phone-cockpit .remote-quick-details')`)
-      await until(`document.querySelector('.phone-cockpit .remote-quick-details')?.getAttribute('aria-expanded')==='false'`)
+      await click(`document.querySelector('.${quickMode}-cockpit .remote-quick-details')`)
+      await until(`document.querySelector('.${quickMode}-cockpit .remote-quick-details')?.getAttribute('aria-expanded')==='false'`)
       await waitScope(false)
       for(const [destination,view]of [['Hunt','needed'],['Log','logbook']]){
         await click(navButton(destination));await until(`document.querySelector('.app').dataset.remoteView==='${view}'`)
         assert.equal(await evaluate(`document.querySelector('${call}')===window.__quickNodes.call&&document.querySelector('${call}').value==='N2QUICK'`),true)
-        await click(navButton('Operate'));await until(`document.querySelector('.app').dataset.remoteView==='phone'`)
+        await click(navButton('Operate'));await until(`document.querySelector('.app').dataset.remoteView==='${quickMode}'`)
         assert.equal(loggingLease,lease);assert.equal(stationRequests.length,0);assert.equal(loggedRequests.length,0)
       }
       await click(navButton('Full Nexus'))
@@ -627,15 +627,15 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,contactContin
         assert.fail('Quick gestures need a fresh native control window')
       }
       for(const operate of [true,false]){
-        await freshWindow();await click(`document.querySelector('.phone-cockpit .amp-op')`)
-        await until(`document.querySelector('.phone-cockpit .amp-op')?.classList.contains('on')===${operate}`)
+        await freshWindow();await click(`document.querySelector('.${quickMode}-cockpit .amp-op')`)
+        await until(`document.querySelector('.${quickMode}-cockpit .amp-op')?.classList.contains('on')===${operate}`)
         assert.deepEqual(stationRequests[stationRequests.length-1].action,{action:'amplifier.operate',expectedOperate:!operate,operate})
       }
       assert.equal(stationRequests.length,2);assert.equal(loggedRequests.length,0)
       // A lost append reply must survive Full/Quick switches without replay.
       loseLogReply=true
-      await freshWindow();await click(`document.querySelector('.phone-cockpit .le-log-btn')`)
-      await until(`document.querySelector('.phone-cockpit .remote-log-entry')?.textContent.includes('may already be logged')`,12000)
+      await freshWindow();await click(`document.querySelector('.${quickMode}-cockpit .le-log-btn')`)
+      await until(`document.querySelector('.${quickMode}-cockpit .remote-log-entry')?.textContent.includes('may already be logged')`,12000)
       assert.equal(loggedRequests.length,1);assert.equal(loggedRequests[0].record.call,'N2QUICK')
       await click(navButton('Full Nexus'));await until(`document.querySelector('.app').dataset.remotePresentation==='full'`)
       assert.equal(await evaluate(`document.querySelector('${call}')===window.__quickNodes.call&&document.querySelector('${call}').value==='N2QUICK'`),true)
@@ -645,23 +645,23 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,contactContin
       await sleep(1000);assert.equal(loggedRequests.length,1,'presentation must not replay an unconfirmed QSO')
       loseLogReply=false
       await evaluate(`(()=>{window.__quickResultEvents=[];for(const type of ['pointerdown','pointerup','click'])document.addEventListener(type,e=>{window.__quickResultEvents.push({type,target:e.target?.outerHTML,at:performance.now(),x:e.clientX,y:e.clientY})},{capture:true})})()`)
-      await click(`[...document.querySelectorAll('.phone-cockpit .remote-log-entry button')].find(e=>e.textContent==='Check submitted QSO result')`)
+      await click(`[...document.querySelectorAll('.${quickMode}-cockpit .remote-log-entry button')].find(e=>e.textContent==='Check submitted QSO result')`)
       if(artifacts)await writeFile(join(artifacts,'result-click.json'),JSON.stringify({events:await evaluate('window.__quickResultEvents'),wire:operationWire.slice(-8),session:await sessionDiagnostic()},null,2))
-      await until(`document.querySelector('.phone-cockpit .remote-log-entry')?.textContent.includes('QSO saved to the station log file')`)
+      await until(`document.querySelector('.${quickMode}-cockpit .remote-log-entry')?.textContent.includes('QSO saved to the station log file')`)
       assert.equal(loggedRequests.length,1);assert.equal(await evaluate(`document.querySelector('${call}').value`),'')
       await click(`document.querySelector('${call}')`);await browser.call('Input.insertText',{text:'N3QSO'},session)
       applicationAvailable=false
       await until(`document.querySelector('.app').dataset.remoteStale==='true'`)
-      assert.equal(await evaluate(`document.querySelector('${call}')===window.__quickNodes.call&&document.querySelector('${call}').value==='N3QSO'&&document.querySelector('.phone-cockpit .le-log-btn').disabled&&document.querySelector('.phone-cockpit .amp-op').disabled`),true)
+      assert.equal(await evaluate(`document.querySelector('${call}')===window.__quickNodes.call&&document.querySelector('${call}').value==='N3QSO'&&document.querySelector('.${quickMode}-cockpit .le-log-btn').disabled&&document.querySelector('.${quickMode}-cockpit .amp-op').disabled`),true)
       applicationAvailable=true
       await until(`document.querySelector('.app').dataset.remoteStale!=='true'`)
       await until(`!!${button('Take station control')}`)
       assert.equal(loggingLease,null,'data recovery must not restore station authority')
       assert.equal(await evaluate(`document.querySelector('${call}')===window.__quickNodes.call&&document.querySelector('${call}').value==='N3QSO'`),true)
       assert.equal(loggedRequests.length,1);assert.equal(stationRequests.length,2)
-      if(artifacts)await writeFile(join(artifacts,'quick-results.json'),JSON.stringify({checks,stationActions:stationRequests.map(r=>r.action),logWrites:loggedRequests.length,presentationActions:0,leasePreservedBeforeLoss:true,reacquireRequired:true,scopeDemand:true,huntLogDrafts:true,unknownResultPreserved:true,explicitResultCheck:true,exceptions,unexpectedMessages},null,2))
+      if(artifacts)await writeFile(join(artifacts,'quick-results.json'),JSON.stringify({mode:quickMode,checks,stationActions:stationRequests.map(r=>r.action),logWrites:loggedRequests.length,presentationActions:0,leasePreservedBeforeLoss:true,reacquireRequired:true,scopeDemand:true,huntLogDrafts:true,unknownResultPreserved:true,explicitResultCheck:true,exceptions,unexpectedMessages},null,2))
       assert.equal(exceptions,0);assert.equal(unexpectedMessages,0)
-      console.log('Compiled Quick presentation: eight layouts, retained drafts, hidden display retirement, native amp readbacks, one QSO receipt and explicit recovery passed');return
+      console.log('Compiled Quick '+quickMode+' presentation: eight layouts, retained drafts, hidden display retirement, native amp readbacks, one QSO receipt and explicit recovery passed');return
     }
     if(contactContinuity){
       loggingAllowed=true;stationControls=true
