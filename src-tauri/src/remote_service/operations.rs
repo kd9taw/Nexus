@@ -1,6 +1,7 @@
 //! Station-owned authority for manual logging and typed station controls.
 //! Cloud admission routes an approved browser; only a local, boot-scoped grant
-//! permits a lease. No Tauri command tunnel or transmit grant. Deferred hardware
+//! permits a lease. Transmit permission is separately granted locally; no browser
+//! transmit command is exposed by this authority foundation. Deferred hardware
 //! writes carry a revocable permit and a separate completion receipt.
 //! A log append already begun cannot be rolled back on disconnect. Its bounded
 //! receipt remains queryable by the same device while locally permitted.
@@ -14,7 +15,7 @@ use std::sync::{
     Mutex,
 };
 use std::time::{Duration, Instant};
-use tempo_app::remote_control::{Completion, Outcome, Revocation};
+use tempo_app::remote_control::{transmit::TransmitAuthority, Completion, Outcome, Revocation};
 
 mod station;
 
@@ -221,6 +222,7 @@ struct Core {
     boot: Option<String>,
     grants: BTreeSet<String>,
     control_grants: BTreeSet<String>,
+    transmit_grants: BTreeSet<String>,
     lease: Option<Lease>,
     revision: u64,
     context: Option<Vec<u8>>,
@@ -236,6 +238,7 @@ impl Default for Core {
             boot: super::query::snapshot_id().ok(),
             grants: BTreeSet::new(),
             control_grants: BTreeSet::new(),
+            transmit_grants: BTreeSet::new(),
             lease: None,
             revision: 0,
             context: None,
@@ -252,10 +255,15 @@ pub struct Authority {
     lease_epoch: AtomicU64,
     core: Mutex<Core>,
     hardware: Revocation,
+    transmit: TransmitAuthority,
     #[cfg(test)]
     before_sync: Option<Box<dyn Fn() + Send + Sync>>,
 }
 impl Authority {
+    fn revoke_execution(&self) {
+        self.hardware.revoke();
+        self.transmit.revoke();
+    }
     pub fn with_spots(spots: Option<crate::SharedSpots>) -> Self {
         Self {
             spots,
@@ -265,13 +273,13 @@ impl Authority {
     /// Synchronous invalidation does not wait for an in-flight file operation.
     /// Its epoch is reconciled before any next request or local grant.
     pub fn invalidate(&self) {
-        self.hardware.revoke();
+        self.revoke_execution();
         let _ = self
             .epoch
             .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_add(1));
     }
     pub fn start_connection(&self) -> u64 {
-        self.hardware.revoke();
+        self.revoke_execution();
         self.connection
             .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_add(1))
             .map_or(u64::MAX, |n| n + 1)
@@ -282,7 +290,7 @@ impl Authority {
             .compare_exchange(id, id.saturating_add(1), Ordering::SeqCst, Ordering::SeqCst)
             .is_ok()
         {
-            self.hardware.revoke();
+            self.revoke_execution();
         }
     }
     fn reconcile(&self, c: &mut Core, now: Instant) -> Result<(), &'static str> {
@@ -306,13 +314,14 @@ impl Authority {
             c.epoch = epoch;
             c.grants.clear();
             c.control_grants.clear();
+            c.transmit_grants.clear();
             c.lease = None;
             c.windows.clear();
             c.context = None;
             self.advance(c)?;
         }
         if c.lease.as_ref().is_some_and(|l| now >= l.until) {
-            self.hardware.revoke();
+            self.revoke_execution();
             c.lease = None;
             c.windows.clear();
             self.advance(c)?;
@@ -335,7 +344,7 @@ impl Authority {
     }
     fn advance(&self, c: &mut Core) -> Result<(), &'static str> {
         if c.revision >= MAX_COUNTER {
-            self.hardware.revoke();
+            self.revoke_execution();
             c.windows.clear();
             c.lease = None;
             return Err("authorityUnavailable");
@@ -357,7 +366,7 @@ impl Authority {
         } else {
             c.grants.remove(device);
             if c.lease.as_ref().is_some_and(|l| l.device == device) {
-                self.hardware.revoke();
+                self.revoke_execution();
                 c.lease = None;
                 c.windows.clear();
                 self.advance(&mut c)?;
@@ -378,11 +387,33 @@ impl Authority {
             c.control_grants.insert(device.to_string());
         } else {
             c.control_grants.remove(device);
+            c.transmit_grants.remove(device);
             if c.lease.as_ref().is_some_and(|l| l.device == device) {
-                self.hardware.revoke();
+                self.revoke_execution();
                 c.lease = None;
                 c.windows.clear();
                 self.advance(&mut c)?;
+            }
+        }
+        Ok(())
+    }
+    /// Local permission is boot-scoped and never implied by a receiver grant.
+    /// Removing it revokes the current TX permit without waiting for Engine.
+    pub fn permit_transmit(&self, device: &str, allow: bool) -> Result<(), &'static str> {
+        if !identifier(device) {
+            return Err("invalidRequest");
+        }
+        let mut c = self.core.try_lock().map_err(|_| "remoteBusy")?;
+        self.reconcile(&mut c, Instant::now())?;
+        if allow {
+            if !c.control_grants.contains(device) {
+                return Err("localPermissionRequired");
+            }
+            c.transmit_grants.insert(device.to_string());
+        } else {
+            c.transmit_grants.remove(device);
+            if c.lease.as_ref().is_some_and(|l| l.device == device) {
+                self.transmit.revoke();
             }
         }
         Ok(())
@@ -392,7 +423,7 @@ impl Authority {
     /// survive; a controller must explicitly acquire a fresh lease afterward.
     pub fn disconnect_session(&self, session: &str) {
         if identifier(session) {
-            self.hardware.revoke();
+            self.revoke_execution();
             let _ = self
                 .lease_epoch
                 .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_add(1));
@@ -405,7 +436,7 @@ impl Authority {
         if self.reconcile(&mut c, Instant::now()).is_err() {
             return json!({"devices":[],"controller":null});
         }
-        json!({"devices":c.grants,"controlDevices":c.control_grants,"controller":c.lease.as_ref().map(|l|l.device.as_str())})
+        json!({"devices":c.grants,"controlDevices":c.control_grants,"transmitDevices":c.transmit_grants,"controller":c.lease.as_ref().map(|l|l.device.as_str())})
     }
     fn context(
         &self,
@@ -549,13 +580,22 @@ impl Authority {
                     return Err("notController");
                 }
                 l.until = now + LEASE;
+                let until = l.until;
+                if c.transmit_grants.contains(device) {
+                    if let Some(permit) = self.transmit.permit(until) {
+                        // An accepted heartbeat extends only an already-owned,
+                        // unexpired transmission. It cannot arm or take over TX.
+                        engine.renew_remote_transmit(permit, now);
+                    }
+                }
+                engine.poll_remote_transmit(now);
                 Self::state(&mut c, session, device, now, control)
             }
             Request::Release { lease_id, .. } => {
                 if c.lease.as_ref().is_some_and(|l| {
                     l.id == *lease_id && l.session == session && l.device == device
                 }) {
-                    self.hardware.revoke();
+                    self.revoke_execution();
                     c.lease = None;
                     c.windows.clear();
                     self.advance(&mut c)?;

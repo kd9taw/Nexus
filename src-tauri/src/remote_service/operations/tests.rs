@@ -16,6 +16,8 @@ mod selection;
 #[cfg(feature = "radio")]
 #[path = "spot_tests.rs"]
 mod spot;
+#[path = "transmit_tests.rs"]
+mod transmit;
 use super::*;
 use std::sync::Arc;
 #[cfg(feature = "radio")]

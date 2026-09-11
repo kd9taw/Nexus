@@ -32,6 +32,7 @@ pub struct Status {
     observation_generation: Option<String>,
     logging_permissions: Vec<String>,
     station_permissions: Vec<String>,
+    transmit_permissions: Vec<String>,
     logging_controller: Option<String>,
 }
 #[derive(Clone, Serialize, Deserialize)]
@@ -52,6 +53,11 @@ pub enum Action {
         allow: bool,
     },
     StationPermission {
+        #[serde(rename = "deviceId")]
+        device_id: String,
+        allow: bool,
+    },
+    TransmitPermission {
         #[serde(rename = "deviceId")]
         device_id: String,
         allow: bool,
@@ -256,6 +262,8 @@ impl Service {
         status.logging_controller = operations["controller"].as_str().map(str::to_string);
         status.station_permissions =
             serde_json::from_value(operations["controlDevices"].clone()).unwrap_or_default();
+        status.transmit_permissions =
+            serde_json::from_value(operations["transmitDevices"].clone()).unwrap_or_default();
         status.observation_generation = enabled.then(|| control.generation.to_string());
         if !enabled && ["connected", "connecting", "reconnecting"].contains(&status.phase.as_str())
         {
@@ -282,7 +290,8 @@ impl Service {
     pub async fn action(&self, action: Action) -> Result<Status, &'static str> {
         match &action {
             Action::LoggingPermission { device_id, allow }
-            | Action::StationPermission { device_id, allow } => {
+            | Action::StationPermission { device_id, allow }
+            | Action::TransmitPermission { device_id, allow } => {
                 let status = self.status()?;
                 if *allow
                     && (status.observation_generation.is_none()
@@ -299,10 +308,14 @@ impl Service {
                     .map_err(|_| "serviceUnavailable")?
                     .operations
                     .clone();
-                if matches!(&action, Action::StationPermission { .. }) {
-                    operations.permit_station(device_id, *allow)?;
-                } else {
-                    operations.permit(device_id, *allow)?;
+                match &action {
+                    Action::StationPermission { .. } => {
+                        operations.permit_station(device_id, *allow)?
+                    }
+                    Action::TransmitPermission { .. } => {
+                        operations.permit_transmit(device_id, *allow)?
+                    }
+                    _ => operations.permit(device_id, *allow)?,
                 }
                 return self.status();
             }
@@ -426,6 +439,7 @@ impl Controller {
         match action {
             Action::LoggingPermission { .. }
             | Action::StationPermission { .. }
+            | Action::TransmitPermission { .. }
             | Action::TakeOverLogging {} => return Err("invalidRequest"),
             Action::Begin { name } => {
                 if self.binding.is_some() || self.pending.is_some() || !valid_name(&name) {
