@@ -135,6 +135,78 @@ impl Station {
 }
 
 #[test]
+fn saved_remote_rx_gain_reaches_the_existing_audio_owner_once_without_tx_or_a_rebuild() {
+    let peer = retuning_peer(14_074_000, "PKTUSB", |_, _| None);
+    let mut s = Station::new(&peer);
+    let reopens = std::cell::Cell::new(0);
+    let mut step = |s: &mut Station| {
+        s.state
+            .step(
+                &s.engine,
+                &mut s.backend,
+                &mut s.rig,
+                &no_sinks(),
+                0.0,
+                &mut |_: &Transport| {
+                reopens.set(reopens.get() + 1);
+                    Err("gain must not reopen capture".into())
+                },
+                &mut mock_reopen_rig(),
+                &mut StationSinks::new(),
+            )
+            .unwrap();
+    };
+    {
+        let mut e = engine_lock(&s.engine);
+        let connection = e
+            .remote_monitor_observation()
+            .radio
+            .readings
+            .cat
+            .unwrap()
+            .connection_generation;
+        let radio = e.settings().active_radio;
+        let expected = e.settings().rx_gain;
+        e.save_remote_rx_gain(
+            radio,
+            expected,
+            2.5,
+            connection,
+            &s.authority
+                .permit(Instant::now() + Duration::from_secs(5))
+                .unwrap(),
+        )
+        .unwrap();
+    }
+    assert!(
+        s.backend.rx_gain_calls.is_empty(),
+        "a saved setting alone is not an applied audio update"
+    );
+    assert!(s.backend.tx_level_calls.is_empty());
+    step(&mut s);
+    assert_eq!(s.backend.rx_gain_calls, [2.5]);
+    assert!(s.backend.tx_level_calls.is_empty());
+    assert_eq!(s.state.applied.rx_gain, 2.5);
+    s.authority.revoke();
+    for _ in 0..3 {
+        step(&mut s);
+    }
+    assert_eq!(s.backend.rx_gain_calls, [2.5]);
+    assert!(writes(&peer).is_empty());
+    assert!(s.backend.played.is_empty());
+    assert_eq!(s.backend.flush_calls, 0);
+    engine_lock(&s.engine).set_rx_gain(1.5);
+    step(&mut s);
+    assert_eq!(
+        s.backend.rx_gain_calls,
+        [2.5, 1.5],
+        "the local control uses the same live owner"
+    );
+    assert!(!engine_lock(&s.engine).tx_enabled());
+    assert_eq!(reopens.get(), 0);
+}
+
+#[test]
 fn tier_entry_uses_the_actual_owner_once_and_same_tier_never_sends_a_command() {
     use tempo_app::dto::Tier;
     let peer = retuning_peer(14_074_000, "PKTUSB", |_, _| None);

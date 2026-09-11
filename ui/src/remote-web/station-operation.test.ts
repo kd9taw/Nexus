@@ -2,6 +2,17 @@ import { describe, expect, it } from 'vitest'
 import { actionCapability, controlContext, controlOutcome, stationAction } from './station-operation'
 
 describe('closed station operating requests', () => {
+  it('binds gain to the saved active radio and prior value under its own capability', () => {
+    const choice = { action: 'receiver.rxGain', radioId: 3, expectedSettingsRevision: 'a'.repeat(64), expectedGain: 1, gain: 2.5 }
+    expect(stationAction(choice)).toEqual(choice)
+    expect(actionCapability(stationAction(choice))).toBe('receiverGain')
+    for (const extra of ['settings', 'command', 'txLevel', 'path', 'expectedTier']) expect(() => stationAction({ ...choice, [extra]: true })).toThrow()
+    for (const gain of [NaN, Infinity, -Infinity, 0.9, 8.1, 1, '2', null]) expect(() => stationAction({ ...choice, gain })).toThrow()
+    for (const expectedGain of [NaN, Infinity, '1', null, 2.5]) expect(() => stationAction({ ...choice, expectedGain })).toThrow()
+    for (const radioId of [-1, 0x100000000, '3', 2.5]) expect(() => stationAction({ ...choice, radioId })).toThrow()
+    for (const expectedSettingsRevision of ['A'.repeat(64), 'a'.repeat(63), '', null]) expect(() => stationAction({ ...choice, expectedSettingsRevision })).toThrow()
+    expect(stationAction({ ...choice, expectedGain: 0.5 })).toMatchObject({ expectedGain: 0.5 })
+  })
   it('binds receive choices to the displayed tier and prior value without accepting TX or form fields', () => {
     const depth = { action: 'decoder.depth', expectedTier: 'FT8', expectedDepth: 3, depth: 1 }
     const rx = { action: 'receiver.rxOffset', expectedTier: 'JS8', expectedHz: 1500, hz: 725.25 }

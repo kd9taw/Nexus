@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
+mod gain;
 mod receiver;
 
 static NEXT: AtomicUsize = AtomicUsize::new(0);

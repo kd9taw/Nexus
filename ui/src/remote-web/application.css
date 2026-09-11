@@ -68,7 +68,10 @@
 /* The same wrapped toolbar can exhaust the native JS8/RTTY/PSK strip's
    viewport-relative height. Each hosted cockpit already owns a scrollbar. */
 .remote-workspace .waterfall-wrap { min-height: min-content; }
-.remote-workspace .wf-stage { min-height: 4em; }
+.remote-workspace .wf-stage { min-height: 6em; }
+/* Keep the strength legend within short receive strips. Its gradient can
+   shrink while both scale labels remain visible above the next pane. */
+.remote-workspace .wf-legend { max-height: calc(100% - 12px); box-sizing: border-box; }
 /* A stacked Tx-message column must scroll its content rather than paint over
    the following recall rail when the effective viewport is narrow. */
 .remote-workspace .cockpit-qsocol { overflow-y: auto; }
