@@ -122,7 +122,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
     const sessionDiagnostic=()=>evaluate(`(()=>{const e=document.querySelector('.app');let fiber=e?.[Object.keys(e).find(k=>k.startsWith('__reactFiber$'))],client;while(fiber){client=fiber.memoizedProps?.connection?.application;if(client)break;fiber=fiber.return}return {now:performance.now(),stale:e?.dataset.remoteStale,phase:client?.getPhase(),snapshotAge:client?.age('get_snapshot'),topics:client?.stream?.topics,waiting:client?.stream?.waiting?[...client.stream.waiting.keys()]:null,interests:client?.stream?.interests?[...client.stream.interests].map(([name,at])=>({name,age:performance.now()-at})):null,closures:window.__socketClosures,trace:window.__protocolTrace}})()`)
     async function until(expression,timeout=12000) { for(let i=0;i<Math.ceil(timeout/100);i++){ if(providerFailure)throw new Error('Simulated provider failed'); if(await evaluate(expression))return;await sleep(100) } if(operating)console.log('Operation diagnostic',expression,operationWire.slice(-30),loggedRequests.map(r=>({call:r.record.call,mode:r.record.mode})),await evaluate(`({status:document.querySelector('.remote-application-status')?.textContent,entries:[...document.querySelectorAll('.remote-log-entry')].map(e=>({text:e.textContent,error:e.dataset.operationError}))})`));throw new Error('Expected browser state did not appear') }
     const button=name=>`[...document.querySelectorAll('button')].find(e=>e.textContent===${JSON.stringify(name)})`
-    async function click(expression) {
+    async function click(expression, clickCount = 1) {
       let point
       try {
         // A positive user action waits for its control to finish loading. Keep
@@ -140,8 +140,8 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         assert.ok(point,'control must become enabled before the single mouse gesture')
       }
       catch(error){console.log('Application session diagnostic',JSON.stringify(await sessionDiagnostic()),{...applicationTraffic,nativeSnapshotAge:performance.now()-(sentAt.get('get_snapshot')??0),stationClosed:station.closed});console.log('Click diagnostic',expression,await evaluate(`(()=>{const e=${expression},r=e?.getBoundingClientRect();return {stale:document.querySelector('.app')?.dataset.remoteStale,status:document.querySelector('.remote-application-status')?.textContent,rect:r?.toJSON(),hit:r?document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)?.outerHTML.slice(0,600):null}})()`));if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-click-failure.png'),Buffer.from(shot.data,'base64'))}throw error}
-      await browser.call('Input.dispatchMouseEvent',{type:'mousePressed',...point,button:'left',clickCount:1},session)
-      await browser.call('Input.dispatchMouseEvent',{type:'mouseReleased',...point,button:'left',clickCount:1},session)
+      await browser.call('Input.dispatchMouseEvent',{type:'mousePressed',...point,button:'left',clickCount},session)
+      await browser.call('Input.dispatchMouseEvent',{type:'mouseReleased',...point,button:'left',clickCount},session)
       await sleep(50)
     }
     async function geometry(width,height,zoom=1,theme='dark',keyboard=0) {
@@ -306,7 +306,13 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
           assert.equal(r.expectedRevision,loggingRevision);assert.equal(r.clientSequence,loggingSequence+1);loggingSequence++
           assert.deepEqual(r.context,controlContext())
           stationRequests.push(r);const a=r.action
-          if(a.action==='ft.cq'||a.action==='ft.txEnabled'){
+          if(a.action==='ft.call'){
+            assert.ok(ftOperating&&transmitAllowed);assert.equal(a.transmitEpoch,transmitEpoch)
+            assert.equal(a.expectedTier,applicationData.get_snapshot.link.tier)
+            assert.deepEqual(a.selection,{call:'W1AW',grid:'FN31',message:null,snr:null,freq:1500})
+            applicationData.get_snapshot.radio.txEnabled=true
+            applicationData.get_snapshot.qso={state:'awaitReport',dxcall:'W1AW',dxgrid:'FN31',rxReport:null,running:true,cqRunning:false,txNow:'W1AW N0CALL AA00'}
+          }else if(a.action==='ft.cq'||a.action==='ft.txEnabled'){
             assert.ok(ftOperating&&transmitAllowed);assert.equal(a.transmitEpoch,transmitEpoch)
             assert.equal(a.expectedTier,applicationData.get_snapshot.link.tier)
             applicationData.get_snapshot.radio.txEnabled=a.action==='ft.cq'||a.on
@@ -447,7 +453,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
           loggingReceipts.set(r.requestId,value);loggingRevision++;applicationRevision++
           if(loseSpotReply&&a.action==='radio.workSpot')continue
         }else if(r.type==='result'){value=loggingReceipts.get(r.operationId);if(!value)error='resultExpired';else if(loseSpotReply&&value.operation==='stationControl')value={operation:'stationControl',operationId:r.operationId,outcome:'unknown',reason:'hardwareUnconfirmed'}}
-        else value={stationBootId:loggingBoot,allowed:loggingAllowed||stationControls,phase:loggingLease?'controlling':loggingAllowed||stationControls?'available':'localPermissionRequired',leaseId:loggingLease,revision:loggingRevision,commandWindowId:loggingLease?loggingWindow:null,nextSequence:loggingLease?loggingSequence+1:null,leaseRemainingMs:loggingLease?5000:null,actions:loggingAllowed?['log.manual']:[],txArmed:ftOperating&&transmitAllowed&&applicationData.get_snapshot.radio.txEnabled,...(ftOperating?{transmitEpoch:transmitAllowed?transmitEpoch:null}:{}),...(stationControls?{controls:{context:controlContext(),capabilities:request.operationVersion>=3?['decoder','amplifier','frequency','mode','tier','ampFollowBand','workspace','decoderSettings','receiverSettings','receiverGain','bandSelection','receiverFilter','receiverDsp','phoneMode','fmTuning','fmReceiver','radioLevels',...(transmitAllowed?['ftOperate']:[]),...(workSpot?['workSpot']:[]),...(radioSelection?['radioSelection']:[])]:['decoder','amplifier']}}:{})}
+        else value={stationBootId:loggingBoot,allowed:loggingAllowed||stationControls,phase:loggingLease?'controlling':loggingAllowed||stationControls?'available':'localPermissionRequired',leaseId:loggingLease,revision:loggingRevision,commandWindowId:loggingLease?loggingWindow:null,nextSequence:loggingLease?loggingSequence+1:null,leaseRemainingMs:loggingLease?5000:null,actions:loggingAllowed?['log.manual']:[],txArmed:ftOperating&&transmitAllowed&&applicationData.get_snapshot.radio.txEnabled,...(ftOperating?{transmitEpoch:transmitAllowed?transmitEpoch:null}:{}),...(stationControls?{controls:{context:controlContext(),capabilities:request.operationVersion>=3?['decoder','amplifier','frequency','mode','tier','ampFollowBand','workspace','decoderSettings','receiverSettings','receiverGain','bandSelection','receiverFilter','receiverDsp','phoneMode','fmTuning','fmReceiver','radioLevels',...(transmitAllowed?['ftOperate','ftCall']:[]),...(workSpot?['workSpot']:[]),...(radioSelection?['radioSelection']:[])]:['decoder','amplifier']}}:{})}
         source.send({type:'operationResponse',sessionId:request.sessionId,requestId:r.requestId,...(error?{error}:{value})});continue
       }
       if (request.type === 'applicationQuery') {
@@ -601,6 +607,9 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         await click(`document.querySelector('${tx}')`)
         await until(`document.querySelector('${tx}')?.textContent.trim()==='TX On'&&!document.querySelector('${tx}').disabled`)
         assert.equal(stationRequests.length,count+3);assert.equal(stationRequests.at(-1).action.on,true)
+        await click(`[...document.querySelectorAll('.or-row[aria-selected]')].find(e=>e.textContent.includes('W1AW'))`,2)
+        await until(`!document.querySelector('${tx}').disabled&&document.querySelector('.cockpit-qso')?.textContent.includes('W1AW')`)
+        assert.equal(stationRequests.length,count+4);assert.equal(stationRequests.at(-1).action.action,'ft.call')
         // Missing station display data blocks arming but cannot block Stop.
         unavailableTopics.add('get_snapshot')
         await until(`document.querySelector('${cq}').disabled`)
@@ -615,10 +624,10 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       }
       transmitAllowed=false
       await until(`document.querySelector('${cq}').disabled&&document.querySelector('${tx}').disabled&&document.querySelector('${stop}').disabled`)
-      assert.equal(stationRequests.length,6);assert.equal(stopRequests.length,2)
+      assert.equal(stationRequests.length,8);assert.equal(stopRequests.length,2)
       assert.equal(loggedRequests.length,0);assert.equal(exceptions,0);assert.equal(unexpectedMessages,0)
       if(artifacts){await writeFile(join(artifacts,'ft-results.json'),JSON.stringify({actions:stationRequests.map(r=>r.action),stopCount:stopRequests.length,staleDisplayStop:true,localGrantRevoked:true,exceptions,unexpectedMessages},null,2));const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'ft-controls.png'),Buffer.from(shot.data,'base64'))}
-      console.log('Compiled Nexus FT8/FT4 CQ, TX On/Off, stale-display Stop and local revocation passed');return
+      console.log('Compiled Nexus FT8/FT4 CQ, station calling, TX On/Off, stale-display Stop and local revocation passed');return
     }
     if(radioSelection){
       const pill=id=>`[...document.querySelectorAll('.radio-pill')].find(e=>e.textContent.includes('Test radio ${id}'))`
