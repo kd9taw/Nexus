@@ -412,7 +412,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
       setMic((m) => (Math.abs(m - pct) >= 2 ? pct : m))
     }
   }, [snap.radio.micGain])
-  const shownMic = control ? mic : Math.round((snap.radio.micGain ?? 0) * 100)
+  const shownMic = control ? mic : Math.round((levels.draft('micGain') ?? snap.radio.micGain ?? 0) * 100)
   const changeMic = (pct: number) => {
     if (!levels.can('micGain')) return
     if (control) setMic(pct)
@@ -438,7 +438,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
       setComp((c) => (Math.abs(c - pct) >= 2 ? pct : c))
     }
   }, [snap.radio.compLevel])
-  const shownComp = control ? comp : Math.round((snap.radio.compLevel ?? 0) * 100)
+  const shownComp = control ? comp : Math.round((levels.draft('compression') ?? snap.radio.compLevel ?? 0) * 100)
   const changeComp = (pct: number) => {
     if (!levels.can('compression')) return
     if (control) setComp(pct)
@@ -456,13 +456,13 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
       setNotchHz((n) => (Math.abs(n - hz) >= 10 ? hz : n))
     }
   }, [snap.radio.notchFreqHz])
-  const shownNotch = control ? notchHz : Math.round(snap.radio.notchFreqHz ?? 0)
+  const shownNotch = control ? notchHz : Math.round(levels.draft('notch') ?? snap.radio.notchFreqHz ?? 0)
   const changeNotch = (hz: number) => {
     if (!levels.can('notch')) return
     if (control) setNotchHz(hz)
     void levels.change('notch', hz).catch(error => pushToast(String(error), 'error'))
   }
-  const shownNr = control ? nr : Math.round((snap.radio.nrLevel ?? 0) * 100)
+  const shownNr = control ? nr : Math.round((levels.draft('nr') ?? snap.radio.nrLevel ?? 0) * 100)
   const changeNr = (pct: number) => {
     if (!levels.can('nr')) return
     if (control) setNr(pct)
@@ -1096,7 +1096,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
             {snap.radio.nrLevel != null && (
               <label className="ph-dsplev" title={t('phone.rxDsp.nr.title')}>
                 <span>{NR}</span>
-                <input disabled={!levels.can('nr')}
+                <input {...levels.input('nr')} disabled={!levels.can('nr')}
                   type="range"
                   min={0}
                   max={100}
@@ -1104,9 +1104,11 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
                   onChange={(e) => changeNr(Number(e.target.value))}
                   onPointerDown={() => {
                     nrDragging.current = true
+                    levels.input('nr').onPointerDown()
                   }}
                   onPointerUp={() => {
                     nrDragging.current = false
+                    levels.input('nr').onPointerUp()
                   }}
                   aria-label={t('phone.rxDsp.nr.aria')}
                 />
@@ -1118,7 +1120,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
             {snap.radio.compLevel != null && (
               <label className="ph-dsplev" title={t('phone.rxDsp.comp.title')}>
                 <span>{COMP}</span>
-                <input disabled={!levels.can('compression')}
+                <input {...levels.input('compression')} disabled={!levels.can('compression')}
                   type="range"
                   min={0}
                   max={100}
@@ -1126,9 +1128,11 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
                   onChange={(e) => changeComp(Number(e.target.value))}
                   onPointerDown={() => {
                     compDragging.current = true
+                    levels.input('compression').onPointerDown()
                   }}
                   onPointerUp={() => {
                     compDragging.current = false
+                    levels.input('compression').onPointerUp()
                   }}
                   aria-label={t('phone.rxDsp.comp.aria')}
                 />
@@ -1141,7 +1145,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
             {snap.radio.notchFreqHz != null && (
               <label className="ph-dsplev" title={t('phone.rxDsp.notchFreq.title')}>
                 <span>{NOTCH}</span>
-                <input disabled={!levels.can('notch')}
+                <input {...levels.input('notch')} disabled={!levels.can('notch')}
                   type="range"
                   min={300}
                   max={3400}
@@ -1150,9 +1154,11 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
                   onChange={(e) => changeNotch(Number(e.target.value))}
                   onPointerDown={() => {
                     notchDragging.current = true
+                    levels.input('notch').onPointerDown()
                   }}
                   onPointerUp={() => {
                     notchDragging.current = false
+                    levels.input('notch').onPointerUp()
                   }}
                   aria-label={t('phone.rxDsp.notchFreq.aria')}
                 />
@@ -1342,7 +1348,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
         {snap.radio.micGain != null && (
           <label className="ph-power" title={t('phone.mic.title')}>
             <span>{t('phone.mic.label')}</span>
-            <input disabled={!levels.can('micGain')}
+            <input {...levels.input('micGain')} disabled={!levels.can('micGain')}
               type="range"
               min={0}
               max={100}
@@ -1350,9 +1356,11 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
               onChange={(e) => changeMic(Number(e.target.value))}
               onPointerDown={() => {
                 micDragging.current = true
+                levels.input('micGain').onPointerDown()
               }}
               onPointerUp={() => {
                 micDragging.current = false
+                levels.input('micGain').onPointerUp()
               }}
               aria-label={t('phone.mic.aria')}
             />

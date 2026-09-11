@@ -1523,6 +1523,28 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
           assert.deepEqual(stationRequests.at(-1).action,{action:'radio.level',mode,level,expected,value})
           await until(`document.querySelector('.remote-control-result')?.textContent.includes('confirmed')`)
           await until(`Number(document.querySelector('${selector}').value)===${target}&&!document.querySelector('${selector}').disabled`)
+          await browser.call('Emulation.setDeviceMetricsOverride',{width:1280,height:800,deviceScaleFactor:1,mobile:false},session)
+          await evaluate(`document.documentElement.style.setProperty('--ui-zoom','1');window.dispatchEvent(new Event('resize'))`);await settledLayout()
+          await evaluate(`document.querySelector('${selector}').scrollIntoView({block:'center',behavior:'instant'})`);await settledLayout()
+          const prior=applicationData.get_snapshot.radio[field],start=stationRequests.length
+          const rect=await evaluate(`document.querySelector('${selector}').getBoundingClientRect().toJSON()`)
+          const y=rect.top+rect.height/2,point=f=>rect.left+rect.width*f
+          await freshLoggingWindow()
+          await browser.call('Input.dispatchMouseEvent',{type:'mouseMoved',x:point(0.2),y},session)
+          await browser.call('Input.dispatchMouseEvent',{type:'mousePressed',x:point(0.2),y,button:'left',clickCount:1},session)
+          await browser.call('Input.dispatchMouseEvent',{type:'mouseMoved',x:point(0.5),y,button:'left',buttons:1},session)
+          const intermediate=await evaluate(`Number(document.querySelector('${selector}').value)`)
+          await browser.call('Input.dispatchMouseEvent',{type:'mouseMoved',x:point(0.8),y,button:'left',buttons:1},session)
+          const released=await evaluate(`Number(document.querySelector('${selector}').value)`)
+          assert.notEqual(released,intermediate,`${mode} ${level} drag moves through intermediate values`)
+          assert.equal(stationRequests.length,start,'drag draft does not write before release')
+          await browser.call('Input.dispatchMouseEvent',{type:'mouseReleased',x:point(0.8),y,button:'left',clickCount:1},session)
+          for(let i=0;i<100&&stationRequests.length===start;i++)await sleep(100)
+          assert.equal(stationRequests.length,start+1,`one released ${mode} ${level} drag`)
+          assert.deepEqual(stationRequests.at(-1).action,{action:'radio.level',mode,level,expected:prior,value:level==='notch'?released:released/100})
+          await until(`document.querySelector('.remote-control-result')?.textContent.includes('confirmed')`)
+          await until(`Number(document.querySelector('${selector}').value)===${released}&&!document.querySelector('${selector}').disabled`)
+
         }
       }
       await click(button('CW'));await settledLayout()
@@ -1542,9 +1564,9 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       stationControls=false;loggingLease=null
       await until(`document.querySelector('.cw-cockpit .amp-op').disabled`)
       assert.equal(controlGeometry+modeGeometry+bandGeometry+wheelGeometry+filterGeometry+dspGeometry+phoneModeGeometry+tierGeometry+followGeometry+decoderGeometry+receiverGeometry+gainGeometry+levelGeometry+16,648)
-      assert.equal(loggedRequests.length,5);assert.equal(stationRequests.length,116);assert.equal(unexpectedMessages,0);assert.equal(exceptions,0)
+      assert.equal(loggedRequests.length,5);assert.equal(stationRequests.length,122);assert.equal(unexpectedMessages,0);assert.equal(exceptions,0)
       if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-manual-logging.png'),Buffer.from(shot.data,'base64'));await writeFile(join(artifacts,'operation-results.json'),JSON.stringify({count:loggedRequests.length,stationActions:stationRequests.map(r=>r.action),controlGeometry,modeGeometry,bandGeometry,wheelGeometry,filterGeometry,dspGeometry,phoneModeGeometry,tierGeometry,followGeometry,decoderGeometry,receiverGeometry,gainGeometry,levelGeometry,modes:loggedRequests.map(r=>r.record.mode),lostResultResolved:true,wholePageReloadResolved:true,crossTabLockRefusal:true,geometry:16,exceptions,unexpectedMessages},null,2))}
-      console.log('Compiled browser: five logging forms, 116 station gestures, saved receiver choices, native band recall, shared wheel/digit tuning, Phone mode picks, separate grants, recovery and 648 geometry cases passed');return
+      console.log('Compiled browser: five logging forms, 122 station gestures, saved receiver choices, native band recall, shared wheel/digit tuning, Phone mode picks, separate grants, recovery and 648 geometry cases passed');return
     }
     const startReads=applicationTraffic.reads, startBytes=applicationTraffic.bytes, started=performance.now()
     for(const [width,height] of [[1024,768],[1280,800],[1366,768],[1200,1390],[3440,1440]])for(const zoom of [1,1.75])for(const theme of ['dark','light']) {

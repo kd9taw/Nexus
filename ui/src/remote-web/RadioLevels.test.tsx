@@ -159,3 +159,70 @@ it('a radio-level capability never enables the shared header audio-drive control
   expect(input.disabled).toBe(true);fireEvent.change(input,{target:{value:'0.7'}});await tick()
   expect(changed).not.toHaveBeenCalled();expect(h.writes()).toHaveLength(0)
 })
+
+
+it.each(choices)('%s %s drag submits the released target once and waits for a station sample', async(mode,level,field,label,before,target)=>{
+  const h=fixture(mode);await tick()
+  const slider=()=>h.getByRole('slider',{name:t(label)}) as HTMLInputElement
+  fireEvent.pointerDown(slider(),{pointerId:1})
+  fireEvent.change(slider(),{target:{value:String(target+(level==='notch'?10:1))}});await tick()
+  fireEvent.change(slider(),{target:{value:String(target)}});await tick()
+  expect(Number(slider().value)).toBe(target);expect(h.writes()).toHaveLength(0)
+  fireEvent.pointerUp(slider(),{pointerId:1});await tick()
+  expect(h.writes()).toHaveLength(1)
+  const scale=level==='notch'?1:100
+  expect(h.writes()[0].request.action).toEqual({action:'radio.level',mode,level,expected:before/scale,value:target/scale})
+  expect(Number(slider().value)).toBe(before)
+  act(()=>h.finish());await tick()
+  expect(Number(slider().value)).toBe(before)
+  h.rerender(h.view({...h.snap,radio:{...h.snap.radio,[field]:target/scale}}));await tick()
+  expect(Number(slider().value)).toBe(target)
+})
+
+it.each(['pointer cancel','blur','permission loss','reading change','radio change','mode change'] as const)
+('a level drag canceled by %s cannot revive when the context returns', async(reason)=>{
+  const h=fixture();await tick()
+  const slider=()=>h.getByRole('slider',{name:t('phone.mic.aria')}) as HTMLInputElement
+  fireEvent.pointerDown(slider(),{pointerId:1});fireEvent.change(slider(),{target:{value:'35'}});await tick()
+  if(reason==='pointer cancel')fireEvent.pointerCancel(slider(),{pointerId:1})
+  else if(reason==='blur')fireEvent.blur(slider())
+  else {
+    const next=structuredClone(h.snap)
+    if(reason==='reading change')next.radio.micGain=0.6
+    if(reason==='radio change')next.activeRadioId=2
+    if(reason==='mode change')next.radio.operatingMode='cw'
+    h.rerender(h.view(next,reason!=='permission loss'));await tick()
+    h.rerender(h.view());await tick()
+  }
+  fireEvent.change(slider(),{target:{value:'42'}});fireEvent.pointerUp(slider(),{pointerId:1});await tick()
+  expect(h.writes()).toHaveLength(0);expect(Number(slider().value)).toBe(50)
+  fireEvent.pointerDown(slider(),{pointerId:2});fireEvent.change(slider(),{target:{value:'42'}});fireEvent.pointerUp(slider(),{pointerId:2});await tick()
+  expect(h.writes()).toHaveLength(1);expect(h.writes()[0].request.action.value).toBe(0.42)
+})
+
+it('held adjustment keys submit on release and cannot restart a canceled edit through key repeat', async()=>{
+  const h=fixture();await tick()
+  const slider=()=>h.getByRole('slider',{name:t('phone.mic.aria')}) as HTMLInputElement
+  fireEvent.keyDown(slider(),{key:'ArrowRight'});fireEvent.change(slider(),{target:{value:'51'}});await tick()
+  h.rerender(h.view(h.snap,false));await tick();h.rerender(h.view());await tick()
+  fireEvent.keyDown(slider(),{key:'ArrowRight',repeat:true});fireEvent.change(slider(),{target:{value:'52'}})
+  fireEvent.keyUp(slider(),{key:'ArrowRight'});await tick();expect(h.writes()).toHaveLength(0)
+  fireEvent.keyDown(slider(),{key:'ArrowRight'});fireEvent.change(slider(),{target:{value:'51'}})
+  fireEvent.keyDown(slider(),{key:'ArrowRight',repeat:true});fireEvent.change(slider(),{target:{value:'52'}});await tick()
+  expect(h.writes()).toHaveLength(0);fireEvent.keyUp(slider(),{key:'ArrowRight'});await tick()
+  expect(h.writes()).toHaveLength(1);expect(h.writes()[0].request.action.value).toBe(0.52)
+})
+
+
+it.each(['leaseId','stationBootId','revision'] as const)('a drag cannot cross a changed %s even if the original state returns',async field=>{
+  const h=fixture();await tick()
+  const slider=()=>h.getByRole('slider',{name:t('phone.mic.aria')}) as HTMLInputElement
+  fireEvent.pointerDown(slider());fireEvent.change(slider(),{target:{value:'35'}});await tick()
+  await tick(1000)
+  act(()=>h.reply({...h.state,[field]:field==='revision'?h.state.revision+1:crypto.randomUUID()}));await tick()
+  await tick(1000);act(()=>h.reply(h.state));await tick()
+  fireEvent.change(slider(),{target:{value:'42'}});fireEvent.pointerUp(slider());await tick()
+  expect(h.writes()).toHaveLength(0)
+  fireEvent.pointerDown(slider());fireEvent.change(slider(),{target:{value:'42'}});fireEvent.pointerUp(slider());await tick()
+  expect(h.writes()).toHaveLength(1)
+})

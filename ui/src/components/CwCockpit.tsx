@@ -471,7 +471,7 @@ export function CwCockpit({
       setNr((n) => (Math.abs(n - pct) >= 2 ? pct : n))
     }
   }, [snap.radio.nrLevel])
-  const shownNr = control ? nr : Math.round((snap.radio.nrLevel ?? 0) * 100)
+  const shownNr = control ? nr : Math.round((levels.draft('nr') ?? snap.radio.nrLevel ?? 0) * 100)
   const changeNr = (pct: number) => {
     if (!levels.can('nr')) return
     if (control) setNr(pct)
@@ -1210,7 +1210,7 @@ export function CwCockpit({
             {snap.radio.nrLevel != null && (
               <label className="ph-dsplev" title={t('cw.rxDsp.nr.title')}>
                 <span>{NR}</span>
-                <input disabled={!levels.can('nr')}
+                <input {...levels.input('nr')} disabled={!levels.can('nr')}
                   type="range"
                   min={0}
                   max={100}
@@ -1218,9 +1218,11 @@ export function CwCockpit({
                   onChange={(e) => changeNr(Number(e.target.value))}
                   onPointerDown={() => {
                     nrDragging.current = true
+                    levels.input('nr').onPointerDown()
                   }}
                   onPointerUp={() => {
                     nrDragging.current = false
+                    levels.input('nr').onPointerUp()
                   }}
                   aria-label={t('cw.rxDsp.nr.aria')}
                 />

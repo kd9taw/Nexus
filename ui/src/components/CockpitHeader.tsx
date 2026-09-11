@@ -170,6 +170,8 @@ export function CockpitHeader({
   const control = useStationControl()
   const levels = useRadioLevels(snap)
   const remotePower = power?.unit === '%' && levels.can('power')
+  const powerInput = levels.input('power'), powerDraft = levels.draft('power')
+  const powerValue = !control && power?.unit === '%' && powerDraft !== undefined ? Math.round(powerDraft * 100) : power?.value
   const radio = snap.radio
   const catOk = radio.catOk === true
   const dial = radio.dialMhz
@@ -315,7 +317,7 @@ export function CockpitHeader({
             }
           >
             <span>{power.label ?? t('cockpit.header.power.label')}</span>
-            <input disabled={(!control && !remotePower) || power.value == null}
+            <input {...powerInput} disabled={(!control && !remotePower) || powerValue == null}
               type="range"
               min={0}
               max={power.unit === '%' ? 100 : 1}
@@ -332,22 +334,22 @@ export function CockpitHeader({
               // value fails HTML5 constraint validation.
               value={
                 power.unit === 'drive'
-                  ? Math.round(Math.sqrt(power.value ?? 0) * 100) / 100
-                  : power.value ?? 0
+                  ? Math.round(Math.sqrt(powerValue ?? 0) * 100) / 100
+                  : powerValue ?? 0
               }
-              style={{ visibility: power.value == null ? 'hidden' : undefined }}
+              style={{ visibility: powerValue == null ? 'hidden' : undefined }}
               onChange={(e) => {
                 const raw = Number(e.target.value)
                 if (control) power.onChange(power.unit === 'drive' ? raw ** 2 : raw)
                 else if (remotePower) void levels.change('power', raw / 100)
                   .catch(error => pushToast(String(error), 'error'))
               }}
-              onPointerDown={power.onPointerDown}
-              onPointerUp={power.onPointerUp}
+              onPointerDown={() => { power.onPointerDown?.(); if (remotePower) powerInput.onPointerDown() }}
+              onPointerUp={() => { power.onPointerUp?.(); if (!control) powerInput.onPointerUp() }}
               aria-label={power.label ?? t('cockpit.header.power.label')}
             />
             <span className="cockpit-pwr-val">
-              {power.value == null ? '—' : power.unit === '%' ? `${Math.round(power.value)}%` : `${Math.round(power.value * 100)}%`}
+              {powerValue == null ? '—' : power.unit === '%' ? `${Math.round(powerValue)}%` : `${Math.round(powerValue * 100)}%`}
             </span>
           </label>
         )}

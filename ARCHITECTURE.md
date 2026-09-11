@@ -78,7 +78,10 @@ PTT/split state, then performs one permitted CAT write and reads the actual leve
 Native limits and per-mode power ceilings still apply. A local setter retires old
 remote work, including an away-and-back change. Only confirmed readback enters
 native desired/observed state and the owner's caches; uncertain writes never become
-retries. Browser inputs display station samples, and this capability grants neither
+retries. Browser drags and held adjustment keys retain a context-bound draft and submit
+the released target once. Lost authority, changed readings/context or canceled
+input discard that draft permanently. Inputs return to station samples after
+release; a receipt does not fabricate readback. This capability grants neither
 audio-drive control nor permission to transmit.
 
 Radio selection has a passive native Settings projection sharing the local
