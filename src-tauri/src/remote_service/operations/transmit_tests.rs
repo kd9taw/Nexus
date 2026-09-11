@@ -493,3 +493,24 @@ fn transmit_browser_arm_requires_its_own_grant_and_fresh_radio_context() {
         );
     }
 }
+
+#[test]
+fn transmit_local_revocation_does_not_wait_for_a_pending_durable_write() {
+    let (f, now, _) = armed();
+    let core = f.authority.core.lock().unwrap();
+    let result = f.authority.permit_transmit(DEVICE, false);
+    assert_eq!(
+        result,
+        Ok(()),
+        "a local revoke must not wait for a file sync"
+    );
+    assert!(f.engine.lock().unwrap().poll_remote_transmit(now));
+    drop(core);
+    let state = control_state_version(&f, Instant::now(), 4);
+    assert!(state["transmitEpoch"].is_null());
+    assert!(!state["controls"]["capabilities"]
+        .as_array()
+        .unwrap()
+        .contains(&json!("ftOperate")));
+    assert!(!f.engine.lock().unwrap().tx_enabled());
+}
