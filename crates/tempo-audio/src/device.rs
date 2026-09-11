@@ -2274,6 +2274,36 @@ mod tx_route_tests {
         vec![0.25f32; 12_000 + 162 * 8192]
     }
 
+    /// ⭐ THE FT TIERS MUST NOT NOTICE THE PACING. An FT8 over is 13.14 s and has always fitted the
+    /// ring, so it still goes in on the FIRST pump, in one push, with nothing left parked — same
+    /// audio, same latency at the key, nothing deferred to a later tick. Pacing applies only to the
+    /// overs that never fitted, which is what keeps this fix off the path that was already right.
+    ///
+    /// Measured rather than argued: the ring holds 262,143 modem samples at 48 kHz and an FT8 over
+    /// is 157,680, but that arithmetic is exactly the kind of claim this project has been burnt by.
+    #[test]
+    fn an_ft_over_still_goes_in_whole_on_the_first_push() {
+        let mut tx_rs = CaptureResampler::new(MODEM_RATE, 48_000);
+        let ring = tx_ring();
+        let mut pending = VecDeque::new();
+        // FT8: 0.5 s lead-in + 79 symbols × 1920 samples at 12 kHz = 13.14 s.
+        let over = vec![0.25f32; 6_000 + 79 * 1920];
+
+        CpalBackend::route_tx(None, &mut tx_rs, &ring, &mut pending, true, &over);
+        assert!(
+            pending.is_empty(),
+            "an FT over must not be deferred — {} samples were parked",
+            pending.len()
+        );
+        assert_eq!(
+            ring.len(),
+            CaptureResampler::new(MODEM_RATE, 48_000)
+                .process(&over)
+                .len(),
+            "the whole over is in the ring after the one call, as it always was"
+        );
+    }
+
     /// ⚠️ FIELD REPORT (FTdx10 / Ubuntu, 2026-09-11): "it transmits for about 15 seconds then the
     /// audio disappears and the power drops to zero but it continues to transmit". The log said
     /// `tx_dropped=4307106` — ~90 s of discarded audio, identical across two samples 21 s apart.
