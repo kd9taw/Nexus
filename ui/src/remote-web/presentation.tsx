@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState } from 'react'
-import { BookOpen, Crosshair, PanelsTopLeft, Radio } from 'lucide-react'
+import { BookOpen, Crosshair, PanelsTopLeft, Radio, SlidersHorizontal } from 'lucide-react'
 import type { View } from '../components/ModeNav'
 import { t } from '../i18n'
 
@@ -20,9 +20,10 @@ export function QuickRadioDetails() {
   const display = useRemotePresentation()
   if (display?.presentation !== 'quick') return null
   return <button type="button" className="remote-button remote-quick-details"
+    aria-label={t('remote.quick.radioDetails')} title={t('remote.quick.radioDetails')}
     aria-expanded={display.radioDetails}
     onClick={() => display.setRadioDetails(!display.radioDetails)}>
-    {t('remote.quick.radioDetails')}
+    <SlidersHorizontal size={20} aria-hidden="true" /><span>{t('remote.quick.radioDetails')}</span>
   </button>
 }
 

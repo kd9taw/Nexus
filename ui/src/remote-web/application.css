@@ -279,3 +279,10 @@
   color: var(--text); background: var(--panel); border: 1px solid var(--border);
   border-radius: var(--radius-sm); min-height: 32px; padding: .35em .5em;
 }
+
+.remote-quick-details { display: inline-flex; align-items: center; justify-content: center; gap: .4em; }
+.remote-quick-nav button { font-size: .85em; }
+.cockpit-header--brief .amp-band-step { display: none; }
+.cockpit-header--quick .amp-watts { min-width: 0; }
+[data-viewport='xs'] .remote-quick-details { width: 44px; padding-inline: 0; }
+[data-viewport='xs'] .remote-quick-details > span { display: none; }
