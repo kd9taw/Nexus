@@ -13,8 +13,9 @@ import settings from '../components/__fixtures__/defaultSettings.json'
 
 vi.mock('../api', async original => {
   const actual = await original<Record<string, unknown>>()
+  const reads: Record<string, unknown> = { getLicensedBandPlan: [], getBandPlan: [] }
   return Object.fromEntries(Object.entries(actual).map(([name, value]) => [name,
-    typeof value === 'function' ? vi.fn(async () => null) : value]))
+    typeof value === 'function' ? vi.fn(async () => structuredClone(reads[name] ?? {})) : value]))
 })
 // The real cockpit owns the BW controls. Only unrelated heavy children are
 // substituted here; the compiled browser suite exercises the full application.
