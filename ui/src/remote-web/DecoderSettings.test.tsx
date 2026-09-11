@@ -154,8 +154,7 @@ it('does not offer decode depth through the local API in a Remote session withou
   const h = fixture('MSK144'); await tick()
   const depth = h.container.querySelector<HTMLButtonElement>('.cockpit-depth-chip:last-child')!
   expect(depth).toBeTruthy()
-  expect(depth.disabled).toBe(true)
   fireEvent.click(depth); await tick()
-  expect(setDecodeDepth).not.toHaveBeenCalled()
-  expect(h.writes()).toHaveLength(0)
+  expect({ disabled: depth.disabled, localCalls: vi.mocked(setDecodeDepth).mock.calls.length, remoteCalls: h.writes().length })
+    .toEqual({ disabled: true, localCalls: 0, remoteCalls: 0 })
 })
