@@ -64,8 +64,8 @@ async function chrome() {
   } catch(error) { ws?.close(); if(!exited)process.kill(-child.pid,'SIGTERM'); await rm(profile,{recursive:true,force:true,maxRetries:8,retryDelay:100}); throw error }
 }
 
-for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,14].map(applicationVersion=>({applicationVersion,operating:false})),{applicationVersion:14,operating:true}]) test(`compiled hosted browser ${operating?'operations':`v${applicationVersion}`} completes PKCE, local device approval, observation and viewport checks`, { timeout: applicationVersion >= 14 ? 540000 : applicationVersion >= 13 ? 420000 : 180000 }, async () => {
-  const app=await runtime(), artifacts=process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS ? join(process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS, operating?'operations':`v${applicationVersion}`) : undefined
+for (const {applicationVersion,operating,sessionLayout} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,14].map(applicationVersion=>({applicationVersion,operating:false})),{applicationVersion:14,operating:true},{applicationVersion:14,operating:true,sessionLayout:true}]) test(`compiled hosted browser ${sessionLayout?'session layout':operating?'operations':`v${applicationVersion}`} completes PKCE, local device approval, observation and viewport checks`, { timeout: applicationVersion >= 14 ? 540000 : applicationVersion >= 13 ? 420000 : 180000 }, async () => {
+  const app=await runtime(), artifacts=process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS ? join(process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS, sessionLayout?'session-layout':operating?'operations':`v${applicationVersion}`) : undefined
   let browser, station, producing=true, pauseObservations=false, producer, applicationProducer
   const results=[]
   try {
@@ -553,6 +553,46 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
       assert.equal(await evaluate(`document.body.textContent.includes('Could not switch mode')`), false)
       assert.equal(fieldDayQueries.length,0)
       await click(button('FT'))
+    }
+    if(sessionLayout){
+      stationControls=true
+      await until(`!!${button('Take station control')}`);await click(button('Take station control'))
+      await until(`document.querySelector('.remote-logging-authority')?.textContent.includes('Station control active')`)
+      const lease=loggingLease,checks=[]
+      await evaluate(`window.__sessionApp=document.querySelector('.app')`)
+      for(const [width,height,zoom]of [[390,844,1],[1280,800,1],[390,844,1.75],[1280,800,1.75]])for(const theme of ['dark','light']){
+        await browser.call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false},session)
+        await evaluate(`document.documentElement.style.setProperty('--ui-zoom','${zoom}');document.documentElement.dataset.theme='${theme}';window.dispatchEvent(new Event('resize'))`);await settledLayout()
+        const shape=await evaluate(`(()=>{const e=document.querySelector('.remote-application-status'),r=e.getBoundingClientRect(),b=[...e.querySelectorAll('button')].find(e=>e.textContent==='Release station control'),q=b.getBoundingClientRect();return {height:r.height,width:r.width,release:q.toJSON(),releaseVisible:b.contains(document.elementFromPoint(q.left+q.width/2,q.top+q.height/2)),docW:document.documentElement.scrollWidth,docH:document.documentElement.scrollHeight}})()`)
+        if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,`session-${width}-${zoom}-${theme}.png`),Buffer.from(shot.data,'base64'));await writeFile(join(artifacts,`session-${width}-${zoom}-${theme}.json`),JSON.stringify(shape,null,2))}
+        assert.ok(shape.height<=Math.min(200,height/4),`Session status must leave at least three quarters of the screen for Nexus: ${JSON.stringify({width,height,zoom,theme,shape})}`)
+        assert.ok(shape.releaseVisible&&shape.docW<=width+1&&shape.docH<=height+1,'control release must remain visible without scrolling')
+        assert.equal(await evaluate(`document.querySelector('.remote-logging-authority')?.closest('details')===null`),true)
+        const info=`document.querySelector('.remote-session-info > summary')`
+        await click(info);await until(`document.querySelector('.remote-session-info')?.open===true`)
+        const disconnect=`document.querySelector('.remote-session-info button')`
+        await evaluate(`${disconnect}.scrollIntoView({block:'center',behavior:'instant'})`);await settledLayout()
+        assert.equal(await evaluate(`(()=>{const b=${disconnect},r=b.getBoundingClientRect();return b.textContent==='Disconnect and return to stations'&&b.contains(document.elementFromPoint(r.left+r.width/2,r.top+r.height/2))})()`),true)
+        assert.equal(await evaluate(`document.querySelector('.remote-session-info')?.textContent.includes('Remote transmission remains unavailable')`),true)
+        await click(info);await until(`document.querySelector('.remote-session-info')?.open===false`)
+        assert.equal(loggingLease,lease,'presentation cannot release or replace authority')
+        assert.equal(await evaluate(`document.querySelector('.app')===window.__sessionApp`),true,'session details must preserve the Nexus component tree')
+        checks.push({width,height,zoom,theme,shape})
+      }
+      applicationAvailable=false
+      await until(`document.querySelector('.app')?.dataset.remoteStale==='true'`)
+      const loss=await evaluate(`(()=>{const e=document.querySelector('.remote-application-status'),warning=e.querySelector('.remote-session-unavailable');return {visible:!!warning&&warning.getBoundingClientRect().height>0&&warning.closest('details')===null,text:e.textContent}})()`)
+      assert.ok(loss.visible&&loss.text.includes('Station data unavailable'),'loss must remain visible outside the collapsed details')
+      applicationAvailable=true
+      await until(`document.querySelector('.app')?.dataset.remoteStale!=='true'`)
+      assert.equal(await evaluate(`document.querySelector('.app')===window.__sessionApp`),true)
+      assert.equal(stationRequests.length,0);assert.equal(loggedRequests.length,0)
+      await click(button('Release station control'))
+      await until(`!!${button('Take station control')}`)
+      assert.equal(loggingLease,null)
+      if(artifacts)await writeFile(join(artifacts,'session-results.json'),JSON.stringify({checks,stationActions:0,logWrites:0,releaseConfirmed:true,exceptions,unexpectedMessages},null,2))
+      assert.equal(exceptions,0);assert.equal(unexpectedMessages,0)
+      console.log('Compiled session layout: eight compact layouts, details, preserved authority and explicit release passed');return
     }
     if(operating){
       await click(button('CW'))
