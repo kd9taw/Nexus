@@ -734,6 +734,7 @@ pub fn capabilities(version: u8) -> Vec<&'static str> {
                 "workSpot",
                 "radioLevels",
                 "radioSelection",
+                "fmTuning",
             ]
         }
     }

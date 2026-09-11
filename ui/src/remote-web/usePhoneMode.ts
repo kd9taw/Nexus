@@ -7,7 +7,7 @@ import { PHONE_MODES, type PhoneMode } from './station-operation'
 
 type Pick = 'USB' | 'LSB' | 'FM' | 'AM' | null
 export function usePhoneMode(snap: AppSnapshot, phoneMode?: string) {
-  const local = useStationControl(), capability = useStationCapability('phoneMode')
+  const local = useStationControl(), capability = useStationCapability('phoneMode'), fm = useStationCapability('fmTuning')
   const operations = useContext(RemoteOperationsContext), { context } = useRemoteStation(snap.activeRadioId)
   const current = operations?.getSnapshot().state?.controls?.context, radio = snap.radio
   const expected = radio.sidebandOverride ?? 'auto'
@@ -16,9 +16,9 @@ export function usePhoneMode(snap: AppSnapshot, phoneMode?: string) {
     radio.source === 'native' && radio.operatingMode === 'phone' && radio.catOk === true && radio.rigKeyed === false &&
     !radio.txEnabled && !radio.transmitting && !radio.tuning && !radio.txBusyReason &&
     PHONE_MODES.includes(expected as PhoneMode) && typeof radio.rigMode === 'string' && radio.rigMode.length > 0 &&
-    radio.rigMode !== 'FM' && radio.rigMode !== 'PKTFM')
+    (fm || (radio.rigMode !== 'FM' && radio.rigMode !== 'PKTFM' && expected !== 'FM')))
   const canPick = (mode: Pick) => local || !!(allowed && PHONE_MODES.includes((mode ?? 'auto') as PhoneMode) &&
-    !(mode === null && phoneMode?.toLowerCase() === 'fm' && radio.dialMhz >= 29) &&
+    (fm || (mode !== 'FM' && !(mode === null && phoneMode?.toLowerCase() === 'fm' && radio.dialMhz >= 29))) &&
     (mode !== 'AM' || (radio.dialMhz > 0 && (radio.dialMhz < 10 || radio.dialMhz >= 28))))
   const pick = async (mode: Pick): Promise<AppSnapshot | undefined> => {
     if (local) return setSidebandOverride(mode)

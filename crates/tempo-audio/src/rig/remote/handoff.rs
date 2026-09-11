@@ -50,6 +50,9 @@ pub struct HandoffReadback {
 }
 
 impl HandoffReadback {
+    pub fn into_radio(self) -> Readback {
+        self.radio
+    }
     pub fn radio(&self) -> &Readback {
         &self.radio
     }

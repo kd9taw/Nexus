@@ -88,6 +88,7 @@ pub struct Request {
     sideband: String,
     power_limit: Option<f32>,
     expected_power: Option<f32>,
+    repeater: Option<(String, i64, f32)>,
     intent: Intent,
     radio: u32,
     connection: u64,
@@ -510,13 +511,17 @@ impl Engine {
         {
             return Err(Reason::InvalidAction);
         }
-        // FM's repeater offset/tone reconciliation is a separate transaction.
-        // Do not complete a QSY that leaves unguarded FM writes for the next tick.
-        if matches!(target.mode.as_str(), "FM" | "PKTFM")
-            || matches!(self.rig_mode_effective().as_str(), "FM" | "PKTFM")
+        // Receiver-only changes retain their existing admission contract. A
+        // tuning transaction owns FM configuration and its later cache adoption.
+        if matches!(
+            target.intent,
+            Intent::Level { .. } | Intent::FilterWidth { .. } | Intent::ReceiverDsp { .. }
+        ) && (matches!(target.mode.as_str(), "FM" | "PKTFM")
+            || matches!(self.rig_mode_effective().as_str(), "FM" | "PKTFM"))
         {
             return Err(Reason::UnsupportedAction);
         }
+        let repeater = self.remote_target_repeater(target.hz, &target.mode);
         let o = self.remote_monitor_observation();
         let cat = o.radio.readings.cat.ok_or(Reason::ReadingUnavailable)?;
         let completion = Completion::guarded(permit.clone());
@@ -537,6 +542,7 @@ impl Engine {
             sideband: target.sideband,
             power_limit: target.power_limit,
             expected_power: self.rf_power,
+            repeater,
             intent: target.intent,
             radio: self.settings.active_radio,
             connection,
@@ -562,6 +568,22 @@ impl Engine {
         request.validate(self)?;
         self.remote_radio_command = Some(request);
         Ok(completion)
+    }
+
+    // remote_radio_idle excludes APRS, satellite and channel holds. Resolve
+    // ordinary Phone FM with the native Settings policy at the TARGET dial,
+    // including the saved odd-split override. Preparation never changes Settings.
+    fn remote_target_repeater(&self, hz: u64, mode: &str) -> Option<(String, i64, f32)> {
+        if !matches!(mode, "FM" | "PKTFM") {
+            return None;
+        }
+        let mut target = self.settings.clone();
+        target.dial_mhz = hz as f64 / 1e6;
+        Some((
+            target.rptr_shift.clone(),
+            target.rptr_offset_hz(),
+            target.ctcss_tone_hz,
+        ))
     }
 
     /// Only the active radio worker consumes this slot, before its settings
@@ -609,6 +631,11 @@ impl Request {
     }
     pub fn power_limit(&self) -> Option<f32> {
         self.power_limit
+    }
+    pub fn repeater(&self) -> Option<(&str, i64, f32)> {
+        self.repeater
+            .as_ref()
+            .map(|(shift, offset, tone)| (shift.as_str(), *offset, *tone))
     }
     pub fn filter_width(&self) -> Option<(u32, u32)> {
         match self.intent {
@@ -687,6 +714,7 @@ impl Request {
         if engine.settings.active_radio != self.radio
             || engine.settings.dial_hz() != self.expected_hz
             || !mode_matches
+            || engine.remote_target_repeater(self.target_hz, &self.target_mode) != self.repeater
             || (self.power_limit.is_some() && engine.rf_power != self.expected_power)
         {
             return Err(Reason::ContextChanged);
@@ -720,11 +748,11 @@ impl Request {
     /// Power is the owning worker's later CAT readback, not a browser argument.
     /// Mode entry may lower it to the new native ceiling, never raise it.
     pub fn commit_readback(self, engine: &mut Engine, power: Option<f32>) -> bool {
-        self.commit_readings(engine, power, None, None, None)
+        self.commit_readings(engine, power, None, None, None, None)
     }
 
     pub fn commit_filter_readback(self, engine: &mut Engine, width: Option<u32>) -> bool {
-        self.commit_readings(engine, None, width, None, None)
+        self.commit_readings(engine, None, width, None, None, None)
     }
 
     pub fn commit_receiver_dsp_readback(
@@ -732,11 +760,22 @@ impl Request {
         engine: &mut Engine,
         value: Option<ReceiverDsp>,
     ) -> bool {
-        self.commit_readings(engine, None, None, value, None)
+        self.commit_readings(engine, None, None, value, None, None)
     }
 
     pub fn commit_level_readback(self, engine: &mut Engine, value: Option<f32>) -> bool {
-        self.commit_readings(engine, None, None, None, value)
+        self.commit_readings(engine, None, None, None, value, None)
+    }
+
+    /// Repeater readings are supplied by the owning CAT transaction, never the
+    /// browser. Zero requested offset preserves the rig's existing magnitude.
+    pub fn commit_tuning_readback(
+        self,
+        engine: &mut Engine,
+        power: Option<f32>,
+        repeater: Option<(&str, i64, f32)>,
+    ) -> bool {
+        self.commit_readings(engine, power, None, None, None, repeater)
     }
 
     fn commit_readings(
@@ -746,9 +785,28 @@ impl Request {
         width: Option<u32>,
         dsp: Option<ReceiverDsp>,
         level_readback: Option<f32>,
+        repeater: Option<(&str, i64, f32)>,
     ) -> bool {
         let confirmed = (|| {
             self.validate(engine)?;
+            if let Some((shift, offset, tone)) = self.repeater() {
+                let expected_shift = match shift.trim().to_ascii_lowercase().as_str() {
+                    "simplex" | "none" => "simplex",
+                    "plus" | "+" => "plus",
+                    "minus" | "-" => "minus",
+                    _ => return Err(Reason::InvalidAction),
+                };
+                if !repeater.is_some_and(|(actual_shift, actual_offset, actual_tone)| {
+                    actual_shift == expected_shift
+                        && actual_offset >= 0
+                        && (offset == 0 || actual_offset == offset)
+                        && actual_tone.is_finite()
+                        && actual_tone >= 0.0
+                        && (actual_tone * 10.0).round() == (tone * 10.0).round()
+                }) {
+                    return Err(Reason::HardwareUnconfirmed);
+                }
+            }
             if let Some((level, _, desired)) = self.level() {
                 let actual = level_readback.ok_or(Reason::HardwareUnconfirmed)?;
                 if !level.valid_target(actual)

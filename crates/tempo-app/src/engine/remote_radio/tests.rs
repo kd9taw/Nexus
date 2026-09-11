@@ -1042,7 +1042,7 @@ fn pending_local_tunes_and_held_channels_are_refused_without_mutation() {
 }
 
 #[test]
-fn radio_handoffs_and_fm_contexts_require_their_own_transaction() {
+fn frequency_handoffs_still_require_their_own_transaction() {
     let mut s = Station::new(OperatingMode::Phone);
     let other = s.engine.add_radio();
     s.engine.set_radio_bands(other, vec!["40m".into()]);
@@ -1051,9 +1051,6 @@ fn radio_handoffs_and_fm_contexts_require_their_own_transaction() {
     s.engine.set_radio_pegged(true);
     s.queue().unwrap();
     s.engine.take_remote_radio().unwrap();
-    s.engine.request_sideband_override(Some("FM"));
-    s.engine.take_immediate_retune();
-    assert!(matches!(s.queue(), Err(Reason::UnsupportedAction)));
     assert_eq!(s.engine.settings.dial_hz(), 14_074_000);
     assert!(!s.path.exists());
 }

@@ -91,7 +91,6 @@ fn remote_phone_mode_refuses_logging_only_authority_and_malformed_or_stale_choic
         Err("localPermissionRequired")
     );
     for (field, value, reason) in [
-        ("mode", "FM", "invalidAction"),
         ("mode", "CW", "invalidAction"),
         ("mode", "AM", "invalidAction"),
         ("mode", "usb", "invalidAction"),

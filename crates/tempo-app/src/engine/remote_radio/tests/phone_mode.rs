@@ -134,9 +134,9 @@ fn remote_phone_mode_cannot_borrow_a_local_away_and_back_pick() {
 }
 
 #[test]
-fn remote_phone_mode_refuses_stale_override_fm_and_modes_absent_from_the_native_picker() {
+fn remote_phone_mode_refuses_stale_override_and_modes_absent_from_the_native_picker() {
     let mut s = Station::new(OperatingMode::Phone);
-    for bad in ["FM", "CW", "USB\nT 1", "usb", ""] {
+    for bad in ["CW", "USB\nT 1", "usb", ""] {
         assert!(matches!(
             queue(&mut s, None, Some(bad)),
             Err(Reason::InvalidAction)
@@ -150,12 +150,6 @@ fn remote_phone_mode_refuses_stale_override_fm_and_modes_absent_from_the_native_
         matches!(queue(&mut s, None, Some("AM")), Err(Reason::InvalidAction)),
         "20m has no AM button"
     );
-    s.sample(14_074_000, "FM");
-    assert!(matches!(
-        queue(&mut s, None, Some("USB")),
-        Err(Reason::UnsupportedAction)
-    ));
-    assert!(s.engine.take_remote_radio().is_none());
     s.sample(14_074_000, "USB");
     let receipt = queue(&mut s, None, Some("LSB")).unwrap();
     let request = s.engine.take_remote_radio().unwrap();
@@ -178,5 +172,46 @@ fn remote_phone_mode_refuses_stale_override_fm_and_modes_absent_from_the_native_
             queue(&mut s, None, Some("USB")),
             Err(Reason::UnsupportedAction)
         ));
+    }
+}
+
+#[test]
+fn remote_phone_fm_requires_repeater_readback_and_binds_saved_configuration() {
+    for failure in ["none", "missing", "offset", "changed"] {
+        let mut s = Station::new(OperatingMode::Phone);
+        s.engine.set_frequency(145.5, "2m", "USB");
+        s.engine.take_immediate_retune();
+        s.engine.settings.rptr_shift = "+".into();
+        s.engine.settings.ctcss_tone_hz = 88.55;
+        s.sample(145_500_000, "USB");
+        let receipt = queue(&mut s, None, Some("FM")).unwrap();
+        let request = s.engine.take_remote_radio().unwrap();
+        assert_eq!(request.target(), (145_500_000, "FM"));
+        assert_eq!(request.repeater(), Some(("+", 600_000, 88.55)));
+        s.sample(145_500_000, "FM");
+        if failure == "changed" {
+            s.engine.settings.ctcss_tone_hz = 100.0;
+        }
+        let actual = match failure {
+            "missing" => None,
+            "offset" => Some(("plus", 5_000_000, 88.6)),
+            _ => Some(("plus", 600_000, 88.6)),
+        };
+        let power = request.power_limit();
+        assert_eq!(
+            request.commit_tuning_readback(&mut s.engine, power, actual),
+            failure == "none"
+        );
+        assert_eq!(
+            matches!(receipt.outcome(), Outcome::Applied { .. }),
+            failure == "none"
+        );
+        assert_eq!(
+            s.engine.sideband_override.as_deref(),
+            (failure == "none").then_some("FM")
+        );
+        assert!(!s.engine.tx_enabled());
+        assert!(!s.engine.take_immediate_retune());
+        assert!(!s.path.exists());
     }
 }

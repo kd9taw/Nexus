@@ -1,7 +1,7 @@
 //! Remote uses this existing radio owner, before ordinary settings reconciliation.
 //! Only confirmed dial/mode/power enter settings; unknown work never becomes a local retry.
 use super::*;
-use crate::rig::remote::{Position, Retune};
+use crate::rig::remote::{Handoff, Position, RepeaterConfig, Retune};
 use tempo_app::engine::remote_radio::{RadioLevel, ReceiverDsp};
 use tempo_app::remote_control::Reason;
 
@@ -67,6 +67,18 @@ impl RadioLoop {
             if let Some(limit) = request.power_limit() {
                 retune = retune.with_power_limit(limit)?;
             }
+            if let Some((shift, offset, tone)) = request.repeater() {
+                let fm = RepeaterConfig::new(shift, offset, tone)?;
+                // Reuse the complete native configuration transaction: probe
+                // before writes, apply FM after mode/dial, then read everything
+                // back under the original permission and deadline.
+                return rig
+                    .remote_handoff(
+                        Handoff::new(retune, Vec::new(), None, Some(fm))?,
+                        request.permission(),
+                    )
+                    .map(|read| read.into_radio());
+            }
             rig.remote_retune(retune, request.permission())
         })();
         let readback = match result {
@@ -89,6 +101,9 @@ impl RadioLoop {
         let filter = request.filter_width().is_some();
         let dsp = request.receiver_dsp().is_some();
         let level = request.level();
+        let repeater = request
+            .repeater()
+            .map(|(shift, offset, tone)| (shift.to_owned(), offset, tone));
         let committed = if level.is_some() {
             request.commit_level_readback(&mut eng, readback.level())
         } else if dsp {
@@ -96,7 +111,13 @@ impl RadioLoop {
         } else if filter {
             request.commit_filter_readback(&mut eng, readback.passband())
         } else {
-            request.commit_readback(&mut eng, readback.power())
+            request.commit_tuning_readback(
+                &mut eng,
+                readback.power(),
+                readback
+                    .repeater()
+                    .map(|fm| (fm.shift(), fm.offset_hz(), fm.tone_hz())),
+            )
         };
         if committed {
             if filter || dsp || level.is_some() {
@@ -143,6 +164,10 @@ impl RadioLoop {
                 self.last_freq_poll = now;
                 return;
             }
+            // Cache the requested native tuple, not the quantized wire reading
+            // or a preserved hardware offset. Otherwise the next local tick
+            // would reapply a completed remote operation outside its authority.
+            self.last_fm = repeater;
             self.last_dial = position.dial_hz();
             self.last_mode = position.mode().into();
             self.rig_asserted = true;

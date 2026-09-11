@@ -1,5 +1,5 @@
-//! The existing Phone AUTO/sideband/AM picker is a transient radio choice,
-//! not a Settings save or a complete FM/repeater transaction.
+//! The existing Phone AUTO/sideband/FM/AM picker is a transient radio choice.
+//! FM configuration is confirmed by the same owner before committing the override.
 use super::*;
 
 impl Engine {
@@ -14,7 +14,7 @@ impl Engine {
             return Err(Reason::UnsupportedAction);
         }
         for value in [expected, mode].into_iter().flatten() {
-            if !matches!(value, "USB" | "LSB" | "AM") {
+            if !matches!(value, "USB" | "LSB" | "FM" | "AM") {
                 return Err(Reason::InvalidAction);
             }
         }
@@ -34,7 +34,7 @@ impl Engine {
         let target = mode
             .map(str::to_owned)
             .unwrap_or_else(|| self.settings.rig_mode());
-        if !matches!(target.as_str(), "USB" | "LSB" | "AM") {
+        if !matches!(target.as_str(), "USB" | "LSB" | "FM" | "AM") {
             return Err(Reason::UnsupportedAction);
         }
         Ok(target)
@@ -50,9 +50,6 @@ impl Engine {
         self.remote_radio_idle()?;
         let target_mode = self.remote_phone_mode_target(expected, mode)?;
         let expected_cat_mode = self.remote_filter_mode(connection)?;
-        if matches!(expected_cat_mode.as_str(), "FM" | "PKTFM") {
-            return Err(Reason::UnsupportedAction);
-        }
         let ceiling = if target_mode == "AM" {
             self.settings.rf_power_ceiling_am()
         } else {

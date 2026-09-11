@@ -15,13 +15,13 @@ describe('closed station operating requests', () => {
       if (level !== 'notch') expect(() => stationAction({ ...action, expected: 1.001 })).toThrow()
     }
   })
-  it('admits the existing transient Phone picker without FM or embedded tuning commands', () => {
-    for (const expectedMode of ['auto', 'USB', 'LSB', 'AM']) for (const mode of ['auto', 'USB', 'LSB', 'AM']) {
+  it('admits the existing transient Phone picker including FM without embedded tuning commands', () => {
+    for (const expectedMode of ['auto', 'USB', 'LSB', 'FM', 'AM']) for (const mode of ['auto', 'USB', 'LSB', 'FM', 'AM']) {
       const action = { action: 'radio.phoneMode', expectedMode, mode }
       expect(stationAction(action)).toEqual(action)
       expect(actionCapability(stationAction(action))).toBe('phoneMode')
       for (const field of ['expectedMode', 'mode']) {
-        for (const value of ['FM', 'CW', 'usb', 'AUTO', '', 'USB\nT 1', null, false, 1, undefined]) expect(() => stationAction({ ...action, [field]: value })).toThrow()
+        for (const value of ['CW', 'usb', 'AUTO', '', 'USB\nT 1', null, false, 1, undefined]) expect(() => stationAction({ ...action, [field]: value })).toThrow()
       }
       for (const extra of ['settings', 'command', 'dialMhz', 'sideband', 'radioId', 'txEnabled']) expect(() => stationAction({ ...action, [extra]: true })).toThrow()
     }

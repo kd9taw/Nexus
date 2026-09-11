@@ -165,3 +165,19 @@ it('preserves native mode API calls and returned snapshots', async () => {
   expect(setSidebandOverride).toHaveBeenCalledExactlyOnceWith('USB')
   expect(h.onSnap).toHaveBeenCalledWith(later); expect(h.writes()).toHaveLength(0)
 })
+
+
+it.each(['FM', 'auto', 'leave'] as const)('uses the existing Phone picker for FM %s only with station support', async pick => {
+  const h = fixture('phone', ['phoneMode', 'fmTuning']);
+  const snap = { ...h.snap, radio: { ...h.snap.radio, dialMhz: 145.5, band: '2m', rigMode: pick === 'leave' ? 'FM' : 'USB', sidebandOverride: pick === 'leave' ? 'FM' : null } } as AppSnapshot
+  h.rerender(h.view(snap, true, h.observation, 'fm')); await tick()
+  const mode = pick === 'auto' ? null : pick === 'leave' ? 'USB' : 'FM'
+  expect(h.button(mode).disabled).toBe(false)
+  fireEvent.click(h.button(mode)); await tick()
+  expect(h.writes()).toHaveLength(1)
+  expect(h.writes()[0].request.action).toEqual({ action: 'radio.phoneMode', expectedMode: pick === 'leave' ? 'FM' : 'auto', mode: mode ?? 'auto' })
+  expect(h.button(pick === 'leave' ? 'FM' : null).getAttribute('aria-pressed')).toBe('true')
+  act(() => h.finish()); await tick()
+  expect(h.onSnap).not.toHaveBeenCalled()
+  expect(setSidebandOverride).not.toHaveBeenCalled()
+})

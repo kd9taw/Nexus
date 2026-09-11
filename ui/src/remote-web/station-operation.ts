@@ -8,7 +8,7 @@ export const RECEIVER_FUNCTIONS = ['nb', 'nr', 'notch', 'manualNotch'] as const
 export type ReceiverFunction = (typeof RECEIVER_FUNCTIONS)[number]
 export const AGC_SPEEDS = ['auto', 'fast', 'mid', 'slow', 'off'] as const
 export type AgcSpeed = (typeof AGC_SPEEDS)[number]
-export const PHONE_MODES = ['auto', 'USB', 'LSB', 'AM'] as const
+export const PHONE_MODES = ['auto', 'USB', 'LSB', 'FM', 'AM'] as const
 export type PhoneMode = (typeof PHONE_MODES)[number]
 export const RADIO_LEVELS = ['power', 'micGain', 'nr', 'compression', 'notch'] as const
 export type RadioLevel = (typeof RADIO_LEVELS)[number]
@@ -46,7 +46,7 @@ export type ControlContext = {
   ampConnection: number | null
   ampReadSequence: number | null
 }
-export const CONTROL_CAPABILITIES = ['decoder', 'radio', 'amplifier', 'frequency', 'mode', 'tier', 'ampFollowBand', 'workspace', 'decoderSettings', 'receiverSettings', 'receiverGain', 'bandSelection', 'receiverFilter', 'receiverDsp', 'phoneMode', 'workSpot', 'radioLevels', 'radioSelection'] as const
+export const CONTROL_CAPABILITIES = ['decoder', 'radio', 'amplifier', 'frequency', 'mode', 'tier', 'ampFollowBand', 'workspace', 'decoderSettings', 'receiverSettings', 'receiverGain', 'bandSelection', 'receiverFilter', 'receiverDsp', 'phoneMode', 'workSpot', 'radioLevels', 'radioSelection', 'fmTuning'] as const
 export type ControlCapability = (typeof CONTROL_CAPABILITIES)[number]
 // A new action cannot silently inherit a broader capability by its prefix.
 const ACTION_CAPABILITY: Record<StationAction['action'], ControlCapability> = {
