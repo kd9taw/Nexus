@@ -1056,6 +1056,9 @@ mod tests {
             }];
             engine.configure_remote_selection_host(true);
             let mut native = Engine::with_settings(engine.settings.clone());
+            // A settings load intentionally has no operator dial residency.
+            // Give the native oracle the same explicit dial gesture as Remote.
+            native.set_frequency(dial, band, "USB");
             native.freq_memory = engine.freq_memory.clone();
             native.set_tx_enabled(false);
             native.set_operating_mode_with_arming(name, true, false);
@@ -1094,7 +1097,7 @@ mod tests {
     #[test]
     fn routed_mode_rechecks_recall_power_host_and_authority_before_commit() {
         use crate::settings::{RouteMode, RoutingRule};
-        for change in ["host", "power", "authority", "peg", "memory"] {
+        for change in ["host", "power", "authority", "peg", "local_qsy"] {
             let (mut engine, incoming, _) = station();
             engine.settings.routing_rules = vec![RoutingRule {
                 mode: Some(RouteMode::Cw),
@@ -1113,7 +1116,7 @@ mod tests {
                 "power" => engine.observe_rig_power(0.2),
                 "authority" => authority.revoke(),
                 "peg" => engine.settings.radio_pegged = true,
-                "memory" => {
+                "local_qsy" => {
                     engine.set_frequency(14.040, "20m", "USB");
                     engine.take_immediate_retune();
                 }
