@@ -518,7 +518,7 @@ test('actual native controller pairs, stores authority, publishes real DTOs, dis
 })
 
 
-for (const operationVersion of [1, 2, 3]) test(`actual cloud and native operations v${operationVersion} produce one durable QSO, preserve receipts and refuse local takeover`, {timeout:60000},async()=>{
+for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native operations v${operationVersion} produce one durable QSO, preserve receipts and refuse local takeover`, {timeout:60000},async()=>{
  assert.ok(process.env.NEXUS_REMOTE_TEST_BINARY)
  const app=await runtime(),probe=await nativeProbe(process.env.NEXUS_REMOTE_TEST_BINARY,app.origin)
  let socket
@@ -541,10 +541,25 @@ for (const operationVersion of [1, 2, 3]) test(`actual cloud and native operatio
   if(operationVersion>=2){
    assert.equal((await probe.send({type:'stationPermission',deviceId:device.deviceId,allow:true})).ok,true)
    const controls=(await operation({type:'state'})).response.value
-   assert.deepEqual(controls.controls.capabilities,operationVersion===3?['decoder','amplifier','frequency','mode','tier','ampFollowBand','workspace','decoderSettings','receiverSettings','receiverGain','bandSelection','receiverFilter','receiverDsp','phoneMode','workSpot','radioLevels','radioSelection','fmTuning', 'fmReceiver']:['decoder','amplifier'])
+   assert.deepEqual(controls.controls.capabilities,operationVersion>=3?['decoder','amplifier','frequency','mode','tier','ampFollowBand','workspace','decoderSettings','receiverSettings','receiverGain','bandSelection','receiverFilter','receiverDsp','phoneMode','workSpot','radioLevels','radioSelection','fmTuning', 'fmReceiver']:['decoder','amplifier'])
    const cleared=await operation({type:'stationControl',stationBootId:controls.stationBootId,leaseId:controls.leaseId,expectedRevision:controls.revision,commandWindowId:controls.commandWindowId,clientSequence:controls.nextSequence,context:controls.controls.context,action:{action:'decoder.clear',receiver:'cw'}})
    assert.equal(cleared.response.value.outcome,'applied');assert.equal(cleared.response.value.evidence,'receiverState')
    assert.deepEqual(await probe.send({type:'loggingEvidence'}),evidence)
+   if (operationVersion === 4) {
+     assert.equal(controls.transmitEpoch, null)
+     const grant = await probe.send({type:'transmitPermission',deviceId:device.deviceId,allow:true})
+     assert.equal(grant.ok,true,grant.error)
+     assert.deepEqual(grant.status.transmitPermissions,[device.deviceId])
+     const owner = (await operation({type:'state'})).response.value
+     assert.match(owner.transmitEpoch,/^[0-9a-f]{16}$/)
+     const stop = {type:'stopTransmit',stationBootId:owner.stationBootId,leaseId:owner.leaseId,transmitEpoch:owner.transmitEpoch}
+     assert.deepEqual((await operation(stop)).response.value,{stop:'accepted'})
+     assert.equal((await operation(stop)).response.error,'staleContext')
+     const after = (await operation({type:'state'})).response.value
+     assert.notEqual(after.transmitEpoch,owner.transmitEpoch)
+     assert.equal(after.phase,'controlling')
+     assert.deepEqual(await probe.send({type:'loggingEvidence'}),evidence)
+   }
   }else assert.equal(Object.hasOwn(state,'controls'),false)
   const current=(await operation({type:'heartbeat',leaseId:state.leaseId})).response.value;assert.equal(current.phase,'controlling')
   assert.equal((await probe.send({type:'takeOverLogging'})).ok,true);const refused=await operation({...logged.request,requestId:crypto.randomUUID(),expectedRevision:current.revision,commandWindowId:current.commandWindowId,clientSequence:current.nextSequence,record:{...record,call:'K2ABC'}});assert.equal(refused.response.error,'localPermissionRequired');assert.deepEqual(await probe.send({type:'loggingEvidence'}),evidence)
