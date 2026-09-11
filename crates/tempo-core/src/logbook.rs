@@ -4286,6 +4286,37 @@ mod tests {
         }
     }
 
+    /// AN AM QSO MUST REACH THE SERVICES AS AM (operator report, 2026-09-10: an AM contact
+    /// on 14.286 — the 20 m AM calling frequency — was written to the log as SSB). The
+    /// cockpit half of that defect is fixed in `PhoneCockpit`; this is the rest of the path
+    /// the corrected value now travels, asserted end to end because AM had never been on it.
+    ///
+    /// AM is the FIRST row of the ADIF 3.1.7 Mode enumeration (adif.org/317, read
+    /// 2026-09-10) — a Mode in its own right, with no submodes and no import-only marking —
+    /// so it rides verbatim: no MFSK parent, no SUBMODE, and no folding into SSB the way the
+    /// USB/LSB *submodes* fold. Every upload leg (QRZ, LoTW, ClubLog, eQSL) and every export
+    /// crosses `adif_record`, so this one assertion covers all of them.
+    #[test]
+    fn am_is_its_own_mode_end_to_end() {
+        let mut r = rec("W1AW", "20m", 1_700_000_000);
+        r.mode = "AM".into();
+        let adif = adif_header() + &adif_record(&r);
+        assert!(adif.contains("<MODE:2>AM"), "{adif}");
+        assert!(!adif.contains("SUBMODE"), "AM has no submode: {adif}");
+        assert_eq!(
+            parse_adif(&adif)[0].mode,
+            "AM",
+            "AM must survive the app's own file"
+        );
+        // The dedup key keeps AM apart from SSB. Folding them (as USB/LSB fold into SSB)
+        // would make an AM contact the SAME QSO as a phone contact in the same second, and
+        // one of the two would vanish on the next import.
+        assert_ne!(dedup_mode("AM"), dedup_mode("SSB"));
+        // …while the awards/needs axis still classes it as phone, not as an unknown data
+        // mode — otherwise an AM contact's LoTW confirmation would never match it.
+        assert_eq!(crate::reconcile::mode_class("AM"), "Phone");
+    }
+
     #[test]
     fn pota_emits_both_sig_info_and_the_dedicated_pota_ref() {
         // HRDLog (and other loggers) key on the ADIF 3.1.4 dedicated POTA_REF and see
