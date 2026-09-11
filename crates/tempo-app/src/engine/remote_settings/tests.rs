@@ -248,6 +248,12 @@ fn decoder_setting_refuses_stale_unknown_keyed_and_armed_station_state() {
         );
         assert_eq!(s.apply(setting), Err(Reason::StationBusy));
         s.engine.set_tx_enabled(false);
+        assert_eq!(s.apply(setting), Err(Reason::StationBusy));
+        assert!(!s.path.exists());
+        // The normal radio worker must first settle the retune requested by
+        // native TX arming. Disarming must not erase that outstanding context.
+        assert!(s.engine.take_immediate_retune());
+        s.sample(Some(false), Duration::ZERO);
         s.apply(setting).unwrap();
     }
 }

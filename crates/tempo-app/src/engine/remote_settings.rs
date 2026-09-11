@@ -68,7 +68,9 @@ impl Engine {
                 {
                     return Err(Reason::InvalidAction);
                 }
-                if self.tier() != Tier::Js8 || self.settings.js8_speed != expected {
+                // Bind the value the native cockpit displays, including its
+                // documented Normal fallback for a legacy invalid stored index.
+                if self.tier() != Tier::Js8 || self.js8_tx_speed().index() != expected {
                     return Err(Reason::ContextChanged);
                 }
                 next.js8_speed = speed;
@@ -78,7 +80,9 @@ impl Engine {
                 if !periods.contains(&expected) || !periods.contains(&secs) || expected == secs {
                     return Err(Reason::InvalidAction);
                 }
-                if self.tier() != Tier::Msk144 || self.settings.msk144_period_s != expected {
+                // The native slot period likewise resolves invalid stored
+                // values to the mode's default before displaying them.
+                if self.tier() != Tier::Msk144 || self.active_slot_secs() != f64::from(expected) {
                     return Err(Reason::ContextChanged);
                 }
                 next.msk144_period_s = secs;
