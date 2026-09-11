@@ -199,6 +199,28 @@ fn decoder_save_failure_publishes_neither_runtime_nor_settings_changes() {
 }
 
 #[test]
+fn decoder_choice_uses_the_native_displayed_fallback_for_legacy_invalid_settings() {
+    for (tier, next) in [(Tier::Js8, 3), (Tier::Msk144, 5)] {
+        let mut s = Station::new(tier);
+        let setting = s.setting(next);
+        if tier == Tier::Js8 {
+            s.engine.settings.js8_speed = 200;
+            assert_eq!(s.engine.js8_state().speed, modes::Js8Speed::Normal);
+        } else {
+            s.engine.settings.msk144_period_s = 14;
+            assert_eq!(s.engine.active_slot_secs(), 15.0);
+        }
+        s.apply(setting).unwrap();
+        assert_eq!(
+            s.engine.active_slot_secs(),
+            if tier == Tier::Js8 { 6.0 } else { 5.0 }
+        );
+        assert!(!s.engine.tx_enabled());
+        assert!(s.path.is_file());
+    }
+}
+
+#[test]
 fn decoder_setting_refuses_stale_unknown_keyed_and_armed_station_state() {
     for (tier, next) in [(Tier::Js8, 3), (Tier::Msk144, 5)] {
         let mut s = Station::new(tier);
