@@ -19,6 +19,7 @@ function connected(pendingMutation = false) {
     controls: { context: { radioId: 1, radioConnection: 1, ampConnection: 1, ampReadSequence: 1 }, capabilities: ['ftOperate'] }
   }
   let stored: PendingControl | null = null
+  let leaseUntil = 0
   const client = new OperationClient(wire => relay.receiveBrowser(sessionId, JSON.parse(wire), Date.now()), true,
     Date.now, undefined, 4, { read: () => stored, write: value => { stored = value }, exclusive: async run => run() })
   relay.sync({ supported: true, operationVersion: 4, peer: {
@@ -26,11 +27,18 @@ function connected(pendingMutation = false) {
     send: raw => {
       const { request } = JSON.parse(raw)
       forwarded.push({ at: Date.now(), type: request.type })
+      if (state.leaseId && Date.now() >= leaseUntil) Object.assign(state, { phase: 'available', leaseId: null,
+        commandWindowId: null, nextSequence: null, leaseRemainingMs: null, transmitEpoch: null, txArmed: false })
       if (request.type === 'acquire') Object.assign(state, { phase: 'controlling', leaseId: crypto.randomUUID(),
         commandWindowId: crypto.randomUUID(), nextSequence: 1, leaseRemainingMs: 5000, transmitEpoch: 'a'.repeat(16) })
+      if (request.type === 'acquire' || request.type === 'heartbeat' && request.leaseId === state.leaseId) leaseUntil = Date.now() + 5000
+      if (state.leaseId) state.leaseRemainingMs = leaseUntil - Date.now()
       if (request.type === 'release') Object.assign(state, { phase: 'available', leaseId: null,
-        commandWindowId: null, nextSequence: null, leaseRemainingMs: null, transmitEpoch: null })
-      if (request.type === 'stationControl') { state.nextSequence!++; state.revision++; state.txArmed = request.action.on }
+        commandWindowId: null, nextSequence: null, leaseRemainingMs: null, transmitEpoch: null, txArmed: false })
+      if (request.type === 'stationControl') {
+        if (!state.leaseId || request.leaseId !== state.leaseId) throw Error('station lease expired')
+        state.nextSequence!++; state.revision++; state.txArmed = request.action.on
+      }
       const value = request.type === 'stationControl'
         ? pendingMutation ? { operation: 'stationControl', operationId: request.requestId, outcome: 'pending' }
           : { operation: 'stationControl', operationId: request.requestId, outcome: 'applied', evidence: 'stationState' }
@@ -47,12 +55,13 @@ function connected(pendingMutation = false) {
   return { client, forwarded, errors, state, stored: () => stored }
 }
 
-it('completes successive enabled FT gestures without status polling exhausting relay capacity', async () => {
+it('keeps the original lease alive through successive FT gestures without exhausting relay capacity', async () => {
   const h = connected()
   try {
     h.client.open(); await vi.advanceTimersByTimeAsync(0)
     const acquire = h.client.acquire(); await vi.advanceTimersByTimeAsync(0); await acquire
-    for (let index = 0; index < 8; index++) {
+    const originalLease = h.state.leaseId
+    for (let index = 0; index < 20; index++) {
       for (let ticks = 0; ticks < 12 && (!h.client.getSnapshot().fresh || h.client.getSnapshot().busy); ticks++)
         await vi.advanceTimersByTimeAsync(250)
       expect(h.client.getSnapshot()).toMatchObject({ fresh: true, busy: false })
@@ -62,10 +71,33 @@ it('completes successive enabled FT gestures without status polling exhausting r
       expect(await action).toMatchObject({ outcome: 'applied' })
       expect(h.stored()).toBeNull()
     }
+    expect(Date.now()).toBeGreaterThanOrEqual(11000)
+    expect(h.state.leaseId).toBe(originalLease)
+    expect(h.forwarded.filter(entry => entry.type === 'acquire')).toHaveLength(1)
+    expect(h.forwarded.filter(entry => entry.type === 'heartbeat').length).toBeGreaterThan(1)
     expect(h.errors).toEqual([])
-    expect(h.forwarded.filter(entry => entry.type === 'stationControl')).toHaveLength(8)
+    expect(h.forwarded.filter(entry => entry.type === 'stationControl')).toHaveLength(20)
     for (const entry of h.forwarded)
       expect(h.forwarded.filter(other => other.at <= entry.at && other.at > entry.at - 1000).length).toBeLessThanOrEqual(4)
+  } finally { h.client.disconnected() }
+})
+
+it('releases the original lease after a command invalidates its displayed state', async () => {
+  const h = connected()
+  try {
+    h.client.open(); await vi.advanceTimersByTimeAsync(0)
+    const acquire = h.client.acquire(); await vi.advanceTimersByTimeAsync(0); await acquire
+    const action = h.client.control({ action: 'ft.txEnabled', expectedTier: 'FT8',
+      transmitEpoch: h.state.transmitEpoch!, on: true })
+    await vi.advanceTimersByTimeAsync(0); await action
+    expect(h.client.getSnapshot().state).toBeNull()
+    const release = h.client.release(); await vi.advanceTimersByTimeAsync(0); await release
+    expect(h.forwarded[h.forwarded.length - 1].type).toBe('release')
+    expect(h.state.phase).toBe('available')
+    const afterRelease = h.forwarded.length
+    await vi.advanceTimersByTimeAsync(6000)
+    expect(h.forwarded.slice(afterRelease).every(entry => entry.type === 'state')).toBe(true)
+    expect(h.client.getSnapshot().state?.phase).toBe('available')
   } finally { h.client.disconnected() }
 })
 

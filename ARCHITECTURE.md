@@ -187,6 +187,11 @@ are already blocked. Controls reflect admission capacity, and unsent commands
 write no receipt. Polling cannot overtake a control waiting for browser storage.
 Stop keeps its independent route and budget; no command is retried or moved to a
 newer authority window.
+Successful commands invalidate the browser's command context while retaining
+the existing lease solely for heartbeat renewal and release. The next refresh
+renews that lease rather than allowing continuous operating gestures to starve
+heartbeats. New actions still require a fresh state response; renewal cannot
+acquire a lease or restore permission revoked at the station.
 The separate `ftExchange` capability connects existing S&P, Resend and in-QSO
 free-text controls. Each gesture captures its rendered partner, exchange state,
 queued text and CQ-run flag before any asynchronous read, along with the original

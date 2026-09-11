@@ -230,7 +230,7 @@ it('sends one explicit intent and retains it until a later native readback', asy
   await Promise.resolve(); await Promise.resolve()
   expect(h.controls.read()?.operationId).toBe(request.requestId)
   await h.advance(250)
-  expect(h.sent[h.sent.length - 1].request.type).toBe('state')
+  expect(h.sent[h.sent.length - 1].request).toMatchObject({ type: 'heartbeat', leaseId: h.state.leaseId })
   h.reply({ ...h.state, revision: 2, nextSequence: 2 })
   await h.advance(250)
   expect(h.sent[h.sent.length - 1].request).toMatchObject({ type: 'result', operationId: request.requestId })

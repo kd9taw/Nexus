@@ -68,6 +68,10 @@ export class OperationClient {
   private pending: Pending | null = null
   private pendingStop: Pending | null = null
   private stopTarget: { stationBootId: string; leaseId: string; transmitEpoch: string } | null = null
+  // A successful mutation invalidates command context, not the controller's
+  // lease. Refresh with a heartbeat so continuous use cannot starve renewal.
+  // This token permits only renewal/release; actions still require fresh state.
+  private heartbeatLeaseId: string | null = null
   private timer: ReturnType<typeof setInterval> | undefined
   private stateUntil = 0
   private controlRefreshUntil = 0
@@ -139,6 +143,7 @@ export class OperationClient {
     this.timer = undefined
     this.resultIntent = null
     this.stopTarget = null
+    this.heartbeatLeaseId = null
     const stop = this.pendingStop
     this.pendingStop = null
     if (stop) { clearTimeout(stop.timer); stop.reject(new Error('operationUnknown')) }
@@ -170,10 +175,9 @@ export class OperationClient {
       this.view.error === 'stationUnsupported'
     )
       return
-    const s = this.view.state
     // Hidden pages cannot retain a control lease. Expiry is also enforced by the
     // native monotonic clock when a browser suspends timers altogether.
-    if (typeof document !== 'undefined' && document.hidden && s?.phase === 'controlling') {
+    if (typeof document !== 'undefined' && document.hidden && this.heartbeatLeaseId) {
       void this.release()
       return
     }
@@ -191,8 +195,8 @@ export class OperationClient {
     }
     this.polledAt = now
     const request: OperationRequest =
-      s?.phase === 'controlling' && s.leaseId
-        ? { type: 'heartbeat', requestId: crypto.randomUUID(), leaseId: s.leaseId }
+      this.heartbeatLeaseId
+        ? { type: 'heartbeat', requestId: crypto.randomUUID(), leaseId: this.heartbeatLeaseId }
         : { type: 'state', requestId: crypto.randomUUID() }
     void this.request(request).catch(() => {})
   }
@@ -223,6 +227,7 @@ export class OperationClient {
         timer: setTimeout(() => {
           if (this.pending !== p) return
           this.pending = null
+          this.heartbeatLeaseId = null
           this.finishBudget(request.requestId)
           const mutation = request.type === 'logManual' || request.type === 'stationControl'
           this.update({
@@ -256,6 +261,7 @@ export class OperationClient {
       } catch {
         clearTimeout(p.timer)
         this.pending = null
+        this.heartbeatLeaseId = null
         this.finishBudget(request.requestId)
         this.update({
           busy: false,
@@ -337,6 +343,7 @@ export class OperationClient {
     this.pending = null
     this.finishBudget(p.request.requestId)
     if ('error' in r) {
+      this.heartbeatLeaseId = null
       const unknown = p.request.type === 'logManual' && r.error === 'operationUnknown'
       if (p.request.type === 'stationControl' && r.error !== 'operationUnknown') {
         try { this.controlStorage?.write(null); this.update({ controlPending: null }) } catch {}
@@ -356,6 +363,7 @@ export class OperationClient {
     }
     if ('stop' in r.value) throw Error('invalidOperation')
     if ('phase' in r.value) {
+      this.heartbeatLeaseId = r.value.phase === 'controlling' ? r.value.leaseId : null
       this.stopTarget = this.operationVersion >= 4 && r.value.phase === 'controlling' && r.value.leaseId && r.value.transmitEpoch
         ? { stationBootId: r.value.stationBootId, leaseId: r.value.leaseId, transmitEpoch: r.value.transmitEpoch } : null
       this.stateUntil = p.started + Math.min(1200, r.value.leaseRemainingMs ?? 1200)
@@ -414,7 +422,8 @@ export class OperationClient {
     })
   }
   async release() {
-    const leaseId = this.view.state?.leaseId
+    const leaseId = this.heartbeatLeaseId
+    this.heartbeatLeaseId = null
     this.update({ state: null, fresh: false })
     if (!leaseId) return
     try {
