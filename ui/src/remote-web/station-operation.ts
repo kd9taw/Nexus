@@ -73,7 +73,7 @@ export function stationAction(raw: unknown): StationAction {
   switch (a.action) {
     case 'radio.frequency':
       object(a, ['action', 'dialMhz', 'band', 'sideband'])
-      if (!finite(a.dialMhz) || a.dialMhz <= 0 || a.dialMhz > 250000 || !oneOf(a.band, BANDS) || !oneOf(a.sideband, ['USB', 'LSB', 'FM', 'AM'])) invalid()
+      if (!finite(a.dialMhz) || a.dialMhz <= 0 || a.dialMhz > 250000 || (a.band !== '' && !oneOf(a.band, BANDS)) || !oneOf(a.sideband, ['USB', 'LSB', 'FM', 'AM'])) invalid()
       break
     case 'radio.mode':
       object(a, ['action', 'mode', 'followFrequency'])

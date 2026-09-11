@@ -107,22 +107,28 @@ impl Engine {
         self.remote_radio_idle()?;
         if !dial_mhz.is_finite()
             || !(0.0..=250000.0).contains(&dial_mhz)
-            || crate::bandplan::band_for_dial(dial_mhz) != Some(band)
+            || crate::bandplan::band_for_dial(dial_mhz).unwrap_or("") != band
             || !matches!(sideband, "USB" | "LSB" | "FM" | "AM")
         {
             return Err(Reason::InvalidAction);
         }
         let target_hz = (dial_mhz * 1e6).round() as u64;
         let dial_mhz = target_hz as f64 / 1e6;
-        if !self.settings.radio_pegged
-            && self
-                .settings
-                .route_radio(band, self.route_mode(band, dial_mhz))
-                .is_some_and(|id| id != self.settings.active_radio)
-        {
+        // Match the native dial owner: an unnamed receive frequency uses the
+        // bandless resolver, never catch-all band coverage or default-radio
+        // fallback. A real requested handoff still needs its own transaction.
+        let route_mode = self.route_mode(band, dial_mhz);
+        let route = if band.is_empty() {
+            self.settings.route_radio_bandless(route_mode)
+        } else {
+            self.settings.route_radio(band, route_mode)
+        };
+        if !self.settings.radio_pegged && route.is_some_and(|id| id != self.settings.active_radio) {
             return Err(Reason::UnsupportedAction);
         }
-        if target_hz == 0 || crate::bandplan::band_for_dial(target_hz as f64 / 1e6) != Some(band) {
+        if target_hz == 0
+            || crate::bandplan::band_for_dial(target_hz as f64 / 1e6).unwrap_or("") != band
+        {
             return Err(Reason::InvalidAction);
         }
         let target_mode =
@@ -411,7 +417,12 @@ impl Engine {
             }
             _ => false,
         };
-        if target.hz == 0 || (named_band != Some(target.band.as_str()) && !native_channel) {
+        let bandless_receive = matches!(&target.intent, Intent::Frequency)
+            && target.band.is_empty()
+            && named_band.is_none();
+        if target.hz == 0
+            || (named_band != Some(target.band.as_str()) && !native_channel && !bandless_receive)
+        {
             return Err(Reason::InvalidAction);
         }
         // FM's repeater offset/tone reconciliation is a separate transaction.

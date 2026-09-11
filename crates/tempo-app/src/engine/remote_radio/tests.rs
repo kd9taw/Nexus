@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 static NEXT: AtomicUsize = AtomicUsize::new(0);
+mod receive_tuning;
 struct Station {
     engine: Engine,
     connection: Connection,
@@ -1056,7 +1057,7 @@ fn the_station_rejects_invalid_frequency_payloads_without_queuing_or_saving() {
         (0.0, "40m", "USB"),
         (7.074, "20m", "USB"),
         (7.074, "40m", "USB\nT 1"),
-        (10.0, "", "USB"),
+        (10.0, "30m", "USB"),
     ] {
         let connection = s
             .engine
