@@ -3,6 +3,16 @@
 use super::*;
 use std::sync::atomic::AtomicBool;
 
+// Each case owns a synthetic station, but the native modem mutex is process-wide.
+// Isolate those stations so a success case is not implicitly a busy-decoder case.
+// The explicit contention test below still exercises the real refusing guard.
+static SELECTION_TESTS: Mutex<()> = Mutex::new(());
+fn selection_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    SELECTION_TESTS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+}
+
 fn station(peer: &Peer) -> Station {
     configured_station(peer, |_| {})
 }
@@ -107,6 +117,7 @@ fn apply(
 
 #[test]
 fn selection_worker_adopts_warm_and_cold_connections_and_does_not_replay_the_retune() {
+    let _station = selection_test_lock();
     for warm in [true, false] {
         let outgoing = retuning_peer(14_074_000, "PKTUSB", |_, _| None);
         let incoming = retuning_peer(7_100_000, "LSB", |_, _| None);
@@ -174,6 +185,7 @@ fn selection_worker_adopts_warm_and_cold_connections_and_does_not_replay_the_ret
 
 #[test]
 fn selection_worker_revocation_during_cold_open_returns_monitor_without_adopting_or_writing() {
+    let _station = selection_test_lock();
     let outgoing = retuning_peer(14_074_000, "PKTUSB", |_, _| None);
     let incoming = retuning_peer(7_100_000, "LSB", |_, _| None);
     let mut s = station(&outgoing);
@@ -198,6 +210,7 @@ fn selection_worker_revocation_during_cold_open_returns_monitor_without_adopting
 
 #[test]
 fn selection_worker_failed_incoming_confirmation_preserves_outgoing_and_has_no_deferred_retry() {
+    let _station = selection_test_lock();
     let outgoing = retuning_peer(14_074_000, "PKTUSB", |_, _| None);
     let incoming = retuning_peer(7_100_000, "LSB", |line, _| {
         line.starts_with("F ").then(|| "RPRT -1\n".into())
@@ -220,6 +233,7 @@ fn selection_worker_failed_incoming_confirmation_preserves_outgoing_and_has_no_d
 
 #[test]
 fn selection_worker_revocation_after_incoming_write_returns_unknown_without_adoption_or_retry() {
+    let _station = selection_test_lock();
     let outgoing = retuning_peer(14_074_000, "PKTUSB", |_, _| None);
     let mut s = station(&outgoing);
     let authority = Arc::new(Revocation::default());
@@ -250,6 +264,7 @@ fn selection_worker_revocation_after_incoming_write_returns_unknown_without_adop
 
 #[test]
 fn selection_worker_failed_save_keeps_actual_adoption_and_never_replays_configuration() {
+    let _station = selection_test_lock();
     let outgoing = retuning_peer(14_074_000, "PKTUSB", |_, _| None);
     let incoming = retuning_peer(7_100_000, "LSB", |_, _| None);
     let mut s = station(&outgoing);
@@ -284,6 +299,7 @@ fn selection_worker_failed_save_keeps_actual_adoption_and_never_replays_configur
 
 #[test]
 fn selection_worker_confirms_fm_repeater_settings_and_does_not_replay_them() {
+    let _station = selection_test_lock();
     let outgoing = retuning_peer(14_074_000, "USB", |_, _| None);
     let repeater = Mutex::new(("None".to_string(), 0i64, 0u32));
     let incoming = retuning_peer(145_500_000, "LSB", move |line, _| {
@@ -365,6 +381,7 @@ fn selection_worker_confirms_fm_repeater_settings_and_does_not_replay_them() {
 
 #[test]
 fn selection_worker_adopts_desired_levels_and_actual_readback_without_replaying_controls() {
+    let _station = selection_test_lock();
     let outgoing = retuning_peer(14_074_000, "PKTUSB", |_, _| None);
     let levels = Mutex::new(std::collections::HashMap::from([
         ("RFPOWER", 0.8f32),
@@ -432,6 +449,7 @@ fn selection_worker_adopts_desired_levels_and_actual_readback_without_replaying_
 
 #[test]
 fn selection_worker_refuses_busy_owner_before_open_or_hardware_cleanup() {
+    let _station = selection_test_lock();
     for busy in 0..4 {
         let outgoing = retuning_peer(14_074_000, "PKTUSB", |_, _| None);
         let mut s = station(&outgoing);
@@ -461,6 +479,7 @@ fn selection_worker_refuses_busy_owner_before_open_or_hardware_cleanup() {
 
 #[test]
 fn selection_worker_switches_back_using_the_original_connection_and_retires_old_readings() {
+    let _station = selection_test_lock();
     let outgoing = retuning_peer(14_074_000, "PKTUSB", |_, _| None);
     let incoming = retuning_peer(7_100_000, "LSB", |_, _| None);
     let mut s = station(&outgoing);
@@ -531,6 +550,7 @@ fn selection_worker_switches_back_using_the_original_connection_and_retires_old_
 
 #[test]
 fn routed_frequency_uses_one_confirmed_handoff_and_never_queues_the_incoming_profile_dial() {
+    let _station = selection_test_lock();
     for warm in [false, true] {
         for confirmed in [false, true] {
             let outgoing = retuning_peer(14_074_000, "PKTUSB", |_, _| None);
@@ -646,6 +666,7 @@ fn routed_frequency_uses_one_confirmed_handoff_and_never_queues_the_incoming_pro
 
 #[test]
 fn routed_mode_handoff_preserves_confirmed_power_and_never_replays_later() {
+    let _station = selection_test_lock();
     for warm in [false, true] {
         for confirmed in [false, true] {
             for initial_power in [0.2_f32, 0.8] {
@@ -790,6 +811,7 @@ fn routed_mode_handoff_preserves_confirmed_power_and_never_replays_later() {
 
 #[test]
 fn mode_entry_without_qsy_keeps_the_native_radio_despite_a_matching_route() {
+    let _station = selection_test_lock();
     use tempo_app::settings::{RouteMode, RoutingRule};
     let peer = retuning_peer(14_074_000, "PKTUSB", |_, _| None);
     let mut s = configured_station(&peer, |settings| {
@@ -826,6 +848,7 @@ fn mode_entry_without_qsy_keeps_the_native_radio_despite_a_matching_route() {
 
 #[test]
 fn routed_mode_refuses_an_acknowledged_but_unapplied_power_ceiling() {
+    let _station = selection_test_lock();
     use tempo_app::settings::{OperatingMode, RouteMode, RoutingRule};
     for warm in [false, true] {
         let outgoing = retuning_peer(14_074_000, "USB", |_, _| None);
@@ -913,6 +936,7 @@ fn routed_mode_refuses_an_acknowledged_but_unapplied_power_ceiling() {
 
 #[test]
 fn routed_spot_commits_exact_contact_context_only_after_confirmed_incoming_tuning() {
+    let _station = selection_test_lock();
     for warm in [false, true] {
         for confirmed in [false, true] {
             for (mode, cat) in [("cw", "CWR"), ("phone", "LSB")] {
@@ -1060,6 +1084,7 @@ fn routed_spot_commits_exact_contact_context_only_after_confirmed_incoming_tunin
 
 #[test]
 fn routed_tier_installs_the_native_decoder_only_after_confirmed_channel_handoff() {
+    let _station = selection_test_lock();
     for warm in [false, true] {
         for confirmed in [false, true] {
             let outgoing = retuning_peer(14_074_000, "PKTUSB", |_, _| None);
@@ -1181,6 +1206,7 @@ fn routed_tier_installs_the_native_decoder_only_after_confirmed_channel_handoff(
 
 #[test]
 fn tier_without_a_band_channel_keeps_the_native_radio_and_frequency() {
+    let _station = selection_test_lock();
     use tempo_app::settings::{RouteMode, RoutingRule};
     let peer = retuning_peer(432_174_000, "PKTUSB", |_, _| None);
     let mut s = configured_station(&peer, |settings| {
@@ -1216,6 +1242,7 @@ fn tier_without_a_band_channel_keeps_the_native_radio_and_frequency() {
 
 #[test]
 fn routed_workspace_enters_js8_only_after_confirmed_channel_handoff() {
+    let _station = selection_test_lock();
     for warm in [false, true] {
         for confirmed in [false, true] {
             let outgoing = retuning_peer(14_074_000, "PKTUSB", |_, _| None);
@@ -1350,4 +1377,49 @@ fn routed_workspace_enters_js8_only_after_confirmed_channel_handoff() {
             assert!(s.backend.played.is_empty());
         }
     }
+}
+
+#[test]
+fn selection_worker_refuses_a_held_modem_and_an_explicit_later_gesture_can_succeed() {
+    let _station = selection_test_lock();
+    let outgoing = retuning_peer(14_074_000, "PKTUSB", |_, _| None);
+    let incoming = retuning_peer(7_100_000, "LSB", |_, _| None);
+    let mut s = configured_station(&outgoing, |settings| {
+        settings.radios[1].bands = vec!["2m".into()];
+    });
+    engine_lock(&s.engine).configure_remote_selection_host(true);
+    let before = engine_lock(&s.engine).settings().clone();
+    let pool = Arc::new(MonitorConnections::new(vec![connection(&s, &incoming)]));
+    let receipt = s.queue_dial(145.225, "2m");
+    let guard = loop {
+        if let Some(guard) = tempo_app::engine::remote_selection::Ft8A7ResetGuard::try_acquire() {
+            break guard;
+        }
+        std::thread::yield_now();
+    };
+    apply(&mut s, &pool, |_| {
+        panic!("warm connection must be retained")
+    });
+    assert!(matches!(receipt.outcome(), Outcome::Unknown { .. }));
+    assert_eq!(engine_lock(&s.engine).settings(), &before);
+    assert!(!s.path.exists());
+    assert!(!engine_lock(&s.engine).tx_enabled());
+    assert!(s.backend.played.is_empty());
+    assert!(super::fm::writes(&incoming).contains(&"F 145225000".into()));
+    drop(guard);
+    // A separate, explicit request after releasing that same guard succeeds.
+    // The first uncertain request is never retried by the owner.
+    let next = s.queue_dial(145.225, "2m");
+    apply(&mut s, &pool, |_| {
+        panic!("returned connection must be reusable")
+    });
+    assert!(matches!(
+        next.outcome(),
+        Outcome::Applied {
+            evidence: Evidence::RadioReadback
+        }
+    ));
+    assert!(matches!(receipt.outcome(), Outcome::Unknown { .. }));
+    assert_eq!(engine_lock(&s.engine).settings().active_radio, 1);
+    assert!(s.path.exists());
 }
