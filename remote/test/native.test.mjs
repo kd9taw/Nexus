@@ -598,7 +598,8 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
        assert.equal(called.response.value?.outcome,'applied',JSON.stringify(called.response))
        const contact = await probe.send({type:'ftCallEvidence'})
        assert.equal(contact.qso.dxcall,'W1AW');assert.equal(contact.qso.dxgrid,'FN31')
-       assert.equal(contact.owned,true);assert.match(contact.qso.txNow,/W1AW N0CALL AA00/)
+       // N0CALL has a nonstandard FT suffix: preserve the native hashed-call form.
+       assert.equal(contact.owned,true);assert.equal(contact.qso.txNow,'<W1AW> N0CALL')
        ft = await ftState()
        assert.deepEqual((await operation({type:'stopTransmit',stationBootId:ft.stationBootId,
          leaseId:ft.leaseId,transmitEpoch:ft.transmitEpoch})).response.value,{stop:'accepted'})
