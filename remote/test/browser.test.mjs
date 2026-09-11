@@ -705,6 +705,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         checks.push({width,height,zoom,theme,shape})
         await click(picker);await until(`!!${menu}`);await settledLayout()
         const menuShape=await evaluate(`(()=>{const e=${menu},r=e.getBoundingClientRect();return {rect:r.toJSON(),labels:[...e.querySelectorAll('[role="menuitem"]')].map(i=>i.textContent),scrollHeight:e.scrollHeight,clientHeight:e.clientHeight}})()`)
+        if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,`quick-modes-open-${width}-${zoom}-${theme}.png`),Buffer.from(shot.data,'base64'));await writeFile(join(artifacts,`quick-modes-${width}-${zoom}-${theme}.json`),JSON.stringify(menuShape,null,2))}
         assert.deepEqual(menuShape.labels,['FT','Phone','CW','RTTY','PSK','JS8','Tempo','SSTV','APRS'])
         assert.ok(menuShape.rect.top>=0&&menuShape.rect.left>=0&&menuShape.rect.right<=width&&menuShape.rect.bottom<=height,'the real zoomed mode menu must fit its browser window')
         for(const edge of ['lastElementChild','firstElementChild']){
