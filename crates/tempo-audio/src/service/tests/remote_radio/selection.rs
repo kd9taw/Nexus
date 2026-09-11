@@ -823,3 +823,90 @@ fn mode_entry_without_qsy_keeps_the_native_radio_despite_a_matching_route() {
         .any(|line| line.starts_with("M CW ")));
     assert!(s.backend.played.is_empty());
 }
+
+#[test]
+fn routed_mode_refuses_an_acknowledged_but_unapplied_power_ceiling() {
+    use tempo_app::settings::{OperatingMode, RouteMode, RoutingRule};
+    for warm in [false, true] {
+        let outgoing = retuning_peer(14_074_000, "USB", |_, _| None);
+        let incoming = retuning_peer(7_100_000, "LSB", |line, _| match line {
+            "l RFPOWER" => Some("0.8\n".into()),
+            "L RFPOWER 0.400" => Some("RPRT 0\n".into()),
+            _ => None,
+        });
+        let mut s = configured_station(&outgoing, |settings| {
+            settings.operating_mode = OperatingMode::Phone;
+            settings.max_power_digital = Some(0.4);
+            settings.routing_rules = vec![RoutingRule {
+                mode: Some(RouteMode::Digital),
+                radio: 1,
+                ..RoutingRule::default()
+            }];
+        });
+        engine_lock(&s.engine).configure_remote_selection_host(true);
+        engine_lock(&s.engine).set_rf_power(0.8);
+        s.state.last_rf_power = Some(0.8);
+        let original = engine_lock(&s.engine).settings().clone();
+        let pool = Arc::new(MonitorConnections::new(if warm {
+            vec![connection(&s, &incoming)]
+        } else {
+            vec![]
+        }));
+        let receipt = s.queue_mode("digital", true);
+        apply(&mut s, &pool, |_| {
+            (Rig::rigctld(&incoming.address), None, Some(true))
+        });
+        assert!(matches!(receipt.outcome(), Outcome::Unknown { .. }));
+        let attempted = super::fm::writes(&incoming);
+        assert_eq!(
+            attempted
+                .iter()
+                .filter(|line| *line == "L RFPOWER 0.400")
+                .count(),
+            1
+        );
+        assert!(attempted.iter().any(|line| line == "F 14074000"));
+        let reads = outgoing
+            .lines
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|line| *line == "f")
+            .count();
+        let started = now_unix_ms();
+        for delta in [200.0, 400.0, 800.0, 1600.0, 2400.0] {
+            s.state
+                .step(
+                    &s.engine,
+                    &mut s.backend,
+                    &mut s.rig,
+                    &no_sinks(),
+                    started + delta,
+                    &mut mock_reopen_audio(),
+                    &mut mock_reopen_rig(),
+                    &mut StationSinks::new(),
+                )
+                .unwrap();
+        }
+        assert!(
+            outgoing
+                .lines
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|line| *line == "f")
+                .count()
+                > reads
+        );
+        assert_eq!(super::fm::writes(&incoming), attempted);
+        assert!(!super::fm::writes(&outgoing)
+            .iter()
+            .any(|line| line.starts_with("F ") || line.starts_with("M ") || line == "T 1"));
+        let e = engine_lock(&s.engine);
+        assert_eq!(e.settings(), &original);
+        assert_eq!(e.rf_power(), Some(0.8));
+        assert!(!s.path.exists());
+        assert!(!e.tx_enabled());
+        assert!(s.backend.played.is_empty());
+    }
+}
