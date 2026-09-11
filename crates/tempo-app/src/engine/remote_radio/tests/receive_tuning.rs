@@ -77,6 +77,13 @@ fn off_band_remote_receive_tuning_matches_the_native_dial_and_memory_policy() {
         ] {
             let before = serde_json::to_value(s.engine.settings()).unwrap();
             let generation = s.engine.tx_gate_gen;
+            // This compares native dial policy, not wall-clock expiry. Building
+            // the other decoder and serializing full Settings can outlive the
+            // initial sample under workspace load; sample the simulated idle
+            // radio immediately before this explicit positive-control request.
+            let hz = s.engine.settings.dial_hz();
+            let mode = s.engine.rig_mode_effective();
+            s.sample(hz, &mode);
             let receipt = queue_dial(&mut s, dial, band).unwrap();
             assert_eq!(serde_json::to_value(s.engine.settings()).unwrap(), before);
             assert_eq!(
@@ -113,6 +120,30 @@ fn off_band_remote_receive_tuning_matches_the_native_dial_and_memory_policy() {
             assert_eq!(saved.band, band);
         }
     }
+}
+
+#[test]
+fn off_band_receive_refuses_an_expired_idle_sample_then_accepts_a_fresh_gesture() {
+    let mut s = Station::new(OperatingMode::Phone);
+    let old = s
+        .engine
+        .remote_radio_read(&s.connection, Instant::now() - Duration::from_secs(2))
+        .unwrap();
+    s.engine.remote_observe_ptt(Some(&old), Some(false));
+    assert!(matches!(
+        queue_dial(&mut s, 10.0, ""),
+        Err(Reason::ReadingUnavailable)
+    ));
+    assert!(s.engine.take_remote_radio().is_none());
+    assert!(!s.path.exists());
+    let mode = s.engine.rig_mode_effective();
+    s.sample(14_074_000, &mode);
+    let receipt = queue_dial(&mut s, 10.0, "").unwrap();
+    let request = s.engine.take_remote_radio().unwrap();
+    s.sample(request.target_hz, &request.target_mode);
+    assert!(request.commit(&mut s.engine));
+    assert!(matches!(receipt.outcome(), Outcome::Applied { .. }));
+    assert!(!s.engine.tx_enabled());
 }
 
 #[test]
