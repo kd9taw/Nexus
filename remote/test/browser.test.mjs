@@ -201,6 +201,20 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
     }
     let radioConnection=1
     const controlContext=()=>({radioId:radioSelection?applicationData.get_snapshot.activeRadioId:1,radioConnection,ampConnection:1,ampReadSequence:1})
+    const adoptBrowserRadio=id=>{
+      assert.ok(radioSelection&&[1,2].includes(id))
+      assert.equal(applicationData.get_snapshot.radio.txEnabled,false)
+      if(applicationData.get_snapshot.activeRadioId===id)return
+      radioConnection++
+      applicationData.get_snapshot.activeRadioId=id
+      for(const radio of applicationData.get_snapshot.radios)radio.isActive=radio.id===id
+      applicationData.get_settings.activeRadio=id
+      const doc=navigation.documents.settings
+      doc.settings.activeRadio=id
+      doc.revision=createHash('sha256').update(JSON.stringify(doc.settings)).digest('hex')
+      fixture.station.radio.id=id
+      for(const key of ['cat','dial','mode','ptt'])if(fixture.station.radio.readings[key])fixture.station.radio.readings[key]={connectionGeneration:radioConnection,readSequence:1,ageMs:0}
+    }
     if(radioSelection){
       const doc=navigation.documents.settings
       doc.settings.radios=[1,2].map(id=>({...structuredClone(doc.settings.radios[0]),id,name:`Test radio ${id}`,rigctldPort:4532+id}))
@@ -285,17 +299,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
           assert.deepEqual(r.context,controlContext())
           stationRequests.push(r);const a=r.action
           if(a.action==='radio.select'){
-            assert.ok(radioSelection&&[1,2].includes(a.radioId))
-            assert.equal(applicationData.get_snapshot.radio.txEnabled,false)
-            radioConnection++
-            applicationData.get_snapshot.activeRadioId=a.radioId
-            for(const radio of applicationData.get_snapshot.radios)radio.isActive=radio.id===a.radioId
-            applicationData.get_settings.activeRadio=a.radioId
-            const doc=navigation.documents.settings
-            doc.settings.activeRadio=a.radioId
-            doc.revision=createHash('sha256').update(JSON.stringify(doc.settings)).digest('hex')
-            fixture.station.radio.id=a.radioId
-            for(const key of ['cat','dial','mode','ptt'])if(fixture.station.radio.readings[key])fixture.station.radio.readings[key]={connectionGeneration:radioConnection,readSequence:1,ageMs:0}
+            adoptBrowserRadio(a.radioId)
           }else if(a.action==='decoder.arm'){
             if(a.receiver==='sstv'){applicationData.get_sstv_state.state.armed=a.on;applicationData.get_sstv_state.state.health.armed=a.on}
             else if(a.receiver==='aprs')applicationData.get_remote_aprs_state.health.arm=a.on?'auto':'off'
@@ -306,6 +310,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
             Object.assign(applicationData.get_snapshot,{workTick:(applicationData.get_snapshot.workTick??0)+1,workView:a.mode,workCall:a.call.toUpperCase()})
           }else if(a.action==='radio.frequency'){
             assert.ok(a.dialMhz>0);assert.equal(a.band,a.dialMhz===10?'':'40m');assert.ok(['USB','LSB'].includes(a.sideband))
+            if(radioSelection)adoptBrowserRadio(a.dialMhz<10?1:2)
             applicationData.get_snapshot.radio.dialMhz=a.dialMhz;applicationData.get_snapshot.radio.band=a.band;applicationData.get_snapshot.radio.sideband=a.sideband
           }else if(a.action==='radio.phoneMode'){
             const radio=applicationData.get_snapshot.radio
@@ -609,16 +614,40 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       assert.equal(stationRequests.length,3)
       assert.deepEqual(stationRequests[2].action,{action:'radio.select',radioId:2})
       assert.equal(await evaluate(`window.__radioCardsLost`),false)
+      // A typed tune can cause the same station-owned handoff. The next tune
+      // must bind the new radio/connection, not the selection's old context.
+      await click(button('FT'));await settledLayout()
+      for(const [index,mhz] of [7.075,7.076].entries()){
+        const before=stationRequests.length,context=controlContext()
+        const dial=`document.querySelector('.operate-cockpit .ch-readout .readout[role="button"]')`
+        await until(`!!${dial}`);await fresh();await click(dial)
+        const input=`document.querySelector('.operate-cockpit .readout-input')`
+        await until(`!!${input}`)
+        for(const type of ['keyDown','keyUp'])await browser.call('Input.dispatchKeyEvent',{type,key:'a',code:'KeyA',windowsVirtualKeyCode:65,modifiers:2},session)
+        await browser.call('Input.insertText',{text:String(mhz)},session)
+        for(const type of ['keyDown','keyUp'])await browser.call('Input.dispatchKeyEvent',{type,key:'Enter',code:'Enter',windowsVirtualKeyCode:13},session)
+        await until(`document.querySelector('.operate-cockpit .readout-val')?.textContent.includes('${mhz.toFixed(4)}')`)
+        await until(`${pill(1)}?.getAttribute('aria-pressed')==='true'`)
+        await until(`document.querySelector('.remote-control-result')?.textContent.includes('confirmed')`)
+        assert.equal(stationRequests.length,before+1)
+        assert.deepEqual(stationRequests.at(-1).context,context)
+        assert.equal(context.radioId,index===0?2:1)
+        assert.equal(stationRequests.at(-1).action.action,'radio.frequency')
+        assert.equal(stationRequests.at(-1).action.dialMhz,mhz)
+      }
+      await click(button('Settings'));await until(`!!document.querySelector('.settings-form')`);await click(button('Radio'))
+      await until(`${card(1)}?.classList.contains('active')`)
+      assert.equal(await evaluate(`document.querySelectorAll('.radio-card').length`),2)
       stationControls=false
-      await until(`[...(${card(1)}?.querySelectorAll('button')??[])].find(e=>e.textContent==='Make active')?.disabled===true`)
-      assert.equal(stationRequests.length,3)
+      await until(`[...(${card(2)}?.querySelectorAll('button')??[])].find(e=>e.textContent==='Make active')?.disabled===true`)
+      assert.equal(stationRequests.length,5)
       assert.equal(exceptions,0);assert.equal(unexpectedMessages,0)
       if(artifacts){
         const shot=await browser.call('Page.captureScreenshot',{format:'png'},session)
         await writeFile(join(artifacts,'radio-selection.png'),Buffer.from(shot.data,'base64'))
-        await writeFile(join(artifacts,'radio-selection-results.json'),JSON.stringify({actions:stationRequests.map(r=>({action:r.action,context:r.context})),observerRefusal:true,revocationRefusal:true,profilesRetained:true,selectionGeometry,exchanges,exceptions,unexpectedMessages},null,2))
+        await writeFile(join(artifacts,'radio-selection-results.json'),JSON.stringify({actions:stationRequests.map(r=>({action:r.action,context:r.context})),observerRefusal:true,revocationRefusal:true,profilesRetained:true,routedFrequency:true,selectionGeometry,exchanges,exceptions,unexpectedMessages},null,2))
       }
-      console.log('Compiled radio selection: existing switcher and Settings, changing radio context, retained profiles and revoked permission passed');return
+      console.log('Compiled radio selection: existing switcher, Settings and routed frequency, changing radio context, retained profiles and revoked permission passed');return
     }
     if(workSpot){
       const row=call=>`[...document.querySelectorAll('.np-row')].find(e=>e.textContent.includes('${call}'))`
