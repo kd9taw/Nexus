@@ -872,6 +872,15 @@ The desktop identity check and saved double-click arming preference still apply.
 Plain decode selection fills the browser's DX fields; Ctrl-double-click can also
 move RX with receiver permission, without borrowing transmit authority.
 
+The `ftExchange` capability connects S&P, Resend and free text in the same FT
+strip. It carries the rendered partner, exchange state, queued message and CQ-run
+flag, plus the original controller window and transmit generation. A changed
+exchange is refused before the native verb runs. S&P uses the native decoder reset
+under a nonblocking lock; none of these commands changes the TX-enable policy.
+Remote free-text drafts remain until confirmation, including when a request is
+refused or its outcome is uncertain. Slot selection, period and TX-offset controls
+and complete durable QSO logging still require their own operation paths.
+
 Call selection currently requires the native 240-row history or current roster.
 Older displayed history, typed targets, complete QSO progression and logging,
 other modes, browser audio and hardware/WAN acceptance remain incomplete.
