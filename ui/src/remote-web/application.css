@@ -65,7 +65,10 @@
    existing cockpit scroller owns the excess. The saved splitter basis still
    sizes the panel above that content minimum. */
 .remote-workspace .cockpit-waterfall { min-height: min-content; flex-shrink: 0; }
-.remote-workspace .cockpit-waterfall .wf-stage { min-height: 4em; }
+/* The same wrapped toolbar can exhaust the native JS8/RTTY/PSK strip's
+   viewport-relative height. Each hosted cockpit already owns a scrollbar. */
+.remote-workspace .waterfall-wrap { min-height: min-content; }
+.remote-workspace .wf-stage { min-height: 4em; }
 /* A stacked Tx-message column must scroll its content rather than paint over
    the following recall rail when the effective viewport is narrow. */
 .remote-workspace .cockpit-qsocol { overflow-y: auto; }

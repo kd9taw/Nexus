@@ -754,6 +754,7 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
           await until(`!!document.querySelector('${selector}')&&!document.querySelector('${selector}').disabled`)
           await evaluate(`document.querySelector('${selector}').scrollIntoView({block:'center',behavior:'instant'})`);await settledLayout()
           const shape=await evaluate(`(()=>{const e=document.querySelector('${selector}'),r=e.getBoundingClientRect(),hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);return{rect:r.toJSON(),hit:hit?.outerHTML.slice(0,300),good:r.width>0&&r.height>0&&e.contains(hit)&&document.documentElement.scrollWidth<=innerWidth+1&&document.documentElement.scrollHeight<=innerHeight+1}})()`)
+          if(!shape.good&&artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'decoder-layout-failure.png'),Buffer.from(shot.data,'base64'));await writeFile(join(artifacts,'decoder-layout-failure.json'),JSON.stringify({name,selector,width,height,zoom,theme,shape},null,2))}
           assert.equal(shape.good,true,`Decoder control reachable ${name} ${width} ${zoom}: ${JSON.stringify(shape)}`);count++
           if(artifacts&&width===390&&zoom===1.75){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,`decoder-${name}-390-175-${theme}.png`),Buffer.from(shot.data,'base64'))}
         }
