@@ -2,7 +2,7 @@
 //! changes station state; only fresh, matching hardware readings permit the
 //! native commit. Frequency/section changes also save Settings; tier selection
 //! keeps native live-state semantics. A failed/expired intent is never replayed.
-use super::Engine;
+use super::{DecoderMutation, Engine};
 use crate::dto::Tier;
 use crate::remote_control::{Completion, Evidence, Outcome, Permit, Reason, WritePermission};
 use crate::settings::OperatingMode;
@@ -598,23 +598,30 @@ impl Request {
                 ..
             } => {
                 engine.set_operating_mode_with_arming("digital", follow_frequency, false);
-                let mut install = |engine: &mut Engine, decoder| {
-                    engine.install_source_into(
+                let mut decoder = |engine: &mut Engine, mutation| match mutation {
+                    DecoderMutation::Install(source) => engine.install_source_into(
                         source_slot.as_mut().expect("workspace decoder lock"),
-                        decoder,
-                    );
+                        source,
+                    ),
+                    DecoderMutation::ResetHarq => Engine::harq_reset_serialized(
+                        source_slot.as_ref().expect("workspace decoder lock"),
+                    ),
                 };
                 match workspace {
                     Workspace::Ft => {
-                        engine.set_area_with_installer("dx", &mut install);
+                        engine.set_area_with_decoder("dx", &mut decoder);
                         if engine.tier() == Tier::Js8 {
-                            engine.set_tier_with_installer(Tier::Ft8, &mut install);
+                            engine.set_tier_with_installer(Tier::Ft8, |engine, source| {
+                                decoder(engine, DecoderMutation::Install(source))
+                            });
                         }
                     }
-                    Workspace::Tempo => engine.set_area_with_installer("msg", &mut install),
+                    Workspace::Tempo => engine.set_area_with_decoder("msg", &mut decoder),
                     Workspace::Js8 => {
                         engine.js8_start_session();
-                        engine.set_tier_with_installer(Tier::Js8, &mut install);
+                        engine.set_tier_with_installer(Tier::Js8, |engine, source| {
+                            decoder(engine, DecoderMutation::Install(source))
+                        });
                     }
                 }
                 if let Some(power) = power.filter(|_| self.power_limit.is_some()) {

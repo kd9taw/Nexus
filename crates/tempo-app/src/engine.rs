@@ -834,6 +834,14 @@ pub fn source_lock(s: &SharedSource) -> std::sync::MutexGuard<'_, Box<dyn Signal
     s.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// The serialized decoder effects of a native operating transition. Remote
+/// commits already own this mutex; local verbs acquire it at the same points
+/// they always have. Neither path skips the reset or replaces the shared mutex.
+enum DecoderMutation {
+    Install(Box<dyn SignalSource>),
+    ResetHarq,
+}
+
 /// Lock the shared [`Engine`] mutex, RECOVERING from poison instead of
 /// propagating it — ONE strategy at every site (the radio loop, the Tauri
 /// commands, the supervisor), mirroring `tempo_fast_sys::modem_lock()`.
@@ -9488,6 +9496,14 @@ impl Engine {
     /// Set the operating mode. `spec`: `chat` | `qso-run` | `qso-monitor` |
     /// `fieldday-run` | `fieldday-sp`.
     pub fn set_mode(&mut self, spec: &str) -> Result<(), String> {
+        self.set_mode_with_decoder(spec, Self::apply_decoder_mutation)
+    }
+
+    fn set_mode_with_decoder(
+        &mut self,
+        spec: &str,
+        mut decoder: impl FnMut(&mut Self, DecoderMutation),
+    ) -> Result<(), String> {
         let mycall = self.settings.mycall.clone();
         let mygrid = self.settings.mygrid.clone();
         // A RUN mode auto-calls CQ and arms TX below — starting one on a tier that
@@ -9594,7 +9610,9 @@ impl Engine {
         // TX, the bubble said "sending", and it could never transmit at all. Same
         // outcome for FT8/FT4 as before (neither is `is_chat`).
         if matches!(self.mode, Mode::Chat) && !self.app.tier().is_chat() {
-            self.set_tier(Tier::TempoFast);
+            self.set_tier_with_installer(Tier::TempoFast, |engine, source| {
+                decoder(engine, DecoderMutation::Install(source));
+            });
         }
         // Running modes (Call CQ / Field-Day run) auto-call CQ, so entering one
         // must ENABLE TX like WSJT-X's run start — otherwise, after a prior Halt Tx
@@ -9622,7 +9640,7 @@ impl Engine {
         self.qso_start_unix = None; // a fresh QSO stamps its own start time
                                     // Clear stale receive-side IR-HARQ buffers so a new exchange never
                                     // joint-combines with retransmissions from a previous one.
-        self.harq_reset_locked();
+        decoder(self, DecoderMutation::ResetHarq);
         Ok(())
     }
 
@@ -9632,7 +9650,7 @@ impl Engine {
     /// mode when they're incompatible with the area, so re-entering an area never
     /// resets a live QSO or chat.
     pub fn set_area(&mut self, area: &str) {
-        self.set_area_with_installer(area, |engine, source| engine.install_source(source));
+        self.set_area_with_decoder(area, Self::apply_decoder_mutation);
     }
 
     /// The area's remembered decoder choice, without changing a radio, source,
@@ -9648,10 +9666,10 @@ impl Engine {
 
     // Remote holds the stable decoder mutex at commit, just as for a tier
     // transaction. Keep every native area side effect in this shared path.
-    fn set_area_with_installer(
+    fn set_area_with_decoder(
         &mut self,
         area: &str,
-        install: impl FnOnce(&mut Self, Box<dyn SignalSource>),
+        mut decoder: impl FnMut(&mut Self, DecoderMutation),
     ) {
         let target = self.area_tier(area);
         match area {
@@ -9663,10 +9681,12 @@ impl Engine {
                 // hand-kept tier list.
                 if !self.app.tier().is_chat() {
                     self.last_dx_tier = Some(self.app.tier());
-                    self.set_tier_with_installer(target, install);
+                    self.set_tier_with_installer(target, |engine, source| {
+                        decoder(engine, DecoderMutation::Install(source));
+                    });
                 }
                 if !matches!(self.mode, Mode::Chat) {
-                    let _ = self.set_mode("chat");
+                    let _ = self.set_mode_with_decoder("chat", &mut decoder);
                 }
             }
             _ => {
@@ -9683,10 +9703,12 @@ impl Engine {
                 // that cannot transmit.
                 if self.app.tier().is_chat() {
                     self.last_msg_tier = Some(self.app.tier());
-                    self.set_tier_with_installer(target, install);
+                    self.set_tier_with_installer(target, |engine, source| {
+                        decoder(engine, DecoderMutation::Install(source));
+                    });
                 }
                 if matches!(self.mode, Mode::Chat) {
-                    let _ = self.set_mode("qso-monitor");
+                    let _ = self.set_mode_with_decoder("qso-monitor", &mut decoder);
                 }
             }
         }
@@ -10004,11 +10026,22 @@ impl Engine {
 
     /// `tempo_fast::harq_reset()` serialized behind the decoder lock, so it can never race
     /// the worker thread's in-flight decode (which uses the same process-global FT1
-    /// IR-HARQ buffers). Every engine-thread reset goes through here; the decode
-    /// path's own reset already runs under the lock in [`run_decode_job`].
+    /// IR-HARQ buffers). Ordinary engine-thread resets acquire here; a native
+    /// transition already holding the guard uses `harq_reset_serialized`. The
+    /// decode path's reset runs under this same lock in [`run_decode_job`].
     fn harq_reset_locked(&self) {
-        let _g = source_lock(&self.source);
+        Self::harq_reset_serialized(&source_lock(&self.source));
+    }
+
+    fn harq_reset_serialized(_source: &std::sync::MutexGuard<'_, Box<dyn SignalSource>>) {
         tempo_fast::harq_reset();
+    }
+
+    fn apply_decoder_mutation(&mut self, mutation: DecoderMutation) {
+        match mutation {
+            DecoderMutation::Install(source) => self.install_source(source),
+            DecoderMutation::ResetHarq => self.harq_reset_locked(),
+        }
     }
 
     /// Clear the CW decode transcript + reset the stream decoder. A QSY (band change,

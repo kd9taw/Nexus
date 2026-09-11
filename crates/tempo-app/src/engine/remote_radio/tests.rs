@@ -207,6 +207,89 @@ fn workspace_entry_uses_native_area_memories_and_js8_session_policy() {
 }
 
 #[test]
+fn workspace_entries_match_native_modes_channels_memories_and_lower_power() {
+    for (mode, name) in [
+        (OperatingMode::Digital, "digital"),
+        (OperatingMode::Cw, "cw"),
+        (OperatingMode::Phone, "phone"),
+        (OperatingMode::Rtty, "rtty"),
+        (OperatingMode::Keyboard, "keyboard"),
+    ] {
+        for from in [Tier::Ft4, Tier::TempoDeep, Tier::Js8] {
+            for workspace in [Workspace::Ft, Workspace::Tempo, Workspace::Js8] {
+                let mut s = Station::new(mode);
+                let mut native = Station::new(mode);
+                for station in [&mut s, &mut native] {
+                    station.engine.settings.max_power_digital = Some(0.2);
+                    station.engine.settings.working_frequencies.push(
+                        crate::settings::WorkingFreq {
+                            band: "40m".into(),
+                            mode: "FT4".into(),
+                            mhz: 7.047,
+                        },
+                    );
+                    station.engine.set_tier(from);
+                    station.engine.set_operating_mode(name, false);
+                    station.engine.set_frequency(7.123, "40m", "LSB");
+                    station.engine.set_tx_enabled(false);
+                    station.engine.take_immediate_retune();
+                    station.engine.rf_power = Some(0.4);
+                    station.sample(7_123_000, &station.engine.rig_mode_effective());
+                }
+                let prior = serde_json::to_value(s.engine.settings()).unwrap();
+                let receipt = s.queue_workspace(workspace).unwrap();
+                assert_eq!(serde_json::to_value(s.engine.settings()).unwrap(), prior);
+                let follow = workspace != Workspace::Tempo && mode != OperatingMode::Digital;
+                native.engine.set_operating_mode("digital", follow);
+                match workspace {
+                    Workspace::Ft => {
+                        native.engine.set_area("dx");
+                        if native.engine.tier() == Tier::Js8 {
+                            native.engine.set_tier(Tier::Ft8);
+                        }
+                    }
+                    Workspace::Tempo => native.engine.set_area("msg"),
+                    Workspace::Js8 => native.engine.js8_enter(),
+                }
+                let request = s.engine.take_remote_radio().unwrap();
+                assert_eq!(
+                    request.target_hz,
+                    native.engine.settings.dial_hz(),
+                    "{name}/{from:?}/{workspace:?}"
+                );
+                assert_eq!(
+                    request.target_mode,
+                    native.engine.rig_mode_effective(),
+                    "{name}/{from:?}/{workspace:?}"
+                );
+                assert_eq!(request.power_limit, Some(0.2));
+                request.permission().begin_write(Instant::now()).unwrap();
+                s.sample(request.target_hz, &request.target_mode);
+                assert!(request.commit_readback(&mut s.engine, Some(0.2)));
+                assert_eq!(
+                    receipt.outcome(),
+                    Outcome::Applied {
+                        evidence: Evidence::RadioReadback
+                    }
+                );
+                assert_eq!(s.engine.tier(), native.engine.tier());
+                assert_eq!(s.engine.rf_power, native.engine.rf_power);
+                assert_eq!(
+                    serde_json::to_value(s.engine.settings()).unwrap(),
+                    serde_json::to_value(native.engine.settings()).unwrap()
+                );
+                assert_eq!(
+                    serde_json::to_value(s.engine.snapshot().mode).unwrap(),
+                    serde_json::to_value(native.engine.snapshot().mode).unwrap()
+                );
+                assert!(!s.engine.tx_enabled());
+                assert!(!s.engine.take_immediate_retune());
+            }
+        }
+    }
+}
+
+#[test]
 fn entering_ft_from_cw_uses_the_native_section_home_even_when_the_ft_tier_is_unchanged() {
     let mut s = Station::new(OperatingMode::Cw);
     s.engine.set_frequency(14.050, "20m", "USB");
