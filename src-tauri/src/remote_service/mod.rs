@@ -292,22 +292,22 @@ impl Service {
             Action::LoggingPermission { device_id, allow }
             | Action::StationPermission { device_id, allow }
             | Action::TransmitPermission { device_id, allow } => {
-                let status = self.status()?;
-                if *allow
-                    && (status.observation_generation.is_none()
+                // Keep admission and grant under the same local control lock
+                // as Disable/Take over. A prior status snapshot must not install
+                // a new grant after that local authority has been stopped.
+                let control = self.control.lock().map_err(|_| "serviceUnavailable")?;
+                if *allow {
+                    let status = self.status.lock().map_err(|_| "serviceUnavailable")?;
+                    if !control.enabled
                         || !status
                             .devices
                             .iter()
-                            .any(|d| d.id == *device_id && d.approved == 1))
-                {
-                    return Err("accessDenied");
+                            .any(|d| d.id == *device_id && d.approved == 1)
+                    {
+                        return Err("accessDenied");
+                    }
                 }
-                let operations = self
-                    .control
-                    .lock()
-                    .map_err(|_| "serviceUnavailable")?
-                    .operations
-                    .clone();
+                let operations = &control.operations;
                 match &action {
                     Action::StationPermission { .. } => {
                         operations.permit_station(device_id, *allow)?
@@ -317,6 +317,7 @@ impl Service {
                     }
                     _ => operations.permit(device_id, *allow)?,
                 }
+                drop(control);
                 return self.status();
             }
             Action::TakeOverLogging {} => {

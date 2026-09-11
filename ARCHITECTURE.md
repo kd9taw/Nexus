@@ -151,8 +151,15 @@ FT8/FT4 native verb and binds renewal to the original unexpired authority. The
 radio loop and both FT plan/commit boundaries check expiry; native halt supplies
 the existing abort and unkey path. Explicit native rearming takes ownership, so
 a previous Remote session cannot stop a later local transmission. This internal
-foundation exposes no browser transmit action: local transmit grants, host and
-browser contracts, full QSO workflows and hardware/WAN acceptance remain pending.
+foundation exposes no browser transmit action. The native local-service API now
+holds a separate, boot-scoped transmit grant that also requires station-control
+permission. Only a valid controller heartbeat can renew an existing permit;
+release, disconnect, connection replacement and local revocation retire it.
+Grant admission shares the local Disable lock, preventing a stale status snapshot
+from installing a grant after local shutdown. FT boundary and immediate keying
+recheck authority before and after blocking PTT I/O, and deny audio on loss.
+Local grant UI, browser contracts, full QSO workflows and hardware/WAN acceptance
+remain pending.
 
 The receive-audio foundation is local to `tempo-audio`: the sole `RxDsp` capture
 consumer offers bounded device-rate mono copies through `receive_audio.rs`, before

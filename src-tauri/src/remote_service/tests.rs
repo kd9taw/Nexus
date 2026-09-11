@@ -666,3 +666,57 @@ fn actual_native_socket_refuses_cloud_commands_after_a_valid_publication() {
         }
     });
 }
+
+#[tokio::test]
+async fn local_transmit_grant_requires_approved_enabled_station_control_and_clears_on_stop() {
+    const DEVICE: &str = "10000000-0000-4000-8000-000000000001";
+    let (commands, _receiver) = mpsc::channel(1);
+    let service = Service {
+        commands,
+        status: Arc::new(Mutex::new(Status::default())),
+        control: Arc::new(Mutex::new(Control::default())),
+    };
+    let grant = || Action::TransmitPermission {
+        device_id: DEVICE.into(),
+        allow: true,
+    };
+    assert!(matches!(service.action(grant()).await, Err("accessDenied")));
+    service.control.lock().unwrap().enabled = true;
+    assert!(matches!(service.action(grant()).await, Err("accessDenied")));
+    service.status.lock().unwrap().devices.push(Device {
+        id: DEVICE.into(),
+        name: "Test browser".into(),
+        approved: 1,
+        expires_at: u64::MAX,
+    });
+    assert!(matches!(
+        service.action(grant()).await,
+        Err("localPermissionRequired")
+    ));
+    service
+        .action(Action::StationPermission {
+            device_id: DEVICE.into(),
+            allow: true,
+        })
+        .await
+        .unwrap();
+    assert!(service.status().unwrap().transmit_permissions.is_empty());
+    assert_eq!(
+        service.action(grant()).await.unwrap().transmit_permissions,
+        [DEVICE]
+    );
+    service.control.lock().unwrap().stop();
+    assert!(service.status().unwrap().transmit_permissions.is_empty());
+    assert!(matches!(service.action(grant()).await, Err("accessDenied")));
+    // Revocation remains available while disabled; it never creates a grant.
+    assert!(service
+        .action(Action::TransmitPermission {
+            device_id: DEVICE.into(),
+            allow: false
+        })
+        .await
+        .unwrap()
+        .transmit_permissions
+        .is_empty());
+    assert!(_receiver.is_empty());
+}
