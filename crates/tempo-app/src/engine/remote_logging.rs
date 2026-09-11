@@ -149,6 +149,7 @@ impl PendingJournalWrite {
     /// Call without holding Engine. No rename or change to the live journal yet.
     pub fn prepare(self) -> io::Result<PreparedPendingJournal> {
         static NEXT: AtomicU64 = AtomicU64::new(0);
+        let text = pending_qso_json(self.pending.record())?;
         let path = self
             .pending
             .path
@@ -176,10 +177,170 @@ impl PendingJournalWrite {
             temporary,
             parent: None,
         };
-        file.write_all(pending_qso_json(prepared.pending.record())?.as_bytes())?;
-        file.sync_all()?;
+        let synced = file
+            .write_all(text.as_bytes())
+            .and_then(|()| file.sync_all());
+        // Close before cleanup, including on write failure (Windows refuses
+        // removal of an open file).
+        drop(file);
+        synced?;
         prepared.parent = journal_parent(prepared.pending.path.as_ref().expect("path checked"))?;
         Ok(prepared)
+    }
+}
+
+#[derive(Debug)]
+pub struct PendingLogConfirmation {
+    pending: PendingLogIdentity,
+    outcome: LogWriteOutcome,
+}
+
+/// Only a successful sync can construct this proof. A duplicate in memory is
+/// not evidence of a durable append and cannot clear the held contact.
+#[derive(Debug)]
+pub struct ConfirmedPendingLog {
+    pending: PendingLogIdentity,
+}
+impl PendingLogConfirmation {
+    pub fn sync(self) -> Result<ConfirmedPendingLog, LogFailure> {
+        match self.outcome {
+            LogWriteOutcome::PendingSync(receipts) if !receipts.is_empty() => {
+                receipts
+                    .into_iter()
+                    .try_for_each(|receipt| receipt.sync())
+                    .map_err(|_| LogFailure::PersistenceUnconfirmed)?;
+                Ok(ConfirmedPendingLog {
+                    pending: self.pending,
+                })
+            }
+            LogWriteOutcome::Duplicate => Err(LogFailure::AlreadyPresent),
+            _ => Err(LogFailure::PersistenceUnconfirmed),
+        }
+    }
+}
+
+impl Engine {
+    pub(super) fn replace_pending_log(&mut self, record: Option<QsoRecord>) {
+        self.pending_log = record;
+        self.pending_log_identity = Arc::new(());
+    }
+
+    pub fn pending_log_identity(&self) -> Option<PendingLogIdentity> {
+        Some(PendingLogIdentity {
+            identity: self.pending_log_identity.clone(),
+            record: Arc::new(self.pending_log.clone()?),
+            path: self.station.pending_qso_path.clone(),
+        })
+    }
+
+    fn matches_pending_log(&self, pending: &PendingLogIdentity) -> bool {
+        Arc::ptr_eq(&self.pending_log_identity, &pending.identity)
+            && self.pending_log.as_ref() == Some(pending.record())
+            && self.station.pending_qso_path == pending.path
+    }
+
+    pub fn load_pending_qso_json(&mut self, text: &str) {
+        if let Ok(pending) = serde_json::from_str::<PendingRecord>(text) {
+            let mut record: QsoRecord = pending.record.into();
+            record.time_off_unix = pending.time_off_unix;
+            record.freq_rx_mhz = pending.freq_rx_mhz;
+            self.load_pending_qso(record);
+        }
+    }
+
+    /// The host must bind the displayed QSO and original controller context
+    /// before calling. Eligibility and write-once behavior are shared with the
+    /// local button. An existing confirmation is never replaced by this action.
+    pub fn log_current_qso_for_sync(&mut self) -> CurrentQsoLogOutcome {
+        if self.pending_log.is_some() {
+            return CurrentQsoLogOutcome::PendingExists;
+        }
+        let Some(record) = self.take_current_qso_record() else {
+            return CurrentQsoLogOutcome::NoEligibleContact;
+        };
+        if self.settings.prompt_to_log {
+            self.replace_pending_log(Some(record));
+            CurrentQsoLogOutcome::Pending(PendingJournalWrite {
+                pending: self.pending_log_identity().expect("hold just installed"),
+            })
+        } else {
+            CurrentQsoLogOutcome::Append(self.log_qso_for_sync(record))
+        }
+    }
+
+    /// Publish only if no local confirmation, discard, replacement or path
+    /// change occurred while the temporary file was being synced.
+    pub fn publish_pending_qso_journal(
+        &mut self,
+        mut prepared: PreparedPendingJournal,
+    ) -> Result<JournalSync, LogFailure> {
+        if !self.matches_pending_log(&prepared.pending) {
+            return Err(LogFailure::StalePending);
+        }
+        std::fs::rename(
+            &prepared.temporary,
+            prepared
+                .pending
+                .path
+                .as_ref()
+                .ok_or(LogFailure::PersistenceUnconfirmed)?,
+        )
+        .map_err(|_| LogFailure::PersistenceUnconfirmed)?;
+        Ok(JournalSync {
+            parent: prepared.parent.take(),
+        })
+    }
+
+    /// Begin the shared append without clearing the hold or its recovery file.
+    /// Neither this step nor its sync requires transmit permission.
+    pub fn confirm_pending_log_for_sync(
+        &mut self,
+        pending: PendingLogIdentity,
+        edits: PendingLogEdits,
+    ) -> Result<PendingLogConfirmation, LogFailure> {
+        if !self.matches_pending_log(&pending) {
+            return Err(LogFailure::StalePending);
+        }
+        if !edits.valid() {
+            return Err(LogFailure::InvalidEdits);
+        }
+        let mut record = pending.record().clone();
+        record.call = edits.call;
+        record.grid = edits.grid;
+        record.rst_sent = edits.rst_sent;
+        record.rst_rcvd = edits.rst_rcvd;
+        let outcome = self.log_qso_for_sync(record);
+        Ok(PendingLogConfirmation { pending, outcome })
+    }
+
+    pub fn finish_pending_log_confirmation(
+        &mut self,
+        confirmed: ConfirmedPendingLog,
+    ) -> Result<JournalSync, LogFailure> {
+        self.discard_pending_log_for_sync(&confirmed.pending)
+    }
+
+    /// The host must authorize an explicit discard or hold a synced append
+    /// proof. A failed deletion retains the in-memory contact for recovery.
+    pub fn discard_pending_log_for_sync(
+        &mut self,
+        pending: &PendingLogIdentity,
+    ) -> Result<JournalSync, LogFailure> {
+        if !self.matches_pending_log(pending) {
+            return Err(LogFailure::StalePending);
+        }
+        let path = pending
+            .path
+            .as_ref()
+            .ok_or(LogFailure::PersistenceUnconfirmed)?;
+        let parent = journal_parent(path).map_err(|_| LogFailure::PersistenceUnconfirmed)?;
+        match std::fs::remove_file(path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(_) => return Err(LogFailure::PersistenceUnconfirmed),
+        }
+        self.replace_pending_log(None);
+        Ok(JournalSync { parent })
     }
 }
 
@@ -558,160 +719,5 @@ mod tests {
         );
         assert!(fixture.engine.station.pending_uploads.is_empty());
         assert!(fixture.dir.join("pending.json").exists());
-    }
-}
-
-#[derive(Debug)]
-pub struct PendingLogConfirmation {
-    pending: PendingLogIdentity,
-    outcome: LogWriteOutcome,
-}
-
-/// Only a successful sync can construct this proof. A duplicate in memory is
-/// not evidence of a durable append and cannot clear the held contact.
-#[derive(Debug)]
-pub struct ConfirmedPendingLog {
-    pending: PendingLogIdentity,
-}
-impl PendingLogConfirmation {
-    pub fn sync(self) -> Result<ConfirmedPendingLog, LogFailure> {
-        match self.outcome {
-            LogWriteOutcome::PendingSync(receipts) if !receipts.is_empty() => {
-                receipts
-                    .into_iter()
-                    .try_for_each(|receipt| receipt.sync())
-                    .map_err(|_| LogFailure::PersistenceUnconfirmed)?;
-                Ok(ConfirmedPendingLog {
-                    pending: self.pending,
-                })
-            }
-            LogWriteOutcome::Duplicate => Err(LogFailure::AlreadyPresent),
-            _ => Err(LogFailure::PersistenceUnconfirmed),
-        }
-    }
-}
-
-impl Engine {
-    pub(super) fn replace_pending_log(&mut self, record: Option<QsoRecord>) {
-        self.pending_log = record;
-        self.pending_log_identity = Arc::new(());
-    }
-
-    pub fn pending_log_identity(&self) -> Option<PendingLogIdentity> {
-        Some(PendingLogIdentity {
-            identity: self.pending_log_identity.clone(),
-            record: Arc::new(self.pending_log.clone()?),
-            path: self.station.pending_qso_path.clone(),
-        })
-    }
-
-    fn matches_pending_log(&self, pending: &PendingLogIdentity) -> bool {
-        Arc::ptr_eq(&self.pending_log_identity, &pending.identity)
-            && self.pending_log.as_ref() == Some(pending.record())
-            && self.station.pending_qso_path == pending.path
-    }
-
-    pub fn load_pending_qso_json(&mut self, text: &str) {
-        if let Ok(pending) = serde_json::from_str::<PendingRecord>(text) {
-            let mut record: QsoRecord = pending.record.into();
-            record.time_off_unix = pending.time_off_unix;
-            record.freq_rx_mhz = pending.freq_rx_mhz;
-            self.load_pending_qso(record);
-        }
-    }
-
-    /// The host must bind the displayed QSO and original controller context
-    /// before calling. Eligibility and write-once behavior are shared with the
-    /// local button. An existing confirmation is never replaced by this action.
-    pub fn log_current_qso_for_sync(&mut self) -> CurrentQsoLogOutcome {
-        if self.pending_log.is_some() {
-            return CurrentQsoLogOutcome::PendingExists;
-        }
-        let Some(record) = self.take_current_qso_record() else {
-            return CurrentQsoLogOutcome::NoEligibleContact;
-        };
-        if self.settings.prompt_to_log {
-            self.replace_pending_log(Some(record));
-            CurrentQsoLogOutcome::Pending(PendingJournalWrite {
-                pending: self.pending_log_identity().expect("hold just installed"),
-            })
-        } else {
-            CurrentQsoLogOutcome::Append(self.log_qso_for_sync(record))
-        }
-    }
-
-    /// Publish only if no local confirmation, discard, replacement or path
-    /// change occurred while the temporary file was being synced.
-    pub fn publish_pending_qso_journal(
-        &mut self,
-        mut prepared: PreparedPendingJournal,
-    ) -> Result<JournalSync, LogFailure> {
-        if !self.matches_pending_log(&prepared.pending) {
-            return Err(LogFailure::StalePending);
-        }
-        std::fs::rename(
-            &prepared.temporary,
-            prepared
-                .pending
-                .path
-                .as_ref()
-                .ok_or(LogFailure::PersistenceUnconfirmed)?,
-        )
-        .map_err(|_| LogFailure::PersistenceUnconfirmed)?;
-        Ok(JournalSync {
-            parent: prepared.parent.take(),
-        })
-    }
-
-    /// Begin the shared append without clearing the hold or its recovery file.
-    /// Neither this step nor its sync requires transmit permission.
-    pub fn confirm_pending_log_for_sync(
-        &mut self,
-        pending: PendingLogIdentity,
-        edits: PendingLogEdits,
-    ) -> Result<PendingLogConfirmation, LogFailure> {
-        if !self.matches_pending_log(&pending) {
-            return Err(LogFailure::StalePending);
-        }
-        if !edits.valid() {
-            return Err(LogFailure::InvalidEdits);
-        }
-        let mut record = pending.record().clone();
-        record.call = edits.call;
-        record.grid = edits.grid;
-        record.rst_sent = edits.rst_sent;
-        record.rst_rcvd = edits.rst_rcvd;
-        let outcome = self.log_qso_for_sync(record);
-        Ok(PendingLogConfirmation { pending, outcome })
-    }
-
-    pub fn finish_pending_log_confirmation(
-        &mut self,
-        confirmed: ConfirmedPendingLog,
-    ) -> Result<JournalSync, LogFailure> {
-        self.discard_pending_log_for_sync(&confirmed.pending)
-    }
-
-    /// The host must authorize an explicit discard or hold a synced append
-    /// proof. A failed deletion retains the in-memory contact for recovery.
-    pub fn discard_pending_log_for_sync(
-        &mut self,
-        pending: &PendingLogIdentity,
-    ) -> Result<JournalSync, LogFailure> {
-        if !self.matches_pending_log(pending) {
-            return Err(LogFailure::StalePending);
-        }
-        let path = pending
-            .path
-            .as_ref()
-            .ok_or(LogFailure::PersistenceUnconfirmed)?;
-        let parent = journal_parent(path).map_err(|_| LogFailure::PersistenceUnconfirmed)?;
-        match std::fs::remove_file(path) {
-            Ok(()) => {}
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(_) => return Err(LogFailure::PersistenceUnconfirmed),
-        }
-        self.replace_pending_log(None);
-        Ok(JournalSync { parent })
     }
 }
