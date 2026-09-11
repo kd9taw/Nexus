@@ -16,8 +16,8 @@ import { tempoConversations } from './tempo-fixture.mjs'
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
-for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='phone',contactContinuity,workSpot,radioSelection,routedTier} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,14].map(applicationVersion=>({applicationVersion,operating:false})),{applicationVersion:14,operating:true},{applicationVersion:14,operating:true,sessionLayout:true},{applicationVersion:14,operating:true,quickLayout:true},{applicationVersion:14,operating:true,quickLayout:true,quickMode:'cw'},{applicationVersion:14,operating:true,contactContinuity:true},{applicationVersion:14,operating:true,workSpot:true},{applicationVersion:14,operating:true,radioSelection:true},{applicationVersion:14,operating:true,radioSelection:true,routedTier:true}]) test(`compiled hosted browser ${routedTier?'routed decoder':radioSelection?'radio selection':workSpot?'DX work':contactContinuity?'contact continuity':quickLayout?`quick layout${quickMode==='cw'?' CW':''}`:sessionLayout?'session layout':operating?'operations':`v${applicationVersion}`} completes PKCE, local device approval, observation and viewport checks`, { timeout: applicationVersion >= 14 ? 540000 : applicationVersion >= 13 ? 420000 : 180000 }, async context => {
-  const app=await runtime(), artifacts=process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS ? join(process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS, routedTier?'routed-decoder':radioSelection?'radio-selection':workSpot?'dx-work':contactContinuity?'contact-continuity':quickLayout?`quick-layout${quickMode==='cw'?'-cw':''}`:sessionLayout?'session-layout':operating?'operations':`v${applicationVersion}`) : undefined
+for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='phone',contactContinuity,workSpot,radioSelection,routedTier,routedWorkspace} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,14].map(applicationVersion=>({applicationVersion,operating:false})),{applicationVersion:14,operating:true},{applicationVersion:14,operating:true,sessionLayout:true},{applicationVersion:14,operating:true,quickLayout:true},{applicationVersion:14,operating:true,quickLayout:true,quickMode:'cw'},{applicationVersion:14,operating:true,contactContinuity:true},{applicationVersion:14,operating:true,workSpot:true},{applicationVersion:14,operating:true,radioSelection:true},{applicationVersion:14,operating:true,radioSelection:true,routedTier:true},{applicationVersion:14,operating:true,radioSelection:true,routedWorkspace:true}]) test(`compiled hosted browser ${routedWorkspace?'routed workspace':routedTier?'routed decoder':radioSelection?'radio selection':workSpot?'DX work':contactContinuity?'contact continuity':quickLayout?`quick layout${quickMode==='cw'?' CW':''}`:sessionLayout?'session layout':operating?'operations':`v${applicationVersion}`} completes PKCE, local device approval, observation and viewport checks`, { timeout: applicationVersion >= 14 ? 540000 : applicationVersion >= 13 ? 420000 : 180000 }, async context => {
+  const app=await runtime(), artifacts=process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS ? join(process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS, routedWorkspace?'routed-workspace':routedTier?'routed-decoder':radioSelection?'radio-selection':workSpot?'dx-work':contactContinuity?'contact-continuity':quickLayout?`quick-layout${quickMode==='cw'?'-cw':''}`:sessionLayout?'session-layout':operating?'operations':`v${applicationVersion}`) : undefined
   let browser, station, producing=true, pauseObservations=false, producer, applicationProducer
   const results=[]
   const stop = cleanupAfterTest(context, async () => {
@@ -368,6 +368,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
             }else if(a.workspace==='js8')snap.link.tier='JS8'
             else assert.fail(`Unreviewed workspace ${a.workspace}`)
             snap.radio.operatingMode='digital';snap.radio.dialMhz=7.074
+            if(routedWorkspace){adoptBrowserRadio(a.workspace==='js8'?1:2);snap.radio.dialMhz=a.workspace==='tempo'?7.0355:a.workspace==='js8'?7.078:7.074;snap.radio.band='40m';snap.radio.sideband='USB'}
             assert.equal(snap.radio.txEnabled,false)
           }else if(a.action==='radio.tier'){
             assert.ok(['FT8','FT4','FT2','WSPR','Q65','MSK144','JT65','FST4','FST4W','TempoFast','TempoDeep'].includes(a.tier))
@@ -375,7 +376,36 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
             // The provider proves the real UI/relay gesture and later snapshot.
             // Native engine/worker tests separately prove channel/source policy.
             applicationData.get_snapshot.link.tier=a.tier
-            if(routedTier){
+            if(routedWorkspace){
+        for(const [view,workspace,tier,id] of [
+          ['Tempo','tempo','TempoFast',2],['JS8','js8','JS8',1],['FT','ft','FT8',2],
+        ]){
+          const before=stationRequests.length,context=controlContext()
+          await click(button(view));await settledLayout()
+          assert.equal(stationRequests.length,before,'navigation is passive')
+          const entry=`document.querySelector('${workspace==='js8'?'.js8-cockpit':'.grid-header'} .remote-mode-entry')`
+          await until(`!!${entry}&&!${entry}.disabled`)
+          await measure(entry,'routed-workspace')
+          await fresh();await click(entry)
+          await until(`${pill(id)}?.getAttribute('aria-pressed')==='true'`)
+          await until(`document.querySelector('.remote-control-result')?.textContent.includes('confirmed')`)
+          assert.equal(stationRequests.length,before+1)
+          assert.deepEqual(stationRequests.at(-1).action,{action:'radio.workspace',workspace})
+          assert.deepEqual(stationRequests.at(-1).context,context)
+          assert.equal(applicationData.get_snapshot.link.tier,tier)
+          assert.equal(applicationData.get_snapshot.radio.txEnabled,false)
+        }
+        stationControls=false
+        await until(`${pill(1)}?.disabled===true`)
+        assert.equal(stationRequests.length,3);assert.equal(exceptions,0);assert.equal(unexpectedMessages,0)
+        if(artifacts){
+          const shot=await browser.call('Page.captureScreenshot',{format:'png'},session)
+          await writeFile(join(artifacts,'routed-workspace.png'),Buffer.from(shot.data,'base64'))
+          await writeFile(join(artifacts,'routed-workspace-results.json'),JSON.stringify({actions:stationRequests.map(r=>({action:r.action,context:r.context})),selectionGeometry,passiveNavigation:true,revocationRefusal:true,exceptions,unexpectedMessages},null,2))
+        }
+        console.log('Compiled routed workspace: explicit native entry, radio context, passive navigation and revocation passed');return
+      }
+      if(routedTier){
               const radio=applicationData.get_snapshot.radio
               if(a.tier==='MSK144'){adoptBrowserRadio(2);Object.assign(radio,{dialMhz:50.260,band:'6m',sideband:'USB',rxOffsetHz:1500,txOffsetHz:1500})}
               else if(a.tier==='FST4'){adoptBrowserRadio(1);Object.assign(radio,{dialMhz:0.136,band:'2200m',sideband:'USB'})}
