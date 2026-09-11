@@ -166,14 +166,14 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
         // A positive user action waits for its control to finish loading. Keep
         // the actual enabled, hit-target and mouse-event checks below intact.
         for(let attempt=0;attempt<30&&!point;attempt++){
-          await until(`(()=>{const e=${expression};return !!e&&!e.disabled})()`)
+          await until(`(()=>{const e=${expression},r=e?.getBoundingClientRect();return !!e&&!e.disabled&&r.width>0&&r.height>0})()`)
           // Center controls below the sticky session banner. Nearest can leave
           // an offscreen tier row behind it after switching cockpit tabs.
           await evaluate(`(()=>{const e=${expression};if(e&&!e.disabled)e.scrollIntoView({block:'center',behavior:'instant'})})()`)
           await settledLayout()
           // A heartbeat can disable the control between CDP read turns. Wait
           // again BEFORE the single mouse gesture; never retry a sent click.
-          point=await evaluate(`(()=>{const e=${expression};if(!e||e.disabled)return null;const r=e.getBoundingClientRect(),x=r.x+r.width/2,y=r.y+r.height/2;if(!e.contains(document.elementFromPoint(x,y)))throw Error('occludedControl');return{x,y}})()`)
+          point=await evaluate(`(()=>{const e=${expression};if(!e||e.disabled)return null;const r=e.getBoundingClientRect();if(r.width<=0||r.height<=0)return null;const x=r.x+r.width/2,y=r.y+r.height/2;if(!e.contains(document.elementFromPoint(x,y)))throw Error('occludedControl');return{x,y}})()`)
         }
         assert.ok(point,'control must become enabled before the single mouse gesture')
       }
