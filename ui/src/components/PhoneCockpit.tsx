@@ -1180,7 +1180,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
   )
 
   const logPane = (
-    <CockpitPaneFrame title={t('phone.pane.log.title')} paneId="log">
+    <CockpitPaneFrame title={quick && !fieldDay ? t('remote.quick.logbook') : t('phone.pane.log.title')} paneId="log">
       {/* compactRecall died here (2026-07-31). It existed because the pre-overhaul cockpit had
           no interposed scroller: the full recall card's height crushed the operating panes
           directly. This pane is now a FILL pane whose .pane-body scrolls internally, so a tall

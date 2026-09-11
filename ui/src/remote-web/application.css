@@ -286,3 +286,8 @@
 .cockpit-header--quick .amp-watts { min-width: 0; }
 [data-viewport='xs'] .remote-quick-details { width: 44px; padding-inline: 0; }
 [data-viewport='xs'] .remote-quick-details > span { display: none; }
+
+/* The contact frame already names the general logbook in Quick. Field Day's
+   warning remains explicit; presentation does not change where a QSO is saved. */
+.remote-log-entry > p[hidden] { display: none; }
+.remote-quick-contact { --space-4: .5rem; --space-3: .4rem; }

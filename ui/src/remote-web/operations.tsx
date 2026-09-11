@@ -181,7 +181,7 @@ export function RemoteLogEntry({
     )
   return (
     <div className="remote-log-entry" data-operation-error={error ?? undefined}>
-      <p className="dim" title={t('remote.loggingHint')}>{display?.presentation === 'quick' && !snap.fieldDay ? t('remote.quick.logbook') : t('remote.loggingHint')}</p>
+      <p className="dim" hidden={display?.presentation === 'quick' && !snap.fieldDay && ['CW', 'SSB', 'FM'].includes(mode)}>{t('remote.loggingHint')}</p>
       {logged && <p role="status">{t('remote.loggingSaved')}</p>}
       {view.submitting && <p role="status">{t('remote.loggingSaving')}</p>}
       {!view.submitting && (error || view.unresolved) && (

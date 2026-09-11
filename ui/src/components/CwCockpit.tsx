@@ -1322,7 +1322,7 @@ export function CwCockpit({
   )
 
   const logPane = (
-    <CockpitPaneFrame title={t('cw.pane.log.title')} paneId="log">
+    <CockpitPaneFrame title={quick && !fieldDay ? t('remote.quick.logbook') : t('cw.pane.log.title')} paneId="log">
       {/* compactRecall died here (2026-07-31) — same reasoning as PhoneCockpit's log pane: the
           pane grid made this pane's .pane-body the scroller, so the FULL recall card (photo /
           bearing / history) can no longer crush the cockpit the way it did pre-overhaul. */}
