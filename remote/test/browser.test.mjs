@@ -16,8 +16,8 @@ import { tempoConversations } from './tempo-fixture.mjs'
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
-for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='phone',contactContinuity,workSpot,radioSelection,routedTier,routedWorkspace} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,14].map(applicationVersion=>({applicationVersion,operating:false})),{applicationVersion:14,operating:true},{applicationVersion:14,operating:true,sessionLayout:true},{applicationVersion:14,operating:true,quickLayout:true},{applicationVersion:14,operating:true,quickLayout:true,quickMode:'cw'},{applicationVersion:14,operating:true,contactContinuity:true},{applicationVersion:14,operating:true,workSpot:true},{applicationVersion:14,operating:true,radioSelection:true},{applicationVersion:14,operating:true,radioSelection:true,routedTier:true},{applicationVersion:14,operating:true,radioSelection:true,routedWorkspace:true}]) test(`compiled hosted browser ${routedWorkspace?'routed workspace':routedTier?'routed decoder':radioSelection?'radio selection':workSpot?'DX work':contactContinuity?'contact continuity':quickLayout?`quick layout${quickMode==='cw'?' CW':''}`:sessionLayout?'session layout':operating?'operations':`v${applicationVersion}`} completes PKCE, local device approval, observation and viewport checks`, { timeout: applicationVersion >= 14 ? 540000 : applicationVersion >= 13 ? 420000 : 180000 }, async context => {
-  const app=await runtime(), artifacts=process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS ? join(process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS, routedWorkspace?'routed-workspace':routedTier?'routed-decoder':radioSelection?'radio-selection':workSpot?'dx-work':contactContinuity?'contact-continuity':quickLayout?`quick-layout${quickMode==='cw'?'-cw':''}`:sessionLayout?'session-layout':operating?'operations':`v${applicationVersion}`) : undefined
+for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='phone',contactContinuity,workSpot,radioSelection,routedTier,routedWorkspace,ftOperating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,14].map(applicationVersion=>({applicationVersion,operating:false})),{applicationVersion:14,operating:true},{applicationVersion:14,operating:true,ftOperating:true},{applicationVersion:14,operating:true,sessionLayout:true},{applicationVersion:14,operating:true,quickLayout:true},{applicationVersion:14,operating:true,quickLayout:true,quickMode:'cw'},{applicationVersion:14,operating:true,contactContinuity:true},{applicationVersion:14,operating:true,workSpot:true},{applicationVersion:14,operating:true,radioSelection:true},{applicationVersion:14,operating:true,radioSelection:true,routedTier:true},{applicationVersion:14,operating:true,radioSelection:true,routedWorkspace:true}]) test(`compiled hosted browser ${ftOperating?'FT operating':routedWorkspace?'routed workspace':routedTier?'routed decoder':radioSelection?'radio selection':workSpot?'DX work':contactContinuity?'contact continuity':quickLayout?`quick layout${quickMode==='cw'?' CW':''}`:sessionLayout?'session layout':operating?'operations':`v${applicationVersion}`} completes PKCE, local device approval, observation and viewport checks`, { timeout: applicationVersion >= 14 ? 540000 : applicationVersion >= 13 ? 420000 : 180000 }, async context => {
+  const app=await runtime(), artifacts=process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS ? join(process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS, ftOperating?'ft-operating':routedWorkspace?'routed-workspace':routedTier?'routed-decoder':radioSelection?'radio-selection':workSpot?'dx-work':contactContinuity?'contact-continuity':quickLayout?`quick-layout${quickMode==='cw'?'-cw':''}`:sessionLayout?'session-layout':operating?'operations':`v${applicationVersion}`) : undefined
   let browser, station, producing=true, pauseObservations=false, producer, applicationProducer
   const results=[]
   const stop = cleanupAfterTest(context, async () => {
@@ -34,7 +34,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
     const shell = await fetch(app.origin,{signal:AbortSignal.timeout(3000)})
     assert.equal(shell.status,200)
     assert.match(await shell.text(), /Nexus Remote/)
-    const stationHeaders = { 'x-nexus-application-version': '1',...(operating?{'x-nexus-operation-version':'2','x-nexus-operation-max-version':'3'}:{}), ...(applicationVersion >= 2 ? { 'x-nexus-application-stream-version': '2' } : {}), ...(applicationVersion >= 3 ? { 'x-nexus-application-query-version': '1' } : {}), ...(applicationVersion >= 4 ? { 'x-nexus-application-recall-version': '1' } : {}), ...(applicationVersion >= 5 ? { 'x-nexus-application-keyboard-version': '1' } : {}), ...(applicationVersion >= 6 ? { 'x-nexus-application-insights-version': '1' } : {}), ...(applicationVersion >= 7 ? { 'x-nexus-application-dxpeditions-version': '1' } : {}), ...(applicationVersion >= 8 ? { 'x-nexus-application-memories-version': '1' } : {}), ...(applicationVersion >= 9 ? { 'x-nexus-application-ota-version': '1' } : {}), ...(applicationVersion >= 10 ? { 'x-nexus-application-field-day-version': '1' } : {}), ...(applicationVersion >= 11 ? { 'x-nexus-application-js8-version': '1' } : {}), ...(applicationVersion >= 12 ? {'x-nexus-application-station-modes-version':'1'} : {}), ...(applicationVersion >= 13 ? {'x-nexus-application-navigation-version':'1'} : {}), ...(applicationVersion >= 14 ? {'x-nexus-application-configuration-version':'1'} : {}) }
+    const stationHeaders = { 'x-nexus-application-version': '1',...(ftOperating?{'x-nexus-operation-ft-version':'1'}:{}),...(operating?{'x-nexus-operation-version':'2','x-nexus-operation-max-version':'3'}:{}), ...(applicationVersion >= 2 ? { 'x-nexus-application-stream-version': '2' } : {}), ...(applicationVersion >= 3 ? { 'x-nexus-application-query-version': '1' } : {}), ...(applicationVersion >= 4 ? { 'x-nexus-application-recall-version': '1' } : {}), ...(applicationVersion >= 5 ? { 'x-nexus-application-keyboard-version': '1' } : {}), ...(applicationVersion >= 6 ? { 'x-nexus-application-insights-version': '1' } : {}), ...(applicationVersion >= 7 ? { 'x-nexus-application-dxpeditions-version': '1' } : {}), ...(applicationVersion >= 8 ? { 'x-nexus-application-memories-version': '1' } : {}), ...(applicationVersion >= 9 ? { 'x-nexus-application-ota-version': '1' } : {}), ...(applicationVersion >= 10 ? { 'x-nexus-application-field-day-version': '1' } : {}), ...(applicationVersion >= 11 ? { 'x-nexus-application-js8-version': '1' } : {}), ...(applicationVersion >= 12 ? {'x-nexus-application-station-modes-version':'1'} : {}), ...(applicationVersion >= 13 ? {'x-nexus-application-navigation-version':'1'} : {}), ...(applicationVersion >= 14 ? {'x-nexus-application-configuration-version':'1'} : {}) }
     station=await pair.native.open(pair.stationId, undefined, 101, stationHeaders)
     let code=null, oauth=null, exchanges=0, providerFailure=false, exceptions=0, acknowledgements=0, unexpectedMessages=0
     const applicationTraffic = { reads: 0, acks: 0, subscriptions: 0, batches: 0, bytes: 0, byCommand: {}, maxResponseBytes: 0 }
@@ -75,7 +75,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         const message = JSON.parse(event.response.payloadData)
         if (message.type === 'ack' && Object.keys(message).sort().join(',') === 'epoch,sequence,type') acknowledgements++
         else if (message.type === 'applicationHello' && (Object.keys(message).length === 1 || (Object.keys(message).length === 2 && [2,3,4,5,6,7,8,9,10,11,12,13,14].includes(message.version)))) {}
-        else if(message.type==='operationRequest'&&((Object.keys(message).length===2)||Object.keys(message).length===3&&[2,3,4].includes(message.operationVersion))&&['state','acquire','heartbeat','release','result','logManual','stationControl'].includes(message.request?.type)){if(!operating)assert.equal(message.request.type,'state');operationWire.push({at:performance.now(),direction:'out',type:message.request.type,requestId:message.request.requestId})}
+        else if(message.type==='operationRequest'&&((Object.keys(message).length===2)||Object.keys(message).length===3&&[2,3,4].includes(message.operationVersion))&&['state','acquire','heartbeat','release','result','logManual','stationControl','stopTransmit'].includes(message.request?.type)){if(!operating)assert.equal(message.request.type,'state');operationWire.push({at:performance.now(),direction:'out',type:message.request.type,requestId:message.request.requestId})}
         else if (message.type === 'applicationRead' && Object.keys(message).length === 4) applicationTraffic.reads++
         else if (message.type === 'applicationQuery' && Object.keys(message).length === 7) applicationTraffic.queries=(applicationTraffic.queries??0)+1
         else if (message.type === 'applicationQueryAck' && Object.keys(message).length === 2) {}
@@ -259,7 +259,8 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
     // separate real-native/workerd test proves the ADIF append and durability.
     let loggingLeaseUntil=0
     let loggingAllowed=false,loggingLease=null,loggingRevision=1,loggingSequence=0,loseLogReply=false
-    let stationControls=false,loseSpotReply=false
+    let stationControls=false,loseSpotReply=false,transmitAllowed=false,transmitEpoch='0000000000000001'
+    const stopRequests=[]
     if(workSpot){
       const original=collections.needs.rows[0]
       collections.needs.rows=[['N2DXCW','CW',14.02345],['N2DXPH','Phone',14.19876],['N3DXCW','CW',14.05543],['N4DXCW','CW',14.077],['N2DIG','FT8',14.074]].map(([call,mode,freqMhz])=>({...original,call,mode,freqMhz,band:'20m'}))
@@ -288,17 +289,28 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         if(r.type==='heartbeat'&&loggingLease&&r.leaseId===loggingLease)loggingLeaseUntil=performance.now()+5000
         if(r.type==='release')loggingLease=null
         if(!loggingAllowed&&!stationControls)loggingLease=null
-        if(r.type==='logManual'){
+        if(r.type==='stopTransmit'){
+          assert.equal(request.operationVersion,4)
+          assert.ok(transmitAllowed&&loggingLease&&r.leaseId===loggingLease)
+          assert.equal(r.transmitEpoch,transmitEpoch)
+          stopRequests.push(r);transmitEpoch=(BigInt('0x'+transmitEpoch)+1n).toString(16).padStart(16,'0')
+          applicationData.get_snapshot.radio.txEnabled=false;applicationRevision++
+          value={stop:'accepted'}
+        }else if(r.type==='logManual'){
           assert.ok(loggingAllowed&&loggingLease&&r.leaseId===loggingLease)
           assert.equal(r.expectedRevision,loggingRevision);assert.equal(r.clientSequence,loggingSequence+1);loggingSequence++
           loggedRequests.push(r);value={outcome:'applied',evidence:'fileSynced',uploads:'stationPipeline',operationId:r.requestId};loggingReceipts.set(r.requestId,value);loggingRevision++
           if(loseLogReply)continue
         }else if(r.type==='stationControl'){
-          assert.equal(request.operationVersion,3);assert.ok(stationControls&&loggingLease&&r.leaseId===loggingLease)
+          assert.equal(request.operationVersion,ftOperating?4:3);assert.ok(stationControls&&loggingLease&&r.leaseId===loggingLease)
           assert.equal(r.expectedRevision,loggingRevision);assert.equal(r.clientSequence,loggingSequence+1);loggingSequence++
           assert.deepEqual(r.context,controlContext())
           stationRequests.push(r);const a=r.action
-          if(a.action==='radio.select'){
+          if(a.action==='ft.cq'||a.action==='ft.txEnabled'){
+            assert.ok(ftOperating&&transmitAllowed);assert.equal(a.transmitEpoch,transmitEpoch)
+            assert.equal(a.expectedTier,applicationData.get_snapshot.link.tier)
+            applicationData.get_snapshot.radio.txEnabled=a.action==='ft.cq'||a.on
+          }else if(a.action==='radio.select'){
             adoptBrowserRadio(a.radioId)
           }else if(a.action==='decoder.arm'){
             if(a.receiver==='sstv'){applicationData.get_sstv_state.state.armed=a.on;applicationData.get_sstv_state.state.health.armed=a.on}
@@ -431,11 +443,11 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
             doc.revision=createHash('sha256').update(JSON.stringify(doc.settings)).digest('hex')
             fixture.station.amplifier.followBand=a.follow
           }else assert.fail(`Unreviewed station action ${a.action}`)
-          value={operation:'stationControl',operationId:r.requestId,outcome:'applied',evidence:['amplifier.followBand','decoder.js8Speed','decoder.msk144Period','decoder.depth','receiver.rxOffset','receiver.rxGain'].includes(a.action)?'settingsSaved':a.action.startsWith('radio.')?'radioReadback':a.action.startsWith('amplifier.')?'amplifierReadback':'receiverState'}
+          value={operation:'stationControl',operationId:r.requestId,outcome:'applied',evidence:a.action.startsWith('ft.')?'stationState':['amplifier.followBand','decoder.js8Speed','decoder.msk144Period','decoder.depth','receiver.rxOffset','receiver.rxGain'].includes(a.action)?'settingsSaved':a.action.startsWith('radio.')?'radioReadback':a.action.startsWith('amplifier.')?'amplifierReadback':'receiverState'}
           loggingReceipts.set(r.requestId,value);loggingRevision++;applicationRevision++
           if(loseSpotReply&&a.action==='radio.workSpot')continue
         }else if(r.type==='result'){value=loggingReceipts.get(r.operationId);if(!value)error='resultExpired';else if(loseSpotReply&&value.operation==='stationControl')value={operation:'stationControl',operationId:r.operationId,outcome:'unknown',reason:'hardwareUnconfirmed'}}
-        else value={stationBootId:loggingBoot,allowed:loggingAllowed||stationControls,phase:loggingLease?'controlling':loggingAllowed||stationControls?'available':'localPermissionRequired',leaseId:loggingLease,revision:loggingRevision,commandWindowId:loggingLease?loggingWindow:null,nextSequence:loggingLease?loggingSequence+1:null,leaseRemainingMs:loggingLease?5000:null,actions:loggingAllowed?['log.manual']:[],txArmed:false,...(stationControls?{controls:{context:controlContext(),capabilities:request.operationVersion>=3?['decoder','amplifier','frequency','mode','tier','ampFollowBand','workspace','decoderSettings','receiverSettings','receiverGain','bandSelection','receiverFilter','receiverDsp','phoneMode','fmTuning','fmReceiver','radioLevels',...(workSpot?['workSpot']:[]),...(radioSelection?['radioSelection']:[])]:['decoder','amplifier']}}:{})}
+        else value={stationBootId:loggingBoot,allowed:loggingAllowed||stationControls,phase:loggingLease?'controlling':loggingAllowed||stationControls?'available':'localPermissionRequired',leaseId:loggingLease,revision:loggingRevision,commandWindowId:loggingLease?loggingWindow:null,nextSequence:loggingLease?loggingSequence+1:null,leaseRemainingMs:loggingLease?5000:null,actions:loggingAllowed?['log.manual']:[],txArmed:ftOperating&&transmitAllowed&&applicationData.get_snapshot.radio.txEnabled,...(ftOperating?{transmitEpoch:transmitAllowed?transmitEpoch:null}:{}),...(stationControls?{controls:{context:controlContext(),capabilities:request.operationVersion>=3?['decoder','amplifier','frequency','mode','tier','ampFollowBand','workspace','decoderSettings','receiverSettings','receiverGain','bandSelection','receiverFilter','receiverDsp','phoneMode','fmTuning','fmReceiver','radioLevels',...(transmitAllowed?['ftOperate']:[]),...(workSpot?['workSpot']:[]),...(radioSelection?['radioSelection']:[])]:['decoder','amplifier']}}:{})}
         source.send({type:'operationResponse',sessionId:request.sessionId,requestId:r.requestId,...(error?{error}:{value})});continue
       }
       if (request.type === 'applicationQuery') {
@@ -566,6 +578,46 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       assert.equal(await evaluate(`document.body.textContent.includes('Could not switch mode')`), false)
       assert.equal(fieldDayQueries.length,0)
       await click(button('FT'))
+    }
+    if(ftOperating){
+      stationControls=true
+      await until(`!!${button('Take station control')}`);await click(button('Take station control'))
+      await until(`document.querySelector('.remote-logging-authority')?.textContent.includes('Station control active')`)
+      const cq='.cockpit-qso .cq-call',tx='.cockpit-qso .op-btn.monitor',stop='.cockpit-qso .op-btn.stop'
+      assert.equal(await evaluate(`document.querySelector('${cq}').disabled`),true)
+      transmitAllowed=true
+      for(const tier of ['FT8','FT4']){
+        applicationData.get_snapshot.link.tier=tier;applicationRevision++
+        await until(`!document.querySelector('${cq}').disabled`)
+        let count=stationRequests.length
+        await click(`document.querySelector('${cq}')`)
+        await until(`document.querySelector('${tx}')?.textContent.trim()==='TX On'&&!document.querySelector('${tx}').disabled`)
+        assert.equal(stationRequests.length,count+1);assert.equal(stationRequests.at(-1).action.action,'ft.cq')
+        assert.equal(stationRequests.at(-1).action.expectedTier,tier)
+        await click(`document.querySelector('${tx}')`)
+        await until(`document.querySelector('${tx}')?.textContent.trim()==='TX Off'&&!document.querySelector('${tx}').disabled`)
+        assert.equal(stationRequests.length,count+2);assert.equal(stationRequests.at(-1).action.on,false)
+        await click(`document.querySelector('${tx}')`)
+        await until(`document.querySelector('${tx}')?.textContent.trim()==='TX On'&&!document.querySelector('${tx}').disabled`)
+        assert.equal(stationRequests.length,count+3);assert.equal(stationRequests.at(-1).action.on,true)
+        // Missing station display data blocks arming but cannot block Stop.
+        unavailableTopics.add('get_snapshot')
+        await until(`document.querySelector('${cq}').disabled`)
+        assert.equal(await evaluate(`document.querySelector('${stop}').disabled`),false)
+        assert.equal(await evaluate(`!!document.querySelector('${stop}').closest('[data-pane-id]')`),false)
+        const stops=stopRequests.length
+        await click(`document.querySelector('${stop}')`)
+        for(let i=0;i<100&&stopRequests.length===stops;i++)await sleep(50)
+        assert.equal(stopRequests.length,stops+1)
+        unavailableTopics.delete('get_snapshot');applicationRevision++
+        await until(`document.querySelector('${tx}')?.textContent.trim()==='TX Off'&&!document.querySelector('${cq}').disabled`)
+      }
+      transmitAllowed=false
+      await until(`document.querySelector('${cq}').disabled&&document.querySelector('${tx}').disabled&&document.querySelector('${stop}').disabled`)
+      assert.equal(stationRequests.length,6);assert.equal(stopRequests.length,2)
+      assert.equal(loggedRequests.length,0);assert.equal(exceptions,0);assert.equal(unexpectedMessages,0)
+      if(artifacts){await writeFile(join(artifacts,'ft-results.json'),JSON.stringify({actions:stationRequests.map(r=>r.action),stopCount:stopRequests.length,staleDisplayStop:true,localGrantRevoked:true,exceptions,unexpectedMessages},null,2));const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'ft-controls.png'),Buffer.from(shot.data,'base64'))}
+      console.log('Compiled Nexus FT8/FT4 CQ, TX On/Off, stale-display Stop and local revocation passed');return
     }
     if(radioSelection){
       const pill=id=>`[...document.querySelectorAll('.radio-pill')].find(e=>e.textContent.includes('Test radio ${id}'))`
