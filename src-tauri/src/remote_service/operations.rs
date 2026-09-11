@@ -95,7 +95,7 @@ pub enum Request {
         #[serde(rename = "clientSequence")]
         client_sequence: u64,
         context: station::Context,
-        action: station::Action,
+        action: Box<station::Action>,
     },
 }
 impl Request {
