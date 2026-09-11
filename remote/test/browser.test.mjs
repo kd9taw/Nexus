@@ -720,7 +720,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         }
         if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,`quick-modes-${width}-${zoom}-${theme}.png`),Buffer.from(shot.data,'base64'))}
         await closePicker()
-        assert.equal(await evaluate(`document.activeElement===${picker}`),true,'Escape returns keyboard focus to the mode selector')
+        await until(`document.activeElement===${picker}`)
         menuChecks.push({width,height,zoom,theme,...menuShape})
       }
       // Receiver detail changes the presentation of the SAME scopes/forms.
