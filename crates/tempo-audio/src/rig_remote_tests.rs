@@ -14,6 +14,8 @@ use super::remote::{Position, Retune};
 mod dsp_tests;
 #[path = "rig_filter_tests.rs"]
 mod filter_tests;
+#[path = "rig_fm_tests.rs"]
+mod fm_tests;
 #[path = "rig_level_tests.rs"]
 mod level_tests;
 

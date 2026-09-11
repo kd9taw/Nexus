@@ -18,6 +18,8 @@ use tempo_app::remote_control::{Reason, WritePermission};
 
 mod dsp;
 mod filter;
+mod fm;
+pub use fm::RepeaterConfig;
 mod level;
 
 /// A station-resolved CAT position, not an arbitrary browser command string.
@@ -100,9 +102,13 @@ pub struct Readback {
     passband: Option<u32>,
     receiver_dsp: Option<ReceiverDsp>,
     level: Option<f32>,
+    repeater: Option<RepeaterConfig>,
 }
 
 impl Readback {
+    pub fn repeater(&self) -> Option<&RepeaterConfig> {
+        self.repeater.as_ref()
+    }
     pub fn position(&self) -> &Position {
         &self.position
     }
@@ -294,6 +300,7 @@ impl Rig {
             passband: None,
             receiver_dsp: None,
             level: None,
+            repeater: None,
         })
     }
 }

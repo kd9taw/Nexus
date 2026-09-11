@@ -10,8 +10,8 @@ impl Rig {
         permission: &WritePermission,
     ) -> Result<f32, Reason> {
         permission.check(Instant::now())?;
-        // Keep raw values until validation. read_level clamps fractions and
-        // would hide an invalid device reply; NOTCHF is hertz, not a fraction.
+        // Use the shared raw meter reader so NOTCHF stays in hertz.
+        // read_level accepts only unit-range fractions.
         let value = self.read_meter_f32(level.token());
         permission.check(Instant::now())?;
         value
@@ -77,6 +77,7 @@ impl Rig {
                 passband: None,
                 receiver_dsp: None,
                 level: Some(actual),
+                repeater: None,
             })
         })();
         if let Err(reason) = result {

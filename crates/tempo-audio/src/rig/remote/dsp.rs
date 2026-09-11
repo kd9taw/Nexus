@@ -87,6 +87,7 @@ impl Rig {
                 passband: None,
                 receiver_dsp: Some(after_value),
                 level: None,
+                repeater: None,
             })
         })();
         if let Err(reason) = result {
