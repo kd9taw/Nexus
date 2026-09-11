@@ -954,8 +954,15 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
           await browser.call('Input.dispatchMouseEvent',{type,...point,button,modifiers,clickCount:1},session)
         await sleep(300);assert.equal(stationRequests.length,before,'receive permission must not move TX or both markers')
         await freshLoggingWindow()
+        const prepared=await evaluate(`(()=>{const e=document.querySelector('${selector}'),r=e.getBoundingClientRect(),hit=document.elementFromPoint(${point.x},${point.y});return {rect:r.toJSON(),hit:hit?.outerHTML.slice(0,1000),visible:e.contains(hit),authority:document.querySelector('.remote-logging-authority')?.textContent}})()`)
         for(const type of ['mousePressed','mouseReleased'])await browser.call('Input.dispatchMouseEvent',{type,...point,button:'left',clickCount:1},session)
         for(let i=0;i<100&&stationRequests.length===before;i++)await sleep(100)
+        if(stationRequests.length!==before+1){
+          const state=await evaluate(`({authority:document.querySelector('.remote-logging-authority')?.textContent,result:document.querySelector('.remote-control-result')?.textContent,toasts:[...document.querySelectorAll('[role="alert"]')].map(e=>e.textContent)})`)
+          const failure={tab,selector,point,hit,prepared,state,expectedTier,expectedHz,hz,wire:operationWire.slice(-30)}
+          console.log('Receiver gesture failure',JSON.stringify(failure))
+          if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'receiver-gesture-failure.png'),Buffer.from(shot.data,'base64'));await writeFile(join(artifacts,'receiver-gesture-failure.json'),JSON.stringify(failure,null,2))}
+        }
         assert.equal(stationRequests.length,before+1,`one ${tab} RX waterfall gesture`)
         assert.deepEqual(stationRequests.at(-1).action,{action:'receiver.rxOffset',expectedTier,expectedHz,hz})
         await until(`document.querySelector('${rxField}').value==='${hz}'`)
