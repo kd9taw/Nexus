@@ -267,7 +267,7 @@ mod tests {
         let reader = feed.subscribe(source).unwrap();
         feed.publish(source, now, &[0.0; 960]);
         for i in 1..=20 {
-            feed.publish(source, now, &vec![i as f32; 960]);
+            feed.publish(source, now, &[i as f32; 960]);
         }
         assert_eq!(feed.state.lock().unwrap().samples, 9_600);
         assert_eq!(reader.read(now).unwrap().unwrap().samples, vec![11.0; 960]);

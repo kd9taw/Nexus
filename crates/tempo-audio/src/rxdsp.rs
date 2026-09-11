@@ -522,7 +522,7 @@ mod tests {
         ));
         let next = audio.subscribe(audio.source().unwrap()).unwrap();
         drop(reader);
-        old.push_slice(&vec![0.8; 960]);
+        old.push_slice(&[0.8; 960]);
         let (feed, meters) = (SpectrumFeed::default(), MeterFeed::default());
         let mut dsp = RxDsp::new();
         let samples = tone(44_100, 900.0, 882);
