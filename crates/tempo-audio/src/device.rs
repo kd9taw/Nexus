@@ -514,20 +514,58 @@ fn err_recorder(
     // Per-callback, so a playback spin cannot spend the capture stream's budget.
     let seen = Arc::new(AtomicU32::new(0));
     move |e| {
-        // RATE-LIMITED — see should_report_stream_error for the 294 MB log this prevents (#139).
-        let n = seen.fetch_add(1, Ordering::Relaxed) + 1;
-        if should_report_stream_error(n) {
-            eprintln!("tempo-audio: cpal {which} stream error (occurrence {n}): {e}");
+        if let Some(line) = record_stream_error(&slot, &seen, which, &e) {
+            eprintln!("tempo-audio: cpal {line}");
+            tempo_core::applog::error("audio", &line);
         }
+    }
+}
+
+/// Fold one stream error into the loop's slot, and decide whether it also earns a line in the
+/// DIAGNOSTIC LOG. `None` ⇒ a suppressed repeat.
+///
+/// ⚠️ THE TWO HALVES ANSWER TO DIFFERENT AUTHORITIES, and conflating them is the defect this
+/// function exists to keep separated (EA5IL, 2026-09-09 — 535 identical `capture stream died`
+/// lines, 61% of a five-hour log):
+///
+/// * The SLOT is refilled on every occurrence, because it is how the radio loop learns the card
+///   reported anything at all. `RadioLoop::step` drains it every 20 ms (`take_stream_error`), and
+///   a report it never sees is a card it can never put on probation.
+/// * The LOG LINE obeys the OCCURRENCE COUNTER and nothing else — see
+///   [`should_report_stream_error`]. Gating it on "the slot is empty" instead, as this shipped,
+///   made the drain re-arm the line: the rate limit held for exactly one loop tick at a time, and
+///   a fault arriving a few times a second wrote a line per drain for five hours.
+///
+/// Split out of [`err_recorder`]'s closure so both halves are testable without a sound card.
+fn record_stream_error(
+    slot: &StreamErrSlot,
+    seen: &AtomicU32,
+    which: &str,
+    e: &cpal::Error,
+) -> Option<String> {
+    let n = seen.fetch_add(1, Ordering::Relaxed) + 1;
+    {
         let mut held = slot.lock().unwrap_or_else(|p| p.into_inner());
+        // The FIRST report is the informative one when a device disappears — capture and playback
+        // die within milliseconds of each other and "capture stream: …" is the useful half — so a
+        // report the loop has not yet drained is never overwritten.
         if held.is_none() {
-            // Only the FIRST one reaches the diagnostic log too — the callback can fire
-            // repeatedly between loop ticks, and a device that vanishes must not be able to
-            // spend the file's size bound on repeats of one fact.
-            tempo_core::applog::error("audio", &format!("{which} stream died: {e}"));
             *held = Some(format!("{which} stream: {e}"));
         }
     }
+    if !should_report_stream_error(n) {
+        return None;
+    }
+    // AN XRUN IS NOT A DEATH, and saying "died" about it sent a reader hunting for a restart that
+    // never had to happen. cpal raises `Xrun` from WASAPI's per-packet
+    // `AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY` and then delivers the packet; on ALSA it is a
+    // condition cpal recovers from itself. The stream is alive — what was lost is AUDIO, which on
+    // this path is a torn symbol window and a missed decode, so say that instead.
+    Some(if e.kind() == cpal::ErrorKind::Xrun {
+        format!("{which} stream lost samples (occurrence {n}): {e}")
+    } else {
+        format!("{which} stream error (occurrence {n}): {e}")
+    })
 }
 
 /// Decay applied to the RX peak meter each input callback (per callback, not per
@@ -1156,8 +1194,8 @@ struct RxTaps {
     rx_level: Arc<AtomicU32>,
 }
 
-/// The stream config a CAPTURE stream opens with — the supported config's own, except that
-/// on Linux the buffer is sized explicitly instead of taking ALSA's default.
+/// The stream config a CAPTURE stream opens with — the supported config's own, except that on
+/// Linux and Windows the buffer is sized explicitly instead of taking the host's default.
 ///
 /// Field report (AppImage, 2026-09-01): `cpal capture stream error: A buffer underrun or
 /// overrun occurred`, repeating on the backoff logger. `BufferSize::Default` lets ALSA pick
@@ -1165,40 +1203,77 @@ struct RxTaps {
 /// capture OVERRUN whenever the desktop schedules us late is not log noise: the overrun
 /// DROPS samples, and a torn symbol window is a lost decode. Latency is worthless on this
 /// path — the decoder consumes on slot boundaries and the waterfall by frame — so the right
-/// trade is a deliberately roomy buffer: ~[`LINUX_CAPTURE_BUFFER_MS`] of scheduling slack,
-/// clamped to what the device declares it supports, `Default` when it declares nothing.
+/// trade is a deliberately roomy buffer: ~[`CAPTURE_BUFFER_MS`] of scheduling slack.
 ///
-/// Linux only, deliberately: Windows (WASAPI) and macOS have no such report, and their
-/// shipped behaviour stays byte-identical rather than re-benched for a fix they don't need.
+/// ⚠️ THIS SHIPPED LINUX-ONLY, on the reasoning that "Windows (WASAPI) and macOS have no such
+/// report". EA5IL's 2026-09-09 log is that report: 535 `Xrun`s in five hours on Windows 11 with
+/// an IC-746 through a USB PnP dongle, and the decoder going quiet through the densest of them.
+/// (Their density tracks how badly that PC was running overall — his worst run was 17.4/min
+/// against 4.4/min ten minutes later — but NOT any one subsystem: the densest burst of CAT work
+/// in the file produced none at all.) The mechanism is the same one, spelled WASAPI:
+/// `BufferSize::Default` becomes `hnsBufferDuration = 0` in `IAudioClient::Initialize`, so the
+/// shared-mode endpoint buffer is one DEVICE PERIOD — ~10 ms on a dongle like his, measured from
+/// his own counters. Let cpal's capture worker be scheduled 10 ms late and the endpoint has
+/// overflowed; the next packet comes back flagged `AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY` and
+/// the samples in between are gone.
+///
+/// Windows does NOT go through [`sized_capture_buffer`], and that is the whole subtlety: WASAPI
+/// takes a DURATION, not a size from a declared range, and the range `default_input_config()`
+/// reports there is `Range { min: period, max: period }` — cpal fills it in from
+/// `GetDevicePeriod` when the device declares nothing. Clamping into that range returns the
+/// ~10 ms default, i.e. exactly the shipped behaviour, which is why the sizing has to be asked
+/// for outright. Shared mode accepts any positive duration and keeps calling back on the device
+/// period regardless, so this buys HEADROOM, not latency: the worker still drains every packet
+/// available on every wake.
+///
+/// macOS stays on the host default — no report, and CoreAudio's `Xrun` comes from a
+/// `kAudioDeviceProcessorOverload` listener rather than a buffer this would size.
 fn capture_config(cfg: &cpal::SupportedStreamConfig) -> cpal::StreamConfig {
-    // `mut` is REQUIRED on Linux — the block below reassigns `out.buffer_size` — and unnecessary
-    // everywhere else, where that block is compiled out. Removing it would break Linux; this is
-    // the same `cfg_attr` shape this file already uses on `sized_capture_buffer` below.
-    #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
+    // `mut` is REQUIRED on Linux and Windows — the blocks below reassign `out.buffer_size` — and
+    // unnecessary everywhere else, where they are compiled out. Removing it would break both; this
+    // is the same `cfg_attr` shape this file already uses on `sized_capture_buffer` below.
+    #[cfg_attr(
+        not(any(target_os = "linux", target_os = "windows")),
+        allow(unused_mut)
+    )]
     let mut out = cfg.config();
     #[cfg(target_os = "linux")]
     {
         out.buffer_size = sized_capture_buffer(cfg.buffer_size(), out.sample_rate);
     }
+    #[cfg(target_os = "windows")]
+    {
+        out.buffer_size = wasapi_capture_buffer(out.sample_rate);
+    }
     out
 }
+
+/// How much scheduling slack the capture endpoint is asked to hold, in milliseconds.
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), allow(dead_code))]
+const CAPTURE_BUFFER_MS: u32 = 100;
 
 /// ~100 ms of frames, clamped into the device's declared range. Pure, so the clamp — the
 /// part that can brick a stream if wrong (ALSA refuses an out-of-range buffer) — is testable
 /// without a soundcard.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-const LINUX_CAPTURE_BUFFER_MS: u32 = 100;
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn sized_capture_buffer(supported: &cpal::SupportedBufferSize, rate_hz: u32) -> cpal::BufferSize {
     match supported {
         cpal::SupportedBufferSize::Range { min, max } => {
-            let want = rate_hz.saturating_mul(LINUX_CAPTURE_BUFFER_MS) / 1000;
+            let want = rate_hz.saturating_mul(CAPTURE_BUFFER_MS) / 1000;
             cpal::BufferSize::Fixed(want.clamp(*min, *max))
         }
         // The device declares nothing → asking for a size is a guess ALSA may refuse;
         // keep the shipped behaviour.
         cpal::SupportedBufferSize::Unknown => cpal::BufferSize::Default,
     }
+}
+
+/// ~100 ms of frames, UNCLAMPED — see [`capture_config`] for why clamping is wrong on WASAPI and
+/// `Fixed` is what asks for anything at all there. Never zero: cpal turns `Fixed(0)` into a
+/// zero-length duration, which is `Default` again.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn wasapi_capture_buffer(rate_hz: u32) -> cpal::BufferSize {
+    cpal::BufferSize::Fixed((rate_hz.saturating_mul(CAPTURE_BUFFER_MS) / 1000).max(1))
 }
 
 /// Open a capture stream from `sized`, retrying once with [`cpal::BufferSize::Default`] if the
@@ -1449,6 +1524,25 @@ impl CpalBackend {
         let out_rate = out_cfg.sample_rate();
         let in_ch = in_cfg.channels() as usize;
         let out_ch = out_cfg.channels() as usize;
+
+        // WHAT THE CARD ACTUALLY OPENED AT. One line per open — an open is exactly the class of
+        // event this log exists for, and there are two of them in a five-hour session.
+        //
+        // Written because EA5IL's 2026-09-09 log could not answer the first question anyone asks
+        // about a capture that is losing samples: at what rate, in what format, with how much
+        // buffer? The file recorded the device NAMES and nothing else, so the rate, the channel
+        // count and the buffer we asked for were all unknowable from the one artifact the
+        // operator can send. `capture_config` is re-derived here rather than remembered, so the
+        // line reports what is actually handed to cpal and not what this function believes.
+        let asked = capture_config(&in_cfg).buffer_size;
+        tempo_core::applog::info(
+            "audio",
+            &format!(
+                "capture open: {in_rate} Hz, {in_ch} ch, {:?}, buffer {asked:?} \
+                 (playback {out_rate} Hz, {out_ch} ch)",
+                in_cfg.sample_format()
+            ),
+        );
 
         // WAIT-FREE, BOUNDED (#172). Both decode-path rings are the atomics-only SpscRing the
         // monitor has always used; what a full ring drops is counted (see `audio_health`) rather
@@ -2781,6 +2875,99 @@ mod tx_realtime_tests {
         assert!(should_report_stream_error(1_048_576));
         assert!(!should_report_stream_error(1_000_000));
     }
+
+    /// ⭐ EA5IL, 2026-09-09: 535 IDENTICAL `ERROR audio: capture stream died` lines — 61% of a
+    /// five-hour diagnostic log — from a Windows 11 / IC-746 station. #139's rate limit was
+    /// already in the tree and did not stop them, because the limit it applied to the
+    /// DIAGNOSTIC LOG was not the counter: the log line was gated on the reporting slot being
+    /// EMPTY, and `RadioLoop::step` drains that slot every 20 ms. So the "only the FIRST one
+    /// reaches the diagnostic log" rule held for exactly one loop tick at a time, and a
+    /// repeating fault wrote a line per drain forever.
+    ///
+    /// The regression this pins: the diagnostic line obeys the OCCURRENCE COUNTER, whatever the
+    /// loop is doing to the slot.
+    #[test]
+    fn draining_the_slot_does_not_re_arm_the_diagnostic_line() {
+        use super::{record_stream_error, StreamErrSlot};
+        use std::sync::Mutex;
+
+        let slot: StreamErrSlot = Arc::new(Mutex::new(None));
+        let seen = AtomicU32::new(0);
+        let xrun = cpal::Error::new(cpal::ErrorKind::Xrun);
+
+        let mut lines = 0usize;
+        // EA5IL's session, to scale: 535 occurrences with the radio loop draining the slot
+        // between every one of them — which is what a 20 ms loop does to a fault arriving a
+        // few times a second.
+        for _ in 0..535 {
+            if record_stream_error(&slot, &seen, "capture", &xrun).is_some() {
+                lines += 1;
+            }
+            // The drain. `take_stream_error()`, once per tick.
+            let _ = slot.lock().unwrap().take();
+        }
+        assert!(
+            lines <= 12,
+            "535 occurrences wrote {lines} diagnostic lines — that is EA5IL's log again"
+        );
+        // The control: a limiter that reported NOTHING would pass the assert above.
+        assert!(lines >= 3, "the diagnosis itself must still be written");
+    }
+
+    /// The other half of the same call site: whatever the log does, the LOOP must still be told,
+    /// every tick, or the card can never be put on probation. The slot is refilled after a drain.
+    #[test]
+    fn the_loop_is_still_told_after_the_log_goes_quiet() {
+        use super::{record_stream_error, StreamErrSlot};
+        use std::sync::Mutex;
+
+        let slot: StreamErrSlot = Arc::new(Mutex::new(None));
+        let seen = AtomicU32::new(0);
+        let xrun = cpal::Error::new(cpal::ErrorKind::Xrun);
+        for _ in 0..600 {
+            record_stream_error(&slot, &seen, "capture", &xrun);
+            assert!(
+                slot.lock().unwrap().take().is_some(),
+                "the loop's slot must be refilled on EVERY occurrence, logged or not"
+            );
+        }
+    }
+
+    /// An xrun is NOT a death. cpal reports `Xrun` from WASAPI's per-packet
+    /// `AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY` and then delivers the packet; on ALSA it is a
+    /// condition cpal itself recovers from. Five hundred lines saying "died" about a stream that
+    /// is still delivering sent the reader hunting for a restart that never had to happen.
+    #[test]
+    fn an_xrun_is_reported_as_lost_samples_not_as_a_death() {
+        use super::{record_stream_error, StreamErrSlot};
+        use std::sync::Mutex;
+
+        let slot: StreamErrSlot = Arc::new(Mutex::new(None));
+        let seen = AtomicU32::new(0);
+        let line = record_stream_error(
+            &slot,
+            &seen,
+            "capture",
+            &cpal::Error::new(cpal::ErrorKind::Xrun),
+        )
+        .expect("the first occurrence is always written");
+        assert!(
+            !line.contains("died"),
+            "an xrun is a glitch, not a death: {line}"
+        );
+        assert!(line.contains("lost samples"), "{line}");
+        // The control: a stream that really IS gone must not be softened into a glitch.
+        let gone: StreamErrSlot = Arc::new(Mutex::new(None));
+        let seen = AtomicU32::new(0);
+        let line = record_stream_error(
+            &gone,
+            &seen,
+            "capture",
+            &cpal::Error::new(cpal::ErrorKind::DeviceNotAvailable),
+        )
+        .expect("the first occurrence is always written");
+        assert!(!line.contains("lost samples"), "{line}");
+    }
 }
 
 #[cfg(test)]
@@ -3254,6 +3441,44 @@ mod resolve_diagnostics {
             super::sized_capture_buffer(&SupportedBufferSize::Unknown, 48_000),
             BufferSize::Default
         );
+    }
+
+    /// ⭐ EA5IL, 2026-09-09 (Windows 11, IC-746, USB PnP dongle): 535 cpal `Xrun`s in five hours
+    /// on the CAPTURE stream, with the decoder going quiet through the densest of them. WASAPI
+    /// shared mode turns `BufferSize::Default` into `hnsBufferDuration = 0`, i.e. an endpoint
+    /// buffer of ONE DEVICE PERIOD — ~10 ms on a dongle — so a capture worker scheduled 10 ms
+    /// late loses samples and the next packet comes back flagged `DATA_DISCONTINUITY`.
+    ///
+    /// ⚠️ THE TRAP THIS PINS, and the reason Windows does not reuse `sized_capture_buffer`:
+    /// cpal's `default_input_config()` fills a device that declares no range in from
+    /// `GetDevicePeriod`, so what it reports on WASAPI is `Range { min: period, max: period }`.
+    /// Clamping ~100 ms into `Range { 480, 480 }` returns 480 frames — the ~10 ms default, i.e.
+    /// no change at all. The sizing has to be asked for OUTRIGHT, and shared-mode `Initialize`
+    /// accepts any positive duration.
+    #[test]
+    fn the_wasapi_capture_buffer_is_asked_for_outright_not_clamped_to_the_device_period() {
+        use cpal::{BufferSize, SupportedBufferSize};
+        // 100 ms at whatever rate the card opened at, however the device describes itself.
+        assert_eq!(
+            super::wasapi_capture_buffer(48_000),
+            BufferSize::Fixed(4_800)
+        );
+        assert_eq!(
+            super::wasapi_capture_buffer(44_100),
+            BufferSize::Fixed(4_410)
+        );
+        // THE POSITIVE CONTROL: the clamping path, handed what WASAPI actually reports for a
+        // dongle like EA5IL's, gives back the 10 ms default this fix exists to replace. If this
+        // assert ever fails, `sized_capture_buffer` would have done on Windows too and the
+        // separate function is dead weight.
+        assert_eq!(
+            super::sized_capture_buffer(&SupportedBufferSize::Range { min: 480, max: 480 }, 48_000),
+            BufferSize::Fixed(480),
+            "the clamp returns one device period — that is the shipped ~10 ms, not a fix"
+        );
+        // Never zero, whatever the rate: cpal turns `Fixed(0)` back into a zero-length
+        // duration, which is `Default` again.
+        assert_eq!(super::wasapi_capture_buffer(0), BufferSize::Fixed(1));
     }
 
     fn fixed_4800() -> cpal::StreamConfig {
