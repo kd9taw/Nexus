@@ -64,8 +64,8 @@ async function chrome() {
   } catch(error) { ws?.close(); if(!exited)process.kill(-child.pid,'SIGTERM'); await rm(profile,{recursive:true,force:true,maxRetries:8,retryDelay:100}); throw error }
 }
 
-for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='phone',contactContinuity} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,14].map(applicationVersion=>({applicationVersion,operating:false})),{applicationVersion:14,operating:true},{applicationVersion:14,operating:true,sessionLayout:true},{applicationVersion:14,operating:true,quickLayout:true},{applicationVersion:14,operating:true,quickLayout:true,quickMode:'cw'},{applicationVersion:14,operating:true,contactContinuity:true}]) test(`compiled hosted browser ${contactContinuity?'contact continuity':quickLayout?`quick layout${quickMode==='cw'?' CW':''}`:sessionLayout?'session layout':operating?'operations':`v${applicationVersion}`} completes PKCE, local device approval, observation and viewport checks`, { timeout: applicationVersion >= 14 ? 540000 : applicationVersion >= 13 ? 420000 : 180000 }, async () => {
-  const app=await runtime(), artifacts=process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS ? join(process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS, contactContinuity?'contact-continuity':quickLayout?`quick-layout${quickMode==='cw'?'-cw':''}`:sessionLayout?'session-layout':operating?'operations':`v${applicationVersion}`) : undefined
+for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='phone',contactContinuity,workSpot} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,14].map(applicationVersion=>({applicationVersion,operating:false})),{applicationVersion:14,operating:true},{applicationVersion:14,operating:true,sessionLayout:true},{applicationVersion:14,operating:true,quickLayout:true},{applicationVersion:14,operating:true,quickLayout:true,quickMode:'cw'},{applicationVersion:14,operating:true,contactContinuity:true},{applicationVersion:14,operating:true,workSpot:true}]) test(`compiled hosted browser ${workSpot?'DX work':contactContinuity?'contact continuity':quickLayout?`quick layout${quickMode==='cw'?' CW':''}`:sessionLayout?'session layout':operating?'operations':`v${applicationVersion}`} completes PKCE, local device approval, observation and viewport checks`, { timeout: applicationVersion >= 14 ? 540000 : applicationVersion >= 13 ? 420000 : 180000 }, async () => {
+  const app=await runtime(), artifacts=process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS ? join(process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS, workSpot?'dx-work':contactContinuity?'contact-continuity':quickLayout?`quick-layout${quickMode==='cw'?'-cw':''}`:sessionLayout?'session-layout':operating?'operations':`v${applicationVersion}`) : undefined
   let browser, station, producing=true, pauseObservations=false, producer, applicationProducer
   const results=[]
   try {
@@ -274,7 +274,11 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
     // separate real-native/workerd test proves the ADIF append and durability.
     let loggingLeaseUntil=0
     let loggingAllowed=false,loggingLease=null,loggingRevision=1,loggingSequence=0,loseLogReply=false
-    let stationControls=false
+    let stationControls=false,loseSpotReply=false
+    if(workSpot){
+      const original=collections.needs.rows[0]
+      collections.needs.rows=[['N2DXCW','CW',14.02345],['N2DXPH','Phone',14.19876],['N3DXCW','CW',14.05543],['N4DXCW','CW',14.077],['N2DIG','FT8',14.074]].map(([call,mode,freqMhz])=>({...original,call,mode,freqMhz,band:'20m'}))
+    }
     const stationRequests=[]
     let lastDxTier='FT8',lastMsgTier='TempoFast'
     if(operating)applicationData.get_snapshot.mode='qso'
@@ -313,6 +317,10 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
             if(a.receiver==='sstv'){applicationData.get_sstv_state.state.armed=a.on;applicationData.get_sstv_state.state.health.armed=a.on}
             else if(a.receiver==='aprs')applicationData.get_remote_aprs_state.health.arm=a.on?'auto':'off'
             else applicationData[`get_${a.receiver}_state`].armed=a.on
+          }else if(a.action==='radio.workSpot'){
+            assert.ok(workSpot&&['cw','phone'].includes(a.mode));assert.equal(a.band,'20m');assert.equal(applicationData.get_snapshot.radio.txEnabled,false)
+            Object.assign(applicationData.get_snapshot.radio,{operatingMode:a.mode,dialMhz:a.dialMhz,band:a.band,sideband:'USB',sidebandOverride:null,rigMode:a.mode==='cw'?'CW':'USB',rigKeyed:false})
+            Object.assign(applicationData.get_snapshot,{workTick:(applicationData.get_snapshot.workTick??0)+1,workView:a.mode,workCall:a.call.toUpperCase()})
           }else if(a.action==='radio.frequency'){
             assert.ok(a.dialMhz>0);assert.equal(a.band,a.dialMhz===10?'':'40m');assert.ok(['USB','LSB'].includes(a.sideband))
             applicationData.get_snapshot.radio.dialMhz=a.dialMhz;applicationData.get_snapshot.radio.band=a.band;applicationData.get_snapshot.radio.sideband=a.sideband
@@ -422,8 +430,9 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
           }else assert.fail(`Unreviewed station action ${a.action}`)
           value={operation:'stationControl',operationId:r.requestId,outcome:'applied',evidence:['amplifier.followBand','decoder.js8Speed','decoder.msk144Period','decoder.depth','receiver.rxOffset','receiver.rxGain'].includes(a.action)?'settingsSaved':a.action.startsWith('radio.')?'radioReadback':a.action.startsWith('amplifier.')?'amplifierReadback':'receiverState'}
           loggingReceipts.set(r.requestId,value);loggingRevision++;applicationRevision++
+          if(loseSpotReply&&a.action==='radio.workSpot')continue
         }else if(r.type==='result'){value=loggingReceipts.get(r.operationId);if(!value)error='resultExpired'}
-        else value={stationBootId:loggingBoot,allowed:loggingAllowed||stationControls,phase:loggingLease?'controlling':loggingAllowed||stationControls?'available':'localPermissionRequired',leaseId:loggingLease,revision:loggingRevision,commandWindowId:loggingLease?loggingWindow:null,nextSequence:loggingLease?loggingSequence+1:null,leaseRemainingMs:loggingLease?5000:null,actions:loggingAllowed?['log.manual']:[],txArmed:false,...(stationControls?{controls:{context:{radioId:1,radioConnection:1,ampConnection:1,ampReadSequence:1},capabilities:request.operationVersion>=3?['decoder','amplifier','frequency','mode','tier','ampFollowBand','workspace','decoderSettings','receiverSettings','receiverGain','bandSelection','receiverFilter','receiverDsp','phoneMode']:['decoder','amplifier']}}:{})}
+        else value={stationBootId:loggingBoot,allowed:loggingAllowed||stationControls,phase:loggingLease?'controlling':loggingAllowed||stationControls?'available':'localPermissionRequired',leaseId:loggingLease,revision:loggingRevision,commandWindowId:loggingLease?loggingWindow:null,nextSequence:loggingLease?loggingSequence+1:null,leaseRemainingMs:loggingLease?5000:null,actions:loggingAllowed?['log.manual']:[],txArmed:false,...(stationControls?{controls:{context:{radioId:1,radioConnection:1,ampConnection:1,ampReadSequence:1},capabilities:request.operationVersion>=3?['decoder','amplifier','frequency','mode','tier','ampFollowBand','workspace','decoderSettings','receiverSettings','receiverGain','bandSelection','receiverFilter','receiverDsp','phoneMode',...(workSpot?['workSpot']:[])]:['decoder','amplifier']}}:{})}
         source.send({type:'operationResponse',sessionId:request.sessionId,requestId:r.requestId,...(error?{error}:{value})});continue
       }
       if (request.type === 'applicationQuery') {
@@ -553,6 +562,82 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       assert.equal(await evaluate(`document.body.textContent.includes('Could not switch mode')`), false)
       assert.equal(fieldDayQueries.length,0)
       await click(button('FT'))
+    }
+    if(workSpot){
+      const row=call=>`[...document.querySelectorAll('.np-row')].find(e=>e.textContent.includes('${call}'))`
+      const input=mode=>`document.querySelector('.${mode}-cockpit .remote-log-entry .le-call')`
+      const visible=mode=>`(()=>{const e=${input(mode)};return !!e&&e.getBoundingClientRect().width>0})()`
+      const fresh=async()=>{
+        const after=performance.now()
+        for(let i=0;i<100;i++){
+          const reply=operationWire.findLast(v=>v.direction==='in'&&v.phase==='controlling')
+          if(reply&&reply.at>after&&performance.now()-reply.at<150)return
+          await sleep(50)
+        }
+        assert.fail('fresh station authority must precede a Work gesture')
+      }
+      await click(button('Needed'));await until(`!!${row('N2DXCW')}`)
+      await click(row('N2DXCW'));await sleep(250)
+      assert.equal(stationRequests.length,0,'an observer can select a need but cannot work it')
+      loggingAllowed=true;stationControls=true
+      await until(`!!${button('Take station control')}`);await click(button('Take station control'))
+      await until(`document.querySelector('.remote-logging-authority')?.textContent.includes('Station control active')`)
+      await fresh();await click(row('N2DIG'));await sleep(250)
+      assert.equal(stationRequests.length,0,'digital Work is still unsupported and cannot fall back to a plain QSY')
+      const work=async(call,mode)=>{
+        await click(button('Needed'));await until(`!!${row(call)}`);await fresh()
+        const before=stationRequests.length;await click(row(call))
+        await until(visible(mode));await until(`document.querySelector('.remote-control-result')?.textContent.includes('confirmed')`)
+        assert.equal(stationRequests.length,before+1)
+        assert.equal(stationRequests.at(-1).action.action,'radio.workSpot')
+        assert.equal(stationRequests.at(-1).action.call,call)
+        assert.equal(stationRequests.at(-1).action.mode,mode)
+        assert.equal(applicationData.get_snapshot.radio.txEnabled,false)
+      }
+      await work('N2DXCW','cw');await until(`${input('cw')}?.value==='N2DXCW'`)
+      await evaluate(`window.__dxCwInput=${input('cw')}`)
+      assert.equal(applicationData.get_snapshot.radio.dialMhz,14.02345)
+      await work('N2DXPH','phone');await until(`${input('phone')}?.value==='N2DXPH'`)
+      assert.equal(await evaluate(`${input('cw')}===window.__dxCwInput&&${input('cw')}.value==='N2DXCW'`),true)
+      // A local/native Work broadcast updates station data but cannot navigate
+      // another browser or replace its draft. Its captured log context survives.
+      Object.assign(applicationData.get_snapshot,{workTick:(applicationData.get_snapshot.workTick??0)+1,workView:'cw',workCall:'N2FOREIGN'})
+      Object.assign(applicationData.get_snapshot.radio,{dialMhz:7.25,band:'40m'});applicationRevision++
+      await until(`document.querySelector('.phone-cockpit .readout-val')?.textContent.includes('7.2500')`)
+      assert.equal(await evaluate(visible('phone')),true)
+      assert.equal(await evaluate(`${input('phone')}.value`),'N2DXPH')
+      assert.ok(await evaluate(`document.querySelector('.phone-cockpit .le-hint')?.textContent.includes('14.199')`))
+      await fresh();await click(`document.querySelector('.phone-cockpit .le-log-btn')`)
+      await until(`document.querySelector('.phone-cockpit .remote-log-entry')?.textContent.includes('QSO saved')`)
+      assert.equal(loggedRequests.length,1)
+      assert.deepEqual({call:loggedRequests[0].record.call,band:loggedRequests[0].record.band,freqMhz:loggedRequests[0].record.freqMhz,mode:loggedRequests[0].record.mode},{call:'N2DXPH',band:'20m',freqMhz:14.19876,mode:'SSB'})
+      await work('N3DXCW','cw')
+      await until(`!!${button('Clear draft and use N3DXCW')}`)
+      assert.equal(await evaluate(`${input('cw')}.value`),'N2DXCW')
+      assert.equal(await evaluate(`${input('cw')}===window.__dxCwInput`),true)
+      assert.ok(await evaluate(`document.querySelector('.cw-cockpit .le-hint')?.textContent.includes('14.023')`))
+      await click(button('Clear draft and use N3DXCW'))
+      assert.equal(await evaluate(`${input('cw')}.value`),'N3DXCW')
+      assert.ok(await evaluate(`document.querySelector('.cw-cockpit .le-hint')?.textContent.includes('14.055')`))
+      assert.equal(stationRequests.length,3,'replacing a draft is local and cannot issue another radio command')
+      await click(button('Needed'));await until(`!!${row('N4DXCW')}`);await fresh()
+      loseSpotReply=true;await click(row('N4DXCW'))
+      await until(`document.querySelector('.remote-control-result')?.textContent.includes('unknown')`,15000)
+      assert.equal(stationRequests.length,4)
+      assert.equal(await evaluate(visible('cw')),false,'a lost receipt cannot navigate from the station Work hint')
+      assert.equal(await evaluate(`${input('cw')}.value`),'N3DXCW')
+      loseSpotReply=false
+      await click(`[...document.querySelectorAll('.remote-control-result button')].find(e=>e.textContent.includes('Check'))`)
+      await until(`document.querySelector('.remote-control-result')?.textContent.includes('confirmed')`)
+      assert.equal(stationRequests.length,4,'checking a result cannot replay Work')
+      assert.equal(await evaluate(visible('cw')),false,'a late result cannot replay navigation or prefill')
+      assert.equal(await evaluate(`${input('cw')}.value`),'N3DXCW')
+      assert.equal(loggedRequests.length,1);assert.equal(exceptions,0);assert.equal(unexpectedMessages,0)
+      if(artifacts){
+        const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'dx-recovered-needed.png'),Buffer.from(shot.data,'base64'))
+        await writeFile(join(artifacts,'dx-results.json'),JSON.stringify({stationActions:stationRequests.map(r=>r.action),log:loggedRequests.map(r=>r.record),nativeBroadcastIgnored:true,independentDrafts:true,originalLogContext:true,explicitReplacement:true,lostResultNotReplayed:true,exceptions,unexpectedMessages},null,2))
+      }
+      console.log('Compiled DX Work: four exact spot actions, independent drafts, original log context, explicit replacement and lost-result recovery passed');return
     }
     if(quickLayout){
       loggingAllowed=true;stationControls=true
