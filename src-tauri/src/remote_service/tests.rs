@@ -313,6 +313,70 @@ fn cloud_runtime_probe() {
     std::io::stdout().flush().unwrap();
     for line in lines {
         let value: serde_json::Value = serde_json::from_str(&line.unwrap()).unwrap();
+        if value["type"] == "seedFtQso"
+            || value["type"] == "ftQsoStep"
+            || value["type"] == "ftQsoEvidence"
+        {
+            let root = std::path::Path::new(config["configurationRoot"].as_str().unwrap());
+            let mut e = engine.lock().unwrap();
+            let mut samples = 0;
+            if value["type"] == "seedFtQso" {
+                e.halt_tx();
+                let mut settings = e.settings().clone();
+                settings.mycall = "K2DEF".into();
+                settings.mygrid = "FN31".into();
+                settings.auto_log = false;
+                settings.prompt_to_log = value["prompt"].as_bool().unwrap();
+                settings.save_qso_wav = false;
+                e.apply_settings(settings);
+                e.set_tier(serde_json::from_value(value["tier"].clone()).unwrap());
+                e.set_log_path(root.join("ft-contacts.adi"));
+                e.set_pending_qso_path(root.join("ft-pending.json"));
+                e.take_immediate_retune();
+                e.take_slot_tx_abort();
+            } else if value["type"] == "ftQsoStep" {
+                // Only this ignored pipe-driven test can supply a simulated
+                // peer or advance a native slot. All audio remains in memory.
+                let slot = value["slot"].as_u64().unwrap();
+                if let Some(text) = value["message"].as_str() {
+                    let mut peer = Engine::new("W1AW", "FN31", 0);
+                    peer.set_tier(e.tier());
+                    peer.override_next_tx("K2DEF", Some("FN31"), text);
+                    let tx_slot = if peer.tx_even() { 0 } else { 1 };
+                    let mut frame: Vec<f32> = peer.poll_tx(tx_slot).into_iter().flatten().collect();
+                    samples = frame.len();
+                    assert!(samples > 0, "peer must produce actual native waveform");
+                    frame.resize((e.active_slot_secs() * 12000.0) as usize, 0.0);
+                    assert!(
+                        e.ingest(&frame, slot) > 0,
+                        "station must decode the actual peer waveform"
+                    );
+                } else {
+                    let tx_slot = if (slot % 2 == 0) == e.tx_even() {
+                        slot
+                    } else {
+                        slot + 1
+                    };
+                    e.take_immediate_retune();
+                    e.take_slot_tx_abort();
+                    samples = e.poll_tx(tx_slot).into_iter().flatten().count();
+                    assert!(
+                        samples > 0,
+                        "remote-owned native sequencer must generate its over"
+                    );
+                }
+            }
+            let snapshot = e.snapshot();
+            println!(
+                "REMOTE_TEST:{}",
+                json!({"qso":snapshot.qso,"currentQsoLogKey":e.current_qso_log_key(),
+                "pendingQsoLogKey":e.pending_qso_log_key(),"pendingLog":snapshot.pending_log,
+                "records":e.get_log(),"adif":std::fs::read_to_string(root.join("ft-contacts.adi")).unwrap_or_default(),
+                "journal":root.join("ft-pending.json").is_file(),"samples":samples,"txEnabled":e.tx_enabled()})
+            );
+            std::io::stdout().flush().unwrap();
+            continue;
+        }
         if value["type"] == "seedLogging" || value["type"] == "loggingEvidence" {
             let path = std::path::Path::new(config["configurationRoot"].as_str().unwrap())
                 .join("remote-manual.adi");

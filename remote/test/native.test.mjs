@@ -11,6 +11,91 @@ import { runtime, roomStatus } from './runtime.mjs'
 import { recallReference, recallAdif } from './recall-reference.mjs'
 import { insightsReference, insightsAdif } from './insights-reference.mjs'
 
+for (const tier of ['FT8', 'FT4']) for (const prompt of [false, true]) test(`actual cloud ${tier} QSO exchange finishes with durable ${prompt ? 'confirmed' : 'current'} logging`, { timeout: 90000 }, async () => {
+  assert.ok(process.env.NEXUS_REMOTE_TEST_BINARY)
+  const app = await runtime(), probe = await nativeProbe(process.env.NEXUS_REMOTE_TEST_BINARY, app.origin)
+  let socket
+  try {
+    await probe.ready()
+    const browser = await app.owner(), begin = await probe.send({ type: 'begin', name: 'FT QSO synthetic bench' })
+    const stationId = begin.status.pairingId
+    await browser.post('pair/claim', { code: begin.status.pairingCode }); await probe.send({ type: 'refresh' })
+    assert.equal((await probe.send({ type: 'approve', enrollmentId: stationId, accountId: browser.accountId })).ok, true)
+    const { value: device, response } = await browser.post(`stations/${stationId}/device`, { name: 'FT logging browser' })
+    browser.setCookie(response.headers.get('set-cookie')); await probe.send({ type: 'refresh' })
+    await probe.send({ type: 'device', deviceId: device.deviceId, approve: true }); await probe.send({ type: 'enable' })
+    const ns = await app.mf.getDurableObjectNamespace('STATIONS'), room = ns.get(ns.idFromName(stationId))
+    for (let i = 0; i < 30 && !(await roomStatus(room)).online; i++) await delay(100)
+    assert.equal((await roomStatus(room)).online, true)
+    for (const type of ['loggingPermission', 'stationPermission', 'transmitPermission'])
+      assert.equal((await probe.send({ type, deviceId: device.deviceId, allow: true })).ok, true)
+    const ticket = (await browser.post(`stations/${stationId}/ticket`)).value
+    socket = await browser.open(stationId, ticket.ticket); socket.ackObservations(); await socket.take(v => v.type === 'session')
+    const operation = async args => {
+      await delay(270)
+      const request = { requestId: crypto.randomUUID(), ...args }
+      socket.send({ type: 'operationRequest', operationVersion: 4, request })
+      const response = await socket.take(v => v.type === 'operationResponse' && v.requestId === request.requestId)
+      assert.equal(response.error, undefined, JSON.stringify(response))
+      return { request, value: response.value }
+    }
+    const initial = (await operation({ type: 'state' })).value
+    const owner = (await operation({ type: 'acquire', stationBootId: initial.stationBootId })).value
+    const action = async a => {
+      const state = (await operation({ type: 'heartbeat', leaseId: owner.leaseId })).value
+      assert.equal(state.phase, 'controlling')
+      return operation({ type: 'stationControl', stationBootId: state.stationBootId, leaseId: state.leaseId,
+        expectedRevision: state.revision, commandWindowId: state.commandWindowId, clientSequence: state.nextSequence,
+        context: state.controls.context, action: a.action.startsWith('ft.') ? { ...a, transmitEpoch: state.transmitEpoch } : a })
+    }
+    let count = 0
+    {
+      await probe.send({ type: 'seedFtQso', tier, prompt })
+      const selection = await probe.send({ type: 'ftCallDecode' })
+      const called = await action({ action: 'ft.call', expectedTier: tier, selection })
+      assert.equal(called.value.outcome, 'applied')
+      assert.ok((await probe.send({ type: 'ftQsoStep', slot: 10 })).samples > 0)
+      const report = await probe.send({ type: 'ftQsoStep', slot: 13, message: 'K2DEF W1AW -12' })
+      assert.equal(report.qso.dxcall, 'W1AW')
+      assert.equal(report.qso.rxReport, -12)
+      assert.match(report.qso.txNow, /R[+-][0-9]{2}/)
+      assert.ok((await probe.send({ type: 'ftQsoStep', slot: 14 })).samples > 0)
+      const roger = await probe.send({ type: 'ftQsoStep', slot: 17, message: 'K2DEF W1AW RR73' })
+      assert.match(roger.qso.txNow, /73/)
+      assert.ok((await probe.send({ type: 'ftQsoStep', slot: 18 })).samples > 0)
+      const before = await probe.send({ type: 'ftQsoEvidence' }), q = before.qso
+      const logged = await action({ action: 'qso.logCurrent', expectedKey: before.currentQsoLogKey, expectedTier: tier,
+        expectedQso: { dxcall: q.dxcall, state: q.state, txNow: q.txNow, cqRunning: q.cqRunning } })
+      assert.equal(logged.value.outcome, 'applied', JSON.stringify(logged.value))
+      assert.equal(logged.value.evidence, prompt ? 'pendingConfirmationSynced' : 'fileSynced')
+      let after = await probe.send({ type: 'ftQsoEvidence' })
+      if (prompt) {
+        assert.equal(after.journal, true)
+        assert.equal(after.records.length, count)
+        assert.equal(after.pendingLog.call, 'W1AW')
+        const record = after.pendingLog
+        const confirmed = await action({ action: 'qso.confirm', expectedKey: after.pendingQsoLogKey,
+          edits: { call: record.call, grid: record.grid, rstSent: record.rstSent, rstRcvd: record.rstRcvd } })
+        assert.equal(confirmed.value.outcome, 'applied', JSON.stringify(confirmed.value))
+        assert.equal(confirmed.value.evidence, 'fileSynced')
+        assert.deepEqual((await operation({ type: 'result', operationId: confirmed.request.requestId })).value, confirmed.value)
+        after = await probe.send({ type: 'ftQsoEvidence' })
+      }
+      count++
+      assert.equal(after.records.length, count)
+      assert.equal(after.journal, false)
+      assert.equal(after.pendingLog, null)
+      assert.match(after.adif, /W1AW/)
+      assert.match(after.adif, /-12/)
+      assert.deepEqual((await operation({ type: 'result', operationId: logged.request.requestId })).value, logged.value)
+      assert.equal((await probe.send({ type: 'ftQsoEvidence' })).adif, after.adif)
+    }
+  } finally {
+    socket?.close()
+    try { await probe.stop() } finally { await app.mf.dispose() }
+  }
+})
+
 async function nativeProbe(binary, origin) {
   const profile=await mkdtemp(join(tmpdir(),'nexus-native-profile-'))
   const child = spawn(binary, ['--ignored', '--exact', 'remote_service::tests::cloud_runtime_probe', '--nocapture'], { stdio: ['pipe', 'pipe', 'pipe'], env:{...process.env,XDG_CONFIG_HOME:profile,APPDATA:profile,NEXUS_DATA_DIR:join(profile,'shared'),NEXUS_PROFILE:''} })
@@ -544,7 +629,7 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
   if(operationVersion>=2){
    assert.equal((await probe.send({type:'stationPermission',deviceId:device.deviceId,allow:true})).ok,true)
    const controls=(await operation({type:'state'})).response.value
-   assert.deepEqual(controls.controls.capabilities,operationVersion>=3?['decoder','amplifier','frequency','mode','tier','ampFollowBand','workspace','decoderSettings','receiverSettings','receiverGain','bandSelection','receiverFilter','receiverDsp','phoneMode','workSpot','radioLevels','radioSelection','fmTuning', 'fmReceiver']:['decoder','amplifier'])
+   assert.deepEqual(controls.controls.capabilities,operationVersion>=3?['decoder','amplifier','frequency','mode','tier','ampFollowBand','workspace','decoderSettings','receiverSettings','receiverGain','bandSelection','receiverFilter','receiverDsp','phoneMode','workSpot','radioLevels','radioSelection','fmTuning', 'fmReceiver',...(operationVersion===4?['qsoLogging']:[])]:['decoder','amplifier'])
    const cleared=await operation({type:'stationControl',stationBootId:controls.stationBootId,leaseId:controls.leaseId,expectedRevision:controls.revision,commandWindowId:controls.commandWindowId,clientSequence:controls.nextSequence,context:controls.controls.context,action:{action:'decoder.clear',receiver:'cw'}})
    assert.equal(cleared.response.value.outcome,'applied');assert.equal(cleared.response.value.evidence,'receiverState')
    assert.deepEqual(await probe.send({type:'loggingEvidence'}),evidence)
