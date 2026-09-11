@@ -148,7 +148,7 @@ fn saved_remote_rx_gain_reaches_the_existing_audio_owner_once_without_tx_or_a_re
                 &no_sinks(),
                 0.0,
                 &mut |_: &Transport| {
-                reopens.set(reopens.get() + 1);
+                    reopens.set(reopens.get() + 1);
                     Err("gain must not reopen capture".into())
                 },
                 &mut mock_reopen_rig(),
