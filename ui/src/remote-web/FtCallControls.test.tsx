@@ -11,7 +11,7 @@ import type { DecodeRow, Station } from '../types'
 vi.mock('../api', () => ({ getDeclination: vi.fn(async () => 0), openQrzPage: vi.fn() }))
 const clients: OperationClient[] = []
 afterEach(() => { cleanup(); clients.splice(0).forEach(c => c.disconnected()); vi.useRealTimers(); localStorage.clear() })
-function owner(capability: 'ftCall' | 'ftOperate') {
+function owner(capability: 'ftCall' | 'ftOperate' | 'receiverSettings') {
   vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
   const sent: any[] = [], client = new OperationClient(w => sent.push(JSON.parse(w)), true, () => 1000, undefined, 4)
   clients.push(client); client.open()
@@ -28,7 +28,7 @@ const station: Station = { call: 'W1AW', grid: 'FN31', snr: -12, lastHeardSlot: 
 const decode: DecodeRow = { from: 'W1AW', message: 'CQ W1AW FN31', snr: -12, freqHz: 1250,
   dtSec: 0.1, isCq: true, directedToMe: false, worked: false, tier: 'FT8', rv: 0 }
 
-it.each(['ftCall', 'ftOperate'] as const)('existing decode, roster and card gestures require %s to support calling', capability => {
+it.each(['ftCall', 'ftOperate', 'receiverSettings'] as const)('existing decode, roster and card gestures respect %s authority', capability => {
   const client = owner(capability), call = vi.fn(), select = vi.fn(), ignore = vi.fn(), rx = vi.fn(), spot = vi.fn()
   const children = <>
     <OperateDecodes decodes={[decode]} slot={100} rxOffsetHz={1250} band="20m" tier="FT8"
@@ -58,10 +58,18 @@ it.each(['ftCall', 'ftOperate'] as const)('existing decode, roster and card gest
     expect(call).toHaveBeenNthCalledWith(5, 'W1AW', 'FN31', undefined, undefined, 1250, 'FT8')
   } else expect(call).not.toHaveBeenCalled()
   call.mockClear()
+  select.mockClear()
+  fireEvent.click(decoded)
   fireEvent.dblClick(decoded, { altKey: true }); fireEvent.dblClick(decoded, { ctrlKey: true })
   fireEvent.dblClick(roster, { altKey: true }); fireEvent.click(view.container.querySelector('.or-spot')!)
-  expect(call).not.toHaveBeenCalled(); expect(ignore).not.toHaveBeenCalled(); expect(rx).not.toHaveBeenCalled(); expect(spot).not.toHaveBeenCalled()
+  expect(call).not.toHaveBeenCalled(); expect(ignore).not.toHaveBeenCalled(); expect(spot).not.toHaveBeenCalled()
+  expect(select).toHaveBeenCalledTimes(2)
+  expect(select).toHaveBeenLastCalledWith('W1AW', 'FN31', 'CQ W1AW FN31', -12)
+  if (capability === 'receiverSettings') expect(rx).toHaveBeenCalledWith(1250)
+  else expect(rx).not.toHaveBeenCalled()
+  select.mockClear(); rx.mockClear()
   view.rerender(tree(false))
+  fireEvent.click(decoded); fireEvent.dblClick(decoded, { ctrlKey: true })
   fireEvent.dblClick(decoded); fireEvent.dblClick(roster); fireEvent.dblClick(view.container.querySelector('.station-card')!)
-  expect(call).not.toHaveBeenCalled()
+  expect(call).not.toHaveBeenCalled(); expect(select).not.toHaveBeenCalled(); expect(rx).not.toHaveBeenCalled()
 })

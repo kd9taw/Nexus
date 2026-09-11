@@ -59,7 +59,9 @@ it('decode click and keyboard operating gestures obey station authority, with a 
     fireEvent.doubleClick(row, { ctrlKey: true })
     fireEvent.doubleClick(row)
     expect(call).toHaveBeenCalledTimes(control ? 2 : 0)
-    expect(select).toHaveBeenCalledTimes(control ? 2 : 0)
+    // Selection only fills the browser's DX draft. RF and TX gestures still
+    // require station authority, as the separate assertions below prove.
+    expect(select).toHaveBeenCalledTimes(2)
     expect(ignore).toHaveBeenCalledTimes(control ? 1 : 0)
     expect(rx).toHaveBeenCalledTimes(control ? 1 : 0)
     cleanup()

@@ -6,7 +6,7 @@
 import { Fragment, useContext, useEffect, useRef, useState } from 'react'
 import { t } from '../i18n'
 import { RemoteHistoryContext, RemoteCollectionsContext } from '../remote-web/collections'
-import { useStationControl, useStationCapability } from '../stationAccess'
+import { useStationControl, useStationCapability, useStationData } from '../stationAccess'
 import { useRovingList } from '../useRovingList'
 import { usePinnedScroll } from '../usePinnedScroll'
 import type { DecodeRow, NeedAlert, Tier } from '../types'
@@ -238,6 +238,9 @@ export function OperateDecodes({
 }: Props) {
   const control = useStationControl()
   const callControl = useStationCapability('ftCall')
+  const rxControl = useStationCapability('receiverSettings')
+  const available = useStationData()
+  const selectControl = control || available
   const remoteHistory = useContext(RemoteHistoryContext)
   const remoteCollections = useContext(RemoteCollectionsContext)
   const historySeen = useRef({ generation: '', sequence: 0 })
@@ -446,10 +449,8 @@ export function OperateDecodes({
       return
     }
     if (e.ctrlKey || e.metaKey) {
-      if (control) {
-        onSelectDecode?.(d.from, gridFromMessage(d.message), d.message, d.snr)
-        onSetRx?.(d.freqHz)
-      }
+      if (selectControl) onSelectDecode?.(d.from, gridFromMessage(d.message), d.message, d.snr)
+      if (rxControl) onSetRx?.(d.freqHz)
       return
     }
     if (callControl) onCall(d.from, undefined, d.message, d.snr, d.freqHz)
@@ -462,7 +463,7 @@ export function OperateDecodes({
     if (!d?.from) return
     if (mods.alt) { if (control) onToggleIgnore?.(d.from) }
     else if (mods.shift) { if (callControl) onCall(d.from, undefined, d.message, d.snr, d.freqHz) }
-    else if (control) onSelectDecode?.(d.from, gridFromMessage(d.message), d.message, d.snr)
+    else if (selectControl) onSelectDecode?.(d.from, gridFromMessage(d.message), d.message, d.snr)
   })
 
   const eraseBtn = (
@@ -685,7 +686,7 @@ export function OperateDecodes({
                 style={hlStyle}
                 onClick={() => {
                   roving.setActive(i)
-                  if (control && d.from) onSelectDecode?.(d.from, gridFromMessage(d.message), d.message, d.snr)
+                  if (selectControl && d.from) onSelectDecode?.(d.from, gridFromMessage(d.message), d.message, d.snr)
                 }}
                 onDoubleClick={(e) => handleDouble(e, d)}
                 title={
