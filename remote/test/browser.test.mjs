@@ -1789,7 +1789,14 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
           const direction=input.value+input.step<=input.max?1:-1,key=direction===1?'ArrowRight':'ArrowLeft',code=direction===1?39:37
           const target=input.value+direction*input.step,value=level==='notch'?target:target/100
           await freshLoggingWindow()
-          const prepared=await evaluate(`(()=>{const e=document.querySelector('${selector}');e.focus({preventScroll:true});return {focused:document.activeElement===e,disabled:e.disabled,value:Number(e.value),active:document.activeElement?.outerHTML.slice(0,300)}})()`)
+          // Wire receipt arrival precedes React's enabled-state render. Prepare
+          // focus only once the real input is enabled; never retry a sent key.
+          let prepared
+          for(let attempt=0;attempt<100&&!prepared;attempt++){
+            prepared=await evaluate(`(()=>{const e=document.querySelector('${selector}');if(!e||e.disabled)return null;e.focus({preventScroll:true});return {focused:document.activeElement===e,disabled:e.disabled,value:Number(e.value),active:document.activeElement?.outerHTML.slice(0,300)}})()`)
+            if(!prepared)await sleep(50)
+          }
+          assert.ok(prepared,'level input must enable before keyboard preparation')
           assert.equal(prepared.disabled,false,`level input enabled: ${JSON.stringify(prepared)}`)
           assert.equal(prepared.focused,true,`level keyboard focus: ${JSON.stringify(prepared)}`)
           await browser.call('Input.dispatchKeyEvent',{type:'keyDown',key,code:key,windowsVirtualKeyCode:code},session)
