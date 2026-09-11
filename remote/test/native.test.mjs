@@ -610,7 +610,7 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
          assert.equal(after.owned,true)
          if(change.kind==='freeText')assert.equal(after.qso.txNow,'W1AW N0CALL TNX 73')
          if(change.kind==='monitor'){assert.equal(after.qso.dxcall,null);assert.equal(after.qso.cqRunning,false)}
-         assert.deepEqual(await probe.send({type:'loggingEvidence'}),evidence)
+         assert.deepEqual(await probe.send({type:'loggingEvidence'}),{...evidence,txEnabled:true})
        }
        ft = await ftState()
        assert.deepEqual((await operation({type:'stopTransmit',stationBootId:ft.stationBootId,
