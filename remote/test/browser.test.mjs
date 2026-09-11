@@ -142,8 +142,11 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       window.requestAnimationFrame=callback=>{const id=originalRaf(time=>{if(!window.__frameDelay){callback(time);return}delayedFrames.set(id,setTimeout(()=>{delayedFrames.delete(id);callback(performance.now())},window.__frameDelay))});return id};
       window.cancelAnimationFrame=id=>{originalCancel(id);clearTimeout(delayedFrames.get(id));delayedFrames.delete(id)};
       window.__keyboardInset=0;const actual=visualViewport;const area=new EventTarget();
-      Object.defineProperties(area,{width:{get:()=>actual.width},height:{get:()=>actual.height-window.__keyboardInset}});
+      Object.defineProperties(area,{width:{get:()=>actual.width},height:{get:()=>actual.height-window.__keyboardInset},
+        offsetLeft:{get:()=>actual.offsetLeft},offsetTop:{get:()=>actual.offsetTop},
+        pageLeft:{get:()=>actual.pageLeft},pageTop:{get:()=>actual.pageTop},scale:{get:()=>actual.scale}});
       actual.addEventListener('resize',()=>area.dispatchEvent(new Event('resize')));
+      actual.addEventListener('scroll',()=>area.dispatchEvent(new Event('scroll')));
       Object.defineProperty(window,'visualViewport',{value:area});
       window.__waterfallDraws=0;const draw=CanvasRenderingContext2D.prototype.putImageData;
       CanvasRenderingContext2D.prototype.putImageData=function(...args){if(this.canvas.classList.contains('waterfall-canvas'))window.__waterfallDraws++;return draw.apply(this,args)};
