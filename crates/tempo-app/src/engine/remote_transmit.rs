@@ -16,16 +16,7 @@ impl Engine {
         permit: TransmitPermit,
         direction: Option<&str>,
     ) -> Result<(), Reason> {
-        if !permit.valid(Instant::now()) {
-            return Err(Reason::AuthorityExpired);
-        }
-        if self.source_kind != SourceKind::Native
-            || self.settings.operating_mode != OperatingMode::Digital
-            || !matches!(self.tier(), Tier::Ft8 | Tier::Ft4)
-        {
-            return Err(Reason::UnsupportedAction);
-        }
-        self.remote_radio_idle()?;
+        self.prepare_remote_ft(&permit)?;
         self.start_cq(direction)
             .map_err(|_| Reason::InvalidAction)?;
         // Native entry may spend time resetting a decoder. Recheck before any
@@ -35,6 +26,97 @@ impl Engine {
             return Err(Reason::AuthorityExpired);
         }
         self.remote_transmit = Some(permit);
+        Ok(())
+    }
+
+    fn require_remote_ft_owner(&self, permit: &TransmitPermit) -> Result<(), Reason> {
+        let now = Instant::now();
+        if !permit.valid(now) {
+            return Err(Reason::AuthorityExpired);
+        }
+        let current = self.remote_transmit.as_ref().ok_or(Reason::StationBusy)?;
+        if !current.valid(now) {
+            return Err(Reason::AuthorityExpired);
+        }
+        if !current.same_session(permit) {
+            return Err(Reason::ContextChanged);
+        }
+        Ok(())
+    }
+
+    fn prepare_remote_ft(&self, permit: &TransmitPermit) -> Result<(), Reason> {
+        if !permit.valid(Instant::now()) {
+            return Err(Reason::AuthorityExpired);
+        }
+        if self.source_kind != SourceKind::Native
+            || self.settings.operating_mode != OperatingMode::Digital
+            || !matches!(self.tier(), Tier::Ft8 | Tier::Ft4)
+        {
+            return Err(Reason::UnsupportedAction);
+        }
+        if self.remote_transmit.is_some() {
+            self.require_remote_ft_owner(permit)?;
+            if self
+                .tx_owner()
+                .is_some_and(|owner| owner != super::TxOwner::Slot)
+                || self.sstv_in_flight()
+            {
+                return Err(Reason::StationBusy);
+            }
+            self.remote_radio_context_idle()
+        } else {
+            self.remote_radio_idle()
+        }
+    }
+
+    /// The native call verb owns message choice, parity, offsets and QSO state.
+    /// A browser-facing caller must bind its selected decode to station data.
+    pub fn call_remote_ft_station(
+        &mut self,
+        permit: TransmitPermit,
+        call: &str,
+        grid: Option<&str>,
+        message: Option<&str>,
+        snr: Option<i32>,
+        frequency: Option<f32>,
+    ) -> Result<(), Reason> {
+        self.prepare_remote_ft(&permit)?;
+        self.call_station_ctx(call, grid, message, snr, frequency)
+            .map_err(|_| Reason::InvalidAction)?;
+        if !permit.valid(Instant::now()) {
+            self.halt_tx();
+            return Err(Reason::AuthorityExpired);
+        }
+        self.remote_transmit = Some(permit);
+        Ok(())
+    }
+
+    pub fn set_remote_ft_tx_enabled(
+        &mut self,
+        permit: TransmitPermit,
+        on: bool,
+    ) -> Result<(), Reason> {
+        if on {
+            self.prepare_remote_ft(&permit)?;
+            self.set_tx_enabled(true);
+            self.remote_transmit = Some(permit);
+            if self.poll_remote_transmit(Instant::now()) {
+                return Err(Reason::AuthorityExpired);
+            }
+        } else {
+            // TX Off must work during our pending retune or current FT over.
+            // Native semantics finish that over; they do not invoke Stop TX.
+            self.require_remote_ft_owner(&permit)?;
+            self.set_tx_enabled(false);
+        }
+        Ok(())
+    }
+
+    pub fn stop_remote_ft(&mut self, permit: &TransmitPermit) -> Result<(), Reason> {
+        // Stop needs ownership, not a fresh CAT reading or an idle transmitter.
+        // It must never stop a later native transmission after local takeover.
+        self.require_remote_ft_owner(permit)?;
+        self.halt_tx();
         Ok(())
     }
 
@@ -123,6 +205,95 @@ mod tests {
         assert!(engine.commit_tx(&plan, vec![0.0; 120], slot).is_empty());
         assert!(!engine.tx_enabled());
         assert!(engine.take_slot_tx_abort());
+    }
+
+    #[test]
+    fn remote_ft_tx_off_and_stop_preserve_the_native_distinction() {
+        for tier in [Tier::Ft8, Tier::Ft4] {
+            let mut native = station(tier);
+            let mut remote = station(tier);
+            let authority = TransmitAuthority::default();
+            let permit = || {
+                authority
+                    .permit(Instant::now() + Duration::from_secs(5))
+                    .unwrap()
+            };
+            native.start_cq(None).unwrap();
+            remote.start_remote_ft_cq(permit(), None).unwrap();
+            native.set_tx_enabled(false);
+            remote.set_remote_ft_tx_enabled(permit(), false).unwrap();
+            assert!(!native.take_slot_tx_abort());
+            assert!(
+                !remote.take_slot_tx_abort(),
+                "TX Off lets the current FT over finish"
+            );
+            assert_eq!(remote.settings, native.settings);
+            assert_eq!(remote.snapshot().qso, native.snapshot().qso);
+            native.take_immediate_retune();
+            remote.take_immediate_retune();
+            native.set_tx_enabled(true);
+            remote.set_remote_ft_tx_enabled(permit(), true).unwrap();
+            native.halt_tx();
+            remote.stop_remote_ft(&permit()).unwrap();
+            assert!(remote.take_slot_tx_abort());
+            assert!(native.take_slot_tx_abort());
+            assert!(!remote.tx_enabled());
+            assert_eq!(remote.settings, native.settings);
+            assert_eq!(remote.snapshot().qso, native.snapshot().qso);
+        }
+    }
+
+    #[test]
+    fn remote_ft_call_uses_native_qso_state_and_keeps_ownership_after_rearm() {
+        for tier in [Tier::Ft8, Tier::Ft4] {
+            let mut native = station(tier);
+            let mut remote = station(tier);
+            let authority = TransmitAuthority::default();
+            let permit = || {
+                authority
+                    .permit(Instant::now() + Duration::from_secs(5))
+                    .unwrap()
+            };
+            native
+                .call_station_ctx("W1AW", Some("FN31"), None, None, Some(950.0))
+                .unwrap();
+            remote
+                .call_remote_ft_station(permit(), "W1AW", Some("FN31"), None, None, Some(950.0))
+                .unwrap();
+            assert_eq!(remote.settings, native.settings);
+            assert_eq!(remote.snapshot().qso, native.snapshot().qso);
+            assert_eq!(remote.tx_even(), native.tx_even());
+            assert_eq!(remote.tx_offset_hz, native.tx_offset_hz);
+            assert_eq!(remote.rx_offset_hz, native.rx_offset_hz);
+            assert_eq!(remote.immediate_tx, native.immediate_tx);
+            assert!(remote.tx_enabled());
+            authority.revoke();
+            assert!(remote.poll_remote_transmit(Instant::now()));
+            assert!(!remote.tx_enabled());
+        }
+    }
+
+    #[test]
+    fn another_remote_owner_and_old_session_cannot_stop_native_or_current_ft() {
+        let mut remote = station(Tier::Ft8);
+        let authority = TransmitAuthority::default();
+        let other = TransmitAuthority::default();
+        let permit = authority
+            .permit(Instant::now() + Duration::from_secs(5))
+            .unwrap();
+        remote.start_remote_ft_cq(permit.clone(), None).unwrap();
+        let foreign = other
+            .permit(Instant::now() + Duration::from_secs(5))
+            .unwrap();
+        assert_eq!(remote.stop_remote_ft(&foreign), Err(Reason::ContextChanged));
+        assert!(remote.tx_enabled());
+        remote.set_tx_enabled(true);
+        assert_eq!(remote.stop_remote_ft(&permit), Err(Reason::StationBusy));
+        assert_eq!(
+            remote.set_remote_ft_tx_enabled(permit, false),
+            Err(Reason::StationBusy)
+        );
+        assert!(remote.tx_enabled());
     }
 
     #[test]

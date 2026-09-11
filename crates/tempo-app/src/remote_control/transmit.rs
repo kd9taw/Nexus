@@ -26,13 +26,17 @@ impl TransmitPermit {
         self.0.valid(now)
     }
 
+    /// Identity only; callers still check both deadlines before admission.
+    pub fn same_session(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0.owner, &other.0.owner) && self.0.generation == other.0.generation
+    }
+
     /// Renewal cannot resurrect an expired/revoked session or transfer it to
     /// another controller. The host must already have admitted the heartbeat.
     pub fn renew(&mut self, next: Self, now: Instant) -> bool {
         if !self.valid(now)
             || !next.valid(now)
-            || !Arc::ptr_eq(&self.0.owner, &next.0.owner)
-            || self.0.generation != next.0.generation
+            || !self.same_session(&next)
             || next.0.deadline < self.0.deadline
         {
             return false;

@@ -110,6 +110,12 @@ impl Engine {
         if self.tx_enabled() || self.tx_owner().is_some() || self.sstv_in_flight() {
             return Err(Reason::StationBusy);
         }
+        self.remote_radio_context_idle()
+    }
+
+    /// Shared context checks. An owned FT operation may keep its own slot
+    /// transmission, but still cannot borrow another pending radio transition.
+    pub(super) fn remote_radio_context_idle(&self) -> Result<(), Reason> {
         if self.remote_settings_path.is_none() {
             return Err(Reason::UnsupportedAction);
         }
