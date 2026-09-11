@@ -682,7 +682,8 @@ fn band_selection_uses_the_actual_radio_owner_and_never_replays_the_native_pick(
 #[test]
 fn remote_ft_authority_loss_flushes_the_owned_over_but_not_a_native_rearm() {
     use tempo_app::remote_control::transmit::TransmitAuthority;
-    for local_rearm in [false, true] {
+    let mut native_writes = None;
+    for (remote, local_rearm) in [(false, true), (true, false), (true, true)] {
         let peer = retuning_peer(14_074_000, "PKTUSB", |line, state| {
             if line == "T 1" {
                 state.keyed = true;
@@ -699,13 +700,17 @@ fn remote_ft_authority_loss_flushes_the_owned_over_but_not_a_native_rearm() {
         {
             let mut e = engine_lock(&s.engine);
             e.take_immediate_retune();
-            e.start_remote_ft_cq(
-                authority
-                    .permit(Instant::now() + Duration::from_secs(5))
-                    .unwrap(),
-                None,
-            )
-            .unwrap();
+            if remote {
+                e.start_remote_ft_cq(
+                    authority
+                        .permit(Instant::now() + Duration::from_secs(5))
+                        .unwrap(),
+                    None,
+                )
+                .unwrap();
+            } else {
+                e.start_cq(None).unwrap();
+            }
             if local_rearm {
                 e.set_tx_enabled(true);
             }
@@ -735,7 +740,17 @@ fn remote_ft_authority_loss_flushes_the_owned_over_but_not_a_native_rearm() {
         assert_eq!(engine_lock(&s.engine).tx_enabled(), local_rearm);
         if local_rearm {
             assert_eq!(s.backend.flush_calls, 0);
-            assert_eq!(writes(&peer), ["T 1"]);
+            // Compare the real native loop: its ordinary PTT reconciliation
+            // can reassert an already-held key. Remote ownership must not
+            // change those writes or flush that native transmission.
+            let sent = writes(&peer);
+            if remote {
+                assert_eq!(Some(&sent), native_writes.as_ref());
+            } else {
+                assert!(!sent.is_empty());
+                assert!(sent.iter().all(|line| line == "T 1"));
+                native_writes = Some(sent);
+            }
         } else {
             assert!(s.backend.flush_calls > 0);
             assert_eq!(writes(&peer), ["T 1", "T 0"]);
