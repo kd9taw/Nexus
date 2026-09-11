@@ -838,19 +838,34 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
             }
             if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,`wheel-${mode}-1280-175-light.png`),Buffer.from(shot.data,'base64'))}
             if(['cw','phone'].includes(mode)){
-              await until(`document.querySelector('${scope}')?.classList.contains('tunable')`)
-              await evaluate(`document.querySelector('${scope}').scrollIntoView({block:'center',inline:'center',behavior:'instant'})`);await settledLayout()
-              const point=await evaluate(`(()=>{const r=document.querySelector('${scope}').getBoundingClientRect();return{x:r.left+r.width*.7,y:r.top+r.height*.4,edge:r.right-1}})()`)
+              const prepareScopePress=async()=>{
+                await freshLoggingWindow()
+                for(let attempt=0;attempt<100;attempt++){
+                  const age=receiverRead?performance.now()-receiverRead.at+(receiverRead.radio?.readings?.ptt?.ageMs??Infinity):Infinity
+                  if(age<250&&receiverRead?.radio?.rigKeyed===false&&await evaluate(`document.querySelector('${scope}')?.classList.contains('tunable')`))break
+                  if(attempt===99)assert.fail(`Fresh readings and the actual ${mode} scope must precede its positive-control press`)
+                  await sleep(50)
+                }
+                await evaluate(`document.querySelector('${scope}').scrollIntoView({block:'center',inline:'center',behavior:'instant'})`);await settledLayout()
+                const point=await evaluate(`(()=>{const e=document.querySelector('${scope}'),r=e.getBoundingClientRect(),x=r.left+r.width*.7,y=r.top+r.height*.4;return{x,y,edge:r.right-1,hit:e===document.elementFromPoint(x,y),rect:r.toJSON()}})()`)
+                assert.equal(point.hit,true,`scope press must hit the refreshed ${mode} canvas: ${JSON.stringify(point)}`)
+                return point
+              }
+              let point=await prepareScopePress()
               const before=stationRequests.length,radio=structuredClone(applicationData.get_snapshot.radio)
               await evaluate(`(()=>{window.__scopePointerEvents=[];for(const type of ['pointerdown','pointerup','pointermove','pointercancel','lostpointercapture'])document.addEventListener(type,e=>{window.__scopePointerEvents.push({type,x:e.clientX,y:e.clientY,button:e.button,pointerId:e.pointerId,target:e.target?.outerHTML?.slice(0,200)});window.__scopePointerEvents=window.__scopePointerEvents.slice(-20)},true)})()`)
-              await freshLoggingWindow()
               await browser.call('Input.dispatchMouseEvent',{type:'mousePressed',x:point.x,y:point.y,button:'left',clickCount:1},session)
               await browser.call('Input.dispatchMouseEvent',{type:'mouseMoved',x:point.edge,y:point.y,buttons:1},session)
               await sleep(150)
               await browser.call('Input.dispatchMouseEvent',{type:'mouseReleased',x:point.edge,y:point.y,button:'left',clickCount:1},session)
               await sleep(150)
               assert.equal(stationRequests.length,before,'scope movement cannot fall through to native drag or edge scanning')
-              await freshLoggingWindow()
+              point=await prepareScopePress()
+              await browser.call('Input.dispatchMouseEvent',{type:'mousePressed',x:point.x,y:point.y,button:'left',clickCount:1},session)
+              await sleep(1600)
+              await browser.call('Input.dispatchMouseEvent',{type:'mouseReleased',x:point.x,y:point.y,button:'left',clickCount:1},session)
+              await sleep(150);assert.equal(stationRequests.length,before,'a held scope press cannot borrow a renewed command window')
+              point=await prepareScopePress()
               for(const type of ['mousePressed','mouseReleased'])await browser.call('Input.dispatchMouseEvent',{type,x:point.x,y:point.y,button:'left',clickCount:1},session)
               for(let i=0;i<100&&stationRequests.length===before;i++)await sleep(100)
               if(stationRequests.length!==before+1&&artifacts){
