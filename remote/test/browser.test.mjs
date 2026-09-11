@@ -842,6 +842,7 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
               await evaluate(`document.querySelector('${scope}').scrollIntoView({block:'center',inline:'center',behavior:'instant'})`);await settledLayout()
               const point=await evaluate(`(()=>{const r=document.querySelector('${scope}').getBoundingClientRect();return{x:r.left+r.width*.7,y:r.top+r.height*.4,edge:r.right-1}})()`)
               const before=stationRequests.length,radio=structuredClone(applicationData.get_snapshot.radio)
+              await evaluate(`(()=>{window.__scopePointerEvents=[];for(const type of ['pointerdown','pointerup','pointermove','pointercancel','lostpointercapture'])document.addEventListener(type,e=>{window.__scopePointerEvents.push({type,x:e.clientX,y:e.clientY,button:e.button,pointerId:e.pointerId,target:e.target?.outerHTML?.slice(0,200)});window.__scopePointerEvents=window.__scopePointerEvents.slice(-20)},true)})()`)
               await freshLoggingWindow()
               await browser.call('Input.dispatchMouseEvent',{type:'mousePressed',x:point.x,y:point.y,button:'left',clickCount:1},session)
               await browser.call('Input.dispatchMouseEvent',{type:'mouseMoved',x:point.edge,y:point.y,buttons:1},session)
@@ -852,6 +853,12 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
               await freshLoggingWindow()
               for(const type of ['mousePressed','mouseReleased'])await browser.call('Input.dispatchMouseEvent',{type,x:point.x,y:point.y,button:'left',clickCount:1},session)
               for(let i=0;i<100&&stationRequests.length===before;i++)await sleep(100)
+              if(stationRequests.length!==before+1&&artifacts){
+                const detail=await evaluate(`(()=>{const e=document.querySelector('${scope}'),r=e?.getBoundingClientRect();return{point:${JSON.stringify(point)},rect:r?.toJSON(),hit:document.elementFromPoint(${point.x},${point.y})?.outerHTML?.slice(0,500),scope:e?.outerHTML,events:window.__scopePointerEvents,authority:document.querySelector('.remote-logging-authority')?.textContent,toasts:[...document.querySelectorAll('[role="status"],[role="alert"]')].map(e=>e.textContent)}})()`)
+                const shot=await browser.call('Page.captureScreenshot',{format:'png'},session)
+                await writeFile(join(artifacts,'scope-click-failure.png'),Buffer.from(shot.data,'base64'))
+                await writeFile(join(artifacts,'scope-click-failure.json'),JSON.stringify({mode,detail,before,after:stationRequests.length,radio,receiverRead,lastOperations:operationWire.slice(-30)},null,2))
+              }
               assert.equal(stationRequests.length,before+1,`one ${mode} scope click`)
               const action=stationRequests.at(-1).action
               assert.equal(action.action,'radio.frequency');assert.equal(action.sideband,radio.sideband)
