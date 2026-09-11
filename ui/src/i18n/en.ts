@@ -239,6 +239,7 @@ export const EN = {
   "remote.scopeFollowsStation": "Scope analysis follows Nexus at the shack. Adjust resolution there.",
   "remote.stationScope": "Station",
   "remote.scopeUnavailable": "Scope data unavailable.",
+  "remote.scopeClick": "Click a signal to tune it",
   "remote.cwUnavailable": "CW decoder data unavailable.",
   "remote.keyboardUnavailable": "Station decoder data unavailable.",
   "remote.keyboardStopped": "Start the decoder in Nexus at the shack to receive text.",

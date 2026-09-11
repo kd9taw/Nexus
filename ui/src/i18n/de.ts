@@ -160,6 +160,7 @@ export const DE: PartialCatalog = {
   "remote.scopeFollowsStation": "Die Spektrumanalyse folgt Nexus an der Station. Ändern Sie die Auflösung dort.",
   "remote.stationScope": "Station",
   "remote.scopeUnavailable": "Spektrumdaten nicht verfügbar.",
+  "remote.scopeClick": "Auf ein Signal klicken, um es abzustimmen",
   "remote.cwUnavailable": "CW-Decoder-Daten nicht verfügbar.",
   "remote.keyboardUnavailable": "Decoder-Daten der Station nicht verfügbar.",
   "remote.keyboardStopped": "Starten Sie den Decoder in Nexus an der Station, um Text zu empfangen.",

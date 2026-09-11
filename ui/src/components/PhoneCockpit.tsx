@@ -1,4 +1,5 @@
 import { useReceiverFilter } from '../remote-web/useReceiverFilter'
+import { useRemoteScopeClick } from '../remote-web/useRemoteScopeClick'
 import { RemoteRecallEntry } from '../remote-web/RemoteRecall'
 import { CollectionStatus, useRemoteCollection } from '../remote-web/collections'
 import { useStationCapability, useStationControl } from '../stationAccess'
@@ -377,6 +378,7 @@ const FLEX_SPANS = [
 
 export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, fieldDay, phoneMode, wheelSensitivity, spots, needByCall, typeByCall, onWorkSpot, onRecallMemory, onOpenMemories, onOpenSettings, onOpenLogbook, panels }: Props) {
   const frequencyControl = useStationCapability('frequency')
+  const scopeClick = useRemoteScopeClick(snap)
   const control = useStationControl()
   const spotsRead = useRemoteCollection('spots')
   // Live S-meter (shared 100 ms poll, lock-free backend) — used to arrive via the 300 ms
@@ -1533,8 +1535,9 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
             dialHz={snap.radio.dialMhz > 0 ? Math.round(snap.radio.dialMhz * 1e6) : null}
             onFeed={(source, loHz, hiHz) => setScopeFeed({ source, loHz, hiHz })}
             onTune={onScopeTune}
+          onBeginClick={control ? undefined : scopeClick.begin}
             filterWidthHz={filterHz ?? 2400}
-            interactive={control && catOk && !snap.radio.txBusyReason && !snap.radio.transmitting && snap.radio.dialMhz > 0}
+            interactive={(control || scopeClick.allowed) && catOk && !snap.radio.txBusyReason && !snap.radio.transmitting && snap.radio.dialMhz > 0}
           />
         </div>
       </section>

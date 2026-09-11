@@ -67,6 +67,29 @@ export class WheelTuning {
     clearTimeout(this.timer); this.timer = undefined; this.burst = null
     if (this.reading) { this.reading = null; this.generation++; this.sending = false; this.notify() }
   }
+  /** Capture at pointer-down; a later release may submit one absolute native
+   * scope target. It cannot borrow authority renewed during the gesture. */
+  captureTarget(source: WheelSource): ((dialHz: number) => boolean) | null {
+    if (!this.ready() || this.burst || !Number.isFinite(source.dialMhz) || source.dialMhz <= 0 || source.dialMhz > 250000 ||
+      !['USB', 'LSB', 'AM', 'FM'].includes(source.sideband)) return null
+    const fromHz = Math.round(source.dialMhz * 1e6), context = this.context(), input = this.inputContext()
+    const state = this.operations.getSnapshot().state!
+    const b: Burst = { ...source, fromHz, targetHz: fromHz, context, radioId: state.controls!.context.radioId,
+      edgeSaid: false, owners: new Set(source.owner ? [source.owner] : []), send: this.operations.prepareControl() }
+    let consumed = false
+    return (dialHz: number) => {
+      if (consumed) return false
+      consumed = true
+      if (!this.ready() || this.burst || input !== this.inputContext() || !Number.isFinite(dialHz) ||
+        !Number.isSafeInteger(Math.round(dialHz)) || dialHz < 1 || dialHz > 250000e6) return false
+      // An absolute click uses native signal/sideband math from PhoneScope. It
+      // has no wheel band-edge clamp and never leaves a trailing drag timer.
+      this.cancel()
+      b.targetHz = Math.round(dialHz); this.burst = b
+      void this.flush()
+      return true
+    }
+  }
   nudge(deltaHz: number, source: WheelSource, onEdge?: (mhz: number) => void): boolean {
     if (!this.ready() || !Number.isFinite(deltaHz) || !deltaHz || !Number.isFinite(source.dialMhz) || source.dialMhz <= 0 || source.dialMhz > 250000 ||
       !['USB', 'LSB', 'AM', 'FM'].includes(source.sideband)) return false

@@ -175,6 +175,7 @@ export const ES: PartialCatalog = {
   "remote.scopeFollowsStation": "El análisis del espectro sigue a Nexus en la estación. Ajuste la resolución allí.",
   "remote.stationScope": "Estación",
   "remote.scopeUnavailable": "Datos del espectro no disponibles.",
+  "remote.scopeClick": "Pulsa una señal para sintonizarla",
   "remote.cwUnavailable": "Datos del decodificador CW no disponibles.",
   "remote.keyboardUnavailable": "Datos del decodificador de la estación no disponibles.",
   "remote.keyboardStopped": "Inicie el decodificador en Nexus en la estación para recibir texto.",

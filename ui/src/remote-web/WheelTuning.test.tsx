@@ -58,6 +58,51 @@ function fixture(dialMhz = 7.2) {
     writes: () => sent.filter(w => w.request.type === 'stationControl') }
 }
 
+it('commits one absolute scope target using the original press without a wheel band-edge clamp', async () => {
+  const h = fixture(), click = h.tuning.captureTarget(h.source())!
+  expect(h.writes()).toHaveLength(0)
+  expect(click(10_000_000)).toBe(true); await tick()
+  expect(h.writes()).toHaveLength(1)
+  expect(h.writes()[0].request.action).toEqual({ action: 'radio.frequency', dialMhz: 10, band: '', sideband: 'LSB' })
+  expect(click(7_100_000)).toBe(false)
+  act(() => h.finish()); await tick(); await h.fresh(10)
+  expect(h.writes()).toHaveLength(1); expect(setFrequency).not.toHaveBeenCalled()
+})
+
+it('drops a scope press across control loss even when the same lease returns', async () => {
+  const h = fixture(), old = h.tuning.captureTarget(h.source())!
+  act(() => { h.client.disconnected(); h.client.open() }); await tick(1000)
+  act(() => h.reply(h.state)); await tick()
+  expect(old(7_205_000)).toBe(false); expect(h.writes()).toHaveLength(0)
+  const fresh = h.tuning.captureTarget(h.source())!
+  expect(fresh(7_201_000)).toBe(true); await tick()
+  expect(h.writes()[0].request.action.dialMhz).toBe(7.201)
+  act(() => h.finish()); await tick()
+})
+
+it('does not borrow a renewed command window to finish an old scope press', async () => {
+  const h = fixture(), old = h.tuning.captureTarget(h.source())!
+  await tick(1000); act(() => h.reply(h.state)); await tick(300)
+  old(7_201_000); await tick()
+  expect(h.writes()).toHaveLength(0)
+  const fresh = h.tuning.captureTarget(h.source())!
+  expect(fresh(7_202_000)).toBe(true); await tick()
+  expect(h.writes()).toHaveLength(1)
+  act(() => h.finish()); await tick()
+})
+
+it('keeps wheel input and local dial changes from becoming an old scope release', async () => {
+  const h = fixture(), click = h.tuning.captureTarget(h.source())!
+  expect(h.tuning.nudge(100, h.source())).toBe(true)
+  expect(click(7_205_000)).toBe(false); await tick(120)
+  expect(h.writes()).toHaveLength(1); expect(h.writes()[0].request.action.dialMhz).toBe(7.2001)
+  act(() => h.finish()); await tick(); await h.fresh(7.2001)
+  const changed = h.tuning.captureTarget(h.source())!
+  h.setSnapshot({ ...h.getSnapshot(), radio: { ...h.getSnapshot().radio, dialMhz: 7.21 } })
+  changed(7_201_000); await tick()
+  expect(h.writes()).toHaveLength(1); expect(h.failed).toHaveBeenCalledOnce()
+})
+
 it('coalesces readout and scope input once and queues nothing behind a submitted command', async () => {
   const h = fixture(), readout = {}, scope = {}
   expect(h.tuning.nudge(100, { ...h.source(), owner: readout })).toBe(true)

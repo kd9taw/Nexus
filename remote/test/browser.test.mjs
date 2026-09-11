@@ -837,6 +837,31 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
               assert.equal(applicationData.get_snapshot.radio.txEnabled,false)
             }
             if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,`wheel-${mode}-1280-175-light.png`),Buffer.from(shot.data,'base64'))}
+            if(['cw','phone'].includes(mode)){
+              await until(`document.querySelector('${scope}')?.classList.contains('tunable')`)
+              await evaluate(`document.querySelector('${scope}').scrollIntoView({block:'center',inline:'center',behavior:'instant'})`);await settledLayout()
+              const point=await evaluate(`(()=>{const r=document.querySelector('${scope}').getBoundingClientRect();return{x:r.left+r.width*.7,y:r.top+r.height*.4,edge:r.right-1}})()`)
+              const before=stationRequests.length,radio=structuredClone(applicationData.get_snapshot.radio)
+              await freshLoggingWindow()
+              await browser.call('Input.dispatchMouseEvent',{type:'mousePressed',x:point.x,y:point.y,button:'left',clickCount:1},session)
+              await browser.call('Input.dispatchMouseEvent',{type:'mouseMoved',x:point.edge,y:point.y,buttons:1},session)
+              await sleep(150)
+              await browser.call('Input.dispatchMouseEvent',{type:'mouseReleased',x:point.edge,y:point.y,button:'left',clickCount:1},session)
+              await sleep(150)
+              assert.equal(stationRequests.length,before,'scope movement cannot fall through to native drag or edge scanning')
+              await freshLoggingWindow()
+              for(const type of ['mousePressed','mouseReleased'])await browser.call('Input.dispatchMouseEvent',{type,x:point.x,y:point.y,button:'left',clickCount:1},session)
+              for(let i=0;i<100&&stationRequests.length===before;i++)await sleep(100)
+              assert.equal(stationRequests.length,before+1,`one ${mode} scope click`)
+              const action=stationRequests.at(-1).action
+              assert.equal(action.action,'radio.frequency');assert.equal(action.sideband,radio.sideband)
+              assert.ok(Math.abs(action.dialMhz-radio.dialMhz)>0&&Math.abs(action.dialMhz-radio.dialMhz)<0.004,'native scope resolves a nearby receive target')
+              await until(`document.querySelector('.remote-control-result')?.textContent.includes('confirmed')`)
+              await until(`document.querySelector('${root} .readout-val')?.textContent.includes('${action.dialMhz.toFixed(4)}')`)
+              assert.equal(applicationData.get_snapshot.radio.txEnabled,false)
+              assert.equal(applicationData.get_snapshot.radio.operatingMode,radio.operatingMode)
+              if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,`scope-click-${mode}-1280-175-light.png`),Buffer.from(shot.data,'base64'))}
+            }
           }
         }
       }
@@ -1038,9 +1063,9 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
       stationControls=false;loggingLease=null
       await until(`document.querySelector('.cw-cockpit .amp-op').disabled`)
       assert.equal(controlGeometry+modeGeometry+bandGeometry+wheelGeometry+filterGeometry+tierGeometry+followGeometry+decoderGeometry+receiverGeometry+gainGeometry+16,432)
-      assert.equal(loggedRequests.length,5);assert.equal(stationRequests.length,85);assert.equal(unexpectedMessages,0);assert.equal(exceptions,0)
+      assert.equal(loggedRequests.length,5);assert.equal(stationRequests.length,87);assert.equal(unexpectedMessages,0);assert.equal(exceptions,0)
       if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-manual-logging.png'),Buffer.from(shot.data,'base64'));await writeFile(join(artifacts,'operation-results.json'),JSON.stringify({count:loggedRequests.length,stationActions:stationRequests.map(r=>r.action),controlGeometry,modeGeometry,bandGeometry,wheelGeometry,filterGeometry,tierGeometry,followGeometry,decoderGeometry,receiverGeometry,gainGeometry,modes:loggedRequests.map(r=>r.record.mode),lostResultResolved:true,wholePageReloadResolved:true,crossTabLockRefusal:true,geometry:16,exceptions,unexpectedMessages},null,2))}
-      console.log('Compiled browser: five logging forms, 85 station gestures, saved receiver choices, native band recall, shared wheel/digit tuning, separate grants, recovery and 432 geometry cases passed');return
+      console.log('Compiled browser: five logging forms, 87 station gestures, saved receiver choices, native band recall, shared wheel/digit tuning, separate grants, recovery and 432 geometry cases passed');return
     }
     const startReads=applicationTraffic.reads, startBytes=applicationTraffic.bytes, started=performance.now()
     for(const [width,height] of [[1024,768],[1280,800],[1366,768],[1200,1390],[3440,1440]])for(const zoom of [1,1.75])for(const theme of ['dark','light']) {

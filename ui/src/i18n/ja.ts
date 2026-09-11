@@ -165,6 +165,7 @@ export const JA: PartialCatalog = {
   "remote.scopeFollowsStation": "スペクトル解析は無線局側のNexusに従います。分解能は無線局側で調整してください。",
   "remote.stationScope": "無線局",
   "remote.scopeUnavailable": "スペクトルのデータを取得できません。",
+  "remote.scopeClick": "信号をクリックして同調",
   "remote.cwUnavailable": "CWデコーダーのデータを取得できません。",
   "remote.keyboardUnavailable": "無線局のデコーダーデータを取得できません。",
   "remote.keyboardStopped": "テキストを受信するには、無線局側のNexusでデコーダーを開始してください。",

@@ -139,6 +139,9 @@ interface Props {
    * dial (all mode math done here, where the spectrum row lives) — the host just
    * coalesces + commands CAT (useScopeTune). Absent = scope stays display-only. */
   onTune?: (t: ScopeTuneRequest) => void
+  /** Optional click-only owner. Captured at press and used once at release;
+   * movement cancels the click and cannot enter native drag/scan callbacks. */
+  onBeginClick?: () => ((dialHz: number) => void) | null
   /** Effective RX filter width (Hz) for the drag box — the cockpit passes the rig's
    * read-back width or its per-mode fallback. */
   filterWidthHz?: number
@@ -199,6 +202,7 @@ export function PhoneScope({
   dialHz = null,
   onFeed,
   onTune,
+  onBeginClick,
   filterWidthHz,
   pitchHz = 600,
   cwPitchRefDial = true,
@@ -266,6 +270,7 @@ export function PhoneScope({
   // Click/drag tuning state — the latest row + drawn view (captured each drawRow so the
   // pointer handlers can hit-test), the tune callback + math inputs, and the gesture.
   const onTuneRef = useRef(onTune)
+  const onBeginClickRef = useRef(onBeginClick)
   const filterWidthRef = useRef(filterWidthHz)
   const pitchRef = useRef(pitchHz)
   const cwPitchRefRef = useRef(cwPitchRefDial)
@@ -277,6 +282,7 @@ export function PhoneScope({
   const lastViewRef = useRef<{ lo: number; hi: number; rf: boolean; mirrored: boolean } | null>(null)
   const boxRef = useRef<HTMLDivElement>(null)
   const dragRef = useRef<{
+    click?: (dialHz: number) => void
     x0: number
     y0: number
     rf: boolean
@@ -313,6 +319,7 @@ export function PhoneScope({
   dialRef.current = dialHz
   onFeedRef.current = onFeed
   onTuneRef.current = onTune
+  onBeginClickRef.current = onBeginClick
   filterWidthRef.current = filterWidthHz
   pitchRef.current = pitchHz
   cwPitchRefRef.current = cwPitchRefDial
@@ -1036,6 +1043,15 @@ export function PhoneScope({
     }
     scanTsRef.current = 0
   }
+  const clickOnly = onBeginClick != null
+  useEffect(() => {
+    if (!clickOnly) return
+    const cancel = () => endGesture()
+    const escape = (e: KeyboardEvent) => { if (e.key === 'Escape') cancel() }
+    window.addEventListener('blur', cancel); window.addEventListener('keydown', escape)
+    return () => { window.removeEventListener('blur', cancel); window.removeEventListener('keydown', escape); cancel() }
+  }, [clickOnly])
+  useEffect(() => { if (clickOnly && !interactive) endGesture() }, [clickOnly, interactive])
   // Edge-scan tuning curve: cubic in depth, so most of the zone gives FINE speed control
   // and the last few pixels ramp hard; at the extreme edge the dial moves ~3 visible
   // spans per second. The dial advances rate×dt per tick from wherever it IS (never
@@ -1099,14 +1115,17 @@ export function PhoneScope({
     if (!m.startsWith('CW') || cwPitchRefRef.current !== false) return 0
     return sidebandSign(sidebandRef.current) * pitchRef.current
   }
-  const tunable = interactive && onTune != null
+  const tunable = interactive && (onTune != null || clickOnly)
   const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (!interactiveRef.current || !onTuneRef.current || e.button !== 0) return
+    if (!interactiveRef.current || (!onTuneRef.current && !onBeginClickRef.current) || e.button !== 0) return
     const view = lastViewRef.current
     if (!view || !lastRowRef.current) return // pre-first-draw — nothing to hit-test
+    const click = onBeginClickRef.current?.()
+    if (onBeginClickRef.current && !click) return
     e.currentTarget.setPointerCapture(e.pointerId)
     // rf captured at press so a mid-gesture feed swap can't change the semantics.
     dragRef.current = {
+      click: click ?? undefined,
       x0: e.clientX,
       y0: e.clientY,
       rf: view.rf,
@@ -1124,6 +1143,7 @@ export function PhoneScope({
     if (!g) return
     if (!g.moved && Math.hypot(e.clientX - g.x0, e.clientY - g.y0) <= 6) return // click wobble
     g.moved = true
+    if (g.click) return // click-only Remote cannot start a native drag or edge scan
     const view = lastViewRef.current
     const rect = canvasRef.current?.getBoundingClientRect()
     if (!view || !rect || rect.width < 4) return
@@ -1198,6 +1218,7 @@ export function PhoneScope({
     const wasDragging = g.dragging
     const centerHz = g.centerHz
     endGesture()
+    if (g.click && g.moved) return
     if (wasDragging) {
       // Final position rides the coalescer's pending timer — latest target wins.
       // centerHz 0 = an audio-row drag that never reached an edge zone (no tune
@@ -1230,7 +1251,8 @@ export function PhoneScope({
       pitchHz: pitchRef.current,
       cwPitchRefDial: cwPitchRefRef.current,
     })
-    onTuneRef.current?.({ dialHz: Math.round(r.dialHz), kind: 'click' })
+    if (g.click) g.click(Math.round(r.dialHz))
+    else onTuneRef.current?.({ dialHz: Math.round(r.dialHz), kind: 'click' })
   }
 
   /** The analysis window in force — its width plate and its tooltip key. */
@@ -1378,11 +1400,12 @@ export function PhoneScope({
           ref={canvasRef}
           className={`ph-scope-canvas${tunable ? ' tunable' : ''}`}
           style={{ visibility: scopeAvailable ? undefined : 'hidden' }}
-          title={tunable ? t('scope.canvas.title') : undefined}
+          title={tunable ? t(clickOnly ? 'remote.scopeClick' : 'scope.canvas.title') : undefined}
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
           onPointerCancel={endGesture}
+          onLostPointerCapture={clickOnly ? endGesture : undefined}
           onWheel={(e) => {
             // Only in pause/review mode: wheel up = back in time, down = toward live.
             if (!pausedRef.current) return
