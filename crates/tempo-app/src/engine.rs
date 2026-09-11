@@ -18097,7 +18097,41 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// dial is wrong, the mode is wrong, the passband is squelched, the audio is silent. On a
     /// dead band it is one line and then silence, because this logs the TRANSITION in and the
     /// transition out, never the state.
+    ///
+    /// The line SAYS WHICH, as far as the window can tell — see [`Engine::drought_audio_note`].
     const DECODE_DROUGHT_PERIODS: u32 = 8;
+
+    /// What the decoder's own input window says about the RECEIVE PATH, appended to the drought
+    /// line above. Pure, so the wording is testable without a sound card.
+    ///
+    /// ⚠️ WHY A DROUGHT LINE THAT DOES NOT SAY THIS IS HALF A DIAGNOSIS (EA5IL, 2026-09-09).
+    /// His five-hour log carries `no decodes for 8 periods on 15m FT8 at 21.074000 MHz` five
+    /// times and nothing anywhere that separates "the band is dead" from "no audio is reaching
+    /// me" — the two readings that lead to completely different next steps, and the two the
+    /// comment above already names as candidates. The decoder's own frame settles it for free:
+    /// it is the exact audio the decode ran on, so a flat window is not an inference about a
+    /// device, it is the measurement.
+    ///
+    /// Deliberately NOT the macOS-only pure-zero capture watch in `service.rs`
+    /// (`SILENT_CAPTURE_CONFIRM_MS`): that one watches the card and is compiled out on Windows
+    /// and Linux. This watches the DECODER'S INPUT, on every platform, and costs one pass over a
+    /// window that has just been through an FFT.
+    fn drought_audio_note(frame: &[f32]) -> String {
+        if frame.is_empty() {
+            return " — and no receive audio reached the decoder at all".to_string();
+        }
+        let peak = frame.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+        if peak == 0.0 {
+            // Exact bit-zero is the discriminator, the same one the macOS watch uses: a live
+            // capture chain always carries a nonzero noise floor in some LSB, so quiet-but-alive
+            // audio cannot reach this arm. The wording is a hint, not a verdict.
+            " — and every sample in that window is zero: the receive audio is silent, which is \
+             the rig's audio cable, the input device or a rig stuck in transmit, not the band"
+                .to_string()
+        } else {
+            format!(" (rx peak {peak:.4} — audio IS arriving)")
+        }
+    }
 
     fn process_decodes(&mut self, frame: &[f32], decodes: Vec<modes::Decode>, slot: u64) -> usize {
         if tempo_core::applog::debug_enabled() {
@@ -18121,7 +18155,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 tempo_core::applog::warn(
                     "decode",
                     &format!(
-                        "no decodes for {} periods on {} {} at {:.6} MHz",
+                        "no decodes for {} periods on {} {} at {:.6} MHz{}",
                         Self::DECODE_DROUGHT_PERIODS,
                         if self.settings.band.is_empty() {
                             "off-band"
@@ -18129,7 +18163,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
                             &self.settings.band
                         },
                         self.app.tier().label(),
-                        self.settings.dial_mhz
+                        self.settings.dial_mhz,
+                        Self::drought_audio_note(frame)
                     ),
                 );
             }
@@ -20127,10 +20162,37 @@ mod tests {
     use super::*;
     use crate::engine::js8::Js8Switch;
     use modes::Decode;
+
     // The station owns every write to the shared log now (`StationCore::append_to_log`),
     // so the only code left reaching `Logbook` directly is the concurrency guards,
     // where it stands in for the OTHER instance.
     use tempo_core::logbook::Logbook;
+
+    /// ⭐ EA5IL, 2026-09-09: five `no decodes for 8 periods` lines in a five-hour log, and
+    /// nothing anywhere in the file separating "the band is dead" from "no audio is reaching
+    /// me" — the two readings that send an operator to completely different next steps. The
+    /// decoder's own input window settles it, and the drought line now carries the answer.
+    #[test]
+    fn the_drought_line_says_whether_any_audio_arrived() {
+        // A live window: audio IS arriving, so the drought is the band or the dial.
+        let live = Engine::drought_audio_note(&[0.0, 0.25, -0.5, 0.1]);
+        assert!(live.contains("0.5000"), "{live}");
+        assert!(!live.contains("silent"), "{live}");
+        // A dead receive path: every sample exactly zero. This is the line EA5IL needed.
+        let dead = Engine::drought_audio_note(&[0.0; 64]);
+        assert!(dead.contains("silent"), "{dead}");
+        assert!(dead.contains("cable"), "{dead}");
+        // Nothing at all reached the decoder — distinct from a window of zeros.
+        let none = Engine::drought_audio_note(&[]);
+        assert!(
+            none.contains("no receive audio reached the decoder"),
+            "{none}"
+        );
+        // THE CONTROL, because "quiet band" must never be reported as a dead cable: one
+        // sample in the noise floor is enough to make the window alive.
+        let floor = Engine::drought_audio_note(&[0.0, 0.0, 3.0e-5, 0.0]);
+        assert!(!floor.contains("silent"), "{floor}");
+    }
 
     /// What `sat_tune_nominal` is told the bird needs the radio to be in. Named
     /// rather than spelled `DownlinkClass::Usb` at ~40 call sites because the
