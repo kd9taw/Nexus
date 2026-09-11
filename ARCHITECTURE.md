@@ -69,8 +69,14 @@ invalidate on their own projected revision without invalidating unrelated planni
 documents. The amplifier strip uses the existing aged observation stream and its
 connection identity, rather than borrowing authority for an older displayed radio.
 Unconfirmed targets never become deferred local retunes. Login, entitlement and
-browser approval remain separate checks. Radio handoffs, mode-specific operating
-actions and remote transmission remain incomplete; no arbitrary Tauri bridge exists.
+browser approval remain separate checks.
+
+Radio selection has a passive native Settings projection sharing the local
+handoff's outgoing-profile banking, daemon-port separation and monitored-or-saved
+tune resolution. The projection grants no hardware access and cannot be applied
+wholesale; actual selection still owns context retirement and hardware completion.
+Radio handoffs, mode-specific operating actions and remote transmission remain
+incomplete; no arbitrary Tauri bridge exists.
 See [the Remote contract and limits](remote/README.md#existing-nexus-workspace).
 
 Remote Phone and CW contact forms mount on first visit and retain their component

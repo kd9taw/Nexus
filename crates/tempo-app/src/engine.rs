@@ -15,6 +15,7 @@
 
 mod field_day_display;
 mod mode_entry;
+pub mod radio_selection;
 pub mod remote_radio;
 mod remote_settings;
 
@@ -5173,18 +5174,7 @@ impl Engine {
         // the new radio in — otherwise an unsaved flat change made while this radio was active (e.g. a
         // live Pwr/tx_level tweak) is discarded by `sync_flat_from_active` below. `active_radio` still
         // names the outgoing radio here, so this folds into the right profile.
-        self.settings.sync_active_from_flat();
-        // Defense-in-depth: folding the outgoing radio's flat mirror into its profile could carry a
-        // colliding rigctld/rotctld port; de-conflict immediately so a switch can never leave two
-        // radios sharing one daemon port (the flat mirror is re-pinned from the new active below).
-        self.settings.ensure_distinct_radio_ports();
-        // Persist the current radio's live tune into its profile before we leave it.
-        let cur = self.settings.active_radio;
-        if let Some(p) = self.settings.radios.iter_mut().find(|p| p.id == cur) {
-            p.last_dial_mhz = self.settings.dial_mhz;
-            p.last_band = self.settings.band.clone();
-            p.last_sideband = self.settings.sideband.clone();
-        }
+        radio_selection::bank_outgoing_profile(&mut self.settings);
         // …and a handoff is a leave-event on the RADIO axis for the per-(band, mode) dial
         // memory, for exactly the same reason: the operator is leaving a residency they were
         // running. Without this the outgoing rig's dial was simply lost and a later return
@@ -5225,38 +5215,16 @@ impl Engine {
         // Adopt the new radio's tune. Prefer its LIVE monitored dial (dual-radio: the radio has been
         // connected the whole time, so use where it ACTUALLY is — the operator may have hand-tuned it),
         // else its persisted last tune, else the mirrored dial. `band` follows the chosen dial.
-        let live = self.radio_live.get(&id).cloned();
-        if let Some(l) = live.filter(|l| l.dial_mhz.is_some()) {
-            let dial = l.dial_mhz.unwrap();
-            let band = l
-                .band
-                .filter(|b| !b.is_empty())
-                .or_else(|| crate::bandplan::band_for_dial(dial).map(str::to_string))
-                .unwrap_or_else(|| self.settings.band.clone());
-            let sb = l.sideband.unwrap_or_else(|| self.settings.sideband.clone());
-            self.settings.dial_mhz = dial;
-            self.settings.band = band.clone();
-            self.settings.sideband = sb.clone();
-            self.app.set_radio(dial, &band, &sb);
-        } else if let Some(p) = self.settings.active_profile().cloned() {
-            let (dial, band, sb) = if p.last_band.is_empty() {
-                (
-                    self.settings.dial_mhz,
-                    self.settings.band.clone(),
-                    self.settings.sideband.clone(),
-                )
-            } else {
-                (p.last_dial_mhz, p.last_band, p.last_sideband)
-            };
-            self.settings.dial_mhz = dial;
-            self.settings.band = band.clone();
-            self.settings.sideband = sb.clone();
-            self.app.set_radio(dial, &band, &sb);
-            // #35 instrumentation: the handoff restore is the unproven second contributor
-            // to the wrong-dial flash. The operator-visible instrument is the service
-            // loop's dial→rig notes (Connections log); this stderr line adds attribution
-            // in dev runs.
-            eprintln!("tempo: dial request: handoff restore -> {dial:.4} MHz ({band})");
+        let tune = radio_selection::incoming_tune(&self.settings, self.radio_live.get(&id));
+        tune.apply(&mut self.settings);
+        self.app
+            .set_radio(tune.dial_mhz, &tune.band, &tune.sideband);
+        if !tune.monitored {
+            // Retain the native handoff attribution for a saved-profile restore.
+            eprintln!(
+                "tempo: dial request: handoff restore -> {:.4} MHz ({})",
+                tune.dial_mhz, tune.band
+            );
         }
         self.immediate_retune = true;
         self.sync_fd_band();
