@@ -431,7 +431,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
           value={operation:'stationControl',operationId:r.requestId,outcome:'applied',evidence:['amplifier.followBand','decoder.js8Speed','decoder.msk144Period','decoder.depth','receiver.rxOffset','receiver.rxGain'].includes(a.action)?'settingsSaved':a.action.startsWith('radio.')?'radioReadback':a.action.startsWith('amplifier.')?'amplifierReadback':'receiverState'}
           loggingReceipts.set(r.requestId,value);loggingRevision++;applicationRevision++
           if(loseSpotReply&&a.action==='radio.workSpot')continue
-        }else if(r.type==='result'){value=loggingReceipts.get(r.operationId);if(!value)error='resultExpired'}
+        }else if(r.type==='result'){value=loggingReceipts.get(r.operationId);if(!value)error='resultExpired';else if(loseSpotReply&&value.operation==='stationControl')value={operation:'stationControl',operationId:r.operationId,outcome:'unknown',reason:'hardwareUnconfirmed'}}
         else value={stationBootId:loggingBoot,allowed:loggingAllowed||stationControls,phase:loggingLease?'controlling':loggingAllowed||stationControls?'available':'localPermissionRequired',leaseId:loggingLease,revision:loggingRevision,commandWindowId:loggingLease?loggingWindow:null,nextSequence:loggingLease?loggingSequence+1:null,leaseRemainingMs:loggingLease?5000:null,actions:loggingAllowed?['log.manual']:[],txArmed:false,...(stationControls?{controls:{context:{radioId:1,radioConnection:1,ampConnection:1,ampReadSequence:1},capabilities:request.operationVersion>=3?['decoder','amplifier','frequency','mode','tier','ampFollowBand','workspace','decoderSettings','receiverSettings','receiverGain','bandSelection','receiverFilter','receiverDsp','phoneMode',...(workSpot?['workSpot']:[])]:['decoder','amplifier']}}:{})}
         source.send({type:'operationResponse',sessionId:request.sessionId,requestId:r.requestId,...(error?{error}:{value})});continue
       }
@@ -622,7 +622,8 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       assert.equal(stationRequests.length,3,'replacing a draft is local and cannot issue another radio command')
       await click(button('Needed'));await until(`!!${row('N4DXCW')}`);await fresh()
       loseSpotReply=true;await click(row('N4DXCW'))
-      await until(`document.querySelector('.remote-control-result')?.textContent.includes('may have taken effect')`,15000)
+      for(let i=0;i<100&&stationRequests.length<4;i++)await sleep(50)
+      await until(`document.querySelector('.remote-control-result')?.textContent.includes('may have taken effect')&&${button('Check command result')}?.disabled===false`,20000)
       assert.equal(stationRequests.length,4)
       assert.equal(await evaluate(visible('cw')),false,'a lost receipt cannot navigate from the station Work hint')
       assert.equal(await evaluate(`${input('cw')}.value`),'N3DXCW')

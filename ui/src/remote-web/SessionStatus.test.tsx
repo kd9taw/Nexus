@@ -61,11 +61,14 @@ it('keeps data loss and command recovery visible while help stays closed, withou
     pending = h.client.control({ action: 'amplifier.operate', expectedOperate: false, operate: true })
     await Promise.resolve()
   })
+  expect(screen.getByText('Waiting for the station to confirm the command…')).toBeTruthy()
+  expect(screen.queryByText('The command may have taken effect. Check the station before another command.')).toBeNull()
   const operationId = h.sent[h.sent.length - 1]!.request.requestId
   await act(async () => {
     h.reply({ operation: 'stationControl', operationId, outcome: 'unknown', reason: 'hardwareUnconfirmed' })
     await pending
   })
+  expect(screen.getByText('The command may have taken effect. Check the station before another command.')).toBeTruthy()
   h.rerender(h.view(true))
   expect(screen.getByRole('alert').closest('.remote-session-info')).toBeNull()
   expect(screen.getByRole('alert').textContent).toContain('Station data unavailable')
