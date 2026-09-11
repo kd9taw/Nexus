@@ -285,7 +285,10 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     tab: 'cw',
     neededInHourOne: true,
     keywords: ['morse', 'keyer', 'winkeyer', 'paddle', 'straight key', 'wpm', 'speed',
-      'sidetone', 'pitch', 'keyline', 'f-key', 'macro', 'iambic'],
+      'sidetone', 'pitch', 'keyline', 'f-key', 'macro', 'iambic',
+      // Reverse CW (2026-09-11). A findability entry as much as a keyword list: an operator
+      // whose rig shows CW-R searches for what the RADIO says, not for what Nexus calls it.
+      'reverse', 'cw-r', 'cwr', 'cw-l', 'sideband'],
   },
   {
     id: 'rtty',

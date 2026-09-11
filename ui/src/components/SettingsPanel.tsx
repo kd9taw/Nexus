@@ -6933,6 +6933,31 @@ export function SettingsPanel({
                 />
                 <span className="settings-hint">{t('settings.cw.pitch.hint')}</span>
               </label>
+              {/* REVERSE CW — a preference, not a band rule (operator 2026-09-11, reversing the
+                  2026-07-24 band-aware ruling). Nexus used to command CWR below 10 MHz by itself;
+                  it does not any more, because CW/CWR name no sideband: Yaesu's CW-L is the LSB
+                  side, but a factory-default Icom's CW-R is the UPPER side ("CW Normal Side
+                  (Default: LSB)"), so the rule handed an IC-7300 the exact opposite of its intent.
+                  Plain on/off with NO band term, because the operator's preference is reverse on
+                  every band — a band term here would be the old ruling wearing a new name.
+                  Shown for the rig-shaped keyers only: the soundcard keyer never enters the rig's
+                  CW mode, so there is no BFO side for this to select. */}
+              {(form.cwKeyer ?? 'cat') !== 'soundcard' && (
+                <label className="settings-field">
+                  <span className="settings-label">{t('settings.cw.reverse.label')}</span>
+                  <span className="settings-input-row">
+                    <input
+                      type="checkbox"
+                      checked={!!form.cwReverse}
+                      onChange={(e) => updateBool('cwReverse', e.target.checked)}
+                      aria-label={t('settings.cw.reverse.aria')}
+                    />
+                    <span className="settings-hint">
+                      <T k="settings.cw.reverse.hint" tags={{ b: <strong /> }} />
+                    </span>
+                  </span>
+                </label>
+              )}
               {/* Gated on its own backend, exactly like the keyline port/line below. Shipped
                   unconditionally through 0.27, which made it the ONLY visible port box under
                   Keyer: an operator on the default `cat` backend filled it in, saved, and

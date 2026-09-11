@@ -2855,6 +2855,13 @@ export interface Settings {
   cwKeyer?: string
   /** CW sidetone/tone pitch (Hz) — the soundcard keyer tone + the CW scope marker. */
   cwPitchHz: number
+  /** Command the rig's REVERSE CW mode (Hamlib `CWR`) instead of plain `CW`, on EVERY band.
+   * Off by default; a preference, not a band rule (operator 2026-09-11). Only the rig-shaped
+   * keyers consult it — the soundcard keyer never enters the rig's CW mode. It deliberately
+   * carries no band term: `CW`/`CWR` name no sideband (Yaesu's CW-L is the LSB side, but a
+   * factory-default Icom's CW-R is the UPPER side), so no band rule in these words is right
+   * for both brands. Optional here as older saved settings omit it. */
+  cwReverse?: boolean
   /** Serial port for the K1EL WinKeyer (when the CW keyer backend is WinKeyer). */
   winkeyerPort: string
   /** Serial port for the DTR/RTS CW keyline (when cwKeyer === 'serial') — a SEPARATE port
