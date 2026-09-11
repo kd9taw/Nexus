@@ -205,6 +205,39 @@ fn workspace_entry_uses_native_area_memories_and_js8_session_policy() {
 }
 
 #[test]
+fn entering_ft_from_cw_uses_the_native_section_home_even_when_the_ft_tier_is_unchanged() {
+    let mut s = Station::new(OperatingMode::Cw);
+    s.engine.set_frequency(14.050, "20m", "USB");
+    s.engine.take_immediate_retune();
+    s.sample(14_050_000, "CW");
+    assert_eq!(s.engine.tier(), Tier::Ft8);
+    let mut native = Engine::with_settings(s.engine.settings.clone());
+    // The actual FT view owns a frequency; rigModeTransition homes when the
+    // last homed native section is CW. No tier change is needed in this case.
+    native.set_operating_mode("digital", true);
+    native.set_area("dx");
+    let receipt = s.queue_workspace(Workspace::Ft).unwrap();
+    let request = s.engine.take_remote_radio().unwrap();
+    assert_eq!(request.target_hz, native.settings.dial_hz());
+    assert_eq!(request.target_mode, native.rig_mode_effective());
+    assert_eq!(request.target_hz, 14_074_000);
+    s.sample(request.target_hz, &request.target_mode);
+    let power = request.power_limit;
+    assert!(request.commit_readback(&mut s.engine, power));
+    assert_eq!(
+        receipt.outcome(),
+        Outcome::Applied {
+            evidence: Evidence::RadioReadback
+        }
+    );
+    assert_eq!(
+        serde_json::to_value(s.engine.settings()).unwrap(),
+        serde_json::to_value(native.settings()).unwrap()
+    );
+    assert!(!s.engine.tx_enabled());
+}
+
+#[test]
 fn a_workspace_entry_never_waits_on_a_decoder_or_changes_state_before_confirmation() {
     let mut s = Station::new(OperatingMode::Digital);
     let source = s.engine.source.clone();
