@@ -18,7 +18,7 @@ function fixture(exclusive: ControlStorage['exclusive'] = async run => run()) {
   clients.push(c); c.open()
   const state: OperationState = { stationBootId: crypto.randomUUID(), allowed: true, phase: 'controlling', leaseId: crypto.randomUUID(),
     revision: 1, commandWindowId: crypto.randomUUID(), nextSequence: 1, leaseRemainingMs: 5000, actions: [], txArmed: false,
-    transmitEpoch: '0000000000000001', controls: { context: { radioId: 0, radioConnection: 1, ampConnection: null, ampReadSequence: null }, capabilities: ['ftOperate'] } }
+    transmitEpoch: '0000000000000001', controls: { context: { radioId: 0, radioConnection: 1, ampConnection: null, ampReadSequence: null }, capabilities: ['ftOperate', 'ftCall'] } }
   const reply = (requestId: string, value: unknown) => c.receive({ type: 'operationResponse', requestId, value })
   reply(sent[0].request.requestId, state)
   const snapshot = { link: { tier: 'FT8' }, radio: { txEnabled: false } }
@@ -35,7 +35,7 @@ it('validates directed CQ tokens without widening into a native invoke tunnel', 
   expect(operationValue({ stop: 'accepted' })).toEqual({ stop: 'accepted' })
 })
 
-it.each([['start_cq', { dir: 'DX' }, 'ft.cq'], ['set_tx_enabled', { enabled: true }, 'ft.txEnabled']] as const)(
+it.each([['call_station', { call: 'W1AW', grid: null, message: 'CQ W1AW FN31', snr: -10, freq: 1250 }, 'ft.call'], ['start_cq', { dir: 'DX' }, 'ft.cq'], ['set_tx_enabled', { enabled: true }, 'ft.txEnabled']] as const)(
   'adapts %s to its FT authority and waits for a later station sample', async (command, args, action) => {
     const h = fixture(), result = h.transport.invoke(command, args)
     await Promise.resolve(); await Promise.resolve(); await Promise.resolve()
@@ -65,4 +65,14 @@ it('Stop bypasses the browser storage lock and prevents a captured CQ from later
   expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(0)
   expect(h.saved).not.toHaveBeenCalled()
   h.fresh(); await vi.advanceTimersByTimeAsync(50); await stopped
+})
+
+it('keeps native-selected call context bounded and rejects mixed roster/decode arguments', () => {
+  const action = { action: 'ft.call', expectedTier: 'FT8', transmitEpoch: '0000000000000001',
+    selection: { call: 'W1AW', grid: null, message: 'CQ W1AW FN31', snr: -10, freq: 1250 } }
+  expect(stationAction(action)).toEqual(action)
+  for (const patch of [{ message: null }, { grid: 'FN31' }, { snr: null }, { freq: null }, { freq: NaN }, { call: 'W1AW;halt_tx' }, { invoke: 'call_station' }])
+    expect(() => stationAction({ ...action, selection: { ...action.selection, ...patch } })).toThrow()
+  const roster = { ...action, selection: { call: 'W1AW', grid: 'FN31', message: null, snr: null, freq: 1250 } }
+  expect(stationAction(roster)).toEqual(roster)
 })

@@ -73,6 +73,14 @@ pub enum Action {
         transmit_epoch: String,
         direction: Option<String>,
     },
+    #[serde(rename = "ft.call")]
+    FtCall {
+        #[serde(rename = "expectedTier")]
+        expected_tier: tempo_app::dto::Tier,
+        #[serde(rename = "transmitEpoch")]
+        transmit_epoch: String,
+        selection: tempo_app::engine::remote_transmit::FtCallSelection,
+    },
     #[serde(rename = "ft.txEnabled")]
     FtTxEnabled {
         #[serde(rename = "expectedTier")]
@@ -246,7 +254,9 @@ pub fn execute(
         return Err(Reason::ContextChanged);
     }
     match action {
-        Action::FtCq { .. } | Action::FtTxEnabled { .. } => return Err(Reason::UnsupportedAction),
+        Action::FtCq { .. } | Action::FtTxEnabled { .. } | Action::FtCall { .. } => {
+            return Err(Reason::UnsupportedAction)
+        }
         #[cfg(feature = "radio")]
         Action::Radio { radio_id } => {
             if !engine.remote_selection_host_ready() {
@@ -704,7 +714,7 @@ pub fn execute(
 impl Action {
     pub fn minimum_version(&self) -> u8 {
         match self {
-            Self::FtCq { .. } | Self::FtTxEnabled { .. } => 4,
+            Self::FtCq { .. } | Self::FtTxEnabled { .. } | Self::FtCall { .. } => 4,
             Self::Level { .. }
             | Self::Frequency { .. }
             | Self::Band { .. }
@@ -767,9 +777,9 @@ pub fn capabilities(version: u8) -> Vec<&'static str> {
 impl Action {
     pub fn transmit_epoch(&self) -> Option<&str> {
         match self {
-            Self::FtCq { transmit_epoch, .. } | Self::FtTxEnabled { transmit_epoch, .. } => {
-                Some(transmit_epoch)
-            }
+            Self::FtCq { transmit_epoch, .. }
+            | Self::FtTxEnabled { transmit_epoch, .. }
+            | Self::FtCall { transmit_epoch, .. } => Some(transmit_epoch),
             _ => None,
         }
     }
@@ -804,6 +814,18 @@ pub fn execute_transmit(
                 &permit,
             )?;
             engine.start_remote_ft_cq(permit, direction.as_deref())?;
+        }
+        Action::FtCall {
+            expected_tier,
+            selection,
+            ..
+        } => {
+            engine.validate_remote_ft_radio(
+                *expected_tier,
+                context.radio_connection.ok_or(Reason::ReadingUnavailable)?,
+                &permit,
+            )?;
+            engine.call_remote_ft_selection(permit, selection)?;
         }
         Action::FtTxEnabled {
             expected_tier, on, ..

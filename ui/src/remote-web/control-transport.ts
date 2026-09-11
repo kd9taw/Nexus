@@ -20,6 +20,16 @@ export function controlTransport(reads: ApplicationTransport, client: Applicatio
           stopped = true
           read = 'get_snapshot'
           break
+        case 'call_station': {
+          if (!args || Object.keys(args).length !== 5 || Object.keys(args).some(k => !['call', 'grid', 'message', 'snr', 'freq'].includes(k))) throw Error('invalidOperation')
+          const state = operations.getSnapshot().state
+          if (!state?.transmitEpoch) throw Error('localPermissionRequired')
+          const snapshot = await reads.invoke<import('../types').AppSnapshot>('get_snapshot')
+          action = stationAction({ action: 'ft.call', expectedTier: snapshot.link.tier,
+            transmitEpoch: state.transmitEpoch, selection: args })
+          read = 'get_snapshot'
+          break
+        }
         case 'start_cq': case 'set_tx_enabled': {
           const key = command === 'start_cq' ? 'dir' : 'enabled'
           if (!args || Object.keys(args).length !== 1 || !(key in args)) throw Error('invalidOperation')

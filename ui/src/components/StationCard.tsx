@@ -8,7 +8,7 @@
 import type { NeedTag, Station, Tier } from '../types'
 import { openQrzPage } from '../api'
 import { t } from '../i18n'
-import { useStationControl } from '../stationAccess'
+import { useStationControl, useStationCapability } from '../stationAccess'
 import { withErrorToast } from '../toast'
 import { azimuthLabel, azimuthTitle, azimuthTo, distanceLabel } from '../grid'
 import { useEntityCentroids } from '../features/entityCentroids'
@@ -76,7 +76,8 @@ export function StationCard({
   onSelect,
   onCall,
 }: Props) {
-  const control = useStationControl()
+  const local = useStationControl(), ftCall = useStationCapability('ftCall')
+  const control = local || (ftCall && (station.tier === 'FT8' || station.tier === 'FT4'))
   const units = useUnits()
   const centroids = useEntityCentroids()
   const dist = distanceLabel(myGrid, station.grid, units)

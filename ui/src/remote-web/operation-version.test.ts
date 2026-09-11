@@ -116,3 +116,21 @@ it('ignores bounded future capability hints without admitting an unknown action 
     context: wire.controls!.context, action: { action: 'futureReceiver', on: true }
   })).toThrow('invalidOperation')
 })
+
+it('keeps FT CQ and Call authority out of older browser state projections', () => {
+  for (const version of [1, 2, 3, 4]) {
+    const relay = new OperationRelay(), station = peer(), browser = peer(), sessionId = crypto.randomUUID(), requestId = crypto.randomUUID()
+    relay.sync({ peer: station, supported: true, operationVersion: 4 }, [{ peer: browser, sessionId, deviceId: crypto.randomUUID() }], 1000)
+    relay.receiveBrowser(sessionId, { type: 'operationRequest', ...(version > 1 ? { operationVersion: version } : {}), request: { type: 'state', requestId } }, 1000)
+    const value = { ...state(), phase: 'controlling', leaseId: crypto.randomUUID(), commandWindowId: crypto.randomUUID(),
+      nextSequence: 1, leaseRemainingMs: 5000, transmitEpoch: '0000000000000001', txArmed: true }
+    value.controls!.capabilities = ['decoder', 'ftOperate', 'ftCall']
+    relay.receiveStation({ type: 'operationResponse', sessionId, requestId, value })
+    expect(browser.frames).toHaveLength(1)
+    const projected = browser.frames[0].value
+    expect(projected.txArmed).toBe(version === 4)
+    expect(projected.transmitEpoch).toBe(version === 4 ? value.transmitEpoch : undefined)
+    if (version === 1) expect(projected.controls).toBeUndefined()
+    else expect(projected.controls.capabilities).toEqual(version === 4 ? ['decoder', 'ftOperate', 'ftCall'] : ['decoder'])
+  }
+})

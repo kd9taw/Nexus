@@ -6,7 +6,7 @@
 import { Fragment, useContext, useEffect, useRef, useState } from 'react'
 import { t } from '../i18n'
 import { RemoteHistoryContext, RemoteCollectionsContext } from '../remote-web/collections'
-import { useStationControl } from '../stationAccess'
+import { useStationControl, useStationCapability } from '../stationAccess'
 import { useRovingList } from '../useRovingList'
 import { usePinnedScroll } from '../usePinnedScroll'
 import type { DecodeRow, NeedAlert, Tier } from '../types'
@@ -237,6 +237,7 @@ export function OperateDecodes({
   myGrid = '',
 }: Props) {
   const control = useStationControl()
+  const callControl = useStationCapability('ftCall')
   const remoteHistory = useContext(RemoteHistoryContext)
   const remoteCollections = useContext(RemoteCollectionsContext)
   const historySeen = useRef({ generation: '', sequence: 0 })
@@ -439,29 +440,29 @@ export function OperateDecodes({
   // WSJT-X double-click dispatch: Alt = toggle session ignore; Ctrl = populate
   // DX fields + move RX onto the signal (no QSO start, no TX arm); plain = work.
   const handleDouble = (e: React.MouseEvent, d: DecodeRow) => {
-    if (!control) return
     if (!d.from) return
     if (e.altKey) {
-      onToggleIgnore?.(d.from)
+      if (control) onToggleIgnore?.(d.from)
       return
     }
     if (e.ctrlKey || e.metaKey) {
-      onSelectDecode?.(d.from, gridFromMessage(d.message), d.message, d.snr)
-      onSetRx?.(d.freqHz)
+      if (control) {
+        onSelectDecode?.(d.from, gridFromMessage(d.message), d.message, d.snr)
+        onSetRx?.(d.freqHz)
+      }
       return
     }
-    onCall(d.from, undefined, d.message, d.snr, d.freqHz)
+    if (callControl) onCall(d.from, undefined, d.message, d.snr, d.freqHz)
   }
 
   // Keyboard: arrow through rows, Enter selects, Shift+Enter works the station,
   // Alt+Enter toggles ignore — the pointerless equivalent of click/double-click.
   const roving = useRovingList(shown.length, (i, mods) => {
-    if (!control) return
     const d = shown[i]
     if (!d?.from) return
-    if (mods.alt) onToggleIgnore?.(d.from)
-    else if (mods.shift) onCall(d.from, undefined, d.message, d.snr, d.freqHz)
-    else onSelectDecode?.(d.from, gridFromMessage(d.message), d.message, d.snr)
+    if (mods.alt) { if (control) onToggleIgnore?.(d.from) }
+    else if (mods.shift) { if (callControl) onCall(d.from, undefined, d.message, d.snr, d.freqHz) }
+    else if (control) onSelectDecode?.(d.from, gridFromMessage(d.message), d.message, d.snr)
   })
 
   const eraseBtn = (
@@ -688,7 +689,7 @@ export function OperateDecodes({
                 }}
                 onDoubleClick={(e) => handleDouble(e, d)}
                 title={
-                  !control ? d.message : ignoredRow
+                  !callControl ? d.message : ignoredRow
                     ? t('operate.row.ignored.title')
                     : d.from
                       ? t('operate.decodes.row.title', { call: d.from, highlight: hlTip })

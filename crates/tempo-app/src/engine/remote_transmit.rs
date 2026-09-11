@@ -7,7 +7,80 @@ use crate::remote_control::{transmit::TransmitPermit, Reason};
 use crate::settings::OperatingMode;
 use std::time::Instant;
 
+/// A clicked decode or roster entry, checked against station-owned data before
+/// forwarding the same arguments to the existing native QSO verb.
+#[derive(Clone, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FtCallSelection {
+    pub call: String,
+    pub grid: Option<String>,
+    pub message: Option<String>,
+    pub snr: Option<i32>,
+    pub freq: Option<f32>,
+}
+
 impl Engine {
+    pub fn call_remote_ft_selection(
+        &mut self,
+        permit: TransmitPermit,
+        selection: &FtCallSelection,
+    ) -> Result<(), Reason> {
+        self.prepare_remote_ft(&permit)?;
+        let FtCallSelection {
+            call,
+            grid,
+            message,
+            snr,
+            freq,
+        } = selection;
+        if call.len() > 32
+            || !tempo_core::message::is_callsign(call)
+            || grid.as_ref().is_some_and(|g| g.len() > 16)
+            || freq.is_some_and(|f| !f.is_finite())
+        {
+            return Err(Reason::InvalidAction);
+        }
+        if let Some(message) = message {
+            // Do not accept fabricated report/message context from a stale UI.
+            // The native verb still resolves its own slot/parity and QSO state.
+            if message.len() > 128 || grid.is_some() || snr.is_none() || freq.is_none() {
+                return Err(Reason::InvalidAction);
+            }
+            let matched = self.decode_history.iter().rev().any(|(_, d)| {
+                d.message == *message
+                    && Some(d.snr) == *snr
+                    && Some(d.freq) == *freq
+                    && tempo_core::message::Msg::parse(&d.message)
+                        .sender()
+                        .is_some_and(|sender| tempo_core::message::same_call(sender, call))
+            });
+            if !matched {
+                return Err(Reason::ContextChanged);
+            }
+        } else {
+            if snr.is_some() {
+                return Err(Reason::InvalidAction);
+            }
+            let matched = self.snapshot().stations.iter().any(|s| {
+                tempo_core::message::same_call(&s.call, call)
+                    && s.grid == *grid
+                    && s.freq_hz.map(|hz| hz as f32) == *freq
+                    && s.tier.is_none_or(|tier| tier == self.tier())
+            });
+            if !matched {
+                return Err(Reason::ContextChanged);
+            }
+        }
+        self.call_remote_ft_station(
+            permit,
+            call,
+            grid.as_deref(),
+            message.as_deref(),
+            *snr,
+            *freq,
+        )
+    }
+
     pub fn remote_ft_available(&self) -> bool {
         self.source_kind == SourceKind::Native
             && self.settings.operating_mode == OperatingMode::Digital
@@ -328,6 +401,196 @@ mod tests {
             assert!(remote.poll_remote_transmit(Instant::now()));
             assert!(!remote.tx_enabled());
         }
+    }
+
+    #[test]
+    fn remote_call_checks_desktop_identity_before_changing_qso() {
+        for invalid in ["call", "grid"] {
+            let mut engine = station(Tier::Ft8);
+            if invalid == "call" {
+                engine.settings.mycall.clear();
+            } else {
+                engine.settings.mygrid.clear();
+            }
+            assert!(engine.structured_tx_ready(true).is_err());
+            let before = engine.snapshot().qso;
+            let authority = TransmitAuthority::default();
+            assert_eq!(
+                engine.call_remote_ft_station(
+                    authority
+                        .permit(Instant::now() + Duration::from_secs(5))
+                        .unwrap(),
+                    "W1AW",
+                    Some("FN31"),
+                    None,
+                    None,
+                    Some(950.0),
+                ),
+                Err(Reason::InvalidAction),
+                "{invalid}"
+            );
+            assert_eq!(engine.snapshot().qso, before);
+            assert!(!engine.tx_enabled());
+        }
+    }
+
+    #[test]
+    fn remote_call_preserves_manual_arming_preference() {
+        for tier in [Tier::Ft8, Tier::Ft4] {
+            let mut native = station(tier);
+            let mut remote = station(tier);
+            native.settings.double_click_sets_tx = false;
+            remote.settings.double_click_sets_tx = false;
+            native
+                .call_station_ctx("W1AW", Some("FN31"), None, None, Some(950.0))
+                .unwrap();
+            let authority = TransmitAuthority::default();
+            remote
+                .call_remote_ft_station(
+                    authority
+                        .permit(Instant::now() + Duration::from_secs(5))
+                        .unwrap(),
+                    "W1AW",
+                    Some("FN31"),
+                    None,
+                    None,
+                    Some(950.0),
+                )
+                .unwrap();
+            assert_eq!(remote.settings, native.settings);
+            assert_eq!(remote.snapshot().qso, native.snapshot().qso);
+            assert_eq!(remote.tx_even(), native.tx_even());
+            assert_eq!(remote.rx_offset_hz, native.rx_offset_hz);
+            assert_eq!(remote.tx_offset_hz, native.tx_offset_hz);
+            assert!(!remote.tx_enabled());
+            assert!(!remote.remote_ft_tx_owned());
+        }
+    }
+
+    #[test]
+    fn remote_selected_decode_uses_native_message_parity_and_offsets() {
+        for tier in [Tier::Ft8, Tier::Ft4] {
+            let mut native = station(tier);
+            let mut remote = station(tier);
+            let decode = modes::Decode {
+                message: "KD9TAW W1AW -07".into(),
+                sync: 1.0,
+                snr: -12,
+                dt: 0.1,
+                freq: 950.0,
+                nap: 0,
+                qual: 1.0,
+                rv: None,
+                mode: None,
+                raw: None,
+            };
+            native.ingest_decodes_for_test(std::slice::from_ref(&decode), 8);
+            remote.ingest_decodes_for_test(std::slice::from_ref(&decode), 8);
+            let selection = FtCallSelection {
+                call: "W1AW".into(),
+                grid: None,
+                message: Some(decode.message.clone()),
+                snr: Some(decode.snr),
+                freq: Some(decode.freq),
+            };
+            let authority = TransmitAuthority::default();
+            let permit = || {
+                authority
+                    .permit(Instant::now() + Duration::from_secs(5))
+                    .unwrap()
+            };
+            for cause in ["message", "snr", "frequency", "call"] {
+                let mut changed = selection.clone();
+                match cause {
+                    "message" => changed.message = Some("KD9TAW W1AW R-07".into()),
+                    "snr" => changed.snr = Some(-3),
+                    "frequency" => changed.freq = Some(1000.0),
+                    "call" => changed.call = "K2ABC".into(),
+                    _ => unreachable!(),
+                }
+                assert_eq!(
+                    remote.call_remote_ft_selection(permit(), &changed),
+                    Err(Reason::ContextChanged),
+                    "{cause}"
+                );
+                assert!(!remote.tx_enabled());
+            }
+            native
+                .call_station_ctx(
+                    "W1AW",
+                    None,
+                    Some(&decode.message),
+                    Some(decode.snr),
+                    Some(decode.freq),
+                )
+                .unwrap();
+            remote
+                .call_remote_ft_selection(permit(), &selection)
+                .unwrap();
+            assert_eq!(remote.settings, native.settings);
+            assert_eq!(remote.snapshot().qso, native.snapshot().qso);
+            assert_eq!(remote.tx_even(), native.tx_even());
+            assert_eq!(remote.tx_offset_hz, native.tx_offset_hz);
+            assert_eq!(remote.rx_offset_hz, native.rx_offset_hz);
+            assert_eq!(remote.immediate_tx, native.immediate_tx);
+            assert!(remote.remote_ft_tx_owned());
+        }
+    }
+
+    #[test]
+    fn remote_selected_roster_and_retired_decode_context() {
+        let mut remote = station(Tier::Ft8);
+        let decode = modes::Decode {
+            message: "CQ W1AW FN31".into(),
+            sync: 1.0,
+            snr: -10,
+            dt: 0.1,
+            freq: 1250.0,
+            nap: 0,
+            qual: 1.0,
+            rv: None,
+            mode: None,
+            raw: None,
+        };
+        remote.ingest_decodes_for_test(std::slice::from_ref(&decode), 8);
+        let station = remote
+            .snapshot()
+            .stations
+            .into_iter()
+            .find(|s| s.call == "W1AW")
+            .unwrap();
+        let selection = FtCallSelection {
+            call: station.call,
+            grid: station.grid,
+            message: None,
+            snr: None,
+            freq: station.freq_hz.map(|hz| hz as f32),
+        };
+        let authority = TransmitAuthority::default();
+        let permit = || {
+            authority
+                .permit(Instant::now() + Duration::from_secs(5))
+                .unwrap()
+        };
+        remote
+            .call_remote_ft_selection(permit(), &selection)
+            .unwrap();
+        assert!(remote.remote_ft_tx_owned());
+        remote.halt_tx();
+        remote.clear_decode_context();
+        remote.take_immediate_retune();
+        let old = FtCallSelection {
+            call: "W1AW".into(),
+            grid: None,
+            message: Some(decode.message),
+            snr: Some(-10),
+            freq: Some(1250.0),
+        };
+        assert_eq!(
+            remote.call_remote_ft_selection(permit(), &old),
+            Err(Reason::ContextChanged)
+        );
+        assert!(!remote.tx_enabled());
     }
 
     #[test]
