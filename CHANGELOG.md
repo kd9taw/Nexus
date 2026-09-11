@@ -75,7 +75,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-<<<<<<< HEAD
 - **A long over went silent partway through and left the rig keyed.** WSPR transmitted for about
   twenty seconds, the audio stopped, the power meter fell to zero — and the radio stayed on the air
   for the remaining ninety seconds of the over, every over. Reported on an FTdx10 under Ubuntu.
@@ -96,7 +95,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   FT8, FT4, FT2, MSK144 and the 15-second Q65 and FST4 periods always fitted and were never
   affected. SSTV, CW, RTTY and the tune carrier feed the card as they go and were never affected
   either.
-=======
+
 - **Nexus no longer switches your radio to CW-R on 40 m.** Moving to 40, 80 or 160 m put the rig in
   reverse CW, and moving back to 20 m put it in normal CW — on every band change, undoing it if you
   set it back by hand. Nexus now asks for plain CW on every band, so your radio stays in whichever
@@ -120,7 +119,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   The soundcard keyer is unchanged. It keys an audio tone through a data mode rather than putting
   the rig in CW, so the sideband there really does follow the band, exactly as it does for FT8.
->>>>>>> investigate/cw-sideband-convention
 
 - **An AM contact was logged as SSB.** Work someone on AM from the Phone screen and Nexus wrote the
   QSO to your logbook as SSB — including on 14.286, the 20 m AM calling frequency. The Phone screen
