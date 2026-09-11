@@ -132,7 +132,7 @@ it.each(['cw', 'phone'] as const)('sends one %s Work intent and waits for matchi
     { age: () => sampleAge } as unknown as ApplicationClient, h.client)
   const result = transport.invoke('work_spot', { mode, freqMhz: 7.19876, band: '40m', call: 'N2SPOT/P', tier: null })
   await Promise.resolve()
-  const request = h.sent.at(-1).request
+  const request = h.sent[h.sent.length - 1].request
   expect(request.action).toEqual({ action: 'radio.workSpot', mode, dialMhz: 7.19876, band: '40m', call: 'N2SPOT/P' })
   expect(getSnapshot).not.toHaveBeenCalled()
   h.reply({ operation: 'stationControl', operationId: request.requestId, outcome: 'applied', evidence: 'radioReadback' })
@@ -152,7 +152,7 @@ it.each(['frequency', 'mode', 'evidence'])('refuses a Work handoff after a misma
     { age: () => 0 } as unknown as ApplicationClient, h.client)
   const result = transport.invoke('work_spot', { mode: 'cw', freqMhz: 7.023, band: '40m', call: 'N2SPOT', tier: null }).catch(e => e)
   await Promise.resolve()
-  const request = h.sent.at(-1).request
+  const request = h.sent[h.sent.length - 1].request
   h.reply({ operation: 'stationControl', operationId: request.requestId, outcome: 'applied', evidence: changed === 'evidence' ? 'receiverState' : 'radioReadback' })
   expect(await result).toMatchObject({ message: changed === 'evidence' ? 'operationUnknown' : 'readingUnavailable' })
   await h.advance(1500)
