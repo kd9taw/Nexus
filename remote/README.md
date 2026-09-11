@@ -337,9 +337,8 @@ media and complete mobile acceptance remain open.
 
 CW, Phone/SSB, RTTY, PSK/QPSK and JS8 reuse the existing manual LogEntry form. The
 station chooses the normal QSO time at append; an explicit UTC override is retained.
-Field Day and QSO WAV recording configurations refuse this path. FT current-QSO
-and pending-log confirmation, editing/import/export, lookup, and radio/TX
-operations remain separate work. Global UI control permission stays false;
+Field Day and QSO WAV recording configurations refuse this manual-form path.
+Editing/import/export and lookup remain separate work. Global UI control permission stays false;
 individual receiver/amplifier affordances use the narrow capability grants.
 
 Manual append reuses native enrichment, deduplication and connector queues. The
@@ -348,7 +347,12 @@ confirms local persistence, not external delivery. Failed append/sync and a lost
 reply can be uncertain; no automatic retransmission occurs. The station retains
 at most 1,024 receipts for ten minutes and refuses old sequences after expiry.
 
-The native current-QSO logging foundation shares the local button's eligibility,
+Operation v4 connects the existing Log QSO button and confirmation dialog through
+the separate `qsoLogging` capability. It needs logging permission and the current
+controller lease; it does not require or grant transmit permission. Current-QSO
+requests bind the displayed contact identity, tier and exchange. Confirmation and
+discard bind the exact pending contact, including replacement by identical fields.
+The native current-QSO implementation shares the local button's eligibility,
 record construction and write-once transition. Its pending-confirmation path
 retains the original contact through append and storage sync; only a successful
 sync can authorize clearing that same hold. Replacing even an identical hold
@@ -356,8 +360,12 @@ invalidates old completion/discard tokens. Journal preparation syncs outside
 Engine and rechecks the hold before publication. Confirmation changes only the
 four existing dialog fields, preserving native split frequency and end time;
 pending journals now retain those fields across restart and still read legacy
-journals. These are native APIs only; the hosted Log QSO and confirmation actions
-are not connected by this foundation.
+journals. Outcomes distinguish a synchronized log append, synchronized pending
+confirmation, discard, no eligible contact and unconfirmed persistence. The
+browser waits for a later station snapshot before updating the existing UI;
+draft confirmation edits survive temporary permission or observation loss. Its
+Stop TX remains available inside the dialog through the independent Stop route.
+Full operating acceptance still requires actual station, hardware and WAN checks.
 
 Before submission the browser retains its operation ID and bounded contact fields.
 Station-specific Web Locks protect writes, result recovery and explicit dismissal

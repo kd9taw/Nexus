@@ -210,6 +210,17 @@ and captures the displayed exchange. A changed native exchange refuses that
 gesture. Remote next-message indicators follow station snapshots, not an
 optimistic local selection. Native calls keep their original argument shape.
 
+The `qsoLogging` capability uses the existing Log QSO and confirmation dialog
+with local logging permission, independently of transmit permission. Remote
+snapshots carry opaque current/pending contact identities captured under the
+same Engine lock as their records. The host binds each gesture to that identity
+and reuses native eligibility, contact construction and connector queues. A
+pending contact remains recoverable until its append is synchronized; completion
+cannot clear a newer hold, even one with identical fields. Only the four existing
+dialog fields are editable remotely. Storage synchronization releases Engine,
+and Stop keeps its independent route and a control inside the pending dialog.
+These operations use the existing lease, result recovery and no-replay contract.
+
 
 The receive-audio foundation is local to `tempo-audio`: the sole `RxDsp` capture
 consumer offers bounded device-rate mono copies through `receive_audio.rs`, before

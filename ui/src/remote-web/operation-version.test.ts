@@ -124,13 +124,13 @@ it('keeps FT CQ and Call authority out of older browser state projections', () =
     relay.receiveBrowser(sessionId, { type: 'operationRequest', ...(version > 1 ? { operationVersion: version } : {}), request: { type: 'state', requestId } }, 1000)
     const value = { ...state(), phase: 'controlling', leaseId: crypto.randomUUID(), commandWindowId: crypto.randomUUID(),
       nextSequence: 1, leaseRemainingMs: 5000, transmitEpoch: '0000000000000001', txArmed: true }
-    value.controls!.capabilities = ['decoder', 'ftOperate', 'ftCall']
+    value.controls!.capabilities = ['decoder', 'ftOperate', 'ftCall', 'qsoLogging']
     relay.receiveStation({ type: 'operationResponse', sessionId, requestId, value })
     expect(browser.frames).toHaveLength(1)
     const projected = browser.frames[0].value
     expect(projected.txArmed).toBe(version === 4)
     expect(projected.transmitEpoch).toBe(version === 4 ? value.transmitEpoch : undefined)
     if (version === 1) expect(projected.controls).toBeUndefined()
-    else expect(projected.controls.capabilities).toEqual(version === 4 ? ['decoder', 'ftOperate', 'ftCall'] : ['decoder'])
+    else expect(projected.controls.capabilities).toEqual(version === 4 ? ['decoder', 'ftOperate', 'ftCall', 'qsoLogging'] : ['decoder'])
   }
 })

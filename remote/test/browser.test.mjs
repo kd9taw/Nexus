@@ -702,7 +702,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       // Existing Log QSO and confirmation dialog, including the stop control
       // while a pending confirmation's station display becomes unavailable.
       loggingAllowed=true
-      applicationData.get_snapshot.currentQsoLogKey='0000000000000001'
+      applicationData.get_snapshot.currentQsoLogKey='00000000000000010000000000000001'
       applicationData.get_snapshot.qso={state:'done',dxcall:'W1AW',dxgrid:'FN31',rxReport:-12,running:false,cqRunning:false,txNow:null}
       applicationData.get_snapshot.radio.txEnabled=true;applicationRevision++
       const log='.cockpit-qso .cq-log',confirm='.logconfirm-log',discard='.logconfirm-discard'
@@ -731,7 +731,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       await until(`!document.querySelector('.logconfirm')`)
       assert.equal(stationRequests.at(-1).action.action,'qso.discard')
       qsoPrompt=false
-      applicationData.get_snapshot.currentQsoLogKey='0000000000000004';applicationData.get_snapshot.qso.dxcall='K2ABC';applicationRevision++
+      applicationData.get_snapshot.currentQsoLogKey='00000000000000040000000000000001';applicationData.get_snapshot.qso.dxcall='K2ABC';applicationRevision++
       await until(`!document.querySelector('${log}').disabled&&document.querySelector('.cockpit-qso .cq-dx')?.textContent==='K2ABC'`)
       await click(`document.querySelector('${log}')`)
       for(let i=0;i<100&&stationRequests.length<30;i++)await sleep(50)

@@ -18,8 +18,8 @@ pub(super) enum Work {
     Discard(JournalSync),
 }
 
-fn key(value: &str) -> bool {
-    value.len() == 16
+fn key(value: &str, length: usize) -> bool {
+    value.len() == length
         && value
             .bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
@@ -40,7 +40,7 @@ pub(super) fn prepare(engine: &mut Engine, action: &Action) -> Result<Work, Reas
             expected_tier,
             expected_qso,
         } => {
-            if !key(expected_key) {
+            if !key(expected_key, 32) {
                 return Err(Reason::InvalidAction);
             }
             if engine.current_qso_log_key().as_deref() != Some(expected_key)
@@ -66,7 +66,7 @@ pub(super) fn prepare(engine: &mut Engine, action: &Action) -> Result<Work, Reas
             expected_key,
             edits,
         } => {
-            if !key(expected_key) {
+            if !key(expected_key, 16) {
                 return Err(Reason::InvalidAction);
             }
             let pending = engine
@@ -81,7 +81,7 @@ pub(super) fn prepare(engine: &mut Engine, action: &Action) -> Result<Work, Reas
                 .map_err(reason)
         }
         Action::QsoDiscard { expected_key } => {
-            if !key(expected_key) {
+            if !key(expected_key, 16) {
                 return Err(Reason::InvalidAction);
             }
             let pending = engine

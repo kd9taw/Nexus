@@ -115,7 +115,7 @@ export function stationAction(raw: unknown): StationAction {
   switch (a.action) {
     case 'qso.logCurrent': case 'qso.confirm': case 'qso.discard': {
       object(a, ['action', 'expectedKey', ...(a.action === 'qso.logCurrent' ? ['expectedTier', 'expectedQso'] : a.action === 'qso.confirm' ? ['edits'] : [])])
-      if (typeof a.expectedKey !== 'string' || !/^[0-9a-f]{16}$/.test(a.expectedKey)) invalid()
+      if (typeof a.expectedKey !== 'string' || !(a.action === 'qso.logCurrent' ? /^[0-9a-f]{32}$/ : /^[0-9a-f]{16}$/).test(a.expectedKey)) invalid()
       if (a.action === 'qso.logCurrent') {
         if (!oneOf(a.expectedTier, CONTROL_TIERS)) invalid()
         exchangeContext(a.expectedQso)

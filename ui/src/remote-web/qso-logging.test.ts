@@ -32,8 +32,8 @@ function fixture(exclusive: ControlStorage['exclusive'] = async run => run()) {
 }
 
 it.each([
-  ['log_current_qso', { expectedKey: key, expectedTier: 'FT8', expectedQso: qso }, 'qso.logCurrent', 'fileSynced'],
-  ['log_current_qso', { expectedKey: key, expectedTier: 'FT8', expectedQso: qso }, 'qso.logCurrent', 'pendingConfirmationSynced'],
+  ['log_current_qso', { expectedKey: key.repeat(2), expectedTier: 'FT8', expectedQso: qso }, 'qso.logCurrent', 'fileSynced'],
+  ['log_current_qso', { expectedKey: key.repeat(2), expectedTier: 'FT8', expectedQso: qso }, 'qso.logCurrent', 'pendingConfirmationSynced'],
   ['confirm_pending_log', { expectedKey: key, record }, 'qso.confirm', 'fileSynced'],
   ['discard_pending_log', { expectedKey: key }, 'qso.discard', 'pendingDiscarded'],
 ] as const)('adapts %s with logging-only permission and requires %s durability', async (command, args, action, evidence) => {
@@ -42,7 +42,7 @@ it.each([
   const request = h.sent[h.sent.length - 1].request
   expect(request.type).toBe('stationControl')
   expect(request.action.action).toBe(action)
-  expect(request.action.expectedKey).toBe(key)
+  expect(request.action.expectedKey).toBe(action === 'qso.logCurrent' ? key.repeat(2) : key)
   expect(request.action.transmitEpoch).toBeUndefined()
   expect(h.reads.invoke).not.toHaveBeenCalled()
   if (action === 'qso.confirm') expect(request.action.edits).toEqual({ call: record.call, grid: record.grid, rstSent: record.rstSent, rstRcvd: record.rstRcvd })
@@ -82,7 +82,7 @@ it('retains the original gesture and refuses it after its storage wait outlives 
 
 it.each(['noEligibleContact', 'alreadyPresent'])('returns the native no-log result for %s without retry', async reason => {
   const h = fixture()
-  const result = h.transport.invoke('log_current_qso', { expectedKey: key, expectedTier: 'FT8', expectedQso: qso })
+  const result = h.transport.invoke('log_current_qso', { expectedKey: key.repeat(2), expectedTier: 'FT8', expectedQso: qso })
   await vi.advanceTimersByTimeAsync(0)
   const request = h.sent[h.sent.length - 1].request
   h.reply(request.requestId, { operation: 'stationControl', operationId: request.requestId, outcome: 'rejected', reason })

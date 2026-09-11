@@ -227,12 +227,13 @@ fn current_log_checks_native_eligibility_and_contact_incarnation() {
         let action = {
             let mut e = f.engine.lock().unwrap();
             e.call_station("W1AW");
+            e.set_tx_enabled(false);
             let action = json!({"action":"qso.logCurrent","expectedKey":e.current_qso_log_key().unwrap(),"expectedTier":e.tier(),
                 "expectedQso":FtExchangeContext::from(&e.snapshot().qso.unwrap())});
             if replace {
                 e.call_station("W1AW");
+                e.set_tx_enabled(false);
             }
-            e.set_tx_enabled(false);
             action
         };
         let result = run(&f, &command(&f, action)).unwrap();

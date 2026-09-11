@@ -248,7 +248,14 @@ impl Engine {
 
     pub fn current_qso_log_key(&self) -> Option<String> {
         if matches!(self.mode, super::Mode::Qso { .. }) {
-            identity_key(self.qso_log_epoch)
+            // The native operating generation also retires away-and-back QSY,
+            // profile, offset and settings changes. A newer command window
+            // cannot make an older displayed contact valid in that context.
+            Some(format!(
+                "{}{}",
+                identity_key(self.qso_log_epoch)?,
+                identity_key(self.remote_log_context_generation())?
+            ))
         } else {
             None
         }
