@@ -303,8 +303,18 @@ mod tests {
         let reader = feed.subscribe(source).unwrap();
         feed.publish(source, now, &[0.0; 960]);
         let held = feed.state.lock().unwrap();
-        feed.publish(source, now, &[0.1; 960]); // must return while the lock is held
+        let (completed, waiting) = std::sync::mpsc::channel();
+        let producer = feed.clone();
+        let publishing = std::thread::spawn(move || {
+            producer.publish(source, now, &[0.1; 960]);
+            completed.send(()).unwrap();
+        });
+        let returned = waiting.recv_timeout(Duration::from_secs(2));
+        // Release before asserting so a regressed blocking producer can finish;
+        // the negative control must fail promptly instead of hanging the suite.
         drop(held);
+        publishing.join().unwrap();
+        assert!(returned.is_ok(), "publication waited for the reader lock");
         assert!(reader.read(now).unwrap().is_none());
         feed.publish(source, now, &[0.2; 960]);
         drop(reader);
