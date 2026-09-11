@@ -1412,7 +1412,7 @@ export function PhoneScope({
           ref={canvasRef}
           className={`ph-scope-canvas${tunable ? ' tunable' : ''}`}
           style={{ visibility: scopeAvailable ? undefined : 'hidden' }}
-          title={tunable ? t(clickOnly ? 'remote.scopeClick' : 'scope.canvas.title') : undefined}
+          title={tunable ? (clickOnly ? t('remote.scopeClick') : t('scope.canvas.title')) : undefined}
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
