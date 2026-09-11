@@ -18,6 +18,7 @@ vi.mock('../api', async importOriginal => {
   const actual = await importOriginal<Record<string, unknown>>()
   return { ...Object.fromEntries(Object.entries(actual).map(([key, value]) => [key, typeof value === 'function' ? vi.fn(async () => ({})) : value])),
     getJs8State: vi.fn(async () => { if (!reading.current) throw Error('readingUnavailable'); return reading.current }),
+    getSpectrumRow: vi.fn(async () => ({ row: [], loHz: 200, hiHz: 4000 })),
     js8SetSpeed: vi.fn(async () => reading.current),
     getLog: vi.fn(async () => []), getLicensedBandPlan: vi.fn(async () => []), getSettings: vi.fn(async () => ({})) }
 })
@@ -160,6 +161,10 @@ it.each(['FT8', 'JS8'] as const)('%s receive gestures require their capability a
     h.rerender(h.view({ ...h.snap, radio: { ...h.snap.radio, ...patch } })); await tick()
     fireEvent.mouseDown(h.canvas(), { clientX: 100, button: 0 }); await tick(); expect(h.writes()).toHaveLength(0)
   }
+  h.rerender(h.view({ ...h.snap, link: { ...h.snap.link, tier: 'Q65' } })); await tick()
+  fireEvent.mouseDown(h.canvas(), { clientX: 100, button: 0 }); await tick(); expect(h.writes()).toHaveLength(0)
+  h.rerender(h.view({ ...h.snap, radio: { ...h.snap.radio, rxOffsetHz: NaN } })); await tick()
+  fireEvent.mouseDown(h.canvas(), { clientX: 100, button: 0 }); await tick(); expect(h.writes()).toHaveLength(0)
   for (const patch of [{ id: 4 }, { rigKeyed: null }, { rigKeyed: true }, { catConnected: false }]) {
     const frame = structuredClone(h.frame); Object.assign(frame.station.radio, patch)
     h.rerender(h.view(h.snap, frame)); await tick(); fireEvent.mouseDown(h.canvas(), { clientX: 100, button: 0 }); await tick()
