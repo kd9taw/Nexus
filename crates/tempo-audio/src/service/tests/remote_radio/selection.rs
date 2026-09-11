@@ -4,7 +4,12 @@ use super::*;
 use std::sync::atomic::AtomicBool;
 
 fn station(peer: &Peer) -> Station {
+    configured_station(peer, |_| {})
+}
+
+fn configured_station(peer: &Peer, configure: impl FnOnce(&mut Settings)) -> Station {
     Station::configured(peer, |settings| {
+        configure(settings);
         settings.ensure_radio_profiles();
         let mut incoming = settings.radios[0].clone();
         incoming.id = 1;
@@ -207,6 +212,141 @@ fn selection_worker_failed_incoming_confirmation_preserves_outgoing_and_has_no_d
     s.step();
     assert_eq!(writes(&incoming), before);
     assert_eq!(s.state.remote_radio_id, Some(0));
+}
+
+#[test]
+fn selection_worker_revocation_after_incoming_write_returns_unknown_without_adoption_or_retry() {
+    let outgoing = retuning_peer(14_074_000, "PKTUSB", |_, _| None);
+    let mut s = station(&outgoing);
+    let authority = s.authority.clone();
+    let incoming = retuning_peer(7_100_000, "LSB", move |line, _| {
+        if line.starts_with("F ") {
+            authority.revoke();
+        }
+        None
+    });
+    let pool = Arc::new(MonitorConnections::new(vec![connection(&s, &incoming)]));
+    let original = engine_lock(&s.engine).settings().clone();
+    let receipt = queue(&s, 1);
+    apply(&mut s, &pool, |_| panic!("warm radio must be reused"));
+    assert!(matches!(receipt.outcome(), Outcome::Unknown { .. }));
+    assert_eq!(engine_lock(&s.engine).settings(), &original);
+    assert!(!s.path.exists());
+    assert_eq!(s.state.remote_radio_id, Some(0));
+    assert_eq!(pool.lock().unwrap()[0].id, 1);
+    assert!(pool.claims.try_claim(1).is_some());
+    let before = writes(&incoming);
+    assert!(before.iter().any(|line| line == "F 7074000"));
+    s.step();
+    s.step();
+    assert_eq!(writes(&incoming), before);
+    assert!(s.backend.played.is_empty());
+}
+
+#[test]
+fn selection_worker_failed_save_keeps_actual_adoption_and_never_replays_configuration() {
+    let outgoing = retuning_peer(14_074_000, "PKTUSB", |_, _| None);
+    let incoming = retuning_peer(7_100_000, "LSB", |_, _| None);
+    let mut s = station(&outgoing);
+    std::fs::create_dir_all(s.path.parent().unwrap()).unwrap();
+    std::fs::write(&s.path, b"fixture save blocker").unwrap();
+    engine_lock(&s.engine).configure_remote_settings_store(s.path.join("settings.json"));
+    let pool = Arc::new(MonitorConnections::new(vec![connection(&s, &incoming)]));
+    let receipt = queue(&s, 1);
+    // The shared apply helper also verifies host notification after adoption,
+    // with both Engine and pool unlocked, even when persistence is unconfirmed.
+    apply(&mut s, &pool, |_| panic!("warm radio must be reused"));
+    assert_eq!(
+        receipt.outcome(),
+        Outcome::Unknown {
+            reason: Reason::HardwareUnconfirmed
+        }
+    );
+    assert_eq!(engine_lock(&s.engine).settings().active_radio, 1);
+    assert_eq!(s.state.remote_radio_id, Some(1));
+    assert_eq!(pool.lock().unwrap()[0].id, 0);
+    assert_eq!(std::fs::read(&s.path).unwrap(), b"fixture save blocker");
+    assert!(!engine_lock(&s.engine).take_immediate_retune());
+    let before = writes(&incoming);
+    assert!(before.iter().any(|line| line == "F 7074000"));
+    s.step();
+    s.step();
+    let after = writes(&incoming);
+    assert!(after[before.len()..].iter().all(|line| line == "T 0"));
+    assert!(!engine_lock(&s.engine).tx_enabled());
+    assert!(s.backend.played.is_empty());
+}
+
+#[test]
+fn selection_worker_confirms_fm_repeater_settings_and_does_not_replay_them() {
+    let outgoing = retuning_peer(14_074_000, "FM", |_, _| None);
+    let repeater = Mutex::new(("None".to_string(), 0i64, 0u32));
+    let incoming = retuning_peer(7_100_000, "LSB", move |line, _| {
+        let mut values = repeater.lock().unwrap();
+        match line {
+            "r" => return Some(format!("{}\n", values.0)),
+            "o" => return Some(format!("{}\n", values.1)),
+            "c" => return Some(format!("{}\n", values.2)),
+            _ => (),
+        }
+        if let Some(value) = line.strip_prefix("R ") {
+            values.0 = value.into();
+        } else if let Some(value) = line.strip_prefix("O ") {
+            values.1 = value.parse().unwrap();
+        } else if let Some(value) = line.strip_prefix("C ") {
+            values.2 = value.parse().unwrap();
+        } else {
+            return None;
+        }
+        Some("RPRT 0\n".into())
+    });
+    let mut s = configured_station(&outgoing, |settings| {
+        settings.operating_mode = tempo_app::settings::OperatingMode::Phone;
+        settings.phone_mode = "FM".into();
+        settings.rptr_shift = "plus".into();
+        settings.rptr_offset_override_hz = 600_000;
+        settings.ctcss_tone_hz = 88.5;
+    });
+    let pool = Arc::new(MonitorConnections::new(vec![connection(&s, &incoming)]));
+    let receipt = queue(&s, 1);
+    apply(&mut s, &pool, |_| panic!("warm radio must be reused"));
+    assert_eq!(
+        receipt.outcome(),
+        Outcome::Applied {
+            evidence: Evidence::RadioReadback
+        }
+    );
+    assert_eq!(s.state.last_mode, "FM");
+    assert_eq!(s.state.last_fm, Some(("plus".into(), 600_000, 88.5)));
+    let writes = || {
+        incoming
+            .lines
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|line| {
+                matches!(
+                    line.as_bytes().first(),
+                    Some(b'M' | b'F' | b'R' | b'O' | b'C' | b'T')
+                )
+            })
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    let before = writes();
+    for command in ["R +", "O 600000", "C 885"] {
+        assert!(before.iter().any(|line| line == command), "{before:?}");
+    }
+    s.step();
+    s.step();
+    assert!(writes()[before.len()..].iter().all(|line| line == "T 0"));
+    let saved = Settings::load(&s.path);
+    assert_eq!(saved.active_radio, 1);
+    assert_eq!(saved.phone_mode, "FM");
+    assert_eq!(saved.rptr_shift, "plus");
+    assert_eq!(saved.ctcss_tone_hz, 88.5);
+    assert!(!engine_lock(&s.engine).tx_enabled());
+    assert!(s.backend.played.is_empty());
 }
 
 #[test]
