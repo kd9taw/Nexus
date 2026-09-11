@@ -24,6 +24,7 @@ enum Intent {
     Workspace {
         workspace: Workspace,
         tier: Tier,
+        follow_frequency: bool,
     },
     Mode {
         mode: String,
@@ -313,10 +314,24 @@ impl Engine {
         };
         let mut projected = self.settings.clone();
         projected.operating_mode = OperatingMode::Digital;
+        // FT and JS8 own their section's frequency. When leaving a manual
+        // section, reuse native mode memory/home policy even if its digital
+        // decoder was already selected. Tempo keeps its own band selection.
+        let follow_frequency =
+            workspace != Workspace::Tempo && self.settings.operating_mode != OperatingMode::Digital;
+        if let Some((dial, sideband)) = self
+            .prepare_mode_entry("digital", follow_frequency)
+            .frequency
+        {
+            projected.dial_mhz = dial;
+            projected.sideband = sideband;
+        }
         // A same-tier return preserves an operator-tuned channel, like the
         // native setter. A changed tier uses its existing override/fallback rule.
         if tier != self.tier() {
-            if let Some(channel) = self.prepare_tier_frequency(tier) {
+            if let Some(channel) =
+                self.prepare_tier_frequency_at(tier, &projected.band, projected.dial_mhz)
+            {
                 projected.dial_mhz = channel.dial_mhz;
                 projected.band = channel.band;
                 projected.sideband = channel.mode;
@@ -356,7 +371,11 @@ impl Engine {
                 band: projected.band,
                 sideband: projected.sideband,
                 power_limit,
-                intent: Intent::Workspace { workspace, tier },
+                intent: Intent::Workspace {
+                    workspace,
+                    tier,
+                    follow_frequency,
+                },
             },
             connection,
             permit,
@@ -573,8 +592,12 @@ impl Request {
             Intent::Frequency => {
                 engine.set_frequency(self.target_hz as f64 / 1e6, &self.band, &self.sideband)
             }
-            Intent::Workspace { workspace, .. } => {
-                engine.set_operating_mode_with_arming("digital", false, false);
+            Intent::Workspace {
+                workspace,
+                follow_frequency,
+                ..
+            } => {
+                engine.set_operating_mode_with_arming("digital", follow_frequency, false);
                 let mut install = |engine: &mut Engine, decoder| {
                     engine.install_source_into(
                         source_slot.as_mut().expect("workspace decoder lock"),

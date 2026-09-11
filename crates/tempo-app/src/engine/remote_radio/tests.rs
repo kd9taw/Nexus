@@ -198,9 +198,11 @@ fn workspace_entry_uses_native_area_memories_and_js8_session_policy() {
         assert!(std::sync::Arc::ptr_eq(&source, &s.engine.source));
         assert!(!s.engine.tx_enabled());
         assert!(!s.engine.take_immediate_retune());
-        let saved: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(&s.path).unwrap()).unwrap();
-        assert_eq!(saved, serde_json::to_value(s.engine.settings()).unwrap());
+        let saved: Settings = serde_json::from_slice(&std::fs::read(&s.path).unwrap()).unwrap();
+        assert_eq!(
+            serde_json::to_value(saved).unwrap(),
+            serde_json::to_value(s.engine.settings()).unwrap()
+        );
     }
 }
 

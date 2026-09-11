@@ -9515,7 +9515,7 @@ impl Engine {
         }
         let exch = Exchange::new(&self.settings.fd_class, &self.settings.fd_section);
         let band = self.settings.band.clone();
-        self.mode = match spec {
+        let next_mode = match spec {
             "chat" => Mode::Chat,
             "qso-run" => Mode::Qso {
                 station: Box::new({
@@ -9561,6 +9561,11 @@ impl Engine {
             },
             other => return Err(format!("unknown mode {other:?}")),
         };
+        // A valid local operating-spec gesture owns the newer station context,
+        // even when its label and CAT mode are unchanged. Do not let older
+        // Remote work overwrite that intent; invalid specs above change nothing.
+        self.remote_actuation.revoke();
+        self.mode = next_mode;
         // Carry the operator's RR73/RRR preference into a fresh QSO sequencer.
         if let Mode::Qso { station, .. } = &mut self.mode {
             station.confirm_with_rrr = self.settings.prefer_rrr;
@@ -10602,15 +10607,24 @@ impl Engine {
     }
 
     fn prepare_tier_frequency(&self, tier: Tier) -> Option<crate::bandplan::BandChannel> {
+        self.prepare_tier_frequency_at(tier, &self.settings.band, self.settings.dial_mhz)
+    }
+
+    fn prepare_tier_frequency_at(
+        &self,
+        tier: Tier,
+        band: &str,
+        dial_mhz: f64,
+    ) -> Option<crate::bandplan::BandChannel> {
         if self.source_kind != SourceKind::Native || self.sat_dial_owner.is_some() {
             return None;
         }
         let plan = self.band_plan_for_tier(tier);
         let stay_on_miss = matches!(tier, Tier::Ft8 | Tier::Ft4 | Tier::Ft2 | Tier::Js8);
         plan.iter()
-            .find(|c| c.band.eq_ignore_ascii_case(&self.settings.band))
+            .find(|c| c.band.eq_ignore_ascii_case(band))
             .or_else(|| if stay_on_miss { None } else { plan.first() })
-            .filter(|ch| (ch.dial_mhz - self.settings.dial_mhz).abs() > 0.0005)
+            .filter(|ch| (ch.dial_mhz - dial_mhz).abs() > 0.0005)
             .cloned()
     }
 
