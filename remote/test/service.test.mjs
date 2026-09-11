@@ -645,6 +645,8 @@ test('expanded operations preserve legacy clients, minimum peer versions and hib
     })
     const send = request => live.browser.send({ type: 'operationRequest', ...(browserVersion >= 2 ? { operationVersion: browserVersion } : {}), request })
     const negotiated = Math.min(stationVersion, browserVersion), requestId = crypto.randomUUID()
+    live.browser.ackObservations()
+    let observationSequence = 0
     send({ type: 'state', requestId })
     const forwarded = await take(live.station, 'operationRequest', 'state request')
     assert.equal(forwarded.operationVersion, negotiated >= 2 ? negotiated : undefined)
@@ -661,6 +663,9 @@ test('expanded operations preserve legacy clients, minimum peer versions and hib
     // controls, while the v3-only decoder transition never reaches an old peer.
     if (browserVersion >= 2) {
       for (const action of [{ action: 'radio.tier', tier: 'FT4' }, { action: 'radio.workspace', workspace: 'js8' }, { action: 'amplifier.followBand', radioId: 1, expectedSettingsRevision: 'a'.repeat(64), expectedFollow: true, follow: false }, { action: 'decoder.js8Speed', expectedSpeed: 1, speed: 3 }, { action: 'decoder.msk144Period', expectedPeriodSecs: 15, periodSecs: 5 }, { action: 'decoder.depth', expectedTier: 'FT8', expectedDepth: 3, depth: 1 }, { action: 'receiver.rxOffset', expectedTier: 'FT8', expectedHz: 1500, hz: 725.25 }, { action: 'receiver.rxGain', radioId: 1, expectedSettingsRevision: 'a'.repeat(64), expectedGain: 1, gain: 2.5 }, { action: 'decoder.clear', receiver: 'cw' }]) {
+        // This matrix outlives the station sampling deadline. Keep the peer
+        // answering the real watch protocol while testing operation versions.
+        await publish(live.station, ++observationSequence)
         await delay(270)
         const command = { type: 'stationControl', requestId: crypto.randomUUID(), stationBootId: state.stationBootId, leaseId: state.leaseId,
           expectedRevision: 1, commandWindowId: state.commandWindowId, clientSequence: 1,
@@ -679,6 +684,9 @@ test('expanded operations preserve legacy clients, minimum peer versions and hib
           assert.equal(response.requestId, command.requestId); assert.equal(response.value.outcome, 'applied')
         }
       }
+      assert.equal(observationSequence, 9)
+      assert.equal(live.browser.closed, false)
+      assert.equal(live.station.closed, false)
     }
     live.browser.close(); live.station.close()
   }
