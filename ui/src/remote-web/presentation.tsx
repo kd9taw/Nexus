@@ -1,6 +1,8 @@
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { BookOpen, Crosshair, PanelsTopLeft, Radio, SlidersHorizontal } from 'lucide-react'
+import { BookOpen, ChevronDown, Crosshair, PanelsTopLeft, Radio, SlidersHorizontal } from 'lucide-react'
 import type { View } from '../components/ModeNav'
+import { Menu } from '../components/ui/Menu'
+import { featureById } from '../features/registry'
 import { t } from '../i18n'
 
 export type RemotePresentation = 'full' | 'quick'
@@ -28,6 +30,9 @@ export function QuickRadioDetails() {
 }
 
 const OPERATING_VIEWS: View[] = ['operate', 'phone', 'cw', 'rtty', 'psk', 'js8', 'chat', 'sstv', 'aprs']
+// Match the native mode rail's invariant FT/Tempo names; other labels come from
+// the shared feature catalog at render time so locale changes remain live.
+const operatingLabel = (view: View) => view === 'operate' ? 'FT' : view === 'chat' ? 'Tempo' : featureById(view)?.label ?? view
 export function QuickNavigation({ view, onSelect, available }: {
   view: View; onSelect: (view: View) => void; available: (view: View) => boolean
 }) {
@@ -49,10 +54,15 @@ export function QuickNavigation({ view, onSelect, available }: {
   useEffect(() => { if (operating) setLast(view) }, [view, operating])
   if (display?.presentation !== 'quick') return null
   return <nav ref={navigation} className="remote-quick-nav" aria-label={t('remote.quick.navigation')}>
-    <button type="button" aria-current={operating ? 'page' : undefined}
+    {operating ? <Menu requiresStationData={false} className="remote-quick-mode-menu"
+      trigger={<button type="button" aria-current="page" aria-label={t('remote.quick.chooseMode')} title={t('remote.quick.chooseMode')}>
+        <ChevronDown size={20} aria-hidden="true" /><span>{operatingLabel(view)}</span>
+      </button>}
+      items={OPERATING_VIEWS.filter(available).map(next => ({ label: operatingLabel(next), onSelect: () => onSelect(next) }))}
+    /> : <button type="button"
       onClick={() => onSelect(available(last) ? last : 'operate')}>
       <Radio size={20} aria-hidden="true" /><span>{t('remote.quick.operate')}</span>
-    </button>
+    </button>}
     <button type="button" disabled={!available('needed')}
       aria-current={view === 'needed' ? 'page' : undefined} onClick={() => onSelect('needed')}>
       <Crosshair size={20} aria-hidden="true" /><span>{t('remote.quick.hunt')}</span>

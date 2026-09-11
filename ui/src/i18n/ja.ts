@@ -117,6 +117,7 @@ export const JA: PartialCatalog = {
   "remote.quick.name": "クイック運用",
   "remote.quick.full": "フル Nexus",
   "remote.quick.navigation": "クイック運用のナビゲーション",
+  "remote.quick.chooseMode": "運用画面を選択",
   "remote.quick.operate": "運用",
   "remote.quick.hunt": "DX 探索",
   "remote.quick.log": "ログ",

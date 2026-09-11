@@ -112,6 +112,7 @@ export const DE: PartialCatalog = {
   "remote.quick.name": "Schnellbetrieb",
   "remote.quick.full": "Vollständiges Nexus",
   "remote.quick.navigation": "Navigation im Schnellbetrieb",
+  "remote.quick.chooseMode": "Betriebsansicht wählen",
   "remote.quick.operate": "Betrieb",
   "remote.quick.hunt": "DX-Suche",
   "remote.quick.log": "Logbuch",

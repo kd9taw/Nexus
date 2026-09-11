@@ -185,6 +185,7 @@ export const EN = {
   "remote.quick.name": "Quick Operate",
   "remote.quick.full": "Full Nexus",
   "remote.quick.navigation": "Quick Operate navigation",
+  "remote.quick.chooseMode": "Choose operating view",
   "remote.quick.operate": "Operate",
   "remote.quick.hunt": "Hunt",
   "remote.quick.log": "Log",

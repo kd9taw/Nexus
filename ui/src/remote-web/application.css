@@ -258,6 +258,14 @@
 }
 .remote-quick-nav button[aria-current='page'] { color: var(--accent); border-color: var(--accent); }
 .remote-quick-nav button:disabled { opacity: .45; }
+/* This shared Nexus menu is portaled. Radix measures the actual available
+   window space; its existing inner wrapper applies the operator's zoom. */
+.remote-quick-mode-menu {
+  max-height: var(--radix-dropdown-menu-content-available-height);
+  max-width: var(--radix-dropdown-menu-content-available-width);
+  overflow-y: auto;
+}
+.remote-quick-mode-menu .ui-menu-item { min-height: 44px; }
 .remote-quick-details { flex: 0 0 auto; }
 /* Optional receiver detail never contains Stop TX, Tune or the amplifier. */
 .cockpit-header--brief .ch-mode-extras,

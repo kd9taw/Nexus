@@ -675,7 +675,22 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       await click(button('Quick Operate'))
       await until(`document.querySelector('.app')?.dataset.remotePresentation==='quick'`)
       const navButton=label=>`[...document.querySelectorAll('.remote-quick-nav button')].find(e=>e.textContent===${JSON.stringify(label)})`
-      const checks=[]
+      const checks=[], menuChecks=[], modeTrips=[]
+      const picker=`document.querySelector('.remote-quick-nav [aria-haspopup="menu"]')`
+      const menu=`document.querySelector('.remote-quick-mode-menu')`
+      const closePicker=async()=>{
+        await browser.call('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27},session)
+        await browser.call('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27},session)
+        await until(`!${menu}`)
+      }
+      const chooseView=async(label,view)=>{
+        await click(picker);await until(`!!${menu}`)
+        const item=`[...${menu}.querySelectorAll('[role="menuitem"]')].find(e=>e.textContent===${JSON.stringify(label)})`
+        await evaluate(`${item}.scrollIntoView({block:'nearest',behavior:'instant'})`);await settledLayout()
+        await click(item);await until(`document.querySelector('.app').dataset.remoteView==='${view}'&&!${menu}`)
+        assert.equal(await evaluate(`document.querySelector('${call}')===window.__quickNodes.call&&document.querySelector('.app')===window.__quickNodes.app`),true)
+        modeTrips.push({label,view})
+      }
       for(const [width,height,zoom]of [[390,844,1],[1280,800,1],[390,844,1.75],[1280,800,1.75]])for(const theme of ['dark','light']){
         await browser.call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false},session)
         await evaluate(`document.documentElement.style.setProperty('--ui-zoom','${zoom}');document.documentElement.dataset.theme='${theme}';window.dispatchEvent(new Event('resize'))`);await settledLayout();await settledLayout()
@@ -688,6 +703,19 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         assert.deepEqual(shape.horizontal,[],'Quick contact controls and recall must fit without sideways scrolling')
         assert.equal(loggingLease,lease);assert.equal(stationRequests.length,0);assert.equal(loggedRequests.length,0)
         checks.push({width,height,zoom,theme,shape})
+        await click(picker);await until(`!!${menu}`);await settledLayout()
+        const menuShape=await evaluate(`(()=>{const e=${menu},r=e.getBoundingClientRect();return {rect:r.toJSON(),labels:[...e.querySelectorAll('[role="menuitem"]')].map(i=>i.textContent),scrollHeight:e.scrollHeight,clientHeight:e.clientHeight}})()`)
+        assert.deepEqual(menuShape.labels,['FT','Phone','CW','RTTY','PSK','JS8','Tempo','SSTV','APRS'])
+        assert.ok(menuShape.rect.top>=0&&menuShape.rect.left>=0&&menuShape.rect.right<=width&&menuShape.rect.bottom<=height,'the real zoomed mode menu must fit its browser window')
+        for(const edge of ['lastElementChild','firstElementChild']){
+          const item=`${menu}.querySelector('[role="menuitem"]').parentElement.${edge}`
+          await evaluate(`${item}.scrollIntoView({block:'nearest',behavior:'instant'})`);await settledLayout()
+          assert.equal(await evaluate(`(()=>{const e=${item},r=e.getBoundingClientRect();return r.height>=44&&e.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))})()`),true,'every end of the mode list must be reachable at the actual zoom')
+        }
+        if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,`quick-modes-${width}-${zoom}-${theme}.png`),Buffer.from(shot.data,'base64'))}
+        await closePicker()
+        assert.equal(await evaluate(`document.activeElement===${picker}`),true,'Escape returns keyboard focus to the mode selector')
+        menuChecks.push({width,height,zoom,theme,...menuShape})
       }
       // Receiver detail changes the presentation of the SAME scopes/forms.
       // Start and stop its actual native topic before testing further gestures.
@@ -712,6 +740,11 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         await click(navButton(destination));await until(`document.querySelector('.app').dataset.remoteView==='${view}'`)
         assert.equal(await evaluate(`document.querySelector('${call}')===window.__quickNodes.call&&document.querySelector('${call}').value==='N2QUICK'`),true)
         await click(navButton('Operate'));await until(`document.querySelector('.app').dataset.remoteView==='${quickMode}'`)
+        assert.equal(loggingLease,lease);assert.equal(stationRequests.length,0);assert.equal(loggedRequests.length,0)
+      }
+      for(const [label,view]of [['FT','operate'],['Phone','phone'],['CW','cw'],['RTTY','rtty'],['PSK','psk'],['JS8','js8'],['Tempo','chat'],['SSTV','sstv'],['APRS','aprs'],[quickMode==='cw'?'CW':'Phone',quickMode]]){
+        await chooseView(label,view)
+        assert.equal(await evaluate(`document.querySelector('${call}').value`),'N2QUICK')
         assert.equal(loggingLease,lease);assert.equal(stationRequests.length,0);assert.equal(loggedRequests.length,0)
       }
       await click(navButton('Full Nexus'))
@@ -758,13 +791,17 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       applicationAvailable=false
       await until(`document.querySelector('.app').dataset.remoteStale==='true'`)
       assert.equal(await evaluate(`document.querySelector('${call}')===window.__quickNodes.call&&document.querySelector('${call}').value==='N3QSO'&&document.querySelector('.${quickMode}-cockpit .le-log-btn').disabled&&document.querySelector('.${quickMode}-cockpit .amp-op').disabled`),true)
+      await chooseView(quickMode==='cw'?'Phone':'CW',quickMode==='cw'?'phone':'cw')
+      await chooseView(quickMode==='cw'?'CW':'Phone',quickMode)
+      assert.equal(await evaluate(`document.querySelector('${call}').value`),'N3QSO')
+      assert.equal(stationRequests.length,2);assert.equal(loggedRequests.length,1)
       applicationAvailable=true
       await until(`document.querySelector('.app').dataset.remoteStale!=='true'`)
       await until(`!!${button('Take station control')}`)
       assert.equal(loggingLease,null,'data recovery must not restore station authority')
       assert.equal(await evaluate(`document.querySelector('${call}')===window.__quickNodes.call&&document.querySelector('${call}').value==='N3QSO'`),true)
       assert.equal(loggedRequests.length,1);assert.equal(stationRequests.length,2)
-      if(artifacts)await writeFile(join(artifacts,'quick-results.json'),JSON.stringify({mode:quickMode,checks,stationActions:stationRequests.map(r=>r.action),logWrites:loggedRequests.length,presentationActions:0,leasePreservedBeforeLoss:true,reacquireRequired:true,scopeDemand:true,huntLogDrafts:true,unknownResultPreserved:true,explicitResultCheck:true,exceptions,unexpectedMessages},null,2))
+      if(artifacts)await writeFile(join(artifacts,'quick-results.json'),JSON.stringify({mode:quickMode,checks,menuChecks,modeTrips,stationActions:stationRequests.map(r=>r.action),logWrites:loggedRequests.length,presentationActions:0,leasePreservedBeforeLoss:true,reacquireRequired:true,scopeDemand:true,huntLogDrafts:true,unknownResultPreserved:true,explicitResultCheck:true,exceptions,unexpectedMessages},null,2))
       assert.equal(exceptions,0);assert.equal(unexpectedMessages,0)
       console.log('Compiled Quick '+quickMode+' presentation: eight layouts, retained drafts, hidden display retirement, native amp readbacks, one QSO receipt and explicit recovery passed');return
     }
