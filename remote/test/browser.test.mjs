@@ -580,6 +580,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,contactContin
         assert.ok(shape.sameApp&&shape.sameCockpit&&shape.sameInput&&shape.value==='N2QUICK','changing presentation must preserve the actual contact form and draft')
         assert.ok(shape.buttons.every(b=>b.visible)&&shape.docW<=width+1&&shape.docH<=height+1,'all Quick destinations and return to Full Nexus must be reachable')
         assert.ok(shape.call.top>=0&&shape.call.bottom<shape.nav.top,'the selected contact must appear before optional radio detail')
+        assert.deepEqual(shape.horizontal,[],'Quick contact controls and recall must fit without sideways scrolling')
         assert.equal(loggingLease,lease);assert.equal(stationRequests.length,0);assert.equal(loggedRequests.length,0)
         checks.push({width,height,zoom,theme,shape})
       }
