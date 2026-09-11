@@ -13,6 +13,7 @@ use std::time::Instant;
 mod dsp;
 mod filter;
 mod phone_mode;
+mod spot;
 pub use dsp::{AgcSpeed, ReceiverDsp, ReceiverFunction};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
@@ -31,6 +32,10 @@ enum Intent {
         expected_cat_mode: String,
     },
     Frequency,
+    Spot {
+        mode: String,
+        call: String,
+    },
     FilterWidth {
         mode: OperatingMode,
         expected: u32,
@@ -787,6 +792,20 @@ impl Request {
             }),
             Intent::Frequency => {
                 engine.set_frequency(self.target_hz as f64 / 1e6, &self.band, &self.sideband)
+            }
+            Intent::Spot { mode, call } => {
+                engine.work_spot_split_with_arming(
+                    &mode,
+                    self.target_hz as f64 / 1e6,
+                    &self.band,
+                    None,
+                    false,
+                );
+                engine.note_work_call(Some(call));
+                if let Some(power) = power.filter(|_| self.power_limit.is_some()) {
+                    engine.rf_power = Some(power);
+                    engine.observe_rig_power(power);
+                }
             }
             Intent::Band { mode } => engine.pick_band(&self.band, Some(&mode)),
             Intent::Workspace {

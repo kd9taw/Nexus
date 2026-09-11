@@ -6591,7 +6591,20 @@ impl Engine {
         band: &str,
         split_up_khz: Option<f64>,
     ) {
-        self.set_operating_mode(mode, false);
+        self.work_spot_split_with_arming(mode, freq_mhz, band, split_up_khz, true);
+    }
+
+    // The local verb keeps manual-mode arming. A guarded Remote receive QSY
+    // shares its exact context/callsign handoff without gaining TX authority.
+    fn work_spot_split_with_arming(
+        &mut self,
+        mode: &str,
+        freq_mhz: f64,
+        band: &str,
+        split_up_khz: Option<f64>,
+        arm_manual: bool,
+    ) {
+        self.set_operating_mode_with_arming(mode, false, arm_manual);
         self.set_frequency(freq_mhz, band, "USB"); // clears split + arms the retune
                                                    // Working a spot carries explicit mode intent — drop any manual override (even same-band)
                                                    // so the spot's band-auto sideband applies (10 m mixes FM + SSB, so a stale FM override

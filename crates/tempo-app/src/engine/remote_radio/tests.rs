@@ -11,6 +11,7 @@ mod dsp;
 mod filter;
 mod phone_mode;
 mod receive_tuning;
+mod spot;
 struct Station {
     engine: Engine,
     connection: Connection,
