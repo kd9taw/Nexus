@@ -43,6 +43,7 @@ fn band_selection_matches_native_defaults_for_every_desktop_choice_and_class() {
                 let memory = s.engine.freq_memory.clone();
                 let current_mode = s.engine.rig_mode_effective();
                 s.sample(s.engine.settings.dial_hz(), &current_mode);
+                let queued_at = Instant::now();
                 let result = queue(&mut s, &channel.band, name);
                 assert_eq!(serde_json::to_value(s.engine.settings()).unwrap(), before);
                 assert_eq!(s.engine.freq_memory, memory);
@@ -64,12 +65,24 @@ fn band_selection_matches_native_defaults_for_every_desktop_choice_and_class() {
                 );
                 assert_eq!(request.target_mode, native.engine.rig_mode_effective());
                 s.sample(request.target_hz, &request.target_mode);
-                assert!(request.commit(&mut s.engine));
+                let commit_started = Instant::now();
+                assert!(
+                    request.commit(&mut s.engine),
+                    "{class:?}/{name}/{}: queue-to-commit {:?}, commit {:?}, outcome {:?}",
+                    channel.band,
+                    commit_started.duration_since(queued_at),
+                    commit_started.elapsed(),
+                    receipt.outcome()
+                );
                 assert_eq!(
                     receipt.outcome(),
                     Outcome::Applied {
                         evidence: Evidence::RadioReadback
-                    }
+                    },
+                    "{class:?}/{name}/{}: queue-to-commit {:?}, commit {:?}",
+                    channel.band,
+                    commit_started.duration_since(queued_at),
+                    commit_started.elapsed()
                 );
                 assert_eq!(
                     serde_json::to_value(s.engine.settings()).unwrap(),

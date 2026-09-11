@@ -84,6 +84,7 @@ fn off_band_remote_receive_tuning_matches_the_native_dial_and_memory_policy() {
             let hz = s.engine.settings.dial_hz();
             let mode = s.engine.rig_mode_effective();
             s.sample(hz, &mode);
+            let queued_at = Instant::now();
             let receipt = queue_dial(&mut s, dial, band).unwrap();
             assert_eq!(serde_json::to_value(s.engine.settings()).unwrap(), before);
             assert_eq!(
@@ -97,12 +98,22 @@ fn off_band_remote_receive_tuning_matches_the_native_dial_and_memory_policy() {
             assert_eq!(request.target_hz, native.engine.settings.dial_hz());
             assert_eq!(request.target_mode, native.engine.rig_mode_effective());
             s.sample(request.target_hz, &request.target_mode);
-            assert!(request.commit(&mut s.engine));
+            let commit_started = Instant::now();
+            assert!(
+                request.commit(&mut s.engine),
+                "{dial}/{band}: queue-to-commit {:?}, commit {:?}, outcome {:?}",
+                commit_started.duration_since(queued_at),
+                commit_started.elapsed(),
+                receipt.outcome()
+            );
             assert_eq!(
                 receipt.outcome(),
                 Outcome::Applied {
                     evidence: Evidence::RadioReadback
-                }
+                },
+                "{dial}/{band}: queue-to-commit {:?}, commit {:?}",
+                commit_started.duration_since(queued_at),
+                commit_started.elapsed()
             );
             assert_eq!(
                 serde_json::to_value(s.engine.settings()).unwrap(),
