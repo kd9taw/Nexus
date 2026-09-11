@@ -3616,7 +3616,7 @@ export const ES: PartialCatalog = {
   "settings.amplifier.model.hint": "Coloca el panel Amplificador en Connect para ver las lecturas. Nada de esto cambia cómo transmite la radio.",
   "settings.amplifier.model.label": "Amplificador",
   "settings.amplifier.model.none": "Ninguno",
-  "settings.amplifier.note": "Estado de solo lectura de un lineal en su propio puerto serie — potencia de salida, SWR, temperatura y alarmas. Nexus nunca manda al amplificador: solo lo lee.",
+  "settings.amplifier.note": "Conecte un amplificador compatible a su propio puerto serie para ver potencia, ROE, temperatura y alarmas. Use los controles del panel para Operar/Espera y los cambios de banda. Configure el seguimiento automático de banda a continuación.",
   "settings.amplifier.port.hint": "Su propio puerto, no el de CAT — un puerto serie solo puede abrirse una vez, así que compartirlo impide que la radio conecte. La velocidad se detecta sola.",
   "settings.amplifier.follow.label": "Seguir la banda del equipo",
   "settings.amplifier.follow.hint": "Cambia el amplificador a la banda en la que est\u00e1s, sin preguntar. Desactivado por defecto: es el \u00fanico control del amplificador que act\u00faa por su cuenta. Nunca mueve el amplificador mientras transmites, y avanza de banda en banda comprobando d\u00f3nde est\u00e1 realmente despu\u00e9s de cada paso. \u26a0\ufe0f Si tu amplificador ya sigue al equipo por su propio cable de datos de banda, como en la mayor\u00eda de las instalaciones SPE, deja esto desactivado: el hardware hace lo mismo, y dos cosas gobernando una banda es peor que cualquiera de las dos sola.",

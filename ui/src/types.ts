@@ -1079,9 +1079,9 @@ export interface LinkState {
 /** One amplifier reading — mirrors Rust `AmpStatusDto` exactly (this file is hand-written,
  * so a key that disagrees compiles clean on BOTH sides and renders '—' forever).
  *
- * ⚠️ READ-ONLY STATUS. There is no write surface and none is planned: putting an amplifier in
- * standby is not a way to stop a transmission — the exciter keeps keying and the drive passes
- * straight through — so nothing built on this may become a stop control.
+ * This DTO reports measurements; separate guarded commands control the amplifier.
+ * Standby does not stop the exciter transmitting, so these readings and amplifier
+ * controls must never stand in for a transmitter Stop.
  *
  * Two things are deliberately NOT here and their absence is the honest reading: the band index
  * (its SPE ladder is an inference, and it tells an operator nothing their rig does not show),
@@ -1092,8 +1092,8 @@ export interface AmpStatus {
   /** SPE's raw model id ('13K', '20K', and whatever a 1.5K-FA reports) — kept raw, because an
    * id we do not recognise is a newer amplifier, not a bad frame. Empty for the KPA. */
   model: string
-  /** True once a poll has succeeded; false only after three CONSECUTIVE misses, so one slow
-   * poll does not strobe the indicator. The readings clear on the FIRST miss regardless. */
+  /** True after a successful poll. Repeated misses or a failed control write
+   * mark the link down; readings clear on the first miss. */
   linked: boolean
   /** Why the link is down: 'portBusy' | 'noAnswer' | 'wrongModel' | 'malformed'. Empty while
    * linked. A TOKEN the UI switches on, never text to render — the wording is ours so it can

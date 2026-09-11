@@ -4821,7 +4821,7 @@ export const EN = {
   // both forms at once in two languages, and no guard sees it.
   'settings.amplifier.legend': 'Amplifier',
   'settings.amplifier.note':
-    'Read-only status from a linear on its own serial port — power out, SWR, temperature and any alarm. Nexus never commands the amplifier: it only reads it.',
+    "Connect a supported amplifier on its own serial port to see power, SWR, temperature and alarms. Use the cockpit controls for Operate/Standby and band steps. Set automatic band following below.",
   'settings.amplifier.model.label': 'Amplifier',
   'settings.amplifier.model.none': 'None',
   'settings.amplifier.model.hint':

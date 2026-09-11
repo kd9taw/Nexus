@@ -992,7 +992,7 @@ export const DE: PartialCatalog = {
   // ── Settings ▸ Radio ▸ Endstufe ─────────────────────────────────────────────────────
   // ⚠️ Herstellernamen und Gerätepfade bleiben unübersetzt (siehe en.ts). Keine Plural-Keys.
   "settings.amplifier.legend": "Endstufe",
-  "settings.amplifier.note": "Nur-Lese-Status einer Endstufe an einem eigenen seriellen Port — Ausgangsleistung, SWR, Temperatur und Alarme. Nexus steuert die Endstufe nie, es liest sie nur.",
+  "settings.amplifier.note": "Eine unterstützte Endstufe an ihrem eigenen seriellen Port zeigt Leistung, SWR, Temperatur und Alarme. Die Cockpit-Bedienelemente steuern Betrieb, Bereitschaft und Bandwechsel. Die automatische Bandnachführung wird unten eingestellt.",
   "settings.amplifier.model.label": "Endstufe",
   "settings.amplifier.model.none": "Keine",
   "settings.amplifier.model.hint": "Setze das Endstufen-Panel in Connect ein, um die Messwerte zu sehen. Nichts hiervon ändert, wie das Funkgerät sendet.",

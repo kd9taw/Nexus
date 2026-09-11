@@ -2992,7 +2992,7 @@ export const JA: PartialCatalog = {
   "settings.orbitalElements.hint": "アマチュア衛星のケプラー軌道要素（TLE）です。パス予測、アンテナ指向、ドップラーはすべてここから計算されます。hamradiotools.ioから6時間ごとに更新されます。衛星リストはSatNOGSデータベース（CC BY-SA 4.0）、軌道要素はCelesTrakとSatNOGSに由来します。オフラインのシャックや打ち上げ直後の衛星にはファイルをインポートしてください。",
   "settings.orbitalElements.lastRefresh": "最終更新: {{detail}}",
   "settings.amplifier.legend": "リニアアンプ",
-  "settings.amplifier.note": "専用のシリアルポート経由でリニアアンプから読み取り専用のステータスを取得します — 出力、SWR、温度、アラームです。Nexusがアンプに指示を出すことは決してありません。読み取るだけです。",
+  "settings.amplifier.note": "対応アンプを専用シリアルポートに接続すると、出力、SWR、温度、アラームを確認できます。運用／スタンバイとバンド切り替えにはコックピットの操作ボタンを使います。自動バンド追従は以下で設定します。",
   "settings.amplifier.model.label": "アンプ",
   "settings.amplifier.model.none": "なし",
   "settings.amplifier.model.hint": "読み取り値を見るには、コネクトにアンプパネルを配置してください。ここの設定が無線機の送信動作を変えることはありません。",

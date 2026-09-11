@@ -791,7 +791,7 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
         if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-nexus-keyboard-failure.png'),Buffer.from(shot.data,'base64'))}
         throw error
       }
-      assert.ok(await evaluate(`document.querySelector('.${mode}-cockpit .amp-strip')?.textContent.includes('80m')`))
+      assert.ok(await evaluate(`document.querySelector('.${mode}-cockpit .amp-strip')?.textContent.includes(${JSON.stringify(fixture.station.amplifier.bandLabel)})`), 'keyboard cockpit amp follows the authenticated observation, not the older application snapshot')
       const controls = await evaluate(`Array.from(document.querySelectorAll('.${mode}-cockpit .rtty-arm, .${mode}-cockpit .cw-macro, .${mode}-cockpit .cw-type, .${mode}-cockpit .cw-decode-clear')).map(e=>e.disabled)`)
       assert.ok(controls.length > 8 && controls.every(Boolean))
       await evaluate(`document.querySelector('.${mode}-cockpit .cw-type').dispatchEvent(new InputEvent('beforeinput',{data:'X',inputType:'insertText',bubbles:true,cancelable:true}));window.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))`)
