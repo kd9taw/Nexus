@@ -822,7 +822,10 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
         if(workspace)await gesture(workspace==='js8'?'.js8-cockpit .remote-mode-entry':'.grid-header .remote-mode-entry','radio.workspace')
         await until(`!!document.querySelector('${selector}')`)
         await evaluate(`document.querySelector('${selector}').scrollIntoView({block:'center',behavior:'instant'})`);await settledLayout()
-        const point=await evaluate(`(()=>{const e=document.querySelector('${selector}'),r=e.getBoundingClientRect(),x=r.left+r.width*${fraction},y=r.top+r.height/2;if(!e.contains(document.elementFromPoint(x,y)))throw Error('occludedWaterfall');return{x,y}})()`)
+        const hit=await evaluate(`(()=>{const e=document.querySelector('${selector}'),r=e.getBoundingClientRect(),x=r.left+r.width*${fraction},y=r.top+r.height/2,hit=document.elementFromPoint(x,y);return{x,y,rect:r.toJSON(),hit:hit?.outerHTML.slice(0,1000),visible:e.contains(hit)}})()`)
+        if(!hit.visible&&artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'receiver-waterfall-failure.png'),Buffer.from(shot.data,'base64'));await writeFile(join(artifacts,'receiver-waterfall-failure.json'),JSON.stringify({tab,selector,hit},null,2))}
+        assert.equal(hit.visible,true,`RX waterfall reachable ${tab}: ${JSON.stringify(hit)}`)
+        const point={x:hit.x,y:hit.y}
         const before=stationRequests.length,expectedHz=applicationData.get_snapshot.radio.rxOffsetHz,expectedTier=applicationData.get_snapshot.link.tier
         for(const [button,modifiers]of [['right',0],['left',8],['left',2]])for(const type of ['mousePressed','mouseReleased'])
           await browser.call('Input.dispatchMouseEvent',{type,...point,button,modifiers,clickCount:1},session)
