@@ -13,6 +13,22 @@ impl TransmitAuthority {
         self.0.revoke();
     }
 
+    pub fn generation(&self) -> u64 {
+        self.0.generation()
+    }
+
+    /// A delayed Stop can retire only the generation it displayed. Atomic
+    /// comparison prevents it racing a newer controller or transmission.
+    pub fn revoke_generation(&self, expected: u64) -> bool {
+        use std::sync::atomic::Ordering;
+        expected != u64::MAX
+            && self
+                .0
+                 .0
+                .compare_exchange(expected, expected + 1, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+    }
+
     pub fn permit(&self, deadline: Instant) -> Option<TransmitPermit> {
         self.0.permit(deadline).map(TransmitPermit)
     }

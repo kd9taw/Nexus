@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 use tempo_app::remote_control::{transmit::TransmitAuthority, Completion, Outcome, Revocation};
 
 mod station;
+mod transmit_stop;
 
 const LEASE: Duration = Duration::from_secs(5);
 const WINDOW: Duration = Duration::from_secs(2);
@@ -48,6 +49,16 @@ pub enum Request {
         request_id: String,
         #[serde(rename = "leaseId")]
         lease_id: String,
+    },
+    StopTransmit {
+        #[serde(rename = "requestId")]
+        request_id: String,
+        #[serde(rename = "stationBootId")]
+        station_boot_id: String,
+        #[serde(rename = "leaseId")]
+        lease_id: String,
+        #[serde(rename = "transmitEpoch")]
+        transmit_epoch: String,
     },
     Result {
         #[serde(rename = "requestId")]
@@ -94,6 +105,7 @@ impl Request {
             | Self::Acquire { request_id, .. }
             | Self::Heartbeat { request_id, .. }
             | Self::Release { request_id, .. }
+            | Self::StopTransmit { request_id, .. }
             | Self::Result { request_id, .. }
             | Self::LogManual { request_id, .. }
             | Self::StationControl { request_id, .. } => request_id,
@@ -256,6 +268,7 @@ pub struct Authority {
     core: Mutex<Core>,
     hardware: Revocation,
     transmit: TransmitAuthority,
+    stop_owner: Mutex<Option<transmit_stop::Owner>>,
     #[cfg(test)]
     before_sync: Option<Box<dyn Fn() + Send + Sync>>,
 }
@@ -340,6 +353,7 @@ impl Authority {
         {
             c.receipts.pop_front();
         }
+        self.sync_stop_owner(c);
         Ok(())
     }
     fn advance(&self, c: &mut Core) -> Result<(), &'static str> {
@@ -372,6 +386,7 @@ impl Authority {
                 self.advance(&mut c)?;
             }
         }
+        self.sync_stop_owner(&c);
         Ok(())
     }
     pub fn permit_station(&self, device: &str, allow: bool) -> Result<(), &'static str> {
@@ -395,6 +410,7 @@ impl Authority {
                 self.advance(&mut c)?;
             }
         }
+        self.sync_stop_owner(&c);
         Ok(())
     }
     /// Local permission is boot-scoped and never implied by a receiver grant.
@@ -416,6 +432,7 @@ impl Authority {
                 self.transmit.revoke();
             }
         }
+        self.sync_stop_owner(&c);
         Ok(())
     }
     /// Any admitted browser departure ends the shared logging lease. This is
@@ -471,12 +488,14 @@ impl Authority {
         Ok(())
     }
     fn state(
+        &self,
         c: &mut Core,
         session: &str,
         device: &str,
         now: Instant,
         control: Option<(u8, station::Context)>,
     ) -> Result<Value, &'static str> {
+        self.sync_stop_owner(c);
         let allowed =
             c.grants.contains(device) || (control.is_some() && c.control_grants.contains(device));
         let owned = allowed
@@ -528,6 +547,13 @@ impl Authority {
         engine: &crate::SharedEngine,
         now: Instant,
     ) -> Result<Value, &'static str> {
+        if matches!(request, Request::StopTransmit { .. }) {
+            if version != 4 {
+                return Err("stationUnsupported");
+            }
+            self.stop_transmit(connection, session, device, request, now)?;
+            return Ok(json!({"stop":"accepted"}));
+        }
         if !matches!(version, 1..=3)
             || matches!(request, Request::StationControl { action, .. } if version < action.minimum_version())
         {
@@ -547,7 +573,8 @@ impl Authority {
         self.context(&mut c, &engine)?;
         let control = (version >= 2).then(|| (version, station::Context::capture(&engine)));
         match request {
-            Request::State { .. } => Self::state(&mut c, session, device, now, control),
+            Request::StopTransmit { .. } => unreachable!("handled before ordinary operations"),
+            Request::State { .. } => self.state(&mut c, session, device, now, control),
             Request::Acquire {
                 station_boot_id, ..
             } => {
@@ -572,7 +599,7 @@ impl Authority {
                     });
                     self.advance(&mut c)?;
                 }
-                Self::state(&mut c, session, device, now, control)
+                self.state(&mut c, session, device, now, control)
             }
             Request::Heartbeat { lease_id, .. } => {
                 let l = c.lease.as_mut().ok_or("leaseExpired")?;
@@ -589,7 +616,7 @@ impl Authority {
                     }
                 }
                 engine.poll_remote_transmit(now);
-                Self::state(&mut c, session, device, now, control)
+                self.state(&mut c, session, device, now, control)
             }
             Request::Release { lease_id, .. } => {
                 if c.lease.as_ref().is_some_and(|l| {
@@ -600,7 +627,7 @@ impl Authority {
                     c.windows.clear();
                     self.advance(&mut c)?;
                 }
-                Self::state(&mut c, session, device, now, control)
+                self.state(&mut c, session, device, now, control)
             }
             Request::Result { operation_id, .. } => {
                 if !identifier(operation_id)

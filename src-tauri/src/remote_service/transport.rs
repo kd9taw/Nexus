@@ -336,7 +336,18 @@ pub async fn connected(
                         ServerMessage::OperationDisconnect{session_id}=>{if !identifier(&session_id){return Err("invalidResponse")}operation_connection.authority.disconnect_session(&session_id);},
                         ServerMessage::OperationRequest{session_id,device_id,operation_version,request}=>{
                             if !identifier(&session_id)||!identifier(&device_id)||!identifier(request.id()){return Err("invalidResponse")}
-                            if operation_task.is_some(){
+                            if matches!(&request, super::operations::Request::StopTransmit { .. }) {
+                                // Stop must not queue behind a disk append or another Engine
+                                // operation. Its authority path uses neither of those locks.
+                                let result = operation_connection.authority.handle_version(
+                                    (operation_connection.id, operation_version.unwrap_or(1)),
+                                    &session_id, &device_id, &request, &engine, Instant::now());
+                                let data = match result {
+                                    Ok(value) => json!({"type":"operationResponse","sessionId":session_id,"requestId":request.id(),"value":value}),
+                                    Err(error) => json!({"type":"operationResponse","sessionId":session_id,"requestId":request.id(),"error":error}),
+                                }.to_string();
+                                tokio::time::timeout(Duration::from_secs(2),socket.send(Message::Text(data.into()))).await.map_err(|_|"serviceUnavailable")?.map_err(|_|"serviceUnavailable")?;
+                            } else if operation_task.is_some(){
                                 let data=json!({"type":"operationResponse","sessionId":session_id,"requestId":request.id(),"error":"stationBusy"}).to_string();
                                 tokio::time::timeout(Duration::from_secs(2),socket.send(Message::Text(data.into()))).await.map_err(|_|"serviceUnavailable")?.map_err(|_|"serviceUnavailable")?;
                             }else{
