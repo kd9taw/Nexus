@@ -161,3 +161,58 @@ fn remote_fm_cross_band_tuning_uses_target_band_or_saved_odd_split_without_repla
         assert!(s.backend.played.is_empty());
     }
 }
+
+#[test]
+fn remote_fm_partial_cross_band_failure_cannot_replay_after_later_dial_polling() {
+    for ignore_tone in [false, true] {
+        let peer = peer("FM", ignore_tone);
+        let mut s = station(&peer, true, 0);
+        let receipt = s.queue_dial(433.5, "70cm");
+        s.step();
+        assert_eq!(
+            matches!(receipt.outcome(), Outcome::Applied { .. }),
+            !ignore_tone
+        );
+        if ignore_tone {
+            assert!(matches!(receipt.outcome(), Outcome::Unknown { .. }));
+        }
+        let initial = writes(&peer);
+        let initial_reads = peer
+            .lines
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|s| *s == "f")
+            .count();
+        for now in [200.0, 400.0, 800.0, 1000.0, 1600.0, 2400.0] {
+            s.state
+                .step(
+                    &s.engine,
+                    &mut s.backend,
+                    &mut s.rig,
+                    &no_sinks(),
+                    now,
+                    &mut mock_reopen_audio(),
+                    &mut mock_reopen_rig(),
+                    &mut StationSinks::new(),
+                )
+                .unwrap();
+        }
+        let later_reads = peer
+            .lines
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|s| *s == "f")
+            .count();
+        assert!(
+            later_reads > initial_reads,
+            "the test must actually run later native dial polls"
+        );
+        assert_eq!(writes(&peer).into_iter().filter(|s| s != "T 0").collect::<Vec<_>>(),
+            initial.into_iter().filter(|s| s != "T 0").collect::<Vec<_>>(),
+            "later CAT observations must not replay an uncertain remote transaction; ignored tone: {ignore_tone}");
+        assert!(!engine_lock(&s.engine).tx_enabled());
+        assert!(s.backend.played.is_empty());
+    }
+}
