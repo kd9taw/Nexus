@@ -20,7 +20,7 @@ impl Adjustment {
                 if level == RadioLevel::NotchFrequency {
                     "1500"
                 } else {
-                    "0.35"
+                    "0.350"
                 }
             ),
             Self::Filter => format!("M {mode} 2300"),
