@@ -259,3 +259,23 @@
 .cockpit-header--brief .ch-freq-extras,
 .cockpit-header--brief .ch-band,
 .cockpit-header--brief .cockpit-pwr { display: none; }
+
+/* Compact header chrome keeps every stop control outside optional detail. */
+.cockpit-header--quick {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: .4em;
+  padding: .5em;
+}
+.cockpit-header--quick .ch-identity { min-width: 0; min-height: 0; margin: 0; }
+.cockpit-header--quick .remote-quick-details { grid-column: 2; grid-row: 1; padding: .3em .5em; min-height: 44px; }
+.cockpit-header--quick .ch-freq { grid-column: 1 / -1; min-width: 0; margin: 0; }
+.cockpit-header--quick .ch-mode-extras { grid-column: 1 / -1; }
+.cockpit-header--quick .ch-actions { grid-column: 1 / -1; min-width: 0; margin: 0; flex-wrap: wrap; gap: .35em; }
+.cockpit-header--brief .panels-menu,
+.cockpit-header--brief .ph-mode-btn:not([aria-pressed='true']) { display: none; }
+.cockpit-header--quick .amp-strip { flex-wrap: wrap; max-width: 100%; gap: .35em; }
+.cockpit-header--quick .amp-strip button {
+  color: var(--text); background: var(--panel); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); min-height: 32px; padding: .35em .5em;
+}

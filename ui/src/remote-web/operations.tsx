@@ -1,3 +1,4 @@
+import { useRemotePresentation } from './presentation'
 import { useContext, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { LogEntry } from '../components/LogEntry'
 import { t } from '../i18n'
@@ -110,6 +111,7 @@ export function RemoteLogEntry({
   onOpenLog,
   selectedCall
 }: Omit<RecallProps, 'call' | 'bounded'> & { client: OperationClient; selectedCall?: string }) {
+  const display = useRemotePresentation()
   const view = useSyncExternalStore(client.subscribe, client.getSnapshot),
     available = useStationData()
   const [error, setError] = useState<string | null>(null),
@@ -179,7 +181,7 @@ export function RemoteLogEntry({
     )
   return (
     <div className="remote-log-entry" data-operation-error={error ?? undefined}>
-      <p className="dim">{t('remote.loggingHint')}</p>
+      <p className="dim" title={t('remote.loggingHint')}>{display?.presentation === 'quick' && !snap.fieldDay ? t('remote.quick.logbook') : t('remote.loggingHint')}</p>
       {logged && <p role="status">{t('remote.loggingSaved')}</p>}
       {view.submitting && <p role="status">{t('remote.loggingSaving')}</p>}
       {!view.submitting && (error || view.unresolved) && (

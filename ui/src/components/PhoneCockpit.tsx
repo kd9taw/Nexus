@@ -1437,7 +1437,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
           the dock below, none of them reachable from the ⊞ menu. */}
       {shown('scope') && (
         <>
-      <section hidden={!details} className="ph-scope-panel">
+      <section hidden={!details} className={`ph-scope-panel${!details ? ' ph-scope-panel--quiet' : ''}`}>
         <div className="ph-scope-head">
           {(() => {
             // Honest per feed: soundcard FFT = the demodulated RX audio; a native

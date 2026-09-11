@@ -189,6 +189,7 @@ export const EN = {
   "remote.quick.hunt": "Hunt",
   "remote.quick.log": "Log",
   "remote.quick.radioDetails": "Radio details",
+  "remote.quick.logbook": "General logbook",
   "remote.applicationObserver": "Monitoring only. Operating controls are not available in this preview.",
   "remote.viewUnavailable": "Remote support for this view is not available in this preview. Open this view in Nexus at the shack.",
   "remote.recallSnapshot": "Station log snapshot. Names, locations and notes come from previous contacts. Refresh to check for changes.",

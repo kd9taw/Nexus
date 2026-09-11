@@ -437,7 +437,8 @@
 
 /* Optional Remote contact presentation. The original keyed columns keep their
    parents and local state; this changes their visual order, never pane prefs. */
-.cockpit-panes.cockpit-panes--contact {
+.cockpit-panes--contact[data-flow='stack'],
+.cockpit-panes--contact[data-flow='fill'] {
   grid-template-columns: minmax(0, 1fr);
   grid-auto-rows: auto;
   overflow-y: auto;
@@ -445,4 +446,4 @@
 }
 .cockpit-col--contact { order: -1; }
 .cockpit-col--quiet { display: none; }
-.ph-scope-panel[hidden] { display: none; }
+.ph-scope-panel--quiet { display: none; }

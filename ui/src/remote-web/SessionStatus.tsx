@@ -31,7 +31,7 @@ export function SessionStatus({ client, stale, disconnect, display }: {
       {display && <button type="button" className="remote-button" onClick={() => {
         display.change(display.presentation === 'quick' ? 'full' : 'quick')
         setExpanded(false)
-      }}>{t(display.presentation === 'quick' ? 'remote.quick.full' : 'remote.quick.name')}</button>}
+      }}>{display.presentation === 'quick' ? t('remote.quick.full') : t('remote.quick.name')}</button>}
     </div>
   </div>
 }
