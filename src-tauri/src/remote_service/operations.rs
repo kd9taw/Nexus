@@ -269,6 +269,7 @@ pub struct Authority {
     hardware: Revocation,
     transmit: TransmitAuthority,
     stop_owner: Mutex<Option<transmit_stop::Owner>>,
+    transmit_revocations: Mutex<BTreeSet<String>>,
     #[cfg(test)]
     before_sync: Option<Box<dyn Fn() + Send + Sync>>,
 }
@@ -332,6 +333,20 @@ impl Authority {
             c.windows.clear();
             c.context = None;
             self.advance(c)?;
+        }
+        // A local revoke cannot wait behind a durable append. Retire its grant
+        // before any later heartbeat, state or command can consume Core again.
+        let revoked = std::mem::take(
+            &mut *self
+                .transmit_revocations
+                .lock()
+                .map_err(|_| "authorityUnavailable")?,
+        );
+        for device in revoked {
+            c.transmit_grants.remove(&device);
+            if c.lease.as_ref().is_some_and(|l| l.device == device) {
+                self.transmit.revoke();
+            }
         }
         if c.lease.as_ref().is_some_and(|l| now >= l.until) {
             self.revoke_execution();
@@ -419,7 +434,14 @@ impl Authority {
         if !identifier(device) {
             return Err("invalidRequest");
         }
-        let mut c = self.core.try_lock().map_err(|_| "remoteBusy")?;
+        if !allow {
+            self.revoke_transmit_device(device)?;
+        }
+        let mut c = match self.core.try_lock() {
+            Ok(c) => c,
+            Err(std::sync::TryLockError::WouldBlock) if !allow => return Ok(()),
+            Err(_) => return Err("remoteBusy"),
+        };
         self.reconcile(&mut c, Instant::now())?;
         if allow {
             if !c.control_grants.contains(device) {

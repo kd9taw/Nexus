@@ -15,6 +15,28 @@ pub(super) struct Owner {
 }
 
 impl Authority {
+    pub(super) fn revoke_transmit_device(&self, device: &str) -> Result<(), &'static str> {
+        {
+            let mut pending = self
+                .transmit_revocations
+                .lock()
+                .map_err(|_| "authorityUnavailable")?;
+            // This local-only queue is bounded independently of a blocked file.
+            if pending.len() >= 64 && !pending.contains(device) {
+                return Err("remoteBusy");
+            }
+            pending.insert(device.to_owned());
+        }
+        let mut owner = self.stop_owner.lock().map_err(|_| "authorityUnavailable")?;
+        if owner.as_ref().is_some_and(|o| o.device == device) {
+            self.transmit.revoke();
+            *owner = None;
+        }
+        // reconcile removes the queued grant before any subsequent command.
+        // Neither lock above acquires Core/Engine or performs external I/O.
+        Ok(())
+    }
+
     pub(super) fn sync_stop_owner(&self, c: &Core) {
         let owner = c
             .lease
