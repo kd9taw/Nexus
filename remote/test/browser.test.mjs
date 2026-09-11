@@ -797,6 +797,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       applicationAvailable=false
       await until(`document.querySelector('.app').dataset.remoteStale==='true'`)
       assert.equal(await evaluate(`document.querySelector('${call}')===window.__quickNodes.call&&document.querySelector('${call}').value==='N3QSO'&&document.querySelector('.${quickMode}-cockpit .le-log-btn').disabled&&document.querySelector('.${quickMode}-cockpit .amp-op').disabled`),true)
+      assert.equal(await evaluate(`getComputedStyle(document.querySelector('.shell')).visibility`),'hidden','stale station readings remain hidden while passive navigation stays available')
       await chooseView(quickMode==='cw'?'Phone':'CW',quickMode==='cw'?'phone':'cw')
       await chooseView(quickMode==='cw'?'CW':'Phone',quickMode)
       assert.equal(await evaluate(`document.querySelector('${call}').value`),'N3QSO')

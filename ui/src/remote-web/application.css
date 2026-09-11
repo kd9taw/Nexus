@@ -132,7 +132,9 @@
   height: 100%;
   object-fit: contain;
 }
-.app[data-remote-stale="true"] > :not(.remote-application-status) {
+/* Retire stale readings and station controls. Quick destinations contain only
+   browser navigation, so the operator can still leave a view or return to Full. */
+.app[data-remote-stale="true"] > :not(.remote-application-status, .remote-quick-nav) {
   visibility: hidden;
   pointer-events: none;
 }
