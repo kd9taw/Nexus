@@ -16,6 +16,7 @@
 mod field_day_display;
 mod mode_entry;
 pub mod radio_selection;
+pub mod remote_logging;
 pub mod remote_radio;
 pub mod remote_selection;
 mod remote_settings;
@@ -2051,6 +2052,7 @@ pub struct Engine {
     /// (WSJT-X "Prompt me to log QSO"). `Some` only while `prompt_to_log` is on
     /// and a finished contact is awaiting confirm/discard.
     pending_log: Option<QsoRecord>,
+    pending_log_identity: std::sync::Arc<()>,
     /// Whether the active QSO has already been auto-logged (so it logs exactly
     /// once when the sequencer reaches `Done`). Reset when a new QSO starts.
     qso_logged: bool,
@@ -4253,6 +4255,7 @@ impl Engine {
             stalled_qso: None,
             recent_partner: None,
             pending_log: None,
+            pending_log_identity: std::sync::Arc::new(()),
             qso_logged: false,
             qso_start_unix: None,
             cq_running: false,
@@ -8476,8 +8479,7 @@ impl Engine {
             let _ = std::fs::remove_file(path);
             return;
         };
-        let dto: crate::dto::LoggedQso = rec.clone().into();
-        let Ok(text) = serde_json::to_string(&dto) else {
+        let Ok(text) = remote_logging::pending_qso_json(rec) else {
             return;
         };
         if let Some(dir) = path.parent() {
@@ -8501,7 +8503,7 @@ impl Engine {
     /// held — a live hold outranks a restored one.
     pub fn load_pending_qso(&mut self, rec: QsoRecord) {
         if self.pending_log.is_none() {
-            self.pending_log = Some(rec);
+            self.replace_pending_log(Some(rec));
         }
     }
 
@@ -10190,14 +10192,14 @@ impl Engine {
     /// Confirm-and-log a QSO held by the prompt-to-log popup. `rec` is the
     /// (possibly operator-edited) record; logs it and clears the pending hold.
     pub fn confirm_pending_log(&mut self, rec: QsoRecord) {
-        self.pending_log = None;
+        self.replace_pending_log(None);
         self.persist_pending_qso(); // clears the journal — it's in the log now
         self.log_qso(rec);
     }
 
     /// Discard a QSO held by the prompt-to-log popup without logging it.
     pub fn discard_pending_log(&mut self) {
-        self.pending_log = None;
+        self.replace_pending_log(None);
         self.persist_pending_qso(); // clears the journal — the operator said no
     }
 
@@ -10216,10 +10218,26 @@ impl Engine {
     /// even if the sequence hasn't reached the final 73. Marks the QSO logged so it
     /// isn't also auto-logged on completion. Returns false outside a QSO / no DX.
     pub fn log_current_qso(&mut self) -> bool {
+        let Some(rec) = self.take_current_qso_record() else {
+            return false;
+        };
+        // Respect prompt-to-log just like auto-log.
+        if self.settings.prompt_to_log {
+            self.replace_pending_log(Some(rec));
+            self.persist_pending_qso();
+        } else {
+            self.log_qso(rec);
+        }
+        true
+    }
+
+    /// Shared eligibility, captured fields and write-once transition for the
+    /// local Log QSO button and its remote equivalent. No transport policy here.
+    fn take_current_qso_record(&mut self) -> Option<QsoRecord> {
         // Write-once: if this contact was already logged (manual double-click, or
         // it auto-logged on completion), don't log it again.
         if self.qso_logged {
-            return false;
+            return None;
         }
         let (dxcall, dxgrid, rx_report, report_impossible) = match &self.mode {
             Mode::Qso { station, .. } => match &station.dxcall {
@@ -10247,10 +10265,10 @@ impl Engine {
                         }
                         (st.dxcall, st.dxgrid, st.rx_report, false)
                     }
-                    None => return false,
+                    None => return None,
                 },
             },
-            _ => return false,
+            _ => return None,
         };
         // Don't create a report-LESS record: a QSO isn't a contact until at least one
         // signal report has been exchanged (WSJT-X only logs after the report exchange).
@@ -10265,20 +10283,12 @@ impl Engine {
         // a CQ with nobody on it, and a QSO we have only listened to, stay unloggable
         // exactly as before.
         if rx_report.is_none() && self.qso_report_sent.is_none() && !report_impossible {
-            return false;
+            return None;
         }
         let rec = self.qso_record(dxcall, dxgrid, rx_report);
         self.qso_logged = true;
-        self.qso_start_unix = None; // contact logged — the next QSO stamps a fresh start
-                                    // Respect prompt-to-log just like auto-log: hold for the confirm popup
-                                    // instead of writing silently, so manual + auto behave the same.
-        if self.settings.prompt_to_log {
-            self.pending_log = Some(rec);
-            self.persist_pending_qso(); // a real contact — journal it before the popup waits
-        } else {
-            self.log_qso(rec);
-        }
-        true
+        self.qso_start_unix = None;
+        Some(rec)
     }
 
     /// Operator in-QSO free text (WSJT-X Tx5): override the next transmission with
@@ -15048,7 +15058,7 @@ impl Engine {
                     let rec = self.rtty_qso_record(&call, &exchange);
                     if self.settings.prompt_to_log {
                         // Hold for the operator's confirm-before-log popup.
-                        self.pending_log = Some(rec);
+                        self.replace_pending_log(Some(rec));
                         self.persist_pending_qso(); // journal before the popup waits
                     } else {
                         self.log_qso(rec);
@@ -18616,7 +18626,7 @@ impl Engine {
                 if self.settings.prompt_to_log {
                     // Hold for the operator's confirm-before-log popup instead of
                     // writing it silently.
-                    self.pending_log = Some(rec);
+                    self.replace_pending_log(Some(rec));
                     self.persist_pending_qso(); // journal before the popup waits
                 } else {
                     self.log_qso(rec);

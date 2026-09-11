@@ -20903,9 +20903,7 @@ pub fn run() {
         // journal just means there was nothing pending.
         eng.set_pending_qso_path(pending_qso_path());
         if let Ok(text) = std::fs::read_to_string(pending_qso_path()) {
-            if let Ok(q) = serde_json::from_str::<tempo_app::dto::LoggedQso>(&text) {
-                eng.load_pending_qso(q.into());
-            }
+            eng.load_pending_qso_json(&text);
         }
         // Restore-on-launch (spec §1.1): if the operator left the Field Day
         // master switch on, re-enter FD (passive S&P) so a crash/restart during a
