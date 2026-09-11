@@ -75,6 +75,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A long over went silent partway through and left the rig keyed.** WSPR transmitted for about
+  twenty seconds, the audio stopped, the power meter fell to zero — and the radio stayed on the air
+  for the remaining ninety seconds of the over, every over. Reported on an FTdx10 under Ubuntu.
+
+  Nexus hands the sound card a whole transmission at once, and the card's buffer held twenty
+  seconds of it. An FT8 over is thirteen seconds and fitted; a WSPR over is a hundred and twelve and
+  did not, so four fifths of it was thrown away before a single sample played, while the
+  transmitter was held up for the length of the over Nexus *meant* to send. The transmission is now
+  fed to the card as it plays instead of all at once, so the whole of it goes out and the
+  transmitter drops when the audio really ends.
+
+  WSPR was the report, but it was never only WSPR: JT65, Q65 at 30 s and longer, FST4 and FST4W at
+  30 s and longer — FST4W-1800 was putting twenty-nine minutes of unmodulated carrier on the air per
+  over — and a long PSK31 send, which can run two to three minutes. FT8, FT4, FT2, MSK144 and the
+  15-second Q65/FST4 periods always fitted and were never affected. SSTV, CW, RTTY and the tune
+  carrier feed the card as they go and were never affected either.
+
 - **An AM contact was logged as SSB.** Work someone on AM from the Phone screen and Nexus wrote the
   QSO to your logbook as SSB — including on 14.286, the 20 m AM calling frequency. The Phone screen
   had only two answers for what mode you were on, FM and SSB, and everything that was not FM came
