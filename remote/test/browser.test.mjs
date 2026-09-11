@@ -351,6 +351,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
           }else if(a.action==='radio.mode'){
             const dial={digital:7.074,cw:7.030,phone:7.150,rtty:7.080,keyboard:7.070}[a.mode]
             assert.ok(dial);assert.equal(a.followFrequency,true)
+            if(radioSelection)adoptBrowserRadio(a.mode==='phone'?2:1)
             applicationData.get_snapshot.radio.operatingMode=a.mode;applicationData.get_snapshot.radio.dialMhz=dial
             if(a.mode==='cw'||a.mode==='phone')applicationData.get_snapshot.radio.filterWidthHz=a.mode==='cw'?500:2400
             assert.equal(applicationData.get_snapshot.radio.txEnabled,false)
@@ -635,19 +636,38 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         assert.equal(stationRequests.at(-1).action.action,'radio.frequency')
         assert.equal(stationRequests.at(-1).action.dialMhz,mhz)
       }
+      // Mode entry may route again. Keep the actual cockpit entry button,
+      // then require the next gesture to use the newly selected radio token.
+      for(const [tab,mode,id] of [['Phone','phone',2],['CW','cw',1]]){
+        const before=stationRequests.length,context=controlContext()
+        const entry=`document.querySelector('.${mode}-cockpit .remote-mode-entry')`
+        await click(button(tab));await settledLayout()
+        await until(`!!${entry}&&!${entry}.disabled`)
+        assert.equal(stationRequests.length,before,'navigation alone does not retune')
+        await measure(entry,'routed-mode')
+        await fresh();await click(entry)
+        await until(`!${entry}`)
+        await until(`${pill(id)}?.getAttribute('aria-pressed')==='true'`)
+        await until(`document.querySelector('.remote-control-result')?.textContent.includes('confirmed')`)
+        assert.equal(stationRequests.length,before+1)
+        assert.deepEqual(stationRequests.at(-1).action,{action:'radio.mode',mode,followFrequency:true})
+        assert.deepEqual(stationRequests.at(-1).context,context)
+        assert.equal(context.radioId,id===2?1:2)
+        assert.equal(applicationData.get_snapshot.radio.txEnabled,false)
+      }
       await click(button('Settings'));await until(`!!document.querySelector('.settings-form')`);await click(button('Radio'))
       await until(`${card(1)}?.classList.contains('active')`)
       assert.equal(await evaluate(`document.querySelectorAll('.radio-card').length`),2)
       stationControls=false
       await until(`[...(${card(2)}?.querySelectorAll('button')??[])].find(e=>e.textContent==='Make active')?.disabled===true`)
-      assert.equal(stationRequests.length,5)
+      assert.equal(stationRequests.length,7)
       assert.equal(exceptions,0);assert.equal(unexpectedMessages,0)
       if(artifacts){
         const shot=await browser.call('Page.captureScreenshot',{format:'png'},session)
         await writeFile(join(artifacts,'radio-selection.png'),Buffer.from(shot.data,'base64'))
-        await writeFile(join(artifacts,'radio-selection-results.json'),JSON.stringify({actions:stationRequests.map(r=>({action:r.action,context:r.context})),observerRefusal:true,revocationRefusal:true,profilesRetained:true,routedFrequency:true,selectionGeometry,exchanges,exceptions,unexpectedMessages},null,2))
+        await writeFile(join(artifacts,'radio-selection-results.json'),JSON.stringify({actions:stationRequests.map(r=>({action:r.action,context:r.context})),observerRefusal:true,revocationRefusal:true,profilesRetained:true,routedFrequency:true,routedMode:true,selectionGeometry,exchanges,exceptions,unexpectedMessages},null,2))
       }
-      console.log('Compiled radio selection: existing switcher, Settings and routed frequency, changing radio context, retained profiles and revoked permission passed');return
+      console.log('Compiled radio selection: existing switcher, Settings, routed frequency and mode, changing radio context, retained profiles and revoked permission passed');return
     }
     if(workSpot){
       const row=call=>`[...document.querySelectorAll('.np-row')].find(e=>e.textContent.includes('${call}'))`
