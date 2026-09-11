@@ -6614,11 +6614,30 @@ impl Engine {
         split_up_khz: Option<f64>,
         arm_manual: bool,
     ) {
+        self.work_spot_split_with_reset(
+            mode,
+            freq_mhz,
+            band,
+            split_up_khz,
+            arm_manual,
+            modes::reset_ft8_a7,
+        );
+    }
+
+    fn work_spot_split_with_reset(
+        &mut self,
+        mode: &str,
+        freq_mhz: f64,
+        band: &str,
+        split_up_khz: Option<f64>,
+        arm_manual: bool,
+        reset: impl FnMut(),
+    ) {
         self.set_operating_mode_with_arming(mode, false, arm_manual);
-        self.set_frequency(freq_mhz, band, "USB"); // clears split + arms the retune
-                                                   // Working a spot carries explicit mode intent — drop any manual override (even same-band)
-                                                   // so the spot's band-auto sideband applies (10 m mixes FM + SSB, so a stale FM override
-                                                   // must not key FM onto an SSB spot).
+        self.tune_dial_with_reset(freq_mhz, band, "USB", DialOrigin::Operator, reset);
+        // Working a spot carries explicit mode intent — drop any manual override (even same-band)
+        // so the spot's band-auto sideband applies (10 m mixes FM + SSB, so a stale FM override
+        // must not key FM onto an SSB spot).
         self.sideband_override = None;
         if let Some(up) = split_up_khz {
             self.split_tx_mhz = Some(freq_mhz + up / 1000.0);

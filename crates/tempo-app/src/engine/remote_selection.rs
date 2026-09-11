@@ -30,8 +30,18 @@ struct RoutedTune {
 struct ModeEntry {
     mode: String,
     follow_frequency: bool,
+    spot_call: Option<String>,
     power_limit: Option<f32>,
     prior_power: (Option<f32>, Option<f32>),
+}
+
+/// Validated native spot intent; never a profile patch or hardware command.
+pub(super) struct RoutedSpot {
+    pub mode: String,
+    pub dial_mhz: f64,
+    pub band: String,
+    pub call: String,
+    pub power_limit: Option<f32>,
 }
 
 /// Final position read by the incoming connection owner, never a browser DTO.
@@ -130,7 +140,38 @@ impl Engine {
                 mode_entry: Some(ModeEntry {
                     mode: mode.into(),
                     follow_frequency,
+                    spot_call: None,
                     power_limit,
+                    prior_power: (self.rf_power, self.rig_rf_power),
+                }),
+            }),
+            connection,
+            permit,
+        )
+    }
+
+    pub(super) fn queue_remote_routed_spot(
+        &mut self,
+        id: u32,
+        spot: RoutedSpot,
+        connection: u64,
+        permit: Permit,
+    ) -> Result<Completion, Reason> {
+        if !self.remote_selection_host_ready {
+            return Err(Reason::UnsupportedAction);
+        }
+        self.queue_remote_selection(
+            id,
+            Some(RoutedTune {
+                dial_mhz: spot.dial_mhz,
+                band: spot.band,
+                sideband: "USB".into(),
+                band_mode: None,
+                mode_entry: Some(ModeEntry {
+                    mode: spot.mode,
+                    follow_frequency: false,
+                    spot_call: Some(spot.call),
+                    power_limit: spot.power_limit,
                     prior_power: (self.rf_power, self.rig_rf_power),
                 }),
             }),
@@ -227,8 +268,9 @@ impl Request {
             }
             let routed = if let Some(entry) = &tune.mode_entry {
                 let prepared = engine.prepare_mode_entry(&entry.mode, entry.follow_frequency);
-                if prepared.frequency != Some((tune.dial_mhz, tune.sideband.clone()))
-                    || engine.settings.band != tune.band
+                if (entry.spot_call.is_none()
+                    && (prepared.frequency != Some((tune.dial_mhz, tune.sideband.clone()))
+                        || engine.settings.band != tune.band))
                     || engine.settings.radio_pegged
                     || (engine.rf_power, engine.rig_rf_power) != entry.prior_power
                 {
@@ -389,12 +431,24 @@ impl Request {
         let incoming = self.settings().active_radio;
         if let Some(tune) = &self.tune {
             if let Some(entry) = &tune.mode_entry {
-                engine.set_operating_mode_with_reset(
-                    &entry.mode,
-                    entry.follow_frequency,
-                    false,
-                    || decoder.reset_held(),
-                );
+                if let Some(call) = &entry.spot_call {
+                    engine.work_spot_split_with_reset(
+                        &entry.mode,
+                        tune.dial_mhz,
+                        &tune.band,
+                        None,
+                        false,
+                        || decoder.reset_held(),
+                    );
+                    engine.note_work_call(Some(call.clone()));
+                } else {
+                    engine.set_operating_mode_with_reset(
+                        &entry.mode,
+                        entry.follow_frequency,
+                        false,
+                        || decoder.reset_held(),
+                    );
+                }
             } else if let Some(mode) = &tune.band_mode {
                 engine.pick_band_with_reset(&tune.band, Some(mode), || decoder.reset_held());
             } else {
@@ -1027,6 +1081,107 @@ mod tests {
             .cat
             .unwrap()
             .connection_generation
+    }
+
+    #[test]
+    fn routed_spot_matches_native_exact_dial_contact_context_and_profile_memory() {
+        use crate::settings::{OperatingMode, RouteMode, RoutingRule};
+        for (mode, dial, band, am) in [
+            ("cw", 7.031, "40m", false),
+            ("phone", 7.183, "40m", false),
+            ("phone", 14.267, "20m", true),
+        ] {
+            let (mut engine, incoming, _) = station();
+            engine.settings.operating_mode = OperatingMode::Phone;
+            engine.set_frequency(14.250, "20m", "USB");
+            engine.take_immediate_retune();
+            engine.settings.routing_rules = vec![RoutingRule {
+                mode: Some(if mode == "cw" {
+                    RouteMode::Cw
+                } else {
+                    RouteMode::Ssb
+                }),
+                radio: incoming,
+                ..RoutingRule::default()
+            }];
+            engine.configure_remote_selection_host(true);
+            engine.rf_power = Some(0.8);
+            engine.sideband_override = am.then(|| "AM".into());
+            let mut native = Engine::with_settings(engine.settings.clone());
+            // The initial dial must not run the destination routing rule.
+            native.settings.radio_pegged = true;
+            native.set_frequency(14.250, "20m", "USB");
+            native.settings.radio_pegged = false;
+            native.freq_memory = engine.freq_memory.clone();
+            native.rf_power = engine.rf_power;
+            native.sideband_override = engine.sideband_override.clone();
+            native.set_tx_enabled(false);
+            native.work_spot_split_with_arming(mode, dial, band, None, false);
+            native.note_work_call(Some("W1AW/P".into()));
+            native.take_immediate_retune();
+            let original = engine.settings.clone();
+            let tick = engine.work_tick;
+            let generation = refresh(&mut engine);
+            let authority = Revocation::default();
+            let receipt = engine
+                .queue_remote_spot(mode, dial, band, "w1aw/p", generation, permit(&authority))
+                .unwrap();
+            assert_eq!(engine.settings, original);
+            assert_eq!(engine.work_tick, tick);
+            let request = engine.take_remote_radio_selection().unwrap();
+            assert_eq!(request.settings(), native.settings());
+            if am {
+                assert_eq!(
+                    request.configuration(&engine).unwrap().power_limit,
+                    Some(0.25)
+                );
+            }
+            assert!(commit(request, &mut engine, |_| {}));
+            assert!(matches!(
+                receipt.outcome(),
+                Outcome::Applied {
+                    evidence: Evidence::RadioReadback
+                }
+            ));
+            assert_eq!(engine.settings, native.settings);
+            assert_eq!(engine.freq_memory, native.freq_memory);
+            assert_eq!(engine.rf_power, native.rf_power);
+            assert_eq!(engine.work_view, native.work_view);
+            assert_eq!(engine.work_call, native.work_call);
+            assert_eq!(engine.work_tick, tick + 1);
+            assert!(engine.sideband_override.is_none());
+            assert!(!engine.tx_enabled());
+            assert!(!engine.immediate_retune);
+            let saved: Settings = serde_json::from_slice(
+                &std::fs::read(engine.remote_settings_path.as_ref().unwrap()).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(saved, engine.settings);
+        }
+    }
+
+    #[test]
+    fn spot_leaving_am_prepares_the_native_entry_power_on_the_same_radio() {
+        let (mut engine, _, _) = station();
+        engine.settings.operating_mode = crate::settings::OperatingMode::Phone;
+        engine.settings.max_power_phone = Some(0.8);
+        engine.rf_power = Some(0.8);
+        engine.sideband_override = Some("AM".into());
+        let generation = refresh(&mut engine);
+        let authority = Revocation::default();
+        let _receipt = engine
+            .queue_remote_spot(
+                "phone",
+                14.267,
+                "20m",
+                "W1AW",
+                generation,
+                permit(&authority),
+            )
+            .unwrap();
+        let request = engine.take_remote_radio().unwrap();
+        assert_eq!(request.power_limit(), Some(0.25));
+        assert_eq!(engine.rf_power, Some(0.8), "preparation remains passive");
     }
 
     #[test]

@@ -567,7 +567,14 @@ reset order. Entry without a QSY keeps the active radio. A mode power ceiling is
 confirmed before adoption, retaining a lower incoming level through later polls.
 Changing the section does not arm Remote transmission.
 
-Combined routed workspace/spot changes, repeater-channel holds and satellite/split transactions,
+CW and Phone Work spots use the same incoming-radio owner when routing selects
+another radio. The exact spot dial is the only tuning target. Native Work owns
+mode entry, outgoing memory, override cleanup and the contact/navigation hint;
+those effects occur only after confirmed hardware adoption. A canceled or
+unconfirmed handoff leaves the original contact context intact. Transient AM
+entry retains its native power reduction even when the spot ends in SSB.
+
+Combined routed workspace changes, repeater-channel holds and satellite/split transactions,
 band-memory/spot shortcuts, scope dragging, continuous scanning and attended hardware/WAN
 acceptance remain incomplete. A compatible station build is required; this
 source increment does not update existing installations or establish paid readiness.

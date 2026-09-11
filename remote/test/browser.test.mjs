@@ -200,9 +200,9 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       doc.revision=createHash('sha256').update(JSON.stringify(doc.settings)).digest('hex')
     }
     let radioConnection=1
-    const controlContext=()=>({radioId:radioSelection?applicationData.get_snapshot.activeRadioId:1,radioConnection,ampConnection:1,ampReadSequence:1})
+    const controlContext=()=>({radioId:(radioSelection||workSpot)?applicationData.get_snapshot.activeRadioId:1,radioConnection,ampConnection:1,ampReadSequence:1})
     const adoptBrowserRadio=id=>{
-      assert.ok(radioSelection&&[1,2].includes(id))
+      assert.ok((radioSelection||workSpot)&&[1,2].includes(id))
       assert.equal(applicationData.get_snapshot.radio.txEnabled,false)
       if(applicationData.get_snapshot.activeRadioId===id)return
       radioConnection++
@@ -215,7 +215,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       fixture.station.radio.id=id
       for(const key of ['cat','dial','mode','ptt'])if(fixture.station.radio.readings[key])fixture.station.radio.readings[key]={connectionGeneration:radioConnection,readSequence:1,ageMs:0}
     }
-    if(radioSelection){
+    if(radioSelection||workSpot){
       const doc=navigation.documents.settings
       doc.settings.radios=[1,2].map(id=>({...structuredClone(doc.settings.radios[0]),id,name:`Test radio ${id}`,rigctldPort:4532+id}))
       doc.revision=createHash('sha256').update(JSON.stringify(doc.settings)).digest('hex')
@@ -305,6 +305,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
             else if(a.receiver==='aprs')applicationData.get_remote_aprs_state.health.arm=a.on?'auto':'off'
             else applicationData[`get_${a.receiver}_state`].armed=a.on
           }else if(a.action==='radio.workSpot'){
+            if(workSpot)adoptBrowserRadio(applicationData.get_snapshot.activeRadioId===1?2:1)
             assert.ok(workSpot&&['cw','phone'].includes(a.mode));assert.equal(a.band,'20m');assert.equal(applicationData.get_snapshot.radio.txEnabled,false)
             Object.assign(applicationData.get_snapshot.radio,{operatingMode:a.mode,dialMhz:a.dialMhz,band:a.band,sideband:'USB',sidebandOverride:null,rigMode:a.mode==='cw'?'CW':'USB',rigKeyed:false})
             Object.assign(applicationData.get_snapshot,{workTick:(applicationData.get_snapshot.workTick??0)+1,workView:a.mode,workCall:a.call.toUpperCase()})
@@ -692,12 +693,15 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       assert.equal(stationRequests.length,0,'digital Work is still unsupported and cannot fall back to a plain QSY')
       const work=async(call,mode)=>{
         await click(button('Needed'));await until(`!!${row(call)}`);await fresh()
-        const before=stationRequests.length;await click(row(call))
+        const before=stationRequests.length,context=controlContext();await click(row(call))
         await until(visible(mode));await until(`document.querySelector('.remote-control-result')?.textContent.includes('confirmed')`)
         assert.equal(stationRequests.length,before+1)
         assert.equal(stationRequests.at(-1).action.action,'radio.workSpot')
         assert.equal(stationRequests.at(-1).action.call,call)
         assert.equal(stationRequests.at(-1).action.mode,mode)
+        assert.deepEqual(stationRequests.at(-1).context,context)
+        assert.equal(applicationData.get_snapshot.activeRadioId,context.radioId===1?2:1)
+        assert.ok(radioConnection>context.radioConnection)
         assert.equal(applicationData.get_snapshot.radio.txEnabled,false)
       }
       await work('N2DXCW','cw');await until(`${input('cw')}?.value==='N2DXCW'`)
@@ -761,7 +765,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       assert.equal(loggedRequests.length,1);assert.equal(exceptions,0);assert.equal(unexpectedMessages,0)
       if(artifacts){
         const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'dx-recovered-needed.png'),Buffer.from(shot.data,'base64'))
-        await writeFile(join(artifacts,'dx-results.json'),JSON.stringify({stationActions:stationRequests.map(r=>r.action),log:loggedRequests.map(r=>r.record),nativeBroadcastIgnored:true,independentDrafts:true,originalLogContext:true,explicitReplacement:true,draftLayouts,lostResultNotReplayed:true,exceptions,unexpectedMessages},null,2))
+        await writeFile(join(artifacts,'dx-results.json'),JSON.stringify({stationActions:stationRequests.map(r=>r.action),stationContexts:stationRequests.map(r=>r.context),routedRadioContext:true,log:loggedRequests.map(r=>r.record),nativeBroadcastIgnored:true,independentDrafts:true,originalLogContext:true,explicitReplacement:true,draftLayouts,lostResultNotReplayed:true,exceptions,unexpectedMessages},null,2))
       }
       console.log('Compiled DX Work: four exact spot actions, independent drafts, original log context, explicit replacement and lost-result recovery passed');return
     }

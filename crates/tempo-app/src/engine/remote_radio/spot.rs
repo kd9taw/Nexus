@@ -1,6 +1,7 @@
 //! Receive-only CW/Phone spot entry through the existing radio transaction.
-//! Mode and exact spot frequency are one intent. Digital tier changes, split
-//! and radio handoffs require their own complete contracts.
+//! Mode and exact spot frequency are one intent. Digital tier changes and split
+//! require their own complete contracts. Routed spots share the station-owned
+//! incoming-radio transaction and native atomic Work verb.
 use super::*;
 
 impl Engine {
@@ -40,18 +41,15 @@ impl Engine {
         projected.dial_mhz = (dial_mhz * 1e6).round() / 1e6;
         projected.band = band.into();
         projected.sideband = "USB".into();
-        if !projected.radio_pegged
-            && projected
-                .route_radio(
-                    band,
-                    self.route_mode_for(band, projected.dial_mhz, operating_mode),
-                )
-                .is_some_and(|id| id != projected.active_radio)
-        {
-            return Err(Reason::UnsupportedAction);
-        }
         let mode_target = projected.rig_mode();
-        let ceiling = if mode_target == "AM" {
+        // Native Work enters the section before clearing a temporary override.
+        // Preserve its power reduction even when the final spot mode is SSB.
+        let ceiling = if operating_mode == OperatingMode::Phone
+            && self
+                .sideband_override
+                .as_deref()
+                .is_some_and(|m| m.eq_ignore_ascii_case("AM"))
+        {
             projected.rf_power_ceiling_am()
         } else {
             projected.rf_power_ceiling()
@@ -64,6 +62,28 @@ impl Engine {
         });
         if power_limit.is_some_and(|p| !p.is_finite() || !(0.0..=1.0).contains(&p)) {
             return Err(Reason::ReadingUnavailable);
+        }
+        if !projected.radio_pegged {
+            if let Some(id) = projected
+                .route_radio(
+                    band,
+                    self.route_mode_for(band, projected.dial_mhz, operating_mode),
+                )
+                .filter(|id| *id != projected.active_radio)
+            {
+                return self.queue_remote_routed_spot(
+                    id,
+                    super::super::remote_selection::RoutedSpot {
+                        mode: mode.into(),
+                        dial_mhz: projected.dial_mhz,
+                        band: band.into(),
+                        call: call.to_ascii_uppercase(),
+                        power_limit,
+                    },
+                    connection,
+                    permit,
+                );
+            }
         }
         self.queue_remote_target(
             Target {

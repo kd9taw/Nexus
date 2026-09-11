@@ -910,3 +910,150 @@ fn routed_mode_refuses_an_acknowledged_but_unapplied_power_ceiling() {
         assert!(s.backend.played.is_empty());
     }
 }
+
+#[test]
+fn routed_spot_commits_exact_contact_context_only_after_confirmed_incoming_tuning() {
+    for warm in [false, true] {
+        for confirmed in [false, true] {
+            for (mode, cat) in [("cw", "CWR"), ("phone", "LSB")] {
+                let outgoing = retuning_peer(14_074_000, "PKTUSB", |_, _| None);
+                let incoming = retuning_peer(7_100_000, "LSB", move |line, _| {
+                    (!confirmed && line == "F 7031450").then(|| "RPRT 0\n".into())
+                });
+                let mut s = configured_station(&outgoing, |settings| {
+                    settings.radios[1].bands = vec!["40m".into()];
+                });
+                engine_lock(&s.engine).configure_remote_selection_host(true);
+                let original = engine_lock(&s.engine).settings().clone();
+                let pool = Arc::new(MonitorConnections::new(if warm {
+                    vec![connection(&s, &incoming)]
+                } else {
+                    vec![]
+                }));
+                let tick = engine_lock(&s.engine).snapshot().work_tick;
+                let receipt = {
+                    let mut engine = engine_lock(&s.engine);
+                    let connection = engine
+                        .remote_monitor_observation()
+                        .radio
+                        .readings
+                        .cat
+                        .unwrap()
+                        .connection_generation;
+                    engine
+                        .queue_remote_spot(
+                            mode,
+                            7.03145,
+                            "40m",
+                            "N2SPOT/P",
+                            connection,
+                            s.authority
+                                .permit(Instant::now() + Duration::from_secs(5))
+                                .unwrap(),
+                        )
+                        .unwrap()
+                };
+                assert_eq!(engine_lock(&s.engine).settings(), &original);
+                apply(&mut s, &pool, |_| {
+                    (Rig::rigctld(&incoming.address), None, Some(true))
+                });
+                assert_eq!(
+                    matches!(
+                        receipt.outcome(),
+                        Outcome::Applied {
+                            evidence: Evidence::RadioReadback
+                        }
+                    ),
+                    confirmed,
+                    "{:?}",
+                    receipt.outcome()
+                );
+                if !confirmed {
+                    assert!(matches!(receipt.outcome(), Outcome::Unknown { .. }));
+                }
+                let incoming_writes = super::fm::writes(&incoming);
+                let outgoing_writes = super::fm::writes(&outgoing);
+                assert_eq!(
+                    incoming_writes
+                        .iter()
+                        .filter(|line| line.starts_with("F "))
+                        .collect::<Vec<_>>(),
+                    vec![&"F 7031450".to_string()]
+                );
+                assert!(!outgoing_writes
+                    .iter()
+                    .any(|line| line.starts_with("F ") || line.starts_with("M ")));
+                let active_peer = if confirmed { &incoming } else { &outgoing };
+                let reads = active_peer
+                    .lines
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|line| *line == "f")
+                    .count();
+                let started = now_unix_ms();
+                for delta in [200.0, 400.0, 800.0, 1600.0, 2400.0] {
+                    s.state
+                        .step(
+                            &s.engine,
+                            &mut s.backend,
+                            &mut s.rig,
+                            &no_sinks(),
+                            started + delta,
+                            &mut mock_reopen_audio(),
+                            &mut mock_reopen_rig(),
+                            &mut StationSinks::new(),
+                        )
+                        .unwrap();
+                }
+                assert!(
+                    active_peer
+                        .lines
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .filter(|line| *line == "f")
+                        .count()
+                        > reads,
+                    "the subsequent native ticks must perform actual dial polling"
+                );
+                let without_unkey = |lines: Vec<String>| {
+                    lines
+                        .into_iter()
+                        .filter(|line| line != "T 0")
+                        .collect::<Vec<_>>()
+                };
+                assert_eq!(
+                    without_unkey(super::fm::writes(&incoming)),
+                    without_unkey(incoming_writes)
+                );
+                assert_eq!(
+                    without_unkey(super::fm::writes(&outgoing)),
+                    without_unkey(outgoing_writes)
+                );
+                let e = engine_lock(&s.engine);
+                assert_eq!(e.settings().active_radio, if confirmed { 1 } else { 0 });
+                if confirmed {
+                    let saved: Settings =
+                        serde_json::from_slice(&std::fs::read(&s.path).unwrap()).unwrap();
+                    assert_eq!(saved.dial_mhz, 7.03145);
+                    assert_eq!(e.snapshot().work_tick, tick + 1);
+                    assert_eq!(e.snapshot().work_view.as_deref(), Some(mode));
+                    assert_eq!(e.snapshot().work_call.as_deref(), Some("N2SPOT/P"));
+                    assert!(super::fm::writes(&incoming)
+                        .iter()
+                        .any(|line| line.starts_with(&format!("M {cat} "))));
+                    assert_eq!(saved.active_radio, 1);
+                    assert_eq!(saved.radios[0].last_dial_mhz, original.dial_mhz);
+                } else {
+                    assert_eq!(e.settings(), &original);
+                    assert!(!s.path.exists());
+                    assert_eq!(e.snapshot().work_tick, tick);
+                    assert_eq!(e.snapshot().work_call, None);
+                }
+                assert!(!e.tx_enabled());
+                assert!(s.backend.played.is_empty());
+            }
+        }
+    }
+}

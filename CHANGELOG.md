@@ -26,6 +26,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Operating-section QSYs also follow the selected mode's rules. Section entry
   without a QSY keeps the active radio; routed entry confirms the incoming mode,
   dial and any power reduction before adopting it, and leaves transmit disarmed.
+- **Remote routed DX spots:** CW and Phone Work actions can select the radio
+  named by saved routing rules and tune the exact spot in one confirmed handoff.
+  Contact prefill and cockpit navigation follow successful adoption; failed
+  hardware confirmation does not change the active contact or queue a retry.
 - **Remote FM receiver controls:** Power, microphone gain, receiver DSP, AGC and
   bandwidth use the existing Nexus controls while receiving FM, retaining native
   control visibility. Commands preserve
