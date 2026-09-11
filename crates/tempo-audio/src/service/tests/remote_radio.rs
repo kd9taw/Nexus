@@ -139,7 +139,7 @@ fn saved_remote_rx_gain_reaches_the_existing_audio_owner_once_without_tx_or_a_re
     let peer = retuning_peer(14_074_000, "PKTUSB", |_, _| None);
     let mut s = Station::new(&peer);
     let reopens = std::cell::Cell::new(0);
-    let mut step = |s: &mut Station| {
+    let step = |s: &mut Station| {
         s.state
             .step(
                 &s.engine,
