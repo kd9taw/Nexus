@@ -19,7 +19,10 @@ import type { ControlCapability } from './station-operation'
 
 vi.mock('../api', async original => {
   const actual = await original<Record<string, unknown>>()
-  return Object.fromEntries(Object.entries(actual).map(([name, value]) => [name, typeof value === 'function' ? vi.fn(async () => null) : value]))
+  const reads: Record<string, unknown> = { getRigModels: [], getAllRigModels: [], getSerialPortsDetailed: [],
+    getBandPlan: [], getAudioDevices: { input: [], output: [] }, getCredentialsStatus: {}, detectRigs: [], appVersion: 'test' }
+  return Object.fromEntries(Object.entries(actual).map(([name, value]) => [name,
+    typeof value === 'function' ? vi.fn(async () => structuredClone(reads[name] ?? null)) : value]))
 })
 vi.mock('../toast', () => ({ pushToast: vi.fn(), withErrorToast: vi.fn(async (run: () => Promise<unknown>) => run()) }))
 import { setSettings, setRxGain, setTxLevel, updateRadioProfile, getSettings } from '../api'
@@ -117,7 +120,7 @@ it('cancels a whole drag after a local settings edit instead of rebasing later m
 it('losing and regaining observation during a drag requires a new gesture', async () => {
   const h = fixture(); await tick(); drag('2')
   h.rerender(h.view(h.radio, h.frame, false)); await tick()
-  expect(slider().disabled).toBe(true)
+  expect(screen.queryByRole('slider', { name: /RX capture gain/i })).toBeNull()
   h.rerender(h.view()); await tick()
   fireEvent.change(slider(), { target: { value: '3' } }); fireEvent.pointerUp(slider()); await tick()
   expect(h.writes()).toHaveLength(0)

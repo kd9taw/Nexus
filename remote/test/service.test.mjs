@@ -635,6 +635,10 @@ test('expanded operations preserve legacy clients, minimum peer versions and hib
   assert.equal(config.operationVersion, 2, 'old browsers must keep their original advertisement')
   assert.equal(config.operationMaxVersion, 3)
   for (const stationVersion of [1, 2, 3]) for (const browserVersion of [1, 2, 3]) {
+    const take = async (peer, kind, stage) => {
+      try { return await peer.take(type(kind)) }
+      catch (error) { throw new Error(`Operating versions ${stationVersion}/${browserVersion}, ${stage}: closed=${peer.closed}, code=${peer.closeCode}`, { cause: error }) }
+    }
     const pair = await app.paired(), live = await admitted(pair, 1, {
       'x-nexus-operation-version': String(Math.min(stationVersion, 2)),
       ...(stationVersion === 3 ? { 'x-nexus-operation-max-version': '3' } : {})
@@ -642,7 +646,7 @@ test('expanded operations preserve legacy clients, minimum peer versions and hib
     const send = request => live.browser.send({ type: 'operationRequest', ...(browserVersion >= 2 ? { operationVersion: browserVersion } : {}), request })
     const negotiated = Math.min(stationVersion, browserVersion), requestId = crypto.randomUUID()
     send({ type: 'state', requestId })
-    const forwarded = await live.station.take(type('operationRequest'))
+    const forwarded = await take(live.station, 'operationRequest', 'state request')
     assert.equal(forwarded.operationVersion, negotiated >= 2 ? negotiated : undefined)
     const state = { stationBootId: crypto.randomUUID(), allowed: true, phase: 'controlling', leaseId: crypto.randomUUID(), revision: 1,
       commandWindowId: crypto.randomUUID(), nextSequence: 1, leaseRemainingMs: 5000, actions: [], txArmed: false,
@@ -652,7 +656,7 @@ test('expanded operations preserve legacy clients, minimum peer versions and hib
     const wire = structuredClone(state)
     if (negotiated >= 2) wire.controls.capabilities = ['decoder', 'amplifier', 'frequency', 'mode', 'tier', 'ampFollowBand', 'workspace', 'decoderSettings','receiverSettings','receiverGain']
     live.station.send({ type: 'operationResponse', sessionId: forwarded.sessionId, requestId, value: wire })
-    assert.deepEqual((await live.browser.take(type('operationResponse'))).value, state)
+    assert.deepEqual((await take(live.browser, 'operationResponse', 'state response')).value, state)
     // A v1 client has no station-control envelope. v2 may keep using receiver
     // controls, while the v3-only decoder transition never reaches an old peer.
     if (browserVersion >= 2) {
@@ -663,15 +667,15 @@ test('expanded operations preserve legacy clients, minimum peer versions and hib
           context: { radioId: 1, radioConnection: 1, ampConnection: null, ampReadSequence: null }, action }
         send(command)
         if (negotiated < (action.action === 'decoder.clear' ? 2 : 3)) {
-          assert.equal((await live.browser.take(type('operationResponse'))).error, 'stationUnsupported')
+          assert.equal((await take(live.browser, 'operationResponse', `${action.action} unsupported response`)).error, 'stationUnsupported')
           await assert.rejects(live.station.take(type('operationRequest'), 100), /timeout/)
         } else {
-          const routed = await live.station.take(type('operationRequest'))
+          const routed = await take(live.station, 'operationRequest', `${action.action} request`)
           assert.deepEqual(routed.request, command); assert.equal(routed.operationVersion, negotiated)
           await app.evict(pair.stationId)
           live.station.send({ type: 'operationResponse', sessionId: routed.sessionId, requestId: command.requestId,
             value: { operation: 'stationControl', operationId: command.requestId, outcome: 'applied', evidence: ['amplifier.followBand','decoder.js8Speed','decoder.msk144Period','decoder.depth','receiver.rxOffset','receiver.rxGain'].includes(action.action) ? 'settingsSaved' : action.action.startsWith('radio.') ? 'radioReadback' : 'receiverState' } })
-          const response = await live.browser.take(type('operationResponse'))
+          const response = await take(live.browser, 'operationResponse', `${action.action} applied response`)
           assert.equal(response.requestId, command.requestId); assert.equal(response.value.outcome, 'applied')
         }
       }
