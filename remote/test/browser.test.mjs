@@ -506,7 +506,13 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
       for(const [label,selector,call,mode] of [['CW','.cw-cockpit','K1OPS','CW'],['Phone','.phone-cockpit','K2OPS','SSB'],['RTTY','.rtty-cockpit','K3OPS','RTTY'],['PSK','.psk-cockpit','K4OPS','QPSK31'],['JS8','.js8-cockpit','K5OPS','JS8']]){
         console.log('Logging form',label);await click(button(label));
         if(label==='JS8'){await until(`!!${button('Take logging control')}`);await click(button('Take logging control'))}await until(`!!document.querySelector('${selector} .remote-log-entry .le-call')`)
-        await click(`document.querySelector('${selector} .remote-log-entry .le-call')`);await browser.call('Input.insertText',{text:call},session)
+        await click(`document.querySelector('${selector} .remote-log-entry .le-call')`)
+        const focused=await evaluate(`document.activeElement===document.querySelector('${selector} .remote-log-entry .le-call')`)
+        assert.equal(focused,true,`${label} call input receives the actual mouse gesture`)
+        await browser.call('Input.insertText',{text:call},session)
+        const entered=await evaluate(`({value:document.querySelector('${selector} .remote-log-entry .le-call')?.value,active:document.activeElement?.outerHTML.slice(0,300)})`)
+        console.log('Contact input',label,entered)
+        assert.equal(entered.value,call,`${label} typed contact remains in its own form`)
         // Wait for an actual new native reply, rather than an arbitrary delay
         // that can land the positive control on the old window's last instant.
         // Expiry and burst refusal remain separate client/relay test cases.
