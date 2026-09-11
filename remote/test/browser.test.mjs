@@ -604,7 +604,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
           const before=stationRequests.length,context=controlContext()
           await click(button(view));await settledLayout()
           assert.equal(stationRequests.length,before,'navigation is passive')
-          const entry=`document.querySelector('${workspace==='js8'?'.js8-cockpit':'.grid-header'} .remote-mode-entry')`
+          const entry=`document.querySelector('${workspace==='js8'?'.js8-cockpit':workspace==='ft'?'.operate-cockpit':'.grid-header'} .remote-mode-entry')`
           await until(`!!${entry}&&!${entry}.disabled`)
           await measure(entry,'routed-workspace')
           await fresh();await click(entry)
