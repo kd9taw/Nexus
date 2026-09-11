@@ -24,7 +24,7 @@ vi.mock('../api', async importOriginal => {
 vi.mock('./useJs8Context', () => ({ useJs8Context: () => ({ remote: true, value: null, loading: false, refresh: () => {} }) }))
 vi.mock('../components/Waterfall', () => ({ Waterfall: () => <div/> }))
 vi.mock('../toast', () => ({ pushToast: vi.fn(), withErrorToast: vi.fn(async (run: () => Promise<unknown>) => run()) }))
-import { js8SetSpeed, js8Enter, setMsk144Period } from '../api'
+import { js8SetSpeed, js8Enter, setMsk144Period, setDecodeDepth } from '../api'
 import { pushToast } from '../toast'
 
 const clients: OperationClient[] = []
@@ -147,5 +147,15 @@ it.each(['JS8', 'MSK144'] as const)('%s keeps the local cockpit on the existing 
   const h = fixture(kind); h.rerender(h.view(h.snap, h.frame, true, true)); await tick()
   h.gesture(); await tick()
   expect(kind === 'JS8' ? js8SetSpeed : setMsk144Period).toHaveBeenCalledWith(kind === 'JS8' ? 3 : 5)
+  expect(h.writes()).toHaveLength(0)
+})
+
+it('does not offer decode depth through the local API in a Remote session without its capability', async () => {
+  const h = fixture('MSK144'); await tick()
+  const depth = h.container.querySelector<HTMLButtonElement>('.cockpit-depth-chip:last-child')!
+  expect(depth).toBeTruthy()
+  expect(depth.disabled).toBe(true)
+  fireEvent.click(depth); await tick()
+  expect(setDecodeDepth).not.toHaveBeenCalled()
   expect(h.writes()).toHaveLength(0)
 })
