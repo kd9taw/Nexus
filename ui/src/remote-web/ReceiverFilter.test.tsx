@@ -10,6 +10,10 @@ import type { AppSnapshot } from '../types'
 import type { OperationState } from './operation-protocol'
 import type { ControlCapability } from './station-operation'
 import settings from '../components/__fixtures__/defaultSettings.json'
+import { RemoteObservationContext } from './amplifier-observation'
+import frames from '../remote-monitor/fixtures.v2.json'
+import type { MonitorState } from '../remote-monitor/session'
+import type { MonitorFrame } from '../remote-monitor/protocol'
 
 vi.mock('../api', async original => {
   const actual = await original<Record<string, unknown>>()
@@ -58,9 +62,14 @@ function fixture(mode: 'cw' | 'phone' = 'cw', capabilities: ControlCapability[] 
   const reply = (value: unknown) => client.receive({ type: 'operationResponse', requestId: sent[sent.length - 1].request.requestId, value })
   client.open(); reply(state)
   const onSnap = vi.fn(), Component = mode === 'cw' ? CwCockpit : PhoneCockpit
-  const view = (current = snap, available = true) => <StationControlContext.Provider value={local}><StationDataContext.Provider value={available}>
+  const frame = structuredClone(frames.spe) as MonitorFrame
+  frame.station.radio.id = 1; frame.station.radio.readings.cat!.connectionGeneration = 7; frame.station.amplifier = null
+  const observation = { status: 'current', frame } as MonitorState
+  const view = (current = snap, available = true, shown = observation) => <StationControlContext.Provider value={local}><StationDataContext.Provider value={available}>
     <RemoteOperationsContext.Provider value={local ? null : client}>
+      <RemoteObservationContext.Provider value={shown}>
       <Component snap={current} theme="dark" spots={[]} onWorkSpot={() => {}} onSnap={onSnap}/>
+      </RemoteObservationContext.Provider>
     </RemoteOperationsContext.Provider>
   </StationDataContext.Provider></StationControlContext.Provider>
   const ui = render(view())
@@ -70,10 +79,28 @@ function fixture(mode: 'cw' | 'phone' = 'cw', capabilities: ControlCapability[] 
     reply({ operation: 'stationControl', operationId: request.requestId, outcome,
       ...(outcome === 'applied' ? { evidence: 'radioReadback' } : { reason: 'hardwareUnconfirmed' }) })
   }
-  return { ...ui, snap, state, client, reply, onSnap, view, writes, finish,
+  return { ...ui, snap, state, client, reply, onSnap, view, writes, finish, observation,
     buttons: () => [...ui.container.querySelectorAll<HTMLButtonElement>('.ph-filter-step')],
     value: () => ui.container.querySelector('.ph-filter-val')!.textContent }
 }
+
+it.each(['radio', 'connection'] as const)('the native BW control waits for the displayed %s after a same-width handoff', async changed => {
+  const h = fixture(), context = { ...h.state.controls!.context, ...(changed === 'radio' ? { radioId: 2 } : { radioConnection: 8 }) }
+  await tick(1000)
+  const snap = { ...h.snap, activeRadioId: context.radioId }
+  act(() => h.reply({ ...h.state, revision: 2, controls: { ...h.state.controls!, context } })); await tick()
+  h.rerender(h.view(snap)); await tick()
+  fireEvent.click(h.buttons()[1]); await tick()
+  expect(h.writes()).toHaveLength(0)
+  const fresh = structuredClone(h.observation)
+  fresh.frame!.station.radio.id = context.radioId
+  fresh.frame!.station.radio.readings.cat!.connectionGeneration = context.radioConnection!
+  h.rerender(h.view(snap, true, fresh)); await tick()
+  expect(h.buttons().every(b => !b.disabled)).toBe(true)
+  fireEvent.click(h.buttons()[1]); await tick()
+  expect(h.writes()).toHaveLength(1); expect(h.writes()[0].request.context).toEqual(context)
+  act(() => h.finish()); await tick()
+})
 
 it.each(['cw', 'phone'] as const)('the actual %s BW steppers require readback and a fresh station sample', async mode => {
   const h = fixture(mode), before = h.snap.radio.filterWidthHz!, step = mode === 'cw' ? 50 : 100
