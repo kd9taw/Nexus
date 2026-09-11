@@ -95,6 +95,13 @@ retuning, requested levels, AGC and FM shift/offset/tone under the original perm
 then re-read the complete result. Unset controls remain unset. These primitives
 do not yet acquire/adopt a pool connection, persist a selection or enable a browser
 radio picker; those owner and transport steps remain required.
+Monitor connection opens now take a per-radio ownership token before releasing
+the pool lock for I/O. Reconciliation and local handoff respect that token, so
+an in-flight open finishes before another caller can open or adopt that radio.
+Other radios remain available. Failed-open entries retain their retry deadline
+and failure count, increasing the wait to one minute; configuration changes retry
+immediately and successful opens clear the backoff. These tokens cover temporary
+pool/open ownership, not the complete Remote selection transaction.
 Radio handoffs, mode-specific operating actions and remote transmission remain
 incomplete; no arbitrary Tauri bridge exists.
 See [the Remote contract and limits](remote/README.md#existing-nexus-workspace).

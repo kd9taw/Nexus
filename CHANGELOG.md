@@ -288,6 +288,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Radio connection recovery:** Background radios retain their retry wait after
+  a failed connection, increasing to one minute. Correcting the connection settings
+  retries immediately. Switching to a radio whose connection is still opening
+  waits for that open, avoiding a competing connection attempt.
+
 - **Remote amplifier readings and Settings:** Amplifier gestures stay bound to
   the displayed radio and connection. Failed command writes clear the linked
   reading, and an old connection cannot overwrite a newer reading. Settings

@@ -37,7 +37,9 @@ use crate::rig::tuning::{passband_for, retune_passband, same_named_band};
 use crate::rig::{PttMode, Rig, SerialLine, ATU_START_TUNE};
 use crate::rigctld_proc::{spawn_rigctld, RigctldProc};
 
+mod monitor_claims;
 mod remote_radio;
+use monitor_claims::RadioClaims;
 
 /// The daemon serving the rigctld protocol on a radio's TCP port: Hamlib's spawned
 /// `rigctld` (classic), or Nexus's own native CI-V daemon (`icom_native_cat` — same
@@ -1626,7 +1628,7 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
     // above (unchanged path). Every OTHER enabled radio gets its own persistent rigctld+Rig in the
     // monitor pool, polled READ-ONLY on a dedicated thread → the switcher pills show both rigs live.
     // Switching = a HANDOFF (swap the active Rig with a pool one) — no teardown, so no read-back race.
-    let pool: MonitorPool = Arc::new(Mutex::new(Vec::new()));
+    let pool: MonitorPool = Arc::new(MonitorConnections::new(Vec::new()));
     // The active radio at startup (so the monitor thread doesn't also open it).
     let mut last_active = engine_lock(&engine).settings().active_radio;
     // Raised the moment a switch intent is seen, dropped when the handoff completes: the
@@ -1755,7 +1757,32 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
 // ======================= Dual-radio: persistent per-radio CAT (monitor pool) =======================
 
 /// The shared pool of persistent, read-only CAT connections to the NON-active radios ("both live").
-type MonitorPool = Arc<Mutex<Vec<MonitorConn>>>;
+type MonitorPool = Arc<MonitorConnections>;
+
+/// The connection list and per-radio claims share the same lifetime. Callers
+/// decide whether to claim/open/remove under the list lock; the claim itself
+/// holds no mutex during daemon startup or CAT I/O.
+struct MonitorConnections {
+    connections: Mutex<Vec<MonitorConn>>,
+    claims: RadioClaims,
+}
+
+impl MonitorConnections {
+    fn new(connections: Vec<MonitorConn>) -> Self {
+        Self {
+            connections: Mutex::new(connections),
+            claims: RadioClaims::default(),
+        }
+    }
+
+    fn lock(&self) -> std::sync::LockResult<std::sync::MutexGuard<'_, Vec<MonitorConn>>> {
+        self.connections.lock()
+    }
+
+    fn try_lock(&self) -> std::sync::TryLockResult<std::sync::MutexGuard<'_, Vec<MonitorConn>>> {
+        self.connections.try_lock()
+    }
+}
 
 /// Per-radio dial-read cadence for a monitor (unhurried — the active radio has the fast poll).
 const MONITOR_POLL_MS: f64 = 600.0;
@@ -1789,6 +1816,20 @@ struct MonitorConn {
     /// libhamlib DLL re-scanned by Defender on every launch, which is why it shows
     /// up as antimalware CPU rather than as ours.
     retry_after_ms: f64,
+}
+
+impl MonitorConn {
+    fn keep_for(&mut self, transport: &Transport, now_ms: f64) -> bool {
+        if self.transport.rig_differs(transport) {
+            return false;
+        }
+        // A failed-open placeholder owns the retry deadline too. Removing it
+        // before that deadline loses both the wait and the failure count.
+        if !self.rig.has_control() && now_ms < self.retry_after_ms {
+            return true;
+        }
+        self.rig.has_control() && self.rigctld_proc.as_mut().is_none_or(CatDaemon::is_alive)
+    }
 }
 
 impl Transport {
@@ -1960,24 +2001,17 @@ fn reconcile_pool_with_open(
         let mut p = pool.lock().unwrap_or_else(|e| e.into_inner());
         let mut to_open = Vec::new();
         for (id, t) in want {
+            if pool.claims.contains(*id) {
+                continue;
+            }
             // Keep only a CAT-identical AND LIVE conn — live Rig control channel AND a live
             // daemon. A conn parked as `Rig::vox()` (rigctld couldn't bind / CAT probe failed)
             // has no control channel; a dead DAEMON behind a cached TCP answer is a zombie.
             // Either way: recycle so it self-heals (and a switch-to never adopts a dead conn).
-            let keep = p.iter_mut().find(|c| c.id == *id).is_some_and(|c| {
-                if c.transport.rig_differs(t) {
-                    return false; // CAT settings changed — always reopen, no backoff
-                }
-                // ⭐ BACKOFF: a conn that failed to open is KEPT (not recycled) until
-                // its retry window opens. Without this the 150 ms reconcile respawns
-                // an unreachable radio's rigctld forever — see `retry_after_ms`.
-                // A CAT change above bypasses it, because that is the operator
-                // fixing the very thing that was broken and they should not wait.
-                if !c.rig.has_control() && now_ms < c.retry_after_ms {
-                    return true;
-                }
-                c.rig.has_control() && c.rigctld_proc.as_mut().is_none_or(CatDaemon::is_alive)
-            });
+            let keep = p
+                .iter_mut()
+                .find(|c| c.id == *id)
+                .is_some_and(|c| c.keep_for(t, now_ms));
             if !keep {
                 to_open.push((*id, t.clone())); // new / CAT changed / DEAD → (re)open
             }
@@ -1989,20 +2023,12 @@ fn reconcile_pool_with_open(
             // wins the race by design (back-to-back locks vs a 20 ms-cadence try_lock) and
             // downgrades every switch to a fresh daemon spawn. If the handoff instead takes
             // its fallback, IT drops this conn — nothing leaks.
-            if c.id == active {
+            if c.id == active || pool.claims.contains(c.id) {
                 continue;
             }
-            let keep = match want.iter().find(|(wid, _)| *wid == c.id) {
-                None => false, // no longer wanted
-                Some((_, t)) => {
-                    !c.transport.rig_differs(t)
-                        && c.rig.has_control()
-                        // A dead DAEMON behind a live TCP cache is a zombie: the pill
-                        // would show a frozen dial forever. Recycle it.
-                        && c.rigctld_proc.as_mut().is_none_or(CatDaemon::is_alive)
-                }
-            };
-            if !keep {
+            // Wanted but stale/failed entries are replaced below, under their
+            // own claim. Retain their failure count until that replacement.
+            if !want.iter().any(|(id, _)| *id == c.id) {
                 to_close.push(c.id);
             }
         }
@@ -2011,6 +2037,12 @@ fn reconcile_pool_with_open(
     if !to_close.is_empty() {
         crate::civ::diag::note("monitor pool: closing daemon(s) — a recycle drops+unkeys them");
         let mut p = pool.lock().unwrap_or_else(|e| e.into_inner());
+        // A caller may have claimed a radio since the initial scan. Its owner
+        // now decides when that connection is released.
+        let to_close: Vec<_> = to_close
+            .into_iter()
+            .filter(|id| !pool.claims.contains(*id))
+            .collect();
         p.retain(|c| !to_close.contains(&c.id)); // drop kills each daemon
         {
             let mut e = engine_lock(engine);
@@ -2020,6 +2052,27 @@ fn reconcile_pool_with_open(
         }
     }
     for (id, t) in to_open {
+        let (_claim, prior_failures) = {
+            let mut p = pool.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(claim) = pool.claims.try_claim(id) else {
+                continue;
+            };
+            // A different caller may have finished since the scan. Decide
+            // again under the list lock before dropping or opening anything.
+            if p.iter_mut()
+                .find(|c| c.id == id)
+                .is_some_and(|c| c.keep_for(&t, now_ms))
+            {
+                continue;
+            }
+            let failures = p
+                .iter()
+                .find(|c| c.id == id && !c.transport.rig_differs(&t))
+                .map_or(0, |c| c.open_failures);
+            p.retain(|c| c.id != id); // finish old daemon teardown before opening
+            engine_lock(engine).forget_radio_live(id);
+            (claim, failures)
+        };
         let (rig, proc, ok) = open(&t); // slow (spawn) — pool lock NOT held
         {
             let mut e = engine_lock(engine);
@@ -2029,15 +2082,11 @@ fn reconcile_pool_with_open(
         // an unreachable radio settles to one probe a minute instead of one every
         // 850 ms. A SUCCESSFUL open clears it, so a radio that comes back on line
         // is adopted at the next reconcile.
-        let prior_failures = {
-            let p = pool.lock().unwrap_or_else(|e| e.into_inner());
-            p.iter().find(|c| c.id == id).map_or(0, |c| c.open_failures)
-        };
         let (open_failures, retry_after_ms) = if rig.has_control() {
             (0, 0.0)
         } else {
             let n = prior_failures.saturating_add(1);
-            let wait = (1000.0_f64 * 2.0_f64.powi(n.min(6) as i32 - 1)).min(60_000.0);
+            let wait = (1000.0_f64 * 2.0_f64.powi(n.min(7) as i32 - 1)).min(60_000.0);
             if n == 1 || n % 8 == 0 {
                 crate::civ::diag::note(&format!(
                     "monitor radio {id}: CAT open failed ({n}x) — retrying in {:.0}s",
@@ -2082,7 +2131,9 @@ fn poll_monitors(
     // which pauses these polls entirely, so a switch waits out at most one in-flight read.
     let conn = match p
         .iter_mut()
-        .filter(|c| c.id != active && now - c.last_poll >= MONITOR_POLL_MS)
+        .filter(|c| {
+            c.id != active && !pool.claims.contains(c.id) && now - c.last_poll >= MONITOR_POLL_MS
+        })
         .min_by(|a, b| {
             a.last_poll
                 .partial_cmp(&b.last_poll)
@@ -2236,6 +2287,13 @@ fn handoff_if_switched(
             return;
         }
     };
+    if pool.claims.contains(active) {
+        // An open already in flight owns this radio's port. Do not fall back
+        // to a second open: its result will enter the pool before the claim is
+        // released, and the ordinary next-tick handoff can adopt or recover it.
+        state.handoff_deferred = true;
+        return;
+    }
     state.handoff_deferred = false;
     // The monitor's `from_profile` conn transport zeroes the broker port; compare CAT fields against a
     // broker-stripped `want` so the broker being on doesn't spuriously fail the match (FIX #3: adopt
@@ -2319,8 +2377,8 @@ fn handoff_if_switched(
         // a config change). Drop any stale conn for this id so its daemon is reaped + its port freed,
         // then let step()'s `rig_differs` path open the new active fresh (it also unkeys + tears down
         // the OLD active safely). The old active is not kept monitored in this edge — steady state
-        // (both radios configured) always ADOPTS above. A switch during a radio's very first monitor
-        // open can transiently coexist onto the monitor daemon; it self-heals on the next reconcile.
+        // (both radios configured) always ADOPTS above. An in-flight monitor open holds its claim
+        // until its result reaches the pool; the deferral above prevents a competing fallback open.
         p.retain(|c| c.id != active);
         {
             let mut e = engine_lock(engine);
@@ -14654,7 +14712,7 @@ mod tests {
             open_failures: 0,
             retry_after_ms: 0.0,
         };
-        let pool: MonitorPool = Arc::new(Mutex::new(vec![
+        let pool: MonitorPool = Arc::new(MonitorConnections::new(vec![
             conn(r1, ports[1], transports[0].clone()),
             conn(r2, ports[2], transports[1].clone()),
         ]));
@@ -14790,7 +14848,7 @@ mod tests {
         // Radio 1 is already LIVE in the monitor pool with a transport matching its profile. A live
         // monitor conn holds a control-bearing Rig (`with_control`) + its own daemon — only such a conn
         // is adopted (a dead `Rig::vox()` conn is rejected; see `handoff_skips_a_dead_conn…`).
-        let pool: MonitorPool = Arc::new(Mutex::new(vec![MonitorConn {
+        let pool: MonitorPool = Arc::new(MonitorConnections::new(vec![MonitorConn {
             id: r1,
             transport: r1_transport,
             rig: Rig::with_control(Some(format!("127.0.0.1:{r1_port}")), PttMode::Vox),
@@ -15010,7 +15068,7 @@ mod tests {
         };
         let mut state = loop_state();
         state.applied = cat_transport(4532, None);
-        let pool: MonitorPool = Arc::new(Mutex::new(vec![MonitorConn {
+        let pool: MonitorPool = Arc::new(MonitorConnections::new(vec![MonitorConn {
             id: r1,
             transport: r1_transport,
             rig: Rig::with_control(Some(format!("127.0.0.1:{r1_port}")), PttMode::Vox),
@@ -15243,7 +15301,7 @@ mod tests {
     #[test]
     fn monitor_open_backoff_survives_reconciliation_and_accumulates_failures() {
         let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
-        let pool: MonitorPool = Arc::new(Mutex::new(Vec::new()));
+        let pool: MonitorPool = Arc::new(MonitorConnections::new(Vec::new()));
         let (id, transport) = {
             let mut e = engine.lock().unwrap();
             let id = e.add_radio();
@@ -15278,10 +15336,171 @@ mod tests {
     }
 
     #[test]
+    fn monitor_open_backoff_reaches_one_minute_and_configuration_change_retries_now() {
+        let (engine, pool, _, id, _) = switch_scene();
+        let transport = pool.lock().unwrap()[0].transport.clone();
+        pool.lock().unwrap().clear();
+        let opens = std::cell::Cell::new(0);
+        let fail = |_: &Transport| {
+            opens.set(opens.get() + 1);
+            (Rig::vox(), None, Some(false))
+        };
+        let mut now = 0.0;
+        for delay in [
+            1000.0, 2000.0, 4000.0, 8000.0, 16_000.0, 32_000.0, 60_000.0, 60_000.0,
+        ] {
+            reconcile_pool_with_open(&pool, &[(id, transport.clone())], 0, &engine, now, fail);
+            let deadline = pool.lock().unwrap()[0].retry_after_ms;
+            assert_eq!(deadline, now + delay);
+            now = deadline;
+        }
+        assert_eq!(opens.get(), 8);
+        let mut changed = transport;
+        changed.baud = changed.baud.saturating_add(1);
+        reconcile_pool_with_open(&pool, &[(id, changed.clone())], 0, &engine, now - 1.0, fail);
+        assert_eq!(
+            opens.get(),
+            9,
+            "an operator's correction bypasses the old deadline"
+        );
+        {
+            let p = pool.lock().unwrap();
+            assert_eq!(
+                p[0].open_failures, 1,
+                "changed configuration starts its own backoff"
+            );
+            assert_eq!(p[0].retry_after_ms, now + 999.0);
+        }
+        // Successful reopen clears the failure state. This control-bearing fake
+        // never talks to hardware; reconciliation itself must not issue CAT writes.
+        reconcile_pool_with_open(&pool, &[(id, changed)], 0, &engine, now + 999.0, |_| {
+            (
+                Rig::with_control(Some("127.0.0.1:1".into()), PttMode::Vox),
+                None,
+                Some(true),
+            )
+        });
+        let p = pool.lock().unwrap();
+        assert!(p[0].rig.has_control());
+        assert_eq!(p[0].open_failures, 0);
+        assert_eq!(p[0].retry_after_ms, 0.0);
+    }
+
+    #[test]
+    fn monitor_open_panic_releases_claim_and_allows_recovery() {
+        let (engine, pool, _, id, _) = switch_scene();
+        let want = [(id, pool.lock().unwrap()[0].transport.clone())];
+        pool.lock().unwrap().clear();
+        let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            reconcile_pool_with_open(&pool, &want, 0, &engine, 0.0, |_| panic!("opener failed"));
+        }));
+        assert!(failed.is_err());
+        assert!(!pool.claims.contains(id));
+        assert!(
+            !pool.connections.is_poisoned(),
+            "I/O runs outside the pool lock"
+        );
+        let mut retried = false;
+        reconcile_pool_with_open(&pool, &want, 0, &engine, 150.0, |_| {
+            retried = true;
+            (Rig::vox(), None, Some(false))
+        });
+        assert!(retried);
+        assert_eq!(pool.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn monitor_claim_defers_handoff_and_native_rebuild_until_open_finishes() {
+        for successful_open in [true, false] {
+            let (engine, pool, mut state, id, port) = switch_scene();
+            let (claim, mut incoming) = {
+                let mut p = pool.lock().unwrap();
+                (pool.claims.try_claim(id).unwrap(), p.remove(0))
+            };
+            let mut rig = Rig::vox();
+            let mut last_active = 0;
+            let pending = std::sync::atomic::AtomicBool::new(false);
+            let mut backend = MockBackend::new();
+            let (sinks, mut ra) = (no_sinks(), mock_reopen_audio());
+            let mut station = StationSinks::new();
+            let opens = std::cell::Cell::new(0);
+            let mut rr = |_: &Transport, _: bool| {
+                opens.set(opens.get() + 1);
+                (Rig::vox(), None, CatProbe::status(None, ""))
+            };
+            engine.lock().unwrap().set_active_radio(id);
+            for tick in 0..3 {
+                handoff_if_switched(
+                    &engine,
+                    &pool,
+                    &mut rig,
+                    &mut state,
+                    &mut last_active,
+                    &pending,
+                );
+                assert!(state.handoff_deferred);
+                assert_eq!(last_active, 0);
+                assert!(pending.load(std::sync::atomic::Ordering::Relaxed));
+                state
+                    .step(
+                        &engine,
+                        &mut backend,
+                        &mut rig,
+                        &sinks,
+                        tick as f64,
+                        &mut ra,
+                        &mut rr,
+                        &mut station,
+                    )
+                    .unwrap();
+                assert_eq!(opens.get(), 0, "do not compete with the claimed open");
+            }
+            if !successful_open {
+                incoming.rig = Rig::vox();
+            }
+            pool.lock().unwrap().push(incoming);
+            drop(claim);
+            handoff_if_switched(
+                &engine,
+                &pool,
+                &mut rig,
+                &mut state,
+                &mut last_active,
+                &pending,
+            );
+            assert!(!state.handoff_deferred);
+            assert!(!pending.load(std::sync::atomic::Ordering::Relaxed));
+            assert_eq!(last_active, id);
+            if successful_open {
+                assert_eq!(state.applied.rigctld_port, port, "adopt the finished open");
+                assert_eq!(opens.get(), 0);
+            } else {
+                state
+                    .step(
+                        &engine,
+                        &mut backend,
+                        &mut rig,
+                        &sinks,
+                        4.0,
+                        &mut ra,
+                        &mut rr,
+                        &mut station,
+                    )
+                    .unwrap();
+                assert_eq!(
+                    opens.get(),
+                    1,
+                    "a failed open retains native fallback recovery"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn monitor_open_has_one_owner_while_other_radios_can_open() {
         use std::sync::atomic::{AtomicUsize, Ordering};
         let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
-        let pool: MonitorPool = Arc::new(Mutex::new(Vec::new()));
+        let pool: MonitorPool = Arc::new(MonitorConnections::new(Vec::new()));
         let want = {
             let mut e = engine.lock().unwrap();
             let first = e.add_radio();
@@ -15712,7 +15931,7 @@ mod tests {
         state.applied = cat_transport(4532, None); // radio 0 (the OUTGOING active) on its port
                                                    // Radio 0 is a live CAT rig — after the swap it must be DEMOTED to Vox in the pool.
         let mut rig = Rig::with_control(Some("127.0.0.1:4532".to_string()), PttMode::Cat);
-        let pool: MonitorPool = Arc::new(Mutex::new(vec![MonitorConn {
+        let pool: MonitorPool = Arc::new(MonitorConnections::new(vec![MonitorConn {
             id: r1,
             transport: r1_transport,
             rig: Rig::with_control(Some(format!("127.0.0.1:{r1_port}")), PttMode::Vox),
@@ -15960,7 +16179,7 @@ mod tests {
         state.applied = yaesu_transport;
         let mut last_active = 0u32;
         // The Icom is live in the monitor pool (read-only ⇒ Vox), as the monitor thread opens it.
-        let pool: MonitorPool = Arc::new(Mutex::new(vec![MonitorConn {
+        let pool: MonitorPool = Arc::new(MonitorConnections::new(vec![MonitorConn {
             id: icom,
             transport: Transport::from_profile(&icom_profile),
             rig: Rig::with_control(Some("127.0.0.1:4533".to_string()), PttMode::Vox),
@@ -16154,7 +16373,7 @@ mod tests {
         let mut state = loop_state();
         state.applied = yaesu_transport;
         let mut last_active = 0u32;
-        let pool: MonitorPool = Arc::new(Mutex::new(vec![MonitorConn {
+        let pool: MonitorPool = Arc::new(MonitorConnections::new(vec![MonitorConn {
             id: icom,
             transport: Transport::from_profile(&icom_profile),
             // Opened READ-ONLY by the monitor thread; the adopt gives it the real PTT mode.
@@ -16474,7 +16693,7 @@ mod tests {
         state.applied = yaesu_transport;
         ContendedSwitch {
             engine,
-            pool: Arc::new(Mutex::new(vec![MonitorConn {
+            pool: Arc::new(MonitorConnections::new(vec![MonitorConn {
                 id: icom,
                 transport: Transport::from_profile(&icom_profile),
                 // Opened READ-ONLY by the monitor thread; the adopt gives it the real PTT mode.
@@ -17263,7 +17482,7 @@ mod tests {
         state.applied = cat_transport(4532, None); // radio 0 (active) on its port
         let mut rig = Rig::vox();
         // Radio 1's monitor conn is DEAD: a `Rig::vox()` with no control channel + no daemon.
-        let pool: MonitorPool = Arc::new(Mutex::new(vec![MonitorConn {
+        let pool: MonitorPool = Arc::new(MonitorConnections::new(vec![MonitorConn {
             id: r1,
             transport: r1_transport,
             rig: Rig::vox(),
@@ -17329,7 +17548,7 @@ mod tests {
         state.tx_until_ms = Some(now_unix_ms() + 5000.0);
         state.manual_ptt_applied = true;
         let mut rig = Rig::vox();
-        let pool: MonitorPool = Arc::new(Mutex::new(vec![MonitorConn {
+        let pool: MonitorPool = Arc::new(MonitorConnections::new(vec![MonitorConn {
             id: r1,
             rig: Rig::with_control(
                 Some(format!("127.0.0.1:{}", r1_transport.rigctld_port)),
@@ -17377,7 +17596,7 @@ mod tests {
         let mut state = loop_state();
         state.applied = cat_transport(4532, None);
         let mut rig = Rig::vox();
-        let pool: MonitorPool = Arc::new(Mutex::new(Vec::new())); // empty pool
+        let pool: MonitorPool = Arc::new(MonitorConnections::new(Vec::new())); // empty pool
         let mut last_active = 0u32;
         let pending = std::sync::atomic::AtomicBool::new(false);
         engine.lock().unwrap().set_active_radio(r1);
