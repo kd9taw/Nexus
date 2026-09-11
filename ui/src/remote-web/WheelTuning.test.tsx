@@ -30,7 +30,7 @@ function fixture(dialMhz = 7.2) {
   const state: OperationState = { stationBootId: crypto.randomUUID(), allowed: true, phase: 'controlling', leaseId: crypto.randomUUID(), revision: 1,
     commandWindowId: crypto.randomUUID(), nextSequence: 1, leaseRemainingMs: 5000, actions: [], txArmed: false,
     controls: { context: { radioId: 1, radioConnection: 7, ampConnection: null, ampReadSequence: null }, capabilities: ['frequency'] } }
-  const reply = (value: unknown) => client.receive({ type: 'operationResponse', requestId: sent.at(-1).request.requestId, value })
+  const reply = (value: unknown) => client.receive({ type: 'operationResponse', requestId: sent[sent.length - 1].request.requestId, value })
   client.open(); reply(state)
   let snapshot = { activeRadioId: 1, radio: { dialMhz, band: '40m', sideband: 'LSB', source: 'native', operatingMode: 'phone', catOk: true,
     txEnabled: false, transmitting: false, rigKeyed: false, tuning: false, txAllowed: true }, link: { tier: 'FT8' } } as unknown as AppSnapshot
@@ -42,7 +42,8 @@ function fixture(dialMhz = 7.2) {
   closes.push(() => { tuning.dispose(); client.disconnected() })
   const source = () => ({ dialMhz: snapshot.radio.dialMhz, sideband: snapshot.radio.sideband })
   const finish = (outcome: 'applied' | 'unknown' = 'applied') => {
-    const request = sent.filter(w => w.request.type === 'stationControl').at(-1).request
+    const writes = sent.filter(w => w.request.type === 'stationControl')
+    const request = writes[writes.length - 1].request
     reply({ operation: 'stationControl', operationId: request.requestId, outcome,
       ...(outcome === 'applied' ? { evidence: 'radioReadback' } : { reason: 'hardwareUnconfirmed' }) })
   }
@@ -88,7 +89,9 @@ it('does not carry a read across loss even when the same lease later returns', a
   h.read.mockImplementationOnce(() => new Promise(r => { resolve = r }))
   h.tuning.nudge(100, h.source()); await tick(120)
   expect(h.tuning.getPending()).toBe(true)
-  act(() => { h.client.disconnected(); h.client.open(); h.reply(h.state) }); await tick()
+  act(() => { h.client.disconnected(); h.client.open() })
+  await tick(1000) // Reopen preserves the client's existing poll cadence.
+  act(() => h.reply(h.state)); await tick()
   await act(async () => resolve(h.getSnapshot())); await tick()
   expect(h.writes()).toHaveLength(0)
   expect(h.tuning.nudge(200, h.source())).toBe(true); await tick(120)
@@ -172,9 +175,10 @@ it('a real scope listener discards sub-notch residue across a loss and same-leas
       <Scope snap={h.getSnapshot()}/>
     </RemoteWheelTuningContext.Provider></RemoteOperationsContext.Provider>
   </StationDataContext.Provider></StationControlContext.Provider>)
-  await tick()
+  await tick(950)
   fireEvent.wheel(ui.getByTestId('scope'), { deltaY: -60, deltaMode: 0 })
-  act(() => { h.client.disconnected(); h.client.open(); h.reply(h.state) }); await tick()
+  act(() => h.client.disconnected()); await tick(100)
+  act(() => { h.client.open(); h.reply(h.state) }); await tick()
   fireEvent.wheel(ui.getByTestId('scope'), { deltaY: -60, deltaMode: 0 }); await tick(120)
   expect(h.writes()).toHaveLength(0)
   fireEvent.wheel(ui.getByTestId('scope'), { deltaY: -40, deltaMode: 0 }); await tick(120)
@@ -187,6 +191,8 @@ it('a confirmed command shows refresh progress, but a failed refresh and disconn
   h.tuning.nudge(100, h.source()); await tick(120)
   act(() => h.finish()); await tick()
   expect(ui.container.textContent).toContain('Updating station controls')
+  await tick(1500)
+  expect(ui.container.textContent).toContain('Logging control status unavailable')
   await tick(9000)
   expect(ui.container.textContent).toContain('Logging control status unavailable')
   expect(ui.container.textContent).not.toContain('Updating station controls')

@@ -28,6 +28,7 @@ export type OperationView = {
   controlPending: PendingControl | null
   controlResult: ControlOutcome | null
   controlError: string | null
+  controlRefreshing?: boolean
 }
 type CapturedControl = { state: OperationState; until: number }
 type Pending = {
@@ -60,6 +61,7 @@ export class OperationClient {
   private pending: Pending | null = null
   private timer: ReturnType<typeof setInterval> | undefined
   private stateUntil = 0
+  private controlRefreshUntil = 0
   private polledAt = 0
   private finished: OperationOutcome | null = null
   private loggingIntent = false
@@ -105,6 +107,7 @@ export class OperationClient {
     this.view = {
       ...this.view,
       ...value,
+      ...((value.error || value.connected === false || value.state) ? { controlRefreshing: false } : {}),
       ...(value.unresolved === null ? { pendingDraft: null } : {})
     }
     for (const f of this.listeners) f()
@@ -134,6 +137,7 @@ export class OperationClient {
   private tick() {
     const now = this.now(),
       fresh = !!this.view.state && now < this.stateUntil
+    if (this.view.controlRefreshing && now >= this.controlRefreshUntil) this.update({ controlRefreshing: false })
     if (fresh !== this.view.fresh) this.update({ fresh })
     if (
       !this.view.connected ||
@@ -276,7 +280,10 @@ export class OperationClient {
       if (terminal) {
         try { this.controlStorage?.write(null); cleared = true } catch {}
       }
+      const refreshing = result.outcome === 'applied' && (p.request.type === 'stationControl' || !this.view.state)
+      if (refreshing) this.controlRefreshUntil = this.now() + 1200
       this.update({ busy: false, submitting: false, controlResult: result, controlError: null,
+        controlRefreshing: refreshing,
         ...(cleared ? { controlPending: null } : {}),
         ...(p.request.type === 'stationControl' ? { state: null, fresh: false } : {}), error: null })
       if (p.request.type === 'stationControl') this.polledAt = -Infinity

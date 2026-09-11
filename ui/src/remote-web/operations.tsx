@@ -17,7 +17,7 @@ export function LoggingAuthority({ client }: { client: OperationClient }) {
   const label = !view.connected
     ? station ? t('remote.controlOffline') : t('remote.loggingOffline')
     : !view.state && view.supported
-      ? !view.error && !view.controlError && view.controlResult?.outcome === 'applied'
+      ? !view.error && !view.controlError && view.controlRefreshing
         ? t('remote.controlRefreshing') : t('remote.loggingStatusUnavailable')
       : view.error === 'stationUnsupported'
         ? t('remote.loggingUnsupported')

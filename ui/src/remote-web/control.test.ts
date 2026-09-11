@@ -277,7 +277,7 @@ it('a prepared tuning gesture cannot borrow a newer lease, revision or command d
     // A later explicit gesture captures the now-current station authority.
     const fresh = h.client.control(frequency)
     await Promise.resolve(); await Promise.resolve()
-    const request = h.sent.at(-1).request
+    const request = h.sent[h.sent.length - 1].request
     expect(request.action).toEqual(frequency)
     h.reply({ operation: 'stationControl', operationId: request.requestId, outcome: 'applied', evidence: 'radioReadback' })
     expect(await fresh).toMatchObject({ outcome: 'applied' })
