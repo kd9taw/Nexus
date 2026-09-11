@@ -812,7 +812,7 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
           assert.equal(stationRequests.length,count,'missing actual mode cannot command Phone selection')
           // Supply the physical reading through the normal station stream.
           // The following four picks are the fresh positive control.
-          applicationData.get_snapshot.radio.rigMode='LSB'
+          applicationData.get_snapshot.radio.rigMode='LSB';applicationRevision++
           const phoneDiagnostic=()=>evaluate(`(()=>{const e=document.querySelector('.phone-cockpit');let f=e?.[Object.keys(e).find(k=>k.startsWith('__reactFiber$'))],snap,phoneMode,operations,observation;while(f){if(f.memoizedProps?.snap){snap=f.memoizedProps.snap;phoneMode=f.memoizedProps.phoneMode}for(let d=f.dependencies?.firstContext;d;d=d.next){const v=d.memoizedValue;if(v?.getSnapshot&&v?.control)operations=v.getSnapshot();if(v?.frame&&v?.status)observation=v}f=f.return}return {radio:snap?.radio,activeRadioId:snap?.activeRadioId,phoneMode,operations,observation,buttons:[...e.querySelectorAll('.ph-mode-btn')].map(b=>({text:b.textContent,disabled:b.disabled}))}})()`)
           for(const [pick,index]of [['USB',2],['LSB',3],['AM',5],['auto',1]]){
             const selector=root+` .ph-mode-pick > button:nth-of-type(${index})`
