@@ -23,6 +23,7 @@ pub use fm::RepeaterConfig;
 mod handoff;
 pub use handoff::{Handoff, HandoffReadback};
 mod level;
+mod release;
 
 /// A station-resolved CAT position, not an arbitrary browser command string.
 #[derive(Debug, Clone, PartialEq, Eq)]

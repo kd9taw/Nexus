@@ -20,6 +20,8 @@ mod fm_tests;
 mod handoff_tests;
 #[path = "rig_level_tests.rs"]
 mod level_tests;
+#[path = "rig_release_tests.rs"]
+mod release_tests;
 
 #[test]
 fn idle_position_reads_the_owned_connection_without_reasserting_any_setting() {

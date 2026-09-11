@@ -92,9 +92,17 @@ The native selector also accepts an already-held FT8 reset guard, acquired witho
 waiting on the same process-wide modem mutex. Local selection keeps its blocking
 reset at the same lifecycle point. An incoming-radio CAT transaction can combine
 retuning, requested levels, AGC and FM shift/offset/tone under the original permit,
-then re-read the complete result. Unset controls remain unset. These primitives
-do not yet acquire/adopt a pool connection, persist a selection or enable a browser
-radio picker; those owner and transport steps remain required.
+then re-read the complete result. Unset controls remain unset. Internal selection
+admission binds the original station and projected incoming profile. Temporary
+connection acquisition keeps its radio claim through adoption or returns the
+connection read-only on cancellation. The Engine commit checks fresh incoming
+position and original authority, uses the native guarded selector, installs the
+prepared connection before saving, and consumes its retune. Failed persistence
+retains the actual selection with an unknown receipt. Read-only position probes
+and permission-bearing idle PTT release support the owner transaction; serial
+port opens recheck permission at each baud attempt and always perform idle cleanup.
+These pieces are not yet connected through the complete radio worker and host
+device synchronization, and do not enable a browser radio picker.
 Monitor connection opens now take a per-radio ownership token before releasing
 the pool lock for I/O. Reconciliation and local handoff respect that token, so
 an in-flight open finishes before another caller can open or adopt that radio.
