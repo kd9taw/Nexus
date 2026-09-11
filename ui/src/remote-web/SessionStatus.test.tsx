@@ -23,7 +23,7 @@ function fixture(loggingOnly = false) {
     actions: loggingOnly ? ['log.manual'] : [], txArmed: false,
     ...(loggingOnly ? {} : { controls: { context: { radioId: 1, radioConnection: 1, ampConnection: 1, ampReadSequence: 1 }, capabilities: ['amplifier' as const] } })
   }
-  const reply = (value: unknown) => client.receive({ type: 'operationResponse', requestId: sent.at(-1)!.request.requestId, value })
+  const reply = (value: unknown) => client.receive({ type: 'operationResponse', requestId: sent[sent.length - 1]!.request.requestId, value })
   client.open(); reply(state)
   const disconnect = vi.fn()
   const view = (stale = false) => <SessionStatus client={client} stale={stale} disconnect={disconnect} />
@@ -47,7 +47,7 @@ it('keeps the current authority outside optional help and releases only on an ex
   expect(h.client.getSnapshot().state?.leaseId).toBe(lease)
   expect(h.sent).toHaveLength(messages)
   fireEvent.click(release)
-  expect(h.sent.at(-1)?.request.type).toBe('release')
+  expect(h.sent[h.sent.length - 1]?.request.type).toBe('release')
   act(() => h.reply({ ...h.state, phase: 'available', leaseId: null, commandWindowId: null, nextSequence: null, leaseRemainingMs: null }))
   await act(async () => {})
   expect(screen.getByRole('button', { name: 'Take station control' })).toBeTruthy()
@@ -61,7 +61,7 @@ it('keeps data loss and command recovery visible while help stays closed, withou
     pending = h.client.control({ action: 'amplifier.operate', expectedOperate: false, operate: true })
     await Promise.resolve()
   })
-  const operationId = h.sent.at(-1)!.request.requestId
+  const operationId = h.sent[h.sent.length - 1]!.request.requestId
   await act(async () => {
     h.reply({ operation: 'stationControl', operationId, outcome: 'unknown', reason: 'hardwareUnconfirmed' })
     await pending
@@ -74,7 +74,7 @@ it('keeps data loss and command recovery visible while help stays closed, withou
   }
   expect(toggle().getAttribute('aria-expanded')).toBe('false')
   fireEvent.click(screen.getByRole('button', { name: 'Check command result' }))
-  expect(h.sent.at(-1)?.request).toMatchObject({ type: 'result', operationId })
+  expect(h.sent[h.sent.length - 1]?.request).toMatchObject({ type: 'result', operationId })
   await act(async () => h.reply({ operation: 'stationControl', operationId, outcome: 'unknown', reason: 'hardwareUnconfirmed' }))
   expect(h.sent.filter(message => message.request.type === 'stationControl')).toHaveLength(1)
   act(() => h.client.disconnected())
