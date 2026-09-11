@@ -1423,3 +1423,147 @@ fn selection_worker_refuses_a_held_modem_and_an_explicit_later_gesture_can_succe
     assert_eq!(engine_lock(&s.engine).settings().active_radio, 1);
     assert!(s.path.exists());
 }
+
+#[test]
+fn workspace_return_retains_the_original_connection_and_confirms_before_native_commit() {
+    let _station = selection_test_lock();
+    use tempo_app::dto::Tier;
+    use tempo_app::engine::remote_radio::Workspace;
+    use tempo_app::settings::{RouteMode, RoutingRule};
+    for confirmed in [true, false] {
+        let peer = retuning_peer(14_250_000, "USB", move |line, _| {
+            (!confirmed && line == "F 50260000").then(|| "RPRT 0\n".into())
+        });
+        let mut s = configured_station(&peer, |_| {});
+        {
+            let mut e = engine_lock(&s.engine);
+            e.set_radio_pegged(true);
+            e.set_tier(Tier::Msk144);
+            e.set_area("msg");
+            e.set_operating_mode("phone", false);
+            e.set_frequency(14.250, "20m", "USB");
+            e.set_tx_enabled(false);
+            e.set_routing_rules(vec![
+                RoutingRule {
+                    bands: vec!["6m".into()],
+                    mode: Some(RouteMode::Digital),
+                    radio: 0,
+                    ..RoutingRule::default()
+                },
+                RoutingRule {
+                    mode: Some(RouteMode::Digital),
+                    radio: 1,
+                    ..RoutingRule::default()
+                },
+            ]);
+            e.set_radio_pegged(false);
+            e.configure_remote_selection_host(true);
+            e.take_immediate_retune();
+        }
+        s.state.last_dial = 14_250_000;
+        s.state.last_mode = "USB".into();
+        let read = s.state.remote_read(&s.engine).unwrap();
+        let (original, receipt) = {
+            let mut e = engine_lock(&s.engine);
+            e.remote_observe_cat(Some(&read), Some(true));
+            e.remote_observe_dial(Some(&read), Some(14_250_000));
+            e.remote_observe_mode(Some(&read), Some("USB"));
+            e.remote_observe_ptt(Some(&read), Some(false));
+            let original = e.settings().clone();
+            let generation = e
+                .remote_monitor_observation()
+                .radio
+                .readings
+                .cat
+                .unwrap()
+                .connection_generation;
+            let receipt = e
+                .queue_remote_workspace(
+                    Workspace::Ft,
+                    generation,
+                    s.authority
+                        .permit(Instant::now() + Duration::from_secs(5))
+                        .unwrap(),
+                )
+                .unwrap();
+            (original, receipt)
+        };
+        assert_eq!(receipt.outcome(), Outcome::Pending);
+        let pool = Arc::new(MonitorConnections::new(vec![]));
+        let pending = AtomicBool::new(false);
+        let mut active = 0;
+        let notifications = std::cell::Cell::new(0);
+        s.state.apply_remote_selection(
+            &s.engine,
+            &pool,
+            &mut s.rig,
+            &mut s.backend,
+            &mut active,
+            &pending,
+            |_| panic!("returning workspace must retain the original physical connection"),
+            || notifications.set(notifications.get() + 1),
+        );
+        assert_eq!(active, 0);
+        assert_eq!(notifications.get(), usize::from(confirmed));
+        assert!(!pending.load(Ordering::Relaxed));
+        assert!(pool.lock().unwrap().is_empty());
+        assert!(!s.state.force_audio_rebuild);
+        assert_eq!(s.state.remote_radio_id, Some(0));
+        let before_poll = super::fm::writes(&peer);
+        assert_eq!(
+            before_poll
+                .iter()
+                .filter(|line| line.starts_with("F "))
+                .collect::<Vec<_>>(),
+            [&"F 50260000".to_string()]
+        );
+        if confirmed {
+            assert_eq!(
+                receipt.outcome(),
+                Outcome::Applied {
+                    evidence: Evidence::RadioReadback
+                }
+            );
+            let e = engine_lock(&s.engine);
+            assert_eq!(e.tier(), Tier::Msk144);
+            assert_eq!(e.settings().dial_hz(), 50_260_000);
+            assert_eq!(e.settings().audio_in, original.audio_in);
+            let saved: Settings = serde_json::from_slice(&std::fs::read(&s.path).unwrap()).unwrap();
+            assert_eq!(&saved, e.settings());
+            assert_ne!(
+                saved.radios[1].last_dial_mhz, original.radios[1].last_dial_mhz,
+                "intermediate native profile must be banked"
+            );
+            assert!(!s.state.remote_retune_uncertain);
+        } else {
+            assert!(matches!(receipt.outcome(), Outcome::Unknown { .. }));
+            assert_eq!(engine_lock(&s.engine).settings(), &original);
+            assert!(!s.path.exists());
+            assert!(s.state.remote_retune_uncertain);
+        }
+        let started = now_unix_ms();
+        for delta in [200.0, 400.0, 800.0, 1600.0, 2400.0] {
+            s.state
+                .step(
+                    &s.engine,
+                    &mut s.backend,
+                    &mut s.rig,
+                    &no_sinks(),
+                    started + delta,
+                    &mut |_| panic!("unchanged capture must stay open"),
+                    &mut |_| panic!("unchanged radio must stay open"),
+                    &mut StationSinks::new(),
+                )
+                .unwrap();
+        }
+        let after_poll = super::fm::writes(&peer);
+        assert!(
+            after_poll[before_poll.len()..]
+                .iter()
+                .all(|line| line == "T 0"),
+            "no deferred workspace writes: {after_poll:?}"
+        );
+        assert!(!engine_lock(&s.engine).tx_enabled());
+        assert!(s.backend.played.is_empty());
+    }
+}
