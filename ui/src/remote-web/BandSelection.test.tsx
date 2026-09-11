@@ -12,12 +12,11 @@ import type { AppSnapshot } from '../types'
 import type { ControlCapability } from './station-operation'
 import { readBandChoices } from './band-choices'
 
-vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }))
 vi.mock('../toast', () => ({ pushToast: vi.fn() }))
-import { invoke } from '@tauri-apps/api/core'
+const invoke = vi.fn(async (_command: string, _args?: Record<string, unknown>): Promise<unknown> => null)
 
 const cleanupClients: (() => void)[] = []
-afterEach(() => { cleanup(); cleanupClients.splice(0).forEach(f => f()); vi.useRealTimers(); vi.clearAllMocks() })
+afterEach(() => { cleanup(); cleanupClients.splice(0).forEach(f => f()); vi.useRealTimers(); vi.clearAllMocks(); delete window.__TAURI_INTERNALS__ })
 async function tick(ms = 0) { await act(async () => { await vi.advanceTimersByTimeAsync(ms) }) }
 const channel = (band = '40m', dialMhz = 7.2) => ({ band, dialMhz, group: 'HF', mode: 'LSB', label: band, note: '', tx: true })
 function fixture(mode: 'cw' | 'phone' = 'phone', capabilities: ControlCapability[] = ['bandSelection'], version: 2 | 3 = 3, local = false) {
@@ -38,7 +37,10 @@ function fixture(mode: 'cw' | 'phone' = 'phone', capabilities: ControlCapability
   const read = vi.fn(async (command: string) => command === 'get_settings' ? settings : later)
   if (!local) cleanupClients.push(installApplicationTransport(controlTransport({ kind: 'remote', invoke: read } as ApplicationTransport,
     { age: () => age } as unknown as ApplicationClient, client)))
-  else vi.mocked(invoke).mockImplementation(async (command) => (command === 'get_licensed_band_plan' ? [channel()] : later) as never)
+  else {
+    invoke.mockImplementation(async command => command === 'get_licensed_band_plan' ? [channel()] : later)
+    window.__TAURI_INTERNALS__ = { invoke: invoke as NonNullable<Window['__TAURI_INTERNALS__']>['invoke'] }
+  }
   cleanupClients.push(() => client.disconnected())
   const onSnap = vi.fn()
   const view = (available = true, current = snap) => <StationControlContext.Provider value={local}><StationDataContext.Provider value={available}>

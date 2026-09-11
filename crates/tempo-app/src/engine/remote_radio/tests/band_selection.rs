@@ -79,9 +79,14 @@ fn band_selection_matches_native_defaults_for_every_desktop_choice_and_class() {
                 let saved: Settings =
                     serde_json::from_slice(&std::fs::read(&s.path).unwrap()).unwrap();
                 assert_eq!(saved.dial_hz(), native.engine.settings.dial_hz());
+                native.engine.settings.save(&native.path).unwrap();
+                let native_saved: serde_json::Value =
+                    serde_json::from_slice(&std::fs::read(&native.path).unwrap()).unwrap();
+                let remote_saved: serde_json::Value =
+                    serde_json::from_slice(&std::fs::read(&s.path).unwrap()).unwrap();
                 assert_eq!(
-                    saved.active_profile().unwrap().last_dial_mhz,
-                    saved.dial_mhz
+                    remote_saved, native_saved,
+                    "persist the same full profile/settings projection as the native pick"
                 );
             }
         }

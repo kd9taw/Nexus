@@ -71,7 +71,7 @@ it('projects older station capability hints for each browser version after room 
     expect(browser.frames).toHaveLength(1)
     if (version === 1) expect(browser.frames[0].value.controls).toBeUndefined()
     else expect(browser.frames[0].value.controls.capabilities).toEqual(version === 2 ? ['decoder', 'amplifier'] : wire.controls!.capabilities)
-    expect(wire.controls!.capabilities).toHaveLength(10)
+    expect(wire.controls!.capabilities).toHaveLength(11)
   }
 })
 

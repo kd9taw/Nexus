@@ -996,7 +996,7 @@ fn band_selection_requires_v3_and_a_later_native_owner_receipt() {
                 Instant::now(),
             )
         };
-        assert_eq!(run(2, &command).unwrap()["reason"], "unsupportedAction");
+        assert_eq!(run(2, &command).unwrap_err(), "stationUnsupported");
         assert!(f.engine.lock().unwrap().take_remote_radio().is_none());
         // Version refusal does not consume the v3 command window.
         let pending = run(3, &command).unwrap();
