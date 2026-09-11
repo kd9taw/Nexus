@@ -111,7 +111,8 @@ it.each(['radio', 'connection'] as const)('does not retarget an older displayed 
   act(() => h.reply({ ...h.state, revision: 2, controls: { ...h.state.controls, context } })); await tick()
   expect(h.tuning.nudge(100, displayed)).toBe(false)
   await tick(120); expect(h.writes()).toHaveLength(0)
-  expect(h.tuning.nudge(100, { ...displayed, context })).toBe(true)
+  const current = { ...displayed, context }
+  expect(h.tuning.nudge(100, current)).toBe(true)
   await tick(120)
   expect(h.writes()).toHaveLength(1); expect(h.writes()[0].request.context).toEqual(context)
   act(() => h.finish()); await tick()
