@@ -23,6 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Remote radio routing:** Typed frequencies and CW/Phone band picks follow the
   station's saved radio rules through one confirmed handoff and tune. The native
   QSY and band-memory paths retain outgoing profiles and operator choices.
+  Operating-section QSYs also follow the selected mode's rules. Section entry
+  without a QSY keeps the active radio; routed entry confirms the incoming mode,
+  dial and any power reduction before adopting it, and leaves transmit disarmed.
 - **Remote FM receiver controls:** Power, microphone gain, receiver DSP, AGC and
   bandwidth use the existing Nexus controls while receiving FM, retaining native
   control visibility. Commands preserve

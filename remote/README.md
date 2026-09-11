@@ -560,7 +560,14 @@ profile's remembered frequency as an intermediate command. Peg-lock and bandless
 routing keep their desktop meanings. Failure does not queue a retry or activate
 an unconfirmed radio. Host handoff support is required.
 
-Combined routed mode/workspace/spot changes, repeater-channel holds and satellite/split transactions,
+Operating-section changes share that handoff when native mode entry recalls a
+frequency on another radio. Preparation uses the destination mode's routing and
+profile policy; commit runs native mode entry with its original dial banking and
+reset order. Entry without a QSY keeps the active radio. A mode power ceiling is
+confirmed before adoption, retaining a lower incoming level through later polls.
+Changing the section does not arm Remote transmission.
+
+Combined routed workspace/spot changes, repeater-channel holds and satellite/split transactions,
 band-memory/spot shortcuts, scope dragging, continuous scanning and attended hardware/WAN
 acceptance remain incomplete. A compatible station build is required; this
 source increment does not update existing installations or establish paid readiness.

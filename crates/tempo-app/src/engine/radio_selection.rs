@@ -18,6 +18,11 @@ impl RadioSelection {
         self
     }
 
+    pub(super) fn with_operating_mode(mut self, mode: crate::settings::OperatingMode) -> Self {
+        self.settings.operating_mode = mode;
+        self
+    }
+
     /// Local owner input for transport/tune preparation; never a browser DTO.
     pub fn settings(&self) -> &Settings {
         &self.settings

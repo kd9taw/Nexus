@@ -643,3 +643,183 @@ fn routed_frequency_uses_one_confirmed_handoff_and_never_queues_the_incoming_pro
         }
     }
 }
+
+#[test]
+fn routed_mode_handoff_preserves_confirmed_power_and_never_replays_later() {
+    for warm in [false, true] {
+        for confirmed in [false, true] {
+            for initial_power in [0.2_f32, 0.8] {
+                let outgoing = retuning_peer(14_074_000, "USB", |_, _| None);
+                let power = Mutex::new(initial_power);
+                let incoming = retuning_peer(7_100_000, "LSB", move |line, _| {
+                    if !confirmed && line == "F 14074000" {
+                        return Some("RPRT 0\n".into());
+                    }
+                    let mut power = power.lock().unwrap();
+                    if line == "l RFPOWER" {
+                        return Some(format!("{power}\n"));
+                    }
+                    if let Some(value) = line.strip_prefix("L RFPOWER ") {
+                        *power = value.parse().unwrap();
+                        return Some("RPRT 0\n".into());
+                    }
+                    None
+                });
+                let mut s = configured_station(&outgoing, |settings| {
+                    use tempo_app::settings::{OperatingMode, RouteMode, RoutingRule};
+                    settings.operating_mode = OperatingMode::Phone;
+                    settings.max_power_digital = Some(0.4);
+                    settings.routing_rules = vec![RoutingRule {
+                        mode: Some(RouteMode::Digital),
+                        radio: 1,
+                        ..RoutingRule::default()
+                    }];
+                });
+                engine_lock(&s.engine).configure_remote_selection_host(true);
+                engine_lock(&s.engine).set_rf_power(0.8);
+                s.state.last_rf_power = Some(0.8);
+                let original = engine_lock(&s.engine).settings().clone();
+                let pool = Arc::new(MonitorConnections::new(if warm {
+                    vec![connection(&s, &incoming)]
+                } else {
+                    vec![]
+                }));
+                let receipt = s.queue_mode("digital", true);
+                assert_eq!(engine_lock(&s.engine).settings(), &original);
+                apply(&mut s, &pool, |_| {
+                    (Rig::rigctld(&incoming.address), None, Some(true))
+                });
+                assert_eq!(
+                    matches!(
+                        receipt.outcome(),
+                        Outcome::Applied {
+                            evidence: Evidence::RadioReadback
+                        }
+                    ),
+                    confirmed,
+                    "{:?}",
+                    receipt.outcome()
+                );
+                if !confirmed {
+                    assert!(matches!(receipt.outcome(), Outcome::Unknown { .. }));
+                }
+                let incoming_writes = super::fm::writes(&incoming);
+                let outgoing_writes = super::fm::writes(&outgoing);
+                assert_eq!(
+                    incoming_writes
+                        .iter()
+                        .filter(|line| line.starts_with("F "))
+                        .collect::<Vec<_>>(),
+                    vec![&"F 14074000".to_string()]
+                );
+                assert!(!outgoing_writes
+                    .iter()
+                    .any(|line| line.starts_with("F ") || line.starts_with("M ")));
+                let active_peer = if confirmed { &incoming } else { &outgoing };
+                let reads = active_peer
+                    .lines
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|line| *line == "f")
+                    .count();
+                let started = now_unix_ms();
+                for delta in [200.0, 400.0, 800.0, 1600.0, 2400.0] {
+                    s.state
+                        .step(
+                            &s.engine,
+                            &mut s.backend,
+                            &mut s.rig,
+                            &no_sinks(),
+                            started + delta,
+                            &mut mock_reopen_audio(),
+                            &mut mock_reopen_rig(),
+                            &mut StationSinks::new(),
+                        )
+                        .unwrap();
+                }
+                assert!(
+                    active_peer
+                        .lines
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .filter(|line| *line == "f")
+                        .count()
+                        > reads,
+                    "the subsequent native ticks must perform actual dial polling"
+                );
+                let without_unkey = |lines: Vec<String>| {
+                    lines
+                        .into_iter()
+                        .filter(|line| line != "T 0")
+                        .collect::<Vec<_>>()
+                };
+                assert_eq!(
+                    without_unkey(super::fm::writes(&incoming)),
+                    without_unkey(incoming_writes)
+                );
+                assert_eq!(
+                    without_unkey(super::fm::writes(&outgoing)),
+                    without_unkey(outgoing_writes)
+                );
+                let e = engine_lock(&s.engine);
+                assert_eq!(e.settings().active_radio, if confirmed { 1 } else { 0 });
+                if confirmed {
+                    let saved: Settings =
+                        serde_json::from_slice(&std::fs::read(&s.path).unwrap()).unwrap();
+                    assert_eq!(saved.dial_mhz, 14.074);
+                    assert_eq!(e.rf_power(), Some(initial_power.min(0.4)));
+                    assert_eq!(s.state.last_rf_power, Some(initial_power.min(0.4)));
+                    assert_eq!(
+                        saved.operating_mode,
+                        tempo_app::settings::OperatingMode::Digital
+                    );
+                    assert_eq!(saved.active_radio, 1);
+                    assert_eq!(saved.radios[0].last_dial_mhz, original.dial_mhz);
+                } else {
+                    assert_eq!(e.settings(), &original);
+                    assert!(!s.path.exists());
+                }
+                assert!(!e.tx_enabled());
+                assert!(s.backend.played.is_empty());
+            }
+        }
+    }
+}
+
+#[test]
+fn mode_entry_without_qsy_keeps_the_native_radio_despite_a_matching_route() {
+    use tempo_app::settings::{RouteMode, RoutingRule};
+    let peer = retuning_peer(14_074_000, "PKTUSB", |_, _| None);
+    let mut s = configured_station(&peer, |settings| {
+        settings.routing_rules = vec![RoutingRule {
+            mode: Some(RouteMode::Cw),
+            radio: 1,
+            ..RoutingRule::default()
+        }];
+    });
+    let receipt = s.queue_mode("cw", false);
+    assert!(engine_lock(&s.engine)
+        .take_remote_radio_selection()
+        .is_none());
+    s.step();
+    assert!(matches!(
+        receipt.outcome(),
+        Outcome::Applied {
+            evidence: Evidence::RadioReadback
+        }
+    ));
+    let e = engine_lock(&s.engine);
+    assert_eq!(e.settings().active_radio, 0);
+    assert_eq!(e.settings().dial_mhz, 14.074);
+    assert_eq!(
+        e.settings().operating_mode,
+        tempo_app::settings::OperatingMode::Cw
+    );
+    assert!(!e.tx_enabled());
+    assert!(super::fm::writes(&peer)
+        .iter()
+        .any(|line| line.starts_with("M CW ")));
+    assert!(s.backend.played.is_empty());
+}

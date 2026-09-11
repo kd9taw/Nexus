@@ -294,6 +294,10 @@ impl RadioLoop {
             }
         }
         if let Some(power) = readback.radio().power() {
+            if configuration.adopt_limited_power {
+                self.last_rf_power = Some(power);
+                engine.set_rf_power(power);
+            }
             engine.observe_rig_power(power);
         }
         if let Some(agc) = configuration.agc {

@@ -24,6 +24,14 @@ struct RoutedTune {
     band: String,
     sideband: String,
     band_mode: Option<String>,
+    mode_entry: Option<ModeEntry>,
+}
+
+struct ModeEntry {
+    mode: String,
+    follow_frequency: bool,
+    power_limit: Option<f32>,
+    prior_power: (Option<f32>, Option<f32>),
 }
 
 /// Final position read by the incoming connection owner, never a browser DTO.
@@ -45,6 +53,9 @@ pub struct Configuration {
     pub levels: Vec<(RadioLevel, f32)>,
     pub agc: Option<AgcSpeed>,
     pub power_limit: Option<f32>,
+    /// A mode ceiling may carry a lower incoming level; preserve that readback
+    /// instead of turning the ceiling into a later requested power increase.
+    pub adopt_limited_power: bool,
 }
 
 impl Engine {
@@ -88,6 +99,40 @@ impl Engine {
                 band: band.into(),
                 sideband: sideband.into(),
                 band_mode: None,
+                mode_entry: None,
+            }),
+            connection,
+            permit,
+        )
+    }
+
+    pub(super) fn queue_remote_routed_mode(
+        &mut self,
+        id: u32,
+        mode: &str,
+        follow_frequency: bool,
+        power_limit: Option<f32>,
+        connection: u64,
+        permit: Permit,
+    ) -> Result<Completion, Reason> {
+        if !self.remote_selection_host_ready {
+            return Err(Reason::UnsupportedAction);
+        }
+        let entry = self.prepare_mode_entry(mode, follow_frequency);
+        let (dial_mhz, sideband) = entry.frequency.ok_or(Reason::ContextChanged)?;
+        self.queue_remote_selection(
+            id,
+            Some(RoutedTune {
+                dial_mhz,
+                band: self.settings.band.clone(),
+                sideband,
+                band_mode: None,
+                mode_entry: Some(ModeEntry {
+                    mode: mode.into(),
+                    follow_frequency,
+                    power_limit,
+                    prior_power: (self.rf_power, self.rig_rf_power),
+                }),
             }),
             connection,
             permit,
@@ -141,6 +186,12 @@ impl Engine {
             .ok_or(Reason::InvalidAction)?;
         if let Some(tune) = &tune {
             selection = selection.with_frequency(tune.dial_mhz, &tune.band, &tune.sideband);
+            if let Some(entry) = &tune.mode_entry {
+                selection = selection.with_operating_mode(
+                    self.prepare_mode_entry(&entry.mode, entry.follow_frequency)
+                        .mode,
+                );
+            }
         }
         let request = Request {
             original: self.settings.clone(),
@@ -171,10 +222,27 @@ impl Request {
     fn preview(&self, engine: &Engine) -> Option<RadioSelection> {
         let mut selection = engine.preview_radio_selection(self.settings().active_radio)?;
         if let Some(tune) = &self.tune {
-            if !engine.remote_selection_host_ready
-                || engine.remote_frequency_route(tune.dial_mhz, &tune.band)
-                    != Some(self.settings().active_radio)
-            {
+            if !engine.remote_selection_host_ready {
+                return None;
+            }
+            let routed = if let Some(entry) = &tune.mode_entry {
+                let prepared = engine.prepare_mode_entry(&entry.mode, entry.follow_frequency);
+                if prepared.frequency != Some((tune.dial_mhz, tune.sideband.clone()))
+                    || engine.settings.band != tune.band
+                    || engine.settings.radio_pegged
+                    || (engine.rf_power, engine.rig_rf_power) != entry.prior_power
+                {
+                    return None;
+                }
+                selection = selection.with_operating_mode(prepared.mode);
+                engine.settings.route_radio(
+                    &tune.band,
+                    engine.route_mode_for(&tune.band, tune.dial_mhz, prepared.mode),
+                )
+            } else {
+                engine.remote_frequency_route(tune.dial_mhz, &tune.band)
+            };
+            if routed != Some(self.settings().active_radio) {
                 return None;
             }
             if let Some(mode) = &tune.band_mode {
@@ -213,11 +281,22 @@ impl Request {
 
     pub fn configuration(&self, engine: &Engine) -> Result<Configuration, Reason> {
         self.validate(engine)?;
-        let limit = self.settings().rf_power_ceiling();
+        let mode_limit = self
+            .tune
+            .as_ref()
+            .and_then(|tune| tune.mode_entry.as_ref())
+            .and_then(|entry| entry.power_limit);
+        let limit = self
+            .settings()
+            .rf_power_ceiling()
+            .min(mode_limit.unwrap_or(1.0));
         let levels = [
             (
                 RadioLevel::Power,
-                engine.rf_power.map(|power| power.min(limit)),
+                engine
+                    .rf_power
+                    .filter(|_| mode_limit.is_none())
+                    .map(|power| power.min(limit)),
             ),
             (RadioLevel::MicGain, engine.mic_gain),
             (RadioLevel::NoiseReduction, engine.nr_level),
@@ -236,6 +315,7 @@ impl Request {
             levels,
             agc,
             power_limit: (limit < 1.0).then_some(limit),
+            adopt_limited_power: mode_limit.is_some(),
         })
     }
 
@@ -308,7 +388,14 @@ impl Request {
         }
         let incoming = self.settings().active_radio;
         if let Some(tune) = &self.tune {
-            if let Some(mode) = &tune.band_mode {
+            if let Some(entry) = &tune.mode_entry {
+                engine.set_operating_mode_with_reset(
+                    &entry.mode,
+                    entry.follow_frequency,
+                    false,
+                    || decoder.reset_held(),
+                );
+            } else if let Some(mode) = &tune.band_mode {
                 engine.pick_band_with_reset(&tune.band, Some(mode), || decoder.reset_held());
             } else {
                 engine.tune_dial_with_reset(
@@ -940,6 +1027,106 @@ mod tests {
             .cat
             .unwrap()
             .connection_generation
+    }
+
+    #[test]
+    fn routed_mode_entry_matches_native_mode_memory_profiles_and_disarming() {
+        use crate::settings::{OperatingMode, RouteMode, RoutingRule};
+        for (name, route, phone, dial, band) in [
+            ("digital", RouteMode::Digital, "ssb", 14.250, "20m"),
+            ("keyboard", RouteMode::Digital, "ssb", 14.250, "20m"),
+            ("cw", RouteMode::Cw, "ssb", 14.250, "20m"),
+            ("rtty", RouteMode::Rtty, "ssb", 14.250, "20m"),
+            ("phone", RouteMode::Ssb, "ssb", 14.074, "20m"),
+            ("phone", RouteMode::Fm, "fm", 145.550, "2m"),
+        ] {
+            let (mut engine, incoming, _) = station();
+            engine.settings.operating_mode = if name == "phone" {
+                OperatingMode::Digital
+            } else {
+                OperatingMode::Phone
+            };
+            engine.settings.phone_mode = phone.into();
+            engine.set_frequency(dial, band, "USB");
+            engine.take_immediate_retune();
+            engine.settings.routing_rules = vec![RoutingRule {
+                mode: Some(route),
+                radio: incoming,
+                ..RoutingRule::default()
+            }];
+            engine.configure_remote_selection_host(true);
+            let mut native = Engine::with_settings(engine.settings.clone());
+            native.freq_memory = engine.freq_memory.clone();
+            native.set_tx_enabled(false);
+            native.set_operating_mode_with_arming(name, true, false);
+            native.take_immediate_retune();
+            assert_eq!(native.settings.active_radio, incoming, "{name} {phone}");
+            let generation = refresh(&mut engine);
+            let original = engine.settings.clone();
+            let memory = engine.freq_memory.clone();
+            let authority = Revocation::default();
+            let receipt = engine
+                .queue_remote_mode(name, true, generation, permit(&authority))
+                .unwrap();
+            assert_eq!(engine.settings, original);
+            assert_eq!(engine.freq_memory, memory);
+            assert!(engine.take_remote_radio().is_none());
+            let request = engine.take_remote_radio_selection().unwrap();
+            assert_eq!(request.settings(), native.settings(), "{name} {phone}");
+            assert!(commit(request, &mut engine, |_| {}));
+            assert!(matches!(
+                receipt.outcome(),
+                Outcome::Applied {
+                    evidence: Evidence::RadioReadback
+                }
+            ));
+            assert_eq!(engine.settings, native.settings, "{name} {phone}");
+            assert_eq!(engine.freq_memory, native.freq_memory, "{name} {phone}");
+            assert!(!engine.tx_enabled());
+            assert!(!engine.immediate_retune);
+            assert_eq!(
+                Settings::load(engine.remote_settings_path.as_ref().unwrap()),
+                engine.settings
+            );
+        }
+    }
+
+    #[test]
+    fn routed_mode_rechecks_recall_power_host_and_authority_before_commit() {
+        use crate::settings::{RouteMode, RoutingRule};
+        for change in ["host", "power", "authority", "peg", "memory"] {
+            let (mut engine, incoming, _) = station();
+            engine.settings.routing_rules = vec![RoutingRule {
+                mode: Some(RouteMode::Cw),
+                radio: incoming,
+                ..RoutingRule::default()
+            }];
+            engine.configure_remote_selection_host(true);
+            let generation = refresh(&mut engine);
+            let authority = Revocation::default();
+            let receipt = engine
+                .queue_remote_mode("cw", true, generation, permit(&authority))
+                .unwrap();
+            let request = engine.take_remote_radio_selection().unwrap();
+            match change {
+                "host" => engine.configure_remote_selection_host(false),
+                "power" => engine.observe_rig_power(0.2),
+                "authority" => authority.revoke(),
+                "peg" => engine.settings.radio_pegged = true,
+                "memory" => {
+                    engine.set_frequency(14.040, "20m", "USB");
+                    engine.take_immediate_retune();
+                }
+                _ => unreachable!(),
+            }
+            let original = engine.settings.clone();
+            assert!(!commit(request, &mut engine, |_| panic!(
+                "stale mode installed"
+            )));
+            assert_eq!(engine.settings, original);
+            assert!(matches!(receipt.outcome(), Outcome::Rejected { .. }));
+            assert!(!engine.remote_settings_path.as_ref().unwrap().exists());
+        }
     }
 
     #[test]

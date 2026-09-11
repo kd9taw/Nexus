@@ -264,9 +264,9 @@ impl Engine {
         // the live station. Commit calls the existing native verb under its lock.
         let mut projected = self.settings.clone();
         projected.operating_mode = entry.mode;
-        if let Some((dial, sideband)) = entry.frequency {
-            projected.dial_mhz = dial;
-            projected.sideband = sideband;
+        if let Some((dial, sideband)) = &entry.frequency {
+            projected.dial_mhz = *dial;
+            projected.sideband = sideband.clone();
         } else if entry.mode == OperatingMode::Digital
             && projected.sideband.eq_ignore_ascii_case("LSB")
         {
@@ -278,16 +278,6 @@ impl Engine {
         let target_mode = mode_override
             .map(str::to_string)
             .unwrap_or_else(|| projected.rig_mode());
-        if !projected.radio_pegged
-            && projected
-                .route_radio(
-                    &projected.band,
-                    self.route_mode_for(&projected.band, projected.dial_mhz, entry.mode),
-                )
-                .is_some_and(|id| id != projected.active_radio)
-        {
-            return Err(Reason::UnsupportedAction);
-        }
         let ceiling = if mode_override.is_some_and(|m| m.eq_ignore_ascii_case("AM")) {
             projected.rf_power_ceiling_am()
         } else {
@@ -301,6 +291,26 @@ impl Engine {
         });
         if power_limit.is_some_and(|p| !p.is_finite() || !(0.0..=1.0).contains(&p)) {
             return Err(Reason::ReadingUnavailable);
+        }
+        // Native section entry routes only through its optional QSY. Merely
+        // entering a section with follow-frequency off keeps the active radio.
+        if entry.frequency.is_some() && !projected.radio_pegged {
+            if let Some(id) = projected
+                .route_radio(
+                    &projected.band,
+                    self.route_mode_for(&projected.band, projected.dial_mhz, entry.mode),
+                )
+                .filter(|id| *id != projected.active_radio)
+            {
+                return self.queue_remote_routed_mode(
+                    id,
+                    mode,
+                    follow_frequency,
+                    power_limit,
+                    connection,
+                    permit,
+                );
+            }
         }
         self.queue_remote_target(
             Target {

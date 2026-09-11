@@ -6378,6 +6378,16 @@ impl Engine {
     // Remote entry shares every native section/memory/power decision but cannot
     // acquire transmit authority as a side effect. Local entry keeps its latch.
     fn set_operating_mode_with_arming(&mut self, mode: &str, follow_freq: bool, arm_manual: bool) {
+        self.set_operating_mode_with_reset(mode, follow_freq, arm_manual, modes::reset_ft8_a7);
+    }
+
+    fn set_operating_mode_with_reset(
+        &mut self,
+        mode: &str,
+        follow_freq: bool,
+        arm_manual: bool,
+        mut reset: impl FnMut(),
+    ) {
         use crate::settings::OperatingMode;
         // Resolve the destination without changing the station. Remote radio
         // transactions need this same decision before attempting hardware I/O.
@@ -6469,7 +6479,7 @@ impl Engine {
         let mut re_homed = false;
         if let Some((dial, sideband)) = entry.frequency {
             let band = self.settings.band.clone();
-            self.set_frequency(dial, &band, &sideband); // also flags immediate_retune
+            self.tune_dial_with_reset(dial, &band, &sideband, DialOrigin::Operator, &mut reset);
             re_homed = true;
         }
         // ⭐ THE DIGITAL SECTION RE-DERIVES ITS SIDE EVEN WHEN IT DOES NOT QSY —
