@@ -659,6 +659,13 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
           assert.equal(stationRequests.length,count+7+n)
           assert.equal(stationRequests.at(-1).action.action,n===6?'ft.cq':'ft.message')
           await until(`!document.querySelector('${tx}').disabled`)
+          // The command receipt can precede the rendered station snapshot.
+          // Wait for its actual target and next-message indicator before
+          // selecting the next row; a stale QSO must still be refused.
+          if(n<6){
+            const text=stationRequests.at(-1).action.text
+            await until(`document.querySelector('.cockpit-qso .cq-dx')?.textContent==='K2ABC'&&(()=>{const e=document.querySelector('.txp-row.next .txp-msg');return (e?.value??e?.textContent)?.trim()===${JSON.stringify(text)}})()`)
+          }
         }
         await click(`document.querySelectorAll('.cockpit-layout-toggle .clt-opt')[1]`)
         // Missing station display data blocks arming but cannot block Stop.
