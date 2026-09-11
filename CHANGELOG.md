@@ -26,6 +26,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Operating-section QSYs also follow the selected mode's rules. Section entry
   without a QSY keeps the active radio; routed entry confirms the incoming mode,
   dial and any power reduction before adopting it, and leaves transmit disarmed.
+- **Remote decoder radio routing:** Decoder selections that move to another
+  radio's channel use one confirmed handoff, then install the native decoder.
+  Native channel fallbacks and offset rules remain in force. A busy decoder
+  refuses the change; a missing channel keeps the current dial and radio.
 - **Remote routed DX spots:** CW and Phone Work actions can select the radio
   named by saved routing rules and tune the exact spot in one confirmed handoff.
   Contact prefill and cockpit navigation follow successful adoption; failed

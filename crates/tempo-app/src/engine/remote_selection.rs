@@ -25,6 +25,7 @@ struct RoutedTune {
     sideband: String,
     band_mode: Option<String>,
     mode_entry: Option<ModeEntry>,
+    tier: Option<(crate::dto::Tier, crate::dto::Tier)>,
 }
 
 struct ModeEntry {
@@ -110,6 +111,7 @@ impl Engine {
                 sideband: sideband.into(),
                 band_mode: None,
                 mode_entry: None,
+                tier: None,
             }),
             connection,
             permit,
@@ -144,6 +146,7 @@ impl Engine {
                     power_limit,
                     prior_power: (self.rf_power, self.rig_rf_power),
                 }),
+                tier: None,
             }),
             connection,
             permit,
@@ -174,6 +177,35 @@ impl Engine {
                     power_limit: spot.power_limit,
                     prior_power: (self.rf_power, self.rig_rf_power),
                 }),
+                tier: None,
+            }),
+            connection,
+            permit,
+        )
+    }
+
+    pub(super) fn queue_remote_routed_tier(
+        &mut self,
+        id: u32,
+        tier: crate::dto::Tier,
+        connection: u64,
+        permit: Permit,
+    ) -> Result<Completion, Reason> {
+        if !self.remote_selection_host_ready {
+            return Err(Reason::UnsupportedAction);
+        }
+        let channel = self
+            .prepare_tier_frequency(tier)
+            .ok_or(Reason::ContextChanged)?;
+        self.queue_remote_selection(
+            id,
+            Some(RoutedTune {
+                dial_mhz: channel.dial_mhz,
+                band: channel.band,
+                sideband: channel.mode,
+                band_mode: None,
+                mode_entry: None,
+                tier: Some((tier, self.tier())),
             }),
             connection,
             permit,
@@ -286,6 +318,19 @@ impl Request {
             };
             if routed != Some(self.settings().active_radio) {
                 return None;
+            }
+            if let Some((tier, original)) = tune.tier {
+                if engine.tier() != original
+                    || tier == original
+                    || engine.settings.operating_mode != crate::settings::OperatingMode::Digital
+                    || !engine.prepare_tier_frequency(tier).is_some_and(|channel| {
+                        channel.dial_mhz == tune.dial_mhz
+                            && channel.band == tune.band
+                            && channel.mode == tune.sideband
+                    })
+                {
+                    return None;
+                }
             }
             if let Some(mode) = &tune.band_mode {
                 let om = match mode.as_str() {
@@ -420,17 +465,45 @@ impl Request {
             {
                 return Err(Reason::HardwareUnconfirmed);
             }
-            // Selection itself changes station state, even if CAT setup was a
-            // no-op. Abandonment after this boundary cannot report rejection.
-            self.permission.begin_write(Instant::now())
+            self.permission.check(Instant::now())
         })();
         if let Err(reason) = ready {
             self.refuse(reason);
             return false;
         }
+        let source = engine.source.clone();
+        let mut source_slot = if self.tune.as_ref().is_some_and(|tune| tune.tier.is_some()) {
+            match source.try_lock() {
+                Ok(slot) => Some(slot),
+                Err(std::sync::TryLockError::Poisoned(error)) => Some(error.into_inner()),
+                Err(std::sync::TryLockError::WouldBlock) => {
+                    self.refuse(Reason::StationBusy);
+                    return false;
+                }
+            }
+        } else {
+            None
+        };
+        // Selection changes station state even when CAT setup was a no-op.
+        // Never wait behind a decoder after crossing this boundary.
+        if let Err(reason) = self.permission.begin_write(Instant::now()) {
+            self.refuse(reason);
+            return false;
+        }
         let incoming = self.settings().active_radio;
         if let Some(tune) = &self.tune {
-            if let Some(entry) = &tune.mode_entry {
+            if let Some((tier, _)) = tune.tier {
+                engine.set_tier_with_installer_and_reset(
+                    tier,
+                    |engine, decoder| {
+                        engine.install_source_into(
+                            source_slot.as_mut().expect("tier source lock"),
+                            decoder,
+                        )
+                    },
+                    || decoder.reset_held(),
+                );
+            } else if let Some(entry) = &tune.mode_entry {
                 if let Some(call) = &entry.spot_call {
                     engine.work_spot_split_with_reset(
                         &entry.mode,
@@ -1081,6 +1154,135 @@ mod tests {
             .cat
             .unwrap()
             .connection_generation
+    }
+
+    #[test]
+    fn routed_tier_preserves_native_decoder_channel_offsets_and_profile_policy() {
+        use crate::dto::Tier;
+        use crate::settings::{RouteMode, RoutingRule};
+        for tier in [
+            Tier::Ft4,
+            Tier::Ft2,
+            Tier::Wspr,
+            Tier::Q65,
+            Tier::Msk144,
+            Tier::Jt65,
+            Tier::Fst4,
+            Tier::Fst4w,
+            Tier::TempoFast,
+            Tier::TempoDeep,
+            Tier::Js8,
+        ] {
+            let (mut engine, incoming, _) = station();
+            engine.set_frequency(14.250, "20m", "USB");
+            engine.take_immediate_retune();
+            engine.configure_remote_selection_host(true);
+            engine.settings.routing_rules = vec![RoutingRule {
+                mode: Some(RouteMode::Digital),
+                radio: incoming,
+                ..RoutingRule::default()
+            }];
+            let mut native = Engine::with_settings(engine.settings.clone());
+            native.settings.radio_pegged = true;
+            native.set_frequency(14.250, "20m", "USB");
+            native.settings.radio_pegged = false;
+            native.freq_memory = engine.freq_memory.clone();
+            for e in [&mut engine, &mut native] {
+                e.set_rx_offset(2300.0);
+                e.set_tx_offset(2400.0);
+                e.set_tx_enabled(false);
+                e.take_immediate_retune();
+            }
+            native.set_tier(tier);
+            native.take_immediate_retune();
+            assert_eq!(native.settings.active_radio, incoming, "{tier:?}");
+            let original = engine.settings.clone();
+            let source = engine.source.clone();
+            let generation = refresh(&mut engine);
+            let authority = Revocation::default();
+            let receipt = engine
+                .queue_remote_tier(tier, generation, permit(&authority))
+                .unwrap();
+            assert_eq!(engine.settings, original);
+            assert_eq!(engine.tier(), Tier::Ft8);
+            let request = engine.take_remote_radio_selection().unwrap();
+            // The projection configures hardware. The native tier owner still
+            // owns decoder and offset changes at commit; it is never replaced
+            // wholesale by this temporary Settings value.
+            assert_eq!(request.settings().active_radio, incoming);
+            assert_eq!(request.settings().dial_hz(), native.settings.dial_hz());
+            assert_eq!(request.settings().rig_mode(), native.settings.rig_mode());
+            assert!(commit(request, &mut engine, |_| {}));
+            assert!(matches!(
+                receipt.outcome(),
+                Outcome::Applied {
+                    evidence: Evidence::RadioReadback
+                }
+            ));
+            assert_eq!(engine.settings, native.settings, "{tier:?}");
+            assert_eq!(engine.freq_memory, native.freq_memory, "{tier:?}");
+            assert_eq!(engine.tier(), native.tier());
+            assert_eq!(engine.source_label, native.source_label);
+            assert!(std::sync::Arc::ptr_eq(&source, &engine.source));
+            assert_eq!(engine.rx_offset_hz, native.rx_offset_hz);
+            assert_eq!(engine.tx_offset_hz, native.tx_offset_hz);
+            assert!(!engine.tx_enabled());
+            assert!(!engine.immediate_retune);
+            let saved: Settings = serde_json::from_slice(
+                &std::fs::read(engine.remote_settings_path.as_ref().unwrap()).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(saved, engine.settings);
+        }
+    }
+
+    #[test]
+    fn routed_tier_refuses_a_busy_decoder_at_admission_and_final_commit() {
+        use crate::dto::Tier;
+        use crate::settings::{RouteMode, RoutingRule};
+        let (mut engine, incoming, generation) = station();
+        engine.configure_remote_selection_host(true);
+        engine.settings.routing_rules = vec![RoutingRule {
+            mode: Some(RouteMode::Digital),
+            radio: incoming,
+            ..RoutingRule::default()
+        }];
+        let source = engine.source.clone();
+        let slot = source.lock().unwrap();
+        let authority = Revocation::default();
+        assert!(matches!(
+            engine.queue_remote_tier(Tier::Msk144, generation, permit(&authority)),
+            Err(Reason::StationBusy)
+        ));
+        drop(slot);
+        let original = engine.settings.clone();
+        let label = engine.source_label.clone();
+        let receipt = engine
+            .queue_remote_tier(Tier::Msk144, generation, permit(&authority))
+            .unwrap();
+        let request = engine.take_remote_radio_selection().unwrap();
+        let slot = source.lock().unwrap();
+        assert!(!commit(request, &mut engine, |_| panic!(
+            "busy decoder installed"
+        )));
+        assert!(matches!(
+            receipt.outcome(),
+            Outcome::Rejected {
+                reason: Reason::StationBusy
+            }
+        ));
+        assert_eq!(engine.settings, original);
+        assert_eq!(engine.source_label, label);
+        assert_eq!(engine.tier(), Tier::Ft8);
+        assert!(!engine.remote_settings_path.as_ref().unwrap().exists());
+        drop(slot);
+        // Positive control after releasing that same stable source lock.
+        let receipt = engine
+            .queue_remote_tier(Tier::Msk144, generation, permit(&authority))
+            .unwrap();
+        let request = engine.take_remote_radio_selection().unwrap();
+        assert!(commit(request, &mut engine, |_| {}));
+        assert!(matches!(receipt.outcome(), Outcome::Applied { .. }));
     }
 
     #[test]

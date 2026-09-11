@@ -16,8 +16,8 @@ import { tempoConversations } from './tempo-fixture.mjs'
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
-for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='phone',contactContinuity,workSpot,radioSelection} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,14].map(applicationVersion=>({applicationVersion,operating:false})),{applicationVersion:14,operating:true},{applicationVersion:14,operating:true,sessionLayout:true},{applicationVersion:14,operating:true,quickLayout:true},{applicationVersion:14,operating:true,quickLayout:true,quickMode:'cw'},{applicationVersion:14,operating:true,contactContinuity:true},{applicationVersion:14,operating:true,workSpot:true},{applicationVersion:14,operating:true,radioSelection:true}]) test(`compiled hosted browser ${radioSelection?'radio selection':workSpot?'DX work':contactContinuity?'contact continuity':quickLayout?`quick layout${quickMode==='cw'?' CW':''}`:sessionLayout?'session layout':operating?'operations':`v${applicationVersion}`} completes PKCE, local device approval, observation and viewport checks`, { timeout: applicationVersion >= 14 ? 540000 : applicationVersion >= 13 ? 420000 : 180000 }, async context => {
-  const app=await runtime(), artifacts=process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS ? join(process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS, radioSelection?'radio-selection':workSpot?'dx-work':contactContinuity?'contact-continuity':quickLayout?`quick-layout${quickMode==='cw'?'-cw':''}`:sessionLayout?'session-layout':operating?'operations':`v${applicationVersion}`) : undefined
+for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='phone',contactContinuity,workSpot,radioSelection,routedTier} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,14].map(applicationVersion=>({applicationVersion,operating:false})),{applicationVersion:14,operating:true},{applicationVersion:14,operating:true,sessionLayout:true},{applicationVersion:14,operating:true,quickLayout:true},{applicationVersion:14,operating:true,quickLayout:true,quickMode:'cw'},{applicationVersion:14,operating:true,contactContinuity:true},{applicationVersion:14,operating:true,workSpot:true},{applicationVersion:14,operating:true,radioSelection:true},{applicationVersion:14,operating:true,radioSelection:true,routedTier:true}]) test(`compiled hosted browser ${routedTier?'routed decoder':radioSelection?'radio selection':workSpot?'DX work':contactContinuity?'contact continuity':quickLayout?`quick layout${quickMode==='cw'?' CW':''}`:sessionLayout?'session layout':operating?'operations':`v${applicationVersion}`} completes PKCE, local device approval, observation and viewport checks`, { timeout: applicationVersion >= 14 ? 540000 : applicationVersion >= 13 ? 420000 : 180000 }, async context => {
+  const app=await runtime(), artifacts=process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS ? join(process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS, routedTier?'routed-decoder':radioSelection?'radio-selection':workSpot?'dx-work':contactContinuity?'contact-continuity':quickLayout?`quick-layout${quickMode==='cw'?'-cw':''}`:sessionLayout?'session-layout':operating?'operations':`v${applicationVersion}`) : undefined
   let browser, station, producing=true, pauseObservations=false, producer, applicationProducer
   const results=[]
   const stop = cleanupAfterTest(context, async () => {
@@ -375,6 +375,12 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
             // The provider proves the real UI/relay gesture and later snapshot.
             // Native engine/worker tests separately prove channel/source policy.
             applicationData.get_snapshot.link.tier=a.tier
+            if(routedTier){
+              const radio=applicationData.get_snapshot.radio
+              if(a.tier==='MSK144'){adoptBrowserRadio(2);Object.assign(radio,{dialMhz:50.260,band:'6m',sideband:'USB',rxOffsetHz:1500,txOffsetHz:1500})}
+              else if(a.tier==='FST4'){adoptBrowserRadio(1);Object.assign(radio,{dialMhz:0.136,band:'2200m',sideband:'USB'})}
+              else assert.equal(a.tier,'FT8') // no FT8 channel on 2200m: keep the dial/radio
+            }
             if(a.tier==='MSK144')applicationData.get_snapshot.link.periodSecs=15
             assert.equal(applicationData.get_snapshot.radio.txEnabled,false)
           }else if(a.action==='decoder.js8Speed'){
@@ -589,6 +595,36 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         }
         await browser.call('Emulation.setDeviceMetricsOverride',{width:1280,height:800,deviceScaleFactor:1,mobile:false},session)
         await evaluate(`document.documentElement.style.setProperty('--ui-zoom','1');window.dispatchEvent(new Event('resize'))`);await settledLayout()
+      }
+      if(routedTier){
+        await click(button('FT'));await settledLayout()
+        for(const [selector,tier,id,mhz] of [
+          ['.topbar-group.tier-toggle:not(.tx-period) > button:nth-child(8)','MSK144',2,50.260],
+          ['.topbar-group.tier-toggle:not(.tx-period) > button:nth-child(10)','FST4',1,0.136],
+          ['.operate-cockpit .cockpit-modes > button:first-child','FT8',1,0.136],
+        ]){
+          const before=stationRequests.length,context=controlContext(),entry=`document.querySelector('${selector}')`
+          await until(`!!${entry}&&!${entry}.disabled`)
+          await measure(entry,'routed-decoder')
+          await fresh();await click(entry)
+          await until(`${entry}?.getAttribute('aria-pressed')==='true'`)
+          await until(`${pill(id)}?.getAttribute('aria-pressed')==='true'`)
+          await until(`document.querySelector('.remote-control-result')?.textContent.includes('confirmed')`)
+          assert.equal(stationRequests.length,before+1)
+          assert.deepEqual(stationRequests.at(-1).action,{action:'radio.tier',tier})
+          assert.deepEqual(stationRequests.at(-1).context,context)
+          assert.equal(applicationData.get_snapshot.radio.dialMhz,mhz)
+          assert.equal(applicationData.get_snapshot.radio.txEnabled,false)
+        }
+        stationControls=false
+        await until(`document.querySelector('.topbar-group.tier-toggle:not(.tx-period) > button:nth-child(8)')?.disabled===true`)
+        assert.equal(stationRequests.length,3);assert.equal(exceptions,0);assert.equal(unexpectedMessages,0)
+        if(artifacts){
+          const shot=await browser.call('Page.captureScreenshot',{format:'png'},session)
+          await writeFile(join(artifacts,'routed-decoder.png'),Buffer.from(shot.data,'base64'))
+          await writeFile(join(artifacts,'routed-decoder-results.json'),JSON.stringify({actions:stationRequests.map(r=>({action:r.action,context:r.context})),selectionGeometry,missingChannelRetained:true,revocationRefusal:true,exceptions,unexpectedMessages},null,2))
+        }
+        console.log('Compiled routed decoder: native selectors, station radio context, missing-channel retention and revocation passed');return
       }
       await measure(pill(2),'switcher')
       await fresh();await click(pill(2))

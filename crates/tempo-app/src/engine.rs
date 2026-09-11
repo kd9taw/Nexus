@@ -10485,6 +10485,15 @@ impl Engine {
         tier: Tier,
         install: impl FnOnce(&mut Self, Box<dyn SignalSource>),
     ) {
+        self.set_tier_with_installer_and_reset(tier, install, modes::reset_ft8_a7);
+    }
+
+    fn set_tier_with_installer_and_reset(
+        &mut self,
+        tier: Tier,
+        install: impl FnOnce(&mut Self, Box<dyn SignalSource>),
+        reset: impl FnMut(),
+    ) {
         // SAME TIER ⇒ COMPLETE NO-OP (the 1.1.0 empty-roster report). The rail's FT
         // button re-issues the tier on every return to the FT view, and without this
         // guard the stale-cycle clears below fired on a plain Logbook→FT round trip —
@@ -10675,7 +10684,13 @@ impl Engine {
             // (JS8Call's table) spans 160 m–2 m, so a miss is an exotic band and dragging the
             // operator to 160 m would be the same defect.
             if let Some(ch) = self.prepare_tier_frequency(tier) {
-                self.set_frequency(ch.dial_mhz, &ch.band, &ch.mode);
+                self.tune_dial_with_reset(
+                    ch.dial_mhz,
+                    &ch.band,
+                    &ch.mode,
+                    DialOrigin::Operator,
+                    reset,
+                );
             }
         }
     }

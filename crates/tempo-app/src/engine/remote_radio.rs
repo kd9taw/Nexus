@@ -375,13 +375,15 @@ impl Engine {
             ),
             |ch| (ch.dial_mhz, ch.band.as_str(), ch.mode.as_str()),
         );
-        if !self.settings.radio_pegged
-            && self
-                .settings
-                .route_radio(band, self.route_mode(band, dial))
-                .is_some_and(|id| id != self.settings.active_radio)
-        {
-            return Err(Reason::UnsupportedAction);
+        // Native tier selection routes only when it has a destination channel.
+        // A missing channel preserves the dial and active radio.
+        if target.is_some() {
+            if let Some(id) = self
+                .remote_frequency_route(dial, band)
+                .filter(|id| *id != self.settings.active_radio)
+            {
+                return self.queue_remote_routed_tier(id, tier, connection, permit);
+            }
         }
         self.queue_remote_target(
             Target {

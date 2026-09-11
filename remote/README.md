@@ -574,6 +574,15 @@ those effects occur only after confirmed hardware adoption. A canceled or
 unconfirmed handoff leaves the original contact context intact. Transient AM
 entry retains its native power reduction even when the spot ends in SSB.
 
+Decoder changes also use that owner when the native tier channel resolves to
+another radio. Hardware preparation targets the final channel once. Commit
+acquires the existing decoder source mutex without waiting, then runs native tier
+installation and QSY with the held reset guard. Native decoder labels, channel
+fallbacks and offset rules remain authoritative. Busy decoding refuses admission
+or final adoption; a missing channel preserves the active radio and frequency.
+Same-tier selection retains its existing complete no-op. Radio/profile adoption
+is saved; this adds no persisted decoder preference.
+
 Combined routed workspace changes, repeater-channel holds and satellite/split transactions,
 band-memory/spot shortcuts, scope dragging, continuous scanning and attended hardware/WAN
 acceptance remain incomplete. A compatible station build is required; this
