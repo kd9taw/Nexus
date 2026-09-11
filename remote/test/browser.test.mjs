@@ -1091,10 +1091,21 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
               if(target===scope&&width===1280&&zoom===1.75&&theme==='light'&&artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,`scope-${mode}-1280-175-light.png`),Buffer.from(shot.data,'base64'))}
             }
             for(const kind of ['digit','keyboard',...(['cw','phone'].includes(mode)?['scope','nudge']:[])]){
-              await freshLoggingWindow();await until(`!!document.querySelector('${digit}')`)
+              await until(`!!document.querySelector('${digit}')`)
               const before=stationRequests.length,from=applicationData.get_snapshot.radio.dialMhz
               const target=kind==='scope'?scope:kind==='nudge'?root+' .tuning-nudge:nth-of-type(3)':digit
               await evaluate(`document.querySelector('${target}').scrollIntoView({block:'center',inline:'center',behavior:'instant'})`);await settledLayout()
+              // The positive gesture starts AFTER scrolling and layout settle.
+              // Prove both independent feeds fresh; a current lease does not
+              // make an aged radio snapshot safe to tune. Never retry an input.
+              let ready
+              for(let attempt=0;attempt<20&&!ready;attempt++){
+                await freshLoggingWindow()
+                const current=await sessionDiagnostic()
+                if(Number.isFinite(current.snapshotAge)&&current.snapshotAge<600)ready=current
+              }
+              assert.ok(ready,'positive tuning needs a fresh displayed radio sample')
+              assert.equal(await evaluate(`(()=>{const e=document.querySelector('${target}'),r=e?.getBoundingClientRect();return !!e&&!e.disabled&&!!r&&r.width>0&&r.height>0&&e.contains(document.elementFromPoint(r.left+r.width/2,r.top+r.height/2))})()`),true,'the actual tuning gesture must hit its visible control')
               if(kind==='keyboard'){
                 await evaluate(`document.querySelector('${root} .readout[role="button"]').focus()`)
                 await browser.call('Input.dispatchKeyEvent',{type:'keyDown',key:'ArrowUp',code:'ArrowUp',windowsVirtualKeyCode:38},session)
