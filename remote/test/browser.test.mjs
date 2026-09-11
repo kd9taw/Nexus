@@ -47,12 +47,12 @@ async function chrome() {
     let next=0
     ws.on('message', bytes => {
       const value=JSON.parse(bytes)
-      if (value.id) { const promise=pending.get(value.id); if(promise){pending.delete(value.id);clearTimeout(promise.timer);value.error?promise.reject(new Error('Browser protocol command failed')):promise.resolve(value.result)} }
+      if (value.id) { const promise=pending.get(value.id); if(promise){pending.delete(value.id);clearTimeout(promise.timer);value.error?promise.reject(new Error(`Browser protocol command failed: ${promise.method} (${value.error.code}): ${value.error.message}`)):promise.resolve(value.result)} }
       else listeners.get(value.method)?.(value.params, value.sessionId)
     })
     const call = (method,params={},sessionId) => new Promise((resolve,reject) => {
       const id=++next, timer=setTimeout(()=>{pending.delete(id);reject(new Error(`Browser command timed out: ${method}`))},10000)
-      pending.set(id,{resolve,reject,timer});ws.send(JSON.stringify({id,method,params,sessionId}))
+      pending.set(id,{resolve,reject,timer,method});ws.send(JSON.stringify({id,method,params,sessionId}))
     })
     return { call, on: (method, fn) => listeners.set(method,fn), async stop() {
       await call('Browser.close').catch(()=>{}); ws.close()
