@@ -40,7 +40,7 @@ it.each([
 ] as const)('binds %s to the rendered settings and waits for a later snapshot', async (command, value, change) => {
   const h = fixture(), result = h.transport.invoke(command, { ...value, expectedTier: 'FT8', expected })
   await vi.advanceTimersByTimeAsync(0)
-  const request = h.sent.at(-1).request
+  const request = h.sent[h.sent.length - 1].request
   expect(request.action).toEqual({ action: 'ft.setting', expectedTier: 'FT8', transmitEpoch: key, expected, change })
   expect(h.reads.invoke).not.toHaveBeenCalled()
   expect(controlVersion(request.action)).toBe(4)
@@ -56,14 +56,14 @@ it('refuses expired captured intent without adopting refreshed settings or sendi
   const args = { hz: 1800, expectedTier: 'FT8', expected: { ...expected } }
   const result = h.transport.invoke('set_tx_offset', args), assertion = expect(result).rejects.toThrow('windowExpired')
   args.hz = 2500; args.expected.key = key.replace('1','2').repeat(2)
-  await vi.advanceTimersByTimeAsync(1250); h.reply(h.sent.at(-1).request.requestId, h.state)
+  await vi.advanceTimersByTimeAsync(1250); h.reply(h.sent[h.sent.length - 1].request.requestId, h.state)
   release(); await assertion
   expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(0)
 })
 it('refuses unrelated receipt evidence and malformed settings intents', async () => {
   const h=fixture(), result=h.transport.invoke('set_tx_offset',{hz:1800,expectedTier:'FT8',expected})
   const assertion=expect(result).rejects.toThrow('operationUnknown')
-  await vi.advanceTimersByTimeAsync(0);const request=h.sent.at(-1).request
+  await vi.advanceTimersByTimeAsync(0);const request=h.sent[h.sent.length - 1].request
   h.reply(request.requestId,{operation:'stationControl',operationId:request.requestId,outcome:'applied',evidence:'stationState'});await assertion
   const action={action:'ft.setting',expectedTier:'FT8',transmitEpoch:key,expected,change:{kind:'hold',on:true}}
   expect(stationAction(action)).toEqual(action)

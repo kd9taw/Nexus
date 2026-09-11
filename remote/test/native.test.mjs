@@ -659,6 +659,23 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
        assert.equal((await probe.send({type:'seedFt',tier})).txEnabled,false)
        let ft = await ftState()
        assert.ok(ft.controls.capabilities.includes('ftOperate'))
+       assert.ok(ft.controls.capabilities.includes('ftSettings'))
+       for (const change of [{kind:'txOffset',hz:1800},{kind:'bothOffsets',hz:2200},{kind:'hold',on:true},{kind:'even',even:false},{kind:'auto',auto:true}]) {
+         const before=await probe.send({type:'ftSettingsEvidence'})
+         ft=await ftState()
+         const changed=await action(ft,{action:'ft.setting',expectedTier:tier,expected:before.settings,change})
+         assert.equal(changed.response.value?.outcome,'applied',JSON.stringify(changed.response))
+         assert.equal(changed.response.value?.evidence,change.kind==='auto'?'stationState':'settingsSaved')
+         const after=await probe.send({type:'ftSettingsEvidence'})
+         assert.equal(after.txEnabled,false);assert.equal(after.owned,false)
+         assert.notEqual(after.settings.key,before.settings.key)
+         if(change.kind==='txOffset'||change.kind==='bothOffsets')assert.equal(after.settings.txOffsetHz,change.hz)
+         if(change.kind==='bothOffsets')assert.equal(after.settings.rxOffsetHz,change.hz)
+         if(change.kind==='hold')assert.equal(after.settings.holdTxFreq,true)
+         if(change.kind==='even'){assert.equal(after.settings.txEven,false);assert.equal(after.settings.txCycleAuto,false)}
+         if(change.kind==='auto')assert.equal(after.settings.txCycleAuto,true)
+       }
+       ft=await ftState()
        const cq = await action(ft,{action:'ft.cq',expectedTier:tier,direction:'DX'})
        assert.equal(cq.response.value?.outcome,'applied',JSON.stringify(cq.response))
        assert.deepEqual(await probe.send({type:'ftEvidence'}),{tier,txEnabled:true,owned:true,logCount:1})

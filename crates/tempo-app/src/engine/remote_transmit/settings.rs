@@ -196,7 +196,9 @@ mod tests {
                             &std::fs::read(f.dir.join("settings.json")).unwrap(),
                         )
                         .unwrap();
-                        assert_eq!(&saved, f.engine.settings());
+                        let mut expected_saved = native.engine.settings().clone();
+                        expected_saved.sync_active_from_flat();
+                        assert_eq!(saved, expected_saved);
                     }
                 }
                 f.authority.revoke();

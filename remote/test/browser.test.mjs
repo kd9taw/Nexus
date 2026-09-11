@@ -310,7 +310,21 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
           assert.deepEqual(r.context,controlContext())
           stationRequests.push(r);const a=r.action
           let qsoEvidence=null
-          if(a.action==='qso.logCurrent'){
+          if(a.action==='ft.setting'){
+            assert.ok(ftOperating&&transmitAllowed);assert.equal(a.transmitEpoch,transmitEpoch)
+            assert.equal(a.expectedTier,applicationData.get_snapshot.link.tier)
+            const s=applicationData.get_snapshot, before={...s.remoteFtSettings}
+            assert.deepEqual(a.expected,before)
+            const c=a.change
+            if(c.kind==='txOffset'||c.kind==='bothOffsets')s.radio.txOffsetHz=c.hz
+            if(c.kind==='bothOffsets')s.radio.rxOffsetHz=c.hz
+            if(c.kind==='hold')s.radio.holdTxFreq=c.on
+            if(c.kind==='even'){s.radio.txEven=c.even;s.radio.txCycleAuto=false}
+            if(c.kind==='auto')s.radio.txCycleAuto=c.auto
+            s.remoteFtSettings={key:(BigInt('0x'+before.key)+1n).toString(16).padStart(32,'0'),
+              ...Object.fromEntries(['txOffsetHz','rxOffsetHz','holdTxFreq','txEven','txCycleAuto'].map(k=>[k,s.radio[k]]))}
+            qsoEvidence=c.kind==='auto'?'stationState':'settingsSaved'
+          }else if(a.action==='qso.logCurrent'){
             assert.ok(loggingAllowed)
             assert.equal(a.expectedKey,applicationData.get_snapshot.currentQsoLogKey)
             assert.equal(a.expectedTier,applicationData.get_snapshot.link.tier)
@@ -487,7 +501,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
           loggingReceipts.set(r.requestId,value);loggingRevision++;applicationRevision++
           if(loseSpotReply&&a.action==='radio.workSpot')continue
         }else if(r.type==='result'){value=loggingReceipts.get(r.operationId);if(!value)error='resultExpired';else if(loseSpotReply&&value.operation==='stationControl')value={operation:'stationControl',operationId:r.operationId,outcome:'unknown',reason:'hardwareUnconfirmed'}}
-        else value={stationBootId:loggingBoot,allowed:loggingAllowed||stationControls,phase:loggingLease?'controlling':loggingAllowed||stationControls?'available':'localPermissionRequired',leaseId:loggingLease,revision:loggingRevision,commandWindowId:loggingLease?loggingWindow:null,nextSequence:loggingLease?loggingSequence+1:null,leaseRemainingMs:loggingLease?Math.max(0,Math.floor(loggingLeaseUntil-performance.now())):null,actions:loggingAllowed?['log.manual']:[],txArmed:!!ftOperating&&!!loggingLease&&transmitAllowed&&applicationData.get_snapshot.radio.txEnabled,...(ftOperating?{transmitEpoch:transmitAllowed?transmitEpoch:null}:{}),...(stationControls?{controls:{context:controlContext(),capabilities:request.operationVersion>=3?['decoder','amplifier','frequency','mode','tier','ampFollowBand','workspace','decoderSettings','receiverSettings','receiverGain','bandSelection','receiverFilter','receiverDsp','phoneMode','fmTuning','fmReceiver','radioLevels',...(transmitAllowed?['ftOperate','ftCall','ftExchange','ftMessages']:[]),...(ftOperating&&loggingAllowed?['qsoLogging']:[]),...(workSpot?['workSpot']:[]),...(radioSelection?['radioSelection']:[])]:['decoder','amplifier']}}:{})}
+        else value={stationBootId:loggingBoot,allowed:loggingAllowed||stationControls,phase:loggingLease?'controlling':loggingAllowed||stationControls?'available':'localPermissionRequired',leaseId:loggingLease,revision:loggingRevision,commandWindowId:loggingLease?loggingWindow:null,nextSequence:loggingLease?loggingSequence+1:null,leaseRemainingMs:loggingLease?Math.max(0,Math.floor(loggingLeaseUntil-performance.now())):null,actions:loggingAllowed?['log.manual']:[],txArmed:!!ftOperating&&!!loggingLease&&transmitAllowed&&applicationData.get_snapshot.radio.txEnabled,...(ftOperating?{transmitEpoch:transmitAllowed?transmitEpoch:null}:{}),...(stationControls?{controls:{context:controlContext(),capabilities:request.operationVersion>=3?['decoder','amplifier','frequency','mode','tier','ampFollowBand','workspace','decoderSettings','receiverSettings','receiverGain','bandSelection','receiverFilter','receiverDsp','phoneMode','fmTuning','fmReceiver','radioLevels',...(transmitAllowed?['ftOperate','ftCall','ftExchange','ftMessages','ftSettings']:[]),...(ftOperating&&loggingAllowed?['qsoLogging']:[]),...(workSpot?['workSpot']:[]),...(radioSelection?['radioSelection']:[])]:['decoder','amplifier']}}:{})}
         source.send({type:'operationResponse',sessionId:request.sessionId,requestId:r.requestId,...(error?{error}:{value})});continue
       }
       if (request.type === 'applicationQuery') {
@@ -627,9 +641,36 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       assert.equal(await evaluate(`document.querySelector('${cq}').disabled`),true)
       transmitAllowed=true
       for(const tier of ['FT8','FT4']){
-        applicationData.get_snapshot.link.tier=tier;applicationRevision++
+        applicationData.get_snapshot.link.tier=tier
+        Object.assign(applicationData.get_snapshot.radio,{txOffsetHz:1500,rxOffsetHz:1500,holdTxFreq:false,txEven:true,txCycleAuto:true})
+        applicationData.get_snapshot.remoteFtSettings={key:(tier==='FT8'?'1':'2').padStart(32,'0'),txOffsetHz:1500,rxOffsetHz:1500,holdTxFreq:false,txEven:true,txCycleAuto:true}
+        applicationRevision++
         await until(`[...document.querySelectorAll('.tier-btn.active')].some(e=>e.textContent.trim()===${JSON.stringify(tier)})`)
         await until(`!document.querySelector('${cq}').disabled`)
+        const txField=".operate-cockpit .df-field:last-child input"
+        await until(`!document.querySelector('${txField}').disabled`)
+        let preferences=stationRequests.length
+        await click(`document.querySelector('${txField}')`);await evaluate(`document.querySelector('${txField}').select()`)
+        await browser.call('Input.insertText',{text:'1800'},session)
+        for(const type of ['keyDown','keyUp'])await browser.call('Input.dispatchKeyEvent',{type,key:'Enter',code:'Enter',windowsVirtualKeyCode:13},session)
+        await until(`document.querySelector('${txField}').value==='1800'&&!document.querySelector('${txField}').disabled`)
+        assert.equal(stationRequests.length,++preferences);assert.equal(stationRequests.at(-1).action.change.kind,'txOffset')
+        for(const [selector,kind]of [['.op-btn.hold','hold'],['.cq-period','even'],['.cq-period','even'],['.cq-period','auto']]){
+          await click(`document.querySelector('.cockpit-qso ${selector}')`)
+          for(let i=0;i<100&&stationRequests.length===preferences;i++)await sleep(50)
+          assert.equal(stationRequests.length,++preferences);assert.equal(stationRequests.at(-1).action.change.kind,kind)
+          await until(`!document.querySelector('${txField}').disabled`)
+        }
+        // Real modified waterfall gestures retain native TX-only / both semantics.
+        for(const [modifiers,kind]of [[8,'txOffset'],[2,'bothOffsets']]){
+          await evaluate(`document.querySelector('.operate-cockpit .waterfall-canvas').scrollIntoView({block:'center',behavior:'instant'})`);await settledLayout()
+          const point=await evaluate(`(()=>{const e=document.querySelector('.operate-cockpit .waterfall-canvas'),r=e.getBoundingClientRect(),x=r.left+r.width*.4,y=r.top+r.height*.5;return{x,y,hit:e.contains(document.elementFromPoint(x,y))}})()`)
+          assert.equal(point.hit,true)
+          for(const type of ['mousePressed','mouseReleased'])await browser.call('Input.dispatchMouseEvent',{type,x:point.x,y:point.y,button:'left',modifiers,clickCount:1},session)
+          for(let i=0;i<100&&stationRequests.length===preferences;i++)await sleep(50)
+          assert.equal(stationRequests.length,++preferences);assert.equal(stationRequests.at(-1).action.change.kind,kind)
+          await until(`!document.querySelector('${txField}').disabled`)
+        }
         let count=stationRequests.length
         await click(`document.querySelector('${cq}')`)
         await until(`document.querySelector('${tx}')?.textContent.trim()==='TX On'&&!document.querySelector('${tx}').disabled`)
@@ -734,17 +775,17 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       applicationData.get_snapshot.currentQsoLogKey='00000000000000040000000000000001';applicationData.get_snapshot.qso.dxcall='K2ABC';applicationRevision++
       await until(`!document.querySelector('${log}').disabled&&document.querySelector('.cockpit-qso .cq-dx')?.textContent==='K2ABC'`)
       await click(`document.querySelector('${log}')`)
-      for(let i=0;i<100&&stationRequests.length<30;i++)await sleep(50)
-      assert.equal(stationRequests.length,30)
+      for(let i=0;i<100&&stationRequests.length<44;i++)await sleep(50)
+      assert.equal(stationRequests.length,44)
       assert.equal(stationRequests.at(-1).action.action,'qso.logCurrent')
       assert.equal(await evaluate(`!!document.querySelector('.logconfirm')`),false)
       transmitAllowed=false
       await until(`document.querySelector('${cq}').disabled&&document.querySelector('${tx}').disabled&&document.querySelector('${stop}').disabled`)
-      assert.equal(stationRequests.length,30);assert.equal(stopRequests.length,3)
+      assert.equal(stationRequests.length,44);assert.equal(stopRequests.length,3)
       await evaluate(`document.activeElement.blur()`)
       await browser.call('Input.dispatchKeyEvent',{type:'keyDown',key:'1',code:'Digit1',windowsVirtualKeyCode:49,modifiers:1},session)
       await browser.call('Input.dispatchKeyEvent',{type:'keyUp',key:'1',code:'Digit1',windowsVirtualKeyCode:49,modifiers:1},session)
-      await sleep(250);assert.equal(stationRequests.length,30,'revoked keyboard gestures cannot send')
+      await sleep(250);assert.equal(stationRequests.length,44,'revoked keyboard gestures cannot send')
       assert.equal(loggedRequests.length,0);assert.equal(exceptions,0);assert.equal(unexpectedMessages,0)
       if(artifacts){await writeFile(join(artifacts,'ft-results.json'),JSON.stringify({actions:stationRequests.map(r=>r.action),stopCount:stopRequests.length,staleDisplayStop:true,localGrantRevoked:true,exceptions,unexpectedMessages},null,2));const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'ft-controls.png'),Buffer.from(shot.data,'base64'))}
       console.log('Compiled Nexus FT8/FT4 CQ, station calling, exchange controls, TX On/Off, stale-display Stop and local revocation passed');return
