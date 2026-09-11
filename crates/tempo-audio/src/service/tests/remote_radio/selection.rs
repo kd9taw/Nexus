@@ -1430,9 +1430,22 @@ fn workspace_return_retains_the_original_connection_and_confirms_before_native_c
     use tempo_app::dto::Tier;
     use tempo_app::engine::remote_radio::Workspace;
     use tempo_app::settings::{RouteMode, RoutingRule};
-    for confirmed in [true, false] {
+    for scenario in [
+        "confirmed",
+        "ignored",
+        "revoked_before",
+        "revoked_during",
+        "busy",
+        "save_failed",
+    ] {
+        let adopted = matches!(scenario, "confirmed" | "save_failed");
+        let authority = Arc::new(Revocation::default());
+        let revoke = authority.clone();
         let peer = retuning_peer(14_250_000, "USB", move |line, _| {
-            (!confirmed && line == "F 50260000").then(|| "RPRT 0\n".into())
+            if line == "F 50260000" && scenario == "revoked_during" {
+                revoke.revoke();
+            }
+            (scenario == "ignored" && line == "F 50260000").then(|| "RPRT 0\n".into())
         });
         let mut s = configured_station(&peer, |_| {});
         {
@@ -1481,7 +1494,7 @@ fn workspace_return_retains_the_original_connection_and_confirms_before_native_c
                 .queue_remote_workspace(
                     Workspace::Ft,
                     generation,
-                    s.authority
+                    authority
                         .permit(Instant::now() + Duration::from_secs(5))
                         .unwrap(),
                 )
@@ -1489,6 +1502,19 @@ fn workspace_return_retains_the_original_connection_and_confirms_before_native_c
             (original, receipt)
         };
         assert_eq!(receipt.outcome(), Outcome::Pending);
+        if scenario == "revoked_before" {
+            authority.revoke();
+        }
+        if scenario == "save_failed" {
+            std::fs::create_dir_all(&s.path).unwrap();
+        }
+        let modem = (scenario == "busy").then(|| loop {
+            if let Some(guard) = tempo_app::engine::remote_selection::Ft8A7ResetGuard::try_acquire()
+            {
+                break guard;
+            }
+            std::thread::yield_now();
+        });
         let pool = Arc::new(MonitorConnections::new(vec![]));
         let pending = AtomicBool::new(false);
         let mut active = 0;
@@ -1501,10 +1527,20 @@ fn workspace_return_retains_the_original_connection_and_confirms_before_native_c
             &mut active,
             &pending,
             |_| panic!("returning workspace must retain the original physical connection"),
-            || notifications.set(notifications.get() + 1),
+            || {
+                assert!(s.engine.try_lock().is_ok());
+                assert!(pool.try_lock().is_ok());
+                notifications.set(notifications.get() + 1);
+            },
         );
+        drop(modem);
         assert_eq!(active, 0);
-        assert_eq!(notifications.get(), usize::from(confirmed));
+        assert_eq!(
+            notifications.get(),
+            usize::from(adopted),
+            "{scenario}: {:?}",
+            receipt.outcome()
+        );
         assert!(!pending.load(Ordering::Relaxed));
         assert!(pool.lock().unwrap().is_empty());
         assert!(!s.state.force_audio_rebuild);
@@ -1515,32 +1551,57 @@ fn workspace_return_retains_the_original_connection_and_confirms_before_native_c
                 .iter()
                 .filter(|line| line.starts_with("F "))
                 .collect::<Vec<_>>(),
-            [&"F 50260000".to_string()]
+            if scenario == "revoked_before" {
+                vec![]
+            } else {
+                vec![&"F 50260000".to_string()]
+            }
         );
-        if confirmed {
-            assert_eq!(
-                receipt.outcome(),
-                Outcome::Applied {
-                    evidence: Evidence::RadioReadback
-                }
-            );
+        if adopted {
+            if scenario == "save_failed" {
+                assert!(matches!(receipt.outcome(), Outcome::Unknown { .. }));
+            } else {
+                assert_eq!(
+                    receipt.outcome(),
+                    Outcome::Applied {
+                        evidence: Evidence::RadioReadback
+                    }
+                );
+            }
             let e = engine_lock(&s.engine);
             assert_eq!(e.tier(), Tier::Msk144);
             assert_eq!(e.settings().dial_hz(), 50_260_000);
             assert_eq!(e.settings().audio_in, original.audio_in);
-            let saved: Settings = serde_json::from_slice(&std::fs::read(&s.path).unwrap()).unwrap();
-            assert_eq!(&saved, e.settings());
+            if scenario != "save_failed" {
+                let saved: Settings =
+                    serde_json::from_slice(&std::fs::read(&s.path).unwrap()).unwrap();
+                assert_eq!(&saved, e.settings());
+            }
             assert_ne!(
-                saved.radios[1].last_dial_mhz, original.radios[1].last_dial_mhz,
+                e.settings().radios[1].last_dial_mhz,
+                original.radios[1].last_dial_mhz,
                 "intermediate native profile must be banked"
             );
             assert!(!s.state.remote_retune_uncertain);
         } else {
-            assert!(matches!(receipt.outcome(), Outcome::Unknown { .. }));
+            assert_eq!(
+                matches!(receipt.outcome(), Outcome::Unknown { .. }),
+                scenario != "revoked_before"
+            );
             assert_eq!(engine_lock(&s.engine).settings(), &original);
             assert!(!s.path.exists());
-            assert!(s.state.remote_retune_uncertain);
+            assert_eq!(
+                s.state.remote_retune_uncertain,
+                scenario != "revoked_before"
+            );
         }
+        let reads = peer
+            .lines
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|line| *line == "f")
+            .count();
         let started = now_unix_ms();
         for delta in [200.0, 400.0, 800.0, 1600.0, 2400.0] {
             s.state
@@ -1555,6 +1616,18 @@ fn workspace_return_retains_the_original_connection_and_confirms_before_native_c
                     &mut StationSinks::new(),
                 )
                 .unwrap();
+        }
+        assert!(
+            peer.lines
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|line| *line == "f")
+                .count()
+                > reads
+        );
+        if !adopted {
+            assert_eq!(engine_lock(&s.engine).settings(), &original, "{scenario}");
         }
         let after_poll = super::fm::writes(&peer);
         assert!(
