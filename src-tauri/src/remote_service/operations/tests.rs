@@ -120,43 +120,45 @@ fn control_request(state: &Value, action: Value) -> Request {
 #[test]
 #[cfg(feature = "radio")]
 fn frequency_admission_waits_for_the_radio_owner_and_revoke_cancels_the_pending_write() {
-    let f = Fixture::new();
-    {
-        let mut e = f.engine.lock().unwrap();
-        e.configure_remote_settings_store(f.dir.join("settings.json"));
-        e.set_tx_enabled(false);
-        e.set_frequency(14.074, "20m", "USB");
-        e.take_immediate_retune();
-        let connection = e.remote_open_radio().unwrap();
-        let read = e.remote_radio_read(&connection, Instant::now()).unwrap();
-        e.remote_observe_cat(Some(&read), Some(true));
-        e.remote_observe_dial(Some(&read), Some(14_074_000));
-        e.remote_observe_mode(Some(&read), Some("PKTUSB"));
-        e.remote_observe_ptt(Some(&read), Some(false));
+    for (dial, band, hz) in [(7.074, "40m", 7_074_000), (10.0, "", 10_000_000)] {
+        let f = Fixture::new();
+        {
+            let mut e = f.engine.lock().unwrap();
+            e.configure_remote_settings_store(f.dir.join("settings.json"));
+            e.set_tx_enabled(false);
+            e.set_frequency(14.074, "20m", "USB");
+            e.take_immediate_retune();
+            let connection = e.remote_open_radio().unwrap();
+            let read = e.remote_radio_read(&connection, Instant::now()).unwrap();
+            e.remote_observe_cat(Some(&read), Some(true));
+            e.remote_observe_dial(Some(&read), Some(14_074_000));
+            e.remote_observe_mode(Some(&read), Some("PKTUSB"));
+            e.remote_observe_ptt(Some(&read), Some(false));
+        }
+        let now = Instant::now();
+        let state = acquire_controls_version(&f, now, 3);
+        let command = control_request(
+            &state,
+            json!({"action":"radio.frequency","dialMhz":dial,"band":band,"sideband":"USB"}),
+        );
+        let response = f
+            .authority
+            .handle_version((f.connection, 3), SESSION, DEVICE, &command, &f.engine, now)
+            .unwrap();
+        assert_eq!(response["outcome"], "pending");
+        let work = {
+            let mut e = f.engine.lock().unwrap();
+            assert_eq!(e.settings().dial_hz(), 14_074_000);
+            assert!(!e.take_immediate_retune());
+            e.take_remote_radio().unwrap()
+        };
+        assert_eq!(work.target(), (hz, "PKTUSB"));
+        assert!(work.permission().check(Instant::now()).is_ok());
+        assert!(!f.dir.join("settings.json").exists());
+        f.authority.permit_station(DEVICE, false).unwrap();
+        assert!(work.permission().begin_write(Instant::now()).is_err());
+        assert_eq!(f.engine.lock().unwrap().settings().dial_hz(), 14_074_000);
     }
-    let now = Instant::now();
-    let state = acquire_controls_version(&f, now, 3);
-    let command = control_request(
-        &state,
-        json!({"action":"radio.frequency","dialMhz":7.074,"band":"40m","sideband":"USB"}),
-    );
-    let response = f
-        .authority
-        .handle_version((f.connection, 3), SESSION, DEVICE, &command, &f.engine, now)
-        .unwrap();
-    assert_eq!(response["outcome"], "pending");
-    let work = {
-        let mut e = f.engine.lock().unwrap();
-        assert_eq!(e.settings().dial_hz(), 14_074_000);
-        assert!(!e.take_immediate_retune());
-        e.take_remote_radio().unwrap()
-    };
-    assert_eq!(work.target(), (7_074_000, "PKTUSB"));
-    assert!(work.permission().check(Instant::now()).is_ok());
-    assert!(!f.dir.join("settings.json").exists());
-    f.authority.permit_station(DEVICE, false).unwrap();
-    assert!(work.permission().begin_write(Instant::now()).is_err());
-    assert_eq!(f.engine.lock().unwrap().settings().dial_hz(), 14_074_000);
 }
 
 #[test]

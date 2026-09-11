@@ -62,6 +62,9 @@ impl Station {
         }
     }
     fn queue(&mut self) -> Completion {
+        self.queue_dial(7.074, "40m")
+    }
+    fn queue_dial(&mut self, dial: f64, band: &str) -> Completion {
         let mut e = engine_lock(&self.engine);
         let connection = e
             .remote_monitor_observation()
@@ -71,8 +74,8 @@ impl Station {
             .unwrap()
             .connection_generation;
         e.queue_remote_frequency(
-            7.074,
-            "40m",
+            dial,
+            band,
             "USB",
             connection,
             self.authority
@@ -415,26 +418,35 @@ impl Drop for Station {
 
 #[test]
 fn frequency_crosses_the_actual_worker_once_then_persists_without_native_replay() {
-    let peer = retuning_peer(14_074_000, "PKTUSB", |_, _| None);
-    let mut s = Station::new(&peer);
-    let receipt = s.queue();
-    assert_eq!(engine_lock(&s.engine).settings().dial_hz(), 14_074_000);
-    s.step();
-    assert_eq!(
-        receipt.outcome(),
-        Outcome::Applied {
-            evidence: Evidence::RadioReadback
-        }
-    );
-    assert_eq!(Settings::load(&s.path).dial_hz(), 7_074_000);
-    assert_eq!(writes(&peer), ["M PKTUSB 3000", "F 7074000"]);
-    s.authority.revoke();
-    for _ in 0..3 {
+    for (dial, band, hz) in [
+        (7.074, "40m", 7_074_000),
+        (10.0, "", 10_000_000),
+        (9.5, "", 9_500_000),
+    ] {
+        let peer = retuning_peer(14_074_000, "PKTUSB", |_, _| None);
+        let mut s = Station::new(&peer);
+        let receipt = s.queue_dial(dial, band);
+        assert_eq!(engine_lock(&s.engine).settings().dial_hz(), 14_074_000);
         s.step();
+        assert_eq!(
+            receipt.outcome(),
+            Outcome::Applied {
+                evidence: Evidence::RadioReadback
+            }
+        );
+        assert_eq!(Settings::load(&s.path).dial_hz(), hz);
+        assert_eq!(Settings::load(&s.path).band, band);
+        let expected = vec!["M PKTUSB 3000".to_string(), format!("F {hz}")];
+        assert_eq!(writes(&peer), expected);
+        s.authority.revoke();
+        for _ in 0..3 {
+            s.step();
+        }
+        assert_eq!(writes(&peer), expected);
+        assert!(!engine_lock(&s.engine).tx_enabled());
+        assert_eq!(s.rig.read_freq().unwrap(), hz);
+        assert!(s.backend.played.is_empty());
     }
-    assert_eq!(writes(&peer), ["M PKTUSB 3000", "F 7074000"]);
-    assert!(!engine_lock(&s.engine).tx_enabled());
-    assert_eq!(s.rig.read_freq().unwrap(), 7_074_000);
 }
 
 #[test]

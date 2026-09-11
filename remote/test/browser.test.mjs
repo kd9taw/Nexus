@@ -309,7 +309,7 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
             else if(a.receiver==='aprs')applicationData.get_remote_aprs_state.health.arm=a.on?'auto':'off'
             else applicationData[`get_${a.receiver}_state`].armed=a.on
           }else if(a.action==='radio.frequency'){
-            assert.ok(a.dialMhz>0);assert.equal(a.band,'40m');assert.ok(['USB','LSB'].includes(a.sideband))
+            assert.ok(a.dialMhz>0);assert.equal(a.band,a.dialMhz===10?'':'40m');assert.ok(['USB','LSB'].includes(a.sideband))
             applicationData.get_snapshot.radio.dialMhz=a.dialMhz;applicationData.get_snapshot.radio.band=a.band;applicationData.get_snapshot.radio.sideband=a.sideband
           }else if(a.action==='radio.mode'){
             const dial={digital:7.074,cw:7.030,phone:7.150,rtty:7.080,keyboard:7.070}[a.mode]
@@ -689,7 +689,8 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
       }
       // The ordinary main dial, on each core cockpit. Navigation itself must
       // remain read-only; every submitted frequency is one explicit gesture.
-      for(const [tab,root,mhz] of [['FT','.operate-cockpit',7.075],['Phone','.phone-cockpit',7.076],['CW','.cw-cockpit',7.077],['RTTY','.rtty-cockpit',7.078],['PSK','.psk-cockpit',7.079]]){
+      for(const [tab,root,bandDial] of [['FT','.operate-cockpit',7.075],['Phone','.phone-cockpit',7.076],['CW','.cw-cockpit',7.077],['RTTY','.rtty-cockpit',7.078],['PSK','.psk-cockpit',7.079]]){
+        for(const mhz of [10,bandDial]){
         const count=stationRequests.length
         await click(button(tab));await settledLayout()
         assert.equal(stationRequests.length,count,'navigation cannot command the radio')
@@ -697,14 +698,18 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
         await until(`!!${dial}`);await freshLoggingWindow();await click(dial)
         const input=`document.querySelector('${root} .readout-input')`
         await until(`!!${input}`)
-        await evaluate(`(()=>{const e=${input};Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(e,'${mhz}');e.dispatchEvent(new Event('input',{bubbles:true}))})()`)
+        await browser.call('Input.dispatchKeyEvent',{type:'keyDown',key:'a',code:'KeyA',windowsVirtualKeyCode:65,modifiers:2},session)
+        await browser.call('Input.dispatchKeyEvent',{type:'keyUp',key:'a',code:'KeyA',windowsVirtualKeyCode:65,modifiers:2},session)
+        await browser.call('Input.insertText',{text:String(mhz)},session)
         await browser.call('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter',windowsVirtualKeyCode:13},session)
         await browser.call('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter',windowsVirtualKeyCode:13},session)
         for(let i=0;i<100&&stationRequests.length===count;i++)await sleep(100)
         assert.equal(stationRequests.length,count+1,`one ${tab} dial gesture`)
         assert.equal(stationRequests.at(-1).action.action,'radio.frequency');assert.equal(stationRequests.at(-1).action.dialMhz,mhz)
+        assert.equal(stationRequests.at(-1).action.band,mhz===10?'':'40m')
         await until(`document.querySelector('.remote-control-result')?.textContent.includes('confirmed')`)
         await until(`document.querySelector('${root} .ch-readout .readout-val')?.textContent.includes('${mhz.toFixed(4)}')`)
+        }
       }
       let modeGeometry=0
       for(const [tab,root,mode,workspace] of [['CW','.cw-cockpit','cw'],['FT','.operate-cockpit','digital','ft'],['Phone','.phone-cockpit','phone'],['RTTY','.rtty-cockpit','rtty'],['PSK','.psk-cockpit','keyboard'],['Tempo','.grid-header','digital','tempo'],['JS8','.js8-cockpit','digital','js8'],['FT','.operate-cockpit','digital','ft']]){
@@ -895,9 +900,9 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
       assert.ok(await evaluate(`[...document.querySelectorAll('.cockpit-txdock button')].every(e=>e.disabled)`),'receiver/amp permission cannot enable TX')
       stationControls=false;loggingLease=null
       await until(`document.querySelector('.cw-cockpit .amp-op').disabled`)
-      assert.equal(loggedRequests.length,5);assert.equal(stationRequests.length,58);assert.equal(unexpectedMessages,0);assert.equal(exceptions,0)
+      assert.equal(loggedRequests.length,5);assert.equal(stationRequests.length,63);assert.equal(unexpectedMessages,0);assert.equal(exceptions,0)
       if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-manual-logging.png'),Buffer.from(shot.data,'base64'));await writeFile(join(artifacts,'operation-results.json'),JSON.stringify({count:loggedRequests.length,stationActions:stationRequests.map(r=>r.action),controlGeometry,modeGeometry,tierGeometry,followGeometry,decoderGeometry,receiverGeometry,gainGeometry,modes:loggedRequests.map(r=>r.record.mode),lostResultResolved:true,wholePageReloadResolved:true,crossTabLockRefusal:true,geometry:16,exceptions,unexpectedMessages},null,2))}
-      console.log('Compiled browser: five logging forms, 58 station gestures, saved decoder/receiver choices, separate grants, recovery and 264 geometry cases passed');return
+      console.log('Compiled browser: five logging forms, 63 station gestures, saved decoder/receiver choices, bandless receive tuning, separate grants, recovery and 264 geometry cases passed');return
     }
     const startReads=applicationTraffic.reads, startBytes=applicationTraffic.bytes, started=performance.now()
     for(const [width,height] of [[1024,768],[1280,800],[1366,768],[1200,1390],[3440,1440]])for(const zoom of [1,1.75])for(const theme of ['dark','light']) {
