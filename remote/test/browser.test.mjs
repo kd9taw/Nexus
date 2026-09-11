@@ -1104,7 +1104,9 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
                 const point=await evaluate(`(()=>{const r=document.querySelector('${target}').getBoundingClientRect();return{x:r.left+r.width/2,y:r.top+r.height/2}})()`)
                 await browser.call('Input.dispatchMouseEvent',{type:'mouseWheel',...point,deltaX:0,deltaY:-100},session)
               }
+              const tuningDiagnostic={mode,kind,target,from,before,wire:operationWire.slice(-8),session:await sessionDiagnostic(),view:await evaluate(`({status:document.querySelector('.remote-application-status')?.textContent,toasts:[...document.querySelectorAll('[role="alert"]')].map(e=>e.textContent),target:(()=>{const e=document.querySelector('${target}'),r=e?.getBoundingClientRect();return {rect:r?.toJSON(),disabled:e?.closest('[aria-disabled]')?.getAttribute('aria-disabled'),hit:r?document.elementFromPoint(r.left+r.width/2,r.top+r.height/2)?.outerHTML:null}})()})`)}
               for(let i=0;i<100&&stationRequests.length===before;i++)await sleep(100)
+              if(artifacts)await writeFile(join(artifacts,`tuning-${mode}-${kind}.json`),JSON.stringify({...tuningDiagnostic,after:stationRequests.length,afterWire:operationWire.slice(-8),afterSession:await sessionDiagnostic()},null,2))
               assert.equal(stationRequests.length,before+1,`one ${mode} ${kind} tuning burst`)
               const expected=Math.round(from*1e6+(kind==='digit'?1000:100))/1e6
               assert.equal(stationRequests.at(-1).action.action,'radio.frequency');assert.equal(stationRequests.at(-1).action.dialMhz,expected)
