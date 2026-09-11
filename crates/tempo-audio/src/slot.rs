@@ -157,6 +157,30 @@ pub(crate) fn apply_tx_dial_shift(eng: &mut Engine, rig: &mut Rig) -> SplitApply
     }
 }
 
+/// Check Remote authority on both sides of blocking PTT I/O. Native TX has
+/// no Remote permit and keeps its established keying behavior. A loss during
+/// key-up is unkeyed before any waveform reaches the output device.
+pub(crate) fn key_slot_transmitter(
+    eng: &mut Engine,
+    rig: &mut Rig,
+    backend: &mut impl AudioBackend,
+) -> bool {
+    if eng.poll_remote_transmit(std::time::Instant::now()) {
+        if rig.keyed {
+            let _ = rig.ptt(false);
+        }
+        backend.flush_output();
+        return false;
+    }
+    let _ = rig.ptt(true);
+    if eng.poll_remote_transmit(std::time::Instant::now()) {
+        let _ = rig.ptt(false);
+        backend.flush_output();
+        return false;
+    }
+    true
+}
+
 /// Run one slot boundary.
 ///
 /// At each boundary we FIRST decode the audio of the slot that just ended, THEN
@@ -243,15 +267,30 @@ pub fn slot_tx_phase(
     // the same wait happens in the same place, just without the engine held.
     prebuilt: Option<Vec<Vec<f32>>>,
 ) -> SlotAction {
-    let waves = match prebuilt {
-        Some(w) => w,
-        None => eng.poll_tx(slot),
+    let waves = if eng.poll_remote_transmit(std::time::Instant::now()) {
+        Vec::new()
+    } else {
+        match prebuilt {
+            Some(w) => w,
+            None => eng.poll_tx(slot),
+        }
     };
     if !waves.is_empty() {
         // Split Operation: move the TX dial (if the engine reduced the audio)
         // BEFORE the carrier keys.
         let split = apply_tx_dial_shift(eng, rig);
-        let _ = rig.ptt(true);
+        if !key_slot_transmitter(eng, rig, backend) {
+            // Preserve split cleanup even when permission disappears during
+            // CAT preparation. The native loop restores it on its next idle tick.
+            return SlotAction {
+                tx_until_ms: None,
+                did_rx,
+                rx_frame,
+                tx_this_slot: false,
+                fake_it_restore: split.fake_it_restore,
+                rig_split_engaged: split.rig_split_engaged,
+            };
+        }
         // ⏱ THE PTT-HOLD DEADLINE IS MEASURED FROM HERE — after the carrier is up —
         // not from the caller's `now_ms`. That was bound at the TOP of the radio-loop
         // tick, and the same tick then runs BLOCKING CAT before reaching this key: the

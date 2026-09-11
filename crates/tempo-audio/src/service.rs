@@ -9447,34 +9447,36 @@ impl RadioLoop {
                         }
                         self.ensure_commanded(rig); // read-only launch: assert before key
                         self.publish_tx_intent_now(); // before keying
-                        let _ = rig.ptt(true);
-                        let mut secs = 0.0f32;
-                        let last = waves.len() - 1;
-                        for (i, w) in waves.iter().enumerate() {
-                            let mut w2: &[f32] = if i == 0 && trim_samples > 0 {
-                                &w[trim_samples..]
-                            } else {
-                                w
-                            };
-                            // The generated buffer can carry TRAILING silence
-                            // (FT4: ~1.0 s of zero pad). On a LATE start the fit
-                            // math is airtime-based — playing that pad would
-                            // hold PTT past the boundary into the partner's
-                            // period. Strip it; it carries nothing.
-                            if i == last {
-                                let end = w2.iter().rposition(|&x| x != 0.0).map_or(0, |p| p + 1);
-                                w2 = &w2[..end];
+                        if crate::slot::key_slot_transmitter(&mut eng, rig, backend) {
+                            let mut secs = 0.0f32;
+                            let last = waves.len() - 1;
+                            for (i, w) in waves.iter().enumerate() {
+                                let mut w2: &[f32] = if i == 0 && trim_samples > 0 {
+                                    &w[trim_samples..]
+                                } else {
+                                    w
+                                };
+                                // The generated buffer can carry TRAILING silence
+                                // (FT4: ~1.0 s of zero pad). On a LATE start the fit
+                                // math is airtime-based — playing that pad would
+                                // hold PTT past the boundary into the partner's
+                                // period. Strip it; it carries nothing.
+                                if i == last {
+                                    let end =
+                                        w2.iter().rposition(|&x| x != 0.0).map_or(0, |p| p + 1);
+                                    w2 = &w2[..end];
+                                }
+                                secs += w2.len() as f32 / tempo_fast::SAMPLE_RATE;
+                                backend.play(w2);
                             }
-                            secs += w2.len() as f32 / tempo_fast::SAMPLE_RATE;
-                            backend.play(w2);
+                            self.rx.clear(); // our just-started carrier must not be decoded
+                            self.tx_until_ms =
+                                Some(now + secs as f64 * 1000.0 + crate::slot::TX_TAIL_MS);
+                            // A SLOT over: TX Off must let this one finish (see `slot_tx_until_ms`).
+                            self.slot_tx_until_ms = self.tx_until_ms.unwrap_or(0.0);
+                            self.last_slot = Some(slot_now); // slot handled; skip the boundary
+                            self.prev_slot_was_tx = true;
                         }
-                        self.rx.clear(); // our just-started carrier must not be decoded
-                        self.tx_until_ms =
-                            Some(now + secs as f64 * 1000.0 + crate::slot::TX_TAIL_MS);
-                        // A SLOT over: TX Off must let this one finish (see `slot_tx_until_ms`).
-                        self.slot_tx_until_ms = self.tx_until_ms.unwrap_or(0.0);
-                        self.last_slot = Some(slot_now); // slot handled; skip the boundary
-                        self.prev_slot_was_tx = true;
                     }
                 }
             }
