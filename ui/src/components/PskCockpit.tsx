@@ -500,7 +500,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
           remoteFrequency
           remoteMode="keyboard"
           onCommitDial={frequencyControl && onSetFrequency ? commitDial : undefined}
-          digitTune={control && onSetFrequency != null}
+          digitTune={onSetFrequency != null}
           wheelSensitivity={wheelSensitivity}
           actions={
             host && panels ? (

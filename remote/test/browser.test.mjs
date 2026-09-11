@@ -720,7 +720,8 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
         await until(`document.querySelector('${root} .ch-readout .readout-val')?.textContent.includes('${mhz.toFixed(4)}')`)
         }
       }
-      let modeGeometry=0,bandGeometry=0
+      let modeGeometry=0,bandGeometry=0,wheelGeometry=0
+      const tunedModes=new Set()
       for(const [tab,root,mode,workspace] of [['CW','.cw-cockpit','cw'],['FT','.operate-cockpit','digital','ft'],['Phone','.phone-cockpit','phone'],['RTTY','.rtty-cockpit','rtty'],['PSK','.psk-cockpit','keyboard'],['Tempo','.grid-header','digital','tempo'],['JS8','.js8-cockpit','digital','js8'],['FT','.operate-cockpit','digital','ft']]){
         const before=stationRequests.length,selector=root+' .remote-mode-entry'
         await click(button(tab));await settledLayout()
@@ -767,6 +768,45 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
             assert.equal(applicationData.get_snapshot.radio.txEnabled,false)
           }
           if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,`band-picker-${mode}-1280-175-light.png`),Buffer.from(shot.data,'base64'))}
+        }
+        if(['cw','phone','rtty','keyboard'].includes(mode)||workspace==='ft'){
+          if(!tunedModes.has(mode)){
+            tunedModes.add(mode)
+            const digit=root+' .readout-digit[data-decade="3"]',scope=root+(mode==='cw'?' .ph-scope-panel canvas':' .ph-scope-wrap canvas')
+            const targets=[digit,...(['cw','phone'].includes(mode)?[scope,...[1,2,3,4].map(n=>root+` .tuning-nudge:nth-of-type(${n})`)]:[])]
+            for(const target of targets)for(const [width,height,zoom]of [[390,844,1],[1280,800,1],[390,844,1.75],[1280,800,1.75]])for(const theme of ['dark','light']){
+              await browser.call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false},session)
+              await evaluate(`document.documentElement.style.setProperty('--ui-zoom','${zoom}');document.documentElement.dataset.theme='${theme}';window.dispatchEvent(new Event('resize'))`);await settledLayout()
+              await until(`!!document.querySelector('${target}')`)
+              await evaluate(`document.querySelector('${target}').scrollIntoView({block:'center',inline:'center',behavior:'instant'})`);await settledLayout()
+              const shape=await evaluate(`(()=>{const e=document.querySelector('${target}'),r=e.getBoundingClientRect(),hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);return{rect:r.toJSON(),hit:hit?.outerHTML.slice(0,250),good:r.width>0&&r.height>0&&e.contains(hit)&&document.documentElement.scrollWidth<=innerWidth+1&&document.documentElement.scrollHeight<=innerHeight+1}})()`)
+              if(!shape.good&&artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'wheel-layout-failure.png'),Buffer.from(shot.data,'base64'));await writeFile(join(artifacts,'wheel-layout-failure.json'),JSON.stringify({mode,target,width,height,zoom,theme,shape},null,2))}
+              assert.equal(shape.good,true,`Tuning target reachable ${mode} ${target} ${width} ${zoom}: ${JSON.stringify(shape)}`);wheelGeometry++
+            }
+            for(const kind of ['digit','keyboard',...(['cw','phone'].includes(mode)?['scope','nudge']:[])]){
+              await freshLoggingWindow();await until(`!!document.querySelector('${digit}')`)
+              const before=stationRequests.length,from=applicationData.get_snapshot.radio.dialMhz
+              const target=kind==='scope'?scope:kind==='nudge'?root+' .tuning-nudge:nth-of-type(3)':digit
+              await evaluate(`document.querySelector('${target}').scrollIntoView({block:'center',inline:'center',behavior:'instant'})`);await settledLayout()
+              if(kind==='keyboard'){
+                await evaluate(`document.querySelector('${root} .readout[role="button"]').focus()`)
+                await browser.call('Input.dispatchKeyEvent',{type:'keyDown',key:'ArrowUp',code:'ArrowUp',windowsVirtualKeyCode:38},session)
+                await browser.call('Input.dispatchKeyEvent',{type:'keyUp',key:'ArrowUp',code:'ArrowUp',windowsVirtualKeyCode:38},session)
+              }else if(kind==='nudge')await click(`document.querySelector('${target}')`)
+              else{
+                const point=await evaluate(`(()=>{const r=document.querySelector('${target}').getBoundingClientRect();return{x:r.left+r.width/2,y:r.top+r.height/2}})()`)
+                await browser.call('Input.dispatchMouseEvent',{type:'mouseWheel',...point,deltaX:0,deltaY:-100},session)
+              }
+              for(let i=0;i<100&&stationRequests.length===before;i++)await sleep(100)
+              assert.equal(stationRequests.length,before+1,`one ${mode} ${kind} tuning burst`)
+              const expected=Math.round(from*1e6+(kind==='digit'?1000:100))/1e6
+              assert.equal(stationRequests.at(-1).action.action,'radio.frequency');assert.equal(stationRequests.at(-1).action.dialMhz,expected)
+              await until(`document.querySelector('.remote-control-result')?.textContent.includes('confirmed')`)
+              await until(`document.querySelector('${root} .readout-val')?.textContent.includes('${expected.toFixed(4)}')`)
+              assert.equal(applicationData.get_snapshot.radio.txEnabled,false)
+            }
+            if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,`wheel-${mode}-1280-175-light.png`),Buffer.from(shot.data,'base64'))}
+          }
         }
       }
       let tierGeometry=0
@@ -938,10 +978,10 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
       assert.ok(await evaluate(`[...document.querySelectorAll('.cockpit-txdock button')].every(e=>e.disabled)`),'receiver/amp permission cannot enable TX')
       stationControls=false;loggingLease=null
       await until(`document.querySelector('.cw-cockpit .amp-op').disabled`)
-      assert.equal(controlGeometry+modeGeometry+bandGeometry+tierGeometry+followGeometry+decoderGeometry+receiverGeometry+gainGeometry+16,280)
-      assert.equal(loggedRequests.length,5);assert.equal(stationRequests.length,67);assert.equal(unexpectedMessages,0);assert.equal(exceptions,0)
-      if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-manual-logging.png'),Buffer.from(shot.data,'base64'));await writeFile(join(artifacts,'operation-results.json'),JSON.stringify({count:loggedRequests.length,stationActions:stationRequests.map(r=>r.action),controlGeometry,modeGeometry,bandGeometry,tierGeometry,followGeometry,decoderGeometry,receiverGeometry,gainGeometry,modes:loggedRequests.map(r=>r.record.mode),lostResultResolved:true,wholePageReloadResolved:true,crossTabLockRefusal:true,geometry:16,exceptions,unexpectedMessages},null,2))}
-      console.log('Compiled browser: five logging forms, 67 station gestures, saved receiver choices, native band recall, bandless receive tuning, separate grants, recovery and 280 geometry cases passed');return
+      assert.equal(controlGeometry+modeGeometry+bandGeometry+wheelGeometry+tierGeometry+followGeometry+decoderGeometry+receiverGeometry+gainGeometry+16,400)
+      assert.equal(loggedRequests.length,5);assert.equal(stationRequests.length,81);assert.equal(unexpectedMessages,0);assert.equal(exceptions,0)
+      if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-manual-logging.png'),Buffer.from(shot.data,'base64'));await writeFile(join(artifacts,'operation-results.json'),JSON.stringify({count:loggedRequests.length,stationActions:stationRequests.map(r=>r.action),controlGeometry,modeGeometry,bandGeometry,wheelGeometry,tierGeometry,followGeometry,decoderGeometry,receiverGeometry,gainGeometry,modes:loggedRequests.map(r=>r.record.mode),lostResultResolved:true,wholePageReloadResolved:true,crossTabLockRefusal:true,geometry:16,exceptions,unexpectedMessages},null,2))}
+      console.log('Compiled browser: five logging forms, 81 station gestures, saved receiver choices, native band recall, shared wheel/digit tuning, separate grants, recovery and 400 geometry cases passed');return
     }
     const startReads=applicationTraffic.reads, startBytes=applicationTraffic.bytes, started=performance.now()
     for(const [width,height] of [[1024,768],[1280,800],[1366,768],[1200,1390],[3440,1440]])for(const zoom of [1,1.75])for(const theme of ['dark','light']) {

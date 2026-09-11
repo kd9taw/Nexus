@@ -29,6 +29,7 @@ export type OperationView = {
   controlResult: ControlOutcome | null
   controlError: string | null
 }
+type CapturedControl = { state: OperationState; until: number }
 type Pending = {
   request: OperationRequest
   started: number
@@ -415,16 +416,27 @@ export class OperationClient {
   getLastOutcome() {
     return this.finished
   }
+  /** A coalesced gesture keeps its original authority while its target is being
+   * formed. The returned sender cannot borrow a newer heartbeat or lease. */
+  prepareControl(displayed?: ControlContext): (action: StationAction) => Promise<ControlOutcome> {
+    if (!this.view.state || !this.view.fresh) throw Error('notController')
+    const captured = { state: structuredClone(this.view.state), until: this.stateUntil }
+    const context = displayed && structuredClone(displayed)
+    return action => this.controlFrom(action, context, captured)
+  }
   async control(action: StationAction, displayed?: ControlContext): Promise<ControlOutcome> {
+    return this.controlFrom(action, displayed)
+  }
+  private async controlFrom(action: StationAction, displayed?: ControlContext, captured?: CapturedControl): Promise<ControlOutcome> {
     this.update({ controlError: null })
-    try { return await this.executeControl(action, displayed) }
+    try { return await this.executeControl(action, displayed, captured) }
     catch (error) {
       this.update({ controlError: error instanceof Error ? error.message : 'stationUnavailable' })
       throw error
     }
   }
-  private async executeControl(action: StationAction, displayed?: ControlContext): Promise<ControlOutcome> {
-    const s = this.view.state, until = this.stateUntil, intent = structuredClone(stationAction(action))
+  private async executeControl(action: StationAction, displayed?: ControlContext, captured?: CapturedControl): Promise<ControlOutcome> {
+    const s = captured?.state ?? this.view.state, until = captured?.until ?? this.stateUntil, intent = structuredClone(stationAction(action))
     if (this.operationVersion < controlVersion(intent)) throw Error('stationUnsupported')
     if (!this.controlStorage) throw Error('receiptStorageUnavailable')
     if (this.view.unresolved || this.view.controlPending || this.controlIntent || this.loggingIntent) throw Error('operationUnknown')

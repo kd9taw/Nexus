@@ -10,6 +10,7 @@ import { announce } from '../announce'
 import { parseOperatorNumber } from '../numInput'
 import { t } from '../i18n'
 import { useStationCapability, useStationControl } from '../stationAccess'
+import { useRemoteWheelTuning } from '../remote-web/wheel-tuning-context'
 
 /** The unit printed beside the dial. A unit symbol, not a word. */
 const MHZ = 'MHz'
@@ -114,8 +115,8 @@ export function FrequencyReadout({
 }: Props) {
   const control = useStationControl(), frequencyControl = useStationCapability('frequency')
   disabled = disabled || !(control || (remoteFrequency && frequencyControl))
-  // Continuous/coalesced tuning needs its own Remote gesture contract.
-  digitTune = digitTune && control
+  const wheel = useRemoteWheelTuning()
+  digitTune = digitTune && (control || (remoteFrequency && wheel.allowed))
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
   const canEdit = editable && !disabled

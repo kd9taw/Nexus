@@ -111,6 +111,7 @@ export const EN = {
   "remote.controlLocalHint": "Allow station controls for each browser after Nexus restarts. This permission covers supported receiver, radio and amplifier controls. Remote transmission remains unavailable.",
   "remote.controlAllow": "Allow station controls",
   "remote.controlRevoke": "Revoke station controls",
+  "remote.controlRefreshing": "Updating station controls…",
   "remote.controlActive": "Station control active",
   "remote.modeEntry.label": "Use this mode",
   "remote.modeEntry.title": "Switch the station to this mode and its remembered frequency. Transmit remains off.",

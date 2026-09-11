@@ -46,6 +46,7 @@ export const FR: PartialCatalog = {
   "remote.controlLocalHint": "Autorisez le contrôle de la station pour chaque navigateur après le redémarrage de Nexus. Cette autorisation couvre les fonctions prises en charge du récepteur, de la radio et de l’amplificateur. L’émission à distance reste indisponible.",
   "remote.controlAllow": "Autoriser le contrôle de la station",
   "remote.controlRevoke": "Révoquer le contrôle de la station",
+  "remote.controlRefreshing": "Actualisation des commandes de la station…",
   "remote.controlActive": "Contrôle de la station actif",
   "remote.controlAvailable": "Contrôle de la station autorisé",
   "remote.controlRequired": "Autorisez ce navigateur à contrôler la station dans Nexus sur place.",

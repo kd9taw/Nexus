@@ -262,3 +262,25 @@ it('refuses station control on an old station while retaining legacy read negoti
   expect(frames).toHaveLength(0)
   expect(JSON.stringify(replies)).toContain('stationUnsupported')
 })
+
+
+it('a prepared tuning gesture cannot borrow a newer lease, revision or command deadline', async () => {
+  for (const change of ['revision', 'lease', 'deadline'] as const) {
+    const h = setup(storage(), ['frequency'])
+    const prepared = h.client.prepareControl()
+    await h.advance(change === 'deadline' ? 1250 : 1000)
+    h.reply({ ...h.state, revision: h.state.revision + (change === 'revision' ? 1 : 0),
+      leaseId: change === 'lease' ? crypto.randomUUID() : h.state.leaseId, commandWindowId: crypto.randomUUID() })
+    const frequency = { action: 'radio.frequency', dialMhz: 7.075, band: '40m', sideband: 'USB' } as const
+    await expect(prepared(frequency)).rejects.toThrow(change === 'deadline' ? 'windowExpired' : 'staleContext')
+    expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(0)
+    // A later explicit gesture captures the now-current station authority.
+    const fresh = h.client.control(frequency)
+    await Promise.resolve(); await Promise.resolve()
+    const request = h.sent.at(-1).request
+    expect(request.action).toEqual(frequency)
+    h.reply({ operation: 'stationControl', operationId: request.requestId, outcome: 'applied', evidence: 'radioReadback' })
+    expect(await fresh).toMatchObject({ outcome: 'applied' })
+    h.client.disconnected()
+  }
+})

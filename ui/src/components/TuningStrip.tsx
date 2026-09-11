@@ -1,4 +1,4 @@
-import { useStationControl } from '../stationAccess'
+import { useStationCapability, useStationControl } from '../stationAccess'
 // ⚠️ THIS FILE IS ON THE **MIGRATED** LIST (i18n/hardcoded-strings.test.ts): the prose is in
 // the catalog under `cockpit.tuning.*`. Nothing here transmits — every control moves the RX
 // dial or a clarifier — so nothing is deferred.
@@ -54,7 +54,9 @@ export function TuningStrip({
    * CockpitHeader) already owns the readout and this strip only supplies nudges/step/VFO/RIT/XIT. */
   showReadout?: boolean
 }) {
-  const control = useStationControl()
+  const control = useStationControl(), frequency = useStationCapability('frequency')
+  const frequencyAllowed = control || (frequency && snap.radio.source === 'native' && !snap.radio.txEnabled &&
+    !snap.radio.txBusyReason && !snap.radio.transmitting && !snap.radio.rigKeyed && !snap.radio.tuning)
   const dial = snap.radio.dialMhz
   const catOk = snap.radio.catOk === true
   const [stepInternal, setStepInternal] = useState(100)
@@ -70,7 +72,7 @@ export function TuningStrip({
     // A dial has to BE one. The band lookup used to double as this check (it answers '' for a
     // NaN or an absurd value), so it stays here on its own now that band membership no longer
     // refuses anything.
-    if (!Number.isFinite(mhz) || mhz <= 0) return
+    if (!frequencyAllowed || !Number.isFinite(mhz) || mhz <= 0) return
     // An EMPTY band label is not a refusal: listening off the ham bands is first-class (operator,
     // 2026-08-13) — WWV, a shortwave broadcaster, the gap between two allocations. This used to
     // toast "outside the band plan" and return, which is what made every ◄/► nudge and every
@@ -87,6 +89,7 @@ export function TuningStrip({
   // that have no agreed default frequency. Disabled while transmitting or CAT-down.
   const readoutRef = useRef<HTMLSpanElement>(null)
   useWheelTune(readoutRef, {
+    remoteFrequency: true,
     dialMhz: dial,
     sideband: snap.radio.sideband || 'USB',
     enabled: catOk && !snap.radio.txBusyReason && !snap.radio.transmitting,
@@ -100,7 +103,7 @@ export function TuningStrip({
       <button
         type="button"
         className="tuning-nudge"
-        disabled={!control || (!catOk)}
+        disabled={!frequencyAllowed || !catOk}
         onClick={() => nudge(-step * 10)}
         title={t('cockpit.tuning.down.title', { hz: step * 10 })}
         aria-label={t('cockpit.tuning.down.aria', { hz: step * 10 })}
@@ -110,7 +113,7 @@ export function TuningStrip({
       <button
         type="button"
         className="tuning-nudge"
-        disabled={!control || (!catOk)}
+        disabled={!frequencyAllowed || !catOk}
         onClick={() => nudge(-step)}
         title={t('cockpit.tuning.down.title', { hz: step })}
         aria-label={t('cockpit.tuning.down.aria', { hz: step })}
@@ -127,7 +130,8 @@ export function TuningStrip({
             dialMhz={dial}
             size="hero"
             editable
-            disabled={!catOk}
+            remoteFrequency
+            disabled={!frequencyAllowed || !catOk}
             onCommit={(mhz) => void tuneTo(mhz)}
             // The ENGINE's privilege answer, not the UI's band table. Off-band RX is legal
             // listening, not a transmit block, and `!bandLabelForMhz(dial)` painted every
@@ -139,7 +143,7 @@ export function TuningStrip({
       <button
         type="button"
         className="tuning-nudge"
-        disabled={!control || (!catOk)}
+        disabled={!frequencyAllowed || !catOk}
         onClick={() => nudge(step)}
         title={t('cockpit.tuning.up.title', { hz: step })}
         aria-label={t('cockpit.tuning.up.aria', { hz: step })}
@@ -149,7 +153,7 @@ export function TuningStrip({
       <button
         type="button"
         className="tuning-nudge"
-        disabled={!control || (!catOk)}
+        disabled={!frequencyAllowed || !catOk}
         onClick={() => nudge(step * 10)}
         title={t('cockpit.tuning.up.title', { hz: step * 10 })}
         aria-label={t('cockpit.tuning.up.aria', { hz: step * 10 })}

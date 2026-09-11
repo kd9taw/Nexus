@@ -36,6 +36,7 @@ export const JA: PartialCatalog = {
   "remote.controlLocalHint": "Nexus の再起動後、ブラウザーごとに局の操作を許可してください。対応する受信機、無線機、アンプの操作が対象です。リモート送信はまだ利用できません。",
   "remote.controlAllow": "局の操作を許可",
   "remote.controlRevoke": "局の操作許可を取り消す",
+  "remote.controlRefreshing": "局の操作状態を更新しています…",
   "remote.controlActive": "局の操作中",
   "remote.controlAvailable": "局の操作が許可されています",
   "remote.controlRequired": "局側の Nexus でこのブラウザーによる操作を許可してください。",

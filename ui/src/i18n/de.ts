@@ -31,6 +31,7 @@ export const DE: PartialCatalog = {
   "remote.controlLocalHint": "Erlauben Sie nach jedem Nexus-Neustart die Stationssteuerung für jeden Browser. Die Berechtigung umfasst unterstützte Empfänger-, Funkgeräte- und Verstärkerfunktionen. Fernsenden ist weiterhin nicht verfügbar.",
   "remote.controlAllow": "Stationssteuerung erlauben",
   "remote.controlRevoke": "Stationssteuerung widerrufen",
+  "remote.controlRefreshing": "Stationssteuerung wird aktualisiert…",
   "remote.controlActive": "Stationssteuerung aktiv",
   "remote.controlAvailable": "Stationssteuerung erlaubt",
   "remote.controlRequired": "Erlauben Sie die Stationssteuerung für diesen Browser in Nexus an der Station.",

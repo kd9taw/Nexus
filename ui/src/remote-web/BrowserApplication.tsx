@@ -2,6 +2,9 @@ import { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import App from '../App'
 import {LoggingAuthority,RemoteOperationsContext} from './operations'
 import { controlTransport } from './control-transport'
+import { WheelTuning } from './wheel-tuning'
+import { RemoteWheelTuningContext } from './wheel-tuning-context'
+import { pushToast } from '../toast'
 import { RemoteCollections, RemoteCollectionsContext, RemoteHistoryContext } from './collections'
 import type { HistoryRow, RemoteHistory } from './collections'
 import { CONFIGURATION_COMMAND, NAVIGATION_COMMAND, SSTV_IMAGE_COMMAND, APRS_COMMAND, JS8_CONTEXT_COMMAND, FIELD_DAY_COMMAND, OTA_COMMAND, MEMORIES_COMMAND, DXPEDITIONS_COMMAND, INSIGHTS_COMMAND, QUERY_COMMAND } from './application-query-protocol'
@@ -21,6 +24,9 @@ type Bootstrap = { snapshot: AppSnapshot; settings: Settings; bandPlan: BandChan
 export function BrowserApplication({ connection, disconnect }: { connection: HostedConnection; disconnect: () => void }) {
   const client = connection.application
   const collections = useMemo(() => new RemoteCollections(client), [client])
+  const tuning = useMemo(() => connection.operations ? new WheelTuning(connection.operations, client,
+    () => pushToast(t('remote.controlRequestFailed'), 'error')) : null, [client, connection.operations])
+  useEffect(() => { tuning?.activate(); return () => tuning?.dispose() }, [tuning])
   const [history, setHistory] = useState<RemoteHistory | null>(null)
   const [observation, setObservation] = useState(initialState)
   useEffect(() => startMonitor(connection.source, setObservation), [connection.source])
@@ -84,6 +90,7 @@ export function BrowserApplication({ connection, disconnect }: { connection: Hos
     return () => { live = false; clearTimeout(timer) }
   }, [client, phase])
   const stale = phase !== 'ready' || client.age('get_snapshot') >= APPLICATION_TIMEOUT_MS
+  useEffect(() => { if (stale) tuning?.cancel() }, [stale, tuning])
   const status = <div className="remote-application-status" role="status">
     <strong>{t('remote.browserWorkspace')}</strong>
     {connection.operations&&<LoggingAuthority client={connection.operations}/>}
@@ -104,7 +111,9 @@ export function BrowserApplication({ connection, disconnect }: { connection: Hos
         <RemoteCollectionsContext.Provider value={boot.collections ? collections : null}>
           <RemoteHistoryContext.Provider value={boot.collections ? history : null}>
             <RemoteOperationsContext.Provider value={connection.operations??null}>
-              <RemoteObservationContext.Provider value={observation}><App remote={{ ...boot, status, stale }} /></RemoteObservationContext.Provider>
+              <RemoteObservationContext.Provider value={observation}><RemoteWheelTuningContext.Provider value={stale ? null : tuning}>
+                <App remote={{ ...boot, status, stale }} />
+              </RemoteWheelTuningContext.Provider></RemoteObservationContext.Provider>
             </RemoteOperationsContext.Provider>
           </RemoteHistoryContext.Provider>
         </RemoteCollectionsContext.Provider>
