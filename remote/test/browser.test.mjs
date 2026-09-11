@@ -1503,13 +1503,22 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
           const selector=`${root} input[aria-label="${label}"]`
           levelGeometry+=await decoderLayout(selector,`${mode}-${level}`)
           const expected=applicationData.get_snapshot.radio[field],before=stationRequests.length
-          const input=await evaluate(`(()=>{const e=document.querySelector('${selector}');e.focus({preventScroll:true});return {value:Number(e.value),step:Number(e.step)||1,max:Number(e.max)}})()`)
+          const input=await evaluate(`(()=>{const e=document.querySelector('${selector}');return {value:Number(e.value),step:Number(e.step)||1,max:Number(e.max)}})()`)
           const direction=input.value+input.step<=input.max?1:-1,key=direction===1?'ArrowRight':'ArrowLeft',code=direction===1?39:37
           const target=input.value+direction*input.step,value=level==='notch'?target:target/100
           await freshLoggingWindow()
+          const prepared=await evaluate(`(()=>{const e=document.querySelector('${selector}');e.focus({preventScroll:true});return {focused:document.activeElement===e,disabled:e.disabled,value:Number(e.value),active:document.activeElement?.outerHTML.slice(0,300)}})()`)
+          assert.equal(prepared.disabled,false,`level input enabled: ${JSON.stringify(prepared)}`)
+          assert.equal(prepared.focused,true,`level keyboard focus: ${JSON.stringify(prepared)}`)
           await browser.call('Input.dispatchKeyEvent',{type:'keyDown',key,code:key,windowsVirtualKeyCode:code},session)
           await browser.call('Input.dispatchKeyEvent',{type:'keyUp',key,code:key,windowsVirtualKeyCode:code},session)
           for(let i=0;i<100&&stationRequests.length===before;i++)await sleep(100)
+          if(stationRequests.length!==before+1){
+            const state=await evaluate(`(()=>{const e=document.querySelector('${selector}');return {focused:document.activeElement===e,disabled:e?.disabled,value:e?.value,active:document.activeElement?.outerHTML.slice(0,300),authority:document.querySelector('.remote-logging-authority')?.textContent,result:document.querySelector('.remote-control-result')?.textContent,toasts:[...document.querySelectorAll('[role="alert"]')].map(e=>e.textContent)}})()`)
+            const failure={mode,level,expected,value,input,prepared,state,wire:operationWire.slice(-20)}
+            console.log('Level input failure',JSON.stringify(failure))
+            if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'level-input-failure.png'),Buffer.from(shot.data,'base64'));await writeFile(join(artifacts,'level-input-failure.json'),JSON.stringify(failure,null,2))}
+          }
           assert.equal(stationRequests.length,before+1,`one ${mode} ${level} input gesture`)
           assert.deepEqual(stationRequests.at(-1).action,{action:'radio.level',mode,level,expected,value})
           await until(`document.querySelector('.remote-control-result')?.textContent.includes('confirmed')`)
