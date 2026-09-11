@@ -1334,7 +1334,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,contactContin
           await until(`document.querySelector('.${mode}-cockpit .recall-card')?.textContent.includes('Recall browser note')`)
           assert.ok(await evaluate(`document.querySelector('.${mode}-cockpit .recall-card').textContent.includes('Showing 20 of 2030')`))
         }
-        await until(`document.querySelector('.ph-scope canvas')?.width>0 || document.querySelector('.ph-scope-canvas')?.width>0`)
+        await until(`(()=>{const c=document.querySelector('.${mode}-cockpit .ph-scope canvas'),r=c?.getBoundingClientRect();return !!r&&r.width>0&&r.height>0&&getComputedStyle(c).visibility==='visible'})()`)
         for (const [width,height] of [[390,844],[1024,768],[1280,800],[3440,1440]]) {
           await browser.call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false},session)
           await evaluate(`document.documentElement.style.setProperty('--ui-zoom','1');window.dispatchEvent(new Event('resize'))`)
@@ -1347,12 +1347,12 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,contactContin
         assert.ok(controls.length>2 && controls.every(Boolean),'actual operating controls must be disabled')
         const scopeRow=applicationData.get_scope_snapshot.row
         applicationData.get_scope_snapshot.row=[];applicationRevision++
-        await until(`getComputedStyle(document.querySelector('.ph-scope canvas')).visibility==='hidden' && document.querySelector('.ph-scope').textContent.includes('Scope data unavailable.')`)
+        await until(`getComputedStyle(document.querySelector('.${mode}-cockpit .ph-scope canvas')).visibility==='hidden' && document.querySelector('.${mode}-cockpit .ph-scope').textContent.includes('Scope data unavailable.')`)
         const staleScope=await evaluate(`document.querySelector('.app')?.dataset.remoteStale==='true'`)
         if(staleScope)console.log('Scope session diagnostic',JSON.stringify(await sessionDiagnostic()))
         assert.equal(staleScope,false,'scope absence is distinct from station/session loss')
         applicationData.get_scope_snapshot.row=scopeRow;applicationRevision++
-        await until(`getComputedStyle(document.querySelector('.ph-scope canvas')).visibility==='visible'`)
+        await until(`getComputedStyle(document.querySelector('.${mode}-cockpit .ph-scope canvas')).visibility==='visible'`)
         await browser.call('Emulation.setDeviceMetricsOverride',{width:1280,height:800,deviceScaleFactor:1,mobile:false},session)
         await settledLayout()
         if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,`remote-nexus-${mode}.png`),Buffer.from(shot.data,'base64'))}
