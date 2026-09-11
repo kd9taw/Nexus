@@ -103,6 +103,20 @@ it('keeps wheel input and local dial changes from becoming an old scope release'
   expect(h.writes()).toHaveLength(1); expect(h.failed).toHaveBeenCalledOnce()
 })
 
+it.each(['radio', 'connection'] as const)('does not retarget an older displayed %s when the new station has the same dial', async changed => {
+  const h = fixture(), displayed = { ...h.source(), context: structuredClone(h.state.controls!.context) }
+  const context = { ...h.state.controls!.context, ...(changed === 'radio' ? { radioId: 2 } : { radioConnection: 8 }) }
+  await tick(1000)
+  h.setSnapshot({ ...h.getSnapshot(), activeRadioId: context.radioId })
+  act(() => h.reply({ ...h.state, revision: 2, controls: { ...h.state.controls, context } })); await tick()
+  expect(h.tuning.nudge(100, displayed)).toBe(false)
+  await tick(120); expect(h.writes()).toHaveLength(0)
+  expect(h.tuning.nudge(100, { ...displayed, context })).toBe(true)
+  await tick(120)
+  expect(h.writes()).toHaveLength(1); expect(h.writes()[0].request.context).toEqual(context)
+  act(() => h.finish()); await tick()
+})
+
 it('coalesces readout and scope input once and queues nothing behind a submitted command', async () => {
   const h = fixture(), readout = {}, scope = {}
   expect(h.tuning.nudge(100, { ...h.source(), owner: readout })).toBe(true)
