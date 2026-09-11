@@ -89,7 +89,7 @@ mod tests {
                 .unwrap();
             assert_eq!(remote.settings, native.settings);
             assert_eq!(remote.snapshot().qso, native.snapshot().qso);
-            assert_eq!(remote.tx_even, native.tx_even);
+            assert_eq!(remote.tx_even(), native.tx_even());
             assert_eq!(remote.tx_gate_gen, native.tx_gate_gen);
             assert_eq!(remote.immediate_tx, native.immediate_tx);
             assert_eq!(remote.immediate_retune, native.immediate_retune);
@@ -115,7 +115,7 @@ mod tests {
             .permit(Instant::now() + Duration::from_secs(5))
             .unwrap();
         engine.start_remote_ft_cq(permit, None).unwrap();
-        let slot = if engine.tx_even { 0 } else { 1 };
+        let slot = if engine.tx_even() { 0 } else { 1 };
         let plan = engine
             .plan_tx(slot)
             .expect("positive control: native CQ plans an over");
