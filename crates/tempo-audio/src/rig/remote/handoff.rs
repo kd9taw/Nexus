@@ -82,11 +82,9 @@ impl Rig {
             agc,
             repeater,
         } = handoff;
-        permission.check(Instant::now())?;
-        if self.remote_reported_position(permission)? != retune.expected {
+        if self.remote_idle_position(permission)?.position != retune.expected {
             return Err(Reason::ContextChanged);
         }
-        self.remote_require_idle(permission)?;
         // Do not change mode/dial only to discover an unreadable requested
         // setting. These values are probes, not the post-mode expected values:
         // band/mode registers may legitimately recall different levels.

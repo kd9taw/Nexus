@@ -21,6 +21,140 @@ mod handoff_tests;
 #[path = "rig_level_tests.rs"]
 mod level_tests;
 
+#[test]
+fn idle_position_reads_the_owned_connection_without_reasserting_any_setting() {
+    let first_read = Arc::new(Mutex::new(None));
+    let observed = first_read.clone();
+    let peer = retuning_peer(7_142_000, "LSB", move |line, _| {
+        if line == "f" {
+            *observed.lock().unwrap() = Some(std::time::Instant::now());
+        }
+        None
+    });
+    let mut rig = Rig::rigctld(&peer.address);
+    let (permission, completion) = permission(&Revocation::default(), &Revocation::default());
+    let started = std::time::Instant::now();
+    let read = rig.remote_idle_position(&permission).unwrap();
+    assert_eq!(read.position(), &Position::new(7_142_000, "LSB").unwrap());
+    assert!(read.sampled_at() >= started);
+    assert!(read.sampled_at() <= first_read.lock().unwrap().unwrap());
+    assert_eq!(completion.outcome(), Outcome::Pending);
+    assert_eq!(*peer.lines.lock().unwrap(), ["f", "m", "t", "s"]);
+    // A read is not an attempted mutation: later refusal must stay Rejected.
+    permission.refuse(Reason::ContextChanged);
+    assert_eq!(
+        completion.outcome(),
+        Outcome::Rejected {
+            reason: Reason::ContextChanged
+        }
+    );
+}
+
+#[test]
+fn idle_position_refuses_keyed_split_and_unavailable_readings_without_writes() {
+    for (command, reply, reason) in [
+        ("f", "RPRT -1\n", Reason::ReadingUnavailable),
+        ("m", "RPRT -1\n", Reason::ReadingUnavailable),
+        ("t", "1\n", Reason::StationBusy),
+        ("t", "RPRT -1\n", Reason::ReadingUnavailable),
+        ("s", "1\nVFOB\n", Reason::StationBusy),
+        ("s", "RPRT -1\n", Reason::ReadingUnavailable),
+    ] {
+        let peer = retuning_peer(7_142_000, "LSB", move |line, _| {
+            (line == command).then(|| reply.into())
+        });
+        let mut rig = Rig::rigctld(&peer.address);
+        let (permission, completion) = permission(&Revocation::default(), &Revocation::default());
+        assert_eq!(rig.remote_idle_position(&permission).unwrap_err(), reason);
+        let lines = peer.lines.lock().unwrap();
+        assert!(
+            lines.iter().any(|line| line == command),
+            "failure probe reached the peer"
+        );
+        assert!(lines
+            .iter()
+            .all(|line| ["f", "m", "t", "s"].contains(&line.as_str())));
+        assert_eq!(completion.outcome(), Outcome::Rejected { reason });
+    }
+}
+
+#[test]
+fn idle_position_checks_revocation_after_each_read_and_never_revives() {
+    for command in ["f", "m", "t", "s"] {
+        for revoke_native in [false, true] {
+            let authority = Arc::new(Revocation::default());
+            let native = Arc::new(Revocation::default());
+            let revoked = if revoke_native {
+                native.clone()
+            } else {
+                authority.clone()
+            };
+            let peer = retuning_peer(7_142_000, "LSB", move |line, _| {
+                if line == command {
+                    revoked.revoke();
+                }
+                None
+            });
+            let mut rig = Rig::rigctld(&peer.address);
+            let (permission, completion) = permission(&authority, &native);
+            let reason = if revoke_native {
+                Reason::ContextChanged
+            } else {
+                Reason::AuthorityExpired
+            };
+            assert_eq!(rig.remote_idle_position(&permission).unwrap_err(), reason);
+            let first = peer.lines.lock().unwrap().clone();
+            assert_eq!(first.last().map(String::as_str), Some(command));
+            assert_eq!(completion.outcome(), Outcome::Rejected { reason });
+            // New browser/native permits cannot revive this request.
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            assert!(authority.permit(deadline).is_some());
+            assert!(native.permit(deadline).is_some());
+            assert_eq!(rig.remote_idle_position(&permission).unwrap_err(), reason);
+            assert_eq!(*peer.lines.lock().unwrap(), first);
+        }
+    }
+}
+
+#[test]
+fn idle_position_rejects_missing_control_or_native_keyed_belief_before_io() {
+    let peer = retuning_peer(7_142_000, "LSB", |_, _| None);
+    let mut rig = Rig::rigctld(&peer.address);
+    rig.keyed = true;
+    let (permission, _) = permission(&Revocation::default(), &Revocation::default());
+    assert_eq!(
+        rig.remote_idle_position(&permission).unwrap_err(),
+        Reason::StationBusy
+    );
+    assert!(peer.lines.lock().unwrap().is_empty());
+    let (permission, _) = self::permission(&Revocation::default(), &Revocation::default());
+    assert_eq!(
+        Rig::vox().remote_idle_position(&permission).unwrap_err(),
+        Reason::HardwareUnavailable
+    );
+}
+
+#[test]
+fn idle_position_refusal_preserves_uncertainty_from_an_earlier_write() {
+    let peer = retuning_peer(7_142_000, "LSB", |line, _| {
+        (line == "s").then(|| "1\nVFOB\n".into())
+    });
+    let mut rig = Rig::rigctld(&peer.address);
+    let (permission, completion) = permission(&Revocation::default(), &Revocation::default());
+    permission.begin_write(std::time::Instant::now()).unwrap();
+    assert_eq!(
+        rig.remote_idle_position(&permission).unwrap_err(),
+        Reason::StationBusy
+    );
+    assert_eq!(
+        completion.outcome(),
+        Outcome::Unknown {
+            reason: Reason::HardwareUnconfirmed
+        }
+    );
+    assert_eq!(*peer.lines.lock().unwrap(), ["f", "m", "t", "s"]);
+}
+
 pub(crate) struct Peer {
     pub(crate) address: String,
     pub(crate) lines: Arc<Mutex<Vec<String>>>,

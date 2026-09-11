@@ -2328,61 +2328,19 @@ fn handoff_if_switched(
             && c.rigctld_proc.as_mut().is_none_or(CatDaemon::is_alive)
             && !c.transport.rig_differs(&want_cat)
     }) {
-        let conn = p.remove(idx);
-        let mut old_rig = std::mem::replace(rig, conn.rig);
-        // The adopted rig was opened READ-ONLY by the monitor (`PttMode::Vox`); give it the active
-        // radio's REAL PTT mode so it can key (else `ptt()` no-ops → "TX dead after switching to the
-        // FTDX10"). The demoted radio goes back to Vox — a monitor must never key.
-        rig.set_ptt_mode(ptt_mode_for(&want_active));
-        // Unkey-on-adopt: the radio may be PHYSICALLY keyed from a previous wedge (the
-        // fresh Rig starts keyed=false and would never know). Now that this rig has
-        // control + a real PTT mode, one idempotent key-up puts the newly active radio
-        // in a known-unkeyed state — Session 2's "light stays lit after switching".
-        let _ = rig.ptt(false);
-        old_rig.set_ptt_mode(PttMode::Vox);
-        let old_proc = state.rigctld_proc.take();
-        // The demoted radio becomes a monitor: stop its scope stream (the waveform would
-        // crowd the monitor's slow poll off the serial link). The adopted radio's stream
-        // is enabled by the active loop's per-tick drain.
-        if let Some(d) = old_proc.as_ref().and_then(CatDaemon::native) {
-            d.set_scope_enabled(false);
-        }
-        let mut old_transport = std::mem::replace(&mut state.applied, conn.transport);
-        // Monitor conns always carry `broker_self_port = None` (`from_profile`); strip it off the
-        // demoted radio's transport too, so the monitor `reconcile` doesn't see `rig_differs` (which
-        // compares broker port) and needlessly tear down + reopen the radio we just demoted.
-        old_transport.broker_self_port = None;
-        state.rigctld_proc = conn.rigctld_proc;
-        // The ACTIVE radio DOES interact with the CAT broker — set its broker port to the live value so
-        // `rig_differs` won't see a diff and tear the just-handed-off rig back down. (Audio fields stay
-        // zeroed → `audio_differs` fires → the RX codec rebuilds to the new radio, the one device swap.)
-        state.applied.broker_self_port = want_active.broker_self_port;
+        let mut conn = p.remove(idx);
+        // Preserve native unkey-on-adopt before installing the already-open
+        // connection. Installation itself performs no CAT or serial I/O.
+        conn.rig.set_ptt_mode(ptt_mode_for(&want_active));
+        let _ = conn.rig.ptt(false);
         {
             let mut e = engine_lock(engine);
             e.forget_radio_live(active);
-            // TWO-MIRROR RULE: `reset_for_handoff` below clears the meter BUS ("the new radio
-            // hasn't reported STRENGTH yet"); the engine snapshot copy must go with it, or the
-            // two mirrors disagree until the new rig's first STRENGTH poll (~750 ms, or seconds
-            // if it has no S-meter).
+            // reset_for_handoff clears the meter bus; clear its Engine mirror
+            // too, so neither can show the outgoing radio's strength.
             e.clear_rig_smeter();
         }
-        // The new active rig is ALREADY connected + on its own frequency; reset the per-rig caches so
-        // step()'s retune re-asserts the restored dial/mode and the health/capability re-probe runs.
-        state.reset_for_handoff();
-        state.remote_radio_id = Some(active);
-        // The old active radio joins the monitor pool (stays live); the new active leaves it.
-        p.push(MonitorConn {
-            id: *last_active,
-            transport: old_transport,
-            rig: old_rig,
-            rigctld_proc: old_proc,
-            last_poll: 0.0,
-            ticks: 0,
-            smeter_supported: None,
-            freq_misses: 0,
-            open_failures: 0,
-            retry_after_ms: 0.0,
-        });
+        p.push(state.install_handoff_connection(rig, conn, &want_active, *last_active));
         *last_active = active;
     } else {
         // Fallback: no MATCHING live conn for the new active (never opened / model 0 / a stale conn from
@@ -4797,6 +4755,50 @@ impl RadioLoop {
                     }
                 })
             }
+        }
+    }
+
+    /// Install an already-owned incoming connection and return the outgoing
+    /// connection as a read-only monitor. Physical release must precede this
+    /// step. There is no CAT/serial I/O or Engine lock acquisition here, so the
+    /// Remote owner can install atomically with its native profile commit.
+    fn install_handoff_connection(
+        &mut self,
+        rig: &mut Rig,
+        conn: MonitorConn,
+        want_active: &Transport,
+        outgoing: u32,
+    ) -> MonitorConn {
+        let mut old_rig = std::mem::replace(rig, conn.rig);
+        // Monitors are Vox/read-only; adoption restores the configured keying
+        // method without reopening either connection.
+        rig.set_ptt_mode(ptt_mode_for(want_active));
+        old_rig.set_ptt_mode(PttMode::Vox);
+        let old_proc = self.rigctld_proc.take();
+        // The background radio must stop its scope stream so it does not crowd
+        // out the slow monitor reads. This updates the native daemon's demand.
+        if let Some(daemon) = old_proc.as_ref().and_then(CatDaemon::native) {
+            daemon.set_scope_enabled(false);
+        }
+        let mut old_transport = std::mem::replace(&mut self.applied, conn.transport);
+        // Monitor comparison strips the broker port. The active side retains
+        // it so ordinary reconciliation does not tear down either connection.
+        old_transport.broker_self_port = None;
+        self.rigctld_proc = conn.rigctld_proc;
+        self.applied.broker_self_port = want_active.broker_self_port;
+        self.reset_for_handoff();
+        self.remote_radio_id = Some(conn.id);
+        MonitorConn {
+            id: outgoing,
+            transport: old_transport,
+            rig: old_rig,
+            rigctld_proc: old_proc,
+            last_poll: 0.0,
+            ticks: 0,
+            smeter_supported: None,
+            freq_misses: 0,
+            open_failures: 0,
+            retry_after_ms: 0.0,
         }
     }
 
@@ -14831,6 +14833,62 @@ mod tests {
         let p = pool.lock().unwrap();
         assert_eq!(p[0].ticks, 1);
         assert_eq!(p[1].ticks, 1, "the second monitor got its turn");
+    }
+
+    #[test]
+    fn handoff_installation_moves_live_connections_without_radio_io() {
+        use crate::rig::remote_tests::retuning_peer;
+        let outgoing = retuning_peer(7_142_000, "LSB", |_, _| None);
+        let incoming = retuning_peer(14_225_000, "USB", |_, _| None);
+        let mut rig = Rig::with_control(Some(outgoing.address.clone()), PttMode::Cat);
+        let mut new_rig = Rig::with_control(Some(incoming.address.clone()), PttMode::Vox);
+        // Positive controls: both peers are live and record actual reads.
+        assert_eq!(rig.read_freq().unwrap(), 7_142_000);
+        assert_eq!(new_rig.read_freq().unwrap(), 14_225_000);
+        assert_eq!(*outgoing.lines.lock().unwrap(), ["f"]);
+        assert_eq!(*incoming.lines.lock().unwrap(), ["f"]);
+        let mut state = loop_state();
+        state.applied = cat_transport(4532, None);
+        state.applied.broker_self_port = Some(4534);
+        state.last_dial = 7_142_000;
+        state.last_mode = "LSB".into();
+        state.meter_feed.set_smeter_db(Some(-20));
+        assert_eq!(state.meter_feed.smeter_db(), Some(-20));
+        let mut want = cat_transport(4533, None);
+        want.ptt_method = "cat".into();
+        want.broker_self_port = Some(4534);
+        let mut monitored = want.clone();
+        monitored.broker_self_port = None;
+        let connection = MonitorConn {
+            id: 1,
+            transport: monitored,
+            rig: new_rig,
+            rigctld_proc: None,
+            last_poll: 1.0,
+            ticks: 1,
+            smeter_supported: Some(true),
+            freq_misses: 0,
+            open_failures: 0,
+            retry_after_ms: 0.0,
+        };
+        let mut demoted = state.install_handoff_connection(&mut rig, connection, &want, 0);
+        assert_eq!(*outgoing.lines.lock().unwrap(), ["f"]);
+        assert_eq!(*incoming.lines.lock().unwrap(), ["f"]);
+        assert!(matches!(rig.ptt_mode(), PttMode::Cat));
+        assert!(matches!(demoted.rig.ptt_mode(), PttMode::Vox));
+        assert_eq!(demoted.id, 0);
+        assert_eq!(demoted.transport.broker_self_port, None);
+        assert_eq!(state.applied.broker_self_port, Some(4534));
+        assert_eq!(state.remote_radio_id, Some(1));
+        assert_eq!(state.meter_feed.smeter_db(), None);
+        assert!(state.force_audio_rebuild);
+        assert_eq!(state.last_dial, 0);
+        assert!(state.last_mode.is_empty());
+        // The moved handles still reach their respective physical peers.
+        assert_eq!(rig.read_freq().unwrap(), 14_225_000);
+        assert_eq!(demoted.rig.read_freq().unwrap(), 7_142_000);
+        assert_eq!(*outgoing.lines.lock().unwrap(), ["f", "f"]);
+        assert_eq!(*incoming.lines.lock().unwrap(), ["f", "f"]);
     }
 
     #[test]

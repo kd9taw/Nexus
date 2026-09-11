@@ -133,6 +133,41 @@ impl Readback {
 }
 
 impl Rig {
+    /// Read the current position and prove reported PTT/split idle without
+    /// writing mode, dial or PTT. Selection can use this on each owned connection;
+    /// a same-position retune is unsuitable because it still reasserts mode.
+    /// The sample starts before I/O so a slow read cannot look newly measured.
+    pub fn remote_idle_position(
+        &mut self,
+        permission: &WritePermission,
+    ) -> Result<Readback, Reason> {
+        let result = (|| {
+            permission.check(Instant::now())?;
+            if self.control.is_none() {
+                return Err(Reason::HardwareUnavailable);
+            }
+            if self.keyed {
+                return Err(Reason::StationBusy);
+            }
+            let sampled_at = Instant::now();
+            let position = self.remote_reported_position(permission)?;
+            self.remote_require_idle(permission)?;
+            Ok(Readback {
+                position,
+                sampled_at,
+                power: None,
+                passband: None,
+                receiver_dsp: None,
+                level: None,
+                repeater: None,
+            })
+        })();
+        if let Err(reason) = &result {
+            permission.refuse(*reason);
+        }
+        result
+    }
+
     fn remote_read_power(&mut self, permission: &WritePermission) -> Result<f32, Reason> {
         permission.check(Instant::now())?;
         let value = self.read_level("RFPOWER");
@@ -232,18 +267,10 @@ impl Rig {
         retune: Retune,
         permission: &WritePermission,
     ) -> Result<Readback, Reason> {
-        permission.check(Instant::now())?;
-        if self.control.is_none() {
-            return Err(Reason::HardwareUnavailable);
-        }
-        if self.keyed {
-            return Err(Reason::StationBusy);
-        }
-        let before = self.remote_reported_position(permission)?;
+        let before = self.remote_idle_position(permission)?.position;
         if before != retune.expected {
             return Err(Reason::ContextChanged);
         }
-        self.remote_require_idle(permission)?;
         // Prove power can be observed before any mode/dial mutation. Some rigs
         // cannot report this level; they cannot confirm a capped transition.
         if retune.power_limit.is_some() {
