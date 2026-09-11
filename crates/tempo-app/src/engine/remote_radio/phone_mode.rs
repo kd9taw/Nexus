@@ -24,7 +24,8 @@ impl Engine {
         // Same bands offered by the existing Phone picker. No new AM buttons
         // or mode policy are introduced in the browser.
         let dial = self.settings.dial_mhz;
-        if mode == Some("AM") && !(dial > 0.0 && !(10.0..28.0).contains(&dial)) {
+        if mode == Some("AM") && (!dial.is_finite() || dial <= 0.0 || (10.0..28.0).contains(&dial))
+        {
             return Err(Reason::InvalidAction);
         }
         // remote_radio_idle excludes APRS/FM/satellite holds and in-flight

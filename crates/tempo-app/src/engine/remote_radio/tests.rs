@@ -241,9 +241,6 @@ fn workspace_entries_match_native_modes_channels_memories_and_lower_power() {
                     station.engine.rf_power = Some(0.4);
                     station.sample(7_123_000, &station.engine.rig_mode_effective());
                 }
-                let prior = serde_json::to_value(s.engine.settings()).unwrap();
-                let receipt = s.queue_workspace(workspace).unwrap();
-                assert_eq!(serde_json::to_value(s.engine.settings()).unwrap(), prior);
                 let follow = workspace != Workspace::Tempo && mode != OperatingMode::Digital;
                 native.engine.set_operating_mode("digital", follow);
                 match workspace {
@@ -256,6 +253,12 @@ fn workspace_entries_match_native_modes_channels_memories_and_lower_power() {
                     Workspace::Tempo => native.engine.set_area("msg"),
                     Workspace::Js8 => native.engine.js8_enter(),
                 }
+                // Complete native comparison setup before publishing the fresh
+                // positive-control reading or starting the command deadline.
+                let prior = serde_json::to_value(s.engine.settings()).unwrap();
+                s.sample(7_123_000, &s.engine.rig_mode_effective());
+                let receipt = s.queue_workspace(workspace).unwrap();
+                assert_eq!(serde_json::to_value(s.engine.settings()).unwrap(), prior);
                 let request = s.engine.take_remote_radio().unwrap();
                 assert_eq!(
                     request.target_hz,
