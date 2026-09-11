@@ -802,7 +802,13 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
           assert.equal(applicationData.get_snapshot.radio.rigMode,undefined)
           const first=root+' .ph-mode-pick > button:nth-of-type(2)',count=stationRequests.length
           await freshLoggingWindow();await until(`document.querySelector('${first}')?.disabled===true`)
-          await click(`document.querySelector('${first}')`);await sleep(200)
+          // The ordinary positive click helper waits for an enabled target.
+          // This negative intentionally presses the disabled control itself.
+          await evaluate(`document.querySelector('${first}').scrollIntoView({block:'center',inline:'center',behavior:'instant'})`);await settledLayout()
+          const inactive=await evaluate(`(()=>{const e=document.querySelector('${first}'),r=e.getBoundingClientRect();return{x:r.left+r.width/2,y:r.top+r.height/2,hit:e.contains(document.elementFromPoint(r.left+r.width/2,r.top+r.height/2))}})()`)
+          assert.equal(inactive.hit,true,'negative Phone gesture must reach the disabled control')
+          for(const type of ['mousePressed','mouseReleased'])await browser.call('Input.dispatchMouseEvent',{type,x:inactive.x,y:inactive.y,button:'left',clickCount:1},session)
+          await sleep(200)
           assert.equal(stationRequests.length,count,'missing actual mode cannot command Phone selection')
           // Supply the physical reading through the normal station stream.
           // The following four picks are the fresh positive control.
