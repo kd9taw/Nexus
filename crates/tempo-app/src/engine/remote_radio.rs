@@ -474,6 +474,10 @@ impl Engine {
             .remote_radio_command
             .as_ref()
             .is_some_and(|r| matches!(r.completion.outcome(), Outcome::Pending))
+            || self
+                .remote_radio_selection
+                .as_ref()
+                .is_some_and(|r| r.pending())
         {
             return Err(Reason::StationBusy);
         }
@@ -590,6 +594,10 @@ impl Engine {
 mod tests;
 
 impl Request {
+    pub(super) fn pending(&self) -> bool {
+        matches!(self.completion.outcome(), Outcome::Pending)
+    }
+
     pub fn expected(&self) -> (u64, &str) {
         (self.expected_hz, &self.expected_mode)
     }

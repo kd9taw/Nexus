@@ -17,6 +17,7 @@ mod field_day_display;
 mod mode_entry;
 pub mod radio_selection;
 pub mod remote_radio;
+pub mod remote_selection;
 mod remote_settings;
 
 /// A manual Remote log append awaiting storage confirmation. The caller must
@@ -2237,6 +2238,7 @@ pub struct Engine {
     remote_actuation: crate::remote_control::Revocation,
     remote_amp_command: Option<crate::remote_control::amplifier::Request>,
     remote_radio_command: Option<remote_radio::Request>,
+    remote_radio_selection: Option<remote_selection::Request>,
     remote_settings_path: Option<std::path::PathBuf>,
     /// The transponder the operator selected for the tracked bird, plus their
     /// position inside its passband and what was last written to the radio.
@@ -4297,6 +4299,7 @@ impl Engine {
             remote_actuation: Default::default(),
             remote_amp_command: None,
             remote_radio_command: None,
+            remote_radio_selection: None,
             remote_settings_path: None,
             sat_tune: None,
             sat_dial_owner: None,
