@@ -607,9 +607,11 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         await click(`document.querySelector('${tx}')`)
         await until(`document.querySelector('${tx}')?.textContent.trim()==='TX On'&&!document.querySelector('${tx}').disabled`)
         assert.equal(stationRequests.length,count+3);assert.equal(stationRequests.at(-1).action.on,true)
+        await evaluate(`window.__ftRowEvents=[];for(const type of ['click','dblclick'])document.addEventListener(type,e=>{if(e.target.closest('.or-row'))window.__ftRowEvents.push({type,detail:e.detail,target:e.target.className,button:!!e.target.closest('button')})},{capture:true,once:true})`)
         await click(`[...document.querySelectorAll('.or-row[aria-selected]')].find(e=>e.textContent.includes('W1AW'))`,2)
         for(let i=0;i<100&&stationRequests.length<count+4;i++)await sleep(50)
         await until(`!document.querySelector('${tx}').disabled&&document.querySelector('.cockpit-qso')?.textContent.includes('W1AW')`)
+        if(stationRequests.length!==count+4)console.log('FT call gesture diagnostic',tier,await evaluate(`({events:window.__ftRowEvents,alerts:[...document.querySelectorAll('[role=alert]')].map(e=>e.textContent),status:document.querySelector('.remote-control-result')?.textContent,rows:[...document.querySelectorAll('.or-row[aria-selected]')].map(e=>({title:e.title,cls:e.className}))})`))
         assert.equal(stationRequests.length,count+4);assert.equal(stationRequests.at(-1).action.action,'ft.call')
         // Missing station display data blocks arming but cannot block Stop.
         unavailableTopics.add('get_snapshot')
