@@ -336,7 +336,7 @@ pub async fn connected(
                         ServerMessage::OperationDisconnect{session_id}=>{if !identifier(&session_id){return Err("invalidResponse")}operation_connection.authority.disconnect_session(&session_id);},
                         ServerMessage::OperationRequest{session_id,device_id,operation_version,request}=>{
                             if !identifier(&session_id)||!identifier(&device_id)||!identifier(request.id()){return Err("invalidResponse")}
-                            if matches!(&request, super::operations::Request::StopTransmit { .. }) {
+                            if matches!(request.as_ref(), super::operations::Request::StopTransmit { .. }) {
                                 // Stop must not queue behind a disk append or another Engine
                                 // operation. Its authority path uses neither of those locks.
                                 let result = operation_connection.authority.handle_version(
