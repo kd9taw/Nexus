@@ -616,7 +616,24 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       assert.equal(await evaluate(`${input('cw')}.value`),'N2DXCW')
       assert.equal(await evaluate(`${input('cw')}===window.__dxCwInput`),true)
       assert.ok(await evaluate(`document.querySelector('.cw-cockpit .le-hint')?.textContent.includes('14.023')`))
+      await click(`document.querySelector('.remote-session-toggle')`);await click(button('Quick Operate'))
+      await until(`document.querySelector('.app')?.dataset.remotePresentation==='quick'`)
+      const draftLayouts=[]
+      for(const [width,height,zoom]of [[390,844,1],[1280,800,1],[390,844,1.75],[1280,800,1.75]])for(const theme of ['dark','light']){
+        await browser.call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false},session)
+        await evaluate(`document.documentElement.style.setProperty('--ui-zoom','${zoom}');document.documentElement.dataset.theme='${theme}';window.dispatchEvent(new Event('resize'))`);await settledLayout()
+        await evaluate(`${button('Clear draft and use N3DXCW')}.scrollIntoView({block:'center',behavior:'instant'});true`);await settledLayout()
+        const shape=await evaluate(`(()=>{const e=${button('Clear draft and use N3DXCW')},r=e.getBoundingClientRect(),input=${input('cw')};return {target:r.toJSON(),hit:e.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)),sameInput:input===window.__dxCwInput,call:input.value,docW:document.documentElement.scrollWidth,horizontal:[...document.querySelectorAll('.cw-cockpit, .cw-cockpit *')].filter(e=>e.clientWidth>0&&e.scrollWidth>e.clientWidth+1&&/auto|scroll/.test(getComputedStyle(e).overflowX)).map(e=>e.className)}})()`)
+        if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,`draft-${width}-${zoom}-${theme}.png`),Buffer.from(shot.data,'base64'))}
+        assert.ok(shape.sameInput&&shape.call==='N2DXCW'&&shape.hit&&shape.docW<=width+1)
+        assert.deepEqual(shape.horizontal,[],'explicit Work draft replacement must fit without sideways scrolling')
+        assert.equal(stationRequests.length,3);draftLayouts.push({width,height,zoom,theme,shape})
+      }
       await click(button('Clear draft and use N3DXCW'))
+      await click(`[...document.querySelectorAll('.remote-quick-nav button')].find(e=>e.textContent==='Full Nexus')`)
+      await until(`document.querySelector('.app')?.dataset.remotePresentation==='full'`)
+      await browser.call('Emulation.setDeviceMetricsOverride',{width:1280,height:800,deviceScaleFactor:1,mobile:false},session)
+      await evaluate(`document.documentElement.style.setProperty('--ui-zoom','1');window.dispatchEvent(new Event('resize'))`);await settledLayout()
       assert.equal(await evaluate(`${input('cw')}.value`),'N3DXCW')
       assert.ok(await evaluate(`document.querySelector('.cw-cockpit .le-hint')?.textContent.includes('14.055')`))
       assert.equal(stationRequests.length,3,'replacing a draft is local and cannot issue another radio command')
@@ -636,7 +653,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       assert.equal(loggedRequests.length,1);assert.equal(exceptions,0);assert.equal(unexpectedMessages,0)
       if(artifacts){
         const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'dx-recovered-needed.png'),Buffer.from(shot.data,'base64'))
-        await writeFile(join(artifacts,'dx-results.json'),JSON.stringify({stationActions:stationRequests.map(r=>r.action),log:loggedRequests.map(r=>r.record),nativeBroadcastIgnored:true,independentDrafts:true,originalLogContext:true,explicitReplacement:true,lostResultNotReplayed:true,exceptions,unexpectedMessages},null,2))
+        await writeFile(join(artifacts,'dx-results.json'),JSON.stringify({stationActions:stationRequests.map(r=>r.action),log:loggedRequests.map(r=>r.record),nativeBroadcastIgnored:true,independentDrafts:true,originalLogContext:true,explicitReplacement:true,draftLayouts,lostResultNotReplayed:true,exceptions,unexpectedMessages},null,2))
       }
       console.log('Compiled DX Work: four exact spot actions, independent drafts, original log context, explicit replacement and lost-result recovery passed');return
     }
