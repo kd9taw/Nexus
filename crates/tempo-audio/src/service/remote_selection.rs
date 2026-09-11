@@ -164,7 +164,8 @@ impl RadioLoop {
             }
         };
         let mut eng = engine_lock(engine);
-        let Some(decoder) = modes::Ft8A7ResetGuard::try_acquire() else {
+        let Some(decoder) = tempo_app::engine::remote_selection::Ft8A7ResetGuard::try_acquire()
+        else {
             request.refuse(Reason::StationBusy);
             return;
         };

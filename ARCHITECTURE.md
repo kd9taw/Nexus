@@ -101,8 +101,17 @@ prepared connection before saving, and consumes its retune. Failed persistence
 retains the actual selection with an unknown receipt. Read-only position probes
 and permission-bearing idle PTT release support the owner transaction; serial
 port opens recheck permission at each baud attempt and always perform idle cleanup.
-These pieces are not yet connected through the complete radio worker and host
-device synchronization, and do not enable a browser radio picker.
+The active radio worker consumes selection before local handoff. It claims the
+incoming connection, releases idle PTT through the configured backend, performs
+native keyer cleanup and verifies the complete incoming configuration under the
+original permission. Installation transfers the connection and desired-value
+caches before persistence, clears outgoing observations, and retires old receive
+audio. The next native tick rebuilds capture and retains its ordinary unkey
+cleanup without replaying the completed tuning transaction. Preparation samples
+are not relabeled as live incoming readings: the next read binds the new
+connection before I/O. Pending local hardware commands keep their original owner.
+Host device synchronization and the hosted selection action remain unconnected;
+this internal worker does not yet enable a browser radio picker.
 Monitor connection opens now take a per-radio ownership token before releasing
 the pool lock for I/O. Reconciliation and local handoff respect that token, so
 an in-flight open finishes before another caller can open or adopt that radio.

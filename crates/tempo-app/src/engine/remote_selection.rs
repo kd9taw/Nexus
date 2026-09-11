@@ -6,6 +6,7 @@ use super::remote_radio::{AgcSpeed, RadioLevel};
 use super::Engine;
 use crate::remote_control::{Completion, Evidence, Outcome, Permit, Reason, WritePermission};
 use crate::settings::Settings;
+pub use modes::Ft8A7ResetGuard;
 use std::time::Instant;
 
 pub struct Request {
@@ -568,6 +569,97 @@ mod tests {
                 "abandonment ends a request instead of leaving it queued"
             );
         }
+    }
+
+    #[test]
+    fn selection_leaves_pending_local_hardware_commands_with_the_original_radio() {
+        let pending: [fn(&mut Engine); 7] = [
+            |e| e.pending_func[0] = Some(true),
+            |e| e.pending_passband = Some(1800),
+            |e| e.pending_atu_tune = Some(1),
+            |e| e.pending_scope_span = Some(25000),
+            |e| e.pending_yaesu_scope_mode = Some(1),
+            |e| e.pending_scope_ref = Some(-10),
+            |e| e.pending_scope_fixed = Some(true),
+        ];
+        for set in pending {
+            let (mut engine, incoming, connection) = station();
+            let authority = Revocation::default();
+            let completion = engine
+                .queue_remote_radio_selection(incoming, connection, permit(&authority))
+                .unwrap();
+            let request = engine.take_remote_radio_selection().unwrap();
+            set(&mut engine);
+            assert_eq!(request.validate(&engine), Err(Reason::StationBusy));
+            assert!(!commit(request, &mut engine, |_| panic!(
+                "pending local command cannot transfer"
+            )));
+            assert_eq!(engine.settings.active_radio, 0);
+            assert_eq!(
+                completion.outcome(),
+                Outcome::Rejected {
+                    reason: Reason::StationBusy
+                }
+            );
+            assert!(matches!(
+                engine.queue_remote_radio_selection(incoming, connection, permit(&authority)),
+                Err(Reason::StationBusy)
+            ));
+        }
+    }
+
+    #[test]
+    fn selection_clears_outgoing_level_readings_but_preserves_operator_preferences() {
+        let (mut engine, incoming, connection) = station();
+        engine.set_rf_power(0.2);
+        engine.set_mic_gain(0.3);
+        engine.set_nr_level(0.4);
+        engine.set_comp_level(0.5);
+        engine.set_notch_freq_hz(1200.0);
+        engine.set_agc("slow");
+        engine.observe_rig_power(0.95);
+        engine.observe_rig_mic_gain(0.9);
+        engine.observe_rig_nr_level(0.9);
+        engine.observe_rig_comp_level(0.9);
+        engine.observe_rig_notch_freq_hz(900.0);
+        engine.observe_rig_agc("fast".into());
+        let authority = Revocation::default();
+        let completion = engine
+            .queue_remote_radio_selection(incoming, connection, permit(&authority))
+            .unwrap();
+        let request = engine.take_remote_radio_selection().unwrap();
+        assert!(commit(request, &mut engine, |e| {
+            assert_eq!(
+                (
+                    e.rig_rf_power,
+                    e.rig_mic_gain,
+                    e.rig_nr_level,
+                    e.rig_comp_level,
+                    e.rig_notch_freq_hz
+                ),
+                (None, None, None, None, None)
+            );
+            assert_eq!(e.rig_agc, None);
+            assert_eq!(
+                (
+                    e.rf_power,
+                    e.mic_gain,
+                    e.nr_level,
+                    e.comp_level,
+                    e.notch_freq_hz
+                ),
+                (Some(0.2), Some(0.3), Some(0.4), Some(0.5), Some(1200.0))
+            );
+            assert_eq!(e.agc.as_deref(), Some("slow"));
+            e.observe_rig_power(0.21);
+        }));
+        assert_eq!(engine.rig_rf_power, Some(0.21));
+        assert_eq!(
+            completion.outcome(),
+            Outcome::Applied {
+                evidence: Evidence::RadioReadback
+            }
+        );
     }
 
     #[test]
