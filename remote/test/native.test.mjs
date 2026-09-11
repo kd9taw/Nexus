@@ -528,7 +528,7 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
   const {value:device,response}=await browser.post(`stations/${stationId}/device`,{name:'Logging browser'});browser.setCookie(response.headers.get('set-cookie'));await probe.send({type:'refresh'});await probe.send({type:'device',deviceId:device.deviceId,approve:true});await probe.send({type:'enable'})
   const roomNamespace=await app.mf.getDurableObjectNamespace('STATIONS'),room=roomNamespace.get(roomNamespace.idFromName(stationId));for(let i=0;i<30&&!(await roomStatus(room)).online;i++)await delay(100);assert.equal((await roomStatus(room)).online,true)
   assert.deepEqual(await probe.send({type:'seedLogging'}),{count:0,adif:'',txEnabled:false})
-  const ticket=(await browser.post(`stations/${stationId}/ticket`)).value;socket=await browser.open(stationId,ticket.ticket);await socket.take(v=>v.type==='session')
+  const ticket=(await browser.post(`stations/${stationId}/ticket`)).value;socket=await browser.open(stationId,ticket.ticket);socket.ackObservations();await socket.take(v=>v.type==='session')
   const envelope=request=>({type:'operationRequest',...(operationVersion>=2?{operationVersion}:{}),request})
   const operation=async args=>{await delay(270);const request={requestId:crypto.randomUUID(),...args};socket.send(envelope(request));
     try{return {request,response:await socket.take(v=>v.type==='operationResponse'&&v.requestId===request.requestId)}}
