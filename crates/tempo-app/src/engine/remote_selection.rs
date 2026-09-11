@@ -1087,10 +1087,11 @@ mod tests {
             assert_eq!(engine.freq_memory, native.freq_memory, "{name} {phone}");
             assert!(!engine.tx_enabled());
             assert!(!engine.immediate_retune);
-            assert_eq!(
-                Settings::load(engine.remote_settings_path.as_ref().unwrap()),
-                engine.settings
-            );
+            let saved: Settings = serde_json::from_slice(
+                &std::fs::read(engine.remote_settings_path.as_ref().unwrap()).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(saved, engine.settings);
         }
     }
 
