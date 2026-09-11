@@ -196,6 +196,7 @@ export function CockpitHeader({
   // Do NOT re-derive this from flags. Ask the arbiter; it ships the reason with the answer.
   const tuneBy = useWheelTune(readoutRef, {
     remoteFrequency,
+    radioId: snap.activeRadioId,
     dialMhz: dial,
     sideband: radio.sideband || 'USB',
     enabled:

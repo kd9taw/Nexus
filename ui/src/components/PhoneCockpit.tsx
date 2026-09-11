@@ -585,6 +585,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   const seenDspLevels = useRef(false)
   useWheelTune(scopeRef, {
     remoteFrequency: true,
+    radioId: snap.activeRadioId,
     dialMhz: snap.radio.dialMhz,
     sideband: snap.radio.sideband || 'USB',
     enabled: snap.radio.catOk === true && !snap.radio.txBusyReason && !snap.radio.transmitting,

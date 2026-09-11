@@ -13,6 +13,10 @@ import type { AppSnapshot } from '../types'
 import type { ApplicationClient } from './application-client'
 import type { OperationState } from './operation-protocol'
 import { LoggingAuthority } from './operations'
+import { RemoteObservationContext } from './amplifier-observation'
+import frames from '../remote-monitor/fixtures.v2.json'
+import type { MonitorState } from '../remote-monitor/session'
+import type { MonitorFrame } from '../remote-monitor/protocol'
 
 vi.mock('../api', async original => ({ ...await original<Record<string, unknown>>(), setFrequency: vi.fn(async () => null) }))
 vi.mock('../toast', () => ({ pushToast: vi.fn() }))
@@ -40,7 +44,10 @@ function fixture(dialMhz = 7.2) {
   const app = { invoke: read, age: () => age } as unknown as ApplicationClient
   const tuning = new WheelTuning(client, app, failed); tuning.activate()
   closes.push(() => { tuning.dispose(); client.disconnected() })
-  const source = () => ({ dialMhz: snapshot.radio.dialMhz, sideband: snapshot.radio.sideband })
+  const source = () => ({ dialMhz: snapshot.radio.dialMhz, sideband: snapshot.radio.sideband, context: state.controls!.context })
+  const frame = structuredClone(frames.spe) as MonitorFrame
+  frame.station.radio.id = 1; frame.station.radio.readings.cat!.connectionGeneration = 7; frame.station.amplifier = null
+  const observation = { status: 'current', frame } as MonitorState
   const finish = (outcome: 'applied' | 'unknown' = 'applied') => {
     const writes = sent.filter(w => w.request.type === 'stationControl')
     const request = writes[writes.length - 1].request
@@ -53,7 +60,7 @@ function fixture(dialMhz = 7.2) {
     act(() => reply({ ...state, revision: ++revision, commandWindowId: crypto.randomUUID(), nextSequence: ++sequence }))
     await tick()
   }
-  return { tuning, client, state, reply, sent, read, failed, source, finish, fresh,
+  return { tuning, client, state, reply, sent, read, failed, source, finish, fresh, observation,
     getSnapshot: () => snapshot, setSnapshot: (s: AppSnapshot) => { snapshot = s }, setAge: (v: number) => { age = v },
     writes: () => sent.filter(w => w.request.type === 'stationControl') }
 }
@@ -196,16 +203,41 @@ it('retains uncertain command recovery without replaying a wheel target', async 
 
 function Scope({ snap }: { snap: AppSnapshot }) {
   const ref = useRef<HTMLDivElement>(null)
-  useWheelTune(ref, { ...snap.radio, enabled: true, stepHz: 100, remoteFrequency: true })
+  useWheelTune(ref, { ...snap.radio, radioId: snap.activeRadioId, enabled: true, stepHz: 100, remoteFrequency: true })
   return <div ref={ref} data-testid="scope"/>
 }
+it('the mounted native readout waits for its displayed radio and observation to catch up after handoff', async () => {
+  const h = fixture(), displayed = h.getSnapshot()
+  const page = (snap = displayed, observation = h.observation) => <StationControlContext.Provider value={false}><StationDataContext.Provider value={true}>
+    <RemoteOperationsContext.Provider value={h.client}><RemoteWheelTuningContext.Provider value={h.tuning}>
+      <RemoteObservationContext.Provider value={observation}>
+        <CockpitHeader snap={snap} modeIndicator="Phone" bandControl={null} onCommitDial={vi.fn()} wheelTune digitTune remoteFrequency/>
+      </RemoteObservationContext.Provider>
+    </RemoteWheelTuningContext.Provider></RemoteOperationsContext.Provider>
+  </StationDataContext.Provider></StationControlContext.Provider>
+  const ui = render(page()); await tick(1000)
+  h.setSnapshot({ ...displayed, activeRadioId: 2 })
+  act(() => h.reply({ ...h.state, revision: 2, controls: { ...h.state.controls, context: { ...h.state.controls!.context, radioId: 2 } } })); await tick()
+  const digit = () => ui.container.querySelector('[data-decade="3"]')!
+  fireEvent.wheel(digit(), { deltaY: -100, deltaMode: 0 }); await tick(120)
+  expect(h.writes()).toHaveLength(0)
+  ui.rerender(page(h.getSnapshot())); await tick()
+  fireEvent.wheel(digit(), { deltaY: -100, deltaMode: 0 }); await tick(120)
+  expect(h.writes()).toHaveLength(0)
+  const fresh = structuredClone(h.observation); fresh.frame!.station.radio.id = 2
+  ui.rerender(page(h.getSnapshot(), fresh)); await tick()
+  fireEvent.wheel(digit(), { deltaY: -100, deltaMode: 0 }); await tick(120)
+  expect(h.writes()).toHaveLength(1); expect(h.writes()[0].request.context.radioId).toBe(2)
+  act(() => h.finish()); await tick()
+})
+
 it('the actual digit readout and scope listener share one target and keep native calls inert', async () => {
   const h = fixture()
   const view = (show = true) => <StationControlContext.Provider value={false}><StationDataContext.Provider value={true}>
-    <RemoteOperationsContext.Provider value={h.client}><RemoteWheelTuningContext.Provider value={h.tuning}>
+    <RemoteOperationsContext.Provider value={h.client}><RemoteWheelTuningContext.Provider value={h.tuning}><RemoteObservationContext.Provider value={h.observation}>
       <LoggingAuthority client={h.client}/>
       {show && <><CockpitHeader snap={h.getSnapshot()} modeIndicator="Phone" bandControl={null} onCommitDial={vi.fn()} wheelTune digitTune remoteFrequency/><Scope snap={h.getSnapshot()}/></>}
-    </RemoteWheelTuningContext.Provider></RemoteOperationsContext.Provider>
+    </RemoteObservationContext.Provider></RemoteWheelTuningContext.Provider></RemoteOperationsContext.Provider>
   </StationDataContext.Provider></StationControlContext.Provider>
   const ui = render(view()); await tick()
   const digit = ui.container.querySelector('[data-decade="3"]')!
@@ -231,9 +263,9 @@ it('the actual digit readout and scope listener share one target and keep native
 it('a real scope listener discards sub-notch residue across a loss and same-lease return', async () => {
   const h = fixture()
   const ui = render(<StationControlContext.Provider value={false}><StationDataContext.Provider value={true}>
-    <RemoteOperationsContext.Provider value={h.client}><RemoteWheelTuningContext.Provider value={h.tuning}>
+    <RemoteOperationsContext.Provider value={h.client}><RemoteWheelTuningContext.Provider value={h.tuning}><RemoteObservationContext.Provider value={h.observation}>
       <Scope snap={h.getSnapshot()}/>
-    </RemoteWheelTuningContext.Provider></RemoteOperationsContext.Provider>
+    </RemoteObservationContext.Provider></RemoteWheelTuningContext.Provider></RemoteOperationsContext.Provider>
   </StationDataContext.Provider></StationControlContext.Provider>)
   await tick(950)
   fireEvent.wheel(ui.getByTestId('scope'), { deltaY: -60, deltaMode: 0 })

@@ -7,6 +7,8 @@ import { clampWheelTarget } from './wheelTuningPolicy'
 import { useStationControl } from './stationAccess'
 import { useRemoteWheelTuning } from './remote-web/wheel-tuning-context'
 import type { WheelTuning } from './remote-web/wheel-tuning'
+import { useRemoteStation } from './remote-web/amplifier-observation'
+import type { ControlContext } from './remote-web/station-operation'
 
 /** Trailing-flush window: at most one CAT write per this many ms while the wheel spins. */
 const FLUSH_MS = 120
@@ -34,6 +36,8 @@ interface WheelTuneOpts {
   enabled: boolean
   /** Explicitly reviewed Remote surface; its burst uses the session owner. */
   remoteFrequency?: boolean
+  /** Identity of the station snapshot displayed by a reviewed Remote surface. */
+  radioId?: number
   /** Hz per tuning step (Shift = ×10). Shared with the tuning strip's step selector. */
   stepHz: number
   /** Sensitivity multiplier (1.0 = stock). <1 needs more scroll per step (damps an energetic /
@@ -85,11 +89,12 @@ export function useWheelTune(
   opts: WheelTuneOpts,
 ): (deltaHz: number) => void {
   const control = useStationControl(), remote = useRemoteWheelTuning()
+  const observation = useRemoteStation(opts.radioId)
   // The listener attaches once; a ref keeps it reading the latest props each event.
   const owner = useRef<object>({})
-  const stateRef = useRef<WheelTuneOpts & { remote: WheelTuning | null; owner: object }>({ ...opts, remote: null, owner: owner.current })
+  const stateRef = useRef<WheelTuneOpts & { remote: WheelTuning | null; owner: object; context: ControlContext | null }>({ ...opts, remote: null, owner: owner.current, context: null })
   stateRef.current = { ...opts, owner: owner.current, enabled: opts.enabled && (control || (!!opts.remoteFrequency && remote.allowed)),
-    remote: !control && opts.remoteFrequency ? remote.controller : null }
+    remote: !control && opts.remoteFrequency ? remote.controller : null, context: observation.context }
   const targetHzRef = useRef<number | null>(null) // optimistic dial while a burst is in flight
   const accumRef = useRef(0) // sub-step scroll accumulator (pixel-equivalents)
   /** The step `accumRef` was filled AT. One accumulator serves every decade, so without this a
@@ -142,7 +147,7 @@ export function useWheelTune(
   const seed = useCallback(() => {
     const source = stateRef.current
     if (source.remote) {
-      const context = JSON.stringify([source.remote.inputContext(), source.dialMhz, source.sideband])
+      const context = JSON.stringify([source.remote.inputContext(), source.context?.radioId, source.context?.radioConnection, source.context?.ampConnection, source.dialMhz, source.sideband])
       if (remoteInputRef.current !== context) {
         remoteInputRef.current = context
         targetHzRef.current = null

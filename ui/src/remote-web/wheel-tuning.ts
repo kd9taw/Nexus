@@ -3,14 +3,14 @@ import { bandLabelForMhz } from '../band'
 import { clampWheelTarget } from '../wheelTuningPolicy'
 import type { ApplicationClient } from './application-client'
 import type { OperationClient } from './operation-client'
-import type { StationAction, ControlOutcome } from './station-operation'
+import type { StationAction, ControlOutcome, ControlContext } from './station-operation'
 
-export type WheelSource = { dialMhz: number; sideband: string; owner?: object }
+export type WheelSource = { dialMhz: number; sideband: string; owner?: object; context?: ControlContext | null }
 type Burst = WheelSource & {
   fromHz: number
   targetHz: number
   radioId: number
-  context: string
+  authority: string
   edgeSaid: boolean
   owners: Set<object>
   send: (action: StationAction) => Promise<ControlOutcome>
@@ -61,6 +61,11 @@ export class WheelTuning {
       !v.unresolved && !v.controlPending && !v.submitting && s?.phase === 'controlling' && !s.txArmed &&
       s.controls?.capabilities.includes('frequency') && s.controls.context.radioConnection !== null)
   }
+  private matchesSource(source: WheelSource): boolean {
+    const displayed = source.context, current = this.operations.getSnapshot().state?.controls?.context
+    return !!(displayed && current && displayed.radioId === current.radioId &&
+      displayed.radioConnection === current.radioConnection && displayed.ampConnection === current.ampConnection)
+  }
   cancel(owner?: object) {
     if (owner && !this.burst?.owners.has(owner) && !this.reading?.owners.has(owner)) return
     this.inputEpoch++
@@ -91,16 +96,16 @@ export class WheelTuning {
     }
   }
   nudge(deltaHz: number, source: WheelSource, onEdge?: (mhz: number) => void): boolean {
-    if (!this.ready() || !Number.isFinite(deltaHz) || !deltaHz || !Number.isFinite(source.dialMhz) || source.dialMhz <= 0 || source.dialMhz > 250000 ||
+    if (!this.ready() || !this.matchesSource(source) || !Number.isFinite(deltaHz) || !deltaHz || !Number.isFinite(source.dialMhz) || source.dialMhz <= 0 || source.dialMhz > 250000 ||
       !['USB', 'LSB', 'AM', 'FM'].includes(source.sideband)) return false
     const fromHz = Math.round(source.dialMhz * 1e6), context = this.context()
     // A new event may begin a fresh burst; it cannot carry the old target into
     // that new context. The prepared sender still enforces the original window.
-    if (this.burst && (this.burst.context !== context || this.burst.fromHz !== fromHz || this.burst.sideband !== source.sideband)) this.cancel()
+    if (this.burst && (this.burst.authority !== context || this.burst.fromHz !== fromHz || this.burst.sideband !== source.sideband)) this.cancel()
     if (!this.burst) {
       const state = this.operations.getSnapshot().state!
-      this.burst = { ...source, fromHz, targetHz: fromHz, context, radioId: state.controls!.context.radioId,
-        edgeSaid: false, owners: new Set(), send: this.operations.prepareControl() }
+      this.burst = { ...source, fromHz, targetHz: fromHz, authority: context, radioId: state.controls!.context.radioId,
+        edgeSaid: false, owners: new Set(), send: this.operations.prepareControl(source.context!) }
     }
     const b = this.burst
     if (source.owner) b.owners.add(source.owner)
@@ -115,7 +120,7 @@ export class WheelTuning {
   private async flush() {
     const b = this.burst, generation = this.generation
     this.timer = undefined
-    if (!b || !this.ready() || b.context !== this.context()) { this.cancel(); return }
+    if (!b || !this.ready() || b.authority !== this.context()) { this.cancel(); return }
     this.burst = null
     if (b.targetHz === b.fromHz) return
     this.reading = b; this.sending = true; this.notify()
@@ -124,7 +129,7 @@ export class WheelTuning {
       // unavailable sample or another radio's snapshot cancels the entire burst.
       const s = await this.application.invoke<AppSnapshot>('get_snapshot'), radio = s?.radio
       if (!this.live || generation !== this.generation) return
-      if (b.context !== this.context() || this.application.age('get_snapshot') >= 1200 || s.activeRadioId !== b.radioId ||
+      if (b.authority !== this.context() || this.application.age('get_snapshot') >= 1200 || s.activeRadioId !== b.radioId ||
         !radio || radio.source !== 'native' || radio.catOk !== true || radio.txEnabled || radio.transmitting || radio.rigKeyed !== false || radio.tuning || radio.txBusyReason ||
         Math.round(radio.dialMhz * 1e6) !== b.fromHz || radio.sideband !== b.sideband) throw Error('staleContext')
       const dialMhz = b.targetHz / 1e6

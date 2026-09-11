@@ -410,6 +410,7 @@ export function CwCockpit({
   const scopeRef = useRef<HTMLElement>(null)
   useWheelTune(scopeRef, {
     remoteFrequency: true,
+    radioId: snap.activeRadioId,
     dialMhz: snap.radio.dialMhz,
     sideband: snap.radio.sideband || 'USB',
     enabled: catOk && !snap.radio.txBusyReason && !snap.radio.transmitting,
