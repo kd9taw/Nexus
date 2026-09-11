@@ -64,8 +64,8 @@ async function chrome() {
   } catch(error) { ws?.close(); if(!exited)process.kill(-child.pid,'SIGTERM'); await rm(profile,{recursive:true,force:true,maxRetries:8,retryDelay:100}); throw error }
 }
 
-for (const {applicationVersion,operating,sessionLayout,quickLayout} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,14].map(applicationVersion=>({applicationVersion,operating:false})),{applicationVersion:14,operating:true},{applicationVersion:14,operating:true,sessionLayout:true},{applicationVersion:14,operating:true,quickLayout:true}]) test(`compiled hosted browser ${quickLayout?'quick layout':sessionLayout?'session layout':operating?'operations':`v${applicationVersion}`} completes PKCE, local device approval, observation and viewport checks`, { timeout: applicationVersion >= 14 ? 540000 : applicationVersion >= 13 ? 420000 : 180000 }, async () => {
-  const app=await runtime(), artifacts=process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS ? join(process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS, quickLayout?'quick-layout':sessionLayout?'session-layout':operating?'operations':`v${applicationVersion}`) : undefined
+for (const {applicationVersion,operating,sessionLayout,quickLayout,contactContinuity} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,14].map(applicationVersion=>({applicationVersion,operating:false})),{applicationVersion:14,operating:true},{applicationVersion:14,operating:true,sessionLayout:true},{applicationVersion:14,operating:true,quickLayout:true},{applicationVersion:14,operating:true,contactContinuity:true}]) test(`compiled hosted browser ${contactContinuity?'contact continuity':quickLayout?'quick layout':sessionLayout?'session layout':operating?'operations':`v${applicationVersion}`} completes PKCE, local device approval, observation and viewport checks`, { timeout: applicationVersion >= 14 ? 540000 : applicationVersion >= 13 ? 420000 : 180000 }, async () => {
+  const app=await runtime(), artifacts=process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS ? join(process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS, contactContinuity?'contact-continuity':quickLayout?'quick-layout':sessionLayout?'session-layout':operating?'operations':`v${applicationVersion}`) : undefined
   let browser, station, producing=true, pauseObservations=false, producer, applicationProducer
   const results=[]
   try {
@@ -589,6 +589,49 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout} of [...[1,2,
       if(artifacts)await writeFile(join(artifacts,'quick-results.json'),JSON.stringify({checks,stationActions:0,logWrites:0,leasePreserved:true,exceptions,unexpectedMessages},null,2))
       assert.equal(exceptions,0);assert.equal(unexpectedMessages,0)
       console.log('Compiled Quick presentation: actual contact draft, one app and lease, eight layouts and return to full Nexus passed');return
+    }
+    if(contactContinuity){
+      loggingAllowed=true;stationControls=true
+      await until(`!!${button('Take station control')}`);await click(button('Take station control'))
+      await until(`document.querySelector('.remote-logging-authority')?.textContent.includes('Station control active')`)
+      const lease=loggingLease,checks=[]
+      const waitTopics=async (predicate,message)=>{
+        for(let attempt=0;attempt<100;attempt++){
+          if(predicate(streamWatch?.topics??[]))return
+          await sleep(100)
+        }
+        assert.fail(`${message}: ${JSON.stringify(streamWatch?.topics)}`)
+      }
+      for(const [label,mode,call]of [['Phone','phone','N2CONTACT'],['CW','cw','N3CONTACT']]){
+        await click(button(label))
+        const selector=`.${mode}-cockpit .remote-log-entry .le-call`
+        await until(`!!document.querySelector('${selector}')`)
+        await click(`document.querySelector('${selector}')`)
+        await browser.call('Input.insertText',{text:call},session)
+        assert.equal(await evaluate(`document.querySelector('${selector}').value`),call)
+        await evaluate(`void(window.__contactNodes={...(window.__contactNodes??{}),${mode}:document.querySelector('${selector}')})`)
+        await waitTopics(topics=>topics.includes('get_scope_snapshot')&&(mode!=='cw'||topics.includes('get_cw_state')),'the visible cockpit must first receive its actual display topics')
+        for(const destination of ['Needed','Logbook']){
+          await click(button(destination));await settledLayout()
+          const hidden=await evaluate(`(()=>{const e=document.querySelector('${selector}');return {same:e===window.__contactNodes.${mode},value:e?.value,hidden:!!e&&e.getBoundingClientRect().width===0}})()`)
+          assert.ok(hidden.same&&hidden.value===call&&hidden.hidden,`${label} must retain its actual contact form and draft while visiting ${destination}: ${JSON.stringify(hidden)}`)
+          await waitTopics(topics=>!topics.includes('get_scope_snapshot')&&!topics.includes('get_cw_state'),'hidden Phone and CW must retire display demand')
+          const before={scope:applicationTraffic.byCommand.get_scope_snapshot??0,cw:applicationTraffic.byCommand.get_cw_state??0}
+          await sleep(750)
+          assert.deepEqual({scope:applicationTraffic.byCommand.get_scope_snapshot??0,cw:applicationTraffic.byCommand.get_cw_state??0},before,'retired scopes and decoder views must stay idle')
+          await click(button(label));await settledLayout()
+          assert.equal(await evaluate(`(()=>{const e=document.querySelector('${selector}');return e===window.__contactNodes.${mode}&&e.value==='${call}'&&e.getBoundingClientRect().width>0})()`),true,'returning must reveal the same draft')
+          await waitTopics(topics=>topics.includes('get_scope_snapshot')&&(mode!=='cw'||topics.includes('get_cw_state')),'returning must resume display updates')
+          assert.equal(loggingLease,lease);assert.equal(stationRequests.length,0);assert.equal(loggedRequests.length,0)
+          checks.push({mode,destination,draftRetained:true,hiddenTopicsRetired:true,resumed:true})
+        }
+      }
+      await click(button('Phone'));await settledLayout()
+      assert.equal(await evaluate(`document.querySelector('.phone-cockpit .le-call')===window.__contactNodes.phone&&document.querySelector('.phone-cockpit .le-call').value==='N2CONTACT'&&document.querySelector('.cw-cockpit .le-call')===window.__contactNodes.cw&&document.querySelector('.cw-cockpit .le-call').value==='N3CONTACT'`),true,'Phone and CW must retain independent contact drafts')
+      assert.equal(loggingLease,lease);assert.equal(stationRequests.length,0);assert.equal(loggedRequests.length,0)
+      if(artifacts)await writeFile(join(artifacts,'contact-results.json'),JSON.stringify({checks,stationActions:0,logWrites:0,leasePreserved:true,exceptions,unexpectedMessages},null,2))
+      assert.equal(exceptions,0);assert.equal(unexpectedMessages,0)
+      console.log('Compiled contact continuity: independent Phone/CW drafts, Hunt/Log round trips, hidden display retirement and resumed data passed');return
     }
     if(sessionLayout){
       stationControls=true
