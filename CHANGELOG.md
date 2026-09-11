@@ -87,8 +87,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   transmitter drops when the audio really ends.
 
   WSPR was the report, but it was never only WSPR: JT65, Q65 at 30 s and longer, FST4 and FST4W at
-  30 s and longer — FST4W-1800 was putting twenty-nine minutes of unmodulated carrier on the air per
-  over. It also caught PSK31: a one-shot send longer than about eighty characters — two lines — went
+  30 s and longer — FST4W-1800 held the transmitter up for twenty-nine minutes per over.
+    On the digital modes this was reported on there is no carrier to hear — SSB suppresses it, so
+    a drained buffer means no RF at all, which is why the reporter's power meter read zero while
+    his radio was still keyed. On FM, AM and CW it would be an unmodulated carrier. It also caught PSK31: a one-shot send longer than about eighty characters — two lines — went
   out truncated with the transmitter held up for the whole message. Continuous (latched) PSK31 was
   never affected, because it feeds the card as it types.
 
