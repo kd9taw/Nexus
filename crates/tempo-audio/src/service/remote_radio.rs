@@ -2,7 +2,7 @@
 //! Only confirmed dial/mode/power enter settings; unknown work never becomes a local retry.
 use super::*;
 use crate::rig::remote::{Position, Retune};
-use tempo_app::engine::remote_radio::ReceiverDsp;
+use tempo_app::engine::remote_radio::{RadioLevel, ReceiverDsp};
 use tempo_app::remote_control::Reason;
 
 impl RadioLoop {
@@ -23,7 +23,9 @@ impl RadioLoop {
                 if self.tx_until_ms.is_some()
                     || self.tuning_keyed
                     || rig.keyed
-                    || ((request.filter_width().is_some() || request.receiver_dsp().is_some())
+                    || ((request.filter_width().is_some()
+                        || request.receiver_dsp().is_some()
+                        || request.level().is_some())
                         && !self.rig_asserted)
                 {
                     Err(Reason::StationBusy)
@@ -51,6 +53,9 @@ impl RadioLoop {
         let result = (|| {
             let (hz, mode) = request.expected();
             let expected = Position::new(hz, mode)?;
+            if let Some((level, before, value)) = request.level() {
+                return rig.remote_level(expected, level, before, value, request.permission());
+            }
             if let Some((before, width)) = request.filter_width() {
                 return rig.remote_filter_width(expected, before, width, request.permission());
             }
@@ -83,7 +88,10 @@ impl RadioLoop {
         eng.remote_observe_ptt(read.as_ref(), Some(false));
         let filter = request.filter_width().is_some();
         let dsp = request.receiver_dsp().is_some();
-        let committed = if dsp {
+        let level = request.level();
+        let committed = if level.is_some() {
+            request.commit_level_readback(&mut eng, readback.level())
+        } else if dsp {
             request.commit_receiver_dsp_readback(&mut eng, readback.receiver_dsp())
         } else if filter {
             request.commit_filter_readback(&mut eng, readback.passband())
@@ -91,7 +99,31 @@ impl RadioLoop {
             request.commit_readback(&mut eng, readback.power())
         };
         if committed {
-            if filter || dsp {
+            if filter || dsp || level.is_some() {
+                if let Some((level, _, desired)) = level {
+                    match level {
+                        RadioLevel::Power => {
+                            self.last_rf_power = Some(desired);
+                            self.rf_power_giveup = None;
+                        }
+                        RadioLevel::MicGain => {
+                            self.last_mic_gain = Some(desired);
+                            self.mic_gain_giveup = None;
+                        }
+                        RadioLevel::NoiseReduction => {
+                            self.last_nr_level = Some(desired);
+                            self.nr_level_giveup = None;
+                        }
+                        RadioLevel::Compression => {
+                            self.last_comp_level = Some(desired);
+                            self.comp_level_giveup = None;
+                        }
+                        RadioLevel::NotchFrequency => {
+                            self.last_notch_freq_hz = Some(desired);
+                            self.notch_freq_giveup = None;
+                        }
+                    }
+                }
                 match readback.receiver_dsp() {
                     Some(ReceiverDsp::Function { func, on }) => {
                         self.func_state[func.index()] = Some(on);

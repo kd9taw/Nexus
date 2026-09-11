@@ -10,7 +10,10 @@ export const AGC_SPEEDS = ['auto', 'fast', 'mid', 'slow', 'off'] as const
 export type AgcSpeed = (typeof AGC_SPEEDS)[number]
 export const PHONE_MODES = ['auto', 'USB', 'LSB', 'AM'] as const
 export type PhoneMode = (typeof PHONE_MODES)[number]
+export const RADIO_LEVELS = ['power', 'micGain', 'nr', 'compression', 'notch'] as const
+export type RadioLevel = (typeof RADIO_LEVELS)[number]
 export type StationAction =
+  | { action: 'radio.level'; mode: 'digital' | 'phone' | 'cw' | 'rtty' | 'keyboard'; level: RadioLevel; expected: number; value: number }
   | { action: 'radio.workSpot'; mode: 'cw' | 'phone'; dialMhz: number; band: string; call: string }
   | { action: 'radio.frequency'; dialMhz: number; band: string; sideband: 'USB' | 'LSB' | 'FM' | 'AM' }
   | { action: 'radio.band'; band: string; mode: 'cw' | 'phone' }
@@ -43,10 +46,11 @@ export type ControlContext = {
   ampConnection: number | null
   ampReadSequence: number | null
 }
-export const CONTROL_CAPABILITIES = ['decoder', 'radio', 'amplifier', 'frequency', 'mode', 'tier', 'ampFollowBand', 'workspace', 'decoderSettings', 'receiverSettings', 'receiverGain', 'bandSelection', 'receiverFilter', 'receiverDsp', 'phoneMode', 'workSpot'] as const
+export const CONTROL_CAPABILITIES = ['decoder', 'radio', 'amplifier', 'frequency', 'mode', 'tier', 'ampFollowBand', 'workspace', 'decoderSettings', 'receiverSettings', 'receiverGain', 'bandSelection', 'receiverFilter', 'receiverDsp', 'phoneMode', 'workSpot', 'radioLevels'] as const
 export type ControlCapability = (typeof CONTROL_CAPABILITIES)[number]
 // A new action cannot silently inherit a broader capability by its prefix.
 const ACTION_CAPABILITY: Record<StationAction['action'], ControlCapability> = {
+  'radio.level': 'radioLevels',
   'radio.disarm': 'radio', 'radio.select': 'radio', 'radio.frequency': 'frequency',
   'radio.band': 'bandSelection', 'radio.mode': 'mode', 'radio.tier': 'tier', 'radio.workspace': 'workspace',
   'radio.filterWidth': 'receiverFilter',
@@ -97,6 +101,12 @@ export function stationAction(raw: unknown): StationAction {
     case 'radio.band':
       object(a, ['action', 'band', 'mode'])
       if (!oneOf(a.band, BANDS) || !oneOf(a.mode, ['cw', 'phone'])) invalid()
+      break
+    case 'radio.level':
+      object(a, ['action', 'mode', 'level', 'expected', 'value'])
+      if (!oneOf(a.mode, ['digital', 'phone', 'cw', 'rtty', 'keyboard']) || !oneOf(a.level, RADIO_LEVELS) ||
+        !finite(a.expected) || !finite(a.value) || a.expected < 0 ||
+        (a.level === 'notch' ? a.value < 300 || a.value > 3400 : a.expected > 1 || a.value < 0 || a.value > 1)) invalid()
       break
     case 'radio.filterWidth':
       object(a, ['action', 'mode', 'expectedHz', 'hz'])

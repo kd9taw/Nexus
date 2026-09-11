@@ -65,6 +65,13 @@ pub enum KeyboardReceiver {
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(tag = "action", deny_unknown_fields)]
 pub enum Action {
+    #[serde(rename = "radio.level")]
+    Level {
+        mode: String,
+        level: String,
+        expected: f32,
+        value: f32,
+    },
     #[serde(rename = "decoder.arm")]
     ReceiverArm { receiver: Receiver, on: bool },
     #[serde(rename = "decoder.clear")]
@@ -223,6 +230,24 @@ pub fn execute(
         return Err(Reason::ContextChanged);
     }
     match action {
+        #[cfg(feature = "radio")]
+        Action::Level {
+            mode,
+            level,
+            expected,
+            value,
+        } => {
+            let level = tempo_app::engine::remote_radio::RadioLevel::from_name(level)
+                .ok_or(Reason::InvalidAction)?;
+            return engine.queue_remote_level(
+                mode,
+                level,
+                *expected,
+                *value,
+                context.radio_connection.ok_or(Reason::ReadingUnavailable)?,
+                permit,
+            );
+        }
         #[cfg(feature = "radio")]
         Action::WorkSpot {
             mode,
@@ -651,7 +676,8 @@ pub fn execute(
 impl Action {
     pub fn minimum_version(&self) -> u8 {
         match self {
-            Self::Frequency { .. }
+            Self::Level { .. }
+            | Self::Frequency { .. }
             | Self::Band { .. }
             | Self::FilterWidth { .. }
             | Self::ReceiverFunction { .. }
@@ -695,6 +721,7 @@ pub fn capabilities(version: u8) -> Vec<&'static str> {
                 "receiverDsp",
                 "phoneMode",
                 "workSpot",
+                "radioLevels",
             ]
         }
     }

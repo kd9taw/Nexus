@@ -52,6 +52,7 @@ impl Rig {
                 power: None,
                 passband: Some(width),
                 receiver_dsp: None,
+                level: None,
             })
         })();
         if let Err(reason) = result {

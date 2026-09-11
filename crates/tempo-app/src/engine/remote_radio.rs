@@ -12,6 +12,8 @@ use std::time::Instant;
 
 mod dsp;
 mod filter;
+mod level;
+pub use level::RadioLevel;
 mod phone_mode;
 mod spot;
 pub use dsp::{AgcSpeed, ReceiverDsp, ReceiverFunction};
@@ -25,6 +27,13 @@ pub enum Workspace {
 }
 
 enum Intent {
+    Level {
+        mode: OperatingMode,
+        level: RadioLevel,
+        expected: f32,
+        value: f32,
+        expected_native: Option<f32>,
+    },
     PhoneMode {
         expected_override: Option<String>,
         override_mode: Option<String>,
@@ -486,6 +495,7 @@ impl Engine {
         let bandless_receive = matches!(
             &target.intent,
             Intent::Frequency
+                | Intent::Level { .. }
                 | Intent::FilterWidth { .. }
                 | Intent::ReceiverDsp { .. }
                 | Intent::PhoneMode { .. }
@@ -512,7 +522,9 @@ impl Engine {
                 Intent::PhoneMode {
                     expected_cat_mode, ..
                 } => expected_cat_mode.clone(),
-                Intent::FilterWidth { .. } | Intent::ReceiverDsp { .. } => target.mode.clone(),
+                Intent::FilterWidth { .. } | Intent::ReceiverDsp { .. } | Intent::Level { .. } => {
+                    target.mode.clone()
+                }
                 _ => self.rig_mode_effective(),
             },
             target_hz: target.hz,
@@ -596,6 +608,17 @@ impl Request {
             _ => None,
         }
     }
+    pub fn level(&self) -> Option<(RadioLevel, f32, f32)> {
+        match self.intent {
+            Intent::Level {
+                level,
+                expected,
+                value,
+                ..
+            } => Some((level, expected, value)),
+            _ => None,
+        }
+    }
     pub fn receiver_dsp(&self) -> Option<(ReceiverDsp, ReceiverDsp)> {
         match self.intent {
             Intent::ReceiverDsp {
@@ -625,6 +648,16 @@ impl Request {
                 .remote_phone_mode_target(expected_override.as_deref(), override_mode.as_deref())?
                 == self.target_mode
                 && engine.rig_mode_effective() == *expected_native_mode
+        } else if let Intent::Level {
+            mode,
+            level,
+            expected,
+            value,
+            expected_native,
+        } = self.intent
+        {
+            engine.validate_remote_level(mode, level, expected, value, expected_native)?;
+            engine.remote_filter_mode(self.connection)? == self.expected_mode
         } else if let Intent::ReceiverDsp {
             mode,
             expected,
@@ -679,11 +712,11 @@ impl Request {
     /// Power is the owning worker's later CAT readback, not a browser argument.
     /// Mode entry may lower it to the new native ceiling, never raise it.
     pub fn commit_readback(self, engine: &mut Engine, power: Option<f32>) -> bool {
-        self.commit_readings(engine, power, None, None)
+        self.commit_readings(engine, power, None, None, None)
     }
 
     pub fn commit_filter_readback(self, engine: &mut Engine, width: Option<u32>) -> bool {
-        self.commit_readings(engine, None, width, None)
+        self.commit_readings(engine, None, width, None, None)
     }
 
     pub fn commit_receiver_dsp_readback(
@@ -691,7 +724,11 @@ impl Request {
         engine: &mut Engine,
         value: Option<ReceiverDsp>,
     ) -> bool {
-        self.commit_readings(engine, None, None, value)
+        self.commit_readings(engine, None, None, value, None)
+    }
+
+    pub fn commit_level_readback(self, engine: &mut Engine, value: Option<f32>) -> bool {
+        self.commit_readings(engine, None, None, None, value)
     }
 
     fn commit_readings(
@@ -700,9 +737,19 @@ impl Request {
         power: Option<f32>,
         width: Option<u32>,
         dsp: Option<ReceiverDsp>,
+        level_readback: Option<f32>,
     ) -> bool {
         let confirmed = (|| {
             self.validate(engine)?;
+            if let Some((level, _, desired)) = self.level() {
+                let actual = level_readback.ok_or(Reason::HardwareUnconfirmed)?;
+                if !level.same_display_value(desired, actual)
+                    || (level == RadioLevel::Power
+                        && actual > engine.active_power_ceiling() + 0.001)
+                {
+                    return Err(Reason::HardwareUnconfirmed);
+                }
+            }
             if self.filter_width().is_some_and(|(_, hz)| width != Some(hz)) {
                 return Err(Reason::HardwareUnconfirmed);
             }
@@ -763,15 +810,21 @@ impl Request {
             self.refuse(reason);
             return false;
         }
-        let receiver = self.filter_width().is_some() || self.receiver_dsp().is_some();
+        let receiver = self.filter_width().is_some()
+            || self.receiver_dsp().is_some()
+            || self.level().is_some();
         let persist = !matches!(
             &self.intent,
             Intent::Tier(_)
+                | Intent::Level { .. }
                 | Intent::FilterWidth { .. }
                 | Intent::ReceiverDsp { .. }
                 | Intent::PhoneMode { .. }
         );
         match self.intent {
+            Intent::Level { level, value, .. } => {
+                engine.commit_remote_level(level, value, level_readback.expect("validated level"))
+            }
             Intent::PhoneMode { override_mode, .. } => {
                 engine.request_sideband_override(override_mode.as_deref());
                 if let Some(power) = power.filter(|_| self.power_limit.is_some()) {

@@ -18,6 +18,7 @@ use tempo_app::remote_control::{Reason, WritePermission};
 
 mod dsp;
 mod filter;
+mod level;
 
 /// A station-resolved CAT position, not an arbitrary browser command string.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -98,6 +99,7 @@ pub struct Readback {
     power: Option<f32>,
     passband: Option<u32>,
     receiver_dsp: Option<ReceiverDsp>,
+    level: Option<f32>,
 }
 
 impl Readback {
@@ -113,6 +115,9 @@ impl Readback {
     }
     pub fn passband(&self) -> Option<u32> {
         self.passband
+    }
+    pub fn level(&self) -> Option<f32> {
+        self.level
     }
     pub fn receiver_dsp(&self) -> Option<ReceiverDsp> {
         self.receiver_dsp
@@ -288,6 +293,7 @@ impl Rig {
             power,
             passband: None,
             receiver_dsp: None,
+            level: None,
         })
     }
 }

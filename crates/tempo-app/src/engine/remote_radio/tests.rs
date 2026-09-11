@@ -9,6 +9,7 @@ static NEXT: AtomicUsize = AtomicUsize::new(0);
 mod band_selection;
 mod dsp;
 mod filter;
+mod level;
 mod phone_mode;
 mod receive_tuning;
 mod spot;

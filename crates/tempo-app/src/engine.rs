@@ -7641,6 +7641,7 @@ impl Engine {
 
     /// Set desired mic gain (0.0–1.0). The radio loop applies it via the rig.
     pub fn set_mic_gain(&mut self, frac: f32) {
+        self.remote_actuation.revoke();
         self.mic_gain = Some(frac.clamp(0.0, 1.0));
     }
     /// Desired mic gain, if the operator has set one (for the radio loop).
@@ -7667,6 +7668,7 @@ impl Engine {
 
     /// Set desired noise-reduction level (0.0–1.0); the radio loop applies it.
     pub fn set_nr_level(&mut self, frac: f32) {
+        self.remote_actuation.revoke();
         self.nr_level = Some(frac.clamp(0.0, 1.0));
     }
     pub fn nr_level(&self) -> Option<f32> {
@@ -7693,6 +7695,7 @@ impl Engine {
 
     /// Speech-processor depth (0..1). #95 — the COMP toggle had no level behind it.
     pub fn set_comp_level(&mut self, frac: f32) {
+        self.remote_actuation.revoke();
         self.comp_level = Some(frac.clamp(0.0, 1.0));
     }
     pub fn comp_level(&self) -> Option<f32> {
@@ -7707,6 +7710,7 @@ impl Engine {
     /// Manual-notch frequency in HZ. Clamped to the audio passband a notch can live in: a
     /// notch commanded outside it is one the operator cannot hear and cannot find again.
     pub fn set_notch_freq_hz(&mut self, hz: f32) {
+        self.remote_actuation.revoke();
         self.notch_freq_hz = Some(hz.clamp(NOTCH_MIN_HZ, NOTCH_MAX_HZ));
     }
     pub fn notch_freq_hz(&self) -> Option<f32> {
