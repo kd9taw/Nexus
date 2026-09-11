@@ -938,9 +938,10 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
       assert.ok(await evaluate(`[...document.querySelectorAll('.cockpit-txdock button')].every(e=>e.disabled)`),'receiver/amp permission cannot enable TX')
       stationControls=false;loggingLease=null
       await until(`document.querySelector('.cw-cockpit .amp-op').disabled`)
-      assert.equal(loggedRequests.length,5);assert.equal(stationRequests.length,63);assert.equal(unexpectedMessages,0);assert.equal(exceptions,0)
+      assert.equal(controlGeometry+modeGeometry+bandGeometry+tierGeometry+followGeometry+decoderGeometry+receiverGeometry+gainGeometry+16,280)
+      assert.equal(loggedRequests.length,5);assert.equal(stationRequests.length,67);assert.equal(unexpectedMessages,0);assert.equal(exceptions,0)
       if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-manual-logging.png'),Buffer.from(shot.data,'base64'));await writeFile(join(artifacts,'operation-results.json'),JSON.stringify({count:loggedRequests.length,stationActions:stationRequests.map(r=>r.action),controlGeometry,modeGeometry,bandGeometry,tierGeometry,followGeometry,decoderGeometry,receiverGeometry,gainGeometry,modes:loggedRequests.map(r=>r.record.mode),lostResultResolved:true,wholePageReloadResolved:true,crossTabLockRefusal:true,geometry:16,exceptions,unexpectedMessages},null,2))}
-      console.log('Compiled browser: five logging forms, 63 station gestures, saved decoder/receiver choices, bandless receive tuning, separate grants, recovery and 264 geometry cases passed');return
+      console.log('Compiled browser: five logging forms, 67 station gestures, saved receiver choices, native band recall, bandless receive tuning, separate grants, recovery and 280 geometry cases passed');return
     }
     const startReads=applicationTraffic.reads, startBytes=applicationTraffic.bytes, started=performance.now()
     for(const [width,height] of [[1024,768],[1280,800],[1366,768],[1200,1390],[3440,1440]])for(const zoom of [1,1.75])for(const theme of ['dark','light']) {
