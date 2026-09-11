@@ -3,7 +3,8 @@ import { act, cleanup, renderHook } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
 import type { ReactNode } from 'react'
 import { RemoteCollectionsContext, type RemoteCollections } from './collections'
-import { useSatelliteSchedule } from './useNavigation'
+import { useNavigation, useSatelliteSchedule } from './useNavigation'
+import configuration from './__fixtures__/configuration-settings.json'
 import satellite from './__fixtures__/navigation-satellite.json'
 import { navigationPages } from './__fixtures__/navigation-page'
 import type { QueryArgs } from './application-query-protocol'
@@ -43,6 +44,31 @@ function fixture(reuseNativeCache = false, earlierSecondBird = false) {
   return { ...hook, page, fail: (value: string | null) => { failure = value } }
 }
 async function advance(ms: number) { await act(async () => { await vi.advanceTimersByTimeAsync(ms) }) }
+
+it('keeps a valid Settings document through explicit refresh without extending its original deadline', async () => {
+  vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout', 'performance'] })
+  let congested = false
+  const pages = navigationPages('settings', configuration)
+  const page = vi.fn(async () => {
+    if (congested) throw Error('applicationBusy')
+    return { ...pages[0], rows: pages.flatMap(p => p.rows), nextCursor: null }
+  })
+  const source = { page } as unknown as RemoteCollections
+  const { result } = renderHook(() => useNavigation('settings'), { wrapper: ({ children }) =>
+    <RemoteCollectionsContext.Provider value={source}>{children}</RemoteCollectionsContext.Provider> })
+  await advance(0)
+  expect(result.current.value).toEqual(configuration)
+  const before = result.current.value
+  congested = true
+  act(() => result.current.refresh())
+  await advance(500)
+  expect(result.current.value).toBe(before)
+  await advance(30_000)
+  expect(result.current.value).toBeNull()
+  congested = false
+  await advance(2000)
+  expect(result.current.value).toEqual(configuration)
+})
 
 it('refreshes a slow multi-bird schedule before expiry without collapsing the displayed rows', async () => {
   const { result, page } = fixture()

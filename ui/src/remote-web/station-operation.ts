@@ -17,6 +17,7 @@ export type StationAction =
   | { action: 'decoder.pskMode'; mode: 'PSK31' | 'QPSK31'; reverse: boolean }
   | { action: 'amplifier.operate'; expectedOperate: boolean; operate: boolean }
   | { action: 'amplifier.band'; expectedBand: string; direction: -1 | 1 }
+  | { action: 'amplifier.followBand'; radioId: number; expectedSettingsRevision: string; expectedFollow: boolean; follow: boolean }
 
 export type ControlContext = {
   radioId: number
@@ -24,7 +25,7 @@ export type ControlContext = {
   ampConnection: number | null
   ampReadSequence: number | null
 }
-export const CONTROL_CAPABILITIES = ['decoder', 'radio', 'amplifier', 'frequency', 'mode', 'tier'] as const
+export const CONTROL_CAPABILITIES = ['decoder', 'radio', 'amplifier', 'frequency', 'mode', 'tier', 'ampFollowBand'] as const
 export type ControlCapability = (typeof CONTROL_CAPABILITIES)[number]
 export const CONTROL_TIERS = [
   'FT8', 'FT4', 'FT2', 'Q65', 'MSK144', 'JT65', 'FST4', 'FST4W', 'WSPR', 'JS8',
@@ -99,6 +100,12 @@ export function stationAction(raw: unknown): StationAction {
       object(a, ['action', 'expectedBand', 'direction'])
       if (!oneOf(a.expectedBand, BANDS.slice(2, 14)) || ![-1, 1].includes(Number(a.direction)) || typeof a.direction !== 'number') invalid()
       break
+    case 'amplifier.followBand':
+      object(a, ['action', 'radioId', 'expectedSettingsRevision', 'expectedFollow', 'follow'])
+      if (!integer(a.radioId) || a.radioId < 0 || a.radioId > 0xffffffff ||
+        typeof a.expectedSettingsRevision !== 'string' || !/^[0-9a-f]{64}$/.test(a.expectedSettingsRevision) ||
+        typeof a.expectedFollow !== 'boolean' || typeof a.follow !== 'boolean' || a.expectedFollow === a.follow) invalid()
+      break
     default: invalid()
   }
   return raw as StationAction
@@ -106,17 +113,17 @@ export function stationAction(raw: unknown): StationAction {
 
 export type ControlOutcome = { operation: 'stationControl'; operationId: string } & (
   | { outcome: 'pending' }
-  | { outcome: 'applied'; evidence: 'receiverState' | 'radioReadback' | 'amplifierReadback' | 'stationState' }
+  | { outcome: 'applied'; evidence: 'receiverState' | 'radioReadback' | 'amplifierReadback' | 'stationState' | 'settingsSaved' }
   | { outcome: 'rejected' | 'unknown'; reason: string }
 )
-const REASONS = ['authorityExpired', 'contextChanged', 'readingUnavailable', 'stationBusy', 'hardwareUnavailable', 'hardwareUnconfirmed', 'unsupportedAction', 'invalidAction']
+const REASONS = ['authorityExpired', 'contextChanged', 'readingUnavailable', 'stationBusy', 'hardwareUnavailable', 'hardwareUnconfirmed', 'unsupportedAction', 'invalidAction', 'persistenceFailed']
 export function controlOutcome(raw: unknown): ControlOutcome {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) invalid()
   const v = raw as Record<string, unknown>
   object(v, ['operation', 'operationId', 'outcome', ...(v.outcome === 'applied' ? ['evidence'] : v.outcome === 'pending' ? [] : ['reason'])])
   if (v.operation !== 'stationControl' || typeof v.operationId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(v.operationId)) invalid()
   if (v.outcome === 'applied') {
-    if (!oneOf(v.evidence, ['receiverState', 'radioReadback', 'amplifierReadback', 'stationState'])) invalid()
+    if (!oneOf(v.evidence, ['receiverState', 'radioReadback', 'amplifierReadback', 'stationState', 'settingsSaved'])) invalid()
   } else if (v.outcome !== 'pending' && (!oneOf(v.outcome, ['rejected', 'unknown']) || !oneOf(v.reason, REASONS))) invalid()
   return raw as ControlOutcome
 }

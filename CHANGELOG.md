@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Remote amplifier band following:** The existing Settings checkbox and Save
+  button can save the active radio's follow-band choice with station-control
+  permission. Enabling requires a disarmed, idle radio and fresh amplifier
+  readings; disabling works without hardware readings. A changed station form
+  is refused, other profiles are preserved, and the saved choice survives
+  disconnects. Results distinguish a saved setting from a hardware command.
+  Requires a compatible station and operation-v3 follow-band capability;
+  physical radio/amplifier acceptance remains pending.
+
 - **Remote decoder selection:** The existing FT, advanced decoder and Tempo
   selectors now submit guarded tier changes through the station's radio owner.
   Native channel choices, decoder settings and offsets are preserved. Same-tier
@@ -219,6 +228,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ⊞-hideable like their siblings.
 
 ### Fixed
+
+- **Remote amplifier readings and Settings:** Amplifier gestures stay bound to
+  the displayed radio and connection. Failed command writes clear the linked
+  reading, and an old connection cannot overwrite a newer reading. Settings
+  refreshes show a newly saved follow choice without collapsing a still-valid
+  form; labels wrap within narrow browser windows at high zoom.
 
 - **Amplifier follow-band and local controls:** Recheck the active configuration
   and completed poll before each serial write. Disabling follow or changing a

@@ -98,6 +98,7 @@ struct Entry {
     kind: Collection,
     search: String,
     context: Context,
+    settings_revision: Option<String>,
     at: Instant,
     value: Result<Arc<Document>, &'static str>,
 }
@@ -118,6 +119,17 @@ pub struct Source {
     muf: crate::Kc2gCache,
     protons: crate::ProtonCache,
     scales: crate::ScalesCache,
+}
+
+fn settings_revision(
+    kind: Collection,
+    engine: &crate::SharedEngine,
+) -> Result<Option<String>, &'static str> {
+    if kind != Collection::Settings {
+        return Ok(None);
+    }
+    let e = engine.try_lock().map_err(|_| "applicationBusy")?;
+    super::configuration::settings_revision(e.settings()).map(Some)
 }
 impl Source {
     pub fn new(
@@ -141,6 +153,7 @@ impl Source {
         sources: &Sources,
     ) -> Result<(Vec<Value>, usize, Value), &'static str> {
         let context = Context::read(engine)?;
+        let revision = settings_revision(request.collection, engine)?;
         if matches!(request.collection, Collection::Connect | Collection::Path)
             && crate::unassisted()
         {
@@ -153,6 +166,7 @@ impl Source {
             v.kind == request.collection
                 && v.search == request.search
                 && v.context.same(&context)
+                && v.settings_revision == revision
                 && v.at.elapsed().as_millis() < u128::from(REUSE_MS)
                 && (v.value.is_ok() || v.at.elapsed() < Duration::from_secs(1))
         }) {
@@ -188,6 +202,7 @@ impl Source {
                     let value = build(kind, &search, &context, &engine, &sources)?;
                     if id.is_empty()
                         || !context.same(&Context::read(&engine)?)
+                        || settings_revision(kind, &engine)? != revision
                         || at.elapsed().as_millis() >= u128::from(VALID_MS)
                     {
                         return Err("applicationUnavailable");
@@ -206,6 +221,7 @@ impl Source {
                         kind,
                         search,
                         context,
+                        settings_revision: revision,
                         at,
                         value,
                     });
@@ -241,6 +257,7 @@ impl Source {
             .find(|v| Some(v.id.as_str()) == meta["contextId"].as_str())
             .ok_or("queryExpired")?;
         if !entry.context.same(&context)
+            || entry.settings_revision != settings_revision(entry.kind, engine)?
             || entry.at.elapsed().as_millis() >= u128::from(VALID_MS)
             || (matches!(entry.kind, Collection::Connect | Collection::Path) && crate::unassisted())
         {
@@ -915,6 +932,46 @@ mod tests {
             sources.navigation.validate(&engine, &meta),
             Err("queryExpired")
         );
+    }
+    #[test]
+    fn settings_refresh_observes_a_saved_choice_without_waiting_for_the_planning_cache() {
+        let (engine, sources) = fixture();
+        let request = request(Collection::Settings, "");
+        let read = || {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                match sources.navigation.read(&request, &engine, &sources) {
+                    Ok((rows, _, meta)) => {
+                        let text: String = rows.iter().map(|v| v.as_str().unwrap()).collect();
+                        break (serde_json::from_str::<Value>(&text).unwrap(), meta);
+                    }
+                    Err("applicationBusy") if Instant::now() < deadline => {
+                        std::thread::sleep(Duration::from_millis(5))
+                    }
+                    other => panic!("capture: {other:?}"),
+                }
+            }
+        };
+        let (first, old_meta) = read();
+        assert_eq!(first["settings"]["ampFollowBand"], false);
+        sources.navigation.validate(&engine, &old_meta).unwrap();
+        assert_eq!(read().1["contextId"], old_meta["contextId"]);
+        {
+            let mut e = engine.lock().unwrap();
+            let mut s = e.settings().clone();
+            s.amp_follow_band = true;
+            e.apply_settings(s);
+            assert!(e.settings().active_profile().unwrap().amp_follow_band);
+        }
+        let (fresh, fresh_meta) = read();
+        assert_eq!(fresh["settings"]["ampFollowBand"], true);
+        assert_ne!(first["revision"], fresh["revision"]);
+        assert_ne!(old_meta["contextId"], fresh_meta["contextId"]);
+        assert_eq!(
+            sources.navigation.validate(&engine, &old_meta),
+            Err("queryExpired")
+        );
+        sources.navigation.validate(&engine, &fresh_meta).unwrap();
     }
     #[test]
     fn a_refresh_preserves_another_browsers_still_valid_capture() {

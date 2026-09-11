@@ -92,6 +92,69 @@ fn fresh_amp(
 }
 
 #[test]
+fn failed_native_amp_write_clears_both_displays_and_retires_the_completed_poll() {
+    let _guard = QueueGuard::new();
+    let (e, dto, read) = station(FAMILY_SPE, true);
+    let id = e.lock().unwrap().settings().active_radio;
+    finish_poll(&mut e.lock().unwrap(), id, Some(&read), dto.clone(), true);
+    assert_eq!(
+        e.lock().unwrap().amp_live(id).unwrap().output_watts,
+        Some(0)
+    );
+    let mut attempted = 0;
+    assert!(dispatch_native(&e, &dto, Some(&read), false, |_| {
+        attempted += 1;
+        Err(std::io::Error::other("test wire failure"))
+    }));
+    assert_eq!(attempted, 1);
+    let mut native = e.lock().unwrap();
+    finish_poll(&mut native, id, Some(&read), dto.clone(), false);
+    assert_eq!(native.amp_live(id).unwrap().output_watts, None);
+    assert!(!native.amp_live(id).unwrap().linked);
+    assert!(native
+        .remote_monitor_observation()
+        .amplifier
+        .unwrap()
+        .reading
+        .is_none());
+    native.remote_observe_amp(Some(&read), dto.clone());
+    finish_poll(&mut native, id, Some(&read), dto, true);
+    assert_eq!(native.amp_live(id).unwrap().output_watts, None);
+    assert!(native
+        .remote_monitor_observation()
+        .amplifier
+        .unwrap()
+        .reading
+        .is_none());
+}
+
+#[test]
+fn retired_amp_completion_cannot_replace_a_reconnected_amplifiers_current_display() {
+    let (e, dto, old) = station(FAMILY_SPE, false);
+    let current = AmpStatusDto {
+        operate: Some(true),
+        band_label: Some("40m".into()),
+        ..dto.clone()
+    };
+    let fresh = fresh_amp(&e, &current);
+    let mut native = e.lock().unwrap();
+    let id = native.settings().active_radio;
+    finish_poll(&mut native, id, Some(&fresh), current, true);
+    for linked in [false, true] {
+        finish_poll(&mut native, id, Some(&old), dto.clone(), linked);
+        assert_eq!(native.amp_live(id).unwrap().operate, Some(true));
+        assert_eq!(
+            native
+                .remote_monitor_observation()
+                .amplifier
+                .unwrap()
+                .operate,
+            Some(true)
+        );
+    }
+}
+
+#[test]
 fn native_amp_refuses_physical_ptt_even_when_nexus_did_not_key_the_radio() {
     let _guard = QueueGuard::new();
     for family in [FAMILY_KPA, FAMILY_SPE] {

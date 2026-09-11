@@ -200,6 +200,21 @@ impl Observations {
         Sample::accept(&mut self.amplifier, &self.amp, read, Some(value));
     }
 
+    pub(crate) fn current_amp_read(&self, read: &Read) -> bool {
+        self.amp.accepts(&read.connection)
+            && self
+                .amplifier
+                .as_ref()
+                .is_some_and(|sample| sample.read.sequence == read.sequence)
+    }
+
+    pub(crate) fn retire_amp_read(&mut self, read: &Read) {
+        if self.current_amp_read(read) {
+            self.amp.current = None;
+            self.amplifier = None;
+        }
+    }
+
     /// The exact completed poll, still owned by this connection. A matching
     /// model/port string cannot revive a retired read after an away-and-back edit.
     pub(crate) fn amp_for_read(
@@ -207,13 +222,10 @@ impl Observations {
         read: &Read,
         now: Instant,
     ) -> Option<(&AmpStatusDto, ReadAge)> {
-        if !self.amp.accepts(&read.connection) {
+        if !self.current_amp_read(read) {
             return None;
         }
         let sample = self.amplifier.as_ref()?;
-        if sample.read.sequence != read.sequence {
-            return None;
-        }
         sample.current(&self.amp, now, MEASUREMENT_STALE_MS)
     }
 

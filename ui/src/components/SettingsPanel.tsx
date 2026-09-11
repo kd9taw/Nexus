@@ -1,5 +1,6 @@
 import { useNavigation } from '../remote-web/useNavigation'
 import { settingsForm, type SettingsConfiguration } from '../remote-web/configuration'
+import { useAmplifierFollow } from '../remote-web/useAmplifierFollow'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { RemoteStation } from '../remote-native/RemoteStation'
 import { SAT_VFO_MAPS } from '../features/satVfo'
@@ -865,6 +866,7 @@ export function SettingsPanel({
 }: Props) {
   const configuration=useNavigation<SettingsConfiguration>('settings')
   const remote=configuration.remote
+  const remoteFollow = useAmplifierFollow(configuration.value, activeRadioId, configuration.refresh)
   // Restore-from-backup (#28 item 4). A hidden file input, the same shape the Logbook's ADIF
   // import uses — Tauri has no native picker wired here and this needs none.
   const backupFileRef = useRef<HTMLInputElement | null>(null)
@@ -2666,7 +2668,7 @@ export function SettingsPanel({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if(remote)return
+    if(remote){await remoteFollow.save();return}
     if (!form) return
     if (!form.mycall.trim()) {
       // Don't dead-end on another tab: route the operator to where the fix is instead of a
@@ -2941,7 +2943,7 @@ export function SettingsPanel({
           ))}
         </div>
         <div className="settings-scroll">
-          {remote && <p className="settings-note" role="status">{t('remote.configurationObserver')}</p>}
+          {remote && <p className="settings-note" role="status">{remoteFollow.supported ? t('remote.configurationControls') : t('remote.configurationObserver')}</p>}
           {remote && (tab==='logging'||tab==='configurations') && <p className="settings-note">{t('remote.configurationLocal')}</p>}
           {/* ---- Workspace (UI-only prefs, applied live like the theme) ---- */}
           {tab === 'configurations' && !remote && (
@@ -5536,13 +5538,9 @@ export function SettingsPanel({
             </div>
           </fieldset>
 
-          {/* The amplifier: a per-radio external device on its own serial port, the same shape
-              as the rotator above. READ-ONLY, and that is a safety decision rather than a
-              scope one — SPE's whole command set is front-panel KEYSTROKES (relative steps and
-              toggles whose meaning depends on a state we learn a poll late), and putting an
-              amplifier in standby is not a way to stop a transmission anyway: the exciter keeps
-              keying and the drive passes straight through. So there is no standby, operate,
-              reset or tune control here and none is planned. */}
+          {/* Amplifier configuration belongs to the active radio profile. Remote
+              can save only the follow-band choice here; model and port remain
+              local settings. Guarded operate and band steps live in AmpStrip. */}
           <fieldset className="settings-section" id="settings-amplifier">
             <legend>{t('settings.amplifier.legend')}</legend>
             <p className="settings-note">{t('settings.amplifier.note')}</p>
@@ -5590,14 +5588,15 @@ export function SettingsPanel({
               {(form.ampModel ?? '') !== '' && (form.ampPort ?? '') !== '' && (
                 <div className="settings-field">
                   <label className="settings-check">
-                    <input disabled={remote}
+                    <input disabled={remote && !remoteFollow.canEdit}
                       type="checkbox"
-                      checked={form.ampFollowBand ?? false}
-                      onChange={(e) => updateBool('ampFollowBand', e.target.checked)}
+                      checked={remote ? remoteFollow.follow : form.ampFollowBand ?? false}
+                      onChange={(e) => remote ? remoteFollow.change(e.target.checked) : updateBool('ampFollowBand', e.target.checked)}
                     />
                     <span>{t('settings.amplifier.follow.label')}</span>
                   </label>
                   <span className="settings-hint">{t('settings.amplifier.follow.hint')}</span>
+                  {remote && remoteFollow.waitingForIdle && <span className="settings-hint">{t('remote.followNeedsIdle')}</span>}
                 </div>
               )}
             </div>
@@ -10640,6 +10639,10 @@ export function SettingsPanel({
         </div>
 
         <div className="settings-actions">
+          {remote && remoteFollow.error && <span className="settings-error" role="alert">{remoteFollow.error === 'contextChanged' ? t('remote.followChanged')
+            : remoteFollow.error === 'persistenceFailed' ? t('remote.followSaveFailed') : ['unconfirmed', 'hardwareUnconfirmed'].includes(remoteFollow.error) ? t('remote.followUnconfirmed') : t('remote.followRefused')}</span>}
+          {remote && remoteFollow.confirming && <span className="settings-ok" role="status">{t('remote.followSavedRefreshing')}</span>}
+          {remote && remoteFollow.saved && <span className="settings-ok" role="status">{t('settings.panel.saved')}</span>}
           {/* Warnings from the last save. They did NOT block it -- the save went through -- so
               they are stated once and left visible rather than interrupting. An operator whose
               setup is unusual but correct must be able to read them and carry on. */}
@@ -10659,9 +10662,9 @@ export function SettingsPanel({
             className="settings-save"
             // Not disabled on an empty callsign — clicking routes to the Station tab with a clear
             // message (handleSubmit), rather than a greyed button that gives no reason or fix.
-            disabled={remote || (status === 'saving')}
+            disabled={remote ? !remoteFollow.canSave : status === 'saving'}
           >
-            {status === 'saving' ? t('settings.panel.saving') : t('settings.panel.save')}
+            {(remote ? remoteFollow.saving : status === 'saving') ? t('settings.panel.saving') : t('settings.panel.save')}
           </button>
         </div>
       </form>

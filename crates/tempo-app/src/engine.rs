@@ -16,6 +16,7 @@
 mod field_day_display;
 mod mode_entry;
 pub mod remote_radio;
+mod remote_settings;
 
 /// A manual Remote log append awaiting storage confirmation. The caller must
 /// release its engine lock before syncing; connector delivery uses its existing pipeline.
@@ -15979,6 +15980,44 @@ impl Engine {
         status: crate::dto::AmpStatusDto,
     ) {
         self.remote_readings.amp(read, status);
+    }
+
+    /// Finish the port owner's poll after button/follow writes. A failed write
+    /// retires that exact link; publishing another value with the same read
+    /// sequence would be ignored by the ordered observation cache. Late work
+    /// cannot clear or replace a newly connected amplifier's native display.
+    pub fn finish_amp_poll(
+        &mut self,
+        id: u32,
+        read: Option<&crate::remote_monitor::provenance::Read>,
+        status: crate::dto::AmpStatusDto,
+        linked: bool,
+    ) {
+        let Some(read) = read.filter(|r| self.remote_readings.current_amp_read(r)) else {
+            return;
+        };
+        if id != self.settings.active_radio {
+            return;
+        }
+        if linked
+            && self
+                .remote_readings
+                .amp_for_read(read, std::time::Instant::now())
+                .is_some()
+        {
+            self.observe_amp_status(id, status);
+        } else {
+            if !linked {
+                self.remote_readings.retire_amp_read(read);
+                self.remote_actuation.revoke();
+            }
+            self.observe_amp_miss(id, &status.family, "noAnswer");
+            if !linked {
+                if let Some(entry) = self.amp_live.get_mut(&id) {
+                    entry.status.linked = false;
+                }
+            }
+        }
     }
 
     /// Constant-size monitoring read. Never builds the full snapshot, scans the

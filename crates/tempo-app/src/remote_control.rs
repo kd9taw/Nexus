@@ -125,6 +125,7 @@ pub enum Evidence {
     StationState,
     RadioReadback,
     AmplifierReadback,
+    SettingsSaved,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -138,6 +139,7 @@ pub enum Reason {
     HardwareUnconfirmed,
     UnsupportedAction,
     InvalidAction,
+    PersistenceFailed,
 }
 
 /// A bounded receipt shared with the worker, not a second command queue.

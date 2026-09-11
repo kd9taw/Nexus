@@ -19,7 +19,7 @@ export function useStationCapability(capability: ControlCapability): boolean {
   const local = useStationControl(), available = useStationData()
   const client = useContext(RemoteOperationsContext)
   const view = useSyncExternalStore(client?.subscribe ?? idleSubscribe, client?.getSnapshot ?? idleSnapshot)
-  const expanded = ['frequency', 'mode', 'tier'].includes(capability)
+  const expanded = ['frequency', 'mode', 'tier', 'ampFollowBand'].includes(capability)
   return local || !!(available && (!expanded || (client?.operationVersion ?? 0) >= 3) && view?.fresh && view.connected && !view.unresolved && !view.controlPending &&
     view.state?.phase === 'controlling' && (!['frequency', 'mode', 'tier'].includes(capability) || !view.state.txArmed) && view.state.controls?.capabilities.includes(capability))
 }

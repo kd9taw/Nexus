@@ -15,12 +15,14 @@ function refreshDelay(remaining:number,transferMs:number){
 }
 export function useNavigation<T>(kind:DocumentCollection,search='',active=true){
   const source=useContext(RemoteCollectionsContext),available=useStationData()
-  const [capture,setCapture]=useState<{doc:NavigationDocument<T>;at:number;key:string}|null>(null)
+  const [capture,setCapture]=useState<{doc:NavigationDocument<T>;at:number;key:string;source:typeof source}|null>(null)
   const [loading,setLoading]=useState(true),[refresh,setRefresh]=useState(0),[now,setNow]=useState(()=>performance.now())
   const key=kind+'|'+search
   useEffect(()=>{if(!source||!available)return;const timer=setInterval(()=>setNow(performance.now()),500);return()=>clearInterval(timer)},[source,available])
   useEffect(()=>{
-    setCapture(null);setLoading(true)
+    // An explicit refresh retains only this source/query's still-valid capture.
+    // Its age keeps advancing; unavailable data and the original deadline hide it.
+    setCapture(previous=>source&&available&&active&&previous?.source===source&&previous.key===key?previous:null);setLoading(true)
     if(!source||!available||!active)return
     let live=true,timer:ReturnType<typeof setTimeout>
     async function read(){
@@ -28,7 +30,7 @@ export function useNavigation<T>(kind:DocumentCollection,search='',active=true){
       let next=2000
       try{
         const doc=await loadNavigation<T>(source!,kind,search,()=>live)
-        if(live){setCapture({doc,at:performance.now()-doc.ageMs,key});setLoading(false)}
+        if(live){setCapture({doc,at:performance.now()-doc.ageMs,key,source});setLoading(false)}
         // Planning documents can contain the full catalog. Refresh before their
         // source deadline instead of retransmitting megabytes every two seconds.
         next=refreshDelay(doc.validForMs-doc.ageMs,performance.now()-started)
@@ -40,7 +42,7 @@ export function useNavigation<T>(kind:DocumentCollection,search='',active=true){
     void read();return()=>{live=false;clearTimeout(timer)}
   },[source,available,active,kind,search,key,refresh])
   const age=capture?Math.max(0,now-capture.at):Infinity
-  const value=source&&available&&active&&capture?.key===key&&age<capture.doc.validForMs?capture.doc.value:null
+  const value=source&&available&&active&&capture?.source===source&&capture.key===key&&age<capture.doc.validForMs?capture.doc.value:null
   return {remote:!!source,value,loading,ageMs:age,refresh:()=>setRefresh(n=>n+1)}
 }
 export function useSatelliteLive(active=true){

@@ -16,6 +16,15 @@ pub(crate) mod navigation;
 mod ota;
 mod recall;
 
+/// The same bounded public projection used by the Settings document. Neither
+/// private settings fields nor client-supplied filesystem paths enter its digest.
+#[cfg(feature = "radio")]
+pub(super) fn settings_revision(
+    settings: &tempo_app::settings::Settings,
+) -> Result<String, &'static str> {
+    configuration::settings_revision(settings)
+}
+
 const PAGE_BYTES: usize = 256 * 1024;
 const CACHE_BYTES: usize = 16 * 1024 * 1024;
 const SNAPSHOT_BYTES: usize = 4 * 1024 * 1024;

@@ -4,7 +4,7 @@ import { OperationRelay } from './operation-relay'
 import { pendingControlStorage } from './control-storage'
 import { pendingLogStorage, type ReceiptLock } from './operation-storage'
 import type { OperationState } from './operation-protocol'
-import type { ControlCapability } from './station-operation'
+import type { ControlCapability, ControlContext } from './station-operation'
 import type { OperationVersion } from './operation-version'
 import { controlTransport } from './control-transport'
 import type { ApplicationClient } from './application-client'
@@ -22,7 +22,7 @@ function storage() {
   }
   return { data, lock }
 }
-function setup(store = storage(), capabilities: ControlCapability[] = ['decoder', 'amplifier'], version: OperationVersion = capabilities.some(c => ['frequency', 'mode', 'tier'].includes(c)) ? 3 : 2) {
+function setup(store = storage(), capabilities: ControlCapability[] = ['decoder', 'amplifier'], version: OperationVersion = capabilities.some(c => ['frequency', 'mode', 'tier', 'ampFollowBand'].includes(c)) ? 3 : 2) {
   vi.useFakeTimers()
   let now = 1000
   const sent: any[] = []
@@ -38,6 +38,41 @@ function setup(store = storage(), capabilities: ControlCapability[] = ['decoder'
   client.open(); reply(s)
   return { client, controls, logs, sent, state: s, reply, store, advance: async (ms: number) => { now += ms; await vi.advanceTimersByTimeAsync(ms) } }
 }
+
+it('refuses to borrow a newer radio or amplifier connection for the displayed gesture', async () => {
+  for (const changed of ['radioId', 'radioConnection', 'ampConnection'] as const) {
+    const h = setup()
+    const displayed: ControlContext = { ...h.state.controls!.context, [changed]: 77 }
+    const attempted = h.client.control(action, displayed).catch(e => e as Error)
+    try {
+      await Promise.resolve(); await Promise.resolve()
+      expect(h.sent.filter(w => w.request.type === 'stationControl'), changed).toHaveLength(0)
+      expect(await attempted).toMatchObject({ message: 'staleContext' })
+      expect(h.client.getSnapshot().controlPending).toBeNull()
+    } finally { h.client.disconnected() }
+  }
+})
+
+it('keeps the displayed read sequence and requires the dedicated v3 follow capability', async () => {
+  const intent = { action: 'amplifier.followBand', radioId: 1, expectedSettingsRevision: 'a'.repeat(64), expectedFollow: false, follow: true } as const
+  for (const [capabilities, version] of [[['amplifier'], 3], [['ampFollowBand'], 2]] as [ControlCapability[], OperationVersion][]) {
+    const h = setup(storage(), capabilities, version)
+    await expect(h.client.control(intent)).rejects.toThrow(version === 2 ? 'stationUnsupported' : 'notController')
+    expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(0)
+    h.client.disconnected()
+  }
+  const h = setup(storage(), ['ampFollowBand'])
+  const displayed = { ...h.state.controls!.context, ampReadSequence: 4 }
+  const pending = h.client.control(intent, displayed)
+  await Promise.resolve(); await Promise.resolve()
+  const request = h.sent[h.sent.length - 1].request
+  expect(request.context).toEqual(displayed)
+  expect(request.action).toEqual(intent)
+  h.reply({ operation: 'stationControl', operationId: request.requestId, outcome: 'applied', evidence: 'settingsSaved' })
+  expect(await pending).toMatchObject({ evidence: 'settingsSaved' })
+  expect(h.client.getSnapshot().controlPending).toBeNull()
+  h.client.disconnected()
+})
 
 it('adapts a frequency gesture through its own capability and returns only a later station sample', async () => {
   const h = setup(storage(), ['frequency'])
@@ -167,6 +202,25 @@ it('does not replay an uncertain toggle after disconnect or reload', async () =>
   expect(next.controls.read()?.operationId).toBe(operationId)
   await next.client.acknowledgeControl()
   expect(next.controls.read()).toBeNull()
+  next.client.disconnected()
+})
+
+it('recovers a saved follow setting after reload without sending another save', async () => {
+  const intent = { action: 'amplifier.followBand', radioId: 1, expectedSettingsRevision: 'a'.repeat(64), expectedFollow: false, follow: true } as const
+  const h = setup(storage(), ['ampFollowBand'])
+  const pending = h.client.control(intent).catch(e => e.message)
+  await Promise.resolve()
+  const operationId = h.sent[h.sent.length - 1].request.requestId
+  expect(h.controls.read()?.action).toEqual(intent)
+  h.client.disconnected(); await pending
+  const next = setup(h.store, ['ampFollowBand'])
+  await expect(next.client.control(intent)).rejects.toThrow('operationUnknown')
+  const checked = next.client.refreshControl()
+  await Promise.resolve()
+  next.reply({ operation: 'stationControl', operationId, outcome: 'applied', evidence: 'settingsSaved' })
+  expect(await checked).toMatchObject({ evidence: 'settingsSaved' })
+  expect(next.controls.read()).toBeNull()
+  expect(next.sent.map(w => w.request.type)).toEqual(['state', 'result'])
   next.client.disconnected()
 })
 

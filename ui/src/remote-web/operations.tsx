@@ -54,7 +54,7 @@ export function LoggingAuthority({ client }: { client: OperationClient }) {
       )}
       {(view.controlPending || view.controlResult || view.controlError) && <div className="remote-control-result">
         {view.controlError && !view.controlPending ? <span role="alert">{t('remote.controlRequestFailed')}</span> :
-        <span role="status">{view.controlResult?.outcome === 'applied' ? t('remote.controlApplied')
+        <span role="status">{view.controlResult?.outcome === 'applied' ? view.controlResult.evidence === 'settingsSaved' ? t('remote.controlSettingsSaved') : t('remote.controlApplied')
           : view.controlResult?.outcome === 'rejected' ? t('remote.controlRefused')
           : view.controlResult?.outcome === 'pending' && view.connected ? t('remote.controlPending') : t('remote.controlUnknown')}</span>}
         {view.controlPending && <>

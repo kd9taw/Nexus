@@ -449,13 +449,24 @@ fn dispatch_native(
 #[path = "amppoll/native_tests.rs"]
 mod native_tests;
 
+#[cfg(any(test, all(feature = "device", feature = "serial")))]
+fn finish_poll(
+    engine: &mut tempo_app::engine::Engine,
+    id: u32,
+    read: Option<&tempo_app::remote_monitor::provenance::Read>,
+    dto: AmpStatusDto,
+    linked: bool,
+) {
+    engine.finish_amp_poll(id, read, dto, linked);
+}
+
 /// The port-owning half. Needs `serial` for the links themselves and `device` for the process
 /// shutdown flag; neither alone is enough, and src-tauri's `radio` feature turns on both.
 #[cfg(all(feature = "device", feature = "serial"))]
 mod imp {
     use super::{
-        backoff_ms, dispatch_native, dispatch_remote, drop_pending, has_pending, kpa_dto,
-        reason_for, remote_amp_read, spe_dto, FAMILY_KPA, FAMILY_SPE, POLL,
+        backoff_ms, dispatch_native, dispatch_remote, drop_pending, finish_poll, has_pending,
+        kpa_dto, reason_for, remote_amp_read, spe_dto, FAMILY_KPA, FAMILY_SPE, POLL,
     };
     use crate::amplifier::{KpaLink, KpaStatus, SpeLink};
     use crate::service::SHUTDOWN;
@@ -687,19 +698,7 @@ mod imp {
                         link = None;
                     }
                     let mut eng = engine_lock(&engine);
-                    eng.remote_observe_amp(
-                        remote_read.as_ref(),
-                        if link.is_some() {
-                            dto.clone()
-                        } else {
-                            tempo_app::dto::AmpStatusDto {
-                                family: family.clone(),
-                                reason: "noAnswer".into(),
-                                ..Default::default()
-                            }
-                        },
-                    );
-                    eng.observe_amp_status(id, dto);
+                    finish_poll(&mut eng, id, remote_read.as_ref(), dto, link.is_some());
                 }
                 Err(e) => {
                     if let Some(request) = remote_command.take() {

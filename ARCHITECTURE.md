@@ -38,6 +38,17 @@ Native amplifier buttons and saved follow-band also validate the exact completed
 serial poll after I/O. Current settings, observed physical PTT and read expiry
 bound each write; local gestures take precedence over automatic steps. These
 checks never use an amplifier as a transmitter stop or alter FT sequencing.
+
+Amplifier follow-band is a dedicated operation-v3 capability. The actual Settings
+checkbox retains its checkbox-then-Save interaction; the request carries only
+the desired boolean, displayed radio, prior choice and bounded public Settings
+revision. The native host checks authority and fresh idle hardware before enabling,
+then atomically saves the narrow change under the existing Engine owner. Disabling
+needs no hardware reading. A saved-setting receipt does not claim hardware readback
+or RF state, and lease loss never resets a saved preference. Settings captures
+invalidate on their own projected revision without invalidating unrelated planning
+documents. The amplifier strip uses the existing aged observation stream and its
+connection identity, rather than borrowing authority for an older displayed radio.
 Unconfirmed targets never become deferred local retunes. Login, entitlement and
 browser approval remain separate checks. Radio handoffs, complete workspace
 entry and remote transmission remain incomplete; no arbitrary Tauri bridge exists.

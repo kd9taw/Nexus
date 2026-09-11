@@ -286,7 +286,8 @@ export function CockpitHeader({
             ⛔ Not a stop control: an amplifier in standby does not end a transmission. */}
         <AmpStrip
           amp={snap?.radio?.amp ?? null}
-          radioTransmitting={snap?.radio?.transmitting ?? false}
+          radioId={snap?.activeRadioId}
+          radioTransmitting={!!(snap?.radio?.transmitting || snap?.radio?.rigKeyed)}
         />
 
         {power && (

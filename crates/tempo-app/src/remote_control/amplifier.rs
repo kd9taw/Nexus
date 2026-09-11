@@ -35,6 +35,59 @@ pub struct Request {
     attempted: bool,
 }
 
+fn connected_observation(
+    engine: &Engine,
+    radio_connection: u64,
+    amp_connection: u64,
+    prior_read: u64,
+) -> Result<Observation, Reason> {
+    let o = engine.remote_monitor_observation();
+    let cat = o.radio.readings.cat.ok_or(Reason::ReadingUnavailable)?;
+    let amp = o.amplifier.as_ref().ok_or(Reason::ReadingUnavailable)?;
+    let reading = amp.reading.ok_or(Reason::ReadingUnavailable)?;
+    if cat.connection_generation != radio_connection
+        || reading.connection_generation != amp_connection
+    {
+        return Err(Reason::ContextChanged);
+    }
+    if o.radio.cat_connected != Some(true) || !amp.linked || reading.read_sequence < prior_read {
+        return Err(Reason::ReadingUnavailable);
+    }
+    Ok(o)
+}
+
+fn idle(engine: &Engine, o: &Observation, radio_connection: u64) -> Result<(), Reason> {
+    // Shared by front-panel intents and enabling automatic follow. KPA does
+    // not report PTT; a missing amplifier flag never becomes an idle claim.
+    if engine.tx_enabled() || o.radio.nexus_busy || o.radio.rig_keyed == Some(true) {
+        return Err(Reason::StationBusy);
+    }
+    let ptt = o.radio.readings.ptt.ok_or(Reason::ReadingUnavailable)?;
+    if o.radio.rig_keyed != Some(false)
+        || ptt.connection_generation != radio_connection
+        || ptt.age_ms >= 1000
+    {
+        return Err(Reason::ReadingUnavailable);
+    }
+    let amp = o.amplifier.as_ref().ok_or(Reason::ReadingUnavailable)?;
+    if amp.transmitting == Some(true) || amp.output_watts.is_some_and(|w| w > 0) {
+        return Err(Reason::StationBusy);
+    }
+    Ok(())
+}
+
+/// Enabling automation requires the same fresh idle exciter/amplifier evidence
+/// as a Remote button. Disabling the saved choice needs no hardware reading.
+pub fn follow_ready(
+    engine: &Engine,
+    radio_connection: u64,
+    amp_connection: u64,
+    prior_read: u64,
+) -> Result<(), Reason> {
+    let o = connected_observation(engine, radio_connection, amp_connection, prior_read)?;
+    idle(engine, &o, radio_connection)
+}
+
 impl Request {
     pub fn new(
         engine: &Engine,
@@ -82,41 +135,17 @@ impl Request {
         {
             return Err(Reason::ContextChanged);
         }
-        let o = engine.remote_monitor_observation();
-        let cat = o.radio.readings.cat.ok_or(Reason::ReadingUnavailable)?;
-        let amp = o.amplifier.as_ref().ok_or(Reason::ReadingUnavailable)?;
-        let reading = amp.reading.ok_or(Reason::ReadingUnavailable)?;
-        if cat.connection_generation != self.radio_connection
-            || reading.connection_generation != self.amp_connection
-        {
-            return Err(Reason::ContextChanged);
-        }
-        if o.radio.cat_connected != Some(true)
-            || !amp.linked
-            || reading.read_sequence < self.prior_read
-        {
-            return Err(Reason::ReadingUnavailable);
-        }
-        Ok(o)
+        connected_observation(
+            engine,
+            self.radio_connection,
+            self.amp_connection,
+            self.prior_read,
+        )
     }
 
     fn idle(&self, engine: &Engine, o: &Observation) -> Result<(), Reason> {
-        // Remote amplifier changes require a disarmed, idle exciter. A KPA does
-        // not report PTT; a missing amplifier flag never becomes an idle claim.
-        if engine.tx_enabled() || o.radio.nexus_busy || o.radio.rig_keyed == Some(true) {
-            return Err(Reason::StationBusy);
-        }
-        let ptt = o.radio.readings.ptt.ok_or(Reason::ReadingUnavailable)?;
-        if o.radio.rig_keyed != Some(false)
-            || ptt.connection_generation != self.radio_connection
-            || ptt.age_ms >= 1000
-        {
-            return Err(Reason::ReadingUnavailable);
-        }
+        idle(engine, o, self.radio_connection)?;
         let amp = o.amplifier.as_ref().ok_or(Reason::ReadingUnavailable)?;
-        if amp.transmitting == Some(true) || amp.output_watts.is_some_and(|w| w > 0) {
-            return Err(Reason::StationBusy);
-        }
         if matches!(self.target, Target::Band { .. }) && amp.follow_band {
             return Err(Reason::StationBusy);
         }

@@ -181,6 +181,14 @@
 }
 .remote-workspace .settings-panel[data-remote-configuration] .settings-form { min-height: 32em; }
 .remote-workspace .settings-panel[data-remote-configuration] .settings-scroll { min-height: 16em; }
+/* Keep the native Settings columns, but allow a column to fit a phone's
+   available width after browser zoom. Labels must wrap inside the scrollport. */
+.remote-workspace .settings-panel[data-remote-configuration] .settings-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
+}
+:is([data-viewport='md'], [data-viewport='lg'], [data-viewport='xl']) .remote-workspace .settings-panel[data-remote-configuration] .settings-grid {
+  grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr));
+}
 .remote-workspace .radioprog[data-remote-configuration] .rp-body { min-height: 40em; }
 .remote-workspace .radioprog[data-remote-configuration] .rp-source { overflow-y: auto; }
 .remote-workspace .radioprog[data-remote-configuration] .rp-source > * { flex-shrink: 0; }

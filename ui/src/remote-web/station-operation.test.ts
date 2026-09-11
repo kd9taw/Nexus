@@ -2,6 +2,18 @@ import { describe, expect, it } from 'vitest'
 import { controlContext, controlOutcome, stationAction } from './station-operation'
 
 describe('closed station operating requests', () => {
+  it('accepts only a changed follow choice with the displayed profile and exact Settings revision', () => {
+    const intent = { action: 'amplifier.followBand', radioId: 3, expectedSettingsRevision: 'a'.repeat(64), expectedFollow: false, follow: true }
+    expect(stationAction(intent)).toEqual(intent)
+    for (const bad of [
+      { ...intent, radioId: -1 }, { ...intent, radioId: '3' }, { ...intent, expectedSettingsRevision: 'A'.repeat(64) },
+      { ...intent, expectedSettingsRevision: 'a'.repeat(63) }, { ...intent, follow: false },
+      { ...intent, follow: 1 }, { ...intent, settingsPath: '/untrusted' }, { ...intent, settings: {} }
+    ]) expect(() => stationAction(bad)).toThrow('invalidOperation')
+    const base = { operation: 'stationControl', operationId: crypto.randomUUID() }
+    expect(controlOutcome({ ...base, outcome: 'applied', evidence: 'settingsSaved' })).toMatchObject({ evidence: 'settingsSaved' })
+    expect(controlOutcome({ ...base, outcome: 'rejected', reason: 'persistenceFailed' })).toMatchObject({ reason: 'persistenceFailed' })
+  })
   it('admits explicit receiver and amplifier gestures without accepting a generic invoke', () => {
     for (const receiver of ['rtty', 'psk', 'sstv', 'aprs']) {
       const action = { action: 'decoder.arm', receiver, on: true }

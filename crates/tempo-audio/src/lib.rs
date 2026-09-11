@@ -23,8 +23,8 @@
 
 pub mod amplifier;
 /// Amplifier status poll thread — one serial link, once a second, into the snapshot.
-/// READ-ONLY: only status verbs are ever sent, nothing here keys, unkeys or gates TX, and no
-/// reading it produces may enter a cockpit's stop-line census.
+/// Owns status polling and guarded amplifier controls. Nothing here keys, unkeys
+/// or gates the exciter's TX; amplifier status never proves that RF has stopped.
 pub mod amppoll;
 /// APRS (AFSK-1200 / AX.25) RX decode thread — same armed-decoder pattern, RX ONLY.
 #[cfg(feature = "device")]

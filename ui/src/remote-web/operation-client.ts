@@ -1,6 +1,6 @@
 import type { ReceiptStorage } from './operation-storage'
 import type { ControlStorage, PendingControl } from './control-storage'
-import { stationAction, type StationAction, type ControlOutcome } from './station-operation'
+import { controlContext, stationAction, type StationAction, type ControlOutcome, type ControlContext } from './station-operation'
 import { controlVersion, type OperationVersion } from './operation-version'
 import {
   manualRecord,
@@ -415,30 +415,35 @@ export class OperationClient {
   getLastOutcome() {
     return this.finished
   }
-  async control(action: StationAction): Promise<ControlOutcome> {
+  async control(action: StationAction, displayed?: ControlContext): Promise<ControlOutcome> {
     this.update({ controlError: null })
-    try { return await this.executeControl(action) }
+    try { return await this.executeControl(action, displayed) }
     catch (error) {
       this.update({ controlError: error instanceof Error ? error.message : 'stationUnavailable' })
       throw error
     }
   }
-  private async executeControl(action: StationAction): Promise<ControlOutcome> {
+  private async executeControl(action: StationAction, displayed?: ControlContext): Promise<ControlOutcome> {
     const s = this.view.state, until = this.stateUntil, intent = structuredClone(stationAction(action))
     if (this.operationVersion < controlVersion(intent)) throw Error('stationUnsupported')
     if (!this.controlStorage) throw Error('receiptStorageUnavailable')
     if (this.view.unresolved || this.view.controlPending || this.controlIntent || this.loggingIntent) throw Error('operationUnknown')
-    const capability = action.action === 'radio.frequency' ? 'frequency' : action.action === 'radio.mode' ? 'mode' : action.action === 'radio.tier' ? 'tier' : action.action.startsWith('decoder.') ? 'decoder' : action.action.startsWith('amplifier.') ? 'amplifier' : 'radio'
+    const capability = action.action === 'radio.frequency' ? 'frequency' : action.action === 'radio.mode' ? 'mode' : action.action === 'radio.tier' ? 'tier' : action.action === 'amplifier.followBand' ? 'ampFollowBand' : action.action.startsWith('decoder.') ? 'decoder' : action.action.startsWith('amplifier.') ? 'amplifier' : 'radio'
     if (!s || !this.view.fresh || s.phase !== 'controlling' || !s.leaseId || !s.commandWindowId || s.nextSequence === null || !s.controls?.capabilities.includes(capability)) throw Error('notController')
+    const context = structuredClone(controlContext(displayed ?? s.controls.context))
+    const sameConnection = (current: ControlContext | undefined) => !!current &&
+      context.radioId === current.radioId && context.radioConnection === current.radioConnection && context.ampConnection === current.ampConnection
+    if (!sameConnection(s.controls.context)) throw Error('staleContext')
     const request: OperationRequest = { type: 'stationControl', requestId: crypto.randomUUID(), stationBootId: s.stationBootId,
       leaseId: s.leaseId, expectedRevision: s.revision, commandWindowId: s.commandWindowId, clientSequence: s.nextSequence,
-      context: structuredClone(s.controls.context), action: intent }
+      context, action: intent }
     this.controlIntent = true
     try {
       const first = await this.controlStorage.exclusive(async () => {
         if (this.pending) await this.waitForHeartbeat(until)
         if (this.now() >= until) throw Error('windowExpired')
         if (this.view.state?.leaseId !== s.leaseId || this.view.state.revision !== s.revision) throw Error('staleContext')
+        if (!sameConnection(this.view.state.controls?.context)) throw Error('staleContext')
         const saved = { operationId: request.requestId, action: intent }
         this.controlStorage!.write(saved)
         this.update({ controlPending: saved, controlResult: null })

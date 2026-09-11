@@ -109,6 +109,16 @@ pub enum Action {
         expected_band: String,
         direction: i8,
     },
+    #[serde(rename = "amplifier.followBand")]
+    AmpFollowBand {
+        #[serde(rename = "radioId")]
+        radio_id: u32,
+        #[serde(rename = "expectedSettingsRevision")]
+        expected_settings_revision: String,
+        #[serde(rename = "expectedFollow")]
+        expected_follow: bool,
+        follow: bool,
+    },
 }
 
 pub fn execute(
@@ -207,6 +217,54 @@ pub fn execute(
             );
         }
         #[cfg(feature = "radio")]
+        Action::AmpFollowBand {
+            radio_id,
+            expected_settings_revision,
+            expected_follow,
+            follow,
+        } => {
+            if expected_settings_revision.len() != 64
+                || !expected_settings_revision
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+                || expected_follow == follow
+            {
+                return Err(Reason::InvalidAction);
+            }
+            if *radio_id != context.radio_id
+                || super::super::query::settings_revision(engine.settings())
+                    .map_err(|_| Reason::ReadingUnavailable)?
+                    != *expected_settings_revision
+            {
+                return Err(Reason::ContextChanged);
+            }
+            let profile = engine
+                .settings()
+                .active_profile()
+                .ok_or(Reason::ContextChanged)?;
+            if !["spe", "kpa"].contains(&profile.amp_model.trim().to_lowercase().as_str())
+                || profile.amp_port.trim().is_empty()
+            {
+                return Err(Reason::HardwareUnavailable);
+            }
+            if *follow {
+                tempo_app::remote_control::amplifier::follow_ready(
+                    engine,
+                    context.radio_connection.ok_or(Reason::ReadingUnavailable)?,
+                    context.amp_connection.ok_or(Reason::ReadingUnavailable)?,
+                    context
+                        .amp_read_sequence
+                        .ok_or(Reason::ReadingUnavailable)?,
+                )?;
+            }
+            engine.save_remote_amp_follow_band(*radio_id, *expected_follow, *follow, &permit)?;
+            let result = Completion::default();
+            result.finish(Outcome::Applied {
+                evidence: Evidence::SettingsSaved,
+            });
+            return Ok(result);
+        }
+        #[cfg(feature = "radio")]
         Action::AmpOperate {
             expected_operate,
             operate,
@@ -296,9 +354,11 @@ pub fn execute(
 impl Action {
     pub fn minimum_version(&self) -> u8 {
         match self {
-            Self::Frequency { .. } | Self::Mode { .. } | Self::Tier { .. } | Self::Radio { .. } => {
-                3
-            }
+            Self::Frequency { .. }
+            | Self::Mode { .. }
+            | Self::Tier { .. }
+            | Self::Radio { .. }
+            | Self::AmpFollowBand { .. } => 3,
             _ => 2,
         }
     }
@@ -310,7 +370,14 @@ pub fn capabilities(version: u8) -> Vec<&'static str> {
         if version == 2 {
             vec!["decoder", "amplifier"]
         } else {
-            vec!["decoder", "amplifier", "frequency", "mode", "tier"]
+            vec![
+                "decoder",
+                "amplifier",
+                "frequency",
+                "mode",
+                "tier",
+                "ampFollowBand",
+            ]
         }
     }
     #[cfg(not(feature = "radio"))]

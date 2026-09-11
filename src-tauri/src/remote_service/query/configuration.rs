@@ -632,11 +632,17 @@ fn revision(value: &Value) -> Result<String, &'static str> {
         .map(|b| format!("{b:02x}"))
         .collect())
 }
-pub(super) fn settings(s: &Settings) -> Result<Value, &'static str> {
+fn settings_values(s: &Settings) -> Result<Value, &'static str> {
     if s.radios.len() > 64 {
         return Err("applicationTooLarge");
     }
-    let values = navigation::value(&SettingsView(s))?;
+    navigation::value(&SettingsView(s))
+}
+pub(super) fn settings_revision(s: &Settings) -> Result<String, &'static str> {
+    revision(&settings_values(s)?)
+}
+pub(super) fn settings(s: &Settings) -> Result<Value, &'static str> {
+    let values = settings_values(s)?;
     let revision = revision(&values)?;
     Ok(
         json!({"settings":values,"withheld":WITHHELD_KEYS,"revision":revision,"platform":std::env::consts::OS}),

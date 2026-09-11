@@ -9,7 +9,7 @@ export async function applicationFixture() {
   const settings = Object.fromEntries(Object.entries(defaults).filter(([key]) => keys.includes(key)))
   return {
     get_snapshot: {
-      mycall: 'N0CALL', mygrid: 'AA00', mode: 'Normal',
+      mycall: 'N0CALL', mygrid: 'AA00', mode: 'Normal', activeRadioId: 0,
       radio: { dialMhz: 3.573, band: '80m', catOk: true, sideband: 'USB', operatingMode: 'digital',
         transmitting: false, txEnabled: false, txAllowed: true, rxOffsetHz: 1500, txOffsetHz: 1500,
         txLevel: 0.5, slot: 0, nextSlotMs: 12000,

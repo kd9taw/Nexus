@@ -541,7 +541,7 @@ for (const operationVersion of [1, 2, 3]) test(`actual cloud and native operatio
   if(operationVersion>=2){
    assert.equal((await probe.send({type:'stationPermission',deviceId:device.deviceId,allow:true})).ok,true)
    const controls=(await operation({type:'state'})).response.value
-   assert.deepEqual(controls.controls.capabilities,operationVersion===3?['decoder','amplifier','frequency','mode','tier']:['decoder','amplifier'])
+   assert.deepEqual(controls.controls.capabilities,operationVersion===3?['decoder','amplifier','frequency','mode','tier','ampFollowBand']:['decoder','amplifier'])
    const cleared=await operation({type:'stationControl',stationBootId:controls.stationBootId,leaseId:controls.leaseId,expectedRevision:controls.revision,commandWindowId:controls.commandWindowId,clientSequence:controls.nextSequence,context:controls.controls.context,action:{action:'decoder.clear',receiver:'cw'}})
    assert.equal(cleared.response.value.outcome,'applied');assert.equal(cleared.response.value.evidence,'receiverState')
    assert.deepEqual(await probe.send({type:'loggingEvidence'}),evidence)

@@ -10,6 +10,8 @@ import { installApplicationTransport } from '../applicationTransport'
 import { ErrorBoundary } from '../components/ErrorBoundary'
 import { t } from '../i18n'
 import { StationControlContext, StationDataContext } from '../stationAccess'
+import { RemoteObservationContext } from './amplifier-observation'
+import { initialState, startMonitor } from '../remote-monitor/session'
 import { APPLICATION_TIMEOUT_MS } from './application-protocol'
 import type { HostedConnection } from './client'
 import '../cockpit-panes.css'
@@ -20,6 +22,8 @@ export function BrowserApplication({ connection, disconnect }: { connection: Hos
   const client = connection.application
   const collections = useMemo(() => new RemoteCollections(client), [client])
   const [history, setHistory] = useState<RemoteHistory | null>(null)
+  const [observation, setObservation] = useState(initialState)
+  useEffect(() => startMonitor(connection.source, setObservation), [connection.source])
   const phase = useSyncExternalStore(client.subscribe, client.getPhase)
   const [boot, setBoot] = useState<Bootstrap | null>(null)
   const [error, setError] = useState(false)
@@ -99,7 +103,9 @@ export function BrowserApplication({ connection, disconnect }: { connection: Hos
       <StationDataContext.Provider value={!stale}>
         <RemoteCollectionsContext.Provider value={boot.collections ? collections : null}>
           <RemoteHistoryContext.Provider value={boot.collections ? history : null}>
-            <RemoteOperationsContext.Provider value={connection.operations??null}><App remote={{ ...boot, status, stale }} /></RemoteOperationsContext.Provider>
+            <RemoteOperationsContext.Provider value={connection.operations??null}>
+              <RemoteObservationContext.Provider value={observation}><App remote={{ ...boot, status, stale }} /></RemoteObservationContext.Provider>
+            </RemoteOperationsContext.Provider>
           </RemoteHistoryContext.Provider>
         </RemoteCollectionsContext.Provider>
       </StationDataContext.Provider>

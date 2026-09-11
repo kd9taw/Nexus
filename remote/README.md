@@ -342,6 +342,27 @@ and commercial acceptance require their own review before a paid operating relea
 
 ## Receiver and amplifier operations
 
+With the `ampFollowBand` capability on operation v3, Settings → Radio → Amplifier
+uses the existing follow-band checkbox and Save button. Only that boolean is
+submitted, with the displayed radio, prior choice and exact public Settings
+revision. The station owns the settings path and preserves other fields/profiles.
+Newer local settings refuse an old browser form. A successful atomic native save
+returns `settingsSaved`; a failed save leaves the prior choice and returns
+`persistenceFailed`. Neither means that the amplifier has changed band or that RF
+is off. Enabling requires the existing fresh idle/disarmed hardware checks;
+disabling can be saved with unknown hardware state. Disconnect and lease expiry
+leave the saved preference intact. Retained receipts prevent a duplicate or lost
+response from replaying the save.
+
+The full browser reuses the original observation stream for amplifier readings,
+follow state and actual connection/read identities. Manual Remote band steps are
+disabled while follow is on. Settings refreshes retain an unchanged draft only
+under its original revision and freshness deadline. Native Settings captures
+refresh immediately after the projected configuration changes. A failed amplifier
+write retires its exact observation connection and clears both displays; late
+replies cannot replace a newer connection. Physical SPE/KPA and WAN/device
+acceptance remain required before a complete-operation claim.
+
 `x-nexus-operation-version: 2` adds a closed `stationControl` request. A browser
 needs approval, an explicit per-browser **Allow station controls** grant at the
 shack, and the shared controller lease. Grants reset after a station restart.
@@ -368,7 +389,7 @@ precedence over an automatic step. Native KPA writes require a current CAT idle
 reading because KPA supplies no transmit flag; SPE can use its own idle flag,
 while observed physical radio keying always vetoes a change. Write permission
 expires with the supporting readings and serial I/O never holds Engine. These
-guards do not deliver remote follow-setting writes yet and do not prove an RF
+guards do not prove an RF
 interlock against keying that has not been observed. Attended bench verification
 remains required before release.
 
