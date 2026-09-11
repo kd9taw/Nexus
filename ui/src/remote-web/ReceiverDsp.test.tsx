@@ -190,3 +190,26 @@ it.each(['cw','phone'] as const)('preserves native %s APIs, AGC repicks and retu
   expect(setAgc).toHaveBeenCalledExactlyOnceWith('fast')
   expect(h.onSnap).toHaveBeenCalledWith(later); expect(h.writes()).toHaveLength(0)
 })
+
+
+it.each(['FM', 'PKTFM'])('FM receiver controls require the newer station capability in %s', async rigMode => {
+  const h = fixture('phone', ['receiverDsp'])
+  h.rerender(h.view({ ...h.snap, radio: { ...h.snap.radio, rigMode } })); await tick()
+  const control = h.func('NB')
+  expect(control.disabled).toBe(true)
+  fireEvent.click(control); await tick()
+  expect(h.writes()).toHaveLength(0)
+})
+
+
+it.each(['FM', 'PKTFM'])('the existing Phone control sends a confirmed FM receiver command in %s', async rigMode => {
+  const h = fixture('phone', ['receiverDsp', 'fmReceiver'])
+  h.rerender(h.view({ ...h.snap, radio: { ...h.snap.radio, rigMode } })); await tick()
+  const control = h.func('NB')
+  expect(control.disabled).toBe(false)
+  fireEvent.click(control); await tick()
+  expect(h.writes()).toHaveLength(1)
+  expect(h.writes()[0].request.action.action).toBe('radio.function')
+  act(() => h.finish()); await tick()
+  expect(h.onSnap).not.toHaveBeenCalled()
+})

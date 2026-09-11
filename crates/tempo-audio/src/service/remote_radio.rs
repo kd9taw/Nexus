@@ -23,10 +23,11 @@ impl RadioLoop {
                 if self.tx_until_ms.is_some()
                     || self.tuning_keyed
                     || rig.keyed
-                    || ((request.filter_width().is_some()
-                        || request.receiver_dsp().is_some()
-                        || request.level().is_some())
-                        && !self.rig_asserted)
+                    || (!request.retuning()
+                        && (!self.rig_asserted
+                            || self.remote_retune_uncertain
+                            || (matches!(eng.rig_mode_effective().as_str(), "FM" | "PKTFM")
+                                && self.last_fm.as_ref() != Some(&eng.fm_repeater_config()))))
                 {
                     Err(Reason::StationBusy)
                 } else if self.handoff_deferred
@@ -50,9 +51,7 @@ impl RadioLoop {
             }
             request
         };
-        let retuning = request.level().is_none()
-            && request.filter_width().is_none()
-            && request.receiver_dsp().is_none();
+        let retuning = request.retuning();
         let result = (|| {
             let (hz, mode) = request.expected();
             let expected = Position::new(hz, mode)?;

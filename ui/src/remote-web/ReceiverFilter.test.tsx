@@ -175,3 +175,26 @@ it.each(['cw', 'phone'] as const)('preserves the native %s filter API and return
   expect(setFilterWidth).toHaveBeenCalledExactlyOnceWith(hz)
   expect(h.onSnap).toHaveBeenCalledWith(later); expect(h.writes()).toHaveLength(0)
 })
+
+
+it.each(['FM', 'PKTFM'])('FM receiver controls require the newer station capability in %s', async rigMode => {
+  const h = fixture('phone', ['receiverFilter'])
+  h.rerender(h.view({ ...h.snap, radio: { ...h.snap.radio, rigMode } })); await tick()
+  const control = h.buttons()[1]
+  expect(control.disabled).toBe(true)
+  fireEvent.click(control); await tick()
+  expect(h.writes()).toHaveLength(0)
+})
+
+
+it.each(['FM', 'PKTFM'])('the existing Phone control sends a confirmed FM receiver command in %s', async rigMode => {
+  const h = fixture('phone', ['receiverFilter', 'fmReceiver'])
+  h.rerender(h.view({ ...h.snap, radio: { ...h.snap.radio, rigMode } })); await tick()
+  const control = h.buttons()[1]
+  expect(control.disabled).toBe(false)
+  fireEvent.click(control); await tick()
+  expect(h.writes()).toHaveLength(1)
+  expect(h.writes()[0].request.action.action).toBe('radio.filterWidth')
+  act(() => h.finish()); await tick()
+  expect(h.onSnap).not.toHaveBeenCalled()
+})

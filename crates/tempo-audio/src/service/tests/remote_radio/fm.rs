@@ -1,13 +1,13 @@
 //! Actual radio owner, including subsequent native ticks and persisted choices.
 use super::*;
 
-fn writes(peer: &Peer) -> Vec<String> {
+pub(super) fn writes(peer: &Peer) -> Vec<String> {
     peer.lines
         .lock()
         .unwrap()
         .iter()
         .filter(|s| {
-            ["M ", "F ", "T ", "L ", "R ", "O ", "C "]
+            ["M ", "F ", "T ", "L ", "U ", "R ", "O ", "C "]
                 .iter()
                 .any(|p| s.starts_with(p))
         })
@@ -41,7 +41,7 @@ fn peer(mode: &str, ignore_tone: bool) -> Peer {
     })
 }
 
-fn station(peer: &Peer, fm: bool, offset: i64) -> Station {
+pub(super) fn station(peer: &Peer, fm: bool, offset: i64) -> Station {
     let mut s = Station::configured(peer, |settings| {
         settings.operating_mode = tempo_app::settings::OperatingMode::Phone;
         settings.dial_mhz = 145.5;

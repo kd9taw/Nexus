@@ -9,6 +9,7 @@ use tempo_app::remote_control::{Completion, Evidence, Outcome, Reason, Revocatio
 mod dsp;
 mod filter;
 mod fm;
+mod fm_receiver;
 mod level;
 mod phone_mode;
 mod selection;

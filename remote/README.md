@@ -542,6 +542,14 @@ partially written tune holds automatic dial/mode/repeater reconciliation until
 a new explicit native retune or confirmed Remote tune/radio selection. Readings
 and unkeying continue while held. The picker remains transient.
 
+Stations advertising `fmReceiver` also accept the existing level, DSP, AGC and
+bandwidth controls while the radio reports FM or PKTFM. These commands preserve
+the current dial, mode and repeater configuration; only bandwidth reissues the
+same mode with a new width. The native owner refuses receiver adjustments while
+a tune is unconfirmed or its FM configuration is still pending. Hardware readback
+is required, and later polls do not retry an unconfirmed adjustment. Older
+stations keep FM receiver controls disabled.
+
 Combined routed profile/tuning changes, repeater-channel holds and satellite/split transactions,
 band-memory/spot shortcuts, scope dragging, continuous scanning and attended hardware/WAN
 acceptance remain incomplete. A compatible station build is required; this

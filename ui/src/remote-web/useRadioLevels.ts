@@ -16,12 +16,13 @@ const adjustmentKeys = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown
  * treats the submitted value or its receipt as a replacement hardware reading. */
 export function useRadioLevels(snap: AppSnapshot) {
   const local = useStationControl(), capability = useStationCapability('radioLevels')
+  const fmCapable = useStationCapability('fmReceiver')
   const operations = useContext(RemoteOperationsContext), { context } = useRemoteStation(snap.activeRadioId)
   const state = operations?.getSnapshot().state, current = state?.controls?.context, radio = snap.radio
   const mode = radio.operatingMode
   const allowed = !!(capability && operations && context && current && context.radioId === current.radioId && snap.activeRadioId === context.radioId &&
     context.radioConnection !== null && context.radioConnection === current.radioConnection && context.ampConnection === current.ampConnection &&
-    radio.source === 'native' && ['digital', 'phone', 'cw', 'rtty', 'keyboard'].includes(mode ?? '') &&
+    radio.source === 'native' && (!['FM', 'PKTFM'].includes(radio.rigMode ?? '') || fmCapable) && ['digital', 'phone', 'cw', 'rtty', 'keyboard'].includes(mode ?? '') &&
     radio.catOk === true && radio.rigKeyed === false && !radio.txEnabled && !radio.transmitting && !radio.tuning && !radio.txBusyReason)
   const can = (level: RadioLevel) => local || !!(allowed && typeof radio[fields[level]] === 'number' && Number.isFinite(radio[fields[level]]))
   const edit = useRef<Draft | null>(null), [draft, setDraft] = useState<Draft | null>(null)

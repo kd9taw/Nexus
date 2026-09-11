@@ -377,7 +377,8 @@ fn tier_admission_requires_v3_and_keeps_one_native_receipt_through_readback() {
             "workSpot",
             "radioLevels",
             "radioSelection",
-            "fmTuning"
+            "fmTuning",
+            "fmReceiver"
         ])
     );
     let command = control_request(&state, json!({"action":"radio.tier","tier":"FT4"}));

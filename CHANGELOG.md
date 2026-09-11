@@ -20,6 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Remote access. Loss warnings and unresolved command recovery remain visible;
   expanding the details preserves the current cockpit and session.
 
+- **Remote FM receiver controls:** Power, microphone gain, receiver DSP, AGC and
+  bandwidth use the existing Nexus controls while receiving FM. Commands preserve
+  the tuned frequency and repeater settings and require confirmed radio readback.
+  Older stations keep these controls disabled until they advertise support.
 - **Remote Phone mode picker:** The existing AUTO, USB, LSB, FM and AM buttons use
   confirmed mode and frequency readback through a compatible station. Choices
   retain desktop behavior, remain transient and require an idle, disarmed radio.

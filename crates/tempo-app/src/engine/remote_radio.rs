@@ -511,17 +511,16 @@ impl Engine {
         {
             return Err(Reason::InvalidAction);
         }
-        // Receiver-only changes retain their existing admission contract. A
-        // tuning transaction owns FM configuration and its later cache adoption.
-        if matches!(
+        // Receiver adjustments preserve the current FM configuration. Only a
+        // tuning transaction may carry repeater writes and adopt its cache.
+        let repeater = if matches!(
             target.intent,
             Intent::Level { .. } | Intent::FilterWidth { .. } | Intent::ReceiverDsp { .. }
-        ) && (matches!(target.mode.as_str(), "FM" | "PKTFM")
-            || matches!(self.rig_mode_effective().as_str(), "FM" | "PKTFM"))
-        {
-            return Err(Reason::UnsupportedAction);
-        }
-        let repeater = self.remote_target_repeater(target.hz, &target.mode);
+        ) {
+            None
+        } else {
+            self.remote_target_repeater(target.hz, &target.mode)
+        };
         let o = self.remote_monitor_observation();
         let cat = o.radio.readings.cat.ok_or(Reason::ReadingUnavailable)?;
         let completion = Completion::guarded(permit.clone());
@@ -662,6 +661,14 @@ impl Request {
             _ => None,
         }
     }
+    /// Only tuning transactions own frequency, mode and repeater adoption.
+    pub fn retuning(&self) -> bool {
+        !matches!(
+            self.intent,
+            Intent::Level { .. } | Intent::FilterWidth { .. } | Intent::ReceiverDsp { .. }
+        )
+    }
+
     /// An attempted write without a confirmed commit cannot grant the normal
     /// radio loop permission to finish or retry the transaction later.
     pub fn uncertain(&self) -> bool {
@@ -719,7 +726,9 @@ impl Request {
         if engine.settings.active_radio != self.radio
             || engine.settings.dial_hz() != self.expected_hz
             || !mode_matches
-            || engine.remote_target_repeater(self.target_hz, &self.target_mode) != self.repeater
+            || (self.retuning()
+                && engine.remote_target_repeater(self.target_hz, &self.target_mode)
+                    != self.repeater)
             || (self.power_limit.is_some() && engine.rf_power != self.expected_power)
         {
             return Err(Reason::ContextChanged);

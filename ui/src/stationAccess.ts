@@ -19,9 +19,9 @@ export function useStationCapability(capability: ControlCapability): boolean {
   const local = useStationControl(), available = useStationData()
   const client = useContext(RemoteOperationsContext)
   const view = useSyncExternalStore(client?.subscribe ?? idleSubscribe, client?.getSnapshot ?? idleSnapshot)
-  const expanded = ['frequency', 'mode', 'tier', 'workspace', 'ampFollowBand', 'decoderSettings', 'receiverSettings', 'receiverGain', 'bandSelection', 'receiverFilter', 'receiverDsp', 'phoneMode', 'workSpot', 'radioLevels', 'radioSelection', 'fmTuning'].includes(capability)
+  const expanded = ['frequency', 'mode', 'tier', 'workspace', 'ampFollowBand', 'decoderSettings', 'receiverSettings', 'receiverGain', 'bandSelection', 'receiverFilter', 'receiverDsp', 'phoneMode', 'workSpot', 'radioLevels', 'radioSelection', 'fmTuning', 'fmReceiver'].includes(capability)
   return local || !!(available && (!expanded || (client?.operationVersion ?? 0) >= 3) && view?.fresh && view.connected && !view.unresolved && !view.controlPending &&
-    view.state?.phase === 'controlling' && (!['frequency', 'mode', 'tier', 'workspace', 'decoderSettings', 'receiverSettings', 'receiverGain', 'bandSelection', 'receiverFilter', 'receiverDsp', 'phoneMode', 'workSpot', 'radioLevels', 'radioSelection', 'fmTuning'].includes(capability) || !view.state.txArmed) && view.state.controls?.capabilities.includes(capability))
+    view.state?.phase === 'controlling' && (!['frequency', 'mode', 'tier', 'workspace', 'decoderSettings', 'receiverSettings', 'receiverGain', 'bandSelection', 'receiverFilter', 'receiverDsp', 'phoneMode', 'workSpot', 'radioLevels', 'radioSelection', 'fmTuning', 'fmReceiver'].includes(capability) || !view.state.txArmed) && view.state.controls?.capabilities.includes(capability))
 }
 
 /** Local tier changes retain their native conditions. Remote selection needs

@@ -9,6 +9,7 @@ import { useRemoteStation } from './amplifier-observation'
  * the regular station stream supplies the later display, without optimism. */
 export function useReceiverFilter(snap: AppSnapshot, mode: 'cw' | 'phone') {
   const local = useStationControl(), capable = useStationCapability('receiverFilter')
+  const fmCapable = useStationCapability('fmReceiver')
   const operations = useContext(RemoteOperationsContext), radio = snap.radio
   const { context } = useRemoteStation(snap.activeRadioId)
   const current = operations?.getSnapshot().state?.controls?.context
@@ -16,7 +17,7 @@ export function useReceiverFilter(snap: AppSnapshot, mode: 'cw' | 'phone') {
     context.radioConnection === current.radioConnection && context.ampConnection === current.ampConnection)
   const prior = radio.filterWidthHz
   const allowed = local || !!(capable && operations && bound && context && snap.activeRadioId === context.radioId &&
-    context.radioConnection !== null && radio.source === 'native' && radio.operatingMode === mode &&
+    context.radioConnection !== null && radio.source === 'native' && (!['FM', 'PKTFM'].includes(radio.rigMode ?? '') || fmCapable) && radio.operatingMode === mode &&
     radio.catOk === true && radio.rigKeyed === false && !radio.txEnabled && !radio.transmitting && !radio.tuning && !radio.txBusyReason &&
     typeof prior === 'number' && Number.isInteger(prior) && prior > 0)
   const setWidth = async (hz: number): Promise<AppSnapshot | undefined> => {

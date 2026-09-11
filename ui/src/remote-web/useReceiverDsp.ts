@@ -10,11 +10,12 @@ import { AGC_SPEEDS, RECEIVER_FUNCTIONS, type AgcSpeed, type ReceiverFunction, t
  * changes the displayed choice, never the submitted intent or receipt. */
 export function useReceiverDsp(snap: AppSnapshot, mode: 'cw' | 'phone') {
   const local = useStationControl(), capability = useStationCapability('receiverDsp')
+  const fmCapable = useStationCapability('fmReceiver')
   const operations = useContext(RemoteOperationsContext), { context } = useRemoteStation(snap.activeRadioId)
   const current = operations?.getSnapshot().state?.controls?.context, radio = snap.radio
   const allowed = !!(capability && operations && context && current && context.radioId === current.radioId &&
     context.radioConnection !== null && context.radioConnection === current.radioConnection && context.ampConnection === current.ampConnection &&
-    radio.source === 'native' && radio.operatingMode === mode && radio.catOk === true && radio.rigKeyed === false &&
+    radio.source === 'native' && (!['FM', 'PKTFM'].includes(radio.rigMode ?? '') || fmCapable) && radio.operatingMode === mode && radio.catOk === true && radio.rigKeyed === false &&
     !radio.txEnabled && !radio.transmitting && !radio.tuning && !radio.txBusyReason)
   const canFunction = (name: string) => local || !!(allowed && RECEIVER_FUNCTIONS.includes(name as ReceiverFunction) &&
     typeof radio[name as ReceiverFunction] === 'boolean')

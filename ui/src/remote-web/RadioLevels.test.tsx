@@ -226,3 +226,26 @@ it.each(['leaseId','stationBootId','revision'] as const)('a drag cannot cross a 
   fireEvent.pointerDown(slider());fireEvent.change(slider(),{target:{value:'42'}});fireEvent.pointerUp(slider());await tick()
   expect(h.writes()).toHaveLength(1)
 })
+
+
+it.each(['FM', 'PKTFM'])('FM receiver controls require the newer station capability in %s', async rigMode => {
+  const h = fixture('phone', ['radioLevels'])
+  h.rerender(h.view({ ...h.snap, radio: { ...h.snap.radio, rigMode } })); await tick()
+  const control = h.getByRole('slider', { name: t('phone.mic.aria') }) as HTMLInputElement
+  expect(control.disabled).toBe(true)
+  fireEvent.change(control, { target: { value: '35' } }); await tick()
+  expect(h.writes()).toHaveLength(0)
+})
+
+
+it.each(['FM', 'PKTFM'])('the existing Phone control sends a confirmed FM receiver command in %s', async rigMode => {
+  const h = fixture('phone', ['radioLevels', 'fmReceiver'])
+  h.rerender(h.view({ ...h.snap, radio: { ...h.snap.radio, rigMode } })); await tick()
+  const control = h.getByRole('slider', { name: t('phone.mic.aria') }) as HTMLInputElement
+  expect(control.disabled).toBe(false)
+  fireEvent.change(control, { target: { value: '35' } }); await tick()
+  expect(h.writes()).toHaveLength(1)
+  expect(h.writes()[0].request.action.action).toBe('radio.level')
+  act(() => h.finish()); await tick()
+  expect(h.onSnap).not.toHaveBeenCalled()
+})
