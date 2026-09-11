@@ -143,6 +143,14 @@ impl CaptureResampler {
         }
     }
 
+    /// The rate this resampler emits at. Callers that must SIZE a chunk before
+    /// resampling it need the ratio — see `device.rs`'s `pump_card`, which works
+    /// out how much 12 kHz audio will fit the sound card's ring at device rate.
+    #[must_use]
+    pub fn out_rate(&self) -> u32 {
+        self.out_rate
+    }
+
     /// Resample a chunk of capture audio, carrying filter history + phase across
     /// calls. Emits every output whose full 64-tap window is now in-buffer and
     /// retains the rest for the next call.
