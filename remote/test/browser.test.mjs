@@ -630,6 +630,8 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         assert.equal(stationRequests.length,3);draftLayouts.push({width,height,zoom,theme,shape})
       }
       await click(button('Clear draft and use N3DXCW'))
+      await until(`document.querySelector('.ui-toast-msg')?.textContent.includes('N3DXCW')`)
+      assert.ok(await evaluate(`(()=>{const nav=document.querySelector('.remote-quick-nav'),r=nav.getBoundingClientRect(),toast=document.querySelector('.ui-toast-viewport').getBoundingClientRect();return toast.bottom<r.top&&[...nav.querySelectorAll('button')].every(e=>{const b=e.getBoundingClientRect();return e.contains(document.elementFromPoint(b.x+b.width/2,b.y+b.height/2))})})()`),'the actual Work toast must leave every Quick destination accessible')
       await click(`[...document.querySelectorAll('.remote-quick-nav button')].find(e=>e.textContent==='Full Nexus')`)
       await until(`document.querySelector('.app')?.dataset.remotePresentation==='full'`)
       await browser.call('Emulation.setDeviceMetricsOverride',{width:1280,height:800,deviceScaleFactor:1,mobile:false},session)

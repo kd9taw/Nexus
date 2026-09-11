@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState } from 'react'
+import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { BookOpen, Crosshair, PanelsTopLeft, Radio, SlidersHorizontal } from 'lucide-react'
 import type { View } from '../components/ModeNav'
 import { t } from '../i18n'
@@ -32,11 +32,23 @@ export function QuickNavigation({ view, onSelect, available }: {
   view: View; onSelect: (view: View) => void; available: (view: View) => boolean
 }) {
   const display = useRemotePresentation()
+  const navigation = useRef<HTMLElement>(null)
+  useLayoutEffect(() => {
+    const nav = navigation.current, app = nav?.closest<HTMLElement>('.app')
+    if (!nav || !app || display?.presentation !== 'quick') return
+    // The translated, zoomed navigation can wrap. Reserve its measured CSS
+    // height for the existing toast viewport instead of covering its buttons.
+    const measure = () => app.style.setProperty('--remote-quick-nav-height', `${nav.offsetHeight}px`)
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(nav)
+    return () => { observer.disconnect(); app.style.removeProperty('--remote-quick-nav-height') }
+  }, [display?.presentation])
   const operating = OPERATING_VIEWS.includes(view) && available(view)
   const [last, setLast] = useState<View>(operating ? view : 'operate')
   useEffect(() => { if (operating) setLast(view) }, [view, operating])
   if (display?.presentation !== 'quick') return null
-  return <nav className="remote-quick-nav" aria-label={t('remote.quick.navigation')}>
+  return <nav ref={navigation} className="remote-quick-nav" aria-label={t('remote.quick.navigation')}>
     <button type="button" aria-current={operating ? 'page' : undefined}
       onClick={() => onSelect(available(last) ? last : 'operate')}>
       <Radio size={20} aria-hidden="true" /><span>{t('remote.quick.operate')}</span>
