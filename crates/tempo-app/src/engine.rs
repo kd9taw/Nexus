@@ -9742,7 +9742,16 @@ impl Engine {
     fn set_area_with_decoder(
         &mut self,
         area: &str,
+        decoder: impl FnMut(&mut Self, DecoderMutation),
+    ) {
+        self.set_area_with_decoder_and_reset(area, decoder, modes::reset_ft8_a7);
+    }
+
+    fn set_area_with_decoder_and_reset(
+        &mut self,
+        area: &str,
         mut decoder: impl FnMut(&mut Self, DecoderMutation),
+        mut reset: impl FnMut(),
     ) {
         let target = self.area_tier(area);
         match area {
@@ -9754,9 +9763,11 @@ impl Engine {
                 // hand-kept tier list.
                 if !self.app.tier().is_chat() {
                     self.last_dx_tier = Some(self.app.tier());
-                    self.set_tier_with_installer(target, |engine, source| {
-                        decoder(engine, DecoderMutation::Install(source));
-                    });
+                    self.set_tier_with_installer_and_reset(
+                        target,
+                        |engine, source| decoder(engine, DecoderMutation::Install(source)),
+                        &mut reset,
+                    );
                 }
                 if !matches!(self.mode, Mode::Chat) {
                     let _ = self.set_mode_with_decoder("chat", &mut decoder);
@@ -9776,9 +9787,11 @@ impl Engine {
                 // that cannot transmit.
                 if self.app.tier().is_chat() {
                     self.last_msg_tier = Some(self.app.tier());
-                    self.set_tier_with_installer(target, |engine, source| {
-                        decoder(engine, DecoderMutation::Install(source));
-                    });
+                    self.set_tier_with_installer_and_reset(
+                        target,
+                        |engine, source| decoder(engine, DecoderMutation::Install(source)),
+                        &mut reset,
+                    );
                 }
                 if matches!(self.mode, Mode::Chat) {
                     let _ = self.set_mode_with_decoder("qso-monitor", &mut decoder);

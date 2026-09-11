@@ -16,6 +16,7 @@ mod level;
 pub use level::RadioLevel;
 mod phone_mode;
 mod spot;
+mod workspace;
 pub use dsp::{AgcSpeed, ReceiverDsp, ReceiverFunction};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
@@ -414,56 +415,10 @@ impl Engine {
         if matches!(self.source.try_lock(), Err(TryLockError::WouldBlock)) {
             return Err(Reason::StationBusy);
         }
-        let tier = match workspace {
-            Workspace::Ft => match self.area_tier("dx") {
-                Tier::Js8 => Tier::Ft8, // JS8 owns its own cockpit, outside FT.
-                tier => tier,
-            },
-            Workspace::Tempo => self.area_tier("msg"),
-            Workspace::Js8 => Tier::Js8,
-        };
-        let mut projected = self.settings.clone();
-        projected.operating_mode = OperatingMode::Digital;
-        // FT and JS8 own their section's frequency. When leaving a manual
-        // section, reuse native mode memory/home policy even if its digital
-        // decoder was already selected. Tempo keeps its own band selection.
-        let follow_frequency =
-            workspace != Workspace::Tempo && self.settings.operating_mode != OperatingMode::Digital;
-        if let Some((dial, sideband)) = self
-            .prepare_mode_entry("digital", follow_frequency)
-            .frequency
-        {
-            projected.dial_mhz = dial;
-            projected.sideband = sideband;
-        }
-        // A same-tier return preserves an operator-tuned channel, like the
-        // native setter. A changed tier uses its existing override/fallback rule.
-        if tier != self.tier() {
-            if let Some(channel) =
-                self.prepare_tier_frequency_at(tier, &projected.band, projected.dial_mhz)
-            {
-                projected.dial_mhz = channel.dial_mhz;
-                projected.band = channel.band;
-                projected.sideband = channel.mode;
-            }
-        }
-        if projected.sideband.eq_ignore_ascii_case("LSB") {
-            projected.sideband = "USB".into();
-        }
-        if !projected.radio_pegged
-            && projected
-                .route_radio(
-                    &projected.band,
-                    self.route_mode_for(
-                        &projected.band,
-                        projected.dial_mhz,
-                        OperatingMode::Digital,
-                    ),
-                )
-                .is_some_and(|id| id != projected.active_radio)
-        {
-            return Err(Reason::UnsupportedAction);
-        }
+        let plan = self.prepare_remote_workspace(workspace);
+        let tier = plan.tier;
+        let follow_frequency = plan.follow_frequency;
+        let projected = plan.selection.settings();
         let ceiling = projected.rf_power_ceiling();
         let power_limit = (ceiling < 1.0).then(|| {
             self.rf_power
@@ -474,12 +429,15 @@ impl Engine {
         if power_limit.is_some_and(|p| !p.is_finite() || !(0.0..=1.0).contains(&p)) {
             return Err(Reason::ReadingUnavailable);
         }
+        if plan.routed {
+            return self.queue_remote_routed_workspace(workspace, power_limit, connection, permit);
+        }
         self.queue_remote_target(
             Target {
                 hz: projected.dial_hz(),
                 mode: projected.rig_mode(),
-                band: projected.band,
-                sideband: projected.sideband,
+                band: projected.band.clone(),
+                sideband: projected.sideband.clone(),
                 power_limit,
                 intent: Intent::Workspace {
                     workspace,
@@ -975,33 +933,20 @@ impl Request {
                 follow_frequency,
                 ..
             } => {
-                engine.set_operating_mode_with_arming("digital", follow_frequency, false);
-                let mut decoder = |engine: &mut Engine, mutation| match mutation {
-                    DecoderMutation::Install(source) => engine.install_source_into(
-                        source_slot.as_mut().expect("workspace decoder lock"),
-                        source,
-                    ),
-                    DecoderMutation::ResetHarq => Engine::harq_reset_serialized(
-                        source_slot.as_ref().expect("workspace decoder lock"),
-                    ),
-                };
-                match workspace {
-                    Workspace::Ft => {
-                        engine.set_area_with_decoder("dx", &mut decoder);
-                        if engine.tier() == Tier::Js8 {
-                            engine.set_tier_with_installer(Tier::Ft8, |engine, source| {
-                                decoder(engine, DecoderMutation::Install(source))
-                            });
-                        }
-                    }
-                    Workspace::Tempo => engine.set_area_with_decoder("msg", &mut decoder),
-                    Workspace::Js8 => {
-                        engine.js8_start_session();
-                        engine.set_tier_with_installer(Tier::Js8, |engine, source| {
-                            decoder(engine, DecoderMutation::Install(source))
-                        });
-                    }
-                }
+                engine.enter_remote_workspace_with_decoder(
+                    workspace,
+                    follow_frequency,
+                    |engine, mutation| match mutation {
+                        DecoderMutation::Install(source) => engine.install_source_into(
+                            source_slot.as_mut().expect("workspace decoder lock"),
+                            source,
+                        ),
+                        DecoderMutation::ResetHarq => Engine::harq_reset_serialized(
+                            source_slot.as_ref().expect("workspace decoder lock"),
+                        ),
+                    },
+                    modes::reset_ft8_a7,
+                );
                 if let Some(power) = power.filter(|_| self.power_limit.is_some()) {
                     engine.rf_power = Some(power);
                     engine.observe_rig_power(power);

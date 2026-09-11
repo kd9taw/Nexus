@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Remote workspace routing:** FT, Tempo and JS8 entry can follow the station's
+  configured radio routes through confirmed native handoff. Section memories,
+  remembered decoders and intermediate radio profiles retain their native order.
+  Routed entries that return to their original radio remain unavailable.
+
 - **Remote radio selection:** The existing radio pills and Settings Make active
   button select a configured radio through a compatible station. Selection
   preserves native profiles and operator controls, waits for confirmed tuning,

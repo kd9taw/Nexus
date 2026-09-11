@@ -2,7 +2,7 @@
 //! passive native projection, never a browser payload or a state to apply wholesale.
 //! The radio owner must acquire, configure and adopt the actual incoming connection.
 use super::radio_selection::RadioSelection;
-use super::remote_radio::{AgcSpeed, RadioLevel};
+use super::remote_radio::{AgcSpeed, RadioLevel, Workspace};
 use super::Engine;
 use crate::remote_control::{Completion, Evidence, Outcome, Permit, Reason, WritePermission};
 use crate::settings::Settings;
@@ -26,6 +26,16 @@ struct RoutedTune {
     band_mode: Option<String>,
     mode_entry: Option<ModeEntry>,
     tier: Option<(crate::dto::Tier, crate::dto::Tier)>,
+    workspace: Option<WorkspaceEntry>,
+}
+
+struct WorkspaceEntry {
+    workspace: Workspace,
+    original_tier: crate::dto::Tier,
+    target_tier: crate::dto::Tier,
+    follow_frequency: bool,
+    power_limit: Option<f32>,
+    prior_power: (Option<f32>, Option<f32>),
 }
 
 struct ModeEntry {
@@ -112,6 +122,7 @@ impl Engine {
                 band_mode: None,
                 mode_entry: None,
                 tier: None,
+                workspace: None,
             }),
             connection,
             permit,
@@ -147,6 +158,7 @@ impl Engine {
                     prior_power: (self.rf_power, self.rig_rf_power),
                 }),
                 tier: None,
+                workspace: None,
             }),
             connection,
             permit,
@@ -178,6 +190,7 @@ impl Engine {
                     prior_power: (self.rf_power, self.rig_rf_power),
                 }),
                 tier: None,
+                workspace: None,
             }),
             connection,
             permit,
@@ -206,6 +219,47 @@ impl Engine {
                 band_mode: None,
                 mode_entry: None,
                 tier: Some((tier, self.tier())),
+                workspace: None,
+            }),
+            connection,
+            permit,
+        )
+    }
+
+    pub(super) fn queue_remote_routed_workspace(
+        &mut self,
+        workspace: Workspace,
+        power_limit: Option<f32>,
+        connection: u64,
+        permit: Permit,
+    ) -> Result<Completion, Reason> {
+        if !self.remote_selection_host_ready {
+            return Err(Reason::UnsupportedAction);
+        }
+        let plan = self.prepare_remote_workspace(workspace);
+        let settings = plan.selection.settings();
+        // A route that returns to the original owner needs the active-radio
+        // transaction; it cannot acquire its own connection as an incoming rig.
+        if !plan.routed || settings.active_radio == self.settings.active_radio {
+            return Err(Reason::UnsupportedAction);
+        }
+        self.queue_remote_selection(
+            settings.active_radio,
+            Some(RoutedTune {
+                dial_mhz: settings.dial_mhz,
+                band: settings.band.clone(),
+                sideband: settings.sideband.clone(),
+                band_mode: None,
+                mode_entry: None,
+                tier: None,
+                workspace: Some(WorkspaceEntry {
+                    workspace,
+                    original_tier: self.tier(),
+                    target_tier: plan.tier,
+                    follow_frequency: plan.follow_frequency,
+                    power_limit,
+                    prior_power: (self.rf_power, self.rig_rf_power),
+                }),
             }),
             connection,
             permit,
@@ -254,9 +308,13 @@ impl Engine {
             });
             return Ok(completion);
         }
-        let mut selection = self
-            .preview_radio_selection(id)
-            .ok_or(Reason::InvalidAction)?;
+        let workspace = tune.as_ref().and_then(|tune| tune.workspace.as_ref());
+        let mut selection = if let Some(entry) = workspace {
+            self.prepare_remote_workspace(entry.workspace).selection
+        } else {
+            self.preview_radio_selection(id)
+                .ok_or(Reason::InvalidAction)?
+        };
         if let Some(tune) = &tune {
             selection = selection.with_frequency(tune.dial_mhz, &tune.band, &tune.sideband);
             if let Some(entry) = &tune.mode_entry {
@@ -293,6 +351,20 @@ impl Request {
     }
 
     fn preview(&self, engine: &Engine) -> Option<RadioSelection> {
+        if let Some(entry) = self.tune.as_ref().and_then(|tune| tune.workspace.as_ref()) {
+            if !engine.remote_selection_host_ready
+                || engine.tier() != entry.original_tier
+                || (engine.rf_power, engine.rig_rf_power) != entry.prior_power
+            {
+                return None;
+            }
+            let plan = engine.prepare_remote_workspace(entry.workspace);
+            return (plan.routed
+                && plan.tier == entry.target_tier
+                && plan.follow_frequency == entry.follow_frequency
+                && plan.selection.settings().active_radio == self.settings().active_radio)
+                .then_some(plan.selection);
+        }
         let mut selection = engine.preview_radio_selection(self.settings().active_radio)?;
         if let Some(tune) = &self.tune {
             if !engine.remote_selection_host_ready {
@@ -368,11 +440,12 @@ impl Request {
 
     pub fn configuration(&self, engine: &Engine) -> Result<Configuration, Reason> {
         self.validate(engine)?;
-        let mode_limit = self
-            .tune
-            .as_ref()
-            .and_then(|tune| tune.mode_entry.as_ref())
-            .and_then(|entry| entry.power_limit);
+        let mode_limit = self.tune.as_ref().and_then(|tune| {
+            tune.mode_entry
+                .as_ref()
+                .and_then(|entry| entry.power_limit)
+                .or_else(|| tune.workspace.as_ref().and_then(|entry| entry.power_limit))
+        });
         let limit = self
             .settings()
             .rf_power_ceiling()
@@ -472,7 +545,11 @@ impl Request {
             return false;
         }
         let source = engine.source.clone();
-        let mut source_slot = if self.tune.as_ref().is_some_and(|tune| tune.tier.is_some()) {
+        let mut source_slot = if self
+            .tune
+            .as_ref()
+            .is_some_and(|tune| tune.tier.is_some() || tune.workspace.is_some())
+        {
             match source.try_lock() {
                 Ok(slot) => Some(slot),
                 Err(std::sync::TryLockError::Poisoned(error)) => Some(error.into_inner()),
@@ -492,7 +569,22 @@ impl Request {
         }
         let incoming = self.settings().active_radio;
         if let Some(tune) = &self.tune {
-            if let Some((tier, _)) = tune.tier {
+            if let Some(entry) = &tune.workspace {
+                engine.enter_remote_workspace_with_decoder(
+                    entry.workspace,
+                    entry.follow_frequency,
+                    |engine, mutation| match mutation {
+                        super::DecoderMutation::Install(source) => engine.install_source_into(
+                            source_slot.as_mut().expect("workspace source lock"),
+                            source,
+                        ),
+                        super::DecoderMutation::ResetHarq => Engine::harq_reset_serialized(
+                            source_slot.as_ref().expect("workspace source lock"),
+                        ),
+                    },
+                    || decoder.reset_held(),
+                );
+            } else if let Some((tier, _)) = tune.tier {
                 engine.set_tier_with_installer_and_reset(
                     tier,
                     |engine, decoder| {

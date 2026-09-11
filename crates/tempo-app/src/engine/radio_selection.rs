@@ -11,6 +11,10 @@ pub struct RadioSelection {
 }
 
 impl RadioSelection {
+    pub(super) fn from_settings(settings: Settings) -> Self {
+        Self { settings }
+    }
+
     pub(super) fn with_frequency(mut self, dial_mhz: f64, band: &str, sideband: &str) -> Self {
         self.settings.dial_mhz = dial_mhz;
         self.settings.band = band.into();
@@ -34,10 +38,18 @@ impl Engine {
     /// selection, without executing a selection. Recompute at commit: a monitor
     /// read, profile edit or local gesture can supersede this projection.
     pub fn preview_radio_selection(&self, id: u32) -> Option<RadioSelection> {
-        if id == self.settings.active_radio || !self.settings.radios.iter().any(|p| p.id == id) {
+        self.preview_radio_selection_from(&self.settings, id)
+    }
+
+    pub(super) fn preview_radio_selection_from(
+        &self,
+        original: &Settings,
+        id: u32,
+    ) -> Option<RadioSelection> {
+        if id == original.active_radio || !original.radios.iter().any(|p| p.id == id) {
             return None;
         }
-        let mut settings = self.settings.clone();
+        let mut settings = original.clone();
         bank_outgoing_profile(&mut settings);
         settings.active_radio = id;
         settings.sync_flat_from_active();

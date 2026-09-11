@@ -30,6 +30,14 @@ port or router forwarding is required. The desktop is pinned to
 
 ## Existing Nexus workspace
 
+Workspace entry prepares each native section and decoder QSY in order, including
+intermediate profile banking. Only the final incoming radio is configured by the
+selection worker. The commit shares native section, area, session and tier verbs
+under the stable source lock and existing A7 guard; it grants no transmit access.
+A routed entry that ends back at its original radio still needs the active-owner
+transaction and is refused pending that integration. Hardware and WAN acceptance
+remain required.
+
 **Open Nexus** loads the same `ui/src/App.tsx`, Operate, CW, Phone, RTTY, PSK, Needed, Spots and Logbook components as the
 desktop. The explicit adapter below `api.ts` owns one authenticated station
 session. It does not install a Tauri global or forward arbitrary command names.
