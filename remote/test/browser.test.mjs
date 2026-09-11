@@ -1293,6 +1293,11 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
       }else{
         await click(`[...document.querySelectorAll('.sat-pick')].find(e=>e.textContent.includes('ISS (ZARYA)'))`)
         await until(`document.querySelector('.sats-arm-id')?.textContent.includes('ISS (ZARYA)')`)
+        // Catalog/detail readiness precedes the separate, coherent favorites
+        // schedule batch. Measure the populated layout: otherwise its initial
+        // arrival can move the same radio panel between scroll and hit-test.
+        await until(`document.querySelectorAll('.sats-sched tbody.fav tr:not(.sats-inline-empty)').length>0`)
+        console.log('Satellite favorites ready for geometry',JSON.stringify(await evaluate(`({rows:document.querySelectorAll('.sats-sched tbody.fav tr:not(.sats-inline-empty)').length,empty:!!document.querySelector('.sats-sched tbody.fav .sats-inline-empty')})`)))
         const actions=await evaluate(`[...document.querySelectorAll('.sat-track,.sat-work,input[name="sat-transponder"],.sat-chip.quiet')].map(e=>e.disabled)`)
         assert.ok(actions.length>0&&actions.every(Boolean),'station actions remain guarded until control is explicitly supported')
       }
