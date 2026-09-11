@@ -32,7 +32,7 @@ fn cluster(call: &str, freq_khz: f64, comment: &str) -> tempo_net::cluster::Clus
 
 #[test]
 fn remote_spot_requires_v3_and_readback_before_native_handoff_without_replay() {
-    for (mode, dial, target) in [("cw", 7.02345, "CW"), ("phone", 7.19876, "LSB")] {
+    for (mode, dial, target) in [("cw", 7.02345_f64, "CW"), ("phone", 7.19876, "LSB")] {
         let (mut f, connection) = station("phone", 2400);
         f.authority.spots = Some(Default::default());
         let before = std::fs::read(f.dir.join("settings.json")).unwrap();
