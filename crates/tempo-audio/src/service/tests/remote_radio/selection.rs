@@ -1551,7 +1551,7 @@ fn workspace_return_retains_the_original_connection_and_confirms_before_native_c
                     &no_sinks(),
                     started + delta,
                     &mut |_| panic!("unchanged capture must stay open"),
-                    &mut |_| panic!("unchanged radio must stay open"),
+                    &mut |_, _| panic!("unchanged radio must stay open"),
                     &mut StationSinks::new(),
                 )
                 .unwrap();
