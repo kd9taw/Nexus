@@ -30,6 +30,8 @@ export type OperationView = {
   controlResult: ControlOutcome | null
   controlError: string | null
   controlRefreshing?: boolean
+  stopSending?: boolean
+  stopError?: string | null
 }
 type CapturedControl = { state: OperationState; until: number }
 type Pending = {
@@ -61,6 +63,8 @@ export class OperationClient {
     controlError: null
   }
   private pending: Pending | null = null
+  private pendingStop: Pending | null = null
+  private stopTarget: { stationBootId: string; leaseId: string; transmitEpoch: string } | null = null
   private timer: ReturnType<typeof setInterval> | undefined
   private stateUntil = 0
   private controlRefreshUntil = 0
@@ -111,6 +115,7 @@ export class OperationClient {
       ...this.view,
       ...value,
       controlSending: this.pending?.request.type === 'stationControl',
+      stopSending: !!this.pendingStop,
       ...((value.error || value.connected === false || value.state) ? { controlRefreshing: false } : {}),
       ...(value.unresolved === null ? { pendingDraft: null } : {})
     }
@@ -127,6 +132,10 @@ export class OperationClient {
     clearInterval(this.timer)
     this.timer = undefined
     this.resultIntent = null
+    this.stopTarget = null
+    const stop = this.pendingStop
+    this.pendingStop = null
+    if (stop) { clearTimeout(stop.timer); stop.reject(new Error('operationUnknown')) }
     const p = this.pending
     this.pending = null
     if (p) {
@@ -229,11 +238,56 @@ export class OperationClient {
       }
     })
   }
+  /** Stop uses the last station-issued owner token, even while an ordinary
+   * request or receipt is unresolved. Native authority alone decides if it is
+   * still valid. Acceptance is revocation, not confirmation that RF stopped. */
+  stopTransmit(): Promise<OperationValue> {
+    if (this.operationVersion < 4) return Promise.reject(new Error('stationUnsupported'))
+    if (!this.view.connected) return Promise.reject(new Error('stationUnavailable'))
+    if (this.pendingStop) return Promise.reject(new Error('remoteBusy'))
+    if (!this.stopTarget) return Promise.reject(new Error('localPermissionRequired'))
+    const request: OperationRequest = { type: 'stopTransmit', requestId: crypto.randomUUID(), ...this.stopTarget }
+    operationRequest(request)
+    return new Promise((resolve, reject) => {
+      const p: Pending = { request, started: this.now(), resolve, reject, timer: setTimeout(() => {
+        if (this.pendingStop !== p) return
+        this.pendingStop = null
+        this.update({ stopError: 'operationUnknown' })
+        reject(new Error('operationUnknown'))
+      }, 7500) }
+      this.pendingStop = p
+      this.update({ stopError: null })
+      try { this.send(JSON.stringify({ type: 'operationRequest', operationVersion: 4, request })) }
+      catch {
+        clearTimeout(p.timer)
+        this.pendingStop = null
+        this.update({ stopError: 'operationUnknown' })
+        reject(new Error('operationUnknown'))
+      }
+    })
+  }
   receive(raw: unknown) {
-    const r = operationResponse(raw),
-      p = this.pending
+    const r = operationResponse(raw)
+    const stop = this.pendingStop
+    if (stop?.request.requestId === r.requestId) {
+      if ('value' in r && !('stop' in r.value)) throw Error('invalidOperation')
+      clearTimeout(stop.timer)
+      this.pendingStop = null
+      if ('error' in r) {
+        this.update({ stopError: r.error })
+        stop.reject(new Error(r.error))
+      } else {
+        this.stopTarget = null
+        this.polledAt = -Infinity
+        this.update({ stopError: null })
+        stop.resolve(r.value)
+      }
+      return
+    }
+    const p = this.pending
     if (!p || p.request.requestId !== r.requestId) return
     if ('value' in r) {
+      if ('stop' in r.value) throw Error('invalidOperation')
       const expectsOutcome = p.request.type === 'logManual' || p.request.type === 'stationControl' || p.request.type === 'result'
       if (expectsOutcome !== 'outcome' in r.value) throw new Error('invalidOperation')
       if (
@@ -268,7 +322,10 @@ export class OperationClient {
       p.reject(new Error(r.error))
       return
     }
+    if ('stop' in r.value) throw Error('invalidOperation')
     if ('phase' in r.value) {
+      this.stopTarget = this.operationVersion >= 4 && r.value.phase === 'controlling' && r.value.leaseId && r.value.transmitEpoch
+        ? { stationBootId: r.value.stationBootId, leaseId: r.value.leaseId, transmitEpoch: r.value.transmitEpoch } : null
       this.stateUntil = p.started + Math.min(1200, r.value.leaseRemainingMs ?? 1200)
       this.update({
         supported: true,

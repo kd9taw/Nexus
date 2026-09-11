@@ -522,6 +522,13 @@ impl Authority {
             "nextSequence":if owned{c.lease.as_ref().map(|l|l.sequence+1)}else{None},
             "leaseRemainingMs":if owned{c.lease.as_ref().map(|l|l.until.saturating_duration_since(now).as_millis() as u64)}else{None},
             "actions":if c.grants.contains(device){vec!["log.manual"]}else{vec![]},"txArmed":false});
+        if control.as_ref().is_some_and(|(version, _)| *version >= 4) {
+            value["transmitEpoch"] = if owned && c.transmit_grants.contains(device) {
+                json!(format!("{:016x}", self.transmit.generation()))
+            } else {
+                Value::Null
+            };
+        }
         if let Some((version, context)) = control {
             value["controls"] = json!({"context":context,"capabilities":if c.control_grants.contains(device){station::capabilities(version)}else{vec![]}});
         }
@@ -554,7 +561,7 @@ impl Authority {
             self.stop_transmit(connection, session, device, request, now)?;
             return Ok(json!({"stop":"accepted"}));
         }
-        if !matches!(version, 1..=3)
+        if !matches!(version, 1..=4)
             || matches!(request, Request::StationControl { action, .. } if version < action.minimum_version())
         {
             return Err("stationUnsupported");

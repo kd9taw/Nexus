@@ -691,3 +691,41 @@ test('expanded operations preserve legacy clients, minimum peer versions and hib
     live.browser.close(); live.station.close()
   }
 })
+
+test('FT Stop crosses the real relay alongside pending operations and survives hibernation', async () => {
+  const config = await (await fetch(`${app.origin}/api/remote/config`)).json()
+  assert.equal(config.operationFtVersion, 1)
+  assert.equal(config.operationMaxVersion, 3)
+  const pair = await app.paired(), live = await admitted(pair, 1, {
+    'x-nexus-operation-version': '2', 'x-nexus-operation-max-version': '3', 'x-nexus-operation-ft-version': '1'
+  })
+  const boot = crypto.randomUUID(), lease = crypto.randomUUID(), sessionId = live.session.sessionId
+  const send = request => live.browser.send({ type: 'operationRequest', operationVersion: 4, request })
+  const command = { type: 'stationControl', requestId: crypto.randomUUID(), stationBootId: boot, leaseId: lease,
+    expectedRevision: 1, commandWindowId: crypto.randomUUID(), clientSequence: 1,
+    context: { radioId: 1, radioConnection: 1, ampConnection: null, ampReadSequence: null }, action: { action: 'decoder.clear', receiver: 'cw' } }
+  send(command)
+  assert.equal((await live.station.take(type('operationRequest'))).operationVersion, 4)
+  const heartbeat = { type: 'heartbeat', requestId: crypto.randomUUID(), leaseId: lease }
+  send(heartbeat)
+  assert.equal((await live.station.take(type('operationRequest'))).request.type, 'heartbeat')
+  const stop = { type: 'stopTransmit', requestId: crypto.randomUUID(), stationBootId: boot, leaseId: lease, transmitEpoch: '000000000000002a' }
+  send(stop)
+  const routed = await live.station.take(type('operationRequest'))
+  assert.deepEqual(routed.request, stop)
+  assert.equal(routed.deviceId, live.deviceId)
+  send({ ...stop, requestId: crypto.randomUUID() })
+  assert.equal((await live.browser.take(type('operationResponse'))).error, 'remoteBusy')
+  await app.evict(pair.stationId)
+  live.station.send({ type: 'operationResponse', sessionId, requestId: stop.requestId, value: { stop: 'accepted' } })
+  assert.deepEqual((await live.browser.take(type('operationResponse'))).value, { stop: 'accepted' })
+  live.station.send({ type: 'operationResponse', sessionId, requestId: command.requestId,
+    value: { operation: 'stationControl', operationId: command.requestId, outcome: 'applied', evidence: 'receiverState' } })
+  assert.equal((await live.browser.take(type('operationResponse'))).requestId, command.requestId)
+  live.station.send({ type: 'operationResponse', sessionId, requestId: heartbeat.requestId,
+    value: { stationBootId: boot, allowed: true, phase: 'controlling', leaseId: lease, revision: 2,
+      commandWindowId: crypto.randomUUID(), nextSequence: 2, leaseRemainingMs: 5000, actions: [], txArmed: false, transmitEpoch: '000000000000002b' } })
+  assert.equal((await live.browser.take(type('operationResponse'))).value.transmitEpoch, '000000000000002b')
+  assert.equal(live.station.closed, false)
+  live.browser.close(); live.station.close()
+})

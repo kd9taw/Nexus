@@ -308,3 +308,54 @@ fn transmit_stop_requires_the_exact_granted_live_lease_and_new_protocol() {
         }
     }
 }
+
+#[test]
+fn transmit_stop_token_is_only_returned_to_the_granted_v4_owner() {
+    let (f, now, _) = armed();
+    for version in 1..=4 {
+        let value = f
+            .authority
+            .handle_version(
+                (f.connection, version),
+                SESSION,
+                DEVICE,
+                &Request::State { request_id: id() },
+                &f.engine,
+                now,
+            )
+            .unwrap();
+        if version < 4 {
+            assert!(value.get("transmitEpoch").is_none());
+        } else {
+            assert_eq!(
+                value["transmitEpoch"],
+                format!("{:016x}", f.authority.transmit.generation())
+            );
+        }
+    }
+    let value = f
+        .authority
+        .handle_version(
+            (f.connection, 4),
+            OTHER,
+            DEVICE,
+            &Request::State { request_id: id() },
+            &f.engine,
+            now,
+        )
+        .unwrap();
+    assert!(value["transmitEpoch"].is_null());
+    f.authority.permit_transmit(DEVICE, false).unwrap();
+    let value = f
+        .authority
+        .handle_version(
+            (f.connection, 4),
+            SESSION,
+            DEVICE,
+            &Request::State { request_id: id() },
+            &f.engine,
+            now,
+        )
+        .unwrap();
+    assert!(value["transmitEpoch"].is_null());
+}

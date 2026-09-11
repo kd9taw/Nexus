@@ -39,6 +39,7 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
     applicationVersion: 14,
     operationVersion: 2,
     operationMaxVersion: 3,
+    operationFtVersion: 1,
   })
   const match = /^stations\/([0-9a-f-]{36})\/(.+)$/.exec(path)
   if (request.method === 'GET' && match && ['connect', 'observe'].includes(match[2])) {
@@ -65,6 +66,7 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
         operationVersion: advertisedOperationVersion(
           ['1','2'].includes(request.headers.get('x-nexus-operation-version')??'') ? Number(request.headers.get('x-nexus-operation-version')) : 0,
           request.headers.get('x-nexus-operation-max-version') === '3' ? 3 : 0,
+          request.headers.get('x-nexus-operation-ft-version') === '1' ? 1 : 0,
         ),
         identity: { stationId, accountId: row.account_id, generation: row.generation, expiresAt: now + 86400000 } })
     }

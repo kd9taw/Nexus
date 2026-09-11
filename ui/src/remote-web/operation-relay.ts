@@ -11,11 +11,12 @@ type Pending = {
   deviceId: string
   at: number
   mutation: boolean
+  stop?: true
   operationVersion?: OperationVersion
 }
 export type OperationCheckpoint = {
   version: 1
-  pending: { requestId: string; at: number; mutation: boolean; operationVersion?: OperationVersion }[]
+  pending: { requestId: string; at: number; mutation: boolean; stop?: true; operationVersion?: OperationVersion }[]
 }
 // Socket close notifications can race revocation. A lost send must close its
 // peer without aborting the authoritative revocation/checkpoint operation.
@@ -35,6 +36,7 @@ export class OperationRelay {
   private browsers = new Map<string, Browser>()
   private pending = new Map<string, Pending>()
   private rates = new Map<string, number[]>()
+  private stopRates = new Map<string, number[]>()
   sync(station: { peer: Peer; supported: boolean; operationVersion?: number } | null, browsers: Browser[], now: number): void {
     const next = new Map(browsers.map((b) => [b.sessionId, b]))
     for (const [id] of this.browsers)
@@ -42,6 +44,7 @@ export class OperationRelay {
         if (this.station?.supported && this.station.peer === station?.peer)
           deliver(this.station.peer, JSON.stringify({ type: 'operationDisconnect', sessionId: id }))
         this.rates.delete(id)
+        this.stopRates.delete(id)
       }
     if (this.station?.peer !== station?.peer) {
       for (const p of this.pending.values())
@@ -74,7 +77,8 @@ export class OperationRelay {
         sessionId,
         deviceId: browser.deviceId,
         at: now,
-        mutation: request.type === 'logManual' || request.type === 'stationControl'
+        mutation: request.type === 'logManual' || request.type === 'stationControl' || request.type === 'stopTransmit',
+        ...(request.type === 'stopTransmit' ? { stop: true as const } : {})
       }
       if (!this.station?.supported) {
         this.error(p, 'stationUnsupported')
@@ -82,13 +86,16 @@ export class OperationRelay {
       }
       const stationVersion = parseOperationVersion(this.station.operationVersion) ?? 1
       const version = Math.min(browserVersion, stationVersion) as OperationVersion
-      if (request.type === 'stationControl' && version < controlVersion(request.action)) {
+      if ((request.type === 'stationControl' && version < controlVersion(request.action)) || (request.type === 'stopTransmit' && version < 4)) {
         this.error(p, 'stationUnsupported')
         return
       }
-      const rate = (this.rates.get(sessionId) ?? []).filter((at) => now - at < 1000)
-      const mine = [...this.pending.values()].filter((p) => p.sessionId === sessionId)
-      if (rate.length >= 4 || mine.length >= 2 || (p.mutation && mine.some((p) => p.mutation))) {
+      const rates = p.stop ? this.stopRates : this.rates
+      const rate = (rates.get(sessionId) ?? []).filter((at) => now - at < 1000)
+      const mine = [...this.pending.values()].filter((pending) => pending.sessionId === sessionId && !!pending.stop === !!p.stop)
+      // One bounded Stop can pass a pending write/control and a heartbeat. It
+      // has its own rate budget; ordinary requests cannot consume that budget.
+      if (rate.length >= (p.stop ? 2 : 4) || mine.length >= (p.stop ? 1 : 2) || (!p.stop && p.mutation && mine.some((p) => p.mutation))) {
         this.error(p, 'remoteBusy')
         return
       }
@@ -97,7 +104,7 @@ export class OperationRelay {
         return
       }
       rate.push(now)
-      this.rates.set(sessionId, rate)
+      rates.set(sessionId, rate)
       this.pending.set(p.requestId, { ...p, operationVersion: version })
       if (
         !deliver(
@@ -132,7 +139,9 @@ export class OperationRelay {
       // A closed observer or expired request may leave a legitimate late reply.
       if (!p) return
       if (p.sessionId !== sessionId) throw Error()
+      if ('value' in response && !!p.stop !== ('stop' in response.value)) throw Error()
       this.pending.delete(response.requestId)
+      if ('value' in response && 'phase' in response.value && (p.operationVersion ?? 2) < 4) delete response.value.transmitEpoch
       if ('value' in response && 'controls' in response.value && response.value.controls) {
         // Keep capability vocabulary compatible even with pre-v3 stations that
         // advertised extra hints under v2. This only removes hints; it cannot
@@ -164,25 +173,30 @@ export class OperationRelay {
       version: 1,
       pending: [...this.pending.values()]
         .filter((p) => p.sessionId === sessionId)
-        .map(({ requestId, at, mutation, operationVersion }) => ({ requestId, at, mutation, ...(operationVersion ? { operationVersion } : {}) }))
+        .map(({ requestId, at, mutation, stop, operationVersion }) => ({ requestId, at, mutation, ...(stop ? { stop } : {}), ...(operationVersion ? { operationVersion } : {}) }))
     }
   }
   restore(sessionId: string, raw: OperationCheckpoint): void {
     const b = this.browsers.get(sessionId)
-    if (!b || raw.version !== 1 || !Array.isArray(raw.pending) || raw.pending.length > 2)
+    if (!b || raw.version !== 1 || !Array.isArray(raw.pending) || raw.pending.length > 3)
       throw Error('invalidOperationCheckpoint')
+    if (raw.pending.filter(p => p.stop).length > 1 || raw.pending.filter(p => !p.stop).length > 2) throw Error('invalidOperationCheckpoint')
+    const seen = new Set<string>()
     for (const p of raw.pending) {
-      object(p, ['requestId', 'at', 'mutation', ...('operationVersion' in p ? ['operationVersion'] : [])])
+      object(p, ['requestId', 'at', 'mutation', ...('stop' in p ? ['stop'] : []), ...('operationVersion' in p ? ['operationVersion'] : [])])
       if (
         !operationId(p.requestId) ||
         !Number.isSafeInteger(p.at) ||
         p.at < 0 ||
         typeof p.mutation !== 'boolean' ||
+        ('stop' in p && (p.stop !== true || p.operationVersion !== 4 || !p.mutation)) ||
+        seen.has(p.requestId) ||
         ('operationVersion' in p && !parseOperationVersion(p.operationVersion)) ||
         this.pending.has(p.requestId)
       )
         throw Error('invalidOperationCheckpoint')
-      this.pending.set(p.requestId, { ...p, sessionId, deviceId: b.deviceId })
+      seen.add(p.requestId)
     }
+    for (const p of raw.pending) this.pending.set(p.requestId, { ...p, sessionId, deviceId: b.deviceId })
   }
 }

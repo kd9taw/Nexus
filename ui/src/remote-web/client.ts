@@ -36,7 +36,7 @@ async function boundedJson<T>(path: string, options: RequestInit): Promise<T> {
 export class BrowserClient {
   constructor(private readonly auth: Auth0Client, readonly applicationVersion = 1, readonly operationVersion = 0) {}
   static async load(): Promise<BrowserClient | null> {
-    const config = await boundedJson<{ issuer: string; audience: string; clientId: string; ready: boolean; applicationVersion?: number; operationVersion?: number; operationMaxVersion?: number }>(
+    const config = await boundedJson<{ issuer: string; audience: string; clientId: string; ready: boolean; applicationVersion?: number; operationVersion?: number; operationMaxVersion?: number; operationFtVersion?: number }>(
       '/api/remote/config', { cache: 'no-store', credentials: 'omit' })
     if (!config.ready) return null
     const issuer = new URL(config.issuer)
@@ -51,7 +51,7 @@ export class BrowserClient {
     } else {
       try { await auth.checkSession() } catch { /* interactive login stays available */ }
     }
-    return new BrowserClient(auth, APPLICATION_VERSIONS.find(version=>version===config.applicationVersion)??1, advertisedOperationVersion(config.operationVersion, config.operationMaxVersion))
+    return new BrowserClient(auth, APPLICATION_VERSIONS.find(version=>version===config.applicationVersion)??1, advertisedOperationVersion(config.operationVersion, config.operationMaxVersion, config.operationFtVersion))
   }
   authenticated(): Promise<boolean> { return this.auth.isAuthenticated() }
   signIn(): Promise<void> { return this.auth.loginWithRedirect() }

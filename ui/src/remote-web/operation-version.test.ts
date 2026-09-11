@@ -14,6 +14,9 @@ it('preserves the original advertisement while explicitly negotiating expanded o
   expect(advertisedOperationVersion(1, 3)).toBe(1)
   expect(advertisedOperationVersion(2)).toBe(2)
   expect(advertisedOperationVersion(2, 3)).toBe(3)
+  expect(advertisedOperationVersion(2, 3, 1)).toBe(4)
+  expect(advertisedOperationVersion(2, 4, 1)).toBe(2)
+  expect(advertisedOperationVersion(2, 3, 2)).toBe(3)
   expect(advertisedOperationVersion(2, 999)).toBe(2)
   for (const base of [undefined, 0, 3, '2', null]) expect(advertisedOperationVersion(base, 3)).toBe(0)
   expect(controlVersion({ action: 'radio.filterWidth', mode: 'cw', expectedHz: 500, hz: 550 })).toBe(3)
@@ -28,7 +31,7 @@ it('preserves the original advertisement while explicitly negotiating expanded o
 })
 
 it('negotiates each legacy/new browser and station pair without upgrading the older peer', () => {
-  for (const browserVersion of [1, 2, 3]) for (const stationVersion of [1, 2, 3]) {
+  for (const browserVersion of [1, 2, 3, 4]) for (const stationVersion of [1, 2, 3, 4]) {
     const relay = new OperationRelay(), station = peer(), browser = peer(), sessionId = crypto.randomUUID()
     relay.sync({ peer: station, supported: true, operationVersion: stationVersion }, [{ peer: browser, sessionId, deviceId: crypto.randomUUID() }], 1000)
     const request = { type: 'state', requestId: crypto.randomUUID() }
@@ -59,7 +62,7 @@ it('refuses expanded actions before a legacy station receives them, and allows r
 })
 
 it('projects older station capability hints for each browser version after room hibernation', () => {
-  for (const version of [1, 2, 3]) {
+  for (const version of [1, 2, 3, 4]) {
     const relay = new OperationRelay(), station = peer(), browser = peer(), sessionId = crypto.randomUUID()
     const peers = [{ peer: browser, sessionId, deviceId: crypto.randomUUID() }]
     relay.sync({ peer: station, supported: true, operationVersion: 3 }, peers, 1000)
@@ -90,7 +93,7 @@ it('restores pre-v3 checkpoints conservatively and rejects malformed stored vers
   wire.controls!.capabilities = ['decoder', 'frequency', 'mode']
   restored.receiveStation({ type: 'operationResponse', sessionId, requestId, value: wire })
   expect(browser.frames[0].value.controls.capabilities).toEqual(['decoder'])
-  for (const version of [0, 4, '3', null]) {
+  for (const version of [0, 5, '3', null]) {
     expect(() => restored.restore(sessionId, { version: 1, pending: [{ requestId, at: 1000, mutation: false, operationVersion: version as never }] })).toThrow('invalidOperationCheckpoint')
   }
 })

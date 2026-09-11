@@ -25,6 +25,7 @@ export type ManualRecord = {
 }
 export type OperationRequest =
   | { type: 'state'; requestId: string }
+  | { type: 'stopTransmit'; requestId: string; stationBootId: string; leaseId: string; transmitEpoch: string }
   | { type: 'acquire'; requestId: string; stationBootId: string }
   | { type: 'heartbeat' | 'release'; requestId: string; leaseId: string }
   | { type: 'result'; requestId: string; operationId: string }
@@ -60,6 +61,7 @@ export type OperationState = {
   leaseRemainingMs: number | null
   actions: 'log.manual'[]
   txArmed: false
+  transmitEpoch?: string | null
   controls?: { context: ControlContext; capabilities: ControlCapability[] }
 }
 export type OperationOutcome =
@@ -69,7 +71,9 @@ export type OperationOutcome =
       reason: 'persistenceUnconfirmed' | 'alreadyPresent'
       operationId: string
     }
-export type OperationValue = OperationState | OperationOutcome | ControlOutcome
+export type StopOutcome = { stop: 'accepted' }
+export type OperationValue = OperationState | OperationOutcome | ControlOutcome | StopOutcome
+export const transmitEpoch = (v: unknown): v is string => typeof v === 'string' && /^[0-9a-f]{16}$/.test(v)
 export type OperationResponse =
   | { type: 'operationResponse'; requestId: string; value: OperationValue }
   | { type: 'operationResponse'; requestId: string; error: string }
@@ -144,6 +148,7 @@ export function operationRequest(raw: unknown): OperationRequest {
   const r = raw as Record<string, unknown>
   const extra = {
     state: [],
+    stopTransmit: ['stationBootId', 'leaseId', 'transmitEpoch'],
     acquire: ['stationBootId'],
     heartbeat: ['leaseId'],
     release: ['leaseId'],
@@ -163,6 +168,7 @@ export function operationRequest(raw: unknown): OperationRequest {
   if (!operationId(r.requestId)) invalid()
   for (const key of ['stationBootId', 'leaseId', 'operationId', 'commandWindowId'])
     if (key in r && !operationId(r[key])) invalid()
+  if (r.type === 'stopTransmit' && !transmitEpoch(r.transmitEpoch)) invalid()
   if (r.type === 'logManual' || r.type === 'stationControl') {
     if (
       !integer(r.expectedRevision) ||
@@ -180,6 +186,11 @@ export function operationRequest(raw: unknown): OperationRequest {
 export function operationValue(raw: unknown): OperationValue {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) invalid()
   const v = raw as Record<string, unknown>
+  if ('stop' in v) {
+    object(v, ['stop'])
+    if (v.stop !== 'accepted') invalid()
+    return raw as StopOutcome
+  }
   if ('operation' in v) return controlOutcome(v)
   if ('outcome' in v) {
     object(
@@ -209,6 +220,7 @@ export function operationValue(raw: unknown): OperationValue {
     'leaseRemainingMs',
     'actions',
     'txArmed',
+    ...('transmitEpoch' in v ? ['transmitEpoch'] : []),
     ...('controls' in v ? ['controls'] : [])
   ])
   if ('controls' in v) {
@@ -232,6 +244,7 @@ export function operationValue(raw: unknown): OperationValue {
   )
     invalid()
   const owned = v.phase === 'controlling'
+  if ('transmitEpoch' in v && v.transmitEpoch !== null && (!owned || !transmitEpoch(v.transmitEpoch))) invalid()
   if (
     owned
       ? !v.allowed ||
