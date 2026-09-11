@@ -1628,7 +1628,20 @@ fn workspace_return_retains_the_original_connection_and_confirms_before_native_c
                 > reads
         );
         if !adopted {
-            assert_eq!(engine_lock(&s.engine).settings(), &original, "{scenario}");
+            // Ordinary observation still follows the physical dial after an
+            // uncertain write. It must not adopt the requested workspace or
+            // profile changes, nor command a retry to reconcile the mismatch.
+            let e = engine_lock(&s.engine);
+            let mut observed = original.clone();
+            let (hz, band) = match scenario {
+                "ignored" => (14_250_650, "20m"),
+                "revoked_before" => (14_250_000, "20m"),
+                _ => (50_260_000, "6m"),
+            };
+            observed.dial_mhz = hz as f64 / 1_000_000.0;
+            observed.band = band.into();
+            assert_eq!(e.settings(), &observed, "{scenario}");
+            assert_eq!(e.tier(), Tier::TempoFast);
         }
         let after_poll = super::fm::writes(&peer);
         assert!(
