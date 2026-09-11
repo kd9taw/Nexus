@@ -587,10 +587,17 @@ for (const {applicationVersion,operating,sessionLayout} of [...[1,2,3,4,5,6,7,8,
       await until(`document.querySelector('.app')?.dataset.remoteStale!=='true'`)
       assert.equal(await evaluate(`document.querySelector('.app')===window.__sessionApp`),true)
       assert.equal(stationRequests.length,0);assert.equal(loggedRequests.length,0)
+      // Loss expires the lease. Recovery preserves the cockpit, not authority;
+      // a new explicit acquisition is required before testing explicit release.
+      await until(`!!${button('Take station control')}`)
+      assert.equal(loggingLease,null)
+      await click(button('Take station control'))
+      await until(`!!${button('Release station control')}`)
+      assert.notEqual(loggingLease,lease)
       await click(button('Release station control'))
       await until(`!!${button('Take station control')}`)
       assert.equal(loggingLease,null)
-      if(artifacts)await writeFile(join(artifacts,'session-results.json'),JSON.stringify({checks,stationActions:0,logWrites:0,releaseConfirmed:true,exceptions,unexpectedMessages},null,2))
+      if(artifacts)await writeFile(join(artifacts,'session-results.json'),JSON.stringify({checks,stationActions:0,logWrites:0,releaseConfirmed:true,reacquireRequired:true,exceptions,unexpectedMessages},null,2))
       assert.equal(exceptions,0);assert.equal(unexpectedMessages,0)
       console.log('Compiled session layout: eight compact layouts, details, preserved authority and explicit release passed');return
     }
