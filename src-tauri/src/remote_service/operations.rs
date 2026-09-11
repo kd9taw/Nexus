@@ -211,6 +211,9 @@ struct Receipt {
     at: Instant,
     value: Value,
     control: Option<Completion>,
+    // The result payload can require a newer decoder than the Result request.
+    // Never send v4 QSO evidence to a browser which only understands v2/v3.
+    result_version: u8,
 }
 impl Receipt {
     fn value(&self) -> Value {
@@ -701,8 +704,14 @@ impl Authority {
                             && r.device == device
                             && (version >= 2 || r.control.is_none())
                     })
-                    .map(Receipt::value)
                     .ok_or("resultExpired")
+                    .and_then(|receipt| {
+                        if version < receipt.result_version {
+                            Err("stationUnsupported")
+                        } else {
+                            Ok(receipt.value())
+                        }
+                    })
             }
             Request::LogManual {
                 station_boot_id,
@@ -811,6 +820,7 @@ impl Authority {
                             at: current,
                             value: value.clone(),
                             control: Some(completion),
+                            result_version: 4,
                         });
                         while c.receipts.len() > 1024 {
                             c.receipts.pop_front();
@@ -868,6 +878,7 @@ impl Authority {
                         at: current,
                         value: value.clone(),
                         control: Some(completion),
+                        result_version: 2,
                     });
                     while c.receipts.len() > 1024 {
                         c.receipts.pop_front();
@@ -925,6 +936,7 @@ impl Authority {
                     at: current,
                     value: value.clone(),
                     control: None,
+                    result_version: 1,
                 });
                 while c.receipts.len() > 1024 {
                     c.receipts.pop_front();
