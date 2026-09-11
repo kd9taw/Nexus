@@ -166,7 +166,9 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
         // the actual enabled, hit-target and mouse-event checks below intact.
         for(let attempt=0;attempt<30&&!point;attempt++){
           await until(`(()=>{const e=${expression};return !!e&&!e.disabled})()`)
-          await evaluate(`(()=>{const e=${expression};if(e&&!e.disabled)e.scrollIntoView({block:'nearest',behavior:'instant'})})()`)
+          // Center controls below the sticky session banner. Nearest can leave
+          // an offscreen tier row behind it after switching cockpit tabs.
+          await evaluate(`(()=>{const e=${expression};if(e&&!e.disabled)e.scrollIntoView({block:'center',behavior:'instant'})})()`)
           await settledLayout()
           // A heartbeat can disable the control between CDP read turns. Wait
           // again BEFORE the single mouse gesture; never retry a sent click.
