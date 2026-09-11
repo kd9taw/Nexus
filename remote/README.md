@@ -1,5 +1,10 @@
 # Nexus Remote browser pilot
 
+The compact session bar keeps control ownership, Release and unresolved command
+recovery above the existing Nexus workspace. **Remote access** opens connection
+help and Disconnect. Expanding those details leaves the cockpit and current
+authority intact; connection recovery still requires a new explicit acquisition.
+
 This service connects an approved browser to an outbound Nexus desktop connection.
 It reuses the existing Nexus application for station observation and adds
 separately authorized manual general-log QSO entry, receiver/amplifier controls

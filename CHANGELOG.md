@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Compact Remote session status:** Control ownership and Release stay above
+  the existing Nexus workspace, with connection help and Disconnect under
+  Remote access. Loss warnings and unresolved command recovery remain visible;
+  expanding the details preserves the current cockpit and session.
+
 - **Remote Phone mode picker:** The existing AUTO, USB, LSB and AM buttons use
   confirmed mode and frequency readback through a compatible station. Choices
   retain desktop behavior, remain transient and require an idle, disarmed radio.
