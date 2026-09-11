@@ -20,6 +20,8 @@ mod dsp;
 mod filter;
 mod fm;
 pub use fm::RepeaterConfig;
+mod handoff;
+pub use handoff::{Handoff, HandoffReadback};
 mod level;
 
 /// A station-resolved CAT position, not an arbitrary browser command string.

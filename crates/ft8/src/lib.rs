@@ -272,9 +272,27 @@ pub fn decode_frame_a7(
 /// tracker). Call on band change / QSO change so a new band's audio is not
 /// probed with stale prior-cycle hypotheses. Mirrors `tempo_fast::harq_reset`.
 pub fn a7_reset() {
-    let _guard = modem_lock();
-    unsafe {
-        tempo_fast_sys::ft8_a7_reset();
+    A7ResetGuard(modem_lock()).reset();
+}
+
+/// Exclusive permission to reset FT8's prior-cycle decode table. This holds the
+/// same process-wide modem mutex as every decode/encode call. It is not radio or
+/// transmit authority, and must not be held across hardware I/O.
+pub struct A7ResetGuard(std::sync::MutexGuard<'static, ()>);
+
+impl A7ResetGuard {
+    /// A remote context transition can refuse a busy decoder before changing
+    /// native state, then recheck its own authority with serialization held.
+    pub fn try_acquire() -> Option<Self> {
+        tempo_fast_sys::try_modem_lock().map(Self)
+    }
+
+    /// Consume the held lock at the native reset point without locking again.
+    pub fn reset(self) {
+        let _guard = self.0;
+        unsafe {
+            tempo_fast_sys::ft8_a7_reset();
+        }
     }
 }
 

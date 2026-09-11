@@ -263,4 +263,72 @@ mod tests {
             assert_eq!(serde_json::to_value(engine.settings()).unwrap(), before);
         }
     }
+
+    fn decoder_guard() -> modes::Ft8A7ResetGuard {
+        loop {
+            if let Some(guard) = modes::Ft8A7ResetGuard::try_acquire() {
+                return guard;
+            }
+            std::thread::yield_now();
+        }
+    }
+
+    #[test]
+    fn guarded_selection_keeps_native_profiles_context_and_stop_effects() {
+        let (mut local, incoming) = station();
+        let (mut guarded, guarded_incoming) = station();
+        assert_eq!(incoming, guarded_incoming);
+        for engine in [&mut local, &mut guarded] {
+            engine.aprs_fm = true;
+            engine.fm_channel = true;
+            engine.sideband_override = Some("LSB".into());
+            engine.observed_split = Some((true, Some(7_124_000), 0));
+            engine.split_tx_mhz = Some(7.124);
+            engine.immediate_retune = false;
+            engine.slot_tx_abort = false;
+            engine.cw_abort = false;
+            engine.rtty_abort = false;
+            engine.psk_abort = false;
+            engine.sstv_abort = false;
+        }
+        let epoch = guarded.decode_epoch;
+        let generation = guarded.tx_gate_gen;
+        local.set_active_radio(incoming);
+        let guard = decoder_guard();
+        assert!(modes::Ft8A7ResetGuard::try_acquire().is_none());
+        guarded.set_active_radio_with_decoder_guard(incoming, guard);
+        assert_eq!(guarded.settings, local.settings);
+        assert_eq!(guarded.decode_epoch, epoch.wrapping_add(1));
+        assert_eq!(guarded.decode_epoch, local.decode_epoch);
+        assert_eq!(guarded.tx_gate_gen, generation.wrapping_add(1));
+        assert_eq!(guarded.tx_gate_gen, local.tx_gate_gen);
+        assert!(!guarded.tx_enabled());
+        assert!(!guarded.aprs_fm && !guarded.fm_channel);
+        assert!(guarded.sideband_override.is_none());
+        assert!(guarded.split_tx_mhz.is_none() && guarded.observed_split.is_none());
+        assert!(guarded.split_dirty && guarded.immediate_retune);
+        assert!(guarded.slot_tx_abort && guarded.cw_abort && guarded.rtty_abort);
+        assert!(guarded.psk_abort && guarded.sstv_abort);
+        // A complete reverse switch proves the consumed guard was released,
+        // and retains the outgoing radio's banked live edits.
+        guarded.set_active_radio_with_decoder_guard(0, decoder_guard());
+        local.set_active_radio(0);
+        assert_eq!(guarded.settings, local.settings);
+        assert_eq!(guarded.settings.audio_in, "outgoing-live-input");
+        assert!(guarded.settings.amp_follow_band);
+    }
+
+    #[test]
+    fn guarded_no_op_does_not_retire_context_or_reset_decoder() {
+        let (mut engine, _) = station();
+        let before = engine.settings.clone();
+        let (epoch, generation) = (engine.decode_epoch, engine.tx_gate_gen);
+        for id in [0, u32::MAX] {
+            engine.set_active_radio_with_reset(id, || panic!("no-op must not reset FT8"));
+            engine.set_active_radio_with_decoder_guard(id, decoder_guard());
+            assert_eq!(engine.settings, before);
+            assert_eq!(engine.decode_epoch, epoch);
+            assert_eq!(engine.tx_gate_gen, generation);
+        }
+    }
 }

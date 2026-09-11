@@ -46,7 +46,7 @@ impl RepeaterConfig {
 }
 
 impl Rig {
-    fn remote_read_repeater(
+    pub(super) fn remote_read_repeater(
         &mut self,
         permission: &WritePermission,
     ) -> Result<RepeaterConfig, Reason> {

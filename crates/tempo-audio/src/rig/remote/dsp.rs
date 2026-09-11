@@ -3,7 +3,7 @@
 use super::*;
 
 impl Rig {
-    fn remote_read_receiver_dsp(
+    pub(super) fn remote_read_receiver_dsp(
         &mut self,
         value: ReceiverDsp,
         permission: &WritePermission,

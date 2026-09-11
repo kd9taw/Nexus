@@ -88,6 +88,13 @@ Radio selection has a passive native Settings projection sharing the local
 handoff's outgoing-profile banking, daemon-port separation and monitored-or-saved
 tune resolution. The projection grants no hardware access and cannot be applied
 wholesale; actual selection still owns context retirement and hardware completion.
+The native selector also accepts an already-held FT8 reset guard, acquired without
+waiting on the same process-wide modem mutex. Local selection keeps its blocking
+reset at the same lifecycle point. An incoming-radio CAT transaction can combine
+retuning, requested levels, AGC and FM shift/offset/tone under the original permit,
+then re-read the complete result. Unset controls remain unset. These primitives
+do not yet acquire/adopt a pool connection, persist a selection or enable a browser
+radio picker; those owner and transport steps remain required.
 Radio handoffs, mode-specific operating actions and remote transmission remain
 incomplete; no arbitrary Tauri bridge exists.
 See [the Remote contract and limits](remote/README.md#existing-nexus-workspace).

@@ -5,7 +5,7 @@
 #![allow(non_camel_case_types)]
 
 use std::os::raw::{c_char, c_float, c_int, c_void};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Mutex, MutexGuard, TryLockError};
 
 /// Serializes ALL access to the non-thread-safe `libtempo` modem.
 ///
@@ -16,7 +16,7 @@ use std::sync::{Mutex, MutexGuard};
 /// lock would not prevent an FT1 decode from racing an FT8 decode on the shared
 /// FFTW plan cache. It lives here because this crate owns the one native library.
 ///
-/// ⚠️ **Acquire it with [`modem_lock`], never by calling `.lock().unwrap()` on this
+/// ⚠️ **Acquire it with [`modem_lock`] or [`try_modem_lock`], never by calling `.lock().unwrap()` on this
 /// static directly.** It stays public for documentation and for the tests that reason
 /// about it; the unwrap is what turned one panic into a dead radio for the session.
 pub static MODEM_LOCK: Mutex<()> = Mutex::new(());
@@ -49,6 +49,16 @@ pub static MODEM_LOCK: Mutex<()> = Mutex::new(());
 /// (`unwrap_or_else(|e| e.into_inner())`); the modem was the outlier.
 pub fn modem_lock() -> MutexGuard<'static, ()> {
     MODEM_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Try the same modem serialization without waiting for an active decode.
+/// Poison recovery is identical to [`modem_lock`]; only contention returns None.
+pub fn try_modem_lock() -> Option<MutexGuard<'static, ()>> {
+    match MODEM_LOCK.try_lock() {
+        Ok(guard) => Some(guard),
+        Err(TryLockError::Poisoned(error)) => Some(error.into_inner()),
+        Err(TryLockError::WouldBlock) => None,
+    }
 }
 
 /// Total channel symbols per FT1 frame.
@@ -1199,7 +1209,24 @@ mod tests {
         // The unwrap that used to be here would panic on every one of these.
         for _ in 0..3 {
             let _guard = modem_lock();
+            assert!(
+                try_modem_lock().is_none(),
+                "a held modem must stay exclusive"
+            );
         }
+
+        // The nonblocking owner path recovers the SAME poisoned mutex too.
+        // Other modem tests may briefly hold it, so contention itself is not
+        // evidence of failed poison recovery.
+        let recovered = loop {
+            if let Some(guard) = try_modem_lock() {
+                break guard;
+            }
+            std::thread::yield_now();
+        };
+        assert!(MODEM_LOCK.is_poisoned());
+        assert!(try_modem_lock().is_none());
+        drop(recovered);
 
         // And the modem still answers — a real FFI call through the recovered lock.
         let nmax = {

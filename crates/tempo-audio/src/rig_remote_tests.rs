@@ -16,6 +16,8 @@ mod dsp_tests;
 mod filter_tests;
 #[path = "rig_fm_tests.rs"]
 mod fm_tests;
+#[path = "rig_handoff_tests.rs"]
+mod handoff_tests;
 #[path = "rig_level_tests.rs"]
 mod level_tests;
 

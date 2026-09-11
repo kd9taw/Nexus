@@ -4,7 +4,7 @@ use super::*;
 use tempo_app::engine::remote_radio::RadioLevel;
 
 impl Rig {
-    fn remote_read_level_value(
+    pub(super) fn remote_read_level_value(
         &mut self,
         level: RadioLevel,
         permission: &WritePermission,

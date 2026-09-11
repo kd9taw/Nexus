@@ -5130,6 +5130,18 @@ impl Engine {
     /// `apply_settings`), so swinging radios mid-session never resets the operator to Chat. No-op if
     /// `id` isn't a configured radio or is already active.
     pub fn set_active_radio(&mut self, id: u32) {
+        self.set_active_radio_with_reset(id, modes::reset_ft8_a7);
+    }
+
+    /// The same native handoff after its owner has acquired decoder serialization
+    /// without waiting. The owner must separately validate Remote authority and
+    /// hardware completion; the decoder guard grants neither. Local selection
+    /// retains its existing blocking reset at the same point in the lifecycle.
+    pub fn set_active_radio_with_decoder_guard(&mut self, id: u32, guard: modes::Ft8A7ResetGuard) {
+        self.set_active_radio_with_reset(id, || guard.reset());
+    }
+
+    fn set_active_radio_with_reset(&mut self, id: u32, reset: impl FnOnce()) {
         if id == self.settings.active_radio || !self.settings.radios.iter().any(|p| p.id == id) {
             return;
         }
@@ -5205,7 +5217,7 @@ impl Engine {
         self.app.clear_stations();
         // The a7 cross-cycle AP table holds the OLD radio's decodes — replaying
         // them as AP hypotheses on the new radio's band would seed wrong-call decodes.
-        modes::reset_ft8_a7();
+        reset();
         self.sideband_override = None;
         // Flip active + mirror the new profile's CAT/audio into the flat fields — Transport::
         // from_settings then differs and the loop's existing swap tears down the old rig + opens
