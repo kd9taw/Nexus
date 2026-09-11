@@ -40,6 +40,15 @@ pub struct Configuration {
 }
 
 impl Engine {
+    /// Host wiring, not a saved operator setting or a browser permission.
+    pub fn configure_remote_selection_host(&mut self, ready: bool) {
+        self.remote_selection_host_ready = ready;
+    }
+
+    pub fn remote_selection_host_ready(&self) -> bool {
+        self.remote_selection_host_ready
+    }
+
     /// A configured id, not an address, port, profile patch or arbitrary command.
     /// No radio/profile/decoder mutation occurs at admission. The caller still
     /// needs a native worker completion before reporting a successful selection.

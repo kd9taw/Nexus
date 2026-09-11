@@ -8,6 +8,7 @@ impl Rig {
     /// Native handoff's best-effort CAT Morse flush, with the original permit
     /// at the socket. Some rigs do not implement this command; its reply alone
     /// is not evidence that all external keyer queues stopped.
+    #[cfg(feature = "device")]
     pub(crate) fn remote_stop_morse(
         &mut self,
         permission: &WritePermission,

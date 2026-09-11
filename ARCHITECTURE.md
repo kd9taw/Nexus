@@ -110,8 +110,15 @@ audio. The next native tick rebuilds capture and retains its ordinary unkey
 cleanup without replaying the completed tuning transaction. Preparation samples
 are not relabeled as live incoming readings: the next read binds the new
 connection before I/O. Pending local hardware commands keep their original owner.
-Host device synchronization and the hosted selection action remain unconnected;
-this internal worker does not yet enable a browser radio picker.
+After adoption, a bounded host notification reconciles the current rotator
+profile outside the radio loop. Host synchronization acquires its daemon owner
+before reading current Engine settings, then releases Engine before device I/O;
+local Settings saves and selection use the same ordering. The operation-v3
+`radioSelection` capability connects the existing radio pills and Settings Make
+active action to this owner transaction. Browser completion requires a later
+snapshot and Settings projection naming the selected radio. This capability
+neither grants peg-lock nor arms TX. It currently requires an idle native station;
+shared-port/keyer, physical capture, slow CAT and WAN behavior still need acceptance.
 Monitor connection opens now take a per-radio ownership token before releasing
 the pool lock for I/O. Reconciliation and local handoff respect that token, so
 an in-flight open finishes before another caller can open or adopt that radio.

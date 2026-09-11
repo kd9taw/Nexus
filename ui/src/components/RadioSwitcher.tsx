@@ -1,4 +1,4 @@
-import { useStationControl } from '../stationAccess'
+import { useStationControl, useStationCapability } from '../stationAccess'
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every operator-visible
 // string comes from the catalog. What does NOT: the radio's own profile name, its band label and
 // its dial frequency — all three are interpolated as the tokens they are.
@@ -21,6 +21,7 @@ interface Props {
  * never sees this (the whole multi-radio surface stays invisible until a 2nd radio is added). */
 export function RadioSwitcher({ radios, pegged, onSwitch, onTogglePeg }: Props) {
   const control = useStationControl()
+  const select = useStationCapability('radioSelection')
   if (radios.length < 2) return null
   return (
     <div className="radio-switcher" role="group" aria-label={t('radios.switcher.aria')}>
@@ -31,7 +32,7 @@ export function RadioSwitcher({ radios, pegged, onSwitch, onTogglePeg }: Props) 
         // radio's own CAT trouble already shows in its cockpit's "no rig control" badge.
         const catDead = !r.isActive && r.catOk === false
         return (
-          <button disabled={!control}
+          <button disabled={!select}
             key={r.id}
             type="button"
             className={`radio-pill${r.isActive ? ' active' : ''}${r.transmitting ? ' tx' : ''}${catDead ? ' cat-dead' : ''}`}

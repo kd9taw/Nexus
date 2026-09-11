@@ -37,6 +37,7 @@ impl RadioLoop {
         last_active: &mut u32,
         pending: &std::sync::atomic::AtomicBool,
         mut open: impl FnMut(&Transport) -> (Rig, Option<CatDaemon>, Option<bool>),
+        notify_host: impl FnOnce(),
     ) {
         let (request, configuration) = {
             let mut eng = engine_lock(engine);
@@ -170,7 +171,7 @@ impl RadioLoop {
             return;
         };
         let radio = request.settings().active_radio;
-        request.commit_with_install(
+        let adopted = request.commit_with_install(
             &mut eng,
             Readback {
                 radio,
@@ -202,6 +203,9 @@ impl RadioLoop {
         drop(eng);
         drop(connections);
         drop(incoming);
+        if adopted {
+            notify_host();
+        }
         // The normal next tick creates the incoming observation token BEFORE
         // its next read. Preparation readings are transaction evidence; they
         // must not be re-stamped as a newly started live-stream measurement.

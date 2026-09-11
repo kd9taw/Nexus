@@ -231,6 +231,17 @@ pub fn execute(
     }
     match action {
         #[cfg(feature = "radio")]
+        Action::Radio { radio_id } => {
+            if !engine.remote_selection_host_ready() {
+                return Err(Reason::UnsupportedAction);
+            }
+            return engine.queue_remote_radio_selection(
+                *radio_id,
+                context.radio_connection.ok_or(Reason::ReadingUnavailable)?,
+                permit,
+            );
+        }
+        #[cfg(feature = "radio")]
         Action::Level {
             mode,
             level,
@@ -722,6 +733,7 @@ pub fn capabilities(version: u8) -> Vec<&'static str> {
                 "phoneMode",
                 "workSpot",
                 "radioLevels",
+                "radioSelection",
             ]
         }
     }

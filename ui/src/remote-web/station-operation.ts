@@ -46,12 +46,12 @@ export type ControlContext = {
   ampConnection: number | null
   ampReadSequence: number | null
 }
-export const CONTROL_CAPABILITIES = ['decoder', 'radio', 'amplifier', 'frequency', 'mode', 'tier', 'ampFollowBand', 'workspace', 'decoderSettings', 'receiverSettings', 'receiverGain', 'bandSelection', 'receiverFilter', 'receiverDsp', 'phoneMode', 'workSpot', 'radioLevels'] as const
+export const CONTROL_CAPABILITIES = ['decoder', 'radio', 'amplifier', 'frequency', 'mode', 'tier', 'ampFollowBand', 'workspace', 'decoderSettings', 'receiverSettings', 'receiverGain', 'bandSelection', 'receiverFilter', 'receiverDsp', 'phoneMode', 'workSpot', 'radioLevels', 'radioSelection'] as const
 export type ControlCapability = (typeof CONTROL_CAPABILITIES)[number]
 // A new action cannot silently inherit a broader capability by its prefix.
 const ACTION_CAPABILITY: Record<StationAction['action'], ControlCapability> = {
   'radio.level': 'radioLevels',
-  'radio.disarm': 'radio', 'radio.select': 'radio', 'radio.frequency': 'frequency',
+  'radio.disarm': 'radio', 'radio.select': 'radioSelection', 'radio.frequency': 'frequency',
   'radio.band': 'bandSelection', 'radio.mode': 'mode', 'radio.tier': 'tier', 'radio.workspace': 'workspace',
   'radio.filterWidth': 'receiverFilter',
   'radio.function': 'receiverDsp', 'radio.agc': 'receiverDsp',

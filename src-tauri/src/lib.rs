@@ -33,6 +33,7 @@
 /// chain registry. Inert at runtime — see the module docs.
 mod chains;
 mod pouncer;
+mod profile_sync;
 mod remote_monitor;
 mod remote_service;
 /// Pins `assetProtocol.scope` to where SSTV images are actually written — they are one fact in
@@ -8477,8 +8478,6 @@ fn apply_and_persist(
         settings.lotw_max_age_days,
         std::sync::atomic::Ordering::Relaxed,
     );
-    // Integrated rotator daemon follows the settings (spawn/respawn/kill).
-    sync_rotctld(&settings);
     // Capture the feed config before `settings` moves into the engine.
     // `cluster_active()`, not the raw setting: Unassisted mode must also stop the
     // cluster/RBN feeds from STARTING, not just discard what they deliver.
@@ -8559,6 +8558,8 @@ fn apply_and_persist(
         }
         eng.snapshot()
     }; // release the engine lock before spawning feed threads
+       // Resolve the authoritative merged profile after the Engine commit.
+    sync_rotctld(&state);
 
     // The live feeds (cluster telnet login, PSKR MQTT topic filters) are BOUND to
     // the callsign — a changed call tears them down, clears old-call buffers, and
@@ -9467,7 +9468,21 @@ fn effective_rotator_addr(st: &tempo_app::settings::Settings) -> Option<String> 
 /// nothing, forever, and re-saving Settings did not bring it back — the params matched, so this
 /// function took the "running with the right params" arm and never looked at the corpse. It
 /// looks now, in both places: after the spawn, and on every later sync.
-fn sync_rotctld(st: &tempo_app::settings::Settings) {
+fn sync_rotctld(engine: &SharedEngine) {
+    // Serialize first, then read current settings. A delayed notification must
+    // never restore a snapshot from before a newer local profile selection.
+    // Drop Engine before any daemon operation; the lock order is ROTCTLD -> Engine.
+    profile_sync::with_current(
+        &ROTCTLD,
+        || engine_lock(engine).settings().clone(),
+        |owner, settings| sync_rotctld_owned(owner, &settings),
+    );
+}
+
+fn sync_rotctld_owned(
+    g: &mut Option<(tempo_audio::rigctld_proc::RigctldProc, RotctldParams)>,
+    st: &Settings,
+) {
     let want = st.rotator_host.trim().is_empty() && st.rotator_model > 0;
     let params = (
         st.rotator_model,
@@ -9475,7 +9490,6 @@ fn sync_rotctld(st: &tempo_app::settings::Settings) {
         st.rotator_baud,
         rotctld_port_for(st),
     );
-    let Ok(mut g) = ROTCTLD.lock() else { return };
     // Liveness is a `&mut` question (`try_wait`), so it is asked BEFORE the match rather than in
     // a pattern guard. A daemon that died takes the respawn path, which is SAFE here for the
     // same reason the CAT daemon's rebuild is: while it is dead there is no rotator channel to
@@ -10975,18 +10989,18 @@ fn set_rx_gain(state: State<'_, SharedEngine>, gain: f32) -> Result<AppSnapshot,
 /// `apply_settings`). Persisted so the active radio survives a restart. Returns the snapshot.
 #[tauri::command(async)]
 fn set_active_radio(state: State<'_, SharedEngine>, id: u32) -> Result<AppSnapshot, String> {
-    let (snap, settings) = {
+    let snap = {
         let mut eng = engine_lock(&state);
         eng.set_active_radio(id);
         if let Err(e) = eng.settings().save(&settings_path()) {
             eprintln!("tempo: set_active_radio save failed: {e}");
         }
-        (eng.snapshot(), eng.settings().clone())
+        eng.snapshot()
     }; // drop the engine lock before touching the rotator daemon
        // Each radio carries its own rotator — re-sync the rotctld daemon to the newly-active radio's
        // rotator config (mirrors set_settings). The rig loop swaps CAT/audio on its own via the flat
        // mirror, but the rotator daemon only follows an explicit sync.
-    sync_rotctld(&settings);
+    sync_rotctld(&state);
     Ok(snap)
 }
 
@@ -20549,7 +20563,8 @@ pub fn run() {
 
     // Build the radio config from settings before the engine takes ownership.
     #[cfg(feature = "radio")]
-    let radio_cfg = tempo_audio::service::RadioConfig {
+    let mut radio_cfg = tempo_audio::service::RadioConfig {
+        on_active_profile_change: None,
         // The SAME feed the UI reads (registered as managed state below) and the tee the
         // rx-dsp thread drains. The waterfall row is produced on that thread, not on the radio
         // loop, so blocking CAT can no longer starve it — see tempo-audio/src/rxtap.rs.
@@ -20641,6 +20656,18 @@ pub fn run() {
     // second chain — and re-registering chains when the radio set changes is the first thing the
     // cap-lift has to solve. It is not papered over here, where it would be untestable.
     let engine: SharedEngine = Arc::new(Mutex::new(Engine::with_settings(settings)));
+    #[cfg(feature = "radio")]
+    {
+        let host_engine = engine.clone();
+        radio_cfg.on_active_profile_change =
+            profile_sync::notifier(move || sync_rotctld(&host_engine))
+                .map_err(|error| {
+                    eprintln!("tempo: active-profile notification unavailable: {error}")
+                })
+                .ok();
+        engine_lock(&engine)
+            .configure_remote_selection_host(radio_cfg.on_active_profile_change.is_some());
+    }
     // Re-seed the decoder's hash table from the logbook so <...> compound-call
     // tokens resolve right after launch (the Fortran table dies with the process).
     {
@@ -20680,10 +20707,7 @@ pub fn run() {
     // up here with the other network feeds rather than when the APRS view is entered.
     sync_aprs_is_feed(&engine);
     // Integrated rotator: launch the bundled rotctld when a model is configured.
-    {
-        let eng = engine_lock(&engine);
-        sync_rotctld(eng.settings());
-    }
+    sync_rotctld(&engine);
     if region_enabled {
         start_pskr_region_feed(&region_paths, &cluster_call, &region_grid);
     }

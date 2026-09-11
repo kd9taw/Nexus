@@ -67,6 +67,9 @@ fn apply(
     open: impl FnMut(&Transport) -> (Rig, Option<CatDaemon>, Option<bool>),
 ) {
     let mut active = engine_lock(&s.engine).settings().active_radio;
+    let before = active;
+    let notifications = std::cell::Cell::new(0);
+    let engine = s.engine.clone();
     let pending = AtomicBool::new(false);
     s.state.apply_remote_selection(
         &s.engine,
@@ -76,7 +79,19 @@ fn apply(
         &mut active,
         &pending,
         open,
+        || {
+            assert!(
+                engine.try_lock().is_ok(),
+                "host notification cannot hold Engine"
+            );
+            assert!(
+                pool.try_lock().is_ok(),
+                "host notification cannot hold pool"
+            );
+            notifications.set(notifications.get() + 1);
+        },
     );
+    assert_eq!(notifications.get(), usize::from(active != before));
     assert!(!pending.load(Ordering::Relaxed));
     assert_eq!(active, engine_lock(&s.engine).settings().active_radio);
 }

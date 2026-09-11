@@ -2240,6 +2240,7 @@ pub struct Engine {
     remote_radio_command: Option<remote_radio::Request>,
     remote_radio_selection: Option<remote_selection::Request>,
     remote_settings_path: Option<std::path::PathBuf>,
+    remote_selection_host_ready: bool,
     /// The transponder the operator selected for the tracked bird, plus their
     /// position inside its passband and what was last written to the radio.
     /// `None` = no satellite tuning in force, which is every terrestrial path.
@@ -4301,6 +4302,7 @@ impl Engine {
             remote_radio_command: None,
             remote_radio_selection: None,
             remote_settings_path: None,
+            remote_selection_host_ready: false,
             sat_tune: None,
             sat_dial_owner: None,
             sat_last_rate: None,

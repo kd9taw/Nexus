@@ -1,3 +1,4 @@
+import { useStationCapability } from '../stationAccess'
 import { useNavigation } from '../remote-web/useNavigation'
 import { settingsForm, type SettingsConfiguration } from '../remote-web/configuration'
 import { useAmplifierFollow } from '../remote-web/useAmplifierFollow'
@@ -867,6 +868,7 @@ export function SettingsPanel({
 }: Props) {
   const configuration=useNavigation<SettingsConfiguration>('settings')
   const remote=configuration.remote
+  const canSelectRadio = useStationCapability('radioSelection')
   const remoteFollow = useAmplifierFollow(configuration.value, activeRadioId, configuration.refresh)
   const remoteGain = useReceiverGain(configuration.value, activeRadioId, radio, configuration.refresh)
   // Restore-from-backup (#28 item 4). A hidden file input, the same shape the Logbook's ADIF
@@ -3542,7 +3544,7 @@ export function SettingsPanel({
                         </button>
                       )}
                       {!isActive && (
-                        <button disabled={remote}
+                        <button disabled={!canSelectRadio}
                           type="button"
                           className="settings-refresh"
                           onClick={() => handleMakeActive(r.id)}

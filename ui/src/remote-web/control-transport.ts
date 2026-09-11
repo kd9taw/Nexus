@@ -1,7 +1,7 @@
 import type { ApplicationTransport } from '../applicationTransport'
 import type { ApplicationClient } from './application-client'
 import type { OperationClient } from './operation-client'
-import { stationAction, type StationAction } from './station-operation'
+import { stationAction, type StationAction, type ControlContext } from './station-operation'
 import { APPLICATION_TIMEOUT_MS } from './application-protocol'
 import type { ApplicationCommand } from './application-protocol'
 import { readBandChoices } from './band-choices'
@@ -14,6 +14,11 @@ export function controlTransport(reads: ApplicationTransport, client: Applicatio
     async invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
       let action: StationAction | null = null, read = ''
       switch (command) {
+        case 'set_active_radio':
+          if (!args || Object.keys(args).some(k => k !== 'id')) throw Error('invalidOperation')
+          action = stationAction({ action: 'radio.select', radioId: args.id })
+          read = 'get_snapshot'
+          break
         case 'work_spot':
           if (!args || Object.keys(args).some(k => !['mode', 'freqMhz', 'band', 'call', 'tier'].includes(k)) || (args.tier !== null && args.tier !== undefined)) throw Error('applicationUnsupported')
           action = stationAction({ action: 'radio.workSpot', mode: args.mode, dialMhz: args.freqMhz, band: args.band, call: args.call })
@@ -68,19 +73,36 @@ export function controlTransport(reads: ApplicationTransport, client: Applicatio
           break
       }
       if (!action) return reads.invoke<T>(command, args)
-      const result = await operations.control(action)
+      let displayed: ControlContext | undefined
+      if (action.action === 'radio.select') {
+        const context = operations.getSnapshot().state?.controls?.context
+        if (!context) throw Error('readingUnavailable')
+        displayed = { ...context }
+        const snapshot = await reads.invoke<import('../types').AppSnapshot>('get_snapshot')
+        if (snapshot.activeRadioId !== displayed.radioId || !snapshot.radios?.some(r => r.id === action.radioId)) throw Error('readingUnavailable')
+      }
+      const result = await operations.control(action, displayed)
       if (result.outcome !== 'applied') throw Error(result.outcome === 'rejected' ? result.reason : 'operationUnknown')
       if (action.action === 'radio.workSpot' && result.evidence !== 'radioReadback') throw Error('operationUnknown')
+      if (action.action === 'radio.select' && result.evidence !== 'radioReadback' && !(displayed?.radioId === action.radioId && result.evidence === 'stationState')) throw Error('operationUnknown')
       if (!read) return undefined as T
       // The UI receives a later station sample, not an optimistic local copy or
       // the pre-command snapshot still in the stream's cache.
       const after = performance.now()
+      // Keep Settings in the subscription even when its panel is closed.
+      // A cache-age check alone cannot request a new station sample.
+      if (action.action === 'radio.select') await reads.invoke('get_settings')
       while (performance.now() - after < APPLICATION_TIMEOUT_MS) {
-        if (client.age(read as ApplicationCommand) <= performance.now() - after) {
+        if (client.age(read as ApplicationCommand) <= performance.now() - after && (action.action !== 'radio.select' || client.age('get_settings') <= performance.now() - after)) {
           const value = await reads.invoke<T>(read)
           if (action.action === 'radio.workSpot') {
             const radio = (value as import('../types').AppSnapshot)?.radio
             if (!radio || Math.round(radio.dialMhz * 1e6) !== Math.round(action.dialMhz * 1e6) || radio.operatingMode?.toLowerCase() !== action.mode) throw Error('readingUnavailable')
+          }
+          if (action.action === 'radio.select') {
+            const snapshot = value as import('../types').AppSnapshot
+            const settings = await reads.invoke<import('../types').Settings>('get_settings')
+            if (snapshot.activeRadioId !== action.radioId || settings.activeRadio !== action.radioId) throw Error('readingUnavailable')
           }
           return value
         }

@@ -11,6 +11,9 @@ mod receiver_dsp;
 #[path = "filter_tests.rs"]
 mod receiver_filter;
 #[cfg(feature = "radio")]
+#[path = "selection_tests.rs"]
+mod selection;
+#[cfg(feature = "radio")]
 #[path = "spot_tests.rs"]
 mod spot;
 use super::*;
@@ -372,7 +375,8 @@ fn tier_admission_requires_v3_and_keeps_one_native_receipt_through_readback() {
             "receiverDsp",
             "phoneMode",
             "workSpot",
-            "radioLevels"
+            "radioLevels",
+            "radioSelection"
         ])
     );
     let command = control_request(&state, json!({"action":"radio.tier","tier":"FT4"}));

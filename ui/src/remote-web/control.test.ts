@@ -339,3 +339,42 @@ it('a prepared tuning gesture cannot borrow a newer lease, revision or command d
     h.client.disconnected()
   }
 })
+
+it('selects a configured radio with displayed context and waits for both new snapshot and Settings', async () => {
+  const h = setup(storage(), ['radioSelection'], 3)
+  let snapshotAge = Infinity, settingsAge = Infinity, active = 1
+  const read = vi.fn(async (command: string) => command === 'get_settings' ? { activeRadio: active } : { activeRadioId: active, radios: [{ id: 1 }, { id: 2 }] })
+  const transport = controlTransport({ kind: 'remote', invoke: read } as ApplicationTransport,
+    { age: (command: string) => command === 'get_settings' ? settingsAge : snapshotAge } as unknown as ApplicationClient, h.client)
+  const result = transport.invoke('set_active_radio', { id: 2 })
+  await h.advance(0)
+  const request = h.sent[h.sent.length - 1].request
+  expect(request.action).toEqual({ action: 'radio.select', radioId: 2 })
+  expect(request.context.radioId).toBe(1)
+  h.reply({ operation: 'stationControl', operationId: request.requestId, outcome: 'applied', evidence: 'radioReadback' })
+  await h.advance(50)
+  active = 2; snapshotAge = 0
+  await h.advance(50)
+  expect(read).toHaveBeenNthCalledWith(2, 'get_settings')
+  expect(read).toHaveBeenCalledTimes(2)
+  settingsAge = 0
+  await h.advance(50)
+  expect(await result).toMatchObject({ activeRadioId: 2 })
+  expect(read).toHaveBeenLastCalledWith('get_settings')
+  expect(h.sent.filter(w=>w.request.type==='stationControl')).toHaveLength(1)
+  h.client.disconnected()
+})
+
+it('refuses stale radio displays, unconfigured targets, extra arguments and pre-v3 selection', async () => {
+  for (const [active, target] of [[9, 2], [1, 99]]) {
+    const h = setup(storage(), ['radioSelection'], 3)
+    const transport = controlTransport({kind:'remote',invoke:vi.fn(async()=>({activeRadioId:active,radios:[{id:1},{id:2}]}))} as ApplicationTransport, {} as ApplicationClient, h.client)
+    await expect(transport.invoke('set_active_radio',{id:target})).rejects.toThrow('readingUnavailable')
+    for (const args of [{id:2,command:'key'},{id:-1},{}]) await expect(transport.invoke('set_active_radio',args)).rejects.toThrow('invalidOperation')
+    expect(h.sent.filter(w=>w.request.type==='stationControl')).toHaveLength(0)
+    h.client.disconnected()
+  }
+  const legacy = setup(storage(), ['radioSelection'], 2)
+  await expect(legacy.client.control({action:'radio.select',radioId:2})).rejects.toThrow('stationUnsupported')
+  legacy.client.disconnected()
+})

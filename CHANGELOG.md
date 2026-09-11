@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Remote radio selection:** The existing radio pills and Settings Make active
+  button select a configured radio through a compatible station. Selection
+  preserves native profiles and operator controls, waits for confirmed tuning,
+  and refreshes the selected radio and Settings together. Requires an idle,
+  disarmed native station; physical backend and WAN acceptance remain pending.
+
 - **Compact Remote session status:** Control ownership and Release stay above
   the existing Nexus workspace, with connection help and Disconnect under
   Remote access. Loss warnings and unresolved command recovery remain visible;

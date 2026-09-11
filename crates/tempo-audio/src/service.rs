@@ -1073,6 +1073,10 @@ const MODE_SET_PASSBAND0_AFTER: u32 = 10;
 /// PTT is keyed, and for CAT the `rig_model` / `serial_port` / `baud` /
 /// `rigctld_port` describe the `rigctld` daemon Tempo launches itself.
 pub struct RadioConfig {
+    /// Nonblocking host notification after an owned profile selection commits.
+    /// Called without Engine/pool locks, including when settings persistence fails.
+    /// The host must resolve current settings when handling it, not capture an old profile.
+    pub on_active_profile_change: Option<Arc<dyn Fn() + Send + Sync>>,
     /// Where every waterfall source publishes, shared with the UI reader and the rx-dsp thread.
     /// Defaulted so existing constructions (tests, tools) need no change.
     pub spectrum_feed: tempo_app::engine::SpectrumFeed,
@@ -1144,6 +1148,7 @@ pub struct RadioConfig {
 impl Default for RadioConfig {
     fn default() -> Self {
         Self {
+            on_active_profile_change: None,
             spectrum_feed: tempo_app::engine::SpectrumFeed::default(),
             rx_tap: Arc::new(crate::rxtap::RxTap::new()),
             capture_radio_id: None,
@@ -1652,6 +1657,11 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
             &mut last_active,
             &switch_pending,
             open_monitor,
+            || {
+                if let Some(notify) = &cfg.on_active_profile_change {
+                    notify();
+                }
+            },
         );
         // Dual-radio: if the operator switched the active radio, hand off between the active Rig and
         // the monitor pool BEFORE the normal tick — so `state.applied` already matches the new active
