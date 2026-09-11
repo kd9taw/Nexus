@@ -836,3 +836,72 @@ fn remote_ft_immediate_over_rechecks_authority_around_key_up() {
         }
     }
 }
+
+#[test]
+fn remote_ft_tx_off_finishes_the_owned_over_and_stop_cuts_it() {
+    use tempo_app::remote_control::transmit::TransmitAuthority;
+    for stop in [false, true] {
+        let peer = retuning_peer(14_074_000, "PKTUSB", |line, state| {
+            if line == "T 1" {
+                state.keyed = true;
+                Some("RPRT 0\n".into())
+            } else {
+                None
+            }
+        });
+        let mut s = Station::configured(&peer, |settings| {
+            settings.mycall = "KD9TAW".into();
+            settings.mygrid = "EN52".into();
+        });
+        let authority = TransmitAuthority::default();
+        let permit = authority
+            .permit(Instant::now() + Duration::from_secs(5))
+            .unwrap();
+        {
+            let mut e = engine_lock(&s.engine);
+            e.take_immediate_retune();
+            e.start_remote_ft_cq(permit.clone(), None).unwrap();
+            e.take_immediate_retune();
+            e.take_slot_tx_abort();
+            e.take_immediate_tx();
+            s.state.cur_tier = e.tier();
+            s.state.cur_slot_secs = e.active_slot_secs();
+            s.state.clock = SlotClock::with_period_secs(e.active_slot_secs());
+            s.state.last_slot = Some(0);
+        }
+        s.rig.ptt(true).unwrap();
+        s.state.tx_until_ms = Some(14_000.0);
+        s.state.slot_tx_until_ms = 14_000.0;
+        {
+            let mut e = engine_lock(&s.engine);
+            if stop {
+                e.stop_remote_ft(&permit).unwrap();
+            } else {
+                e.set_remote_ft_tx_enabled(permit, false).unwrap();
+            }
+        }
+        s.state
+            .step(
+                &s.engine,
+                &mut s.backend,
+                &mut s.rig,
+                &no_sinks(),
+                100.0,
+                &mut |_| panic!("unexpected device rebuild"),
+                &mut |_, _| panic!("unexpected radio rebuild"),
+                &mut StationSinks::new(),
+            )
+            .unwrap();
+        assert_eq!(s.rig.keyed, !stop);
+        assert_eq!(s.state.tx_until_ms.is_some(), !stop);
+        assert!(!engine_lock(&s.engine).tx_enabled());
+        assert!(s.backend.played.is_empty());
+        if stop {
+            assert!(s.backend.flush_calls > 0);
+            assert_eq!(writes(&peer), ["T 1", "T 0"]);
+        } else {
+            assert_eq!(s.backend.flush_calls, 0);
+            assert_eq!(writes(&peer), ["T 1"]);
+        }
+    }
+}
