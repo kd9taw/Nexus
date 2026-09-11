@@ -242,6 +242,8 @@ fn cloud_runtime_probe() {
         };
         while !stop.load(Ordering::Relaxed) {
             let mut e = read_engine.lock().unwrap();
+            // Synthetic owner tick: exercise permit expiry/Stop without RF or device I/O.
+            e.poll_remote_transmit(Instant::now());
             let read = e.remote_radio_read(&radio, Instant::now());
             e.remote_observe_cat(read.as_ref(), Some(true));
             e.remote_observe_dial(read.as_ref(), Some(14_074_000));
@@ -313,6 +315,24 @@ fn cloud_runtime_probe() {
             println!(
                 "REMOTE_TEST:{}",
                 json!({"count":e.log_records().len(),"adif":std::fs::read_to_string(path).unwrap_or_default(),"txEnabled":e.snapshot().radio.tx_enabled})
+            );
+            std::io::stdout().flush().unwrap();
+            continue;
+        }
+        if value["type"] == "seedFt" || value["type"] == "ftEvidence" {
+            let mut e = engine.lock().unwrap();
+            if value["type"] == "seedFt" {
+                e.halt_tx();
+                e.set_tier(serde_json::from_value(value["tier"].clone()).unwrap());
+                e.take_immediate_retune();
+                e.take_slot_tx_abort();
+            }
+            let snapshot = e.snapshot();
+            println!(
+                "REMOTE_TEST:{}",
+                json!({"tier":snapshot.link.tier,
+                "txEnabled":snapshot.radio.tx_enabled,"owned":e.remote_ft_tx_owned(),
+                "logCount":e.log_records().len()})
             );
             std::io::stdout().flush().unwrap();
             continue;
