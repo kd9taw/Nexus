@@ -22,7 +22,7 @@
 // so the ordinary-SSB control and the cases where the read-back must NOT be believed (no CAT, a
 // mode Nexus cannot map to a phone Mode) are asserted alongside it.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react'
+import { render, screen, within, fireEvent, cleanup, waitFor } from '@testing-library/react'
 import { PhoneCockpit } from './PhoneCockpit'
 import { logQso } from '../api'
 import type { AppSnapshot } from '../types'
@@ -66,11 +66,16 @@ vi.mock('../toast', () => ({
   withErrorToast: vi.fn(async (action: () => Promise<unknown>) => action()),
 }))
 
-// The header renders its children (the mode picker and the `rig: …` mismatch chip live there),
-// so the stub must pass them through or the picker assertions would pass on nothing.
+// The header renders its children AND its `modeIndicator` — the mode picker and the `rig: …`
+// mismatch chip live in the latter — so the stub must pass BOTH through.
+// ⚠️ It passed only `children` until 2026-09-10, so the picker was absent from every test in
+// this file and any assertion about it would have been vacuous.
 vi.mock('./CockpitHeader', () => ({
-  CockpitHeader: (p: { children?: React.ReactNode }) => (
-    <header className="cockpit-header">{p.children}</header>
+  CockpitHeader: (p: { children?: React.ReactNode; modeIndicator?: React.ReactNode }) => (
+    <header className="cockpit-header">
+      {p.modeIndicator}
+      {p.children}
+    </header>
   ),
 }))
 // Not this suite's subject, and RotorStrip polls rotctld on mount.
@@ -154,12 +159,29 @@ const summaryText = () => document.body.textContent ?? ''
 
 describe('the Phone cockpit logs the mode the rig is actually on', () => {
   it('logs an AM contact on 14.286 as AM, not SSB', async () => {
-    // The reported case exactly: the rig is in AM (the operator set it at the radio — the
-    // cockpit does not even offer AM on 20 m), Nexus has read that back over CAT, and the top
-    // bar is already flagging the disagreement.
+    // The reported case exactly: the rig is in AM, Nexus has read that back over CAT, and the
+    // top bar is already flagging the disagreement. (At the time of the report the cockpit did
+    // not offer AM on 20 m either, which is why he set it at the radio; that filter is gone.)
     renderPhone({ rigMode: 'AM' })
     await logContact('w1aw')
     expect(loggedMode(), 'an AM QSO was written to the logbook as SSB').toBe('AM')
+  })
+
+  it('offers AM on 20 m — the band a hardcoded filter used to rule out', async () => {
+    // 14.286 IS the 20 m AM calling frequency. The picker used to hide AM below 10 MHz and at
+    // 28 MHz and up, so on the one band this operator needed it, the button was missing. Nexus
+    // does not get to have a band-plan opinion the rig itself does not have.
+    renderPhone({ rigMode: 'USB' })
+    const picker = await screen.findByRole('group', { name: /mode/i })
+    const offered = within(picker)
+      .getAllByRole('button')
+      .map((b) => (b.textContent ?? '').trim())
+    expect(offered, 'AM must be offered on 20 m').toContain('AM')
+    // The control: the modes that were never filtered are still all there, so a green here
+    // cannot come from the picker having lost its contents. AUTO's button names the sideband it
+    // currently resolves to ("AUTO·USB"), hence the prefix match rather than equality.
+    expect(offered).toEqual(expect.arrayContaining(['USB', 'LSB', 'FM', 'AM']))
+    expect(offered.some((m) => m.startsWith('AUTO')), 'AUTO is still offered').toBe(true)
   })
 
   it('says AM on the line that states what will be written', async () => {
