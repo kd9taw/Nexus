@@ -72,6 +72,24 @@ fn pending_confirm_requires_logging_not_radio_or_transmit_permission() {
     let result = run(&f, &request).unwrap();
     assert_eq!(result["outcome"], "applied");
     assert_eq!(result["evidence"], "fileSynced");
+    // A previous browser cannot parse v4 persistence evidence as its older
+    // station-control result. Refuse the query explicitly, without replay.
+    for version in [2, 3] {
+        assert_eq!(
+            f.authority.handle_version(
+                (f.connection, version),
+                SESSION,
+                DEVICE,
+                &Request::Result {
+                    request_id: id(),
+                    operation_id: request.id().into()
+                },
+                &f.engine,
+                Instant::now()
+            ),
+            Err("stationUnsupported")
+        );
+    }
     let bytes = std::fs::read(f.dir.join("contacts.adi")).unwrap();
     assert!(!f.dir.join("pending.json").exists());
     assert_eq!(run(&f, &request).unwrap(), result);
