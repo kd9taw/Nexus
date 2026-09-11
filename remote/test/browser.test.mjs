@@ -1129,11 +1129,24 @@ for (const {applicationVersion,operating,sessionLayout} of [...[1,2,3,4,5,6,7,8,
           // Authority and physical readings have separate clocks. An available
           // controller cannot authorize an RX gesture using an old PTT sample.
           pauseObservations=true
+          // The input also disables between short authority windows. Prove the
+          // independent hardware clock has expired before refreshing authority;
+          // an input's disabled state alone does not establish stale readings.
+          for(let attempt=0;attempt<100;attempt++){
+            const age=receiverRead?performance.now()-receiverRead.at+(receiverRead.radio?.readings?.ptt?.ageMs??Infinity):Infinity
+            if(Number.isFinite(age)&&age>=1250)break
+            if(attempt===99)assert.fail('The stale-reading negative control requires an expired, previously received PTT sample')
+            await sleep(50)
+          }
           await until(`document.querySelector('${rxField}').disabled`)
           await freshLoggingWindow()
           assert.equal(await evaluate(`document.querySelector('.remote-logging-authority')?.textContent.includes('Station control active')`),true)
-          for(const type of ['mousePressed','mouseReleased'])await browser.call('Input.dispatchMouseEvent',{type,...point,button:'left',clickCount:1},session)
+          const stale=await evaluate(`(()=>{const e=document.querySelector('${selector}'),r=e.getBoundingClientRect(),x=r.left+r.width*${fraction},y=r.top+r.height/2;return {x,y,visible:e.contains(document.elementFromPoint(x,y)),disabled:document.querySelector('${rxField}').disabled}})()`)
+          const age=performance.now()-receiverRead.at+receiverRead.radio.readings.ptt.ageMs
+          assert.ok(age>=1000&&stale.disabled&&stale.visible,'expired readings and a real waterfall hit must precede the negative gesture')
+          for(const type of ['mousePressed','mouseReleased'])await browser.call('Input.dispatchMouseEvent',{type,x:stale.x,y:stale.y,button:'left',clickCount:1},session)
           await sleep(150);assert.equal(stationRequests.length,before,'fresh control authority cannot replace missing fresh receiver readings')
+          if(artifacts)await writeFile(join(artifacts,'receiver-stale-reading.json'),JSON.stringify({age,stale,requestsBefore:before,requestsAfter:stationRequests.length},null,2))
           pauseObservations=false
         }
         await freshLoggingWindow()
