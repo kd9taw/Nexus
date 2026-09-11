@@ -631,6 +631,8 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         if(stationRequests.length!==count+4)console.log('FT call gesture diagnostic',tier,await evaluate(`({events:window.__ftRowEvents,alerts:[...document.querySelectorAll('[role=alert]')].map(e=>e.textContent),status:document.querySelector('.remote-control-result')?.textContent,rows:[...document.querySelectorAll('.or-row[aria-selected]')].map(e=>({title:e.title,cls:e.className}))})`))
         assert.equal(stationRequests.length,count+4);assert.equal(stationRequests.at(-1).action.action,'ft.call')
         await click(`document.querySelector('.cockpit-qso .cq-resend')`)
+        for(let i=0;i<100&&stationRequests.length<count+5;i++)await sleep(50)
+        if(stationRequests.length!==count+5)console.log('FT Resend diagnostic',tier,operationWire.slice(-12),await evaluate(`({alerts:[...document.querySelectorAll('[role=alert]')].map(e=>e.textContent),result:document.querySelector('.remote-control-result')?.textContent,strip:document.querySelector('.cockpit-qso')?.textContent})`))
         await until(`!document.querySelector('${tx}').disabled`)
         assert.equal(stationRequests.length,count+5);assert.equal(stationRequests.at(-1).action.change.kind,'resend')
         await click(`document.querySelector('.cockpit-qso .cq-free input')`)
