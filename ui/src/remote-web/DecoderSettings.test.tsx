@@ -109,7 +109,7 @@ it.each(['JS8', 'MSK144'] as const)('%s refuses old capability/version, lost obs
     expect(h.widget().disabled).toBe(true); h.gesture(); await tick(); expect(h.writes()).toHaveLength(0); h.unmount()
   }
   const h = fixture(kind); await tick()
-  for (const patch of [{ operatingMode: 'cw' }, { txEnabled: true }, { rigKeyed: true }, { transmitting: true }, { tuning: true }, { catOk: false }]) {
+  for (const patch of [{ source: 'companion' as const }, { operatingMode: 'cw' }, { txEnabled: true }, { rigKeyed: true }, { transmitting: true }, { tuning: true }, { catOk: false }]) {
     h.rerender(h.view({ ...h.snap, radio: { ...h.snap.radio, ...patch } })); await tick()
     expect(h.widget().disabled).toBe(true); h.gesture(); await tick(); expect(h.writes()).toHaveLength(0)
   }
@@ -123,6 +123,14 @@ it.each(['JS8', 'MSK144'] as const)('%s refuses old capability/version, lost obs
   h.rerender(h.view()); await tick(); expect(h.widget().disabled).toBe(false)
   act(() => h.client.disconnected()); await tick(); expect(h.widget().disabled).toBe(true)
   expect(h.writes()).toHaveLength(0)
+})
+
+it('does not offer a JS8 speed change when its own decoder reading becomes unavailable', async () => {
+  const h = fixture('JS8'); await tick(); expect(h.widget().disabled).toBe(false)
+  reading.current = null; await tick(500)
+  expect(h.widget().disabled).toBe(true); h.gesture(); await tick(); expect(h.writes()).toHaveLength(0)
+  reading.current = { ...structuredClone(js8Fixture.state), activity: [], stations: [], inbox: [] } as Js8State
+  await tick(500); expect(h.widget().disabled).toBe(false)
 })
 
 it.each(['JS8', 'MSK144'] as const)('%s persistence refusal leaves the displayed preference unchanged and reports failure', async kind => {
