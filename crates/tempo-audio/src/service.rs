@@ -15278,6 +15278,65 @@ mod tests {
     }
 
     #[test]
+    fn monitor_open_has_one_owner_while_other_radios_can_open() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+        let pool: MonitorPool = Arc::new(Mutex::new(Vec::new()));
+        let want = {
+            let mut e = engine.lock().unwrap();
+            let first = e.add_radio();
+            let second = e.add_radio();
+            e.set_active_radio(0);
+            [first, second].map(|id| {
+                let profile = e.settings().radios.iter().find(|p| p.id == id).unwrap();
+                (id, Transport::from_profile(profile))
+            })
+        };
+        let first_port = want[0].1.rigctld_port;
+        let first_opens = Arc::new(AtomicUsize::new(0));
+        let second_opens = AtomicUsize::new(0);
+        let (started, entering) = std::sync::mpsc::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        let worker = {
+            let engine = engine.clone();
+            let pool = pool.clone();
+            let want = [want[0].clone()];
+            let first_opens = first_opens.clone();
+            std::thread::spawn(move || {
+                reconcile_pool_with_open(&pool, &want, 0, &engine, 0.0, |_| {
+                    first_opens.fetch_add(1, Ordering::SeqCst);
+                    started.send(()).unwrap();
+                    released.recv().unwrap();
+                    (Rig::vox(), None, Some(false))
+                });
+            })
+        };
+        entering.recv_timeout(Duration::from_secs(5)).unwrap();
+        reconcile_pool_with_open(&pool, &want, 0, &engine, 150.0, |transport| {
+            if transport.rigctld_port == first_port {
+                first_opens.fetch_add(1, Ordering::SeqCst);
+            } else {
+                second_opens.fetch_add(1, Ordering::SeqCst);
+            }
+            (Rig::vox(), None, Some(false))
+        });
+        // Always release/join the blocked opener before asserting a failure.
+        release.send(()).unwrap();
+        worker.join().unwrap();
+        assert_eq!(
+            first_opens.load(Ordering::SeqCst),
+            1,
+            "one opener per radio"
+        );
+        assert_eq!(
+            second_opens.load(Ordering::SeqCst),
+            1,
+            "other radios stay available"
+        );
+        assert_eq!(pool.lock().unwrap().len(), 2);
+    }
+
+    #[test]
     fn reconcile_never_closes_the_new_actives_conn_mid_switch() {
         // Right after a switch the new active leaves reconcile's want-list, but its conn is
         // exactly what the handoff adopts for the instant switch. Reconcile must leave it
