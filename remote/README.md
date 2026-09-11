@@ -429,6 +429,17 @@ relay project capabilities for the negotiated version. Routing checkpoints
 retain that version through room hibernation. Bounded unknown capability hints
 are ignored, while action names and arguments remain a closed vocabulary.
 
+The `radioSelection` v3 capability connects the existing radio pills and Settings
+Make active button to the station's queued `radio.select` action. It requires
+local station-control permission, the displayed active-radio connection, an idle
+disarmed station and a configured target. The radio owner prepares the incoming
+connection, retains native profile choices and confirms its tuning before adoption;
+failed or expired work is never retried as a local command. Host rotator profile
+synchronization runs outside the radio loop. The browser waits for later snapshot
+and Settings samples naming the selected radio, and Settings refreshes its complete
+configuration document. Peg-lock and transmission retain separate permissions.
+Physical capture, shared-port PTT/keyers, slow CAT and WAN acceptance remain open.
+
 The `frequency` capability admits only `radio.frequency`, separately
 from the future `radio` capability. The existing main dial on FT, Phone, CW,
 RTTY, PSK and Tempo accepts typed MHz; FT/Tempo channel selects use the same

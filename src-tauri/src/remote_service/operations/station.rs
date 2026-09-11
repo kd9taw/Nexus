@@ -673,8 +673,8 @@ pub fn execute(
             )?;
             return engine.queue_remote_amp(request);
         }
-        // Hardware actions are admitted only once their owner is connected.
-        // They must never fall through to a generic engine/Tauri command.
+        // A build without the radio owner cannot dispatch hardware actions.
+        #[cfg(not(feature = "radio"))]
         _ => return Err(Reason::UnsupportedAction),
     }
     let result = Completion::default();

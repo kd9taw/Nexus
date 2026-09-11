@@ -93,6 +93,7 @@ struct Reply<'a> {
 // a newly added connector key, path or credential cannot silently enter Remote.
 // These are actual station values, not default settings constructed in the browser.
 const SETTINGS_KEYS: &[&str] = &[
+    "activeRadio",
     "mycall",
     "mygrid",
     "opName",
@@ -747,6 +748,17 @@ mod tests {
         assert!(full["baseRevision"].is_null());
         assert_eq!(full["data"]["mycall"], "TEST");
     }
+    #[test]
+    fn settings_projection_identifies_selected_profile_without_exporting_profiles() {
+        let settings = tempo_app::settings::Settings {
+            active_radio: 7,
+            ..Default::default()
+        };
+        let view = settings_view(&settings).unwrap();
+        assert_eq!(view["activeRadio"], 7);
+        assert!(view.get("radios").is_none());
+    }
+
     #[test]
     fn settings_projection_is_closed_and_preserves_actual_operating_values() {
         let settings = tempo_app::settings::Settings {

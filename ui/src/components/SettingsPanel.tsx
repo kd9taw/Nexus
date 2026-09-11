@@ -1336,7 +1336,6 @@ export function SettingsPanel({
   // the wrong rig. Skip the first observation (the mount effect already loads the form).
   const lastActiveRef = useRef<number | undefined>(undefined)
   useEffect(() => {
-    if(remote)return
     if (activeRadioId == null) return
     if (lastActiveRef.current === undefined) {
       lastActiveRef.current = activeRadioId
@@ -1344,6 +1343,11 @@ export function SettingsPanel({
     }
     if (lastActiveRef.current === activeRadioId) return
     lastActiveRef.current = activeRadioId
+    if (remote) {
+      configuration.refresh()
+      setEditingRadioId(activeRadioId)
+      return
+    }
     void getSettings()
       .then((s) => {
         setForm(s)
@@ -2003,6 +2007,14 @@ export function SettingsPanel({
     }
     void withErrorToast(() => setActiveRadio(id), t('settings.radios.switch.failed')).then((s) => {
       if (!s) return
+      if (remote) {
+        // The streamed Settings projection is deliberately smaller than this
+        // form. Refresh its complete configuration document after selection.
+        configuration.refresh()
+        setEditingRadioId(id)
+        onSaved?.()
+        return
+      }
       void getSettings().then((full) => {
         setForm(full)
         dirtyRef.current = false

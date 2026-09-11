@@ -16,8 +16,8 @@ import { tempoConversations } from './tempo-fixture.mjs'
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
-for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='phone',contactContinuity,workSpot} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,14].map(applicationVersion=>({applicationVersion,operating:false})),{applicationVersion:14,operating:true},{applicationVersion:14,operating:true,sessionLayout:true},{applicationVersion:14,operating:true,quickLayout:true},{applicationVersion:14,operating:true,quickLayout:true,quickMode:'cw'},{applicationVersion:14,operating:true,contactContinuity:true},{applicationVersion:14,operating:true,workSpot:true}]) test(`compiled hosted browser ${workSpot?'DX work':contactContinuity?'contact continuity':quickLayout?`quick layout${quickMode==='cw'?' CW':''}`:sessionLayout?'session layout':operating?'operations':`v${applicationVersion}`} completes PKCE, local device approval, observation and viewport checks`, { timeout: applicationVersion >= 14 ? 540000 : applicationVersion >= 13 ? 420000 : 180000 }, async context => {
-  const app=await runtime(), artifacts=process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS ? join(process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS, workSpot?'dx-work':contactContinuity?'contact-continuity':quickLayout?`quick-layout${quickMode==='cw'?'-cw':''}`:sessionLayout?'session-layout':operating?'operations':`v${applicationVersion}`) : undefined
+for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='phone',contactContinuity,workSpot,radioSelection} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,14].map(applicationVersion=>({applicationVersion,operating:false})),{applicationVersion:14,operating:true},{applicationVersion:14,operating:true,sessionLayout:true},{applicationVersion:14,operating:true,quickLayout:true},{applicationVersion:14,operating:true,quickLayout:true,quickMode:'cw'},{applicationVersion:14,operating:true,contactContinuity:true},{applicationVersion:14,operating:true,workSpot:true},{applicationVersion:14,operating:true,radioSelection:true}]) test(`compiled hosted browser ${radioSelection?'radio selection':workSpot?'DX work':contactContinuity?'contact continuity':quickLayout?`quick layout${quickMode==='cw'?' CW':''}`:sessionLayout?'session layout':operating?'operations':`v${applicationVersion}`} completes PKCE, local device approval, observation and viewport checks`, { timeout: applicationVersion >= 14 ? 540000 : applicationVersion >= 13 ? 420000 : 180000 }, async context => {
+  const app=await runtime(), artifacts=process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS ? join(process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS, radioSelection?'radio-selection':workSpot?'dx-work':contactContinuity?'contact-continuity':quickLayout?`quick-layout${quickMode==='cw'?'-cw':''}`:sessionLayout?'session-layout':operating?'operations':`v${applicationVersion}`) : undefined
   let browser, station, producing=true, pauseObservations=false, producer, applicationProducer
   const results=[]
   const stop = cleanupAfterTest(context, async () => {
@@ -199,6 +199,15 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       doc.settings.radios[0].id=1;doc.settings.radios[0].ampFollowBand=false
       doc.revision=createHash('sha256').update(JSON.stringify(doc.settings)).digest('hex')
     }
+    let radioConnection=1
+    const controlContext=()=>({radioId:radioSelection?applicationData.get_snapshot.activeRadioId:1,radioConnection,ampConnection:1,ampReadSequence:1})
+    if(radioSelection){
+      const doc=navigation.documents.settings
+      doc.settings.radios=[1,2].map(id=>({...structuredClone(doc.settings.radios[0]),id,name:`Test radio ${id}`,rigctldPort:4532+id}))
+      doc.revision=createHash('sha256').update(JSON.stringify(doc.settings)).digest('hex')
+      applicationData.get_settings.activeRadio=1
+      applicationData.get_snapshot.radios=doc.settings.radios.map(r=>({id:r.id,name:r.name,band:'80m',dialMhz:3.573,sideband:'USB',isActive:r.id===1,catOk:true,smeterDb:-12,transmitting:false,bands:[]}))
+    }
     applicationData.get_remote_satellite_state=navigation.live
     const stationModes=await stationModesFixture()
     applicationData.get_sstv_state=stationModes.sstv;applicationData.get_remote_aprs_state=stationModes.aprs
@@ -273,9 +282,21 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         }else if(r.type==='stationControl'){
           assert.equal(request.operationVersion,3);assert.ok(stationControls&&loggingLease&&r.leaseId===loggingLease)
           assert.equal(r.expectedRevision,loggingRevision);assert.equal(r.clientSequence,loggingSequence+1);loggingSequence++
-          assert.deepEqual(r.context,{radioId:1,radioConnection:1,ampConnection:1,ampReadSequence:1})
+          assert.deepEqual(r.context,controlContext())
           stationRequests.push(r);const a=r.action
-          if(a.action==='decoder.arm'){
+          if(a.action==='radio.select'){
+            assert.ok(radioSelection&&[1,2].includes(a.radioId))
+            assert.equal(applicationData.get_snapshot.radio.txEnabled,false)
+            radioConnection++
+            applicationData.get_snapshot.activeRadioId=a.radioId
+            for(const radio of applicationData.get_snapshot.radios)radio.isActive=radio.id===a.radioId
+            applicationData.get_settings.activeRadio=a.radioId
+            const doc=navigation.documents.settings
+            doc.settings.activeRadio=a.radioId
+            doc.revision=createHash('sha256').update(JSON.stringify(doc.settings)).digest('hex')
+            fixture.station.radio.id=a.radioId
+            for(const key of ['cat','dial','mode','ptt'])if(fixture.station.radio.readings[key])fixture.station.radio.readings[key]={connectionGeneration:radioConnection,readSequence:1,ageMs:0}
+          }else if(a.action==='decoder.arm'){
             if(a.receiver==='sstv'){applicationData.get_sstv_state.state.armed=a.on;applicationData.get_sstv_state.state.health.armed=a.on}
             else if(a.receiver==='aprs')applicationData.get_remote_aprs_state.health.arm=a.on?'auto':'off'
             else applicationData[`get_${a.receiver}_state`].armed=a.on
@@ -400,7 +421,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
           loggingReceipts.set(r.requestId,value);loggingRevision++;applicationRevision++
           if(loseSpotReply&&a.action==='radio.workSpot')continue
         }else if(r.type==='result'){value=loggingReceipts.get(r.operationId);if(!value)error='resultExpired';else if(loseSpotReply&&value.operation==='stationControl')value={operation:'stationControl',operationId:r.operationId,outcome:'unknown',reason:'hardwareUnconfirmed'}}
-        else value={stationBootId:loggingBoot,allowed:loggingAllowed||stationControls,phase:loggingLease?'controlling':loggingAllowed||stationControls?'available':'localPermissionRequired',leaseId:loggingLease,revision:loggingRevision,commandWindowId:loggingLease?loggingWindow:null,nextSequence:loggingLease?loggingSequence+1:null,leaseRemainingMs:loggingLease?5000:null,actions:loggingAllowed?['log.manual']:[],txArmed:false,...(stationControls?{controls:{context:{radioId:1,radioConnection:1,ampConnection:1,ampReadSequence:1},capabilities:request.operationVersion>=3?['decoder','amplifier','frequency','mode','tier','ampFollowBand','workspace','decoderSettings','receiverSettings','receiverGain','bandSelection','receiverFilter','receiverDsp','phoneMode','radioLevels',...(workSpot?['workSpot']:[])]:['decoder','amplifier']}}:{})}
+        else value={stationBootId:loggingBoot,allowed:loggingAllowed||stationControls,phase:loggingLease?'controlling':loggingAllowed||stationControls?'available':'localPermissionRequired',leaseId:loggingLease,revision:loggingRevision,commandWindowId:loggingLease?loggingWindow:null,nextSequence:loggingLease?loggingSequence+1:null,leaseRemainingMs:loggingLease?5000:null,actions:loggingAllowed?['log.manual']:[],txArmed:false,...(stationControls?{controls:{context:controlContext(),capabilities:request.operationVersion>=3?['decoder','amplifier','frequency','mode','tier','ampFollowBand','workspace','decoderSettings','receiverSettings','receiverGain','bandSelection','receiverFilter','receiverDsp','phoneMode','radioLevels',...(workSpot?['workSpot']:[]),...(radioSelection?['radioSelection']:[])]:['decoder','amplifier']}}:{})}
         source.send({type:'operationResponse',sessionId:request.sessionId,requestId:r.requestId,...(error?{error}:{value})});continue
       }
       if (request.type === 'applicationQuery') {
@@ -531,6 +552,73 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       assert.equal(await evaluate(`document.body.textContent.includes('Could not switch mode')`), false)
       assert.equal(fieldDayQueries.length,0)
       await click(button('FT'))
+    }
+    if(radioSelection){
+      const pill=id=>`[...document.querySelectorAll('.radio-pill')].find(e=>e.textContent.includes('Test radio ${id}'))`
+      await until(`!!${pill(2)}`)
+      assert.equal(await evaluate(`${pill(2)}.disabled`),true)
+      assert.equal(stationRequests.length,0)
+      stationControls=true
+      await until(`!!${button('Take station control')}`);await click(button('Take station control'))
+      await until(`document.querySelector('.remote-logging-authority')?.textContent.includes('Station control active')`)
+      const fresh=async()=>{
+        const after=performance.now()
+        for(let i=0;i<100;i++){
+          const reply=operationWire.findLast(v=>v.direction==='in'&&v.phase==='controlling')
+          if(reply&&reply.at>after&&performance.now()-reply.at<150)return
+          await sleep(50)
+        }
+        assert.fail('fresh authority must precede radio selection')
+      }
+      const selectionGeometry=[]
+      const measure=async(expression,kind)=>{
+        for(const [width,height,zoom]of [[1024,768,1],[1280,800,1],[1280,800,1.75]])for(const theme of ['dark','light']){
+          await browser.call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false},session)
+          await evaluate(`document.documentElement.style.setProperty('--ui-zoom','${zoom}');document.documentElement.dataset.theme='${theme}';window.dispatchEvent(new Event('resize'))`)
+          await settledLayout();await evaluate(`${expression}.scrollIntoView({block:'center',behavior:'instant'});true`);await settledLayout()
+          const shape=await evaluate(`(()=>{const e=${expression},r=e.getBoundingClientRect();return {rect:r.toJSON(),hit:e.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)),width:innerWidth,height:innerHeight}})()`)
+          assert.ok(shape.hit&&shape.rect.width>0&&shape.rect.height>0&&shape.rect.left>=0&&shape.rect.right<=width+1&&shape.rect.top>=0&&shape.rect.bottom<=height+1,JSON.stringify({kind,width,height,zoom,theme,shape}))
+          selectionGeometry.push({kind,width,height,zoom,theme,shape})
+        }
+        await browser.call('Emulation.setDeviceMetricsOverride',{width:1280,height:800,deviceScaleFactor:1,mobile:false},session)
+        await evaluate(`document.documentElement.style.setProperty('--ui-zoom','1');window.dispatchEvent(new Event('resize'))`);await settledLayout()
+      }
+      await measure(pill(2),'switcher')
+      await fresh();await click(pill(2))
+      await until(`${pill(2)}?.getAttribute('aria-pressed')==='true'`)
+      await until(`document.querySelector('.remote-control-result')?.textContent.includes('confirmed')`)
+      assert.equal(stationRequests.length,1)
+      assert.deepEqual(stationRequests[0].action,{action:'radio.select',radioId:2})
+      assert.equal(stationRequests[0].context.radioId,1)
+      assert.equal(await evaluate(`document.querySelector('.radio-peg').disabled`),true)
+      await click(button('Settings'));await until(`!!document.querySelector('.settings-form')`);await click(button('Radio'))
+      const card=id=>`[...document.querySelectorAll('.radio-card')].find(e=>e.querySelector('input')?.value==='Test radio ${id}')`
+      await until(`${card(2)}?.classList.contains('active')`)
+      await evaluate(`window.__radioCardsLost=false;new MutationObserver(()=>{if(document.querySelectorAll('.radio-card').length!==2)window.__radioCardsLost=true}).observe(document.querySelector('.radios-manager'),{childList:true,subtree:true});true`)
+      await measure(`[...${card(1)}.querySelectorAll('button')].find(e=>e.textContent==='Make active')`,'settings')
+      await fresh();await click(`[...${card(1)}.querySelectorAll('button')].find(e=>e.textContent==='Make active')`)
+      await until(`${card(1)}?.classList.contains('active')`)
+      assert.equal(stationRequests.length,2)
+      assert.deepEqual(stationRequests[1].action,{action:'radio.select',radioId:1})
+      assert.equal(stationRequests[1].context.radioId,2)
+      assert.equal(await evaluate(`window.__radioCardsLost`),false,'the full profile form must never be replaced with the small streamed Settings projection')
+      assert.equal(await evaluate(`document.querySelectorAll('.radio-card').length`),2)
+      // The always-visible switcher must refresh an already-open Settings form.
+      await fresh();await click(pill(2))
+      await until(`${card(2)}?.classList.contains('active')`)
+      assert.equal(stationRequests.length,3)
+      assert.deepEqual(stationRequests[2].action,{action:'radio.select',radioId:2})
+      assert.equal(await evaluate(`window.__radioCardsLost`),false)
+      stationControls=false
+      await until(`[...(${card(1)}?.querySelectorAll('button')??[])].find(e=>e.textContent==='Make active')?.disabled===true`)
+      assert.equal(stationRequests.length,3)
+      assert.equal(exceptions,0);assert.equal(unexpectedMessages,0)
+      if(artifacts){
+        const shot=await browser.call('Page.captureScreenshot',{format:'png'},session)
+        await writeFile(join(artifacts,'radio-selection.png'),Buffer.from(shot.data,'base64'))
+        await writeFile(join(artifacts,'radio-selection-results.json'),JSON.stringify({actions:stationRequests.map(r=>({action:r.action,context:r.context})),observerRefusal:true,revocationRefusal:true,profilesRetained:true,selectionGeometry,exchanges,exceptions,unexpectedMessages},null,2))
+      }
+      console.log('Compiled radio selection: existing switcher and Settings, changing radio context, retained profiles and revoked permission passed');return
     }
     if(workSpot){
       const row=call=>`[...document.querySelectorAll('.np-row')].find(e=>e.textContent.includes('${call}'))`
