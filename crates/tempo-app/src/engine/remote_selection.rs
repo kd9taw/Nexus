@@ -238,9 +238,7 @@ impl Engine {
         }
         let plan = self.prepare_remote_workspace(workspace);
         let settings = plan.selection.settings();
-        // A route that returns to the original owner needs the active-radio
-        // transaction; it cannot acquire its own connection as an incoming rig.
-        if !plan.routed || settings.active_radio == self.settings.active_radio {
+        if !plan.routed {
             return Err(Reason::UnsupportedAction);
         }
         self.queue_remote_selection(
@@ -300,7 +298,7 @@ impl Engine {
             completion.clone(),
         );
         permission.check(Instant::now())?;
-        if id == self.settings.active_radio {
+        if id == self.settings.active_radio && tune.is_none() {
             // Preserve the local no-op: do not reset the decoder, touch a
             // connection or re-save settings merely to select the active radio.
             completion.finish(Outcome::Applied {
@@ -436,6 +434,17 @@ impl Request {
 
     pub fn expected(&self) -> (u64, &str) {
         (self.original.dial_hz(), &self.original_mode)
+    }
+
+    /// A workspace may logically visit another profile and end at its original
+    /// radio. The existing owner must keep that connection, never claim itself
+    /// from the monitor pool or reopen its physical CAT/audio devices.
+    pub fn retains_connection(&self) -> bool {
+        self.original.active_radio == self.settings().active_radio
+    }
+
+    pub fn uncertain(&self) -> bool {
+        matches!(self.completion.outcome(), Outcome::Unknown { .. })
     }
 
     pub fn configuration(&self, engine: &Engine) -> Result<Configuration, Reason> {

@@ -8,8 +8,8 @@ authority intact; connection recovery still requires a new explicit acquisition.
 This service connects an approved browser to an outbound Nexus desktop connection.
 It reuses the existing Nexus application for station observation and adds
 separately authorized manual general-log QSO entry, receiver/amplifier controls
-and bounded frequency, section and decoder changes on the active radio.
-Radio handoffs and transmitter commands, receive/browser microphone audio, payment collection and a native mobile
+and bounded frequency, section, decoder and configured-radio changes.
+Transmitter commands, receive/browser microphone audio, payment collection and a native mobile
 application remain outside the implemented pilot. A compatible station build is
 required for each negotiated feature; browser deployment does not upgrade Nexus
 at the shack.
@@ -31,12 +31,12 @@ port or router forwarding is required. The desktop is pinned to
 ## Existing Nexus workspace
 
 Workspace entry prepares each native section and decoder QSY in order, including
-intermediate profile banking. Only the final incoming radio is configured by the
-selection worker. The commit shares native section, area, session and tier verbs
+intermediate profile banking. Only the final radio is configured by the selection worker. The commit shares native section, area, session and tier verbs
 under the stable source lock and existing A7 guard; it grants no transmit access.
-A routed entry that ends back at its original radio still needs the active-owner
-transaction and is refused pending that integration. Hardware and WAN acceptance
-remain required.
+A routed entry that ends back at its original radio uses the same physical
+connection and capture stream while committing the intermediate native profile
+changes. Unconfirmed writes never become local retries. Hardware and WAN
+acceptance remain required.
 
 **Open Nexus** loads the same `ui/src/App.tsx`, Operate, CW, Phone, RTTY, PSK, Needed, Spots and Logbook components as the
 desktop. The explicit adapter below `api.ts` owns one authenticated station
@@ -591,7 +591,7 @@ or final adoption; a missing channel preserves the active radio and frequency.
 Same-tier selection retains its existing complete no-op. Radio/profile adoption
 is saved; this adds no persisted decoder preference.
 
-Combined routed workspace changes, repeater-channel holds and satellite/split transactions,
+Repeater-channel holds and satellite/split transactions,
 band-memory/spot shortcuts, scope dragging, continuous scanning and attended hardware/WAN
 acceptance remain incomplete. A compatible station build is required; this
 source increment does not update existing installations or establish paid readiness.

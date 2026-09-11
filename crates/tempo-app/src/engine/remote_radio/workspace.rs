@@ -138,7 +138,7 @@ mod tests {
     use super::*;
     use crate::settings::RoutingRule;
 
-    fn station() -> Engine {
+    fn station(final_radio: u32) -> Engine {
         let mut engine = Engine::new("KD9TAW", "EN52", 0);
         engine.settings.ensure_radio_profiles();
         engine.add_radio();
@@ -155,7 +155,7 @@ mod tests {
             RoutingRule {
                 bands: vec!["6m".into()],
                 mode: Some(RouteMode::Digital),
-                radio: 2,
+                radio: final_radio,
                 ..RoutingRule::default()
             },
             RoutingRule {
@@ -170,9 +170,12 @@ mod tests {
 
     #[test]
     fn held_workspace_guards_preserve_native_multi_radio_transition_order() {
-        for workspace in [Workspace::Ft, Workspace::Tempo, Workspace::Js8] {
-            let mut native = station();
-            let mut guarded = station();
+        for (workspace, final_radio) in [Workspace::Ft, Workspace::Tempo, Workspace::Js8]
+            .into_iter()
+            .flat_map(|workspace| [0, 2].map(|radio| (workspace, radio)))
+        {
+            let mut native = station(final_radio);
+            let mut guarded = station(final_radio);
             let before = guarded.settings.clone();
             let plan = guarded.prepare_remote_workspace(workspace);
             assert_eq!(guarded.settings, before);
@@ -251,7 +254,7 @@ mod tests {
             assert!(!guarded.tx_enabled());
             assert_eq!(guarded.settings.operating_mode, OperatingMode::Digital);
             if workspace == Workspace::Ft {
-                assert_eq!(guarded.settings.active_radio, 2);
+                assert_eq!(guarded.settings.active_radio, final_radio);
                 assert_eq!(guarded.tier(), Tier::Msk144);
                 assert_eq!(guarded.settings.dial_hz(), 50_260_000);
                 // The intermediate HF radio was selected by section entry,

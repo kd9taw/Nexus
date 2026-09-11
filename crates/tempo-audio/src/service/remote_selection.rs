@@ -83,6 +83,17 @@ impl RadioLoop {
             }
         };
         let _pause = MonitorPause::new(pending);
+        if request.retains_connection() {
+            self.apply_remote_selection_return(
+                engine,
+                rig,
+                backend,
+                request,
+                configuration,
+                notify_host,
+            );
+            return;
+        }
         let want = Transport::from_settings(request.settings());
         let target =
             match Position::new(request.settings().dial_hz(), &request.settings().rig_mode()) {
@@ -211,6 +222,104 @@ impl RadioLoop {
         // The normal next tick creates the incoming observation token BEFORE
         // its next read. Preparation readings are transaction evidence; they
         // must not be re-stamped as a newly started live-stream measurement.
+    }
+
+    /// Complete logical profile hops on the current physical owner. Only the
+    /// final native target reaches CAT; intermediate profiles are banked by the
+    /// shared Engine commit. Keep the actual capture and daemon resources alive.
+    fn apply_remote_selection_return<B: AudioBackend>(
+        &mut self,
+        engine: &Arc<Mutex<Engine>>,
+        rig: &mut Rig,
+        backend: &mut B,
+        request: Request,
+        configuration: Configuration,
+        notify_host: impl FnOnce(),
+    ) {
+        let prepared = (|| {
+            let mut want = Transport::from_settings(request.settings());
+            self.apply_port_alias(&mut want);
+            if want != self.applied {
+                return Err(Reason::ContextChanged);
+            }
+            let (hz, mode) = request.expected();
+            let outgoing = Position::new(hz, mode)?;
+            self.selection_outgoing_read(engine, rig, &request, &outgoing)?;
+            let target =
+                Position::new(request.settings().dial_hz(), &request.settings().rig_mode())?;
+            let mut retune = Retune::new(outgoing.clone(), target);
+            if let Some(limit) = configuration.power_limit {
+                retune = retune.with_power_limit(limit)?;
+            }
+            let handoff = Handoff::new(
+                retune,
+                configuration.levels.clone(),
+                configuration.agc,
+                None,
+            )?;
+            request.permission().check(Instant::now())?;
+            backend.flush_output();
+            rig.remote_unkey_idle(outgoing, request.permission())?;
+            self.selection_clear_keyers(rig, request.permission())?;
+            rig.remote_handoff(handoff, request.permission())
+        })();
+        let readback = match prepared {
+            Ok(readback) => readback,
+            Err(reason) => {
+                request.refuse(reason);
+                if request.uncertain() {
+                    self.remote_retune_uncertain = true;
+                }
+                return;
+            }
+        };
+        let mut eng = engine_lock(engine);
+        // Refresh the original connection's idle evidence after I/O. Native
+        // settings still describe the old workspace until commit succeeds.
+        let read = self.remote_connection.as_ref().and_then(|connection| {
+            eng.remote_radio_read(connection, readback.radio().sampled_at())
+        });
+        eng.remote_observe_cat(read.as_ref(), Some(true));
+        eng.remote_observe_dial(read.as_ref(), Some(readback.radio().position().dial_hz()));
+        eng.remote_observe_mode(read.as_ref(), Some(readback.radio().position().mode()));
+        eng.remote_observe_ptt(read.as_ref(), Some(false));
+        let Some(decoder) = tempo_app::engine::remote_selection::Ft8A7ResetGuard::try_acquire()
+        else {
+            request.refuse(Reason::StationBusy);
+            self.remote_retune_uncertain = true;
+            return;
+        };
+        let radio = request.settings().active_radio;
+        let adopted = request.commit_with_install(
+            &mut eng,
+            Readback {
+                radio,
+                dial_hz: readback.radio().position().dial_hz(),
+                mode: readback.radio().position().mode(),
+                sampled_at: readback.radio().sampled_at(),
+            },
+            decoder,
+            |eng| {
+                self.adopt_selection_readback(eng, &configuration, &readback, None);
+                self.remote_connection = None;
+                self.mode_giveup = None;
+                self.mode_fail_count = 0;
+                self.mode_saw_reject = false;
+                self.dial_giveup = None;
+                self.dial_fail_count = 0;
+                self.last_rig_poll = now_unix_ms();
+                self.last_freq_poll = self.last_rig_poll;
+                let _ = eng.take_cw_abort();
+                let _ = eng.take_rtty_abort();
+                let _ = eng.take_psk_abort();
+                let _ = eng.take_sstv_abort();
+            },
+        );
+        self.remote_retune_uncertain = !adopted;
+        drop(eng);
+        if adopted {
+            notify_host();
+        }
     }
 
     fn selection_outgoing_read(
