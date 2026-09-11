@@ -345,7 +345,7 @@ pub async fn connected(
                                 // operation. Its authority path uses neither of those locks.
                                 let result = operation_connection.authority.handle_version(
                                     (operation_connection.id, operation_version.unwrap_or(1)),
-                                    &session_id, &device_id, &request, &engine, Instant::now());
+                                    &session_id, &device_id, &request, engine, Instant::now());
                                 let data = match result {
                                     Ok(value) => json!({"type":"operationResponse","sessionId":session_id,"requestId":request.id(),"value":value}),
                                     Err(error) => json!({"type":"operationResponse","sessionId":session_id,"requestId":request.id(),"error":error}),
