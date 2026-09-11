@@ -559,7 +559,7 @@ for (const {applicationVersion,operating,sessionLayout} of [...[1,2,3,4,5,6,7,8,
       await until(`!!${button('Take station control')}`);await click(button('Take station control'))
       await until(`document.querySelector('.remote-logging-authority')?.textContent.includes('Station control active')`)
       const lease=loggingLease,checks=[]
-      await evaluate(`window.__sessionApp=document.querySelector('.app')`)
+      await evaluate(`void(window.__sessionApp=document.querySelector('.app'))`)
       for(const [width,height,zoom]of [[390,844,1],[1280,800,1],[390,844,1.75],[1280,800,1.75]])for(const theme of ['dark','light']){
         await browser.call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false},session)
         await evaluate(`document.documentElement.style.setProperty('--ui-zoom','${zoom}');document.documentElement.dataset.theme='${theme}';window.dispatchEvent(new Event('resize'))`);await settledLayout()
