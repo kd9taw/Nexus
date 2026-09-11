@@ -5426,6 +5426,17 @@ impl Engine {
     }
 
     fn tune_dial(&mut self, dial_mhz: f64, band: &str, mode: &str, origin: DialOrigin) {
+        self.tune_dial_with_reset(dial_mhz, band, mode, origin, modes::reset_ft8_a7);
+    }
+
+    fn tune_dial_with_reset(
+        &mut self,
+        dial_mhz: f64,
+        band: &str,
+        mode: &str,
+        origin: DialOrigin,
+        mut reset: impl FnMut(),
+    ) {
         // Band transitions only. The dial itself moves constantly (RIT, a click on the
         // waterfall, Doppler on a pass) and logging THAT would be per-tick noise; the band is
         // what a reader needs to make sense of the lines under it.
@@ -5502,7 +5513,7 @@ impl Engine {
                     self.settings.route_radio(band, route_mode)
                 }
             }) {
-                self.set_active_radio(id);
+                self.set_active_radio_with_reset(id, &mut reset);
             }
         }
         // A normal QSY leaves the APRS FM-simplex context (aprs_tune re-sets it right after its own
@@ -5558,7 +5569,7 @@ impl Engine {
             self.app.clear_stations();
             // The a7 cross-cycle AP table holds the OLD band's decodes — replaying
             // them as AP hypotheses on the new band would seed wrong-call decodes.
-            modes::reset_ft8_a7();
+            reset();
         }
         if band_changed {
             // ⚠️ BAND CHANGE ONLY — this is an FT-mode TX/timing behaviour and
@@ -6311,6 +6322,10 @@ impl Engine {
     /// operating mode. No memory + no default = no-op — the dropdown only lists licensed
     /// bands, and the TX lockout guards the air regardless.
     pub fn pick_band(&mut self, band: &str, mode: Option<&str>) {
+        self.pick_band_with_reset(band, mode, modes::reset_ft8_a7);
+    }
+
+    fn pick_band_with_reset(&mut self, band: &str, mode: Option<&str>, reset: impl FnMut()) {
         use crate::settings::OperatingMode;
         let band = crate::bandplan::canonical_band(band);
         let om = match mode.map(str::to_ascii_lowercase).as_deref() {
@@ -6332,7 +6347,7 @@ impl Engine {
         self.bank_dial_memory();
         if let Some((dial, sideband)) = self.prepare_band_pick(&band, om) {
             // Arms the retune, and opens the residency this pick should be remembered by.
-            self.set_frequency(dial, &band, &sideband);
+            self.tune_dial_with_reset(dial, &band, &sideband, DialOrigin::Operator, reset);
             // Record it in the cell the recall READ. `set_frequency` opens the residency with
             // `settings.operating_mode`, which is exactly the value that may still lag `om`
             // during cockpit entry — the race `mode` is passed to dodge. One mode decides both

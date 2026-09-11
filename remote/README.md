@@ -550,7 +550,15 @@ a tune is unconfirmed or its FM configuration is still pending. Hardware readbac
 is required, and later polls do not retry an unconfirmed adjustment. Older
 stations keep FM receiver controls disabled.
 
-Combined routed profile/tuning changes, repeater-channel holds and satellite/split transactions,
+Typed frequencies and named CW/Phone band picks also follow the station's saved
+radio routing rules. A routed tune uses one native selection transaction: prepare
+the incoming radio at the requested dial, confirm both radios, then adopt and save
+through the native QSY or band-recall owner. It does not select the incoming
+profile's remembered frequency as an intermediate command. Peg-lock and bandless
+routing keep their desktop meanings. Failure does not queue a retry or activate
+an unconfirmed radio. Host handoff support is required.
+
+Combined routed mode/workspace/spot changes, repeater-channel holds and satellite/split transactions,
 band-memory/spot shortcuts, scope dragging, continuous scanning and attended hardware/WAN
 acceptance remain incomplete. A compatible station build is required; this
 source increment does not update existing installations or establish paid readiness.

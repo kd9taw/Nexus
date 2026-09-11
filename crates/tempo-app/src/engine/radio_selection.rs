@@ -11,6 +11,13 @@ pub struct RadioSelection {
 }
 
 impl RadioSelection {
+    pub(super) fn with_frequency(mut self, dial_mhz: f64, band: &str, sideband: &str) -> Self {
+        self.settings.dial_mhz = dial_mhz;
+        self.settings.band = band.into();
+        self.settings.sideband = sideband.into();
+        self
+    }
+
     /// Local owner input for transport/tune preparation; never a browser DTO.
     pub fn settings(&self) -> &Settings {
         &self.settings

@@ -528,3 +528,85 @@ fn selection_worker_switches_back_using_the_original_connection_and_retires_old_
     assert_eq!(saved.radios[1].last_dial_mhz, 7.074);
     assert_eq!(pool.lock().unwrap()[0].id, 1);
 }
+
+#[test]
+fn routed_frequency_uses_one_confirmed_handoff_and_never_queues_the_incoming_profile_dial() {
+    for warm in [false, true] {
+        for confirmed in [false, true] {
+            let outgoing = retuning_peer(14_074_000, "PKTUSB", |_, _| None);
+            let incoming = retuning_peer(7_100_000, "LSB", move |line, _| {
+                (!confirmed && line == "F 145225000").then(|| "RPRT 0\n".into())
+            });
+            let mut s = configured_station(&outgoing, |settings| {
+                settings.radios[1].bands = vec!["2m".into()];
+            });
+            engine_lock(&s.engine).configure_remote_selection_host(true);
+            let original = engine_lock(&s.engine).settings().clone();
+            let pool = Arc::new(MonitorConnections::new(if warm {
+                vec![connection(&s, &incoming)]
+            } else {
+                vec![]
+            }));
+            let receipt = s.queue_dial(145.225, "2m");
+            assert_eq!(engine_lock(&s.engine).settings(), &original);
+            apply(&mut s, &pool, |_| {
+                (Rig::rigctld(&incoming.address), None, Some(true))
+            });
+            assert_eq!(
+                matches!(
+                    receipt.outcome(),
+                    Outcome::Applied {
+                        evidence: Evidence::RadioReadback
+                    }
+                ),
+                confirmed,
+                "{:?}",
+                receipt.outcome()
+            );
+            if !confirmed {
+                assert!(matches!(receipt.outcome(), Outcome::Unknown { .. }));
+            }
+            let incoming_writes = super::fm::writes(&incoming);
+            let outgoing_writes = super::fm::writes(&outgoing);
+            assert_eq!(
+                incoming_writes
+                    .iter()
+                    .filter(|line| line.starts_with("F "))
+                    .collect::<Vec<_>>(),
+                vec![&"F 145225000".to_string()]
+            );
+            assert!(!outgoing_writes
+                .iter()
+                .any(|line| line.starts_with("F ") || line.starts_with("M ")));
+            for now in [200.0, 400.0, 800.0, 1600.0, 2400.0] {
+                s.state
+                    .step(
+                        &s.engine,
+                        &mut s.backend,
+                        &mut s.rig,
+                        &no_sinks(),
+                        now,
+                        &mut mock_reopen_audio(),
+                        &mut mock_reopen_rig(),
+                        &mut StationSinks::new(),
+                    )
+                    .unwrap();
+            }
+            assert_eq!(super::fm::writes(&incoming), incoming_writes);
+            let e = engine_lock(&s.engine);
+            assert_eq!(e.settings().active_radio, if confirmed { 1 } else { 0 });
+            if confirmed {
+                let saved: Settings =
+                    serde_json::from_slice(&std::fs::read(&s.path).unwrap()).unwrap();
+                assert_eq!(saved.dial_mhz, 145.225);
+                assert_eq!(saved.active_radio, 1);
+                assert_eq!(saved.radios[0].last_dial_mhz, original.dial_mhz);
+            } else {
+                assert_eq!(e.settings(), &original);
+                assert!(!s.path.exists());
+            }
+            assert!(!e.tx_enabled());
+            assert!(s.backend.played.is_empty());
+        }
+    }
+}

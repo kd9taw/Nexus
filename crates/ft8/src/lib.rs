@@ -288,8 +288,14 @@ impl A7ResetGuard {
     }
 
     /// Consume the held lock at the native reset point without locking again.
-    pub fn reset(self) {
-        let _guard = self.0;
+    pub fn reset(mut self) {
+        self.reset_held();
+    }
+
+    /// Keep serialization across a native radio handoff followed by its QSY.
+    /// Each native reset point still runs; neither point reacquires the lock.
+    pub fn reset_held(&mut self) {
+        let _guard = &self.0;
         unsafe {
             tempo_fast_sys::ft8_a7_reset();
         }

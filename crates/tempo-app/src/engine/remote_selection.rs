@@ -14,8 +14,16 @@ pub struct Request {
     original_mode: String,
     connection: u64,
     selection: RadioSelection,
+    tune: Option<RoutedTune>,
     permission: WritePermission,
     completion: Completion,
+}
+
+struct RoutedTune {
+    dial_mhz: f64,
+    band: String,
+    sideband: String,
+    band_mode: Option<String>,
 }
 
 /// Final position read by the incoming connection owner, never a browser DTO.
@@ -58,6 +66,41 @@ impl Engine {
         connection: u64,
         permit: Permit,
     ) -> Result<Completion, Reason> {
+        self.queue_remote_selection(id, None, connection, permit)
+    }
+
+    pub(super) fn queue_remote_routed_frequency(
+        &mut self,
+        id: u32,
+        dial_mhz: f64,
+        band: &str,
+        sideband: &str,
+        connection: u64,
+        permit: Permit,
+    ) -> Result<Completion, Reason> {
+        if !self.remote_selection_host_ready {
+            return Err(Reason::UnsupportedAction);
+        }
+        self.queue_remote_selection(
+            id,
+            Some(RoutedTune {
+                dial_mhz,
+                band: band.into(),
+                sideband: sideband.into(),
+                band_mode: None,
+            }),
+            connection,
+            permit,
+        )
+    }
+
+    fn queue_remote_selection(
+        &mut self,
+        id: u32,
+        tune: Option<RoutedTune>,
+        connection: u64,
+        permit: Permit,
+    ) -> Result<Completion, Reason> {
         self.remote_radio_idle()?;
         self.remote_radio_link(connection)?;
         if self.source_kind != crate::dto::SourceKind::Native {
@@ -93,13 +136,18 @@ impl Engine {
             });
             return Ok(completion);
         }
+        let mut selection = self
+            .preview_radio_selection(id)
+            .ok_or(Reason::InvalidAction)?;
+        if let Some(tune) = &tune {
+            selection = selection.with_frequency(tune.dial_mhz, &tune.band, &tune.sideband);
+        }
         let request = Request {
             original: self.settings.clone(),
             original_mode: self.rig_mode_effective(),
             connection,
-            selection: self
-                .preview_radio_selection(id)
-                .ok_or(Reason::InvalidAction)?,
+            selection,
+            tune,
             permission,
             completion: completion.clone(),
         };
@@ -116,6 +164,37 @@ impl Engine {
 }
 
 impl Request {
+    pub(super) fn bind_band_pick(&mut self, mode: &str) {
+        self.tune.as_mut().expect("routed tune").band_mode = Some(mode.into());
+    }
+
+    fn preview(&self, engine: &Engine) -> Option<RadioSelection> {
+        let mut selection = engine.preview_radio_selection(self.settings().active_radio)?;
+        if let Some(tune) = &self.tune {
+            if !engine.remote_selection_host_ready
+                || engine.remote_frequency_route(tune.dial_mhz, &tune.band)
+                    != Some(self.settings().active_radio)
+            {
+                return None;
+            }
+            if let Some(mode) = &tune.band_mode {
+                let om = match mode.as_str() {
+                    "cw" => crate::settings::OperatingMode::Cw,
+                    "phone" => crate::settings::OperatingMode::Phone,
+                    _ => return None,
+                };
+                if engine.settings.operating_mode != om
+                    || engine.prepare_band_pick(&tune.band, om)
+                        != Some((tune.dial_mhz, tune.sideband.clone()))
+                {
+                    return None;
+                }
+            }
+            selection = selection.with_frequency(tune.dial_mhz, &tune.band, &tune.sideband);
+        }
+        Some(selection)
+    }
+
     pub(super) fn pending(&self) -> bool {
         matches!(self.completion.outcome(), Outcome::Pending)
     }
@@ -179,8 +258,8 @@ impl Request {
         if engine.source_kind != crate::dto::SourceKind::Native
             || engine.settings != self.original
             || engine.rig_mode_effective() != self.original_mode
-            || !engine
-                .preview_radio_selection(self.settings().active_radio)
+            || !self
+                .preview(engine)
                 .is_some_and(|selection| selection.settings() == self.settings())
         {
             return Err(Reason::ContextChanged);
@@ -204,7 +283,7 @@ impl Request {
         self,
         engine: &mut Engine,
         readback: Readback<'_>,
-        decoder: modes::Ft8A7ResetGuard,
+        mut decoder: modes::Ft8A7ResetGuard,
         install: impl FnOnce(&mut Engine),
     ) -> bool {
         let ready = (|| {
@@ -228,7 +307,22 @@ impl Request {
             return false;
         }
         let incoming = self.settings().active_radio;
-        engine.set_active_radio_with_decoder_guard(incoming, decoder);
+        if let Some(tune) = &self.tune {
+            if let Some(mode) = &tune.band_mode {
+                engine.pick_band_with_reset(&tune.band, Some(mode), || decoder.reset_held());
+            } else {
+                engine.tune_dial_with_reset(
+                    tune.dial_mhz,
+                    &tune.band,
+                    &tune.sideband,
+                    super::DialOrigin::Operator,
+                    || decoder.reset_held(),
+                );
+            }
+            drop(decoder);
+        } else {
+            engine.set_active_radio_with_decoder_guard(incoming, decoder);
+        }
         engine.forget_radio_live(incoming);
         engine.clear_rig_smeter();
         // These observations belong to the outgoing hardware. In particular,
@@ -828,5 +922,177 @@ mod tests {
         ));
         assert!(engine.take_remote_radio_selection().is_none());
         assert_eq!(engine.settings, before);
+    }
+
+    fn refresh(engine: &mut Engine) -> u64 {
+        let connection = engine.remote_open_radio().unwrap();
+        let read = engine
+            .remote_radio_read(&connection, Instant::now())
+            .unwrap();
+        engine.remote_observe_cat(Some(&read), Some(true));
+        engine.remote_observe_dial(Some(&read), Some(engine.settings.dial_hz()));
+        engine.remote_observe_mode(Some(&read), Some(&engine.rig_mode_effective()));
+        engine.remote_observe_ptt(Some(&read), Some(false));
+        engine
+            .remote_monitor_observation()
+            .radio
+            .readings
+            .cat
+            .unwrap()
+            .connection_generation
+    }
+
+    #[test]
+    fn routed_frequency_preparation_and_commit_match_the_native_qsy_for_each_mode() {
+        use crate::settings::OperatingMode;
+        for (mode, phone_mode) in [
+            (OperatingMode::Digital, "ssb"),
+            (OperatingMode::Cw, "ssb"),
+            (OperatingMode::Rtty, "ssb"),
+            (OperatingMode::Keyboard, "ssb"),
+            (OperatingMode::Phone, "ssb"),
+            (OperatingMode::Phone, "fm"),
+            (OperatingMode::Phone, "am"),
+        ] {
+            let (mut engine, incoming, _) = station();
+            engine.settings.operating_mode = mode;
+            engine.settings.phone_mode = phone_mode.into();
+            engine
+                .settings
+                .radios
+                .iter_mut()
+                .find(|p| p.id == incoming)
+                .unwrap()
+                .bands = vec!["2m".into()];
+            engine.configure_remote_selection_host(true);
+            let mut native = Engine::with_settings(engine.settings.clone());
+            native.set_tx_enabled(false);
+            for e in [&mut engine, &mut native] {
+                e.set_frequency(14.250, "20m", "USB");
+                e.take_immediate_retune();
+            }
+            native.set_frequency(145.225, "2m", "USB");
+            native.take_immediate_retune();
+            let generation = refresh(&mut engine);
+            let original = engine.settings.clone();
+            let memory = engine.freq_memory.clone();
+            let authority = Revocation::default();
+            let receipt = engine
+                .queue_remote_frequency(145.225, "2m", "USB", generation, permit(&authority))
+                .unwrap();
+            assert_eq!(engine.settings, original);
+            assert_eq!(engine.freq_memory, memory);
+            assert!(engine.take_remote_radio().is_none());
+            let request = engine.take_remote_radio_selection().unwrap();
+            assert_eq!(
+                request.settings(),
+                native.settings(),
+                "{mode:?} {phone_mode}"
+            );
+            assert!(commit(request, &mut engine, |_| {}));
+            assert_eq!(
+                receipt.outcome(),
+                Outcome::Applied {
+                    evidence: Evidence::RadioReadback
+                }
+            );
+            assert_eq!(engine.settings, native.settings);
+            assert_eq!(engine.freq_memory, native.freq_memory);
+            assert_eq!(engine.settings.active_radio, incoming);
+            assert_eq!(engine.settings.dial_mhz, 145.225);
+            assert!(!engine.tx_enabled());
+            assert!(!engine.immediate_retune);
+            let saved: Settings = serde_json::from_slice(
+                &std::fs::read(engine.remote_settings_path.as_ref().unwrap()).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(saved, engine.settings);
+        }
+    }
+
+    #[test]
+    fn routed_band_selection_uses_native_memory_and_outgoing_profile_banking() {
+        use crate::settings::OperatingMode;
+        for (mode, name, dial) in [
+            (OperatingMode::Phone, "phone", 145.275),
+            (OperatingMode::Cw, "cw", 144.055),
+        ] {
+            let (mut engine, incoming, _) = station();
+            engine.settings.operating_mode = mode;
+            engine.settings.license_class = crate::settings::LicenseClass::Open;
+            engine
+                .settings
+                .radios
+                .iter_mut()
+                .find(|p| p.id == incoming)
+                .unwrap()
+                .bands = vec!["2m".into()];
+            engine.configure_remote_selection_host(true);
+            let mut native = Engine::with_settings(engine.settings.clone());
+            native.set_tx_enabled(false);
+            for e in [&mut engine, &mut native] {
+                e.set_frequency(dial, "2m", "USB");
+                e.set_frequency(14.250, "20m", "USB");
+                e.take_immediate_retune();
+            }
+            native.pick_band("2m", Some(name));
+            native.take_immediate_retune();
+            let generation = refresh(&mut engine);
+            let before = engine.settings.clone();
+            let authority = Revocation::default();
+            let receipt = engine
+                .queue_remote_band("2m", name, generation, permit(&authority))
+                .unwrap();
+            assert_eq!(engine.settings, before);
+            let request = engine.take_remote_radio_selection().unwrap();
+            assert_eq!(request.settings().dial_mhz, dial);
+            assert!(commit(request, &mut engine, |_| {}));
+            assert_eq!(
+                receipt.outcome(),
+                Outcome::Applied {
+                    evidence: Evidence::RadioReadback
+                }
+            );
+            assert_eq!(engine.settings, native.settings);
+            assert_eq!(engine.freq_memory, native.freq_memory);
+            assert!(!engine.tx_enabled());
+        }
+    }
+
+    #[test]
+    fn routed_frequency_needs_host_support_and_rechecks_the_original_route_before_commit() {
+        for changed in ["host", "route", "authority"] {
+            let (mut engine, incoming, _) = station();
+            engine
+                .settings
+                .radios
+                .iter_mut()
+                .find(|p| p.id == incoming)
+                .unwrap()
+                .bands = vec!["2m".into()];
+            let authority = Revocation::default();
+            let generation = refresh(&mut engine);
+            assert!(matches!(
+                engine.queue_remote_frequency(145.225, "2m", "USB", generation, permit(&authority)),
+                Err(Reason::UnsupportedAction)
+            ));
+            engine.configure_remote_selection_host(true);
+            let receipt = engine
+                .queue_remote_frequency(145.225, "2m", "USB", generation, permit(&authority))
+                .unwrap();
+            let request = engine.take_remote_radio_selection().unwrap();
+            match changed {
+                "host" => engine.configure_remote_selection_host(false),
+                "route" => engine.settings.radio_pegged = true,
+                _ => authority.revoke(),
+            }
+            let expected = engine.settings.clone();
+            assert!(!commit(request, &mut engine, |_| panic!(
+                "refused selection cannot install"
+            )));
+            assert!(matches!(receipt.outcome(), Outcome::Rejected { .. }));
+            assert_eq!(engine.settings, expected);
+            assert_eq!(engine.settings.active_radio, 0);
+        }
     }
 }

@@ -135,6 +135,19 @@ impl Engine {
         Ok(())
     }
 
+    // Same bandless, peg and station routing rules as the native QSY owner.
+    pub(super) fn remote_frequency_route(&self, dial_mhz: f64, band: &str) -> Option<u32> {
+        if self.settings.radio_pegged {
+            return None;
+        }
+        let mode = self.route_mode(band, dial_mhz);
+        if band.is_empty() {
+            self.settings.route_radio_bandless(mode)
+        } else {
+            self.settings.route_radio(band, mode)
+        }
+    }
+
     pub fn queue_remote_frequency(
         &mut self,
         dial_mhz: f64,
@@ -153,22 +166,15 @@ impl Engine {
         }
         let target_hz = (dial_mhz * 1e6).round() as u64;
         let dial_mhz = target_hz as f64 / 1e6;
-        // Match the native dial owner: an unnamed receive frequency uses the
-        // bandless resolver, never catch-all band coverage or default-radio
-        // fallback. A real requested handoff still needs its own transaction.
-        let route_mode = self.route_mode(band, dial_mhz);
-        let route = if band.is_empty() {
-            self.settings.route_radio_bandless(route_mode)
-        } else {
-            self.settings.route_radio(band, route_mode)
-        };
-        if !self.settings.radio_pegged && route.is_some_and(|id| id != self.settings.active_radio) {
-            return Err(Reason::UnsupportedAction);
-        }
-        if target_hz == 0
-            || crate::bandplan::band_for_dial(target_hz as f64 / 1e6).unwrap_or("") != band
-        {
+        if target_hz == 0 || crate::bandplan::band_for_dial(dial_mhz).unwrap_or("") != band {
             return Err(Reason::InvalidAction);
+        }
+        if let Some(id) = self
+            .remote_frequency_route(dial_mhz, band)
+            .filter(|id| *id != self.settings.active_radio)
+        {
+            return self
+                .queue_remote_routed_frequency(id, dial_mhz, band, sideband, connection, permit);
         }
         let target_mode = if self.settings.operating_mode == OperatingMode::Phone
             && !self.context_band_transition(band).0
@@ -221,11 +227,21 @@ impl Engine {
             .ok_or(Reason::UnsupportedAction)?;
         // The existing frequency transaction owns routing, authority, mode and
         // readback. Only its final verb differs: native pick must bank/recall.
+        let routed = self
+            .remote_frequency_route(dial, band)
+            .is_some_and(|id| id != self.settings.active_radio);
         let receipt = self.queue_remote_frequency(dial, band, &sideband, connection, permit)?;
-        self.remote_radio_command
-            .as_mut()
-            .expect("queued frequency")
-            .intent = Intent::Band { mode: mode.into() };
+        if routed {
+            self.remote_radio_selection
+                .as_mut()
+                .expect("queued routed frequency")
+                .bind_band_pick(mode);
+        } else {
+            self.remote_radio_command
+                .as_mut()
+                .expect("queued frequency")
+                .intent = Intent::Band { mode: mode.into() };
+        }
         Ok(receipt)
     }
 

@@ -20,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Remote access. Loss warnings and unresolved command recovery remain visible;
   expanding the details preserves the current cockpit and session.
 
+- **Remote radio routing:** Typed frequencies and CW/Phone band picks follow the
+  station's saved radio rules through one confirmed handoff and tune. The native
+  QSY and band-memory paths retain outgoing profiles and operator choices.
 - **Remote FM receiver controls:** Power, microphone gain, receiver DSP, AGC and
   bandwidth use the existing Nexus controls while receiving FM. Commands preserve
   the tuned frequency and repeater settings and require confirmed radio readback.
