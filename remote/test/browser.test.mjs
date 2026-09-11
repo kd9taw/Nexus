@@ -3,12 +3,11 @@
 // It is a test provider, not evidence of a live Auth0 tenant or physical phone.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { spawn } from 'node:child_process'
-import { mkdtemp, readFile, writeFile, mkdir, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { readFile, writeFile, mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createHash, randomBytes } from 'node:crypto'
-import WebSocket from 'ws'
+import { chrome, cleanupAfterTest } from './browser-runtime.mjs'
+import './browser-lifecycle.test.mjs'
 import { runtime } from './runtime.mjs'
 import { applicationFixture, collectionFixture, recallFixture } from './application-fixture.mjs'
 import { stationModesFixture } from './station-modes-fixture.mjs'
@@ -16,58 +15,18 @@ import { navigationFixture } from './navigation-fixture.mjs'
 import { tempoConversations } from './tempo-fixture.mjs'
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
-async function chrome() {
-  const profile = await mkdtemp(join(tmpdir(), 'nexus-remote-browser-'))
-  const child = spawn(process.env.CHROME_BIN || 'google-chrome', [
-    '--headless=new', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage',
-    '--disable-background-networking', '--no-first-run', '--no-default-browser-check',
-    '--no-proxy-server', '--disable-extensions', '--disable-default-apps',
-    // Isolate synthetic browser cookies from a locked desktop credential store.
-    '--password-store=basic', '--use-mock-keychain',
-    '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank',
-  ], { stdio: 'ignore', detached: true })
-  let exited = false
-  child.once('error', () => { exited = true })
-  const exit = new Promise(resolve => child.once('exit', () => { exited = true; resolve() }))
-  let ws
-  try {
-    let endpoint
-    // A cold hosted runner can take longer than five seconds to launch Chrome.
-    // Bound process startup separately from the browser's application assertions.
-    const deadline = performance.now() + 30_000
-    while (performance.now() < deadline) {
-      if (exited) throw new Error('Chrome could not start')
-      try { const [port,path] = (await readFile(join(profile,'DevToolsActivePort'),'utf8')).split('\n'); endpoint=`ws://127.0.0.1:${port}${path}`; break } catch {}
-      await sleep(50)
-    }
-    assert.ok(endpoint, 'Chrome debugging endpoint must start within 30 seconds')
-    ws = new WebSocket(endpoint)
-    await new Promise((resolve,reject) => { ws.once('open',resolve); ws.once('error',()=>reject(new Error('Chrome debugging connection failed'))) })
-    const pending = new Map(), listeners = new Map()
-    let next=0
-    ws.on('message', bytes => {
-      const value=JSON.parse(bytes)
-      if (value.id) { const promise=pending.get(value.id); if(promise){pending.delete(value.id);clearTimeout(promise.timer);value.error?promise.reject(new Error(`Browser protocol command failed: ${promise.method} (${value.error.code}): ${value.error.message}`)):promise.resolve(value.result)} }
-      else listeners.get(value.method)?.(value.params, value.sessionId)
-    })
-    const call = (method,params={},sessionId) => new Promise((resolve,reject) => {
-      const id=++next, timer=setTimeout(()=>{pending.delete(id);reject(new Error(`Browser command timed out: ${method}`))},10000)
-      pending.set(id,{resolve,reject,timer,method});ws.send(JSON.stringify({id,method,params,sessionId}))
-    })
-    return { call, on: (method, fn) => listeners.set(method,fn), async stop() {
-      await call('Browser.close').catch(()=>{}); ws.close()
-      await Promise.race([exit,sleep(2000)])
-      if(!exited){process.kill(-child.pid,'SIGTERM');await Promise.race([exit,sleep(2000)])}
-      if(!exited)process.kill(-child.pid,'SIGKILL')
-      await rm(profile,{recursive:true,force:true,maxRetries:8,retryDelay:100})
-    } }
-  } catch(error) { ws?.close(); if(!exited)process.kill(-child.pid,'SIGTERM'); await rm(profile,{recursive:true,force:true,maxRetries:8,retryDelay:100}); throw error }
-}
 
-for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='phone',contactContinuity,workSpot} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,14].map(applicationVersion=>({applicationVersion,operating:false})),{applicationVersion:14,operating:true},{applicationVersion:14,operating:true,sessionLayout:true},{applicationVersion:14,operating:true,quickLayout:true},{applicationVersion:14,operating:true,quickLayout:true,quickMode:'cw'},{applicationVersion:14,operating:true,contactContinuity:true},{applicationVersion:14,operating:true,workSpot:true}]) test(`compiled hosted browser ${workSpot?'DX work':contactContinuity?'contact continuity':quickLayout?`quick layout${quickMode==='cw'?' CW':''}`:sessionLayout?'session layout':operating?'operations':`v${applicationVersion}`} completes PKCE, local device approval, observation and viewport checks`, { timeout: applicationVersion >= 14 ? 540000 : applicationVersion >= 13 ? 420000 : 180000 }, async () => {
+for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='phone',contactContinuity,workSpot} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,14].map(applicationVersion=>({applicationVersion,operating:false})),{applicationVersion:14,operating:true},{applicationVersion:14,operating:true,sessionLayout:true},{applicationVersion:14,operating:true,quickLayout:true},{applicationVersion:14,operating:true,quickLayout:true,quickMode:'cw'},{applicationVersion:14,operating:true,contactContinuity:true},{applicationVersion:14,operating:true,workSpot:true}]) test(`compiled hosted browser ${workSpot?'DX work':contactContinuity?'contact continuity':quickLayout?`quick layout${quickMode==='cw'?' CW':''}`:sessionLayout?'session layout':operating?'operations':`v${applicationVersion}`} completes PKCE, local device approval, observation and viewport checks`, { timeout: applicationVersion >= 14 ? 540000 : applicationVersion >= 13 ? 420000 : 180000 }, async context => {
   const app=await runtime(), artifacts=process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS ? join(process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS, workSpot?'dx-work':contactContinuity?'contact-continuity':quickLayout?`quick-layout${quickMode==='cw'?'-cw':''}`:sessionLayout?'session-layout':operating?'operations':`v${applicationVersion}`) : undefined
   let browser, station, producing=true, pauseObservations=false, producer, applicationProducer
   const results=[]
+  const stop = cleanupAfterTest(context, async () => {
+    producing=false;station?.close()
+    // Stop the browser even if a producer rejected; no failed fixture may skip
+    // process cleanup and overlap the next compatibility or operating case.
+    try { await Promise.all([producer,applicationProducer]) }
+    finally { try { await browser?.stop() } finally { await app.mf.dispose() } }
+  })
   try {
     browser=await chrome()
     if(artifacts){await mkdir(artifacts,{recursive:true});await writeFile(join(artifacts,'chrome-version.json'),JSON.stringify(await browser.call('Browser.getVersion'),null,2)+'\n')}
@@ -2338,7 +2297,6 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
     console.log(`Compiled browser: PKCE exchange, browser approval, live observation, revocation, ${results.length} geometry cases and overflow positive control passed`)
     if(artifacts)await writeFile(join(artifacts,'remote-browser-results.json'),JSON.stringify({exchanges,exceptions,acknowledgements,unexpectedMessages,applicationTraffic,geometry:results},null,2)+'\n')
   } finally {
-    producing=false;station?.close();await Promise.all([producer,applicationProducer])
-    try { await browser?.stop() } finally { await app.mf.dispose() }
+    await stop()
   }
 })
