@@ -952,7 +952,6 @@ mod tests {
             (OperatingMode::Keyboard, "ssb"),
             (OperatingMode::Phone, "ssb"),
             (OperatingMode::Phone, "fm"),
-            (OperatingMode::Phone, "am"),
         ] {
             let (mut engine, incoming, _) = station();
             engine.settings.operating_mode = mode;
@@ -1097,13 +1096,14 @@ mod tests {
     }
 
     #[test]
-    fn routed_am_configuration_uses_the_native_am_power_ceiling_before_any_write() {
+    fn routed_frequency_leaves_temporary_am_mode_under_native_handoff_policy() {
         let (mut engine, incoming, _) = station();
         engine.settings.operating_mode = crate::settings::OperatingMode::Phone;
-        engine.settings.phone_mode = "am".into();
+        engine.settings.phone_mode = "ssb".into();
+        engine.sideband_override = Some("AM".into());
         engine.settings.max_power_phone = Some(0.8);
         engine.settings.max_power_am = Some(0.25);
-        engine.rf_power = Some(0.7);
+        engine.rf_power = Some(0.2);
         engine
             .settings
             .radios
@@ -1118,9 +1118,9 @@ mod tests {
             .queue_remote_frequency(145.225, "2m", "USB", generation, permit(&authority))
             .unwrap();
         let request = engine.take_remote_radio_selection().unwrap();
-        assert_eq!(request.settings().rig_mode(), "AM");
+        assert_eq!(request.settings().rig_mode(), "USB");
         let configuration = request.configuration(&engine).unwrap();
-        assert_eq!(configuration.power_limit, Some(0.25));
-        assert!(configuration.levels.contains(&(RadioLevel::Power, 0.25)));
+        assert_eq!(configuration.power_limit, Some(0.8));
+        assert!(configuration.levels.contains(&(RadioLevel::Power, 0.2)));
     }
 }
