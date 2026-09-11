@@ -786,7 +786,8 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
         await until(`document.querySelector('.remote-control-result')?.textContent.includes('saved')`)
         await until(`document.querySelector('${periodSelector}').value==='${periodSecs}'`)
       }
-      await gesture('.topbar-group.tier-toggle:not(.tx-period) > button:nth-child(1)','radio.tier')
+      await gesture('.operate-cockpit .cockpit-modes > button:first-child','radio.tier')
+      assert.deepEqual(stationRequests.at(-1).action,{action:'radio.tier',tier:'FT8'})
       await until(`document.querySelector('.operate-cockpit .cockpit-depth-chip:last-child')?.getAttribute('aria-pressed')==='true'`)
       let receiverGeometry=await decoderLayout('.operate-cockpit .cockpit-depth-chip:first-child','depth')
       for(const depth of [1,2,3]){
