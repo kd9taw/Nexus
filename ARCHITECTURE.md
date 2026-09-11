@@ -201,6 +201,14 @@ decoder lock without waiting and uses the shared native reset callback. Remote
 free-text drafts clear only after confirmation and retain edits made while a
 request is pending. This does not add Tx-slot selection, offset/period settings
 or complete QSO logging/confirmation.
+The `ftMessages` capability connects the existing Tx1–Tx5 choices to a checked
+form of the same native message override, including deliberate typed targets,
+manual-arming preference, parity and immediate-slot policy. Tx6 uses `ftOperate`
+and the existing directed-CQ parser. Draft edits and Generate/Clear are browser
+presentation; each button or Alt+number gesture separately checks its capability
+and captures the displayed exchange. A changed native exchange refuses that
+gesture. Remote next-message indicators follow station snapshots, not an
+optimistic local selection. Native calls keep their original argument shape.
 
 
 The receive-audio foundation is local to `tempo-audio`: the sole `RxDsp` capture

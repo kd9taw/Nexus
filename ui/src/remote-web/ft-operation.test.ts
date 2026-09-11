@@ -18,7 +18,7 @@ function fixture(exclusive: ControlStorage['exclusive'] = async run => run()) {
   clients.push(c); c.open()
   const state: OperationState = { stationBootId: crypto.randomUUID(), allowed: true, phase: 'controlling', leaseId: crypto.randomUUID(),
     revision: 1, commandWindowId: crypto.randomUUID(), nextSequence: 1, leaseRemainingMs: 5000, actions: [], txArmed: false,
-    transmitEpoch: '0000000000000001', controls: { context: { radioId: 0, radioConnection: 1, ampConnection: null, ampReadSequence: null }, capabilities: ['ftOperate', 'ftCall', 'ftExchange'] } }
+    transmitEpoch: '0000000000000001', controls: { context: { radioId: 0, radioConnection: 1, ampConnection: null, ampReadSequence: null }, capabilities: ['ftOperate', 'ftCall', 'ftExchange', 'ftMessages'] } }
   const reply = (requestId: string, value: unknown) => c.receive({ type: 'operationResponse', requestId, value })
   reply(sent[0].request.requestId, state)
   const snapshot = { link: { tier: 'FT8' }, radio: { txEnabled: false }, qso: { dxcall: 'W1AW', state: 'awaitReport', txNow: 'W1AW KD9TAW EN52', cqRunning: false } }
@@ -35,9 +35,9 @@ it('validates directed CQ tokens without widening into a native invoke tunnel', 
   expect(operationValue({ stop: 'accepted' })).toEqual({ stop: 'accepted' })
 })
 
-it.each([['qso_resend', {}, 'ft.exchange'], ['qso_freetext', { text: 'TNX 73' }, 'ft.exchange'], ['set_mode', { mode: 'qso-monitor' }, 'ft.exchange'], ['call_station', { call: 'W1AW', grid: null, message: 'CQ W1AW FN31', snr: -10, freq: 1250 }, 'ft.call'], ['start_cq', { dir: 'DX' }, 'ft.cq'], ['set_tx_enabled', { enabled: true }, 'ft.txEnabled']] as const)(
+it.each([['override_next_tx', { call: 'K2ABC', grid: 'FN42', text: 'K2ABC KD9TAW -12' }, 'ft.message'], ['qso_resend', {}, 'ft.exchange'], ['qso_freetext', { text: 'TNX 73' }, 'ft.exchange'], ['set_mode', { mode: 'qso-monitor' }, 'ft.exchange'], ['call_station', { call: 'W1AW', grid: null, message: 'CQ W1AW FN31', snr: -10, freq: 1250 }, 'ft.call'], ['start_cq', { dir: 'DX' }, 'ft.cq'], ['set_tx_enabled', { enabled: true }, 'ft.txEnabled']] as const)(
   'adapts %s to its FT authority and waits for a later station sample', async (command, args, action) => {
-    const h = fixture(), result = h.transport.invoke(command, action === 'ft.exchange' ? { ...args, expectedQso: h.snapshot.qso } : args)
+    const h = fixture(), result = h.transport.invoke(command, ['ft.exchange', 'ft.message'].includes(action) ? { ...args, expectedQso: h.snapshot.qso } : args)
     await Promise.resolve(); await Promise.resolve(); await Promise.resolve()
     const request = h.sent[h.sent.length - 1].request
     expect(request.type).toBe('stationControl'); expect(request.action.action).toBe(action)
@@ -92,4 +92,14 @@ it('retains the displayed exchange and original command window through an asynch
   expect(await pending).toMatchObject({ message: 'windowExpired' })
   expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(0)
   expect(h.saved).not.toHaveBeenCalled()
+})
+
+
+it('bounds message choices without requiring a roster target and rejects extra native arguments', () => {
+  const a = { action: 'ft.message', expectedTier: 'FT8', transmitEpoch: '0000000000000001',
+    expectedQso: { dxcall: null, state: 'Idle', txNow: null, cqRunning: false }, call: 'K2ABC', grid: 'FN42', text: 'K2ABC KD9TAW -12' }
+  expect(stationAction(a)).toEqual(a)
+  for (const patch of [{ call: 'W1AW;halt_tx' }, { text: '' }, { text: 'x'.repeat(129) }, { text: 'TNX\n73' },
+    { expectedTier: 'WSPR' }, { expectedQso: null }, { invoke: 'override_next_tx' }])
+    expect(() => stationAction({ ...a, ...patch })).toThrow()
 })

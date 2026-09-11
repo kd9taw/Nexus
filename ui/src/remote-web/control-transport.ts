@@ -15,8 +15,8 @@ export function controlTransport(reads: ApplicationTransport, client: Applicatio
       let action: StationAction | null = null, read = '', stopped = false
       let captured: ReturnType<OperationClient['prepareControl']> | undefined
       switch (command) {
-        case 'qso_resend': case 'qso_freetext': case 'set_mode': {
-          const keys = command === 'qso_resend' ? ['expectedQso'] : [command === 'qso_freetext' ? 'text' : 'mode', 'expectedQso']
+        case 'override_next_tx': case 'qso_resend': case 'qso_freetext': case 'set_mode': {
+          const keys = command === 'override_next_tx' ? ['call', 'grid', 'text', 'expectedQso'] : command === 'qso_resend' ? ['expectedQso'] : [command === 'qso_freetext' ? 'text' : 'mode', 'expectedQso']
           if (!args || Object.keys(args).length !== keys.length || Object.keys(args).some(key => !keys.includes(key))) throw Error('invalidOperation')
           if (command === 'set_mode' && args?.mode !== 'qso-monitor') throw Error('applicationUnsupported')
           const gesture = structuredClone(args)
@@ -26,10 +26,11 @@ export function controlTransport(reads: ApplicationTransport, client: Applicatio
           if (!state?.transmitEpoch) throw Error('localPermissionRequired')
           captured = operations.prepareControl()
           const snapshot = await reads.invoke<import('../types').AppSnapshot>('get_snapshot')
-          action = stationAction({ action: 'ft.exchange', expectedTier: snapshot.link.tier,
+          action = stationAction({ action: command === 'override_next_tx' ? 'ft.message' : 'ft.exchange', expectedTier: snapshot.link.tier,
             transmitEpoch: state.transmitEpoch,
             expectedQso: { dxcall: qso.dxcall, state: qso.state, txNow: qso.txNow ?? null, cqRunning: qso.cqRunning ?? false },
-            change: command === 'qso_resend' ? { kind: 'resend' } : command === 'set_mode' ? { kind: 'monitor' } : { kind: 'freeText', text: gesture.text } })
+            ...(command === 'override_next_tx' ? { call: gesture.call, grid: gesture.grid, text: gesture.text } :
+              { change: command === 'qso_resend' ? { kind: 'resend' } : command === 'set_mode' ? { kind: 'monitor' } : { kind: 'freeText', text: gesture.text } }) })
           read = 'get_snapshot'
           break
         }

@@ -1,5 +1,5 @@
 import { RemoteRecall } from '../remote-web/RemoteRecall'
-import { useStationControl, useStationTierControl } from '../stationAccess'
+import { useStationControl, useStationTierControl, useStationCapability } from '../stationAccess'
 import { useDecoderSettings } from '../remote-web/useDecoderSettings'
 import { useReceiverSettings } from '../remote-web/useReceiverSettings'
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every reading in this
@@ -124,7 +124,7 @@ interface Props {
   /** Log the active QSO now (inline button). */
   onLog: () => void
   /** WSJT-X Tx-slot click: force `text` as the next transmission to `call`. */
-  onOverrideTx: (call: string, grid: string | null, text: string) => void
+  onOverrideTx: (call: string, grid: string | null, text: string, expectedQso?: AppSnapshot['qso']) => void
   /** Halt TX immediately (the Esc key — same api as the Stop TX button). */
   onHaltTx: () => void
   /** TX-control cluster consolidated into the QSO strip (beside CQ/S&P). */
@@ -355,6 +355,8 @@ export function OperateCockpit({
   wheelSensitivity,
 }: Props) {
   const control = useStationControl()
+  const messageControl = useStationCapability('ftMessages')
+  const cqControl = useStationCapability('ftOperate')
   const tierControl = useStationTierControl(snap.radio)
   const decoderSettings = useDecoderSettings(snap, 'MSK144')
   const receiverSettings = useReceiverSettings(snap, tier)
@@ -711,19 +713,24 @@ export function OperateCockpit({
    * startCq(dir | null) directly; apply the returned snapshot via onSnap.
    * Tx1–Tx5 force the row's text as the next transmission to the DX. */
   const doTx = (n: number) => {
+    if (!(n === 6 ? cqControl : messageControl)) return
     if (n === 6) {
-      setLocalNext(5)
+      if (control) setLocalNext(5)
       const dir = cqDirFromText(tx6, snap.mycall)
       // dir === undefined → parse failed / malformed → fall back to plain CQ
       const resolved = dir === undefined ? null : dir
-      startCq(resolved).then((s) => onSnap?.(s)).catch(() => {})
+      startCq(resolved).then((s) => onSnap?.(s)).catch((e) => { if (!control) pushToast(String(e), 'error') })
       return
     }
     const call = dxCall.trim().toUpperCase()
     const text = rowTexts[n - 1]?.trim()
     if (!call || !text) return
-    setLocalNext(n - 1)
-    onOverrideTx(call, dxGrid.trim().toUpperCase() || null, text)
+    if (control) {
+      setLocalNext(n - 1)
+      onOverrideTx(call, dxGrid.trim().toUpperCase() || null, text)
+    } else {
+      onOverrideTx(call, dxGrid.trim().toUpperCase() || null, text, snap.qso)
+    }
   }
 
   /** Re-decode the last period (WSJT-X Decode / F6). */

@@ -1582,7 +1582,7 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // WSJT-X Tx-slot click (Tx1–Tx5 buttons / Alt+N): force the row's text as the
   // next transmission to the DX. The backend starts/retargets the QSO + arms TX;
   // applying the returned snapshot makes the Tx panel's "next" dot land at once.
-  const handleOverrideTx = useCallback((call: string, grid: string | null, text: string) => {
+  const handleOverrideTx = useCallback((call: string, grid: string | null, text: string, expectedQso?: AppSnapshot['qso']) => {
     // Same own-call guard as handleCall — the engine no-ops on a self-target
     // but returns a normal snapshot, which read as silent success here.
     const me = mycallRef.current.trim().toUpperCase()
@@ -1591,7 +1591,7 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       return
     }
     void withErrorToast(
-      () => apiOverrideNextTx(call, grid, text),
+      () => apiOverrideNextTx(call, grid, text, expectedQso),
       t('shell.overrideTx.failed', { call }),
     ).then((s) => {
       if (s) setSnap(s)

@@ -404,6 +404,45 @@ fn ft_run(f: &Fixture, request: &Request) -> Result<Value, &'static str> {
 }
 
 #[test]
+fn transmit_message_choice_uses_the_original_exchange_and_native_target() {
+    use tempo_app::engine::remote_transmit::FtExchangeContext;
+    for tier in [tempo_app::dto::Tier::Ft8, tempo_app::dto::Tier::Ft4] {
+        let (f, _, state) = ready_ft(tier);
+        assert!(state["controls"]["capabilities"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("ftMessages")));
+        let cq = ft_command(
+            &state,
+            json!({"action":"ft.cq","expectedTier":tier,"transmitEpoch":state["transmitEpoch"],"direction":null}),
+        );
+        assert_eq!(ft_run(&f, &cq).unwrap()["outcome"], "applied");
+        f.engine.lock().unwrap().take_immediate_retune();
+        let expected = FtExchangeContext::from(&f.engine.lock().unwrap().snapshot().qso.unwrap());
+        let current = control_state_version(&f, Instant::now(), 4);
+        let command = ft_command(
+            &current,
+            json!({"action":"ft.message","expectedTier":tier,
+            "transmitEpoch":current["transmitEpoch"],"expectedQso":expected,
+            "call":"W1AW","grid":"FN31","text":"W1AW KD9TAW -12"}),
+        );
+        assert_eq!(ft_run(&f, &command).unwrap()["outcome"], "applied");
+        let qso = f.engine.lock().unwrap().snapshot().qso.unwrap();
+        assert_eq!(qso.dxcall.as_deref(), Some("W1AW"));
+        assert_eq!(qso.tx_now.as_deref(), Some("W1AW KD9TAW -12"));
+        let current = control_state_version(&f, Instant::now(), 4);
+        let stale = ft_command(
+            &current,
+            json!({"action":"ft.message","expectedTier":tier,
+            "transmitEpoch":current["transmitEpoch"],"expectedQso":expected,
+            "call":"K2ABC","grid":null,"text":"K2ABC KD9TAW -10"}),
+        );
+        assert_eq!(ft_run(&f, &stale).unwrap()["outcome"], "rejected");
+        assert_eq!(f.engine.lock().unwrap().snapshot().qso.unwrap(), qso);
+    }
+}
+
+#[test]
 fn transmit_exchange_controls_reuse_native_policy_and_reject_an_advanced_display() {
     use tempo_app::engine::remote_transmit::FtExchangeContext;
     for tier in [tempo_app::dto::Tier::Ft8, tempo_app::dto::Tier::Ft4] {

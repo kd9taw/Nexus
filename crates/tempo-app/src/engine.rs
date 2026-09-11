@@ -15934,27 +15934,33 @@ impl Engine {
     /// still advances on the partner's matching reply, so a forced message
     /// rejoins the normal flow (Station::override_next semantics).
     pub fn override_next_tx(&mut self, dxcall: &str, dxgrid: Option<&str>, text: &str) {
+        let _ = self.override_next_tx_checked(dxcall, dxgrid, text);
+    }
+
+    // Preserve the native void command while letting Remote distinguish a
+    // refused target from a queued message. Both use this single policy path.
+    fn override_next_tx_checked(
+        &mut self,
+        dxcall: &str,
+        dxgrid: Option<&str>,
+        text: &str,
+    ) -> Result<(), String> {
         if tempo_core::message::same_call(dxcall, &self.settings.mycall) {
-            return; // never a self-QSO
+            return Err("cannot target own callsign".into());
         }
         // Answering a decode is a TX commitment: it arms TX and asks for the
         // current period. On a receive-only tier there is no over to send, so do
         // not stage one — a queued reply the operator can see but the radio can
         // never send is the phantom this whole guard exists to prevent.
         if self.tier_is_rx_only(self.app.tier()) {
-            return;
+            return Err("transmit unavailable for this tier".into());
         }
         let on_dx = matches!(&self.mode, Mode::Qso { station, .. }
             if station.dxcall.as_deref().map(|c| tempo_core::message::same_call(c, dxcall)).unwrap_or(false));
         if !on_dx {
             // A refusal here (no derivable parity) leaves the override below un-armed too —
             // correct: the override rides a QSO that was never started.
-            if self
-                .call_station_ctx(dxcall, dxgrid, None, None, None)
-                .is_err()
-            {
-                return;
-            }
+            self.call_station_ctx(dxcall, dxgrid, None, None, None)?;
         }
         if let Mode::Qso { station, .. } = &mut self.mode {
             station.override_next(Msg::parse(text));
@@ -15965,6 +15971,7 @@ impl Engine {
         }
         // Fire this period when it still fits (the snappy path).
         self.immediate_tx = true;
+        Ok(())
     }
 
     /// WSJT-X Split Operation: reduce a TX audio offset into the clean

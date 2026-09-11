@@ -14,6 +14,6 @@ export function advertisedOperationVersion(base: unknown, maximum?: unknown, ft?
 }
 
 export function controlVersion(action: StationAction): 2 | 3 | 4 {
-  if (action.action === 'ft.exchange' || action.action === 'ft.call' || action.action === 'ft.cq' || action.action === 'ft.txEnabled') return 4
+  if (action.action === 'ft.message' || action.action === 'ft.exchange' || action.action === 'ft.call' || action.action === 'ft.cq' || action.action === 'ft.txEnabled') return 4
   return ['radio.level', 'radio.band', 'radio.filterWidth', 'radio.function', 'radio.agc', 'radio.phoneMode', 'radio.workSpot', 'radio.frequency', 'radio.mode', 'radio.tier', 'radio.workspace', 'radio.select', 'amplifier.followBand', 'decoder.js8Speed', 'decoder.msk144Period', 'decoder.depth', 'receiver.rxOffset', 'receiver.rxGain'].includes(action.action) ? 3 : 2
 }

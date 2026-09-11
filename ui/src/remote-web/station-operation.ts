@@ -16,6 +16,7 @@ export type FtCallSelection = { call: string; grid: string | null; message: stri
 export type FtExchangeContext = { dxcall: string | null; state: string; txNow: string | null; cqRunning: boolean }
 export type FtExchangeChange = { kind: 'resend' | 'monitor' } | { kind: 'freeText'; text: string }
 export type StationAction =
+  | { action: 'ft.message'; expectedTier: 'FT8' | 'FT4'; transmitEpoch: string; expectedQso: FtExchangeContext; call: string; grid: string | null; text: string }
   | { action: 'ft.exchange'; expectedTier: 'FT8' | 'FT4'; transmitEpoch: string; expectedQso: FtExchangeContext; change: FtExchangeChange }
   | { action: 'ft.call'; expectedTier: 'FT8' | 'FT4'; transmitEpoch: string; selection: FtCallSelection }
   | { action: 'ft.cq'; expectedTier: 'FT8' | 'FT4'; transmitEpoch: string; direction: string | null }
@@ -53,10 +54,11 @@ export type ControlContext = {
   ampConnection: number | null
   ampReadSequence: number | null
 }
-export const CONTROL_CAPABILITIES = ['ftOperate', 'ftCall', 'ftExchange', 'decoder', 'radio', 'amplifier', 'frequency', 'mode', 'tier', 'ampFollowBand', 'workspace', 'decoderSettings', 'receiverSettings', 'receiverGain', 'bandSelection', 'receiverFilter', 'receiverDsp', 'phoneMode', 'workSpot', 'radioLevels', 'radioSelection', 'fmTuning', 'fmReceiver'] as const
+export const CONTROL_CAPABILITIES = ['ftOperate', 'ftCall', 'ftExchange', 'ftMessages', 'decoder', 'radio', 'amplifier', 'frequency', 'mode', 'tier', 'ampFollowBand', 'workspace', 'decoderSettings', 'receiverSettings', 'receiverGain', 'bandSelection', 'receiverFilter', 'receiverDsp', 'phoneMode', 'workSpot', 'radioLevels', 'radioSelection', 'fmTuning', 'fmReceiver'] as const
 export type ControlCapability = (typeof CONTROL_CAPABILITIES)[number]
 // A new action cannot silently inherit a broader capability by its prefix.
 const ACTION_CAPABILITY: Record<StationAction['action'], ControlCapability> = {
+  'ft.message': 'ftMessages',
   'ft.exchange': 'ftExchange',
   'ft.call': 'ftCall', 'ft.cq': 'ftOperate', 'ft.txEnabled': 'ftOperate',
   'radio.level': 'radioLevels',
@@ -99,13 +101,19 @@ export function stationAction(raw: unknown): StationAction {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) invalid()
   const a = raw as Record<string, unknown>
   switch (a.action) {
-    case 'ft.exchange': {
-      object(a, ['action', 'expectedTier', 'transmitEpoch', 'expectedQso', 'change'])
+    case 'ft.message': case 'ft.exchange': {
+      object(a, ['action', 'expectedTier', 'transmitEpoch', 'expectedQso', ...(a.action === 'ft.message' ? ['call', 'grid', 'text'] : ['change'])])
       if (!oneOf(a.expectedTier, ['FT8', 'FT4']) || typeof a.transmitEpoch !== 'string' || !/^[0-9a-f]{16}$/.test(a.transmitEpoch)) invalid()
       const q = object(a.expectedQso, ['dxcall', 'state', 'txNow', 'cqRunning'])
       if (typeof q.state !== 'string' || !q.state || q.state.length > 32 || /[^ -~]/.test(q.state) || typeof q.cqRunning !== 'boolean' ||
         (q.dxcall !== null && (typeof q.dxcall !== 'string' || !/^[A-Z0-9/]{3,32}$/.test(q.dxcall))) ||
         (q.txNow !== null && (typeof q.txNow !== 'string' || q.txNow.length > 128 || /[^ -~]/.test(q.txNow)))) invalid()
+      if (a.action === 'ft.message') {
+        if (typeof a.call !== 'string' || !/^[A-Z0-9/]{3,32}$/.test(a.call) ||
+          (a.grid !== null && (typeof a.grid !== 'string' || !/^[A-Za-z0-9]{0,16}$/.test(a.grid))) ||
+          typeof a.text !== 'string' || !a.text.trim() || a.text.length > 128 || /[^ -~]/.test(a.text)) invalid()
+        break
+      }
       if (!a.change || typeof a.change !== 'object') invalid()
       const kind = (a.change as Record<string, unknown>).kind
       const change = object(a.change, ['kind', ...(kind === 'freeText' ? ['text'] : [])])

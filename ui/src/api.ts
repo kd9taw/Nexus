@@ -598,8 +598,9 @@ export async function overrideNextTx(
   call: string,
   grid: string | null,
   text: string,
+  expectedQso?: AppSnapshot['qso'],
 ): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('override_next_tx', { call, grid, text })
+  return invoke<AppSnapshot>('override_next_tx', { call, grid, text, ...(remoteApplicationTransport() ? { expectedQso } : {}) })
 }
 
 /** The operator erased a decode pane — mirror it to cooperating apps via the

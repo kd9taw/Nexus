@@ -1,4 +1,4 @@
-import { useStationControl } from '../stationAccess'
+import { useStationCapability } from '../stationAccess'
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). The six rows are
 // WSJT-X's Tx1–Tx6 slots: the row NAME (`Tx 3`), the generated message text, the DX call and
 // grid, and the 73/RR73 macro suggestions are tokens and stay in the code. What moved is the
@@ -65,7 +65,8 @@ export function TxPanel({
   qsoMacros,
   compact = false,
 }: Props) {
-  const control = useStationControl()
+  const messagesControl = useStationCapability('ftMessages')
+  const cqControl = useStationCapability('ftOperate')
   const canTx = dxCall.trim().length > 0
   const rows: { n: number; text: string }[] = [
     { n: 1, text: messages.tx1 },
@@ -86,7 +87,7 @@ export function TxPanel({
       <div className="txp-dx">
         <label className="txp-field">
           <span>{t('operate.tx.dxCall.label')}</span>
-          <input disabled={!control}
+          <input
             type="text"
             value={dxCall}
             maxLength={11}
@@ -99,7 +100,7 @@ export function TxPanel({
         </label>
         <label className="txp-field">
           <span>{t('operate.tx.dxGrid.label')}</span>
-          <input disabled={!control}
+          <input
             type="text"
             value={dxGrid}
             maxLength={6}
@@ -111,7 +112,7 @@ export function TxPanel({
           />
         </label>
         <div className="txp-dx-actions">
-          <button disabled={!control}
+          <button
             type="button"
             className="txp-gen"
             onClick={onGenerate}
@@ -119,7 +120,7 @@ export function TxPanel({
           >
             {t('operate.tx.generate.label')}
           </button>
-          <button disabled={!control} type="button" className="txp-clear" onClick={onClear} title={t('operate.tx.clear.title')}>
+          <button type="button" className="txp-clear" onClick={onClear} title={t('operate.tx.clear.title')}>
             {t('operate.tx.clear.label')}
           </button>
         </div>
@@ -138,7 +139,7 @@ export function TxPanel({
               />
               {n === 5 ? (
                 <>
-                  <input disabled={!control}
+                  <input
                     type="text"
                     className="txp-msg txp-free mono"
                     value={tx5}
@@ -157,7 +158,7 @@ export function TxPanel({
                 </>
               ) : n === 6 ? (
                 <div className="txp-cq-field">
-                  <input disabled={!control}
+                  <input
                     type="text"
                     className="txp-msg txp-free txp-cq-edit mono"
                     value={tx6}
@@ -175,7 +176,7 @@ export function TxPanel({
               <button
                 type="button"
                 className={`txp-btn${n === 6 ? ' txp-cq' : ''}`}
-                disabled={!control || (disabled)}
+                disabled={!(n === 6 ? cqControl : messagesControl) || disabled}
                 onClick={() => onTx(n)}
                 title={
                   n === 6

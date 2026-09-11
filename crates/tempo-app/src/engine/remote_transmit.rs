@@ -50,6 +50,40 @@ pub enum FtExchangeChange {
 }
 
 impl Engine {
+    pub fn set_remote_ft_message(
+        &mut self,
+        permit: TransmitPermit,
+        expected: &FtExchangeContext,
+        call: &str,
+        grid: Option<&str>,
+        text: &str,
+    ) -> Result<(), Reason> {
+        self.prepare_remote_ft(&permit)?;
+        let current = self.snapshot().qso.ok_or(Reason::UnsupportedAction)?;
+        if FtExchangeContext::from(&current) != *expected {
+            return Err(Reason::ContextChanged);
+        }
+        if call.len() > 32
+            || !tempo_core::message::is_callsign(call)
+            || grid.is_some_and(|g| g.len() > 16 || !g.bytes().all(|b| b.is_ascii_alphanumeric()))
+            || text.trim().is_empty()
+            || text.len() > 128
+            || !text.bytes().all(|b| (b' '..=b'~').contains(&b))
+        {
+            return Err(Reason::InvalidAction);
+        }
+        self.structured_tx_ready(true)
+            .map_err(|_| Reason::InvalidAction)?;
+        self.override_next_tx_checked(call, grid, text)
+            .map_err(|_| Reason::InvalidAction)?;
+        if !permit.valid(Instant::now()) {
+            self.halt_tx();
+            return Err(Reason::AuthorityExpired);
+        }
+        self.remote_transmit = Some(permit);
+        Ok(())
+    }
+
     pub fn change_remote_ft_exchange(
         &mut self,
         permit: TransmitPermit,
@@ -376,6 +410,93 @@ mod tests {
         engine.take_immediate_retune();
         engine.take_slot_tx_abort();
         engine
+    }
+
+    #[test]
+    fn remote_message_choices_match_native_targeting_and_manual_arming() {
+        for tier in [Tier::Ft8, Tier::Ft4] {
+            for auto_arm in [false, true] {
+                for text in [
+                    "W1AW KD9TAW EN52",
+                    "W1AW KD9TAW -12",
+                    "W1AW KD9TAW R-12",
+                    "W1AW KD9TAW RR73",
+                    "TNX 73",
+                ] {
+                    let mut native = station(tier);
+                    let mut remote = station(tier);
+                    let authority = TransmitAuthority::default();
+                    let permit = || {
+                        authority
+                            .permit(Instant::now() + Duration::from_secs(5))
+                            .unwrap()
+                    };
+                    native.start_cq(None).unwrap();
+                    remote.start_remote_ft_cq(permit(), None).unwrap();
+                    native.set_tx_enabled(false);
+                    remote.set_remote_ft_tx_enabled(permit(), false).unwrap();
+                    native.take_immediate_retune();
+                    remote.take_immediate_retune();
+                    native.settings.double_click_sets_tx = auto_arm;
+                    remote.settings.double_click_sets_tx = auto_arm;
+                    let context = FtExchangeContext::from(&remote.snapshot().qso.unwrap());
+                    native.override_next_tx("W1AW", Some("FN31"), text);
+                    remote
+                        .set_remote_ft_message(permit(), &context, "W1AW", Some("FN31"), text)
+                        .unwrap();
+                    assert_eq!(remote.snapshot().qso, native.snapshot().qso);
+                    assert_eq!(remote.settings, native.settings);
+                    assert_eq!(remote.tx_enabled(), auto_arm);
+                    assert_eq!(remote.tx_enabled(), native.tx_enabled());
+                    assert_eq!(remote.tx_even(), native.tx_even());
+                    assert_eq!(remote.immediate_tx, native.immediate_tx);
+                    assert_eq!(remote.take_slot_tx_abort(), native.take_slot_tx_abort());
+                    authority.revoke();
+                    assert!(remote.poll_remote_transmit(Instant::now()));
+                    assert!(!remote.tx_enabled());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn remote_message_refuses_changed_exchange_and_invalid_or_self_targets() {
+        let mut engine = station(Tier::Ft8);
+        let authority = TransmitAuthority::default();
+        let permit = || {
+            authority
+                .permit(Instant::now() + Duration::from_secs(5))
+                .unwrap()
+        };
+        engine.start_remote_ft_cq(permit(), None).unwrap();
+        engine.take_immediate_retune();
+        let context = FtExchangeContext::from(&engine.snapshot().qso.unwrap());
+        let before = engine.snapshot().qso;
+        for (call, text) in [
+            ("KD9TAW", "TNX 73"),
+            ("NOT A CALL", "TNX 73"),
+            ("W1AW", ""),
+            ("W1AW", "TNX\n73"),
+        ] {
+            assert_eq!(
+                engine.set_remote_ft_message(permit(), &context, call, None, text),
+                Err(Reason::InvalidAction)
+            );
+            assert_eq!(engine.snapshot().qso, before);
+        }
+        engine.qso_freetext("LOCAL EDIT");
+        let changed = engine.snapshot().qso;
+        assert_eq!(
+            engine.set_remote_ft_message(permit(), &context, "W1AW", None, "TNX 73"),
+            Err(Reason::ContextChanged)
+        );
+        assert_eq!(engine.snapshot().qso, changed);
+        let expired = permit();
+        authority.revoke();
+        assert_eq!(
+            engine.set_remote_ft_message(expired, &context, "W1AW", None, "TNX 73"),
+            Err(Reason::AuthorityExpired)
+        );
     }
 
     #[test]

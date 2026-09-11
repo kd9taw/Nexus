@@ -881,7 +881,16 @@ Remote free-text drafts remain until confirmation, including when a request is
 refused or its outcome is uncertain. Slot selection, period and TX-offset controls
 and complete durable QSO logging still require their own operation paths.
 
-Call selection currently requires the native 240-row history or current roster.
+The separate `ftMessages` capability connects the existing Tx1–Tx5 buttons and
+Alt+number shortcuts, including deliberately typed targets. Tx6 uses the existing
+directed-CQ parser and `ftOperate`. Each message choice binds the displayed QSO
+before asynchronous work; the station compares it before the shared native
+override. Native arming preference, parity and immediate-slot behavior remain.
+Draft editing and Generate/Clear stay local to the browser, while the next-message
+indicator follows station confirmation. Full QSO logging and TX settings remain
+incomplete.
+
+Decode/roster Call selection currently requires the native 240-row history or current roster.
 Older displayed history, typed targets, complete QSO progression and logging,
 other modes, browser audio and hardware/WAN acceptance remain incomplete.
 Source verification is not installation or deployment.

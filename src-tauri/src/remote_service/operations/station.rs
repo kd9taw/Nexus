@@ -65,6 +65,18 @@ pub enum KeyboardReceiver {
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(tag = "action", deny_unknown_fields)]
 pub enum Action {
+    #[serde(rename = "ft.message")]
+    FtMessage {
+        #[serde(rename = "expectedTier")]
+        expected_tier: tempo_app::dto::Tier,
+        #[serde(rename = "transmitEpoch")]
+        transmit_epoch: String,
+        #[serde(rename = "expectedQso")]
+        expected_qso: tempo_app::engine::remote_transmit::FtExchangeContext,
+        call: String,
+        grid: Option<String>,
+        text: String,
+    },
     #[serde(rename = "ft.exchange")]
     FtExchange {
         #[serde(rename = "expectedTier")]
@@ -267,7 +279,8 @@ pub fn execute(
         Action::FtCq { .. }
         | Action::FtTxEnabled { .. }
         | Action::FtCall { .. }
-        | Action::FtExchange { .. } => return Err(Reason::UnsupportedAction),
+        | Action::FtExchange { .. }
+        | Action::FtMessage { .. } => return Err(Reason::UnsupportedAction),
         #[cfg(feature = "radio")]
         Action::Radio { radio_id } => {
             if !engine.remote_selection_host_ready() {
@@ -728,7 +741,8 @@ impl Action {
             Self::FtCq { .. }
             | Self::FtTxEnabled { .. }
             | Self::FtCall { .. }
-            | Self::FtExchange { .. } => 4,
+            | Self::FtExchange { .. }
+            | Self::FtMessage { .. } => 4,
             Self::Level { .. }
             | Self::Frequency { .. }
             | Self::Band { .. }
@@ -794,7 +808,8 @@ impl Action {
             Self::FtCq { transmit_epoch, .. }
             | Self::FtTxEnabled { transmit_epoch, .. }
             | Self::FtCall { transmit_epoch, .. }
-            | Self::FtExchange { transmit_epoch, .. } => Some(transmit_epoch),
+            | Self::FtExchange { transmit_epoch, .. }
+            | Self::FtMessage { transmit_epoch, .. } => Some(transmit_epoch),
             _ => None,
         }
     }
@@ -810,6 +825,21 @@ pub fn execute_transmit(
         return Err(Reason::ContextChanged);
     }
     match action {
+        Action::FtMessage {
+            expected_tier,
+            expected_qso,
+            call,
+            grid,
+            text,
+            ..
+        } => {
+            engine.validate_remote_ft_radio(
+                *expected_tier,
+                context.radio_connection.ok_or(Reason::ReadingUnavailable)?,
+                &permit,
+            )?;
+            engine.set_remote_ft_message(permit, expected_qso, call, grid.as_deref(), text)?;
+        }
         Action::FtExchange {
             expected_tier,
             expected_qso,
