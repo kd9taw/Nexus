@@ -5,6 +5,17 @@ use super::*;
 use crate::rig::PttMode;
 
 impl Rig {
+    /// Native handoff's best-effort CAT Morse flush, with the original permit
+    /// at the socket. Some rigs do not implement this command; its reply alone
+    /// is not evidence that all external keyer queues stopped.
+    pub(crate) fn remote_stop_morse(
+        &mut self,
+        permission: &WritePermission,
+    ) -> std::io::Result<()> {
+        self.command_permitted("\\stop_morse\n", None, Some(permission))
+            .map(|_| ())
+    }
+
     /// Preserve unkey-on-adopt through the profile's real PTT method. The caller
     /// must set that method before calling; a monitor normally carries Vox.
     /// Separate keyer queues still require their existing native abort paths.

@@ -39,12 +39,7 @@ use crate::rigctld_proc::{spawn_rigctld, RigctldProc};
 
 mod monitor_claims;
 mod remote_radio;
-// This owner is being connected to the selection request path. Keep its
-// integration warning explicit until that caller lands.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "Remote selection request integration in progress")
-)]
+mod remote_selection;
 mod selection_connection;
 use monitor_claims::RadioClaims;
 
@@ -1649,6 +1644,15 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
         std::thread::spawn(move || monitor_loop(mon_engine, mon_pool, mon_pending));
     }
     loop {
+        state.apply_remote_selection(
+            &engine,
+            &pool,
+            &mut rig,
+            &mut backend,
+            &mut last_active,
+            &switch_pending,
+            open_monitor,
+        );
         // Dual-radio: if the operator switched the active radio, hand off between the active Rig and
         // the monitor pool BEFORE the normal tick — so `state.applied` already matches the new active
         // and the `rig_differs` teardown never fires (the new rig is already connected + on-frequency).

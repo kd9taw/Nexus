@@ -2,6 +2,7 @@
 //! passive native projection, never a browser payload or a state to apply wholesale.
 //! The radio owner must acquire, configure and adopt the actual incoming connection.
 use super::radio_selection::RadioSelection;
+use super::remote_radio::{AgcSpeed, RadioLevel};
 use super::Engine;
 use crate::remote_control::{Completion, Evidence, Outcome, Permit, Reason, WritePermission};
 use crate::settings::Settings;
@@ -24,6 +25,17 @@ pub struct Readback<'a> {
     pub dial_hz: u64,
     pub mode: &'a str,
     pub sampled_at: Instant,
+}
+
+/// Desired controls the native loop would reapply on the selected radio.
+/// Preparation does not consume a pending AGC pick or adopt observed levels
+/// as operator preferences. The worker retains these targets separately from
+/// rounded hardware readback for its reconciliation caches.
+#[derive(Debug, PartialEq)]
+pub struct Configuration {
+    pub levels: Vec<(RadioLevel, f32)>,
+    pub agc: Option<AgcSpeed>,
+    pub power_limit: Option<f32>,
 }
 
 impl Engine {
@@ -110,10 +122,50 @@ impl Request {
         (self.original.dial_hz(), &self.original_mode)
     }
 
+    pub fn configuration(&self, engine: &Engine) -> Result<Configuration, Reason> {
+        self.validate(engine)?;
+        let limit = self.settings().rf_power_ceiling();
+        let levels = [
+            (
+                RadioLevel::Power,
+                engine.rf_power.map(|power| power.min(limit)),
+            ),
+            (RadioLevel::MicGain, engine.mic_gain),
+            (RadioLevel::NoiseReduction, engine.nr_level),
+            (RadioLevel::Compression, engine.comp_level),
+            (RadioLevel::NotchFrequency, engine.notch_freq_hz),
+        ]
+        .into_iter()
+        .filter_map(|(kind, value)| value.map(|value| (kind, value)))
+        .collect();
+        let agc = engine
+            .agc
+            .as_deref()
+            .map(|speed| AgcSpeed::from_name(speed).ok_or(Reason::InvalidAction))
+            .transpose()?;
+        Ok(Configuration {
+            levels,
+            agc,
+            power_limit: (limit < 1.0).then_some(limit),
+        })
+    }
+
     pub fn validate(&self, engine: &Engine) -> Result<(), Reason> {
         self.permission.check(Instant::now())?;
         engine.remote_radio_idle()?;
         engine.remote_radio_link(self.connection)?;
+        if engine.pending_func.iter().any(Option::is_some)
+            || engine.pending_passband.is_some()
+            || engine.pending_atu_tune.is_some()
+            || engine.pending_scope_span.is_some()
+            || engine.pending_yaesu_scope_mode.is_some()
+            || engine.pending_scope_ref.is_some()
+            || engine.pending_scope_fixed.is_some()
+        {
+            // Let the native owner finish the local radio's pending gesture.
+            // Selection must neither consume it nor apply it on another rig.
+            return Err(Reason::StationBusy);
+        }
         if engine.source_kind != crate::dto::SourceKind::Native
             || engine.settings != self.original
             || engine.rig_mode_effective() != self.original_mode
@@ -169,6 +221,22 @@ impl Request {
         engine.set_active_radio_with_decoder_guard(incoming, decoder);
         engine.forget_radio_live(incoming);
         engine.clear_rig_smeter();
+        // These observations belong to the outgoing hardware. In particular,
+        // its RF reading cannot force a later power write on the incoming rig.
+        // Desired controls remain intact and the owner installs actual new
+        // readings in the callback before ordinary reconciliation can run.
+        engine.rig_rf_power = None;
+        engine.rig_mic_gain = None;
+        engine.rig_nr_level = None;
+        engine.rig_comp_level = None;
+        engine.rig_notch_freq_hz = None;
+        engine.rig_agc = None;
+        engine.set_rig_refused_agc(None);
+        engine.clear_rig_mode();
+        engine.clear_rig_funcs();
+        engine.clear_rig_tuner();
+        engine.clear_rig_passband();
+        engine.clear_rig_tx_meters();
         // This request's CAT transaction already established the selected dial
         // and mode. Consume only its own retune while local setters are excluded.
         // Do this before installation too: unwinding may not leave a retry behind.
@@ -500,6 +568,52 @@ mod tests {
                 "abandonment ends a request instead of leaving it queued"
             );
         }
+    }
+
+    #[test]
+    fn selection_configuration_keeps_unset_controls_and_does_not_consume_an_agc_pick() {
+        let (mut engine, incoming, connection) = station();
+        let authority = Revocation::default();
+        let completion = engine
+            .queue_remote_radio_selection(incoming, connection, permit(&authority))
+            .unwrap();
+        let request = engine.take_remote_radio_selection().unwrap();
+        let configuration = request.configuration(&engine).unwrap();
+        assert!(configuration.levels.is_empty());
+        assert_eq!(configuration.agc, None);
+        drop(request);
+        assert!(matches!(completion.outcome(), Outcome::Rejected { .. }));
+
+        engine.settings.max_power_digital = Some(0.4);
+        engine.set_rf_power(0.25);
+        engine.set_mic_gain(0.3);
+        engine.set_nr_level(0.4);
+        engine.set_comp_level(0.5);
+        engine.set_notch_freq_hz(1200.0);
+        engine.set_agc("slow");
+        let _completion = engine
+            .queue_remote_radio_selection(incoming, connection, permit(&authority))
+            .unwrap();
+        let request = engine.take_remote_radio_selection().unwrap();
+        let before = engine.settings.clone();
+        let configuration = request.configuration(&engine).unwrap();
+        assert_eq!(
+            configuration.levels,
+            vec![
+                (RadioLevel::Power, 0.25),
+                (RadioLevel::MicGain, 0.3),
+                (RadioLevel::NoiseReduction, 0.4),
+                (RadioLevel::Compression, 0.5),
+                (RadioLevel::NotchFrequency, 1200.0),
+            ]
+        );
+        assert_eq!(configuration.power_limit, Some(0.4));
+        assert_eq!(configuration.agc, Some(AgcSpeed::Slow));
+        assert!(engine.agc_picked);
+        assert_eq!(engine.settings, before);
+        assert_eq!(engine.rf_power(), Some(0.25));
+        engine.set_agc("fast");
+        assert_eq!(request.configuration(&engine), Err(Reason::ContextChanged));
     }
 
     #[test]
