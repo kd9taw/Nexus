@@ -684,7 +684,7 @@ test('expanded operations preserve legacy clients, minimum peer versions and hib
           assert.equal(response.requestId, command.requestId); assert.equal(response.value.outcome, 'applied')
         }
       }
-      assert.equal(observationSequence, 11)
+      assert.equal(observationSequence, 13)
       assert.equal(live.browser.closed, false)
       assert.equal(live.station.closed, false)
     }
