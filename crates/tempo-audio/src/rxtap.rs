@@ -32,6 +32,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::monitor::SpscRing;
+use crate::receive_audio::{ReceiveAudioFeed, ReceiveSource};
 
 /// One published capture source: the ring the audio callback pushes into, the device rate its
 /// samples are at, and an epoch that changes whenever the source is replaced.
@@ -57,6 +58,7 @@ pub struct RxSource {
 pub struct RxTap {
     card: Mutex<Option<RxSource>>,
     epoch_seq: AtomicU64,
+    audio: Arc<ReceiveAudioFeed>,
 }
 
 impl RxTap {
@@ -77,6 +79,8 @@ impl RxTap {
             .wrapping_add(1);
         if let Ok(mut g) = self.card.lock() {
             *g = Some(RxSource { ring, rate, epoch });
+            self.audio
+                .replace_source(Some(ReceiveSource { epoch, rate }));
         }
     }
 
@@ -84,12 +88,31 @@ impl RxTap {
     pub fn clear_card(&self) {
         if let Ok(mut g) = self.card.lock() {
             *g = None;
+            self.audio.replace_source(None);
         }
     }
 
     /// The source to drain right now, if any.
     pub fn current(&self) -> Option<RxSource> {
         self.card.lock().ok().and_then(|g| g.clone())
+    }
+
+    /// A separate bounded copy stream. The network consumer must not drain the
+    /// single-consumer capture ring returned by current(). This feed alone does
+    /// not authorize a Remote client or open any device or network connection.
+    pub fn receive_audio(&self) -> Arc<ReceiveAudioFeed> {
+        self.audio.clone()
+    }
+
+    pub(crate) fn publish_audio(&self, source: &RxSource, samples: &[f32]) {
+        self.audio.publish(
+            ReceiveSource {
+                epoch: source.epoch,
+                rate: source.rate,
+            },
+            std::time::Instant::now(),
+            samples,
+        );
     }
 }
 

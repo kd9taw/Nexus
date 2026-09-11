@@ -68,6 +68,7 @@ pub mod proc_util;
 /// RX side of PSK31 (TX runs in the radio loop — `service.rs`).
 #[cfg(feature = "device")]
 pub mod pskrx;
+pub mod receive_audio;
 pub mod resample;
 pub mod rig;
 pub mod rigctld_proc;

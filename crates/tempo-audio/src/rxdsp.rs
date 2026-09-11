@@ -224,6 +224,11 @@ impl RxDsp {
         if dev.is_empty() {
             return false; // nothing new this tick; the last row AND level stand (no new info)
         }
+        // Optional media gets its own bounded copy, never another consumer of
+        // the capture ring. An idle or contended feed copies nothing and never
+        // delays this thread on a network reader. Device-rate samples preserve
+        // the existing mono fold/gain before the display's 12 kHz resampler.
+        tap.publish_audio(&src, &dev);
         // ---- RX level meter: RMS of this tick's post-gain samples, instrument ballistics ----
         // Measured on the DEVICE-rate samples (the exact `m` values the callback teed), before
         // the display resample, so the reading matches what the sound card actually delivered.
@@ -459,6 +464,83 @@ mod tests {
             .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
             .map(|(i, _)| i)
             .unwrap_or(0)
+    }
+
+    #[test]
+    fn receive_media_copies_original_rate_audio_without_changing_spectrum_or_meter_samples() {
+        let tap = RxTap::new();
+        let baseline = RxTap::new();
+        let ring = Arc::new(SpscRing::new(48_000));
+        let original = Arc::new(SpscRing::new(48_000));
+        tap.publish_card(ring.clone(), 48_000);
+        baseline.publish_card(original.clone(), 48_000);
+        let audio = tap.receive_audio();
+        let reader = audio.subscribe(audio.source().unwrap()).unwrap();
+        let (feed, unchanged) = (SpectrumFeed::default(), SpectrumFeed::default());
+        let (meters, unchanged_meters) = (MeterFeed::default(), MeterFeed::default());
+        let (mut dsp, mut normal) = (RxDsp::new(), RxDsp::new());
+        let samples = tone(48_000, 700.0, 960);
+        // Leave the media reader idle through more than its entire buffer. The
+        // display must still process every original sample exactly as before.
+        for _ in 0..60 {
+            assert_eq!(ring.push_slice(&samples), samples.len());
+            assert_eq!(original.push_slice(&samples), samples.len());
+            assert!(dsp.tick(&tap, &feed, &meters));
+            assert!(normal.tick(&baseline, &unchanged, &unchanged_meters));
+            assert_eq!(feed.row().unwrap().row, unchanged.row().unwrap().row);
+            assert_eq!(meters.rx_level(), unchanged_meters.rx_level());
+            assert!(ring.is_empty() && original.is_empty());
+        }
+        let mut blocks = 0;
+        while let Some(block) = reader.read(std::time::Instant::now()).unwrap() {
+            assert_eq!(block.source.rate, 48_000);
+            assert_eq!(block.samples, samples);
+            blocks += 1;
+        }
+        assert!((1..=10).contains(&blocks));
+        drop(reader);
+        ring.push_slice(&samples);
+        original.push_slice(&samples);
+        assert!(dsp.tick(&tap, &feed, &meters));
+        assert!(normal.tick(&baseline, &unchanged, &unchanged_meters));
+        assert_eq!(feed.row().unwrap().row, unchanged.row().unwrap().row);
+    }
+
+    #[test]
+    fn actual_tap_source_changes_end_media_and_rebuild_the_display_at_the_new_rate() {
+        use crate::receive_audio::ReceiveError;
+        let tap = RxTap::new();
+        let old = Arc::new(SpscRing::new(48_000));
+        tap.publish_card(old.clone(), 48_000);
+        let audio = tap.receive_audio();
+        let reader = audio.subscribe(audio.source().unwrap()).unwrap();
+        let current = Arc::new(SpscRing::new(44_100));
+        tap.publish_card(current.clone(), 44_100);
+        assert!(matches!(
+            reader.read(std::time::Instant::now()),
+            Err(ReceiveError::Ended)
+        ));
+        let next = audio.subscribe(audio.source().unwrap()).unwrap();
+        drop(reader);
+        old.push_slice(&vec![0.8; 960]);
+        let (feed, meters) = (SpectrumFeed::default(), MeterFeed::default());
+        let mut dsp = RxDsp::new();
+        let samples = tone(44_100, 900.0, 882);
+        for _ in 0..2 {
+            current.push_slice(&samples);
+            assert!(dsp.tick(&tap, &feed, &meters));
+        }
+        let block = next.read(std::time::Instant::now()).unwrap().unwrap();
+        assert_eq!(block.source.rate, 44_100);
+        assert_eq!(block.samples, samples);
+        assert_eq!(old.len(), 960, "old source is never adopted or drained");
+        tap.clear_card();
+        assert!(matches!(
+            next.read(std::time::Instant::now()),
+            Err(ReceiveError::Ended)
+        ));
+        assert!(!dsp.tick(&tap, &feed, &meters));
+        assert_eq!(meters.rx_level(), 0.0);
     }
 
     /// THE REGRESSION THIS WHOLE CHANGE EXISTS FOR.
