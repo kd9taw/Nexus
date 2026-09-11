@@ -517,9 +517,12 @@ mod tests {
             fixture.engine.current_qso_log_key().as_deref(),
             Some(current.as_str())
         );
-        // Same-contact re-arm preserves the native exchange and its identity.
+        // Same-contact re-arm preserves contact identity, but the deliberate
+        // local gesture supersedes an older Remote operating context.
+        let contact_epoch = fixture.engine.qso_log_epoch;
         fixture.engine.call_station("W9XYZ");
-        assert_eq!(
+        assert_eq!(fixture.engine.qso_log_epoch, contact_epoch);
+        assert_ne!(
             fixture.engine.current_qso_log_key().as_deref(),
             Some(current.as_str())
         );
