@@ -1095,4 +1095,32 @@ mod tests {
             assert_eq!(engine.settings.active_radio, 0);
         }
     }
+
+    #[test]
+    fn routed_am_configuration_uses_the_native_am_power_ceiling_before_any_write() {
+        let (mut engine, incoming, _) = station();
+        engine.settings.operating_mode = crate::settings::OperatingMode::Phone;
+        engine.settings.phone_mode = "am".into();
+        engine.settings.max_power_phone = Some(0.8);
+        engine.settings.max_power_am = Some(0.25);
+        engine.rf_power = Some(0.7);
+        engine
+            .settings
+            .radios
+            .iter_mut()
+            .find(|p| p.id == incoming)
+            .unwrap()
+            .bands = vec!["2m".into()];
+        engine.configure_remote_selection_host(true);
+        let generation = refresh(&mut engine);
+        let authority = Revocation::default();
+        engine
+            .queue_remote_frequency(145.225, "2m", "USB", generation, permit(&authority))
+            .unwrap();
+        let request = engine.take_remote_radio_selection().unwrap();
+        assert_eq!(request.settings().rig_mode(), "AM");
+        let configuration = request.configuration(&engine).unwrap();
+        assert_eq!(configuration.power_limit, Some(0.25));
+        assert!(configuration.levels.contains(&(RadioLevel::Power, 0.25)));
+    }
 }

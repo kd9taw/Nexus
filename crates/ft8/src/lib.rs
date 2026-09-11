@@ -302,6 +302,24 @@ impl A7ResetGuard {
     }
 }
 
+#[cfg(test)]
+#[test]
+fn repeated_native_a7_resets_keep_the_original_serialization_guard() {
+    let mut guard = loop {
+        if let Some(guard) = A7ResetGuard::try_acquire() {
+            break guard;
+        }
+        std::thread::yield_now();
+    };
+    for _ in 0..2 {
+        guard.reset_held();
+        assert!(
+            A7ResetGuard::try_acquire().is_none(),
+            "a native reset must retain serialization until the whole routed QSY commits"
+        );
+    }
+}
+
 /// Read a NUL-/space-padded fixed C char field into a trimmed String.
 fn cstr_field(buf: &[u8]) -> String {
     let bytes: Vec<u8> = buf.iter().take_while(|&&b| b != 0).copied().collect();
