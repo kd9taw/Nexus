@@ -90,10 +90,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   commanded mode as before.
 
   Everything downstream carries AM once the log does — ADIF export, the N1MM and N3FJP feeds, and
-  your uploads to QRZ, LoTW, ClubLog and eQSL. **Contacts you have already uploaded are not
-  re-sent.** Correcting a mode in the Logbook fixes your own log and every export from it, but only
-  a *callsign* correction re-queues a contact to the services; a mode fix does not, so anything
-  already out there as SSB stays that way unless you re-upload it yourself.
+  your uploads to QRZ, LoTW, ClubLog and eQSL. This fixes contacts from here on; an AM QSO already
+  logged as SSB is yours to correct in the Logbook.
 
 - **Your ARRL section list was eight years out of date.** Nexus carried 83 sections including
   `MAR`, `GTA` and `NT`. ARRL now publishes 85: the Maritime section split into `NB`, `NS` and `PE`,
