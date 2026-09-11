@@ -1,5 +1,41 @@
 use super::*;
 
+#[test]
+fn off_band_listening_and_returning_keep_the_native_phone_sideband_override() {
+    for sideband in ["LSB", "AM"] {
+        let mut s = Station::new(OperatingMode::Phone);
+        let mut native = Station::new(OperatingMode::Phone);
+        for station in [&mut s, &mut native] {
+            station.engine.request_sideband_override(Some(sideband));
+            station.engine.take_immediate_retune();
+            station.sample(14_074_000, sideband);
+        }
+        for (dial, band) in [(10.0, ""), (14.240, "20m"), (9.5, ""), (7.200, "40m")] {
+            let receipt = queue_dial(&mut s, dial, band).unwrap();
+            let request = s.engine.take_remote_radio().unwrap();
+            native.engine.set_frequency(dial, band, "USB");
+            native.engine.take_immediate_retune();
+            assert_eq!(
+                request.target_mode,
+                native.engine.rig_mode_effective(),
+                "the explicit Phone mode must follow native off-band context retention"
+            );
+            s.sample(request.target_hz, &request.target_mode);
+            assert!(request.commit(&mut s.engine));
+            assert_eq!(
+                receipt.outcome(),
+                Outcome::Applied {
+                    evidence: Evidence::RadioReadback
+                }
+            );
+            assert_eq!(s.engine.sideband_override, native.engine.sideband_override);
+            assert_eq!(s.engine.off_band_from, native.engine.off_band_from);
+            assert_eq!(s.engine.tx_gate_gen, native.engine.tx_gate_gen);
+            assert!(!s.engine.tx_enabled());
+        }
+    }
+}
+
 fn queue_dial(s: &mut Station, dial: f64, band: &str) -> Result<Completion, Reason> {
     let connection = s
         .engine
