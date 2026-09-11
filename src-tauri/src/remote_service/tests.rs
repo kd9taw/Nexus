@@ -248,6 +248,8 @@ fn cloud_runtime_probe() {
             let mut e = read_engine.lock().unwrap();
             // Synthetic owner tick: exercise permit expiry/Stop without RF or device I/O.
             e.poll_remote_transmit(Instant::now());
+            // Consume the modeled retune signal; this fixture owns no CAT device.
+            e.take_immediate_retune();
             let read = e.remote_radio_read(&radio, Instant::now()).or_else(|| {
                 radio = e.remote_open_radio().unwrap();
                 e.remote_radio_read(&radio, Instant::now())

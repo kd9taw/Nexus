@@ -563,21 +563,23 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
        stationBootId:state.stationBootId,leaseId:state.leaseId,expectedRevision:state.revision,
        commandWindowId:state.commandWindowId,clientSequence:state.nextSequence,
        context:state.controls.context,action:{...action,transmitEpoch:state.transmitEpoch}})
+     const ftState = async () => (await operation({type:'heartbeat',leaseId:state.leaseId})).response.value
      for (const tier of ['FT8','FT4']) {
        assert.equal((await probe.send({type:'seedFt',tier})).txEnabled,false)
-       let ft = (await operation({type:'state'})).response.value
+       let ft = await ftState()
        assert.ok(ft.controls.capabilities.includes('ftOperate'))
        const cq = await action(ft,{action:'ft.cq',expectedTier:tier,direction:'DX'})
        assert.equal(cq.response.value?.outcome,'applied',JSON.stringify(cq.response))
        assert.deepEqual(await probe.send({type:'ftEvidence'}),{tier,txEnabled:true,owned:true,logCount:1})
-       ft = (await operation({type:'state'})).response.value
+       ft = await ftState()
        assert.equal(ft.txArmed,true)
        assert.equal((await action(ft,{action:'ft.txEnabled',expectedTier:tier,on:false})).response.value?.outcome,'applied')
        assert.equal((await probe.send({type:'ftEvidence'})).txEnabled,false)
-       ft = (await operation({type:'state'})).response.value
-       assert.equal((await action(ft,{action:'ft.txEnabled',expectedTier:tier,on:true})).response.value?.outcome,'applied')
+       ft = await ftState()
+       const enabled = await action(ft,{action:'ft.txEnabled',expectedTier:tier,on:true})
+       assert.equal(enabled.response.value?.outcome,'applied',JSON.stringify(enabled.response))
        assert.equal((await probe.send({type:'ftEvidence'})).txEnabled,true)
-       ft = (await operation({type:'state'})).response.value
+       ft = await ftState()
        const stop = {type:'stopTransmit',stationBootId:ft.stationBootId,leaseId:ft.leaseId,transmitEpoch:ft.transmitEpoch}
        assert.deepEqual((await operation(stop)).response.value,{stop:'accepted'})
        // The acknowledgement alone is not evidence of the native engine stopping.
