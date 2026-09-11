@@ -291,3 +291,9 @@
    warning remains explicit; presentation does not change where a QSO is saved. */
 .remote-log-entry > p[hidden] { display: none; }
 .remote-quick-contact { --space-4: .5rem; --space-3: .4rem; }
+
+/* Match Nexus's compact navigation convention: the return icon has a full
+   accessible name, with its text label restored when there is room. */
+[data-viewport='xs'] .remote-quick-nav button:last-child > span { display: none; }
+.remote-quick-nav button > span { overflow-wrap: anywhere; }
+.cockpit-header--quick .amp-strip button { min-height: 44px; min-width: 44px; }

@@ -569,6 +569,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,contactContin
       await until(`!!${button('Quick Operate')}`)
       await click(button('Quick Operate'))
       await until(`document.querySelector('.app')?.dataset.remotePresentation==='quick'`)
+      const navButton=label=>`[...document.querySelectorAll('.remote-quick-nav button')].find(e=>e.textContent===${JSON.stringify(label)})`
       const checks=[]
       for(const [width,height,zoom]of [[390,844,1],[1280,800,1],[390,844,1.75],[1280,800,1.75]])for(const theme of ['dark','light']){
         await browser.call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false},session)
@@ -582,13 +583,82 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,contactContin
         assert.equal(loggingLease,lease);assert.equal(stationRequests.length,0);assert.equal(loggedRequests.length,0)
         checks.push({width,height,zoom,theme,shape})
       }
-      await click(button('Full Nexus'))
+      // Receiver detail changes the presentation of the SAME scopes/forms.
+      // Start and stop its actual native topic before testing further gestures.
+      const waitScope=async present=>{
+        for(let attempt=0;attempt<100;attempt++){
+          if((streamWatch?.topics.includes('get_scope_snapshot')??false)===present)return
+          await sleep(100)
+        }
+        assert.fail(`Quick scope demand did not become ${present}`)
+      }
+      await waitScope(false)
+      await click(`document.querySelector('.phone-cockpit .remote-quick-details')`)
+      await until(`document.querySelector('.phone-cockpit .remote-quick-details')?.getAttribute('aria-expanded')==='true'`)
+      await waitScope(true)
+      const scope=`document.querySelector('.phone-cockpit .ph-scope canvas')`
+      await evaluate(`${scope}.scrollIntoView({block:'center',behavior:'instant'})`);await settledLayout()
+      assert.equal(await evaluate(`(()=>{const r=${scope}.getBoundingClientRect();return r.width>0&&r.height>0})()`),true)
+      await click(`document.querySelector('.phone-cockpit .remote-quick-details')`)
+      await until(`document.querySelector('.phone-cockpit .remote-quick-details')?.getAttribute('aria-expanded')==='false'`)
+      await waitScope(false)
+      for(const [destination,view]of [['Hunt','needed'],['Log','logbook']]){
+        await click(navButton(destination));await until(`document.querySelector('.app').dataset.remoteView==='${view}'`)
+        assert.equal(await evaluate(`document.querySelector('${call}')===window.__quickNodes.call&&document.querySelector('${call}').value==='N2QUICK'`),true)
+        await click(navButton('Operate'));await until(`document.querySelector('.app').dataset.remoteView==='phone'`)
+        assert.equal(loggingLease,lease);assert.equal(stationRequests.length,0);assert.equal(loggedRequests.length,0)
+      }
+      await click(navButton('Full Nexus'))
       await until(`document.querySelector('.app')?.dataset.remotePresentation==='full'`)
       assert.equal(await evaluate(`document.querySelector('${call}')===window.__quickNodes.call&&document.querySelector('${call}').value==='N2QUICK'`),true)
       assert.equal(loggingLease,lease);assert.equal(stationRequests.length,0);assert.equal(loggedRequests.length,0)
-      if(artifacts)await writeFile(join(artifacts,'quick-results.json'),JSON.stringify({checks,stationActions:0,logWrites:0,leasePreserved:true,exceptions,unexpectedMessages},null,2))
+      await click(`document.querySelector('.remote-session-toggle')`);await click(button('Quick Operate'))
+      await until(`document.querySelector('.app')?.dataset.remotePresentation==='quick'`)
+      await browser.call('Emulation.setDeviceMetricsOverride',{width:1280,height:800,deviceScaleFactor:1,mobile:false},session)
+      await evaluate(`document.documentElement.style.setProperty('--ui-zoom','1');window.dispatchEvent(new Event('resize'))`);await settledLayout()
+      const freshWindow=async()=>{
+        const after=performance.now()
+        for(let attempt=0;attempt<100;attempt++){
+          const reply=operationWire.findLast(v=>v.direction==='in'&&v.phase==='controlling')
+          if(reply&&reply.at>after&&performance.now()-reply.at<150)return
+          await sleep(50)
+        }
+        assert.fail('Quick gestures need a fresh native control window')
+      }
+      for(const operate of [true,false]){
+        await freshWindow();await click(`document.querySelector('.phone-cockpit .amp-op')`)
+        await until(`document.querySelector('.phone-cockpit .amp-op')?.classList.contains('on')===${operate}`)
+        assert.deepEqual(stationRequests[stationRequests.length-1].action,{action:'amplifier.operate',operate})
+      }
+      assert.equal(stationRequests.length,2);assert.equal(loggedRequests.length,0)
+      // A lost append reply must survive Full/Quick switches without replay.
+      loseLogReply=true
+      await freshWindow();await click(`document.querySelector('.phone-cockpit .le-log-btn')`)
+      await until(`document.querySelector('.phone-cockpit .remote-log-entry')?.textContent.includes('may already be logged')`,12000)
+      assert.equal(loggedRequests.length,1);assert.equal(loggedRequests[0].record.call,'N2QUICK')
+      await click(navButton('Full Nexus'));await until(`document.querySelector('.app').dataset.remotePresentation==='full'`)
+      assert.equal(await evaluate(`document.querySelector('${call}')===window.__quickNodes.call&&document.querySelector('${call}').value==='N2QUICK'`),true)
+      await click(`document.querySelector('.remote-session-toggle')`);await click(button('Quick Operate'))
+      await until(`document.querySelector('.app').dataset.remotePresentation==='quick'`)
+      assert.equal(await evaluate(`document.querySelector('${call}')===window.__quickNodes.call&&document.querySelector('${call}').value==='N2QUICK'`),true)
+      await sleep(1000);assert.equal(loggedRequests.length,1,'presentation must not replay an unconfirmed QSO')
+      loseLogReply=false
+      await click(`[...document.querySelectorAll('.phone-cockpit .remote-log-entry button')].find(e=>e.textContent==='Check submitted QSO result')`)
+      await until(`document.querySelector('.phone-cockpit .remote-log-entry')?.textContent.includes('QSO saved to the station log file')`)
+      assert.equal(loggedRequests.length,1);assert.equal(await evaluate(`document.querySelector('${call}').value`),'')
+      await click(`document.querySelector('${call}')`);await browser.call('Input.insertText',{text:'N3QSO'},session)
+      applicationAvailable=false
+      await until(`document.querySelector('.app').dataset.remoteStale==='true'`)
+      assert.equal(await evaluate(`document.querySelector('${call}')===window.__quickNodes.call&&document.querySelector('${call}').value==='N3QSO'&&document.querySelector('.phone-cockpit .le-log-btn').disabled&&document.querySelector('.phone-cockpit .amp-op').disabled`),true)
+      applicationAvailable=true
+      await until(`document.querySelector('.app').dataset.remoteStale!=='true'`)
+      await until(`!!${button('Take station control')}`)
+      assert.equal(loggingLease,null,'data recovery must not restore station authority')
+      assert.equal(await evaluate(`document.querySelector('${call}')===window.__quickNodes.call&&document.querySelector('${call}').value==='N3QSO'`),true)
+      assert.equal(loggedRequests.length,1);assert.equal(stationRequests.length,2)
+      if(artifacts)await writeFile(join(artifacts,'quick-results.json'),JSON.stringify({checks,stationActions:stationRequests.map(r=>r.action),logWrites:loggedRequests.length,presentationActions:0,leasePreservedBeforeLoss:true,reacquireRequired:true,scopeDemand:true,huntLogDrafts:true,unknownResultPreserved:true,explicitResultCheck:true,exceptions,unexpectedMessages},null,2))
       assert.equal(exceptions,0);assert.equal(unexpectedMessages,0)
-      console.log('Compiled Quick presentation: actual contact draft, one app and lease, eight layouts and return to full Nexus passed');return
+      console.log('Compiled Quick presentation: eight layouts, retained drafts, hidden display retirement, native amp readbacks, one QSO receipt and explicit recovery passed');return
     }
     if(contactContinuity){
       loggingAllowed=true;stationControls=true

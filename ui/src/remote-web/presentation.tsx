@@ -49,7 +49,7 @@ export function QuickNavigation({ view, onSelect, available }: {
       aria-current={view === 'logbook' ? 'page' : undefined} onClick={() => onSelect('logbook')}>
       <BookOpen size={20} aria-hidden="true" /><span>{t('remote.quick.log')}</span>
     </button>
-    <button type="button" onClick={() => display.change('full')}>
+    <button type="button" aria-label={t('remote.quick.full')} title={t('remote.quick.full')} onClick={() => display.change('full')}>
       <PanelsTopLeft size={20} aria-hidden="true" /><span>{t('remote.quick.full')}</span>
     </button>
   </nav>
