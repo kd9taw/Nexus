@@ -20,6 +20,7 @@ export type StationAction =
   | { action: 'decoder.msk144Period'; expectedPeriodSecs: number; periodSecs: number }
   | { action: 'decoder.depth'; expectedTier: string; expectedDepth: number; depth: number }
   | { action: 'receiver.rxOffset'; expectedTier: string; expectedHz: number; hz: number }
+  | { action: 'receiver.rxGain'; radioId: number; expectedSettingsRevision: string; expectedGain: number; gain: number }
   | { action: 'amplifier.operate'; expectedOperate: boolean; operate: boolean }
   | { action: 'amplifier.band'; expectedBand: string; direction: -1 | 1 }
   | { action: 'amplifier.followBand'; radioId: number; expectedSettingsRevision: string; expectedFollow: boolean; follow: boolean }
@@ -30,7 +31,7 @@ export type ControlContext = {
   ampConnection: number | null
   ampReadSequence: number | null
 }
-export const CONTROL_CAPABILITIES = ['decoder', 'radio', 'amplifier', 'frequency', 'mode', 'tier', 'ampFollowBand', 'workspace', 'decoderSettings', 'receiverSettings'] as const
+export const CONTROL_CAPABILITIES = ['decoder', 'radio', 'amplifier', 'frequency', 'mode', 'tier', 'ampFollowBand', 'workspace', 'decoderSettings', 'receiverSettings', 'receiverGain'] as const
 export type ControlCapability = (typeof CONTROL_CAPABILITIES)[number]
 // A new action cannot silently inherit a broader capability by its prefix.
 const ACTION_CAPABILITY: Record<StationAction['action'], ControlCapability> = {
@@ -40,6 +41,7 @@ const ACTION_CAPABILITY: Record<StationAction['action'], ControlCapability> = {
   'decoder.net': 'decoder', 'decoder.pskMode': 'decoder',
   'decoder.js8Speed': 'decoderSettings', 'decoder.msk144Period': 'decoderSettings',
   'decoder.depth': 'receiverSettings', 'receiver.rxOffset': 'receiverSettings',
+  'receiver.rxGain': 'receiverGain',
   'amplifier.operate': 'amplifier', 'amplifier.band': 'amplifier', 'amplifier.followBand': 'ampFollowBand'
 }
 export const actionCapability = (action: StationAction): ControlCapability => ACTION_CAPABILITY[action.action]
@@ -128,6 +130,12 @@ export function stationAction(raw: unknown): StationAction {
     case 'receiver.rxOffset':
       object(a, ['action', 'expectedTier', 'expectedHz', 'hz'])
       if (!oneOf(a.expectedTier, CONTROL_TIERS) || !finite(a.expectedHz) || !finite(a.hz) || a.hz < 200 || a.hz > 4000 || a.expectedHz === a.hz) invalid()
+      break
+    case 'receiver.rxGain':
+      object(a, ['action', 'radioId', 'expectedSettingsRevision', 'expectedGain', 'gain'])
+      if (!integer(a.radioId) || a.radioId < 0 || a.radioId > 0xffffffff ||
+        typeof a.expectedSettingsRevision !== 'string' || !/^[0-9a-f]{64}$/.test(a.expectedSettingsRevision) ||
+        !finite(a.expectedGain) || !finite(a.gain) || a.gain < 1 || a.gain > 8 || a.expectedGain === a.gain) invalid()
       break
     case 'amplifier.operate':
       object(a, ['action', 'expectedOperate', 'operate'])

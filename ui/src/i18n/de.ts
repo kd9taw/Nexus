@@ -36,7 +36,7 @@ export const DE: PartialCatalog = {
   "remote.controlRequired": "Erlauben Sie die Stationssteuerung für diesen Browser in Nexus an der Station.",
   "remote.controlOccupied": "Ein anderer Browser steuert die Station.",
   "remote.controlPending": "Warte auf die Bestätigung des Befehls durch die Station…",
-  "remote.configurationControls": "Stationseinstellungen · „Funkband folgen“ kann mit Stationssteuerung gespeichert werden. Darstellung und Beobachtungsliste gelten für diesen Browser.",
+  "remote.configurationControls": "Stationseinstellungen · Verfügbare Einstellungen können mit Stationssteuerung geändert werden. Darstellung und Beobachtungsliste gelten für diesen Browser.",
   "remote.followNeedsIdle": "Zum Aktivieren der Bandnachführung die Sendefreigabe ausschalten und auf aktuelle Ruhezustandswerte von Funkgerät und Verstärker warten.",
   "remote.followChanged": "Die Stationseinstellungen haben sich geändert. Prüfen Sie die aktuelle Auswahl vor dem Speichern.",
   "remote.followSaveFailed": "Die Station konnte die Änderung nicht speichern. Die gespeicherte Auswahl bleibt unverändert.",

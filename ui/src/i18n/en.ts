@@ -119,7 +119,7 @@ export const EN = {
   "remote.controlRequired": "Allow station controls for this browser in Nexus at the station.",
   "remote.controlOccupied": "Another browser controls the station.",
   "remote.controlPending": "Waiting for the station to confirm the command…",
-  "remote.configurationControls": "Station settings · Follow radio band can be saved with station control. Appearance and watchlist choices apply to this browser.",
+  "remote.configurationControls": "Station settings · Available controls can be changed with station control. Appearance and watchlist choices apply to this browser.",
   "remote.followNeedsIdle": "To enable band following, disarm transmit and wait for fresh idle radio and amplifier readings.",
   "remote.followChanged": "The station settings changed. Review the current choice before saving.",
   "remote.followSaveFailed": "The station could not save the change. The saved choice is unchanged.",

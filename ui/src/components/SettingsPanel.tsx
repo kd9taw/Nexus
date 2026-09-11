@@ -1,6 +1,7 @@
 import { useNavigation } from '../remote-web/useNavigation'
 import { settingsForm, type SettingsConfiguration } from '../remote-web/configuration'
 import { useAmplifierFollow } from '../remote-web/useAmplifierFollow'
+import { useReceiverGain } from '../remote-web/useReceiverGain'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { RemoteStation } from '../remote-native/RemoteStation'
 import { SAT_VFO_MAPS } from '../features/satVfo'
@@ -867,6 +868,7 @@ export function SettingsPanel({
   const configuration=useNavigation<SettingsConfiguration>('settings')
   const remote=configuration.remote
   const remoteFollow = useAmplifierFollow(configuration.value, activeRadioId, configuration.refresh)
+  const remoteGain = useReceiverGain(configuration.value, activeRadioId, radio, configuration.refresh)
   // Restore-from-backup (#28 item 4). A hidden file input, the same shape the Logbook's ADIF
   // import uses — Tauri has no native picker wired here and this needs none.
   const backupFileRef = useRef<HTMLInputElement | null>(null)
@@ -2943,7 +2945,7 @@ export function SettingsPanel({
           ))}
         </div>
         <div className="settings-scroll">
-          {remote && <p className="settings-note" role="status">{remoteFollow.supported ? t('remote.configurationControls') : t('remote.configurationObserver')}</p>}
+          {remote && <p className="settings-note" role="status">{remoteFollow.supported || remoteGain.supported ? t('remote.configurationControls') : t('remote.configurationObserver')}</p>}
           {remote && (tab==='logging'||tab==='configurations') && <p className="settings-note">{t('remote.configurationLocal')}</p>}
           {/* ---- Workspace (UI-only prefs, applied live like the theme) ---- */}
           {tab === 'configurations' && !remote && (
@@ -4902,18 +4904,22 @@ export function SettingsPanel({
               <label className="settings-field">
                 <span className="settings-label">
                   {t('settings.audio.rxGain.label')}{' '}
-                  <span className="settings-value">×{(form.rxGain ?? 1).toFixed(1)}</span>
+                  <span className="settings-value">×{remote ? remoteGain.gain?.toFixed(1) ?? '—' : (form.rxGain ?? 1).toFixed(1)}</span>
                 </span>
-                <input disabled={remote}
+                <input disabled={remote && !remoteGain.canEdit}
                   className="settings-slider"
                   type="range"
                   min="1"
                   max="8"
                   step="0.1"
-                  value={String(form.rxGain ?? 1)}
-                  onChange={(e) => updateNum('rxGain', Number(e.target.value))}
-                  onPointerUp={(e) => applyRxGainLive(Number((e.target as HTMLInputElement).value))}
-                  onKeyUp={(e) => applyRxGainLive(Number((e.target as HTMLInputElement).value))}
+                  value={String(remote ? remoteGain.gain ?? 1 : form.rxGain ?? 1)}
+                  onPointerDown={() => { if (remote) remoteGain.begin() }}
+                  onKeyDown={(e) => { if (remote && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown'].includes(e.key)) remoteGain.begin() }}
+                  onChange={(e) => remote ? remoteGain.change(Number(e.target.value)) : updateNum('rxGain', Number(e.target.value))}
+                  onPointerUp={(e) => remote ? void remoteGain.commit() : applyRxGainLive(Number((e.target as HTMLInputElement).value))}
+                  onKeyUp={(e) => remote ? void remoteGain.commit() : applyRxGainLive(Number((e.target as HTMLInputElement).value))}
+                  onPointerCancel={() => { if (remote) remoteGain.cancel() }}
+                  onBlur={() => { if (remote) remoteGain.cancel() }}
                   aria-label={t('settings.audio.rxGain.aria')}
                 />
                 <span className="settings-hint">{t('settings.audio.rxGain.hint')}</span>

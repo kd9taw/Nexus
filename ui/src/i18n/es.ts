@@ -51,7 +51,7 @@ export const ES: PartialCatalog = {
   "remote.controlRequired": "Permite el control de este navegador en Nexus en la estación.",
   "remote.controlOccupied": "Otro navegador controla la estación.",
   "remote.controlPending": "Esperando que la estación confirme el comando…",
-  "remote.configurationControls": "Ajustes de la estación · Seguir la banda de la radio se puede guardar con el control de la estación. La apariencia y la lista de seguimiento se aplican a este navegador.",
+  "remote.configurationControls": "Ajustes de la estación · Los controles disponibles se pueden cambiar con el control de la estación. La apariencia y la lista de seguimiento se aplican a este navegador.",
   "remote.followNeedsIdle": "Para activar el seguimiento de banda, desactive la transmisión y espere lecturas recientes de la radio y el amplificador en reposo.",
   "remote.followChanged": "Los ajustes de la estación han cambiado. Revise la selección actual antes de guardar.",
   "remote.followSaveFailed": "La estación no pudo guardar el cambio. La selección guardada no ha cambiado.",

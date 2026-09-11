@@ -51,7 +51,7 @@ export const FR: PartialCatalog = {
   "remote.controlRequired": "Autorisez ce navigateur à contrôler la station dans Nexus sur place.",
   "remote.controlOccupied": "Un autre navigateur contrôle la station.",
   "remote.controlPending": "En attente de confirmation de la commande par la station…",
-  "remote.configurationControls": "Réglages de la station · Le suivi de la bande radio peut être enregistré avec le contrôle de la station. L’apparence et la liste de suivi s’appliquent à ce navigateur.",
+  "remote.configurationControls": "Réglages de la station · Les commandes disponibles peuvent être modifiées avec le contrôle de la station. L’apparence et la liste de suivi s’appliquent à ce navigateur.",
   "remote.followNeedsIdle": "Pour activer le suivi de bande, désarmez l’émission et attendez des mesures récentes de la radio et de l’amplificateur au repos.",
   "remote.followChanged": "Les réglages de la station ont changé. Vérifiez le choix actuel avant d’enregistrer.",
   "remote.followSaveFailed": "La station n’a pas pu enregistrer la modification. Le choix enregistré reste inchangé.",

@@ -8,6 +8,8 @@ use crate::settings::OperatingMode;
 use std::sync::TryLockError;
 use std::time::Instant;
 
+mod gain;
+
 #[derive(Clone, Copy)]
 enum DecoderSetting {
     Js8Speed { expected: u8, speed: u8 },

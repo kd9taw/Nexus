@@ -104,6 +104,16 @@ pub enum Action {
         expected_hz: f32,
         hz: f32,
     },
+    #[serde(rename = "receiver.rxGain")]
+    RxGain {
+        #[serde(rename = "radioId")]
+        radio_id: u32,
+        #[serde(rename = "expectedSettingsRevision")]
+        expected_settings_revision: String,
+        #[serde(rename = "expectedGain")]
+        expected_gain: f32,
+        gain: f32,
+    },
     #[serde(rename = "radio.disarm")]
     Disarm {},
     #[serde(rename = "radio.frequency")]
@@ -172,6 +182,40 @@ pub fn execute(
         return Err(Reason::ContextChanged);
     }
     match action {
+        #[cfg(feature = "radio")]
+        Action::RxGain {
+            radio_id,
+            expected_settings_revision,
+            expected_gain,
+            gain,
+        } => {
+            if expected_settings_revision.len() != 64
+                || !expected_settings_revision
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            {
+                return Err(Reason::InvalidAction);
+            }
+            if *radio_id != context.radio_id
+                || super::super::query::settings_revision(engine.settings())
+                    .map_err(|_| Reason::ReadingUnavailable)?
+                    != *expected_settings_revision
+            {
+                return Err(Reason::ContextChanged);
+            }
+            engine.save_remote_rx_gain(
+                *radio_id,
+                *expected_gain,
+                *gain,
+                context.radio_connection.ok_or(Reason::ReadingUnavailable)?,
+                &permit,
+            )?;
+            let result = Completion::default();
+            result.finish(Outcome::Applied {
+                evidence: Evidence::SettingsSaved,
+            });
+            return Ok(result);
+        }
         #[cfg(feature = "radio")]
         Action::DecodeDepth {
             expected_tier,
@@ -475,6 +519,7 @@ impl Action {
             | Self::Msk144Period { .. }
             | Self::DecodeDepth { .. }
             | Self::RxOffset { .. }
+            | Self::RxGain { .. }
             | Self::Radio { .. }
             | Self::AmpFollowBand { .. } => 3,
             _ => 2,
@@ -498,6 +543,7 @@ pub fn capabilities(version: u8) -> Vec<&'static str> {
                 "workspace",
                 "decoderSettings",
                 "receiverSettings",
+                "receiverGain",
             ]
         }
     }

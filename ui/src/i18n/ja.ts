@@ -41,7 +41,7 @@ export const JA: PartialCatalog = {
   "remote.controlRequired": "局側の Nexus でこのブラウザーによる操作を許可してください。",
   "remote.controlOccupied": "別のブラウザーが局を操作しています。",
   "remote.controlPending": "局によるコマンドの確認を待っています…",
-  "remote.configurationControls": "局の設定 · 局を制御中は無線機のバンドへの追従設定を保存できます。外観とウォッチリストはこのブラウザーに適用されます。",
+  "remote.configurationControls": "局の設定 · 局を制御中は利用可能な設定を変更できます。外観とウォッチリストはこのブラウザーに適用されます。",
   "remote.followNeedsIdle": "バンド追従を有効にするには、送信許可を解除し、無線機とアンプが待機中であることを示す新しい測定値を待ってください。",
   "remote.followChanged": "局の設定が変更されました。保存する前に現在の選択を確認してください。",
   "remote.followSaveFailed": "局で変更を保存できませんでした。保存済みの選択は変わっていません。",

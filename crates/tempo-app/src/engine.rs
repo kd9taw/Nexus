@@ -11191,8 +11191,6 @@ impl Engine {
         self.settings.tx_level = level.clamp(0.0, 1.0);
     }
 
-    /// Set the RX capture gain (≥1.0 multiplier on received audio before decode). Headroom for a
-    /// quiet interface; clamped to 1.0–8.0 (+18 dB). Applied live by the audio service.
     /// Set the MSK144 T/R period (s) — the cockpit's narrow write. Clamped to the mode's
     /// own set {5,10,15,30}; anything else snaps to 15. NARROW deliberately: a full
     /// settings apply resets the mode and clears the TX queue (issue #54), which is the
@@ -11207,7 +11205,10 @@ impl Engine {
         self.settings.msk144_period_s = secs;
     }
 
+    /// Set the RX capture gain (≥1.0 multiplier on received audio before decode). Headroom for a
+    /// quiet interface; clamped to 1.0–8.0 (+18 dB). Applied live by the audio service.
     pub fn set_rx_gain(&mut self, gain: f32) {
+        self.remote_actuation.revoke();
         self.settings.rx_gain = gain.clamp(1.0, 8.0);
     }
 
