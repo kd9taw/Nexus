@@ -718,6 +718,10 @@ fn remote_ft_authority_loss_flushes_the_owned_over_but_not_a_native_rearm() {
             e.take_immediate_retune();
             e.take_slot_tx_abort();
             e.take_immediate_tx();
+            s.state.cur_tier = e.tier();
+            s.state.cur_slot_secs = e.active_slot_secs();
+            s.state.clock = SlotClock::with_period_secs(e.active_slot_secs());
+            s.state.last_slot = Some(s.state.clock.slot_index(100.0));
         }
         s.rig.ptt(true).unwrap();
         s.state.tx_until_ms = Some(999_999.0);
