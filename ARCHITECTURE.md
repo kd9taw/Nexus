@@ -80,6 +80,14 @@ session. Returning resumes display interest without logging, retuning or replaci
 the controller lease. Drafts stay in the existing forms; this does not add durable
 draft storage. Native cockpit mounting and transmitter cleanup remain unchanged.
 
+Full Nexus remains the hosted default. Optional Quick Operate is browser-local
+presentation state above that same App, with Operate, Hunt and Log destinations
+and a return to the full interface. Phone/CW prioritize the existing contact form,
+keep amplifier readbacks and stop controls outside optional radio detail, and
+pause folded scopes. Presentation changes neither pane preferences nor authority,
+and cannot resubmit an unconfirmed QSO. Other modes retain their existing layouts;
+Quick is not yet complete mobile or operating parity.
+
 The receive-audio foundation is local to `tempo-audio`: the sole `RxDsp` capture
 consumer offers bounded device-rate mono copies through `receive_audio.rs`, before
 display resampling. It never consumes the decoder ring or gives media a CAT/TX

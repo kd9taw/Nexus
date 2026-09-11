@@ -317,6 +317,16 @@ after restart. The station owns the boot identity, connection/lease generations,
 sequence and bounded result history. Local takeover, observation disable and
 revocation invalidate authority; reconnect never reacquires it.
 
+The hosted application starts with the full Nexus interface. The session Info
+panel offers an optional Quick Operate presentation on the same mounted App.
+Its Operate, Hunt and Log destinations preserve the current Phone/CW contact draft;
+Full Nexus returns to the original navigation. Phone/CW put the general-log form
+first, with radio detail expandable and amplifier state visible. Enlarged phone
+layouts use one main contact scrollport, while prior-contact history retains its
+bounded list. This presentation neither grants station control nor adds remote
+transmission. Other operating modes keep their existing layouts; keyboard/locale,
+media and complete mobile acceptance remain open.
+
 CW, Phone/SSB, RTTY, PSK/QPSK and JS8 reuse the existing manual LogEntry form. The
 station chooses the normal QSO time at append; an explicit UTC override is retained.
 Field Day and QSO WAV recording configurations refuse this path. FT current-QSO
