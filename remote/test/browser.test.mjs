@@ -588,6 +588,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       transmitAllowed=true
       for(const tier of ['FT8','FT4']){
         applicationData.get_snapshot.link.tier=tier;applicationRevision++
+        await until(`[...document.querySelectorAll('.tier-btn.active')].some(e=>e.textContent.trim()===${JSON.stringify(tier)})`)
         await until(`!document.querySelector('${cq}').disabled`)
         let count=stationRequests.length
         await click(`document.querySelector('${cq}')`)

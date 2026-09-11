@@ -216,6 +216,10 @@ fn cloud_runtime_probe() {
     let engine = Arc::new(Mutex::new(Engine::with_settings(settings)));
     {
         let mut e = engine.lock().unwrap();
+        e.configure_remote_settings_store(
+            std::path::Path::new(config["configurationRoot"].as_str().unwrap())
+                .join("settings.json"),
+        );
         let chars: Vec<_> = "CQ W1AW"
             .chars()
             .map(|ch| tempo_core::textmode::DecodedChar {
