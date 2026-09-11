@@ -530,7 +530,10 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
   assert.deepEqual(await probe.send({type:'seedLogging'}),{count:0,adif:'',txEnabled:false})
   const ticket=(await browser.post(`stations/${stationId}/ticket`)).value;socket=await browser.open(stationId,ticket.ticket);await socket.take(v=>v.type==='session')
   const envelope=request=>({type:'operationRequest',...(operationVersion>=2?{operationVersion}:{}),request})
-  const operation=async args=>{await delay(270);const request={requestId:crypto.randomUUID(),...args};socket.send(envelope(request));return {request,response:await socket.take(v=>v.type==='operationResponse'&&v.requestId===request.requestId)}}
+  const operation=async args=>{await delay(270);const request={requestId:crypto.randomUUID(),...args};socket.send(envelope(request));
+    try{return {request,response:await socket.take(v=>v.type==='operationResponse'&&v.requestId===request.requestId)}}
+    catch(error){throw new Error(`operation ${request.type}/${request.action?.action??''} v${operationVersion} timed out; socket closed=${socket.closed} code=${socket.closeCode} reason=${socket.closeReason}`,{cause:error})}}
+
   let state=(await operation({type:'state'})).response.value;assert.equal(state.phase,'localPermissionRequired');assert.equal((await operation({type:'acquire',stationBootId:state.stationBootId})).response.error,'localPermissionRequired')
   await probe.send({type:'refresh'});const permission=await probe.send({type:'loggingPermission',deviceId:device.deviceId,allow:true});assert.equal(permission.ok,true,permission.error);assert.deepEqual(permission.status.loggingPermissions,[device.deviceId])
   state=(await operation({type:'acquire',stationBootId:state.stationBootId})).response.value;assert.equal(state.phase,'controlling');assert.equal(state.txArmed,false)
