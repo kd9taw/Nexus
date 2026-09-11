@@ -151,7 +151,7 @@ it.each(['unavailable','keyed','ptt unknown','armed','busy','mode','radio','stal
   const h = fixture(), next = structuredClone(h.snap)
   if (change === 'unavailable') { next.radio.nb = null; next.radio.nr = null; next.radio.notch = null; next.radio.agc = null }
   if (change === 'keyed') next.radio.rigKeyed = true
-  if (change === 'ptt unknown') next.radio.rigKeyed = null
+  if (change === 'ptt unknown') next.radio.rigKeyed = undefined
   if (change === 'armed') next.radio.txEnabled = true
   if (change === 'busy') next.radio.txBusyReason = 'manualPtt'
   if (change === 'mode') next.radio.operatingMode = 'phone'
