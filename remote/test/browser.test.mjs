@@ -1234,7 +1234,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
             await until(`document.querySelector('${selector}')?.getAttribute('aria-pressed')==='true'`)
           }
           if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'phone-mode-1280-175-light.png'),Buffer.from(shot.data,'base64'))}
-          // Exercise the following real DSP/AGC/BW controls while receiving FM.
+          // Exercise the following real DSP/AGC controls while receiving FM.
           await gesture(root+' .ph-mode-pick > button:nth-of-type(4)','radio.phoneMode')
           assert.equal(applicationData.get_snapshot.radio.rigMode,'FM')
 
@@ -1261,6 +1261,12 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
           }
           if(mode==='phone')for(const index of [4,5])assert.equal(await evaluate(`document.querySelector('${root} .ph-dsp > button:nth-of-type(${index})')?.disabled`),true)
           if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,`dsp-${mode}-1280-175-light.png`),Buffer.from(shot.data,'base64'))}
+          if(mode==='phone'){
+            // Native Phone hides its SSB bandwidth controls for commanded FM.
+            assert.equal(applicationData.get_snapshot.radio.rigMode,'FM')
+            assert.equal(await evaluate(`document.querySelector('${root} .ph-filter')===null`),true)
+            await gesture(root+' .ph-mode-pick > button:nth-of-type(1)','radio.phoneMode')
+          }
           for(const direction of [1,2]){
             const selector=root+` .ph-filter-step:nth-of-type(${direction})`
             for(const [width,height,zoom]of [[390,844,1],[1280,800,1],[390,844,1.75],[1280,800,1.75]])for(const theme of ['dark','light']){
@@ -1659,9 +1665,9 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       stationControls=false;loggingLease=null
       await until(`document.querySelector('.cw-cockpit .amp-op').disabled`)
       assert.equal(controlGeometry+modeGeometry+bandGeometry+wheelGeometry+filterGeometry+dspGeometry+phoneModeGeometry+tierGeometry+followGeometry+decoderGeometry+receiverGeometry+gainGeometry+levelGeometry+16,656)
-      assert.equal(loggedRequests.length,5);assert.equal(stationRequests.length,125);assert.equal(unexpectedMessages,0);assert.equal(exceptions,0)
+      assert.equal(loggedRequests.length,5);assert.equal(stationRequests.length,126);assert.equal(unexpectedMessages,0);assert.equal(exceptions,0)
       if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-manual-logging.png'),Buffer.from(shot.data,'base64'));await writeFile(join(artifacts,'operation-results.json'),JSON.stringify({count:loggedRequests.length,stationActions:stationRequests.map(r=>r.action),controlGeometry,modeGeometry,bandGeometry,wheelGeometry,filterGeometry,dspGeometry,phoneModeGeometry,tierGeometry,followGeometry,decoderGeometry,receiverGeometry,gainGeometry,levelGeometry,modes:loggedRequests.map(r=>r.record.mode),lostResultResolved:true,wholePageReloadResolved:true,crossTabLockRefusal:true,geometry:16,exceptions,unexpectedMessages},null,2))}
-      console.log('Compiled browser: five logging forms, 125 station gestures, saved receiver choices, native band recall, shared wheel/digit tuning, Phone mode and FM receiver controls, separate grants, recovery and 656 geometry cases passed');return
+      console.log('Compiled browser: five logging forms, 126 station gestures, saved receiver choices, native band recall, shared wheel/digit tuning, Phone mode and FM receiver controls, separate grants, recovery and 656 geometry cases passed');return
     }
     const startReads=applicationTraffic.reads, startBytes=applicationTraffic.bytes, started=performance.now()
     for(const [width,height] of [[1024,768],[1280,800],[1366,768],[1200,1390],[3440,1440]])for(const zoom of [1,1.75])for(const theme of ['dark','light']) {

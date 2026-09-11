@@ -24,7 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   station's saved radio rules through one confirmed handoff and tune. The native
   QSY and band-memory paths retain outgoing profiles and operator choices.
 - **Remote FM receiver controls:** Power, microphone gain, receiver DSP, AGC and
-  bandwidth use the existing Nexus controls while receiving FM. Commands preserve
+  bandwidth use the existing Nexus controls while receiving FM, retaining native
+  control visibility. Commands preserve
   the tuned frequency and repeater settings and require confirmed radio readback.
   Older stations keep these controls disabled until they advertise support.
 - **Remote Phone mode picker:** The existing AUTO, USB, LSB, FM and AM buttons use

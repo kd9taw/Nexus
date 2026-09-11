@@ -543,7 +543,9 @@ a new explicit native retune or confirmed Remote tune/radio selection. Readings
 and unkeying continue while held. The picker remains transient.
 
 Stations advertising `fmReceiver` also accept the existing level, DSP, AGC and
-bandwidth controls while the radio reports FM or PKTFM. These commands preserve
+bandwidth controls while the radio reports FM or PKTFM. Bandwidth retains native
+visibility: the Phone cockpit hides its SSB width buttons when FM is commanded.
+These commands preserve
 the current dial, mode and repeater configuration; only bandwidth reissues the
 same mode with a new width. The native owner refuses receiver adjustments while
 a tune is unconfirmed or its FM configuration is still pending. Hardware readback
