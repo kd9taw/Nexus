@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Remote signal clicking:** Click a signal in the existing CW or Phone scope
+  to tune using the desktop's signal detection and sideband calculation.
+  Each click belongs to its original radio, connection and control window.
+  Interrupted or moved presses are canceled; dragging and continuous scanning
+  remain separate work. Requires an idle, disarmed compatible station.
+
 - **Remote CW and Phone bandwidth:** The existing BW buttons adjust the radio's
   receive filter through a compatible station with filter-control permission.
   They retain the desktop's steps and ranges, preserve the radio's current mode,
@@ -18,8 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Remote tuning gestures:** Frequency-readout digits and arrow keys, CW/Phone
   scope-wheel input and the native tuning-strip buttons share guarded browser
   tuning. Lost control discards pending input, and a submitted burst waits for
-  confirmation before another gesture. Scope click/drag and continuous scanning
-  remain separate work.
+  confirmation before another gesture. Continuous dragging and scanning remain
+  separate work.
 
 - **Remote receiver adjustments:** The existing decode-depth buttons, FT RX
   frequency field, FT/JS8/Tempo waterfalls and JS8 offset table can save receive

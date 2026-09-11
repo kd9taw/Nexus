@@ -468,6 +468,15 @@ and submits one frequency intent. Input is consumed on submission; disconnected
 or expired work cannot return as a deferred target. Further input requires a
 fresh explicit gesture after the command settles.
 
+CW and Phone scope clicks use that same frequency owner and the existing
+PhoneScope signal detector, sideband and CW pitch calculations. Pointer-down
+captures the displayed observation and original authority; release submits at
+most one absolute target. A changed scope mapping, moved pointer, loss of
+capture, blur, Escape or unmount cancels the press. A second pointer cannot
+replace it. The target is rechecked against a fresh station snapshot before
+the native frequency transaction. This click path does not enable native
+drag timers or edge scanning, and an uncertain result is never replayed.
+
 The separate operation-v3 `receiverFilter` capability connects the existing CW
 and Phone BW steppers using the closed `radio.filterWidth` action. It binds the
 displayed cockpit, exact prior width and active radio. The existing radio owner
@@ -479,7 +488,7 @@ The normal station stream supplies the displayed width; a receipt does not
 replace that sample. Local filter gestures retire older remote work.
 
 Profile/radio transitions, FM/repeater and satellite/split transactions,
-band-memory/spot shortcuts, scope click/drag, continuous scanning and attended hardware/WAN
+band-memory/spot shortcuts, scope dragging, continuous scanning and attended hardware/WAN
 acceptance remain incomplete. A compatible station build is required; this
 source increment does not update existing installations or establish paid readiness.
 
