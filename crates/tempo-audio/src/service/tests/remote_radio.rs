@@ -597,3 +597,75 @@ fn a_local_qsy_between_cat_commands_cancels_the_remote_tail() {
     assert_eq!(engine_lock(&s.engine).settings().dial_hz(), 14_075_000);
     assert!(!s.path.exists());
 }
+
+#[test]
+fn band_selection_uses_the_actual_radio_owner_and_never_replays_the_native_pick() {
+    use tempo_app::settings::OperatingMode;
+    for (om, mode, rig_mode) in [
+        (OperatingMode::Cw, "cw", "CW"),
+        (OperatingMode::Phone, "phone", "USB"),
+    ] {
+        let peer = retuning_peer(14_074_000, rig_mode, |_, _| None);
+        let mut s = Station::configured(&peer, |settings| {
+            settings.operating_mode = om;
+            settings.ensure_radio_profiles();
+        });
+        let mut expected = Engine::with_settings(engine_lock(&s.engine).settings().clone());
+        expected.set_tx_enabled(false);
+        for (index, band) in ["40m", "20m", "40m"].into_iter().enumerate() {
+            let receipt = {
+                let mut e = engine_lock(&s.engine);
+                let connection = e
+                    .remote_monitor_observation()
+                    .radio
+                    .readings
+                    .cat
+                    .unwrap()
+                    .connection_generation;
+                e.queue_remote_band(
+                    band,
+                    mode,
+                    connection,
+                    s.authority
+                        .permit(Instant::now() + Duration::from_secs(5))
+                        .unwrap(),
+                )
+                .unwrap()
+            };
+            expected.pick_band(band, Some(mode));
+            expected.take_immediate_retune();
+            s.step();
+            assert_eq!(
+                receipt.outcome(),
+                Outcome::Applied {
+                    evidence: Evidence::RadioReadback
+                }
+            );
+            assert_eq!(
+                engine_lock(&s.engine).settings().dial_hz(),
+                expected.settings().dial_hz()
+            );
+            assert_eq!(
+                engine_lock(&s.engine).rig_mode_effective(),
+                expected.rig_mode_effective()
+            );
+            let sent = writes(&peer);
+            assert_eq!(sent.len(), (index + 1) * 2);
+            assert!(
+                sent[sent.len() - 2].starts_with(&format!("M {} ", expected.rig_mode_effective()))
+            );
+            assert_eq!(
+                sent.last().unwrap(),
+                &format!("F {}", expected.settings().dial_hz())
+            );
+            for _ in 0..3 {
+                s.step();
+            }
+            assert_eq!(writes(&peer), sent);
+            assert!(s.backend.played.is_empty());
+            assert!(!engine_lock(&s.engine).tx_enabled());
+            let saved: Settings = serde_json::from_slice(&std::fs::read(&s.path).unwrap()).unwrap();
+            assert_eq!(saved.dial_hz(), expected.settings().dial_hz());
+        }
+    }
+}

@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 static NEXT: AtomicUsize = AtomicUsize::new(0);
+mod band_selection;
 mod receive_tuning;
 struct Station {
     engine: Engine,

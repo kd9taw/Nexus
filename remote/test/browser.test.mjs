@@ -216,6 +216,8 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
     producer=(async()=>{while(producing){const source=station;let watch;try{watch=await source.take(value=>value.type==='watch'&&value.enabled,1000)}catch{continue}await sleep(200);if(!producing)break;if(source!==station||source.closed)continue;source.send({type:'publication',requestId:watch.requestId,frame:{...fixture,source:'native',sequence:++sequence}})}})()
     const applicationData = await applicationFixture()
     applicationData.get_settings.fdActive = true
+    if(operating)applicationData.get_settings.bandChoices=Object.fromEntries(['cw','phone'].map(mode=>[mode,
+      ['40m','20m'].map(band=>({band,group:'HF',dialMhz:band==='40m'?7.2:14.25,mode:'USB',label:band,note:'',tx:true}))]))
     const collections = collectionFixture()
     const navigation=await navigationFixture(),navigationQueries=[]
     if(operating){
@@ -311,6 +313,13 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
           }else if(a.action==='radio.frequency'){
             assert.ok(a.dialMhz>0);assert.equal(a.band,a.dialMhz===10?'':'40m');assert.ok(['USB','LSB'].includes(a.sideband))
             applicationData.get_snapshot.radio.dialMhz=a.dialMhz;applicationData.get_snapshot.radio.band=a.band;applicationData.get_snapshot.radio.sideband=a.sideband
+          }else if(a.action==='radio.band'){
+            assert.ok(['cw','phone'].includes(a.mode));assert.ok(['40m','20m'].includes(a.band))
+            assert.equal(applicationData.get_snapshot.radio.operatingMode,a.mode)
+            // The station's remembered destination intentionally differs from
+            // the dropdown's published default. The browser only names a band.
+            applicationData.get_snapshot.radio.dialMhz=a.mode==='cw'?(a.band==='40m'?7.055:14.055):(a.band==='40m'?7.255:14.275)
+            applicationData.get_snapshot.radio.band=a.band
           }else if(a.action==='radio.mode'){
             const dial={digital:7.074,cw:7.030,phone:7.150,rtty:7.080,keyboard:7.070}[a.mode]
             assert.ok(dial);assert.equal(a.followFrequency,true)
@@ -387,7 +396,7 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
           value={operation:'stationControl',operationId:r.requestId,outcome:'applied',evidence:['amplifier.followBand','decoder.js8Speed','decoder.msk144Period','decoder.depth','receiver.rxOffset','receiver.rxGain'].includes(a.action)?'settingsSaved':a.action.startsWith('radio.')?'radioReadback':a.action.startsWith('amplifier.')?'amplifierReadback':'receiverState'}
           loggingReceipts.set(r.requestId,value);loggingRevision++;applicationRevision++
         }else if(r.type==='result'){value=loggingReceipts.get(r.operationId);if(!value)error='resultExpired'}
-        else value={stationBootId:loggingBoot,allowed:loggingAllowed||stationControls,phase:loggingLease?'controlling':loggingAllowed||stationControls?'available':'localPermissionRequired',leaseId:loggingLease,revision:loggingRevision,commandWindowId:loggingLease?loggingWindow:null,nextSequence:loggingLease?loggingSequence+1:null,leaseRemainingMs:loggingLease?5000:null,actions:loggingAllowed?['log.manual']:[],txArmed:false,...(stationControls?{controls:{context:{radioId:1,radioConnection:1,ampConnection:1,ampReadSequence:1},capabilities:request.operationVersion>=3?['decoder','amplifier','frequency','mode','tier','ampFollowBand','workspace','decoderSettings','receiverSettings','receiverGain']:['decoder','amplifier']}}:{})}
+        else value={stationBootId:loggingBoot,allowed:loggingAllowed||stationControls,phase:loggingLease?'controlling':loggingAllowed||stationControls?'available':'localPermissionRequired',leaseId:loggingLease,revision:loggingRevision,commandWindowId:loggingLease?loggingWindow:null,nextSequence:loggingLease?loggingSequence+1:null,leaseRemainingMs:loggingLease?5000:null,actions:loggingAllowed?['log.manual']:[],txArmed:false,...(stationControls?{controls:{context:{radioId:1,radioConnection:1,ampConnection:1,ampReadSequence:1},capabilities:request.operationVersion>=3?['decoder','amplifier','frequency','mode','tier','ampFollowBand','workspace','decoderSettings','receiverSettings','receiverGain','bandSelection']:['decoder','amplifier']}}:{})}
         source.send({type:'operationResponse',sessionId:request.sessionId,requestId:r.requestId,...(error?{error}:{value})});continue
       }
       if (request.type === 'applicationQuery') {
@@ -711,7 +720,7 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
         await until(`document.querySelector('${root} .ch-readout .readout-val')?.textContent.includes('${mhz.toFixed(4)}')`)
         }
       }
-      let modeGeometry=0
+      let modeGeometry=0,bandGeometry=0
       for(const [tab,root,mode,workspace] of [['CW','.cw-cockpit','cw'],['FT','.operate-cockpit','digital','ft'],['Phone','.phone-cockpit','phone'],['RTTY','.rtty-cockpit','rtty'],['PSK','.psk-cockpit','keyboard'],['Tempo','.grid-header','digital','tempo'],['JS8','.js8-cockpit','digital','js8'],['FT','.operate-cockpit','digital','ft']]){
         const before=stationRequests.length,selector=root+' .remote-mode-entry'
         await click(button(tab));await settledLayout()
@@ -730,6 +739,35 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
         assert.deepEqual(stationRequests.at(-1).action,expected)
         await until(`!document.querySelector('${selector}')`)
         assert.equal(applicationData.get_snapshot.radio.txEnabled,false)
+        if(['cw','phone'].includes(mode)){
+          const picker=root+' .band-picker-select'
+          for(const [width,height,zoom]of [[390,844,1],[1280,800,1],[390,844,1.75],[1280,800,1.75]])for(const theme of ['dark','light']){
+            await browser.call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false},session)
+            await evaluate(`document.documentElement.style.setProperty('--ui-zoom','${zoom}');document.documentElement.dataset.theme='${theme}';window.dispatchEvent(new Event('resize'))`);await settledLayout()
+            await until(`!!document.querySelector('${picker}')&&!document.querySelector('${picker}').disabled`)
+            await evaluate(`document.querySelector('${picker}').scrollIntoView({block:'center',behavior:'instant'})`);await settledLayout()
+            const good=await evaluate(`(()=>{const e=document.querySelector('${picker}'),r=e.getBoundingClientRect();return r.width>0&&r.height>0&&e.contains(document.elementFromPoint(r.left+r.width/2,r.top+r.height/2))&&document.documentElement.scrollWidth<=innerWidth+1&&document.documentElement.scrollHeight<=innerHeight+1})()`)
+            assert.equal(good,true,`Band picker reachable ${mode} ${width} ${zoom} ${theme}`);bandGeometry++
+          }
+          for(const band of ['20m','40m']){
+            await freshLoggingWindow();await until(`!document.querySelector('${picker}').disabled`)
+            const count=stationRequests.length
+            await click(`document.querySelector('${picker}')`)
+            for(const key of ['Home',...(band==='20m'?['ArrowDown']:[]),'Enter']){
+              const code={Home:36,ArrowDown:40,Enter:13}[key]
+              await browser.call('Input.dispatchKeyEvent',{type:'keyDown',key,code:key,windowsVirtualKeyCode:code},session)
+              await browser.call('Input.dispatchKeyEvent',{type:'keyUp',key,code:key,windowsVirtualKeyCode:code},session)
+            }
+            for(let i=0;i<100&&stationRequests.length===count;i++)await sleep(100)
+            assert.equal(stationRequests.length,count+1,`one ${mode} band gesture`)
+            assert.deepEqual(stationRequests.at(-1).action,{action:'radio.band',band,mode})
+            await until(`document.querySelector('.remote-control-result')?.textContent.includes('confirmed')`)
+            const dial=applicationData.get_snapshot.radio.dialMhz.toFixed(4)
+            await until(`document.querySelector('${root} .readout-val')?.textContent.includes('${dial}')`)
+            assert.equal(applicationData.get_snapshot.radio.txEnabled,false)
+          }
+          if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,`band-picker-${mode}-1280-175-light.png`),Buffer.from(shot.data,'base64'))}
+        }
       }
       let tierGeometry=0
       for(const [tab,root,index,tier] of [
@@ -901,7 +939,7 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
       stationControls=false;loggingLease=null
       await until(`document.querySelector('.cw-cockpit .amp-op').disabled`)
       assert.equal(loggedRequests.length,5);assert.equal(stationRequests.length,63);assert.equal(unexpectedMessages,0);assert.equal(exceptions,0)
-      if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-manual-logging.png'),Buffer.from(shot.data,'base64'));await writeFile(join(artifacts,'operation-results.json'),JSON.stringify({count:loggedRequests.length,stationActions:stationRequests.map(r=>r.action),controlGeometry,modeGeometry,tierGeometry,followGeometry,decoderGeometry,receiverGeometry,gainGeometry,modes:loggedRequests.map(r=>r.record.mode),lostResultResolved:true,wholePageReloadResolved:true,crossTabLockRefusal:true,geometry:16,exceptions,unexpectedMessages},null,2))}
+      if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-manual-logging.png'),Buffer.from(shot.data,'base64'));await writeFile(join(artifacts,'operation-results.json'),JSON.stringify({count:loggedRequests.length,stationActions:stationRequests.map(r=>r.action),controlGeometry,modeGeometry,bandGeometry,tierGeometry,followGeometry,decoderGeometry,receiverGeometry,gainGeometry,modes:loggedRequests.map(r=>r.record.mode),lostResultResolved:true,wholePageReloadResolved:true,crossTabLockRefusal:true,geometry:16,exceptions,unexpectedMessages},null,2))}
       console.log('Compiled browser: five logging forms, 63 station gestures, saved decoder/receiver choices, bandless receive tuning, separate grants, recovery and 264 geometry cases passed');return
     }
     const startReads=applicationTraffic.reads, startBytes=applicationTraffic.bytes, started=performance.now()

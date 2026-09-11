@@ -152,13 +152,17 @@ const SETTINGS_KEYS: &[&str] = &[
 fn settings_view(settings: &tempo_app::settings::Settings) -> Result<Value, &'static str> {
     let mut settings = settings.clone();
     settings.sync_flat_from_active();
-    let all = serde_json::to_value(settings).map_err(|_| "applicationUnavailable")?;
+    let all = serde_json::to_value(&settings).map_err(|_| "applicationUnavailable")?;
     let mut view = serde_json::Map::new();
     for key in SETTINGS_KEYS {
         if let Some(value) = all.get(*key) {
             view.insert((*key).into(), value.clone());
         }
     }
+    view.insert("bandChoices".into(), serde_json::json!({
+        "cw": tempo_app::bandplan::licensed_bands(settings.license_class, tempo_app::settings::OperatingMode::Cw),
+        "phone": tempo_app::bandplan::licensed_bands(settings.license_class, tempo_app::settings::OperatingMode::Phone),
+    }));
     Ok(Value::Object(view))
 }
 fn changes(previous: &Value, current: &Value) -> Option<(Value, Vec<String>)> {
@@ -762,11 +766,24 @@ mod tests {
         );
         assert_eq!(view["mycall"], "TEST");
         assert_eq!(view["mygrid"], "AA00");
+        for (mode, om) in [
+            ("cw", tempo_app::settings::OperatingMode::Cw),
+            ("phone", tempo_app::settings::OperatingMode::Phone),
+        ] {
+            assert_eq!(
+                view["bandChoices"][mode],
+                serde_json::to_value(tempo_app::bandplan::licensed_bands(
+                    settings.license_class,
+                    om
+                ))
+                .unwrap()
+            );
+        }
         assert!(view
             .as_object()
             .unwrap()
             .keys()
-            .all(|key| SETTINGS_KEYS.contains(&key.as_str())));
+            .all(|key| key == "bandChoices" || SETTINGS_KEYS.contains(&key.as_str())));
         for key in [
             "cloudlogKey",
             "clublogApiKey",

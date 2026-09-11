@@ -6248,6 +6248,25 @@ impl Engine {
             .then_some((dial, sideband))
     }
 
+    /// Resolve the cell a native band pick will read after banking the current
+    /// residency, without changing that residency or any station state.
+    fn prepare_band_pick(
+        &self,
+        band: &str,
+        om: crate::settings::OperatingMode,
+    ) -> Option<(f64, String)> {
+        let memory = if let Some(r) = self
+            .dial_residency
+            .as_ref()
+            .filter(|r| r.band == band && r.mode == om)
+        {
+            self.resolve_dial_memory(band, om, r.dial_mhz, r.sideband.clone())
+        } else {
+            self.recall_dial_memory(band, om)
+        };
+        memory.or_else(|| self.band_pick_default(band, om))
+    }
+
     /// Today's band-dropdown default for (`band`, `om`) — mirrors what the pickers land on
     /// when no memory cell exists (`get_licensed_band_plan` for Phone/CW, the band-plan
     /// channel for Digital, the RTTY plan for RTTY). An empty cell must park EXACTLY where
@@ -6326,10 +6345,7 @@ impl Engine {
         // it just happens a moment earlier, into the same cell (the residency carries its own
         // band, so nothing is misattributed).
         self.bank_dial_memory();
-        if let Some((dial, sideband)) = self
-            .recall_dial_memory(&band, om)
-            .or_else(|| self.band_pick_default(&band, om))
-        {
+        if let Some((dial, sideband)) = self.prepare_band_pick(&band, om) {
             // Arms the retune, and opens the residency this pick should be remembered by.
             self.set_frequency(dial, &band, &sideband);
             // Record it in the cell the recall READ. `set_frequency` opens the residency with

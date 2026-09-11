@@ -351,7 +351,8 @@ fn tier_admission_requires_v3_and_keeps_one_native_receipt_through_readback() {
             "workspace",
             "decoderSettings",
             "receiverSettings",
-            "receiverGain"
+            "receiverGain",
+            "bandSelection"
         ])
     );
     let command = control_request(&state, json!({"action":"radio.tier","tier":"FT4"}));
@@ -949,4 +950,66 @@ fn a_desktop_log_collision_and_a_returned_profile_do_not_repeat_remote_work() {
     }
     assert_eq!(f.run(&next, now), Err("staleContext"));
     assert_eq!(std::fs::read(f.dir.join("contacts.adi")).unwrap(), adif);
+}
+
+#[test]
+#[cfg(feature = "radio")]
+fn band_selection_requires_v3_and_a_later_native_owner_receipt() {
+    for mode in ["cw", "phone"] {
+        let f = Fixture::new();
+        let (connection, target_hz, target_mode) = {
+            let mut e = f.engine.lock().unwrap();
+            e.configure_remote_settings_store(f.dir.join("settings.json"));
+            e.set_operating_mode(mode, false);
+            e.set_tx_enabled(false);
+            e.set_frequency(14.275, "20m", "USB");
+            e.take_immediate_retune();
+            let mut expected = tempo_app::engine::Engine::with_settings(e.settings().clone());
+            expected.pick_band("40m", Some(mode));
+            (
+                e.remote_open_radio().unwrap(),
+                expected.settings().dial_hz(),
+                expected.rig_mode_effective(),
+            )
+        };
+        let sample = |hz, rig_mode: &str| {
+            let mut e = f.engine.lock().unwrap();
+            let read = e.remote_radio_read(&connection, Instant::now()).unwrap();
+            e.remote_observe_cat(Some(&read), Some(true));
+            e.remote_observe_dial(Some(&read), Some(hz));
+            e.remote_observe_mode(Some(&read), Some(rig_mode));
+            e.remote_observe_ptt(Some(&read), Some(false));
+        };
+        sample(14_275_000, if mode == "cw" { "CW" } else { "USB" });
+        let state = acquire_controls_version(&f, Instant::now(), 3);
+        let command = control_request(
+            &state,
+            json!({"action":"radio.band", "band":"40m", "mode":mode}),
+        );
+        let run = |version, request: &Request| {
+            f.authority.handle_version(
+                (f.connection, version),
+                SESSION,
+                DEVICE,
+                request,
+                &f.engine,
+                Instant::now(),
+            )
+        };
+        assert_eq!(run(2, &command).unwrap()["reason"], "unsupportedAction");
+        assert!(f.engine.lock().unwrap().take_remote_radio().is_none());
+        // Version refusal does not consume the v3 command window.
+        let pending = run(3, &command).unwrap();
+        assert_eq!(pending["outcome"], "pending");
+        assert_eq!(run(3, &command).unwrap(), pending);
+        let work = f.engine.lock().unwrap().take_remote_radio().unwrap();
+        assert_eq!(work.target(), (target_hz, target_mode.as_str()));
+        sample(target_hz, &target_mode);
+        assert!(work.commit(&mut f.engine.lock().unwrap()));
+        let applied = run(3, &command).unwrap();
+        assert_eq!(applied["outcome"], "applied");
+        assert_eq!(applied["evidence"], "radioReadback");
+        assert!(!f.engine.lock().unwrap().tx_enabled());
+        assert!(f.engine.lock().unwrap().take_remote_radio().is_none());
+    }
 }

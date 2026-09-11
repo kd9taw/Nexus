@@ -20,6 +20,9 @@ pub enum Workspace {
 
 enum Intent {
     Frequency,
+    Band {
+        mode: String,
+    },
     Tier(Tier),
     Workspace {
         workspace: Workspace,
@@ -152,6 +155,42 @@ impl Engine {
             connection,
             permit,
         )
+    }
+
+    pub fn queue_remote_band(
+        &mut self,
+        band: &str,
+        mode: &str,
+        connection: u64,
+        permit: Permit,
+    ) -> Result<Completion, Reason> {
+        self.remote_radio_idle()?;
+        let om = match mode {
+            "cw" => OperatingMode::Cw,
+            "phone" => OperatingMode::Phone,
+            _ => return Err(Reason::InvalidAction),
+        };
+        if self.settings.operating_mode != om || self.source_kind != crate::dto::SourceKind::Native
+        {
+            return Err(Reason::ContextChanged);
+        }
+        if !crate::bandplan::licensed_bands(self.settings.license_class, om)
+            .iter()
+            .any(|c| c.band == band)
+        {
+            return Err(Reason::InvalidAction);
+        }
+        let (dial, sideband) = self
+            .prepare_band_pick(band, om)
+            .ok_or(Reason::UnsupportedAction)?;
+        // The existing frequency transaction owns routing, authority, mode and
+        // readback. Only its final verb differs: native pick must bank/recall.
+        let receipt = self.queue_remote_frequency(dial, band, &sideband, connection, permit)?;
+        self.remote_radio_command
+            .as_mut()
+            .expect("queued frequency")
+            .intent = Intent::Band { mode: mode.into() };
+        Ok(receipt)
     }
 
     pub fn queue_remote_mode(
@@ -528,6 +567,21 @@ impl Request {
         {
             return Err(Reason::ContextChanged);
         }
+        if let Intent::Band { mode } = &self.intent {
+            let om = if mode == "cw" {
+                OperatingMode::Cw
+            } else {
+                OperatingMode::Phone
+            };
+            let target = engine.prepare_band_pick(&self.band, om);
+            if engine.settings.operating_mode != om
+                || !target.is_some_and(|(dial, sideband)| {
+                    (dial * 1e6).round() as u64 == self.target_hz && sideband == self.sideband
+                })
+            {
+                return Err(Reason::ContextChanged);
+            }
+        }
         engine.remote_radio_link(self.connection)
     }
 
@@ -604,6 +658,7 @@ impl Request {
             Intent::Frequency => {
                 engine.set_frequency(self.target_hz as f64 / 1e6, &self.band, &self.sideband)
             }
+            Intent::Band { mode } => engine.pick_band(&self.band, Some(&mode)),
             Intent::Workspace {
                 workspace,
                 follow_frequency,

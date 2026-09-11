@@ -2,6 +2,16 @@ import { describe, expect, it } from 'vitest'
 import { actionCapability, controlContext, controlOutcome, stationAction } from './station-operation'
 
 describe('closed station operating requests', () => {
+  it('names a band and its cockpit mode without accepting a browser frequency policy', () => {
+    for (const mode of ['cw', 'phone']) {
+      const a = { action: 'radio.band', band: '40m', mode }
+      expect(actionCapability(stationAction(a))).toBe('bandSelection')
+      for (const extra of ['dialMhz', 'sideband', 'settings', 'command', 'radioId']) expect(() => stationAction({ ...a, [extra]: 1 })).toThrow()
+      for (const band of ['', null, '40m-call', '20m;T 1']) expect(() => stationAction({ ...a, band })).toThrow()
+    }
+    for (const mode of ['digital', 'CW', null, ['cw']]) expect(() => stationAction({ action: 'radio.band', band: '40m', mode })).toThrow()
+  })
+
   it('accepts a bandless receive dial through the existing frequency intent', () => {
     const action = { action: 'radio.frequency', dialMhz: 10, band: '', sideband: 'USB' }
     expect(stationAction(action)).toEqual(action)

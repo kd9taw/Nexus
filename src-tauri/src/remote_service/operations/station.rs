@@ -123,6 +123,8 @@ pub enum Action {
         band: String,
         sideband: String,
     },
+    #[serde(rename = "radio.band")]
+    Band { band: String, mode: String },
     #[serde(rename = "radio.mode")]
     Mode {
         mode: String,
@@ -346,6 +348,15 @@ pub fn execute(
             );
         }
         #[cfg(feature = "radio")]
+        Action::Band { band, mode } => {
+            return engine.queue_remote_band(
+                band,
+                mode,
+                context.radio_connection.ok_or(Reason::ReadingUnavailable)?,
+                permit,
+            );
+        }
+        #[cfg(feature = "radio")]
         Action::Workspace { workspace } => {
             return engine.queue_remote_workspace(
                 *workspace,
@@ -512,6 +523,7 @@ impl Action {
     pub fn minimum_version(&self) -> u8 {
         match self {
             Self::Frequency { .. }
+            | Self::Band { .. }
             | Self::Mode { .. }
             | Self::Tier { .. }
             | Self::Workspace { .. }
@@ -544,6 +556,7 @@ pub fn capabilities(version: u8) -> Vec<&'static str> {
                 "decoderSettings",
                 "receiverSettings",
                 "receiverGain",
+                "bandSelection",
             ]
         }
     }

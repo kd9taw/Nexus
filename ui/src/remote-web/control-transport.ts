@@ -4,6 +4,7 @@ import type { OperationClient } from './operation-client'
 import { stationAction, type StationAction } from './station-operation'
 import { APPLICATION_TIMEOUT_MS } from './application-protocol'
 import type { ApplicationCommand } from './application-protocol'
+import { readBandChoices } from './band-choices'
 
 /** Adapt only the reviewed local gestures. The station receives typed intents,
  * never an invoke name; every other command remains behind the read allowlist. */
@@ -13,6 +14,15 @@ export function controlTransport(reads: ApplicationTransport, client: Applicatio
     async invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
       let action: StationAction | null = null, read = ''
       switch (command) {
+        case 'get_licensed_band_plan': {
+          if (!args || Object.keys(args).length !== 1 || typeof args.mode !== 'string' || !['cw', 'phone'].includes(args.mode)) throw Error('applicationUnsupported')
+          return readBandChoices(await reads.invoke('get_settings'), args.mode as 'cw' | 'phone') as T
+        }
+        case 'pick_band':
+          action = stationAction({ action: 'radio.band', band: args?.band, mode: args?.mode })
+          if (!args || Object.keys(args).some(k => !['band', 'mode'].includes(k))) throw Error('invalidOperation')
+          read = 'get_snapshot'
+          break
         case 'set_tier':
           action = stationAction({ action: 'radio.tier', tier: args?.tier })
           if (!args || Object.keys(args).some(k => k !== 'tier')) throw Error('invalidOperation')
