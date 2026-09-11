@@ -258,6 +258,7 @@ export function OperateQsoStrip({
           <button disabled={!stopControl}
             type="button"
             className="op-btn stop"
+            data-remote-stop={stopControl || undefined}
             onClick={() => onHaltTx?.()}
             title="Stop transmitting immediately — cuts even an over already in flight"
           >

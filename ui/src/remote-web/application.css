@@ -139,6 +139,13 @@
   pointer-events: none;
 }
 
+/* Stop derives authority from the live controller, independently of readings.
+   An enabled stop must remain visible and clickable inside the retired workspace. */
+.app[data-remote-stale="true"] [data-remote-stop="true"] {
+  visibility: visible;
+  pointer-events: auto;
+}
+
 /* Keep the existing Memories manager and its own list/grid scroll owner. */
 .remote-memories-view { overflow: auto; }
 .remote-memory-bank { display: contents; }

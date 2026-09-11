@@ -236,7 +236,7 @@ fn cloud_runtime_probe() {
     let readings_stop = Arc::new(AtomicBool::new(false));
     let stop = readings_stop.clone();
     let readings = std::thread::spawn(move || {
-        let (radio, amp) = {
+        let (mut radio, mut amp) = {
             let mut e = read_engine.lock().unwrap();
             (e.remote_open_radio().unwrap(), e.remote_open_amp().unwrap())
         };
@@ -244,12 +244,18 @@ fn cloud_runtime_probe() {
             let mut e = read_engine.lock().unwrap();
             // Synthetic owner tick: exercise permit expiry/Stop without RF or device I/O.
             e.poll_remote_transmit(Instant::now());
-            let read = e.remote_radio_read(&radio, Instant::now());
+            let read = e.remote_radio_read(&radio, Instant::now()).or_else(|| {
+                radio = e.remote_open_radio().unwrap();
+                e.remote_radio_read(&radio, Instant::now())
+            });
             e.remote_observe_cat(read.as_ref(), Some(true));
             e.remote_observe_dial(read.as_ref(), Some(14_074_000));
             e.remote_observe_mode(read.as_ref(), Some("USB"));
             e.remote_observe_ptt(read.as_ref(), Some(false));
-            let read = e.remote_amp_read(&amp, Instant::now());
+            let read = e.remote_amp_read(&amp, Instant::now()).or_else(|| {
+                amp = e.remote_open_amp().unwrap();
+                e.remote_amp_read(&amp, Instant::now())
+            });
             e.remote_observe_amp(
                 read.as_ref(),
                 AmpStatusDto {
