@@ -27,8 +27,11 @@ for (const tier of ['FT8', 'FT4']) for (const prompt of [false, true]) test(`act
     const ns = await app.mf.getDurableObjectNamespace('STATIONS'), room = ns.get(ns.idFromName(stationId))
     for (let i = 0; i < 30 && !(await roomStatus(room)).online; i++) await delay(100)
     assert.equal((await roomStatus(room)).online, true)
-    for (const type of ['loggingPermission', 'stationPermission', 'transmitPermission'])
-      assert.equal((await probe.send({ type, deviceId: device.deviceId, allow: true })).ok, true)
+    await probe.send({ type: 'refresh' })
+    for (const type of ['loggingPermission', 'stationPermission', 'transmitPermission']) {
+      const result = await probe.send({ type, deviceId: device.deviceId, allow: true })
+      assert.equal(result.ok, true, `${type}: ${result.error}`)
+    }
     const ticket = (await browser.post(`stations/${stationId}/ticket`)).value
     socket = await browser.open(stationId, ticket.ticket); socket.ackObservations(); await socket.take(v => v.type === 'session')
     const operation = async args => {

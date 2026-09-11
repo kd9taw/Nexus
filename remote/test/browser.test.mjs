@@ -259,6 +259,8 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
     // separate real-native/workerd test proves the ADIF append and durability.
     let loggingLeaseUntil=0
     let loggingAllowed=false,loggingLease=null,loggingRevision=1,loggingSequence=0,loseLogReply=false
+    let qsoPrompt=true
+    const qsoRecord={call:'W1AW',grid:'FN31',country:null,state:null,band:'20m',freqMhz:14.0755,mode:'FT8',rstSent:'-10',rstRcvd:'-12',name:null,qth:null,comment:null,notes:null,whenUnix:1700000000,confirmed:false,awardConfirmed:false}
     let stationControls=false,loseSpotReply=false,transmitAllowed=false,transmitEpoch='0000000000000001'
     const stopRequests=[]
     if(workSpot){
@@ -307,7 +309,22 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
           assert.equal(r.expectedRevision,loggingRevision);assert.equal(r.clientSequence,loggingSequence+1);loggingSequence++
           assert.deepEqual(r.context,controlContext())
           stationRequests.push(r);const a=r.action
-          if(a.action==='ft.message'){
+          let qsoEvidence=null
+          if(a.action==='qso.logCurrent'){
+            assert.ok(loggingAllowed)
+            assert.equal(a.expectedKey,applicationData.get_snapshot.currentQsoLogKey)
+            assert.equal(a.expectedTier,applicationData.get_snapshot.link.tier)
+            const q=applicationData.get_snapshot.qso
+            assert.deepEqual(a.expectedQso,{dxcall:q.dxcall,state:q.state,txNow:q.txNow,cqRunning:q.cqRunning})
+            if(qsoPrompt){applicationData.get_snapshot.pendingLog={...qsoRecord};applicationData.get_snapshot.pendingQsoLogKey='0000000000000002'}
+            qsoEvidence=qsoPrompt?'pendingConfirmationSynced':'fileSynced'
+          }else if(a.action==='qso.confirm'||a.action==='qso.discard'){
+            assert.ok(loggingAllowed)
+            assert.equal(a.expectedKey,applicationData.get_snapshot.pendingQsoLogKey)
+            if(a.action==='qso.confirm')assert.deepEqual(a.edits,{call:'W1AW',grid:'FN32',rstSent:'-10',rstRcvd:'-12'})
+            applicationData.get_snapshot.pendingLog=null;applicationData.get_snapshot.pendingQsoLogKey=null
+            qsoEvidence=a.action==='qso.confirm'?'fileSynced':'pendingDiscarded'
+          }else if(a.action==='ft.message'){
             assert.ok(ftOperating&&transmitAllowed);assert.equal(a.transmitEpoch,transmitEpoch)
             assert.equal(a.expectedTier,applicationData.get_snapshot.link.tier)
             const qso=applicationData.get_snapshot.qso
@@ -466,11 +483,11 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
             doc.revision=createHash('sha256').update(JSON.stringify(doc.settings)).digest('hex')
             fixture.station.amplifier.followBand=a.follow
           }else assert.fail(`Unreviewed station action ${a.action}`)
-          value={operation:'stationControl',operationId:r.requestId,outcome:'applied',evidence:a.action.startsWith('ft.')?'stationState':['amplifier.followBand','decoder.js8Speed','decoder.msk144Period','decoder.depth','receiver.rxOffset','receiver.rxGain'].includes(a.action)?'settingsSaved':a.action.startsWith('radio.')?'radioReadback':a.action.startsWith('amplifier.')?'amplifierReadback':'receiverState'}
+          value={operation:'stationControl',operationId:r.requestId,outcome:'applied',evidence:qsoEvidence??(a.action.startsWith('ft.')?'stationState':['amplifier.followBand','decoder.js8Speed','decoder.msk144Period','decoder.depth','receiver.rxOffset','receiver.rxGain'].includes(a.action)?'settingsSaved':a.action.startsWith('radio.')?'radioReadback':a.action.startsWith('amplifier.')?'amplifierReadback':'receiverState')}
           loggingReceipts.set(r.requestId,value);loggingRevision++;applicationRevision++
           if(loseSpotReply&&a.action==='radio.workSpot')continue
         }else if(r.type==='result'){value=loggingReceipts.get(r.operationId);if(!value)error='resultExpired';else if(loseSpotReply&&value.operation==='stationControl')value={operation:'stationControl',operationId:r.operationId,outcome:'unknown',reason:'hardwareUnconfirmed'}}
-        else value={stationBootId:loggingBoot,allowed:loggingAllowed||stationControls,phase:loggingLease?'controlling':loggingAllowed||stationControls?'available':'localPermissionRequired',leaseId:loggingLease,revision:loggingRevision,commandWindowId:loggingLease?loggingWindow:null,nextSequence:loggingLease?loggingSequence+1:null,leaseRemainingMs:loggingLease?Math.max(0,Math.floor(loggingLeaseUntil-performance.now())):null,actions:loggingAllowed?['log.manual']:[],txArmed:!!ftOperating&&!!loggingLease&&transmitAllowed&&applicationData.get_snapshot.radio.txEnabled,...(ftOperating?{transmitEpoch:transmitAllowed?transmitEpoch:null}:{}),...(stationControls?{controls:{context:controlContext(),capabilities:request.operationVersion>=3?['decoder','amplifier','frequency','mode','tier','ampFollowBand','workspace','decoderSettings','receiverSettings','receiverGain','bandSelection','receiverFilter','receiverDsp','phoneMode','fmTuning','fmReceiver','radioLevels',...(transmitAllowed?['ftOperate','ftCall','ftExchange','ftMessages']:[]),...(workSpot?['workSpot']:[]),...(radioSelection?['radioSelection']:[])]:['decoder','amplifier']}}:{})}
+        else value={stationBootId:loggingBoot,allowed:loggingAllowed||stationControls,phase:loggingLease?'controlling':loggingAllowed||stationControls?'available':'localPermissionRequired',leaseId:loggingLease,revision:loggingRevision,commandWindowId:loggingLease?loggingWindow:null,nextSequence:loggingLease?loggingSequence+1:null,leaseRemainingMs:loggingLease?Math.max(0,Math.floor(loggingLeaseUntil-performance.now())):null,actions:loggingAllowed?['log.manual']:[],txArmed:!!ftOperating&&!!loggingLease&&transmitAllowed&&applicationData.get_snapshot.radio.txEnabled,...(ftOperating?{transmitEpoch:transmitAllowed?transmitEpoch:null}:{}),...(stationControls?{controls:{context:controlContext(),capabilities:request.operationVersion>=3?['decoder','amplifier','frequency','mode','tier','ampFollowBand','workspace','decoderSettings','receiverSettings','receiverGain','bandSelection','receiverFilter','receiverDsp','phoneMode','fmTuning','fmReceiver','radioLevels',...(transmitAllowed?['ftOperate','ftCall','ftExchange','ftMessages']:[]),...(ftOperating&&loggingAllowed?['qsoLogging']:[]),...(workSpot?['workSpot']:[]),...(radioSelection?['radioSelection']:[])]:['decoder','amplifier']}}:{})}
         source.send({type:'operationResponse',sessionId:request.sessionId,requestId:r.requestId,...(error?{error}:{value})});continue
       }
       if (request.type === 'applicationQuery') {
@@ -682,13 +699,52 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         unavailableTopics.delete('get_snapshot');applicationRevision++
         await until(`document.querySelector('${tx}')?.textContent.trim()==='TX Off'&&!document.querySelector('${cq}').disabled`)
       }
+      // Existing Log QSO and confirmation dialog, including the stop control
+      // while a pending confirmation's station display becomes unavailable.
+      loggingAllowed=true
+      applicationData.get_snapshot.currentQsoLogKey='0000000000000001'
+      applicationData.get_snapshot.qso={state:'done',dxcall:'W1AW',dxgrid:'FN31',rxReport:-12,running:false,cqRunning:false,txNow:null}
+      applicationData.get_snapshot.radio.txEnabled=true;applicationRevision++
+      const log='.cockpit-qso .cq-log',confirm='.logconfirm-log',discard='.logconfirm-discard'
+      await until(`!document.querySelector('${log}').disabled`)
+      await click(`document.querySelector('${log}')`)
+      await until(`!!document.querySelector('.logconfirm')&&!document.querySelector('${confirm}').disabled`)
+      assert.equal(stationRequests.at(-1).action.action,'qso.logCurrent')
+      const grid=`document.querySelectorAll('.logconfirm input')[1]`
+      await click(grid);await evaluate(`${grid}.select()`);await browser.call('Input.insertText',{text:'FN32'},session)
+      unavailableTopics.add('get_snapshot')
+      await until(`document.querySelector('${confirm}').disabled`)
+      assert.equal(await evaluate(`document.querySelector('${discard}').disabled`),true)
+      await click(`document.querySelector('.logconfirm [data-remote-stop]')`)
+      for(let i=0;i<100&&stopRequests.length<3;i++)await sleep(50)
+      assert.equal(stopRequests.length,3)
+      unavailableTopics.delete('get_snapshot');applicationRevision++
+      await until(`!document.querySelector('${confirm}').disabled`)
+      assert.equal(await evaluate(`${grid}.value`),'FN32')
+      await click(`document.querySelector('${confirm}')`)
+      await until(`!document.querySelector('.logconfirm')`)
+      assert.equal(stationRequests.at(-1).action.action,'qso.confirm')
+      applicationData.get_snapshot.pendingLog={...qsoRecord};applicationData.get_snapshot.pendingQsoLogKey='0000000000000003';applicationRevision++
+      await until(`!!document.querySelector('${discard}')&&!document.querySelector('${discard}').disabled`)
+      assert.equal(await evaluate(`${grid}.value`),'FN31')
+      await click(`document.querySelector('${discard}')`)
+      await until(`!document.querySelector('.logconfirm')`)
+      assert.equal(stationRequests.at(-1).action.action,'qso.discard')
+      qsoPrompt=false
+      applicationData.get_snapshot.currentQsoLogKey='0000000000000004';applicationData.get_snapshot.qso.dxcall='K2ABC';applicationRevision++
+      await until(`!document.querySelector('${log}').disabled&&document.querySelector('.cockpit-qso .cq-dx')?.textContent==='K2ABC'`)
+      await click(`document.querySelector('${log}')`)
+      for(let i=0;i<100&&stationRequests.length<30;i++)await sleep(50)
+      assert.equal(stationRequests.length,30)
+      assert.equal(stationRequests.at(-1).action.action,'qso.logCurrent')
+      assert.equal(await evaluate(`!!document.querySelector('.logconfirm')`),false)
       transmitAllowed=false
       await until(`document.querySelector('${cq}').disabled&&document.querySelector('${tx}').disabled&&document.querySelector('${stop}').disabled`)
-      assert.equal(stationRequests.length,26);assert.equal(stopRequests.length,2)
+      assert.equal(stationRequests.length,30);assert.equal(stopRequests.length,3)
       await evaluate(`document.activeElement.blur()`)
       await browser.call('Input.dispatchKeyEvent',{type:'keyDown',key:'1',code:'Digit1',windowsVirtualKeyCode:49,modifiers:1},session)
       await browser.call('Input.dispatchKeyEvent',{type:'keyUp',key:'1',code:'Digit1',windowsVirtualKeyCode:49,modifiers:1},session)
-      await sleep(250);assert.equal(stationRequests.length,26,'revoked keyboard gestures cannot send')
+      await sleep(250);assert.equal(stationRequests.length,30,'revoked keyboard gestures cannot send')
       assert.equal(loggedRequests.length,0);assert.equal(exceptions,0);assert.equal(unexpectedMessages,0)
       if(artifacts){await writeFile(join(artifacts,'ft-results.json'),JSON.stringify({actions:stationRequests.map(r=>r.action),stopCount:stopRequests.length,staleDisplayStop:true,localGrantRevoked:true,exceptions,unexpectedMessages},null,2));const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'ft-controls.png'),Buffer.from(shot.data,'base64'))}
       console.log('Compiled Nexus FT8/FT4 CQ, station calling, exchange controls, TX On/Off, stale-display Stop and local revocation passed');return
