@@ -73,6 +73,15 @@ browser approval remain separate checks. Radio handoffs, mode-specific operating
 actions and remote transmission remain incomplete; no arbitrary Tauri bridge exists.
 See [the Remote contract and limits](remote/README.md#existing-nexus-workspace).
 
+The receive-audio foundation is local to `tempo-audio`: the sole `RxDsp` capture
+consumer offers bounded device-rate mono copies through `receive_audio.rs`, before
+display resampling. It never consumes the decoder ring or gives media a CAT/TX
+handle. Inactive readers copy nothing; congestion drops media, and capture-source
+replacement ends subscriptions. Its age limit measures DSP publication, not physical
+capture time. This seam does not authorize a browser or provide playback, signaling,
+codecs or a relay. A future media adapter must bind the actual input and radio to a
+local grant, including the service's possible System default recovery fallback.
+
 ## Crates (roles, not an exhaustive list)
 
 | Crate | Role |
