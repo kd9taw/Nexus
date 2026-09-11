@@ -1357,7 +1357,7 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
 
   const handleConfirmLog = useCallback(
     (record: LoggedQso) => {
-      void withErrorToast(() => apiConfirmPendingLog(record), t('shell.log.failed')).then((s) => {
+      void withErrorToast(() => apiConfirmPendingLog(record, snap?.pendingQsoLogKey), t('shell.log.failed')).then((s) => {
         if (s) {
           setSnap(s)
           refreshNeeds() // drop the just-worked station from the roster/needs immediately
@@ -1366,14 +1366,14 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
         }
       })
     },
-    [refreshNeeds],
+    [refreshNeeds, snap?.pendingQsoLogKey],
   )
 
   const handleDiscardLog = useCallback(() => {
-    void withErrorToast(() => apiDiscardPendingLog(), t('shell.log.discard.failed')).then((s) => {
+    void withErrorToast(() => apiDiscardPendingLog(snap?.pendingQsoLogKey), t('shell.log.discard.failed')).then((s) => {
       if (s) setSnap(s)
     })
-  }, [])
+  }, [snap?.pendingQsoLogKey])
 
   const handleSend = useCallback(
     (text: string) => {
@@ -2049,7 +2049,7 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   }, [])
 
   const handleLogCurrent = useCallback(() => {
-    void withErrorToast(() => apiLogCurrentQso(), t('shell.log.failed')).then((r) => {
+    void withErrorToast(() => apiLogCurrentQso({ expectedKey: snap?.currentQsoLogKey, expectedTier: snap?.link.tier, expectedQso: snap?.qso }), t('shell.log.failed')).then((r) => {
       if (r) {
         setSnap(r.snapshot)
         // The engine's verdict, not the call returning (#100): every false is a deliberate
@@ -2060,12 +2060,12 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
           refreshNeeds() // drop the just-worked station from the roster/needs immediately
           // QRZ/ClubLog/eQSL auto-upload happens in the BACKEND log funnel now
           // (every log path, auto-log included); outcomes toast via uploadTick.
-        } else {
+        } else if (!r.pending) {
           pushToast(t('shell.toast.nothingToLog'), 'info', 4000)
         }
       }
     })
-  }, [refreshNeeds])
+  }, [refreshNeeds, snap?.currentQsoLogKey, snap?.link.tier, snap?.qso])
 
   // Selecting a view from the nav. QSO / Field Day also request the backend mode
   // (defaulting to the "run" / "chat" role); Settings are pure UI
@@ -3353,6 +3353,8 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
 
       {snap.pendingLog && (
         <LogConfirm
+          key={remote ? snap.pendingQsoLogKey : undefined}
+          onStop={remote ? handleHaltTx : undefined}
           record={snap.pendingLog}
           onConfirm={handleConfirmLog}
           onDiscard={handleDiscardLog}

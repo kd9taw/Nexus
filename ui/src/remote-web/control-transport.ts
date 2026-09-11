@@ -13,8 +13,28 @@ export function controlTransport(reads: ApplicationTransport, client: Applicatio
     kind: 'remote',
     async invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
       let action: StationAction | null = null, read = '', stopped = false
+      let qsoResult: 'logged' | 'pending' | 'none' | null = null
       let captured: ReturnType<OperationClient['prepareControl']> | undefined
       switch (command) {
+        case 'log_current_qso': case 'confirm_pending_log': case 'discard_pending_log': {
+          const keys = command === 'log_current_qso' ? ['expectedKey', 'expectedTier', 'expectedQso'] : command === 'confirm_pending_log' ? ['record', 'expectedKey'] : ['expectedKey']
+          if (!args || Object.keys(args).length !== keys.length || Object.keys(args).some(k => !keys.includes(k))) throw Error('invalidOperation')
+          const gesture = structuredClone(args)
+          captured = operations.prepareControl()
+          if (command === 'log_current_qso') {
+            const q = gesture.expectedQso as import('../types').QsoStatus | null
+            if (!q) throw Error('staleContext')
+            action = stationAction({ action: 'qso.logCurrent', expectedKey: gesture.expectedKey, expectedTier: gesture.expectedTier,
+              expectedQso: { dxcall: q.dxcall, state: q.state, txNow: q.txNow ?? null, cqRunning: q.cqRunning ?? false } })
+          } else if (command === 'confirm_pending_log') {
+            const record = gesture.record as import('../types').LoggedQso | null
+            if (!record) throw Error('invalidOperation')
+            action = stationAction({ action: 'qso.confirm', expectedKey: gesture.expectedKey,
+              edits: { call: record.call, grid: record.grid, rstSent: record.rstSent, rstRcvd: record.rstRcvd } })
+          } else action = stationAction({ action: 'qso.discard', expectedKey: gesture.expectedKey })
+          read = 'get_snapshot'
+          break
+        }
         case 'override_next_tx': case 'qso_resend': case 'qso_freetext': case 'set_mode': {
           const keys = command === 'override_next_tx' ? ['call', 'grid', 'text', 'expectedQso'] : command === 'qso_resend' ? ['expectedQso'] : [command === 'qso_freetext' ? 'text' : 'mode', 'expectedQso']
           if (!args || Object.keys(args).length !== keys.length || Object.keys(args).some(key => !keys.includes(key))) throw Error('invalidOperation')
@@ -131,9 +151,17 @@ export function controlTransport(reads: ApplicationTransport, client: Applicatio
       }
       if (action) {
         const result = await (captured ? captured(action) : operations.control(action, displayed))
-        if (result.outcome !== 'applied') throw Error(result.outcome === 'rejected' ? result.reason : 'operationUnknown')
-        if (action?.action === 'radio.workSpot' && result.evidence !== 'radioReadback') throw Error('operationUnknown')
-        if (action?.action === 'radio.select' && result.evidence !== 'radioReadback' && !(displayed?.radioId === action.radioId && result.evidence === 'stationState')) throw Error('operationUnknown')
+        if (action.action === 'qso.logCurrent' && result.outcome === 'rejected' && ['noEligibleContact', 'alreadyPresent'].includes(result.reason)) qsoResult = 'none'
+        else if (result.outcome !== 'applied') throw Error(result.outcome === 'rejected' ? result.reason : 'operationUnknown')
+        if (action.action === 'qso.logCurrent' && result.outcome === 'applied') {
+          if (result.evidence === 'fileSynced') qsoResult = 'logged'
+          else if (result.evidence === 'pendingConfirmationSynced') qsoResult = 'pending'
+          else throw Error('operationUnknown')
+        }
+        if ((action.action === 'qso.confirm' || action.action === 'qso.discard') &&
+          (result.outcome !== 'applied' || result.evidence !== (action.action === 'qso.confirm' ? 'fileSynced' : 'pendingDiscarded'))) throw Error('operationUnknown')
+        if (action?.action === 'radio.workSpot' && result.outcome === 'applied' && result.evidence !== 'radioReadback') throw Error('operationUnknown')
+        if (action?.action === 'radio.select' && result.outcome === 'applied' && result.evidence !== 'radioReadback' && !(displayed?.radioId === action.radioId && result.evidence === 'stationState')) throw Error('operationUnknown')
       }
       if (!read) return undefined as T
       // The UI receives a later station sample, not an optimistic local copy or
@@ -154,6 +182,7 @@ export function controlTransport(reads: ApplicationTransport, client: Applicatio
             const settings = await reads.invoke<import('../types').Settings>('get_settings')
             if (snapshot.activeRadioId !== action.radioId || settings.activeRadio !== action.radioId) throw Error('readingUnavailable')
           }
+          if (qsoResult) return { logged: qsoResult === 'logged', pending: qsoResult === 'pending', snapshot: value } as T
           return value
         }
         await new Promise(resolve => setTimeout(resolve, 50))

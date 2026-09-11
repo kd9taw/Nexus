@@ -20,7 +20,7 @@ export function useStationCapability(capability: ControlCapability): boolean {
   const client = useContext(RemoteOperationsContext)
   const view = useSyncExternalStore(client?.subscribe ?? idleSubscribe, client?.getSnapshot ?? idleSnapshot)
   const expanded = ['frequency', 'mode', 'tier', 'workspace', 'ampFollowBand', 'decoderSettings', 'receiverSettings', 'receiverGain', 'bandSelection', 'receiverFilter', 'receiverDsp', 'phoneMode', 'workSpot', 'radioLevels', 'radioSelection', 'fmTuning', 'fmReceiver'].includes(capability)
-  return local || !!(available && (!['ftOperate', 'ftCall', 'ftExchange', 'ftMessages'].includes(capability) || (client?.operationVersion ?? 0) >= 4) && (!expanded || (client?.operationVersion ?? 0) >= 3) && view?.fresh && view.connected && view.requestReady !== false && !view.unresolved && !view.controlPending &&
+  return local || !!(available && (!['qsoLogging', 'ftOperate', 'ftCall', 'ftExchange', 'ftMessages'].includes(capability) || (client?.operationVersion ?? 0) >= 4) && (!expanded || (client?.operationVersion ?? 0) >= 3) && view?.fresh && view.connected && view.requestReady !== false && !view.unresolved && !view.controlPending &&
     view.state?.phase === 'controlling' && (!['frequency', 'mode', 'tier', 'workspace', 'decoderSettings', 'receiverSettings', 'receiverGain', 'bandSelection', 'receiverFilter', 'receiverDsp', 'phoneMode', 'workSpot', 'radioLevels', 'radioSelection', 'fmTuning', 'fmReceiver'].includes(capability) || !view.state.txArmed) && view.state.controls?.capabilities.includes(capability))
 }
 

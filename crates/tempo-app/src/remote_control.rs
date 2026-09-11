@@ -127,6 +127,9 @@ pub enum Evidence {
     RadioReadback,
     AmplifierReadback,
     SettingsSaved,
+    FileSynced,
+    PendingConfirmationSynced,
+    PendingDiscarded,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -141,6 +144,9 @@ pub enum Reason {
     UnsupportedAction,
     InvalidAction,
     PersistenceFailed,
+    NoEligibleContact,
+    AlreadyPresent,
+    PendingConfirmationRequired,
 }
 
 /// A bounded receipt shared with the worker, not a second command queue.

@@ -17,6 +17,7 @@ use std::sync::{
 use std::time::{Duration, Instant};
 use tempo_app::remote_control::{transmit::TransmitAuthority, Completion, Outcome, Revocation};
 
+mod logging;
 mod station;
 mod transmit_stop;
 
@@ -561,6 +562,9 @@ impl Authority {
                 vec![]
             };
             if version >= 4 {
+                if c.grants.contains(device) {
+                    capabilities.push("qsoLogging");
+                }
                 value["txArmed"] = json!(owned && tx_owned);
                 if ft_available
                     && c.control_grants.contains(device)
@@ -615,7 +619,8 @@ impl Authority {
         self.reconcile(&mut c, now)?;
         // Capture context and execute under the same engine lock. There is no
         // queue whose work could migrate into a later radio/profile context.
-        let mut engine = engine.try_lock().map_err(|_| "stationBusy")?;
+        let shared_engine = engine;
+        let mut engine = shared_engine.try_lock().map_err(|_| "stationBusy")?;
         self.context(&mut c, &engine)?;
         let control = (version >= 2).then(|| {
             (
@@ -715,7 +720,7 @@ impl Authority {
                 client_sequence,
                 ..
             } => {
-                let is_control = matches!(request, Request::StationControl { .. });
+                let is_control = matches!(request, Request::StationControl { action, .. } if !action.is_logging());
                 if !(if is_control {
                     c.control_grants.contains(device)
                 } else {
@@ -782,6 +787,37 @@ impl Authority {
                     action, context, ..
                 } = request
                 {
+                    if action.is_logging() {
+                        self.advance(&mut c)?;
+                        c.lease.as_mut().ok_or("leaseExpired")?.sequence = *client_sequence;
+                        let prepared = logging::prepare(&mut engine, action);
+                        drop(engine);
+                        #[cfg(test)]
+                        if let Some(probe) = &self.before_sync {
+                            probe();
+                        }
+                        let outcome = match prepared {
+                            Ok(work) => work.finish(shared_engine),
+                            Err(reason) => Outcome::Rejected { reason },
+                        };
+                        let completion = Completion::default();
+                        completion.finish(outcome.clone());
+                        let value = control_value(request.id(), outcome);
+                        c.receipts.push_back(Receipt {
+                            id: request.id().into(),
+                            session: session.into(),
+                            device: device.into(),
+                            fingerprint,
+                            at: current,
+                            value: value.clone(),
+                            control: Some(completion),
+                        });
+                        while c.receipts.len() > 1024 {
+                            c.receipts.pop_front();
+                        }
+                        c.windows.clear();
+                        return Ok(value);
+                    }
                     let deadline = (current + Duration::from_secs(5)).min(l.until);
                     let transmit_permit = if let Some(epoch) = action.transmit_epoch() {
                         if !c.transmit_grants.contains(device) {

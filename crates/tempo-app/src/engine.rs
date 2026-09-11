@@ -2053,6 +2053,8 @@ pub struct Engine {
     /// and a finished contact is awaiting confirm/discard.
     pending_log: Option<QsoRecord>,
     pending_log_identity: std::sync::Arc<()>,
+    pending_log_epoch: u64,
+    qso_log_epoch: u64,
     /// Whether the active QSO has already been auto-logged (so it logs exactly
     /// once when the sequencer reaches `Done`). Reset when a new QSO starts.
     qso_logged: bool,
@@ -4256,6 +4258,8 @@ impl Engine {
             recent_partner: None,
             pending_log: None,
             pending_log_identity: std::sync::Arc::new(()),
+            pending_log_epoch: 0,
+            qso_log_epoch: remote_logging::next_identity(),
             qso_logged: false,
             qso_start_unix: None,
             cq_running: false,
@@ -9713,7 +9717,7 @@ impl Engine {
                                // starts with fresh outbound queues, but the overs already transmitted are history and
                                // stay in the Rx-Frequency pane.
                                // A new QSO (or mode change) starts a fresh auto-log window.
-        self.qso_logged = false;
+        self.reset_qso_log_identity();
         self.qso_report_sent = None;
         self.qso_start_unix = None; // a fresh QSO stamps its own start time
                                     // Clear stale receive-side IR-HARQ buffers so a new exchange never
@@ -10011,7 +10015,7 @@ impl Engine {
                 station: Box::new(station),
                 running: true,
             };
-            self.qso_logged = false;
+            self.reset_qso_log_identity();
             self.qso_report_sent = opening_report;
             self.qso_start_unix = Some(now_unix_secs()); // working a station starts the QSO clock
         }
@@ -18807,7 +18811,7 @@ impl Engine {
             // keeps going out. Clear the QSO-start stamp too — the NEXT caller stamps
             // its own TIME_ON; otherwise this QSO's start would leak into the next
             // contact's logged TIME_ON (e.g. after a manual Log-QSO mid-run).
-            self.qso_logged = false;
+            self.reset_qso_log_identity();
             self.qso_report_sent = None;
             self.qso_start_unix = None;
             self.reset_tx_watchdog();

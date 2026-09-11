@@ -293,9 +293,15 @@ impl Publisher {
                     Ok(value)
                 }
                 Command::Snapshot => {
-                    let value = eng.snapshot();
+                    let snapshot = eng.snapshot();
+                    let current_key = eng.current_qso_log_key();
+                    let pending_key = eng.pending_qso_log_key();
                     drop(eng);
-                    serde_json::to_value(value)
+                    serde_json::to_value(snapshot).map(|mut value| {
+                        value["currentQsoLogKey"] = serde_json::json!(current_key);
+                        value["pendingQsoLogKey"] = serde_json::json!(pending_key);
+                        value
+                    })
                 }
                 Command::Settings => {
                     let value = eng.settings().clone();

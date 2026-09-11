@@ -65,6 +65,26 @@ pub enum KeyboardReceiver {
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(tag = "action", deny_unknown_fields)]
 pub enum Action {
+    #[serde(rename = "qso.logCurrent")]
+    QsoLogCurrent {
+        #[serde(rename = "expectedKey")]
+        expected_key: String,
+        #[serde(rename = "expectedTier")]
+        expected_tier: tempo_app::dto::Tier,
+        #[serde(rename = "expectedQso")]
+        expected_qso: tempo_app::engine::remote_transmit::FtExchangeContext,
+    },
+    #[serde(rename = "qso.confirm")]
+    QsoConfirm {
+        #[serde(rename = "expectedKey")]
+        expected_key: String,
+        edits: tempo_app::engine::remote_logging::PendingLogEdits,
+    },
+    #[serde(rename = "qso.discard")]
+    QsoDiscard {
+        #[serde(rename = "expectedKey")]
+        expected_key: String,
+    },
     #[serde(rename = "ft.message")]
     FtMessage {
         #[serde(rename = "expectedTier")]
@@ -276,7 +296,10 @@ pub fn execute(
         return Err(Reason::ContextChanged);
     }
     match action {
-        Action::FtCq { .. }
+        Action::QsoLogCurrent { .. }
+        | Action::QsoConfirm { .. }
+        | Action::QsoDiscard { .. }
+        | Action::FtCq { .. }
         | Action::FtTxEnabled { .. }
         | Action::FtCall { .. }
         | Action::FtExchange { .. }
@@ -736,9 +759,19 @@ pub fn execute(
 }
 
 impl Action {
+    pub fn is_logging(&self) -> bool {
+        matches!(
+            self,
+            Self::QsoLogCurrent { .. } | Self::QsoConfirm { .. } | Self::QsoDiscard { .. }
+        )
+    }
+
     pub fn minimum_version(&self) -> u8 {
         match self {
-            Self::FtCq { .. }
+            Self::QsoLogCurrent { .. }
+            | Self::QsoConfirm { .. }
+            | Self::QsoDiscard { .. }
+            | Self::FtCq { .. }
             | Self::FtTxEnabled { .. }
             | Self::FtCall { .. }
             | Self::FtExchange { .. }

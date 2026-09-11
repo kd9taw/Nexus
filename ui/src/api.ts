@@ -735,13 +735,13 @@ export async function resumeChatCq(): Promise<AppSnapshot> {
 
 /** Confirm-and-log a QSO held by the prompt-to-log popup (the possibly-edited
  * record). Returns the fresh snapshot. */
-export async function confirmPendingLog(record: LoggedQso): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('confirm_pending_log', { record })
+export async function confirmPendingLog(record: LoggedQso, expectedKey?: string | null): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('confirm_pending_log', { record, ...(remoteApplicationTransport() ? { expectedKey } : {}) })
 }
 
 /** Discard a QSO held by the prompt-to-log popup without logging it. */
-export async function discardPendingLog(): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('discard_pending_log', {})
+export async function discardPendingLog(expectedKey?: string | null): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('discard_pending_log', remoteApplicationTransport() ? { expectedKey } : {})
 }
 
 /** Open (or focus) a standalone OS window for one panel — multi-monitor tear-off. */
@@ -776,8 +776,8 @@ export async function qsoFreetext(text: string, expectedQso?: import('./types').
 /** Operator "Log QSO": log the active QSO's contact now. `logged` is the engine's verdict
  *  (#100) — false when nothing was loggable (already logged / no QSO / no report yet), and
  *  the UI must not claim success then. Snapshot is fresh either way. */
-export async function logCurrentQso(): Promise<{ logged: boolean; snapshot: AppSnapshot }> {
-  return invoke<{ logged: boolean; snapshot: AppSnapshot }>('log_current_qso', {})
+export async function logCurrentQso(context?: { expectedKey?: string | null; expectedTier?: string; expectedQso?: import('./types').QsoStatus | null }): Promise<{ logged: boolean; pending?: boolean; snapshot: AppSnapshot }> {
+  return invoke<{ logged: boolean; pending?: boolean; snapshot: AppSnapshot }>('log_current_qso', remoteApplicationTransport() ? { ...context } : {})
 }
 
 /** Append a contact to the ADIF logbook. Returns the fresh snapshot. */

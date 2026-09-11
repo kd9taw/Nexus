@@ -1,6 +1,8 @@
 #[cfg(feature = "radio")]
 #[path = "level_tests.rs"]
 mod level;
+#[path = "logging_tests.rs"]
+mod logging;
 #[cfg(feature = "radio")]
 #[path = "phone_mode_tests.rs"]
 mod phone_mode;

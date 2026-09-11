@@ -13,6 +13,17 @@ use std::sync::{
 };
 use tempo_core::logbook::QsoRecord;
 
+// Opaque observation identities, never authority. Exhaustion disables Remote
+// identity matching instead of reusing an old value; local behavior continues.
+pub(super) fn next_identity() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
+        .unwrap_or(u64::MAX)
+}
+fn identity_key(id: u64) -> Option<String> {
+    (id != u64::MAX).then(|| format!("{id:016x}"))
+}
+
 /// The existing journal DTO plus fields which the ordinary UI edit DTO does
 /// not carry. Legacy journals remain readable. Nothing changes the log format.
 #[derive(Serialize, Deserialize)]
@@ -41,9 +52,13 @@ pub struct PendingLogIdentity {
     identity: Arc<()>,
     record: Arc<QsoRecord>,
     path: Option<PathBuf>,
+    epoch: u64,
 }
 
 impl PendingLogIdentity {
+    pub fn key(&self) -> Option<String> {
+        identity_key(self.epoch)
+    }
     pub fn record(&self) -> &QsoRecord {
         &self.record
     }
@@ -223,6 +238,26 @@ impl Engine {
     pub(super) fn replace_pending_log(&mut self, record: Option<QsoRecord>) {
         self.pending_log = record;
         self.pending_log_identity = Arc::new(());
+        self.pending_log_epoch = next_identity();
+    }
+
+    pub(super) fn reset_qso_log_identity(&mut self) {
+        self.qso_logged = false;
+        self.qso_log_epoch = next_identity();
+    }
+
+    pub fn current_qso_log_key(&self) -> Option<String> {
+        if matches!(self.mode, super::Mode::Qso { .. }) {
+            identity_key(self.qso_log_epoch)
+        } else {
+            None
+        }
+    }
+
+    pub fn pending_qso_log_key(&self) -> Option<String> {
+        self.pending_log
+            .as_ref()
+            .and_then(|_| identity_key(self.pending_log_epoch))
     }
 
     pub fn pending_log_identity(&self) -> Option<PendingLogIdentity> {
@@ -230,6 +265,7 @@ impl Engine {
             identity: self.pending_log_identity.clone(),
             record: Arc::new(self.pending_log.clone()?),
             path: self.station.pending_qso_path.clone(),
+            epoch: self.pending_log_epoch,
         })
     }
 
@@ -462,6 +498,40 @@ mod tests {
         assert!(!engine.qso_logged);
         assert!(engine.station.logbook.records().is_empty());
         assert!(engine.station.pending_uploads.is_empty());
+    }
+
+    #[test]
+    fn observation_keys_follow_contact_lifetimes_not_snapshot_polls() {
+        let mut fixture = Fixture::new(Tier::Ft8, true);
+        let current = fixture.engine.current_qso_log_key().unwrap();
+        fixture.engine.snapshot();
+        fixture.engine.qso_resend();
+        assert_eq!(
+            fixture.engine.current_qso_log_key().as_deref(),
+            Some(current.as_str())
+        );
+        // Same-contact re-arm preserves the native exchange and its identity.
+        fixture.engine.call_station("W9XYZ");
+        assert_eq!(
+            fixture.engine.current_qso_log_key().as_deref(),
+            Some(current.as_str())
+        );
+        let held = fixture.hold();
+        assert_eq!(fixture.engine.pending_qso_log_key(), held.key());
+        fixture
+            .engine
+            .replace_pending_log(Some(held.record().clone()));
+        assert_ne!(fixture.engine.pending_qso_log_key(), held.key());
+        fixture.engine.call_station("W1AW");
+        assert_ne!(
+            fixture.engine.current_qso_log_key().as_deref(),
+            Some(current.as_str())
+        );
+        fixture.engine.qso_log_epoch = u64::MAX;
+        fixture.engine.pending_log_epoch = u64::MAX;
+        assert!(fixture.engine.current_qso_log_key().is_none());
+        assert!(fixture.engine.pending_qso_log_key().is_none());
+        assert!(fixture.engine.pending_log.is_some());
     }
 
     #[test]

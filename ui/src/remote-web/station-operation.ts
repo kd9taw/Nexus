@@ -15,7 +15,11 @@ export type RadioLevel = (typeof RADIO_LEVELS)[number]
 export type FtCallSelection = { call: string; grid: string | null; message: string | null; snr: number | null; freq: number | null }
 export type FtExchangeContext = { dxcall: string | null; state: string; txNow: string | null; cqRunning: boolean }
 export type FtExchangeChange = { kind: 'resend' | 'monitor' } | { kind: 'freeText'; text: string }
+export type PendingLogEdits = { call: string; grid: string | null; rstSent: string | null; rstRcvd: string | null }
 export type StationAction =
+  | { action: 'qso.logCurrent'; expectedKey: string; expectedTier: string; expectedQso: FtExchangeContext }
+  | { action: 'qso.confirm'; expectedKey: string; edits: PendingLogEdits }
+  | { action: 'qso.discard'; expectedKey: string }
   | { action: 'ft.message'; expectedTier: 'FT8' | 'FT4'; transmitEpoch: string; expectedQso: FtExchangeContext; call: string; grid: string | null; text: string }
   | { action: 'ft.exchange'; expectedTier: 'FT8' | 'FT4'; transmitEpoch: string; expectedQso: FtExchangeContext; change: FtExchangeChange }
   | { action: 'ft.call'; expectedTier: 'FT8' | 'FT4'; transmitEpoch: string; selection: FtCallSelection }
@@ -54,10 +58,11 @@ export type ControlContext = {
   ampConnection: number | null
   ampReadSequence: number | null
 }
-export const CONTROL_CAPABILITIES = ['ftOperate', 'ftCall', 'ftExchange', 'ftMessages', 'decoder', 'radio', 'amplifier', 'frequency', 'mode', 'tier', 'ampFollowBand', 'workspace', 'decoderSettings', 'receiverSettings', 'receiverGain', 'bandSelection', 'receiverFilter', 'receiverDsp', 'phoneMode', 'workSpot', 'radioLevels', 'radioSelection', 'fmTuning', 'fmReceiver'] as const
+export const CONTROL_CAPABILITIES = ['qsoLogging', 'ftOperate', 'ftCall', 'ftExchange', 'ftMessages', 'decoder', 'radio', 'amplifier', 'frequency', 'mode', 'tier', 'ampFollowBand', 'workspace', 'decoderSettings', 'receiverSettings', 'receiverGain', 'bandSelection', 'receiverFilter', 'receiverDsp', 'phoneMode', 'workSpot', 'radioLevels', 'radioSelection', 'fmTuning', 'fmReceiver'] as const
 export type ControlCapability = (typeof CONTROL_CAPABILITIES)[number]
 // A new action cannot silently inherit a broader capability by its prefix.
 const ACTION_CAPABILITY: Record<StationAction['action'], ControlCapability> = {
+  'qso.logCurrent': 'qsoLogging', 'qso.confirm': 'qsoLogging', 'qso.discard': 'qsoLogging',
   'ft.message': 'ftMessages',
   'ft.exchange': 'ftExchange',
   'ft.call': 'ftCall', 'ft.cq': 'ftOperate', 'ft.txEnabled': 'ftOperate',
@@ -97,17 +102,35 @@ export function controlContext(raw: unknown): ControlContext {
   return raw as ControlContext
 }
 
+function exchangeContext(raw: unknown): void {
+  const q = object(raw, ['dxcall', 'state', 'txNow', 'cqRunning'])
+  if (typeof q.state !== 'string' || !q.state || q.state.length > 32 || /[^ -~]/.test(q.state) || typeof q.cqRunning !== 'boolean' ||
+        (q.dxcall !== null && (typeof q.dxcall !== 'string' || !/^[A-Z0-9/]{3,32}$/.test(q.dxcall))) ||
+        (q.txNow !== null && (typeof q.txNow !== 'string' || q.txNow.length > 128 || /[^ -~]/.test(q.txNow)))) invalid()
+}
+
 export function stationAction(raw: unknown): StationAction {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) invalid()
   const a = raw as Record<string, unknown>
   switch (a.action) {
+    case 'qso.logCurrent': case 'qso.confirm': case 'qso.discard': {
+      object(a, ['action', 'expectedKey', ...(a.action === 'qso.logCurrent' ? ['expectedTier', 'expectedQso'] : a.action === 'qso.confirm' ? ['edits'] : [])])
+      if (typeof a.expectedKey !== 'string' || !/^[0-9a-f]{16}$/.test(a.expectedKey)) invalid()
+      if (a.action === 'qso.logCurrent') {
+        if (!oneOf(a.expectedTier, CONTROL_TIERS)) invalid()
+        exchangeContext(a.expectedQso)
+      } else if (a.action === 'qso.confirm') {
+        const e = object(a.edits, ['call', 'grid', 'rstSent', 'rstRcvd'])
+        if (typeof e.call !== 'string' || !/^[A-Z0-9/]{3,32}$/.test(e.call) ||
+          (e.grid !== null && (typeof e.grid !== 'string' || !/^[A-Za-z0-9]{0,16}$/.test(e.grid)))) invalid()
+        for (const k of ['rstSent', 'rstRcvd']) if (e[k] !== null && (typeof e[k] !== 'string' || (e[k] as string).length > 16 || /[^ -~]/.test(e[k] as string))) invalid()
+      }
+      break
+    }
     case 'ft.message': case 'ft.exchange': {
       object(a, ['action', 'expectedTier', 'transmitEpoch', 'expectedQso', ...(a.action === 'ft.message' ? ['call', 'grid', 'text'] : ['change'])])
       if (!oneOf(a.expectedTier, ['FT8', 'FT4']) || typeof a.transmitEpoch !== 'string' || !/^[0-9a-f]{16}$/.test(a.transmitEpoch)) invalid()
-      const q = object(a.expectedQso, ['dxcall', 'state', 'txNow', 'cqRunning'])
-      if (typeof q.state !== 'string' || !q.state || q.state.length > 32 || /[^ -~]/.test(q.state) || typeof q.cqRunning !== 'boolean' ||
-        (q.dxcall !== null && (typeof q.dxcall !== 'string' || !/^[A-Z0-9/]{3,32}$/.test(q.dxcall))) ||
-        (q.txNow !== null && (typeof q.txNow !== 'string' || q.txNow.length > 128 || /[^ -~]/.test(q.txNow)))) invalid()
+      exchangeContext(a.expectedQso)
       if (a.action === 'ft.message') {
         if (typeof a.call !== 'string' || !/^[A-Z0-9/]{3,32}$/.test(a.call) ||
           (a.grid !== null && (typeof a.grid !== 'string' || !/^[A-Za-z0-9]{0,16}$/.test(a.grid))) ||
@@ -258,17 +281,17 @@ export function stationAction(raw: unknown): StationAction {
 
 export type ControlOutcome = { operation: 'stationControl'; operationId: string } & (
   | { outcome: 'pending' }
-  | { outcome: 'applied'; evidence: 'receiverState' | 'radioReadback' | 'amplifierReadback' | 'stationState' | 'settingsSaved' }
+  | { outcome: 'applied'; evidence: 'receiverState' | 'radioReadback' | 'amplifierReadback' | 'stationState' | 'settingsSaved' | 'fileSynced' | 'pendingConfirmationSynced' | 'pendingDiscarded' }
   | { outcome: 'rejected' | 'unknown'; reason: string }
 )
-const REASONS = ['authorityExpired', 'contextChanged', 'readingUnavailable', 'stationBusy', 'hardwareUnavailable', 'hardwareUnconfirmed', 'unsupportedAction', 'invalidAction', 'persistenceFailed']
+const REASONS = ['authorityExpired', 'contextChanged', 'readingUnavailable', 'stationBusy', 'hardwareUnavailable', 'hardwareUnconfirmed', 'unsupportedAction', 'invalidAction', 'persistenceFailed', 'noEligibleContact', 'alreadyPresent', 'pendingConfirmationRequired']
 export function controlOutcome(raw: unknown): ControlOutcome {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) invalid()
   const v = raw as Record<string, unknown>
   object(v, ['operation', 'operationId', 'outcome', ...(v.outcome === 'applied' ? ['evidence'] : v.outcome === 'pending' ? [] : ['reason'])])
   if (v.operation !== 'stationControl' || typeof v.operationId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(v.operationId)) invalid()
   if (v.outcome === 'applied') {
-    if (!oneOf(v.evidence, ['receiverState', 'radioReadback', 'amplifierReadback', 'stationState', 'settingsSaved'])) invalid()
+    if (!oneOf(v.evidence, ['receiverState', 'radioReadback', 'amplifierReadback', 'stationState', 'settingsSaved', 'fileSynced', 'pendingConfirmationSynced', 'pendingDiscarded'])) invalid()
   } else if (v.outcome !== 'pending' && (!oneOf(v.outcome, ['rejected', 'unknown']) || !oneOf(v.reason, REASONS))) invalid()
   return raw as ControlOutcome
 }
