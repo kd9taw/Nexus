@@ -20,10 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Remote access. Loss warnings and unresolved command recovery remain visible;
   expanding the details preserves the current cockpit and session.
 
-- **Remote Phone mode picker:** The existing AUTO, USB, LSB and AM buttons use
+- **Remote Phone mode picker:** The existing AUTO, USB, LSB, FM and AM buttons use
   confirmed mode and frequency readback through a compatible station. Choices
   retain desktop behavior, remain transient and require an idle, disarmed radio.
-  FM/repeater transitions and physical-radio acceptance remain separate work.
+  FM tuning confirms the saved repeater shift, target-band or custom offset,
+  and tone in the same transaction. Physical-radio acceptance remains pending.
 
 - **Remote receiver DSP:** The existing CW/Phone NB, NR, automatic-notch and AGC
   buttons, plus Phone manual-notch enable, use confirmed radio commands through

@@ -310,7 +310,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
           }else if(a.action==='radio.phoneMode'){
             const radio=applicationData.get_snapshot.radio
             assert.equal(radio.operatingMode,'phone');assert.equal(a.expectedMode,radio.sidebandOverride??'auto')
-            assert.ok(['auto','USB','LSB','AM'].includes(a.mode));assert.equal(radio.txEnabled,false);assert.equal(radio.rigKeyed,false)
+            assert.ok(['auto','USB','LSB','FM','AM'].includes(a.mode));assert.equal(radio.txEnabled,false);assert.equal(radio.rigKeyed,false)
             radio.sidebandOverride=a.mode==='auto'?null:a.mode
             radio.rigMode=a.mode==='auto'?(radio.dialMhz<10?'LSB':'USB'):a.mode
           }else if(a.action==='radio.level'){
@@ -421,7 +421,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
           loggingReceipts.set(r.requestId,value);loggingRevision++;applicationRevision++
           if(loseSpotReply&&a.action==='radio.workSpot')continue
         }else if(r.type==='result'){value=loggingReceipts.get(r.operationId);if(!value)error='resultExpired';else if(loseSpotReply&&value.operation==='stationControl')value={operation:'stationControl',operationId:r.operationId,outcome:'unknown',reason:'hardwareUnconfirmed'}}
-        else value={stationBootId:loggingBoot,allowed:loggingAllowed||stationControls,phase:loggingLease?'controlling':loggingAllowed||stationControls?'available':'localPermissionRequired',leaseId:loggingLease,revision:loggingRevision,commandWindowId:loggingLease?loggingWindow:null,nextSequence:loggingLease?loggingSequence+1:null,leaseRemainingMs:loggingLease?5000:null,actions:loggingAllowed?['log.manual']:[],txArmed:false,...(stationControls?{controls:{context:controlContext(),capabilities:request.operationVersion>=3?['decoder','amplifier','frequency','mode','tier','ampFollowBand','workspace','decoderSettings','receiverSettings','receiverGain','bandSelection','receiverFilter','receiverDsp','phoneMode','radioLevels',...(workSpot?['workSpot']:[]),...(radioSelection?['radioSelection']:[])]:['decoder','amplifier']}}:{})}
+        else value={stationBootId:loggingBoot,allowed:loggingAllowed||stationControls,phase:loggingLease?'controlling':loggingAllowed||stationControls?'available':'localPermissionRequired',leaseId:loggingLease,revision:loggingRevision,commandWindowId:loggingLease?loggingWindow:null,nextSequence:loggingLease?loggingSequence+1:null,leaseRemainingMs:loggingLease?5000:null,actions:loggingAllowed?['log.manual']:[],txArmed:false,...(stationControls?{controls:{context:controlContext(),capabilities:request.operationVersion>=3?['decoder','amplifier','frequency','mode','tier','ampFollowBand','workspace','decoderSettings','receiverSettings','receiverGain','bandSelection','receiverFilter','receiverDsp','phoneMode','fmTuning','radioLevels',...(workSpot?['workSpot']:[]),...(radioSelection?['radioSelection']:[])]:['decoder','amplifier']}}:{})}
         source.send({type:'operationResponse',sessionId:request.sessionId,requestId:r.requestId,...(error?{error}:{value})});continue
       }
       if (request.type === 'applicationQuery') {
@@ -1213,10 +1213,10 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
           await sleep(200)
           assert.equal(stationRequests.length,count,'missing actual mode cannot command Phone selection')
           // Supply the physical reading through the normal station stream.
-          // The following four picks are the fresh positive control.
+          // The following five picks are the fresh positive control.
           applicationData.get_snapshot.radio.rigMode='LSB';applicationRevision++
           const phoneDiagnostic=()=>evaluate(`(()=>{const e=document.querySelector('.phone-cockpit');let f=e?.[Object.keys(e).find(k=>k.startsWith('__reactFiber$'))],snap,phoneMode,operations,observation;while(f){if(f.memoizedProps?.snap){snap=f.memoizedProps.snap;phoneMode=f.memoizedProps.phoneMode}for(let d=f.dependencies?.firstContext;d;d=d.next){const v=d.memoizedValue;if(v?.getSnapshot&&v?.control)operations=v.getSnapshot();if(v?.frame&&v?.status)observation=v}f=f.return}return {radio:snap?.radio,activeRadioId:snap?.activeRadioId,phoneMode,operations,observation,buttons:[...e.querySelectorAll('.ph-mode-btn')].map(b=>({text:b.textContent,disabled:b.disabled}))}})()`)
-          for(const [pick,index]of [['USB',2],['LSB',3],['AM',5],['auto',1]]){
+          for(const [pick,index]of [['USB',2],['LSB',3],['AM',5],['FM',4],['auto',1]]){
             const selector=root+` .ph-mode-pick > button:nth-of-type(${index})`
             for(const [width,height,zoom]of [[390,844,1],[1280,800,1],[390,844,1.75],[1280,800,1.75]])for(const theme of ['dark','light']){
               await browser.call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false},session)
@@ -1233,7 +1233,6 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
             assert.deepEqual(applicationData.get_snapshot.radio,{...before,sidebandOverride:pick==='auto'?null:pick,rigMode:pick==='auto'?'LSB':pick})
             await until(`document.querySelector('${selector}')?.getAttribute('aria-pressed')==='true'`)
           }
-          assert.equal(await evaluate(`document.querySelector('${root} .ph-mode-pick > button:nth-of-type(4)')?.disabled`),true)
           if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'phone-mode-1280-175-light.png'),Buffer.from(shot.data,'base64'))}
         }
         if(['cw','phone'].includes(mode)){
@@ -1651,10 +1650,10 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       assert.ok(await evaluate(`[...document.querySelectorAll('.cockpit-txdock button')].every(e=>e.disabled)`),'receiver/amp permission cannot enable TX')
       stationControls=false;loggingLease=null
       await until(`document.querySelector('.cw-cockpit .amp-op').disabled`)
-      assert.equal(controlGeometry+modeGeometry+bandGeometry+wheelGeometry+filterGeometry+dspGeometry+phoneModeGeometry+tierGeometry+followGeometry+decoderGeometry+receiverGeometry+gainGeometry+levelGeometry+16,648)
-      assert.equal(loggedRequests.length,5);assert.equal(stationRequests.length,122);assert.equal(unexpectedMessages,0);assert.equal(exceptions,0)
+      assert.equal(controlGeometry+modeGeometry+bandGeometry+wheelGeometry+filterGeometry+dspGeometry+phoneModeGeometry+tierGeometry+followGeometry+decoderGeometry+receiverGeometry+gainGeometry+levelGeometry+16,656)
+      assert.equal(loggedRequests.length,5);assert.equal(stationRequests.length,123);assert.equal(unexpectedMessages,0);assert.equal(exceptions,0)
       if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-manual-logging.png'),Buffer.from(shot.data,'base64'));await writeFile(join(artifacts,'operation-results.json'),JSON.stringify({count:loggedRequests.length,stationActions:stationRequests.map(r=>r.action),controlGeometry,modeGeometry,bandGeometry,wheelGeometry,filterGeometry,dspGeometry,phoneModeGeometry,tierGeometry,followGeometry,decoderGeometry,receiverGeometry,gainGeometry,levelGeometry,modes:loggedRequests.map(r=>r.record.mode),lostResultResolved:true,wholePageReloadResolved:true,crossTabLockRefusal:true,geometry:16,exceptions,unexpectedMessages},null,2))}
-      console.log('Compiled browser: five logging forms, 122 station gestures, saved receiver choices, native band recall, shared wheel/digit tuning, Phone mode picks, separate grants, recovery and 648 geometry cases passed');return
+      console.log('Compiled browser: five logging forms, 123 station gestures, saved receiver choices, native band recall, shared wheel/digit tuning, Phone mode picks, separate grants, recovery and 656 geometry cases passed');return
     }
     const startReads=applicationTraffic.reads, startBytes=applicationTraffic.bytes, started=performance.now()
     for(const [width,height] of [[1024,768],[1280,800],[1366,768],[1200,1390],[3440,1440]])for(const zoom of [1,1.75])for(const theme of ['dark','light']) {

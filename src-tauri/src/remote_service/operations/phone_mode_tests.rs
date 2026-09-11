@@ -17,6 +17,8 @@ fn remote_phone_mode_admission_requires_v3_and_readback_without_persistence_or_r
         ("auto", "LSB", "LSB"),
         ("LSB", "auto", "USB"),
         ("USB", "USB", "USB"),
+        ("auto", "FM", "FM"),
+        ("FM", "auto", "USB"),
     ] {
         let (f, connection) = station("phone", 2400);
         {
@@ -30,6 +32,10 @@ fn remote_phone_mode_admission_requires_v3_and_readback_without_persistence_or_r
             .as_array()
             .unwrap()
             .contains(&json!("phoneMode")));
+        assert!(state["controls"]["capabilities"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("fmTuning")));
         sample(&f, &connection, "LSB");
         let command = control_request(
             &state,
@@ -45,7 +51,13 @@ fn remote_phone_mode_admission_requires_v3_and_readback_without_persistence_or_r
         assert_eq!(work.target(), (14_275_000, target));
         sample(&f, &connection, target);
         let power = work.power_limit();
-        assert!(work.commit_readback(&mut f.engine.lock().unwrap(), power));
+        // Admission/receipt recovery uses an explicit worker readback here;
+        // the actual CAT transaction is covered by the audio owner tests.
+        assert!(work.commit_tuning_readback(
+            &mut f.engine.lock().unwrap(),
+            power,
+            (target == "FM").then_some(("simplex", 0, 0.0))
+        ));
         let applied = run(&f, 3, &command).unwrap();
         assert_eq!(applied["outcome"], "applied");
         assert_eq!(applied["evidence"], "radioReadback");

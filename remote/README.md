@@ -448,7 +448,8 @@ changes the station's operating mode. An idle, disarmed station, a current radio
 connection and fresh unkeyed PTT are required. The requested named band must
 match the native band plan, and the existing routing policy must keep the active
 radio (including the operator's peg choice). Held satellite/channel contexts,
-pending local tuning/VFO/offset requests, split and FM refuse this increment.
+pending local tuning/VFO/offset requests and split refuse this increment.
+Ordinary FM tuning confirms native repeater configuration within the same request.
 Normal RX tuning is not restricted to the operator's TX privileges; transmit
 guards remain in the native engine.
 
@@ -526,14 +527,19 @@ selection follows later station samples. NR depth, manual-notch frequency, COMP
 and VOX remain separate work. Physical-radio and WAN acceptance remain pending.
 
 The separate operation-v3 `phoneMode` capability connects the existing Phone
-AUTO, USB, LSB and AM buttons through `radio.phoneMode`. It binds the displayed
+AUTO, USB, LSB, FM and AM buttons through `radio.phoneMode`. It binds the displayed
 override and actual CAT mode, retains the station's automatic-mode policy and
 native AM visibility, and confirms the new mode at the unchanged receive dial.
 The native override remains transient; no Settings save or future retune is
 queued. An unconfirmed change is not retried. The normal stream supplies the
-displayed selection. FM/repeater transitions require a separate transaction.
+displayed selection. Stations advertising `fmTuning` also support the existing
+FM button, AUTO into FM, and transitions out of FM. The native owner resolves
+saved shift, target-frequency offset (including an explicit override) and CTCSS,
+probes them before tuning, applies and reads them back under the original request,
+then adopts its native reconciliation cache. Missing readback cannot confirm the
+choice; uncertain work is not retried. The picker remains transient.
 
-Profile/radio transitions, FM/repeater and satellite/split transactions,
+Combined routed profile/tuning changes, repeater-channel holds and satellite/split transactions,
 band-memory/spot shortcuts, scope dragging, continuous scanning and attended hardware/WAN
 acceptance remain incomplete. A compatible station build is required; this
 source increment does not update existing installations or establish paid readiness.
