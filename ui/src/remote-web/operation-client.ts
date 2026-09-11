@@ -68,6 +68,7 @@ export class OperationClient {
   private finished: OperationOutcome | null = null
   private loggingIntent = false
   private controlIntent = false
+  private resultIntent: object | null = null
   private controlPolledAt = -Infinity
   constructor(
     private send: (message: string) => void,
@@ -125,6 +126,7 @@ export class OperationClient {
   disconnected() {
     clearInterval(this.timer)
     this.timer = undefined
+    this.resultIntent = null
     const p = this.pending
     this.pending = null
     if (p) {
@@ -146,6 +148,7 @@ export class OperationClient {
       !this.view.connected ||
       this.pending ||
       this.loggingIntent ||
+      this.resultIntent ||
       this.view.error === 'stationUnsupported'
     )
       return
@@ -353,6 +356,26 @@ export class OperationClient {
       ? this.receiptStorage.exclusive(action)
       : Promise.resolve(action())
   }
+  /** Reserve the request slot before an asynchronous browser receipt lock.
+   * Background status polling must not consume the operator's result gesture.
+   * This admits only a receipt read; it never replays a station action. */
+  private async withResultIntent<T>(read: (current: () => void) => Promise<T>): Promise<T> {
+    if (this.pending || this.resultIntent) throw Error('remoteBusy')
+    if (!this.view.connected) throw Error('stationUnavailable')
+    const intent = {}
+    this.resultIntent = intent
+    this.update({ busy: true })
+    try {
+      return await read(() => {
+        if (this.resultIntent !== intent || !this.view.connected) throw Error('stationUnavailable')
+      })
+    } finally {
+      if (this.resultIntent === intent) {
+        this.resultIntent = null
+        this.update({ busy: !!this.pending })
+      }
+    }
+  }
   async log(record: ManualRecord, onSubmitted?: (id: string) => void): Promise<OperationOutcome> {
     const s = this.view.state,
       until = this.stateUntil,
@@ -404,7 +427,8 @@ export class OperationClient {
   async resolve(): Promise<OperationOutcome> {
     const id = this.view.unresolved
     if (!id) throw new Error('resultExpired')
-    return this.withReceiptLock(async () => {
+    return this.withResultIntent(current => this.withReceiptLock(async () => {
+      current()
       if (this.view.unresolved !== id) throw Error('resultExpired')
       const r = await this.request({
         type: 'result',
@@ -413,7 +437,7 @@ export class OperationClient {
       })
       if (!('outcome' in r) || 'operation' in r) throw new Error('invalidRequest')
       return r
-    })
+    }))
   }
   async acknowledgeAfterCheckingLog() {
     const id = this.view.unresolved
@@ -490,11 +514,13 @@ export class OperationClient {
   async refreshControl(): Promise<ControlOutcome> {
     const entry = this.view.controlPending
     if (!entry || !this.controlStorage) throw Error('resultExpired')
-    return this.controlStorage.exclusive(async () => {
+    return this.withResultIntent(current => this.controlStorage!.exclusive(async () => {
+      current()
+      if (this.view.controlPending?.operationId !== entry.operationId) throw Error('resultExpired')
       const result = await this.request({ type: 'result', requestId: crypto.randomUUID(), operationId: entry.operationId })
       if (!('operation' in result)) throw Error('invalidOperation')
       return result
-    })
+    }))
   }
   async acknowledgeControl() {
     if (this.view.busy || !this.view.controlPending || !this.controlStorage) return
