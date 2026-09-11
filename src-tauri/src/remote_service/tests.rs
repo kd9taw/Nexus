@@ -371,7 +371,7 @@ fn cloud_runtime_probe() {
                 "REMOTE_TEST:{}",
                 json!({"qso":snapshot.qso,"currentQsoLogKey":e.current_qso_log_key(),
                 "pendingQsoLogKey":e.pending_qso_log_key(),"pendingLog":snapshot.pending_log,
-                "records":e.get_log(),"adif":std::fs::read_to_string(root.join("ft-contacts.adi")).unwrap_or_default(),
+                "records":e.get_log().into_iter().map(tempo_app::dto::LoggedQso::from).collect::<Vec<_>>(),"adif":std::fs::read_to_string(root.join("ft-contacts.adi")).unwrap_or_default(),
                 "journal":root.join("ft-pending.json").is_file(),"samples":samples,"txEnabled":e.tx_enabled()})
             );
             std::io::stdout().flush().unwrap();
