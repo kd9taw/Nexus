@@ -72,6 +72,12 @@
 /* Keep the strength legend within short receive strips. Its gradient can
    shrink while both scale labels remain visible above the next pane. */
 .remote-workspace .wf-legend { max-height: calc(100% - 12px); box-sizing: border-box; }
+/* CW/Phone's wrapped scope controls can consume the whole saved strip height
+   at a narrow effective viewport. Preserve a real receive canvas below them;
+   the existing cockpit scroller owns any height beyond the saved basis. */
+.remote-workspace :is(.cw-cockpit, .phone-cockpit) .ph-scope-panel { min-height: min-content; flex-shrink: 0; }
+.remote-workspace :is(.ph-scope-wrap, .ph-scope) { min-height: min-content; }
+.remote-workspace .ph-scope-canvas-wrap { min-height: 6em; }
 /* A stacked Tx-message column must scroll its content rather than paint over
    the following recall rail when the effective viewport is narrow. */
 .remote-workspace .cockpit-qsocol { overflow-y: auto; }
