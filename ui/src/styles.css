@@ -23073,3 +23073,7 @@ tr.sel .aprs-sym {
 .tv-app .map-empty-hint {
   display: none;
 }
+
+/* App owns the remote Phone/CW keep-alive hosts, beside its other view hosts. */
+.remote-contact-host { display: contents; }
+.remote-contact-host[hidden] { display: none; }

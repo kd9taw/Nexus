@@ -225,10 +225,6 @@
 .remote-log-submitted dd { margin: 0 0 .5em; white-space: pre-wrap; }
 .remote-log-submitted dt { color: var(--text-dim); }
 
-/* Keep the original Phone/CW forms mounted across remote navigation. */
-.remote-contact-host { display: contents; }
-.remote-contact-host[hidden] { display: none; }
-
 /* Quick uses the same mounted App. Navigation changes only its selected view. */
 .remote-quick-workspace { overflow: hidden; }
 .remote-quick-workspace > .now-bar,

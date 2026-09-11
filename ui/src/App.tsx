@@ -2692,10 +2692,12 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       workspace = remote ? <RemoteInsights kind="statistics" /> : <StatsView />
       break
     case 'cw':
-      workspace = remote ? null : cwWorkspace
+      if (remote) workspace = null
+      else workspace = cwWorkspace
       break
     case 'phone':
-      workspace = remote ? null : phoneWorkspace
+      if (remote) workspace = null
+      else workspace = phoneWorkspace
       break
     case 'pota':
       workspace = remote ? <RemoteOta snap={snap} /> : (
