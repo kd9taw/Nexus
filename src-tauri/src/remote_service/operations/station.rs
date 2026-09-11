@@ -159,6 +159,14 @@ pub enum Action {
         #[serde(rename = "followFrequency")]
         follow_frequency: bool,
     },
+    #[serde(rename = "radio.workSpot")]
+    WorkSpot {
+        mode: String,
+        #[serde(rename = "dialMhz")]
+        dial_mhz: f64,
+        band: String,
+        call: String,
+    },
     #[serde(rename = "radio.tier")]
     Tier { tier: tempo_app::dto::Tier },
     #[serde(rename = "radio.workspace")]
@@ -199,7 +207,10 @@ pub fn execute(
     context: &Context,
     action: &Action,
     permit: Permit,
+    spots: Option<&crate::SharedSpots>,
 ) -> Result<Completion, Reason> {
+    #[cfg(not(feature = "radio"))]
+    let _ = spots;
     if !permit.valid(std::time::Instant::now()) {
         return Err(Reason::AuthorityExpired);
     }
@@ -212,6 +223,35 @@ pub fn execute(
         return Err(Reason::ContextChanged);
     }
     match action {
+        #[cfg(feature = "radio")]
+        Action::WorkSpot {
+            mode,
+            dial_mhz,
+            band,
+            call,
+        } => {
+            // Split needs a complete radio-worker transaction. Until then,
+            // refuse a station-resolved pile-up rather than silently tuning
+            // simplex. Failure to inspect the buffer is not evidence of none.
+            let buffer = spots
+                .ok_or(Reason::ReadingUnavailable)?
+                .try_lock()
+                .map_err(|_| Reason::ReadingUnavailable)?;
+            if crate::work_spot_split_offset(&buffer, call, *dial_mhz, std::time::Instant::now())
+                .is_some()
+            {
+                return Err(Reason::UnsupportedAction);
+            }
+            drop(buffer);
+            return engine.queue_remote_spot(
+                mode,
+                *dial_mhz,
+                band,
+                call,
+                context.radio_connection.ok_or(Reason::ReadingUnavailable)?,
+                permit,
+            );
+        }
         #[cfg(feature = "radio")]
         Action::RxGain {
             radio_id,
@@ -618,6 +658,7 @@ impl Action {
             | Self::Agc { .. }
             | Self::PhoneMode { .. }
             | Self::Mode { .. }
+            | Self::WorkSpot { .. }
             | Self::Tier { .. }
             | Self::Workspace { .. }
             | Self::Js8Speed { .. }
@@ -653,6 +694,7 @@ pub fn capabilities(version: u8) -> Vec<&'static str> {
                 "receiverFilter",
                 "receiverDsp",
                 "phoneMode",
+                "workSpot",
             ]
         }
     }

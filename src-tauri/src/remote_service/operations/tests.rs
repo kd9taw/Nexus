@@ -7,6 +7,9 @@ mod receiver_dsp;
 #[cfg(feature = "radio")]
 #[path = "filter_tests.rs"]
 mod receiver_filter;
+#[cfg(feature = "radio")]
+#[path = "spot_tests.rs"]
+mod spot;
 use super::*;
 use std::sync::Arc;
 #[cfg(feature = "radio")]

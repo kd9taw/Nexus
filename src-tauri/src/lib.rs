@@ -11764,26 +11764,10 @@ fn work_spot(
     // listening — the N1MM behavior, using the spot we already hold. Tolerant
     // lookup (3Y0J/MM matches 3Y0J); no spot or no offset → simplex.
     let split_up_khz = call.as_deref().and_then(|c| {
-        let c = c.to_uppercase();
-        // Slash-boundary tolerant identity ONLY ("3Y0J" ⇔ "3Y0J/MM") — bare prefix
-        // matching would let "K9A" pick up "K9AB"'s spot (a different station).
-        let same_station = |dx: &str| {
-            dx == c || dx.starts_with(&format!("{c}/")) || c.starts_with(&format!("{dx}/"))
-        };
-        spots.lock().ok().and_then(|buf| {
-            buf.recent_within(
-                std::time::Instant::now(),
-                std::time::Duration::from_secs(1800),
-            )
-            .into_iter()
-            .filter(|cs| {
-                same_station(&cs.dx_call.to_uppercase())
-                    // The spot must be for THIS frequency neighborhood — a 20 m CW
-                    // spot's split must not apply to the same call worked on 40 m.
-                    && (cs.freq_mhz() - freq_mhz).abs() < 0.05
-            })
-            .find_map(|cs| cs.split_offset_khz())
-        })
+        spots
+            .lock()
+            .ok()
+            .and_then(|buf| work_spot_split_offset(&buf, c, freq_mhz, std::time::Instant::now()))
     });
     let mut eng = engine_lock(&state);
     eng.work_spot_tiered(tier, &mode, freq_mhz, &band, split_up_khz);
@@ -11792,6 +11776,30 @@ fn work_spot(
         eprintln!("tempo: failed to persist worked spot: {e}");
     }
     Ok(eng.snapshot())
+}
+
+/// The desktop and Remote inspect the same station-owned cluster evidence.
+/// A browser cannot erase a pile-up offset by omitting it from its request.
+fn work_spot_split_offset(
+    spots: &tempo_net::cluster::SpotBuffer,
+    call: &str,
+    freq_mhz: f64,
+    now: std::time::Instant,
+) -> Option<f64> {
+    let call = call.to_uppercase();
+    spots
+        .recent_within(now, std::time::Duration::from_secs(1800))
+        .into_iter()
+        .filter(|cs| {
+            // Slash-boundary tolerance never matches K9A with K9AB. Restrict
+            // the frequency neighborhood so another band cannot supply split.
+            let dx = cs.dx_call.to_uppercase();
+            (dx == call
+                || dx.starts_with(&format!("{call}/"))
+                || call.starts_with(&format!("{dx}/")))
+                && (cs.freq_mhz() - freq_mhz).abs() < 0.05
+        })
+        .find_map(|cs| cs.split_offset_khz())
 }
 
 /// Queue CW to transmit (CAT keyer path). `text` is an F-key macro template or literal

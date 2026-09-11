@@ -246,6 +246,7 @@ impl Default for Core {
 }
 #[derive(Default)]
 pub struct Authority {
+    spots: Option<crate::SharedSpots>,
     epoch: AtomicU64,
     connection: AtomicU64,
     lease_epoch: AtomicU64,
@@ -255,6 +256,12 @@ pub struct Authority {
     before_sync: Option<Box<dyn Fn() + Send + Sync>>,
 }
 impl Authority {
+    pub fn with_spots(spots: Option<crate::SharedSpots>) -> Self {
+        Self {
+            spots,
+            ..Self::default()
+        }
+    }
     /// Synchronous invalidation does not wait for an in-flight file operation.
     /// Its epoch is reconciled before any next request or local grant.
     pub fn invalidate(&self) {
@@ -662,7 +669,13 @@ impl Authority {
                         .ok_or("authorityUnavailable")?;
                     self.advance(&mut c)?;
                     c.lease.as_mut().ok_or("leaseExpired")?.sequence = *client_sequence;
-                    let completion = match station::execute(&mut engine, context, action, permit) {
+                    let completion = match station::execute(
+                        &mut engine,
+                        context,
+                        action,
+                        permit,
+                        self.spots.as_ref(),
+                    ) {
                         Ok(result) => result,
                         Err(reason) => {
                             let result = Completion::default();

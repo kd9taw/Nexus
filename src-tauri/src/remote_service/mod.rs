@@ -192,6 +192,9 @@ impl Service {
             ..Default::default()
         }));
         let control = Arc::new(Mutex::new(Control {
+            operations: Arc::new(operations::Authority::with_spots(
+                sources.as_ref().map(|s| s.spots.clone()),
+            )),
             memories: sources
                 .as_ref()
                 .map(|s| s.memories.clone())
