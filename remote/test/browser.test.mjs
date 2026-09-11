@@ -64,8 +64,8 @@ async function chrome() {
   } catch(error) { ws?.close(); if(!exited)process.kill(-child.pid,'SIGTERM'); await rm(profile,{recursive:true,force:true,maxRetries:8,retryDelay:100}); throw error }
 }
 
-for (const {applicationVersion,operating,sessionLayout} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,14].map(applicationVersion=>({applicationVersion,operating:false})),{applicationVersion:14,operating:true},{applicationVersion:14,operating:true,sessionLayout:true}]) test(`compiled hosted browser ${sessionLayout?'session layout':operating?'operations':`v${applicationVersion}`} completes PKCE, local device approval, observation and viewport checks`, { timeout: applicationVersion >= 14 ? 540000 : applicationVersion >= 13 ? 420000 : 180000 }, async () => {
-  const app=await runtime(), artifacts=process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS ? join(process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS, sessionLayout?'session-layout':operating?'operations':`v${applicationVersion}`) : undefined
+for (const {applicationVersion,operating,sessionLayout,quickLayout} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,14].map(applicationVersion=>({applicationVersion,operating:false})),{applicationVersion:14,operating:true},{applicationVersion:14,operating:true,sessionLayout:true},{applicationVersion:14,operating:true,quickLayout:true}]) test(`compiled hosted browser ${quickLayout?'quick layout':sessionLayout?'session layout':operating?'operations':`v${applicationVersion}`} completes PKCE, local device approval, observation and viewport checks`, { timeout: applicationVersion >= 14 ? 540000 : applicationVersion >= 13 ? 420000 : 180000 }, async () => {
+  const app=await runtime(), artifacts=process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS ? join(process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS, quickLayout?'quick-layout':sessionLayout?'session-layout':operating?'operations':`v${applicationVersion}`) : undefined
   let browser, station, producing=true, pauseObservations=false, producer, applicationProducer
   const results=[]
   try {
@@ -553,6 +553,42 @@ for (const {applicationVersion,operating,sessionLayout} of [...[1,2,3,4,5,6,7,8,
       assert.equal(await evaluate(`document.body.textContent.includes('Could not switch mode')`), false)
       assert.equal(fieldDayQueries.length,0)
       await click(button('FT'))
+    }
+    if(quickLayout){
+      loggingAllowed=true;stationAllowed=true
+      await until(`!!${button('Take station control')}`);await click(button('Take station control'))
+      await until(`document.querySelector('.remote-logging-authority')?.textContent.includes('Station control active')`)
+      await click(button('Phone'))
+      const call='.phone-cockpit .remote-log-entry .le-call'
+      await until(`!!document.querySelector('${call}')`);await click(`document.querySelector('${call}')`)
+      await browser.call('Input.insertText',{text:'N2QUICK'},session)
+      const lease=loggingLease
+      await evaluate(`void(window.__quickNodes={app:document.querySelector('.app'),cockpit:document.querySelector('.phone-cockpit'),call:document.querySelector('${call}')})`)
+      assert.equal(await evaluate(`document.querySelector('.app').dataset.remotePresentation??'full'`),'full','a new browser starts with the full Nexus interface')
+      await click(`document.querySelector('.remote-session-toggle')`)
+      await until(`!!${button('Quick Operate')}`)
+      await click(button('Quick Operate'))
+      await until(`document.querySelector('.app')?.dataset.remotePresentation==='quick'`)
+      const checks=[]
+      for(const [width,height,zoom]of [[390,844,1],[1280,800,1],[390,844,1.75],[1280,800,1.75]])for(const theme of ['dark','light']){
+        await browser.call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false},session)
+        await evaluate(`document.documentElement.style.setProperty('--ui-zoom','${zoom}');document.documentElement.dataset.theme='${theme}';window.dispatchEvent(new Event('resize'))`);await settledLayout();await settledLayout()
+        await evaluate(`document.querySelector('.app').scrollTop=0;document.querySelector('.shell').scrollTop=0;document.querySelector('.phone-cockpit').scrollTop=0`);await settledLayout()
+        const shape=await evaluate(`(()=>{const e=document.querySelector('${call}'),r=e.getBoundingClientRect(),nav=document.querySelector('.remote-quick-nav'),buttons=[...nav.querySelectorAll('button')];return {call:r.toJSON(),nav:nav.getBoundingClientRect().toJSON(),buttons:buttons.map(b=>{const r=b.getBoundingClientRect();return {name:b.getAttribute('aria-label')||b.textContent,visible:r.width>0&&r.height>0&&b.contains(document.elementFromPoint(r.left+r.width/2,r.top+r.height/2))}}),value:e.value,sameApp:document.querySelector('.app')===window.__quickNodes.app,sameCockpit:document.querySelector('.phone-cockpit')===window.__quickNodes.cockpit,sameInput:e===window.__quickNodes.call,docW:document.documentElement.scrollWidth,docH:document.documentElement.scrollHeight}})()`)
+        if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,`quick-${width}-${zoom}-${theme}.png`),Buffer.from(shot.data,'base64'));await writeFile(join(artifacts,`quick-${width}-${zoom}-${theme}.json`),JSON.stringify(shape,null,2))}
+        assert.ok(shape.sameApp&&shape.sameCockpit&&shape.sameInput&&shape.value==='N2QUICK','changing presentation must preserve the actual contact form and draft')
+        assert.ok(shape.buttons.every(b=>b.visible)&&shape.docW<=width+1&&shape.docH<=height+1,'all Quick destinations and return to Full Nexus must be reachable')
+        assert.ok(shape.call.top>=0&&shape.call.bottom<height-60,'the selected contact must appear before optional radio detail')
+        assert.equal(loggingLease,lease);assert.equal(stationRequests.length,0);assert.equal(loggedRequests.length,0)
+        checks.push({width,height,zoom,theme,shape})
+      }
+      await click(button('Full Nexus'))
+      await until(`document.querySelector('.app')?.dataset.remotePresentation==='full'`)
+      assert.equal(await evaluate(`document.querySelector('${call}')===window.__quickNodes.call&&document.querySelector('${call}').value==='N2QUICK'`),true)
+      assert.equal(loggingLease,lease);assert.equal(stationRequests.length,0);assert.equal(loggedRequests.length,0)
+      if(artifacts)await writeFile(join(artifacts,'quick-results.json'),JSON.stringify({checks,stationActions:0,logWrites:0,leasePreserved:true,exceptions,unexpectedMessages},null,2))
+      assert.equal(exceptions,0);assert.equal(unexpectedMessages,0)
+      console.log('Compiled Quick presentation: actual contact draft, one app and lease, eight layouts and return to full Nexus passed');return
     }
     if(sessionLayout){
       stationControls=true
