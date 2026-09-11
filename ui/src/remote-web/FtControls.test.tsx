@@ -46,3 +46,15 @@ it('receiver permission alone does not enable FT operation or Stop', () => {
   const h = fixture(false); strip(h.c)
   for (const name of [/call cq/i, /^tx off$/i, /stop tx/i]) expect(button(name).disabled).toBe(true)
 })
+it('disables ordinary FT gestures when request capacity is unavailable and keeps Stop usable', () => {
+  const h = fixture()
+  vi.spyOn(h.c, 'getSnapshot').mockReturnValue({ ...h.c.getSnapshot(), requestReady: false })
+  const ui = strip(h.c)
+  for (const name of [/call cq/i, /^tx off$/i]) {
+    expect(button(name).disabled).toBe(true)
+    fireEvent.click(button(name))
+  }
+  expect(ui.cq).not.toHaveBeenCalled(); expect(ui.tx).not.toHaveBeenCalled()
+  expect(button(/stop tx/i).disabled).toBe(false)
+  fireEvent.click(button(/stop tx/i)); expect(ui.halt).toHaveBeenCalledOnce()
+})

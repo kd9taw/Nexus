@@ -180,6 +180,13 @@ message choice, parity, offsets and the operator's manual-arming preference.
 Plain decode selection fills browser fields without RF authority; modified RX
 gestures require receiver permission. Older displayed history, typed targets,
 full QSO workflows and hardware/WAN acceptance remain pending.
+The browser budgets ordinary requests against the relay limit, retaining each
+slot until one rate window after its reply. Automatic reads leave capacity for
+an operator action; pending results can use that capacity because new actions
+are already blocked. Controls reflect admission capacity, and unsent commands
+write no receipt. Polling cannot overtake a control waiting for browser storage.
+Stop keeps its independent route and budget; no command is retried or moved to a
+newer authority window.
 
 The receive-audio foundation is local to `tempo-audio`: the sole `RxDsp` capture
 consumer offers bounded device-rate mono copies through `receive_audio.rs`, before

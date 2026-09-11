@@ -2,6 +2,7 @@ import type { ReceiptStorage } from './operation-storage'
 import type { ControlStorage, PendingControl } from './control-storage'
 import { actionCapability, controlContext, stationAction, type StationAction, type ControlOutcome, type ControlContext } from './station-operation'
 import { controlVersion, type OperationVersion } from './operation-version'
+import { OPERATION_RATE_LIMIT, OPERATION_RATE_WINDOW_MS } from './operation-limits'
 import {
   manualRecord,
   operationId,
@@ -33,6 +34,7 @@ export type OperationView = {
   stopSending?: boolean
   stopAvailable?: boolean
   stopError?: string | null
+  requestReady?: boolean
 }
 type CapturedControl = { state: OperationState; until: number }
 type Pending = {
@@ -75,6 +77,7 @@ export class OperationClient {
   private controlIntent = false
   private resultIntent: object | null = null
   private controlPolledAt = -Infinity
+  private requestBudget: { requestId: string; until: number }[] = []
   constructor(
     private send: (message: string) => void,
     readonly enabled: boolean,
@@ -115,6 +118,7 @@ export class OperationClient {
     this.view = {
       ...this.view,
       ...value,
+      requestReady: (value.connected ?? this.view.connected) && this.requestCount() < OPERATION_RATE_LIMIT,
       controlSending: this.pending?.request.type === 'stationControl',
       stopSending: !!this.pendingStop,
       stopAvailable: this.operationVersion >= 4 && !!this.stopTarget && (value.connected ?? this.view.connected),
@@ -142,6 +146,7 @@ export class OperationClient {
     this.pending = null
     if (p) {
       clearTimeout(p.timer)
+      this.finishBudget(p.request.requestId)
       if (p.request.type === 'logManual') this.update({ unresolved: p.request.requestId })
       p.reject(
         new Error(p.request.type === 'logManual' ? 'operationUnknown' : 'stationUnavailable')
@@ -155,10 +160,12 @@ export class OperationClient {
       fresh = !!this.view.state && now < this.stateUntil
     if (this.view.controlRefreshing && now >= this.controlRefreshUntil) this.update({ controlRefreshing: false })
     if (fresh !== this.view.fresh) this.update({ fresh })
+    if ((this.view.connected && this.requestCount() < OPERATION_RATE_LIMIT) !== this.view.requestReady) this.update({})
     if (
       !this.view.connected ||
       this.pending ||
       this.loggingIntent ||
+      (this.controlIntent && !this.view.controlPending) ||
       this.resultIntent ||
       this.view.error === 'stationUnsupported'
     )
@@ -170,6 +177,11 @@ export class OperationClient {
       void this.release()
       return
     }
+    // Automatic reads leave one ordinary slot for an explicit operator action.
+    // After a mutation, controls remain unavailable until a fresh state can be
+    // read within this budget. Stop never enters the ordinary budget.
+    const readLimit = this.view.controlPending || this.view.unresolved ? OPERATION_RATE_LIMIT : OPERATION_RATE_LIMIT - 1
+    if (this.requestCount() >= readLimit) return
     if (now - this.polledAt < 1000) {
       if (this.view.controlPending && this.view.controlResult?.outcome !== 'unknown' && now - this.controlPolledAt >= 1000) {
         this.controlPolledAt = now
@@ -184,9 +196,23 @@ export class OperationClient {
         : { type: 'state', requestId: crypto.randomUUID() }
     void this.request(request).catch(() => {})
   }
+  private requestCount(): number {
+    this.requestBudget = this.requestBudget.filter(entry => this.now() < entry.until)
+    return this.requestBudget.length
+  }
+  private requireRequestCapacity() {
+    if (this.requestCount() >= OPERATION_RATE_LIMIT) throw Error('remoteBusy')
+  }
+  private finishBudget(requestId: string) {
+    const entry = this.requestBudget.find(entry => entry.requestId === requestId)
+    // Receipt time bounds the relay's earlier arrival without comparing clocks.
+    // Keeping a slot through the reply also handles delayed/clustered delivery.
+    if (entry) entry.until = this.now() + OPERATION_RATE_WINDOW_MS
+  }
   private request(request: OperationRequest): Promise<OperationValue> {
     if (!this.view.connected) return Promise.reject(new Error('stationUnavailable'))
     if (this.pending) return Promise.reject(new Error('remoteBusy'))
+    if (this.requestCount() >= OPERATION_RATE_LIMIT) return Promise.reject(new Error('remoteBusy'))
     operationRequest(request)
     return new Promise((resolve, reject) => {
       const p: Pending = {
@@ -197,6 +223,7 @@ export class OperationClient {
         timer: setTimeout(() => {
           if (this.pending !== p) return
           this.pending = null
+          this.finishBudget(request.requestId)
           const mutation = request.type === 'logManual' || request.type === 'stationControl'
           this.update({
             busy: false,
@@ -222,12 +249,14 @@ export class OperationClient {
         }
       }
       this.pending = p
+      this.requestBudget.push({ requestId: request.requestId, until: Infinity })
       this.update({ busy: true, submitting: request.type === 'logManual', error: null })
       try {
         this.send(JSON.stringify({ type: 'operationRequest', ...(this.operationVersion >= 2 ? { operationVersion: this.operationVersion } : {}), request }))
       } catch {
         clearTimeout(p.timer)
         this.pending = null
+        this.finishBudget(request.requestId)
         this.update({
           busy: false,
           submitting: false,
@@ -306,6 +335,7 @@ export class OperationClient {
     }
     clearTimeout(p.timer)
     this.pending = null
+    this.finishBudget(p.request.requestId)
     if ('error' in r) {
       const unknown = p.request.type === 'logManual' && r.error === 'operationUnknown'
       if (p.request.type === 'stationControl' && r.error !== 'operationUnknown') {
@@ -468,6 +498,7 @@ export class OperationClient {
         if (this.now() >= until) throw new Error('windowExpired')
         if (this.view.state?.leaseId !== s.leaseId || this.view.state.revision !== s.revision)
           throw new Error('staleContext')
+        this.requireRequestCapacity()
         const requestId = crypto.randomUUID()
         onSubmitted?.(requestId)
         const r = await this.request({
@@ -551,6 +582,7 @@ export class OperationClient {
         if (this.view.state?.leaseId !== s.leaseId || this.view.state.revision !== s.revision) throw Error('staleContext')
         if (!sameConnection(this.view.state.controls?.context)) throw Error('staleContext')
         if ('transmitEpoch' in intent && (intent.transmitEpoch !== this.view.state.transmitEpoch || intent.transmitEpoch !== this.stopTarget?.transmitEpoch)) throw Error('staleContext')
+        this.requireRequestCapacity()
         const saved = { operationId: request.requestId, action: intent }
         this.controlStorage!.write(saved)
         this.update({ controlPending: saved, controlResult: null })

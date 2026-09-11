@@ -4,6 +4,7 @@ import type { Peer } from '../remote-monitor/relay'
 import { object } from './display-validation'
 import { operationId, operationRequest, operationResponse } from './operation-protocol'
 import { controlVersion, parseOperationVersion, type OperationVersion } from './operation-version'
+import { OPERATION_RATE_LIMIT, OPERATION_RATE_WINDOW_MS } from './operation-limits'
 type Browser = { sessionId: string; deviceId: string; peer: Peer }
 type Pending = {
   requestId: string
@@ -91,11 +92,11 @@ export class OperationRelay {
         return
       }
       const rates = p.stop ? this.stopRates : this.rates
-      const rate = (rates.get(sessionId) ?? []).filter((at) => now - at < 1000)
+      const rate = (rates.get(sessionId) ?? []).filter((at) => now - at < OPERATION_RATE_WINDOW_MS)
       const mine = [...this.pending.values()].filter((pending) => pending.sessionId === sessionId && !!pending.stop === !!p.stop)
       // One bounded Stop can pass a pending write/control and a heartbeat. It
       // has its own rate budget; ordinary requests cannot consume that budget.
-      if (rate.length >= (p.stop ? 2 : 4) || mine.length >= (p.stop ? 1 : 2) || (!p.stop && p.mutation && mine.some((p) => p.mutation))) {
+      if (rate.length >= (p.stop ? 2 : OPERATION_RATE_LIMIT) || mine.length >= (p.stop ? 1 : 2) || (!p.stop && p.mutation && mine.some((p) => p.mutation))) {
         this.error(p, 'remoteBusy')
         return
       }

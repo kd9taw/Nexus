@@ -38,7 +38,7 @@ export function LoggingAuthority({ client }: { client: OperationClient }) {
         <button
           type="button"
           className="remote-button"
-          disabled={!view.fresh || view.busy}
+          disabled={!view.fresh || view.busy || view.requestReady === false}
           onClick={() => void client.acquire().catch(() => {})}
         >
           {station ? t('remote.controlAcquire') : t('remote.loggingAcquire')}
@@ -60,7 +60,7 @@ export function LoggingAuthority({ client }: { client: OperationClient }) {
           : view.controlResult?.outcome === 'rejected' ? t('remote.controlRefused')
           : (view.controlSending || view.controlResult?.outcome === 'pending') && view.connected ? t('remote.controlPending') : t('remote.controlUnknown')}</span>}
         {view.controlPending && <>
-          <button type="button" className="remote-button" disabled={view.busy || !view.connected} onClick={() => void client.refreshControl().catch(() => {})}>{t('remote.controlCheckResult')}</button>
+          <button type="button" className="remote-button" disabled={view.busy || !view.connected || view.requestReady === false} onClick={() => void client.refreshControl().catch(() => {})}>{t('remote.controlCheckResult')}</button>
           <button type="button" className="remote-button" disabled={view.busy || view.controlResult?.outcome === 'pending'} onClick={() => void client.acknowledgeControl().catch(() => {})}>{t('remote.controlCheckedStation')}</button>
         </>}
       </div>}
@@ -139,7 +139,7 @@ export function RemoteLogEntry({
     }
   }, [view.resolved, view.dismissed])
   const canSubmit =
-    available && view.fresh && view.state?.phase === 'controlling' && view.state.actions.includes('log.manual') && !view.unresolved && !view.controlPending
+    available && view.fresh && view.requestReady !== false && view.state?.phase === 'controlling' && view.state.actions.includes('log.manual') && !view.unresolved && !view.controlPending
   async function submit(record: LoggedQso, time: 'station' | 'explicit') {
     setError(null)
     setLogged(false)
@@ -199,7 +199,7 @@ export function RemoteLogEntry({
           <button
             type="button"
             className="remote-button"
-            disabled={view.busy || !view.connected}
+            disabled={view.busy || !view.connected || view.requestReady === false}
             onClick={() => void resolve()}
           >
             {t('remote.loggingCheckResult')}
