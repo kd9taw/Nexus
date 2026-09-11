@@ -79,6 +79,29 @@ const DBM = 'dBm'
 const REC = 'REC'
 /** The mode picker's AUTO face — the word and the sideband it resolved to, both tokens. */
 const autoPlate = (sideband: string) => `AUTO·${sideband}`
+
+/** The ADIF **Mode** a phone mode word names, or `null` when it names no phone mode at all
+ *  (CW, RTTY, a PKT/data submode, a rig that reported nothing).
+ *
+ *  USB and LSB deliberately answer SSB. They are ADIF SUBMODEs, not Modes — `<MODE:3>USB` gets
+ *  the whole record rejected by TQSL on the closed Mode enumeration, the same trap
+ *  `logbook::adif_submode` documents for a bare `<MODE:9>TempoFast`, and `LOG_MODES` in the log
+ *  strip omits them for that reason. AM and FM are Modes in their own right and ride through:
+ *  AM is the first row of the ADIF 3.1.7 Mode enumeration (adif.org/317, read 2026-09-10), with
+ *  no submodes and no import-only marking. */
+function phoneAdifMode(mode: string): 'SSB' | 'FM' | 'AM' | null {
+  switch (mode.trim().toUpperCase()) {
+    case 'USB':
+    case 'LSB':
+      return 'SSB'
+    case 'FM':
+      return 'FM'
+    case 'AM':
+      return 'AM'
+    default:
+      return null
+  }
+}
 /** The nudges the two steppers take, as their tooltips print them — figures, so they are
  *  supplied to the message rather than written in it. */
 const FILTER_STEP_HZ = 100
@@ -618,15 +641,44 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
       .catch(() => pushToast(t('phone.filter.failed'), 'error'))
   }
 
-  // Rig's actual mode read back over CAT (display-only). The app's `commandedMode` stays
-  // canonical for TX/logging; this just flags when the rig's mode disagrees, so the badge
-  // never silently lies.
+  // Rig's actual mode read back over CAT. `commandedMode` stays canonical for TX; this is what
+  // flags when the rig's mode disagrees, so the badge never silently lies — and, since the
+  // 2026-09-10 AM report below, it is also what the LOG believes.
   const rigMode = (snap.radio.rigMode ?? '').toUpperCase()
   // Collapse ONLY the FM variants (FMN/WFM → FM). Deliberately do NOT strip PKT/data suffixes:
   // in Phone a rig stuck in PKTUSB / DATA-U (rear-jack audio → dead mic) vs a commanded USB is a
   // REAL operational mismatch worth flagging, not a cosmetic naming variant.
   const rigFamily = /^W?FM/.test(rigMode) ? 'FM' : rigMode
   const modeMismatch = catOk && rigMode !== '' && rigFamily !== commandedMode ? rigMode : null
+
+  // ⭐ WHAT THE RIG IS ACTUALLY ON — and the mode the QSO is LOGGED as.
+  //
+  // The operator held an AM contact on 14.286 (the 20 m AM calling frequency) and Nexus wrote it
+  // to the logbook as SSB. The log strip was handed `commandedMode === 'FM' ? 'FM' : 'SSB'`, a
+  // binary choice in which everything that is not FM is SSB — so it could not say AM even when
+  // the operator had PICKED AM, and it never asked the rig at all. The screenshot showed both
+  // halves at once: `rig: AM` in the header, "Logs to the shared logbook as SSB" below it. Nexus
+  // knew the answer and logged something else.
+  //
+  // THE RIG WINS OVER THE COMMAND, and that direction is the point: the emission that went out is
+  // the rig's, not the one Nexus asked for. It fixes the reported case (the rig put into AM at the
+  // radio, which is the only way to work AM on 20 m — the picker does not offer it there), and it
+  // is also the safe direction for the opposite error, because a pick the rig did not take logs as
+  // what the rig DID transmit. Mislabelling an SSB contact AM is exactly as bad as the report.
+  //
+  // A read-back is believed only on the same terms the mismatch chip above is shown on, so the
+  // badge the operator SEES and the mode Nexus WRITES can never disagree: `catOk`, and a non-empty
+  // `rigMode`. That is not a loose gate — the engine sets `rig_mode` only from a successful
+  // `read_mode_passband()`, and CLEARS it both when the app commands a new dial/mode (so a cached
+  // Hamlib `m` cannot answer for the command in flight) and when the link drops. A stale read
+  // cannot outlive either event; the only residual window is a mode knob turned at the radio
+  // within the last few polls, which is a race with the QSO itself and not a systematic lie.
+  //
+  // A rig outside the phone family (CW, RTTY, PKTUSB…) names no mode this strip can log FROM, so
+  // it keeps the commanded mode — unchanged behaviour for a state the chip is already shouting
+  // about, and the log strip's own manual override is there for a genuine cross-mode contact.
+  const observedMode = catOk && phoneAdifMode(rigFamily) !== null ? rigFamily : commandedMode
+  const logMode = phoneAdifMode(observedMode) ?? 'SSB'
 
   // ⚠️ THE MIC IS DEAD AND ONLY THIS SCREEN CAN SAY SO (2026-08-17 Flex audit, critic gap #6).
   // Native Flex DAX audio sends `transmit set dax=1`, which is a RADIO-WIDE setting: while it
@@ -1150,7 +1202,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
       <LogEntry
         onOpenLogbook={onOpenLogbook}
         snap={snap}
-        mode={commandedMode === 'FM' ? 'FM' : 'SSB'}
+        mode={logMode}
         defaultRst="59"
         exchange="terrestrial"
         // The frame head above already reads LOG and is this pane's accessible name.
@@ -1661,7 +1713,10 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
         onClose={() => setSpotOpen(false)}
         initialCall={spotCall}
         freqMhz={snap.radio.dialMhz}
-        defaultComment={commandedMode}
+        // The rig's own mode, not the command — a spot posted from an AM QSO said "USB" for
+        // the same reason the log did. The picker's vocabulary, not the ADIF one: a DX-cluster
+        // comment wants the sideband word an operator would type ("USB"), not "SSB".
+        defaultComment={observedMode}
       />
     </main>
   )

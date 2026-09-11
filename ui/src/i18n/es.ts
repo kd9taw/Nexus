@@ -2505,7 +2505,7 @@ export const ES: PartialCatalog = {
   "phone.rfZoom.full.title": "Todo el barrido del scope del equipo (el ancho se fija en el equipo)",
   "phone.rfZoom.span.title": "±{{khz}} kHz alrededor de tu dial",
   "phone.rigMismatch.chip": "equipo: {{mode}}",
-  "phone.rigMismatch.title": "Tu equipo está en {{rigMode}}, pero Phone está en {{mode}}. El log y el TX usan {{mode}} — gira el mando de modo del equipo (o vuelve a elegir la banda) para que coincidan.",
+  "phone.rigMismatch.title": "Tu equipo está en {{rigMode}}, pero Phone está en {{mode}}. El TX usa {{mode}} — gira el mando de modo del equipo (o vuelve a elegir la banda) para que coincidan.",
   "phone.rigScope.aria": "Control del scope del equipo",
   "phone.rigScope.label": "Scope\\u00a0equipo",
   "phone.rigScope.ref.aria": "Nivel de referencia del scope (dB)",

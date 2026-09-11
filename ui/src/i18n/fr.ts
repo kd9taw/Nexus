@@ -2505,7 +2505,7 @@ export const FR: PartialCatalog = {
   "phone.rfZoom.full.title": "Tout le balayage du scope de la radio (la largeur se règle sur la radio)",
   "phone.rfZoom.span.title": "±{{khz}} kHz autour de votre VFO",
   "phone.rigMismatch.chip": "radio : {{mode}}",
-  "phone.rigMismatch.title": "Votre radio est en {{rigMode}}, mais Phone est réglé sur {{mode}}. L'enregistrement et le TX utilisent {{mode}} — tournez le sélecteur de mode de la radio (ou re-choisissez la bande) pour correspondre.",
+  "phone.rigMismatch.title": "Votre radio est en {{rigMode}}, mais Phone est réglé sur {{mode}}. Le TX utilise {{mode}} — tournez le sélecteur de mode de la radio (ou re-choisissez la bande) pour correspondre.",
   "phone.rigScope.aria": "Commande du scope de la radio",
   "phone.rigScope.label": "Scope\\u00a0radio",
   "phone.rigScope.ref.aria": "Niveau de référence du scope (dB)",

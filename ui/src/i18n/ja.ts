@@ -4671,7 +4671,7 @@ export const JA: PartialCatalog = {
   "phone.micDax.label": "マイク無効 (DAX)",
   "phone.micDax.title": "FlexネイティブDAXオーディオがオンのため、無線機は送信音声をDAXから取り、物理マイクは切り離されています — すべてのスライス、SmartSDRを含むすべてのプログラムで同様です。マイクを使うには設定 ▸ 無線機 ▸ リグとCATでFlexネイティブDAXオーディオをオフにしてください。",
   "phone.rigMismatch.chip": "無線機: {{mode}}",
-  "phone.rigMismatch.title": "無線機は{{rigMode}}ですが、Phoneは{{mode}}に設定されています。ログとTXは{{mode}}を使います — 無線機のモードつまみを回すか、バンドを選び直して合わせてください。",
+  "phone.rigMismatch.title": "無線機は{{rigMode}}ですが、Phoneは{{mode}}に設定されています。TXは{{mode}}を使います — 無線機のモードつまみを回すか、バンドを選び直して合わせてください。",
   "phone.split.on.title": "スプリットON — TX {{freq}} MHz。クリックでシンプレックスに戻ります。",
   "phone.split.off.title": "スプリット運用 — RX周波数からずらして送信します (例: 5アップ)",
   "phone.split.lower.title": "TXを{{step}} kHz下へ",

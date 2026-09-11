@@ -4429,7 +4429,7 @@ export const DE: PartialCatalog = {
   "phone.micDax.label": "Mic aus (DAX)",
   "phone.micDax.title": "Natives Flex-DAX-Audio ist an, das Funkgerät nimmt das Sendeaudio also von DAX und Ihr Mikrofon ist abgeklemmt — auf jedem Slice und in jedem Programm, SmartSDR eingeschlossen. Für das Mikrofon das native Flex-DAX-Audio unter Einstellungen ▸ Funkgerät ▸ Funkgerät & CAT abschalten.",
   "phone.rigMismatch.chip": "Rig: {{mode}}",
-  "phone.rigMismatch.title": "Ihr Funkgerät steht auf {{rigMode}}, Phone ist aber auf {{mode}} gesetzt. Loggen und TX nutzen {{mode}} — den Betriebsartenknopf am Gerät drehen (oder das Band neu wählen), damit es zusammenpasst.",
+  "phone.rigMismatch.title": "Ihr Funkgerät steht auf {{rigMode}}, Phone ist aber auf {{mode}} gesetzt. TX nutzt {{mode}} — den Betriebsartenknopf am Gerät drehen (oder das Band neu wählen), damit es zusammenpasst.",
   "phone.split.on.title": "Split AN — TX {{freq}} MHz. Klicken für Simplex.",
   "phone.split.off.title": "Split arbeiten — TX abseits Ihrer RX-Frequenz (z. B. 5 rauf)",
   "phone.split.lower.title": "TX {{step}} kHz tiefer",

@@ -7804,9 +7804,14 @@ export const EN = {
   'phone.micDax.title':
     'Flex native DAX audio is on, so the radio takes transmit audio from DAX and your microphone is disconnected — on every slice and in every program, SmartSDR included. Turn OFF Flex native DAX audio in Settings ▸ Radio ▸ Rig & CAT to use the mic.',
   // `{{rigMode}}` is what the rig reports over CAT and `{{mode}}` what Phone commands.
+  // It used to say "Logging and TX use {{mode}}", and the logging half became FALSE on
+  // 2026-09-10: the log now follows the rig's own mode, which is the whole of the AM fix
+  // (see `phoneAdifMode` in PhoneCockpit). Nothing replaces the claim here because the log
+  // strip states the mode it will write, in full, three lines below this chip — and unlike a
+  // sentence here it stays exact for a rig reporting PKTUSB, which logs as SSB, not PKTUSB.
   'phone.rigMismatch.chip': 'rig: {{mode}}',
   'phone.rigMismatch.title':
-    "Your rig is on {{rigMode}}, but Phone is set to {{mode}}. Logging and TX use {{mode}} — turn the rig's mode knob (or re-pick the band) to match.",
+    "Your rig is on {{rigMode}}, but Phone is set to {{mode}}. TX uses {{mode}} — turn the rig's mode knob (or re-pick the band) to match.",
   // `{{freq}}` is the split TX dial and `{{step}}` the nudge in kHz — both supplied by the
   // call site, never written here.
   'phone.split.on.title': 'Split ON — TX {{freq}} MHz. Click for simplex.',
