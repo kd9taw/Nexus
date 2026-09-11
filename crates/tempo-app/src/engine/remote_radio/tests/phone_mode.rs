@@ -1,5 +1,45 @@
 use super::*;
 
+#[test]
+fn remote_phone_am_pick_uses_the_native_am_ceiling_and_keeps_lower_power() {
+    for (phone_cap, am_cap, before) in [
+        (None, Some(0.25), 0.8),
+        (Some(0.2), Some(0.5), 0.8),
+        (None, Some(0.25), 0.1),
+    ] {
+        let mut s = Station::new(OperatingMode::Phone);
+        s.engine.settings.max_power_phone = phone_cap;
+        s.engine.settings.max_power_am = am_cap;
+        s.engine.set_frequency(7.22, "40m", "LSB");
+        s.engine.take_immediate_retune();
+        s.engine.set_rf_power(before);
+        s.engine.observe_rig_power(before);
+        let mut native = Engine::with_settings(s.engine.settings.clone());
+        native.request_sideband_override(Some("AM"));
+        let limit = before.min(native.active_power_ceiling());
+        s.sample(7_220_000, "LSB");
+        let receipt = queue(&mut s, None, Some("AM")).unwrap();
+        let request = s.engine.take_remote_radio().unwrap();
+        assert_eq!(
+            request.power_limit(),
+            Some(limit),
+            "a transient AM pick must inherit the native AM ceiling"
+        );
+        s.sample(7_220_000, "AM");
+        assert!(request.commit_readback(&mut s.engine, Some(limit)));
+        assert_eq!(s.engine.rf_power(), Some(limit));
+        assert!(!s.engine.tx_enabled());
+        assert!(!s.engine.take_immediate_retune());
+        assert_eq!(
+            receipt.outcome(),
+            Outcome::Applied {
+                evidence: Evidence::RadioReadback
+            }
+        );
+        assert!(!s.path.exists());
+    }
+}
+
 fn queue(s: &mut Station, before: Option<&str>, mode: Option<&str>) -> Result<Completion, Reason> {
     let connection = s
         .engine
