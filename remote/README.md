@@ -878,7 +878,7 @@ flag, plus the original controller window and transmit generation. A changed
 exchange is refused before the native verb runs. S&P uses the native decoder reset
 under a nonblocking lock; none of these commands changes the TX-enable policy.
 Remote free-text drafts remain until confirmation, including when a request is
-refused or its outcome is uncertain. Slot selection, period and TX-offset controls
+refused or its outcome is uncertain. Period and TX-offset controls
 and complete durable QSO logging still require their own operation paths.
 
 The separate `ftMessages` capability connects the existing Tx1–Tx5 buttons and
@@ -891,6 +891,6 @@ indicator follows station confirmation. Full QSO logging and TX settings remain
 incomplete.
 
 Decode/roster Call selection currently requires the native 240-row history or current roster.
-Older displayed history, typed targets, complete QSO progression and logging,
+Older displayed history, typed Call-button targets, complete QSO progression and logging,
 other modes, browser audio and hardware/WAN acceptance remain incomplete.
 Source verification is not installation or deployment.
