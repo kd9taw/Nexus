@@ -24,7 +24,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   confirmed mode and frequency readback through a compatible station. Choices
   retain desktop behavior, remain transient and require an idle, disarmed radio.
   FM tuning confirms the saved repeater shift, target-band or custom offset,
-  and tone in the same transaction. Physical-radio acceptance remains pending.
+  and tone in the same transaction. A partial failure cannot be retried by a later
+  dial poll; a new explicit tuning action restores operation. Physical-radio
+  acceptance remains pending.
 
 - **Remote receiver DSP:** The existing CW/Phone NB, NR, automatic-notch and AGC
   buttons, plus Phone manual-notch enable, use confirmed radio commands through

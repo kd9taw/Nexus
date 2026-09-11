@@ -316,6 +316,7 @@ fn selection_worker_confirms_fm_repeater_settings_and_does_not_replay_them() {
         settings.radios[1].last_dial_mhz = 147.06;
         settings.radios[1].last_band = "2m".into();
     });
+    s.state.remote_retune_uncertain = true;
     let pool = Arc::new(MonitorConnections::new(vec![connection(&s, &incoming)]));
     let receipt = queue(&s, 1);
     apply(&mut s, &pool, |_| panic!("warm radio must be reused"));
@@ -324,6 +325,10 @@ fn selection_worker_confirms_fm_repeater_settings_and_does_not_replay_them() {
         Outcome::Applied {
             evidence: Evidence::RadioReadback
         }
+    );
+    assert!(
+        !s.state.remote_retune_uncertain,
+        "confirmed radio selection restores reconciliation on the incoming owner"
     );
     assert_eq!(s.state.last_mode, "FM");
     assert_eq!(s.state.last_fm, Some(("plus".into(), 600_000, 88.5)));

@@ -2840,6 +2840,10 @@ struct RadioLoop {
     /// Last FM repeater config (shift, offset Hz, CTCSS Hz) applied — so the shift/offset/
     /// CTCSS commands only fire on change, not every loop. `None` when not in FM.
     last_fm: Option<(String, i64, f32)>,
+    /// A partial Remote tune must not become an automatic native retry after
+    /// a later dial poll changes band/mode/repeater policy. Reads and unkeying
+    /// continue; a new explicit retune or confirmed Remote adoption clears it.
+    remote_retune_uncertain: bool,
     /// The open WinKeyer keyer (port + handle) when the CW backend is WinKeyer — opened
     /// on demand, reopened if the configured port changes.
     #[cfg(feature = "serial")]
@@ -3401,6 +3405,7 @@ impl RadioLoop {
             last_winkeyer_wpm: 0, // 0 = unset → the open pushes the speed
             cw_busy_until: 0.0,
             last_fm: None,
+            remote_retune_uncertain: false,
             #[cfg(feature = "serial")]
             winkeyer: None,
             #[cfg(feature = "serial")]
@@ -5835,7 +5840,12 @@ impl RadioLoop {
             let mut retune_note: Option<String> = None;
             // A DIAL refusal, held separately so the mode note below cannot bury it.
             let mut dial_note: Option<String> = None;
-            if can_retune {
+            if force_retune {
+                // New native intent (including local TX arming's existing
+                // assert) owns this work; an observation never sets this flag.
+                self.remote_retune_uncertain = false;
+            }
+            if can_retune && !self.remote_retune_uncertain {
                 if force_retune {
                     // The operator just clicked a section / worked a Needed spot / QSY'd.
                     // Apply the dial + mode RIGHT NOW, clearing any give-up so a single
@@ -6064,7 +6074,11 @@ impl RadioLoop {
             // ever tells it to stop), so this was churn rather than a dropped shift; it is still
             // a CAT write into the seconds right after an over, and the tracker is supposed to
             // mean "the machine's settings are current".
-            if can_retune && mode_is_fm_family(&md) && self.rig_asserted {
+            if can_retune
+                && !self.remote_retune_uncertain
+                && mode_is_fm_family(&md)
+                && self.rig_asserted
+            {
                 if self.last_fm.as_ref() != Some(&fm) {
                     let _ = rig.set_fm_repeater(&fm.0, fm.1, fm.2);
                     self.last_fm = Some(fm);

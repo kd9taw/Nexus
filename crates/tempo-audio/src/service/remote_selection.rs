@@ -269,6 +269,7 @@ impl RadioLoop {
         self.last_dial = readback.radio().position().dial_hz();
         self.last_mode = readback.radio().position().mode().into();
         self.rig_asserted = true;
+        self.remote_retune_uncertain = false;
         self.cat_ok = Some(true);
         self.last_fm = fm;
         for &(level, desired) in &configuration.levels {

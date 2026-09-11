@@ -164,9 +164,14 @@ fn remote_fm_cross_band_tuning_uses_target_band_or_saved_odd_split_without_repla
 
 #[test]
 fn remote_fm_partial_cross_band_failure_cannot_replay_after_later_dial_polling() {
-    for ignore_tone in [false, true] {
+    for (ignore_tone, remote_recovery) in [(false, false), (true, false), (true, true)] {
         let peer = peer("FM", ignore_tone);
         let mut s = station(&peer, true, 0);
+        // This scene advances an explicit clock from zero. A failed request
+        // correctly leaves the ordinary poll timers untouched, so initialize
+        // those timers to the same clock instead of their wall-clock defaults.
+        s.state.last_rig_poll = 0.0;
+        s.state.last_freq_poll = 0.0;
         let receipt = s.queue_dial(433.5, "70cm");
         s.step();
         assert_eq!(
@@ -207,11 +212,71 @@ fn remote_fm_partial_cross_band_failure_cannot_replay_after_later_dial_polling()
             .count();
         assert!(
             later_reads > initial_reads,
-            "the test must actually run later native dial polls"
+            "the test must actually run later native dial polls: control={} cat={:?} last_dial={} freq_poll={} rig_poll={} lines={:?}", s.rig.has_control(), s.state.cat_ok, s.state.last_dial, s.state.last_freq_poll, s.state.last_rig_poll, peer.lines.lock().unwrap()
         );
         assert_eq!(writes(&peer).into_iter().filter(|s| s != "T 0").collect::<Vec<_>>(),
             initial.into_iter().filter(|s| s != "T 0").collect::<Vec<_>>(),
             "later CAT observations must not replay an uncertain remote transaction; ignored tone: {ignore_tone}");
+        assert_eq!(s.state.remote_retune_uncertain, ignore_tone);
+        if ignore_tone {
+            let before_local = writes(&peer).len();
+            let recovery = if remote_recovery {
+                let mut e = engine_lock(&s.engine);
+                let connection = e
+                    .remote_monitor_observation()
+                    .radio
+                    .readings
+                    .cat
+                    .unwrap()
+                    .connection_generation;
+                Some(
+                    e.queue_remote_phone_mode(
+                        None,
+                        Some("USB"),
+                        connection,
+                        s.authority
+                            .permit(Instant::now() + Duration::from_secs(5))
+                            .unwrap(),
+                    )
+                    .unwrap(),
+                )
+            } else {
+                engine_lock(&s.engine).set_frequency(433.5, "70cm", "USB");
+                None
+            };
+            s.state
+                .step(
+                    &s.engine,
+                    &mut s.backend,
+                    &mut s.rig,
+                    &no_sinks(),
+                    2600.0,
+                    &mut mock_reopen_audio(),
+                    &mut mock_reopen_rig(),
+                    &mut StationSinks::new(),
+                )
+                .unwrap();
+            if let Some(recovery) = recovery {
+                assert_eq!(
+                    recovery.outcome(),
+                    Outcome::Applied {
+                        evidence: Evidence::RadioReadback
+                    }
+                );
+            }
+            assert!(
+                !s.state.remote_retune_uncertain,
+                "an explicit local or confirmed remote pick restores reconciliation"
+            );
+            assert!(
+                writes(&peer).len() > before_local,
+                "the operator's new action must actually command the rig"
+            );
+            assert!(
+                matches!(receipt.outcome(), Outcome::Unknown { .. }),
+                "new intent does not rewrite the old receipt"
+            );
+        }
         assert!(!engine_lock(&s.engine).tx_enabled());
         assert!(s.backend.played.is_empty());
     }

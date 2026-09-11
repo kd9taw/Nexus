@@ -662,6 +662,11 @@ impl Request {
             _ => None,
         }
     }
+    /// An attempted write without a confirmed commit cannot grant the normal
+    /// radio loop permission to finish or retry the transaction later.
+    pub fn uncertain(&self) -> bool {
+        matches!(self.completion.outcome(), Outcome::Unknown { .. })
+    }
     pub fn refuse(&self, reason: Reason) {
         self.completion.refuse(reason);
     }

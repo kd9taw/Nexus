@@ -537,7 +537,10 @@ FM button, AUTO into FM, and transitions out of FM. The native owner resolves
 saved shift, target-frequency offset (including an explicit override) and CTCSS,
 probes them before tuning, applies and reads them back under the original request,
 then adopts its native reconciliation cache. Missing readback cannot confirm the
-choice; uncertain work is not retried. The picker remains transient.
+choice; uncertain work is not retried, including after later dial polls. A
+partially written tune holds automatic dial/mode/repeater reconciliation until
+a new explicit native retune or confirmed Remote tune/radio selection. Readings
+and unkeying continue while held. The picker remains transient.
 
 Combined routed profile/tuning changes, repeater-channel holds and satellite/split transactions,
 band-memory/spot shortcuts, scope dragging, continuous scanning and attended hardware/WAN

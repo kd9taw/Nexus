@@ -50,6 +50,9 @@ impl RadioLoop {
             }
             request
         };
+        let retuning = request.level().is_none()
+            && request.filter_width().is_none()
+            && request.receiver_dsp().is_none();
         let result = (|| {
             let (hz, mode) = request.expected();
             let expected = Position::new(hz, mode)?;
@@ -85,6 +88,9 @@ impl RadioLoop {
             Ok(readback) => readback,
             Err(reason) => {
                 request.refuse(reason);
+                if retuning && request.uncertain() {
+                    self.remote_retune_uncertain = true;
+                }
                 return;
             }
         };
@@ -119,6 +125,12 @@ impl RadioLoop {
                     .map(|fm| (fm.shift(), fm.offset_hz(), fm.tone_hz())),
             )
         };
+        if retuning {
+            // Even a successful CAT exchange can lose authority before the
+            // Engine commit. A failed save with confirmed adoption returns true
+            // here: it is a durability failure, not unconfirmed radio state.
+            self.remote_retune_uncertain = !committed;
+        }
         if committed {
             if filter || dsp || level.is_some() {
                 if let Some((level, _, desired)) = level {
