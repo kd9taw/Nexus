@@ -2367,16 +2367,19 @@ export async function sstvStop(): Promise<SstvState> {
 }
 
 /** Set the TX period: true = even/"1st" slots, false = odd/"2nd". */
-export async function setTxCycleAuto(auto: boolean): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('set_tx_cycle_auto', { auto })
+type FtSettingsGesture = { expectedTier: string; expected: import('./remote-web/station-operation').FtSettingsContext | null | undefined }
+const ftSettingsArgs = (context?: FtSettingsGesture) => remoteApplicationTransport() ? { expectedTier: context?.expectedTier, expected: context?.expected } : {}
+
+export async function setTxCycleAuto(auto: boolean, context?: FtSettingsGesture): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_tx_cycle_auto', { auto, ...ftSettingsArgs(context) })
 }
 
 export async function setBeacon(on: boolean): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_beacon', { on })
 }
 
-export async function setTxEven(even: boolean): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('set_tx_even', { even })
+export async function setTxEven(even: boolean, context?: FtSettingsGesture): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_tx_even', { even, ...ftSettingsArgs(context) })
 }
 
 /** Set the receive audio offset (Hz) — the green marker. TX follows unless Hold Tx. */
@@ -2385,13 +2388,20 @@ export async function setRxOffset(hz: number): Promise<AppSnapshot> {
 }
 
 /** Set the transmit audio offset (Hz) — the red marker. */
-export async function setTxOffset(hz: number): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('set_tx_offset', { hz })
+export async function setTxOffset(hz: number, context?: FtSettingsGesture): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_tx_offset', { hz, ...ftSettingsArgs(context) })
 }
 
-/** Hold the TX offset fixed when RX changes ("Hold Tx Freq"). */
-export async function setHoldTxFreq(on: boolean): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('set_hold_tx_freq', { on })
+/** Explicit combined-marker gesture, atomic at the remote station. */
+export async function setBothOffsets(hz: number, context?: FtSettingsGesture): Promise<AppSnapshot> {
+  if (remoteApplicationTransport()) return invoke<AppSnapshot>('set_ft_both_offsets', { hz, ...ftSettingsArgs(context) })
+  await setTxOffset(hz)
+  return setRxOffset(hz)
+}
+
+/** Hold the TX offset fixed when selecting a decoded station ("Hold Tx Freq"). */
+export async function setHoldTxFreq(on: boolean, context?: FtSettingsGesture): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_hold_tx_freq', { on, ...ftSettingsArgs(context) })
 }
 
 /** Replace the blocked-callsigns list — the ONE write path (Alt-double-click gesture and

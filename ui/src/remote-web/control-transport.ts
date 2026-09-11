@@ -16,6 +16,19 @@ export function controlTransport(reads: ApplicationTransport, client: Applicatio
       let qsoResult: 'logged' | 'pending' | 'none' | null = null
       let captured: ReturnType<OperationClient['prepareControl']> | undefined
       switch (command) {
+        case 'set_tx_offset': case 'set_ft_both_offsets': case 'set_hold_tx_freq': case 'set_tx_even': case 'set_tx_cycle_auto': {
+          const field = command === 'set_tx_offset' || command === 'set_ft_both_offsets' ? 'hz' : command === 'set_hold_tx_freq' ? 'on' : command === 'set_tx_even' ? 'even' : 'auto'
+          const keys = [field, 'expectedTier', 'expected']
+          if (!args || Object.keys(args).length !== keys.length || Object.keys(args).some(k => !keys.includes(k))) throw Error('invalidOperation')
+          const gesture = structuredClone(args), state = operations.getSnapshot().state
+          if (!state?.transmitEpoch) throw Error('localPermissionRequired')
+          captured = operations.prepareControl()
+          const kind = command === 'set_tx_offset' ? 'txOffset' : command === 'set_ft_both_offsets' ? 'bothOffsets' : command === 'set_hold_tx_freq' ? 'hold' : command === 'set_tx_even' ? 'even' : 'auto'
+          action = stationAction({ action: 'ft.setting', expectedTier: gesture.expectedTier, transmitEpoch: state.transmitEpoch,
+            expected: gesture.expected, change: { kind, [field]: gesture[field] } })
+          read = 'get_snapshot'
+          break
+        }
         case 'log_current_qso': case 'confirm_pending_log': case 'discard_pending_log': {
           const keys = command === 'log_current_qso' ? ['expectedKey', 'expectedTier', 'expectedQso'] : command === 'confirm_pending_log' ? ['record', 'expectedKey'] : ['expectedKey']
           if (!args || Object.keys(args).length !== keys.length || Object.keys(args).some(k => !keys.includes(k))) throw Error('invalidOperation')
@@ -153,6 +166,7 @@ export function controlTransport(reads: ApplicationTransport, client: Applicatio
         const result = await (captured ? captured(action) : operations.control(action, displayed))
         if (action.action === 'qso.logCurrent' && result.outcome === 'rejected' && ['noEligibleContact', 'alreadyPresent'].includes(result.reason)) qsoResult = 'none'
         else if (result.outcome !== 'applied') throw Error(result.outcome === 'rejected' ? result.reason : 'operationUnknown')
+        if (action.action === 'ft.setting' && (result.outcome !== 'applied' || result.evidence !== (action.change.kind === 'auto' ? 'stationState' : 'settingsSaved'))) throw Error('operationUnknown')
         if (action.action === 'qso.logCurrent' && result.outcome === 'applied') {
           if (result.evidence === 'fileSynced') qsoResult = 'logged'
           else if (result.evidence === 'pendingConfirmationSynced') qsoResult = 'pending'

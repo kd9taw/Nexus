@@ -16,7 +16,10 @@ export type FtCallSelection = { call: string; grid: string | null; message: stri
 export type FtExchangeContext = { dxcall: string | null; state: string; txNow: string | null; cqRunning: boolean }
 export type FtExchangeChange = { kind: 'resend' | 'monitor' } | { kind: 'freeText'; text: string }
 export type PendingLogEdits = { call: string; grid: string | null; rstSent: string | null; rstRcvd: string | null }
+export type FtSettingsContext = { key: string; txOffsetHz: number; rxOffsetHz: number; holdTxFreq: boolean; txEven: boolean; txCycleAuto: boolean }
+export type FtSettingChange = { kind: 'txOffset' | 'bothOffsets'; hz: number } | { kind: 'hold'; on: boolean } | { kind: 'even'; even: boolean } | { kind: 'auto'; auto: boolean }
 export type StationAction =
+  | { action: 'ft.setting'; expectedTier: 'FT8' | 'FT4'; transmitEpoch: string; expected: FtSettingsContext; change: FtSettingChange }
   | { action: 'qso.logCurrent'; expectedKey: string; expectedTier: string; expectedQso: FtExchangeContext }
   | { action: 'qso.confirm'; expectedKey: string; edits: PendingLogEdits }
   | { action: 'qso.discard'; expectedKey: string }
@@ -58,11 +61,12 @@ export type ControlContext = {
   ampConnection: number | null
   ampReadSequence: number | null
 }
-export const CONTROL_CAPABILITIES = ['qsoLogging', 'ftOperate', 'ftCall', 'ftExchange', 'ftMessages', 'decoder', 'radio', 'amplifier', 'frequency', 'mode', 'tier', 'ampFollowBand', 'workspace', 'decoderSettings', 'receiverSettings', 'receiverGain', 'bandSelection', 'receiverFilter', 'receiverDsp', 'phoneMode', 'workSpot', 'radioLevels', 'radioSelection', 'fmTuning', 'fmReceiver'] as const
+export const CONTROL_CAPABILITIES = ['ftSettings', 'qsoLogging', 'ftOperate', 'ftCall', 'ftExchange', 'ftMessages', 'decoder', 'radio', 'amplifier', 'frequency', 'mode', 'tier', 'ampFollowBand', 'workspace', 'decoderSettings', 'receiverSettings', 'receiverGain', 'bandSelection', 'receiverFilter', 'receiverDsp', 'phoneMode', 'workSpot', 'radioLevels', 'radioSelection', 'fmTuning', 'fmReceiver'] as const
 export type ControlCapability = (typeof CONTROL_CAPABILITIES)[number]
 // A new action cannot silently inherit a broader capability by its prefix.
 const ACTION_CAPABILITY: Record<StationAction['action'], ControlCapability> = {
   'qso.logCurrent': 'qsoLogging', 'qso.confirm': 'qsoLogging', 'qso.discard': 'qsoLogging',
+  'ft.setting': 'ftSettings',
   'ft.message': 'ftMessages',
   'ft.exchange': 'ftExchange',
   'ft.call': 'ftCall', 'ft.cq': 'ftOperate', 'ft.txEnabled': 'ftOperate',
@@ -113,6 +117,20 @@ export function stationAction(raw: unknown): StationAction {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) invalid()
   const a = raw as Record<string, unknown>
   switch (a.action) {
+    case 'ft.setting': {
+      object(a, ['action', 'expectedTier', 'transmitEpoch', 'expected', 'change'])
+      if (!oneOf(a.expectedTier, ['FT8', 'FT4']) || typeof a.transmitEpoch !== 'string' || !/^[0-9a-f]{16}$/.test(a.transmitEpoch)) invalid()
+      const e = object(a.expected, ['key', 'txOffsetHz', 'rxOffsetHz', 'holdTxFreq', 'txEven', 'txCycleAuto'])
+      if (typeof e.key !== 'string' || !/^[0-9a-f]{32}$/.test(e.key) || !finite(e.txOffsetHz) || !finite(e.rxOffsetHz) ||
+        typeof e.holdTxFreq !== 'boolean' || typeof e.txEven !== 'boolean' || typeof e.txCycleAuto !== 'boolean') invalid()
+      if (!a.change || typeof a.change !== 'object') invalid()
+      const kind = (a.change as Record<string, unknown>).kind
+      const field = kind === 'txOffset' || kind === 'bothOffsets' ? 'hz' : kind === 'hold' ? 'on' : kind === 'even' ? 'even' : 'auto'
+      const c = object(a.change, ['kind', field])
+      if (!oneOf(kind, ['txOffset', 'bothOffsets', 'hold', 'even', 'auto'])) invalid()
+      if (field === 'hz' ? !finite(c.hz) || c.hz < 200 || c.hz > 4000 : typeof c[field] !== 'boolean') invalid()
+      break
+    }
     case 'qso.logCurrent': case 'qso.confirm': case 'qso.discard': {
       object(a, ['action', 'expectedKey', ...(a.action === 'qso.logCurrent' ? ['expectedTier', 'expectedQso'] : a.action === 'qso.confirm' ? ['edits'] : [])])
       if (typeof a.expectedKey !== 'string' || !(a.action === 'qso.logCurrent' ? /^[0-9a-f]{32}$/ : /^[0-9a-f]{16}$/).test(a.expectedKey)) invalid()

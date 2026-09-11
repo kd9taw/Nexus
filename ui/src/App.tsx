@@ -45,6 +45,7 @@ import {
   setBeacon as apiSetBeacon,
   setRxOffset as apiSetRxOffset,
   setTxOffset as apiSetTxOffset,
+  setBothOffsets as apiSetBothOffsets,
   setHoldTxFreq as apiSetHoldTxFreq,
   subscribeSnapshot,
 } from './api'
@@ -1599,30 +1600,35 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   }, [])
 
   const handleSetTxEven = useCallback((even: boolean) => {
-    void withErrorToast(() => apiSetTxEven(even), t('shell.txPeriod.failed')).then((s) => {
+    void withErrorToast(() => apiSetTxEven(even, snap ? { expectedTier: snap.link.tier, expected: snap.remoteFtSettings } : undefined), t('shell.txPeriod.failed')).then((s) => {
       if (s) setSnap(s)
     })
-  }, [])
+  }, [snap])
 
   const handleSetTxCycleAuto = useCallback((auto: boolean) => {
-    void withErrorToast(() => apiSetTxCycleAuto(auto), t('shell.cycleMode.failed')).then(
+    void withErrorToast(() => apiSetTxCycleAuto(auto, snap ? { expectedTier: snap.link.tier, expected: snap.remoteFtSettings } : undefined), t('shell.cycleMode.failed')).then(
       (s) => {
         if (s) setSnap(s)
       },
     )
-  }, [])
+  }, [snap])
 
   const handleSetHoldTxFreq = useCallback((on: boolean) => {
-    void withErrorToast(() => apiSetHoldTxFreq(on), t('shell.holdTx.failed')).then((s) => {
+    void withErrorToast(() => apiSetHoldTxFreq(on, snap ? { expectedTier: snap.link.tier, expected: snap.remoteFtSettings } : undefined), t('shell.holdTx.failed')).then((s) => {
       if (s) setSnap(s)
     })
-  }, [])
+  }, [snap])
 
   // Waterfall click: left-click sets RX only; shift/right-click sets TX;
   // Ctrl/Command sets both. Hold Tx belongs to decode/QSO selection, not this click.
   const handleTune = useCallback((hz: number, target: 'tx' | 'rx' | 'both') => {
     if (remote) {
       if (target === 'rx') receiverSettingsRef.current.tuneRx(hz)
+      else {
+        const context = snap ? { expectedTier: snap.link.tier, expected: snap.remoteFtSettings } : undefined
+        void withErrorToast(() => target === 'tx' ? apiSetTxOffset(hz, context) : apiSetBothOffsets(hz, context), t('shell.offset.failed'))
+          .then(s => { if (s) setSnap(s) })
+      }
       return
     }
     // Stock WSJT-X gestures (Waterfall dispatches): 'rx' = click, 'tx' = Shift, 'both' = Ctrl.
@@ -1635,7 +1641,7 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     void withErrorToast(call, t('shell.offset.failed')).then((s) => {
       if (s) setSnap(s)
     })
-  }, [remote])
+  }, [remote, snap])
 
   // QSY from the Needed panel: move the rig to that band's channel and listen.
   const handleQsy = useCallback(

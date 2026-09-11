@@ -596,3 +596,100 @@ fn transmit_local_revocation_does_not_wait_for_a_pending_durable_write() {
         .contains(&json!("ftOperate")));
     assert!(!f.engine.lock().unwrap().tx_enabled());
 }
+
+#[test]
+fn ft_preferences_require_transmit_grant_and_match_durable_native_state() {
+    for tier in [tempo_app::dto::Tier::Ft8, tempo_app::dto::Tier::Ft4] {
+        for change in [
+            json!({"kind":"txOffset","hz":1800}),
+            json!({"kind":"bothOffsets","hz":2200}),
+            json!({"kind":"hold","on":true}),
+            json!({"kind":"even","even":false}),
+            json!({"kind":"auto","auto":false}),
+        ] {
+            let (f, _, state) = ready_ft(tier);
+            assert!(state["controls"]["capabilities"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("ftSettings")));
+            let expected = f.engine.lock().unwrap().remote_ft_settings().unwrap();
+            let request = ft_command(
+                &state,
+                json!({"action":"ft.setting","expectedTier":tier,
+                "transmitEpoch":state["transmitEpoch"],"expected":expected,"change":change}),
+            );
+            for version in [2, 3] {
+                assert_eq!(
+                    f.authority.handle_version(
+                        (f.connection, version),
+                        SESSION,
+                        DEVICE,
+                        &request,
+                        &f.engine,
+                        Instant::now()
+                    ),
+                    Err("stationUnsupported")
+                );
+            }
+            let response = ft_run(&f, &request).unwrap();
+            assert_eq!(response["outcome"], "applied", "{response}");
+            assert_eq!(
+                response["evidence"],
+                if change["kind"] == "auto" {
+                    "stationState"
+                } else {
+                    "settingsSaved"
+                }
+            );
+            assert!(!f.engine.lock().unwrap().tx_enabled());
+            let after = f.engine.lock().unwrap().remote_ft_settings().unwrap();
+            assert_ne!(expected.key, after.key);
+            match change["kind"].as_str().unwrap() {
+                "txOffset" => assert_eq!(after.tx_offset_hz, 1800.0),
+                "bothOffsets" => {
+                    assert_eq!(after.tx_offset_hz, 2200.0);
+                    assert_eq!(after.rx_offset_hz, 2200.0);
+                }
+                "hold" => assert!(after.hold_tx_freq),
+                "even" => {
+                    assert!(!after.tx_even);
+                    assert!(!after.tx_cycle_auto);
+                }
+                "auto" => assert!(!after.tx_cycle_auto),
+                _ => unreachable!(),
+            }
+            assert_eq!(ft_run(&f, &request).unwrap(), response);
+            assert_eq!(f.engine.lock().unwrap().remote_ft_settings(), Some(after));
+        }
+    }
+}
+
+#[test]
+fn ft_preferences_refuse_lost_grant_changed_context_and_unavailable_radio() {
+    for cause in ["grant", "context", "radio"] {
+        let (f, _, state) = ready_ft_link(tempo_app::dto::Tier::Ft8, cause != "radio");
+        let expected = f.engine.lock().unwrap().remote_ft_settings().unwrap();
+        let request = ft_command(
+            &state,
+            json!({"action":"ft.setting","expectedTier":"FT8","transmitEpoch":state["transmitEpoch"],
+            "expected":expected,"change":{"kind":"txOffset","hz":1800}}),
+        );
+        if cause == "grant" {
+            f.authority.permit_transmit(DEVICE, false).unwrap();
+        }
+        if cause == "context" {
+            let mut e = f.engine.lock().unwrap();
+            e.set_hold_tx_freq(!expected.hold_tx_freq);
+            e.set_hold_tx_freq(expected.hold_tx_freq);
+        }
+        let before = f.engine.lock().unwrap().settings().clone();
+        let result = ft_run(&f, &request);
+        if cause == "grant" {
+            assert!(result.is_err());
+        } else {
+            assert_eq!(result.unwrap()["outcome"], "rejected");
+        }
+        assert_eq!(f.engine.lock().unwrap().settings(), &before);
+        assert!(!f.dir.join("settings.json").exists());
+    }
+}

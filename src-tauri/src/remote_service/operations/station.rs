@@ -65,6 +65,15 @@ pub enum KeyboardReceiver {
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(tag = "action", deny_unknown_fields)]
 pub enum Action {
+    #[serde(rename = "ft.setting")]
+    FtSetting {
+        #[serde(rename = "expectedTier")]
+        expected_tier: tempo_app::dto::Tier,
+        #[serde(rename = "transmitEpoch")]
+        transmit_epoch: String,
+        expected: tempo_app::engine::remote_transmit::settings::FtSettingsContext,
+        change: tempo_app::engine::remote_transmit::settings::FtSettingChange,
+    },
     #[serde(rename = "qso.logCurrent")]
     QsoLogCurrent {
         #[serde(rename = "expectedKey")]
@@ -303,6 +312,7 @@ pub fn execute(
         | Action::FtTxEnabled { .. }
         | Action::FtCall { .. }
         | Action::FtExchange { .. }
+        | Action::FtSetting { .. }
         | Action::FtMessage { .. } => return Err(Reason::UnsupportedAction),
         #[cfg(feature = "radio")]
         Action::Radio { radio_id } => {
@@ -775,6 +785,7 @@ impl Action {
             | Self::FtTxEnabled { .. }
             | Self::FtCall { .. }
             | Self::FtExchange { .. }
+            | Self::FtSetting { .. }
             | Self::FtMessage { .. } => 4,
             Self::Level { .. }
             | Self::Frequency { .. }
@@ -842,6 +853,7 @@ impl Action {
             | Self::FtTxEnabled { transmit_epoch, .. }
             | Self::FtCall { transmit_epoch, .. }
             | Self::FtExchange { transmit_epoch, .. }
+            | Self::FtSetting { transmit_epoch, .. }
             | Self::FtMessage { transmit_epoch, .. } => Some(transmit_epoch),
             _ => None,
         }
@@ -858,6 +870,31 @@ pub fn execute_transmit(
         return Err(Reason::ContextChanged);
     }
     match action {
+        Action::FtSetting {
+            expected_tier,
+            expected,
+            change,
+            ..
+        } => {
+            engine.validate_remote_ft_radio(
+                *expected_tier,
+                context.radio_connection.ok_or(Reason::ReadingUnavailable)?,
+                &permit,
+            )?;
+            engine.change_remote_ft_setting(&permit, expected, change)?;
+            let result = Completion::default();
+            result.finish(Outcome::Applied {
+                evidence: if matches!(
+                    change,
+                    tempo_app::engine::remote_transmit::settings::FtSettingChange::Auto { .. }
+                ) {
+                    Evidence::StationState
+                } else {
+                    Evidence::SettingsSaved
+                },
+            });
+            return Ok(result);
+        }
         Action::FtMessage {
             expected_tier,
             expected_qso,

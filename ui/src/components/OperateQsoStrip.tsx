@@ -79,6 +79,7 @@ interface Props {
   // strip, and relocation must not change behaviour.
   /** Transmit-period control (TX AUTO / 1st / 2nd) — rendered when BOTH handlers
    *  and `radio` are present. */
+  remoteFtSettings?: boolean
   onSetTxEven?: (even: boolean) => void
   onSetTxCycleAuto?: (auto: boolean) => void
   /** Skip Tx1 (WSJT-X parity) — rendered when the handler is present. */
@@ -124,6 +125,7 @@ export function OperateQsoStrip({
   onSetHoldTxFreq,
   rxOnly,
   beacon,
+  remoteFtSettings = false,
   onSetTxEven,
   onSetTxCycleAuto,
   skipTx1,
@@ -135,6 +137,8 @@ export function OperateQsoStrip({
 }: Props) {
   const logging = useStationCapability('qsoLogging')
   const control = useStationControl(), ftControl = useStationCapability('ftOperate'), ftExchange = useStationCapability('ftExchange')
+  const settingsCapability = useStationCapability('ftSettings')
+  const ftSettings = control || (remoteFtSettings && settingsCapability)
   // ⚠️ cqRunning, NOT qso.running. `running` is also true through a directed S&P call (the
   // engine's own comment at call_station_ctx says so) and nothing clears it after the QSO —
   // so this strip lit Call CQ solid through every S&P contact and forever after, and the
@@ -261,7 +265,7 @@ export function OperateQsoStrip({
             </button>
           )}
           <FtStopControl onHaltTx={onHaltTx} />
-          <button disabled={!control}
+          <button disabled={!ftSettings}
             type="button"
             className={`op-btn hold${radio.holdTxFreq ? ' on' : ''}`}
             aria-pressed={radio.holdTxFreq}
@@ -386,7 +390,7 @@ export function OperateQsoStrip({
       {specialOpBadge}
       {rotor}
       {radio && onSetTxEven && onSetTxCycleAuto && (
-        <button disabled={!control}
+        <button disabled={!ftSettings}
           type="button"
           className={`cq-period${radio.txCycleAuto ? ' is-auto' : ''}`}
           onClick={() => {

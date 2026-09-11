@@ -7,6 +7,8 @@ use crate::remote_control::{transmit::TransmitPermit, Reason};
 use crate::settings::OperatingMode;
 use std::time::Instant;
 
+pub mod settings;
+
 /// A clicked decode or roster entry, checked against station-owned data before
 /// forwarding the same arguments to the existing native QSO verb.
 #[derive(Clone, serde::Deserialize, serde::Serialize)]

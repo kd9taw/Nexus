@@ -356,6 +356,7 @@ export function OperateCockpit({
 }: Props) {
   const control = useStationControl()
   const messageControl = useStationCapability('ftMessages')
+  const ftSettings = useStationCapability('ftSettings') && !!snap.remoteFtSettings && (tier === 'FT8' || tier === 'FT4')
   const cqControl = useStationCapability('ftOperate')
   const tierControl = useStationTierControl(snap.radio)
   const decoderSettings = useDecoderSettings(snap, 'MSK144')
@@ -1108,7 +1109,7 @@ export function OperateCockpit({
             <DfField key={control ? 'rx' : `rx-${snap.activeRadioId}-${tier}`} label={DF_RX} hz={snap.radio.rxOffsetHz}
               remoteReceive={receiverSettings.rxAllowed}
               onCommit={(hz) => control ? onTune(hz, 'rx') : receiverSettings.tuneRx(hz)} />
-            <DfField label={DF_TX} hz={snap.radio.txOffsetHz} onCommit={(hz) => onTune(hz, 'tx')} />
+            <DfField key={control ? 'tx' : `tx-${snap.remoteFtSettings?.key}`} label={DF_TX} hz={snap.radio.txOffsetHz} remoteReceive={ftSettings} onCommit={(hz) => onTune(hz, 'tx')} />
           </div>
           {/* Decode button — re-run the decoder over the last period's audio (F6). */}
           <button disabled={!control}
@@ -1253,6 +1254,7 @@ export function OperateCockpit({
                   onTune={(hz, target) => {
                     if (control) onTune(hz, target)
                     else if (target === 'rx') receiverSettings.tuneRx(hz)
+                    else if (ftSettings) onTune(hz, target)
                   }}
                   active={active}
                   paletteScope={FT_PALETTE_SCOPE}
@@ -1296,6 +1298,7 @@ export function OperateCockpit({
               .catch((e) => pushToast(String(e), 'error'))
           }
           onHaltTx={onHaltTx}
+          remoteFtSettings={ftSettings}
           onSetHoldTxFreq={onSetHoldTxFreq}
           onSetMode={onSetMode}
           onCallCq={() => {

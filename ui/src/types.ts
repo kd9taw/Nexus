@@ -3508,6 +3508,7 @@ export interface AppSnapshot {
   /** Remote snapshot identities; native calls do not require these. */
   pendingQsoLogKey?: string | null
   currentQsoLogKey?: string | null
+  remoteFtSettings?: import('./remote-web/station-operation').FtSettingsContext | null
   /** Last connector auto-upload outcome (QRZ/ClubLog/eQSL) from the backend
    * upload funnel; uploadTick bumps per outcome so the UI toasts it. */
   uploadNote?: string | null
