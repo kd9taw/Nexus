@@ -108,7 +108,8 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
     const session=(await browser.call('Target.attachToTarget',{targetId:target,flatten:true})).sessionId
     for(const method of ['Page.enable','Runtime.enable','Network.enable'])await browser.call(method,{},session)
     const operationWire=[]
-    browser.on('Network.webSocketFrameReceived',event=>{try{const v=JSON.parse(event.response.payloadData);if(v.type==='operationResponse')operationWire.push({at:performance.now(),direction:'in',requestId:v.requestId,error:v.error,phase:v.value?.phase})}catch{}})
+    let receiverRead=null
+    browser.on('Network.webSocketFrameReceived',event=>{try{const v=JSON.parse(event.response.payloadData);if(v.type==='observation')receiverRead={at:performance.now(),radio:v.frame?.station?.radio};if(v.type==='operationResponse')operationWire.push({at:performance.now(),direction:'in',requestId:v.requestId,error:v.error,phase:v.value?.phase})}catch{}})
     browser.on('Network.webSocketFrameSent', event => {
       if (event.response.opcode !== 1) return
       try {
@@ -965,9 +966,14 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
           pauseObservations=false
         }
         await freshLoggingWindow()
-        // This is the actual shared RX widget's permission, not merely a
-        // controlling response on the socket. Re-measure after its update.
-        await until(`!document.querySelector('${rxField}').disabled`)
+        // The positive gesture needs a fresh hardware sample as well as the
+        // shared widget's permission; leave room for input/layout dispatch.
+        for(let attempt=0;attempt<100;attempt++){
+          const age=receiverRead?performance.now()-receiverRead.at+(receiverRead.radio?.readings?.ptt?.ageMs??Infinity):Infinity
+          if(age<250&&receiverRead?.radio?.rigKeyed===false&&await evaluate(`!document.querySelector('${rxField}').disabled`))break
+          if(attempt===99)assert.fail(`Fresh receive readings must precede ${tab} RX gesture`)
+          await sleep(50)
+        }
         await evaluate(`document.querySelector('${selector}').scrollIntoView({block:'center',behavior:'instant'})`);await settledLayout()
         const prepared=await evaluate(`(()=>{const e=document.querySelector('${selector}'),r=e.getBoundingClientRect(),x=r.left+r.width*${fraction},y=r.top+r.height/2,hit=document.elementFromPoint(x,y);return {x,y,rect:r.toJSON(),hit:hit?.outerHTML.slice(0,1000),visible:e.contains(hit),authority:document.querySelector('.remote-logging-authority')?.textContent}})()`)
         assert.equal(prepared.visible,true,`RX gesture must hit the refreshed ${tab} canvas`)
@@ -975,7 +981,7 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
         for(let i=0;i<100&&stationRequests.length===before;i++)await sleep(100)
         if(stationRequests.length!==before+1){
           const state=await evaluate(`({authority:document.querySelector('.remote-logging-authority')?.textContent,result:document.querySelector('.remote-control-result')?.textContent,toasts:[...document.querySelectorAll('[role="alert"]')].map(e=>e.textContent)})`)
-          const failure={tab,selector,point,hit,prepared,state,expectedTier,expectedHz,hz,wire:operationWire.slice(-30)}
+          const failure={tab,selector,point,hit,prepared,state,receiverRead,expectedTier,expectedHz,hz,wire:operationWire.slice(-30)}
           console.log('Receiver gesture failure',JSON.stringify(failure))
           if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'receiver-gesture-failure.png'),Buffer.from(shot.data,'base64'));await writeFile(join(artifacts,'receiver-gesture-failure.json'),JSON.stringify(failure,null,2))}
         }
