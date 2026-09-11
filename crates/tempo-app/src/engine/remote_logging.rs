@@ -535,6 +535,20 @@ mod tests {
     }
 
     #[test]
+    fn current_log_key_retires_after_qsy_even_if_the_same_contact_and_frequency_return() {
+        let mut fixture = Fixture::new(Tier::Ft8, false);
+        let key = fixture.engine.current_qso_log_key().unwrap();
+        let qso = fixture.engine.snapshot().qso;
+        fixture.engine.set_frequency(7.074, "40m", "USB");
+        fixture.engine.set_frequency(14.074, "20m", "USB");
+        assert_eq!(fixture.engine.snapshot().qso, qso);
+        assert_ne!(
+            fixture.engine.current_qso_log_key().as_deref(),
+            Some(key.as_str())
+        );
+    }
+
+    #[test]
     fn held_record_keeps_split_and_end_time_through_journal_and_confirmation() {
         let mut fixture = Fixture::new(Tier::Ft8, true);
         let CurrentQsoLogOutcome::Pending(_) = fixture.engine.log_current_qso_for_sync() else {
