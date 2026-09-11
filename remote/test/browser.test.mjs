@@ -595,7 +595,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         assert.equal(applicationData.get_snapshot.radio.txEnabled,false)
       }
       await work('N2DXCW','cw');await until(`${input('cw')}?.value==='N2DXCW'`)
-      await evaluate(`window.__dxCwInput=${input('cw')}`)
+      await evaluate(`window.__dxCwInput=${input('cw')};true`)
       assert.equal(applicationData.get_snapshot.radio.dialMhz,14.02345)
       await work('N2DXPH','phone');await until(`${input('phone')}?.value==='N2DXPH'`)
       assert.equal(await evaluate(`${input('cw')}===window.__dxCwInput&&${input('cw')}.value==='N2DXCW'`),true)
@@ -622,7 +622,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       assert.equal(stationRequests.length,3,'replacing a draft is local and cannot issue another radio command')
       await click(button('Needed'));await until(`!!${row('N4DXCW')}`);await fresh()
       loseSpotReply=true;await click(row('N4DXCW'))
-      await until(`document.querySelector('.remote-control-result')?.textContent.includes('unknown')`,15000)
+      await until(`document.querySelector('.remote-control-result')?.textContent.includes('may have taken effect')`,15000)
       assert.equal(stationRequests.length,4)
       assert.equal(await evaluate(visible('cw')),false,'a lost receipt cannot navigate from the station Work hint')
       assert.equal(await evaluate(`${input('cw')}.value`),'N3DXCW')
