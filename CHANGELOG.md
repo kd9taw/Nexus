@@ -88,9 +88,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   WSPR was the report, but it was never only WSPR: JT65, Q65 at 30 s and longer, FST4 and FST4W at
   30 s and longer — FST4W-1800 was putting twenty-nine minutes of unmodulated carrier on the air per
-  over — and a long PSK31 send, which can run two to three minutes. FT8, FT4, FT2, MSK144 and the
-  15-second Q65/FST4 periods always fitted and were never affected. SSTV, CW, RTTY and the tune
-  carrier feed the card as they go and were never affected either.
+  over. It also caught PSK31: a one-shot send longer than about eighty characters — two lines — went
+  out truncated with the transmitter held up for the whole message. Continuous (latched) PSK31 was
+  never affected, because it feeds the card as it types.
+
+  FT8, FT4, FT2, MSK144 and the 15-second Q65 and FST4 periods always fitted and were never
+  affected. SSTV, CW, RTTY and the tune carrier feed the card as they go and were never affected
+  either.
 
 - **An AM contact was logged as SSB.** Work someone on AM from the Phone screen and Nexus wrote the
   QSO to your logbook as SSB — including on 14.286, the 20 m AM calling frequency. The Phone screen
