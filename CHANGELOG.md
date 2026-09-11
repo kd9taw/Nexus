@@ -75,6 +75,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An AM contact was logged as SSB.** Work someone on AM from the Phone screen and Nexus wrote the
+  QSO to your logbook as SSB — including on 14.286, the 20 m AM calling frequency. The Phone screen
+  had only two answers for what mode you were on, FM and SSB, and everything that was not FM came
+  out SSB. It now logs AM as AM, and the entry strip's "Logs to the shared logbook as …" line says
+  so before you commit the contact.
+
+  **The log follows your radio, not what Nexus asked it for.** If the rig is on AM, the contact is
+  AM, whatever the Phone screen last commanded — which is the case that started this, since AM is
+  not offered on 20 m and the only way to work it there is the mode knob on the radio. It cuts the
+  other way too: pick AM and your rig does not take it, and the contact logs as the SSB it really
+  was. Nexus believes a mode read-back only while CAT is up and the radio has actually answered, and
+  a radio sitting in CW or a data mode names nothing this screen can log from, so that keeps the
+  commanded mode as before.
+
+  Everything downstream carries AM once the log does — ADIF export, the N1MM and N3FJP feeds, and
+  your uploads to QRZ, LoTW, ClubLog and eQSL. **Contacts you have already uploaded are not
+  re-sent.** Correcting a mode in the Logbook fixes your own log and every export from it, but only
+  a *callsign* correction re-queues a contact to the services; a mode fix does not, so anything
+  already out there as SSB stays that way unless you re-upload it yourself.
+
 - **Your ARRL section list was eight years out of date.** Nexus carried 83 sections including
   `MAR`, `GTA` and `NT`. ARRL now publishes 85: the Maritime section split into `NB`, `NS` and `PE`,
   `GTA` became `GH` and `NT` became `TER`. So Field Day offered three sections ARRL does not
