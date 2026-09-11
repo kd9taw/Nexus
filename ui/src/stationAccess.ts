@@ -20,7 +20,7 @@ export function useStationCapability(capability: ControlCapability): boolean {
   const client = useContext(RemoteOperationsContext)
   const view = useSyncExternalStore(client?.subscribe ?? idleSubscribe, client?.getSnapshot ?? idleSnapshot)
   const expanded = ['frequency', 'mode', 'tier', 'workspace', 'ampFollowBand', 'decoderSettings', 'receiverSettings', 'receiverGain', 'bandSelection', 'receiverFilter', 'receiverDsp', 'phoneMode', 'workSpot', 'radioLevels', 'radioSelection', 'fmTuning', 'fmReceiver'].includes(capability)
-  return local || !!(available && (!expanded || (client?.operationVersion ?? 0) >= 3) && view?.fresh && view.connected && !view.unresolved && !view.controlPending &&
+  return local || !!(available && (capability !== 'ftOperate' || (client?.operationVersion ?? 0) >= 4) && (!expanded || (client?.operationVersion ?? 0) >= 3) && view?.fresh && view.connected && !view.unresolved && !view.controlPending &&
     view.state?.phase === 'controlling' && (!['frequency', 'mode', 'tier', 'workspace', 'decoderSettings', 'receiverSettings', 'receiverGain', 'bandSelection', 'receiverFilter', 'receiverDsp', 'phoneMode', 'workSpot', 'radioLevels', 'radioSelection', 'fmTuning', 'fmReceiver'].includes(capability) || !view.state.txArmed) && view.state.controls?.capabilities.includes(capability))
 }
 
@@ -31,4 +31,11 @@ export function useStationTierControl(radio: RadioStatus): boolean {
   return local || !!(allowed && radio.operatingMode?.toLowerCase() === 'digital' &&
     radio.catOk === true && !radio.txEnabled && !radio.transmitting && !radio.rigKeyed &&
     !radio.tuning && !radio.txBusyReason)
+}
+
+/** Stop is independent of stale observations, receipts and ordinary commands. */
+export function useStationStopControl(): boolean {
+  const local = useStationControl(), client = useContext(RemoteOperationsContext)
+  const view = useSyncExternalStore(client?.subscribe ?? idleSubscribe, client?.getSnapshot ?? idleSnapshot)
+  return local || !!(view?.connected && view.stopAvailable && !view.stopSending)
 }

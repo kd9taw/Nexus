@@ -29,6 +29,13 @@ impl TransmitAuthority {
                 .is_ok()
     }
 
+    /// Bind an arming gesture to the generation the browser displayed. A Stop
+    /// racing issuance invalidates the returned permit before Engine admission.
+    pub fn permit_generation(&self, expected: u64, deadline: Instant) -> Option<TransmitPermit> {
+        let permit = self.permit(deadline)?;
+        (permit.0.generation == expected && permit.valid(Instant::now())).then_some(permit)
+    }
+
     pub fn permit(&self, deadline: Instant) -> Option<TransmitPermit> {
         self.0.permit(deadline).map(TransmitPermit)
     }

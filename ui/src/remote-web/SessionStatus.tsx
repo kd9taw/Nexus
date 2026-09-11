@@ -25,7 +25,7 @@ export function SessionStatus({ client, stale, disconnect, display }: {
     {stale && <p className="remote-session-unavailable" role="alert">{t('remote.applicationUnavailable')}</p>}
     <div className="remote-session-info" id={id} hidden={!expanded}>
       <strong>{t('remote.browserWorkspace')}</strong>
-      <p>{(client?.operationVersion ?? 0) >= 2 ? t('remote.controlPreview')
+      <p>{(client?.operationVersion ?? 0) >= 4 ? t('remote.ftControlPreview') : (client?.operationVersion ?? 0) >= 2 ? t('remote.controlPreview')
         : client?.enabled ? t('remote.applicationLoggingPreview') : t('remote.applicationObserver')}</p>
       <button type="button" className="remote-button" onClick={disconnect}>{t('remote.disconnect')}</button>
       {display && <button type="button" className="remote-button" onClick={() => {

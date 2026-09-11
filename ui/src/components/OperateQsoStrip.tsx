@@ -1,4 +1,4 @@
-import { useStationControl } from '../stationAccess'
+import { useStationControl, useStationCapability, useStationStopControl } from '../stationAccess'
 // ⚠️ THIS FILE IS **PARTIAL** ON THE i18n LIST (i18n/hardcoded-strings.test.ts), and the part
 // that is deferred is deliberate: STOP TX, TUNE, ATU and the TX On/Off tooltip stay written
 // here. The first three cut or key a carrier — Stop TX and Tune are on this cockpit's
@@ -132,7 +132,7 @@ export function OperateQsoStrip({
   rotor,
   telemetry,
 }: Props) {
-  const control = useStationControl()
+  const control = useStationControl(), ftControl = useStationCapability('ftOperate'), stopControl = useStationStopControl()
   // ⚠️ cqRunning, NOT qso.running. `running` is also true through a directed S&P call (the
   // engine's own comment at call_station_ctx says so) and nothing clears it after the QSO —
   // so this strip lit Call CQ solid through every S&P contact and forever after, and the
@@ -190,7 +190,7 @@ export function OperateQsoStrip({
           className={`cq-role cq-call${running ? ' active' : ''}`}
           aria-pressed={running}
           onClick={() => (onCallCq ? onCallCq() : onSetMode('qso-run'))}
-          disabled={!control || (noQso)}
+          disabled={!ftControl || (noQso)}
           title={noQso ? noQsoWhy : t('operate.strip.callCq.title')}
         >
           {t('operate.strip.callCq.label')}
@@ -217,7 +217,7 @@ export function OperateQsoStrip({
             className={`op-btn monitor${radio.txEnabled ? ' on' : ''}`}
             aria-pressed={radio.txEnabled}
             onClick={() => onSetTxEnabled?.(!radio.txEnabled)}
-            disabled={!control || (noTx)}
+            disabled={!ftControl || (noTx)}
             title={
               noTx
                 ? noTxWhy
@@ -255,7 +255,7 @@ export function OperateQsoStrip({
               ATU
             </button>
           )}
-          <button disabled={!control}
+          <button disabled={!stopControl}
             type="button"
             className="op-btn stop"
             onClick={() => onHaltTx?.()}

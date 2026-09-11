@@ -164,8 +164,15 @@ not block Stop. The relay retains one extra bounded Stop route across hibernatio
 native transport admits it without waiting for the Engine or a file operation.
 The acknowledgement confirms permission revocation, not RF cessation. A separate
 FT extension advertisement preserves v2/v3 negotiation for older peers. Native
-Call, TX On/Off and Stop wrappers reuse the existing FT verbs, but browser arming,
-local grant UI, full QSO workflows and hardware/WAN acceptance remain pending.
+Call, TX On/Off and Stop wrappers reuse the existing FT verbs. The FT8/FT4 CQ
+and enable latch now use a dedicated `ftOperate` capability and the existing
+cockpit buttons. Arming includes the displayed transmit generation, current tier
+and radio connection; revocation invalidates even a previously captured command
+whose ordinary window remains valid. The separate local transmit permission is
+managed in the existing Remote settings section, remains boot-scoped and can be
+revoked during a pending refresh. Older refresh results cannot restore its display.
+Stop remains independent of stale observations and command/storage locks. Call
+selection, full QSO workflows and hardware/WAN acceptance remain pending.
 
 The receive-audio foundation is local to `tempo-audio`: the sole `RxDsp` capture
 consumer offers bounded device-rate mono copies through `receive_audio.rs`, before

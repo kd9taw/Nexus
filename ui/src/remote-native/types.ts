@@ -5,6 +5,7 @@ export type RemoteStationStatus = {
   devices: { id: string; name: string; approved: number; expiresAt: number }[]
   loggingPermissions?: string[]
   stationPermissions?: string[]
+  transmitPermissions?: string[]
   loggingController?: string | null
   observationGeneration?: string | null
   error: string | null
@@ -15,5 +16,6 @@ export type RemoteStationAction =
   | { type: 'approve'; enrollmentId: string; accountId: string }
   | { type: 'loggingPermission'; deviceId: string; allow: boolean }
   | { type: 'stationPermission'; deviceId: string; allow: boolean }
+  | { type: 'transmitPermission'; deviceId: string; allow: boolean }
   | { type: 'takeOverLogging' }
   | { type: 'device'; deviceId: string; approve: boolean }

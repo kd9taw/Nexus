@@ -141,7 +141,11 @@ export class OperationRelay {
       if (p.sessionId !== sessionId) throw Error()
       if ('value' in response && !!p.stop !== ('stop' in response.value)) throw Error()
       this.pending.delete(response.requestId)
-      if ('value' in response && 'phase' in response.value && (p.operationVersion ?? 2) < 4) delete response.value.transmitEpoch
+      if ('value' in response && 'phase' in response.value && (p.operationVersion ?? 2) < 4) {
+        delete response.value.transmitEpoch
+        response.value.txArmed = false
+        if (response.value.controls) response.value.controls.capabilities = response.value.controls.capabilities.filter(c => c !== 'ftOperate')
+      }
       if ('value' in response && 'controls' in response.value && response.value.controls) {
         // Keep capability vocabulary compatible even with pre-v3 stations that
         // advertised extra hints under v2. This only removes hints; it cannot

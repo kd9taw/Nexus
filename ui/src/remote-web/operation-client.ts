@@ -31,6 +31,7 @@ export type OperationView = {
   controlError: string | null
   controlRefreshing?: boolean
   stopSending?: boolean
+  stopAvailable?: boolean
   stopError?: string | null
 }
 type CapturedControl = { state: OperationState; until: number }
@@ -116,6 +117,7 @@ export class OperationClient {
       ...value,
       controlSending: this.pending?.request.type === 'stationControl',
       stopSending: !!this.pendingStop,
+      stopAvailable: this.operationVersion >= 4 && !!this.stopTarget && (value.connected ?? this.view.connected),
       ...((value.error || value.connected === false || value.state) ? { controlRefreshing: false } : {}),
       ...(value.unresolved === null ? { pendingDraft: null } : {})
     }
@@ -532,6 +534,7 @@ export class OperationClient {
     if (!this.controlStorage) throw Error('receiptStorageUnavailable')
     if (this.view.unresolved || this.view.controlPending || this.controlIntent || this.loggingIntent) throw Error('operationUnknown')
     const capability = actionCapability(intent)
+    if ('transmitEpoch' in intent && intent.transmitEpoch !== s?.transmitEpoch) throw Error('staleContext')
     if (!s || !this.view.fresh || s.phase !== 'controlling' || !s.leaseId || !s.commandWindowId || s.nextSequence === null || !s.controls?.capabilities.includes(capability)) throw Error('notController')
     const context = structuredClone(controlContext(displayed ?? s.controls.context))
     const sameConnection = (current: ControlContext | undefined) => !!current &&
@@ -547,6 +550,7 @@ export class OperationClient {
         if (this.now() >= until) throw Error('windowExpired')
         if (this.view.state?.leaseId !== s.leaseId || this.view.state.revision !== s.revision) throw Error('staleContext')
         if (!sameConnection(this.view.state.controls?.context)) throw Error('staleContext')
+        if ('transmitEpoch' in intent && (intent.transmitEpoch !== this.view.state.transmitEpoch || intent.transmitEpoch !== this.stopTarget?.transmitEpoch)) throw Error('staleContext')
         const saved = { operationId: request.requestId, action: intent }
         this.controlStorage!.write(saved)
         this.update({ controlPending: saved, controlResult: null })

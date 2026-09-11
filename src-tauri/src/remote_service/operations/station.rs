@@ -65,6 +65,22 @@ pub enum KeyboardReceiver {
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(tag = "action", deny_unknown_fields)]
 pub enum Action {
+    #[serde(rename = "ft.cq")]
+    FtCq {
+        #[serde(rename = "expectedTier")]
+        expected_tier: tempo_app::dto::Tier,
+        #[serde(rename = "transmitEpoch")]
+        transmit_epoch: String,
+        direction: Option<String>,
+    },
+    #[serde(rename = "ft.txEnabled")]
+    FtTxEnabled {
+        #[serde(rename = "expectedTier")]
+        expected_tier: tempo_app::dto::Tier,
+        #[serde(rename = "transmitEpoch")]
+        transmit_epoch: String,
+        on: bool,
+    },
     #[serde(rename = "radio.level")]
     Level {
         mode: String,
@@ -230,6 +246,7 @@ pub fn execute(
         return Err(Reason::ContextChanged);
     }
     match action {
+        Action::FtCq { .. } | Action::FtTxEnabled { .. } => return Err(Reason::UnsupportedAction),
         #[cfg(feature = "radio")]
         Action::Radio { radio_id } => {
             if !engine.remote_selection_host_ready() {
@@ -687,6 +704,7 @@ pub fn execute(
 impl Action {
     pub fn minimum_version(&self) -> u8 {
         match self {
+            Self::FtCq { .. } | Self::FtTxEnabled { .. } => 4,
             Self::Level { .. }
             | Self::Frequency { .. }
             | Self::Band { .. }
@@ -744,4 +762,69 @@ pub fn capabilities(version: u8) -> Vec<&'static str> {
         let _ = version;
         vec!["decoder"]
     }
+}
+
+impl Action {
+    pub fn transmit_epoch(&self) -> Option<&str> {
+        match self {
+            Self::FtCq { transmit_epoch, .. } | Self::FtTxEnabled { transmit_epoch, .. } => {
+                Some(transmit_epoch)
+            }
+            _ => None,
+        }
+    }
+}
+
+pub fn execute_transmit(
+    engine: &mut Engine,
+    context: &Context,
+    action: &Action,
+    permit: tempo_app::remote_control::transmit::TransmitPermit,
+) -> Result<Completion, Reason> {
+    if !context.matches_radio(engine) {
+        return Err(Reason::ContextChanged);
+    }
+    match action {
+        Action::FtCq {
+            expected_tier,
+            direction,
+            ..
+        } => {
+            if let Some(direction) = direction {
+                let letters = (1..=4).contains(&direction.len())
+                    && direction.bytes().all(|b| b.is_ascii_uppercase());
+                let digits = direction.len() == 3 && direction.bytes().all(|b| b.is_ascii_digit());
+                if !letters && !digits {
+                    return Err(Reason::InvalidAction);
+                }
+            }
+            engine.validate_remote_ft_radio(
+                *expected_tier,
+                context.radio_connection.ok_or(Reason::ReadingUnavailable)?,
+                &permit,
+            )?;
+            engine.start_remote_ft_cq(permit, direction.as_deref())?;
+        }
+        Action::FtTxEnabled {
+            expected_tier, on, ..
+        } => {
+            if engine.tier() != *expected_tier {
+                return Err(Reason::ContextChanged);
+            }
+            if *on {
+                engine.validate_remote_ft_radio(
+                    *expected_tier,
+                    context.radio_connection.ok_or(Reason::ReadingUnavailable)?,
+                    &permit,
+                )?;
+            }
+            engine.set_remote_ft_tx_enabled(permit, *on)?;
+        }
+        _ => return Err(Reason::UnsupportedAction),
+    }
+    let result = Completion::default();
+    result.finish(Outcome::Applied {
+        evidence: Evidence::StationState,
+    });
+    Ok(result)
 }

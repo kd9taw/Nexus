@@ -60,7 +60,7 @@ export type OperationState = {
   nextSequence: number | null
   leaseRemainingMs: number | null
   actions: 'log.manual'[]
-  txArmed: false
+  txArmed: boolean
   transmitEpoch?: string | null
   controls?: { context: ControlContext; capabilities: ControlCapability[] }
 }
@@ -237,13 +237,14 @@ export function operationValue(raw: unknown): OperationValue {
     ) ||
     !integer(v.revision) ||
     v.revision < 0 ||
-    v.txArmed !== false ||
+    typeof v.txArmed !== 'boolean' ||
     !Array.isArray(v.actions) ||
     v.actions.length > 1 ||
     v.actions.some((a) => a !== 'log.manual')
   )
     invalid()
   const owned = v.phase === 'controlling'
+  if (v.txArmed && (!owned || !transmitEpoch(v.transmitEpoch))) invalid()
   if ('transmitEpoch' in v && v.transmitEpoch !== null && (!owned || !transmitEpoch(v.transmitEpoch))) invalid()
   if (
     owned

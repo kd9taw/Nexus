@@ -8,6 +8,63 @@ use crate::settings::OperatingMode;
 use std::time::Instant;
 
 impl Engine {
+    pub fn remote_ft_available(&self) -> bool {
+        self.source_kind == SourceKind::Native
+            && self.settings.operating_mode == OperatingMode::Digital
+            && matches!(self.tier(), Tier::Ft8 | Tier::Ft4)
+    }
+
+    pub fn remote_ft_tx_owned(&self) -> bool {
+        self.tx_enabled()
+            && self
+                .remote_transmit
+                .as_ref()
+                .is_some_and(|p| p.valid(Instant::now()))
+    }
+
+    /// Arming needs fresh readings from the displayed active radio. TX Off and
+    /// Stop use ownership alone so missing CAT cannot prevent their release.
+    pub fn validate_remote_ft_radio(
+        &self,
+        tier: Tier,
+        connection: u64,
+        permit: &TransmitPermit,
+    ) -> Result<(), Reason> {
+        if self.tier() != tier {
+            return Err(Reason::ContextChanged);
+        }
+        self.prepare_remote_ft(permit)?;
+        let o = self.remote_monitor_observation();
+        let cat = o.radio.readings.cat.ok_or(Reason::ReadingUnavailable)?;
+        let ptt = o.radio.readings.ptt.ok_or(Reason::ReadingUnavailable)?;
+        let dial = o.radio.readings.dial.ok_or(Reason::ReadingUnavailable)?;
+        let mode = o.radio.readings.mode.ok_or(Reason::ReadingUnavailable)?;
+        if [cat, ptt, dial, mode]
+            .iter()
+            .any(|r| r.connection_generation != connection)
+        {
+            return Err(Reason::ContextChanged);
+        }
+        if o.radio.cat_connected != Some(true)
+            || cat.age_ms >= 1000
+            || ptt.age_ms >= 1000
+            || dial.age_ms >= 1000
+            || mode.age_ms >= 10000
+        {
+            return Err(Reason::ReadingUnavailable);
+        }
+        if o.radio.rig_keyed != Some(false)
+            && !(o.radio.rig_keyed == Some(true)
+                && self
+                    .remote_transmit
+                    .as_ref()
+                    .is_some_and(|p| p.valid(Instant::now())))
+        {
+            return Err(Reason::StationBusy);
+        }
+        Ok(())
+    }
+
     /// Begin CQ using exactly the native operating verb. Existing local arming
     /// is not permission for a remote browser to take over that transmission.
     /// The host still owns device approval, command context and hardware checks.

@@ -493,7 +493,7 @@ impl Authority {
         session: &str,
         device: &str,
         now: Instant,
-        control: Option<(u8, station::Context)>,
+        control: Option<(u8, station::Context, bool, bool)>,
     ) -> Result<Value, &'static str> {
         self.sync_stop_owner(c);
         let allowed =
@@ -522,15 +522,32 @@ impl Authority {
             "nextSequence":if owned{c.lease.as_ref().map(|l|l.sequence+1)}else{None},
             "leaseRemainingMs":if owned{c.lease.as_ref().map(|l|l.until.saturating_duration_since(now).as_millis() as u64)}else{None},
             "actions":if c.grants.contains(device){vec!["log.manual"]}else{vec![]},"txArmed":false});
-        if control.as_ref().is_some_and(|(version, _)| *version >= 4) {
+        if control
+            .as_ref()
+            .is_some_and(|(version, _, _, _)| *version >= 4)
+        {
             value["transmitEpoch"] = if owned && c.transmit_grants.contains(device) {
                 json!(format!("{:016x}", self.transmit.generation()))
             } else {
                 Value::Null
             };
         }
-        if let Some((version, context)) = control {
-            value["controls"] = json!({"context":context,"capabilities":if c.control_grants.contains(device){station::capabilities(version)}else{vec![]}});
+        if let Some((version, context, ft_available, tx_owned)) = control {
+            let mut capabilities = if c.control_grants.contains(device) {
+                station::capabilities(version)
+            } else {
+                vec![]
+            };
+            if version >= 4 {
+                value["txArmed"] = json!(owned && tx_owned);
+                if ft_available
+                    && c.control_grants.contains(device)
+                    && c.transmit_grants.contains(device)
+                {
+                    capabilities.push("ftOperate");
+                }
+            }
+            value["controls"] = json!({"context":context,"capabilities":capabilities});
         }
         Ok(value)
     }
@@ -578,7 +595,14 @@ impl Authority {
         // queue whose work could migrate into a later radio/profile context.
         let mut engine = engine.try_lock().map_err(|_| "stationBusy")?;
         self.context(&mut c, &engine)?;
-        let control = (version >= 2).then(|| (version, station::Context::capture(&engine)));
+        let control = (version >= 2).then(|| {
+            (
+                version,
+                station::Context::capture(&engine),
+                engine.remote_ft_available(),
+                engine.remote_ft_tx_owned(),
+            )
+        });
         match request {
             Request::StopTransmit { .. } => unreachable!("handled before ordinary operations"),
             Request::State { .. } => self.state(&mut c, session, device, now, control),
@@ -737,19 +761,39 @@ impl Authority {
                 } = request
                 {
                     let deadline = (current + Duration::from_secs(5)).min(l.until);
+                    let transmit_permit = if let Some(epoch) = action.transmit_epoch() {
+                        if !c.transmit_grants.contains(device) {
+                            return Err("localPermissionRequired");
+                        }
+                        if epoch.len() != 16
+                            || !epoch
+                                .bytes()
+                                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+                        {
+                            return Err("invalidRequest");
+                        }
+                        let expected =
+                            u64::from_str_radix(epoch, 16).map_err(|_| "invalidRequest")?;
+                        Some(
+                            self.transmit
+                                .permit_generation(expected, deadline)
+                                .ok_or("staleContext")?,
+                        )
+                    } else {
+                        None
+                    };
                     let permit = self
                         .hardware
                         .permit(deadline)
                         .ok_or("authorityUnavailable")?;
                     self.advance(&mut c)?;
                     c.lease.as_mut().ok_or("leaseExpired")?.sequence = *client_sequence;
-                    let completion = match station::execute(
-                        &mut engine,
-                        context,
-                        action,
-                        permit,
-                        self.spots.as_ref(),
-                    ) {
+                    let executed = if let Some(transmit_permit) = transmit_permit {
+                        station::execute_transmit(&mut engine, context, action, transmit_permit)
+                    } else {
+                        station::execute(&mut engine, context, action, permit, self.spots.as_ref())
+                    };
+                    let completion = match executed {
                         Ok(result) => result,
                         Err(reason) => {
                             let result = Completion::default();

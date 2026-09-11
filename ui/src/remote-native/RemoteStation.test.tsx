@@ -75,3 +75,31 @@ it('keeps station control permission separate from logging and clears both on ta
  await screen.findByRole('button',{name:'Allow station controls'})
  expect(actions).toEqual([{type:'stationPermission',deviceId,allow:true},{type:'takeOverLogging'}])
 })
+
+it('keeps transmit revocation available during a pending refresh and discards its older grant display', async () => {
+ const deviceId = crypto.randomUUID()
+ const original:RemoteStationStatus={phase:'connected',origin:'https://remote-staging.hamradiotools.io',stationId:crypto.randomUUID(),accountId:crypto.randomUUID(),pairingId:null,pairingCode:null,expiresAt:null,devices:[{id:deviceId,name:'FT browser',approved:1,expiresAt:Date.now()+600000}],error:null,stationPermissions:[deviceId],transmitPermissions:[deviceId]}
+ let status = original, release!:()=>void
+ const delayed = new Promise<RemoteStationStatus>(resolve => { release = () => resolve(original) })
+ const actions:RemoteStationAction[]=[]
+ const invoke = async (command:string,input?:unknown) => {
+  if(command==='get_remote_station_status')return status
+  if(command!=='remote_station_action')throw Error('unexpectedCommand')
+  const action=(input as {action:RemoteStationAction}).action;actions.push(action)
+  if(action.type==='refresh')return delayed
+  if(action.type==='transmitPermission')status={...status,transmitPermissions:action.allow?[deviceId]:[]}
+  return status
+ }
+ window.__TAURI_INTERNALS__={invoke:invoke as NonNullable<Window['__TAURI_INTERNALS__']>['invoke']}
+ render(<RemoteStation />)
+ const revoke=await screen.findByRole('button',{name:'Revoke transmission permission'})
+ fireEvent.click(screen.getByRole('button',{name:'Refresh browser requests'}))
+ expect((revoke as HTMLButtonElement).disabled).toBe(false)
+ fireEvent.click(revoke)
+ await screen.findByRole('button',{name:'Allow FT8/FT4 transmission'})
+ release()
+ await waitFor(()=>expect(actions).toContainEqual({type:'transmitPermission',deviceId,allow:false}))
+ await new Promise(resolve=>setTimeout(resolve,0))
+ expect(screen.queryByRole('button',{name:'Revoke transmission permission'})).toBeNull()
+ expect(screen.getByRole('button',{name:'Allow FT8/FT4 transmission'})).toBeTruthy()
+})

@@ -13,6 +13,8 @@ export type PhoneMode = (typeof PHONE_MODES)[number]
 export const RADIO_LEVELS = ['power', 'micGain', 'nr', 'compression', 'notch'] as const
 export type RadioLevel = (typeof RADIO_LEVELS)[number]
 export type StationAction =
+  | { action: 'ft.cq'; expectedTier: 'FT8' | 'FT4'; transmitEpoch: string; direction: string | null }
+  | { action: 'ft.txEnabled'; expectedTier: 'FT8' | 'FT4'; transmitEpoch: string; on: boolean }
   | { action: 'radio.level'; mode: 'digital' | 'phone' | 'cw' | 'rtty' | 'keyboard'; level: RadioLevel; expected: number; value: number }
   | { action: 'radio.workSpot'; mode: 'cw' | 'phone'; dialMhz: number; band: string; call: string }
   | { action: 'radio.frequency'; dialMhz: number; band: string; sideband: 'USB' | 'LSB' | 'FM' | 'AM' }
@@ -46,10 +48,11 @@ export type ControlContext = {
   ampConnection: number | null
   ampReadSequence: number | null
 }
-export const CONTROL_CAPABILITIES = ['decoder', 'radio', 'amplifier', 'frequency', 'mode', 'tier', 'ampFollowBand', 'workspace', 'decoderSettings', 'receiverSettings', 'receiverGain', 'bandSelection', 'receiverFilter', 'receiverDsp', 'phoneMode', 'workSpot', 'radioLevels', 'radioSelection', 'fmTuning', 'fmReceiver'] as const
+export const CONTROL_CAPABILITIES = ['ftOperate', 'decoder', 'radio', 'amplifier', 'frequency', 'mode', 'tier', 'ampFollowBand', 'workspace', 'decoderSettings', 'receiverSettings', 'receiverGain', 'bandSelection', 'receiverFilter', 'receiverDsp', 'phoneMode', 'workSpot', 'radioLevels', 'radioSelection', 'fmTuning', 'fmReceiver'] as const
 export type ControlCapability = (typeof CONTROL_CAPABILITIES)[number]
 // A new action cannot silently inherit a broader capability by its prefix.
 const ACTION_CAPABILITY: Record<StationAction['action'], ControlCapability> = {
+  'ft.cq': 'ftOperate', 'ft.txEnabled': 'ftOperate',
   'radio.level': 'radioLevels',
   'radio.disarm': 'radio', 'radio.select': 'radioSelection', 'radio.frequency': 'frequency',
   'radio.band': 'bandSelection', 'radio.mode': 'mode', 'radio.tier': 'tier', 'radio.workspace': 'workspace',
@@ -90,6 +93,13 @@ export function stationAction(raw: unknown): StationAction {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) invalid()
   const a = raw as Record<string, unknown>
   switch (a.action) {
+    case 'ft.cq': case 'ft.txEnabled':
+      object(a, ['action', 'expectedTier', 'transmitEpoch', a.action === 'ft.cq' ? 'direction' : 'on'])
+      if (!oneOf(a.expectedTier, ['FT8', 'FT4']) || typeof a.transmitEpoch !== 'string' || !/^[0-9a-f]{16}$/.test(a.transmitEpoch)) invalid()
+      if (a.action === 'ft.cq') {
+        if (a.direction !== null && (typeof a.direction !== 'string' || !/^(?:[A-Z]{1,4}|[0-9]{3})$/.test(a.direction))) invalid()
+      } else if (typeof a.on !== 'boolean') invalid()
+      break
     case 'radio.workSpot':
       object(a, ['action', 'mode', 'dialMhz', 'band', 'call'])
       if (!oneOf(a.mode, ['cw', 'phone']) || !finite(a.dialMhz) || a.dialMhz <= 0 || a.dialMhz > 250000 || !oneOf(a.band, BANDS) || typeof a.call !== 'string' || !/^[A-Za-z0-9/]{1,32}$/.test(a.call)) invalid()

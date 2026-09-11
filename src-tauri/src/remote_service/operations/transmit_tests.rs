@@ -359,3 +359,137 @@ fn transmit_stop_token_is_only_returned_to_the_granted_v4_owner() {
         .unwrap();
     assert!(value["transmitEpoch"].is_null());
 }
+
+fn ready_ft(tier: tempo_app::dto::Tier) -> (Fixture, Instant, Value) {
+    ready_ft_link(tier, true)
+}
+
+fn ready_ft_link(tier: tempo_app::dto::Tier, connected: bool) -> (Fixture, Instant, Value) {
+    let f = Fixture::new();
+    {
+        let mut e = f.engine.lock().unwrap();
+        e.set_tier(tier);
+        e.configure_remote_settings_store(f.dir.join("settings.json"));
+        e.set_tx_enabled(false);
+        e.take_immediate_retune();
+        e.take_slot_tx_abort();
+        let radio = e.remote_open_radio().unwrap();
+        let read = e.remote_radio_read(&radio, Instant::now());
+        let hz = (e.settings().dial_mhz * 1e6).round() as u64;
+        e.remote_observe_cat(read.as_ref(), Some(connected));
+        e.remote_observe_dial(read.as_ref(), Some(hz));
+        e.remote_observe_mode(read.as_ref(), Some("PKTUSB"));
+        e.remote_observe_ptt(read.as_ref(), Some(false));
+    }
+    let now = Instant::now();
+    acquire_controls_version(&f, now, 4);
+    f.authority.permit_transmit(DEVICE, true).unwrap();
+    let state = control_state_version(&f, now, 4);
+    (f, now, state)
+}
+fn ft_command(state: &Value, action: Value) -> Request {
+    serde_json::from_value(json!({"type":"stationControl","requestId":id(),"stationBootId":state["stationBootId"],
+        "leaseId":state["leaseId"],"expectedRevision":state["revision"],"commandWindowId":state["commandWindowId"],
+        "clientSequence":state["nextSequence"],"context":state["controls"]["context"],"action":action})).unwrap()
+}
+fn ft_run(f: &Fixture, request: &Request) -> Result<Value, &'static str> {
+    f.authority.handle_version(
+        (f.connection, 4),
+        SESSION,
+        DEVICE,
+        request,
+        &f.engine,
+        Instant::now(),
+    )
+}
+
+#[test]
+fn transmit_browser_cq_tx_off_and_stop_preserve_native_ft_behavior() {
+    use tempo_app::dto::Tier;
+    for tier in [Tier::Ft8, Tier::Ft4] {
+        let (f, _, state) = ready_ft(tier);
+        assert!(state["controls"]["capabilities"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("ftOperate")));
+        let command = ft_command(
+            &state,
+            json!({"action":"ft.cq","expectedTier":tier,"transmitEpoch":state["transmitEpoch"],"direction":"DX"}),
+        );
+        assert_eq!(ft_run(&f, &command).unwrap()["evidence"], "stationState");
+        assert!(f.engine.lock().unwrap().tx_enabled());
+        let armed = control_state_version(&f, Instant::now(), 4);
+        assert_eq!(armed["txArmed"], true);
+        let off = ft_command(
+            &armed,
+            json!({"action":"ft.txEnabled","expectedTier":tier,"transmitEpoch":armed["transmitEpoch"],"on":false}),
+        );
+        assert_eq!(ft_run(&f, &off).unwrap()["outcome"], "applied");
+        assert!(!f.engine.lock().unwrap().take_slot_tx_abort());
+        assert!(!f.engine.lock().unwrap().tx_enabled());
+        let stop = stop_request(&f, &state);
+        assert_eq!(ft_run(&f, &stop).unwrap(), json!({"stop":"accepted"}));
+        assert!(f
+            .engine
+            .lock()
+            .unwrap()
+            .poll_remote_transmit(Instant::now()));
+        assert!(f.engine.lock().unwrap().take_slot_tx_abort());
+    }
+}
+
+#[test]
+fn transmit_stop_invalidates_an_unsent_arm_even_if_its_command_window_still_matches() {
+    let (f, _, state) = ready_ft(tempo_app::dto::Tier::Ft8);
+    let command = ft_command(
+        &state,
+        json!({"action":"ft.cq","expectedTier":"FT8","transmitEpoch":state["transmitEpoch"],"direction":null}),
+    );
+    assert_eq!(
+        ft_run(&f, &stop_request(&f, &state)).unwrap(),
+        json!({"stop":"accepted"})
+    );
+    assert_eq!(ft_run(&f, &command), Err("staleContext"));
+    assert!(!f.engine.lock().unwrap().tx_enabled());
+    let fresh = control_state_version(&f, Instant::now(), 4);
+    let command = ft_command(
+        &fresh,
+        json!({"action":"ft.cq","expectedTier":"FT8","transmitEpoch":fresh["transmitEpoch"],"direction":null}),
+    );
+    assert_eq!(ft_run(&f, &command).unwrap()["outcome"], "applied");
+    assert!(f.engine.lock().unwrap().tx_enabled());
+}
+
+#[test]
+fn transmit_browser_arm_requires_its_own_grant_and_fresh_radio_context() {
+    for cause in [
+        "permission",
+        "link",
+        "tier",
+        "generation",
+        "direction",
+        "local",
+    ] {
+        let (f, _, state) = ready_ft_link(tempo_app::dto::Tier::Ft8, cause != "link");
+        let mut action = json!({"action":"ft.cq","expectedTier":"FT8","transmitEpoch":state["transmitEpoch"],"direction":null});
+        match cause {
+            "permission" => f.authority.permit_transmit(DEVICE, false).unwrap(),
+            "link" => {}
+            "tier" => action["expectedTier"] = json!("FT4"),
+            "generation" => action["transmitEpoch"] = json!("ffffffffffffffff"),
+            "direction" => action["direction"] = json!("CQ DX W1AW"),
+            "local" => f.engine.lock().unwrap().set_tx_enabled(true),
+            _ => unreachable!(),
+        }
+        let result = ft_run(&f, &ft_command(&state, action));
+        assert!(
+            result.is_err() || result.unwrap()["outcome"] == "rejected",
+            "{cause}"
+        );
+        assert_eq!(
+            f.engine.lock().unwrap().tx_enabled(),
+            cause == "local",
+            "{cause}"
+        );
+    }
+}
