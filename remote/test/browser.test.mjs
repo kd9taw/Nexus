@@ -644,7 +644,9 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,contactContin
       assert.equal(await evaluate(`document.querySelector('${call}')===window.__quickNodes.call&&document.querySelector('${call}').value==='N2QUICK'`),true)
       await sleep(1000);assert.equal(loggedRequests.length,1,'presentation must not replay an unconfirmed QSO')
       loseLogReply=false
+      await evaluate(`(()=>{window.__quickResultEvents=[];for(const type of ['pointerdown','pointerup','click'])document.addEventListener(type,e=>{window.__quickResultEvents.push({type,target:e.target?.outerHTML,at:performance.now(),x:e.clientX,y:e.clientY})},{capture:true})})()`)
       await click(`[...document.querySelectorAll('.phone-cockpit .remote-log-entry button')].find(e=>e.textContent==='Check submitted QSO result')`)
+      if(artifacts)await writeFile(join(artifacts,'result-click.json'),JSON.stringify({events:await evaluate('window.__quickResultEvents'),wire:operationWire.slice(-8),session:await sessionDiagnostic()},null,2))
       await until(`document.querySelector('.phone-cockpit .remote-log-entry')?.textContent.includes('QSO saved to the station log file')`)
       assert.equal(loggedRequests.length,1);assert.equal(await evaluate(`document.querySelector('${call}').value`),'')
       await click(`document.querySelector('${call}')`);await browser.call('Input.insertText',{text:'N3QSO'},session)
