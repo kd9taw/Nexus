@@ -66,7 +66,7 @@ async function chrome() {
 
 for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,14].map(applicationVersion=>({applicationVersion,operating:false})),{applicationVersion:14,operating:true}]) test(`compiled hosted browser ${operating?'operations':`v${applicationVersion}`} completes PKCE, local device approval, observation and viewport checks`, { timeout: applicationVersion >= 14 ? 540000 : applicationVersion >= 13 ? 420000 : 180000 }, async () => {
   const app=await runtime(), artifacts=process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS ? join(process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS, operating?'operations':`v${applicationVersion}`) : undefined
-  let browser, station, producing=true, producer, applicationProducer
+  let browser, station, producing=true, pauseObservations=false, producer, applicationProducer
   const results=[]
   try {
     browser=await chrome()
@@ -213,7 +213,7 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
     if(artifacts){await mkdir(artifacts,{recursive:true});await geometry(390,844);const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-account.png'),Buffer.from(shot.data,'base64'))}
     const fixture=JSON.parse(await readFile(new URL('../../ui/src/remote-monitor/fixtures.v2.json',import.meta.url),'utf8')).spe
     let sequence=0
-    producer=(async()=>{while(producing){const source=station;let watch;try{watch=await source.take(value=>value.type==='watch'&&value.enabled,1000)}catch{continue}await sleep(200);if(!producing)break;if(source!==station||source.closed)continue;source.send({type:'publication',requestId:watch.requestId,frame:{...fixture,source:'native',sequence:++sequence}})}})()
+    producer=(async()=>{while(producing){const source=station;let watch;try{watch=await source.take(value=>value.type==='watch'&&value.enabled,1000)}catch{continue}await sleep(200);while(producing&&pauseObservations)await sleep(50);if(!producing)break;if(source!==station||source.closed)continue;source.send({type:'publication',requestId:watch.requestId,frame:{...fixture,source:'native',sequence:++sequence}})}})()
     const applicationData = await applicationFixture()
     applicationData.get_settings.fdActive = true
     if(operating)applicationData.get_settings.bandChoices=Object.fromEntries(['cw','phone'].map(mode=>[mode,
@@ -953,9 +953,25 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
         for(const [button,modifiers]of [['right',0],['left',8],['left',2]])for(const type of ['mousePressed','mouseReleased'])
           await browser.call('Input.dispatchMouseEvent',{type,...point,button,modifiers,clickCount:1},session)
         await sleep(300);assert.equal(stationRequests.length,before,'receive permission must not move TX or both markers')
+        if(tab==='FT'){
+          // Authority and physical readings have separate clocks. An available
+          // controller cannot authorize an RX gesture using an old PTT sample.
+          pauseObservations=true
+          await until(`document.querySelector('${rxField}').disabled`)
+          await freshLoggingWindow()
+          assert.equal(await evaluate(`document.querySelector('.remote-logging-authority')?.textContent.includes('Station control active')`),true)
+          for(const type of ['mousePressed','mouseReleased'])await browser.call('Input.dispatchMouseEvent',{type,...point,button:'left',clickCount:1},session)
+          await sleep(150);assert.equal(stationRequests.length,before,'fresh control authority cannot replace missing fresh receiver readings')
+          pauseObservations=false
+        }
         await freshLoggingWindow()
-        const prepared=await evaluate(`(()=>{const e=document.querySelector('${selector}'),r=e.getBoundingClientRect(),hit=document.elementFromPoint(${point.x},${point.y});return {rect:r.toJSON(),hit:hit?.outerHTML.slice(0,1000),visible:e.contains(hit),authority:document.querySelector('.remote-logging-authority')?.textContent}})()`)
-        for(const type of ['mousePressed','mouseReleased'])await browser.call('Input.dispatchMouseEvent',{type,...point,button:'left',clickCount:1},session)
+        // This is the actual shared RX widget's permission, not merely a
+        // controlling response on the socket. Re-measure after its update.
+        await until(`!document.querySelector('${rxField}').disabled`)
+        await evaluate(`document.querySelector('${selector}').scrollIntoView({block:'center',behavior:'instant'})`);await settledLayout()
+        const prepared=await evaluate(`(()=>{const e=document.querySelector('${selector}'),r=e.getBoundingClientRect(),x=r.left+r.width*${fraction},y=r.top+r.height/2,hit=document.elementFromPoint(x,y);return {x,y,rect:r.toJSON(),hit:hit?.outerHTML.slice(0,1000),visible:e.contains(hit),authority:document.querySelector('.remote-logging-authority')?.textContent}})()`)
+        assert.equal(prepared.visible,true,`RX gesture must hit the refreshed ${tab} canvas`)
+        for(const type of ['mousePressed','mouseReleased'])await browser.call('Input.dispatchMouseEvent',{type,x:prepared.x,y:prepared.y,button:'left',clickCount:1},session)
         for(let i=0;i<100&&stationRequests.length===before;i++)await sleep(100)
         if(stationRequests.length!==before+1){
           const state=await evaluate(`({authority:document.querySelector('.remote-logging-authority')?.textContent,result:document.querySelector('.remote-control-result')?.textContent,toasts:[...document.querySelectorAll('[role="alert"]')].map(e=>e.textContent)})`)
