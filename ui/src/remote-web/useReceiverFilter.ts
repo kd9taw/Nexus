@@ -2,6 +2,7 @@ import { useContext } from 'react'
 import { setFilterWidth } from '../api'
 import type { AppSnapshot } from '../types'
 import { RemoteOperationsContext, useStationCapability, useStationControl } from '../stationAccess'
+import { useRemoteStation } from './amplifier-observation'
 
 /** The native steppers keep their own range/formatting and API. Remote binds
  * the displayed width and cockpit mode and waits for the actual radio owner;
@@ -9,9 +10,12 @@ import { RemoteOperationsContext, useStationCapability, useStationControl } from
 export function useReceiverFilter(snap: AppSnapshot, mode: 'cw' | 'phone') {
   const local = useStationControl(), capable = useStationCapability('receiverFilter')
   const operations = useContext(RemoteOperationsContext), radio = snap.radio
-  const context = operations?.getSnapshot().state?.controls?.context
+  const { context } = useRemoteStation(snap.activeRadioId)
+  const current = operations?.getSnapshot().state?.controls?.context
+  const bound = !!(context && current && context.radioId === current.radioId &&
+    context.radioConnection === current.radioConnection && context.ampConnection === current.ampConnection)
   const prior = radio.filterWidthHz
-  const allowed = local || !!(capable && operations && context && snap.activeRadioId === context.radioId &&
+  const allowed = local || !!(capable && operations && bound && context && snap.activeRadioId === context.radioId &&
     context.radioConnection !== null && radio.source === 'native' && radio.operatingMode === mode &&
     radio.catOk === true && radio.rigKeyed === false && !radio.txEnabled && !radio.transmitting && !radio.tuning && !radio.txBusyReason &&
     typeof prior === 'number' && Number.isInteger(prior) && prior > 0)
