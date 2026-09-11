@@ -461,7 +461,7 @@ rolls back a whole settings snapshot over local preferences. The browser waits
 for a later station sample after an applied receipt. Unknown outcomes require
 checking the station, never automatic replay.
 
-Profile/radio transitions, complete Tempo/JS8 workspace entry, FM/repeater and satellite/split transactions,
+Profile/radio transitions, FM/repeater and satellite/split transactions,
 band-memory/spot shortcuts, continuous wheel/scope tuning and attended hardware/WAN
 acceptance remain incomplete. A compatible station build is required; this
 source increment does not update existing installations or establish paid readiness.
@@ -491,6 +491,38 @@ existing behavior; Remote does not alter FT sequencing or grant transmission.
 Tier selection alone does not establish complete Tempo/JS8 workspace behavior,
 message sending or a complete remote operating mode. Physical radio acceptance
 and the remaining operational contracts still apply.
+
+## Digital workspace entry
+
+The distinct operation-v3 `workspace` capability admits only `radio.workspace`
+with `ft`, `tempo` or `js8`. The existing “Use this mode” button enters that
+workspace; mounting or revisiting a browser tab never sends an operating command.
+The UI binds the displayed active radio and observation connection, requires
+fresh known-idle PTT and leaves the native snapshot as the source of mode state.
+An applied receipt does not invent a new decoder snapshot. Older peers without
+the workspace capability remain passive.
+
+The station resolves its existing digital CAT policy, FT/Tempo area memories,
+working-frequency overrides, JS8 session entry and power ceiling before any
+mutation. FT/JS8 entry from a manual section reuses native section frequency
+memory/home policy even when the digital tier is unchanged. Tempo retains its
+own section-frequency behavior. A same-tier digital return preserves an
+operator-tuned dial; changed tiers use the native channel/fallback rules.
+
+The existing RadioLoop owns the CAT transaction and final readback. Admission
+and commit both try the stable decoder mutex; contention refuses without
+waiting under the Engine lock. The shared native mode/area helpers perform
+decoder replacement and HARQ reset under that same held guard at commit.
+Local callers retain their normal lock acquisition and all original transition
+effects. A valid local operating-spec gesture retires pending remote work even
+when its label and CAT context are unchanged; an invalid spec changes nothing.
+
+The host saves current Settings after the confirmed native transition, never a
+browser-supplied settings object. Missing/changed authority, hardware context,
+readback or required power reduction cannot claim success. A save failure
+keeps confirmed live state with an uncertain receipt and no deferred CAT retry.
+No entry arms transmit. This does not complete message sending, QSO operation,
+radio handoffs, FM/split/satellite contexts, remote audio or hardware acceptance.
 
 ## Local verification
 

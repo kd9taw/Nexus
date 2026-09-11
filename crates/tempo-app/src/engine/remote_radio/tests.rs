@@ -323,6 +323,75 @@ fn entering_ft_from_cw_uses_the_native_section_home_even_when_the_ft_tier_is_unc
 }
 
 #[test]
+fn workspace_entry_needs_the_actual_power_readback_and_carries_an_already_lower_level() {
+    for power in [None, Some(0.3), Some(0.1)] {
+        let mut s = Station::new(OperatingMode::Phone);
+        s.engine.settings.max_power_digital = Some(0.2);
+        s.engine.rf_power = Some(0.5);
+        let before = serde_json::to_value(s.engine.settings()).unwrap();
+        let receipt = s.queue_workspace(Workspace::Js8).unwrap();
+        let request = s.engine.take_remote_radio().unwrap();
+        assert_eq!(request.power_limit, Some(0.2));
+        request.permission().begin_write(Instant::now()).unwrap();
+        s.sample(request.target_hz, &request.target_mode);
+        if power == Some(0.1) {
+            assert!(request.commit_readback(&mut s.engine, power));
+            assert_eq!(s.engine.rf_power, power);
+            assert_eq!(s.engine.tier(), Tier::Js8);
+            assert_eq!(
+                receipt.outcome(),
+                Outcome::Applied {
+                    evidence: Evidence::RadioReadback
+                }
+            );
+            assert!(s.path.exists());
+        } else {
+            assert!(!request.commit_readback(&mut s.engine, power));
+            assert_eq!(serde_json::to_value(s.engine.settings()).unwrap(), before);
+            assert_eq!(s.engine.tier(), Tier::Ft8);
+            assert_eq!(
+                receipt.outcome(),
+                Outcome::Unknown {
+                    reason: Reason::HardwareUnconfirmed
+                }
+            );
+            assert!(!s.path.exists());
+        }
+        assert!(!s.engine.tx_enabled());
+        assert!(!s.engine.take_immediate_retune());
+        assert!(s.engine.take_remote_radio().is_none());
+    }
+}
+
+#[test]
+fn workspace_save_failure_keeps_confirmed_state_without_claiming_durability_or_retrying() {
+    let mut s = Station::new(OperatingMode::Digital);
+    std::fs::create_dir_all(s.path.parent().unwrap()).unwrap();
+    let blocker = s.path.parent().unwrap().join("not-a-directory");
+    std::fs::write(&blocker, b"preserve this file").unwrap();
+    s.engine
+        .configure_remote_settings_store(blocker.join("settings.json"));
+    let receipt = s.queue_workspace(Workspace::Tempo).unwrap();
+    let request = s.engine.take_remote_radio().unwrap();
+    request.permission().begin_write(Instant::now()).unwrap();
+    s.sample(request.target_hz, &request.target_mode);
+    let power = request.power_limit;
+    assert!(request.commit_readback(&mut s.engine, power));
+    assert_eq!(s.engine.tier(), Tier::TempoFast);
+    assert_eq!(s.engine.snapshot().mode, crate::dto::OpMode::Chat);
+    assert_eq!(
+        receipt.outcome(),
+        Outcome::Unknown {
+            reason: Reason::HardwareUnconfirmed
+        }
+    );
+    assert_eq!(std::fs::read(blocker).unwrap(), b"preserve this file");
+    assert!(!s.engine.tx_enabled());
+    assert!(!s.engine.take_immediate_retune());
+    assert!(s.engine.take_remote_radio().is_none());
+}
+
+#[test]
 fn a_workspace_entry_never_waits_on_a_decoder_or_changes_state_before_confirmation() {
     let mut s = Station::new(OperatingMode::Digital);
     let source = s.engine.source.clone();

@@ -34,6 +34,12 @@ Decoder selection shares native tier/channel policy and the stable decoder
 mutex; a busy decode refuses the remote transition without blocking the Engine.
 Same-tier selection remains a complete no-op. Operation v3 adds the radio
 capabilities while preserving v1 logging and v2 receiver/amplifier clients.
+The explicit `workspace` capability enters FT, Tempo or JS8 through the same
+native area, mode, channel-memory and session helpers. Preparation is passive;
+the existing radio owner commits after CAT/power readback. Decoder installation
+and HARQ reset use the same held serialization guard, avoiding a nested lock
+while preserving the native transition effects. Newer valid local operating
+specs retire older remote work even when the dial and CAT mode are unchanged.
 Native amplifier buttons and saved follow-band also validate the exact completed
 serial poll after I/O. Current settings, observed physical PTT and read expiry
 bound each write; local gestures take precedence over automatic steps. These
@@ -50,8 +56,8 @@ invalidate on their own projected revision without invalidating unrelated planni
 documents. The amplifier strip uses the existing aged observation stream and its
 connection identity, rather than borrowing authority for an older displayed radio.
 Unconfirmed targets never become deferred local retunes. Login, entitlement and
-browser approval remain separate checks. Radio handoffs, complete workspace
-entry and remote transmission remain incomplete; no arbitrary Tauri bridge exists.
+browser approval remain separate checks. Radio handoffs, mode-specific operating
+actions and remote transmission remain incomplete; no arbitrary Tauri bridge exists.
 See [the Remote contract and limits](remote/README.md#existing-nexus-workspace).
 
 ## Crates (roles, not an exhaustive list)

@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Remote FT, Tempo and JS8 entry:** “Use this mode” in the existing cockpit
+  selects the complete native operating workspace, including its decoder,
+  remembered FT/Tempo choice and JS8 session entry. FT and JS8 restore the
+  native digital frequency when leaving a manual section; an already active
+  digital workspace preserves the operator's dial. Transmit stays disarmed.
+  Decoder replacement and reset share the native serialization guard, and
+  newer local mode gestures cancel pending remote work. Requires a compatible
+  station with the workspace capability. Sending, remote audio and hardware
+  acceptance remain separate work.
+
 - **Remote amplifier band following:** The existing Settings checkbox and Save
   button can save the active radio's follow-band choice with station-control
   permission. Enabling requires a disarmed, idle radio and fresh amplifier
@@ -23,8 +33,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Native channel choices, decoder settings and offsets are preserved. Same-tier
   selection does nothing, and a busy decoder refuses without blocking the
   engine. Transmit stays disarmed. Operation v3 retains older logging and
-  receiver/amplifier clients. Complete Tempo/JS8 workspace entry, radio handoffs
-  and remote transmission still require further work; physical acceptance is
+  receiver/amplifier clients. Radio handoffs and remote transmission still
+  require further work; physical acceptance is
   pending and a compatible station build is required.
 
 - **Remote operating-mode entry:** “Use this mode” in the existing FT, Phone,
