@@ -157,10 +157,14 @@ it.each(['FT8', 'JS8'] as const)('%s receive gestures require their capability a
     fireEvent.mouseDown(h.canvas(), { clientX: 100, button: 0 }); await tick(); expect(h.writes()).toHaveLength(0); h.unmount()
   }
   const h = fixture(kind); await tick()
-  for (const patch of [{ source: 'companion' as const }, { source: undefined }, { operatingMode: 'cw' }, { catOk: false }, { txEnabled: true }, { transmitting: true }, { tuning: true }, { rigKeyed: true }]) {
+  for (const patch of [{ source: 'companion' as const }, { operatingMode: 'cw' }, { catOk: false }, { txEnabled: true }, { transmitting: true }, { tuning: true }, { rigKeyed: true }]) {
     h.rerender(h.view({ ...h.snap, radio: { ...h.snap.radio, ...patch } })); await tick()
     fireEvent.mouseDown(h.canvas(), { clientX: 100, button: 0 }); await tick(); expect(h.writes()).toHaveLength(0)
   }
+  // Deliberately incomplete older reading; valid RadioStatus requires a source.
+  const incomplete = { ...h.snap, radio: { ...h.snap.radio, source: undefined } } as unknown as AppSnapshot
+  h.rerender(h.view(incomplete)); await tick()
+  fireEvent.mouseDown(h.canvas(), { clientX: 100, button: 0 }); await tick(); expect(h.writes()).toHaveLength(0)
   h.rerender(h.view({ ...h.snap, link: { ...h.snap.link, tier: 'Q65' } })); await tick()
   fireEvent.mouseDown(h.canvas(), { clientX: 100, button: 0 }); await tick(); expect(h.writes()).toHaveLength(0)
   h.rerender(h.view({ ...h.snap, radio: { ...h.snap.radio, rxOffsetHz: NaN } })); await tick()
