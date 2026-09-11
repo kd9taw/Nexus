@@ -816,11 +816,12 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
         ['JS8','js8','.js8-cockpit .waterfall-canvas',0.5,1600],
         ['Tempo','tempo','.right-rail .waterfall-canvas',0.75,2300]
       ]){
-        await browser.call('Emulation.setDeviceMetricsOverride',{width:1280,height:800,deviceScaleFactor:1,mobile:false},session)
-        await evaluate(`document.documentElement.style.setProperty('--ui-zoom','1');window.dispatchEvent(new Event('resize'))`);await settledLayout()
         await click(button(tab));await settledLayout()
         if(workspace)await gesture(workspace==='js8'?'.js8-cockpit .remote-mode-entry':'.grid-header .remote-mode-entry','radio.workspace')
         await until(`!!document.querySelector('${selector}')`)
+        receiverGeometry+=await decoderLayout(selector,`waterfall-${tab.toLowerCase()}`)
+        await browser.call('Emulation.setDeviceMetricsOverride',{width:1280,height:800,deviceScaleFactor:1,mobile:false},session)
+        await evaluate(`document.documentElement.style.setProperty('--ui-zoom','1');window.dispatchEvent(new Event('resize'))`);await settledLayout()
         await evaluate(`document.querySelector('${selector}').scrollIntoView({block:'center',behavior:'instant'})`);await settledLayout()
         const hit=await evaluate(`(()=>{const e=document.querySelector('${selector}'),r=e.getBoundingClientRect(),x=r.left+r.width*${fraction},y=r.top+r.height/2,hit=document.elementFromPoint(x,y);return{x,y,rect:r.toJSON(),hit:hit?.outerHTML.slice(0,1000),visible:e.contains(hit)}})()`)
         if(!hit.visible&&artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'receiver-waterfall-failure.png'),Buffer.from(shot.data,'base64'));await writeFile(join(artifacts,'receiver-waterfall-failure.json'),JSON.stringify({tab,selector,hit},null,2))}
@@ -857,7 +858,7 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
       await until(`document.querySelector('.cw-cockpit .amp-op').disabled`)
       assert.equal(loggedRequests.length,5);assert.equal(stationRequests.length,55);assert.equal(unexpectedMessages,0);assert.equal(exceptions,0)
       if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-manual-logging.png'),Buffer.from(shot.data,'base64'));await writeFile(join(artifacts,'operation-results.json'),JSON.stringify({count:loggedRequests.length,stationActions:stationRequests.map(r=>r.action),controlGeometry,modeGeometry,tierGeometry,followGeometry,decoderGeometry,receiverGeometry,modes:loggedRequests.map(r=>r.record.mode),lostResultResolved:true,wholePageReloadResolved:true,crossTabLockRefusal:true,geometry:16,exceptions,unexpectedMessages},null,2))}
-      console.log('Compiled browser: five logging forms, 55 station gestures, saved decoder/receiver choices, separate grants, recovery and 232 geometry cases passed');return
+      console.log('Compiled browser: five logging forms, 55 station gestures, saved decoder/receiver choices, separate grants, recovery and 256 geometry cases passed');return
     }
     const startReads=applicationTraffic.reads, startBytes=applicationTraffic.bytes, started=performance.now()
     for(const [width,height] of [[1024,768],[1280,800],[1366,768],[1200,1390],[3440,1440]])for(const zoom of [1,1.75])for(const theme of ['dark','light']) {

@@ -59,6 +59,13 @@
    and content can exceed the remaining box; allow the existing shell to scroll
    that deficit instead of clipping its recall rail below the window. */
 .remote-workspace .layout.single.operate-cockpit { overflow-y: auto; }
+/* The hosted status/header takes height from the FT body. Its flexible
+   waterfall can otherwise pay the entire deficit and leave a zero-height
+   canvas. Keep the wrapped native toolbar plus a usable receive strip; the
+   existing cockpit scroller owns the excess. The saved splitter basis still
+   sizes the panel above that content minimum. */
+.remote-workspace .cockpit-waterfall { min-height: min-content; flex-shrink: 0; }
+.remote-workspace .cockpit-waterfall .wf-stage { min-height: 4em; }
 /* A stacked Tx-message column must scroll its content rather than paint over
    the following recall rail when the effective viewport is narrow. */
 .remote-workspace .cockpit-qsocol { overflow-y: auto; }
