@@ -10,6 +10,9 @@ use tempo_app::remote_control::{Completion, Evidence, Outcome, Reason, Revocatio
 
 use super::remote::{Position, Retune};
 
+#[path = "rig_filter_tests.rs"]
+mod filter_tests;
+
 pub(crate) struct Peer {
     pub(crate) address: String,
     pub(crate) lines: Arc<Mutex<Vec<String>>>,
@@ -144,6 +147,39 @@ pub(crate) fn retuning_peer(
             }
             _ => "RPRT -1\n".into(),
         }
+    })
+}
+
+pub(crate) fn filtering_peer(
+    dial: u64,
+    mode: &str,
+    width: u32,
+    intercept: impl Fn(&str, &mut RadioState, &std::sync::atomic::AtomicU32) -> Option<String>
+        + Send
+        + 'static,
+) -> Peer {
+    let width = std::sync::atomic::AtomicU32::new(width);
+    retuning_peer(dial, mode, move |line, state| {
+        if let Some(reply) = intercept(line, state, &width) {
+            return Some(reply);
+        }
+        if line == "m" {
+            return Some(format!(
+                "{}\n{}\n",
+                state.mode,
+                width.load(Ordering::SeqCst)
+            ));
+        }
+        if line.starts_with("M ") {
+            if let Some(next) = line
+                .split_whitespace()
+                .nth(2)
+                .and_then(|n| n.parse::<u32>().ok())
+            {
+                width.store(next, Ordering::SeqCst);
+            }
+        }
+        None
     })
 }
 

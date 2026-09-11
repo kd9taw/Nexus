@@ -19,7 +19,11 @@ impl RadioLoop {
             let mut want = Transport::from_settings(eng.settings());
             self.apply_port_alias(&mut want);
             let ready = request.validate(&eng).and_then(|()| {
-                if self.tx_until_ms.is_some() || self.tuning_keyed || rig.keyed {
+                if self.tx_until_ms.is_some()
+                    || self.tuning_keyed
+                    || rig.keyed
+                    || (request.filter_width().is_some() && !self.rig_asserted)
+                {
                     Err(Reason::StationBusy)
                 } else if self.handoff_deferred
                     || self.cat_hold_active
@@ -45,6 +49,9 @@ impl RadioLoop {
         let result = (|| {
             let (hz, mode) = request.expected();
             let expected = Position::new(hz, mode)?;
+            if let Some((before, width)) = request.filter_width() {
+                return rig.remote_filter_width(expected, before, width, request.permission());
+            }
             let (hz, mode) = request.target();
             let mut retune = Retune::new(expected, Position::new(hz, mode)?);
             if let Some(limit) = request.power_limit() {
@@ -69,7 +76,21 @@ impl RadioLoop {
         eng.remote_observe_dial(read.as_ref(), Some(position.dial_hz()));
         eng.remote_observe_mode(read.as_ref(), Some(position.mode()));
         eng.remote_observe_ptt(read.as_ref(), Some(false));
-        if request.commit_readback(&mut eng, readback.power()) {
+        let filter = request.filter_width().is_some();
+        let committed = if filter {
+            request.commit_filter_readback(&mut eng, readback.passband())
+        } else {
+            request.commit_readback(&mut eng, readback.power())
+        };
+        if committed {
+            if filter {
+                // Native filter adjustment preserves the physical front-panel
+                // mode. Changing the canonical reconciliation belief to that
+                // mode would queue a later reassertion of Settings' old mode.
+                self.last_rig_poll = now;
+                self.last_freq_poll = now;
+                return;
+            }
             self.last_dial = position.dial_hz();
             self.last_mode = position.mode().into();
             self.rig_asserted = true;

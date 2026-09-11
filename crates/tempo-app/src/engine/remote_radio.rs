@@ -10,6 +10,8 @@ use std::path::PathBuf;
 use std::sync::TryLockError;
 use std::time::Instant;
 
+mod filter;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Workspace {
@@ -20,6 +22,11 @@ pub enum Workspace {
 
 enum Intent {
     Frequency,
+    FilterWidth {
+        mode: OperatingMode,
+        expected: u32,
+        hz: u32,
+    },
     Band {
         mode: String,
     },
@@ -457,8 +464,10 @@ impl Engine {
             }
             _ => false,
         };
-        let bandless_receive = matches!(&target.intent, Intent::Frequency)
-            && target.band.is_empty()
+        let bandless_receive = matches!(
+            &target.intent,
+            Intent::Frequency | Intent::FilterWidth { .. }
+        ) && target.band.is_empty()
             && named_band.is_none();
         if target.hz == 0
             || (named_band != Some(target.band.as_str()) && !native_channel && !bandless_receive)
@@ -477,7 +486,11 @@ impl Engine {
         let completion = Completion::guarded(permit.clone());
         let request = Request {
             expected_hz: self.settings.dial_hz(),
-            expected_mode: self.rig_mode_effective(),
+            expected_mode: if matches!(&target.intent, Intent::FilterWidth { .. }) {
+                target.mode.clone()
+            } else {
+                self.rig_mode_effective()
+            },
             target_hz: target.hz,
             target_mode: target.mode,
             band: target.band,
@@ -553,6 +566,12 @@ impl Request {
     pub fn power_limit(&self) -> Option<f32> {
         self.power_limit
     }
+    pub fn filter_width(&self) -> Option<(u32, u32)> {
+        match self.intent {
+            Intent::FilterWidth { expected, hz, .. } => Some((expected, hz)),
+            _ => None,
+        }
+    }
     pub fn refuse(&self, reason: Reason) {
         self.completion.refuse(reason);
     }
@@ -560,9 +579,19 @@ impl Request {
     pub fn validate(&self, engine: &Engine) -> Result<(), Reason> {
         self.permission.check(Instant::now())?;
         engine.remote_radio_idle()?;
+        let mode = if let Some((expected, hz)) = self.filter_width() {
+            if !matches!(self.intent, Intent::FilterWidth { mode, .. } if mode == engine.settings.operating_mode)
+            {
+                return Err(Reason::ContextChanged);
+            }
+            engine.validate_remote_filter_width(expected, hz)?;
+            engine.remote_filter_mode(self.connection)?
+        } else {
+            engine.rig_mode_effective()
+        };
         if engine.settings.active_radio != self.radio
             || engine.settings.dial_hz() != self.expected_hz
-            || engine.rig_mode_effective() != self.expected_mode
+            || mode != self.expected_mode
             || (self.power_limit.is_some() && engine.rf_power != self.expected_power)
         {
             return Err(Reason::ContextChanged);
@@ -596,8 +625,19 @@ impl Request {
     /// Power is the owning worker's later CAT readback, not a browser argument.
     /// Mode entry may lower it to the new native ceiling, never raise it.
     pub fn commit_readback(self, engine: &mut Engine, power: Option<f32>) -> bool {
+        self.commit_readings(engine, power, None)
+    }
+
+    pub fn commit_filter_readback(self, engine: &mut Engine, width: Option<u32>) -> bool {
+        self.commit_readings(engine, None, width)
+    }
+
+    fn commit_readings(self, engine: &mut Engine, power: Option<f32>, width: Option<u32>) -> bool {
         let confirmed = (|| {
             self.validate(engine)?;
+            if self.filter_width().is_some_and(|(_, hz)| width != Some(hz)) {
+                return Err(Reason::HardwareUnconfirmed);
+            }
             if let Some(limit) = self.power_limit {
                 if !power.is_some_and(|p| p.is_finite() && p >= 0.0 && p <= limit + 0.001) {
                     return Err(Reason::HardwareUnconfirmed);
@@ -649,8 +689,15 @@ impl Request {
             self.refuse(reason);
             return false;
         }
-        let persist = !matches!(&self.intent, Intent::Tier(_));
+        let filter = self.filter_width().is_some();
+        let persist = !matches!(&self.intent, Intent::Tier(_) | Intent::FilterWidth { .. });
         match self.intent {
+            Intent::FilterWidth { hz, .. } => {
+                // This is observed hardware state. Never create the native
+                // pending/retry slot, a Settings mutation or a later CAT write.
+                engine.remote_actuation.revoke();
+                engine.observe_rig_passband(Some(hz));
+            }
             Intent::Tier(tier) => engine.set_tier_with_installer(tier, |engine, decoder| {
                 engine
                     .install_source_into(source_slot.as_mut().expect("tier decoder lock"), decoder);
@@ -711,7 +758,9 @@ impl Request {
         }
         // This QSY has ALREADY reached the radio. Consuming its one-shot under
         // the lock cannot consume a later local gesture's retune request.
-        engine.take_immediate_retune();
+        if !filter {
+            engine.take_immediate_retune();
+        }
         // The native tier verb changes live tier/decoder state and does not
         // persist Settings. Frequency and section gestures retain their save.
         let saved = if persist {

@@ -2,6 +2,22 @@ import { describe, expect, it } from 'vitest'
 import { actionCapability, controlContext, controlOutcome, stationAction } from './station-operation'
 
 describe('closed station operating requests', () => {
+  it('binds native filter width to the displayed cockpit and prior width under its own capability', () => {
+    for (const [mode, expectedHz, hz] of [['cw', 500, 550], ['phone', 2400, 2300]] as const) {
+      const a = { action: 'radio.filterWidth', mode, expectedHz, hz }
+      expect(stationAction(a)).toEqual(a)
+      expect(actionCapability(stationAction(a))).toBe('receiverFilter')
+      for (const extra of ['dialMhz', 'sideband', 'settings', 'command', 'tx', 'radioId']) expect(() => stationAction({ ...a, [extra]: true })).toThrow()
+      for (const expectedHz of [0, -1, 0x100000000, 500.5, NaN, Infinity, '500', null]) expect(() => stationAction({ ...a, expectedHz })).toThrow()
+      for (const hz of [0, 49, 4001, NaN, Infinity, 550.5, '550', null]) expect(() => stationAction({ ...a, hz })).toThrow()
+      for (const mode of ['digital', 'CW', 'ssb', null]) expect(() => stationAction({ ...a, mode })).toThrow()
+    }
+    expect(() => stationAction({ action: 'radio.filterWidth', mode: 'cw', expectedHz: 500, hz: 2001 })).toThrow()
+    expect(() => stationAction({ action: 'radio.filterWidth', mode: 'phone', expectedHz: 2400, hz: 299 })).toThrow()
+    // A native value outside the UI range can be narrowed back into it; the
+    // expected readback is not itself a request to write an invalid width.
+    expect(stationAction({ action: 'radio.filterWidth', mode: 'phone', expectedHz: 4500, hz: 4000 })).toMatchObject({ expectedHz: 4500 })
+  })
   it('names a band and its cockpit mode without accepting a browser frequency policy', () => {
     for (const mode of ['cw', 'phone']) {
       const a = { action: 'radio.band', band: '40m', mode }

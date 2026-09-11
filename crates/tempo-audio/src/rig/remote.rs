@@ -15,6 +15,8 @@ use super::Rig;
 use std::time::Instant;
 use tempo_app::remote_control::{Reason, WritePermission};
 
+mod filter;
+
 /// A station-resolved CAT position, not an arbitrary browser command string.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Position {
@@ -92,6 +94,7 @@ pub struct Readback {
     position: Position,
     sampled_at: Instant,
     power: Option<f32>,
+    passband: Option<u32>,
 }
 
 impl Readback {
@@ -104,6 +107,9 @@ impl Readback {
     }
     pub fn power(&self) -> Option<f32> {
         self.power
+    }
+    pub fn passband(&self) -> Option<u32> {
+        self.passband
     }
 }
 
@@ -274,6 +280,7 @@ impl Rig {
             position: after,
             sampled_at,
             power,
+            passband: None,
         })
     }
 }

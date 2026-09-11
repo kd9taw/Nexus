@@ -1,3 +1,6 @@
+#[cfg(feature = "radio")]
+#[path = "filter_tests.rs"]
+mod receiver_filter;
 use super::*;
 use std::sync::Arc;
 #[cfg(feature = "radio")]
@@ -352,7 +355,8 @@ fn tier_admission_requires_v3_and_keeps_one_native_receipt_through_readback() {
             "decoderSettings",
             "receiverSettings",
             "receiverGain",
-            "bandSelection"
+            "bandSelection",
+            "receiverFilter"
         ])
     );
     let command = control_request(&state, json!({"action":"radio.tier","tier":"FT4"}));

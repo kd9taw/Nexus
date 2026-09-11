@@ -461,8 +461,25 @@ rolls back a whole settings snapshot over local preferences. The browser waits
 for a later station sample after an applied receipt. Unknown outcomes require
 checking the station, never automatic replay.
 
+Readout digits and arrow keys, CW/Phone scope-wheel input and tuning-strip
+nudges share one browser tuning owner. Each short burst captures the original
+station authority, rechecks the displayed dial against a fresh station sample,
+and submits one frequency intent. Input is consumed on submission; disconnected
+or expired work cannot return as a deferred target. Further input requires a
+fresh explicit gesture after the command settles.
+
+The separate operation-v3 `receiverFilter` capability connects the existing CW
+and Phone BW steppers using the closed `radio.filterWidth` action. It binds the
+displayed cockpit, exact prior width and active radio. The existing radio owner
+reads the actual mode, bandwidth, dial, PTT and split state before a single width
+write. A later matching readback completes it. The physical mode is preserved,
+including a front-panel change that differs from the app's commanded sideband.
+No Settings save, native retry slot, frequency write or transmit action is added.
+The normal station stream supplies the displayed width; a receipt does not
+replace that sample. Local filter gestures retire older remote work.
+
 Profile/radio transitions, FM/repeater and satellite/split transactions,
-band-memory/spot shortcuts, continuous wheel/scope tuning and attended hardware/WAN
+band-memory/spot shortcuts, scope click/drag, continuous scanning and attended hardware/WAN
 acceptance remain incomplete. A compatible station build is required; this
 source increment does not update existing installations or establish paid readiness.
 

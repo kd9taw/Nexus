@@ -273,6 +273,39 @@ fn remote_retune_roundtrips_real_hamlib_without_committing_station_state() {
 }
 
 #[test]
+fn remote_filter_roundtrips_real_hamlib_without_qsy_or_mode_change() {
+    let bin = require_rigctld!();
+    let _serial = ONE_AT_A_TIME.lock().unwrap_or_else(|p| p.into_inner());
+    let d = DummyRig::spawn(&bin);
+    let mut rig = connect_settled(&d.addr);
+    let authority = Revocation::default();
+    let native = Revocation::default();
+    for (mode, before, width) in [("CW", 500, 550), ("LSB", 2400, 2300)] {
+        rig.set_mode(mode, before).unwrap();
+        rig.set_freq(14_074_000).unwrap();
+        rig.ptt(false).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let permit = authority.permit(deadline).unwrap();
+        let completion = Completion::guarded(permit.clone());
+        let permission =
+            WritePermission::new(permit, native.permit(deadline).unwrap(), completion.clone());
+        let observed = rig
+            .remote_filter_width(
+                Position::new(14_074_000, mode).unwrap(),
+                before as u32,
+                width,
+                &permission,
+            )
+            .unwrap();
+        assert_eq!(observed.passband(), Some(width));
+        assert_eq!(rig.read_mode_passband(), (Some(mode.into()), Some(width)));
+        assert_eq!(rig.read_freq().unwrap(), 14_074_000);
+        assert_eq!(rig.read_ptt(), Some(false));
+        assert_eq!(completion.outcome(), Outcome::Pending);
+    }
+}
+
+#[test]
 fn remote_power_limit_is_observed_by_real_hamlib_and_never_raises_a_lower_setting() {
     let bin = require_rigctld!();
     let _serial = ONE_AT_A_TIME.lock().unwrap_or_else(|p| p.into_inner());

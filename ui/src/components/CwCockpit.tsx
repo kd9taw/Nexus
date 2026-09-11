@@ -1,3 +1,4 @@
+import { useReceiverFilter } from '../remote-web/useReceiverFilter'
 import { RemoteRecallEntry } from '../remote-web/RemoteRecall'
 import { CollectionStatus, useRemoteCollection } from '../remote-web/collections'
 import { useStationCapability, useStationControl } from '../stationAccess'
@@ -49,7 +50,6 @@ import {
   previewCw,
   pointRotatorAtCall,
   setRigFunc,
-  setFilterWidth,
   setNrLevel,
   setAgc,
   setScopeSpan,
@@ -429,16 +429,17 @@ export function CwCockpit({
   // click zero-beats instead of carrier-snapping, and the box centers on the dial.
   const scopeMode = sidebandSign(snap.radio.sideband || 'USB') < 0 ? 'CW-L' : 'CW'
   // RX filter width (CW wants a NARROW filter — default 500 Hz, 50-Hz steps, 50–2000 Hz span).
+  const filterControl = useReceiverFilter(snap, 'cw')
   const filterHz = snap.radio.filterWidthHz ?? null
   const bumpFilter = (deltaHz: number) => {
-    if (!control) return
+    if (!filterControl.allowed) return
     const base = filterHz ?? 500
     const next = Math.min(2000, Math.max(50, base + deltaHz))
     // Never let the clamp invert the direction — "wider" must not narrow (e.g. a stale Phone
     // width above CW's 2 kHz cap right after switching modes, before the next `m` re-read).
     if ((deltaHz > 0 && next <= base) || (deltaHz < 0 && next >= base)) return
-    void setFilterWidth(next)
-      .then((s) => onSnap?.(s))
+    void filterControl.setWidth(next)
+      .then((s) => s && onSnap?.(s))
       .catch(() => pushToast(t('cw.filter.failed'), 'error'))
   }
   // Source of truth = the engine's actual keyer speed (survives navigation; the
@@ -1477,7 +1478,7 @@ export function CwCockpit({
         {catOk && (
           <div className="ph-filter" title={t('cw.filter.title')}>
             <span className="ph-filter-lbl">{BW}</span>
-            <button disabled={!control}
+            <button disabled={!filterControl.allowed}
               type="button"
               className="ph-filter-step"
               onClick={() => bumpFilter(-FILTER_STEP_HZ)}
@@ -1486,7 +1487,7 @@ export function CwCockpit({
               −
             </button>
             <span className="ph-filter-val mono">{filterHz ? `${filterHz}` : '—'}</span>
-            <button disabled={!control}
+            <button disabled={!filterControl.allowed}
               type="button"
               className="ph-filter-step"
               onClick={() => bumpFilter(FILTER_STEP_HZ)}

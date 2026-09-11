@@ -1,3 +1,4 @@
+import { useReceiverFilter } from '../remote-web/useReceiverFilter'
 import { RemoteRecallEntry } from '../remote-web/RemoteRecall'
 import { CollectionStatus, useRemoteCollection } from '../remote-web/collections'
 import { useStationCapability, useStationControl } from '../stationAccess'
@@ -54,7 +55,7 @@ import { pushToast } from '../toast'
 import { RotorStrip } from './RotorStrip'
 import { MemoryStrip, MemoryStripUnavailable } from './MemoryStrip'
 import type { Memory } from '../features/memories'
-import { setFrequency, setRigFunc, setSidebandOverride, setFilterWidth, openPanelWindow } from '../api'
+import { setFrequency, setRigFunc, setSidebandOverride, openPanelWindow } from '../api'
 import { bandLabelForMhz, sidebandForQsy } from '../band'
 import { isRfScopeSource, NO_NATIVE_SCOPE_REASON } from '../waterfall'
 import { useWheelTune } from '../useWheelTune'
@@ -622,15 +623,16 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
 
   // RX filter / passband width — the rig's read-back (null = unknown/default). The ± stepper
   // nudges it 100 Hz within a sane SSB/CW span, seeded from the current value or a 2.4 kHz default.
+  const filterControl = useReceiverFilter(snap, 'phone')
   const filterHz = snap.radio.filterWidthHz ?? null
   const bumpFilter = (deltaHz: number) => {
-    if (!control) return
+    if (!filterControl.allowed) return
     const base = filterHz ?? 2400
     const next = Math.min(4000, Math.max(300, base + deltaHz))
     // Never let the clamp invert the direction ("wider" must not narrow at the rails).
     if ((deltaHz > 0 && next <= base) || (deltaHz < 0 && next >= base)) return
-    void setFilterWidth(next)
-      .then((s) => onSnap?.(s))
+    void filterControl.setWidth(next)
+      .then((s) => s && onSnap?.(s))
       .catch(() => pushToast(t('phone.filter.failed'), 'error'))
   }
 
@@ -1346,7 +1348,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
         {catOk && commandedMode !== 'FM' && (
           <div className="ph-filter" title={t('phone.filter.title')}>
             <span className="ph-filter-lbl">{BW}</span>
-            <button disabled={!control}
+            <button disabled={!filterControl.allowed}
               type="button"
               className="ph-filter-step"
               onClick={() => bumpFilter(-FILTER_STEP_HZ)}
@@ -1357,7 +1359,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
             <span className="ph-filter-val mono">
               {filterHz ? `${(filterHz / 1000).toFixed(1)}k` : '—'}
             </span>
-            <button disabled={!control}
+            <button disabled={!filterControl.allowed}
               type="button"
               className="ph-filter-step"
               onClick={() => bumpFilter(FILTER_STEP_HZ)}

@@ -7,6 +7,7 @@ export type TextReceiver = 'cw' | 'rtty' | 'psk'
 export type StationAction =
   | { action: 'radio.frequency'; dialMhz: number; band: string; sideband: 'USB' | 'LSB' | 'FM' | 'AM' }
   | { action: 'radio.band'; band: string; mode: 'cw' | 'phone' }
+  | { action: 'radio.filterWidth'; mode: 'cw' | 'phone'; expectedHz: number; hz: number }
   | { action: 'radio.mode'; mode: 'digital' | 'phone' | 'cw' | 'rtty' | 'keyboard'; followFrequency: boolean }
   | { action: 'radio.tier'; tier: string }
   | { action: 'radio.workspace'; workspace: 'ft' | 'tempo' | 'js8' }
@@ -32,12 +33,13 @@ export type ControlContext = {
   ampConnection: number | null
   ampReadSequence: number | null
 }
-export const CONTROL_CAPABILITIES = ['decoder', 'radio', 'amplifier', 'frequency', 'mode', 'tier', 'ampFollowBand', 'workspace', 'decoderSettings', 'receiverSettings', 'receiverGain', 'bandSelection'] as const
+export const CONTROL_CAPABILITIES = ['decoder', 'radio', 'amplifier', 'frequency', 'mode', 'tier', 'ampFollowBand', 'workspace', 'decoderSettings', 'receiverSettings', 'receiverGain', 'bandSelection', 'receiverFilter'] as const
 export type ControlCapability = (typeof CONTROL_CAPABILITIES)[number]
 // A new action cannot silently inherit a broader capability by its prefix.
 const ACTION_CAPABILITY: Record<StationAction['action'], ControlCapability> = {
   'radio.disarm': 'radio', 'radio.select': 'radio', 'radio.frequency': 'frequency',
   'radio.band': 'bandSelection', 'radio.mode': 'mode', 'radio.tier': 'tier', 'radio.workspace': 'workspace',
+  'radio.filterWidth': 'receiverFilter',
   'decoder.arm': 'decoder', 'decoder.clear': 'decoder', 'decoder.afcReset': 'decoder',
   'decoder.net': 'decoder', 'decoder.pskMode': 'decoder',
   'decoder.js8Speed': 'decoderSettings', 'decoder.msk144Period': 'decoderSettings',
@@ -79,6 +81,11 @@ export function stationAction(raw: unknown): StationAction {
     case 'radio.band':
       object(a, ['action', 'band', 'mode'])
       if (!oneOf(a.band, BANDS) || !oneOf(a.mode, ['cw', 'phone'])) invalid()
+      break
+    case 'radio.filterWidth':
+      object(a, ['action', 'mode', 'expectedHz', 'hz'])
+      if (!oneOf(a.mode, ['cw', 'phone']) || !integer(a.expectedHz) || a.expectedHz < 1 || a.expectedHz > 0xffffffff ||
+        !integer(a.hz) || a.hz < (a.mode === 'cw' ? 50 : 300) || a.hz > (a.mode === 'cw' ? 2000 : 4000)) invalid()
       break
     case 'radio.mode':
       object(a, ['action', 'mode', 'followFrequency'])

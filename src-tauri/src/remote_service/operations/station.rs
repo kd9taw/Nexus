@@ -125,6 +125,13 @@ pub enum Action {
     },
     #[serde(rename = "radio.band")]
     Band { band: String, mode: String },
+    #[serde(rename = "radio.filterWidth")]
+    FilterWidth {
+        mode: String,
+        #[serde(rename = "expectedHz")]
+        expected_hz: u32,
+        hz: u32,
+    },
     #[serde(rename = "radio.mode")]
     Mode {
         mode: String,
@@ -357,6 +364,20 @@ pub fn execute(
             );
         }
         #[cfg(feature = "radio")]
+        Action::FilterWidth {
+            mode,
+            expected_hz,
+            hz,
+        } => {
+            return engine.queue_remote_filter_width(
+                mode,
+                *expected_hz,
+                *hz,
+                context.radio_connection.ok_or(Reason::ReadingUnavailable)?,
+                permit,
+            );
+        }
+        #[cfg(feature = "radio")]
         Action::Workspace { workspace } => {
             return engine.queue_remote_workspace(
                 *workspace,
@@ -524,6 +545,7 @@ impl Action {
         match self {
             Self::Frequency { .. }
             | Self::Band { .. }
+            | Self::FilterWidth { .. }
             | Self::Mode { .. }
             | Self::Tier { .. }
             | Self::Workspace { .. }
@@ -557,6 +579,7 @@ pub fn capabilities(version: u8) -> Vec<&'static str> {
                 "receiverSettings",
                 "receiverGain",
                 "bandSelection",
+                "receiverFilter",
             ]
         }
     }

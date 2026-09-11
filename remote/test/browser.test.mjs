@@ -314,6 +314,12 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
           }else if(a.action==='radio.frequency'){
             assert.ok(a.dialMhz>0);assert.equal(a.band,a.dialMhz===10?'':'40m');assert.ok(['USB','LSB'].includes(a.sideband))
             applicationData.get_snapshot.radio.dialMhz=a.dialMhz;applicationData.get_snapshot.radio.band=a.band;applicationData.get_snapshot.radio.sideband=a.sideband
+          }else if(a.action==='radio.filterWidth'){
+            const radio=applicationData.get_snapshot.radio
+            assert.equal(a.mode,radio.operatingMode);assert.equal(a.expectedHz,radio.filterWidthHz)
+            assert.ok(a.mode==='cw'?a.hz>=50&&a.hz<=2000:a.hz>=300&&a.hz<=4000)
+            assert.equal(radio.txEnabled,false);assert.equal(radio.rigKeyed,false)
+            radio.filterWidthHz=a.hz
           }else if(a.action==='radio.band'){
             assert.ok(['cw','phone'].includes(a.mode));assert.ok(['40m','20m'].includes(a.band))
             assert.equal(applicationData.get_snapshot.radio.operatingMode,a.mode)
@@ -325,6 +331,7 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
             const dial={digital:7.074,cw:7.030,phone:7.150,rtty:7.080,keyboard:7.070}[a.mode]
             assert.ok(dial);assert.equal(a.followFrequency,true)
             applicationData.get_snapshot.radio.operatingMode=a.mode;applicationData.get_snapshot.radio.dialMhz=dial
+            if(a.mode==='cw'||a.mode==='phone')applicationData.get_snapshot.radio.filterWidthHz=a.mode==='cw'?500:2400
             assert.equal(applicationData.get_snapshot.radio.txEnabled,false)
           }else if(a.action==='radio.workspace'){
             const snap=applicationData.get_snapshot,chat=['TempoFast','TempoDeep'].includes(snap.link.tier)
@@ -397,7 +404,7 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
           value={operation:'stationControl',operationId:r.requestId,outcome:'applied',evidence:['amplifier.followBand','decoder.js8Speed','decoder.msk144Period','decoder.depth','receiver.rxOffset','receiver.rxGain'].includes(a.action)?'settingsSaved':a.action.startsWith('radio.')?'radioReadback':a.action.startsWith('amplifier.')?'amplifierReadback':'receiverState'}
           loggingReceipts.set(r.requestId,value);loggingRevision++;applicationRevision++
         }else if(r.type==='result'){value=loggingReceipts.get(r.operationId);if(!value)error='resultExpired'}
-        else value={stationBootId:loggingBoot,allowed:loggingAllowed||stationControls,phase:loggingLease?'controlling':loggingAllowed||stationControls?'available':'localPermissionRequired',leaseId:loggingLease,revision:loggingRevision,commandWindowId:loggingLease?loggingWindow:null,nextSequence:loggingLease?loggingSequence+1:null,leaseRemainingMs:loggingLease?5000:null,actions:loggingAllowed?['log.manual']:[],txArmed:false,...(stationControls?{controls:{context:{radioId:1,radioConnection:1,ampConnection:1,ampReadSequence:1},capabilities:request.operationVersion>=3?['decoder','amplifier','frequency','mode','tier','ampFollowBand','workspace','decoderSettings','receiverSettings','receiverGain','bandSelection']:['decoder','amplifier']}}:{})}
+        else value={stationBootId:loggingBoot,allowed:loggingAllowed||stationControls,phase:loggingLease?'controlling':loggingAllowed||stationControls?'available':'localPermissionRequired',leaseId:loggingLease,revision:loggingRevision,commandWindowId:loggingLease?loggingWindow:null,nextSequence:loggingLease?loggingSequence+1:null,leaseRemainingMs:loggingLease?5000:null,actions:loggingAllowed?['log.manual']:[],txArmed:false,...(stationControls?{controls:{context:{radioId:1,radioConnection:1,ampConnection:1,ampReadSequence:1},capabilities:request.operationVersion>=3?['decoder','amplifier','frequency','mode','tier','ampFollowBand','workspace','decoderSettings','receiverSettings','receiverGain','bandSelection','receiverFilter']:['decoder','amplifier']}}:{})}
         source.send({type:'operationResponse',sessionId:request.sessionId,requestId:r.requestId,...(error?{error}:{value})});continue
       }
       if (request.type === 'applicationQuery') {
@@ -721,7 +728,7 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
         await until(`document.querySelector('${root} .ch-readout .readout-val')?.textContent.includes('${mhz.toFixed(4)}')`)
         }
       }
-      let modeGeometry=0,bandGeometry=0,wheelGeometry=0
+      let modeGeometry=0,bandGeometry=0,wheelGeometry=0,filterGeometry=0
       const tunedModes=new Set()
       for(const [tab,root,mode,workspace] of [['CW','.cw-cockpit','cw'],['FT','.operate-cockpit','digital','ft'],['Phone','.phone-cockpit','phone'],['RTTY','.rtty-cockpit','rtty'],['PSK','.psk-cockpit','keyboard'],['Tempo','.grid-header','digital','tempo'],['JS8','.js8-cockpit','digital','js8'],['FT','.operate-cockpit','digital','ft']]){
         const before=stationRequests.length,selector=root+' .remote-mode-entry'
@@ -770,6 +777,27 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
           }
           if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,`band-picker-${mode}-1280-175-light.png`),Buffer.from(shot.data,'base64'))}
         }
+        if(['cw','phone'].includes(mode)){
+          for(const direction of [1,2]){
+            const selector=root+` .ph-filter-step:nth-of-type(${direction})`
+            for(const [width,height,zoom]of [[390,844,1],[1280,800,1],[390,844,1.75],[1280,800,1.75]])for(const theme of ['dark','light']){
+              await browser.call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false},session)
+              await evaluate(`document.documentElement.style.setProperty('--ui-zoom','${zoom}');document.documentElement.dataset.theme='${theme}';window.dispatchEvent(new Event('resize'))`);await settledLayout()
+              await until(`!!document.querySelector('${selector}')&&!document.querySelector('${selector}').disabled`)
+              await evaluate(`document.querySelector('${selector}').scrollIntoView({block:'center',inline:'center',behavior:'instant'})`);await settledLayout()
+              const shape=await evaluate(`(()=>{const e=document.querySelector('${selector}'),r=e.getBoundingClientRect(),hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);return {rect:r.toJSON(),hit:hit?.outerHTML.slice(0,250),good:r.width>0&&r.height>0&&e.contains(hit)&&document.documentElement.scrollWidth<=innerWidth+1&&document.documentElement.scrollHeight<=innerHeight+1}})()`)
+              if(!shape.good&&artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'filter-layout-failure.png'),Buffer.from(shot.data,'base64'));await writeFile(join(artifacts,'filter-layout-failure.json'),JSON.stringify({mode,direction,width,height,zoom,theme,shape},null,2))}
+              assert.equal(shape.good,true,`Filter control reachable ${mode} ${direction} ${width} ${zoom} ${theme}: ${JSON.stringify(shape)}`);filterGeometry++
+            }
+            const before=structuredClone(applicationData.get_snapshot.radio),step=mode==='cw'?50:100,hz=before.filterWidthHz+(direction===1?-step:step)
+            await gesture(selector,'radio.filterWidth')
+            assert.deepEqual(stationRequests.at(-1).action,{action:'radio.filterWidth',mode,expectedHz:before.filterWidthHz,hz})
+            assert.deepEqual(applicationData.get_snapshot.radio,{...before,filterWidthHz:hz})
+            const displayed=mode==='cw'?String(hz):`${(hz/1000).toFixed(1)}k`
+            await until(`document.querySelector('${root} .ph-filter-val')?.textContent.trim()==='${displayed}'`)
+          }
+          if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,`filter-${mode}-1280-175-light.png`),Buffer.from(shot.data,'base64'))}
+        }
         if(['cw','phone','rtty','keyboard'].includes(mode)||workspace==='ft'){
           if(!tunedModes.has(mode)){
             tunedModes.add(mode)
@@ -783,6 +811,7 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
               const shape=await evaluate(`(()=>{const e=document.querySelector('${target}'),r=e.getBoundingClientRect(),hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);return{rect:r.toJSON(),hit:hit?.outerHTML.slice(0,250),good:r.width>0&&r.height>0&&e.contains(hit)&&document.documentElement.scrollWidth<=innerWidth+1&&document.documentElement.scrollHeight<=innerHeight+1}})()`)
               if(!shape.good&&artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'wheel-layout-failure.png'),Buffer.from(shot.data,'base64'));await writeFile(join(artifacts,'wheel-layout-failure.json'),JSON.stringify({mode,target,width,height,zoom,theme,shape},null,2))}
               assert.equal(shape.good,true,`Tuning target reachable ${mode} ${target} ${width} ${zoom}: ${JSON.stringify(shape)}`);wheelGeometry++
+              if(target===scope&&width===1280&&zoom===1.75&&theme==='light'&&artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,`scope-${mode}-1280-175-light.png`),Buffer.from(shot.data,'base64'))}
             }
             for(const kind of ['digit','keyboard',...(['cw','phone'].includes(mode)?['scope','nudge']:[])]){
               await freshLoggingWindow();await until(`!!document.querySelector('${digit}')`)
@@ -979,10 +1008,10 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
       assert.ok(await evaluate(`[...document.querySelectorAll('.cockpit-txdock button')].every(e=>e.disabled)`),'receiver/amp permission cannot enable TX')
       stationControls=false;loggingLease=null
       await until(`document.querySelector('.cw-cockpit .amp-op').disabled`)
-      assert.equal(controlGeometry+modeGeometry+bandGeometry+wheelGeometry+tierGeometry+followGeometry+decoderGeometry+receiverGeometry+gainGeometry+16,400)
-      assert.equal(loggedRequests.length,5);assert.equal(stationRequests.length,81);assert.equal(unexpectedMessages,0);assert.equal(exceptions,0)
-      if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-manual-logging.png'),Buffer.from(shot.data,'base64'));await writeFile(join(artifacts,'operation-results.json'),JSON.stringify({count:loggedRequests.length,stationActions:stationRequests.map(r=>r.action),controlGeometry,modeGeometry,bandGeometry,wheelGeometry,tierGeometry,followGeometry,decoderGeometry,receiverGeometry,gainGeometry,modes:loggedRequests.map(r=>r.record.mode),lostResultResolved:true,wholePageReloadResolved:true,crossTabLockRefusal:true,geometry:16,exceptions,unexpectedMessages},null,2))}
-      console.log('Compiled browser: five logging forms, 81 station gestures, saved receiver choices, native band recall, shared wheel/digit tuning, separate grants, recovery and 400 geometry cases passed');return
+      assert.equal(controlGeometry+modeGeometry+bandGeometry+wheelGeometry+filterGeometry+tierGeometry+followGeometry+decoderGeometry+receiverGeometry+gainGeometry+16,432)
+      assert.equal(loggedRequests.length,5);assert.equal(stationRequests.length,85);assert.equal(unexpectedMessages,0);assert.equal(exceptions,0)
+      if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-manual-logging.png'),Buffer.from(shot.data,'base64'));await writeFile(join(artifacts,'operation-results.json'),JSON.stringify({count:loggedRequests.length,stationActions:stationRequests.map(r=>r.action),controlGeometry,modeGeometry,bandGeometry,wheelGeometry,filterGeometry,tierGeometry,followGeometry,decoderGeometry,receiverGeometry,gainGeometry,modes:loggedRequests.map(r=>r.record.mode),lostResultResolved:true,wholePageReloadResolved:true,crossTabLockRefusal:true,geometry:16,exceptions,unexpectedMessages},null,2))}
+      console.log('Compiled browser: five logging forms, 85 station gestures, saved receiver choices, native band recall, shared wheel/digit tuning, separate grants, recovery and 432 geometry cases passed');return
     }
     const startReads=applicationTraffic.reads, startBytes=applicationTraffic.bytes, started=performance.now()
     for(const [width,height] of [[1024,768],[1280,800],[1366,768],[1200,1390],[3440,1440]])for(const zoom of [1,1.75])for(const theme of ['dark','light']) {

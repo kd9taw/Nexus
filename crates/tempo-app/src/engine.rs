@@ -8012,6 +8012,7 @@ impl Engine {
     /// width OPTIMISTICALLY so the snapshot reflects the click at once — rapid ± steps accumulate
     /// (rather than all reading the same stale value), and the loop's next read reconciles it.
     pub fn request_filter_width(&mut self, hz: u32) {
+        self.remote_actuation.revoke();
         self.pending_passband = Some(hz);
         self.rig_passband = Some(hz);
     }

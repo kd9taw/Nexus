@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Remote CW and Phone bandwidth:** The existing BW buttons adjust the radio's
+  receive filter through a compatible station with filter-control permission.
+  They retain the desktop's steps and ranges, preserve the radio's current mode,
+  and display the later station reading. Uncertain commands are not retried.
+  Requires an idle, disarmed station; physical-radio acceptance remains pending.
+
+- **Remote tuning gestures:** Frequency-readout digits and arrow keys, CW/Phone
+  scope-wheel input and the native tuning-strip buttons share guarded browser
+  tuning. Lost control discards pending input, and a submitted burst waits for
+  confirmation before another gesture. Scope click/drag and continuous scanning
+  remain separate work.
+
 - **Remote receiver adjustments:** The existing decode-depth buttons, FT RX
   frequency field, FT/JS8/Tempo waterfalls and JS8 offset table can save receive
   choices through a compatible station with receiver-settings permission.

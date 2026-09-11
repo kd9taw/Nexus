@@ -6,6 +6,8 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tempo_app::remote_control::{Completion, Evidence, Outcome, Reason, Revocation};
 
+mod filter;
+
 static NEXT: AtomicUsize = AtomicUsize::new(0);
 struct Station {
     engine: Arc<Mutex<Engine>>,
