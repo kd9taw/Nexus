@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tempo_app::remote_control::{Completion, Evidence, Outcome, Reason, Revocation};
 
+mod dsp;
 mod filter;
 
 static NEXT: AtomicUsize = AtomicUsize::new(0);

@@ -132,6 +132,21 @@ pub enum Action {
         expected_hz: u32,
         hz: u32,
     },
+    #[serde(rename = "radio.function")]
+    ReceiverFunction {
+        mode: String,
+        func: String,
+        #[serde(rename = "expectedOn")]
+        expected_on: bool,
+        on: bool,
+    },
+    #[serde(rename = "radio.agc")]
+    Agc {
+        mode: String,
+        #[serde(rename = "expectedSpeed")]
+        expected_speed: String,
+        speed: String,
+    },
     #[serde(rename = "radio.mode")]
     Mode {
         mode: String,
@@ -378,6 +393,41 @@ pub fn execute(
             );
         }
         #[cfg(feature = "radio")]
+        Action::ReceiverFunction {
+            mode,
+            func,
+            expected_on,
+            on,
+        } => {
+            use tempo_app::engine::remote_radio::{ReceiverDsp, ReceiverFunction};
+            let func = ReceiverFunction::from_name(func).ok_or(Reason::InvalidAction)?;
+            return engine.queue_remote_receiver_dsp(
+                mode,
+                ReceiverDsp::Function {
+                    func,
+                    on: *expected_on,
+                },
+                ReceiverDsp::Function { func, on: *on },
+                context.radio_connection.ok_or(Reason::ReadingUnavailable)?,
+                permit,
+            );
+        }
+        #[cfg(feature = "radio")]
+        Action::Agc {
+            mode,
+            expected_speed,
+            speed,
+        } => {
+            use tempo_app::engine::remote_radio::{AgcSpeed, ReceiverDsp};
+            return engine.queue_remote_receiver_dsp(
+                mode,
+                ReceiverDsp::Agc(AgcSpeed::from_name(expected_speed).ok_or(Reason::InvalidAction)?),
+                ReceiverDsp::Agc(AgcSpeed::from_name(speed).ok_or(Reason::InvalidAction)?),
+                context.radio_connection.ok_or(Reason::ReadingUnavailable)?,
+                permit,
+            );
+        }
+        #[cfg(feature = "radio")]
         Action::Workspace { workspace } => {
             return engine.queue_remote_workspace(
                 *workspace,
@@ -546,6 +596,8 @@ impl Action {
             Self::Frequency { .. }
             | Self::Band { .. }
             | Self::FilterWidth { .. }
+            | Self::ReceiverFunction { .. }
+            | Self::Agc { .. }
             | Self::Mode { .. }
             | Self::Tier { .. }
             | Self::Workspace { .. }
@@ -580,6 +632,7 @@ pub fn capabilities(version: u8) -> Vec<&'static str> {
                 "receiverGain",
                 "bandSelection",
                 "receiverFilter",
+                "receiverDsp",
             ]
         }
     }

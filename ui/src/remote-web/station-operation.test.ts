@@ -2,6 +2,24 @@ import { describe, expect, it } from 'vitest'
 import { actionCapability, controlContext, controlOutcome, stationAction } from './station-operation'
 
 describe('closed station operating requests', () => {
+  it('admits only receiver function names, boolean targets and native AGC choices', () => {
+    for (const mode of ['cw', 'phone']) {
+      for (const func of ['nb', 'nr', 'notch', 'manualNotch']) {
+        const action = { action: 'radio.function', mode, func, expectedOn: false, on: true }
+        expect(stationAction(action)).toEqual(action); expect(actionCapability(stationAction(action))).toBe('receiverDsp')
+        for (const func of ['vox', 'comp', 'tuner', 'NB', 'nb\nT 1', '', null]) expect(() => stationAction({ ...action, func })).toThrow()
+        for (const value of [0, 1, 'true', null]) for (const field of ['expectedOn', 'on']) expect(() => stationAction({ ...action, [field]: value })).toThrow()
+        for (const extra of ['dialMhz', 'sideband', 'settings', 'command', 'tx', 'radioId']) expect(() => stationAction({ ...action, [extra]: true })).toThrow()
+        for (const mode of ['digital', 'CW', 'ssb', null]) expect(() => stationAction({ ...action, mode })).toThrow()
+      }
+      for (const speed of ['auto', 'fast', 'mid', 'slow', 'off']) {
+        const action = { action: 'radio.agc', mode, expectedSpeed: 'fast', speed }
+        expect(stationAction(action)).toEqual(action); expect(actionCapability(stationAction(action))).toBe('receiverDsp')
+        for (const value of ['FAST', 'user', 2, 6, null, 'slow\nT 1']) for (const field of ['expectedSpeed', 'speed']) expect(() => stationAction({ ...action, [field]: value })).toThrow()
+        for (const extra of ['settings', 'command', 'txEnabled', 'radioId']) expect(() => stationAction({ ...action, [extra]: true })).toThrow()
+      }
+    }
+  })
   it('binds native filter width to the displayed cockpit and prior width under its own capability', () => {
     for (const [mode, expectedHz, hz] of [['cw', 500, 550], ['phone', 2400, 2300]] as const) {
       const a = { action: 'radio.filterWidth', mode, expectedHz, hz }

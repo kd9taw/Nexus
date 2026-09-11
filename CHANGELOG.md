@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Remote receiver DSP:** The existing CW/Phone NB, NR, automatic-notch and AGC
+  buttons, plus Phone manual-notch enable, use confirmed radio commands through
+  a compatible station. They preserve frequency and mode and wait for station
+  readings before changing the displayed choice. Requires receiver-DSP permission
+  and an idle, disarmed station; hardware acceptance remains pending.
+
 - **Remote signal clicking:** Click a signal in the existing CW or Phone scope
   to tune using the desktop's signal detection and sideband calculation.
   Each click belongs to its original radio, connection and control window.

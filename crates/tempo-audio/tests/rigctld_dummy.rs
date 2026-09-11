@@ -306,6 +306,73 @@ fn remote_filter_roundtrips_real_hamlib_without_qsy_or_mode_change() {
 }
 
 #[test]
+fn remote_dsp_roundtrips_real_hamlib_without_qsy_mode_or_ptt_change() {
+    use tempo_app::engine::remote_radio::{AgcSpeed, ReceiverDsp, ReceiverFunction};
+    let bin = require_rigctld!();
+    let _serial = ONE_AT_A_TIME.lock().unwrap_or_else(|p| p.into_inner());
+    let d = DummyRig::spawn(&bin);
+    let mut rig = connect_settled(&d.addr);
+    rig.set_mode("LSB", 2400).unwrap();
+    rig.set_freq(14_074_000).unwrap();
+    rig.ptt(false).unwrap();
+    let authority = Revocation::default();
+    let native = Revocation::default();
+    let mut choices = Vec::new();
+    for func in [
+        ReceiverFunction::Nb,
+        ReceiverFunction::Nr,
+        ReceiverFunction::Notch,
+        ReceiverFunction::ManualNotch,
+    ] {
+        rig.set_func(func.token(), false).unwrap();
+        choices.push((
+            ReceiverDsp::Function { func, on: false },
+            ReceiverDsp::Function { func, on: true },
+        ));
+        choices.push((
+            ReceiverDsp::Function { func, on: true },
+            ReceiverDsp::Function { func, on: false },
+        ));
+    }
+    rig.set_agc(2).unwrap();
+    let mut previous = AgcSpeed::Fast;
+    for speed in [
+        AgcSpeed::Fast,
+        AgcSpeed::Slow,
+        AgcSpeed::Mid,
+        AgcSpeed::Off,
+        AgcSpeed::Auto,
+    ] {
+        choices.push((ReceiverDsp::Agc(previous), ReceiverDsp::Agc(speed)));
+        previous = speed;
+    }
+    for (before, after) in choices {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let permit = authority.permit(deadline).unwrap();
+        let completion = Completion::guarded(permit.clone());
+        let permission =
+            WritePermission::new(permit, native.permit(deadline).unwrap(), completion.clone());
+        let read = rig
+            .remote_receiver_dsp(
+                Position::new(14_074_000, "LSB").unwrap(),
+                before,
+                after,
+                &permission,
+            )
+            .unwrap();
+        assert_eq!(read.receiver_dsp(), Some(after));
+        match after {
+            ReceiverDsp::Function { func, on } => assert_eq!(rig.read_func(func.token()), Some(on)),
+            ReceiverDsp::Agc(speed) => assert_eq!(rig.read_agc(), Some(speed.hamlib_value())),
+        }
+        assert_eq!(rig.read_mode_passband(), (Some("LSB".into()), Some(2400)));
+        assert_eq!(rig.read_freq().unwrap(), 14_074_000);
+        assert_eq!(rig.read_ptt(), Some(false));
+        assert_eq!(completion.outcome(), Outcome::Pending);
+    }
+}
+
+#[test]
 fn remote_power_limit_is_observed_by_real_hamlib_and_never_raises_a_lower_setting() {
     let bin = require_rigctld!();
     let _serial = ONE_AT_A_TIME.lock().unwrap_or_else(|p| p.into_inner());

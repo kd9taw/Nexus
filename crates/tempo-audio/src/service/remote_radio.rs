@@ -2,6 +2,7 @@
 //! Only confirmed dial/mode/power enter settings; unknown work never becomes a local retry.
 use super::*;
 use crate::rig::remote::{Position, Retune};
+use tempo_app::engine::remote_radio::ReceiverDsp;
 use tempo_app::remote_control::Reason;
 
 impl RadioLoop {
@@ -22,7 +23,8 @@ impl RadioLoop {
                 if self.tx_until_ms.is_some()
                     || self.tuning_keyed
                     || rig.keyed
-                    || (request.filter_width().is_some() && !self.rig_asserted)
+                    || ((request.filter_width().is_some() || request.receiver_dsp().is_some())
+                        && !self.rig_asserted)
                 {
                     Err(Reason::StationBusy)
                 } else if self.handoff_deferred
@@ -52,6 +54,9 @@ impl RadioLoop {
             if let Some((before, width)) = request.filter_width() {
                 return rig.remote_filter_width(expected, before, width, request.permission());
             }
+            if let Some((before, value)) = request.receiver_dsp() {
+                return rig.remote_receiver_dsp(expected, before, value, request.permission());
+            }
             let (hz, mode) = request.target();
             let mut retune = Retune::new(expected, Position::new(hz, mode)?);
             if let Some(limit) = request.power_limit() {
@@ -77,13 +82,28 @@ impl RadioLoop {
         eng.remote_observe_mode(read.as_ref(), Some(position.mode()));
         eng.remote_observe_ptt(read.as_ref(), Some(false));
         let filter = request.filter_width().is_some();
-        let committed = if filter {
+        let dsp = request.receiver_dsp().is_some();
+        let committed = if dsp {
+            request.commit_receiver_dsp_readback(&mut eng, readback.receiver_dsp())
+        } else if filter {
             request.commit_filter_readback(&mut eng, readback.passband())
         } else {
             request.commit_readback(&mut eng, readback.power())
         };
         if committed {
-            if filter {
+            if filter || dsp {
+                match readback.receiver_dsp() {
+                    Some(ReceiverDsp::Function { func, on }) => {
+                        self.func_state[func.index()] = Some(on);
+                        self.func_supported[func.index()] = Some(true);
+                        self.func_misses[func.index()] = 0;
+                    }
+                    Some(ReceiverDsp::Agc(speed)) => {
+                        self.last_agc = Some(speed.name().into());
+                        self.agc_giveup = None;
+                    }
+                    None => {}
+                }
                 // Native filter adjustment preserves the physical front-panel
                 // mode. Changing the canonical reconciliation belief to that
                 // mode would queue a later reassertion of Settings' old mode.

@@ -487,6 +487,18 @@ No Settings save, native retry slot, frequency write or transmit action is added
 The normal station stream supplies the displayed width; a receipt does not
 replace that sample. Local filter gestures retire older remote work.
 
+Expanded-operation version 3 can advertise `receiverDsp` for the existing CW/Phone
+NB, NR, automatic-notch and five AGC buttons, plus Phone manual-notch enable.
+Closed `radio.function` and `radio.agc` actions bind the displayed cockpit, prior
+reading, radio and connection. The existing radio owner checks actual frequency,
+mode, DSP state, PTT and split before one permitted CAT write, then confirms the
+requested value and unchanged receive position. Missing support or an uncertain
+result cannot enter native retry slots. Local function/AGC picks retire pending
+Remote work. AGC repicks preserve the desktop's explicit reassert behavior;
+confirmed choices update reconciliation state without writing Settings. Browser
+selection follows later station samples. NR depth, manual-notch frequency, COMP
+and VOX remain separate work. Physical-radio and WAN acceptance remain pending.
+
 Profile/radio transitions, FM/repeater and satellite/split transactions,
 band-memory/spot shortcuts, scope dragging, continuous scanning and attended hardware/WAN
 acceptance remain incomplete. A compatible station build is required; this

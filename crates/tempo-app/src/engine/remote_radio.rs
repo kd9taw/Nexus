@@ -10,7 +10,9 @@ use std::path::PathBuf;
 use std::sync::TryLockError;
 use std::time::Instant;
 
+mod dsp;
 mod filter;
+pub use dsp::{AgcSpeed, ReceiverDsp, ReceiverFunction};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -26,6 +28,11 @@ enum Intent {
         mode: OperatingMode,
         expected: u32,
         hz: u32,
+    },
+    ReceiverDsp {
+        mode: OperatingMode,
+        expected: ReceiverDsp,
+        value: ReceiverDsp,
     },
     Band {
         mode: String,
@@ -466,7 +473,7 @@ impl Engine {
         };
         let bandless_receive = matches!(
             &target.intent,
-            Intent::Frequency | Intent::FilterWidth { .. }
+            Intent::Frequency | Intent::FilterWidth { .. } | Intent::ReceiverDsp { .. }
         ) && target.band.is_empty()
             && named_band.is_none();
         if target.hz == 0
@@ -486,7 +493,10 @@ impl Engine {
         let completion = Completion::guarded(permit.clone());
         let request = Request {
             expected_hz: self.settings.dial_hz(),
-            expected_mode: if matches!(&target.intent, Intent::FilterWidth { .. }) {
+            expected_mode: if matches!(
+                &target.intent,
+                Intent::FilterWidth { .. } | Intent::ReceiverDsp { .. }
+            ) {
                 target.mode.clone()
             } else {
                 self.rig_mode_effective()
@@ -572,6 +582,14 @@ impl Request {
             _ => None,
         }
     }
+    pub fn receiver_dsp(&self) -> Option<(ReceiverDsp, ReceiverDsp)> {
+        match self.intent {
+            Intent::ReceiverDsp {
+                expected, value, ..
+            } => Some((expected, value)),
+            _ => None,
+        }
+    }
     pub fn refuse(&self, reason: Reason) {
         self.completion.refuse(reason);
     }
@@ -579,7 +597,15 @@ impl Request {
     pub fn validate(&self, engine: &Engine) -> Result<(), Reason> {
         self.permission.check(Instant::now())?;
         engine.remote_radio_idle()?;
-        let mode = if let Some((expected, hz)) = self.filter_width() {
+        let mode = if let Intent::ReceiverDsp {
+            mode,
+            expected,
+            value,
+        } = self.intent
+        {
+            engine.validate_remote_receiver_dsp(mode, expected, value)?;
+            engine.remote_filter_mode(self.connection)?
+        } else if let Some((expected, hz)) = self.filter_width() {
             if !matches!(self.intent, Intent::FilterWidth { mode, .. } if mode == engine.settings.operating_mode)
             {
                 return Err(Reason::ContextChanged);
@@ -625,17 +651,37 @@ impl Request {
     /// Power is the owning worker's later CAT readback, not a browser argument.
     /// Mode entry may lower it to the new native ceiling, never raise it.
     pub fn commit_readback(self, engine: &mut Engine, power: Option<f32>) -> bool {
-        self.commit_readings(engine, power, None)
+        self.commit_readings(engine, power, None, None)
     }
 
     pub fn commit_filter_readback(self, engine: &mut Engine, width: Option<u32>) -> bool {
-        self.commit_readings(engine, None, width)
+        self.commit_readings(engine, None, width, None)
     }
 
-    fn commit_readings(self, engine: &mut Engine, power: Option<f32>, width: Option<u32>) -> bool {
+    pub fn commit_receiver_dsp_readback(
+        self,
+        engine: &mut Engine,
+        value: Option<ReceiverDsp>,
+    ) -> bool {
+        self.commit_readings(engine, None, None, value)
+    }
+
+    fn commit_readings(
+        self,
+        engine: &mut Engine,
+        power: Option<f32>,
+        width: Option<u32>,
+        dsp: Option<ReceiverDsp>,
+    ) -> bool {
         let confirmed = (|| {
             self.validate(engine)?;
             if self.filter_width().is_some_and(|(_, hz)| width != Some(hz)) {
+                return Err(Reason::HardwareUnconfirmed);
+            }
+            if self
+                .receiver_dsp()
+                .is_some_and(|(_, value)| dsp != Some(value))
+            {
                 return Err(Reason::HardwareUnconfirmed);
             }
             if let Some(limit) = self.power_limit {
@@ -689,9 +735,13 @@ impl Request {
             self.refuse(reason);
             return false;
         }
-        let filter = self.filter_width().is_some();
-        let persist = !matches!(&self.intent, Intent::Tier(_) | Intent::FilterWidth { .. });
+        let receiver = self.filter_width().is_some() || self.receiver_dsp().is_some();
+        let persist = !matches!(
+            &self.intent,
+            Intent::Tier(_) | Intent::FilterWidth { .. } | Intent::ReceiverDsp { .. }
+        );
         match self.intent {
+            Intent::ReceiverDsp { value, .. } => engine.commit_remote_receiver_dsp(value),
             Intent::FilterWidth { hz, .. } => {
                 // This is observed hardware state. Never create the native
                 // pending/retry slot, a Settings mutation or a later CAT write.
@@ -758,7 +808,7 @@ impl Request {
         }
         // This QSY has ALREADY reached the radio. Consuming its one-shot under
         // the lock cannot consume a later local gesture's retune request.
-        if !filter {
+        if !receiver {
             engine.take_immediate_retune();
         }
         // The native tier verb changes live tier/decoder state and does not

@@ -51,6 +51,7 @@ impl Rig {
                 sampled_at,
                 power: None,
                 passband: Some(width),
+                receiver_dsp: None,
             })
         })();
         if let Err(reason) = result {

@@ -14,5 +14,5 @@ export function advertisedOperationVersion(base: unknown, maximum?: unknown): Op
 }
 
 export function controlVersion(action: StationAction): 2 | 3 {
-  return ['radio.band', 'radio.filterWidth', 'radio.frequency', 'radio.mode', 'radio.tier', 'radio.workspace', 'radio.select', 'amplifier.followBand', 'decoder.js8Speed', 'decoder.msk144Period', 'decoder.depth', 'receiver.rxOffset', 'receiver.rxGain'].includes(action.action) ? 3 : 2
+  return ['radio.band', 'radio.filterWidth', 'radio.function', 'radio.agc', 'radio.frequency', 'radio.mode', 'radio.tier', 'radio.workspace', 'radio.select', 'amplifier.followBand', 'decoder.js8Speed', 'decoder.msk144Period', 'decoder.depth', 'receiver.rxOffset', 'receiver.rxGain'].includes(action.action) ? 3 : 2
 }

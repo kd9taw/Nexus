@@ -1,4 +1,5 @@
 import { useReceiverFilter } from '../remote-web/useReceiverFilter'
+import { useReceiverDsp } from '../remote-web/useReceiverDsp'
 import { useRemoteScopeClick } from '../remote-web/useRemoteScopeClick'
 import { RemoteRecallEntry } from '../remote-web/RemoteRecall'
 import { CollectionStatus, useRemoteCollection } from '../remote-web/collections'
@@ -50,9 +51,7 @@ import {
   selectPeer,
   previewCw,
   pointRotatorAtCall,
-  setRigFunc,
   setNrLevel,
-  setAgc,
   setScopeSpan,
   setYaesuScopeMode,
   setScopeRef,
@@ -357,6 +356,7 @@ export function CwCockpit({
 }: Props) {
   const frequencyControl = useStationCapability('frequency')
   const scopeClick = useRemoteScopeClick(snap)
+  const dspControl = useReceiverDsp(snap, 'cw')
   const control = useStationControl(), receiverControl = useStationCapability('decoder')
   const spotsRead = useRemoteCollection('spots')
   // Live S-meter (shared 100 ms poll, lock-free backend) — used to arrive via the 300 ms
@@ -475,12 +475,12 @@ export function CwCockpit({
   // remembered mirror would light Mid forever on a radio that is still on Fast.
   const [agcPick, setAgcPick] = useState<string | null>(null)
   const agc =
-    agcPick != null && agcPick !== snap.radio.refusedAgc ? agcPick : (snap.radio.agc ?? null)
+    control && agcPick != null && agcPick !== snap.radio.refusedAgc ? agcPick : (snap.radio.agc ?? null)
   const changeAgc = (sp: 'auto' | 'fast' | 'mid' | 'slow' | 'off') => {
-    if (!control) return
-    setAgcPick(sp)
-    void setAgc(sp)
-      .then((s) => onSnap?.(s))
+    if (!dspControl.canAgc) return
+    if (control) setAgcPick(sp)
+    void dspControl.changeAgc(sp)
+      .then((s) => s && onSnap?.(s))
       .catch(() => {})
   }
   // Native scope feed (reported by PhoneScope) → drives the RF-panadapter switch, exactly like
@@ -1173,15 +1173,15 @@ export function CwCockpit({
             {cwDspFuncs.map((f) => {
               const on = snap.radio[f.key] === true
               return (
-                <button disabled={!control}
+                <button disabled={!dspControl.canFunction(f.key)}
                   key={f.key}
                   type="button"
                   className={`ph-dsp-btn${on ? ' on' : ''}`}
                   aria-pressed={on}
                   title={t(f.titleKey)}
                   onClick={() =>
-                    void setRigFunc(f.key, !on)
-                      .then((s) => onSnap?.(s))
+                    void dspControl.changeFunction(f.key, !on)
+                      .then((s) => s && onSnap?.(s))
                       .catch(() => pushToast(t('cw.dsp.toggleFailed', { func: f.label }), 'error'))
                   }
                 >
@@ -1225,7 +1225,7 @@ export function CwCockpit({
               >
                 <span className="ph-dsplev-lbl">{AGC}</span>
                 {AGC_CHIPS.map(({ id, labelKey }) => (
-                  <button disabled={!control}
+                  <button disabled={!dspControl.canAgc}
                     key={id}
                     type="button"
                     className={`theme-chip${agc === id ? ' active' : ''}`}

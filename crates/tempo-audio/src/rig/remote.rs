@@ -13,8 +13,10 @@
 use super::tuning::{passband_for, retune_passband, same_named_band};
 use super::Rig;
 use std::time::Instant;
+use tempo_app::engine::remote_radio::{AgcSpeed, ReceiverDsp};
 use tempo_app::remote_control::{Reason, WritePermission};
 
+mod dsp;
 mod filter;
 
 /// A station-resolved CAT position, not an arbitrary browser command string.
@@ -95,6 +97,7 @@ pub struct Readback {
     sampled_at: Instant,
     power: Option<f32>,
     passband: Option<u32>,
+    receiver_dsp: Option<ReceiverDsp>,
 }
 
 impl Readback {
@@ -110,6 +113,9 @@ impl Readback {
     }
     pub fn passband(&self) -> Option<u32> {
         self.passband
+    }
+    pub fn receiver_dsp(&self) -> Option<ReceiverDsp> {
+        self.receiver_dsp
     }
 }
 
@@ -281,6 +287,7 @@ impl Rig {
             sampled_at,
             power,
             passband: None,
+            receiver_dsp: None,
         })
     }
 }

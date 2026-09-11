@@ -1041,22 +1041,14 @@ fn should_command_rf_power(
 }
 
 fn agc_to_hamlib(speed: &str) -> u8 {
-    match speed {
-        "off" => 0,
-        "fast" => 2,
-        "slow" => 3,
-        "auto" => 6,
-        _ => 5, // mid
-    }
+    use tempo_app::engine::remote_radio::AgcSpeed;
+    AgcSpeed::from_name(speed)
+        .unwrap_or(AgcSpeed::Mid)
+        .hamlib_value()
 }
 fn agc_from_hamlib(v: u8) -> &'static str {
-    match v {
-        0 => "off",
-        1 | 2 => "fast", // 1 = SUPERFAST: faster than FAST, so never "mid"
-        3 => "slow",
-        6 => "auto",
-        _ => "mid", // 5 MEDIUM, and USER (4) which has no honest nearest
-    }
+    use tempo_app::engine::remote_radio::AgcSpeed;
+    AgcSpeed::from_hamlib(v).unwrap_or(AgcSpeed::Mid).name()
 }
 /// Max consecutive `set_mode` retries for one target mode before giving up (so a rig
 /// that rejects a submode doesn't get an `M` command every loop). Sized to ride out a

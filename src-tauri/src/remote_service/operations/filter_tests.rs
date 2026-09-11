@@ -1,6 +1,9 @@
 use super::*;
 
-fn station(mode: &str, width: u32) -> (Fixture, tempo_app::remote_monitor::provenance::Connection) {
+pub(super) fn station(
+    mode: &str,
+    width: u32,
+) -> (Fixture, tempo_app::remote_monitor::provenance::Connection) {
     let f = Fixture::new();
     let mut e = f.engine.lock().unwrap();
     e.configure_remote_settings_store(f.dir.join("settings.json"));
@@ -16,7 +19,11 @@ fn station(mode: &str, width: u32) -> (Fixture, tempo_app::remote_monitor::prove
     (f, connection)
 }
 
-fn sample(f: &Fixture, connection: &tempo_app::remote_monitor::provenance::Connection, mode: &str) {
+pub(super) fn sample(
+    f: &Fixture,
+    connection: &tempo_app::remote_monitor::provenance::Connection,
+    mode: &str,
+) {
     let mut e = f.engine.lock().unwrap();
     let read = e.remote_radio_read(connection, Instant::now()).unwrap();
     e.remote_observe_cat(Some(&read), Some(true));
@@ -27,7 +34,7 @@ fn sample(f: &Fixture, connection: &tempo_app::remote_monitor::provenance::Conne
     e.remote_observe_ptt(Some(&read), Some(false));
 }
 
-fn run(f: &Fixture, version: u8, command: &Request) -> Result<Value, &'static str> {
+pub(super) fn run(f: &Fixture, version: u8, command: &Request) -> Result<Value, &'static str> {
     f.authority.handle_version(
         (f.connection, version),
         SESSION,

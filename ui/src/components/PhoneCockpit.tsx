@@ -1,4 +1,5 @@
 import { useReceiverFilter } from '../remote-web/useReceiverFilter'
+import { useReceiverDsp } from '../remote-web/useReceiverDsp'
 import { useRemoteScopeClick } from '../remote-web/useRemoteScopeClick'
 import { RemoteRecallEntry } from '../remote-web/RemoteRecall'
 import { CollectionStatus, useRemoteCollection } from '../remote-web/collections'
@@ -39,7 +40,6 @@ import {
   setNrLevel,
   setCompLevel,
   setNotchFreq,
-  setAgc,
   setScopeSpan,
   setYaesuScopeMode,
   setScopeRef,
@@ -56,7 +56,7 @@ import { pushToast } from '../toast'
 import { RotorStrip } from './RotorStrip'
 import { MemoryStrip, MemoryStripUnavailable } from './MemoryStrip'
 import type { Memory } from '../features/memories'
-import { setFrequency, setRigFunc, setSidebandOverride, openPanelWindow } from '../api'
+import { setFrequency, setSidebandOverride, openPanelWindow } from '../api'
 import { bandLabelForMhz, sidebandForQsy } from '../band'
 import { isRfScopeSource, NO_NATIVE_SCOPE_REASON } from '../waterfall'
 import { useWheelTune } from '../useWheelTune'
@@ -379,6 +379,7 @@ const FLEX_SPANS = [
 export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, fieldDay, phoneMode, wheelSensitivity, spots, needByCall, typeByCall, onWorkSpot, onRecallMemory, onOpenMemories, onOpenSettings, onOpenLogbook, panels }: Props) {
   const frequencyControl = useStationCapability('frequency')
   const scopeClick = useRemoteScopeClick(snap)
+  const dspControl = useReceiverDsp(snap, 'phone')
   const control = useStationControl()
   const spotsRead = useRemoteCollection('spots')
   // Live S-meter (shared 100 ms poll, lock-free backend) — used to arrive via the 300 ms
@@ -465,12 +466,12 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   // read-back never moves, and the chip claimed a speed the radio never took.
   const [agcPick, setAgcPick] = useState<string | null>(null)
   const agc =
-    agcPick != null && agcPick !== snap.radio.refusedAgc ? agcPick : (snap.radio.agc ?? null)
+    control && agcPick != null && agcPick !== snap.radio.refusedAgc ? agcPick : (snap.radio.agc ?? null)
   const changeAgc = (sp: 'auto' | 'fast' | 'mid' | 'slow' | 'off') => {
-    if (!control) return
-    setAgcPick(sp)
-    void setAgc(sp)
-      .then((s) => onSnap?.(s))
+    if (!dspControl.canAgc) return
+    if (control) setAgcPick(sp)
+    void dspControl.changeAgc(sp)
+      .then((s) => s && onSnap?.(s))
       .catch(() => {})
   }
   // Native Icom scope reference level, in tenths of a dB (−200..+200 = −20.0..+20.0 dB).
@@ -1058,15 +1059,15 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
             {dspFuncs.map((f) => {
               const on = snap.radio[f.key] === true
               return (
-                <button disabled={!control}
+                <button disabled={!dspControl.canFunction(f.key)}
                   key={f.key}
                   type="button"
                   className={`ph-dsp-btn${on ? ' on' : ''}`}
                   aria-pressed={on}
                   title={t(f.titleKey)}
                   onClick={() =>
-                    void setRigFunc(f.key, !on)
-                      .then((s) => onSnap?.(s))
+                    void dspControl.changeFunction(f.key, !on)
+                      .then((s) => s && onSnap?.(s))
                       .catch(() => pushToast(t('phone.dsp.toggleFailed', { func: f.label }), 'error'))
                   }
                 >
@@ -1152,7 +1153,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
               <div className="ph-agc" role="group" aria-label={t('phone.rxDsp.agc.aria')} title={t('phone.rxDsp.agc.title')}>
                 <span className="ph-dsplev-lbl">{AGC}</span>
                 {AGC_CHIPS.map(({ id, labelKey }) => (
-                  <button disabled={!control}
+                  <button disabled={!dspControl.canAgc}
                     key={id}
                     type="button"
                     className={`theme-chip${agc === id ? ' active' : ''}`}

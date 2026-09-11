@@ -1,4 +1,7 @@
 #[cfg(feature = "radio")]
+#[path = "dsp_tests.rs"]
+mod receiver_dsp;
+#[cfg(feature = "radio")]
 #[path = "filter_tests.rs"]
 mod receiver_filter;
 use super::*;

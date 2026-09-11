@@ -7741,6 +7741,7 @@ impl Engine {
     /// honours even when it is the speed the loop last wrote (see [`Self::agc_to_command`]).
     pub fn set_agc(&mut self, speed: &str) {
         if Self::AGC_SPEEDS.contains(&speed) {
+            self.remote_actuation.revoke();
             self.agc = Some(speed.to_string());
             self.agc_picked = true;
         }
@@ -7909,6 +7910,7 @@ impl Engine {
     /// it (and reverts if the rig rejected the set). Unknown names are ignored.
     pub fn request_rig_func(&mut self, func: &str, on: bool) {
         if let Some(i) = func_index(func) {
+            self.remote_actuation.revoke();
             self.pending_func[i] = Some(on);
             self.rig_funcs[i] = Some(on);
         }

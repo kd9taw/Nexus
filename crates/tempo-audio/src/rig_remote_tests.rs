@@ -10,6 +10,8 @@ use tempo_app::remote_control::{Completion, Evidence, Outcome, Reason, Revocatio
 
 use super::remote::{Position, Retune};
 
+#[path = "rig_dsp_tests.rs"]
+mod dsp_tests;
 #[path = "rig_filter_tests.rs"]
 mod filter_tests;
 
@@ -181,6 +183,47 @@ pub(crate) fn filtering_peer(
         }
         None
     })
+}
+
+pub(crate) fn dsp_peer(
+    mode: &str,
+    initial: u8,
+    intercept: impl Fn(&str, &mut RadioState) -> Option<String> + Send + 'static,
+) -> Peer {
+    let value = std::sync::atomic::AtomicU8::new(initial);
+    retuning_peer(14_074_000, mode, move |line, state| {
+        if let Some(reply) = intercept(line, state) {
+            return Some(reply);
+        }
+        if ["u NB", "u NR", "u ANF", "u MN", "l AGC"].contains(&line) {
+            return Some(format!("{}\n", value.load(Ordering::SeqCst)));
+        }
+        if ["U NB ", "U NR ", "U ANF ", "U MN ", "L AGC "]
+            .iter()
+            .any(|prefix| line.starts_with(prefix))
+        {
+            value.store(
+                line.split_whitespace().last().unwrap().parse().unwrap(),
+                Ordering::SeqCst,
+            );
+            return Some("RPRT 0\n".into());
+        }
+        None
+    })
+}
+
+pub(crate) fn dsp_writes(peer: &Peer) -> Vec<String> {
+    peer.lines
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|s| {
+            ["M ", "F ", "T ", "L ", "U "]
+                .iter()
+                .any(|prefix| s.starts_with(prefix))
+        })
+        .cloned()
+        .collect()
 }
 
 fn retune(from: (u64, &str), to: (u64, &str)) -> Retune {

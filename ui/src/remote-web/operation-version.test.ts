@@ -17,6 +17,8 @@ it('preserves the original advertisement while explicitly negotiating expanded o
   expect(advertisedOperationVersion(2, 999)).toBe(2)
   for (const base of [undefined, 0, 3, '2', null]) expect(advertisedOperationVersion(base, 3)).toBe(0)
   expect(controlVersion({ action: 'radio.filterWidth', mode: 'cw', expectedHz: 500, hz: 550 })).toBe(3)
+  expect(controlVersion({ action: 'radio.function', mode: 'phone', func: 'manualNotch', expectedOn: false, on: true })).toBe(3)
+  expect(controlVersion({ action: 'radio.agc', mode: 'cw', expectedSpeed: 'fast', speed: 'fast' })).toBe(3)
   expect(controlVersion({ action: 'radio.band', band: '40m', mode: 'phone' })).toBe(3)
   expect(controlVersion({ action: 'radio.tier', tier: 'FT4' })).toBe(3)
   expect(controlVersion({ action: 'radio.workspace', workspace: 'js8' })).toBe(3)
@@ -67,12 +69,12 @@ it('projects older station capability hints for each browser version after room 
     // A pre-v3 native build may have advertised frequency/mode under v2.
     // Cloud upgrades must keep that hint from breaking a legacy parser.
     const wire = state()
-    wire.controls!.capabilities = ['decoder', 'amplifier', 'frequency', 'mode', 'tier', 'ampFollowBand', 'workspace', 'decoderSettings','receiverSettings','receiverGain','bandSelection','receiverFilter']
+    wire.controls!.capabilities = ['decoder', 'amplifier', 'frequency', 'mode', 'tier', 'ampFollowBand', 'workspace', 'decoderSettings','receiverSettings','receiverGain','bandSelection','receiverFilter','receiverDsp']
     restored.receiveStation({ type: 'operationResponse', sessionId, requestId, value: wire })
     expect(browser.frames).toHaveLength(1)
     if (version === 1) expect(browser.frames[0].value.controls).toBeUndefined()
     else expect(browser.frames[0].value.controls.capabilities).toEqual(version === 2 ? ['decoder', 'amplifier'] : wire.controls!.capabilities)
-    expect(wire.controls!.capabilities).toHaveLength(12)
+    expect(wire.controls!.capabilities).toHaveLength(13)
   }
 })
 
