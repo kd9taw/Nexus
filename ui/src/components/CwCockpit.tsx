@@ -1348,7 +1348,7 @@ export function CwCockpit({
         }}
         fieldDay={fieldDay}
         fdMode="CW"
-      /> : <RemoteRecallEntry snap={snap} mode="CW" onOpenLog={onOpenLogbook} />}
+      /> : <RemoteRecallEntry snap={snap} mode="CW" onOpenLog={onOpenLogbook} pendingWork={pendingWork} onConsumeWork={onConsumeWork} />}
     </CockpitPaneFrame>
   )
 

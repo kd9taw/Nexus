@@ -116,8 +116,9 @@ interface Props {
     submit: (record: LoggedQso, time: 'station' | 'explicit') => Promise<void>
     canSubmit: boolean
     busy: boolean
+    pending?: boolean
     resetKey: number
-    recall: (call: string) => React.ReactNode
+    recall: (call: string, context?: { band: string; freqMhz: number; mode: string }) => React.ReactNode
   }
 
   snap: AppSnapshot
@@ -248,6 +249,13 @@ export function LogEntry({
   remote,
 }: Props) {
   const remoteMode = remote != null
+  type DraftContext = { band: string; freqMhz: number; mode: string }
+  const [remoteDraftContext, setRemoteDraftContext] = useState<DraftContext | null>(null)
+  const [remoteWorkOffer, setRemoteWorkOffer] = useState<({ call: string; ts: number } & { context: DraftContext }) | null>(null)
+  const currentDraftContext = (): DraftContext => ({ band: snap.radio.band, freqMhz: snap.radio.dialMhz, mode })
+  const rememberRemoteContext = () => {
+    if (remoteMode) setRemoteDraftContext(current => current ?? currentDraftContext())
+  }
   const fdActive = fieldDay != null
   // Does this cockpit's exchange carry a park/summit reference? See `exchange`.
   const asksForPark = exchange === 'terrestrial'
@@ -501,6 +509,12 @@ export function LogEntry({
   // and hits Enter. Keyed on `ts` to refire on re-click of the same call.
   useEffect(() => {
     if (!pendingWork) return
+    if (remoteMode && (remote?.pending || remoteDraftContext || logCall.trim() || logName.trim() || logQth.trim() || logComment.trim() || logNotes.trim() || logParkRef.trim() || overrideOpen || logRstSent !== defaultRst || logRstRcvd !== defaultRst)) {
+      setRemoteWorkOffer({ ...pendingWork, context: currentDraftContext() })
+      onConsumeWork?.()
+      return
+    }
+    if (remoteMode) { setRemoteDraftContext(currentDraftContext()); setRemoteWorkOffer(null) }
     setLogCall(pendingWork.call.toUpperCase())
     humanCallEditRef.current = false // a clicked spot is not a human keystroke…
     settledCallRef.current = true // …but it IS a final call, so it still gets enriched
@@ -717,6 +731,7 @@ export function LogEntry({
   }
 
   const reset = () => {
+    setRemoteDraftContext(null)
     setLogCall('')
     setLogRstSent(defaultRst)
     setLogRstRcvd(defaultRst)
@@ -785,9 +800,12 @@ export function LogEntry({
   const ovFreqNum = Number(ovFreq)
   const ovFreqOk = overrideOpen && Number.isFinite(ovFreqNum) && ovFreqNum > 0
   const overrideBlocked = overrideOpen && !ovFreqOk
-  const effBand = overrideOpen ? ovBand : snap.radio.band
-  const effFreqMhz = overrideOpen ? ovFreqNum : snap.radio.dialMhz
-  const effMode = overrideOpen ? ovMode : mode
+  // Remote drafts survive navigation and other operators' QSYs. Keep their
+  // captured contact context; the explicit other-radio override still wins.
+  const draftContext = remoteMode ? remoteDraftContext : null
+  const effBand = overrideOpen ? ovBand : draftContext?.band ?? snap.radio.band
+  const effFreqMhz = overrideOpen ? ovFreqNum : draftContext?.freqMhz ?? snap.radio.dialMhz
+  const effMode = overrideOpen ? ovMode : draftContext?.mode ?? mode
 
   useEffect(() => {
     if (remoteMode && remote?.resetKey) reset()
@@ -796,7 +814,7 @@ export function LogEntry({
   }, [remote?.resetKey])
 
   const logIt = async () => {
-    if (remote && (!remote.canSubmit || remote.busy || fdActive)) return
+    if (remote && (!remote.canSubmit || remote.busy || remote.pending || fdActive)) return
     const call = logCall.trim().toUpperCase()
     if (!call) return
     if (overrideBlocked) {
@@ -1109,8 +1127,23 @@ export function LogEntry({
     hunt.call.trim().toUpperCase().split('/')[0] === logCall.trim().toUpperCase().split('/')[0]
 
   return (
-    <div className="log-entry">
+    <div className="log-entry" onChangeCapture={remoteMode ? rememberRemoteContext : undefined}>
       {titled && <h2>{t('logEntry.title')}</h2>}
+      {remoteMode && remoteWorkOffer && <div>
+        <p role="status">{t('remote.workDraftKept', { call: remoteWorkOffer.call })}</p>
+        <div className="remote-actions"><button type="button" className="remote-button" disabled={remote?.pending}
+          onClick={() => {
+            if (remote?.pending) return
+            const next = remoteWorkOffer
+            reset()
+            setRemoteWorkOffer(null)
+            setOverrideOpen(false)
+            setRemoteDraftContext(next.context)
+            setLogCall(next.call.toUpperCase())
+            humanCallEditRef.current = false
+            settledCallRef.current = true
+          }}>{t('remote.workReplaceDraft', { call: remoteWorkOffer.call })}</button></div>
+      </div>}
 
       {hunt && (
         <div className={`le-hunt-chip${huntMatches ? ' match' : ''}`} title={t('logEntry.hunt.title')}>
@@ -1499,7 +1532,7 @@ export function LogEntry({
           type="button"
           className="le-log-btn"
           onClick={logIt}
-          disabled={!logCall.trim() || overrideBlocked || gridBlocked || (remote != null && (!remote.canSubmit || remote.busy))}
+          disabled={!logCall.trim() || overrideBlocked || gridBlocked || (remote != null && (!remote.canSubmit || remote.busy || remote.pending))}
           title={
             overrideBlocked
               ? t('logEntry.override.blocked')
@@ -1523,7 +1556,7 @@ export function LogEntry({
         )}
       </div>
 
-      {remote ? remote.recall(logCall) : <RecallPanel
+      {remote ? remote.recall(logCall, { band: effBand, freqMhz: effFreqMhz, mode: effMode }) : <RecallPanel
         call={logCall}
         band={snap.radio.band}
         name={logName}

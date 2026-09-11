@@ -1,4 +1,4 @@
-import { useStationControl } from '../stationAccess'
+import { useStationControl, useStationCapability } from '../stationAccess'
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every operator-visible
 // string comes from the catalog. What does NOT: the band and mode names (`modeLabel` is CW or
 // SSB), the scale's edge frequencies, the dial reading, and every value in a spot's tooltip —
@@ -97,6 +97,7 @@ export function BandStrip({
   onSnap,
 }: Props) {
   const control = useStationControl()
+  const workAllowed = useStationCapability('workSpot')
   // Legend is opt-in but remembered — it answers "what do the colours mean?" once, then
   // stays out of the way. Default ON the first time so the key is discoverable.
   const [showLegend, setShowLegend] = useState(
@@ -264,9 +265,9 @@ export function BandStrip({
               type="button"
               className="bandstrip-spot"
               style={{ left: `${pct(s.freqMhz)}%`, opacity }}
-              title={control ? t('bandStrip.spot.title', { detail }) : detail}
-              disabled={!control}
-              onClick={() => { if (control) onWorkSpot(s) }}
+              title={workAllowed ? t('bandStrip.spot.title', { detail }) : detail}
+              disabled={!workAllowed}
+              onClick={() => { if (workAllowed) onWorkSpot(s) }}
             >
               {beacon && (
                 <span className={`bandstrip-type spot-type-badge ${beacon.cls}`}>{beacon.ch}</span>

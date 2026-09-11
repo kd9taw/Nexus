@@ -14,6 +14,11 @@ export function controlTransport(reads: ApplicationTransport, client: Applicatio
     async invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
       let action: StationAction | null = null, read = ''
       switch (command) {
+        case 'work_spot':
+          if (!args || Object.keys(args).some(k => !['mode', 'freqMhz', 'band', 'call', 'tier'].includes(k)) || (args.tier !== null && args.tier !== undefined)) throw Error('applicationUnsupported')
+          action = stationAction({ action: 'radio.workSpot', mode: args.mode, dialMhz: args.freqMhz, band: args.band, call: args.call })
+          read = 'get_snapshot'
+          break
         case 'get_licensed_band_plan': {
           if (!args || Object.keys(args).length !== 1 || typeof args.mode !== 'string' || !['cw', 'phone'].includes(args.mode)) throw Error('applicationUnsupported')
           return readBandChoices(await reads.invoke('get_settings'), args.mode as 'cw' | 'phone') as T
@@ -65,12 +70,20 @@ export function controlTransport(reads: ApplicationTransport, client: Applicatio
       if (!action) return reads.invoke<T>(command, args)
       const result = await operations.control(action)
       if (result.outcome !== 'applied') throw Error(result.outcome === 'rejected' ? result.reason : 'operationUnknown')
+      if (action.action === 'radio.workSpot' && result.evidence !== 'radioReadback') throw Error('operationUnknown')
       if (!read) return undefined as T
       // The UI receives a later station sample, not an optimistic local copy or
       // the pre-command snapshot still in the stream's cache.
       const after = performance.now()
       while (performance.now() - after < APPLICATION_TIMEOUT_MS) {
-        if (client.age(read as ApplicationCommand) <= performance.now() - after) return reads.invoke<T>(read)
+        if (client.age(read as ApplicationCommand) <= performance.now() - after) {
+          const value = await reads.invoke<T>(read)
+          if (action.action === 'radio.workSpot') {
+            const radio = (value as import('../types').AppSnapshot)?.radio
+            if (!radio || Math.round(radio.dialMhz * 1e6) !== Math.round(action.dialMhz * 1e6) || radio.operatingMode?.toLowerCase() !== action.mode) throw Error('readingUnavailable')
+          }
+          return value
+        }
         await new Promise(resolve => setTimeout(resolve, 50))
       }
       throw Error('readingUnavailable')

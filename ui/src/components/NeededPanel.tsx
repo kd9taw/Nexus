@@ -239,6 +239,7 @@ interface Props {
    * the log. Omitted in the popped-out window (no cross-window nav) → those rows fall
    * back to a plain band QSY. */
   onWork?: (alert: NeedAlert) => void
+  canWork?: (alert: NeedAlert) => boolean
   /** Point the antenna rotator at this need's call (great-circle bearing). Omitted when
    * no rotator is configured → the ↗ button is hidden. */
   onPoint?: (call: string) => void
@@ -295,6 +296,7 @@ export function NeededPanel({
   onQsy,
   onSelect,
   onWork,
+  canWork,
   onPoint,
   onPopOut,
   phoneSource,
@@ -427,7 +429,7 @@ export function NeededPanel({
     const a = rows[i]
     if (!a) return
     onSelect(a.call)
-    if (!control) return
+    if (!control && !canWork?.(a)) return
     if (onWork) onWork(a)
     else onQsy(a)
   })
@@ -649,7 +651,7 @@ export function NeededPanel({
             // need must land in the FT8 cockpit, not just move the dial (the
             // "radio switched but the app didn't" bug). The pop-out has no onWork,
             // so its rows fall back to the QSY-only branch below.
-            const workable = control && !!onWork
+            const workable = (control || !!canWork?.(a)) && !!onWork
             const age = ageLabel(a.admittedAt)
             const evidenceLine = a.evidence
               ? (age ? `${a.evidence} · ${age}` : a.evidence)

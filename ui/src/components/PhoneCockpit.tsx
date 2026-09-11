@@ -1202,7 +1202,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
         onConsumeWork={onConsumeWork}
         fieldDay={fieldDay}
         fdMode="PH"
-      /> : <RemoteRecallEntry snap={snap} mode={commandedMode === 'FM' ? 'FM' : 'SSB'} onOpenLog={onOpenLogbook} />}
+      /> : <RemoteRecallEntry snap={snap} mode={commandedMode === 'FM' ? 'FM' : 'SSB'} onOpenLog={onOpenLogbook} pendingWork={pendingWork} onConsumeWork={onConsumeWork} />}
     </CockpitPaneFrame>
   )
 

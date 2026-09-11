@@ -7,7 +7,7 @@ export { RemoteOperationsContext } from '../stationAccess'
 import type { LoggedQso } from '../types'
 import { manualRecord, type ManualRecord } from './operation-protocol'
 import type { OperationClient } from './operation-client'
-import { ObserverRecallEntry, RemoteRecall, type RecallProps } from './RemoteRecall'
+import { ObserverRecallEntry, RemoteRecall, type RemoteRecallEntryProps } from './RemoteRecall'
 // Radio units are invariant protocol tokens, never translated or locale-formatted.
 const FREQUENCY_UNIT = 'MHz'
 export function LoggingAuthority({ client }: { client: OperationClient }) {
@@ -109,8 +109,10 @@ export function RemoteLogEntry({
   snap,
   mode,
   onOpenLog,
-  selectedCall
-}: Omit<RecallProps, 'call' | 'bounded'> & { client: OperationClient; selectedCall?: string }) {
+  selectedCall,
+  pendingWork,
+  onConsumeWork,
+}: RemoteRecallEntryProps & { client: OperationClient }) {
   const display = useRemotePresentation()
   const view = useSyncExternalStore(client.subscribe, client.getSnapshot),
     available = useStationData()
@@ -225,14 +227,16 @@ export function RemoteLogEntry({
           defaultRst={mode === 'SSB' || mode === 'FM' ? '59' : '599'}
           exchange={mode === 'SAT' ? 'satellite' : 'terrestrial'}
           onOpenLogbook={onOpenLog}
-          pendingWork={selectedCall ? { call: selectedCall, ts: 0 } : null}
+          pendingWork={pendingWork ?? (selectedCall ? { call: selectedCall, ts: 0 } : null)}
+          onConsumeWork={onConsumeWork}
           remote={{
             submit,
             canSubmit,
             busy: view.busy,
+            pending: !!view.unresolved || view.submitting,
             resetKey,
-            recall: (call) => (
-              <RemoteRecall snap={snap} call={call} mode={mode} onOpenLog={onOpenLog} />
+            recall: (call, context) => (
+              <RemoteRecall snap={snap} call={call} mode={mode} context={context} onOpenLog={onOpenLog} />
             )
           }}
         />

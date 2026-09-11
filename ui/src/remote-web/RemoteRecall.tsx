@@ -10,8 +10,9 @@ import { RECALL_COMMAND } from './application-query-protocol'
 import { parseRecall } from './recall'
 import type { Recall } from './recall'
 
-export type RecallProps = { snap: AppSnapshot; call: string; mode: string; bounded?: boolean; onOpenLog?: (call: string) => void }
-export function RemoteRecall({ snap, call, mode, bounded, onOpenLog }: RecallProps) {
+export type RecallProps = { snap: AppSnapshot; call: string; mode: string; bounded?: boolean; onOpenLog?: (call: string) => void; context?: { band: string; freqMhz: number; mode: string } }
+export type RemoteRecallEntryProps = Omit<RecallProps, 'call' | 'bounded'> & { selectedCall?: string; pendingWork?: { call: string; ts: number } | null; onConsumeWork?: () => void }
+export function RemoteRecall({ snap, call, mode, bounded, onOpenLog, context }: RecallProps) {
   const source = useContext(RemoteCollectionsContext)
   const available = useStationData()
   const cu = call.trim().toUpperCase()
@@ -38,16 +39,17 @@ export function RemoteRecall({ snap, call, mode, bounded, onOpenLog }: RecallPro
   if (!value) return <div className={`recall-card${bounded ? ' cockpit-recall' : ''}`}>
     <strong>{cu}</strong><p className="dim" role="status">{t(error || !available || !/^[A-Z0-9/]{3,32}$/.test(cu) ? 'remote.collectionUnavailable' : 'remote.collectionLoading')}</p>{retry}
   </div>
-  const liveBand = bandKey({ band: snap.radio.band, freqMhz: snap.radio.dialMhz })
-  const dupe = value.workedBandModes.some(([b, m]) => b === snap.radio.band.trim().toLowerCase() && b !== '' && (!snap.b4MatchMode || m === mode.trim().toUpperCase()))
+  const band = context?.band ?? snap.radio.band, logMode = context?.mode ?? mode
+  const liveBand = bandKey({ band, freqMhz: context?.freqMhz ?? snap.radio.dialMhz })
+  const dupe = value.workedBandModes.some(([b, m]) => b === band.trim().toLowerCase() && b !== '' && (!snap.b4MatchMode || m === logMode.trim().toUpperCase()))
   const newBandSlot = value.slots.workedEver && !value.slots.bandUnknown && liveBand !== null && !value.slots.bandsWorked.includes(liveBand)
   const station = snap.stations.find(s => s.call.trim().toUpperCase() === cu)
   const latest = value.rows[0]
-  return <RecallPanel call={cu} band={snap.radio.band} myGrid={snap.mygrid}
+  return <RecallPanel call={cu} band={band} myGrid={snap.mygrid}
     name={latest?.name} qth={latest?.qth} grid={station?.grid || latest?.grid} country={value.entity}
     hist={{ ...value.history, qsos: value.rows, dupeThisBand: dupe }}
     newEntity={Boolean(value.entity?.trim()) && !value.slots.workedEver}
-    newBandSlot={newBandSlot} newModeSlot={value.slots.workedEver && !newBandSlot && !value.slots.modesWorked.includes(modeKey(mode))}
+    newBandSlot={newBandSlot} newModeSlot={value.slots.workedEver && !newBandSlot && !value.slots.modesWorked.includes(modeKey(logMode))}
     latestNote={value.latestNote} hasLookup={false} bounded={bounded} onOpenLog={onOpenLog}
     historyNotice={<div className="dim" role="status"><p>{t('remote.recallSnapshot')}</p>
       {value.rows.length < value.history.count && <p>{t('remote.collectionCapped', { count: value.rows.length, total: value.history.count })}</p>}{retry}</div>} />
@@ -66,7 +68,7 @@ export function ObserverRecallEntry({ snap, mode, onOpenLog, selectedCall }: Omi
   </div>
 }
 
-export function RemoteRecallEntry(props:Omit<RecallProps,'call'|'bounded'>&{selectedCall?:string}) {
+export function RemoteRecallEntry(props:RemoteRecallEntryProps) {
   const operations=useRemoteOperations()
   return operations?.enabled?<RemoteLogEntry {...props} client={operations}/>:<ObserverRecallEntry {...props}/>
 }

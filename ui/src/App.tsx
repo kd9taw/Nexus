@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { StationDataContext } from './stationAccess'
+import { StationDataContext, useStationCapability } from './stationAccess'
 import { QuickNavigation, useRemotePresentation } from './remote-web/presentation'
 import type { AppSnapshot, BandChannel, LoggedQso, ModeRequest, Settings, SourceKind, Tier } from './types'
 import { rigModeTransition, type RigMode } from './rigModeForView'
@@ -251,6 +251,7 @@ import { RemoteOta } from './remote-web/RemoteOta'
 import { RemoteMemories } from './remote-web/RemoteMemories'
 
 export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
+  const remoteWorkAllowed = useStationCapability('workSpot')
   const display = useRemotePresentation()
   const quick = !!remote && display?.presentation === 'quick'
   const needsRead = useRemoteCollection('needs')
@@ -922,6 +923,9 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   const workNavRef = useRef<number | null>(null)
   useEffect(() => {
     const tick = snap?.workTick ?? 0
+    // Native pop-outs share this hint. Independent browser drafts/navigation
+    // follow only their own confirmed Work action, never a station broadcast.
+    if (remote) { workNavRef.current = tick; return }
     if (workNavRef.current === null) {
       workNavRef.current = tick
       return
@@ -954,7 +958,7 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     if (wc && (target === 'cw' || target === 'phone')) {
       setPendingWork({ call: wc, view: target, ts: Date.now() })
     }
-  }, [snap?.workTick, snap?.workView, cwEnabled, phoneEnabled, rttyEnabled])
+  }, [snap?.workTick, snap?.workView, cwEnabled, phoneEnabled, rttyEnabled, remote])
   // Declared here (rather than beside bandPlan below) because the need gate reads it: the
   // band scopes live in settings and everything derived from `needAlerts` sits right below.
   const [settings, setSettings] = useState<Settings | null>(remote?.settings ?? null)
@@ -1820,9 +1824,16 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     }
   }, [])
 
+  const canRemoteWork = useCallback((alert: NeedAlert) => {
+    const target = workTarget(alert, bandPlan)
+    return remoteWorkAllowed && !!target &&
+      ((target.view === 'cw' && cwEnabled) || (target.view === 'phone' && phoneEnabled))
+  }, [remoteWorkAllowed, bandPlan, cwEnabled, phoneEnabled])
+
   // resolvable frequency at all falls back to a plain band QSY.
   const handleWorkNeeded = useCallback(
     (alert: NeedAlert) => {
+      if (remote && !canRemoteWork(alert)) return
       // `target`, not `t` — `t` is the translator in this file.
       const target = workTarget(alert, bandPlan)
       if (!target) {
@@ -1886,7 +1897,7 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
         )
       })()
     },
-    [bandPlan, handleQsy, cwEnabled, phoneEnabled, rttyEnabled],
+    [bandPlan, handleQsy, cwEnabled, phoneEnabled, rttyEnabled, remote, canRemoteWork],
   )
 
   // Work a spot double-clicked on the MAP — the same atomic path as the Needed
@@ -1969,6 +1980,7 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // act: go to that cockpit.
   const handleWorkSpotHere = useCallback(
     (cockpit: 'phone' | 'cw') => (s: SpotRow) => {
+      if (remote && !remoteWorkAllowed) return
       const kind = cockpit
       void withErrorToast(
         () => workSpot(kind as 'digital' | 'phone' | 'cw', s.freqMhz, s.band, s.call),
@@ -1976,6 +1988,7 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       ).then((snap) => {
         if (!snap) return
         setSnap(snap)
+        if (remote) setPendingWork({ call: s.call, view: cockpit, ts: Date.now() })
         pushToast(
           t('shell.work.here', { call: s.call, band: s.band, freq: s.freqMhz.toFixed(3) }),
           'success',
@@ -1983,7 +1996,7 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
         )
       })
     },
-    [],
+    [remote, remoteWorkAllowed],
   )
   const workSpotHerePhone = useMemo(() => handleWorkSpotHere('phone'), [handleWorkSpotHere])
   const workSpotHereCw = useMemo(() => handleWorkSpotHere('cw'), [handleWorkSpotHere])
@@ -2647,6 +2660,7 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
           onQsy={(a) => handleQsy(a.band, a.freqMhz ?? undefined)}
           onSelect={handleSelect}
           onWork={handleWorkNeeded}
+          canWork={remote ? canRemoteWork : undefined}
           onPoint={
               !remote && ((settings?.rotatorModel ?? 0) > 0 || settings?.rotatorHost?.trim())
                 ? handlePointAntenna

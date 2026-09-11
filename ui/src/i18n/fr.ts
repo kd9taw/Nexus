@@ -131,6 +131,8 @@ export const FR: PartialCatalog = {
   "remote.quick.hunt": "Chasse DX",
   "remote.quick.log": "Journal",
   "remote.quick.radioDetails": "Détails de la radio",
+  "remote.workDraftKept": "Le brouillon du contact actuel est conservé. Commencez un nouveau contact avec {call} lorsque vous êtes prêt.",
+  "remote.workReplaceDraft": "Effacer le brouillon et utiliser {call}",
   "remote.quick.logbook": "Journal général",
   "remote.applicationObserver": "Observation uniquement. Les commandes d’exploitation ne sont pas disponibles dans cet aperçu.",
   "remote.viewUnavailable": "Cette vue n’est pas encore disponible à distance dans cet aperçu. Ouvrez-la dans Nexus à la station.",

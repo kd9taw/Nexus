@@ -123,6 +123,61 @@ it('adapts explicit mode entry separately from frequency and waits for a later s
   h.client.disconnected()
 })
 
+it.each(['cw', 'phone'] as const)('sends one %s Work intent and waits for matching later station data before handoff', async mode => {
+  const h = setup(storage(), ['workSpot'], 3)
+  let sampleAge = Infinity
+  const snapshot = { radio: { operatingMode: mode, dialMhz: 7.19876, txEnabled: false } }
+  const getSnapshot = vi.fn(async () => snapshot)
+  const transport = controlTransport({ kind: 'remote', invoke: getSnapshot } as ApplicationTransport,
+    { age: () => sampleAge } as unknown as ApplicationClient, h.client)
+  const result = transport.invoke('work_spot', { mode, freqMhz: 7.19876, band: '40m', call: 'N2SPOT/P', tier: null })
+  await Promise.resolve()
+  const request = h.sent.at(-1).request
+  expect(request.action).toEqual({ action: 'radio.workSpot', mode, dialMhz: 7.19876, band: '40m', call: 'N2SPOT/P' })
+  expect(getSnapshot).not.toHaveBeenCalled()
+  h.reply({ operation: 'stationControl', operationId: request.requestId, outcome: 'applied', evidence: 'radioReadback' })
+  await h.advance(100)
+  expect(getSnapshot).not.toHaveBeenCalled()
+  sampleAge = 0
+  await h.advance(50)
+  expect(await result).toEqual(snapshot)
+  expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(1)
+  h.client.disconnected()
+})
+
+it.each(['frequency', 'mode', 'evidence'])('refuses a Work handoff after a mismatched %s without replaying the intent', async changed => {
+  const h = setup(storage(), ['workSpot'], 3)
+  const snapshot = { radio: { operatingMode: changed === 'mode' ? 'phone' : 'cw', dialMhz: changed === 'frequency' ? 14.074 : 7.023 } }
+  const transport = controlTransport({ kind: 'remote', invoke: vi.fn(async () => snapshot) } as ApplicationTransport,
+    { age: () => 0 } as unknown as ApplicationClient, h.client)
+  const result = transport.invoke('work_spot', { mode: 'cw', freqMhz: 7.023, band: '40m', call: 'N2SPOT', tier: null }).catch(e => e)
+  await Promise.resolve()
+  const request = h.sent.at(-1).request
+  h.reply({ operation: 'stationControl', operationId: request.requestId, outcome: 'applied', evidence: changed === 'evidence' ? 'receiverState' : 'radioReadback' })
+  expect(await result).toMatchObject({ message: changed === 'evidence' ? 'operationUnknown' : 'readingUnavailable' })
+  await h.advance(1500)
+  expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(1)
+  h.client.disconnected()
+})
+
+it('refuses Work on older stations, without its capability, or with unsupported native arguments', async () => {
+  for (const [capabilities, version] of [[['workSpot'], 2], [['frequency', 'mode'], 3]] as [ControlCapability[], OperationVersion][]) {
+    const h = setup(storage(), capabilities, version)
+    await expect(h.client.control({ action: 'radio.workSpot', mode: 'cw', dialMhz: 7.023, band: '40m', call: 'N2SPOT' })).rejects.toThrow(version === 2 ? 'stationUnsupported' : 'notController')
+    expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(0)
+    h.client.disconnected()
+  }
+  const h = setup(storage(), ['workSpot'], 3)
+  const invoke = vi.fn(), transport = controlTransport({ kind: 'remote', invoke } as ApplicationTransport, {} as ApplicationClient, h.client)
+  const args = { mode: 'cw', freqMhz: 7.023, band: '40m', call: 'N2SPOT', tier: null }
+  for (const bad of [{ ...args, tier: 'FT8' }, { ...args, splitUpKhz: 2 }, { ...args, txEnabled: true }, { ...args, mode: 'digital' }, { ...args, call: null }, { ...args, call: 'N2SPOT\nT 1' }]) {
+    await expect(transport.invoke('work_spot', bad)).rejects.toThrow()
+  }
+  expect(invoke).not.toHaveBeenCalled()
+  expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(0)
+  h.client.disconnected()
+})
+
 it('a receiver grant cannot tune and an uncertain frequency is never sent again', async () => {
   const a = { action: 'radio.frequency', dialMhz: 7.074, band: '40m', sideband: 'USB' } as const
   const receiver = setup(storage(), ['decoder', 'amplifier'], 3)

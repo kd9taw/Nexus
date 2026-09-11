@@ -11,6 +11,7 @@ export type AgcSpeed = (typeof AGC_SPEEDS)[number]
 export const PHONE_MODES = ['auto', 'USB', 'LSB', 'AM'] as const
 export type PhoneMode = (typeof PHONE_MODES)[number]
 export type StationAction =
+  | { action: 'radio.workSpot'; mode: 'cw' | 'phone'; dialMhz: number; band: string; call: string }
   | { action: 'radio.frequency'; dialMhz: number; band: string; sideband: 'USB' | 'LSB' | 'FM' | 'AM' }
   | { action: 'radio.band'; band: string; mode: 'cw' | 'phone' }
   | { action: 'radio.filterWidth'; mode: 'cw' | 'phone'; expectedHz: number; hz: number }
@@ -42,7 +43,7 @@ export type ControlContext = {
   ampConnection: number | null
   ampReadSequence: number | null
 }
-export const CONTROL_CAPABILITIES = ['decoder', 'radio', 'amplifier', 'frequency', 'mode', 'tier', 'ampFollowBand', 'workspace', 'decoderSettings', 'receiverSettings', 'receiverGain', 'bandSelection', 'receiverFilter', 'receiverDsp', 'phoneMode'] as const
+export const CONTROL_CAPABILITIES = ['decoder', 'radio', 'amplifier', 'frequency', 'mode', 'tier', 'ampFollowBand', 'workspace', 'decoderSettings', 'receiverSettings', 'receiverGain', 'bandSelection', 'receiverFilter', 'receiverDsp', 'phoneMode', 'workSpot'] as const
 export type ControlCapability = (typeof CONTROL_CAPABILITIES)[number]
 // A new action cannot silently inherit a broader capability by its prefix.
 const ACTION_CAPABILITY: Record<StationAction['action'], ControlCapability> = {
@@ -50,7 +51,7 @@ const ACTION_CAPABILITY: Record<StationAction['action'], ControlCapability> = {
   'radio.band': 'bandSelection', 'radio.mode': 'mode', 'radio.tier': 'tier', 'radio.workspace': 'workspace',
   'radio.filterWidth': 'receiverFilter',
   'radio.function': 'receiverDsp', 'radio.agc': 'receiverDsp',
-  'radio.phoneMode': 'phoneMode',
+  'radio.phoneMode': 'phoneMode', 'radio.workSpot': 'workSpot',
   'decoder.arm': 'decoder', 'decoder.clear': 'decoder', 'decoder.afcReset': 'decoder',
   'decoder.net': 'decoder', 'decoder.pskMode': 'decoder',
   'decoder.js8Speed': 'decoderSettings', 'decoder.msk144Period': 'decoderSettings',
@@ -85,6 +86,10 @@ export function stationAction(raw: unknown): StationAction {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) invalid()
   const a = raw as Record<string, unknown>
   switch (a.action) {
+    case 'radio.workSpot':
+      object(a, ['action', 'mode', 'dialMhz', 'band', 'call'])
+      if (!oneOf(a.mode, ['cw', 'phone']) || !finite(a.dialMhz) || a.dialMhz <= 0 || a.dialMhz > 250000 || !oneOf(a.band, BANDS) || typeof a.call !== 'string' || !/^[A-Za-z0-9/]{1,32}$/.test(a.call)) invalid()
+      break
     case 'radio.frequency':
       object(a, ['action', 'dialMhz', 'band', 'sideband'])
       if (!finite(a.dialMhz) || a.dialMhz <= 0 || a.dialMhz > 250000 || (a.band !== '' && !oneOf(a.band, BANDS)) || !oneOf(a.sideband, ['USB', 'LSB', 'FM', 'AM'])) invalid()
