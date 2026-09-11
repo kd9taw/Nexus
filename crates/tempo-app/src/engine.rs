@@ -5650,20 +5650,27 @@ impl Engine {
     /// * **nothing known** (empty context and no memory — a boot seed off the bands) — reads
     ///   as changed, which clears. The safe direction: nothing is claimed to still be valid.
     fn context_band_changed(&mut self, band: &str) -> bool {
-        // Spent on every crossing: from here on the context belongs to wherever we land.
-        let left = self.off_band_from.take();
+        let (changed, next) = self.context_band_transition(band);
+        self.off_band_from = next;
+        changed
+    }
+
+    // The same decision, without changing the live context, lets a Remote
+    // radio transaction prepare the mode that the native dial verb will keep.
+    fn context_band_transition(&self, band: &str) -> (bool, Option<String>) {
         let prev = if self.settings.band.is_empty() {
-            left.unwrap_or_default()
+            self.off_band_from.as_deref().unwrap_or_default()
         } else {
-            self.settings.band.clone()
+            self.settings.band.as_str()
         };
         if band.is_empty() {
             // Off the bands (or still off them — a second off-band move must not forget the
             // band the FIRST one left, or the way home stops being a way home).
-            self.off_band_from = (!prev.is_empty()).then_some(prev);
-            return false;
+            (false, (!prev.is_empty()).then(|| prev.to_string()))
+        } else {
+            // Spent on every crossing: the context now belongs to the named band.
+            (!prev.eq_ignore_ascii_case(band), None)
         }
-        !prev.eq_ignore_ascii_case(band)
     }
 
     /// The rig reported a dial frequency we did NOT set — the operator turned the VFO knob

@@ -131,14 +131,15 @@ impl Engine {
         {
             return Err(Reason::InvalidAction);
         }
-        let target_mode =
-            if self.settings.operating_mode == OperatingMode::Phone && band == self.settings.band {
-                self.sideband_override
-                    .clone()
-                    .unwrap_or_else(|| self.settings.rig_mode_at(dial_mhz, sideband))
-            } else {
-                self.settings.rig_mode_at(dial_mhz, sideband)
-            };
+        let target_mode = if self.settings.operating_mode == OperatingMode::Phone
+            && !self.context_band_transition(band).0
+        {
+            self.sideband_override
+                .clone()
+                .unwrap_or_else(|| self.settings.rig_mode_at(dial_mhz, sideband))
+        } else {
+            self.settings.rig_mode_at(dial_mhz, sideband)
+        };
         self.queue_remote_target(
             Target {
                 hz: target_hz,
