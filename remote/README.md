@@ -348,6 +348,17 @@ confirms local persistence, not external delivery. Failed append/sync and a lost
 reply can be uncertain; no automatic retransmission occurs. The station retains
 at most 1,024 receipts for ten minutes and refuses old sequences after expiry.
 
+The native current-QSO logging foundation shares the local button's eligibility,
+record construction and write-once transition. Its pending-confirmation path
+retains the original contact through append and storage sync; only a successful
+sync can authorize clearing that same hold. Replacing even an identical hold
+invalidates old completion/discard tokens. Journal preparation syncs outside
+Engine and rechecks the hold before publication. Confirmation changes only the
+four existing dialog fields, preserving native split frequency and end time;
+pending journals now retain those fields across restart and still read legacy
+journals. These are native APIs only; the hosted Log QSO and confirmation actions
+are not connected by this foundation.
+
 Before submission the browser retains its operation ID and bounded contact fields.
 Station-specific Web Locks protect writes, result recovery and explicit dismissal
 across tabs. Contention or unavailable locking refuses the gesture; it never queues
