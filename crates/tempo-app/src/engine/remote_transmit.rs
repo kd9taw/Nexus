@@ -211,6 +211,13 @@ impl Engine {
         frequency: Option<f32>,
     ) -> Result<(), Reason> {
         self.prepare_remote_ft(&permit)?;
+        // Match the desktop command's entry validation before the native QSO
+        // verb can change its target or arm TX. Keying guards remain in place.
+        self.structured_tx_ready(true)
+            .map_err(|_| Reason::InvalidAction)?;
+        let grid = grid.map(str::trim).filter(|s| !s.is_empty());
+        let message = message.map(str::trim).filter(|s| !s.is_empty());
+        let frequency = frequency.filter(|f| *f > 0.0);
         self.call_station_ctx(call, grid, message, snr, frequency)
             .map_err(|_| Reason::InvalidAction)?;
         if !permit.valid(Instant::now()) {
