@@ -399,10 +399,10 @@ mod tests {
                     };
                     native.start_cq(None).unwrap();
                     remote.start_remote_ft_cq(permit(), None).unwrap();
-                    native.set_tx_enabled(armed);
-                    remote.set_remote_ft_tx_enabled(permit(), armed).unwrap();
                     native.take_immediate_retune();
                     remote.take_immediate_retune();
+                    native.set_tx_enabled(armed);
+                    remote.set_remote_ft_tx_enabled(permit(), armed).unwrap();
                     let context = FtExchangeContext::from(&remote.snapshot().qso.unwrap());
                     match &change {
                         FtExchangeChange::Resend => native.qso_resend(),
