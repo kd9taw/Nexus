@@ -111,11 +111,11 @@ fn receiver_peer(mode: &str, ignore: Option<String>) -> Peer {
             return Some("RPRT 0\n".into());
         }
         let mut values = readings.lock().unwrap();
-        if let Some(token) = line.strip_prefix("l ").or_else(|| line.strip_prefix("u ")) {
-            let default = match token {
-                "AGC" => "2",
-                "NOTCHF" => "600",
-                "RFPOWER" | "MICGAIN" | "NR" | "COMP" => "0.5",
+        if line.starts_with("l ") || line.starts_with("u ") {
+            let default = match line {
+                "l AGC" => "2",
+                "l NOTCHF" => "600",
+                "l RFPOWER" | "l MICGAIN" | "l NR" | "l COMP" => "0.5",
                 _ => "0",
             };
             return Some(format!(
