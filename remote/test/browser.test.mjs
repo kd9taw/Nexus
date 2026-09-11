@@ -608,6 +608,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         await until(`document.querySelector('${tx}')?.textContent.trim()==='TX On'&&!document.querySelector('${tx}').disabled`)
         assert.equal(stationRequests.length,count+3);assert.equal(stationRequests.at(-1).action.on,true)
         await click(`[...document.querySelectorAll('.or-row[aria-selected]')].find(e=>e.textContent.includes('W1AW'))`,2)
+        for(let i=0;i<100&&stationRequests.length<count+4;i++)await sleep(50)
         await until(`!document.querySelector('${tx}').disabled&&document.querySelector('.cockpit-qso')?.textContent.includes('W1AW')`)
         assert.equal(stationRequests.length,count+4);assert.equal(stationRequests.at(-1).action.action,'ft.call')
         // Missing station display data blocks arming but cannot block Stop.

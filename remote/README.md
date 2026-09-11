@@ -864,6 +864,15 @@ station reconciles the removed grant before accepting subsequent commands;
 older settings refreshes cannot restore the revoked grant's display. Older
 operation versions retain their existing capability vocabulary and cannot arm FT.
 
-This covers CQ, the enable latch and Stop. Station selection/Call, complete QSO
-progression and logging, other modes, browser audio and hardware/WAN acceptance
-remain incomplete. Source verification is not installation or deployment.
+The separate `ftCall` capability connects double-click and keyboard Work gestures
+in the existing decode, roster and station-card surfaces. The station checks the
+selected message/report/offset against its native decode history, or the selected
+roster entry against its current station data, before calling the native routine.
+The desktop identity check and saved double-click arming preference still apply.
+Plain decode selection fills the browser's DX fields; Ctrl-double-click can also
+move RX with receiver permission, without borrowing transmit authority.
+
+Call selection currently requires the native 240-row history or current roster.
+Older displayed history, typed targets, complete QSO progression and logging,
+other modes, browser audio and hardware/WAN acceptance remain incomplete.
+Source verification is not installation or deployment.

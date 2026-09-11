@@ -172,8 +172,14 @@ managed in the existing Remote settings section, remains boot-scoped and can be
 revoked during a pending refresh. Older refresh results cannot restore its display.
 Stop remains independent of stale observations and command/storage locks. The
 stale-workspace visibility rule preserves an enabled Stop while hiding readings;
-a compiled-browser click checks its actual hit target. Call
-selection, full QSO workflows and hardware/WAN acceptance remain pending.
+a compiled-browser click checks its actual hit target. The `ftCall` capability
+connects existing decode, roster and station-card work gestures. Selected decode
+arguments are checked against native history; roster arguments against current
+station data. Desktop identity checks precede the same native call verb, retaining
+message choice, parity, offsets and the operator's manual-arming preference.
+Plain decode selection fills browser fields without RF authority; modified RX
+gestures require receiver permission. Older displayed history, typed targets,
+full QSO workflows and hardware/WAN acceptance remain pending.
 
 The receive-audio foundation is local to `tempo-audio`: the sole `RxDsp` capture
 consumer offers bounded device-rate mono copies through `receive_audio.rs`, before
