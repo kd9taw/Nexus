@@ -590,6 +590,20 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
        assert.deepEqual(await probe.send({type:'ftEvidence'}),{tier,txEnabled:false,owned:false,logCount:1})
        assert.equal((await action(ft,{action:'ft.cq',expectedTier:tier,direction:null})).response.error,'staleContext')
        assert.deepEqual(await probe.send({type:'loggingEvidence'}),evidence)
+       const selection = await probe.send({type:'ftCallDecode'})
+       assert.match(selection.message,/CQ W1AW FN31/)
+       ft = await ftState()
+       assert.ok(ft.controls.capabilities.includes('ftCall'))
+       const called = await action(ft,{action:'ft.call',expectedTier:tier,selection})
+       assert.equal(called.response.value?.outcome,'applied',JSON.stringify(called.response))
+       const contact = await probe.send({type:'ftCallEvidence'})
+       assert.equal(contact.qso.dxcall,'W1AW');assert.equal(contact.qso.dxgrid,'FN31')
+       assert.equal(contact.owned,true);assert.match(contact.qso.txNow,/W1AW N0CALL AA00/)
+       ft = await ftState()
+       assert.deepEqual((await operation({type:'stopTransmit',stationBootId:ft.stationBootId,
+         leaseId:ft.leaseId,transmitEpoch:ft.transmitEpoch})).response.value,{stop:'accepted'})
+       for(let i=0;i<30&&(await probe.send({type:'ftEvidence'})).txEnabled;i++)await delay(50)
+       assert.deepEqual(await probe.send({type:'loggingEvidence'}),evidence)
      }
    }
   }else assert.equal(Object.hasOwn(state,'controls'),false)

@@ -331,6 +331,44 @@ fn cloud_runtime_probe() {
             std::io::stdout().flush().unwrap();
             continue;
         }
+        if value["type"] == "ftCallDecode" {
+            let mut e = engine.lock().unwrap();
+            // Generate a peer's CQ into memory and decode through the real native
+            // path. No radio, PTT, sound device or external station is opened.
+            let mut peer = Engine::new("W1AW", "FN31", 0);
+            peer.set_tier(e.tier());
+            peer.start_cq(None).unwrap();
+            let slot = if peer.tx_even() { 0 } else { 1 };
+            let mut frame: Vec<f32> = peer.poll_tx(slot).into_iter().flatten().collect();
+            assert!(!frame.is_empty(), "the synthetic peer must generate a CQ");
+            frame.resize((e.active_slot_secs() * 12000.0) as usize, 0.0);
+            assert!(
+                e.ingest(&frame, 8) > 0,
+                "the native decoder must hear the peer"
+            );
+            let snapshot = e.snapshot();
+            let decode = snapshot
+                .recent_decodes
+                .iter()
+                .find(|d| d.from.as_deref() == Some("W1AW"))
+                .unwrap();
+            println!(
+                "REMOTE_TEST:{}",
+                json!({"call":"W1AW","grid":null,
+                "message":decode.message,"snr":decode.snr,"freq":decode.freq_hz})
+            );
+            std::io::stdout().flush().unwrap();
+            continue;
+        }
+        if value["type"] == "ftCallEvidence" {
+            let e = engine.lock().unwrap();
+            println!(
+                "REMOTE_TEST:{}",
+                json!({"qso":e.snapshot().qso,"owned":e.remote_ft_tx_owned()})
+            );
+            std::io::stdout().flush().unwrap();
+            continue;
+        }
         if value["type"] == "seedFt" || value["type"] == "ftEvidence" {
             let mut e = engine.lock().unwrap();
             if value["type"] == "seedFt" {
