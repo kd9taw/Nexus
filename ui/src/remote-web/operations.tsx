@@ -58,7 +58,7 @@ export function LoggingAuthority({ client }: { client: OperationClient }) {
         {view.controlError && !view.controlPending ? <span role="alert">{t('remote.controlRequestFailed')}</span> :
         <span role="status">{view.controlResult?.outcome === 'applied' ? view.controlResult.evidence === 'settingsSaved' ? t('remote.controlSettingsSaved') : t('remote.controlApplied')
           : view.controlResult?.outcome === 'rejected' ? t('remote.controlRefused')
-          : view.controlResult?.outcome === 'pending' && view.connected ? t('remote.controlPending') : t('remote.controlUnknown')}</span>}
+          : (view.controlSending || view.controlResult?.outcome === 'pending') && view.connected ? t('remote.controlPending') : t('remote.controlUnknown')}</span>}
         {view.controlPending && <>
           <button type="button" className="remote-button" disabled={view.busy || !view.connected} onClick={() => void client.refreshControl().catch(() => {})}>{t('remote.controlCheckResult')}</button>
           <button type="button" className="remote-button" disabled={view.busy || view.controlResult?.outcome === 'pending'} onClick={() => void client.acknowledgeControl().catch(() => {})}>{t('remote.controlCheckedStation')}</button>

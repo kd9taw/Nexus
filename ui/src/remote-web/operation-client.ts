@@ -26,6 +26,7 @@ export type OperationView = {
   dismissed: string | null
   error: string | null
   controlPending: PendingControl | null
+  controlSending: boolean
   controlResult: ControlOutcome | null
   controlError: string | null
   controlRefreshing?: boolean
@@ -55,6 +56,7 @@ export class OperationClient {
     dismissed: null,
     error: null,
     controlPending: null,
+    controlSending: false,
     controlResult: null,
     controlError: null
   }
@@ -107,6 +109,7 @@ export class OperationClient {
     this.view = {
       ...this.view,
       ...value,
+      controlSending: this.pending?.request.type === 'stationControl',
       ...((value.error || value.connected === false || value.state) ? { controlRefreshing: false } : {}),
       ...(value.unresolved === null ? { pendingDraft: null } : {})
     }

@@ -59,6 +59,7 @@ it('keeps data loss and command recovery visible while help stays closed, withou
   let pending!: ReturnType<OperationClient['control']>
   await act(async () => {
     pending = h.client.control({ action: 'amplifier.operate', expectedOperate: false, operate: true })
+    void pending.catch(() => {}) // cleanup must also be quiet if a preceding assertion fails
     await Promise.resolve()
   })
   expect(screen.getByText('Waiting for the station to confirm the command…')).toBeTruthy()
@@ -78,6 +79,8 @@ it('keeps data loss and command recovery visible while help stays closed, withou
   expect(toggle().getAttribute('aria-expanded')).toBe('false')
   fireEvent.click(screen.getByRole('button', { name: 'Check command result' }))
   expect(h.sent[h.sent.length - 1]?.request).toMatchObject({ type: 'result', operationId })
+  expect(screen.getByText('The command may have taken effect. Check the station before another command.')).toBeTruthy()
+  expect(screen.queryByText('Waiting for the station to confirm the command…')).toBeNull()
   await act(async () => h.reply({ operation: 'stationControl', operationId, outcome: 'unknown', reason: 'hardwareUnconfirmed' }))
   expect(h.sent.filter(message => message.request.type === 'stationControl')).toHaveLength(1)
   act(() => h.client.disconnected())
