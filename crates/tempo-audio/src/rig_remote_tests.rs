@@ -14,6 +14,8 @@ use super::remote::{Position, Retune};
 mod dsp_tests;
 #[path = "rig_filter_tests.rs"]
 mod filter_tests;
+#[path = "rig_level_tests.rs"]
+mod level_tests;
 
 pub(crate) struct Peer {
     pub(crate) address: String,
@@ -778,4 +780,25 @@ fn remote_cat_refuses_missing_hardware_and_mode_injection() {
     );
     rig.ptt(false).unwrap();
     assert_eq!(*peer.lines.lock().unwrap(), ["T 0"]);
+}
+
+pub(crate) fn level_peer(
+    level: tempo_app::engine::remote_radio::RadioLevel,
+    initial: f32,
+    intercept: impl Fn(&str, &mut RadioState, &Mutex<f32>) -> Option<String> + Send + 'static,
+) -> Peer {
+    let value = Mutex::new(initial);
+    retuning_peer(14_074_000, "LSB", move |line, state| {
+        if let Some(reply) = intercept(line, state, &value) {
+            return Some(reply);
+        }
+        if line == format!("l {}", level.token()) {
+            return Some(format!("{}\n", *value.lock().unwrap()));
+        }
+        if let Some(raw) = line.strip_prefix(&format!("L {} ", level.token())) {
+            *value.lock().unwrap() = raw.parse().unwrap();
+            return Some("RPRT 0\n".into());
+        }
+        None
+    })
 }

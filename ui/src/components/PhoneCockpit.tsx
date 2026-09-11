@@ -1,3 +1,4 @@
+import { useRadioLevels } from '../remote-web/useRadioLevels'
 import { useRemotePresentation } from '../remote-web/presentation'
 import { useReceiverFilter } from '../remote-web/useReceiverFilter'
 import { useReceiverDsp } from '../remote-web/useReceiverDsp'
@@ -38,10 +39,6 @@ import { LogEntry } from './LogEntry'
 import {
   setPtt,
   setRfPower,
-  setMicGain,
-  setNrLevel,
-  setCompLevel,
-  setNotchFreq,
   setScopeSpan,
   setYaesuScopeMode,
   setScopeRef,
@@ -386,6 +383,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
   const details = !quick || display.radioDetails
   const frequencyControl = useStationCapability('frequency')
   const scopeClick = useRemoteScopeClick(snap)
+  const levels = useRadioLevels(snap)
   const dspControl = useReceiverDsp(snap, 'phone')
   const phoneModeControl = usePhoneMode(snap, phoneMode)
   const control = useStationControl()
@@ -414,10 +412,11 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
       setMic((m) => (Math.abs(m - pct) >= 2 ? pct : m))
     }
   }, [snap.radio.micGain])
+  const shownMic = control ? mic : Math.round((snap.radio.micGain ?? 0) * 100)
   const changeMic = (pct: number) => {
-    if (!control) return
-    setMic(pct)
-    void setMicGain(pct / 100)
+    if (!levels.can('micGain')) return
+    if (control) setMic(pct)
+    void levels.change('micGain', pct / 100).catch(error => pushToast(String(error), 'error'))
   }
   const [nr, setNr] = useState(30) // % noise-reduction level — pushed once touched
   const nrDragging = useRef(false)
@@ -439,10 +438,11 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
       setComp((c) => (Math.abs(c - pct) >= 2 ? pct : c))
     }
   }, [snap.radio.compLevel])
+  const shownComp = control ? comp : Math.round((snap.radio.compLevel ?? 0) * 100)
   const changeComp = (pct: number) => {
-    if (!control) return
-    setComp(pct)
-    void setCompLevel(pct / 100)
+    if (!levels.can('compression')) return
+    if (control) setComp(pct)
+    void levels.change('compression', pct / 100).catch(error => pushToast(String(error), 'error'))
   }
   // HZ, not a percentage — the notch sits at an audio frequency and the operator is placing it
   // on a heterodyne by ear. A 10 Hz step is fine enough to null a tone and coarse enough to
@@ -456,15 +456,17 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
       setNotchHz((n) => (Math.abs(n - hz) >= 10 ? hz : n))
     }
   }, [snap.radio.notchFreqHz])
+  const shownNotch = control ? notchHz : Math.round(snap.radio.notchFreqHz ?? 0)
   const changeNotch = (hz: number) => {
-    if (!control) return
-    setNotchHz(hz)
-    void setNotchFreq(hz)
+    if (!levels.can('notch')) return
+    if (control) setNotchHz(hz)
+    void levels.change('notch', hz).catch(error => pushToast(String(error), 'error'))
   }
+  const shownNr = control ? nr : Math.round((snap.radio.nrLevel ?? 0) * 100)
   const changeNr = (pct: number) => {
-    if (!control) return
-    setNr(pct)
-    void setNrLevel(pct / 100)
+    if (!levels.can('nr')) return
+    if (control) setNr(pct)
+    void levels.change('nr', pct / 100).catch(error => pushToast(String(error), 'error'))
   }
   // AGC speed — the chip lights on the click, then the rig gets the last word. Reading
   // snap.radio.agc directly lagged ~0.75–1.5 s: setAgc's snapshot returns the OLD rig read-back
@@ -1094,11 +1096,11 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
             {snap.radio.nrLevel != null && (
               <label className="ph-dsplev" title={t('phone.rxDsp.nr.title')}>
                 <span>{NR}</span>
-                <input disabled={!control}
+                <input disabled={!levels.can('nr')}
                   type="range"
                   min={0}
                   max={100}
-                  value={nr}
+                  value={shownNr}
                   onChange={(e) => changeNr(Number(e.target.value))}
                   onPointerDown={() => {
                     nrDragging.current = true
@@ -1108,7 +1110,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
                   }}
                   aria-label={t('phone.rxDsp.nr.aria')}
                 />
-                <span className="ph-power-val">{nr}%</span>
+                <span className="ph-power-val">{shownNr}%</span>
               </label>
             )}
             {/* #95: the speech processor's DEPTH. The toggle switched PROC on and there was
@@ -1116,11 +1118,11 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
             {snap.radio.compLevel != null && (
               <label className="ph-dsplev" title={t('phone.rxDsp.comp.title')}>
                 <span>{COMP}</span>
-                <input disabled={!control}
+                <input disabled={!levels.can('compression')}
                   type="range"
                   min={0}
                   max={100}
-                  value={comp}
+                  value={shownComp}
                   onChange={(e) => changeComp(Number(e.target.value))}
                   onPointerDown={() => {
                     compDragging.current = true
@@ -1130,7 +1132,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
                   }}
                   aria-label={t('phone.rxDsp.comp.aria')}
                 />
-                <span className="ph-power-val">{comp}%</span>
+                <span className="ph-power-val">{shownComp}%</span>
               </label>
             )}
             {/* #95: WHERE the manual notch sits. Shown only when the rig reports NOTCHF, so a
@@ -1139,12 +1141,12 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
             {snap.radio.notchFreqHz != null && (
               <label className="ph-dsplev" title={t('phone.rxDsp.notchFreq.title')}>
                 <span>{NOTCH}</span>
-                <input disabled={!control}
+                <input disabled={!levels.can('notch')}
                   type="range"
                   min={300}
                   max={3400}
                   step={10}
-                  value={notchHz}
+                  value={shownNotch}
                   onChange={(e) => changeNotch(Number(e.target.value))}
                   onPointerDown={() => {
                     notchDragging.current = true
@@ -1154,7 +1156,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
                   }}
                   aria-label={t('phone.rxDsp.notchFreq.aria')}
                 />
-                <span className="ph-power-val">{notchHz} {HZ}</span>
+                <span className="ph-power-val">{shownNotch} {HZ}</span>
               </label>
             )}
             {snap.radio.agc != null && (
@@ -1340,11 +1342,11 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
         {snap.radio.micGain != null && (
           <label className="ph-power" title={t('phone.mic.title')}>
             <span>{t('phone.mic.label')}</span>
-            <input disabled={!control}
+            <input disabled={!levels.can('micGain')}
               type="range"
               min={0}
               max={100}
-              value={mic}
+              value={shownMic}
               onChange={(e) => changeMic(Number(e.target.value))}
               onPointerDown={() => {
                 micDragging.current = true
@@ -1354,7 +1356,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
               }}
               aria-label={t('phone.mic.aria')}
             />
-            <span className="ph-power-val">{mic}%</span>
+            <span className="ph-power-val">{shownMic}%</span>
           </label>
         )}
         {catOk && commandedMode !== 'FM' && (

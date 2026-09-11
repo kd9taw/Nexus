@@ -2,6 +2,19 @@ import { describe, expect, it } from 'vitest'
 import { actionCapability, controlContext, controlOutcome, stationAction } from './station-operation'
 
 describe('closed station operating requests', () => {
+  it('accepts bounded native levels with exact prior readings and their own capability', () => {
+    for (const mode of ['digital', 'phone', 'cw', 'rtty', 'keyboard']) for (const level of ['power', 'micGain', 'nr', 'compression', 'notch']) {
+      const action = { action: 'radio.level', mode, level, expected: level === 'notch' ? 0 : 0.5, value: level === 'notch' ? 300 : 0.35 }
+      expect(stationAction(action)).toEqual(action)
+      expect(actionCapability(stationAction(action))).toBe('radioLevels')
+      for (const field of ['expected', 'value']) for (const value of [NaN, Infinity, -Infinity, -1, '0.5', null]) expect(() => stationAction({ ...action, [field]: value })).toThrow()
+      for (const extra of ['command', 'settings', 'txEnabled', 'radioId']) expect(() => stationAction({ ...action, [extra]: true })).toThrow()
+      for (const level of ['RFPOWER', 'vox', 'power\nT 1', '', null]) expect(() => stationAction({ ...action, level })).toThrow()
+      for (const mode of ['CW', 'ssb', '', null]) expect(() => stationAction({ ...action, mode })).toThrow()
+      for (const value of level === 'notch' ? [299, 3401] : [1.001, 300]) expect(() => stationAction({ ...action, value })).toThrow()
+      if (level !== 'notch') expect(() => stationAction({ ...action, expected: 1.001 })).toThrow()
+    }
+  })
   it('admits the existing transient Phone picker without FM or embedded tuning commands', () => {
     for (const expectedMode of ['auto', 'USB', 'LSB', 'AM']) for (const mode of ['auto', 'USB', 'LSB', 'AM']) {
       const action = { action: 'radio.phoneMode', expectedMode, mode }

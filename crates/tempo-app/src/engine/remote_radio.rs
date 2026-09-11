@@ -743,7 +743,8 @@ impl Request {
             self.validate(engine)?;
             if let Some((level, _, desired)) = self.level() {
                 let actual = level_readback.ok_or(Reason::HardwareUnconfirmed)?;
-                if !level.same_display_value(desired, actual)
+                if !level.valid_target(actual)
+                    || !level.same_display_value(desired, actual)
                     || (level == RadioLevel::Power
                         && actual > engine.active_power_ceiling() + 0.001)
                 {

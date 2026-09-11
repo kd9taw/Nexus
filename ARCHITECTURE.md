@@ -71,6 +71,16 @@ connection identity, rather than borrowing authority for an older displayed radi
 Unconfirmed targets never become deferred local retunes. Login, entitlement and
 browser approval remain separate checks.
 
+The `radioLevels` operation-v3 capability connects existing RF power, mic gain,
+noise-reduction depth, compressor depth and notch-frequency controls. The active
+radio owner compares the displayed prior value and physical position, checks idle
+PTT/split state, then performs one permitted CAT write and reads the actual level.
+Native limits and per-mode power ceilings still apply. A local setter retires old
+remote work, including an away-and-back change. Only confirmed readback enters
+native desired/observed state and the owner's caches; uncertain writes never become
+retries. Browser inputs display station samples, and this capability grants neither
+audio-drive control nor permission to transmit.
+
 Radio selection has a passive native Settings projection sharing the local
 handoff's outgoing-profile banking, daemon-port separation and monitored-or-saved
 tune resolution. The projection grants no hardware access and cannot be applied

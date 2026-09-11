@@ -1,3 +1,4 @@
+import { useRadioLevels } from '../remote-web/useRadioLevels'
 import { useRemotePresentation } from '../remote-web/presentation'
 import { useReceiverFilter } from '../remote-web/useReceiverFilter'
 import { useReceiverDsp } from '../remote-web/useReceiverDsp'
@@ -52,7 +53,6 @@ import {
   selectPeer,
   previewCw,
   pointRotatorAtCall,
-  setNrLevel,
   setScopeSpan,
   setYaesuScopeMode,
   setScopeRef,
@@ -363,6 +363,7 @@ export function CwCockpit({
   const details = !quick || display.radioDetails
   const frequencyControl = useStationCapability('frequency')
   const scopeClick = useRemoteScopeClick(snap)
+  const levels = useRadioLevels(snap)
   const dspControl = useReceiverDsp(snap, 'cw')
   const control = useStationControl(), receiverControl = useStationCapability('decoder')
   const spotsRead = useRemoteCollection('spots')
@@ -470,10 +471,11 @@ export function CwCockpit({
       setNr((n) => (Math.abs(n - pct) >= 2 ? pct : n))
     }
   }, [snap.radio.nrLevel])
+  const shownNr = control ? nr : Math.round((snap.radio.nrLevel ?? 0) * 100)
   const changeNr = (pct: number) => {
-    if (!control) return
-    setNr(pct)
-    void setNrLevel(pct / 100)
+    if (!levels.can('nr')) return
+    if (control) setNr(pct)
+    void levels.change('nr', pct / 100).catch(error => pushToast(String(error), 'error'))
   }
   // AGC speed — the chip lights on the click (snap.radio.agc is the rig READ-BACK and lags a
   // poll behind), then the rig gets the last word: DERIVED, so there is no mirror to go stale.
@@ -1208,11 +1210,11 @@ export function CwCockpit({
             {snap.radio.nrLevel != null && (
               <label className="ph-dsplev" title={t('cw.rxDsp.nr.title')}>
                 <span>{NR}</span>
-                <input disabled={!control}
+                <input disabled={!levels.can('nr')}
                   type="range"
                   min={0}
                   max={100}
-                  value={nr}
+                  value={shownNr}
                   onChange={(e) => changeNr(Number(e.target.value))}
                   onPointerDown={() => {
                     nrDragging.current = true
@@ -1222,7 +1224,7 @@ export function CwCockpit({
                   }}
                   aria-label={t('cw.rxDsp.nr.aria')}
                 />
-                <span className="ph-power-val">{nr}%</span>
+                <span className="ph-power-val">{shownNr}%</span>
               </label>
             )}
             {snap.radio.agc != null && (

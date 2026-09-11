@@ -1,4 +1,5 @@
 import { QuickRadioDetails, useRemotePresentation } from '../remote-web/presentation'
+import { useRadioLevels } from '../remote-web/useRadioLevels'
 import { useStationControl } from '../stationAccess'
 import { ModeEntry, type OperatingSection, type OperatingWorkspace } from '../remote-web/ModeEntry'
 // ⚠️ THIS FILE IS **PARTIAL** ON THE i18n LIST (i18n/hardcoded-strings.test.ts), and what is
@@ -167,6 +168,8 @@ export function CockpitHeader({
   catStatus,
 }: CockpitHeaderProps) {
   const control = useStationControl()
+  const levels = useRadioLevels(snap)
+  const remotePower = power?.unit === '%' && levels.can('power')
   const radio = snap.radio
   const catOk = radio.catOk === true
   const dial = radio.dialMhz
@@ -312,7 +315,7 @@ export function CockpitHeader({
             }
           >
             <span>{power.label ?? t('cockpit.header.power.label')}</span>
-            <input disabled={!control || power.value == null}
+            <input disabled={(!control && !remotePower) || power.value == null}
               type="range"
               min={0}
               max={power.unit === '%' ? 100 : 1}
@@ -335,7 +338,9 @@ export function CockpitHeader({
               style={{ visibility: power.value == null ? 'hidden' : undefined }}
               onChange={(e) => {
                 const raw = Number(e.target.value)
-                power.onChange(power.unit === 'drive' ? raw ** 2 : raw)
+                if (control) power.onChange(power.unit === 'drive' ? raw ** 2 : raw)
+                else if (remotePower) void levels.change('power', raw / 100)
+                  .catch(error => pushToast(String(error), 'error'))
               }}
               onPointerDown={power.onPointerDown}
               onPointerUp={power.onPointerUp}

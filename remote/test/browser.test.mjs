@@ -292,6 +292,12 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
             assert.ok(['auto','USB','LSB','AM'].includes(a.mode));assert.equal(radio.txEnabled,false);assert.equal(radio.rigKeyed,false)
             radio.sidebandOverride=a.mode==='auto'?null:a.mode
             radio.rigMode=a.mode==='auto'?(radio.dialMhz<10?'LSB':'USB'):a.mode
+          }else if(a.action==='radio.level'){
+            const radio=applicationData.get_snapshot.radio,fields={power:'rfPower',micGain:'micGain',nr:'nrLevel',compression:'compLevel',notch:'notchFreqHz'}
+            assert.ok(Object.hasOwn(fields,a.level));assert.equal(a.mode,radio.operatingMode)
+            assert.equal(a.expected,radio[fields[a.level]]);assert.equal(radio.txEnabled,false);assert.equal(radio.rigKeyed,false)
+            assert.ok(Number.isFinite(a.value)&&(a.level==='notch'?a.value>=300&&a.value<=3400:a.value>=0&&a.value<=1))
+            radio[fields[a.level]]=a.value
           }else if(a.action==='radio.function'||a.action==='radio.agc'){
             const radio=applicationData.get_snapshot.radio
             assert.ok(['cw','phone'].includes(a.mode));assert.equal(a.mode,radio.operatingMode)
@@ -394,7 +400,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
           loggingReceipts.set(r.requestId,value);loggingRevision++;applicationRevision++
           if(loseSpotReply&&a.action==='radio.workSpot')continue
         }else if(r.type==='result'){value=loggingReceipts.get(r.operationId);if(!value)error='resultExpired';else if(loseSpotReply&&value.operation==='stationControl')value={operation:'stationControl',operationId:r.operationId,outcome:'unknown',reason:'hardwareUnconfirmed'}}
-        else value={stationBootId:loggingBoot,allowed:loggingAllowed||stationControls,phase:loggingLease?'controlling':loggingAllowed||stationControls?'available':'localPermissionRequired',leaseId:loggingLease,revision:loggingRevision,commandWindowId:loggingLease?loggingWindow:null,nextSequence:loggingLease?loggingSequence+1:null,leaseRemainingMs:loggingLease?5000:null,actions:loggingAllowed?['log.manual']:[],txArmed:false,...(stationControls?{controls:{context:{radioId:1,radioConnection:1,ampConnection:1,ampReadSequence:1},capabilities:request.operationVersion>=3?['decoder','amplifier','frequency','mode','tier','ampFollowBand','workspace','decoderSettings','receiverSettings','receiverGain','bandSelection','receiverFilter','receiverDsp','phoneMode',...(workSpot?['workSpot']:[])]:['decoder','amplifier']}}:{})}
+        else value={stationBootId:loggingBoot,allowed:loggingAllowed||stationControls,phase:loggingLease?'controlling':loggingAllowed||stationControls?'available':'localPermissionRequired',leaseId:loggingLease,revision:loggingRevision,commandWindowId:loggingLease?loggingWindow:null,nextSequence:loggingLease?loggingSequence+1:null,leaseRemainingMs:loggingLease?5000:null,actions:loggingAllowed?['log.manual']:[],txArmed:false,...(stationControls?{controls:{context:{radioId:1,radioConnection:1,ampConnection:1,ampReadSequence:1},capabilities:request.operationVersion>=3?['decoder','amplifier','frequency','mode','tier','ampFollowBand','workspace','decoderSettings','receiverSettings','receiverGain','bandSelection','receiverFilter','receiverDsp','phoneMode','radioLevels',...(workSpot?['workSpot']:[])]:['decoder','amplifier']}}:{})}
         source.send({type:'operationResponse',sessionId:request.sessionId,requestId:r.requestId,...(error?{error}:{value})});continue
       }
       if (request.type === 'applicationQuery') {
@@ -1479,6 +1485,37 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         await until(`document.querySelector('${gainSelector}').value==='${gain}'&&!document.querySelector('${gainSelector}').disabled`)
         assert.equal(await evaluate(`document.querySelector('#settings-audio input[aria-label="Transmit drive level"]').disabled`),true)
       }
+      // Exercise the existing native inputs with real keyboard events. A
+      // receipt alone must not replace their values; the fixture publishes the
+      // new station sample through the normal application stream.
+      let levelGeometry=0
+      for(const [tab,mode,root,choices] of [
+        ['Phone','phone','.phone-cockpit',[
+          ['power','rfPower','Power'],['micGain','micGain','Mic gain'],
+          ['nr','nrLevel','Noise-reduction level'],['compression','compLevel','Speech processor depth'],
+          ['notch','notchFreqHz','Manual notch frequency in hertz']]],
+        ['CW','cw','.cw-cockpit',[['nr','nrLevel','Noise-reduction level']]]
+      ]){
+        for(const [level,field] of choices) applicationData.get_snapshot.radio[field]??=level==='notch'?600:0.3
+        await click(button(tab));await gesture(root+' .remote-mode-entry','radio.mode')
+        await until(`!document.querySelector('${root} .remote-mode-entry')`)
+        for(const [level,field,label] of choices){
+          const selector=`${root} input[aria-label="${label}"]`
+          levelGeometry+=await decoderLayout(selector,`${mode}-${level}`)
+          const expected=applicationData.get_snapshot.radio[field],before=stationRequests.length
+          const input=await evaluate(`(()=>{const e=document.querySelector('${selector}');e.focus({preventScroll:true});return {value:Number(e.value),step:Number(e.step)||1,max:Number(e.max)}})()`)
+          const direction=input.value+input.step<=input.max?1:-1,key=direction===1?'ArrowRight':'ArrowLeft',code=direction===1?39:37
+          const target=input.value+direction*input.step,value=level==='notch'?target:target/100
+          await freshLoggingWindow()
+          await browser.call('Input.dispatchKeyEvent',{type:'keyDown',key,code:key,windowsVirtualKeyCode:code},session)
+          await browser.call('Input.dispatchKeyEvent',{type:'keyUp',key,code:key,windowsVirtualKeyCode:code},session)
+          for(let i=0;i<100&&stationRequests.length===before;i++)await sleep(100)
+          assert.equal(stationRequests.length,before+1,`one ${mode} ${level} input gesture`)
+          assert.deepEqual(stationRequests.at(-1).action,{action:'radio.level',mode,level,expected,value})
+          await until(`document.querySelector('.remote-control-result')?.textContent.includes('confirmed')`)
+          await until(`Number(document.querySelector('${selector}').value)===${target}&&!document.querySelector('${selector}').disabled`)
+        }
+      }
       await click(button('CW'));await settledLayout()
       let controlGeometry=0
       for(const [width,height,zoom]of [[390,844,1],[1280,800,1],[390,844,1.75],[1280,800,1.75]])for(const theme of ['dark','light']){
@@ -1495,10 +1532,10 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       assert.ok(await evaluate(`[...document.querySelectorAll('.cockpit-txdock button')].every(e=>e.disabled)`),'receiver/amp permission cannot enable TX')
       stationControls=false;loggingLease=null
       await until(`document.querySelector('.cw-cockpit .amp-op').disabled`)
-      assert.equal(controlGeometry+modeGeometry+bandGeometry+wheelGeometry+filterGeometry+dspGeometry+phoneModeGeometry+tierGeometry+followGeometry+decoderGeometry+receiverGeometry+gainGeometry+16,600)
-      assert.equal(loggedRequests.length,5);assert.equal(stationRequests.length,108);assert.equal(unexpectedMessages,0);assert.equal(exceptions,0)
-      if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-manual-logging.png'),Buffer.from(shot.data,'base64'));await writeFile(join(artifacts,'operation-results.json'),JSON.stringify({count:loggedRequests.length,stationActions:stationRequests.map(r=>r.action),controlGeometry,modeGeometry,bandGeometry,wheelGeometry,filterGeometry,dspGeometry,phoneModeGeometry,tierGeometry,followGeometry,decoderGeometry,receiverGeometry,gainGeometry,modes:loggedRequests.map(r=>r.record.mode),lostResultResolved:true,wholePageReloadResolved:true,crossTabLockRefusal:true,geometry:16,exceptions,unexpectedMessages},null,2))}
-      console.log('Compiled browser: five logging forms, 108 station gestures, saved receiver choices, native band recall, shared wheel/digit tuning, Phone mode picks, separate grants, recovery and 600 geometry cases passed');return
+      assert.equal(controlGeometry+modeGeometry+bandGeometry+wheelGeometry+filterGeometry+dspGeometry+phoneModeGeometry+tierGeometry+followGeometry+decoderGeometry+receiverGeometry+gainGeometry+levelGeometry+16,648)
+      assert.equal(loggedRequests.length,5);assert.equal(stationRequests.length,116);assert.equal(unexpectedMessages,0);assert.equal(exceptions,0)
+      if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-manual-logging.png'),Buffer.from(shot.data,'base64'));await writeFile(join(artifacts,'operation-results.json'),JSON.stringify({count:loggedRequests.length,stationActions:stationRequests.map(r=>r.action),controlGeometry,modeGeometry,bandGeometry,wheelGeometry,filterGeometry,dspGeometry,phoneModeGeometry,tierGeometry,followGeometry,decoderGeometry,receiverGeometry,gainGeometry,levelGeometry,modes:loggedRequests.map(r=>r.record.mode),lostResultResolved:true,wholePageReloadResolved:true,crossTabLockRefusal:true,geometry:16,exceptions,unexpectedMessages},null,2))}
+      console.log('Compiled browser: five logging forms, 116 station gestures, saved receiver choices, native band recall, shared wheel/digit tuning, Phone mode picks, separate grants, recovery and 648 geometry cases passed');return
     }
     const startReads=applicationTraffic.reads, startBytes=applicationTraffic.bytes, started=performance.now()
     for(const [width,height] of [[1024,768],[1280,800],[1366,768],[1200,1390],[3440,1440]])for(const zoom of [1,1.75])for(const theme of ['dark','light']) {

@@ -62,7 +62,7 @@ impl Rig {
             let actual = self
                 .remote_read_level_value(level, permission)
                 .map_err(|_| Reason::HardwareUnconfirmed)?;
-            if !level.same_display_value(actual, value) {
+            if !level.valid_target(actual) || !level.same_display_value(actual, value) {
                 return Err(Reason::HardwareUnconfirmed);
             }
             let after = self.remote_reported_position(permission)?;

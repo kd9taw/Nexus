@@ -169,3 +169,90 @@ fn remote_level_targets_keep_native_limits_and_reject_nonfinite_inputs() {
     assert!(!RadioLevel::Power.same_display_value(0.35, 0.37));
     assert!(!RadioLevel::NotchFrequency.valid_target(1e20));
 }
+
+#[test]
+fn remote_notch_does_not_confirm_out_of_range_readback_with_same_display_value() {
+    for (target, actual) in [(300.0, 299.6), (3400.0, 3400.4)] {
+        let mut s = Station::new(OperatingMode::Phone);
+        observe(&mut s, RadioLevel::NotchFrequency, 600.0);
+        let receipt = queue(&mut s, RadioLevel::NotchFrequency, 600.0, target).unwrap();
+        let request = s.engine.take_remote_radio().unwrap();
+        request.permission().begin_write(Instant::now()).unwrap();
+        observe(&mut s, RadioLevel::NotchFrequency, 600.0);
+        assert!(!request.commit_level_readback(&mut s.engine, Some(actual)));
+        assert!(matches!(receipt.outcome(), Outcome::Unknown { .. }));
+        assert_eq!(
+            s.engine.remote_level_desired(RadioLevel::NotchFrequency),
+            None
+        );
+        let receipt = queue(&mut s, RadioLevel::NotchFrequency, 600.0, target).unwrap();
+        let request = s.engine.take_remote_radio().unwrap();
+        observe(&mut s, RadioLevel::NotchFrequency, 600.0);
+        assert!(request.commit_level_readback(&mut s.engine, Some(target)));
+        assert!(matches!(receipt.outcome(), Outcome::Applied { .. }));
+    }
+}
+
+#[test]
+fn remote_power_keeps_each_native_mode_ceiling_and_rechecks_a_lowered_limit() {
+    for (name, mode, cap) in [
+        ("digital", OperatingMode::Digital, 0.2),
+        ("phone", OperatingMode::Phone, 0.4),
+        ("cw", OperatingMode::Cw, 0.6),
+        ("rtty", OperatingMode::Rtty, 0.2),
+        ("keyboard", OperatingMode::Keyboard, 0.2),
+    ] {
+        let mut s = Station::new(mode);
+        s.engine.settings.max_power_digital = Some(0.2);
+        s.engine.settings.max_power_phone = Some(0.4);
+        s.engine.settings.max_power_cw = Some(0.6);
+        observe(&mut s, RadioLevel::Power, 0.1);
+        let connection = s
+            .engine
+            .remote_monitor_observation()
+            .radio
+            .readings
+            .cat
+            .unwrap()
+            .connection_generation;
+        let receipt = s
+            .engine
+            .queue_remote_level(
+                name,
+                RadioLevel::Power,
+                0.1,
+                1.0,
+                connection,
+                s.authority
+                    .permit(Instant::now() + Duration::from_secs(5))
+                    .unwrap(),
+            )
+            .unwrap();
+        let request = s.engine.take_remote_radio().unwrap();
+        assert_eq!(request.level().unwrap().2, cap);
+        observe(&mut s, RadioLevel::Power, 0.1);
+        assert!(request.commit_level_readback(&mut s.engine, Some(cap)));
+        assert!(matches!(receipt.outcome(), Outcome::Applied { .. }));
+        observe(&mut s, RadioLevel::Power, cap);
+        let receipt = s
+            .engine
+            .queue_remote_level(
+                name,
+                RadioLevel::Power,
+                cap,
+                1.0,
+                connection,
+                s.authority
+                    .permit(Instant::now() + Duration::from_secs(5))
+                    .unwrap(),
+            )
+            .unwrap();
+        let request = s.engine.take_remote_radio().unwrap();
+        s.engine.settings.max_power_digital = Some(0.1);
+        s.engine.settings.max_power_phone = Some(0.1);
+        s.engine.settings.max_power_cw = Some(0.1);
+        assert!(!request.commit_level_readback(&mut s.engine, Some(cap)));
+        assert!(!matches!(receipt.outcome(), Outcome::Applied { .. }));
+        assert!(!s.engine.tx_enabled());
+    }
+}

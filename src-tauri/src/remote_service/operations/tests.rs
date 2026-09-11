@@ -1,4 +1,7 @@
 #[cfg(feature = "radio")]
+#[path = "level_tests.rs"]
+mod level;
+#[cfg(feature = "radio")]
 #[path = "phone_mode_tests.rs"]
 mod phone_mode;
 #[cfg(feature = "radio")]
@@ -368,7 +371,8 @@ fn tier_admission_requires_v3_and_keeps_one_native_receipt_through_readback() {
             "receiverFilter",
             "receiverDsp",
             "phoneMode",
-            "workSpot"
+            "workSpot",
+            "radioLevels"
         ])
     );
     let command = control_request(&state, json!({"action":"radio.tier","tier":"FT4"}));
