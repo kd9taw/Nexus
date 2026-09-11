@@ -297,3 +297,10 @@
 [data-viewport='xs'] .remote-quick-nav button:last-child > span { display: none; }
 .remote-quick-nav button > span { overflow-wrap: anywhere; }
 .cockpit-header--quick .amp-strip button { min-height: 44px; min-width: 44px; }
+
+/* Native PTT has a desktop minimum width. Keep the same button reachable in
+   Quick's narrower contact column, including enlarged text. */
+.remote-quick-contact .ph-ptt { min-width: min(220px, 100%); max-width: 100%; white-space: normal; }
+[data-viewport='xs'] .remote-quick-contact .recall-log-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+[data-viewport='xs'] .remote-quick-contact .recall-log-date { overflow-wrap: anywhere; }
+[data-viewport='xs'] .remote-quick-contact .recall-log-cmt { grid-column: 1 / -1; }

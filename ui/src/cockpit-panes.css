@@ -441,9 +441,14 @@
 .cockpit-panes--contact[data-flow='fill'] {
   grid-template-columns: minmax(0, 1fr);
   grid-auto-rows: auto;
-  overflow-y: auto;
+  /* A contact flows through its cockpit's scrollport. A second bounded region
+     would leave only the callsign visible behind nested scrollbars on phones. */
+  flex: 0 0 auto;
+  min-height: 0;
+  overflow: visible;
+  scrollbar-gutter: auto;
   --cockpit-pane-flex: 0 0 auto;
 }
-.cockpit-col--contact { order: -1; }
+.cockpit-col--contact { order: -1; overflow: visible; }
 .cockpit-col--quiet { display: none; }
 .ph-scope-panel--quiet { display: none; }
