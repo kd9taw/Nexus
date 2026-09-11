@@ -12,6 +12,7 @@ use std::time::Instant;
 
 mod dsp;
 mod filter;
+mod phone_mode;
 pub use dsp::{AgcSpeed, ReceiverDsp, ReceiverFunction};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
@@ -23,6 +24,12 @@ pub enum Workspace {
 }
 
 enum Intent {
+    PhoneMode {
+        expected_override: Option<String>,
+        override_mode: Option<String>,
+        expected_native_mode: String,
+        expected_cat_mode: String,
+    },
     Frequency,
     FilterWidth {
         mode: OperatingMode,
@@ -473,7 +480,10 @@ impl Engine {
         };
         let bandless_receive = matches!(
             &target.intent,
-            Intent::Frequency | Intent::FilterWidth { .. } | Intent::ReceiverDsp { .. }
+            Intent::Frequency
+                | Intent::FilterWidth { .. }
+                | Intent::ReceiverDsp { .. }
+                | Intent::PhoneMode { .. }
         ) && target.band.is_empty()
             && named_band.is_none();
         if target.hz == 0
@@ -493,13 +503,12 @@ impl Engine {
         let completion = Completion::guarded(permit.clone());
         let request = Request {
             expected_hz: self.settings.dial_hz(),
-            expected_mode: if matches!(
-                &target.intent,
-                Intent::FilterWidth { .. } | Intent::ReceiverDsp { .. }
-            ) {
-                target.mode.clone()
-            } else {
-                self.rig_mode_effective()
+            expected_mode: match &target.intent {
+                Intent::PhoneMode {
+                    expected_cat_mode, ..
+                } => expected_cat_mode.clone(),
+                Intent::FilterWidth { .. } | Intent::ReceiverDsp { .. } => target.mode.clone(),
+                _ => self.rig_mode_effective(),
             },
             target_hz: target.hz,
             target_mode: target.mode,
@@ -597,27 +606,41 @@ impl Request {
     pub fn validate(&self, engine: &Engine) -> Result<(), Reason> {
         self.permission.check(Instant::now())?;
         engine.remote_radio_idle()?;
-        let mode = if let Intent::ReceiverDsp {
+        let mode_matches = if let Intent::PhoneMode {
+            expected_override,
+            override_mode,
+            expected_native_mode,
+            ..
+        } = &self.intent
+        {
+            // The requested override changes the physical mode. Its later
+            // readback is checked at commit; keep the original native policy
+            // and displayed override bound independently from that CAT value.
+            engine
+                .remote_phone_mode_target(expected_override.as_deref(), override_mode.as_deref())?
+                == self.target_mode
+                && engine.rig_mode_effective() == *expected_native_mode
+        } else if let Intent::ReceiverDsp {
             mode,
             expected,
             value,
         } = self.intent
         {
             engine.validate_remote_receiver_dsp(mode, expected, value)?;
-            engine.remote_filter_mode(self.connection)?
+            engine.remote_filter_mode(self.connection)? == self.expected_mode
         } else if let Some((expected, hz)) = self.filter_width() {
             if !matches!(self.intent, Intent::FilterWidth { mode, .. } if mode == engine.settings.operating_mode)
             {
                 return Err(Reason::ContextChanged);
             }
             engine.validate_remote_filter_width(expected, hz)?;
-            engine.remote_filter_mode(self.connection)?
+            engine.remote_filter_mode(self.connection)? == self.expected_mode
         } else {
-            engine.rig_mode_effective()
+            engine.rig_mode_effective() == self.expected_mode
         };
         if engine.settings.active_radio != self.radio
             || engine.settings.dial_hz() != self.expected_hz
-            || mode != self.expected_mode
+            || !mode_matches
             || (self.power_limit.is_some() && engine.rf_power != self.expected_power)
         {
             return Err(Reason::ContextChanged);
@@ -738,9 +761,19 @@ impl Request {
         let receiver = self.filter_width().is_some() || self.receiver_dsp().is_some();
         let persist = !matches!(
             &self.intent,
-            Intent::Tier(_) | Intent::FilterWidth { .. } | Intent::ReceiverDsp { .. }
+            Intent::Tier(_)
+                | Intent::FilterWidth { .. }
+                | Intent::ReceiverDsp { .. }
+                | Intent::PhoneMode { .. }
         );
         match self.intent {
+            Intent::PhoneMode { override_mode, .. } => {
+                engine.request_sideband_override(override_mode.as_deref());
+                if let Some(power) = power.filter(|_| self.power_limit.is_some()) {
+                    engine.rf_power = Some(power);
+                    engine.observe_rig_power(power);
+                }
+            }
             Intent::ReceiverDsp { value, .. } => engine.commit_remote_receiver_dsp(value),
             Intent::FilterWidth { hz, .. } => {
                 // This is observed hardware state. Never create the native

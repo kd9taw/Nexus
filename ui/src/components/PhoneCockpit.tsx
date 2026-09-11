@@ -1,5 +1,6 @@
 import { useReceiverFilter } from '../remote-web/useReceiverFilter'
 import { useReceiverDsp } from '../remote-web/useReceiverDsp'
+import { usePhoneMode } from '../remote-web/usePhoneMode'
 import { useRemoteScopeClick } from '../remote-web/useRemoteScopeClick'
 import { RemoteRecallEntry } from '../remote-web/RemoteRecall'
 import { CollectionStatus, useRemoteCollection } from '../remote-web/collections'
@@ -56,7 +57,7 @@ import { pushToast } from '../toast'
 import { RotorStrip } from './RotorStrip'
 import { MemoryStrip, MemoryStripUnavailable } from './MemoryStrip'
 import type { Memory } from '../features/memories'
-import { setFrequency, setSidebandOverride, openPanelWindow } from '../api'
+import { setFrequency, openPanelWindow } from '../api'
 import { bandLabelForMhz, sidebandForQsy } from '../band'
 import { isRfScopeSource, NO_NATIVE_SCOPE_REASON } from '../waterfall'
 import { useWheelTune } from '../useWheelTune'
@@ -380,6 +381,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   const frequencyControl = useStationCapability('frequency')
   const scopeClick = useRemoteScopeClick(snap)
   const dspControl = useReceiverDsp(snap, 'phone')
+  const phoneModeControl = usePhoneMode(snap, phoneMode)
   const control = useStationControl()
   const spotsRead = useRemoteCollection('spots')
   // Live S-meter (shared 100 ms poll, lock-free backend) — used to arrive via the 300 ms
@@ -607,9 +609,9 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   const amBandOk = snap.radio.dialMhz > 0 && (snap.radio.dialMhz < 10 || snap.radio.dialMhz >= 28)
   const commandedMode = modeOverride ?? sidebandAuto
   const pickMode = (m: 'USB' | 'LSB' | 'FM' | 'AM' | null) => {
-    if (!control) return
-    void setSidebandOverride(m)
-      .then((s) => onSnap?.(s))
+    if (!phoneModeControl.canPick(m)) return
+    void phoneModeControl.pick(m)
+      .then((s) => s && onSnap?.(s))
       .catch(() => pushToast(t('phone.mode.failed'), 'error'))
   }
   // Whether the app can actually control the rig. Without CAT (VOX/serial PTT) the dial +
@@ -1227,7 +1229,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
                   type="button"
                   className={`ph-mode-btn${active ? ' active' : ''}`}
                   aria-pressed={active}
-                  disabled={!control || (!catOk)}
+                  disabled={!phoneModeControl.canPick(m === 'AUTO' ? null : m) || !catOk}
                   title={
                     m === 'AUTO'
                       ? t('phone.mode.auto.title', { sideband: sidebandAuto })

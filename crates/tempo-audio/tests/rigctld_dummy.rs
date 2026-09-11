@@ -306,6 +306,37 @@ fn remote_filter_roundtrips_real_hamlib_without_qsy_or_mode_change() {
 }
 
 #[test]
+fn remote_phone_modes_roundtrip_real_hamlib_without_moving_the_receive_dial() {
+    let bin = require_rigctld!();
+    let _serial = ONE_AT_A_TIME.lock().unwrap_or_else(|p| p.into_inner());
+    let mut d = DummyRig::spawn(&bin);
+    let mut rig = connect_settled(&d.addr);
+    rig.set_mode("CW", 500).unwrap();
+    rig.set_freq(7_220_000).unwrap();
+    rig.ptt(false).unwrap();
+    let authority = Revocation::default();
+    let native = Revocation::default();
+    let mut before = Position::new(7_220_000, "CW").unwrap();
+    for mode in ["USB", "LSB", "AM", "LSB", "LSB"] {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let permit = authority.permit(deadline).unwrap();
+        let receipt = Completion::guarded(permit.clone());
+        let permission =
+            WritePermission::new(permit, native.permit(deadline).unwrap(), receipt.clone());
+        let target = Position::new(7_220_000, mode).unwrap();
+        let read = rig
+            .remote_retune(Retune::new(before, target.clone()), &permission)
+            .unwrap();
+        assert_eq!(read.position(), &target);
+        assert_eq!(d.observe("f"), "7220000");
+        assert_eq!(d.observe("m"), mode);
+        assert_eq!(d.observe("t"), "0");
+        assert_eq!(receipt.outcome(), Outcome::Pending);
+        before = target;
+    }
+}
+
+#[test]
 fn remote_dsp_roundtrips_real_hamlib_without_qsy_mode_or_ptt_change() {
     use tempo_app::engine::remote_radio::{AgcSpeed, ReceiverDsp, ReceiverFunction};
     let bin = require_rigctld!();

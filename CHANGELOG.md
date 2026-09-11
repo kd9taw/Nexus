@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Remote Phone mode picker:** The existing AUTO, USB, LSB and AM buttons use
+  confirmed mode and frequency readback through a compatible station. Choices
+  retain desktop behavior, remain transient and require an idle, disarmed radio.
+  FM/repeater transitions and physical-radio acceptance remain separate work.
+
 - **Remote receiver DSP:** The existing CW/Phone NB, NR, automatic-notch and AGC
   buttons, plus Phone manual-notch enable, use confirmed radio commands through
   a compatible station. They preserve frequency and mode and wait for station

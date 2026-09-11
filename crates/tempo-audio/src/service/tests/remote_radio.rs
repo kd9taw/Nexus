@@ -8,6 +8,7 @@ use tempo_app::remote_control::{Completion, Evidence, Outcome, Reason, Revocatio
 
 mod dsp;
 mod filter;
+mod phone_mode;
 
 static NEXT: AtomicUsize = AtomicUsize::new(0);
 struct Station {

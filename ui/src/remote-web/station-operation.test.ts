@@ -2,6 +2,17 @@ import { describe, expect, it } from 'vitest'
 import { actionCapability, controlContext, controlOutcome, stationAction } from './station-operation'
 
 describe('closed station operating requests', () => {
+  it('admits the existing transient Phone picker without FM or embedded tuning commands', () => {
+    for (const expectedMode of ['auto', 'USB', 'LSB', 'AM']) for (const mode of ['auto', 'USB', 'LSB', 'AM']) {
+      const action = { action: 'radio.phoneMode', expectedMode, mode }
+      expect(stationAction(action)).toEqual(action)
+      expect(actionCapability(stationAction(action))).toBe('phoneMode')
+      for (const field of ['expectedMode', 'mode']) {
+        for (const value of ['FM', 'CW', 'usb', 'AUTO', '', 'USB\nT 1', null, false, 1, undefined]) expect(() => stationAction({ ...action, [field]: value })).toThrow()
+      }
+      for (const extra of ['settings', 'command', 'dialMhz', 'sideband', 'radioId', 'txEnabled']) expect(() => stationAction({ ...action, [extra]: true })).toThrow()
+    }
+  })
   it('admits only receiver function names, boolean targets and native AGC choices', () => {
     for (const mode of ['cw', 'phone']) {
       for (const func of ['nb', 'nr', 'notch', 'manualNotch']) {

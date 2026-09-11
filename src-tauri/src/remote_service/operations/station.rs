@@ -147,6 +147,12 @@ pub enum Action {
         expected_speed: String,
         speed: String,
     },
+    #[serde(rename = "radio.phoneMode")]
+    PhoneMode {
+        #[serde(rename = "expectedMode")]
+        expected_mode: String,
+        mode: String,
+    },
     #[serde(rename = "radio.mode")]
     Mode {
         mode: String,
@@ -428,6 +434,18 @@ pub fn execute(
             );
         }
         #[cfg(feature = "radio")]
+        Action::PhoneMode {
+            expected_mode,
+            mode,
+        } => {
+            return engine.queue_remote_phone_mode(
+                (expected_mode != "auto").then_some(expected_mode.as_str()),
+                (mode != "auto").then_some(mode.as_str()),
+                context.radio_connection.ok_or(Reason::ReadingUnavailable)?,
+                permit,
+            );
+        }
+        #[cfg(feature = "radio")]
         Action::Workspace { workspace } => {
             return engine.queue_remote_workspace(
                 *workspace,
@@ -598,6 +616,7 @@ impl Action {
             | Self::FilterWidth { .. }
             | Self::ReceiverFunction { .. }
             | Self::Agc { .. }
+            | Self::PhoneMode { .. }
             | Self::Mode { .. }
             | Self::Tier { .. }
             | Self::Workspace { .. }
@@ -633,6 +652,7 @@ pub fn capabilities(version: u8) -> Vec<&'static str> {
                 "bandSelection",
                 "receiverFilter",
                 "receiverDsp",
+                "phoneMode",
             ]
         }
     }

@@ -8,12 +8,15 @@ export const RECEIVER_FUNCTIONS = ['nb', 'nr', 'notch', 'manualNotch'] as const
 export type ReceiverFunction = (typeof RECEIVER_FUNCTIONS)[number]
 export const AGC_SPEEDS = ['auto', 'fast', 'mid', 'slow', 'off'] as const
 export type AgcSpeed = (typeof AGC_SPEEDS)[number]
+export const PHONE_MODES = ['auto', 'USB', 'LSB', 'AM'] as const
+export type PhoneMode = (typeof PHONE_MODES)[number]
 export type StationAction =
   | { action: 'radio.frequency'; dialMhz: number; band: string; sideband: 'USB' | 'LSB' | 'FM' | 'AM' }
   | { action: 'radio.band'; band: string; mode: 'cw' | 'phone' }
   | { action: 'radio.filterWidth'; mode: 'cw' | 'phone'; expectedHz: number; hz: number }
   | { action: 'radio.function'; mode: 'cw' | 'phone'; func: ReceiverFunction; expectedOn: boolean; on: boolean }
   | { action: 'radio.agc'; mode: 'cw' | 'phone'; expectedSpeed: AgcSpeed; speed: AgcSpeed }
+  | { action: 'radio.phoneMode'; expectedMode: PhoneMode; mode: PhoneMode }
   | { action: 'radio.mode'; mode: 'digital' | 'phone' | 'cw' | 'rtty' | 'keyboard'; followFrequency: boolean }
   | { action: 'radio.tier'; tier: string }
   | { action: 'radio.workspace'; workspace: 'ft' | 'tempo' | 'js8' }
@@ -39,7 +42,7 @@ export type ControlContext = {
   ampConnection: number | null
   ampReadSequence: number | null
 }
-export const CONTROL_CAPABILITIES = ['decoder', 'radio', 'amplifier', 'frequency', 'mode', 'tier', 'ampFollowBand', 'workspace', 'decoderSettings', 'receiverSettings', 'receiverGain', 'bandSelection', 'receiverFilter', 'receiverDsp'] as const
+export const CONTROL_CAPABILITIES = ['decoder', 'radio', 'amplifier', 'frequency', 'mode', 'tier', 'ampFollowBand', 'workspace', 'decoderSettings', 'receiverSettings', 'receiverGain', 'bandSelection', 'receiverFilter', 'receiverDsp', 'phoneMode'] as const
 export type ControlCapability = (typeof CONTROL_CAPABILITIES)[number]
 // A new action cannot silently inherit a broader capability by its prefix.
 const ACTION_CAPABILITY: Record<StationAction['action'], ControlCapability> = {
@@ -47,6 +50,7 @@ const ACTION_CAPABILITY: Record<StationAction['action'], ControlCapability> = {
   'radio.band': 'bandSelection', 'radio.mode': 'mode', 'radio.tier': 'tier', 'radio.workspace': 'workspace',
   'radio.filterWidth': 'receiverFilter',
   'radio.function': 'receiverDsp', 'radio.agc': 'receiverDsp',
+  'radio.phoneMode': 'phoneMode',
   'decoder.arm': 'decoder', 'decoder.clear': 'decoder', 'decoder.afcReset': 'decoder',
   'decoder.net': 'decoder', 'decoder.pskMode': 'decoder',
   'decoder.js8Speed': 'decoderSettings', 'decoder.msk144Period': 'decoderSettings',
@@ -101,6 +105,10 @@ export function stationAction(raw: unknown): StationAction {
     case 'radio.agc':
       object(a, ['action', 'mode', 'expectedSpeed', 'speed'])
       if (!oneOf(a.mode, ['cw', 'phone']) || !oneOf(a.expectedSpeed, AGC_SPEEDS) || !oneOf(a.speed, AGC_SPEEDS)) invalid()
+      break
+    case 'radio.phoneMode':
+      object(a, ['action', 'expectedMode', 'mode'])
+      if (!oneOf(a.expectedMode, PHONE_MODES) || !oneOf(a.mode, PHONE_MODES)) invalid()
       break
     case 'radio.mode':
       object(a, ['action', 'mode', 'followFrequency'])

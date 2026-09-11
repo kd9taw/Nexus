@@ -499,6 +499,14 @@ confirmed choices update reconciliation state without writing Settings. Browser
 selection follows later station samples. NR depth, manual-notch frequency, COMP
 and VOX remain separate work. Physical-radio and WAN acceptance remain pending.
 
+The separate operation-v3 `phoneMode` capability connects the existing Phone
+AUTO, USB, LSB and AM buttons through `radio.phoneMode`. It binds the displayed
+override and actual CAT mode, retains the station's automatic-mode policy and
+native AM visibility, and confirms the new mode at the unchanged receive dial.
+The native override remains transient; no Settings save or future retune is
+queued. An unconfirmed change is not retried. The normal stream supplies the
+displayed selection. FM/repeater transitions require a separate transaction.
+
 Profile/radio transitions, FM/repeater and satellite/split transactions,
 band-memory/spot shortcuts, scope dragging, continuous scanning and attended hardware/WAN
 acceptance remain incomplete. A compatible station build is required; this

@@ -316,6 +316,12 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
           }else if(a.action==='radio.frequency'){
             assert.ok(a.dialMhz>0);assert.equal(a.band,a.dialMhz===10?'':'40m');assert.ok(['USB','LSB'].includes(a.sideband))
             applicationData.get_snapshot.radio.dialMhz=a.dialMhz;applicationData.get_snapshot.radio.band=a.band;applicationData.get_snapshot.radio.sideband=a.sideband
+          }else if(a.action==='radio.phoneMode'){
+            const radio=applicationData.get_snapshot.radio
+            assert.equal(radio.operatingMode,'phone');assert.equal(a.expectedMode,radio.sidebandOverride??'auto')
+            assert.ok(['auto','USB','LSB','AM'].includes(a.mode));assert.equal(radio.txEnabled,false);assert.equal(radio.rigKeyed,false)
+            radio.sidebandOverride=a.mode==='auto'?null:a.mode
+            radio.rigMode=a.mode==='auto'?(radio.dialMhz<10?'LSB':'USB'):a.mode
           }else if(a.action==='radio.function'||a.action==='radio.agc'){
             const radio=applicationData.get_snapshot.radio
             assert.ok(['cw','phone'].includes(a.mode));assert.equal(a.mode,radio.operatingMode)
@@ -417,7 +423,7 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
           value={operation:'stationControl',operationId:r.requestId,outcome:'applied',evidence:['amplifier.followBand','decoder.js8Speed','decoder.msk144Period','decoder.depth','receiver.rxOffset','receiver.rxGain'].includes(a.action)?'settingsSaved':a.action.startsWith('radio.')?'radioReadback':a.action.startsWith('amplifier.')?'amplifierReadback':'receiverState'}
           loggingReceipts.set(r.requestId,value);loggingRevision++;applicationRevision++
         }else if(r.type==='result'){value=loggingReceipts.get(r.operationId);if(!value)error='resultExpired'}
-        else value={stationBootId:loggingBoot,allowed:loggingAllowed||stationControls,phase:loggingLease?'controlling':loggingAllowed||stationControls?'available':'localPermissionRequired',leaseId:loggingLease,revision:loggingRevision,commandWindowId:loggingLease?loggingWindow:null,nextSequence:loggingLease?loggingSequence+1:null,leaseRemainingMs:loggingLease?5000:null,actions:loggingAllowed?['log.manual']:[],txArmed:false,...(stationControls?{controls:{context:{radioId:1,radioConnection:1,ampConnection:1,ampReadSequence:1},capabilities:request.operationVersion>=3?['decoder','amplifier','frequency','mode','tier','ampFollowBand','workspace','decoderSettings','receiverSettings','receiverGain','bandSelection','receiverFilter','receiverDsp']:['decoder','amplifier']}}:{})}
+        else value={stationBootId:loggingBoot,allowed:loggingAllowed||stationControls,phase:loggingLease?'controlling':loggingAllowed||stationControls?'available':'localPermissionRequired',leaseId:loggingLease,revision:loggingRevision,commandWindowId:loggingLease?loggingWindow:null,nextSequence:loggingLease?loggingSequence+1:null,leaseRemainingMs:loggingLease?5000:null,actions:loggingAllowed?['log.manual']:[],txArmed:false,...(stationControls?{controls:{context:{radioId:1,radioConnection:1,ampConnection:1,ampReadSequence:1},capabilities:request.operationVersion>=3?['decoder','amplifier','frequency','mode','tier','ampFollowBand','workspace','decoderSettings','receiverSettings','receiverGain','bandSelection','receiverFilter','receiverDsp','phoneMode']:['decoder','amplifier']}}:{})}
         source.send({type:'operationResponse',sessionId:request.sessionId,requestId:r.requestId,...(error?{error}:{value})});continue
       }
       if (request.type === 'applicationQuery') {
@@ -741,7 +747,7 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
         await until(`document.querySelector('${root} .ch-readout .readout-val')?.textContent.includes('${mhz.toFixed(4)}')`)
         }
       }
-      let modeGeometry=0,bandGeometry=0,wheelGeometry=0,filterGeometry=0,dspGeometry=0
+      let modeGeometry=0,bandGeometry=0,wheelGeometry=0,filterGeometry=0,dspGeometry=0,phoneModeGeometry=0
       const tunedModes=new Set()
       for(const [tab,root,mode,workspace] of [['CW','.cw-cockpit','cw'],['FT','.operate-cockpit','digital','ft'],['Phone','.phone-cockpit','phone'],['RTTY','.rtty-cockpit','rtty'],['PSK','.psk-cockpit','keyboard'],['Tempo','.grid-header','digital','tempo'],['JS8','.js8-cockpit','digital','js8'],['FT','.operate-cockpit','digital','ft']]){
         const before=stationRequests.length,selector=root+' .remote-mode-entry'
@@ -789,6 +795,27 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
             assert.equal(applicationData.get_snapshot.radio.txEnabled,false)
           }
           if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,`band-picker-${mode}-1280-175-light.png`),Buffer.from(shot.data,'base64'))}
+        }
+        if(mode==='phone'){
+          for(const [pick,index]of [['USB',2],['LSB',3],['AM',5],['auto',1]]){
+            const selector=root+` .ph-mode-pick > button:nth-of-type(${index})`
+            for(const [width,height,zoom]of [[390,844,1],[1280,800,1],[390,844,1.75],[1280,800,1.75]])for(const theme of ['dark','light']){
+              await browser.call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false},session)
+              await evaluate(`document.documentElement.style.setProperty('--ui-zoom','${zoom}');document.documentElement.dataset.theme='${theme}';window.dispatchEvent(new Event('resize'))`);await settledLayout()
+              await until(`!!document.querySelector('${selector}')&&!document.querySelector('${selector}').disabled`)
+              await evaluate(`document.querySelector('${selector}').scrollIntoView({block:'center',inline:'center',behavior:'instant'})`);await settledLayout()
+              const shape=await evaluate(`(()=>{const e=document.querySelector('${selector}'),r=e.getBoundingClientRect(),hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);return {rect:r.toJSON(),hit:hit?.outerHTML.slice(0,250),good:r.width>0&&r.height>0&&e.contains(hit)&&document.documentElement.scrollWidth<=innerWidth+1&&document.documentElement.scrollHeight<=innerHeight+1}})()`)
+              if(!shape.good&&artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'phone-mode-layout-failure.png'),Buffer.from(shot.data,'base64'));await writeFile(join(artifacts,'phone-mode-layout-failure.json'),JSON.stringify({pick,width,height,zoom,theme,shape},null,2))}
+              assert.equal(shape.good,true,`Phone mode reachable ${pick} ${width} ${zoom} ${theme}: ${JSON.stringify(shape)}`);phoneModeGeometry++
+            }
+            const before=structuredClone(applicationData.get_snapshot.radio)
+            await gesture(selector,'radio.phoneMode')
+            assert.deepEqual(stationRequests.at(-1).action,{action:'radio.phoneMode',expectedMode:before.sidebandOverride??'auto',mode:pick})
+            assert.deepEqual(applicationData.get_snapshot.radio,{...before,sidebandOverride:pick==='auto'?null:pick,rigMode:pick==='auto'?'LSB':pick})
+            await until(`document.querySelector('${selector}')?.getAttribute('aria-pressed')==='true'`)
+          }
+          assert.equal(await evaluate(`document.querySelector('${root} .ph-mode-pick > button:nth-of-type(4)')?.disabled`),true)
+          if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'phone-mode-1280-175-light.png'),Buffer.from(shot.data,'base64'))}
         }
         if(['cw','phone'].includes(mode)){
           const controls=[...['nb','nr','notch',...(mode==='phone'?['manualNotch']:[])].map((func,index)=>({selector:root+` .ph-dsp > button:nth-of-type(${func==='manualNotch'?6:index+1})`,func})),
@@ -1117,10 +1144,10 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
       assert.ok(await evaluate(`[...document.querySelectorAll('.cockpit-txdock button')].every(e=>e.disabled)`),'receiver/amp permission cannot enable TX')
       stationControls=false;loggingLease=null
       await until(`document.querySelector('.cw-cockpit .amp-op').disabled`)
-      assert.equal(controlGeometry+modeGeometry+bandGeometry+wheelGeometry+filterGeometry+dspGeometry+tierGeometry+followGeometry+decoderGeometry+receiverGeometry+gainGeometry+16,568)
-      assert.equal(loggedRequests.length,5);assert.equal(stationRequests.length,104);assert.equal(unexpectedMessages,0);assert.equal(exceptions,0)
+      assert.equal(controlGeometry+modeGeometry+bandGeometry+wheelGeometry+filterGeometry+dspGeometry+phoneModeGeometry+tierGeometry+followGeometry+decoderGeometry+receiverGeometry+gainGeometry+16,600)
+      assert.equal(loggedRequests.length,5);assert.equal(stationRequests.length,108);assert.equal(unexpectedMessages,0);assert.equal(exceptions,0)
       if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-manual-logging.png'),Buffer.from(shot.data,'base64'));await writeFile(join(artifacts,'operation-results.json'),JSON.stringify({count:loggedRequests.length,stationActions:stationRequests.map(r=>r.action),controlGeometry,modeGeometry,bandGeometry,wheelGeometry,filterGeometry,dspGeometry,tierGeometry,followGeometry,decoderGeometry,receiverGeometry,gainGeometry,modes:loggedRequests.map(r=>r.record.mode),lostResultResolved:true,wholePageReloadResolved:true,crossTabLockRefusal:true,geometry:16,exceptions,unexpectedMessages},null,2))}
-      console.log('Compiled browser: five logging forms, 104 station gestures, saved receiver choices, native band recall, shared wheel/digit tuning, separate grants, recovery and 568 geometry cases passed');return
+      console.log('Compiled browser: five logging forms, 108 station gestures, saved receiver choices, native band recall, shared wheel/digit tuning, Phone mode picks, separate grants, recovery and 600 geometry cases passed');return
     }
     const startReads=applicationTraffic.reads, startBytes=applicationTraffic.bytes, started=performance.now()
     for(const [width,height] of [[1024,768],[1280,800],[1366,768],[1200,1390],[3440,1440]])for(const zoom of [1,1.75])for(const theme of ['dark','light']) {
