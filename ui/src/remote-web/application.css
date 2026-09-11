@@ -52,13 +52,13 @@
 /* The unchanged Nexus header can wrap above a phone-height viewport at pinned
    zoom. Keep the app bounded, and let that excess scroll while retaining a
    usable summary pane and the visible connection/authority status. */
-.remote-workspace:has(.remote-insights-view, [data-three-pane]) { overflow: auto; }
+.remote-workspace:not(.remote-quick-workspace):has(.remote-insights-view, [data-three-pane]) { overflow: auto; }
 .remote-workspace > .remote-application-status {
   position: sticky;
   top: 0;
   z-index: 50;
 }
-.remote-workspace .shell:has(.remote-insights-view, [data-three-pane]) {
+.remote-workspace:not(.remote-quick-workspace) .shell:has(.remote-insights-view, [data-three-pane]) {
   min-height: min(32em, calc(0.7 * var(--vh-eff, 100vh)));
   min-width: 0;
 }
@@ -90,8 +90,8 @@
 .remote-workspace .cockpit-qsocol { overflow-y: auto; }
 /* A large pinned zoom can make the native header taller than a phone. Keep
    a usable mode shell below it and let the application scroll to that shell. */
-.remote-workspace:has(:is(.remote-contact-host, .operate-host, .js8-host, .sstv-host, .aprs-host, .rtty-host, .psk-host):not([hidden])) { overflow: auto; }
-.remote-workspace .shell:has(:is(.remote-contact-host, .operate-host, .js8-host, .sstv-host, .aprs-host, .rtty-host, .psk-host):not([hidden])) {
+.remote-workspace:not(.remote-quick-workspace):has(:is(.remote-contact-host, .operate-host, .js8-host, .sstv-host, .aprs-host, .rtty-host, .psk-host):not([hidden])) { overflow: auto; }
+.remote-workspace:not(.remote-quick-workspace) .shell:has(:is(.remote-contact-host, .operate-host, .js8-host, .sstv-host, .aprs-host, .rtty-host, .psk-host):not([hidden])) {
   min-height: min(32em, calc(0.7 * var(--vh-eff, 100vh)));
   min-width: 0;
 }
@@ -173,8 +173,8 @@
 
 /* Planning pages share the native shell. Preserve a usable page below its
    wrapped header, and let the hosted workspace scroll to it at pinned zoom. */
-.remote-workspace:has(.connect-shell, .sats-view) { overflow: auto; }
-.remote-workspace .shell:has(.connect-shell, .sats-view) {
+.remote-workspace:not(.remote-quick-workspace):has(.connect-shell, .sats-view) { overflow: auto; }
+.remote-workspace:not(.remote-quick-workspace) .shell:has(.connect-shell, .sats-view) {
   min-height: min(38em, calc(0.8 * var(--vh-eff, 100vh)));
   min-width: 0;
 }
@@ -200,8 +200,8 @@
 
 /* The native header can consume a narrow browser's height. Preserve real
    configuration scrollports below it; the outer workspace scrolls the deficit. */
-.remote-workspace:has(.settings-panel[data-remote-configuration], .radioprog[data-remote-configuration]) { overflow: auto; }
-.remote-workspace .shell:has(.settings-panel[data-remote-configuration], .radioprog[data-remote-configuration]) {
+.remote-workspace:not(.remote-quick-workspace):has(.settings-panel[data-remote-configuration], .radioprog[data-remote-configuration]) { overflow: auto; }
+.remote-workspace:not(.remote-quick-workspace) .shell:has(.settings-panel[data-remote-configuration], .radioprog[data-remote-configuration]) {
   min-height: min(38em, calc(0.8 * var(--vh-eff, 100vh)));
   min-width: 0;
 }
@@ -228,3 +228,38 @@
 /* Keep the original Phone/CW forms mounted across remote navigation. */
 .remote-contact-host { display: contents; }
 .remote-contact-host[hidden] { display: none; }
+
+/* Quick uses the same mounted App. Navigation changes only its selected view. */
+.remote-quick-workspace { overflow: hidden; }
+.remote-quick-workspace > .now-bar,
+.remote-quick-workspace .mode-nav { display: none; }
+.remote-quick-workspace .shell { min-height: 0; min-width: 0; overflow: auto; }
+/* These modes already own frequency and stop controls in their cockpit. Global
+   screens retain TopBar, including its stop controls and current frequency. */
+.remote-quick-workspace:is([data-remote-view='phone'], [data-remote-view='cw']) > .topbar { display: none; }
+.remote-quick-workspace .topbar > .topbar-chips,
+.remote-quick-workspace .topbar > .tier-toggle { display: none; }
+.remote-quick-nav {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  flex: 0 0 auto;
+  gap: .25em;
+  padding: .35em .5em max(.35em, env(safe-area-inset-bottom));
+  min-width: 0;
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+}
+.remote-quick-nav button {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: .25em; min-width: 0; min-height: 48px; padding: .3em;
+  color: var(--text); background: var(--panel); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); font: inherit; white-space: normal;
+}
+.remote-quick-nav button[aria-current='page'] { color: var(--accent); border-color: var(--accent); }
+.remote-quick-nav button:disabled { opacity: .45; }
+.remote-quick-details { flex: 0 0 auto; }
+/* Optional receiver detail never contains Stop TX, Tune or the amplifier. */
+.cockpit-header--brief .ch-mode-extras,
+.cockpit-header--brief .ch-freq-extras,
+.cockpit-header--brief .ch-band,
+.cockpit-header--brief .cockpit-pwr { display: none; }

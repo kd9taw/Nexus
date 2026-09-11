@@ -1,3 +1,4 @@
+import { QuickRadioDetails, useRemotePresentation } from '../remote-web/presentation'
 import { useStationControl } from '../stationAccess'
 import { ModeEntry, type OperatingSection, type OperatingWorkspace } from '../remote-web/ModeEntry'
 // ⚠️ THIS FILE IS **PARTIAL** ON THE i18n LIST (i18n/hardcoded-strings.test.ts), and what is
@@ -232,6 +233,10 @@ export function CockpitHeader({
     onSnap,
   })
 
+  const display = useRemotePresentation()
+  const quick = display?.presentation === 'quick' && (remoteMode === 'cw' || remoteMode === 'phone')
+  const brief = quick && !display.radioDetails
+
   // ON AIR is the ARBITER's answer, not the FT slot flag: `transmitting` is written only
   // by the slot/beacon TX path, so a voice over, CW sending, the tune carrier, a held mic
   // key and SSTV all read as "RX" through it — the #57 report (FTdx10, Phone/CW showed no
@@ -241,7 +246,7 @@ export function CockpitHeader({
   const txPill = onAir ? txActiveLabel : radio.txEnabled ? TX_RX : TX_OFF
 
   return (
-    <div className="cockpit-header">
+    <div className={`cockpit-header${quick ? ' cockpit-header--quick' : ''}${brief ? ' cockpit-header--brief' : ''}`}>
       <div className="ch-identity">{modeIndicator}<ModeEntry snap={snap} mode={remoteMode} workspace={remoteWorkspace} onSnap={onSnap} /></div>
 
       <div className="ch-freq">
@@ -280,6 +285,8 @@ export function CockpitHeader({
       </div>
 
       {children != null && <div className="ch-mode-extras">{children}</div>}
+
+      {quick && <QuickRadioDetails />}
 
       <div className="ch-actions">
         {actions}

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import App from '../App'
 import {RemoteOperationsContext} from './operations'
 import { SessionStatus } from './SessionStatus'
+import { RemotePresentationContext, type RemotePresentation } from './presentation'
 import { controlTransport } from './control-transport'
 import { WheelTuning } from './wheel-tuning'
 import { RemoteWheelTuningContext } from './wheel-tuning-context'
@@ -23,6 +24,9 @@ import './application.css'
 
 type Bootstrap = { snapshot: AppSnapshot; settings: Settings; bandPlan: BandChannel[]; cwPhone: boolean; keyboard: boolean; collections: boolean; insights: boolean; dxpeditions: boolean; memories: boolean; ota: boolean; fieldDay: boolean; js8: boolean; stationModes: boolean; navigation: boolean; configuration: boolean }
 export function BrowserApplication({ connection, disconnect }: { connection: HostedConnection; disconnect: () => void }) {
+  const [presentation, setPresentation] = useState<RemotePresentation>('full')
+  const [radioDetails, setRadioDetails] = useState(false)
+  const display = { presentation, change: setPresentation, radioDetails, setRadioDetails }
   const client = connection.application
   const collections = useMemo(() => new RemoteCollections(client), [client])
   const tuning = useMemo(() => connection.operations ? new WheelTuning(connection.operations, client,
@@ -92,7 +96,7 @@ export function BrowserApplication({ connection, disconnect }: { connection: Hos
   }, [client, phase])
   const stale = phase !== 'ready' || client.age('get_snapshot') >= APPLICATION_TIMEOUT_MS
   useEffect(() => { if (stale) tuning?.cancel() }, [stale, tuning])
-  const status = <SessionStatus client={connection.operations} stale={stale} disconnect={disconnect} />
+  const status = <SessionStatus client={connection.operations} stale={stale} disconnect={disconnect} display={display} />
   if (!boot) return <div className="app remote-monitor-app remote-service-app">
     {status}
     <main className="rm-scroll"><div className="rm-content">
@@ -102,6 +106,7 @@ export function BrowserApplication({ connection, disconnect }: { connection: Hos
     </div></main>
   </div>
   return <ErrorBoundary label={t('remote.browserWorkspace')} action={{ label: t('remote.disconnect'), onClick: disconnect }}>
+    <RemotePresentationContext.Provider value={display}>
     <StationControlContext.Provider value={false}>
       <StationDataContext.Provider value={!stale}>
         <RemoteCollectionsContext.Provider value={boot.collections ? collections : null}>
@@ -115,5 +120,6 @@ export function BrowserApplication({ connection, disconnect }: { connection: Hos
         </RemoteCollectionsContext.Provider>
       </StationDataContext.Provider>
     </StationControlContext.Provider>
+    </RemotePresentationContext.Provider>
   </ErrorBoundary>
 }

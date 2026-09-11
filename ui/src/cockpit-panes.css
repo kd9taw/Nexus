@@ -434,3 +434,15 @@
 .remote-cockpit-lower {
   min-height: min(18em, calc(0.35 * var(--vh-eff)));
 }
+
+/* Optional Remote contact presentation. The original keyed columns keep their
+   parents and local state; this changes their visual order, never pane prefs. */
+.cockpit-panes.cockpit-panes--contact {
+  grid-template-columns: minmax(0, 1fr);
+  grid-auto-rows: auto;
+  overflow-y: auto;
+  --cockpit-pane-flex: 0 0 auto;
+}
+.cockpit-col--contact { order: -1; }
+.cockpit-col--quiet { display: none; }
+.ph-scope-panel[hidden] { display: none; }

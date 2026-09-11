@@ -1,3 +1,4 @@
+import { useRemotePresentation } from '../remote-web/presentation'
 import { useReceiverFilter } from '../remote-web/useReceiverFilter'
 import { useReceiverDsp } from '../remote-web/useReceiverDsp'
 import { useRemoteScopeClick } from '../remote-web/useRemoteScopeClick'
@@ -357,6 +358,9 @@ export function CwCockpit({
   onOpenLogbook,
   panels,
 }: Props) {
+  const display = useRemotePresentation()
+  const quick = display?.presentation === 'quick'
+  const details = !quick || display.radioDetails
   const frequencyControl = useStationCapability('frequency')
   const scopeClick = useRemoteScopeClick(snap)
   const dspControl = useReceiverDsp(snap, 'cw')
@@ -1349,7 +1353,7 @@ export function CwCockpit({
   )
 
   return (
-    <main className="layout single cw-cockpit" ref={cockpitRef}>
+    <main className={`layout single cw-cockpit${quick ? ' remote-quick-contact' : ''}`} ref={cockpitRef}>
       <CockpitHeader
         snap={snap}
         onSnap={onSnap}
@@ -1599,7 +1603,7 @@ export function CwCockpit({
           hook's mount — which it did not do until this change; see the note there. */}
       {shown('scope') && (
         <>
-      <section className="ph-scope-panel" ref={scopeRef} title={t('cw.scope.tuneHint')}>
+      <section hidden={!details} className="ph-scope-panel" ref={scopeRef} title={t('cw.scope.tuneHint')}>
         <div className="ph-scope-head">
           {/* When a native panadapter drives the scope, name it honestly (real RF spectrum);
               otherwise it's the CW-narrow audio view for zero-beating. */}
@@ -1621,7 +1625,7 @@ export function CwCockpit({
               pane, no ⊞ id — and it is a display only: nothing here can move the radio. It
               goes with the scope when the strip is hidden, which is right, because it is
               the other half of that picture. */}
-          <ZeroBeat active={active} targetHz={pitch} filterHz={filterHz} />
+          <ZeroBeat active={active && details} targetHz={pitch} filterHz={filterHz} />
           <span className="ph-scope-head-label">{t('cw.scope.colors.label')}</span>
           <PalettePicker />
         </div>
@@ -1685,7 +1689,7 @@ export function CwCockpit({
             scope is streaming, in which case we show the real RF spectrum around the dial. The
             dashed hairline is YOUR pitch, and it now sits mid-screen where a rig puts it. */}
         <PhoneScope
-          active={active}
+          active={active && details}
           transmitting={snap.radio.transmitting}
           theme={theme}
           smeterDb={smeterDb}
@@ -1701,10 +1705,10 @@ export function CwCockpit({
           pitchHz={pitch}
           cwPitchRefDial={keyer !== 'soundcard'}
           traceHoldMs={TRACE_HOLD_MS.fast}
-          interactive={(control || scopeClick.allowed) && catOk && !snap.radio.txBusyReason && !snap.radio.transmitting && snap.radio.dialMhz > 0}
+          interactive={details && (control || scopeClick.allowed) && catOk && !snap.radio.txBusyReason && !snap.radio.transmitting && snap.radio.dialMhz > 0}
         />
       </section>
-      <Splitter
+      {details && <Splitter
         axis="y"
         varName="--cw-scope-h"
         target={cockpitRef}
@@ -1713,7 +1717,7 @@ export function CwCockpit({
         max={SCOPE_SPLIT_MAX}
         defaultPct={13}
         label={t('cw.scope.splitter.label')}
-      />
+      />}
         </>
       )}
 
@@ -1741,28 +1745,28 @@ export function CwCockpit({
           guarded by CwCockpit.structure.test.tsx). Aux panes still change columns on a
           2↔3 flip and do remount — their state (guide, candidates, slider values) lives
           in this component, so the residual is cosmetic and accepted. */}
-      <div className="cockpit-panes" ref={panesRef}>
+      <div className={`cockpit-panes${quick ? ' cockpit-panes--contact' : ''}`} ref={panesRef}>
         {cols === 3 ? (
           <>
-            <div className="cockpit-col" key="main">
+            <div className={`cockpit-col${!details ? ' cockpit-col--quiet' : ''}`} key="main">
               {decodePane}
               {sentPane}
             </div>
-            <div className="cockpit-col" key="aux">{auxPanes}</div>
-            <div className="cockpit-col" key="log">
+            <div className={`cockpit-col${!details ? ' cockpit-col--quiet' : ''}`} key="aux">{auxPanes}</div>
+            <div className={`cockpit-col${quick ? ' cockpit-col--contact' : ''}`} key="log">
               {logPane}
             </div>
           </>
         ) : (
           <>
             {(mainPresent || auxPresent) && (
-              <div className="cockpit-col" key="main">
+              <div className={`cockpit-col${!details ? ' cockpit-col--quiet' : ''}`} key="main">
                 {decodePane}
                 {sentPane}
                 {auxPanes}
               </div>
             )}
-            <div className="cockpit-col" key="log">
+            <div className={`cockpit-col${quick ? ' cockpit-col--contact' : ''}`} key="log">
               {logPane}
             </div>
           </>

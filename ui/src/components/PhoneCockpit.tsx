@@ -1,3 +1,4 @@
+import { useRemotePresentation } from '../remote-web/presentation'
 import { useReceiverFilter } from '../remote-web/useReceiverFilter'
 import { useReceiverDsp } from '../remote-web/useReceiverDsp'
 import { usePhoneMode } from '../remote-web/usePhoneMode'
@@ -380,6 +381,9 @@ const FLEX_SPANS = [
 ] as const
 
 export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsumeWork, onSnap, fieldDay, phoneMode, wheelSensitivity, spots, needByCall, typeByCall, onWorkSpot, onRecallMemory, onOpenMemories, onOpenSettings, onOpenLogbook, panels }: Props) {
+  const display = useRemotePresentation()
+  const quick = display?.presentation === 'quick'
+  const details = !quick || display.radioDetails
   const frequencyControl = useStationCapability('frequency')
   const scopeClick = useRemoteScopeClick(snap)
   const dspControl = useReceiverDsp(snap, 'phone')
@@ -1203,7 +1207,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
   )
 
   return (
-    <main className="layout single phone-cockpit" ref={cockpitRef}>
+    <main className={`layout single phone-cockpit${quick ? ' remote-quick-contact' : ''}`} ref={cockpitRef}>
       <CockpitHeader
         snap={snap}
         onSnap={onSnap}
@@ -1433,7 +1437,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
           the dock below, none of them reachable from the ⊞ menu. */}
       {shown('scope') && (
         <>
-      <section className="ph-scope-panel">
+      <section hidden={!details} className="ph-scope-panel">
         <div className="ph-scope-head">
           {(() => {
             // Honest per feed: soundcard FFT = the demodulated RX audio; a native
@@ -1531,7 +1535,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
             </div>
           )}
           <PhoneScope
-            active={active}
+            active={active && details}
             transmitting={snap.radio.transmitting}
             theme={theme}
             smeterDb={smeterDb}
@@ -1544,11 +1548,11 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
             onTune={onScopeTune}
           onBeginClick={control ? undefined : scopeClick.begin}
             filterWidthHz={filterHz ?? 2400}
-            interactive={(control || scopeClick.allowed) && catOk && !snap.radio.txBusyReason && !snap.radio.transmitting && snap.radio.dialMhz > 0}
+            interactive={details && (control || scopeClick.allowed) && catOk && !snap.radio.txBusyReason && !snap.radio.transmitting && snap.radio.dialMhz > 0}
           />
         </div>
       </section>
-      <Splitter
+      {details && <Splitter
         axis="y"
         varName="--ph-scope-h"
         target={cockpitRef}
@@ -1557,7 +1561,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
         max={SCOPE_SPLIT_MAX}
         defaultPct={22}
         label={t('phone.scope.splitter.label')}
-      />
+      />}
         </>
       )}
 
@@ -1583,26 +1587,26 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
           guarded by PhoneCockpit.structure.test.tsx). Aux strips still change columns
           on a 2↔3 flip and do remount — they hold no local state (their sliders bind
           to cockpit state), so that residual is harmless and accepted. */}
-      <div className="cockpit-panes" ref={panesRef}>
+      <div className={`cockpit-panes${quick ? ' cockpit-panes--contact' : ''}`} ref={panesRef}>
         {cols === 3 ? (
           <>
-            <div className="cockpit-col" key="main">
+            <div className={`cockpit-col${!details ? ' cockpit-col--quiet' : ''}`} key="main">
               {bandPane}
               {keyerPane}
             </div>
-            <div className="cockpit-col" key="aux">{auxPanes}</div>
-            <div className="cockpit-col" key="log">{logPane}</div>
+            <div className={`cockpit-col${!details ? ' cockpit-col--quiet' : ''}`} key="aux">{auxPanes}</div>
+            <div className={`cockpit-col${quick ? ' cockpit-col--contact' : ''}`} key="log">{logPane}</div>
           </>
         ) : (
           <>
             {leadPresent && (
-              <div className="cockpit-col" key="main">
+              <div className={`cockpit-col${!details ? ' cockpit-col--quiet' : ''}`} key="main">
                 {bandPane}
                 {keyerPane}
                 {auxPanes}
               </div>
             )}
-            <div className="cockpit-col" key="log">{logPane}</div>
+            <div className={`cockpit-col${quick ? ' cockpit-col--contact' : ''}`} key="log">{logPane}</div>
           </>
         )}
       </div>

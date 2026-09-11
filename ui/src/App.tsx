@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { StationDataContext } from './stationAccess'
+import { QuickNavigation, useRemotePresentation } from './remote-web/presentation'
 import type { AppSnapshot, BandChannel, LoggedQso, ModeRequest, Settings, SourceKind, Tier } from './types'
 import { rigModeTransition, type RigMode } from './rigModeForView'
 import {
@@ -250,6 +251,8 @@ import { RemoteOta } from './remote-web/RemoteOta'
 import { RemoteMemories } from './remote-web/RemoteMemories'
 
 export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
+  const display = useRemotePresentation()
+  const quick = !!remote && display?.presentation === 'quick'
   const needsRead = useRemoteCollection('needs')
   const spotsRead = useRemoteCollection('spots')
   const [remoteSelection, setRemoteSelection] = useState<string | null>(null)
@@ -2976,7 +2979,7 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   }
 
   return (
-    <div className={`app${remote ? ' remote-workspace' : ''}`} data-remote-stale={remote?.stale || undefined}>
+    <div className={`app${remote ? ' remote-workspace' : ''}${quick ? ' remote-quick-workspace' : ''}`} data-remote-presentation={remote ? display?.presentation ?? 'full' : undefined} data-remote-view={remote ? effectiveView : undefined} data-remote-stale={remote?.stale || undefined}>
       {remote?.status}
       {remote?.collections && (effectiveView === 'needed' || effectiveView === 'spots') && <div className="remote-application-status"><CollectionStatus name={effectiveView === 'needed' ? 'needs' : 'spots'} /></div>}
       <TopBar
@@ -3297,6 +3300,7 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
         </ErrorBoundary>
       </div>
 
+      {remote && <QuickNavigation view={effectiveView} onSelect={handleView} available={(v) => isViewEnabled(v) && isRemoteViewAvailable(v)} />}
       <Toasts />
       {/* Destructive actions confirm through this, not window.confirm — which is inert in the
           macOS webview and silently answered "no" to every one of them. See src/confirm.tsx. */}

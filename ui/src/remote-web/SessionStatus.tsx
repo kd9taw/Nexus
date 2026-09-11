@@ -3,11 +3,12 @@ import { Info } from 'lucide-react'
 import { t } from '../i18n'
 import type { OperationClient } from './operation-client'
 import { LoggingAuthority } from './operations'
+import type { PresentationState } from './presentation'
 
 // Presentation belongs to this browser. Expanding help cannot acquire, release
 // or replace station authority, and never remounts the underlying Nexus app.
-export function SessionStatus({ client, stale, disconnect }: {
-  client?: OperationClient | null; stale: boolean; disconnect: () => void
+export function SessionStatus({ client, stale, disconnect, display }: {
+  client?: OperationClient | null; stale: boolean; disconnect: () => void; display?: PresentationState
 }) {
   const [expanded, setExpanded] = useState(false)
   const id = useId()
@@ -27,6 +28,10 @@ export function SessionStatus({ client, stale, disconnect }: {
       <p>{(client?.operationVersion ?? 0) >= 2 ? t('remote.controlPreview')
         : client?.enabled ? t('remote.applicationLoggingPreview') : t('remote.applicationObserver')}</p>
       <button type="button" className="remote-button" onClick={disconnect}>{t('remote.disconnect')}</button>
+      {display && <button type="button" className="remote-button" onClick={() => {
+        display.change(display.presentation === 'quick' ? 'full' : 'quick')
+        setExpanded(false)
+      }}>{t(display.presentation === 'quick' ? 'remote.quick.full' : 'remote.quick.name')}</button>}
     </div>
   </div>
 }

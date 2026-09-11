@@ -64,6 +64,7 @@ const MIGRATED = [
   'remote-web/RemoteFieldDay.tsx',
   'remote-web/BrowserApplication.tsx',
   'remote-web/SessionStatus.tsx',
+  'remote-web/presentation.tsx',
   'remote-web/RemoteApp.tsx',
   'remote-native/RemoteStation.tsx',
   'remote-monitor/MonitorApp.tsx',
