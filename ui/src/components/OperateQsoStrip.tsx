@@ -31,15 +31,15 @@ const NARROW_FILTER_HZ = 1000
 interface Props {
   qso: QsoStatus | null
   /** Switch the sequencer role (Call CQ / Monitor S&P). */
-  onSetMode: (mode: ModeRequest) => void
+  onSetMode: (mode: ModeRequest, expectedQso?: import('../types').QsoStatus | null) => void
   /** Start a PLAIN CQ run (clears any sticky directed token — the labelled
    * "Call CQ" button must never silently transmit a leftover "CQ DX"). The
    * DIRECTED machine lives in the Tx panel's editable Tx6. */
   onCallCq?: () => void
   /** Re-arm the current message (re-transmit a stalled/uncopied step). */
-  onResend: () => void
+  onResend: (expectedQso?: import('../types').QsoStatus | null) => void
   /** Send in-QSO free text (WSJT-X Tx5). */
-  onFreetext: (text: string) => void
+  onFreetext: (text: string, expectedQso?: import('../types').QsoStatus | null) => void | Promise<boolean>
   /** Log the active QSO now (inline "Log QSO" button). */
   onLog: () => void
   /** TX controls consolidated beside CQ/S&P (operator request: one cluster,
@@ -132,7 +132,7 @@ export function OperateQsoStrip({
   rotor,
   telemetry,
 }: Props) {
-  const control = useStationControl(), ftControl = useStationCapability('ftOperate'), stopControl = useStationStopControl()
+  const control = useStationControl(), ftControl = useStationCapability('ftOperate'), ftExchange = useStationCapability('ftExchange'), stopControl = useStationStopControl()
   // ⚠️ cqRunning, NOT qso.running. `running` is also true through a directed S&P call (the
   // engine's own comment at call_station_ctx says so) and nothing clears it after the QSO —
   // so this strip lit Call CQ solid through every S&P contact and forever after, and the
@@ -171,9 +171,12 @@ export function OperateQsoStrip({
   const [free, setFree] = useState('')
   const sendFree = () => {
     const t = free.trim()
-    if (!t) return
-    onFreetext(t)
-    setFree('')
+    if (!t || !ftExchange) return
+    const sent = control ? onFreetext(t) : onFreetext(t, qso)
+    if (control) setFree('')
+    else if (sent) void sent.then(accepted => {
+      if (accepted) setFree(current => current.trim() === t ? '' : current)
+    }).catch(() => {})
   }
 
   return (
@@ -199,8 +202,8 @@ export function OperateQsoStrip({
           type="button"
           className={`cq-role${!running ? ' active' : ''}`}
           aria-pressed={!running}
-          onClick={() => onSetMode('qso-monitor')}
-          disabled={!control || (noQso)}
+          onClick={() => control ? onSetMode('qso-monitor') : onSetMode('qso-monitor', qso)}
+          disabled={!ftExchange || (noQso)}
           title={noQso ? noQsoWhy : t('operate.strip.sandp.title')}
         >
           {t('operate.strip.sandp.label')}
@@ -343,8 +346,8 @@ export function OperateQsoStrip({
         <button
           type="button"
           className="cq-resend"
-          onClick={onResend}
-          disabled={!control || (!txNow)}
+          onClick={() => control ? onResend() : onResend(qso)}
+          disabled={!ftExchange || (!txNow)}
           title={t('operate.strip.resend.title')}
         >
           ↻
@@ -358,7 +361,7 @@ export function OperateQsoStrip({
           sendFree()
         }}
       >
-        <input disabled={!control}
+        <input disabled={!ftExchange}
           type="text"
           value={free}
           maxLength={13}
@@ -368,7 +371,7 @@ export function OperateQsoStrip({
         />
         <button
           type="submit"
-          disabled={!control || (!free.trim() || noQso)}
+          disabled={!ftExchange || (!free.trim() || noQso)}
           title={noQso ? noQsoWhy : t('operate.strip.send.title')}
         >
           {t('operate.strip.send.label')}

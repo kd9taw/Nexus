@@ -566,7 +566,7 @@ impl Authority {
                     && c.control_grants.contains(device)
                     && c.transmit_grants.contains(device)
                 {
-                    capabilities.extend(["ftOperate", "ftCall"]);
+                    capabilities.extend(["ftOperate", "ftCall", "ftExchange"]);
                 }
             }
             value["controls"] = json!({"context":context,"capabilities":capabilities});

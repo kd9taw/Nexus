@@ -762,14 +762,14 @@ export async function setArea(area: 'dx' | 'msg'): Promise<AppSnapshot> {
 
 /** Operator "Resend": re-arm the current QSO message (re-transmit a stalled or
  * uncopied step). No-op outside a QSO. Returns the fresh snapshot. */
-export async function qsoResend(): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('qso_resend', {})
+export async function qsoResend(expectedQso?: import('./types').QsoStatus | null): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('qso_resend', remoteApplicationTransport() ? { expectedQso } : {})
 }
 
 /** Operator in-QSO free text (WSJT-X Tx5): override the next transmission with
  * `text`, directed to the current DX when known. Returns the fresh snapshot. */
-export async function qsoFreetext(text: string): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('qso_freetext', { text })
+export async function qsoFreetext(text: string, expectedQso?: import('./types').QsoStatus | null): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('qso_freetext', { text, ...(remoteApplicationTransport() ? { expectedQso } : {}) })
 }
 
 /** Operator "Log QSO": log the active QSO's contact now. `logged` is the engine's verdict
@@ -1246,8 +1246,8 @@ export async function osNotify(title: string, body: string): Promise<void> {
  * Switch the top-level operating mode (and operator role). Returns the fresh
  * snapshot so callers can render the new mode immediately.
  */
-export async function setMode(mode: ModeRequest): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('set_mode', { mode })
+export async function setMode(mode: ModeRequest, expectedQso?: import('./types').QsoStatus | null): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_mode', { mode, ...(remoteApplicationTransport() ? { expectedQso } : {}) })
 }
 
 /**

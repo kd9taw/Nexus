@@ -19,7 +19,91 @@ pub struct FtCallSelection {
     pub freq: Option<f32>,
 }
 
+/// The exchange the operator saw. Counts may advance while a message repeats,
+/// but a different partner, reply step or outgoing text retires this gesture.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FtExchangeContext {
+    pub dxcall: Option<String>,
+    pub state: String,
+    pub tx_now: Option<String>,
+    pub cq_running: bool,
+}
+
+impl From<&crate::dto::QsoStatus> for FtExchangeContext {
+    fn from(qso: &crate::dto::QsoStatus) -> Self {
+        Self {
+            dxcall: qso.dxcall.clone(),
+            state: qso.state.clone(),
+            tx_now: qso.tx_now.clone(),
+            cq_running: qso.cq_running,
+        }
+    }
+}
+
+#[derive(Clone, serde::Deserialize, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+pub enum FtExchangeChange {
+    Resend,
+    FreeText { text: String },
+    Monitor,
+}
+
 impl Engine {
+    pub fn change_remote_ft_exchange(
+        &mut self,
+        permit: TransmitPermit,
+        expected: &FtExchangeContext,
+        change: &FtExchangeChange,
+    ) -> Result<(), Reason> {
+        self.prepare_remote_ft(&permit)?;
+        if !matches!(self.mode, super::Mode::Qso { .. }) {
+            return Err(Reason::UnsupportedAction);
+        }
+        let qso = self.snapshot().qso.ok_or(Reason::UnsupportedAction)?;
+        if FtExchangeContext::from(&qso) != *expected {
+            return Err(Reason::ContextChanged);
+        }
+        match change {
+            FtExchangeChange::Resend => self.qso_resend(),
+            FtExchangeChange::FreeText { text } => {
+                if text.trim().is_empty()
+                    || text.len() > 13
+                    || !text.bytes().all(|b| (b' '..=b'~').contains(&b))
+                {
+                    return Err(Reason::InvalidAction);
+                }
+                self.qso_freetext(text);
+            }
+            FtExchangeChange::Monitor => {
+                // Native S&P resets the same decoder state at the same point.
+                // Refuse a busy decoder before changing any exchange state;
+                // never wait for it while owning the Engine mutex.
+                let source = self.source.clone();
+                let mut guard = match source.try_lock() {
+                    Ok(guard) => guard,
+                    Err(std::sync::TryLockError::Poisoned(error)) => error.into_inner(),
+                    Err(std::sync::TryLockError::WouldBlock) => return Err(Reason::StationBusy),
+                };
+                self.set_mode_with_decoder("qso-monitor", |engine, mutation| match mutation {
+                    super::DecoderMutation::ResetHarq => Self::harq_reset_serialized(&guard),
+                    super::DecoderMutation::Install(source) => {
+                        engine.install_source_into(&mut guard, source)
+                    }
+                })
+                .map_err(|_| Reason::InvalidAction)?;
+            }
+        }
+        if !permit.valid(Instant::now()) {
+            self.halt_tx();
+            return Err(Reason::AuthorityExpired);
+        }
+        // None of these native verbs grants TX. Preserve its existing latch and
+        // immediate/slot semantics, and retain the same revocable remote owner.
+        self.remote_transmit = Some(permit);
+        Ok(())
+    }
+
     pub fn call_remote_ft_selection(
         &mut self,
         permit: TransmitPermit,
@@ -292,6 +376,127 @@ mod tests {
         engine.take_immediate_retune();
         engine.take_slot_tx_abort();
         engine
+    }
+
+    #[test]
+    fn remote_exchange_controls_match_native_without_arming_or_changing_settings() {
+        for tier in [Tier::Ft8, Tier::Ft4] {
+            for armed in [false, true] {
+                for change in [
+                    FtExchangeChange::Resend,
+                    FtExchangeChange::FreeText {
+                        text: "TNX 73".into(),
+                    },
+                    FtExchangeChange::Monitor,
+                ] {
+                    let mut native = station(tier);
+                    let mut remote = station(tier);
+                    let authority = TransmitAuthority::default();
+                    let permit = || {
+                        authority
+                            .permit(Instant::now() + Duration::from_secs(5))
+                            .unwrap()
+                    };
+                    native.start_cq(None).unwrap();
+                    remote.start_remote_ft_cq(permit(), None).unwrap();
+                    native.set_tx_enabled(armed);
+                    remote.set_remote_ft_tx_enabled(permit(), armed).unwrap();
+                    native.take_immediate_retune();
+                    remote.take_immediate_retune();
+                    let context = FtExchangeContext::from(&remote.snapshot().qso.unwrap());
+                    match &change {
+                        FtExchangeChange::Resend => native.qso_resend(),
+                        FtExchangeChange::FreeText { text } => native.qso_freetext(text),
+                        FtExchangeChange::Monitor => native.set_mode("qso-monitor").unwrap(),
+                    }
+                    remote
+                        .change_remote_ft_exchange(permit(), &context, &change)
+                        .unwrap();
+                    assert_eq!(remote.snapshot().qso, native.snapshot().qso);
+                    assert_eq!(remote.settings, native.settings);
+                    assert_eq!(remote.tx_enabled(), native.tx_enabled());
+                    assert_eq!(remote.tx_even(), native.tx_even());
+                    assert_eq!(remote.immediate_tx, native.immediate_tx);
+                    assert_eq!(remote.take_slot_tx_abort(), native.take_slot_tx_abort());
+                    authority.revoke();
+                    assert!(remote.poll_remote_transmit(Instant::now()));
+                    assert!(!remote.tx_enabled());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn remote_exchange_refuses_changed_messages_and_expired_authority() {
+        let mut engine = station(Tier::Ft8);
+        let authority = TransmitAuthority::default();
+        let permit = || {
+            authority
+                .permit(Instant::now() + Duration::from_secs(5))
+                .unwrap()
+        };
+        engine.start_remote_ft_cq(permit(), None).unwrap();
+        engine.take_immediate_retune();
+        let before = FtExchangeContext::from(&engine.snapshot().qso.unwrap());
+        engine
+            .change_remote_ft_exchange(
+                permit(),
+                &before,
+                &FtExchangeChange::FreeText {
+                    text: "TNX 73".into(),
+                },
+            )
+            .unwrap();
+        let current = engine.snapshot().qso;
+        assert_eq!(
+            engine.change_remote_ft_exchange(permit(), &before, &FtExchangeChange::Resend),
+            Err(Reason::ContextChanged)
+        );
+        let expected = FtExchangeContext::from(current.as_ref().unwrap());
+        for text in ["", "WAY TOO MUCH TEXT", "TNX\n73"] {
+            assert_eq!(
+                engine.change_remote_ft_exchange(
+                    permit(),
+                    &expected,
+                    &FtExchangeChange::FreeText { text: text.into() }
+                ),
+                Err(Reason::InvalidAction)
+            );
+        }
+        let expired = permit();
+        authority.revoke();
+        assert_eq!(
+            engine.change_remote_ft_exchange(expired, &expected, &FtExchangeChange::Resend),
+            Err(Reason::AuthorityExpired)
+        );
+        assert_eq!(engine.snapshot().qso, current);
+    }
+
+    #[test]
+    fn remote_monitor_refuses_a_busy_decoder_before_mutating_the_exchange() {
+        let mut engine = station(Tier::Ft8);
+        let authority = TransmitAuthority::default();
+        let permit = || {
+            authority
+                .permit(Instant::now() + Duration::from_secs(5))
+                .unwrap()
+        };
+        engine.start_remote_ft_cq(permit(), None).unwrap();
+        engine.take_immediate_retune();
+        let before = engine.snapshot().qso;
+        let expected = FtExchangeContext::from(before.as_ref().unwrap());
+        let source = engine.source.clone();
+        let guard = source.lock().unwrap();
+        assert_eq!(
+            engine.change_remote_ft_exchange(permit(), &expected, &FtExchangeChange::Monitor),
+            Err(Reason::StationBusy)
+        );
+        drop(guard);
+        assert_eq!(engine.snapshot().qso, before);
+        engine
+            .change_remote_ft_exchange(permit(), &expected, &FtExchangeChange::Monitor)
+            .unwrap();
+        assert_ne!(engine.snapshot().qso, before);
     }
 
     #[test]

@@ -2029,21 +2029,22 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       .catch(() => {})
   }, [])
 
-  const handleSetMode = useCallback((mode: ModeRequest) => {
-    void withErrorToast(() => apiSetMode(mode), t('shell.error.switchMode')).then((s) => {
+  const handleSetMode = useCallback((mode: ModeRequest, expectedQso?: import('./types').QsoStatus | null) => {
+    void withErrorToast(() => apiSetMode(mode, expectedQso), t('shell.error.switchMode')).then((s) => {
       if (s) setSnap(s)
     })
   }, [])
 
-  const handleQsoResend = useCallback(() => {
-    void withErrorToast(() => apiQsoResend(), t('shell.resend.qso.failed')).then((s) => {
+  const handleQsoResend = useCallback((expectedQso?: import('./types').QsoStatus | null) => {
+    void withErrorToast(() => apiQsoResend(expectedQso), t('shell.resend.qso.failed')).then((s) => {
       if (s) setSnap(s)
     })
   }, [])
 
-  const handleQsoFreetext = useCallback((text: string) => {
-    void withErrorToast(() => apiQsoFreetext(text), t('shell.freetext.failed')).then((s) => {
+  const handleQsoFreetext = useCallback((text: string, expectedQso?: import('./types').QsoStatus | null) => {
+    return withErrorToast(() => apiQsoFreetext(text, expectedQso), t('shell.freetext.failed')).then((s) => {
       if (s) setSnap(s)
+      return !!s
     })
   }, [])
 

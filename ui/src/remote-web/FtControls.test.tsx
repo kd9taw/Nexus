@@ -7,22 +7,22 @@ import { OperationClient } from './operation-client'
 import type { QsoStatus, RadioStatus } from '../types'
 const clients: OperationClient[] = []
 afterEach(() => { cleanup(); clients.splice(0).forEach(c => c.disconnected()); vi.useRealTimers() })
-function fixture(granted = true) {
+function fixture(granted = true, exchange = false) {
   vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
   const sent: any[] = [], c = new OperationClient(w => sent.push(JSON.parse(w)), true, () => 1000, undefined, 4)
   clients.push(c); c.open()
   c.receive({ type: 'operationResponse', requestId: sent[0].request.requestId, value: { stationBootId: crypto.randomUUID(), allowed: true,
     phase: 'controlling', leaseId: crypto.randomUUID(), revision: 1, commandWindowId: crypto.randomUUID(), nextSequence: 1,
     leaseRemainingMs: 5000, actions: [], txArmed: false, transmitEpoch: granted ? '0000000000000001' : null,
-    controls: { context: { radioId: 0, radioConnection: 1, ampConnection: null, ampReadSequence: null }, capabilities: granted ? ['ftOperate'] : ['decoder'] } } })
+    controls: { context: { radioId: 0, radioConnection: 1, ampConnection: null, ampReadSequence: null }, capabilities: granted ? ['ftOperate', ...(exchange ? ['ftExchange'] : [])] : ['decoder'] } } })
   return { c, sent }
 }
-function strip(c: OperationClient, available = true) {
+function strip(c: OperationClient, available = true, send?: (text: string) => Promise<boolean>) {
   const cq = vi.fn(), tx = vi.fn(), halt = vi.fn(), other = vi.fn()
   const content = (data: boolean) => <StationControlContext.Provider value={false}><StationDataContext.Provider value={data}><RemoteOperationsContext.Provider value={c}>
-    <OperateQsoStrip qso={{ running: false, state: 'Idle', dxcall: null, txNow: null } as QsoStatus}
+    <OperateQsoStrip qso={{ running: false, state: 'Idle', dxcall: 'W1AW', txNow: 'W1AW KD9TAW EN52' } as QsoStatus}
       radio={{ txEnabled: false, tuning: false, holdTxFreq: false, catOk: true } as RadioStatus}
-      onCallCq={cq} onSetTxEnabled={tx} onHaltTx={halt} onSetMode={other} onResend={other} onFreetext={other} onLog={other} onSetTune={other} onSetHoldTxFreq={other} />
+      onCallCq={cq} onSetTxEnabled={tx} onHaltTx={halt} onSetMode={other} onResend={other} onFreetext={send ?? other} onLog={other} onSetTune={other} onSetHoldTxFreq={other} />
   </RemoteOperationsContext.Provider></StationDataContext.Provider></StationControlContext.Provider>
   const view = render(content(available))
   return { cq, tx, halt, other, view, stale: () => view.rerender(content(false)) }
@@ -57,4 +57,25 @@ it('disables ordinary FT gestures when request capacity is unavailable and keeps
   expect(ui.cq).not.toHaveBeenCalled(); expect(ui.tx).not.toHaveBeenCalled()
   expect(button(/stop tx/i).disabled).toBe(false)
   fireEvent.click(button(/stop tx/i)); expect(ui.halt).toHaveBeenCalledOnce()
+})
+
+
+it('uses existing exchange controls and clears only a confirmed Remote free-text draft', async () => {
+  let confirm!: (accepted: boolean) => void
+  const send = vi.fn(() => new Promise<boolean>(resolve => { confirm = resolve }))
+  const h = fixture(true, true), ui = strip(h.c, true, send)
+  const input = screen.getByRole('textbox') as HTMLInputElement
+  fireEvent.change(input, { target: { value: 'TNX 73' } })
+  fireEvent.submit(input.closest('form')!)
+  expect(send).toHaveBeenCalledExactlyOnceWith('TNX 73', expect.objectContaining({ dxcall: 'W1AW', txNow: 'W1AW KD9TAW EN52' }))
+  expect(input.value).toBe('TNX 73')
+  await act(async () => confirm(false))
+  expect(input.value).toBe('TNX 73')
+  fireEvent.submit(input.closest('form')!)
+  await act(async () => confirm(true))
+  expect(input.value).toBe('')
+  fireEvent.click(document.querySelector('.cq-resend')!)
+  expect(ui.other).toHaveBeenLastCalledWith(expect.objectContaining({ dxcall: 'W1AW' }))
+  fireEvent.click(document.querySelectorAll('.cq-role')[1])
+  expect(ui.other).toHaveBeenLastCalledWith('qso-monitor', expect.objectContaining({ dxcall: 'W1AW' }))
 })

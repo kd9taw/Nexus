@@ -13,7 +13,26 @@ export function controlTransport(reads: ApplicationTransport, client: Applicatio
     kind: 'remote',
     async invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
       let action: StationAction | null = null, read = '', stopped = false
+      let captured: ReturnType<OperationClient['prepareControl']> | undefined
       switch (command) {
+        case 'qso_resend': case 'qso_freetext': case 'set_mode': {
+          const keys = command === 'qso_resend' ? ['expectedQso'] : [command === 'qso_freetext' ? 'text' : 'mode', 'expectedQso']
+          if (!args || Object.keys(args).length !== keys.length || Object.keys(args).some(key => !keys.includes(key))) throw Error('invalidOperation')
+          if (command === 'set_mode' && args?.mode !== 'qso-monitor') throw Error('applicationUnsupported')
+          const gesture = structuredClone(args)
+          const qso = gesture.expectedQso as import('../types').QsoStatus | null
+          if (!qso) throw Error('staleContext')
+          const state = operations.getSnapshot().state
+          if (!state?.transmitEpoch) throw Error('localPermissionRequired')
+          captured = operations.prepareControl()
+          const snapshot = await reads.invoke<import('../types').AppSnapshot>('get_snapshot')
+          action = stationAction({ action: 'ft.exchange', expectedTier: snapshot.link.tier,
+            transmitEpoch: state.transmitEpoch,
+            expectedQso: { dxcall: qso.dxcall, state: qso.state, txNow: qso.txNow ?? null, cqRunning: qso.cqRunning ?? false },
+            change: command === 'qso_resend' ? { kind: 'resend' } : command === 'set_mode' ? { kind: 'monitor' } : { kind: 'freeText', text: gesture.text } })
+          read = 'get_snapshot'
+          break
+        }
         case 'halt_tx':
           if (args && Object.keys(args).length) throw Error('invalidOperation')
           await operations.stopTransmit()
@@ -110,7 +129,7 @@ export function controlTransport(reads: ApplicationTransport, client: Applicatio
         if (snapshot.activeRadioId !== displayed.radioId || !snapshot.radios?.some(r => r.id === action.radioId)) throw Error('readingUnavailable')
       }
       if (action) {
-        const result = await operations.control(action, displayed)
+        const result = await (captured ? captured(action) : operations.control(action, displayed))
         if (result.outcome !== 'applied') throw Error(result.outcome === 'rejected' ? result.reason : 'operationUnknown')
         if (action?.action === 'radio.workSpot' && result.evidence !== 'radioReadback') throw Error('operationUnknown')
         if (action?.action === 'radio.select' && result.evidence !== 'radioReadback' && !(displayed?.radioId === action.radioId && result.evidence === 'stationState')) throw Error('operationUnknown')

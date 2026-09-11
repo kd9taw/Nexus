@@ -113,14 +113,14 @@ interface Props {
   /** Commit a dial/band/mode change (the app's setFrequency handler). */
   onSetFrequency: (dialMhz: number, band: string, mode: string) => void
   /** Switch the QSO sequencer role (Call CQ / Monitor). */
-  onSetMode: (mode: ModeRequest) => void
+  onSetMode: (mode: ModeRequest, expectedQso?: import('../types').QsoStatus | null) => void
   /** Set the transmit period (Tx 1st/even vs Tx 2nd/odd). */
   onSetTxEven: (even: boolean) => void
   onSetTxCycleAuto: (auto: boolean) => void
   /** Re-arm the current QSO message. */
-  onResend: () => void
+  onResend: (expectedQso?: import('../types').QsoStatus | null) => void
   /** Send in-QSO free text (Tx5). */
-  onFreetext: (text: string) => void
+  onFreetext: (text: string, expectedQso?: import('../types').QsoStatus | null) => void | Promise<boolean>
   /** Log the active QSO now (inline button). */
   onLog: () => void
   /** WSJT-X Tx-slot click: force `text` as the next transmission to `call`. */

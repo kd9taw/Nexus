@@ -187,6 +187,16 @@ are already blocked. Controls reflect admission capacity, and unsent commands
 write no receipt. Polling cannot overtake a control waiting for browser storage.
 Stop keeps its independent route and budget; no command is retried or moved to a
 newer authority window.
+The separate `ftExchange` capability connects existing S&P, Resend and in-QSO
+free-text controls. Each gesture captures its rendered partner, exchange state,
+queued text and CQ-run flag before any asynchronous read, along with the original
+control window. The Engine compares that exchange before calling its existing
+verb; it preserves the TX latch, settings and slot behavior. S&P takes the stable
+decoder lock without waiting and uses the shared native reset callback. Remote
+free-text drafts clear only after confirmation and retain edits made while a
+request is pending. This does not add Tx-slot selection, offset/period settings
+or complete QSO logging/confirmation.
+
 
 The receive-audio foundation is local to `tempo-audio`: the sole `RxDsp` capture
 consumer offers bounded device-rate mono copies through `receive_audio.rs`, before

@@ -404,6 +404,49 @@ fn ft_run(f: &Fixture, request: &Request) -> Result<Value, &'static str> {
 }
 
 #[test]
+fn transmit_exchange_controls_reuse_native_policy_and_reject_an_advanced_display() {
+    use tempo_app::engine::remote_transmit::FtExchangeContext;
+    for tier in [tempo_app::dto::Tier::Ft8, tempo_app::dto::Tier::Ft4] {
+        let (f, _, state) = ready_ft(tier);
+        assert!(state["controls"]["capabilities"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("ftExchange")));
+        let cq = ft_command(
+            &state,
+            json!({"action":"ft.cq","expectedTier":tier,"transmitEpoch":state["transmitEpoch"],"direction":null}),
+        );
+        assert_eq!(ft_run(&f, &cq).unwrap()["outcome"], "applied");
+        f.engine.lock().unwrap().take_immediate_retune();
+        let original = FtExchangeContext::from(&f.engine.lock().unwrap().snapshot().qso.unwrap());
+        for change in [
+            json!({"kind":"freeText","text":"TNX 73"}),
+            json!({"kind":"resend"}),
+            json!({"kind":"monitor"}),
+        ] {
+            let expected =
+                FtExchangeContext::from(&f.engine.lock().unwrap().snapshot().qso.unwrap());
+            let current = control_state_version(&f, Instant::now(), 4);
+            let command = ft_command(
+                &current,
+                json!({"action":"ft.exchange","expectedTier":tier,"transmitEpoch":current["transmitEpoch"],"expectedQso":expected,"change":change}),
+            );
+            assert_eq!(ft_run(&f, &command).unwrap()["outcome"], "applied");
+            assert!(
+                f.engine.lock().unwrap().tx_enabled(),
+                "native S&P does not disarm the TX latch"
+            );
+        }
+        let current = control_state_version(&f, Instant::now(), 4);
+        let stale = ft_command(
+            &current,
+            json!({"action":"ft.exchange","expectedTier":tier,"transmitEpoch":current["transmitEpoch"],"expectedQso":original,"change":{"kind":"resend"}}),
+        );
+        assert_eq!(ft_run(&f, &stale).unwrap()["outcome"], "rejected");
+    }
+}
+
+#[test]
 fn transmit_browser_cq_tx_off_and_stop_preserve_native_ft_behavior() {
     use tempo_app::dto::Tier;
     for tier in [Tier::Ft8, Tier::Ft4] {

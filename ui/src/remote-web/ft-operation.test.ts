@@ -18,10 +18,10 @@ function fixture(exclusive: ControlStorage['exclusive'] = async run => run()) {
   clients.push(c); c.open()
   const state: OperationState = { stationBootId: crypto.randomUUID(), allowed: true, phase: 'controlling', leaseId: crypto.randomUUID(),
     revision: 1, commandWindowId: crypto.randomUUID(), nextSequence: 1, leaseRemainingMs: 5000, actions: [], txArmed: false,
-    transmitEpoch: '0000000000000001', controls: { context: { radioId: 0, radioConnection: 1, ampConnection: null, ampReadSequence: null }, capabilities: ['ftOperate', 'ftCall'] } }
+    transmitEpoch: '0000000000000001', controls: { context: { radioId: 0, radioConnection: 1, ampConnection: null, ampReadSequence: null }, capabilities: ['ftOperate', 'ftCall', 'ftExchange'] } }
   const reply = (requestId: string, value: unknown) => c.receive({ type: 'operationResponse', requestId, value })
   reply(sent[0].request.requestId, state)
-  const snapshot = { link: { tier: 'FT8' }, radio: { txEnabled: false } }
+  const snapshot = { link: { tier: 'FT8' }, radio: { txEnabled: false }, qso: { dxcall: 'W1AW', state: 'awaitReport', txNow: 'W1AW KD9TAW EN52', cqRunning: false } }
   let age = Infinity
   const reads = { kind: 'remote', invoke: vi.fn(async () => snapshot) } as unknown as ApplicationTransport
   const transport = controlTransport(reads, { age: () => age } as unknown as ApplicationClient, c)
@@ -35,9 +35,9 @@ it('validates directed CQ tokens without widening into a native invoke tunnel', 
   expect(operationValue({ stop: 'accepted' })).toEqual({ stop: 'accepted' })
 })
 
-it.each([['call_station', { call: 'W1AW', grid: null, message: 'CQ W1AW FN31', snr: -10, freq: 1250 }, 'ft.call'], ['start_cq', { dir: 'DX' }, 'ft.cq'], ['set_tx_enabled', { enabled: true }, 'ft.txEnabled']] as const)(
+it.each([['qso_resend', {}, 'ft.exchange'], ['qso_freetext', { text: 'TNX 73' }, 'ft.exchange'], ['set_mode', { mode: 'qso-monitor' }, 'ft.exchange'], ['call_station', { call: 'W1AW', grid: null, message: 'CQ W1AW FN31', snr: -10, freq: 1250 }, 'ft.call'], ['start_cq', { dir: 'DX' }, 'ft.cq'], ['set_tx_enabled', { enabled: true }, 'ft.txEnabled']] as const)(
   'adapts %s to its FT authority and waits for a later station sample', async (command, args, action) => {
-    const h = fixture(), result = h.transport.invoke(command, args)
+    const h = fixture(), result = h.transport.invoke(command, action === 'ft.exchange' ? { ...args, expectedQso: h.snapshot.qso } : args)
     await Promise.resolve(); await Promise.resolve(); await Promise.resolve()
     const request = h.sent[h.sent.length - 1].request
     expect(request.type).toBe('stationControl'); expect(request.action.action).toBe(action)
@@ -75,4 +75,21 @@ it('keeps native-selected call context bounded and rejects mixed roster/decode a
     expect(() => stationAction({ ...action, selection: { ...action.selection, ...patch } })).toThrow()
   const roster = { ...action, selection: { call: 'W1AW', grid: 'FN31', message: null, snr: null, freq: 1250 } }
   expect(stationAction(roster)).toEqual(roster)
+})
+
+
+it('retains the displayed exchange and original command window through an asynchronous read', async () => {
+  const h = fixture()
+  const displayed = { ...h.snapshot.qso }
+  let release!: (value: unknown) => void
+  vi.mocked(h.reads.invoke).mockImplementationOnce(() => new Promise(resolve => { release = resolve }))
+  const pending = h.transport.invoke('qso_resend', { expectedQso: displayed }).catch(error => error as Error)
+  await vi.advanceTimersByTimeAsync(1250)
+  h.reply(h.sent[h.sent.length - 1].request.requestId, h.state)
+  expect(h.c.getSnapshot().fresh).toBe(true)
+  release(h.snapshot)
+  await vi.advanceTimersByTimeAsync(0)
+  expect(await pending).toMatchObject({ message: 'windowExpired' })
+  expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(0)
+  expect(h.saved).not.toHaveBeenCalled()
 })

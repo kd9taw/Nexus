@@ -145,7 +145,7 @@ export class OperationRelay {
       if ('value' in response && 'phase' in response.value && (p.operationVersion ?? 2) < 4) {
         delete response.value.transmitEpoch
         response.value.txArmed = false
-        if (response.value.controls) response.value.controls.capabilities = response.value.controls.capabilities.filter(c => c !== 'ftOperate' && c !== 'ftCall')
+        if (response.value.controls) response.value.controls.capabilities = response.value.controls.capabilities.filter(c => c !== 'ftOperate' && c !== 'ftCall' && c !== 'ftExchange')
       }
       if ('value' in response && 'controls' in response.value && response.value.controls) {
         // Keep capability vocabulary compatible even with pre-v3 stations that
