@@ -226,6 +226,7 @@ for (const {applicationVersion,operating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,
       applicationData.get_snapshot.activeRadioId=1
       applicationData.get_snapshot.radio.source='native'
       applicationData.get_snapshot.radio.decodeDepth=3
+      applicationData.get_snapshot.radio.rigKeyed=false
       fixture.station.radio.id=1;fixture.station.radio.catConnected=true;fixture.station.radio.rigKeyed=false;fixture.station.radio.nexusBusy=false
       for(const key of ['cat','dial','mode','ptt'])if(fixture.station.radio.readings[key])fixture.station.radio.readings[key]={connectionGeneration:1,readSequence:1,ageMs:0}
       Object.assign(fixture.station.amplifier,applicationData.get_snapshot.radio.amp,{followBand:false,reading:{connectionGeneration:1,readSequence:1,ageMs:0}})

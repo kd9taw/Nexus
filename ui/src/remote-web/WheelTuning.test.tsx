@@ -96,13 +96,14 @@ it('does not carry a read across loss even when the same lease later returns', a
   act(() => h.finish()); await tick()
 })
 
-it.each(['dial', 'radio', 'keyed', 'armed', 'busy', 'stale'] as const)('refuses %s readings before dispatch', async change => {
+it.each(['dial', 'radio', 'keyed', 'keying unavailable', 'armed', 'busy', 'stale'] as const)('refuses %s readings before dispatch', async change => {
   const h = fixture()
   h.tuning.nudge(100, h.source())
   const s = structuredClone(h.getSnapshot())
   if (change === 'dial') s.radio.dialMhz += 0.01
   if (change === 'radio') s.activeRadioId = 2
   if (change === 'keyed') s.radio.rigKeyed = true
+  if (change === 'keying unavailable') s.radio.rigKeyed = undefined
   if (change === 'armed') s.radio.txEnabled = true
   if (change === 'busy') s.radio.txBusyReason = 'manualPtt'
   if (change === 'stale') h.setAge(1200)
