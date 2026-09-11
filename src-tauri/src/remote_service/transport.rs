@@ -122,7 +122,7 @@ enum ServerMessage {
         device_id: String,
         #[serde(rename = "operationVersion")]
         operation_version: Option<u8>,
-        request: super::operations::Request,
+        request: Box<super::operations::Request>,
     },
     ApplicationQuery {
         #[serde(flatten)]

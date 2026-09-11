@@ -35,14 +35,19 @@ fn band_selection_matches_native_defaults_for_every_desktop_choice_and_class() {
                 s.engine.settings.license_class = class;
                 native.engine.settings.license_class = class;
                 let expected = native.engine.prepare_band_pick(&channel.band, mode);
+                // Prepare the independent native oracle before opening the
+                // short remote permission window. Its setup is not radio I/O.
+                native.engine.pick_band(&channel.band, Some(name));
+                native.engine.take_immediate_retune();
                 let before = serde_json::to_value(s.engine.settings()).unwrap();
                 let memory = s.engine.freq_memory.clone();
+                let current_mode = s.engine.rig_mode_effective();
+                s.sample(s.engine.settings.dial_hz(), &current_mode);
                 let result = queue(&mut s, &channel.band, name);
                 assert_eq!(serde_json::to_value(s.engine.settings()).unwrap(), before);
                 assert_eq!(s.engine.freq_memory, memory);
                 if expected.is_none() {
                     assert!(matches!(result, Err(Reason::UnsupportedAction)));
-                    native.engine.pick_band(&channel.band, Some(name));
                     assert_eq!(
                         native.engine.settings.dial_hz(),
                         s.engine.settings.dial_hz()
@@ -51,8 +56,6 @@ fn band_selection_matches_native_defaults_for_every_desktop_choice_and_class() {
                 }
                 let receipt = result.unwrap();
                 let request = s.engine.take_remote_radio().unwrap();
-                native.engine.pick_band(&channel.band, Some(name));
-                native.engine.take_immediate_retune();
                 assert_eq!(
                     request.target_hz,
                     native.engine.settings.dial_hz(),
