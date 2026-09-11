@@ -376,36 +376,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
             // The provider proves the real UI/relay gesture and later snapshot.
             // Native engine/worker tests separately prove channel/source policy.
             applicationData.get_snapshot.link.tier=a.tier
-            if(routedWorkspace){
-        for(const [view,workspace,tier,id] of [
-          ['Tempo','tempo','TempoFast',2],['JS8','js8','JS8',1],['FT','ft','FT8',2],
-        ]){
-          const before=stationRequests.length,context=controlContext()
-          await click(button(view));await settledLayout()
-          assert.equal(stationRequests.length,before,'navigation is passive')
-          const entry=`document.querySelector('${workspace==='js8'?'.js8-cockpit':'.grid-header'} .remote-mode-entry')`
-          await until(`!!${entry}&&!${entry}.disabled`)
-          await measure(entry,'routed-workspace')
-          await fresh();await click(entry)
-          await until(`${pill(id)}?.getAttribute('aria-pressed')==='true'`)
-          await until(`document.querySelector('.remote-control-result')?.textContent.includes('confirmed')`)
-          assert.equal(stationRequests.length,before+1)
-          assert.deepEqual(stationRequests.at(-1).action,{action:'radio.workspace',workspace})
-          assert.deepEqual(stationRequests.at(-1).context,context)
-          assert.equal(applicationData.get_snapshot.link.tier,tier)
-          assert.equal(applicationData.get_snapshot.radio.txEnabled,false)
-        }
-        stationControls=false
-        await until(`${pill(1)}?.disabled===true`)
-        assert.equal(stationRequests.length,3);assert.equal(exceptions,0);assert.equal(unexpectedMessages,0)
-        if(artifacts){
-          const shot=await browser.call('Page.captureScreenshot',{format:'png'},session)
-          await writeFile(join(artifacts,'routed-workspace.png'),Buffer.from(shot.data,'base64'))
-          await writeFile(join(artifacts,'routed-workspace-results.json'),JSON.stringify({actions:stationRequests.map(r=>({action:r.action,context:r.context})),selectionGeometry,passiveNavigation:true,revocationRefusal:true,exceptions,unexpectedMessages},null,2))
-        }
-        console.log('Compiled routed workspace: explicit native entry, radio context, passive navigation and revocation passed');return
-      }
-      if(routedTier){
+            if(routedTier){
               const radio=applicationData.get_snapshot.radio
               if(a.tier==='MSK144'){adoptBrowserRadio(2);Object.assign(radio,{dialMhz:50.260,band:'6m',sideband:'USB',rxOffsetHz:1500,txOffsetHz:1500})}
               else if(a.tier==='FST4'){adoptBrowserRadio(1);Object.assign(radio,{dialMhz:0.136,band:'2200m',sideband:'USB'})}
@@ -625,6 +596,35 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         }
         await browser.call('Emulation.setDeviceMetricsOverride',{width:1280,height:800,deviceScaleFactor:1,mobile:false},session)
         await evaluate(`document.documentElement.style.setProperty('--ui-zoom','1');window.dispatchEvent(new Event('resize'))`);await settledLayout()
+      }
+      if(routedWorkspace){
+        for(const [view,workspace,tier,id] of [
+          ['Tempo','tempo','TempoFast',2],['JS8','js8','JS8',1],['FT','ft','FT8',2],
+        ]){
+          const before=stationRequests.length,context=controlContext()
+          await click(button(view));await settledLayout()
+          assert.equal(stationRequests.length,before,'navigation is passive')
+          const entry=`document.querySelector('${workspace==='js8'?'.js8-cockpit':'.grid-header'} .remote-mode-entry')`
+          await until(`!!${entry}&&!${entry}.disabled`)
+          await measure(entry,'routed-workspace')
+          await fresh();await click(entry)
+          await until(`${pill(id)}?.getAttribute('aria-pressed')==='true'`)
+          await until(`document.querySelector('.remote-control-result')?.textContent.includes('confirmed')`)
+          assert.equal(stationRequests.length,before+1)
+          assert.deepEqual(stationRequests.at(-1).action,{action:'radio.workspace',workspace})
+          assert.deepEqual(stationRequests.at(-1).context,context)
+          assert.equal(applicationData.get_snapshot.link.tier,tier)
+          assert.equal(applicationData.get_snapshot.radio.txEnabled,false)
+        }
+        stationControls=false
+        await until(`${pill(1)}?.disabled===true`)
+        assert.equal(stationRequests.length,3);assert.equal(exceptions,0);assert.equal(unexpectedMessages,0)
+        if(artifacts){
+          const shot=await browser.call('Page.captureScreenshot',{format:'png'},session)
+          await writeFile(join(artifacts,'routed-workspace.png'),Buffer.from(shot.data,'base64'))
+          await writeFile(join(artifacts,'routed-workspace-results.json'),JSON.stringify({actions:stationRequests.map(r=>({action:r.action,context:r.context})),selectionGeometry,passiveNavigation:true,revocationRefusal:true,exceptions,unexpectedMessages},null,2))
+        }
+        console.log('Compiled routed workspace: explicit native entry, radio context, passive navigation and revocation passed');return
       }
       if(routedTier){
         await click(button('FT'));await settledLayout()
