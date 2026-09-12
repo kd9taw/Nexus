@@ -122,7 +122,15 @@ function uploadedProvider({ fault, denied = false, legacy = false, observability
     ...Object.entries(config.vars).map(([name, text]) => ({ name, type: 'plain_text', text })),
     { name: 'DB', type: 'd1', id: ids.databaseId }, { name: 'ASSETS', type: 'assets' },
     { name: 'STATIONS', type: 'durable_object_namespace', class_name: 'StationRoom' },
+    // Every secret the config declares required must be present AND encrypted. A live Worker
+    // carrying ADMIN_SUBJECT as a plain var, or not carrying it at all, is not the artifact.
+    ...(config.secrets?.required ?? []).map(name => ({ name, type: 'secret_text' })),
   ] }
+  if (fault === 'secret-as-var') {
+    const row = settings.bindings.find(binding => binding.name === 'ADMIN_SUBJECT')
+    row.type = 'plain_text'; row.text = 'synthetic|someone'
+  }
+  if (fault === 'secret-missing') settings.bindings = settings.bindings.filter(b => b.name !== 'ADMIN_SUBJECT')
   if (fault === 'identity') settings.bindings.find(row => row.name === 'AUTH0_ISSUER').text = 'https://other.auth0.com/'
   if (fault === 'revision') settings.bindings.find(row => row.name === 'REMOTE_BUILD_REVISION').text = '0'.repeat(40)
   if (fault === 'database') settings.bindings.find(row => row.name === 'DB').id = randomUUID()
@@ -186,7 +194,7 @@ test('an untagged upload is recovered only from exact artifact bytes and binding
 })
 
 test('mismatched upload bytes, identities, resources, runtime and domains refuse recovery before any write', async () => {
-  for (const fault of ['identity', 'revision', 'database', 'namespace', 'extra-binding', 'observability', 'logs', 'code', 'extra-module', 'domain']) {
+  for (const fault of ['identity', 'revision', 'database', 'namespace', 'extra-binding', 'secret-as-var', 'secret-missing', 'observability', 'logs', 'code', 'extra-module', 'domain']) {
     const p = uploadedProvider({ fault })
     await assert.rejects(p.api.recover(p.config, artifact.manifest.files['worker.js']), error => {
       assert.ok(!error.message.includes(p.privateText)); return true

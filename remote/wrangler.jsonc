@@ -21,6 +21,7 @@
     "database_id": "00000000-0000-0000-0000-000000000000",
     "migrations_dir": "migrations"
   }],
+  "secrets": { "required": ["ADMIN_SUBJECT"] },
   "vars": {
     "PUBLIC_REMOTE_ORIGIN": "http://127.0.0.1:8787",
     "AUTH0_ISSUER": "https://unconfigured.invalid/",

@@ -107,11 +107,24 @@ export function cloudflare(env = process.env, fetcher = fetch) {
     const { worker, result } = await inventory()
     requireValue(worker && result.databaseId === config.d1_databases[0].database_id, 'The uploaded Worker and artifact database must exist in the staging account')
     const settings = (await api(`/workers/scripts/${STAGING.name}/settings`, 'Worker configuration read')).result
-    requireValue(Array.isArray(settings?.bindings) && settings.bindings.length === Object.keys(config.vars).length + 3,
+    // vars + DB/ASSETS/STATIONS + every secret the config declares required. The count stays
+    // EXACT: an unexpected binding is still refused, which is what staging.test.mjs's
+    // 'extra-binding' fault asserts. What changed is that a DECLARED secret is now expected
+    // rather than treated as an intruder - without this, setting ADMIN_SUBJECT made a successful
+    // deploy fail its own verification, after the Worker was already live.
+    const required = config.secrets?.required ?? []
+    requireValue(Array.isArray(required) && required.every(name => typeof name === 'string' && /^[A-Z][A-Z0-9_]*$/.test(name)),
+      'Declared required secrets must be plain upper-case names')
+    requireValue(Array.isArray(settings?.bindings) && settings.bindings.length === Object.keys(config.vars).length + 3 + required.length,
       'Uploaded Worker binding inventory differs from the artifact')
     const bindings = new Map(settings.bindings.map(binding => [binding.name, binding]))
     requireValue(bindings.size === settings.bindings.length && Object.entries(config.vars).every(([name, text]) =>
       bindings.get(name)?.type === 'plain_text' && bindings.get(name).text === text), 'Uploaded Worker public configuration differs from the artifact')
+    // Each declared secret must be present AND actually encrypted. A secret that arrived as a
+    // plain-text var would read back as `plain_text` here and is refused: the whole point of
+    // pinning an administrator identity is that it is not dashboard-readable.
+    requireValue(required.every(name => bindings.get(name)?.type === 'secret_text'),
+      'A declared secret is missing or was uploaded as plain text')
     requireValue(bindings.get('DB')?.type === 'd1' && bindings.get('DB').id === result.databaseId
       && bindings.get('ASSETS')?.type === 'assets' && bindings.get('STATIONS')?.type === 'durable_object_namespace'
       && bindings.get('STATIONS').class_name === 'StationRoom'

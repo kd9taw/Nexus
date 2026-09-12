@@ -46,6 +46,27 @@ The staging API audience is fixed in the tooling. The preflight checks public OI
 discovery and signing keys; it cannot read the app's callback list or prove a real
 sign-in. Complete those acceptance checks in the actual browser.
 
+## Administrator identity
+
+The service has exactly one privileged write: granting or extending a trial
+(`admin/grant-trial`). It is gated on `ADMIN_SUBJECT`, the Auth0 `sub` of the one account
+allowed to use it, and it fails CLOSED — unset or empty admits nobody, including you.
+
+Set it as a SECRET, never a var:
+
+```sh
+wrangler secret put ADMIN_SUBJECT --name nexus-remote-staging
+```
+
+A var would be readable by anyone with dashboard read access, is echoed back as plain text by
+the Worker settings endpoint, and — because `keep_vars` defaults false — wrangler would DELETE
+it on the next deploy while the deploy stayed green and the gate silently admitted nobody.
+`wrangler.jsonc` declares it under `secrets.required` so wrangler preserves it, and the deploy
+verification refuses a Worker where it is missing or arrived as plain text.
+
+Your own `sub` is visible in the Remote browser under Support details only as an account UUID;
+the `sub` itself comes from the Auth0 dashboard (User Details) or a decoded ID token.
+
 ## Cloudflare and deployment
 
 The workflow `.github/workflows/remote-staging.yml` reuses the existing **production**
@@ -85,7 +106,7 @@ The workflow is dispatched explicitly from the reviewed branch. Select an operat
    For an older upload that discovered adjacent text files, also supply the receipt's
    SHA-256 values for `assets/index.html`, `assets/remote-licenses.txt` and
    `migrations/0001_observation.sql` as the `recovery_additional_modules` JSON object.
-   All three must match; no unknown or unchecked additional module is accepted.
+   Every one must match; no unknown or unchecked additional module is accepted.
 
 Worker tags are applied through Cloudflare's script-settings API and read back;
 the pinned Wrangler does not support a top-level `tags` configuration field.
