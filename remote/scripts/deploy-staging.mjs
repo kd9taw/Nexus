@@ -1,5 +1,6 @@
 // Only the explicit migration/deployment steps receive Cloudflare credentials.
-// Wrangler output may contain account metadata; do not copy it to public CI logs.
+// Wrangler output may contain account metadata; it reaches the public CI log ONLY through
+// `redactedDiagnostic` below, and only when the command failed.
 import { spawn } from 'node:child_process'
 import { mkdtemp, mkdir, readFile, readdir, writeFile, rm } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
@@ -9,6 +10,26 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { verifyArtifact } from './staging-artifact.mjs'
 import { cloudflare } from './cloudflare-staging.mjs'
 import { STAGING, requireValue } from './staging-common.mjs'
+
+/** Wrangler's own words, made safe for a PUBLIC CI log.
+ *
+ *  Two passes, because either alone has a gap. First the exact secret values this process was
+ *  given - the only certain redaction, and the one that cannot be fooled by an unfamiliar format.
+ *  Then any token-shaped run: 25+ of the characters Cloudflare uses, and containing a digit, which
+ *  covers a value this process never held. The digit requirement is what keeps error slugs like
+ *  `workers_dev_subdomain_not_configured` readable - they are the diagnostic, and a redaction that
+ *  ate them would leave us exactly where we started.
+ *
+ *  Bounded to 40 lines and 4000 characters: a failing command must not be able to flood the log.
+ */
+export function redactedDiagnostic(text, env = process.env) {
+  let safe = text
+  for (const value of [env.CLOUDFLARE_API_TOKEN, env.CLOUDFLARE_ACCOUNT_ID]) {
+    if (typeof value === 'string' && value.length >= 8) safe = safe.split(value).join('[redacted]')
+  }
+  safe = safe.replace(/(?=[A-Za-z0-9_-]*\d)[A-Za-z0-9_-]{25,}/g, '[redacted]')
+  return safe.split('\n').slice(0, 40).join('\n').slice(0, 4000)
+}
 
 const repository = fileURLToPath(new URL('../../', import.meta.url))
 export async function uploadArtifact(root, mode, env = process.env) {
@@ -52,7 +73,12 @@ export async function uploadArtifact(root, mode, env = process.env) {
       if (diagnosticSize < 65536) { diagnostics.push(bytes.subarray(0, 65536 - diagnosticSize)); diagnosticSize += bytes.length }
     })
     const code = await new Promise((resolve, reject) => { child.once('error', () => reject(new Error('Wrangler could not start'))); child.once('close', resolve) })
-    const codes = [...new Set([...Buffer.concat(diagnostics).toString('utf8').matchAll(/\[code: (\d{4,6})\]/g)].map(match => match[1]))].slice(0, 4)
+    const output = Buffer.concat(diagnostics).toString('utf8')
+    const codes = [...new Set([...output.matchAll(/\[code: (\d{4,6})\]/g)].map(match => match[1]))].slice(0, 4)
+    // A failure that will not say why costs a 38-minute run every time it is guessed at. Two
+    // deploys failed in exactly four seconds with no Cloudflare code, and six hypotheses had to be
+    // eliminated by other means because this sentence was the only evidence that existed.
+    if (code !== 0) console.error(redactedDiagnostic(output, env))
     requireValue(code === 0, `Wrangler ${mode} failed (exit ${code}${codes.length ? `; Cloudflare codes ${codes.join(', ')}` : ''}); inspect Cloudflare deployment state before retrying`)
     requireValue(digest(await readFile(config.main)) === manifest.files['worker.js'], 'Wrangler changed the upload module')
     if (mode === 'dry-run') {
