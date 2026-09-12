@@ -850,7 +850,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       applicationData.get_snapshot.currentQsoLogKey='00000000000000040000000000000001';applicationData.get_snapshot.qso.dxcall='K2ABC';applicationRevision++
       await until(`!document.querySelector('${log}').disabled&&document.querySelector('.cockpit-qso .cq-dx')?.textContent==='K2ABC'`)
       await click(`document.querySelector('${log}')`)
-      for(let i=0;i<100&&stationRequests.length<50;i++)await sleep(50)
+      for(let i=0;i<100&&stationRequests.length<58;i++)await sleep(50)
       assert.equal(stationRequests.length,58)
       assert.equal(stationRequests.at(-1).action.action,'qso.logCurrent')
       assert.equal(await evaluate(`!!document.querySelector('.logconfirm')`),false)
@@ -860,7 +860,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       await evaluate(`document.activeElement.blur()`)
       await browser.call('Input.dispatchKeyEvent',{type:'keyDown',key:'1',code:'Digit1',windowsVirtualKeyCode:49,modifiers:1},session)
       await browser.call('Input.dispatchKeyEvent',{type:'keyUp',key:'1',code:'Digit1',windowsVirtualKeyCode:49,modifiers:1},session)
-      await sleep(250);assert.equal(stationRequests.length,50,'revoked keyboard gestures cannot send')
+      await sleep(250);assert.equal(stationRequests.length,58,'revoked keyboard gestures cannot send')
       assert.equal(loggedRequests.length,0);assert.equal(exceptions,0);assert.equal(unexpectedMessages,0)
       if(artifacts){await writeFile(join(artifacts,'ft-results.json'),JSON.stringify({actions:stationRequests.map(r=>r.action),stopCount:stopRequests.length,staleDisplayStop:true,localGrantRevoked:true,exceptions,unexpectedMessages},null,2));const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'ft-controls.png'),Buffer.from(shot.data,'base64'))}
       console.log('Compiled Nexus FT8/FT4 CQ, station calling, exchange controls, TX On/Off, stale-display Stop and local revocation passed');return
