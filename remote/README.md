@@ -910,7 +910,7 @@ indicator follows station confirmation. QSO Log/Confirm/Discard uses `qsoLogging
 the FT preferences below use `ftSettings`.
 
 Decode/roster Call selection currently requires the native 240-row history or current roster.
-Older displayed history, typed Call-button targets, remaining FT options,
+Older displayed history, remaining FT options,
 other modes, browser audio and hardware/WAN acceptance remain incomplete.
 The current FT8/FT4 exchange and direct/confirmed logging have automated native/cloud
 evidence; that does not establish physical remotely operated contacts.

@@ -52,7 +52,7 @@ tier and prior value, then uses the native narrow setters without replacing the
 decoder or changing TX offsets, timing, queues or permission. FT/JS8/Tempo keep
 their existing waterfall gestures, and FT's RX field discards a draft if the
 local value changes or authority is lost. TX and combined-marker gestures
-require their own future capability; receive permission cannot enable them.
+use the separate ftSettings capability below; receive permission cannot enable them.
 Native amplifier buttons and saved follow-band also validate the exact completed
 serial poll after I/O. Current settings, observed physical PTT and read expiry
 bound each write; local gestures take precedence over automatic steps. These
@@ -178,8 +178,8 @@ arguments are checked against native history; roster arguments against current
 station data. Desktop identity checks precede the same native call verb, retaining
 message choice, parity, offsets and the operator's manual-arming preference.
 Plain decode selection fills browser fields without RF authority; modified RX
-gestures require receiver permission. Older displayed history, typed targets,
-full QSO workflows and hardware/WAN acceptance remain pending.
+gestures require receiver permission. Older displayed history, remaining QSO options and hardware/WAN acceptance
+remain pending. Typed message targets use the ftMessages capability below.
 The browser budgets ordinary requests against the relay limit, retaining each
 slot until one rate window after its reply. Automatic reads leave capacity for
 an operator action; pending results can use that capacity because new actions
