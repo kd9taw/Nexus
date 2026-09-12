@@ -1345,7 +1345,13 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         const disconnect=`document.querySelector('.remote-session-info button')`
         await evaluate(`${disconnect}.scrollIntoView({block:'center',behavior:'instant'})`);await settledLayout()
         assert.equal(await evaluate(`(()=>{const b=${disconnect},r=b.getBoundingClientRect();return b.textContent==='Disconnect and return to stations'&&b.contains(document.elementFromPoint(r.left+r.width/2,r.top+r.height/2))})()`),true)
-        assert.equal(await evaluate(`document.querySelector('.remote-session-info')?.textContent.includes('Remote transmission remains unavailable')`),true)
+        // The session panel states what still needs permission, and that sentence changed when FT
+        // transmit gained its own station permission: at operation v4 it must say FT8/FT4 needs a
+        // separate grant, because telling a v4 operator transmission is simply unavailable is false.
+        // This entry negotiates v4, so it asserts the v4 wording - previously it still expected the
+        // v2 sentence and nothing covered the v4 one at all.
+        assert.equal(await evaluate(`document.querySelector('.remote-session-info')?.textContent.includes('require local permission')`),true)
+        assert.equal(await evaluate(`document.querySelector('.remote-session-info')?.textContent.includes('FT8/FT4 transmission also needs separate transmit permission')`),true)
         await click(info);await until(`document.querySelector('.remote-session-toggle')?.getAttribute('aria-expanded')==='false'`)
         assert.equal(loggingLease,lease,'presentation cannot release or replace authority')
         assert.equal(await evaluate(`document.querySelector('.app')===window.__sessionApp`),true,'session details must preserve the Nexus component tree')
