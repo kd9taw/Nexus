@@ -44,7 +44,14 @@ jobs:
     if: github.repository == 'kd9taw/Nexus'
     name: Remote staging administration
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 30 was sized before the Remote build existed. browser.test.mjs is now a parametric matrix
+    # driving a real Chrome through PKCE, pairing, approval and observation for every
+    # configuration - it grew by 3,427 lines across 136 commits - and the deploy's gate step runs
+    # the whole remote-web job. Measured 2026-09-11: CI's remote-web job took 38 min on a run that
+    # FAILED EARLY, and the deploy was cancelled at exactly 30 min still inside the gates, which
+    # reads as a deploy failure and is not one. 90 leaves room for a full pass plus the package,
+    # migrate, upload and verify steps that follow it.
+    timeout-minutes: 90
     # Reuse the established account reference. A separate Remote token can be
     # supplied here if the existing Pages token lacks the required permissions.
     environment: production
