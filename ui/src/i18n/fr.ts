@@ -116,6 +116,7 @@ export const FR: PartialCatalog = {
   "remote.trialUnknownStart": "L'accès d'essai est actif jusqu'au {{until}} UTC. Ce compte est antérieur au compteur d'essai, sa date de début n'est donc pas enregistrée.",
   "remote.trialEnded": "Les quatorze jours se sont terminés le {{until}} UTC. Rien n'a changé à votre station — Nexus sur votre PC n'est pas affecté.",
   "remote.trialDisabled": "L'accès au service pour ce compte a été désactivé. Ce n'est pas la même chose qu'un essai arrivé à terme.",
+  "remote.askAboutAccess": "Demander un accès sur le canal bêta",
   "remote.stationLimitReached": "Ce compte a déjà deux stations. Révoquez-en une que vous n'utilisez pas avant d'en appairer une autre.",
   "remote.pairingExpired": "Ce code d'appairage a expiré ou a déjà été utilisé. Obtenez-en un nouveau depuis Nexus au shack.",
   "remote.pairingCodeMalformed": "Un code d'appairage comporte seize caractères, uniquement les chiffres 0-9 et les lettres a-f. Vérifiez s'il y a un O à la place d'un zéro.",

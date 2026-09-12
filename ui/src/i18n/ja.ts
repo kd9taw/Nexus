@@ -106,6 +106,7 @@ export const JA: PartialCatalog = {
   "remote.trialUnknownStart": "試用アクセスは {{until}} UTC まで有効です。このアカウントは試用タイマーより前のもので、開始日は記録されていません。",
   "remote.trialEnded": "14 日間は {{until}} UTC に終了しました。あなたの局では何も変わりません。PC 上の Nexus に影響はありません。",
   "remote.trialDisabled": "このアカウントのサービスアクセスは停止されています。試用期間の満了とは別です。",
+  "remote.askAboutAccess": "ベータチャンネルでアクセスについて問い合わせる",
   "remote.stationLimitReached": "このアカウントにはすでに 2 つのステーションがあります。別のものをペアリングする前に、使っていないものを解除してください。",
   "remote.pairingExpired": "そのペアリングコードは期限切れか、すでに使用済みです。シャックの Nexus で新しいコードを取得してください。",
   "remote.pairingCodeMalformed": "ペアリングコードは 16 文字で、数字 0-9 と英字 a-f のみです。ゼロのところに O が入っていないか確認してください。",

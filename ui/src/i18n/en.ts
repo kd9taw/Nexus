@@ -174,6 +174,7 @@ export const EN = {
   "remote.trialUnknownStart": "Trial access is running until {{until}} UTC. This account predates the trial clock, so its start date is not recorded.",
   "remote.trialEnded": "The fourteen days ended {{until}} UTC. Nothing at your station has changed — Nexus on your PC is unaffected.",
   "remote.trialDisabled": "Service access for this account has been switched off. This is not the same as the trial running out.",
+  "remote.askAboutAccess": "Ask about access in the beta channel",
   "remote.stationLimitReached": "This account already has two stations. Revoke one you are not using before pairing another.",
   "remote.pairingExpired": "That pairing code has expired or has already been used. Get a fresh one from Nexus at the shack.",
   "remote.pairingCodeMalformed": "A pairing code is sixteen characters, digits 0-9 and letters a-f only. Check for a letter O where a zero should be.",

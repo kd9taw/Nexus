@@ -56,6 +56,23 @@ it('an ended trial and a disabled account read as different things, not one vagu
   await screen.findByText(/switched off/i, { selector: '[role="status"]' })
   expect(screen.queryByLabelText('Pairing code')).toBeNull()
 })
+
+// An accurate sentence with nowhere to go reads as "this product is finished with me". During a
+// closed beta every trial is granted by hand, so asking IS the mechanism - the app has to say so.
+it('gives an account whose access has stopped somewhere to go', async () => {
+  for (const state of ['ended', 'disabled'] as const) {
+    const stopped = account(); stopped.entitlement.state = state
+    client(stopped); const view = render(<RemoteApp />)
+    const link = await screen.findByRole('link', { name: /ask about access/i })
+    expect(link.getAttribute('href')).toContain('discord')
+    expect(link.getAttribute('rel')).toContain('noopener')
+    view.unmount()
+  }
+  // A running trial is not a dead end and must not be given the same prompt.
+  client(account()); render(<RemoteApp />)
+  await screen.findByText(/Trial access is running/i)
+  expect(screen.queryByRole('link', { name: /ask about access/i })).toBeNull()
+})
 it('a pilot account with no recorded start says so rather than inventing a date', async () => {
   const pilot = account(); pilot.entitlement.startedAt = null
   client(pilot); render(<RemoteApp />)

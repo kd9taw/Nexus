@@ -8,6 +8,11 @@ import '../remote-monitor/monitor.css'
 import './remote.css'
 
 const BRAND = 'Nexus Remote'
+// The only route back to the operator from inside the app. An account whose trial has ended or
+// been switched off could previously read an accurate sentence and then had nowhere to go, which
+// reads as "this product is finished with me" rather than "ask and it can be extended". During a
+// closed beta every trial is granted by hand anyway, so asking is the actual mechanism.
+const BETA_CHANNEL = 'https://discord.gg/mCCBaRKj3'
 // The service names what it refused. Anything that is not a refusal - a dropped connection, a
 // parse failure - has no name worth showing, so it falls back to the generic message.
 const reason = (cause: unknown) => cause instanceof RemoteError ? cause.code : 'remoteUnavailable'
@@ -151,6 +156,8 @@ export function RemoteApp() {
           : t('remote.trialRunning', { days: daysLeft, from: utcDate(trial.startedAt), until: utcDate(trial.expiresAt) })}</p>}
         {trial?.state === 'ended' && <p role="status">{t('remote.trialEnded', { until: utcDate(trial.expiresAt) })}</p>}
         {trial?.state === 'disabled' && <p role="status">{t('remote.trialDisabled')}</p>}
+        {(trial?.state === 'ended' || trial?.state === 'disabled') &&
+          <p><a href={BETA_CHANNEL} target="_blank" rel="noopener noreferrer">{t('remote.askAboutAccess')}</a></p>}
         {session.stations.map(station => <section className="rm-card remote-section" key={station.id}>
           {/* A station is named at the shack while pairing, and that name used to be permanent:
               a typo meant revoking and re-pairing to fix. Renaming is housekeeping on your own

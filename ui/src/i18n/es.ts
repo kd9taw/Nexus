@@ -116,6 +116,7 @@ export const ES: PartialCatalog = {
   "remote.trialUnknownStart": "El acceso de prueba está activo hasta el {{until}} UTC. Esta cuenta es anterior al reloj de prueba, por lo que no se registró su fecha de inicio.",
   "remote.trialEnded": "Los catorce días terminaron el {{until}} UTC. Nada ha cambiado en tu estación: Nexus en tu PC no se ve afectado.",
   "remote.trialDisabled": "El acceso al servicio de esta cuenta ha sido desactivado. No es lo mismo que el fin del periodo de prueba.",
+  "remote.askAboutAccess": "Pregunta por el acceso en el canal beta",
   "remote.stationLimitReached": "Esta cuenta ya tiene dos estaciones. Revoca una que no uses antes de vincular otra.",
   "remote.pairingExpired": "Ese código de vinculación ha caducado o ya se ha usado. Consigue uno nuevo en Nexus desde la caseta.",
   "remote.pairingCodeMalformed": "Un código de vinculación tiene dieciséis caracteres, solo dígitos 0-9 y letras a-f. Comprueba si hay una O donde debería ir un cero.",

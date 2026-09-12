@@ -101,6 +101,7 @@ export const DE: PartialCatalog = {
   "remote.trialUnknownStart": "Testzugang läuft bis {{until}} UTC. Dieses Konto ist älter als die Testuhr, daher ist sein Startdatum nicht erfasst.",
   "remote.trialEnded": "Die vierzehn Tage endeten am {{until}} UTC. An deiner Station ändert sich nichts — Nexus auf deinem PC bleibt unberührt.",
   "remote.trialDisabled": "Der Dienstzugang für dieses Konto wurde abgeschaltet. Das ist nicht dasselbe wie ein abgelaufener Test.",
+  "remote.askAboutAccess": "Im Beta-Kanal nach Zugang fragen",
   "remote.stationLimitReached": "Dieses Konto hat bereits zwei Stationen. Entziehe einer nicht genutzten den Zugang, bevor du eine weitere koppelst.",
   "remote.pairingExpired": "Dieser Kopplungscode ist abgelaufen oder wurde bereits verwendet. Hole einen neuen aus Nexus in der Funkbude.",
   "remote.pairingCodeMalformed": "Ein Kopplungscode hat sechzehn Zeichen, nur Ziffern 0-9 und Buchstaben a-f. Achte auf ein O, wo eine Null stehen sollte.",
