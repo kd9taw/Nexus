@@ -1280,6 +1280,12 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       assert.equal(loggedRequests.length,1);assert.equal(await evaluate(`document.querySelector('${call}').value`),'')
       await click(`document.querySelector('${call}')`);await browser.call('Input.insertText',{text:'N3QSO'},session)
       applicationAvailable=false
+      // The recovery below asserts the lease did NOT survive the loss, and only the station's own
+      // 5 s TTL can expire it. Nothing here makes the outage outlast that: CI recovered in 2.6 s
+      // against a lease with 1.2 s left, the client legitimately re-adopted 'controlling', and no
+      // re-acquire button could ever appear. Expire the lease WITH the outage, so this tests
+      // recovery rather than how quickly the fixture happened to come back.
+      loggingLeaseUntil=0
       await until(`document.querySelector('.app').dataset.remoteStale==='true'`)
       assert.equal(await evaluate(`document.querySelector('${call}')===window.__quickNodes.call&&document.querySelector('${call}').value==='N3QSO'&&document.querySelector('.${quickMode}-cockpit .le-log-btn').disabled&&document.querySelector('.${quickMode}-cockpit .amp-op').disabled`),true)
       assert.equal(await evaluate(`getComputedStyle(document.querySelector('.shell')).visibility`),'hidden','stale station readings remain hidden while passive navigation stays available')
@@ -1380,6 +1386,12 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         checks.push({width,height,zoom,theme,shape})
       }
       applicationAvailable=false
+      // The recovery below asserts the lease did NOT survive the loss, and only the station's own
+      // 5 s TTL can expire it. Nothing here makes the outage outlast that: CI recovered in 2.6 s
+      // against a lease with 1.2 s left, the client legitimately re-adopted 'controlling', and no
+      // re-acquire button could ever appear. Expire the lease WITH the outage, so this tests
+      // recovery rather than how quickly the fixture happened to come back.
+      loggingLeaseUntil=0
       await until(`document.querySelector('.app')?.dataset.remoteStale==='true'`)
       const loss=await evaluate(`(()=>{const e=document.querySelector('.remote-application-status'),warning=e.querySelector('.remote-session-unavailable');return {visible:!!warning&&warning.getBoundingClientRect().height>0&&warning.closest('.remote-session-info')===null,text:e.textContent}})()`)
       assert.ok(loss.visible&&loss.text.includes('Station data unavailable'),'loss must remain visible outside the collapsed details')
@@ -1531,6 +1543,13 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
           await freshLoggingWindow();await click(monitor)
           for(let i=0;i<100&&stationRequests.length===before;i++)await sleep(100)
           assert.equal(stationRequests.length,before+1);assert.equal(stationRequests.at(-1).action.receiver,'aprs')
+          // Every other station-control gesture ends by waiting for the reply; this branch did not,
+          // and line 1537 then clicked a tab coordinate while the reply was still re-rendering the
+          // sticky session banner (the pending buttons and Release unmount while state is null,
+          // moving every control below them). A click measured before that shift and dispatched
+          // after it lands on nothing. Settle the round trip, exactly as gesture() does - which
+          // also makes this branch finally assert that the station confirmed anything at all.
+          await until(`document.querySelector('.remote-control-result')?.textContent.includes('confirmed')`)
         }else await gesture(actual,'decoder.arm')
         assert.equal(stationRequests.at(-1).action.receiver,receiver)
       }
