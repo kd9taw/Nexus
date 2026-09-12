@@ -332,7 +332,18 @@
     "wrlUpload": false,
     "wsjtxUdp": false,
     "wsjtxUdpAddr": "127.0.0.1:2237",
-    "yaesuRfScope": false
+    "yaesuRfScope": false,
+    "contestCategoryAssisted": "",
+    "contestCategoryOperator": "",
+    "contestCategoryPower": "",
+    "contestCategoryStation": "",
+    "contestCheck": "",
+    "contestCqZone": 0,
+    "contestItuZone": 0,
+    "contestPower": "",
+    "contestQthCounty": "",
+    "contestQthState": "",
+    "cwReverse": false
   },
   "withheld": [
     "lotwUsername",

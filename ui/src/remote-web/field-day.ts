@@ -18,15 +18,36 @@ function object(v: unknown, keys: string[], optional: string[] = []): Record<str
   return v as Record<string, unknown>
 }
 function status(v: unknown): void {
-  const f = object(v, ['myClass','mySection','running','state','dxcall','qsoCount','sections','workedSections','points','event',
-    'poweredPoints','bonusPoints','totalScore','eventStartUnix','eventEndUnix','rulesYear','rulesGenerated','assistanceOn','log'], ['club'])
-  if (![f.myClass,f.mySection,f.state,f.rulesGenerated].every(text) || (f.dxcall !== null && !text(f.dxcall)) ||
+  // The station sends its whole FieldDayStatus, so this list has to track that struct. It drifted
+  // badly: `myClass`/`mySection` were DELETED from the DTO on purpose (two interop emitters were
+  // reading a session-level exchange inside their per-QSO loops and stamping it onto every row),
+  // while the contest programme added multCount, scoreNoteKey, upload, receives, composing, role
+  // and boards. Requiring two fields nobody sends and refusing seven that everybody does meant
+  // every Field Day payload was rejected - the view was blank through Remote for every event.
+  // The additions are OPTIONAL so this validates both directions: an older station that does not
+  // send them still passes, and a newer one is no longer refused by an older browser.
+  const f = object(v, ['running','state','dxcall','qsoCount','sections','workedSections','points','event',
+    'poweredPoints','bonusPoints','totalScore','eventStartUnix','eventEndUnix','rulesYear','rulesGenerated',
+    'assistanceOn','log'],
+    ['club','multCount','scoreNoteKey','upload','receives','composing','role','boards','myClass','mySection'])
+  if (![f.state,f.rulesGenerated].every(text) || (f.dxcall !== null && !text(f.dxcall)) ||
+    (f.myClass !== undefined && !text(f.myClass)) || (f.mySection !== undefined && !text(f.mySection)) ||
+    (f.scoreNoteKey !== undefined && !text(f.scoreNoteKey)) || (f.role !== undefined && !text(f.role)) ||
+    (f.multCount !== undefined && f.multCount !== null && !integer(f.multCount)) ||
+    // `composing` is a VECTOR by design, never a preformatted exchange string - a row's own sent
+    // exchange is its `mex`. Bounded here rather than re-modelled: the real Nexus app is what
+    // consumes these, and this gate exists to cap size and shape, not to duplicate the DTO.
+    [f.receives,f.composing,f.boards].some(x => x !== undefined && (!Array.isArray(x) || x.length > 512)) ||
+    (f.upload !== undefined && (!f.upload || typeof f.upload !== 'object' || Array.isArray(f.upload))) ||
     typeof f.running !== 'boolean' || !eventId(f.event) ||
     ![f.qsoCount,f.sections,f.points,f.poweredPoints,f.bonusPoints,f.totalScore,f.eventStartUnix,f.eventEndUnix,f.rulesYear].every(integer) ||
     Number(f.eventEndUnix) <= Number(f.eventStartUnix) || !texts(f.workedSections,2048) || !texts(f.assistanceOn,64) ||
     !Array.isArray(f.log) || f.log.length > 2048 || f.qsoCount !== f.log.length || f.sections !== (f.workedSections as unknown[]).length) throw new Error('invalidFieldDay')
   for (const raw of f.log) {
-    const q = object(raw,['call','class','section','band','mode','submode','whenUnix'])
+    // `mex` is the row's OWN sent exchange, which is where a per-QSO exchange belongs now that
+    // the session-level class/section pair is gone from the status struct. Optional so a log
+    // written by an older station still validates.
+    const q = object(raw,['call','class','section','band','mode','submode','whenUnix'],['mex'])
     if (![q.call,q.class,q.section,q.band,q.submode].every(text) || !['CW','PH','DIG'].includes(String(q.mode)) || !integer(q.whenUnix)) throw new Error('invalidFieldDay')
   }
   if (f.club !== undefined && f.club !== null) {
@@ -49,9 +70,19 @@ export function parseFieldDay(page: QueryPage): FieldDayObservation & { captured
   if (new TextEncoder().encode(JSON.stringify(value)).length > 224*1024 || typeof value.active !== 'boolean' || (!value.active && value.fieldDay !== null)) throw new Error('invalidFieldDay')
   const s = object(value.settings,['fdOperator','fdPowerMult','fdBonuses','fdBonusesPlanned'])
   if (!text(s.fdOperator) || ![1,2,5].includes(Number(s.fdPowerMult)) || typeof s.fdPowerMult !== 'number' || !texts(s.fdBonuses,64) || !texts(s.fdBonusesPlanned,64)) throw new Error('invalidFieldDay')
-  const r = object(value.ruleset,['event','rulesYear','bannedModes','spottingAllowed','clusterAllowed','enforcement'])
+  // Same drift as the status struct above, and this is the one that actually fired: the contest
+  // programme gave the ruleset an `exchange` (the ExchangeSpec that replaced the hardcoded
+  // class/section pair), a `problem` and a `role`. Optional for both-direction compatibility.
+  const r = object(value.ruleset,['event','rulesYear','bannedModes','spottingAllowed','clusterAllowed','enforcement'],
+    ['exchange','problem','role'])
   if (!['arrlfd','wfd'].includes(String(r.event)) || !integer(r.rulesYear) || !texts(r.bannedModes,64) || typeof r.spottingAllowed !== 'boolean' ||
-    typeof r.clusterAllowed !== 'boolean' || !text(r.enforcement)) throw new Error('invalidFieldDay')
+    typeof r.clusterAllowed !== 'boolean' || !text(r.enforcement) ||
+    (r.role !== undefined && !text(r.role)) ||
+    (r.problem !== undefined && r.problem !== null && !text(r.problem)) ||
+    // The exchange is a spec object, bounded here rather than re-modelled - the real Nexus app
+    // is what renders it, and this gate caps shape and size, it does not duplicate the DTO.
+    (r.exchange !== undefined && r.exchange !== null &&
+      (typeof r.exchange !== 'object' || (Array.isArray(r.exchange) && r.exchange.length > 64)))) throw new Error('invalidFieldDay')
   if (value.fieldDay !== null) status(value.fieldDay)
   return {...value as unknown as FieldDayObservation, capturedAgeMs:Number(meta.capturedAgeMs)}
 }

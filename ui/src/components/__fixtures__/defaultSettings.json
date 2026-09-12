@@ -53,6 +53,7 @@
   "operatingMode": "digital",
   "licenseClass": "open",
   "cwKeyer": "cat",
+  "cwReverse": false,
   "winkeyerPort": "",
   "cwKeyPort": "",
   "cwKeyLine": "dtr",

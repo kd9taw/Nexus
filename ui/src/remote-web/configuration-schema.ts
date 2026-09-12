@@ -258,6 +258,17 @@ export const SETTINGS_KEYS = [
   'cloudlogUpload',
   'openingRegional',
   'macros',
+  'contestCategoryAssisted',
+  'contestCategoryOperator',
+  'contestCategoryPower',
+  'contestCategoryStation',
+  'contestCheck',
+  'contestCqZone',
+  'contestItuZone',
+  'contestPower',
+  'contestQthCounty',
+  'contestQthState',
+  'cwReverse',
 ] as const
 export const WITHHELD_SETTINGS_KEYS = [
   'lotwUsername',
@@ -536,5 +547,16 @@ export const SETTINGS_SHAPES = {
   "n3fjpUpload": "boolean",
   "cloudlogUpload": "boolean",
   "openingRegional": "boolean",
-  "macros": "object"
+  "macros": "object",
+  "contestCategoryAssisted": "string",
+  "contestCategoryOperator": "string",
+  "contestCategoryPower": "string",
+  "contestCategoryStation": "string",
+  "contestCheck": "string",
+  "contestCqZone": "number",
+  "contestItuZone": "number",
+  "contestPower": "string",
+  "contestQthCounty": "string",
+  "contestQthState": "string",
+  "cwReverse": "boolean"
 } as const
