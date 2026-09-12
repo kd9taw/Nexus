@@ -95,6 +95,8 @@ export const JA: PartialCatalog = {
   "remote.stations": "自分の局",
   "remote.pilotIntro": "承認されたブラウザーから自局を運用します。無線機はシャックの PC が保持して主導権を持ち、この画面は操作を送り、ステーションからの報告を表示します。",
   "remote.signIn": "ログインまたはアカウント作成",
+  "remote.createAccount": "アカウントを作成",
+  "remote.supportDetails": "サポート用の情報",
   "remote.signOut": "ログアウト",
   "remote.notConfigured": "リモートサービスはまだ設定されていません。",
   "remote.requestFailed": "要求を完了できませんでした。接続とサービスの利用資格を確認して再試行してください。",

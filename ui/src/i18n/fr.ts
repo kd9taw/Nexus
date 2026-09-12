@@ -105,6 +105,8 @@ export const FR: PartialCatalog = {
   "remote.stations": "Vos stations",
   "remote.pilotIntro": "Exploitez votre station depuis un navigateur approuvé. Le PC du shack garde la radio et reste maître ; cette fenêtre envoie les commandes et affiche ce que la station renvoie.",
   "remote.signIn": "Se connecter ou créer un compte",
+  "remote.createAccount": "Créer un compte",
+  "remote.supportDetails": "Informations pour le support",
   "remote.signOut": "Se déconnecter",
   "remote.notConfigured": "Le service à distance n’est pas encore configuré.",
   "remote.requestFailed": "La demande n’a pas abouti. Vérifiez la connexion et votre accès au service, puis réessayez.",

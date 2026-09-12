@@ -102,9 +102,21 @@ export function RemoteApp() {
       {!ready && <p role="status">{t('monitor.connecting')}</p>}
       {ready && !configured && <p role="status">{t('remote.notConfigured')}</p>}
       {ready && error !== null && !client && <button className="remote-button" onClick={() => setLoadAttempt(value => value + 1)}>{t('shell.crash.retry')}</button>}
-      {ready && client && !session && <button className="remote-button" disabled={busy} onClick={() => void act(async () => { await client.signIn() })}>{t('remote.signIn')}</button>}
+      {ready && client && !session && <div className="remote-actions">
+        <button className="remote-button" disabled={busy} onClick={() => void act(async () => { await client.signIn() })}>{t('remote.signIn')}</button>
+        {/* A first-time operator should not have to find a sign-up link on somebody else's login
+            form. This is the same flow, opened on the create-account screen instead. */}
+        <button className="remote-button" disabled={busy} onClick={() => void act(async () => { await client.signIn(true) })}>{t('remote.createAccount')}</button>
+      </div>}
       {session && <>
-        <p>{t('remote.accountMatch')} <code>{session.accountId}</code></p>
+        {/* The account id is only an instruction while there is something to pair. Once stations
+            are approved it is support detail, not a step, and a raw UUID presented as a standing
+            instruction reads as something the operator still has to act on. It stays in the DOM
+            either way so it can always be quoted when asking for help. */}
+        {canPair && session.stations.length < 2
+          ? <p>{t('remote.accountMatch')} <code>{session.accountId}</code></p>
+          : <details><summary>{t('remote.supportDetails')}</summary>
+              <p>{t('remote.accountMatch')} <code>{session.accountId}</code></p></details>}
         {trial?.state === 'none' && <p role="status">{t('remote.trialNotStarted')}</p>}
         {trial?.state === 'active' && <p role="status">{trial.startedAt === null
           ? t('remote.trialUnknownStart') : t('remote.trialRunning', { days: daysLeft })}</p>}

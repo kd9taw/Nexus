@@ -90,6 +90,8 @@ export const DE: PartialCatalog = {
   "remote.stations": "Deine Stationen",
   "remote.pilotIntro": "Bediene deine Station in einem freigegebenen Browser. Der Shack-PC behält das Funkgerät und bleibt maßgeblich; dieses Fenster sendet Befehle und zeigt, was die Station zurückmeldet.",
   "remote.signIn": "Anmelden oder Konto erstellen",
+  "remote.createAccount": "Konto erstellen",
+  "remote.supportDetails": "Angaben für den Support",
   "remote.signOut": "Abmelden",
   "remote.notConfigured": "Der Remote-Dienst ist noch nicht eingerichtet.",
   "remote.requestFailed": "Die Anfrage konnte nicht abgeschlossen werden. Prüfe Verbindung und Zugangsberechtigung und versuche es erneut.",

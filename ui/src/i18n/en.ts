@@ -102,6 +102,8 @@ export const EN = {
   "remote.stations": "Your stations",
   "remote.pilotIntro": "Operate your station from an approved browser. The shack PC keeps the radio and stays in charge; this window sends gestures and shows what the station reports back.",
   "remote.signIn": "Sign in or create an account",
+  "remote.createAccount": "Create an account",
+  "remote.supportDetails": "Support details",
   "remote.signOut": "Sign out",
   "remote.notConfigured": "The Remote service has not been configured yet.",
   "remote.applicationLoggingPreview": "Station display with optional manual logging. Radio and transmit controls remain unavailable.",

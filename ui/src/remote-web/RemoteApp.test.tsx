@@ -88,3 +88,34 @@ it('browser enrollment displays the local comparison code and does not imply app
   expect(screen.queryByRole('button', { name: 'Observe station' })).toBeNull()
   expect(service.post).toHaveBeenCalledWith(`stations/${stationId}/device`, { name: 'Test browser' })
 })
+
+// A first-time operator should not have to find a sign-up link on somebody else's login form.
+it('offers creating an account as its own route, not a link to hunt for on the login form', async () => {
+  const service = client(null)
+  render(<RemoteApp />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Create an account' }))
+  await waitFor(() => expect(service.signIn).toHaveBeenCalledWith(true))
+  fireEvent.click(screen.getByRole('button', { name: 'Sign in or create an account' }))
+  await waitFor(() => expect(service.signIn).toHaveBeenCalledTimes(2))
+  expect(service.signIn).toHaveBeenLastCalledWith()
+})
+
+// The account id is a step only while something is waiting to be paired. Afterwards it is support
+// detail; a raw UUID standing under "match this on both screens" reads as an unfinished action.
+it('shows the account id as an instruction only while there is something to pair', async () => {
+  const pairing = account(false)
+  client(pairing); const view = render(<RemoteApp />)
+  await screen.findByText(/match this account id/i)
+  expect(screen.queryByText('Support details')).toBeNull()
+  view.unmount()
+
+  const paired = account()
+  paired.stations = [
+    { id: crypto.randomUUID(), name: 'Shack', device: null },
+    { id: crypto.randomUUID(), name: 'Portable', device: null },
+  ]
+  client(paired); render(<RemoteApp />)
+  await screen.findByText('Support details')
+  // Still present for quoting when asking for help, just no longer presented as a step.
+  expect(document.body.textContent).toContain(paired.accountId)
+})

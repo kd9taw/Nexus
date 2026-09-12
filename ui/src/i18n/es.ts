@@ -105,6 +105,8 @@ export const ES: PartialCatalog = {
   "remote.stations": "Tus estaciones",
   "remote.pilotIntro": "Opera tu estación desde un navegador aprobado. El PC de la caseta conserva el equipo y manda; esta ventana envía órdenes y muestra lo que la estación informa.",
   "remote.signIn": "Iniciar sesión o crear una cuenta",
+  "remote.createAccount": "Crear una cuenta",
+  "remote.supportDetails": "Datos para soporte",
   "remote.signOut": "Cerrar sesión",
   "remote.notConfigured": "El servicio remoto aún no está configurado.",
   "remote.requestFailed": "No se pudo completar la solicitud. Comprueba la conexión y tu acceso al servicio e inténtalo de nuevo.",

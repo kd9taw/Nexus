@@ -70,7 +70,12 @@ export class BrowserClient {
     return new BrowserClient(auth, APPLICATION_VERSIONS.find(version=>version===config.applicationVersion)??1, advertisedOperationVersion(config.operationVersion, config.operationMaxVersion, config.operationFtVersion))
   }
   authenticated(): Promise<boolean> { return this.auth.isAuthenticated() }
-  signIn(): Promise<void> { return this.auth.loginWithRedirect() }
+  // `createAccount` sends Auth0 straight to its sign-up screen. Without it a first-time operator
+  // lands on the login form and has to notice a small "Sign up" link to get anywhere, which is a
+  // configuration step in disguise - the thing this project treats as unfinished.
+  signIn(createAccount = false): Promise<void> {
+    return this.auth.loginWithRedirect(createAccount ? { authorizationParams: { screen_hint: 'signup' } } : undefined)
+  }
   signOut(): Promise<void> { return this.auth.logout({ logoutParams: { returnTo: window.location.origin } }) }
   async post<T>(path: string, body: object = {}, signal?: AbortSignal): Promise<T> {
     return (await this.request<T>(path, body, signal)).body
