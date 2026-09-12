@@ -67,6 +67,18 @@ verification refuses a Worker where it is missing or arrived as plain text.
 Your own `sub` is visible in the Remote browser under Support details only as an account UUID;
 the `sub` itself comes from the Auth0 dashboard (User Details) or a decoded ID token.
 
+To grant or extend a trial without the endpoint — before `ADMIN_SUBJECT` is set, or from a
+machine with wrangler but no browser — `remote/scripts/grant-trial.mjs` composes the statement
+and prints the command to run it with. It executes nothing and holds no credentials:
+
+```sh
+node remote/scripts/grant-trial.mjs --account <account-uuid> [--days 14]
+```
+
+Both paths write `source='manual'` and UPDATE rather than DELETE. The trials row is the durable
+proof an account consumed its trial; removing it re-opens the reinstall and re-pair abuse the
+one-trial rule exists to refuse.
+
 ## Cloudflare and deployment
 
 The workflow `.github/workflows/remote-staging.yml` reuses the existing **production**
@@ -103,10 +115,17 @@ The workflow is dispatched explicitly from the reviewed branch. Select an operat
    from the reviewed failed deployment's retained artifact. It requires the uploaded
    module bytes, identity variables, database, namespace and runtime settings to match
    before adding the ownership tag. It neither replaces Worker code nor attaches a domain.
-   For an older upload that discovered adjacent text files, also supply the receipt's
-   SHA-256 values for `assets/index.html`, `assets/remote-licenses.txt` and
-   `migrations/0001_observation.sql` as the `recovery_additional_modules` JSON object.
-   Every one must match; no unknown or unchecked additional module is accepted.
+   For an upload that discovered adjacent text files, also supply the receipt's SHA-256
+   values as the `recovery_additional_modules` JSON object: `assets/index.html`,
+   `assets/remote-licenses.txt`, and **every** `migrations/NNNN_*.sql` the receipt lists —
+   not just the first. There are two migrations as of `0002_trial.sql` and there will be
+   more; take the list from the receipt rather than from this page.
+   Every one must match, and no unknown or unchecked additional module is accepted.
+
+   Supplying too few is the easy mistake and it reports badly: the inventory count check
+   passes (it counts the two fixed assets plus however many migrations you listed), and the
+   failure surfaces later as *"Uploaded additional module bytes differ from the reviewed
+   artifact"* — which reads as byte corruption when the real cause is a missing entry.
 
 Worker tags are applied through Cloudflare's script-settings API and read back;
 the pinned Wrangler does not support a top-level `tags` configuration field.
@@ -147,7 +166,7 @@ failure; inspect the Cloudflare resource state before retrying an ambiguous oper
 ## First browser-to-shack acceptance
 
 After signing in, use the account UUID displayed by Remote to enable a short manual
-trial as described in [README.md](README.md#staging-setup). Then pair the desktop,
+trial as described in [README.md](README.md#deploying). Then pair the desktop,
 approve the browser locally and enable observation. Verify actual readings against
 the rig and amplifier; never count test fixtures as a hardware result.
 
