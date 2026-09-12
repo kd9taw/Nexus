@@ -1,5 +1,5 @@
 import type { Settings, RadioProgProject } from '../types'
-import { SETTINGS_KEYS, SETTINGS_SHAPES, WITHHELD_SETTINGS_KEYS } from './configuration-schema'
+import { SETTINGS_KEYS, SETTINGS_SHAPES, WITHHELD_RADIO_KEYS, WITHHELD_SETTINGS_KEYS } from './configuration-schema'
 import { finite, integer, object, openObject, text } from './display-validation'
 export type SettingsConfiguration = {settings:Record<string,unknown>;withheld:readonly string[];revision:string;platform:'linux'|'windows'|'macos'}
 export type ProgrammingConfiguration = {mygrid:string;projects:RadioProgProject[];revision:string;saved:boolean}
@@ -15,7 +15,29 @@ export function parseConfiguration(raw:unknown,kind:'settings'|'programming'):Se
     // exact, which caught a leak only as arithmetic; now a withheld key appearing in the payload
     // is refused because it is withheld.
     if(WITHHELD_SETTINGS_KEYS.some(k=>Object.prototype.hasOwnProperty.call(values,k)))bad()
-    if(!['linux','windows','macos'].includes(String(v.platform))||!revision(v.revision)||JSON.stringify(v.withheld)!==JSON.stringify(WITHHELD_SETTINGS_KEYS))bad()
+    if(!['linux','windows','macos'].includes(String(v.platform))||!revision(v.revision))bad()
+    // SUPERSET, not equality. The station must declare every key THIS browser knows to be secret;
+    // it may declare more. Exact equality made two harmless changes fatal - a station gaining an
+    // 18th withheld credential, or somebody alphabetising a list that is currently grouped by
+    // service - and each would have darkened Remote settings and Field Day for every operator
+    // running an older browser. The security half is unchanged: a key we hold secret that the
+    // station does NOT declare withheld is still refused, and line 17 above still refuses a
+    // document that actually carries one. CI pins the two lists to each other so drift inside the
+    // repo is caught at build time rather than by an operator.
+    const declared=new Set((Array.isArray(v.withheld)?v.withheld:[bad()]).map(String))
+    if(WITHHELD_SETTINGS_KEYS.some(k=>!declared.has(k)))bad()
+    // OPTIONAL on purpose. A station older than this field cannot declare it, and refusing those
+    // outright is the same outage this whole change exists to avoid - they also predate any
+    // per-radio credential, so there is nothing for them to have leaked. When a station does
+    // declare it, it must cover everything this browser holds secret. The content check below is
+    // the defence either way, and it does not depend on the declaration at all.
+    if(v.radioWithheld!==undefined){
+      const declaredRadio=new Set((Array.isArray(v.radioWithheld)?v.radioWithheld:[bad()]).map(String))
+      if(WITHHELD_RADIO_KEYS.some(k=>!declaredRadio.has(k)))bad()
+    }
+    // The per-radio half of the credential proof, stated the same way as line 17.
+    for(const radio of values.radios as Record<string,unknown>[])
+      if(WITHHELD_RADIO_KEYS.some(k=>Object.prototype.hasOwnProperty.call(radio,k)))bad()
     for(const [key,shape]of Object.entries(SETTINGS_SHAPES)){
       const value=values[key]
       if(value===null&&shape.startsWith('nullable-'))continue

@@ -289,6 +289,10 @@ export const WITHHELD_SETTINGS_KEYS = [
   'cloudlogKey',
   'voiceMessages',
 ] as const
+/** The per-radio withheld list, mirroring Rust RADIO_WITHHELD_KEYS. Empty today by design: it
+ *  exists so the first per-radio credential has somewhere to go that is not the wire, and so the
+ *  browser can refuse a document that carries one anyway. CI pins it to the Rust list. */
+export const WITHHELD_RADIO_KEYS: string[] = []
 export const SETTINGS_SHAPES = {
   "mycall": "string",
   "mygrid": "string",

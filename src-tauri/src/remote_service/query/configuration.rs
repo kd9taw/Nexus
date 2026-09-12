@@ -325,6 +325,64 @@ pub(super) const WITHHELD_KEYS: &[&str] = &[
     "cloudlogKey",
     "voiceMessages",
 ];
+/// The per-radio projection, under the same rule as `SETTINGS_KEYS`: a new `RadioProfile` field
+/// is PRIVATE by default, and the schema-coverage test refuses to go green until it is named on
+/// exactly one of these two lists.
+///
+/// Before this existed, `radios` sat inside `SETTINGS_KEYS` and so fell under the blanket
+/// `view[key] == expected[key]` equality - which asserted that `RadioView` reproduces the WHOLE
+/// serde serialization of `RadioProfile`. That is the inverse of the rule everywhere else here:
+/// adding a field to `Settings` fails the test until somebody classifies it, and withholding is a
+/// legal answer; adding one to `RadioProfile` failed the test until somebody EXPOSED it. Nothing
+/// leaks today - all 39 fields are ids, model and port names, gains and band state - but
+/// `RadioProfile` is the struct that grows every time a per-radio capability is added, and the
+/// first per-radio credential would have arrived with CI pushing it onto the wire.
+#[cfg(test)]
+pub(super) const RADIO_KEYS: &[&str] = &[
+    "ampFollowBand",
+    "ampModel",
+    "ampPort",
+    "audioIn",
+    "audioOut",
+    "bands",
+    "baud",
+    "dataModesPlainSsb",
+    "enabled",
+    "flexNativeAudio",
+    "flexNativePan",
+    "flexRadioIp",
+    "icomDataMode",
+    "icomNativeCat",
+    "id",
+    "lastBand",
+    "lastDialMhz",
+    "lastSideband",
+    "name",
+    "nativeScope",
+    "omnirigSlot",
+    "pttMethod",
+    "pttSerialPort",
+    "rigAddr",
+    "rigConn",
+    "rigModel",
+    "rigModelName",
+    "rigctldPort",
+    "rotatorBaud",
+    "rotatorHost",
+    "rotatorModel",
+    "rotatorPort",
+    "rotctldPort",
+    "rxGain",
+    "serialPort",
+    "sstvHoldDataSubmode",
+    "txLevel",
+    "yaesuFixStarts",
+    "yaesuRfScope",
+];
+/// Empty today, and that is the point: the list exists so the first per-radio credential has
+/// somewhere to go that is not `RadioView`. Declared on the wire beside `withheld`, so the browser
+/// can refuse a document that carries one anyway.
+pub(super) const RADIO_WITHHELD_KEYS: &[&str] = &[];
 impl Serialize for SettingsView<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut out = serializer.serialize_struct("SettingsView", 269)?;
@@ -674,7 +732,7 @@ pub(super) fn settings(s: &Settings) -> Result<Value, &'static str> {
     let values = settings_values(s)?;
     let revision = revision(&values)?;
     Ok(
-        json!({"settings":values,"withheld":WITHHELD_KEYS,"revision":revision,"platform":std::env::consts::OS}),
+        json!({"settings":values,"withheld":WITHHELD_KEYS,"radioWithheld":RADIO_WITHHELD_KEYS,"revision":revision,"platform":std::env::consts::OS}),
     )
 }
 // A static station-owned sidecar only. Distinguish never-saved from unreadable
@@ -778,7 +836,40 @@ mod tests {
         );
         assert_eq!(view.len(), SETTINGS_KEYS.len());
         for key in SETTINGS_KEYS {
+            if *key == "radios" {
+                // Compared field-by-field below. Left in the blanket equality, this line asserted
+                // that RadioView reproduces the whole serde serialization of RadioProfile, so the
+                // only way to make a new per-radio field pass was to publish it.
+                continue;
+            }
             assert_eq!(view[*key], expected[*key], "{key}");
+        }
+        // --- RadioProfile classification, the same rule as Settings above ---
+        // ensure_radio_profiles() above guarantees radios[0] exists, so an empty array cannot pass
+        // itself off as agreement.
+        let profile = &s.radios[0];
+        let expected_radio: Value =
+            serde_json::from_slice(&serde_json::to_vec(profile).unwrap()).unwrap();
+        let expected_radio = expected_radio.as_object().unwrap();
+        let actual_radio = view["radios"][0].as_object().unwrap();
+        let radio_keys: std::collections::BTreeSet<&str> =
+            expected_radio.keys().map(String::as_str).collect();
+        let radio_classified: std::collections::BTreeSet<&str> = RADIO_KEYS
+            .iter()
+            .chain(RADIO_WITHHELD_KEYS)
+            .copied()
+            .filter(|k| radio_keys.contains(k))
+            .collect();
+        assert_eq!(
+            radio_keys, radio_classified,
+            "a new per-radio setting needs an explicit privacy classification"
+        );
+        assert_eq!(actual_radio.len(), RADIO_KEYS.len());
+        for key in RADIO_KEYS {
+            assert_eq!(actual_radio[*key], expected_radio[*key], "radios[].{key}");
+        }
+        for key in RADIO_WITHHELD_KEYS {
+            assert!(!actual_radio.contains_key(*key), "radios[].{key}");
         }
         for key in WITHHELD_KEYS {
             assert!(!view.contains_key(*key), "{key}");

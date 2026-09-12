@@ -2,7 +2,7 @@ import {expect,it} from 'vitest'
 import settings from './__fixtures__/configuration-settings.json'
 import programming from './__fixtures__/configuration-programming.json'
 import {parseConfiguration,settingsForm,type SettingsConfiguration} from './configuration'
-import {SETTINGS_KEYS,WITHHELD_SETTINGS_KEYS} from './configuration-schema'
+import {SETTINGS_KEYS,WITHHELD_RADIO_KEYS,WITHHELD_SETTINGS_KEYS} from './configuration-schema'
 it('accepts the native serialized station choices and excludes account fields instead of supplying defaults',()=>{
   const parsed=parseConfiguration(structuredClone(settings),'settings') as SettingsConfiguration
   expect(parsed.settings.mycall).toBe('W1AW');expect(parsed.settings.mygrid).toBe('FN31RX09')
@@ -19,6 +19,37 @@ it('retains all 1200 saved channels with exact metadata and fails closed on malf
   for(const change of [{revision:''},{projects:[programming.projects[0],programming.projects[0]]},{saved:'yes'},
     {projects:[{...programming.projects[0],channels:[{...programming.projects[0].channels[0],rxMhz:Infinity}]}]},
     {projects:[{...programming.projects[0],channels:Array.from({length:10001},()=>programming.projects[0].channels[0])}]}])expect(()=>parseConfiguration({...programming,...change},'programming')).toThrow()
+})
+
+// The withheld declaration used to be compared with JSON.stringify, so it matched on ORDER as well
+// as content. Two harmless changes were therefore fatal to every already-deployed browser: a station
+// gaining an 18th withheld credential, and somebody alphabetising a list that is currently grouped
+// by service. Both would have darkened Remote settings and Field Day for every operator - the exact
+// outage this file's other gate exists to prevent, reproduced on the one list that carries
+// credentials. Containment keeps the security half and drops the brittleness.
+it('accepts a station that withholds MORE than this browser knows, in any order', async () => {
+  const ahead = structuredClone(settings) as Record<string, unknown>
+  ahead.withheld = [...(ahead.withheld as string[])].reverse().concat('someFutureCredential')
+  expect(() => parseConfiguration(ahead, 'settings')).not.toThrow()
+
+  // ...and still refuses a station that stops declaring something we hold secret.
+  const short = structuredClone(settings) as Record<string, unknown>
+  short.withheld = (short.withheld as string[]).slice(1)
+  expect(() => parseConfiguration(short, 'settings')).toThrow()
+})
+
+// RADIO_WITHHELD_KEYS is empty today, so this pins the mechanism rather than a current secret: the
+// first per-radio credential must be refused on arrival, not merely undeclared.
+it('refuses a per-radio credential even when the station declares it withheld', async () => {
+  const leaked = structuredClone(settings) as Record<string, unknown>
+  const values = leaked.settings as Record<string, unknown>
+  const radios = values.radios as Record<string, unknown>[]
+  expect(radios.length, 'positive control: there is a radio to leak from').toBeGreaterThan(0)
+  radios[0].flexPassword = 'hunter2'
+  leaked.radioWithheld = ['flexPassword']
+  // Declaring it does not make it safe to send. Today the closed per-radio shape is what refuses
+  // it; once flexPassword is a real withheld key the content check refuses it by name.
+  expect(() => parseConfiguration(leaked, 'settings')).toThrow()
 })
 
 // THE GATE THAT WOULD HAVE CAUGHT TONIGHT'S BUG.
@@ -55,6 +86,31 @@ it('keeps the browser settings schema identical to the native projection it must
     'the live settings stream may narrow the projection, never exceed it').toEqual([])
   expect(SETTINGS_KEYS.filter(key => (WITHHELD_SETTINGS_KEYS as readonly string[]).includes(key)),
     'a withheld key must never also be exposed').toEqual([])
+
+  // The WITHHELD lists were never tied together in either direction. That matters more than the
+  // exposed list, not less: the most likely edit to it is adding a NEWLY WITHHELD CREDENTIAL, and
+  // until now nothing would have noticed the browser's copy going stale. Compared as SETS - the
+  // runtime rule is containment, deliberately, so a station may withhold more than this browser
+  // knows - but inside the repo the two must say the same thing.
+  const named = (path: string, constant: string) => {
+    const src = readFileSync(resolve(path), 'utf8')
+    const block = src.match(new RegExp(`const ${constant}: &\\[&str\\] = &\\[([\\s\\S]*?)\\];`))
+    expect(block, `no ${constant} in ${path}`).toBeTruthy()
+    return [...block![1].matchAll(/"([a-zA-Z0-9]+)"/g)].map(m => m[1])
+  }
+  const CONFIG = '../src-tauri/src/remote_service/query/configuration.rs'
+  const withheld = named(CONFIG, 'WITHHELD_KEYS')
+  expect(withheld.length, 'positive control: the reader really finds withheld keys').toBeGreaterThan(10)
+  expect([...WITHHELD_SETTINGS_KEYS].sort()).toEqual([...withheld].sort())
+
+  // RADIO_WITHHELD_KEYS is empty today and that is the point - it is where the first per-radio
+  // credential goes. Empty on both sides is agreement; empty on one is the drift this catches.
+  const radioWithheld = named(CONFIG, 'RADIO_WITHHELD_KEYS')
+  expect([...WITHHELD_RADIO_KEYS].sort()).toEqual([...radioWithheld].sort())
+  const radioKeys = named(CONFIG, 'RADIO_KEYS')
+  expect(radioKeys.length, 'positive control: RADIO_KEYS really read').toBeGreaterThan(30)
+  expect(radioKeys.filter(key => radioWithheld.includes(key)),
+    'a withheld per-radio key must never also be exposed').toEqual([])
 })
 
 // Relaxing the exact key count is what lets a station one release ahead be understood at all.
