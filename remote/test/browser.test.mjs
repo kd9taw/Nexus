@@ -663,6 +663,14 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
           else await until(`document.querySelector('.cockpit-qso .op-btn.hold')?.getAttribute('aria-pressed')==='true'`)
           await until(`!document.querySelector('${txField}').disabled`)
         }
+        // The existing header period controls share the same native actions.
+        for(const [index,kind,label]of [[1,'even','TX 1st / even'],[2,'even','TX 2nd / odd'],[0,'auto','TX AUTO / 2nd']]){
+          await click(`document.querySelectorAll('.topbar-group.tx-period button')[${index}]`)
+          for(let i=0;i<100&&stationRequests.length===preferences;i++)await sleep(50)
+          assert.equal(stationRequests.length,++preferences);assert.equal(stationRequests.at(-1).action.change.kind,kind)
+          await until(`document.querySelector('.cockpit-qso .cq-period')?.textContent.trim()===${JSON.stringify(label)}`)
+          await until(`!document.querySelector('${txField}').disabled`)
+        }
         // Real modified waterfall gestures retain native TX-only / both semantics.
         for(const [modifiers,kind]of [[8,'txOffset'],[2,'bothOffsets']]){
           await evaluate(`document.querySelector('.operate-cockpit .waterfall-canvas').scrollIntoView({block:'center',behavior:'instant'})`);await settledLayout()
@@ -789,17 +797,17 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       applicationData.get_snapshot.currentQsoLogKey='00000000000000040000000000000001';applicationData.get_snapshot.qso.dxcall='K2ABC';applicationRevision++
       await until(`!document.querySelector('${log}').disabled&&document.querySelector('.cockpit-qso .cq-dx')?.textContent==='K2ABC'`)
       await click(`document.querySelector('${log}')`)
-      for(let i=0;i<100&&stationRequests.length<44;i++)await sleep(50)
-      assert.equal(stationRequests.length,44)
+      for(let i=0;i<100&&stationRequests.length<50;i++)await sleep(50)
+      assert.equal(stationRequests.length,50)
       assert.equal(stationRequests.at(-1).action.action,'qso.logCurrent')
       assert.equal(await evaluate(`!!document.querySelector('.logconfirm')`),false)
       transmitAllowed=false
       await until(`document.querySelector('${cq}').disabled&&document.querySelector('${tx}').disabled&&document.querySelector('${stop}').disabled`)
-      assert.equal(stationRequests.length,44);assert.equal(stopRequests.length,3)
+      assert.equal(stationRequests.length,50);assert.equal(stopRequests.length,3)
       await evaluate(`document.activeElement.blur()`)
       await browser.call('Input.dispatchKeyEvent',{type:'keyDown',key:'1',code:'Digit1',windowsVirtualKeyCode:49,modifiers:1},session)
       await browser.call('Input.dispatchKeyEvent',{type:'keyUp',key:'1',code:'Digit1',windowsVirtualKeyCode:49,modifiers:1},session)
-      await sleep(250);assert.equal(stationRequests.length,44,'revoked keyboard gestures cannot send')
+      await sleep(250);assert.equal(stationRequests.length,50,'revoked keyboard gestures cannot send')
       assert.equal(loggedRequests.length,0);assert.equal(exceptions,0);assert.equal(unexpectedMessages,0)
       if(artifacts){await writeFile(join(artifacts,'ft-results.json'),JSON.stringify({actions:stationRequests.map(r=>r.action),stopCount:stopRequests.length,staleDisplayStop:true,localGrantRevoked:true,exceptions,unexpectedMessages},null,2));const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'ft-controls.png'),Buffer.from(shot.data,'base64'))}
       console.log('Compiled Nexus FT8/FT4 CQ, station calling, exchange controls, TX On/Off, stale-display Stop and local revocation passed');return

@@ -1,4 +1,4 @@
-import { useStationControl, useStationTierControl } from '../stationAccess'
+import { useStationControl, useStationTierControl, useStationCapability } from '../stationAccess'
 // ⚠️ THIS FILE IS **PARTIAL** ON THE i18n LIST (i18n/hardcoded-strings.test.ts), and what is
 // deferred is the TX CLUSTER: TX On/Off (its two tooltip arms state the abort semantics — "an
 // FT over already in flight finishes" — and its labels name the latch), TUNE and STOP TX, which
@@ -225,6 +225,8 @@ export function TopBar({
   hideDigitalChrome,
 }: Props) {
   const control = useStationControl()
+  const ftSettings = useStationCapability('ftSettings')
+  const preferenceControl = control || ((tier === 'FT8' || tier === 'FT4') && ftSettings)
   const tierControl = useStationTierControl(radio)
   const countdown = (radio.nextSlotMs / 1000).toFixed(1)
   const [version, setVersion] = useState('')
@@ -435,7 +437,7 @@ export function TopBar({
           >
             Stop TX
           </button>
-          <button disabled={!control}
+          <button disabled={!preferenceControl}
             type="button"
             className={`op-btn hold${radio.holdTxFreq ? ' on' : ''}`}
             aria-pressed={radio.holdTxFreq}
@@ -524,7 +526,7 @@ export function TopBar({
       >
         {/* THREE WHOLE labels, never a stem plus a period token: the <small> is supplied by
             this call site as a marker, so the catalog carries one label per state. */}
-        <button disabled={!control}
+        <button disabled={!preferenceControl}
           type="button"
           className={`tier-btn${radio.txCycleAuto ? ' active' : ''}`}
           aria-pressed={radio.txCycleAuto ?? false}
@@ -546,7 +548,7 @@ export function TopBar({
             correct flip read as a no-op and got reported as one). Distinct from `active`
             on purpose: active is the operator's LOCK, derived is the sequencer's current
             answer, and dressing one as the other would misreport who chose it. */}
-        <button disabled={!control}
+        <button disabled={!preferenceControl}
           type="button"
           className={`tier-btn${!radio.txCycleAuto && radio.txEven ? ' active' : ''}${radio.txCycleAuto && radio.txEven ? ' derived' : ''}`}
           aria-pressed={!radio.txCycleAuto && radio.txEven}
@@ -555,7 +557,7 @@ export function TopBar({
         >
           <T k="topbar.txCycle.first.label" tags={{ s: <small /> }} />
         </button>
-        <button disabled={!control}
+        <button disabled={!preferenceControl}
           type="button"
           className={`tier-btn${!radio.txCycleAuto && !radio.txEven ? ' active' : ''}${radio.txCycleAuto && !radio.txEven ? ' derived' : ''}`}
           aria-pressed={!radio.txCycleAuto && !radio.txEven}
