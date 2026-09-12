@@ -10,6 +10,8 @@
 // projection ids, and the SP/LP path abbreviations below. The prose is in the catalog
 // under `map.*`. Nothing drawn on the canvas is prose — every fillText draws a token.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useContext } from 'react'
+import { NavigationMapContext } from '../remote-web/useNavigation'
 import { workedGridSet } from '../coverage'
 import type { AprsStation } from '../api'
 import { bandLabelForMhz } from '../band'
@@ -175,6 +177,8 @@ interface Props {
   /** Minutes of silence after which a station fades / is dropped, from the same backend read. */
   aprsFadeAfterMin?: number
   aprsTtlMin?: number
+  /** Remote capture clock, for APRS ages only. Native wall-clock behavior stays default. */
+  aprsNowSec?: number
   /** Click an APRS station icon. Omitted = hover-only. */
   onSelectAprs?: (call: string) => void
   /** Highlighted APRS station (the list selection), drawn accented. */
@@ -636,6 +640,7 @@ export function MapView({
   selectedAprs,
   aprsFadeAfterMin = 20,
   aprsTtlMin = 60,
+  aprsNowSec,
   focusBand = null,
   onFocusBand,
   outlook = null,
@@ -643,6 +648,10 @@ export function MapView({
   xrayLong = null,
   embedded,
 }: Props) {
+  const remoteMap=useContext(NavigationMapContext)
+  const remoteConnect=remoteMap?.connect
+  const remoteFeed=<T,>(feed:{value:T;ageMs:number;validForMs:number}|null|undefined):T|null=>
+    feed&&feed.ageMs+(remoteMap?.ageMs??Infinity)<feed.validForMs?feed.value:null
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const wrapRef = useRef<HTMLDivElement>(null)
   // Flare effects overlay (the animated sun + rays) — a separate transparent
@@ -796,7 +805,8 @@ export function MapView({
   }, [])
   // Amateur satellites — polled only while the layer is on (subpoints move
   // ~4°/min; 30 s keeps dots honest without hammering the 10-min view cache).
-  const [sats, setSats] = useState<SatView | null>(null)
+  const [nativeSats, setSats] = useState<SatView | null>(null)
+  const sats=remoteMap?remoteMap.satellites:nativeSats
   // Satellite hitboxes, captured at draw time (positions interpolate every tick,
   // so hit-testing must read what was actually drawn, not recompute).
   const placedSatsRef = useRef<
@@ -815,6 +825,7 @@ export function MapView({
   )
   const satsOn = layers.sats.visible
   useEffect(() => {
+    if(remoteMap)return
     if (!satsOn) {
       setSats(null)
       return
@@ -830,7 +841,7 @@ export function MapView({
       live = false
       clearInterval(id)
     }
-  }, [satsOn])
+  }, [satsOn,!!remoteMap])
   // Birds the ★ filter hides when it hides EVERYTHING: stars exist but none
   // matched (a starred bird aged past the backend's 30-day element cutoff, or
   // left the group file). filterSatsToChased is honest about zero stars (shows
@@ -1004,7 +1015,9 @@ export function MapView({
     }
   }, [me, selStation])
 
-  // Track container size.
+  // With no station location the canvas is absent, not merely hidden. Attach
+  // when it appears, and attach again after unavailable station data recovers.
+  const mapReady = me != null
   useEffect(() => {
     const el = wrapRef.current
     if (!el) return
@@ -1012,7 +1025,7 @@ export function MapView({
     ro.observe(el)
     setSize({ w: el.clientWidth, h: el.clientHeight })
     return () => ro.disconnect()
-  }, [])
+  }, [mapReady])
 
   // ⭐ DEVICE PIXELS PER LAYOUT PIXEL (= UI zoom × devicePixelRatio) — the number the canvas
   // backing store must be sized by, and the reason the map used to look soft.
@@ -1133,6 +1146,7 @@ export function MapView({
   const [otaFetched, setOtaFetched] = useState<OtaMapSpot[]>([])
   const otaOn = layers.ota.visible
   useEffect(() => {
+    if(remoteMap)return
     if (!otaOn) {
       setOtaFetched([])
       return
@@ -1148,7 +1162,7 @@ export function MapView({
       live = false
       clearInterval(id)
     }
-  }, [otaOn])
+  }, [otaOn,!!remoteMap])
   // An explicit `ota` prop wins when a host supplies one (the APRS layer's shape);
   // otherwise the layer feeds itself.
   const otaSpots = ota ?? otaFetched
@@ -1169,9 +1183,11 @@ export function MapView({
 
   // Aurora oval — fetched only while the layer is on (polite; OVATION updates
   // ~30–45 min, so a 10-min refresh is ample). Cleared when the layer is off.
-  const [auroraPts, setAuroraPts] = useState<AuroraPoint[]>([])
+  const [nativeAuroraPts, setAuroraPts] = useState<AuroraPoint[]>([])
+  const auroraPts=remoteMap?remoteFeed(remoteConnect?.aurora)??[]:nativeAuroraPts
   const auroraOn = layers.aurora.visible
   useEffect(() => {
+    if(remoteMap)return
     if (!auroraOn) {
       setAuroraPts([])
       return
@@ -1187,14 +1203,16 @@ export function MapView({
       live = false
       clearInterval(id)
     }
-  }, [auroraOn])
+  }, [auroraOn,!!remoteMap])
 
   // Proton polar-cap absorption — fetched only while the layer is on (the
   // backend caches the GOES feed 5 min; a matching poll is ample). Null =
   // no proton data (offline); empty points = quiet sky. Both draw nothing.
-  const [pca, setPca] = useState<PcaView | null>(null)
+  const [nativePca, setPca] = useState<PcaView | null>(null)
+  const pca=remoteMap?remoteFeed(remoteConnect?.pca):nativePca
   const pcaOn = layers.pca.visible
   useEffect(() => {
+    if(remoteMap)return
     if (!pcaOn) {
       setPca(null)
       return
@@ -1210,12 +1228,14 @@ export function MapView({
       live = false
       clearInterval(id)
     }
-  }, [pcaOn])
+  }, [pcaOn,!!remoteMap])
 
   // Magnetic declination at the QTH (WMM2025) — quasi-static, fetched once;
   // lets hover bearings show the compass heading beside true.
-  const [declination, setDeclination] = useState<number | null>(null)
+  const [nativeDeclination, setDeclination] = useState<number | null>(null)
+  const declination=remoteMap?remoteConnect?.declination??null:nativeDeclination
   useEffect(() => {
+    if(remoteMap)return
     getDeclination()
       .then(setDeclination)
       .catch(() => {})
@@ -1249,9 +1269,12 @@ export function MapView({
   // ---- Coverage layer: what the operator has WORKED, colored on the globe. Configurable
   // dimension (grid squares vs CQ zones), derived from the log on the frontend so there's no
   // backend dependency. Fetched only while the layer + that dimension are active. ----
-  const [workedGrids, setWorkedGrids] = useState<Set<string> | null>(null)
-  const [workedZones, setWorkedZones] = useState<Set<number> | null>(null)
+  const [nativeWorkedGrids, setWorkedGrids] = useState<Set<string> | null>(null)
+  const [nativeWorkedZones, setWorkedZones] = useState<Set<number> | null>(null)
+  const workedGrids=useMemo(()=>remoteMap?(remoteConnect?new Set(remoteConnect.coverage.grids):null):nativeWorkedGrids,[!!remoteMap,remoteConnect,nativeWorkedGrids])
+  const workedZones=useMemo(()=>remoteMap?(remoteConnect?new Set(remoteConnect.coverage.zones):null):nativeWorkedZones,[!!remoteMap,remoteConnect,nativeWorkedZones])
   useEffect(() => {
+    if(remoteMap)return
     if (!coverageOn || coverageDim !== 'grids' || workedGrids) return
     let live = true
     getLog()
@@ -1265,6 +1288,7 @@ export function MapView({
     }
   }, [coverageOn, coverageDim, workedGrids])
   useEffect(() => {
+    if(remoteMap)return
     if (!coverageOn || coverageDim !== 'zones' || workedZones) return
     let live = true
     getLogStats()
@@ -1577,8 +1601,8 @@ export function MapView({
       const sel = selectedAprs ? selectedAprs.toUpperCase() : null
       // Symbols only once the view is local enough for them to be legible; see SYMBOL_MIN_ZOOM.
       const drawSymbols = showSymbolAt(view.zoom)
-      const drawNowSec = Date.now() / 1000
-      ctx.font = `500 ${Math.round(10 * ms)}px ${cssVar('--font-mono') || 'monospace'}`
+      const drawNowSec = aprsNowSec ?? Date.now() / 1000
+      ctx.font = `500 10px ${cssVar('--font-mono') || 'monospace'}`
       ctx.textAlign = 'left'
       ctx.textBaseline = 'middle'
       // Newest last so a station that has moved draws its current dot on top of
@@ -2411,7 +2435,7 @@ export function MapView({
     // theme is a draw dependency so colors refresh on theme switch (the cssVar
     // memo is emptied at the top of this effect).
     void theme
-  }, [me, myQth, showQth, kind, devScale, markerScale, colorBy, pathMode, view, size, layers, placed, placedSpots, placedDxped, txLines, rxLines, mufStations, auroraPts, pca, cqzones, sats, reliefReady, prop, selStation, selectedCall, needByCall, theme, nowMs, focusBand, pulseTick, xrayEff, flareActive, flareHafNow, hoverKey, focusSat, coverageDim, coverageGridGeo, workedZones, aprs, selectedAprs, aprsFadeAfterMin, aprsTtlMin, aprsTick, satFav, satChaseRev])
+  }, [me, myQth, showQth, kind, devScale, markerScale, colorBy, pathMode, view, size, layers, placed, placedSpots, placedDxped, txLines, rxLines, mufStations, auroraPts, pca, cqzones, sats, reliefReady, prop, selStation, selectedCall, needByCall, theme, nowMs, focusBand, pulseTick, xrayEff, flareActive, flareHafNow, hoverKey, focusSat, coverageDim, coverageGridGeo, workedZones, aprs, selectedAprs, aprsFadeAfterMin, aprsTtlMin, aprsTick, satFav, satChaseRev, aprsNowSec])
 
   // THE SUN + RADIATING ENERGY — the flare layer's animated half, on its own
   // transparent canvas at ~20 fps, mounted ONLY while a flare is active and the
@@ -2774,7 +2798,7 @@ export function MapView({
     if (hit.kind === 'aprs') {
       const a = aprs?.find((x) => x.call === hit.name)
       if (!a) return hit.name
-      const age = Math.max(0, Math.round(Date.now() / 1000 - a.lastHeardUnix))
+      const age = Math.max(0, Math.round((aprsNowSec ?? Date.now() / 1000) - a.lastHeardUnix))
       const when =
         age < 60
           ? t('map.hover.aprs.ageSecs', { secs: age })

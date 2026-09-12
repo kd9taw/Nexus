@@ -39,6 +39,8 @@ import { useConnectConfig, type SlotId } from '../features/connectConfig'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
 import { useEntityCentroids } from '../features/entityCentroids'
 import { t } from '../i18n'
+import { NavigationMapContext, useNavigation, useSatelliteLive } from '../remote-web/useNavigation'
+import type { ConnectData, PathData, SatelliteData } from '../remote-web/navigation'
 
 /** The two intents NAMED for a programme and a band. POTA and SOTA are the programmes' own
  * names and `6m/VHF` is a band plus a band group — tokens, exactly as they are everywhere
@@ -118,12 +120,12 @@ interface Props {
 }
 
 export function ConnectView({
-  myGrid,
+  myGrid: nativeMyGrid,
   theme,
   stations,
-  prop,
-  selectedCall,
-  onSelectCall,
+  prop: nativeProp,
+  selectedCall: nativeSelectedCall,
+  onSelectCall: nativeOnSelectCall,
   onWorkSpot,
   needByCall,
   needAlerts,
@@ -132,6 +134,15 @@ export function ConnectView({
   onSelectSat,
   onPopOut,
 }: Props) {
+  const remoteConnect=useNavigation<ConnectData>('connect')
+  const remoteSats=useNavigation<SatelliteData>('satellites')
+  const remoteTrack=useSatelliteLive()
+  const remote=remoteConnect.remote
+  const [remoteSelection,setRemoteSelection]=useState<string|null>(null)
+  const selectedCall=remote?remoteSelection:nativeSelectedCall
+  const onSelectCall=remote?setRemoteSelection:nativeOnSelectCall
+  const prop=remote?remoteConnect.value?.prop??null:nativeProp
+  const myGrid=remote?remoteConnect.value?.mygrid??'':nativeMyGrid
   const prov = prop ? provLabel(prop.source, prop.asOf) : null
   // Fetched here, once, and handed to every pane through the context — the panes that
   // need it include plain render functions that cannot hold a hook of their own.
@@ -214,8 +225,11 @@ export function ConnectView({
     if (selSpot) return latLonToGrid(selSpot.lat, selSpot.lon)
     return null
   }, [selectedCall, selStation, selSpot])
-  const [pathPred, setPathPred] = useState<PathPrediction | null>(null)
+  const remotePath=useNavigation<PathData>('path',selGrid??'',!!selGrid)
+  const [nativePathPred, setPathPred] = useState<PathPrediction | null>(null)
+  const pathPred=remote?(remotePath.value?.mygrid===myGrid?remotePath.value.prediction:null):nativePathPred
   useEffect(() => {
+    if(remote)return
     if (!selGrid) {
       setPathPred(null)
       return
@@ -227,7 +241,7 @@ export function ConnectView({
     return () => {
       live = false
     }
-  }, [selGrid])
+  }, [selGrid,remote])
   const pathOpen = pathPred?.bands.filter((b) => b.workability !== 'Closed') ?? []
 
   // The no-selection general "Band outlook (modelled)": modeled per-band workability
@@ -253,6 +267,7 @@ export function ConnectView({
   // nothing selected this refreshed at most every five minutes rather than on any poll.
   // A plain interval is both simpler and honest about the cadence.
   useEffect(() => {
+    if(remote)return
     let live = true
     const load = () =>
       getBandOutlook()
@@ -264,12 +279,13 @@ export function ConnectView({
       live = false
       window.clearInterval(id)
     }
-  }, [])
+  }, [remote])
   const outlookOpen = bandOutlook?.bands.filter((b) => b.workability !== 'Closed') ?? []
   // "Am I getting out?" — who is hearing me now (observed). Polled on the prop
   // cadence; the backend reads the live PSK Reporter / RBN firehose each call.
   const [getout, setGetout] = useState<GettingOut | null>(null)
   useEffect(() => {
+    if(remote)return
     let live = true
     const load = () =>
       getGettingOut()
@@ -281,13 +297,14 @@ export function ConnectView({
       live = false
       window.clearInterval(id)
     }
-  }, [])
+  }, [remote])
   // B3 live external feeds (desktop-only; cached server-side, polled on the TTL cadence).
   // Graceful: any failure leaves the last value, never throws — the panes degrade honestly.
   const [scales, setScales] = useState<NoaaScalesView | null>(null)
   const [alerts, setAlerts] = useState<AlertView[]>([])
   const [muf, setMuf] = useState<MufStation[]>([])
   useEffect(() => {
+    if(remote)return
     let live = true
     const load = () => {
       getSpaceWxScales()
@@ -310,12 +327,13 @@ export function ConnectView({
       live = false
       window.clearInterval(id)
     }
-  }, [])
+  }, [remote])
   // X-ray fast lane (60 s) so the map's D-RAP flare layer moves at ~1 min cadence
   // during an event instead of the 5-min prop snapshot. Best-effort: a failed
   // fetch just leaves the snapshot's value driving the layer.
   const [xrayNow, setXrayNow] = useState<number | null>(null)
   useEffect(() => {
+    if(remote)return
     let live = true
     const load = () =>
       getXrayNow()
@@ -327,13 +345,14 @@ export function ConnectView({
       live = false
       window.clearInterval(id)
     }
-  }, [])
+  }, [remote])
   // The one flux value the map renders (dev-override > fast lane > snapshot).
   const xrayLong = effectiveXray(xrayNow, prop?.spaceWx.xrayLong)
   // DXpedition best-shot windows (server-cached climatology) — the selection
   // pane shows the selected expedition's line. 10-min poll is generous.
   const [dxpedWindows, setDxpedWindows] = useState<Map<string, DxpedWindow>>(new Map())
   useEffect(() => {
+    if(remote)return
     let live = true
     const load = () =>
       getDxpedWindows()
@@ -347,7 +366,18 @@ export function ConnectView({
       live = false
       window.clearInterval(id)
     }
-  }, [])
+  }, [remote])
+
+  useEffect(()=>{
+    if(!remote)return
+    const d=remoteConnect.value,age=remoteConnect.ageMs
+    setBandOutlook(d?.bandOutlook??null);setGetout(d?.gettingOut??null)
+    const scales=d?.scales&&d.scales.ageMs+age<d.scales.validForMs?d.scales.value:null
+    setScales(scales?.[0]??null);setAlerts(scales?.[1]??[])
+    setMuf(d?.muf&&d.muf.ageMs+age<d.muf.validForMs?d.muf.value:[])
+    setXrayNow(d?.xray&&d.prop.asOf+Math.floor((d.sourceAgeMs+age)/1000)-d.xray.asOf<120?d.xray.flux:null)
+    setDxpedWindows(new Map())
+  },[remote,remoteConnect.value,remoteConnect.ageMs])
 
   // One context handed to every pane (built from the already-lifted state above).
   const ctx: PaneContext = {
@@ -377,8 +407,8 @@ export function ConnectView({
     alerts,
     muf,
     onSelectCall,
-    onWorkSpot,
-    onPoint,
+    onWorkSpot: remote?undefined:onWorkSpot,
+    onPoint: remote?undefined:onPoint,
     toggleFocusBand,
   }
   const railFrame = (s: SlotId) => (
@@ -398,10 +428,12 @@ export function ConnectView({
   const chromeHidden = mapFull && !map3d
 
   return (
+    <NavigationMapContext.Provider value={remote?{connect:remoteConnect.value,satellites:remoteSats.value?.mygrid===myGrid?remoteSats.value.view:null,track:remoteTrack?.track??null,ageMs:remoteConnect.ageMs}:null}>
     <main className="layout single">
       <div className={`connect-shell${chromeHidden ? ' map-full' : ''}`}>
         {!chromeHidden && (
         <div className="connect-header">
+          {remote&&<span role="status" className="dim">{remoteConnect.value?t('remote.collectionObserver'):remoteConnect.loading?t('remote.collectionLoading'):t('remote.collectionUnavailable')}</span>}
           <div
             className="map-proj connect-intent"
             role="group"
@@ -426,7 +458,7 @@ export function ConnectView({
           >
             🌐 {map3d ? '3D' : '2D'}
           </button>
-          {onPopOut && (
+          {onPopOut && !remote && (
             <button
               type="button"
               className="connect-popout"
@@ -469,7 +501,7 @@ export function ConnectView({
               onSelectCall={onSelectCall}
               needByCall={needByCall}
               intent={intent}
-              onWorkSpot={onWorkSpot}
+              onWorkSpot={remote?undefined:onWorkSpot}
               onSelectSat={onSelectSat}
               focusBand={focusBand}
               onFocusBand={toggleFocusBand}
@@ -496,5 +528,6 @@ export function ConnectView({
         </div>
       </div>
     </main>
+    </NavigationMapContext.Provider>
   )
 }

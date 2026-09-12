@@ -83,6 +83,6 @@ describe('the club band board has its own way in', () => {
   it('App wires the rail button to the club-board window', () => {
     // The rail is presentational (it takes callbacks, it never calls the API);
     // the seam that actually opens the OS window lives in App.
-    expect(app).toMatch(/onClubBoard=\{\(\) => void openPanelWindow\('fdclub'\)\}/)
+    expect(app).toMatch(/onClubBoard=\{remote \? undefined : \(\) => void openPanelWindow\('fdclub'\)\}/)
   })
 })

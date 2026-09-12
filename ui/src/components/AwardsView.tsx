@@ -272,12 +272,16 @@ function RowAction({
 export function AwardsView({
   showGamification = true,
   onOpenSettings,
+  observation,
 }: {
   showGamification?: boolean
+  /** A complete station-owned summary; observation never starts upload/diagnostic reads. */
+  observation?: AwardSummary
   /** Open Settings at a section id (see settings/registry.ts). */
   onOpenSettings?: (target: string) => void
 }) {
-  const [aw, setAw] = useState<AwardSummary | null>(null)
+  const [nativeAwards, setAw] = useState<AwardSummary | null>(null)
+  const aw = observation ?? nativeAwards
   const [diag, setDiag] = useState<DiagnosticsReport | null>(null)
   // The log itself, so a diagnosis row (indexed oldest-first, same order as
   // get_log) can hand its QsoRecord to the per-QSO QRZ/ClubLog/eQSL push.
@@ -295,6 +299,7 @@ export function AwardsView({
   const mounted = useRef(true)
   useEffect(() => {
     mounted.current = true
+    if (observation) return () => { mounted.current = false }
     let live = true
     getAwards()
       .then((a) => live && setAw(a))
@@ -309,11 +314,12 @@ export function AwardsView({
       live = false
       mounted.current = false
     }
-  }, [])
+  }, [observation])
 
   /** Sign + upload the given QSOs via TQSL, then re-diagnose so the panel reflects
    * the new state (uploaded rows drop to Pending/waiting; bounced ones show R9). */
   async function upload(indices: number[], key: string) {
+    if (observation) return
     setBusyKey(key)
     setUploadMsg(null)
     try {
@@ -332,6 +338,7 @@ export function AwardsView({
   /** Push one QSO to QRZ/ClubLog/eQSL (the never-uploaded and bounced-re-push
    * cases), then re-diagnose so the row reflects the new upload state. */
   async function push(index: number, service: PushService, key: string) {
+    if (observation) return
     const q = log?.[index]
     if (!q) {
       setUploadMsg(t('awards.push.noQso'))
@@ -387,7 +394,7 @@ export function AwardsView({
     }
   }
 
-  if (err) {
+  if (!observation && err) {
     return (
       <section className="awards">
         <StateBlock
@@ -875,7 +882,7 @@ export function AwardsView({
         </div>
       </div>
 
-      {diag && (diag.diagnoses.length > 0 || diag.pendingLag > 0 || diag.waitingOnPartner > 0) && (
+      {!observation && diag && (diag.diagnoses.length > 0 || diag.pendingLag > 0 || diag.waitingOnPartner > 0) && (
         <div className="aw-panel conf-panel">
           <h3>
             <CheckCircle2 size={14} aria-hidden="true" /> {t('awards.conf.head')}

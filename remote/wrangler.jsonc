@@ -1,0 +1,30 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "nexus-remote-staging",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-30",
+  "workers_dev": false,
+  "preview_urls": false,
+  "observability": { "enabled": false },
+  "assets": {
+    "directory": "../ui/dist-remote",
+    "binding": "ASSETS",
+    "run_worker_first": ["/", "/index.html", "/api/*"],
+    "html_handling": "none",
+    "not_found_handling": "none"
+  },
+  "durable_objects": { "bindings": [{ "name": "STATIONS", "class_name": "StationRoom" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["StationRoom"] }],
+  "d1_databases": [{
+    "binding": "DB",
+    "database_name": "nexus-remote-staging",
+    "database_id": "00000000-0000-0000-0000-000000000000",
+    "migrations_dir": "migrations"
+  }],
+  "vars": {
+    "PUBLIC_REMOTE_ORIGIN": "http://127.0.0.1:8787",
+    "AUTH0_ISSUER": "https://unconfigured.invalid/",
+    "AUTH0_AUDIENCE": "https://nexus-remote.invalid",
+    "AUTH0_CLIENT_ID": "unconfigured"
+  }
+}

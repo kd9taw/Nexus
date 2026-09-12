@@ -5,6 +5,8 @@
 import { useState } from 'react'
 import type { LoggedQso } from '../types'
 import { t } from '../i18n'
+import { useStationCapability } from '../stationAccess'
+import { FtStopControl } from './FtStopControl'
 
 interface Props {
   /** The completed contact awaiting confirm-before-log. */
@@ -13,12 +15,14 @@ interface Props {
   onConfirm: (record: LoggedQso) => void
   /** Discard the contact without logging. */
   onDiscard: () => void
+  onStop?: () => void
 }
 
 /** WSJT-X "Prompt me to log QSO" — a small confirm popup shown when a QSO
  * completes and the operator has asked to review before logging. Pre-fills the
  * exchanged details; the call/grid/reports stay editable. */
-export function LogConfirm({ record, onConfirm, onDiscard }: Props) {
+export function LogConfirm({ record, onConfirm, onDiscard, onStop }: Props) {
+  const allowed = useStationCapability('qsoLogging')
   const [call, setCall] = useState(record.call)
   const [grid, setGrid] = useState(record.grid ?? '')
   const [rstSent, setRstSent] = useState(record.rstSent?.toString() ?? '')
@@ -31,7 +35,7 @@ export function LogConfirm({ record, onConfirm, onDiscard }: Props) {
   }
 
   const confirm = () => {
-    if (!call.trim()) return
+    if (!allowed || !call.trim()) return
     onConfirm({
       ...record,
       call: call.trim().toUpperCase(),
@@ -92,10 +96,11 @@ export function LogConfirm({ record, onConfirm, onDiscard }: Props) {
         </div>
 
         <div className="logconfirm-actions">
-          <button type="button" className="logconfirm-discard" onClick={onDiscard}>
+          {onStop && <FtStopControl onHaltTx={onStop} />}
+          <button type="button" className="logconfirm-discard" disabled={!allowed} onClick={() => { if (allowed) onDiscard() }}>
             {t('logPrompt.discard')}
           </button>
-          <button type="button" className="logconfirm-log" onClick={confirm} disabled={!call.trim()}>
+          <button type="button" className="logconfirm-log" onClick={confirm} disabled={!allowed || !call.trim()}>
             {t('logPrompt.log')}
           </button>
         </div>

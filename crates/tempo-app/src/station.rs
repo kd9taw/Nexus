@@ -857,9 +857,17 @@ impl StationCore {
     ///
     /// [`adif_record`]: tempo_core::logbook::adif_record
     pub(crate) fn append_to_log(&mut self, recs: &[QsoRecord]) {
-        let Some(path) = self.log_path.clone() else {
-            return;
-        };
+        let _ = self.append_to_log_checked(recs, false);
+    }
+
+    // The same memory-first append and fingerprint logic, with an explicit
+    // receipt for Remote. No rewrite, rollback, retry or second upload path.
+    pub(crate) fn append_to_log_checked(
+        &mut self,
+        recs: &[QsoRecord],
+        receipt: bool,
+    ) -> Option<Vec<tempo_core::logbook::LogAppendReceipt>> {
+        let path = self.log_path.clone()?;
         debug_assert!(
             self.logbook.records().ends_with(recs),
             "append_to_log: the records must already be in memory (see the contract above)"
@@ -867,12 +875,22 @@ impl StationCore {
         let before = log_file_stamp(&path);
         let mut accountable = before.is_some() && before == self.last_log_mtime;
         let mut written = 0u64;
+        let mut succeeded = true;
+        let mut receipts = Vec::new();
         for r in recs {
-            match Logbook::append(&path, r) {
-                Ok(()) => written += tempo_core::logbook::adif_record(r).len() as u64,
+            match if receipt {
+                Logbook::append_for_sync(&path, r).map(Some)
+            } else {
+                Logbook::append(&path, r).map(|_| None)
+            } {
+                Ok(handle) => {
+                    written += tempo_core::logbook::adif_record(r).len() as u64;
+                    receipts.extend(handle);
+                }
                 Err(e) => {
                     eprintln!("tempo: logbook append failed: {e}");
                     accountable = false;
+                    succeeded = false;
                 }
             }
         }
@@ -882,6 +900,7 @@ impl StationCore {
             }
             _ => None,
         };
+        succeeded.then_some(receipts)
     }
 
     /// THE way to persist the logbook: save, then record the file's fresh mtime

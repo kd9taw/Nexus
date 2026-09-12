@@ -18,7 +18,11 @@ use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use tempo_audio::rig::Rig;
+use tempo_app::remote_control::{Completion, Outcome, Revocation, WritePermission};
+use tempo_audio::rig::{
+    remote::{Position, Retune},
+    Rig,
+};
 
 /// Locate a usable rigctld, or None (→ tests skip).
 fn rigctld_bin() -> Option<String> {
@@ -105,10 +109,18 @@ impl DummyRig {
                         if BufReader::new(&s).read_line(&mut line).is_ok()
                             && line.trim().parse::<u64>().is_ok()
                         {
+                            // Keep the readiness socket as our independent
+                            // observer. Closing it as the Rig client connects
+                            // can trigger Hamlib 4.7.1's socket-close race and
+                            // abort the daemon before the test sends a command.
+                            s.set_read_timeout(Some(Duration::from_millis(1000)))
+                                .expect("observer read timeout");
+                            s.set_write_timeout(Some(Duration::from_millis(1000)))
+                                .expect("observer write timeout");
                             return DummyRig {
                                 child,
                                 addr,
-                                obs: None,
+                                obs: Some(s),
                             };
                         }
                     }
@@ -148,9 +160,18 @@ impl DummyRig {
             let sock = self.obs.as_mut().unwrap();
             let ok = sock.write_all(format!("{cmd}\n").as_bytes()).is_ok();
             if ok {
+                let mut reply = BufReader::new(&*sock);
                 let mut line = String::new();
-                if BufReader::new(&*sock).read_line(&mut line).is_ok() && !line.trim().is_empty() {
-                    return line.trim().to_string();
+                if reply.read_line(&mut line).is_ok() && !line.trim().is_empty() {
+                    // `m` reports mode and passband on separate lines. Consume
+                    // both before the next observation, even if TCP splits them.
+                    let mut passband = String::new();
+                    if cmd != "m"
+                        || (reply.read_line(&mut passband).is_ok()
+                            && passband.trim().parse::<i32>().is_ok())
+                    {
+                        return line.trim().to_string();
+                    }
                 }
             }
             self.obs = None; // dead/odd socket — reconnect and retry
@@ -214,6 +235,208 @@ fn freq_set_read_roundtrips_against_real_rigctld() {
         "7074000",
         "wire truth matches the client view"
     );
+}
+
+#[test]
+fn remote_retune_roundtrips_real_hamlib_without_committing_station_state() {
+    let bin = require_rigctld!();
+    let _serial = ONE_AT_A_TIME.lock().unwrap_or_else(|p| p.into_inner());
+    let mut d = DummyRig::spawn(&bin);
+    let mut rig = connect_settled(&d.addr);
+    rig.set_mode("USB", 0).unwrap();
+    rig.set_freq(14_240_000).unwrap();
+    rig.ptt(false).unwrap();
+    let authority = Revocation::default();
+    let native = Revocation::default();
+    let mut before = Position::new(14_240_000, "USB").unwrap();
+    for (hz, mode) in [
+        (7_074_000, "PKTUSB"),
+        (7_090_000, "PKTUSB"),
+        (7_030_000, "CW"),
+    ] {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let permit = authority.permit(deadline).unwrap();
+        let completion = Completion::guarded(permit.clone());
+        let permission =
+            WritePermission::new(permit, native.permit(deadline).unwrap(), completion.clone());
+        let target = Position::new(hz, mode).unwrap();
+        let observed = rig
+            .remote_retune(Retune::new(before, target.clone()), &permission)
+            .unwrap();
+        assert_eq!(observed.position(), &target);
+        assert_eq!(d.observe("f"), hz.to_string());
+        assert_eq!(d.observe("m"), mode);
+        assert_eq!(d.observe("t"), "0");
+        assert_eq!(completion.outcome(), Outcome::Pending);
+        before = target;
+    }
+}
+
+#[test]
+fn remote_filter_roundtrips_real_hamlib_without_qsy_or_mode_change() {
+    let bin = require_rigctld!();
+    let _serial = ONE_AT_A_TIME.lock().unwrap_or_else(|p| p.into_inner());
+    let d = DummyRig::spawn(&bin);
+    let mut rig = connect_settled(&d.addr);
+    let authority = Revocation::default();
+    let native = Revocation::default();
+    for (mode, before, width) in [("CW", 500, 550), ("LSB", 2400, 2300)] {
+        rig.set_mode(mode, before).unwrap();
+        rig.set_freq(14_074_000).unwrap();
+        rig.ptt(false).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let permit = authority.permit(deadline).unwrap();
+        let completion = Completion::guarded(permit.clone());
+        let permission =
+            WritePermission::new(permit, native.permit(deadline).unwrap(), completion.clone());
+        let observed = rig
+            .remote_filter_width(
+                Position::new(14_074_000, mode).unwrap(),
+                before as u32,
+                width,
+                &permission,
+            )
+            .unwrap();
+        assert_eq!(observed.passband(), Some(width));
+        assert_eq!(rig.read_mode_passband(), (Some(mode.into()), Some(width)));
+        assert_eq!(rig.read_freq().unwrap(), 14_074_000);
+        assert_eq!(rig.read_ptt(), Some(false));
+        assert_eq!(completion.outcome(), Outcome::Pending);
+    }
+}
+
+#[test]
+fn remote_phone_modes_roundtrip_real_hamlib_without_moving_the_receive_dial() {
+    let bin = require_rigctld!();
+    let _serial = ONE_AT_A_TIME.lock().unwrap_or_else(|p| p.into_inner());
+    let mut d = DummyRig::spawn(&bin);
+    let mut rig = connect_settled(&d.addr);
+    rig.set_mode("CW", 500).unwrap();
+    rig.set_freq(7_220_000).unwrap();
+    rig.ptt(false).unwrap();
+    let authority = Revocation::default();
+    let native = Revocation::default();
+    let mut before = Position::new(7_220_000, "CW").unwrap();
+    for mode in ["USB", "LSB", "AM", "LSB", "LSB"] {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let permit = authority.permit(deadline).unwrap();
+        let receipt = Completion::guarded(permit.clone());
+        let permission =
+            WritePermission::new(permit, native.permit(deadline).unwrap(), receipt.clone());
+        let target = Position::new(7_220_000, mode).unwrap();
+        let read = rig
+            .remote_retune(Retune::new(before, target.clone()), &permission)
+            .unwrap();
+        assert_eq!(read.position(), &target);
+        assert_eq!(d.observe("f"), "7220000");
+        assert_eq!(d.observe("m"), mode);
+        assert_eq!(d.observe("t"), "0");
+        assert_eq!(receipt.outcome(), Outcome::Pending);
+        before = target;
+    }
+}
+
+#[test]
+fn remote_dsp_roundtrips_real_hamlib_without_qsy_mode_or_ptt_change() {
+    use tempo_app::engine::remote_radio::{AgcSpeed, ReceiverDsp, ReceiverFunction};
+    let bin = require_rigctld!();
+    let _serial = ONE_AT_A_TIME.lock().unwrap_or_else(|p| p.into_inner());
+    let d = DummyRig::spawn(&bin);
+    let mut rig = connect_settled(&d.addr);
+    rig.set_mode("LSB", 2400).unwrap();
+    rig.set_freq(14_074_000).unwrap();
+    rig.ptt(false).unwrap();
+    let authority = Revocation::default();
+    let native = Revocation::default();
+    let mut choices = Vec::new();
+    for func in [
+        ReceiverFunction::Nb,
+        ReceiverFunction::Nr,
+        ReceiverFunction::Notch,
+        ReceiverFunction::ManualNotch,
+    ] {
+        rig.set_func(func.token(), false).unwrap();
+        choices.push((
+            ReceiverDsp::Function { func, on: false },
+            ReceiverDsp::Function { func, on: true },
+        ));
+        choices.push((
+            ReceiverDsp::Function { func, on: true },
+            ReceiverDsp::Function { func, on: false },
+        ));
+    }
+    rig.set_agc(2).unwrap();
+    let mut previous = AgcSpeed::Fast;
+    for speed in [
+        AgcSpeed::Fast,
+        AgcSpeed::Slow,
+        AgcSpeed::Mid,
+        AgcSpeed::Off,
+        AgcSpeed::Auto,
+    ] {
+        choices.push((ReceiverDsp::Agc(previous), ReceiverDsp::Agc(speed)));
+        previous = speed;
+    }
+    for (before, after) in choices {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let permit = authority.permit(deadline).unwrap();
+        let completion = Completion::guarded(permit.clone());
+        let permission =
+            WritePermission::new(permit, native.permit(deadline).unwrap(), completion.clone());
+        let read = rig
+            .remote_receiver_dsp(
+                Position::new(14_074_000, "LSB").unwrap(),
+                before,
+                after,
+                &permission,
+            )
+            .unwrap();
+        assert_eq!(read.receiver_dsp(), Some(after));
+        match after {
+            ReceiverDsp::Function { func, on } => assert_eq!(rig.read_func(func.token()), Some(on)),
+            ReceiverDsp::Agc(speed) => assert_eq!(rig.read_agc(), Some(speed.hamlib_value())),
+        }
+        assert_eq!(rig.read_mode_passband(), (Some("LSB".into()), Some(2400)));
+        assert_eq!(rig.read_freq().unwrap(), 14_074_000);
+        assert_eq!(rig.read_ptt(), Some(false));
+        assert_eq!(completion.outcome(), Outcome::Pending);
+    }
+}
+
+#[test]
+fn remote_power_limit_is_observed_by_real_hamlib_and_never_raises_a_lower_setting() {
+    let bin = require_rigctld!();
+    let _serial = ONE_AT_A_TIME.lock().unwrap_or_else(|p| p.into_inner());
+    let mut d = DummyRig::spawn(&bin);
+    let mut rig = connect_settled(&d.addr);
+    let authority = Revocation::default();
+    let native = Revocation::default();
+    for initial in [0.8, 0.2] {
+        rig.set_mode("USB", 0).unwrap();
+        rig.set_freq(14_240_000).unwrap();
+        rig.set_power(initial).unwrap();
+        rig.ptt(false).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let permit = authority.permit(deadline).unwrap();
+        let completion = Completion::guarded(permit.clone());
+        let permission =
+            WritePermission::new(permit, native.permit(deadline).unwrap(), completion.clone());
+        let target = Position::new(14_074_000, "PKTUSB").unwrap();
+        let observed = rig
+            .remote_retune(
+                Retune::new(Position::new(14_240_000, "USB").unwrap(), target.clone())
+                    .with_power_limit(0.4)
+                    .unwrap(),
+                &permission,
+            )
+            .unwrap();
+        assert_eq!(observed.position(), &target);
+        assert!((observed.power().unwrap() - initial.min(0.4)).abs() < 0.001);
+        let independent: f32 = d.observe("l RFPOWER").parse().unwrap();
+        assert!((independent - initial.min(0.4)).abs() < 0.001);
+        assert_eq!(d.observe("t"), "0");
+        assert_eq!(completion.outcome(), Outcome::Pending);
+    }
 }
 
 #[test]

@@ -27,6 +27,7 @@ pub use source::{DecodeRequest, NativeSource, SignalSource, WsjtxUdpSource};
 /// calls this on band QSY / tier switch — analogous to `tempo_fast::harq_reset` — so a
 /// new band's audio is not probed with stale prior-cycle AP hypotheses.
 pub use ft8::a7_reset as reset_ft8_a7;
+pub use ft8::A7ResetGuard as Ft8A7ResetGuard;
 
 #[cfg(test)]
 mod tests {

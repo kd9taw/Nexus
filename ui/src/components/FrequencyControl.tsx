@@ -1,3 +1,4 @@
+import { useStationCapability, useStationControl } from '../stationAccess'
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every operator-visible
 // string comes from the catalog. What does NOT, and must not: the band-plan channel labels and
 // their dial frequencies, the HF/VHF/UHF group names, the band chip, and the USB/FM mode names —
@@ -11,6 +12,7 @@ import { t } from '../i18n'
 import { FrequencyReadout } from './FrequencyReadout'
 
 interface Props {
+  remoteFrequency?: boolean
   channels: BandChannel[]
   dialMhz: number
   band: string
@@ -53,7 +55,10 @@ export function FrequencyControl({
   showReadout = true,
   showModeToggle = true,
   onSet,
+  remoteFrequency = false,
 }: Props) {
+  const control = useStationControl(), frequencyControl = useStationCapability('frequency')
+  const canTune = control || (remoteFrequency && frequencyControl)
   const active = useMemo(
     () => findActive(channels, dialMhz, mode),
     [channels, dialMhz, mode],
@@ -69,6 +74,7 @@ export function FrequencyControl({
   }, [channels])
 
   const selectChannel = (key: string) => {
+    if (!canTune) return
     const c = channels.find((x) => chanKey(x) === key)
     if (c) onSet(c.dialMhz, c.band, c.mode)
   }
@@ -90,7 +96,7 @@ export function FrequencyControl({
       <span className="band-picker-dot" style={{ background: col }} aria-hidden="true" />
       <label className="freq-channel-wrap">
         {variant === 'full' && <span className="settings-label">{t('freq.channel.label')}</span>}
-        <select
+        <select disabled={!canTune}
           className="freq-channel"
           value={selectValue}
           onChange={(e) => selectChannel(e.target.value)}
@@ -130,6 +136,7 @@ export function FrequencyControl({
             dialMhz={dialMhz}
             size="hero"
             editable
+            remoteFrequency={remoteFrequency}
             commitOnBlur
             onCommit={(v) => onSet(v, bandLabelForMhz(v), mode)}
           />
@@ -143,7 +150,7 @@ export function FrequencyControl({
       {showModeToggle && (
         <div className="freq-mode-toggle" role="group" aria-label={t('freq.mode.aria')}>
           {MODES.map((md) => (
-            <button
+            <button disabled={!control}
               key={md}
               type="button"
               className={`freq-mode-btn${mode === md ? ' active' : ''}`}

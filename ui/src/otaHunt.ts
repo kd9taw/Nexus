@@ -1,4 +1,14 @@
 // Pure helpers for the POTA/SOTA hunter view — no React, no IO, fully testable.
+import type { Activation, AppSnapshot, OtaSpot } from './types'
+
+export type OtaFeedStatus = 'ready' | 'unavailable' | 'expired'
+export type ObservedOta = {
+  feeds: { program: 'POTA' | 'SOTA'; status: OtaFeedStatus; sourceAgeMs: number | null; spots: OtaSpot[] }[]
+  activation: Activation
+  hunt: AppSnapshot['hunt']
+  parkCount: number
+  huntedCount: number
+}
 
 /**
  * Derive a ham band label from a spot frequency in kHz.

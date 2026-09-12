@@ -94,10 +94,21 @@ pub fn idle_both_lines<P: ControlLinePins + ?Sized>(port: &mut P) {
 /// is why the FTX-1 report had to be diagnosed by hand in PowerShell.)
 pub fn open_first_working_baud<T, E: std::fmt::Display>(
     port: &str,
+    open: impl FnMut(u32) -> Result<T, E>,
+) -> Result<(T, u32), String> {
+    open_first_working_baud_checked(port, || Ok(()), open)
+}
+
+/// Check permission immediately before each actual port-open attempt. A
+/// rejected check ends the ladder; it is not another unsupported baud rate.
+fn open_first_working_baud_checked<T, E: std::fmt::Display>(
+    port: &str,
+    mut before_open: impl FnMut() -> Result<(), String>,
     mut open: impl FnMut(u32) -> Result<T, E>,
 ) -> Result<(T, u32), String> {
     let mut last_err = String::new();
     for &baud in &BAUD_LADDER {
+        before_open()?;
         match open(baud) {
             Ok(handle) => return Ok((handle, baud)),
             Err(e) => last_err = e.to_string(),
@@ -118,7 +129,30 @@ pub fn open_first_working_baud<T, E: std::fmt::Display>(
 /// [`idle_both_lines`] for why that is the opener's job and not the caller's.
 #[cfg(feature = "serial")]
 pub fn open_control_line_port(port: &str) -> std::io::Result<Box<dyn serialport::SerialPort>> {
-    let (mut sp, baud) = open_first_working_baud(port, |baud| {
+    open_control_line_port_checked(port, || Ok(()))
+}
+
+/// Remote selection may need the incoming radio's serial PTT handle. Opening
+/// itself can change line state, so every baud attempt carries the original
+/// permission. Once opened, idle cleanup is unconditional even after expiry.
+#[cfg(feature = "serial")]
+pub(crate) fn open_control_line_port_permitted(
+    port: &str,
+    permission: &tempo_app::remote_control::WritePermission,
+) -> std::io::Result<Box<dyn serialport::SerialPort>> {
+    open_control_line_port_checked(port, || {
+        permission
+            .begin_write(std::time::Instant::now())
+            .map_err(|reason| format!("Remote serial permission: {reason:?}"))
+    })
+}
+
+#[cfg(feature = "serial")]
+fn open_control_line_port_checked(
+    port: &str,
+    before_open: impl FnMut() -> Result<(), String>,
+) -> std::io::Result<Box<dyn serialport::SerialPort>> {
+    let (mut sp, baud) = open_first_working_baud_checked(port, before_open, |baud| {
         serialport::new(port, baud)
             .timeout(std::time::Duration::from_millis(OPEN_TIMEOUT_MS))
             .open()
@@ -140,6 +174,39 @@ pub fn open_control_line_port(port: &str) -> std::io::Result<Box<dyn serialport:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn checked_open_stops_before_a_later_baud_after_permission_is_lost() {
+        let allowed = std::cell::Cell::new(true);
+        let mut tried = Vec::new();
+        let result = open_first_working_baud_checked(
+            "test-port",
+            || allowed.get().then_some(()).ok_or_else(|| "revoked".into()),
+            |baud| {
+                tried.push(baud);
+                allowed.set(false);
+                Err::<(), _>("port refused baud")
+            },
+        );
+        assert_eq!(result, Err("revoked".into()));
+        assert_eq!(tried, [BAUD_LADDER[0]]);
+        // The same gate allows the native fallback ladder while permitted.
+        tried.clear();
+        let result = open_first_working_baud_checked(
+            "test-port",
+            || Ok(()),
+            |baud| {
+                tried.push(baud);
+                if baud == BAUD_LADDER[1] {
+                    Ok(baud)
+                } else {
+                    Err("unsupported baud")
+                }
+            },
+        );
+        assert_eq!(result, Ok((BAUD_LADDER[1], BAUD_LADDER[1])));
+        assert_eq!(tried, BAUD_LADDER[..2]);
+    }
 
     /// A mock open that accepts only the rates in `accept` and otherwise fails with the
     /// exact Windows text the FTX-1 produces.

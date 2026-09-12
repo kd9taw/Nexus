@@ -259,6 +259,207 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to start the mode anyway and let you transmit it; it now declines, the way a blank section already
   did. If you operate a section Nexus does not know, this will stop you where it previously did not.
 
+- **Remote workspace routing:** FT, Tempo and JS8 entry can follow the station's
+  configured radio routes through confirmed native handoff. Section memories,
+  remembered decoders and intermediate radio profiles retain their native order.
+  Entries that return to their original radio retain its connection and capture
+  stream; only the final frequency is commanded.
+
+- **Remote radio selection:** The existing radio pills and Settings Make active
+  button select a configured radio through a compatible station. Selection
+  preserves native profiles and operator controls, waits for confirmed tuning,
+  and refreshes the selected radio and Settings together. Requires an idle,
+  disarmed native station; physical backend and WAN acceptance remain pending.
+
+- **Compact Remote session status:** Control ownership and Release stay above
+  the existing Nexus workspace, with connection help and Disconnect under
+  Remote access. Loss warnings and unresolved command recovery remain visible;
+  expanding the details preserves the current cockpit and session.
+
+- **Remote radio routing:** Typed frequencies and CW/Phone band picks follow the
+  station's saved radio rules through one confirmed handoff and tune. The native
+  QSY and band-memory paths retain outgoing profiles and operator choices.
+  Operating-section QSYs also follow the selected mode's rules. Section entry
+  without a QSY keeps the active radio; routed entry confirms the incoming mode,
+  dial and any power reduction before adopting it, and leaves transmit disarmed.
+- **Remote decoder radio routing:** Decoder selections that move to another
+  radio's channel use one confirmed handoff, then install the native decoder.
+  Native channel fallbacks and offset rules remain in force. A busy decoder
+  refuses the change; a missing channel keeps the current dial and radio.
+- **Remote routed DX spots:** CW and Phone Work actions can select the radio
+  named by saved routing rules and tune the exact spot in one confirmed handoff.
+  Contact prefill and cockpit navigation follow successful adoption; failed
+  hardware confirmation does not change the active contact or queue a retry.
+- **Remote FM receiver controls:** Power, microphone gain, receiver DSP, AGC and
+  bandwidth use the existing Nexus controls while receiving FM, retaining native
+  control visibility. Commands preserve
+  the tuned frequency and repeater settings and require confirmed radio readback.
+  Older stations keep these controls disabled until they advertise support.
+- **Remote Phone mode picker:** The existing AUTO, USB, LSB, FM and AM buttons use
+  confirmed mode and frequency readback through a compatible station. Choices
+  retain desktop behavior, remain transient and require an idle, disarmed radio.
+  FM tuning confirms the saved repeater shift, target-band or custom offset,
+  and tone in the same transaction. A partial failure cannot be retried by a later
+  dial poll; a new explicit tuning action restores operation. Physical-radio
+  acceptance remains pending.
+
+- **Remote receiver DSP:** The existing CW/Phone NB, NR, automatic-notch and AGC
+  buttons, plus Phone manual-notch enable, use confirmed radio commands through
+  a compatible station. They preserve frequency and mode and wait for station
+  readings before changing the displayed choice. Requires receiver-DSP permission
+  and an idle, disarmed station; hardware acceptance remains pending.
+
+- **Remote signal clicking:** Click a signal in the existing CW or Phone scope
+  to tune using the desktop's signal detection and sideband calculation.
+  Each click belongs to its original radio, connection and control window.
+  Interrupted or moved presses are canceled; dragging and continuous scanning
+  remain separate work. Requires an idle, disarmed compatible station.
+
+- **Remote CW and Phone bandwidth:** The existing BW buttons adjust the radio's
+  receive filter through a compatible station with filter-control permission.
+  They retain the desktop's steps and ranges, preserve the radio's current mode,
+  and display the later station reading. Uncertain commands are not retried.
+  Requires an idle, disarmed station; physical-radio acceptance remains pending.
+
+- **Remote tuning gestures:** Frequency-readout digits and arrow keys, CW/Phone
+  scope-wheel input and the native tuning-strip buttons share guarded browser
+  tuning. Lost control discards pending input, and a submitted burst waits for
+  confirmation before another gesture. Continuous dragging and scanning remain
+  separate work.
+
+- **Remote receiver adjustments:** The existing decode-depth buttons, FT RX
+  frequency field, FT/JS8/Tempo waterfalls and JS8 offset table can save receive
+  choices through a compatible station with receiver-settings permission.
+  Requests check the displayed mode and prior value; failed saves retain the
+  station's settings. The RX field discards a draft after a local frequency
+  change or lost permission. RX-only gestures preserve the TX marker and keep
+  transmit disarmed; radio/audio and physical acceptance remain pending.
+
+- **Remote decoder choices:** The existing JS8 speed chips and MSK144 period
+  selector save through the station's native controls. A stale displayed choice,
+  unavailable reading or failed save cannot silently replace the current
+  preference. Requires a compatible station with the decoder-settings capability
+  and an idle, disarmed radio. Other decoder settings and transmit operations
+  remain separate work.
+
+- **Remote FT, Tempo and JS8 entry:** “Use this mode” in the existing cockpit
+  selects the complete native operating workspace, including its decoder,
+  remembered FT/Tempo choice and JS8 session entry. FT and JS8 restore the
+  native digital frequency when leaving a manual section; an already active
+  digital workspace preserves the operator's dial. Transmit stays disarmed.
+  Decoder replacement and reset share the native serialization guard, and
+  newer local mode gestures cancel pending remote work. Requires a compatible
+  station with the workspace capability. Sending, remote audio and hardware
+  acceptance remain separate work.
+
+- **Remote amplifier band following:** The existing Settings checkbox and Save
+  button can save the active radio's follow-band choice with station-control
+  permission. Enabling requires a disarmed, idle radio and fresh amplifier
+  readings; disabling works without hardware readings. A changed station form
+  is refused, other profiles are preserved, and the saved choice survives
+  disconnects. Results distinguish a saved setting from a hardware command.
+  Requires a compatible station and operation-v3 follow-band capability;
+  physical radio/amplifier acceptance remains pending.
+
+- **Remote decoder selection:** The existing FT, advanced decoder and Tempo
+  selectors now submit guarded tier changes through the station's radio owner.
+  Native channel choices, decoder settings and offsets are preserved. Same-tier
+  selection does nothing, and a busy decoder refuses without blocking the
+  engine. Transmit stays disarmed. Operation v3 retains older logging and
+  receiver/amplifier clients. Radio handoffs and remote transmission still
+  require further work; physical acceptance is
+  pending and a compatible station build is required.
+
+- **Remote operating-mode entry:** “Use this mode” in the existing FT, Phone,
+  CW, RTTY, PSK and Tempo headers switches the station using its native mode
+  and remembered-frequency policy. Browsing tabs stays passive and entry keeps
+  transmit disarmed. CAT mode, frequency and any required power reduction need
+  confirmed readback before settings are saved. Local changes cancel pending
+  work; uncertain outcomes are never replayed. A compatible station build and
+  attended hardware acceptance are required. Radio handoffs, held channels,
+  FM/split and remote transmission remain incomplete.
+
+- **Remote frequency control:** With station permission and the controller
+  lease, the existing main dial accepts a typed frequency on the active radio.
+  CAT readback and settings persistence must finish before success is shown.
+  Local changes cancel pending work; uncertain commands are never repeated.
+  The radio must be disarmed, idle and simplex. Radio handoffs, held channels,
+  FM and continuous tuning remain outside this increment.
+  A compatible station build and attended hardware acceptance are required.
+
+- **Remote receiver and amplifier controls:** With separate permission granted
+  at the station, the browser can use the existing receiver monitor, transcript,
+  AFC and PSK mode controls, plus amplifier Operate/Standby and band steps.
+  Amplifier changes require a disarmed, idle radio and later hardware readback;
+  an uncertain command is never automatically repeated. A compatible station
+  pilot is required. Remote transmission remains unavailable,
+  and physical amplifier acceptance is still required.
+
+- **Remote JS8 observation:** The browser uses Nexus's existing JS8 cockpit,
+  including four-speed activity, heard stations, inbox, queued frames and pending
+  replies. Worked-before details come from the complete station log; unavailable
+  history remains distinct from an unworked call. Selection, pinning and recall
+  stay local to the browser. A compatible station pilot is required. Sending,
+  tuning, transmit latches, queue changes and inbox changes remain on the station.
+
+- **Remote Tempo conversation observation:** The browser uses Nexus's existing
+  Fast/Deep conversation workspace, recent chats, heard stations and message
+  delivery indicators. Thread selection and history scrolling stay local to the
+  browser; incoming messages preserve the reader's position. Sending, resending,
+  CQ, heartbeat, Roam and deleting conversations remain on the station. Typed
+  dial entry and channel selection use the separate frequency capability.
+  This view uses the existing observation protocol without a new station build.
+
+- **Remote Field Day observation:** The browser shows Nexus's existing event
+  dashboard, station score, worked sections, earned and planned bonuses, complete
+  event log and club board. ARRL and Winter Field Day retain their native scoring
+  displays. Refresh preserves the bonus disclosure; expired or disconnected
+  readings are hidden. A compatible station pilot is required. Event setup,
+  operating, scoring changes and exports remain on the station.
+
+- **Remote POTA/SOTA observation:** The browser uses Nexus's existing hunter
+  cards, filters and sort with the station's spot feeds, worked-park badges and
+  activation/hunt context. Feed age and availability are shown separately for
+  POTA and SOTA; Refresh preserves browser filter choices. A compatible station
+  pilot is required. Hunt/QSY, activation changes and file operations remain on
+  the station.
+
+- **Remote Memories observation:** The browser uses Nexus's existing channel
+  list/grid, groups, favorites and search with a current snapshot from the
+  station's main window. Refresh preserves the selected group and display mode;
+  stale or unavailable values are hidden. A compatible station pilot is required.
+  Tuning, editing, file operations and net alerts remain on the station.
+
+- **Remote DXpeditions observation:** The browser uses Nexus's existing expedition
+  cards, calendar and cached station prediction windows, with data age and Refresh.
+  Reads preserve the station's need/live-evidence distinctions and refuse expired
+  or changed profile/log context. A compatible station pilot is required; Work,
+  map navigation, Chase and alarms remain unavailable remotely.
+
+- **Remote Awards and Statistics observation:** The browser now uses Nexus's
+  existing Official Awards cards, chase lists and Stats charts with totals from
+  the complete station log. Capture age and **Refresh summary** make the result's
+  freshness visible. An updated Remote station pilot is required; Journey,
+  confirmation diagnostics and uploads remain unavailable remotely.
+
+- **Remote observation pilot:** Settings → Station → Remote access can pair a
+  station with a pilot account and approve individual browsers. The hosted web
+  view shows radio and SPE/KPA amplifier readings, hides stale measurements, and
+  supports local disable and access revocation. Pairing survives a restart;
+  observation requires local enable after each launch. The pilot needs a
+  configured staging service and administrator-enabled trial access. Receive
+  audio, radio/amplifier commands, QSO logging and payment are later stages.
+- **Remote cockpit recall:** FT, CW and Phone reuse Nexus's callsign card to show
+  prior contacts, full-log worked/confirmation counts and entity context. The
+  card displays the newest 20 contacts and links to the existing Logbook. Reads
+  release the station engine between small chunks and refuse a changing log.
+  This requires the updated station pilot; operating controls remain disabled.
+- **Remote RTTY and PSK observation:** Open the existing Nexus cockpits in the
+  browser to follow decoded text, character confidence, AFC, waterfall and
+  amplifier status, and review prior contacts in the callsign card. Start the
+  decoder in Nexus at the shack; browser decoder, radio and transmit controls
+  remain disabled. This requires the updated station pilot.
+
 ## [1.11.1] — 2026-09-08
 
 > **There is no 1.11.0 release.** The first beta of this work shipped as `v1.11.0-beta.2`
@@ -370,6 +571,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ⊞-hideable like their siblings.
 
 ### Fixed
+
+- **Radio connection recovery:** Background radios retain their retry wait after
+  a failed connection, increasing to one minute. Correcting the connection settings
+  retries immediately. Switching to a radio whose connection is still opening
+  waits for that open, avoiding a competing connection attempt.
+
+- **Remote amplifier readings and Settings:** Amplifier gestures stay bound to
+  the displayed radio and connection. Failed command writes clear the linked
+  reading, and an old connection cannot overwrite a newer reading. Settings
+  refreshes show a newly saved follow choice without collapsing a still-valid
+  form; labels wrap within narrow browser windows at high zoom.
+
+- **Amplifier follow-band and local controls:** Recheck the active configuration
+  and completed poll before each serial write. Disabling follow or changing a
+  port during polling cancels the old work; manual radio keying also prevents
+  amplifier changes. KPA needs a fresh CAT idle reading, and SPE follow-band
+  respects the model's established band limit. Manual commands take priority
+  over automatic steps. Physical bench verification remains pending.
+
+- **Follow-band settings:** Copy the saved choice between the Settings form and
+  its radio profile in both directions. Save, restart and radio switching now
+  retain and display the profile's actual follow setting. Existing profile
+  choices are preserved; the checkbox no longer diverges from the worker.
+
+- **Remote Satellites refresh timing:** Slow favorites refreshes start earlier,
+  accounting for the time needed to collect each bird's schedule. Temporary
+  congestion retains a still-valid schedule; unavailable or expired data is
+  hidden. This prevents routine refreshes from collapsing rows under the reader.
 
 - **The JS8 screen was drawing the Tempo screen underneath it.** Opening JS8 rendered the whole
   Tempo workspace below the cockpit: its Fast and Deep tier buttons, its station roster, its

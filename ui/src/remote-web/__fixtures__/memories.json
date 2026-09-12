@@ -1,0 +1,97 @@
+{
+  "version": 2,
+  "groups": [
+    {
+      "id": "nets",
+      "name": "HF nets",
+      "order": 0
+    },
+    {
+      "id": "local",
+      "name": "Local repeaters",
+      "order": 1
+    }
+  ],
+  "memories": [
+    {
+      "id": "m-net",
+      "name": "Evening test net",
+      "kind": "hfnet",
+      "rxMhz": 7.2,
+      "mode": "LSB",
+      "groups": [
+        "nets"
+      ],
+      "favorite": true,
+      "source": "user",
+      "notes": "Check in after the opening call",
+      "net": {
+        "days": [
+          1,
+          3,
+          5
+        ],
+        "utcTime": "0:30",
+        "netControl": "W1AW",
+        "description": "Weekly practice",
+        "netloggerName": "Test net",
+        "alertEnabled": true,
+        "alertLeadMin": 10
+      }
+    },
+    {
+      "id": "m-repeat",
+      "name": "Hilltop repeater",
+      "kind": "repeater",
+      "rxMhz": 146.94,
+      "mode": "FM",
+      "offsetDir": "minus",
+      "offsetMhz": 0.6,
+      "toneMode": "tsql",
+      "ctcssEncHz": 103.5,
+      "ctcssDecHz": 103.5,
+      "groups": [
+        "local"
+      ],
+      "favorite": true,
+      "source": "program",
+      "callsign": "W1AW",
+      "grid": "FN31",
+      "lat": 41.7148,
+      "lon": -72.7272,
+      "skip": true,
+      "lastUsedUtc": 1788894000
+    },
+    {
+      "id": "m-split",
+      "name": "Imported odd split",
+      "kind": "other",
+      "rxMhz": 145.1,
+      "mode": "P25",
+      "offsetDir": "split",
+      "txMhz": 145.7,
+      "toneMode": "cross",
+      "ctcssEncHz": 69.3,
+      "dtcsCode": 23,
+      "dtcsRxCode": 25,
+      "dtcsPol": "NR",
+      "groups": [
+        "local"
+      ],
+      "favorite": false,
+      "source": "user"
+    },
+    {
+      "id": "m-cw",
+      "name": "QRP calling",
+      "kind": "calling",
+      "rxMhz": 14.06,
+      "mode": "CW",
+      "offsetDir": "simplex",
+      "toneMode": "none",
+      "groups": [],
+      "favorite": false,
+      "source": "curated"
+    }
+  ]
+}

@@ -1080,6 +1080,7 @@ pub struct CpalBackend {
     /// Wait-free tee of the capture stream feeding the waterfall producer (see rxtap.rs). The
     /// caller publishes this to the RxTap after a successful open.
     spectrum_tap: Arc<SpscRing>,
+    capture_input: Option<crate::receive_audio::CaptureInput>,
     /// Device capture rate, so the consumer can build its own resampler.
     in_rate: u32,
     /// Dark headphone monitor: an in-place, off-by-default pass-through of the RX
@@ -1521,6 +1522,13 @@ impl CpalBackend {
         let in_default = in_default.map(|d| enumerated_default(|| host.input_devices().ok(), d));
         let in_dev =
             resolve_configured(|| host.input_devices().ok(), in_name, in_default, "input")?;
+        let capture_input = in_dev
+            .device_name()
+            .filter(|name| !name.trim().is_empty())
+            .map(|device| crate::receive_audio::CaptureInput {
+                device,
+                system_default: in_name.is_none_or(str::is_empty),
+            });
         // ONE CARD FOR BOTH DIRECTIONS (#2 "either alone works, both fails"; #8's CM108):
         // the resolved input device holds the card's handle pair, so re-enumerating for
         // the output would probe the SAME card, find it busy, and drop it — the output
@@ -1680,6 +1688,7 @@ impl CpalBackend {
             tx_level,
             monitor: Monitor::new(mon_ring, mon_enabled, mon_tx_mute, mon_level, in_rate),
             spectrum_tap: tap_ring,
+            capture_input,
             in_rate,
             voice_mic: None,
             tx_tee: None,
@@ -2016,6 +2025,11 @@ impl AudioBackend for CpalBackend {
     }
     fn spectrum_tap(&self) -> Option<(Arc<SpscRing>, u32)> {
         Some((self.spectrum_tap.clone(), self.in_rate))
+    }
+
+    fn capture_input(&self) -> Option<crate::receive_audio::CaptureInput> {
+        self._in_stream.as_ref()?;
+        self.capture_input.clone()
     }
 
     fn take_stream_error(&mut self) -> Option<String> {

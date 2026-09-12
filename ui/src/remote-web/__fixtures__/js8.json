@@ -1,0 +1,143 @@
+{
+  "state": {
+    "speed": "normal",
+    "rxSpeeds": 15,
+    "txEnabled": false,
+    "sending": false,
+    "hbOn": true,
+    "hbNextAtMs": 1700000042000,
+    "hbIntervalMin": 15,
+    "cqOn": true,
+    "cqNextAtMs": 1700000012000,
+    "cqIntervalMin": 3,
+    "autoreply": true,
+    "relay": true,
+    "hbAck": false,
+    "armed": {
+      "autoreply": false,
+      "relay": false,
+      "hbAck": false,
+      "hb": false,
+      "cq": false
+    },
+    "idleMinutes": 12,
+    "idleLimitMin": 60,
+    "idleTripped": false,
+    "activity": [
+      {
+        "atMs": 1700000000000,
+        "speed": "slow",
+        "freqHz": 1000,
+        "snrDb": -8,
+        "dtS": 0.1,
+        "from": "W1AW",
+        "text": "JS8 TEST SLOW",
+        "directedToMe": true,
+        "mine": false,
+        "complete": true,
+        "lowConf": false
+      },
+      {
+        "atMs": 1700000000000,
+        "speed": "normal",
+        "freqHz": 1150,
+        "snrDb": -9,
+        "dtS": 0.1,
+        "from": "W1AW",
+        "text": "JS8 TEST NORMAL",
+        "directedToMe": true,
+        "mine": false,
+        "complete": true,
+        "lowConf": false
+      },
+      {
+        "atMs": 1700000000000,
+        "speed": "fast",
+        "freqHz": 1300,
+        "snrDb": -10,
+        "dtS": 0.1,
+        "from": "W1AW",
+        "text": "JS8 TEST FAST",
+        "directedToMe": true,
+        "mine": false,
+        "complete": false,
+        "lowConf": true
+      },
+      {
+        "atMs": 1700000000000,
+        "speed": "turbo",
+        "freqHz": 1450,
+        "snrDb": -11,
+        "dtS": 0.1,
+        "from": "W1AW",
+        "text": "JS8 TEST TURBO",
+        "directedToMe": true,
+        "mine": false,
+        "complete": true,
+        "lowConf": false
+      }
+    ],
+    "stations": [
+      {
+        "call": "W1AW",
+        "grid": null,
+        "snrDb": -8,
+        "freqHz": 1500,
+        "speed": "normal",
+        "lastMs": 1700000000000,
+        "lastHb": true,
+        "lastCq": false,
+        "storedMsgs": 1
+      },
+      {
+        "call": "K2ABC",
+        "grid": null,
+        "snrDb": -8,
+        "freqHz": 1500,
+        "speed": "normal",
+        "lastMs": 1700000000000,
+        "lastHb": true,
+        "lastCq": false,
+        "storedMsgs": 1
+      }
+    ],
+    "inbox": [
+      {
+        "id": 1,
+        "from": "W1AW",
+        "to": "N0CALL",
+        "text": "STORED REMOTE TEST",
+        "path": [
+          "W1AW",
+          "K2ABC"
+        ],
+        "state": "unread",
+        "atMs": 1700000000000,
+        "freqHz": 1500,
+        "snrDb": -8
+      }
+    ],
+    "queue": [
+      {
+        "origin": "operator",
+        "display": "TEST QUEUED FRAMES",
+        "first": true,
+        "last": false
+      },
+      {
+        "origin": "operator",
+        "display": "TEST QUEUED FRAMES",
+        "first": false,
+        "last": true
+      }
+    ],
+    "pendingReply": {
+      "origin": "autoReply",
+      "to": "W1AW",
+      "display": "N0CALL: W1AW SNR -08",
+      "firesAtMs": 1700000017000
+    },
+    "lastError": null
+  },
+  "capturedAtMs": 1700000000000
+}

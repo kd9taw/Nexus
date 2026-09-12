@@ -238,7 +238,7 @@ describe('every selector is flat (uniform specificity ⇒ no cascade war is poss
 describe('the fence: styles.css never names a structural class', () => {
   // The 19k-line sheet is where every previous override crept in. If it cannot name these
   // classes it cannot fight them — the isolation is the guarantee, not a convention.
-  for (const cls of ['cockpit-panes', 'cockpit-col', 'cockpit-txdock', 'cockpit-pane-acts', 'cockpit-recall']) {
+  for (const cls of ['cockpit-panes', 'cockpit-col', 'cockpit-txdock', 'cockpit-pane-acts', 'cockpit-recall', 'remote-cockpit-lower', 'remote-observer-dock']) {
     it(`styles.css declares no .${cls} rule`, () => {
       const hits = STYLES_RULES
         .map((r) => r.selector)
@@ -422,7 +422,7 @@ describe('panes are sized by the grid, never by themselves', () => {
     expect(forks, `forked shared pane CSS:\n${forks.join('\n')}`).toEqual([])
   })
 
-  it('declares no min-height floor except the region shell-valve floor', () => {
+  it('declares no min-height floor except regions with a shell scrolling fallback', () => {
     // The 18em floors this rebuild deleted (styles.css 5915/6988) sat under a CLIPPING
     // ancestor — that is what put the log form below the clip edge. The ONE legal floor
     // is on `.cockpit-panes` itself, and only because its ancestor is the shell whose
@@ -436,6 +436,10 @@ describe('panes are sized by the grid, never by themselves', () => {
         const v = m[1].trim()
         if (v === '0') continue
         if (r.selector === '.cockpit-panes' && /^\d+(\.\d+)?em$/.test(v)) continue
+        // The hosted FT region has the same shell-valve contract. Its smaller
+        // viewport-capped floor is paired with computed overflow guards in
+        // cockpit-shells.test.ts and real compiled-browser reachability tests.
+        if (r.selector === '.remote-cockpit-lower' && v === 'min(18em, calc(0.35 * var(--vh-eff)))') continue
         offenders.push(`${r.selector} { min-height: ${v} }`)
       }
     }
@@ -443,7 +447,7 @@ describe('panes are sized by the grid, never by themselves', () => {
       offenders,
       `manufactured floor:\n${offenders.join('\n')}\nA floor under a bounded ancestor is how ` +
         'deficit becomes clipping. Growth is expressed as fr shares (and fill weights) only; ' +
-        'the region base floor is the single shell-valve exception.',
+        'only the declared region floors have a shell scrolling fallback.',
     ).toEqual([])
   })
 

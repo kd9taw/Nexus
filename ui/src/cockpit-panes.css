@@ -374,6 +374,14 @@
   background: var(--panel);
 }
 
+/* The keyboard observer's disabled controls can fill the entire remaining
+   viewport at 175% zoom, covering both text and recall at every scroll position.
+   Let that inactive dock scroll with its cockpit. Only observers attach this
+   class; native transmit controls keep the pinned stop surface above. */
+.remote-observer-dock {
+  position: static;
+}
+
 /* Action cluster in a pane head (pop-out / remove / pane-supplied buttons). The head is
    `justify-content: space-between`, so grouping the buttons keeps them together at the
    right edge instead of spreading across the title row. */
@@ -417,3 +425,30 @@
   max-height: min(22em, 45%);
   overflow-y: auto;
 }
+
+/* The hosted observer adds session chrome above the FT shell. At pinned zoom
+   its lower grid can otherwise collapse to zero and leave the rail outside
+   even the shell's scroll range. Reserve a yielding content region, following
+   the pane grid's 18em floor, with a viewport share for short windows. The
+   remote shell provides the interposed scroller; native FT sizing is unchanged. */
+.remote-cockpit-lower {
+  min-height: min(18em, calc(0.35 * var(--vh-eff)));
+}
+
+/* Optional Remote contact presentation. The original keyed columns keep their
+   parents and local state; this changes their visual order, never pane prefs. */
+.cockpit-panes--contact[data-flow='stack'],
+.cockpit-panes--contact[data-flow='fill'] {
+  grid-template-columns: minmax(0, 1fr);
+  grid-auto-rows: auto;
+  /* A contact flows through its cockpit's scrollport. A second bounded region
+     would leave only the callsign visible behind nested scrollbars on phones. */
+  flex: 0 0 auto;
+  min-height: 0;
+  overflow: visible;
+  scrollbar-gutter: auto;
+  --cockpit-pane-flex: 0 0 auto;
+}
+.cockpit-col--contact { order: -1; overflow: visible; }
+.cockpit-col--quiet { display: none; }
+.ph-scope-panel--quiet { display: none; }

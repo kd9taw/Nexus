@@ -8,7 +8,7 @@ import { useEffect, useState } from 'react'
 import { getLog, getLogStats } from '../api'
 import { t } from '../i18n'
 import type { LoggedQso, GeoLogStats } from '../types'
-import { computeLogStats, type Tally } from '../features/logStats'
+import { computeLogStats, type LogStats, type Tally } from '../features/logStats'
 
 /** Service names and ham shorthand — the same letters in every language. */
 const SERVICE_LABELS = { lotw: 'LoTW', eqsl: 'eQSL', dx: 'DX' }
@@ -47,22 +47,26 @@ function BarList({ title, items, max }: { title: string; items: Tally[]; max?: n
  * and Awards (official credit): this is just the operator's log, sliced, from getLog(). Continent /
  * CQ-zone / POTA breakdowns need the cty.dat resolver on the Rust side (a later get_log_stats add).
  */
-export function StatsView() {
+export function StatsView({ observation }: { observation?: { statistics: LogStats; geography: GeoLogStats } } = {}) {
   const [log, setLog] = useState<LoggedQso[] | null>(null)
   const [failed, setFailed] = useState(false)
   // Geographic stats (continent/zone/DX) come from the backend (needs the cty.dat resolver). If
   // that call fails we simply omit those cards — the frontend-computed stats below still render.
-  const [geo, setGeo] = useState<GeoLogStats | null>(null)
+  const [nativeGeo, setGeo] = useState<GeoLogStats | null>(null)
+  const geo = observation?.geography ?? nativeGeo
   useEffect(() => {
+    if (observation) return
+    let live = true
     void getLog()
-      .then(setLog)
-      .catch(() => setFailed(true))
+      .then(value => { if (live) setLog(value) })
+      .catch(() => { if (live) setFailed(true) })
     void getLogStats()
-      .then(setGeo)
-      .catch(() => setGeo(null))
-  }, [])
+      .then(value => { if (live) setGeo(value) })
+      .catch(() => { if (live) setGeo(null) })
+    return () => { live = false }
+  }, [observation])
 
-  if (failed) {
+  if (!observation && failed) {
     return (
       <main className="layout single stats-view">
         <h2>{t('stats.title')}</h2>
@@ -70,14 +74,14 @@ export function StatsView() {
       </main>
     )
   }
-  if (!log) {
+  if (!observation && !log) {
     return (
       <main className="layout single stats-view">
         <p className="stats-empty">{t('stats.loading')}</p>
       </main>
     )
   }
-  const s = computeLogStats(log)
+  const s = observation?.statistics ?? computeLogStats(log!)
   if (s.total === 0) {
     return (
       <main className="layout single stats-view">

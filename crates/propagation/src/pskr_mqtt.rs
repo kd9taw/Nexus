@@ -53,12 +53,13 @@ impl LiveSpots {
     }
     /// Spots no older than `window_secs` as of `now` (Unix secs).
     pub fn recent(&self, now: i64, window_secs: i64) -> Vec<PathSpot> {
+        self.recent_iter(now, window_secs).cloned().collect()
+    }
+    /// Borrow recent reports for bounded display projections without copying
+    /// unrelated callsigns, locations or comments into another cache.
+    pub fn recent_iter(&self, now: i64, window_secs: i64) -> impl Iterator<Item = &PathSpot> {
         let cutoff = now - window_secs;
-        self.spots
-            .iter()
-            .filter(|s| s.time >= cutoff)
-            .cloned()
-            .collect()
+        self.spots.iter().filter(move |s| s.time >= cutoff)
     }
     pub fn len(&self) -> usize {
         self.spots.len()

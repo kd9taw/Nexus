@@ -1,10 +1,12 @@
 // Data layer.
 //
-// Typed functions over the shared DTO contract. EVERY call goes through the Tauri
-// IPC bridge to the Rust core — there is NO in-browser mock/demo fallback. If the
-// bridge is somehow absent the call throws loudly (surfaced as an error toast)
-// rather than silently fabricating data. Nexus runs only inside the desktop app.
+// Typed functions over the shared DTO contract. Native calls use Tauri; an
+// explicitly installed hosted session or the LAN TV entry supplies its own
+// restricted transport. An absent transport throws; there is no mock/demo fallback.
 
+import type { RemoteStationAction, RemoteStationStatus } from './remote-native/types'
+import { remoteApplicationTransport } from './applicationTransport'
+import { t } from './i18n'
 import type {
   AppSnapshot,
   AudioDevices,
@@ -150,7 +152,14 @@ async function httpInvoke<T>(base: string, cmd: string, args?: Record<string, un
  *  RPC when its entry declared one; otherwise a hard error — never fabricated data. */
 async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   const tv = typeof window !== 'undefined' ? window.__NEXUS_TV_RPC__ : undefined
+  const remote = remoteApplicationTransport()
   const out = isTauri() ? ((await bridge()(cmd, args)) as T)
+    : remote ? await remote.invoke<T>(cmd, args).catch(error => {
+      if (error instanceof Error && error.message === 'applicationUnsupported') {
+        throw new Error(t('remote.applicationObserver'))
+      }
+      throw error
+    })
     : tv ? await httpInvoke<T>(tv, cmd, args)
     : ((await bridge()(cmd, args)) as T) // throws with the bridge's own message
   if (mutatesCredentials(cmd) && typeof window !== 'undefined') {
@@ -178,6 +187,10 @@ export async function getCredentialsStatus(): Promise<import('./types').CredStat
 export async function getRemoteMonitorFrame(): Promise<unknown> {
   return invoke<unknown>('get_remote_monitor_frame')
 }
+
+export function publishRemoteMemoryBank(generation: string, bank: string | null): Promise<boolean> { return invoke('publish_remote_memory_bank', { generation, bank }) }
+export function getRemoteStationStatus(): Promise<RemoteStationStatus> { return invoke('get_remote_station_status') }
+export function remoteStationAction(action: RemoteStationAction): Promise<RemoteStationStatus> { return invoke('remote_station_action', { action }) }
 
 export async function getSnapshot(): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('get_snapshot')
@@ -601,8 +614,9 @@ export async function overrideNextTx(
   call: string,
   grid: string | null,
   text: string,
+  expectedQso?: AppSnapshot['qso'],
 ): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('override_next_tx', { call, grid, text })
+  return invoke<AppSnapshot>('override_next_tx', { call, grid, text, ...(remoteApplicationTransport() ? { expectedQso } : {}) })
 }
 
 /** The operator erased a decode pane — mirror it to cooperating apps via the
@@ -808,13 +822,13 @@ export async function resumeChatCq(): Promise<AppSnapshot> {
 
 /** Confirm-and-log a QSO held by the prompt-to-log popup (the possibly-edited
  * record). Returns the fresh snapshot. */
-export async function confirmPendingLog(record: LoggedQso): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('confirm_pending_log', { record })
+export async function confirmPendingLog(record: LoggedQso, expectedKey?: string | null): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('confirm_pending_log', { record, ...(remoteApplicationTransport() ? { expectedKey } : {}) })
 }
 
 /** Discard a QSO held by the prompt-to-log popup without logging it. */
-export async function discardPendingLog(): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('discard_pending_log', {})
+export async function discardPendingLog(expectedKey?: string | null): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('discard_pending_log', remoteApplicationTransport() ? { expectedKey } : {})
 }
 
 /** Open (or focus) a standalone OS window for one panel — multi-monitor tear-off. */
@@ -836,21 +850,21 @@ export async function setArea(area: 'dx' | 'msg'): Promise<AppSnapshot> {
 
 /** Operator "Resend": re-arm the current QSO message (re-transmit a stalled or
  * uncopied step). No-op outside a QSO. Returns the fresh snapshot. */
-export async function qsoResend(): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('qso_resend', {})
+export async function qsoResend(expectedQso?: import('./types').QsoStatus | null): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('qso_resend', remoteApplicationTransport() ? { expectedQso } : {})
 }
 
 /** Operator in-QSO free text (WSJT-X Tx5): override the next transmission with
  * `text`, directed to the current DX when known. Returns the fresh snapshot. */
-export async function qsoFreetext(text: string): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('qso_freetext', { text })
+export async function qsoFreetext(text: string, expectedQso?: import('./types').QsoStatus | null): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('qso_freetext', { text, ...(remoteApplicationTransport() ? { expectedQso } : {}) })
 }
 
 /** Operator "Log QSO": log the active QSO's contact now. `logged` is the engine's verdict
  *  (#100) — false when nothing was loggable (already logged / no QSO / no report yet), and
  *  the UI must not claim success then. Snapshot is fresh either way. */
-export async function logCurrentQso(): Promise<{ logged: boolean; snapshot: AppSnapshot }> {
-  return invoke<{ logged: boolean; snapshot: AppSnapshot }>('log_current_qso', {})
+export async function logCurrentQso(context?: { expectedKey?: string | null; expectedTier?: string; expectedQso?: import('./types').QsoStatus | null }): Promise<{ logged: boolean; pending?: boolean; snapshot: AppSnapshot }> {
+  return invoke<{ logged: boolean; pending?: boolean; snapshot: AppSnapshot }>('log_current_qso', remoteApplicationTransport() ? { ...context } : {})
 }
 
 /** Append a contact to the ADIF logbook. Returns the fresh snapshot. */
@@ -1286,8 +1300,8 @@ export async function sstvDeleteImage(path: string): Promise<void> {
 }
 
 /** Toggle Skip Tx1 (WSJT-X parity) — a session-only flag, resets each launch. */
-export async function setSkipTx1(enabled: boolean): Promise<void> {
-  await invoke('set_skip_tx1', { enabled })
+export async function setSkipTx1(enabled: boolean, context?: FtRuntimeGesture): Promise<void> {
+  await invoke('set_skip_tx1', { enabled, ...ftRuntimeArgs(context) })
 }
 
 /** Write text to the operator's Downloads folder; returns the full saved path. Reliable in a
@@ -1320,8 +1334,8 @@ export async function osNotify(title: string, body: string): Promise<void> {
  * Switch the top-level operating mode (and operator role). Returns the fresh
  * snapshot so callers can render the new mode immediately.
  */
-export async function setMode(mode: ModeRequest): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('set_mode', { mode })
+export async function setMode(mode: ModeRequest, expectedQso?: import('./types').QsoStatus | null): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_mode', { mode, ...(remoteApplicationTransport() ? { expectedQso } : {}) })
 }
 
 /**
@@ -1870,6 +1884,7 @@ export async function readRotator(): Promise<number | null> {
 /** Single-signal CW decode of the recent RX audio (live readout: text + estimated WPM).
  * `sensitivity` (0..1, 0.5 = default gates) scales the decoder's presence + SNR gates. */
 export async function cwDecode(sensitivity: number): Promise<CwDecodeResult> {
+  if (remoteApplicationTransport()) return invoke<CwDecodeResult>('get_cw_state')
   return invoke<CwDecodeResult>('cw_decode', { sensitivity })
 }
 
@@ -2439,31 +2454,44 @@ export async function sstvStop(): Promise<SstvState> {
 }
 
 /** Set the TX period: true = even/"1st" slots, false = odd/"2nd". */
-export async function setTxCycleAuto(auto: boolean): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('set_tx_cycle_auto', { auto })
+type FtRuntimeGesture = { expectedTier: string; expected: import('./remote-web/station-operation').FtRuntimeContext | null | undefined }
+const ftRuntimeArgs = (context?: FtRuntimeGesture) => remoteApplicationTransport() ? { expectedTier: context?.expectedTier, expected: context?.expected } : {}
+
+type FtSettingsGesture = { expectedTier: string; expected: import('./remote-web/station-operation').FtSettingsContext | null | undefined }
+const ftSettingsArgs = (context?: FtSettingsGesture) => remoteApplicationTransport() ? { expectedTier: context?.expectedTier, expected: context?.expected } : {}
+
+export async function setTxCycleAuto(auto: boolean, context?: FtSettingsGesture): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_tx_cycle_auto', { auto, ...ftSettingsArgs(context) })
 }
 
 export async function setBeacon(on: boolean): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_beacon', { on })
 }
 
-export async function setTxEven(even: boolean): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('set_tx_even', { even })
+export async function setTxEven(even: boolean, context?: FtSettingsGesture): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_tx_even', { even, ...ftSettingsArgs(context) })
 }
 
-/** Set the receive audio offset (Hz) — the green marker. TX follows unless Hold Tx. */
-export async function setRxOffset(hz: number): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('set_rx_offset', { hz })
+/** Set the receive audio offset (Hz) — the green marker; TX stays unchanged. */
+export async function setRxOffset(hz: number, context?: FtRuntimeGesture): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_rx_offset', { hz, ...ftRuntimeArgs(context) })
 }
 
 /** Set the transmit audio offset (Hz) — the red marker. */
-export async function setTxOffset(hz: number): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('set_tx_offset', { hz })
+export async function setTxOffset(hz: number, context?: FtSettingsGesture): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_tx_offset', { hz, ...ftSettingsArgs(context) })
 }
 
-/** Hold the TX offset fixed when RX changes ("Hold Tx Freq"). */
-export async function setHoldTxFreq(on: boolean): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('set_hold_tx_freq', { on })
+/** Explicit combined-marker gesture, atomic at the remote station. */
+export async function setBothOffsets(hz: number, context?: FtSettingsGesture): Promise<AppSnapshot> {
+  if (remoteApplicationTransport()) return invoke<AppSnapshot>('set_ft_both_offsets', { hz, ...ftSettingsArgs(context) })
+  await setTxOffset(hz)
+  return setRxOffset(hz)
+}
+
+/** Hold the TX offset fixed when selecting a decoded station ("Hold Tx Freq"). */
+export async function setHoldTxFreq(on: boolean, context?: FtSettingsGesture): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_hold_tx_freq', { on, ...ftSettingsArgs(context) })
 }
 
 /** Replace the blocked-callsigns list — the ONE write path (Alt-double-click gesture and
@@ -2772,6 +2800,7 @@ export async function getScopeRow(
   hiHz: number,
   window?: ScopeWindow,
 ): Promise<Spectrum> {
+  if (remoteApplicationTransport()) return invoke<Spectrum>('get_scope_snapshot')
   return invoke<Spectrum>('get_scope_row', { loHz, hiHz, window })
 }
 

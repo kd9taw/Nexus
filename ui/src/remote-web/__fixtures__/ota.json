@@ -1,0 +1,94 @@
+{
+  "feeds": [
+    {
+      "program": "POTA",
+      "status": "ready",
+      "sourceAgeMs": 1000,
+      "spots": [
+        {
+          "program": "POTA",
+          "reference": "US-0002",
+          "name": "Logged park",
+          "activator": "W1AW",
+          "freqKhz": 14200,
+          "mode": "SSB",
+          "spotter": null,
+          "comment": "Station fixture",
+          "grid": null,
+          "lat": null,
+          "lon": null,
+          "spotTimeUnix": 1000,
+          "newPark": false,
+          "bandOpen": true
+        },
+        {
+          "program": "POTA",
+          "reference": "US-0003",
+          "name": "Imported park",
+          "activator": "K1ABC",
+          "freqKhz": 7030,
+          "mode": "CW",
+          "spotter": null,
+          "comment": "Station fixture",
+          "grid": null,
+          "lat": null,
+          "lon": null,
+          "spotTimeUnix": 1000,
+          "newPark": false,
+          "bandOpen": false
+        },
+        {
+          "program": "POTA",
+          "reference": "US-0004",
+          "name": "New park",
+          "activator": "K2ABC",
+          "freqKhz": 14074,
+          "mode": "FT8",
+          "spotter": null,
+          "comment": "Station fixture",
+          "grid": null,
+          "lat": null,
+          "lon": null,
+          "spotTimeUnix": 1000,
+          "newPark": true,
+          "bandOpen": true
+        }
+      ]
+    },
+    {
+      "program": "SOTA",
+      "status": "ready",
+      "sourceAgeMs": 2000,
+      "spots": [
+        {
+          "program": "SOTA",
+          "reference": "W7A/MN-001",
+          "name": "Test summit",
+          "activator": "K3ABC",
+          "freqKhz": 146520,
+          "mode": "FM",
+          "spotter": null,
+          "comment": "Station fixture",
+          "grid": null,
+          "lat": null,
+          "lon": null,
+          "spotTimeUnix": 1000,
+          "newPark": true,
+          "bandOpen": false
+        }
+      ]
+    }
+  ],
+  "activation": {
+    "program": "POTA",
+    "reference": "US-0001",
+    "qsoCount": 2301
+  },
+  "hunt": {
+    "program": "POTA",
+    "reference": "US-0004",
+    "call": "K2ABC"
+  },
+  "parkCount": 42,
+  "huntedCount": 7
+}

@@ -157,6 +157,30 @@ pub(crate) fn apply_tx_dial_shift(eng: &mut Engine, rig: &mut Rig) -> SplitApply
     }
 }
 
+/// Check Remote authority on both sides of blocking PTT I/O. Native TX has
+/// no Remote permit and keeps its established keying behavior. A loss during
+/// key-up is unkeyed before any waveform reaches the output device.
+pub(crate) fn key_slot_transmitter(
+    eng: &mut Engine,
+    rig: &mut Rig,
+    backend: &mut impl AudioBackend,
+) -> bool {
+    if eng.poll_remote_transmit(std::time::Instant::now()) {
+        if rig.keyed {
+            let _ = rig.ptt(false);
+        }
+        backend.flush_output();
+        return false;
+    }
+    let _ = rig.ptt(true);
+    if eng.poll_remote_transmit(std::time::Instant::now()) {
+        let _ = rig.ptt(false);
+        backend.flush_output();
+        return false;
+    }
+    true
+}
+
 /// Run one slot boundary.
 ///
 /// At each boundary we FIRST decode the audio of the slot that just ended, THEN
@@ -243,15 +267,30 @@ pub fn slot_tx_phase(
     // the same wait happens in the same place, just without the engine held.
     prebuilt: Option<Vec<Vec<f32>>>,
 ) -> SlotAction {
-    let waves = match prebuilt {
-        Some(w) => w,
-        None => eng.poll_tx(slot),
+    let waves = if eng.poll_remote_transmit(std::time::Instant::now()) {
+        Vec::new()
+    } else {
+        match prebuilt {
+            Some(w) => w,
+            None => eng.poll_tx(slot),
+        }
     };
     if !waves.is_empty() {
         // Split Operation: move the TX dial (if the engine reduced the audio)
         // BEFORE the carrier keys.
         let split = apply_tx_dial_shift(eng, rig);
-        let _ = rig.ptt(true);
+        if !key_slot_transmitter(eng, rig, backend) {
+            // Preserve split cleanup even when permission disappears during
+            // CAT preparation. The native loop restores it on its next idle tick.
+            return SlotAction {
+                tx_until_ms: None,
+                did_rx,
+                rx_frame,
+                tx_this_slot: false,
+                fake_it_restore: split.fake_it_restore,
+                rig_split_engaged: split.rig_split_engaged,
+            };
+        }
         // ⏱ THE PTT-HOLD DEADLINE IS MEASURED FROM HERE — after the carrier is up —
         // not from the caller's `now_ms`. That was bound at the TOP of the radio-loop
         // tick, and the same tick then runs BLOCKING CAT before reaching this key: the
@@ -316,6 +355,74 @@ mod tests {
     use super::*;
     use crate::backend::MockBackend;
     use tempo_app::engine::{run_decode_job, DecodeApplied, DecodePass};
+
+    #[test]
+    fn remote_ft_keying_rechecks_authority_before_and_after_ptt_io() {
+        use crate::rig::remote_tests::{retuning_peer, writes};
+        use std::sync::Arc;
+        use std::time::{Duration, Instant};
+        use tempo_app::remote_control::transmit::TransmitAuthority;
+        for scene in ["valid", "beforeKey", "duringKey"] {
+            let authority = Arc::new(TransmitAuthority::default());
+            let revoke = authority.clone();
+            let peer = retuning_peer(14_074_000, "PKTUSB", move |line, state| {
+                if line == "T 1" {
+                    state.keyed = true;
+                    if scene == "duringKey" {
+                        revoke.revoke();
+                    }
+                    Some("RPRT 0\n".into())
+                } else {
+                    None
+                }
+            });
+            let mut e = Engine::new("KD9TAW", "EN52", 0);
+            e.configure_remote_settings_store(std::env::temp_dir().join("nexus-ft-key-test.json"));
+            e.set_tx_enabled(false);
+            e.take_immediate_retune();
+            e.start_remote_ft_cq(
+                authority
+                    .permit(Instant::now() + Duration::from_secs(5))
+                    .unwrap(),
+                None,
+            )
+            .unwrap();
+            let mut rig = Rig::rigctld(&peer.address);
+            let mut backend = MockBackend::new();
+            let mut rx = RxRing::with_capacity(120);
+            if scene == "beforeKey" {
+                authority.revoke();
+            }
+            // The waveform was already committed before the asynchronous revoke.
+            let action = slot_tx_phase(
+                &mut e,
+                &mut rig,
+                &mut backend,
+                &mut rx,
+                0,
+                0.0,
+                false,
+                None,
+                Some(vec![vec![0.25; 120]]),
+            );
+            if scene == "valid" {
+                assert!(action.tx_this_slot);
+                assert_eq!(backend.played.len(), 120);
+                assert_eq!(writes(&peer), ["T 1"]);
+            } else {
+                assert!(!action.tx_this_slot, "{scene}");
+                assert!(backend.played.is_empty(), "{scene}");
+                assert!(!rig.keyed, "{scene}");
+                assert!(!e.tx_enabled(), "{scene}");
+                assert!(e.take_slot_tx_abort(), "{scene}");
+                if scene == "duringKey" {
+                    assert_eq!(writes(&peer), ["T 1", "T 0"]);
+                } else {
+                    assert!(writes(&peer).is_empty());
+                }
+            }
+        }
+    }
 
     /// The clock instant a keyed [`SlotAction`]'s PTT-hold deadline was built from:
     /// strip the played audio's duration and the fixed tail back off. That basis is

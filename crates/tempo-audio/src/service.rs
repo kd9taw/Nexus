@@ -26,14 +26,22 @@ use tempo_app::engine::{
     DecodeResult, Engine, Js8MultiJob, Js8Speed, PskStreamTick, RttyStreamTick, SatCatBackend,
 };
 use tempo_app::keyboard;
+use tempo_app::remote_monitor::provenance::{Connection as RemoteConnection, Read as RemoteRead};
 use tempo_core::tempo_fast;
 use tempo_core::timing::{now_unix_ms, SlotClock};
 
 use crate::backend::AudioBackend;
 use crate::device::CpalBackend;
 use crate::frames::RxRing;
+use crate::rig::tuning::{passband_for, retune_passband, same_named_band};
 use crate::rig::{PttMode, Rig, SerialLine, ATU_START_TUNE};
 use crate::rigctld_proc::{spawn_rigctld, RigctldProc};
+
+mod monitor_claims;
+mod remote_radio;
+mod remote_selection;
+mod selection_connection;
+use monitor_claims::RadioClaims;
 
 /// The daemon serving the rigctld protocol on a radio's TCP port: Hamlib's spawned
 /// `rigctld` (classic), or Nexus's own native CI-V daemon (`icom_native_cat` — same
@@ -1037,22 +1045,14 @@ fn should_command_rf_power(
 }
 
 fn agc_to_hamlib(speed: &str) -> u8 {
-    match speed {
-        "off" => 0,
-        "fast" => 2,
-        "slow" => 3,
-        "auto" => 6,
-        _ => 5, // mid
-    }
+    use tempo_app::engine::remote_radio::AgcSpeed;
+    AgcSpeed::from_name(speed)
+        .unwrap_or(AgcSpeed::Mid)
+        .hamlib_value()
 }
 fn agc_from_hamlib(v: u8) -> &'static str {
-    match v {
-        0 => "off",
-        1 | 2 => "fast", // 1 = SUPERFAST: faster than FAST, so never "mid"
-        3 => "slow",
-        6 => "auto",
-        _ => "mid", // 5 MEDIUM, and USER (4) which has no honest nearest
-    }
+    use tempo_app::engine::remote_radio::AgcSpeed;
+    AgcSpeed::from_hamlib(v).unwrap_or(AgcSpeed::Mid).name()
 }
 /// Max consecutive `set_mode` retries for one target mode before giving up (so a rig
 /// that rejects a submode doesn't get an `M` command every loop). Sized to ride out a
@@ -1073,11 +1073,17 @@ const MODE_SET_PASSBAND0_AFTER: u32 = 10;
 /// PTT is keyed, and for CAT the `rig_model` / `serial_port` / `baud` /
 /// `rigctld_port` describe the `rigctld` daemon Tempo launches itself.
 pub struct RadioConfig {
+    /// Nonblocking host notification after an owned profile selection commits.
+    /// Called without Engine/pool locks, including when settings persistence fails.
+    /// The host must resolve current settings when handling it, not capture an old profile.
+    pub on_active_profile_change: Option<Arc<dyn Fn() + Send + Sync>>,
     /// Where every waterfall source publishes, shared with the UI reader and the rx-dsp thread.
     /// Defaulted so existing constructions (tests, tools) need no change.
     pub spectrum_feed: tempo_app::engine::SpectrumFeed,
     /// The wait-free capture tee the rx-dsp thread drains (rxtap.rs).
     pub rx_tap: Arc<crate::rxtap::RxTap>,
+    /// Radio whose settings produced this capture-open request, not a later UI selection.
+    pub capture_radio_id: Option<u32>,
     /// The live meter bus (RX audio level + CAT S-meter) — written by the rx-dsp thread and
     /// this loop, read lock-free by the UI's `get_meters`. Defaulted so existing
     /// constructions (tests, tools) need no change.
@@ -1142,8 +1148,10 @@ pub struct RadioConfig {
 impl Default for RadioConfig {
     fn default() -> Self {
         Self {
+            on_active_profile_change: None,
             spectrum_feed: tempo_app::engine::SpectrumFeed::default(),
             rx_tap: Arc::new(crate::rxtap::RxTap::new()),
+            capture_radio_id: None,
             meter_feed: tempo_app::engine::MeterFeed::default(),
             ptt_method: "vox".to_string(),
             radio_label: String::new(),
@@ -1519,7 +1527,15 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
     // Hand the capture tee to the waterfall producer and start it. From here the row is made on
     // ITS thread, so this loop's blocking CAT can no longer starve the waterfall (rxtap.rs).
     if let Some((ring, rate)) = backend.spectrum_tap() {
-        cfg.rx_tap.publish_card(ring, rate);
+        cfg.rx_tap.publish_card_with_origin(
+            ring,
+            rate,
+            crate::receive_audio::ReceiveOrigin::from_open(
+                cfg.capture_radio_id,
+                in_name.as_deref().unwrap_or(""),
+                backend.capture_input(),
+            ),
+        );
     }
     crate::rxdsp::spawn(
         cfg.rx_tap.clone(),
@@ -1535,7 +1551,11 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
     let mut applied = Transport::from_cfg(&cfg);
     // ⚠️ #145'S TWO DECLARATIONS HAVE TO REACH THE **FIRST** LAUNCH, so they are overlaid onto
     // the startup seed here — see [`seed_line_declarations`].
-    seed_line_declarations(&mut applied, engine_lock(&engine).settings());
+    let remote_radio_id = {
+        let eng = engine_lock(&engine);
+        seed_line_declarations(&mut applied, eng.settings());
+        eng.settings().active_radio
+    };
     // Initial open: allow coexisting onto a pre-existing EXTERNAL rigctld (e.g. WSJT-X already sharing
     // the rig). Mid-session rig SWITCHES pass `allow_coexist=false` when they reuse their own port.
     let (mut rig, rigctld_proc, init_probe) = open_rig(&applied, true);
@@ -1598,6 +1618,7 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
     // it in tests). The wrapper owns only the device edges (sound card + rigctld)
     // and injects their re-open side-effects.
     let mut state = RadioLoop::new(applied, rigctld_proc, &cfg);
+    state.remote_radio_id = Some(remote_radio_id);
     // Station-wide sinks live OUTSIDE the per-radio loop (multi-radio Phase 1 boundary):
     // one PSK buffer and one Field Day / club-board cursor for the whole station.
     let mut station = StationSinks::new();
@@ -1614,7 +1635,7 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
     // above (unchanged path). Every OTHER enabled radio gets its own persistent rigctld+Rig in the
     // monitor pool, polled READ-ONLY on a dedicated thread → the switcher pills show both rigs live.
     // Switching = a HANDOFF (swap the active Rig with a pool one) — no teardown, so no read-back race.
-    let pool: MonitorPool = Arc::new(Mutex::new(Vec::new()));
+    let pool: MonitorPool = Arc::new(MonitorConnections::new(Vec::new()));
     // The active radio at startup (so the monitor thread doesn't also open it).
     let mut last_active = engine_lock(&engine).settings().active_radio;
     // Raised the moment a switch intent is seen, dropped when the handoff completes: the
@@ -1628,6 +1649,20 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
         std::thread::spawn(move || monitor_loop(mon_engine, mon_pool, mon_pending));
     }
     loop {
+        state.apply_remote_selection(
+            &engine,
+            &pool,
+            &mut rig,
+            &mut backend,
+            &mut last_active,
+            &switch_pending,
+            open_monitor,
+            || {
+                if let Some(notify) = &cfg.on_active_profile_change {
+                    notify();
+                }
+            },
+        );
         // Dual-radio: if the operator switched the active radio, hand off between the active Rig and
         // the monitor pool BEFORE the normal tick — so `state.applied` already matches the new active
         // and the `rig_differs` teardown never fires (the new rig is already connected + on-frequency).
@@ -1680,6 +1715,7 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
             // is bounded (`flexspectrum::reap_workers`, ~600 ms worst case) well inside that 3 s
             // budget. No-op when native Flex audio was never on.
             state.dax_src = None;
+            cfg.rx_tap.retire_receive_audio();
             SHUTDOWN_DONE.store(true, std::sync::atomic::Ordering::Relaxed);
             return Ok(());
         }
@@ -1742,7 +1778,32 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
 // ======================= Dual-radio: persistent per-radio CAT (monitor pool) =======================
 
 /// The shared pool of persistent, read-only CAT connections to the NON-active radios ("both live").
-type MonitorPool = Arc<Mutex<Vec<MonitorConn>>>;
+type MonitorPool = Arc<MonitorConnections>;
+
+/// The connection list and per-radio claims share the same lifetime. Callers
+/// decide whether to claim/open/remove under the list lock; the claim itself
+/// holds no mutex during daemon startup or CAT I/O.
+struct MonitorConnections {
+    connections: Mutex<Vec<MonitorConn>>,
+    claims: RadioClaims,
+}
+
+impl MonitorConnections {
+    fn new(connections: Vec<MonitorConn>) -> Self {
+        Self {
+            connections: Mutex::new(connections),
+            claims: RadioClaims::default(),
+        }
+    }
+
+    fn lock(&self) -> std::sync::LockResult<std::sync::MutexGuard<'_, Vec<MonitorConn>>> {
+        self.connections.lock()
+    }
+
+    fn try_lock(&self) -> std::sync::TryLockResult<std::sync::MutexGuard<'_, Vec<MonitorConn>>> {
+        self.connections.try_lock()
+    }
+}
 
 /// Per-radio dial-read cadence for a monitor (unhurried — the active radio has the fast poll).
 const MONITOR_POLL_MS: f64 = 600.0;
@@ -1776,6 +1837,30 @@ struct MonitorConn {
     /// libhamlib DLL re-scanned by Defender on every launch, which is why it shows
     /// up as antimalware CPU rather than as ours.
     retry_after_ms: f64,
+}
+
+impl MonitorConn {
+    fn open_backoff(controlled: bool, prior_failures: u32, now_ms: f64) -> (u32, f64) {
+        if controlled {
+            (0, 0.0)
+        } else {
+            let failures = prior_failures.saturating_add(1);
+            let delay = (1000.0 * 2.0_f64.powi(failures.min(7) as i32 - 1)).min(60_000.0);
+            (failures, now_ms + delay)
+        }
+    }
+
+    fn keep_for(&mut self, transport: &Transport, now_ms: f64) -> bool {
+        if self.transport.rig_differs(transport) {
+            return false;
+        }
+        // A failed-open placeholder owns the retry deadline too. Removing it
+        // before that deadline loses both the wait and the failure count.
+        if !self.rig.has_control() && now_ms < self.retry_after_ms {
+            return true;
+        }
+        self.rig.has_control() && self.rigctld_proc.as_mut().is_none_or(CatDaemon::is_alive)
+    }
 }
 
 impl Transport {
@@ -1932,28 +2017,32 @@ fn reconcile_pool(
     engine: &Arc<Mutex<Engine>>,
     now_ms: f64,
 ) {
+    reconcile_pool_with_open(pool, want, active, engine, now_ms, open_monitor);
+}
+
+fn reconcile_pool_with_open(
+    pool: &MonitorPool,
+    want: &[(u32, Transport)],
+    active: u32,
+    engine: &Arc<Mutex<Engine>>,
+    now_ms: f64,
+    mut open: impl FnMut(&Transport) -> (Rig, Option<CatDaemon>, Option<bool>),
+) {
     let (to_open, to_close): (Vec<(u32, Transport)>, Vec<u32>) = {
         let mut p = pool.lock().unwrap_or_else(|e| e.into_inner());
         let mut to_open = Vec::new();
         for (id, t) in want {
+            if pool.claims.contains(*id) {
+                continue;
+            }
             // Keep only a CAT-identical AND LIVE conn — live Rig control channel AND a live
             // daemon. A conn parked as `Rig::vox()` (rigctld couldn't bind / CAT probe failed)
             // has no control channel; a dead DAEMON behind a cached TCP answer is a zombie.
             // Either way: recycle so it self-heals (and a switch-to never adopts a dead conn).
-            let keep = p.iter_mut().find(|c| c.id == *id).is_some_and(|c| {
-                if c.transport.rig_differs(t) {
-                    return false; // CAT settings changed — always reopen, no backoff
-                }
-                // ⭐ BACKOFF: a conn that failed to open is KEPT (not recycled) until
-                // its retry window opens. Without this the 150 ms reconcile respawns
-                // an unreachable radio's rigctld forever — see `retry_after_ms`.
-                // A CAT change above bypasses it, because that is the operator
-                // fixing the very thing that was broken and they should not wait.
-                if !c.rig.has_control() && now_ms < c.retry_after_ms {
-                    return true;
-                }
-                c.rig.has_control() && c.rigctld_proc.as_mut().is_none_or(CatDaemon::is_alive)
-            });
+            let keep = p
+                .iter_mut()
+                .find(|c| c.id == *id)
+                .is_some_and(|c| c.keep_for(t, now_ms));
             if !keep {
                 to_open.push((*id, t.clone())); // new / CAT changed / DEAD → (re)open
             }
@@ -1965,20 +2054,12 @@ fn reconcile_pool(
             // wins the race by design (back-to-back locks vs a 20 ms-cadence try_lock) and
             // downgrades every switch to a fresh daemon spawn. If the handoff instead takes
             // its fallback, IT drops this conn — nothing leaks.
-            if c.id == active {
+            if c.id == active || pool.claims.contains(c.id) {
                 continue;
             }
-            let keep = match want.iter().find(|(wid, _)| *wid == c.id) {
-                None => false, // no longer wanted
-                Some((_, t)) => {
-                    !c.transport.rig_differs(t)
-                        && c.rig.has_control()
-                        // A dead DAEMON behind a live TCP cache is a zombie: the pill
-                        // would show a frozen dial forever. Recycle it.
-                        && c.rigctld_proc.as_mut().is_none_or(CatDaemon::is_alive)
-                }
-            };
-            if !keep {
+            // Wanted but stale/failed entries are replaced below, under their
+            // own claim. Retain their failure count until that replacement.
+            if !want.iter().any(|(id, _)| *id == c.id) {
                 to_close.push(c.id);
             }
         }
@@ -1987,6 +2068,12 @@ fn reconcile_pool(
     if !to_close.is_empty() {
         crate::civ::diag::note("monitor pool: closing daemon(s) — a recycle drops+unkeys them");
         let mut p = pool.lock().unwrap_or_else(|e| e.into_inner());
+        // A caller may have claimed a radio since the initial scan. Its owner
+        // now decides when that connection is released.
+        let to_close: Vec<_> = to_close
+            .into_iter()
+            .filter(|id| !pool.claims.contains(*id))
+            .collect();
         p.retain(|c| !to_close.contains(&c.id)); // drop kills each daemon
         {
             let mut e = engine_lock(engine);
@@ -1996,7 +2083,28 @@ fn reconcile_pool(
         }
     }
     for (id, t) in to_open {
-        let (rig, proc, ok) = open_monitor(&t); // slow (spawn) — pool lock NOT held
+        let (_claim, prior_failures) = {
+            let mut p = pool.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(claim) = pool.claims.try_claim(id) else {
+                continue;
+            };
+            // A different caller may have finished since the scan. Decide
+            // again under the list lock before dropping or opening anything.
+            if p.iter_mut()
+                .find(|c| c.id == id)
+                .is_some_and(|c| c.keep_for(&t, now_ms))
+            {
+                continue;
+            }
+            let failures = p
+                .iter()
+                .find(|c| c.id == id && !c.transport.rig_differs(&t))
+                .map_or(0, |c| c.open_failures);
+            p.retain(|c| c.id != id); // finish old daemon teardown before opening
+            engine_lock(engine).forget_radio_live(id);
+            (claim, failures)
+        };
+        let (rig, proc, ok) = open(&t); // slow (spawn) — pool lock NOT held
         {
             let mut e = engine_lock(engine);
             e.observe_radio_cat(id, ok);
@@ -2005,23 +2113,14 @@ fn reconcile_pool(
         // an unreachable radio settles to one probe a minute instead of one every
         // 850 ms. A SUCCESSFUL open clears it, so a radio that comes back on line
         // is adopted at the next reconcile.
-        let prior_failures = {
-            let p = pool.lock().unwrap_or_else(|e| e.into_inner());
-            p.iter().find(|c| c.id == id).map_or(0, |c| c.open_failures)
-        };
-        let (open_failures, retry_after_ms) = if rig.has_control() {
-            (0, 0.0)
-        } else {
-            let n = prior_failures.saturating_add(1);
-            let wait = (1000.0_f64 * 2.0_f64.powi(n.min(6) as i32 - 1)).min(60_000.0);
-            if n == 1 || n % 8 == 0 {
-                crate::civ::diag::note(&format!(
-                    "monitor radio {id}: CAT open failed ({n}x) — retrying in {:.0}s",
-                    wait / 1000.0
-                ));
-            }
-            (n, now_ms + wait)
-        };
+        let (open_failures, retry_after_ms) =
+            MonitorConn::open_backoff(rig.has_control(), prior_failures, now_ms);
+        if open_failures == 1 || (open_failures != 0 && open_failures % 8 == 0) {
+            crate::civ::diag::note(&format!(
+                "monitor radio {id}: CAT open failed ({open_failures}x) — retrying in {:.0}s",
+                (retry_after_ms - now_ms) / 1000.0
+            ));
+        }
         let mut p = pool.lock().unwrap_or_else(|e| e.into_inner());
         // A handoff may have inserted this id meanwhile (old active → pool); don't double-open.
         if !p.iter().any(|c| c.id == id) {
@@ -2058,7 +2157,9 @@ fn poll_monitors(
     // which pauses these polls entirely, so a switch waits out at most one in-flight read.
     let conn = match p
         .iter_mut()
-        .filter(|c| c.id != active && now - c.last_poll >= MONITOR_POLL_MS)
+        .filter(|c| {
+            c.id != active && !pool.claims.contains(c.id) && now - c.last_poll >= MONITOR_POLL_MS
+        })
         .min_by(|a, b| {
             a.last_poll
                 .partial_cmp(&b.last_poll)
@@ -2212,6 +2313,13 @@ fn handoff_if_switched(
             return;
         }
     };
+    if pool.claims.contains(active) {
+        // An open already in flight owns this radio's port. Do not fall back
+        // to a second open: its result will enter the pool before the claim is
+        // released, and the ordinary next-tick handoff can adopt or recover it.
+        state.handoff_deferred = true;
+        return;
+    }
     state.handoff_deferred = false;
     // The monitor's `from_profile` conn transport zeroes the broker port; compare CAT fields against a
     // broker-stripped `want` so the broker being on doesn't spuriously fail the match (FIX #3: adopt
@@ -2234,68 +2342,27 @@ fn handoff_if_switched(
             && c.rigctld_proc.as_mut().is_none_or(CatDaemon::is_alive)
             && !c.transport.rig_differs(&want_cat)
     }) {
-        let conn = p.remove(idx);
-        let mut old_rig = std::mem::replace(rig, conn.rig);
-        // The adopted rig was opened READ-ONLY by the monitor (`PttMode::Vox`); give it the active
-        // radio's REAL PTT mode so it can key (else `ptt()` no-ops → "TX dead after switching to the
-        // FTDX10"). The demoted radio goes back to Vox — a monitor must never key.
-        rig.set_ptt_mode(ptt_mode_for(&want_active));
-        // Unkey-on-adopt: the radio may be PHYSICALLY keyed from a previous wedge (the
-        // fresh Rig starts keyed=false and would never know). Now that this rig has
-        // control + a real PTT mode, one idempotent key-up puts the newly active radio
-        // in a known-unkeyed state — Session 2's "light stays lit after switching".
-        let _ = rig.ptt(false);
-        old_rig.set_ptt_mode(PttMode::Vox);
-        let old_proc = state.rigctld_proc.take();
-        // The demoted radio becomes a monitor: stop its scope stream (the waveform would
-        // crowd the monitor's slow poll off the serial link). The adopted radio's stream
-        // is enabled by the active loop's per-tick drain.
-        if let Some(d) = old_proc.as_ref().and_then(CatDaemon::native) {
-            d.set_scope_enabled(false);
-        }
-        let mut old_transport = std::mem::replace(&mut state.applied, conn.transport);
-        // Monitor conns always carry `broker_self_port = None` (`from_profile`); strip it off the
-        // demoted radio's transport too, so the monitor `reconcile` doesn't see `rig_differs` (which
-        // compares broker port) and needlessly tear down + reopen the radio we just demoted.
-        old_transport.broker_self_port = None;
-        state.rigctld_proc = conn.rigctld_proc;
-        // The ACTIVE radio DOES interact with the CAT broker — set its broker port to the live value so
-        // `rig_differs` won't see a diff and tear the just-handed-off rig back down. (Audio fields stay
-        // zeroed → `audio_differs` fires → the RX codec rebuilds to the new radio, the one device swap.)
-        state.applied.broker_self_port = want_active.broker_self_port;
+        let mut conn = p.remove(idx);
+        // Preserve native unkey-on-adopt before installing the already-open
+        // connection. Installation itself performs no CAT or serial I/O.
+        conn.rig.set_ptt_mode(ptt_mode_for(&want_active));
+        let _ = conn.rig.ptt(false);
         {
             let mut e = engine_lock(engine);
             e.forget_radio_live(active);
-            // TWO-MIRROR RULE: `reset_for_handoff` below clears the meter BUS ("the new radio
-            // hasn't reported STRENGTH yet"); the engine snapshot copy must go with it, or the
-            // two mirrors disagree until the new rig's first STRENGTH poll (~750 ms, or seconds
-            // if it has no S-meter).
+            // reset_for_handoff clears the meter bus; clear its Engine mirror
+            // too, so neither can show the outgoing radio's strength.
             e.clear_rig_smeter();
         }
-        // The new active rig is ALREADY connected + on its own frequency; reset the per-rig caches so
-        // step()'s retune re-asserts the restored dial/mode and the health/capability re-probe runs.
-        state.reset_for_handoff();
-        // The old active radio joins the monitor pool (stays live); the new active leaves it.
-        p.push(MonitorConn {
-            id: *last_active,
-            transport: old_transport,
-            rig: old_rig,
-            rigctld_proc: old_proc,
-            last_poll: 0.0,
-            ticks: 0,
-            smeter_supported: None,
-            freq_misses: 0,
-            open_failures: 0,
-            retry_after_ms: 0.0,
-        });
+        p.push(state.install_handoff_connection(rig, conn, &want_active, *last_active));
         *last_active = active;
     } else {
         // Fallback: no MATCHING live conn for the new active (never opened / model 0 / a stale conn from
         // a config change). Drop any stale conn for this id so its daemon is reaped + its port freed,
         // then let step()'s `rig_differs` path open the new active fresh (it also unkeys + tears down
         // the OLD active safely). The old active is not kept monitored in this edge — steady state
-        // (both radios configured) always ADOPTS above. A switch during a radio's very first monitor
-        // open can transiently coexist onto the monitor daemon; it self-heals on the next reconcile.
+        // (both radios configured) always ADOPTS above. An in-flight monitor open holds its claim
+        // until its result reaches the pool; the deferral above prevents a competing fallback open.
         p.retain(|c| c.id != active);
         {
             let mut e = engine_lock(engine);
@@ -2706,6 +2773,8 @@ struct RadioLoop {
     /// underran and the shortfall went out as silence). Kept at [`TUNE_LEAD_MS`]; see it.
     tune_queued_ms: f32,
     applied: Transport,
+    remote_radio_id: Option<u32>,
+    remote_connection: Option<RemoteConnection>,
     /// Set when a handoff bailed on the pool lock: step() skips ONE rig_differs rebuild
     /// tick so the handoff (not a fresh spawn racing the monitor's port) wins.
     handoff_deferred: bool,
@@ -2771,6 +2840,10 @@ struct RadioLoop {
     /// Last FM repeater config (shift, offset Hz, CTCSS Hz) applied — so the shift/offset/
     /// CTCSS commands only fire on change, not every loop. `None` when not in FM.
     last_fm: Option<(String, i64, f32)>,
+    /// A partial Remote tune must not become an automatic native retry after
+    /// a later dial poll changes band/mode/repeater policy. Reads and unkeying
+    /// continue; a new explicit retune or confirmed Remote adoption clears it.
+    remote_retune_uncertain: bool,
     /// The open WinKeyer keyer (port + handle) when the CW backend is WinKeyer — opened
     /// on demand, reopened if the configured port changes.
     #[cfg(feature = "serial")]
@@ -3265,8 +3338,39 @@ struct RadioLoop {
 }
 
 impl RadioLoop {
+    /// Bind a fresh read to the actual transport, before I/O. Never infer an ID
+    /// from whichever profile happens to be active when the reply arrives.
+    fn remote_read(&mut self, engine: &Arc<Mutex<Engine>>) -> Option<RemoteRead> {
+        if self.handoff_deferred || self.cat_hold_active {
+            return None;
+        }
+        let mut eng = engine_lock(engine);
+        if self.remote_radio_id != Some(eng.settings().active_radio) {
+            return None;
+        }
+        let mut want = Transport::from_settings(eng.settings());
+        self.apply_port_alias(&mut want);
+        if want != self.applied {
+            return None;
+        }
+        let now = Instant::now();
+        if let Some(read) = self
+            .remote_connection
+            .as_ref()
+            .and_then(|c| eng.remote_radio_read(c, now))
+        {
+            return Some(read);
+        }
+        self.remote_connection = eng.remote_open_radio();
+        self.remote_connection
+            .as_ref()
+            .and_then(|c| eng.remote_radio_read(c, now))
+    }
+
     fn new(applied: Transport, rigctld_proc: Option<CatDaemon>, cfg: &RadioConfig) -> Self {
         Self {
+            remote_radio_id: None,
+            remote_connection: None,
             yaesu_wf: None,
             yaesu_wf_key: None,
             yaesu_wf_meta: std::sync::Arc::new(std::sync::Mutex::new(None)),
@@ -3310,6 +3414,7 @@ impl RadioLoop {
             last_winkeyer_wpm: 0, // 0 = unset → the open pushes the speed
             cw_busy_until: 0.0,
             last_fm: None,
+            remote_retune_uncertain: false,
             #[cfg(feature = "serial")]
             winkeyer: None,
             #[cfg(feature = "serial")]
@@ -4682,7 +4787,52 @@ impl RadioLoop {
         }
     }
 
+    /// Install an already-owned incoming connection and return the outgoing
+    /// connection as a read-only monitor. Physical release must precede this
+    /// step. There is no CAT/serial I/O or Engine lock acquisition here, so the
+    /// Remote owner can install atomically with its native profile commit.
+    fn install_handoff_connection(
+        &mut self,
+        rig: &mut Rig,
+        conn: MonitorConn,
+        want_active: &Transport,
+        outgoing: u32,
+    ) -> MonitorConn {
+        let mut old_rig = std::mem::replace(rig, conn.rig);
+        // Monitors are Vox/read-only; adoption restores the configured keying
+        // method without reopening either connection.
+        rig.set_ptt_mode(ptt_mode_for(want_active));
+        old_rig.set_ptt_mode(PttMode::Vox);
+        let old_proc = self.rigctld_proc.take();
+        // The background radio must stop its scope stream so it does not crowd
+        // out the slow monitor reads. This updates the native daemon's demand.
+        if let Some(daemon) = old_proc.as_ref().and_then(CatDaemon::native) {
+            daemon.set_scope_enabled(false);
+        }
+        let mut old_transport = std::mem::replace(&mut self.applied, conn.transport);
+        // Monitor comparison strips the broker port. The active side retains
+        // it so ordinary reconciliation does not tear down either connection.
+        old_transport.broker_self_port = None;
+        self.rigctld_proc = conn.rigctld_proc;
+        self.applied.broker_self_port = want_active.broker_self_port;
+        self.reset_for_handoff();
+        self.remote_radio_id = Some(conn.id);
+        MonitorConn {
+            id: outgoing,
+            transport: old_transport,
+            rig: old_rig,
+            rigctld_proc: old_proc,
+            last_poll: 0.0,
+            ticks: 0,
+            smeter_supported: None,
+            freq_misses: 0,
+            open_failures: 0,
+            retry_after_ms: 0.0,
+        }
+    }
+
     fn reset_for_handoff(&mut self) {
+        self.remote_connection = None;
         self.last_dial = 0; // != any real dial → force the retune to command the restored freq
         self.last_mode = String::new(); // force the mode re-assert
         self.rig_asserted = false; // belt-and-braces: the retune re-asserts + re-latches same tick
@@ -4833,6 +4983,10 @@ impl RadioLoop {
         // uses (slot index, next-slot countdown, TX-hold deadlines) consistently.
         let now = now - self.clock_offset_ms as f64;
 
+        // Remote TX expiry is station-owned and does not depend on the host
+        // receiving another socket message. Native operation has no permit.
+        engine_lock(engine).poll_remote_transmit(Instant::now());
+
         // Continuously fold captured audio into the rolling RX window. Always drain the soundcard
         // ring (so it can't overflow), but when native Flex DAX RX audio is the active source, use
         // its 12 kHz stream as the RX audio instead of the soundcard.
@@ -4925,6 +5079,8 @@ impl RadioLoop {
             _ => {}
         }
 
+        self.apply_remote_radio(engine, rig, now);
+
         // --- Live rig/PTT/audio reconfiguration (operator hit Save) + Test-CAT
         // re-probe. Read settings under a short lock, do the slow rig/audio
         // re-open WITHOUT the lock, then publish status. Makes CAT connect on
@@ -4972,8 +5128,10 @@ impl RadioLoop {
             // last "off" — so the guard it was written to be was answering about
             // a rig that had not been transmitting when it was asked. See
             // `RadioLoop::operator_keyed`.
+            let remote_want_radio;
             let (want, dial, md, reprobe_req, force_retune, split_req, fm, cat_hold, section_cw) = {
                 let mut eng = engine_lock(engine);
+                remote_want_radio = eng.settings().active_radio;
                 // FM repeater config (shift, band-offset magnitude, CTCSS) — applied below
                 // only when the mode policy resolves to FM. Computed first (owned) so the
                 // mutable take_* calls that follow don't fight the settings borrow. APRS forces
@@ -5120,6 +5278,7 @@ impl RadioLoop {
                         // `cat_hold_active` is therefore part of `may_key`, so no key-up runs
                         // until the transport is rebuilt.
                         eng.halt_tx_for_context_change("CAT probe hold");
+                        eng.remote_close_radio();
                     }
                     self.rigctld_proc = None; // drop kills + reaps the daemon (frees the port)
                     *rig = Rig::vox();
@@ -5179,6 +5338,9 @@ impl RadioLoop {
                 self.rigctld_proc = None; // drop kills + reaps the old daemon (frees its port)
                                           // A rig that came back under a NEW port name is followed by USB identity.
                 let open_want = self.resolve_port_alias(&want);
+                engine_lock(engine).remote_close_radio();
+                self.remote_connection = None;
+                self.remote_radio_id = Some(remote_want_radio);
                 let (new_rig, proc, probe) = reopen_rig(&open_want, allow_coexist);
                 let (ok, detail) = (probe.ok, probe.detail);
                 let detail = if suspect_rebuild && !daemon_died {
@@ -5439,6 +5601,7 @@ impl RadioLoop {
                 // common case impossible, and they are changing devices precisely because
                 // the current one is not what they want. The retry already recovers a card
                 // another app holds momentarily.
+                self.rx_tap.retire_receive_audio();
                 backend.release_device();
                 match reopen_audio(&want) {
                     Ok(b) => {
@@ -5477,7 +5640,15 @@ impl RadioLoop {
                         // New stream, new ring: republish so the producer rebuilds its resampler
                         // and clears its window rather than smearing two sample rates together.
                         if let Some((ring, rate)) = backend.spectrum_tap() {
-                            self.rx_tap.publish_card(ring, rate);
+                            self.rx_tap.publish_card_with_origin(
+                                ring,
+                                rate,
+                                crate::receive_audio::ReceiveOrigin::from_open(
+                                    Some(remote_want_radio),
+                                    &want.audio_in,
+                                    backend.capture_input(),
+                                ),
+                            );
                         }
                         // ⚠️ AN OPEN IS NOT A RECOVERY — the banner stays up until the card
                         // DELIVERS. Clearing it here (which is what this did) reported success
@@ -5728,7 +5899,12 @@ impl RadioLoop {
             let mut retune_note: Option<String> = None;
             // A DIAL refusal, held separately so the mode note below cannot bury it.
             let mut dial_note: Option<String> = None;
-            if can_retune {
+            if force_retune {
+                // New native intent (including local TX arming's existing
+                // assert) owns this work; an observation never sets this flag.
+                self.remote_retune_uncertain = false;
+            }
+            if can_retune && !self.remote_retune_uncertain {
                 if force_retune {
                     // The operator just clicked a section / worked a Needed spot / QSY'd.
                     // Apply the dial + mode RIGHT NOW, clearing any give-up so a single
@@ -5957,7 +6133,11 @@ impl RadioLoop {
             // ever tells it to stop), so this was churn rather than a dropped shift; it is still
             // a CAT write into the seconds right after an over, and the tracker is supposed to
             // mean "the machine's settings are current".
-            if can_retune && mode_is_fm_family(&md) && self.rig_asserted {
+            if can_retune
+                && !self.remote_retune_uncertain
+                && mode_is_fm_family(&md)
+                && self.rig_asserted
+            {
                 if self.last_fm.as_ref() != Some(&fm) {
                     let _ = rig.set_fm_repeater(&fm.0, fm.1, fm.2);
                     self.last_fm = Some(fm);
@@ -6107,8 +6287,14 @@ impl RadioLoop {
                         self.func_misses[i] = 0;
                     }
                 }
+                let remote_read = self.remote_read(engine);
                 match rig.read_freq() {
                     Ok(hz) => {
+                        {
+                            let mut eng = engine_lock(engine);
+                            eng.remote_observe_cat(remote_read.as_ref(), Some(true));
+                            eng.remote_observe_dial(remote_read.as_ref(), Some(hz));
+                        }
                         self.freq_misses = 0; // a good read clears the breaker's miss run
                                               // A tripped breaker's re-probe answered: the link is BACK. Reset the health
                                               // verdict + the backoff and re-probe the rig's capabilities, exactly like
@@ -6368,9 +6554,11 @@ impl RadioLoop {
                         // rather than being drained against a mode we did not read.
                         if self.rig_poll_ticks.is_multiple_of(4) && have_budget() {
                             // One `m` read gives BOTH the mode (mirror) and the RX passband width.
+                            let remote_mode = self.remote_read(engine);
                             let (m, pb) = rig.read_mode_passband();
                             {
                                 let mut eng = engine_lock(engine);
+                                eng.remote_observe_mode(remote_mode.as_ref(), m.as_deref());
                                 if let Some(ref mm) = m {
                                     eng.observe_rig_mode(mm.clone());
                                 }
@@ -6608,6 +6796,10 @@ impl RadioLoop {
                     // means nothing, so it must NOT trip the breaker.
                     Err(e) => {
                         // A real CAT rig tolerates a few consecutive misses before tripping — a slow
+                        engine_lock(engine).remote_observe_cat(
+                            remote_read.as_ref(),
+                            rig.has_control().then_some(false),
+                        );
                         // reply cut off by the short serial deadline must not permanently kill
                         // read-back. A VOX/serial rig errors instantly + meaninglessly: never counts.
                         if rig.has_control() {
@@ -6699,7 +6891,13 @@ impl RadioLoop {
                 && now - self.last_freq_poll >= FREQ_POLL_MS
             {
                 self.last_freq_poll = now;
+                let remote_read = self.remote_read(engine);
                 if let Ok(hz) = rig.read_freq() {
+                    {
+                        let mut eng = engine_lock(engine);
+                        eng.remote_observe_cat(remote_read.as_ref(), Some(true));
+                        eng.remote_observe_dial(remote_read.as_ref(), Some(hz));
+                    }
                     if hz != self.last_dial {
                         self.last_dial = hz;
                         {
@@ -8602,7 +8800,10 @@ impl RadioLoop {
                 };
                 if now - self.last_ptt_poll >= interval {
                     self.last_ptt_poll = now;
-                    if let Some(on) = rig.read_ptt() {
+                    let remote_read = self.remote_read(engine);
+                    let ptt_read = rig.read_ptt();
+                    engine_lock(engine).remote_observe_ptt(remote_read.as_ref(), ptt_read);
+                    if let Some(on) = ptt_read {
                         // Two different facts, two different verbs, and the
                         // difference is the whole point of the second one: the
                         // CHANGE of belief is adopted only when it changes, while
@@ -9301,34 +9502,36 @@ impl RadioLoop {
                         }
                         self.ensure_commanded(rig); // read-only launch: assert before key
                         self.publish_tx_intent_now(); // before keying
-                        let _ = rig.ptt(true);
-                        let mut secs = 0.0f32;
-                        let last = waves.len() - 1;
-                        for (i, w) in waves.iter().enumerate() {
-                            let mut w2: &[f32] = if i == 0 && trim_samples > 0 {
-                                &w[trim_samples..]
-                            } else {
-                                w
-                            };
-                            // The generated buffer can carry TRAILING silence
-                            // (FT4: ~1.0 s of zero pad). On a LATE start the fit
-                            // math is airtime-based — playing that pad would
-                            // hold PTT past the boundary into the partner's
-                            // period. Strip it; it carries nothing.
-                            if i == last {
-                                let end = w2.iter().rposition(|&x| x != 0.0).map_or(0, |p| p + 1);
-                                w2 = &w2[..end];
+                        if crate::slot::key_slot_transmitter(&mut eng, rig, backend) {
+                            let mut secs = 0.0f32;
+                            let last = waves.len() - 1;
+                            for (i, w) in waves.iter().enumerate() {
+                                let mut w2: &[f32] = if i == 0 && trim_samples > 0 {
+                                    &w[trim_samples..]
+                                } else {
+                                    w
+                                };
+                                // The generated buffer can carry TRAILING silence
+                                // (FT4: ~1.0 s of zero pad). On a LATE start the fit
+                                // math is airtime-based — playing that pad would
+                                // hold PTT past the boundary into the partner's
+                                // period. Strip it; it carries nothing.
+                                if i == last {
+                                    let end =
+                                        w2.iter().rposition(|&x| x != 0.0).map_or(0, |p| p + 1);
+                                    w2 = &w2[..end];
+                                }
+                                secs += w2.len() as f32 / tempo_fast::SAMPLE_RATE;
+                                backend.play(w2);
                             }
-                            secs += w2.len() as f32 / tempo_fast::SAMPLE_RATE;
-                            backend.play(w2);
+                            self.rx.clear(); // our just-started carrier must not be decoded
+                            self.tx_until_ms =
+                                Some(now + secs as f64 * 1000.0 + crate::slot::TX_TAIL_MS);
+                            // A SLOT over: TX Off must let this one finish (see `slot_tx_until_ms`).
+                            self.slot_tx_until_ms = self.tx_until_ms.unwrap_or(0.0);
+                            self.last_slot = Some(slot_now); // slot handled; skip the boundary
+                            self.prev_slot_was_tx = true;
                         }
-                        self.rx.clear(); // our just-started carrier must not be decoded
-                        self.tx_until_ms =
-                            Some(now + secs as f64 * 1000.0 + crate::slot::TX_TAIL_MS);
-                        // A SLOT over: TX Off must let this one finish (see `slot_tx_until_ms`).
-                        self.slot_tx_until_ms = self.tx_until_ms.unwrap_or(0.0);
-                        self.last_slot = Some(slot_now); // slot handled; skip the boundary
-                        self.prev_slot_was_tx = true;
                     }
                 }
             }
@@ -11205,55 +11408,6 @@ fn mode_is_fm_family(md: &str) -> bool {
     )
 }
 
-fn passband_for(md: &str) -> i32 {
-    match md.trim().to_ascii_uppercase().as_str() {
-        "PKTUSB" | "PKTLSB" => 3000,
-        // AM is DOUBLE-sideband: the carrier sits in the middle with a sideband either side, so
-        // an SSB-width filter cuts half the signal off and the audio comes out thin and distorted.
-        // 6 kHz is the AM filter every HF rig that has one offers. Rigs that round to their
-        // nearest own filter are fine — the read-back check treats a nearby width as the radio
-        // doing its job, not a fault.
-        "AM" => 6000,
-        _ => -1,
-    }
-}
-
-/// Are `a` and `b` (Hz) on the SAME NAMED amateur band — i.e. does a retune between them
-/// cross no band boundary?
-///
-/// ⚠️ `None == None` is NOT "in-band": two dials the band plan cannot name (47 GHz+, or one
-/// named and one not) may sit on different band registers inside the rig, and reading that
-/// equality as same-band is how a band-dependent correction gets skipped exactly where the
-/// rig's band memory is least predictable. Only two EQUAL NAMED bands count. A `0` — the
-/// "no dial pushed yet" sentinel — is unnamed, so it is never the same band as anything.
-fn same_named_band(a: u64, b: u64) -> bool {
-    let band_of = |hz: u64| tempo_app::bandplan::band_for_dial(hz as f64 / 1e6);
-    matches!((band_of(a), band_of(b)), (Some(x), Some(y)) if x == y)
-}
-
-/// The passband to send WITH the mode on an operator force retune: does this retune have to
-/// re-command the width, or may it leave the rig's filter where the operator put it?
-///
-/// THE BUG (#67). The force path sent [`passband_for`]'s width on EVERY retune — it consulted
-/// only "is `md` non-empty", never whether anything about the mode or the band had actually
-/// changed. So in FT8, where `passband_for` deliberately forces 3 kHz, every plain dial move
-/// (a spot click, a Needed pick, a section QSY) re-sent `M PKTUSB 3000`: a DATA-filter switch
-/// and a Width-display pop per QSY, on a rig that was already exactly where we wanted it.
-///
-/// The 3 kHz force itself is NOT removable and this must not be gated on `mode_changed` alone.
-/// It exists because a rig recalls a narrow per-band DATA filter — 600 Hz on the FTDX10 that
-/// prompted it, which clips FT8 — and it recalls it on a BAND change, which routinely arrives
-/// with the mode UNCHANGED. So the gate is "in-band, dial-only": send `-1`
-/// (`RIG_PASSBAND_NOCHANGE`) only when the mode did not change AND the band did not change;
-/// keep the width in every other case.
-fn retune_passband(md: &str, mode_changed: bool, prev_dial: u64, dial: u64) -> i32 {
-    if !mode_changed && same_named_band(prev_dial, dial) {
-        -1
-    } else {
-        passband_for(md)
-    }
-}
-
 /// The passband for attempt `prior_fails + 1` of the bounded mode-set retry — the middle
 /// rung of the resilience ladder. DATA modes start with the full 3 kHz passband
 /// ([`passband_for`]); once a run keeps failing past [`MODE_SET_PASSBAND0_AFTER`], later
@@ -12127,7 +12281,78 @@ fn probe_cat_or_explain(rig: &mut Rig, t: &Transport) -> (Option<bool>, String) 
 
 #[cfg(test)]
 mod tests {
+    mod receive_source;
+    mod remote_radio;
     use super::should_command_rf_power;
+
+    #[test]
+    fn remote_reads_require_the_owned_radio_transport_and_survive_only_their_generation() {
+        let engine = Arc::new(Mutex::new(Engine::with_settings(test_settings())));
+        let mut state = loop_state();
+        state.applied = Transport::from_settings(engine_lock(&engine).settings());
+        let id = engine_lock(&engine).settings().active_radio;
+        state.remote_radio_id = Some(id);
+        let blocked = state.remote_read(&engine).unwrap();
+        {
+            let mut eng = engine_lock(&engine);
+            eng.remote_observe_cat(Some(&blocked), Some(true));
+            assert_eq!(
+                eng.remote_monitor_observation().radio.cat_connected,
+                Some(true)
+            );
+            let other = eng.add_radio();
+            eng.set_active_radio(other);
+        }
+        assert!(state.remote_read(&engine).is_none());
+        {
+            let mut eng = engine_lock(&engine);
+            eng.set_active_radio(id);
+            eng.remote_observe_cat(Some(&blocked), Some(true));
+            assert_eq!(eng.remote_monitor_observation().radio.cat_connected, None);
+        }
+        // Complete the transport adoption as the real handoff/step does. Profile
+        // port repair may have changed the transport while the test switched.
+        state.applied = Transport::from_settings(engine_lock(&engine).settings());
+        let fresh = state.remote_read(&engine).unwrap();
+        engine_lock(&engine).remote_observe_cat(Some(&fresh), Some(true));
+        state.applied.serial_port = "wrong-test-port".into();
+        assert!(state.remote_read(&engine).is_none());
+        state.applied = Transport::from_settings(engine_lock(&engine).settings());
+        state.handoff_deferred = true;
+        assert!(state.remote_read(&engine).is_none());
+        state.handoff_deferred = false;
+        state.cat_hold_active = true;
+        assert!(state.remote_read(&engine).is_none());
+    }
+
+    #[test]
+    fn remote_projection_is_fed_by_the_actual_loop_read_and_clears_unsupported_ptt() {
+        let engine = atu_engine();
+        let (addr, log) = mock_rigctld_on(14_290_000, false);
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state();
+        state.applied = Transport::from_settings(engine_lock(&engine).settings());
+        state.remote_radio_id = Some(engine_lock(&engine).settings().active_radio);
+        run_heavy_polls(&engine, &mut state, &mut rig, &mut backend, 5);
+        let observation = engine_lock(&engine).remote_monitor_observation();
+        assert_eq!(observation.radio.cat_connected, Some(true));
+        assert_eq!(observation.radio.rig_dial_mhz, Some(14.290));
+        assert!(observation.radio.readings.dial.is_some());
+        assert_eq!(
+            observation.radio.rig_keyed, None,
+            "the stub never supplies a PTT reading"
+        );
+        let commands = log.lock().unwrap();
+        assert!(
+            commands.iter().any(|c| c == "f"),
+            "positive control: hardware read occurred"
+        );
+        assert!(
+            !commands.iter().any(|c| c == "T 1"),
+            "observing cannot key the radio"
+        );
+    }
 
     /// #126 (KD9WES, FTDX-101D). The load-bearing rule: the loop must NEVER command RF power
     /// while a transmission is up — WSJT-X sets power before it keys and never touches it during
@@ -15238,7 +15463,7 @@ mod tests {
             open_failures: 0,
             retry_after_ms: 0.0,
         };
-        let pool: MonitorPool = Arc::new(Mutex::new(vec![
+        let pool: MonitorPool = Arc::new(MonitorConnections::new(vec![
             conn(r1, ports[1], transports[0].clone()),
             conn(r2, ports[2], transports[1].clone()),
         ]));
@@ -15348,6 +15573,62 @@ mod tests {
     }
 
     #[test]
+    fn handoff_installation_moves_live_connections_without_radio_io() {
+        use crate::rig::remote_tests::retuning_peer;
+        let outgoing = retuning_peer(7_142_000, "LSB", |_, _| None);
+        let incoming = retuning_peer(14_225_000, "USB", |_, _| None);
+        let mut rig = Rig::with_control(Some(outgoing.address.clone()), PttMode::Cat);
+        let mut new_rig = Rig::with_control(Some(incoming.address.clone()), PttMode::Vox);
+        // Positive controls: both peers are live and record actual reads.
+        assert_eq!(rig.read_freq().unwrap(), 7_142_000);
+        assert_eq!(new_rig.read_freq().unwrap(), 14_225_000);
+        assert_eq!(*outgoing.lines.lock().unwrap(), ["f"]);
+        assert_eq!(*incoming.lines.lock().unwrap(), ["f"]);
+        let mut state = loop_state();
+        state.applied = cat_transport(4532, None);
+        state.applied.broker_self_port = Some(4534);
+        state.last_dial = 7_142_000;
+        state.last_mode = "LSB".into();
+        state.meter_feed.set_smeter_db(Some(-20));
+        assert_eq!(state.meter_feed.smeter_db(), Some(-20));
+        let mut want = cat_transport(4533, None);
+        want.ptt_method = "cat".into();
+        want.broker_self_port = Some(4534);
+        let mut monitored = want.clone();
+        monitored.broker_self_port = None;
+        let connection = MonitorConn {
+            id: 1,
+            transport: monitored,
+            rig: new_rig,
+            rigctld_proc: None,
+            last_poll: 1.0,
+            ticks: 1,
+            smeter_supported: Some(true),
+            freq_misses: 0,
+            open_failures: 0,
+            retry_after_ms: 0.0,
+        };
+        let mut demoted = state.install_handoff_connection(&mut rig, connection, &want, 0);
+        assert_eq!(*outgoing.lines.lock().unwrap(), ["f"]);
+        assert_eq!(*incoming.lines.lock().unwrap(), ["f"]);
+        assert!(matches!(rig.ptt_mode(), PttMode::Cat));
+        assert!(matches!(demoted.rig.ptt_mode(), PttMode::Vox));
+        assert_eq!(demoted.id, 0);
+        assert_eq!(demoted.transport.broker_self_port, None);
+        assert_eq!(state.applied.broker_self_port, Some(4534));
+        assert_eq!(state.remote_radio_id, Some(1));
+        assert_eq!(state.meter_feed.smeter_db(), None);
+        assert!(state.force_audio_rebuild);
+        assert_eq!(state.last_dial, 0);
+        assert!(state.last_mode.is_empty());
+        // The moved handles still reach their respective physical peers.
+        assert_eq!(rig.read_freq().unwrap(), 14_225_000);
+        assert_eq!(demoted.rig.read_freq().unwrap(), 7_142_000);
+        assert_eq!(*outgoing.lines.lock().unwrap(), ["f", "f"]);
+        assert_eq!(*incoming.lines.lock().unwrap(), ["f", "f"]);
+    }
+
+    #[test]
     fn handoff_swaps_active_radio_with_the_pool_no_teardown() {
         // Durable dual-radio: switching the active radio HANDS the (already-connected) new active Rig
         // OUT of the monitor pool into the active slot, and pushes the OLD active back INTO the pool —
@@ -15374,7 +15655,7 @@ mod tests {
         // Radio 1 is already LIVE in the monitor pool with a transport matching its profile. A live
         // monitor conn holds a control-bearing Rig (`with_control`) + its own daemon — only such a conn
         // is adopted (a dead `Rig::vox()` conn is rejected; see `handoff_skips_a_dead_conn…`).
-        let pool: MonitorPool = Arc::new(Mutex::new(vec![MonitorConn {
+        let pool: MonitorPool = Arc::new(MonitorConnections::new(vec![MonitorConn {
             id: r1,
             transport: r1_transport,
             rig: Rig::with_control(Some(format!("127.0.0.1:{r1_port}")), PttMode::Vox),
@@ -15594,7 +15875,7 @@ mod tests {
         };
         let mut state = loop_state();
         state.applied = cat_transport(4532, None);
-        let pool: MonitorPool = Arc::new(Mutex::new(vec![MonitorConn {
+        let pool: MonitorPool = Arc::new(MonitorConnections::new(vec![MonitorConn {
             id: r1,
             transport: r1_transport,
             rig: Rig::with_control(Some(format!("127.0.0.1:{r1_port}")), PttMode::Vox),
@@ -15822,6 +16103,263 @@ mod tests {
             pool.lock().unwrap().is_empty(),
             "the zombie conn was dropped (daemon reaped), not adopted"
         );
+    }
+
+    #[test]
+    fn monitor_open_backoff_survives_reconciliation_and_accumulates_failures() {
+        let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+        let pool: MonitorPool = Arc::new(MonitorConnections::new(Vec::new()));
+        let (id, transport) = {
+            let mut e = engine.lock().unwrap();
+            let id = e.add_radio();
+            e.set_active_radio(0);
+            let profile = e.settings().radios.iter().find(|p| p.id == id).unwrap();
+            (id, Transport::from_profile(profile))
+        };
+        let want = [(id, transport)];
+        let opens = std::cell::Cell::new(0);
+        let fail = |_: &Transport| {
+            opens.set(opens.get() + 1);
+            (Rig::vox(), None, Some(false))
+        };
+        reconcile_pool_with_open(&pool, &want, 0, &engine, 0.0, fail);
+        assert_eq!(opens.get(), 1);
+        for now in [150.0, 300.0, 999.0] {
+            reconcile_pool_with_open(&pool, &want, 0, &engine, now, fail);
+            let conns = pool.lock().unwrap();
+            assert_eq!(conns.len(), 1, "retain the failed-open retry deadline");
+            assert_eq!(conns[0].open_failures, 1);
+            assert_eq!(conns[0].retry_after_ms, 1000.0);
+            assert_eq!(opens.get(), 1, "no spawn before the retry deadline");
+        }
+        reconcile_pool_with_open(&pool, &want, 0, &engine, 1000.0, fail);
+        assert_eq!(opens.get(), 2, "positive control: retry when due");
+        let conns = pool.lock().unwrap();
+        assert_eq!(conns[0].open_failures, 2);
+        assert_eq!(
+            conns[0].retry_after_ms, 3000.0,
+            "second failure waits two seconds"
+        );
+    }
+
+    #[test]
+    fn monitor_open_backoff_reaches_one_minute_and_configuration_change_retries_now() {
+        let (engine, pool, _, id, _) = switch_scene();
+        let transport = pool.lock().unwrap()[0].transport.clone();
+        pool.lock().unwrap().clear();
+        let opens = std::cell::Cell::new(0);
+        let fail = |_: &Transport| {
+            opens.set(opens.get() + 1);
+            (Rig::vox(), None, Some(false))
+        };
+        let mut now = 0.0;
+        for delay in [
+            1000.0, 2000.0, 4000.0, 8000.0, 16_000.0, 32_000.0, 60_000.0, 60_000.0,
+        ] {
+            reconcile_pool_with_open(&pool, &[(id, transport.clone())], 0, &engine, now, fail);
+            let deadline = pool.lock().unwrap()[0].retry_after_ms;
+            assert_eq!(deadline, now + delay);
+            now = deadline;
+        }
+        assert_eq!(opens.get(), 8);
+        let mut changed = transport;
+        changed.baud = changed.baud.saturating_add(1);
+        reconcile_pool_with_open(&pool, &[(id, changed.clone())], 0, &engine, now - 1.0, fail);
+        assert_eq!(
+            opens.get(),
+            9,
+            "an operator's correction bypasses the old deadline"
+        );
+        {
+            let p = pool.lock().unwrap();
+            assert_eq!(
+                p[0].open_failures, 1,
+                "changed configuration starts its own backoff"
+            );
+            assert_eq!(p[0].retry_after_ms, now + 999.0);
+        }
+        // Successful reopen clears the failure state. This control-bearing fake
+        // never talks to hardware; reconciliation itself must not issue CAT writes.
+        reconcile_pool_with_open(&pool, &[(id, changed)], 0, &engine, now + 999.0, |_| {
+            (
+                Rig::with_control(Some("127.0.0.1:1".into()), PttMode::Vox),
+                None,
+                Some(true),
+            )
+        });
+        let p = pool.lock().unwrap();
+        assert!(p[0].rig.has_control());
+        assert_eq!(p[0].open_failures, 0);
+        assert_eq!(p[0].retry_after_ms, 0.0);
+    }
+
+    #[test]
+    fn monitor_open_panic_releases_claim_and_allows_recovery() {
+        let (engine, pool, _, id, _) = switch_scene();
+        let want = [(id, pool.lock().unwrap()[0].transport.clone())];
+        pool.lock().unwrap().clear();
+        let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            reconcile_pool_with_open(&pool, &want, 0, &engine, 0.0, |_| panic!("opener failed"));
+        }));
+        assert!(failed.is_err());
+        assert!(!pool.claims.contains(id));
+        assert!(
+            !pool.connections.is_poisoned(),
+            "I/O runs outside the pool lock"
+        );
+        let mut retried = false;
+        reconcile_pool_with_open(&pool, &want, 0, &engine, 150.0, |_| {
+            retried = true;
+            (Rig::vox(), None, Some(false))
+        });
+        assert!(retried);
+        assert_eq!(pool.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn monitor_claim_defers_handoff_and_native_rebuild_until_open_finishes() {
+        for successful_open in [true, false] {
+            let (engine, pool, mut state, id, port) = switch_scene();
+            let (claim, mut incoming) = {
+                let mut p = pool.lock().unwrap();
+                (pool.claims.try_claim(id).unwrap(), p.remove(0))
+            };
+            let mut rig = Rig::vox();
+            let mut last_active = 0;
+            let pending = std::sync::atomic::AtomicBool::new(false);
+            let mut backend = MockBackend::new();
+            let (sinks, mut ra) = (no_sinks(), mock_reopen_audio());
+            let mut station = StationSinks::new();
+            let opens = std::cell::Cell::new(0);
+            let mut rr = |_: &Transport, _: bool| {
+                opens.set(opens.get() + 1);
+                (Rig::vox(), None, CatProbe::status(None, ""))
+            };
+            engine.lock().unwrap().set_active_radio(id);
+            for tick in 0..3 {
+                handoff_if_switched(
+                    &engine,
+                    &pool,
+                    &mut rig,
+                    &mut state,
+                    &mut last_active,
+                    &pending,
+                );
+                assert!(state.handoff_deferred);
+                assert_eq!(last_active, 0);
+                assert!(pending.load(std::sync::atomic::Ordering::Relaxed));
+                state
+                    .step(
+                        &engine,
+                        &mut backend,
+                        &mut rig,
+                        &sinks,
+                        tick as f64,
+                        &mut ra,
+                        &mut rr,
+                        &mut station,
+                    )
+                    .unwrap();
+                assert_eq!(opens.get(), 0, "do not compete with the claimed open");
+            }
+            if !successful_open {
+                incoming.rig = Rig::vox();
+            }
+            pool.lock().unwrap().push(incoming);
+            drop(claim);
+            handoff_if_switched(
+                &engine,
+                &pool,
+                &mut rig,
+                &mut state,
+                &mut last_active,
+                &pending,
+            );
+            assert!(!state.handoff_deferred);
+            assert!(!pending.load(std::sync::atomic::Ordering::Relaxed));
+            assert_eq!(last_active, id);
+            if successful_open {
+                assert_eq!(state.applied.rigctld_port, port, "adopt the finished open");
+                assert_eq!(opens.get(), 0);
+            } else {
+                state
+                    .step(
+                        &engine,
+                        &mut backend,
+                        &mut rig,
+                        &sinks,
+                        4.0,
+                        &mut ra,
+                        &mut rr,
+                        &mut station,
+                    )
+                    .unwrap();
+                assert_eq!(
+                    opens.get(),
+                    1,
+                    "a failed open retains native fallback recovery"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn monitor_open_has_one_owner_while_other_radios_can_open() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+        let pool: MonitorPool = Arc::new(MonitorConnections::new(Vec::new()));
+        let want = {
+            let mut e = engine.lock().unwrap();
+            let first = e.add_radio();
+            let second = e.add_radio();
+            e.set_active_radio(0);
+            [first, second].map(|id| {
+                let profile = e.settings().radios.iter().find(|p| p.id == id).unwrap();
+                (id, Transport::from_profile(profile))
+            })
+        };
+        let first_port = want[0].1.rigctld_port;
+        let first_opens = Arc::new(AtomicUsize::new(0));
+        let second_opens = AtomicUsize::new(0);
+        let (started, entering) = std::sync::mpsc::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        let worker = {
+            let engine = engine.clone();
+            let pool = pool.clone();
+            let want = [want[0].clone()];
+            let first_opens = first_opens.clone();
+            std::thread::spawn(move || {
+                reconcile_pool_with_open(&pool, &want, 0, &engine, 0.0, |_| {
+                    first_opens.fetch_add(1, Ordering::SeqCst);
+                    started.send(()).unwrap();
+                    released.recv().unwrap();
+                    (Rig::vox(), None, Some(false))
+                });
+            })
+        };
+        entering.recv_timeout(Duration::from_secs(5)).unwrap();
+        reconcile_pool_with_open(&pool, &want, 0, &engine, 150.0, |transport| {
+            if transport.rigctld_port == first_port {
+                first_opens.fetch_add(1, Ordering::SeqCst);
+            } else {
+                second_opens.fetch_add(1, Ordering::SeqCst);
+            }
+            (Rig::vox(), None, Some(false))
+        });
+        // Always release/join the blocked opener before asserting a failure.
+        release.send(()).unwrap();
+        worker.join().unwrap();
+        assert_eq!(
+            first_opens.load(Ordering::SeqCst),
+            1,
+            "one opener per radio"
+        );
+        assert_eq!(
+            second_opens.load(Ordering::SeqCst),
+            1,
+            "other radios stay available"
+        );
+        assert_eq!(pool.lock().unwrap().len(), 2);
     }
 
     #[test]
@@ -16200,7 +16738,7 @@ mod tests {
         state.applied = cat_transport(4532, None); // radio 0 (the OUTGOING active) on its port
                                                    // Radio 0 is a live CAT rig — after the swap it must be DEMOTED to Vox in the pool.
         let mut rig = Rig::with_control(Some("127.0.0.1:4532".to_string()), PttMode::Cat);
-        let pool: MonitorPool = Arc::new(Mutex::new(vec![MonitorConn {
+        let pool: MonitorPool = Arc::new(MonitorConnections::new(vec![MonitorConn {
             id: r1,
             transport: r1_transport,
             rig: Rig::with_control(Some(format!("127.0.0.1:{r1_port}")), PttMode::Vox),
@@ -16448,7 +16986,7 @@ mod tests {
         state.applied = yaesu_transport;
         let mut last_active = 0u32;
         // The Icom is live in the monitor pool (read-only ⇒ Vox), as the monitor thread opens it.
-        let pool: MonitorPool = Arc::new(Mutex::new(vec![MonitorConn {
+        let pool: MonitorPool = Arc::new(MonitorConnections::new(vec![MonitorConn {
             id: icom,
             transport: Transport::from_profile(&icom_profile),
             rig: Rig::with_control(Some("127.0.0.1:4533".to_string()), PttMode::Vox),
@@ -16642,7 +17180,7 @@ mod tests {
         let mut state = loop_state();
         state.applied = yaesu_transport;
         let mut last_active = 0u32;
-        let pool: MonitorPool = Arc::new(Mutex::new(vec![MonitorConn {
+        let pool: MonitorPool = Arc::new(MonitorConnections::new(vec![MonitorConn {
             id: icom,
             transport: Transport::from_profile(&icom_profile),
             // Opened READ-ONLY by the monitor thread; the adopt gives it the real PTT mode.
@@ -16962,7 +17500,7 @@ mod tests {
         state.applied = yaesu_transport;
         ContendedSwitch {
             engine,
-            pool: Arc::new(Mutex::new(vec![MonitorConn {
+            pool: Arc::new(MonitorConnections::new(vec![MonitorConn {
                 id: icom,
                 transport: Transport::from_profile(&icom_profile),
                 // Opened READ-ONLY by the monitor thread; the adopt gives it the real PTT mode.
@@ -18104,7 +18642,7 @@ mod tests {
         state.applied = cat_transport(4532, None); // radio 0 (active) on its port
         let mut rig = Rig::vox();
         // Radio 1's monitor conn is DEAD: a `Rig::vox()` with no control channel + no daemon.
-        let pool: MonitorPool = Arc::new(Mutex::new(vec![MonitorConn {
+        let pool: MonitorPool = Arc::new(MonitorConnections::new(vec![MonitorConn {
             id: r1,
             transport: r1_transport,
             rig: Rig::vox(),
@@ -18170,7 +18708,7 @@ mod tests {
         state.tx_until_ms = Some(now_unix_ms() + 5000.0);
         state.manual_ptt_applied = true;
         let mut rig = Rig::vox();
-        let pool: MonitorPool = Arc::new(Mutex::new(vec![MonitorConn {
+        let pool: MonitorPool = Arc::new(MonitorConnections::new(vec![MonitorConn {
             id: r1,
             rig: Rig::with_control(
                 Some(format!("127.0.0.1:{}", r1_transport.rigctld_port)),
@@ -18218,7 +18756,7 @@ mod tests {
         let mut state = loop_state();
         state.applied = cat_transport(4532, None);
         let mut rig = Rig::vox();
-        let pool: MonitorPool = Arc::new(Mutex::new(Vec::new())); // empty pool
+        let pool: MonitorPool = Arc::new(MonitorConnections::new(Vec::new())); // empty pool
         let mut last_active = 0u32;
         let pending = std::sync::atomic::AtomicBool::new(false);
         engine.lock().unwrap().set_active_radio(r1);

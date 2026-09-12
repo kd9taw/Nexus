@@ -19,6 +19,8 @@ interface Props {
    * A disabled section's chip stays informative-only, never a dead link. */
   connectEnabled: boolean
   dxpedEnabled: boolean
+  /** False when this session does not supply the needs feed. Absence is not "nothing needed". */
+  needsAvailable?: boolean
   onNavigate: (v: View) => void
   /** Profile-driven chip emphasis (profiles.nowBarEmphasis — previously defined
    * but never wired): the emphasized chip leads the bar and gets the accent.
@@ -137,7 +139,7 @@ const BAND_WORD: Record<string, { wordKey: MessageKey; cls: string }> = {
   Closed: { wordKey: 'nowbar.band.closed', cls: 'bad' },
 }
 
-export function NowBar({ snap, prop, feedHealth, connectEnabled, dxpedEnabled, onNavigate, emphasis }: Props) {
+export function NowBar({ snap, prop, feedHealth, connectEnabled, dxpedEnabled, onNavigate, emphasis, needsAvailable = true }: Props) {
   const band = snap.radio.band
   const report = prop?.advisory.bands.find((b) => b.band === band) ?? null
   // Skip NotOpen cards: the chip must never advertise an unworkable slot as the
@@ -233,12 +235,12 @@ export function NowBar({ snap, prop, feedHealth, connectEnabled, dxpedEnabled, o
         key="need"
         cls={`nb-need ${need ? 'good' : 'weak'}`}
         onClick={dxpedEnabled ? () => onNavigate('dxped') : undefined}
-        title={need ? needTitle : t('nowbar.need.title.none')}
+        title={!needsAvailable ? t('remote.viewUnavailable') : need ? needTitle : t('nowbar.need.title.none')}
       >
         <Target size={13} aria-hidden="true" />
         <span className="nb-k">{t('nowbar.need.label')}</span>
         <span className="nb-v">
-          {need
+          {!needsAvailable ? '—' : need
             ? t('nowbar.need.value', {
                 entity: need.entity,
                 band: need.band,

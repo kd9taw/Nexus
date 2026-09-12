@@ -33,7 +33,9 @@
 /// chain registry. Inert at runtime — see the module docs.
 mod chains;
 mod pouncer;
+mod profile_sync;
 mod remote_monitor;
+mod remote_service;
 /// Pins `assetProtocol.scope` to where SSTV images are actually written — they are one fact in
 /// two files, and when they drifted every gallery preview silently went blank.
 #[cfg(test)]
@@ -78,9 +80,24 @@ struct ConnectWebState {
 }
 type SharedConnectWebState = Arc<Mutex<ConnectWebState>>;
 
-/// Cached propagation nowcast: `(fetched_at, snapshot)`. Caching enforces PSK
+/// Cached propagation nowcast: `(fetched_at, snapshot, context)`. Caching enforces PSK
 /// Reporter's ≥5-minute-per-dataset query limit across UI polls.
-type PropCache = Arc<Mutex<Option<(std::time::Instant, propagation::PropagationSnapshot)>>>;
+type PropCache = Arc<
+    Mutex<
+        Option<(
+            std::time::Instant,
+            propagation::PropagationSnapshot,
+            PropContext,
+        )>,
+    >,
+>;
+/// Context of the base DX board, captured alongside the log needs. Remote readers
+/// must not relabel a cache built for a previous identity or log revision.
+struct PropContext {
+    call: String,
+    grid: String,
+    log: Arc<()>,
+}
 /// TTL cache for the OVATION aurora oval (distinct payload type from PropCache, so
 /// a distinct TypeId for `.manage()`).
 type AuroraCache = Arc<
@@ -1196,6 +1213,10 @@ fn summarize_hosts(hosts: &[String]) -> Option<String> {
 /// feed problem — the UI tooltip says so). Disabled feeds are hidden by the UI.
 #[tauri::command]
 fn get_feed_health(health: State<'_, SharedHealth>) -> FeedHealth {
+    read_feed_health(&health)
+}
+
+fn read_feed_health(health: &SharedHealth) -> FeedHealth {
     use std::sync::atomic::Ordering::Relaxed;
     let now = now_unix();
     // The human DX-cluster nodes (the SSB/phone aggregator): the spawned host list drives the
@@ -2813,7 +2834,7 @@ async fn get_propagation(
     spots: State<'_, SharedSpots>,
     wx_history: State<'_, SharedWxHistory>,
 ) -> Result<propagation::PropagationSnapshot, String> {
-    let (mycall, mygrid, needs, local_spots) = {
+    let (mycall, mygrid, needs, local_spots, context) = {
         let eng = engine_lock(&state);
         let s = eng.settings();
         let (mycall, mygrid) = (s.mycall.clone(), s.mygrid.clone());
@@ -2853,7 +2874,12 @@ async fn get_propagation(
                 );
             }
         }
-        (mycall, mygrid, needs, local_spots)
+        let context = PropContext {
+            call: mycall.clone(),
+            grid: mygrid.clone(),
+            log: eng.log_read_token(),
+        };
+        (mycall, mygrid, needs, local_spots, context)
     };
 
     let now = now_unix();
@@ -2872,8 +2898,8 @@ async fn get_propagation(
         let guard = cache.lock().map_err(|e| e.to_string())?;
         guard
             .as_ref()
-            .filter(|(when, _)| when.elapsed().as_secs() < PROP_TTL_SECS)
-            .map(|(_, snap)| snap.clone())
+            .filter(|(when, _, _)| when.elapsed().as_secs() < PROP_TTL_SECS)
+            .map(|(_, snap, _)| snap.clone())
     };
 
     // Track whether THIS poll fetched fresh space weather — only then do we push a
@@ -2922,7 +2948,7 @@ async fn get_propagation(
         match live {
             Ok(snap) => {
                 if let Ok(mut guard) = cache.lock() {
-                    *guard = Some((std::time::Instant::now(), snap.clone()));
+                    *guard = Some((std::time::Instant::now(), snap.clone(), context));
                 }
                 fetched_fresh = true;
                 snap
@@ -2933,7 +2959,7 @@ async fn get_propagation(
                 let guard = cache.lock().map_err(|e| e.to_string())?;
                 guard
                     .as_ref()
-                    .map(|(_, s)| {
+                    .map(|(_, s, _)| {
                         let mut s = s.clone();
                         s.source = "cached".to_string();
                         s
@@ -3204,7 +3230,7 @@ async fn get_path_outlook(
         let guard = cache.lock().map_err(|e| e.to_string())?;
         guard
             .as_ref()
-            .map(|(_, s)| propagation::SpaceWx {
+            .map(|(_, s, _)| propagation::SpaceWx {
                 sfi: s.space_wx.sfi,
                 ssn: LAST_SSN.lock().ok().and_then(|g| *g),
                 kp: s.space_wx.kp,
@@ -3240,7 +3266,6 @@ async fn get_band_outlook(
     state: State<'_, SharedEngine>,
     cache: State<'_, PropCache>,
 ) -> Result<propagation::PathPrediction, String> {
-    const RING_TTL_SECS: u64 = 6 * 3600;
     let (mygrid, prop_engine, station_power_w, ant_gain_dbi) = {
         let eng = engine_lock(&state);
         let st = eng.settings();
@@ -3264,7 +3289,7 @@ async fn get_band_outlook(
         let guard = cache.lock().map_err(|e| e.to_string())?;
         guard
             .as_ref()
-            .map(|(_, s)| propagation::SpaceWx {
+            .map(|(_, s, _)| propagation::SpaceWx {
                 // R12 only matters to p533; withholding it from the heuristic keeps
                 // that path byte-identical to its pre-engine-seam behavior.
                 ssn: if p533 {
@@ -3280,6 +3305,29 @@ async fn get_band_outlook(
             .unwrap_or_default()
     };
     let t = now_unix();
+    ring_prediction(
+        mygrid,
+        prop_engine,
+        station_power_w,
+        ant_gain_dbi,
+        me,
+        wx,
+        t,
+    )
+    .await
+}
+
+async fn ring_prediction(
+    mygrid: String,
+    prop_engine: String,
+    station_power_w: Option<f64>,
+    ant_gain_dbi: f64,
+    me: (f64, f64),
+    wx: propagation::SpaceWx,
+    t: i64,
+) -> Result<propagation::PathPrediction, String> {
+    const RING_TTL_SECS: u64 = 6 * 3600;
+    let p533 = prop_engine == "p533";
     // 8 azimuths at ~9000 km — direction-agnostic "best band to ANY far DX now".
     if !p533 {
         let eng = propagation::HeuristicEngine::new(Some(me));
@@ -3364,8 +3412,30 @@ struct DxpedDayBest {
 /// the DXpeditions board polls the 7-day planner; a single slot would thrash and
 /// re-run the p533 sweep on every alternating call. Expired entries are pruned on
 /// insert, so the map stays at the handful of live param shapes.
-static DXPED_WINDOWS: Mutex<Vec<(std::time::Instant, String, Vec<DxpedWindow>)>> =
-    Mutex::new(Vec::new());
+type DxpedWindowsCache = Mutex<Vec<(std::time::Instant, String, Vec<DxpedWindow>)>>;
+static DXPED_WINDOWS: DxpedWindowsCache = Mutex::new(Vec::new());
+const DXPED_WINDOWS_TTL_SECS: u64 = 6 * 3600;
+
+/// Identical cache identity for the native producer and passive Remote reader.
+#[allow(clippy::too_many_arguments)]
+fn dxped_windows_key(
+    day: i64,
+    days: u32,
+    mygrid: &str,
+    prop_engine: &str,
+    station_power_w: Option<f64>,
+    ant_gain_dbi: f64,
+    ssn: Option<f32>,
+    mut calls: Vec<&str>,
+) -> String {
+    calls.sort_unstable();
+    format!(
+        "{day}|{days}|{mygrid}|{prop_engine}|{ant_gain_dbi}|{:?}|{:?}|{}",
+        station_power_w,
+        ssn.map(|v| v.round() as i32),
+        calls.join(",")
+    )
+}
 
 /// Modelled best-contact windows for every active + upcoming DXpedition, from
 /// the operator's grid, using the CONFIGURED prediction engine (Settings ▸
@@ -3381,7 +3451,6 @@ async fn get_dxped_windows(
     cache: State<'_, PropCache>,
     days: Option<u32>,
 ) -> Result<Vec<DxpedWindow>, String> {
-    const WINDOWS_TTL_SECS: u64 = 6 * 3600;
     // 1 = today only (Connect's default); the DXpeditions board asks for 7 (the
     // week planner). Clamped so a bad caller can't request an unbounded sweep.
     let days = days.unwrap_or(1).clamp(1, 10);
@@ -3402,7 +3471,7 @@ async fn get_dxped_windows(
     // cached snapshot (the same values the dashboard itself was built from).
     let (targets, wx) = {
         let guard = cache.lock().map_err(|e| e.to_string())?;
-        let Some((_, s)) = guard.as_ref() else {
+        let Some((_, s, _)) = guard.as_ref() else {
             return Ok(Vec::new()); // no snapshot yet — the board is empty too
         };
         let mut seen = std::collections::HashSet::new();
@@ -3449,18 +3518,20 @@ async fn get_dxped_windows(
         return Ok(Vec::new());
     }
     let day = now_unix() / 86_400;
-    let mut calls: Vec<&str> = targets.iter().map(|(c, ..)| c.as_str()).collect();
-    calls.sort_unstable();
-    let key = format!(
-        "{day}|{days}|{mygrid}|{prop_engine}|{ant_gain_dbi}|{:?}|{:?}|{}",
+    let key = dxped_windows_key(
+        day,
+        days,
+        &mygrid,
+        &prop_engine,
         station_power_w,
-        wx.ssn.map(|v| v.round() as i32),
-        calls.join(",")
+        ant_gain_dbi,
+        wx.ssn,
+        targets.iter().map(|(c, ..)| c.as_str()).collect(),
     );
     if let Ok(g) = DXPED_WINDOWS.lock() {
         if let Some((_, _, v)) = g
             .iter()
-            .find(|(when, k, _)| *k == key && when.elapsed().as_secs() < WINDOWS_TTL_SECS)
+            .find(|(when, k, _)| *k == key && when.elapsed().as_secs() < DXPED_WINDOWS_TTL_SECS)
         {
             return Ok(v.clone());
         }
@@ -3549,7 +3620,7 @@ async fn get_dxped_windows(
     .await
     .map_err(|e| e.to_string())?;
     if let Ok(mut g) = DXPED_WINDOWS.lock() {
-        g.retain(|(when, _, _)| when.elapsed().as_secs() < WINDOWS_TTL_SECS);
+        g.retain(|(when, _, _)| when.elapsed().as_secs() < DXPED_WINDOWS_TTL_SECS);
         g.retain(|(_, k, _)| *k != key);
         g.push((std::time::Instant::now(), key, out.clone()));
     }
@@ -3669,7 +3740,7 @@ async fn get_pca(
         let guard = cache.lock().map_err(|e| e.to_string())?;
         guard
             .as_ref()
-            .map(|(_, s)| s.space_wx.kp as f64)
+            .map(|(_, s, _)| s.space_wx.kp as f64)
             .unwrap_or(0.0)
     };
     let now = now_unix();
@@ -4645,7 +4716,10 @@ enum TleSnapshotOnDisk {
 /// but a decade of shipped builds is a long time).
 fn load_tle_snapshot_from(path: &std::path::Path) -> Option<TleSnapshot> {
     let text = std::fs::read_to_string(path).ok()?;
-    match serde_json::from_str::<TleSnapshotOnDisk>(&text).ok()? {
+    parse_tle_snapshot(&text)
+}
+fn parse_tle_snapshot(text: &str) -> Option<TleSnapshot> {
+    match serde_json::from_str::<TleSnapshotOnDisk>(text).ok()? {
         TleSnapshotOnDisk::Snapshot(s) => Some(s),
         TleSnapshotOnDisk::Legacy(v) if !v.is_empty() => Some(TleSnapshot {
             schema: 1,
@@ -5049,11 +5123,44 @@ fn view_passes(
 /// when no usable elements exist at all — the UI draws nothing.
 #[tauri::command]
 async fn get_satellites(state: State<'_, SharedEngine>) -> Result<Option<SatView>, String> {
-    const VIEW_TTL_SECS: u64 = 600;
     let mygrid = {
         let eng = engine_lock(&state);
         eng.settings().mygrid.clone()
     };
+    satellite_view_for_grid(mygrid).await
+}
+
+async fn satellite_view_for_grid(mygrid: String) -> Result<Option<SatView>, String> {
+    let tles = tle_snapshot();
+    let (fetched, source) = tle_provenance();
+    satellite_view_from_inputs(mygrid, tles, fetched, source, tle_catalog()).await
+}
+
+// A successful SGP4 calculation can still place a decaying orbit below the
+// Earth's surface. That has no valid radio footprint and serializes acos(NaN)
+// as JSON null. Keep it in the existing noPosition disclosure, not on the map.
+fn satellite_map_position(tle: &propagation::sat::Tle, now: i64) -> Option<(f64, f64, f64, f64)> {
+    const RE_KM: f64 = 6371.0;
+    let (lat, lon, alt) = propagation::sat::subpoint(tle, now)?;
+    if ![lat, lon, alt].iter().all(|v| v.is_finite())
+        || !(-90.0..=90.0).contains(&lat)
+        || !(-180.0..=180.0).contains(&lon)
+        || alt < 0.0
+    {
+        return None;
+    }
+    let footprint = RE_KM * (RE_KM / (RE_KM + alt)).acos();
+    footprint.is_finite().then_some((lat, lon, alt, footprint))
+}
+
+async fn satellite_view_from_inputs(
+    mygrid: String,
+    tles: Vec<propagation::sat::Tle>,
+    tle_fetched_at: i64,
+    tle_source: String,
+    catalog: std::collections::HashMap<u32, propagation::live::tle::SatCatalogEntry>,
+) -> Result<Option<SatView>, String> {
+    const VIEW_TTL_SECS: u64 = 600;
     let now = now_unix();
     let key = format!("{}|{}", now / (VIEW_TTL_SECS as i64), mygrid);
     let cached_passes = {
@@ -5062,17 +5169,13 @@ async fn get_satellites(state: State<'_, SharedEngine>) -> Result<Option<SatView
             (*k == key && when.elapsed().as_secs() < VIEW_TTL_SECS).then(|| v.clone())
         })
     };
-    let tles = tle_snapshot();
     if tles.is_empty() {
         return Ok(None); // never had elements — honest no-data
     }
-    let (tle_fetched_at, tle_source) = tle_provenance();
-    let catalog = tle_catalog();
     let observer = propagation::geo::maidenhead_to_latlon(mygrid.trim());
     let need_passes = cached_passes.is_none();
     let out = tauri::async_runtime::spawn_blocking(move || {
         use propagation::sat;
-        const RE_KM: f64 = 6371.0;
         // Staleness is PER BIRD (the spec's rule): a decaying cubesat with a
         // month-old epoch drops out alone — it must never blank the fresh
         // majority (review catch: the old max-age gate killed the whole view).
@@ -5106,8 +5209,7 @@ async fn get_satellites(state: State<'_, SharedEngine>) -> Result<Option<SatView
         // than silently dropped.
         let mut drawn: std::collections::HashSet<u32> = std::collections::HashSet::new();
         for t in &fresh {
-            if let Some((lat, lon, alt_km)) = sat::subpoint(t, now) {
-                let footprint_km = RE_KM * (RE_KM / (RE_KM + alt_km)).acos();
+            if let Some((lat, lon, alt_km, footprint_km)) = satellite_map_position(t, now) {
                 // 10 min of trail + 25 min of projection at 1-min steps — one
                 // TLE parse per bird (the batch fn), ~ms for the whole flock.
                 let track = sat::track(t, now, 600, 1_500, 60);
@@ -5148,13 +5250,18 @@ async fn get_satellites(state: State<'_, SharedEngine>) -> Result<Option<SatView
                 }
             }
         }
-        let passes = match cached_passes {
+        let mut passes = match cached_passes {
             Some(p) => p,
             None => {
                 computed_passes.sort_by_key(|p| p.aos_unix);
                 computed_passes
             }
         };
+        // Cached pass geometry cannot retain a bird whose current orbit no
+        // longer produces a usable map position.
+        let positioned: std::collections::HashSet<&str> =
+            birds.iter().map(|b| b.name.as_str()).collect();
+        passes.retain(|p| positioned.contains(p.name.as_str()));
         // Every bird that did NOT get a row, with why. Elements we hold but
         // that aged past the 30 d ceiling first (they have a name to show),
         // then catalog birds nothing carried elements for at all.
@@ -6463,37 +6570,50 @@ async fn get_sat_pass_needs(
         if let Some(sn) = satnogs_snapshot(norads) {
             status_by_norad.extend(sn.statuses.into_iter().map(|st| (st.norad, st.status)));
         }
-        let mut passes = Vec::new();
-        for (label, t) in mine {
-            let norad = sat::norad_id(&t.line1);
-            let status = norad.and_then(|n| status_by_norad.get(&n).cloned());
-            // Same 6 h backscan as the schedule so an in-progress pass keeps
-            // its real AOS (and both surfaces agree on row identity).
-            for p in sat::passes(t, obs, now - 21_600, hours + 6) {
-                if p.los_unix <= now {
-                    continue;
-                }
-                let earn = propagation::pass_earn(t, p.aos_unix, p.los_unix, &sat_needs);
-                passes.push(SatPassDto {
-                    name: label.clone(),
-                    norad,
-                    aos_unix: p.aos_unix,
-                    los_unix: p.los_unix,
-                    max_el_deg: p.max_el_deg,
-                    aos_az_deg: p.aos_az_deg,
-                    los_az_deg: p.los_az_deg,
-                    status: status.clone(),
-                    earn: Some(earn),
-                    aos_clamped: false, // favourites wire frozen — see get_sat_schedule
-                });
-            }
-        }
-        passes.sort_by_key(|p| p.aos_unix);
-        passes
+        satellite_needs_passes(obs, &mine, hours, &sat_needs, &status_by_norad, now)
     })
     .await
     .map_err(|e| e.to_string())?;
     Ok(out)
+}
+
+/// One pure fold shared by the native schedule and the bounded Remote planner.
+fn satellite_needs_passes(
+    obs: (f64, f64),
+    mine: &[(String, &propagation::sat::Tle)],
+    hours: u32,
+    sat_needs: &propagation::SatNeeds<'_>,
+    status_by_norad: &std::collections::HashMap<u32, String>,
+    now: i64,
+) -> Vec<SatPassDto> {
+    use propagation::sat;
+    let mut passes = Vec::new();
+    for (label, t) in mine {
+        let norad = sat::norad_id(&t.line1);
+        let status = norad.and_then(|n| status_by_norad.get(&n).cloned());
+        // Same 6 h backscan as the schedule so an in-progress pass keeps
+        // its real AOS (and both surfaces agree on row identity).
+        for p in sat::passes(t, obs, now - 21_600, hours + 6) {
+            if p.los_unix <= now {
+                continue;
+            }
+            let earn = propagation::pass_earn(t, p.aos_unix, p.los_unix, sat_needs);
+            passes.push(SatPassDto {
+                name: label.clone(),
+                norad,
+                aos_unix: p.aos_unix,
+                los_unix: p.los_unix,
+                max_el_deg: p.max_el_deg,
+                aos_az_deg: p.aos_az_deg,
+                los_az_deg: p.los_az_deg,
+                status: status.clone(),
+                earn: Some(earn),
+                aos_clamped: false, // favourites wire frozen — see get_sat_schedule
+            });
+        }
+    }
+    passes.sort_by_key(|p| p.aos_unix);
+    passes
 }
 
 /// The ISS's current-or-next pass over the operator's QTH, or `None`. Keyed on
@@ -6726,9 +6846,30 @@ async fn get_sat_detail(
         let eng = engine_lock(&state);
         eng.settings().mygrid.clone()
     };
-    let obs = propagation::geo::maidenhead_to_latlon(mygrid.trim());
+    satellite_detail_for_grid(mygrid, name).await
+}
+
+async fn satellite_detail_for_grid(mygrid: String, name: String) -> Result<SatDetailDto, String> {
     let tles = tle_snapshot();
     let aliases = tle_aliases();
+    let norad =
+        resolve_bird(&tles, &aliases, &name).and_then(|t| propagation::sat::norad_id(&t.line1));
+    // Disk-backed native catalog reads retain their blocking-worker boundary.
+    let snap =
+        tauri::async_runtime::spawn_blocking(move || satnogs_snapshot(norad.into_iter().collect()))
+            .await
+            .map_err(|e| e.to_string())?;
+    satellite_detail_from_inputs(mygrid, name, tles, aliases, snap).await
+}
+
+async fn satellite_detail_from_inputs(
+    mygrid: String,
+    name: String,
+    tles: Vec<propagation::sat::Tle>,
+    aliases: std::collections::HashMap<String, u32>,
+    snap: Option<SatnogsSnapshot>,
+) -> Result<SatDetailDto, String> {
+    let obs = propagation::geo::maidenhead_to_latlon(mygrid.trim());
     let now = now_unix();
     let out = tauri::async_runtime::spawn_blocking(move || -> Result<SatDetailDto, String> {
         use propagation::sat;
@@ -6744,7 +6885,6 @@ async fn get_sat_detail(
             None => None,
         };
         let norad = tle.and_then(|t| sat::norad_id(&t.line1));
-        let snap = satnogs_snapshot(norad.into_iter().collect());
         let status = norad.and_then(|n| {
             snap.as_ref()
                 .and_then(|sn| sn.statuses.iter().find(|st| st.norad == n))
@@ -8005,6 +8145,10 @@ fn get_sat_transponder(
     state: State<'_, SharedEngine>,
 ) -> Result<Option<SatTransponderHeldDto>, String> {
     let eng = engine_lock(&state);
+    Ok(satellite_held(&eng))
+}
+
+fn satellite_held(eng: &tempo_app::engine::Engine) -> Option<SatTransponderHeldDto> {
     let binding = eng.sat_binding().map(|b| SatBindingDto {
         radio_id: b.radio_id,
         radio_name: b.radio_name.clone(),
@@ -8017,7 +8161,7 @@ fn get_sat_transponder(
         pending_uplink_mhz: b.pending_uplink_mhz,
         note: b.note.clone(),
     });
-    Ok(eng.sat_transponder_held().map(|(label, index)| {
+    eng.sat_transponder_held().map(|(label, index)| {
         // The engine label is "BIRD|description" (see set_sat_transponder).
         let (name, description) = label
             .split_once('|')
@@ -8029,7 +8173,7 @@ fn get_sat_transponder(
             description,
             binding,
         }
-    }))
+    })
 }
 
 /// The NOAA planetary-K outlook — what the disturbance is doing over the next three
@@ -8416,8 +8560,6 @@ fn apply_and_persist(
         settings.lotw_max_age_days,
         std::sync::atomic::Ordering::Relaxed,
     );
-    // Integrated rotator daemon follows the settings (spawn/respawn/kill).
-    sync_rotctld(&settings);
     // Capture the feed config before `settings` moves into the engine.
     // `cluster_active()`, not the raw setting: Unassisted mode must also stop the
     // cluster/RBN feeds from STARTING, not just discard what they deliver.
@@ -8498,6 +8640,8 @@ fn apply_and_persist(
         }
         eng.snapshot()
     }; // release the engine lock before spawning feed threads
+       // Resolve the authoritative merged profile after the Engine commit.
+    sync_rotctld(&state);
 
     // The live feeds (cluster telnet login, PSKR MQTT topic filters) are BOUND to
     // the callsign — a changed call tears them down, clears old-call buffers, and
@@ -9436,7 +9580,21 @@ fn effective_rotator_addr(st: &tempo_app::settings::Settings) -> Option<String> 
 /// nothing, forever, and re-saving Settings did not bring it back — the params matched, so this
 /// function took the "running with the right params" arm and never looked at the corpse. It
 /// looks now, in both places: after the spawn, and on every later sync.
-fn sync_rotctld(st: &tempo_app::settings::Settings) {
+fn sync_rotctld(engine: &SharedEngine) {
+    // Serialize first, then read current settings. A delayed notification must
+    // never restore a snapshot from before a newer local profile selection.
+    // Drop Engine before any daemon operation; the lock order is ROTCTLD -> Engine.
+    profile_sync::with_current(
+        &ROTCTLD,
+        || engine_lock(engine).settings().clone(),
+        |owner, settings| sync_rotctld_owned(owner, &settings),
+    );
+}
+
+fn sync_rotctld_owned(
+    g: &mut Option<(tempo_audio::rigctld_proc::RigctldProc, RotctldParams)>,
+    st: &Settings,
+) {
     let want = st.rotator_host.trim().is_empty() && st.rotator_model > 0;
     let params = (
         st.rotator_model,
@@ -9444,7 +9602,6 @@ fn sync_rotctld(st: &tempo_app::settings::Settings) {
         st.rotator_baud,
         rotctld_port_for(st),
     );
-    let Ok(mut g) = ROTCTLD.lock() else { return };
     // Liveness is a `&mut` question (`try_wait`), so it is asked BEFORE the match rather than in
     // a pattern guard. A daemon that died takes the respawn path, which is SAFE here for the
     // same reason the CAT daemon's rebuild is: while it is dead there is no rotator channel to
@@ -9736,6 +9893,12 @@ struct CwDecodeResult {
 fn cw_decode(state: State<'_, SharedEngine>, sensitivity: f32) -> Result<CwDecodeResult, String> {
     let mut eng = engine_lock(&state);
     eng.set_cw_sensitivity(sensitivity); // operator slider; scales the decode gates
+    Ok(read_cw_state(&eng))
+}
+
+/// Passive half of the local decoder command. Remote observation must never
+/// apply a browser's decoder sensitivity to the station.
+fn read_cw_state(eng: &tempo_app::engine::Engine) -> CwDecodeResult {
     let d = eng.cw_decode();
     let sent = eng.cw_sent();
     let worked = eng.active_peer();
@@ -9745,7 +9908,7 @@ fn cw_decode(state: State<'_, SharedEngine>, sensitivity: f32) -> Result<CwDecod
     let assist = tempo_core::cw_parse::analyze(&d.text, &sent, &mycall, worked.as_deref(), |b| {
         propagation::dxcc::resolve(b).is_some()
     });
-    Ok(CwDecodeResult {
+    CwDecodeResult {
         text: d.text,
         wpm: d.wpm,
         sent,
@@ -9765,7 +9928,7 @@ fn cw_decode(state: State<'_, SharedEngine>, sensitivity: f32) -> Result<CwDecod
         prompt: assist.guidance.prompt,
         recommended: assist.guidance.recommended,
         worked_call: worked,
-    })
+    }
 }
 
 /// Toggle the AI CW decoder (beta) — persisted; the decode thread + audio ring follow it.
@@ -10938,18 +11101,18 @@ fn set_rx_gain(state: State<'_, SharedEngine>, gain: f32) -> Result<AppSnapshot,
 /// `apply_settings`). Persisted so the active radio survives a restart. Returns the snapshot.
 #[tauri::command(async)]
 fn set_active_radio(state: State<'_, SharedEngine>, id: u32) -> Result<AppSnapshot, String> {
-    let (snap, settings) = {
+    let snap = {
         let mut eng = engine_lock(&state);
         eng.set_active_radio(id);
         if let Err(e) = eng.settings().save(&settings_path()) {
             eprintln!("tempo: set_active_radio save failed: {e}");
         }
-        (eng.snapshot(), eng.settings().clone())
+        eng.snapshot()
     }; // drop the engine lock before touching the rotator daemon
        // Each radio carries its own rotator — re-sync the rotctld daemon to the newly-active radio's
        // rotator config (mirrors set_settings). The rig loop swaps CAT/audio on its own via the flat
        // mirror, but the rotator daemon only follows an explicit sync.
-    sync_rotctld(&settings);
+    sync_rotctld(&state);
     Ok(snap)
 }
 
@@ -11466,23 +11629,33 @@ fn get_cat_cw_unproven_rig_models() -> Vec<u32> {
 /// The transmit interlock is NOT here. It lives in the poll thread, which holds a status frame
 /// from a moment earlier and so knows whether the amplifier is keyed; this layer has no reading
 /// of its own and a check written here would be a guess wearing a guard's clothes.
-#[tauri::command]
-fn amp_command(_which: String) -> bool {
+#[tauri::command(async)]
+fn amp_command(_which: String, _state: State<'_, SharedEngine>) -> bool {
     #[cfg(feature = "radio")]
     {
-        use tempo_audio::amplifier::AmpIntent;
-        let cmd = match _which.as_str() {
-            "bandDown" => AmpIntent::BandDown,
-            "bandUp" => AmpIntent::BandUp,
-            "operate" => AmpIntent::ToggleOperate,
-            _ => return false,
-        };
-        tempo_audio::amppoll::queue_amp_command(cmd)
+        queue_local_amp_command(&_which, &_state)
     }
     #[cfg(not(feature = "radio"))]
     {
         false
     }
+}
+
+#[cfg(feature = "radio")]
+fn queue_local_amp_command(which: &str, engine: &SharedEngine) -> bool {
+    use tempo_audio::amplifier::AmpIntent;
+    let cmd = match which {
+        "bandDown" => AmpIntent::BandDown,
+        "bandUp" => AmpIntent::BandUp,
+        "operate" => AmpIntent::ToggleOperate,
+        _ => return false,
+    };
+    // Revoke before enqueueing, even when the local queue is full. Keep the
+    // engine until admission so a Remote request cannot slip between the two.
+    // The port owner rechecks cancellation after releasing this same mutex.
+    let native = engine.lock().unwrap();
+    native.note_local_amplifier_command();
+    tempo_audio::amppoll::queue_amp_command(cmd)
 }
 
 // The band-plan channel list drives BOTH the band selector AND the frequency-preset dropdown —
@@ -11529,97 +11702,7 @@ fn licensed_bands(
     class: tempo_app::settings::LicenseClass,
     mode: tempo_app::settings::OperatingMode,
 ) -> Vec<tempo_app::bandplan::BandChannel> {
-    use tempo_app::bandplan::BandChannel;
-    use tempo_app::settings::OperatingMode;
-    // Band, UI group, and a LISTENING dial — somewhere sensible to park when this class has
-    // no transmit segment here (#184, akhepcat: "there are no restrictions on receiving").
-    // These are calling/activity frequencies, not segment starts, because a receive-only row
-    // has no segment to start at.
-    const BANDS: &[(&str, &str, f64)] = &[
-        ("160m", "HF", 1.845),
-        ("80m", "HF", 3.573),
-        ("40m", "HF", 7.074),
-        ("30m", "HF", 10.136),
-        ("20m", "HF", 14.074),
-        ("17m", "HF", 18.100),
-        ("15m", "HF", 21.074),
-        ("12m", "HF", 24.915),
-        ("10m", "HF", 28.074),
-        ("6m", "VHF", 50.313),
-        // 4 m is IARU Region 1 only — the US has no allocation at any class (#75). It sits
-        // here rather than being left to the FT dropdown because the privilege filter below
-        // is what decides who sees it: a US class holds no 4 m segment and never sees the
-        // row, while the non-US `Open` class does, in SSB and CW as well as in FT8.
-        ("4m", "VHF", 70.200),
-        ("2m", "VHF", 144.174),
-        ("1.25m", "VHF", 222.100),
-        ("70cm", "UHF", 432.174),
-        // Batch 3: the named microwave bands. Per-class privilege filtering below keeps
-        // each operator's dropdown honest automatically — a band whose class holds no
-        // segment (9 cm for every US class) is omitted for them and present for Open.
-        ("33cm", "UHF", 903.100),
-        ("23cm", "UHF", 1296.100),
-        ("13cm", "UHF", 2304.100),
-        ("9cm", "UHF", 3400.100),
-        ("6cm", "UHF", 5760.100),
-        ("3cm", "UHF", 10368.100),
-        ("1.25cm", "UHF", 24192.100),
-    ];
-    let mut out = Vec::new();
-    for (band, group, rx_dial) in BANDS {
-        // PHONE goes through THE phone home (`privileges::phone_home`), which lifts an LSB
-        // home clear of the segment edge — the bare edge is a dial the transmit gate refuses,
-        // and this command recomputing it from `segment_start` is how the dropdown used to
-        // publish an unkeyable 7.1250 for 40 m. Sideband comes from the same answer.
-        // CW parks in the ACTIVITY window (14.030, not the dead 14.000 edge), clamped to the
-        // licensed segment start so it never drops below privileges; digital on the start.
-        // Sideband is digital-safe USB for both (the rig-mode policy forces CW in the CW
-        // section regardless of this field).
-        let home = if matches!(mode, OperatingMode::Phone) {
-            tempo_app::privileges::phone_home(class, band)
-        } else {
-            tempo_app::privileges::segment_start(class, band, mode).map(|seg| {
-                let dial = if matches!(mode, OperatingMode::Cw) {
-                    tempo_app::bandplan::cw_activity_mhz(band).map_or(seg, |a| a.max(seg))
-                } else {
-                    seg
-                };
-                (dial, "USB")
-            })
-        };
-        // ⚠️ A BAND WITH NO TRANSMIT SEGMENT IS LISTED, NOT DROPPED (#184, akhepcat).
-        //
-        // This used to `if let Some(..)` and skip, which applied a TRANSMIT rule to a TUNING
-        // list: no licence restricts listening, and the radio itself tunes there quite
-        // happily. A US General could not select 4 m at all — not "could listen but not
-        // key" — which is neither what the rules say nor what the rig does.
-        //
-        // So the row is emitted either way; `tx` carries which it is, and the UI marks the
-        // receive-only ones. Nothing here reaches the transmit gate:
-        // `privileges::tx_allowed` is untouched and still refuses the over, with the licence
-        // reason, exactly as before.
-        let (dial, sideband) = match home {
-            Some((dial, sideband)) => (dial, sideband),
-            None => (*rx_dial, "USB"),
-        };
-        // ⚠️ ASK THE GATE, do not re-derive it. The obvious spelling — "we found a segment
-        // start, therefore transmit is allowed" — is WRONG for the `Open` class: it holds no
-        // segments above 23 cm, yet `tx_allowed` short-circuits Open to true (it is the
-        // non-US / undeclared class and is trusted), so that spelling labelled a non-US
-        // operator's own microwave bands receive-only. Reading the real gate keeps this flag
-        // and the refusal in agreement by construction rather than by duplicated logic.
-        let tx = tempo_app::privileges::tx_allowed(class, dial, mode);
-        out.push(BandChannel {
-            band: band.to_string(),
-            group: group.to_string(),
-            dial_mhz: dial,
-            mode: sideband.to_string(),
-            label: format!("{band} · {dial:.3} MHz"),
-            note: String::new(),
-            tx,
-        });
-    }
-    out
+    tempo_app::bandplan::licensed_bands(class, mode)
 }
 
 /// The bands the operator may use in the CURRENT operating mode, each parked at the START of
@@ -11807,26 +11890,10 @@ fn work_spot(
     // listening — the N1MM behavior, using the spot we already hold. Tolerant
     // lookup (3Y0J/MM matches 3Y0J); no spot or no offset → simplex.
     let split_up_khz = call.as_deref().and_then(|c| {
-        let c = c.to_uppercase();
-        // Slash-boundary tolerant identity ONLY ("3Y0J" ⇔ "3Y0J/MM") — bare prefix
-        // matching would let "K9A" pick up "K9AB"'s spot (a different station).
-        let same_station = |dx: &str| {
-            dx == c || dx.starts_with(&format!("{c}/")) || c.starts_with(&format!("{dx}/"))
-        };
-        spots.lock().ok().and_then(|buf| {
-            buf.recent_within(
-                std::time::Instant::now(),
-                std::time::Duration::from_secs(1800),
-            )
-            .into_iter()
-            .filter(|cs| {
-                same_station(&cs.dx_call.to_uppercase())
-                    // The spot must be for THIS frequency neighborhood — a 20 m CW
-                    // spot's split must not apply to the same call worked on 40 m.
-                    && (cs.freq_mhz() - freq_mhz).abs() < 0.05
-            })
-            .find_map(|cs| cs.split_offset_khz())
-        })
+        spots
+            .lock()
+            .ok()
+            .and_then(|buf| work_spot_split_offset(&buf, c, freq_mhz, std::time::Instant::now()))
     });
     let mut eng = engine_lock(&state);
     eng.work_spot_tiered(tier, &mode, freq_mhz, &band, split_up_khz);
@@ -11835,6 +11902,30 @@ fn work_spot(
         eprintln!("tempo: failed to persist worked spot: {e}");
     }
     Ok(eng.snapshot())
+}
+
+/// The desktop and Remote inspect the same station-owned cluster evidence.
+/// A browser cannot erase a pile-up offset by omitting it from its request.
+fn work_spot_split_offset(
+    spots: &tempo_net::cluster::SpotBuffer,
+    call: &str,
+    freq_mhz: f64,
+    now: std::time::Instant,
+) -> Option<f64> {
+    let call = call.to_uppercase();
+    spots
+        .recent_within(now, std::time::Duration::from_secs(1800))
+        .into_iter()
+        .filter(|cs| {
+            // Slash-boundary tolerance never matches K9A with K9AB. Restrict
+            // the frequency neighborhood so another band cannot supply split.
+            let dx = cs.dx_call.to_uppercase();
+            (dx == call
+                || dx.starts_with(&format!("{call}/"))
+                || call.starts_with(&format!("{dx}/")))
+                && (cs.freq_mhz() - freq_mhz).abs() < 0.05
+        })
+        .find_map(|cs| cs.split_offset_khz())
 }
 
 /// Queue CW to transmit (CAT keyer path). `text` is an F-key macro template or literal
@@ -13068,10 +13159,18 @@ fn qso_is_sat(prop_mode: Option<&str>) -> bool {
 #[tauri::command(async)]
 fn get_awards(state: State<'_, SharedEngine>) -> Result<propagation::AwardSummary, String> {
     let eng = engine_lock(&state);
+    Ok(awards_for_records(&eng.get_log(), &eng.settings().mycall))
+}
+
+/// The native award fold, also used as the reference for Remote read conformance.
+fn awards_for_records(
+    records: &[tempo_core::logbook::QsoRecord],
+    my_call: &str,
+) -> propagation::AwardSummary {
     let mut awards = propagation::Awards::new();
     // Tell the accumulator our own entity so "First DX" counts only foreign ones.
-    awards.set_home_call(&eng.settings().mycall);
-    for q in eng.get_log() {
+    awards.set_home_call(my_call);
+    for q in records {
         // Award-eligible confirmation only (LoTW/paper) — eQSL doesn't count; plus
         // whether ARRL has granted DXCC-family credit (DXCC / DXCC_BAND /
         // DXCC_MODE / … — real LoTW exports use the granular codes).
@@ -13091,7 +13190,7 @@ fn get_awards(state: State<'_, SharedEngine>) -> Result<propagation::AwardSummar
             qso_is_sat(q.prop_mode.as_deref()),
         );
     }
-    Ok(awards.summary())
+    awards.summary()
 }
 
 /// The geographic slice of the logbook — QSOs by WAC continent, by CQ zone, and a DX-vs-domestic
@@ -13273,21 +13372,33 @@ struct SpotRow {
 /// retention (≈20 min) bounds the set; the UI applies band/mode/age filters client-side.
 #[tauri::command(async)]
 fn get_all_spots(spots: State<'_, SharedSpots>, state: State<'_, SharedEngine>) -> Vec<SpotRow> {
+    read_all_spots(&spots, &state, false).unwrap_or_default()
+}
+
+fn read_all_spots(
+    spots: &SharedSpots,
+    state: &SharedEngine,
+    nonblocking: bool,
+) -> Result<Vec<SpotRow>, String> {
     use tempo_app::settings::{LicenseClass, OperatingMode};
     // UNASSISTED mode: no spot may be DISPLAYED either. Ingestion is already gated at the
     // feed callbacks, so the buffer should be empty — this is the belt-and-braces read gate,
     // so the guarantee never depends on a buffer clear having succeeded, and any spot
     // received before the switch flipped is invisible immediately.
     if unassisted() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     let now = now_unix();
-    let recent = match spots.lock() {
+    let recent = match if nonblocking {
+        spots.try_lock().map_err(|_| ())
+    } else {
+        spots.lock().map_err(|_| ())
+    } {
         Ok(buf) => buf.recent_within(
             std::time::Instant::now(),
             std::time::Duration::from_secs(1200),
         ),
-        Err(_) => return Vec::new(),
+        Err(_) => return Err("applicationBusy".into()),
     };
     // Take the engine lock ONLY long enough to snapshot what the rows need: the license class,
     // and the roster's cached grid for each spotted call (a station heard before → its grid →
@@ -13303,7 +13414,11 @@ fn get_all_spots(spots: State<'_, SharedSpots>, state: State<'_, SharedEngine>) 
     // Poison recovers (engine_lock), so the gate always sees real state; the Option
     // shape is kept for the chains below.
     let (class, my_call, roster_grids) = {
-        let eng = Some(engine_lock(&state));
+        let eng = Some(if nonblocking {
+            state.try_lock().map_err(|_| "applicationBusy")?
+        } else {
+            engine_lock(state)
+        });
         let class = eng
             .as_ref()
             .map(|e| e.settings().license_class)
@@ -13394,7 +13509,7 @@ fn get_all_spots(spots: State<'_, SharedSpots>, state: State<'_, SharedEngine>) 
         .collect();
     // Newest first; unknown-age spots sort last.
     rows.sort_by_key(|r| if r.age_secs < 0 { i64::MAX } else { r.age_secs });
-    rows
+    Ok(rows)
 }
 
 /// The Needed board's DX-cluster / RBN evidence arm: every buffered spot that is
@@ -13585,18 +13700,35 @@ async fn get_need_alerts(
     // flag a DXCC/state/grid as needed that the other one already worked. Mtime-gated, so this is
     // a cheap `stat` whenever the file is unchanged.
     eng.sync_shared_log_if_changed();
-    let mut needs = propagation::LogNeeds::new();
-    for q in eng.get_log() {
-        needs.add_qso(
-            &q.call,
-            &q.band,
-            &q.mode,
-            q.grid.as_deref(),
-            q.state.as_deref(),
-            q.award_confirmed,
-            qso_is_sat(q.prop_mode.as_deref()),
-        );
-    }
+    read_need_alerts(eng, &live_paths, &region_paths, &spots, &ota_cache)
+}
+
+// Shared calculation, with an immutable engine guard. Remote never invokes the
+// native command's shared-log reconciliation or any logbook write/recovery path.
+fn read_need_alerts(
+    eng: std::sync::MutexGuard<'_, tempo_app::engine::Engine>,
+    live_paths: &SharedLivePaths,
+    region_paths: &SharedRegionPaths,
+    spots: &SharedSpots,
+    ota_cache: &SharedOtaSpots,
+) -> Result<Vec<propagation::NeedAlert>, String> {
+    // Copy only the scoring fields while locked. DXCC resolution, indexing and
+    // ranking then run outside the engine lock for both native and Remote readers.
+    let contacts: Vec<_> = eng
+        .log_records()
+        .iter()
+        .map(|q| {
+            (
+                q.call.clone(),
+                q.band.clone(),
+                q.mode.clone(),
+                q.grid.clone(),
+                q.state.clone(),
+                q.award_confirmed,
+                qso_is_sat(q.prop_mode.as_deref()),
+            )
+        })
+        .collect();
     let snap = eng.snapshot();
     // Operator "wanted" watch list (W1.5) — captured before the lock drops.
     let wanted_calls = eng.settings().wanted_calls.clone();
@@ -13605,6 +13737,18 @@ async fn get_need_alerts(
     // transmit to is not a "need". Open (non-US) short-circuits tx_allowed to true, so no gate.
     let license_class = eng.settings().license_class;
     drop(eng); // nothing below needs the engine — don't hold the hot lock
+    let mut needs = propagation::LogNeeds::new();
+    for (call, band, mode, grid, state, confirmed, satellite) in contacts {
+        needs.add_qso(
+            &call,
+            &band,
+            &mode,
+            grid.as_deref(),
+            state.as_deref(),
+            confirmed,
+            satellite,
+        );
+    }
     let band = snap.radio.band.clone();
     // Your own radio's decodes on the CURRENT band (you are the receiver). These come
     // from the digital modem, so the truthful mode label is the active TIER (FT8/FT4/
@@ -17979,7 +18123,7 @@ fn build_connect_board(
 ) -> Option<tempo_app::connect_web::ConnectBoardData> {
     use tempo_app::connect_web::{ConnectBand, ConnectBoardData, ConnectOpening};
     // One bounded clone under each lock; everything else is built off-lock.
-    let snap = prop.lock().ok()?.as_ref().map(|(_, p)| p.clone())?;
+    let snap = prop.lock().ok()?.as_ref().map(|(_, p, _)| p.clone())?;
     let (call, grid) = {
         let e = engine_lock(engine);
         let s = e.settings();
@@ -20664,12 +20808,14 @@ pub fn run() {
 
     // Build the radio config from settings before the engine takes ownership.
     #[cfg(feature = "radio")]
-    let radio_cfg = tempo_audio::service::RadioConfig {
+    let mut radio_cfg = tempo_audio::service::RadioConfig {
+        on_active_profile_change: None,
         // The SAME feed the UI reads (registered as managed state below) and the tee the
         // rx-dsp thread drains. The waterfall row is produced on that thread, not on the radio
         // loop, so blocking CAT can no longer starve it — see tempo-audio/src/rxtap.rs.
         spectrum_feed: spectrum_feed.clone(),
         rx_tap: std::sync::Arc::new(tempo_audio::rxtap::RxTap::new()),
+        capture_radio_id: Some(settings.active_radio),
         meter_feed: meter_feed.clone(),
         ptt_method: settings.ptt_method.clone(),
         // The operator's D1/D2/D3 choice, from the ACTIVE radio's profile. Without this the
@@ -20755,6 +20901,18 @@ pub fn run() {
     // second chain — and re-registering chains when the radio set changes is the first thing the
     // cap-lift has to solve. It is not papered over here, where it would be untestable.
     let engine: SharedEngine = Arc::new(Mutex::new(Engine::with_settings(settings)));
+    #[cfg(feature = "radio")]
+    {
+        let host_engine = engine.clone();
+        radio_cfg.on_active_profile_change =
+            profile_sync::notifier(move || sync_rotctld(&host_engine))
+                .map_err(|error| {
+                    eprintln!("tempo: active-profile notification unavailable: {error}")
+                })
+                .ok();
+        engine_lock(&engine)
+            .configure_remote_selection_host(radio_cfg.on_active_profile_change.is_some());
+    }
     // Re-seed the decoder's hash table from the logbook so <...> compound-call
     // tokens resolve right after launch (the Fortran table dies with the process).
     {
@@ -20794,10 +20952,7 @@ pub fn run() {
     // up here with the other network feeds rather than when the APRS view is entered.
     sync_aprs_is_feed(&engine);
     // Integrated rotator: launch the bundled rotctld when a model is configured.
-    {
-        let eng = engine_lock(&engine);
-        sync_rotctld(eng.settings());
-    }
+    sync_rotctld(&engine);
     if region_enabled {
         start_pskr_region_feed(&region_paths, &cluster_call, &region_grid);
     }
@@ -20993,9 +21148,7 @@ pub fn run() {
         // journal just means there was nothing pending.
         eng.set_pending_qso_path(pending_qso_path());
         if let Ok(text) = std::fs::read_to_string(pending_qso_path()) {
-            if let Ok(q) = serde_json::from_str::<tempo_app::dto::LoggedQso>(&text) {
-                eng.load_pending_qso(q.into());
-            }
+            eng.load_pending_qso_json(&text);
         }
         // Restore-on-launch (spec §1.1): if the operator left the Field Day
         // master switch on, re-enter FD (passive S&P) so a crash/restart during a
@@ -22080,12 +22233,40 @@ pub fn run() {
 /// Everything the chain MOVES arrives in [`BuildDeps`], which clones, so the caller can hand a
 /// second identical set to a retry after setting a corrupt WebView2 user-data folder aside.
 fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
+    let remote_publisher = remote_monitor::Publisher::default();
+    let remote_service = remote_service::Service::new(
+        d.engine.clone(),
+        remote_publisher.clone(),
+        d.spectrum_feed.clone(),
+        d.meter_feed.clone(),
+        Some(remote_service::query::Sources {
+            spots: d.spots.clone(),
+            live_paths: d.live_paths.clone(),
+            region_paths: d.region_paths.clone(),
+            ota: d.ota_spots.clone(),
+            parks: d.parks.clone(),
+            health: d.health.clone(),
+            propagation: d.prop_cache.clone(),
+            memories: Default::default(),
+            navigation: remote_service::query::navigation::Source::new(
+                d.aurora_cache.clone(),
+                d.kc2g_cache.clone(),
+                d.proton_cache.clone(),
+                d.scales_cache.clone(),
+            ),
+            sstv: remote_service::sstv::Source::new(vec![
+                sstv_gallery_dir(),
+                legacy_sstv_gallery_dir(),
+            ]),
+        }),
+    );
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(d.engine)
-        .manage(remote_monitor::Publisher::default())
+        .manage(remote_publisher)
+        .manage(remote_service)
         .manage(d.spectrum_feed)
         .manage(d.meter_feed)
         .manage(d.prop_cache)
@@ -22124,6 +22305,9 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             ui_state_save,
             get_snapshot,
             remote_monitor::get_remote_monitor_frame,
+            remote_service::get_remote_station_status,
+            remote_service::publish_remote_memory_bank,
+            remote_service::remote_station_action,
             send_message,
             resend_chat,
             select_peer,
@@ -23218,6 +23402,32 @@ mod tests {
         // answers above are the country file and not a resolver that always answers.
         assert!(super::contest_place_call("").is_none());
         assert!(super::contest_place_call("...").is_none());
+    }
+
+    #[cfg(feature = "radio")]
+    #[test]
+    fn local_amp_gesture_revokes_remote_permission_without_changing_tx() {
+        use std::time::{Duration, Instant};
+        for armed in [false, true] {
+            let mut native =
+                tempo_app::engine::Engine::with_settings(tempo_app::settings::Settings::default());
+            native.set_tx_enabled(armed);
+            let tx_generation = native.remote_log_context_generation();
+            let permit = native
+                .remote_actuation_permit(Instant::now() + Duration::from_secs(5))
+                .unwrap();
+            let engine = std::sync::Arc::new(std::sync::Mutex::new(native));
+            assert!(!super::queue_local_amp_command("unknown", &engine));
+            assert!(permit.valid(Instant::now()), "invalid names do nothing");
+            assert!(super::queue_local_amp_command("operate", &engine));
+            assert!(
+                !permit.valid(Instant::now()),
+                "a queued local gesture must cancel the older Remote command"
+            );
+            let native = engine.lock().unwrap();
+            assert_eq!(native.tx_enabled(), armed);
+            assert_eq!(native.remote_log_context_generation(), tx_generation);
+        }
     }
 
     /// ⛔ QRZ'S `FETCH REASON` IS NOT A THING THAT MAY BE PRINTED.

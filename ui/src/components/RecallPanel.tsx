@@ -12,6 +12,7 @@ import { gridToLatLon, stationLatLon, distanceLabelAt, bearingLabelAt } from '..
 import { t } from '../i18n'
 import { useUnits } from '../units'
 import { useRovingList } from '../useRovingList'
+import type { ReactNode } from 'react'
 
 interface Props {
   call: string
@@ -54,6 +55,9 @@ interface Props {
    *  keyboard-reachable; when absent they stay inert, which is what a build with the Logbook
    *  section disabled gets — a row that navigates nowhere must not advertise that it can. */
   onOpenLog?: (call: string) => void
+  /** A bounded station result may carry a complete count and an older latest note. */
+  latestNote?: string | null
+  historyNotice?: ReactNode
 }
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
@@ -98,7 +102,7 @@ function initials(call: string): string {
  *   - The list stays a BOUNDED internal scroller (.recall-log-list, fixed em ceiling): the pane
  *     body is the card's real scroller, and a nested full-length list fights it.
  */
-export function RecallPanel({ call, band, name, qth, grid, lat, lon, country, image, myGrid, hist, newEntity, newBandSlot, newModeSlot, hasLookup = true, bounded = false, onOpenLog }: Props) {
+export function RecallPanel({ call, band, name, qth, grid, lat, lon, country, image, myGrid, hist, newEntity, newBandSlot, newModeSlot, hasLookup = true, bounded = false, onOpenLog, latestNote, historyNotice }: Props) {
   const units = useUnits()
   const c = call.trim()
   const cu = c.toUpperCase()
@@ -149,7 +153,7 @@ export function RecallPanel({ call, band, name, qth, grid, lat, lon, country, im
       : newModeSlot
         ? t('recall.need.mode')
         : null
-  const lastNote = prior.find((q) => (q.notes ?? '').trim())?.notes?.trim()
+  const lastNote = latestNote === undefined ? prior.find((q) => (q.notes ?? '').trim())?.notes?.trim() : latestNote?.trim()
   // The link needs only the CALLSIGN (operator, 2026-07-31: open the call's QRZ page from the
   // recall photo "to look at the page while you're working them"). It used to ride on CS
   // RESOLUTION — `nm || where || image` — and that was backwards, reported 2026-08-05 as "the
@@ -253,6 +257,7 @@ export function RecallPanel({ call, band, name, qth, grid, lat, lon, country, im
         </div>
       </div>
 
+      {historyNotice}
       {lastNote && (
         <div className="recall-note" title={t('recall.note.title')}>
           📝 {lastNote}
@@ -262,7 +267,7 @@ export function RecallPanel({ call, band, name, qth, grid, lat, lon, country, im
       {prior.length > 0 && (
         <div className="recall-log">
           <div className="recall-log-head">
-            {t('recall.log.head')} <span className="recall-log-count">{prior.length}</span>
+            {t('recall.log.head')} <span className="recall-log-count">{hist.count}</span>
           </div>
           {/* role=list: jsdom/AT reachability for rows scrolled under the em ceiling —
               carried over from the compact variant's list when compact was deleted. */}

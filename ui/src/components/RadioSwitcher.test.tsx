@@ -105,3 +105,37 @@ describe('RadioSwitcher', () => {
     expect(screen.getByText('FTDX10').closest('button')!.className).not.toContain('cat-dead')
   })
 })
+
+import { act } from '@testing-library/react'
+import { RemoteOperationsContext, StationControlContext, StationDataContext } from '../stationAccess'
+import { OperationClient } from '../remote-web/operation-client'
+import type { OperationState } from '../remote-web/operation-protocol'
+
+it('uses the dedicated Remote selection grant while leaving peg-lock local, and retires access on disconnect', () => {
+  const sent: any[] = []
+  const client = new OperationClient(s => sent.push(JSON.parse(s)), true, () => 1000, undefined, 3)
+  const state: OperationState = {
+    stationBootId: crypto.randomUUID(), allowed: true, phase: 'controlling', leaseId: crypto.randomUUID(),
+    revision: 1, commandWindowId: crypto.randomUUID(), nextSequence: 1, leaseRemainingMs: 5000,
+    actions: [], txArmed: false, controls: { context: { radioId: 0, radioConnection: 7, ampConnection: null, ampReadSequence: null }, capabilities: ['radioSelection'] }
+  }
+  client.open()
+  client.receive({type:'operationResponse',requestId:sent[sent.length - 1].request.requestId,value:state})
+  const onSwitch = vi.fn(), onTogglePeg = vi.fn()
+  const view = render(<StationControlContext.Provider value={false}><StationDataContext.Provider value={true}>
+    <RemoteOperationsContext.Provider value={client}>
+      <RadioSwitcher radios={[radio({isActive:true,catOk:true}),radio({id:1,name:'IC-9700'})]} pegged={false} onSwitch={onSwitch} onTogglePeg={onTogglePeg}/>
+    </RemoteOperationsContext.Provider>
+  </StationDataContext.Provider></StationControlContext.Provider>)
+  const pill=screen.getByText('IC-9700').closest('button')!, peg=view.container.querySelector<HTMLButtonElement>('.radio-peg')!
+  expect(pill.disabled).toBe(false)
+  expect(peg.disabled).toBe(true)
+  fireEvent.click(pill)
+  expect(onSwitch).toHaveBeenCalledExactlyOnceWith(1)
+  fireEvent.click(peg)
+  expect(onTogglePeg).not.toHaveBeenCalled()
+  act(()=>client.disconnected())
+  expect(pill.disabled).toBe(true)
+  fireEvent.click(pill)
+  expect(onSwitch).toHaveBeenCalledTimes(1)
+})

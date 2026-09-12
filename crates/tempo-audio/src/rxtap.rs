@@ -32,6 +32,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::monitor::SpscRing;
+use crate::receive_audio::{ReceiveAudioFeed, ReceiveOrigin, ReceiveSource};
 
 /// One published capture source: the ring the audio callback pushes into, the device rate its
 /// samples are at, and an epoch that changes whenever the source is replaced.
@@ -57,6 +58,7 @@ pub struct RxSource {
 pub struct RxTap {
     card: Mutex<Option<RxSource>>,
     epoch_seq: AtomicU64,
+    audio: Arc<ReceiveAudioFeed>,
 }
 
 impl RxTap {
@@ -71,12 +73,25 @@ impl RxTap {
     /// one producer per ring. During a device rebuild the outgoing stream keeps pushing into
     /// ITS ring, which nobody drains any more — it fills, drops, and dies with the backend.
     pub fn publish_card(&self, ring: Arc<SpscRing>, rate: u32) {
+        self.publish_card_with_origin(ring, rate, None);
+    }
+
+    /// The descriptor travels with the new ring, never with a later Settings
+    /// read. Local-only/mocked sources deliberately have no origin.
+    pub fn publish_card_with_origin(
+        &self,
+        ring: Arc<SpscRing>,
+        rate: u32,
+        origin: Option<ReceiveOrigin>,
+    ) {
         let epoch = self
             .epoch_seq
             .fetch_add(1, Ordering::AcqRel)
             .wrapping_add(1);
         if let Ok(mut g) = self.card.lock() {
             *g = Some(RxSource { ring, rate, epoch });
+            self.audio
+                .replace_source_with_origin(Some(ReceiveSource { epoch, rate }), origin);
         }
     }
 
@@ -84,18 +99,81 @@ impl RxTap {
     pub fn clear_card(&self) {
         if let Ok(mut g) = self.card.lock() {
             *g = None;
+            self.audio.replace_source(None);
         }
+    }
+
+    /// Retire only the optional media copy before capture teardown. Display and
+    /// decode consumers keep their established lifecycle. Publishing a newly
+    /// opened ring is the only way to make this media source available again.
+    pub fn retire_receive_audio(&self) {
+        self.audio.replace_source(None);
     }
 
     /// The source to drain right now, if any.
     pub fn current(&self) -> Option<RxSource> {
         self.card.lock().ok().and_then(|g| g.clone())
     }
+
+    /// A separate bounded copy stream. The network consumer must not drain the
+    /// single-consumer capture ring returned by current(). This feed alone does
+    /// not authorize a Remote client or open any device or network connection.
+    pub fn receive_audio(&self) -> Arc<ReceiveAudioFeed> {
+        self.audio.clone()
+    }
+
+    pub(crate) fn publish_audio(&self, source: &RxSource, samples: &[f32]) {
+        self.audio.publish(
+            ReceiveSource {
+                epoch: source.epoch,
+                rate: source.rate,
+            },
+            std::time::Instant::now(),
+            samples,
+        );
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retiring_media_keeps_the_existing_display_ring_and_requires_a_new_open() {
+        let tap = RxTap::new();
+        let ring = Arc::new(SpscRing::new(4096));
+        let origin = ReceiveOrigin::from_open(
+            Some(3),
+            "Radio codec",
+            Some(crate::receive_audio::CaptureInput {
+                device: "Resolved codec".into(),
+                system_default: false,
+            }),
+        );
+        tap.publish_card_with_origin(ring.clone(), 48_000, origin.clone());
+        let feed = tap.receive_audio();
+        let source = feed.describe().unwrap();
+        assert_eq!(source.origin, origin);
+        let reader = feed.subscribe(source.source).unwrap();
+        tap.retire_receive_audio();
+        assert!(feed.describe().is_none());
+        assert!(matches!(
+            reader.read(std::time::Instant::now()),
+            Err(crate::receive_audio::ReceiveError::Ended)
+        ));
+        let display = tap.current().unwrap();
+        assert!(Arc::ptr_eq(&display.ring, &ring));
+        tap.publish_audio(&display, &[0.2; 960]);
+        assert!(
+            feed.source().is_none(),
+            "remaining display samples cannot reopen media"
+        );
+        tap.publish_card_with_origin(Arc::new(SpscRing::new(4096)), 48_000, origin);
+        assert_ne!(feed.source().unwrap(), source.source);
+        let new = feed.subscribe(feed.source().unwrap()).unwrap();
+        drop(reader);
+        assert!(new.read(std::time::Instant::now()).is_ok());
+    }
 
     #[test]
     fn publishing_a_source_bumps_the_epoch() {

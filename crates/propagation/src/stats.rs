@@ -56,59 +56,81 @@ pub struct LogStats {
 /// operator's own call can't be resolved, every resolved QSO counts as DX (there's no home entity
 /// to be domestic against).
 pub fn compute_log_stats<S: AsRef<str>>(calls: &[S], my_call: &str) -> LogStats {
-    let my_entity = dxcc::resolve(my_call).map(|i| i.entity);
+    let mut stats = LogStatsAccumulator::new(my_call);
+    for call in calls {
+        stats.add(call.as_ref());
+    }
+    stats.summary()
+}
 
-    let mut resolved = 0usize;
-    let mut dx = 0usize;
-    let mut domestic = 0usize;
-    let mut cont_qsos: HashMap<&'static str, usize> = HashMap::new();
-    let mut cont_entities: HashMap<&'static str, HashSet<&'static str>> = HashMap::new();
-    let mut zone_qsos: HashMap<u8, usize> = HashMap::new();
-
-    for c in calls {
-        let Some(info) = dxcc::resolve(c.as_ref()) else {
-            continue;
-        };
-        resolved += 1;
-        if my_entity.is_some() && Some(info.entity) == my_entity {
-            domestic += 1;
-        } else {
-            dx += 1;
-        }
-        if let Some(cont) = continent_of_zone(info.cq_zone) {
-            *cont_qsos.entry(cont).or_default() += 1;
-            cont_entities.entry(cont).or_default().insert(info.entity);
-        }
-        if (1..=40).contains(&info.cq_zone) {
-            *zone_qsos.entry(info.cq_zone).or_default() += 1;
+/// The same geographic fold, usable across short station-log read batches.
+/// State holds counts and resolved entity sets, never a copy of the contact list.
+#[derive(Default)]
+pub struct LogStatsAccumulator {
+    my_entity: Option<&'static str>,
+    total: usize,
+    resolved: usize,
+    dx: usize,
+    domestic: usize,
+    cont_qsos: HashMap<&'static str, usize>,
+    cont_entities: HashMap<&'static str, HashSet<&'static str>>,
+    zone_qsos: HashMap<u8, usize>,
+}
+impl LogStatsAccumulator {
+    pub fn new(my_call: &str) -> Self {
+        Self {
+            my_entity: dxcc::resolve(my_call).map(|i| i.entity),
+            ..Self::default()
         }
     }
-
-    let by_continent = CONTINENTS
-        .iter()
-        .filter_map(|&cont| {
-            let qsos = *cont_qsos.get(cont)?; // omit continents with zero QSOs
-            Some(ContinentTally {
-                continent: cont.to_string(),
-                qsos,
-                entities: cont_entities.get(cont).map_or(0, HashSet::len),
+    pub fn add(&mut self, call: &str) {
+        self.total += 1;
+        let Some(info) = dxcc::resolve(call) else {
+            return;
+        };
+        self.resolved += 1;
+        if self.my_entity.is_some() && Some(info.entity) == self.my_entity {
+            self.domestic += 1;
+        } else {
+            self.dx += 1;
+        }
+        if let Some(cont) = continent_of_zone(info.cq_zone) {
+            *self.cont_qsos.entry(cont).or_default() += 1;
+            self.cont_entities
+                .entry(cont)
+                .or_default()
+                .insert(info.entity);
+        }
+        if (1..=40).contains(&info.cq_zone) {
+            *self.zone_qsos.entry(info.cq_zone).or_default() += 1;
+        }
+    }
+    pub fn summary(&self) -> LogStats {
+        let by_continent = CONTINENTS
+            .iter()
+            .filter_map(|&cont| {
+                let qsos = *self.cont_qsos.get(cont)?;
+                Some(ContinentTally {
+                    continent: cont.to_string(),
+                    qsos,
+                    entities: self.cont_entities.get(cont).map_or(0, HashSet::len),
+                })
             })
-        })
-        .collect();
-
-    let mut by_zone: Vec<ZoneTally> = zone_qsos
-        .into_iter()
-        .map(|(zone, qsos)| ZoneTally { zone, qsos })
-        .collect();
-    by_zone.sort_by_key(|z| z.zone);
-
-    LogStats {
-        total: calls.len(),
-        resolved,
-        dx,
-        domestic,
-        by_continent,
-        by_zone,
+            .collect();
+        let mut by_zone: Vec<ZoneTally> = self
+            .zone_qsos
+            .iter()
+            .map(|(&zone, &qsos)| ZoneTally { zone, qsos })
+            .collect();
+        by_zone.sort_by_key(|z| z.zone);
+        LogStats {
+            total: self.total,
+            resolved: self.resolved,
+            dx: self.dx,
+            domestic: self.domestic,
+            by_continent,
+            by_zone,
+        }
     }
 }
 

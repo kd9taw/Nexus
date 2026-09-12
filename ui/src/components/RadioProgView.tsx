@@ -1,3 +1,5 @@
+import { useNavigation } from '../remote-web/useNavigation'
+import type { ProgrammingConfiguration } from '../remote-web/configuration'
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every operator-visible
 // string comes from the catalog. What does NOT, and this screen is dense with it: every repeater
 // callsign, output frequency, offset, CTCSS tone and DTCS code, the band chips, the mode badges
@@ -143,6 +145,9 @@ interface Props {
  * repeater directory).
  */
 export function RadioProgView({ myGrid, catOk = false }: Props) {
+  const configuration=useNavigation<ProgrammingConfiguration>('programming')
+  const remote=configuration.remote
+  if(remote)myGrid=configuration.value?.mygrid??''
   // ── query state ──
   const [originKind, setOriginKind] = useState<'station' | 'grid' | 'city'>('station')
   const [gridInput, setGridInput] = useState('')
@@ -170,8 +175,15 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
   const [chirpDialog, setChirpDialog] = useState(false)
   const loaded = useRef(false)
 
+  useEffect(()=>{
+    if(!remote)return
+    const project=configuration.value?.projects.find(p=>p.id===WORKING_PROJECT_ID)
+    setRows(project?.channels.map(channel=>({channel,nameEdited:true}))??[])
+  },[remote,configuration.value?.revision])
+
   // Load the persisted working list once; save (debounced) on every change after.
   useEffect(() => {
+    if(remote)return
     radioprogListProjects()
       .then((projects) => {
         const w = projects.find((p) => p.id === WORKING_PROJECT_ID)
@@ -184,7 +196,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
   }, [])
   const saveTimer = useRef<number | null>(null)
   useEffect(() => {
-    if (!loaded.current) return
+    if (remote || !loaded.current) return
     if (saveTimer.current) window.clearTimeout(saveTimer.current)
     saveTimer.current = window.setTimeout(() => {
       const project: RadioProgProject = {
@@ -433,6 +445,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
   const attribution = result?.source === 'repeaterbook' ? ATTRIB_REPEATERBOOK : ATTRIB_HEARHAM
 
   const exportList = (format: 'chirp' | 'csv') => {
+    if(remote)return
     const channels = displayRows.map((r) => ({ ...r.channel, name: r.displayName }))
     const analog = channels.filter((c) => c.mode === 'fm' || c.mode === 'nfm' || c.mode === 'am')
     if (format === 'chirp' && analog.length === 0) {
@@ -465,6 +478,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
    * FM (so 2 m repeater work reaches the FM radio even when the operator came
    * from a digital section) and lands the shift/offset/tone with the QSY. */
   const tuneTo = (c: ProgChannel) => {
+    if(remote)return
     const { shift, offsetHz, toneHz } = rigRepeaterParams(c)
     void repeaterTune(c.rxMhz, shift, offsetHz, toneHz)
       .then(() => {
@@ -586,18 +600,19 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
   }
 
   return (
-    <section className="radioprog panel">
+    <section className="radioprog panel" data-remote-configuration={remote || undefined}>
       <div className="panel-header">
         <h2>{t('program.title')}</h2>
         <span className="awards-sub">{t('program.sub')}</span>
       </div>
 
-      <div className="rp-body">
+      {remote && <p className="settings-note" role="status">{configuration.value ? t('remote.programmingObserver') : configuration.loading ? t('remote.collectionLoading') : t('remote.collectionUnavailable')}</p>}
+      <div className="rp-body" hidden={remote&&!configuration.value}>
         {/* ── SOURCE pane: the query tool ── */}
         <div className="rp-source">
           <div className="rp-origin" role="group" aria-label={t('program.origin.aria')}>
             <span className="rp-lbl">{t('program.origin.label')}</span>
-            <button
+            <button disabled={remote}
               type="button"
               className={`filter-chip${originKind === 'station' ? ' active' : ''}`}
               onClick={() => setOriginKind('station')}
@@ -607,14 +622,14 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
                 grid: myGrid ? `· ${myGrid.toUpperCase()}` : '',
               })}
             </button>
-            <button
+            <button disabled={remote}
               type="button"
               className={`filter-chip${originKind === 'grid' ? ' active' : ''}`}
               onClick={() => setOriginKind('grid')}
             >
               {t('program.origin.grid.label')}
             </button>
-            <button
+            <button disabled={remote}
               type="button"
               className={`filter-chip${originKind === 'city' ? ' active' : ''}`}
               onClick={() => setOriginKind('city')}
@@ -622,7 +637,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
               {t('program.origin.city.label')}
             </button>
             {originKind === 'grid' && (
-              <input
+              <input disabled={remote}
                 type="text"
                 className={`settings-input mono rp-grid${gridInput && !isValidGrid(gridInput.trim()) ? ' invalid' : ''}`}
                 value={gridInput}
@@ -634,7 +649,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
             )}
             {originKind === 'city' && (
               <span className="rp-city">
-                <input
+                <input disabled={remote}
                   type="text"
                   className="settings-input rp-city-input"
                   value={cityInput}
@@ -652,7 +667,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
                   type="button"
                   className="filter-chip"
                   onClick={searchCity}
-                  disabled={geoBusy || !cityInput.trim()}
+                  disabled={remote || (geoBusy || !cityInput.trim())}
                 >
                   {geoBusy ? t('program.city.searching') : t('program.city.search')}
                 </button>
@@ -662,7 +677,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
           {originKind === 'city' && cityCands.length > 1 && !cityPick && (
             <div className="rp-city-cands" role="listbox" aria-label={t('program.city.matches.aria')}>
               {cityCands.map((c) => (
-                <button
+                <button disabled={remote}
                   key={c.displayName}
                   type="button"
                   className="filter-chip"
@@ -677,7 +692,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
             <div className="rp-recents" role="group" aria-label={t('program.recent.aria')}>
               <span className="rp-lbl">{t('program.recent.label')}</span>
               {recents.map((r) => (
-                <button
+                <button disabled={remote}
                   key={r.label}
                   type="button"
                   className="filter-chip rp-recent"
@@ -693,7 +708,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
           <div className="rp-radius" role="group" aria-label={t('program.radius.aria')}>
             <span className="rp-lbl">{t('program.radius.label')}</span>
             {RADIUS_CHIPS_MI.map((mi) => (
-              <button
+              <button disabled={remote}
                 key={mi}
                 type="button"
                 className={`filter-chip${radiusMi === mi ? ' active' : ''}`}
@@ -702,7 +717,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
                 {fmtDistanceKm(mi * 1.609344, units)}
               </button>
             ))}
-            <button
+            <button disabled={remote}
               type="button"
               className={`filter-chip${radiusMi === 'auto' ? ' active' : ''}`}
               onClick={() => setRadiusMi('auto')}
@@ -725,7 +740,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
               type="button"
               className="filter-chip pota-refresh-btn rp-fetch"
               onClick={doFetch}
-              disabled={!origin || fetching}
+              disabled={remote || (!origin || fetching)}
               title={
                 origin
                   ? t('program.fetch.title', {
@@ -747,7 +762,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
           {fetchErr && (
             <div className="rp-error" role="alert">
               {fetchErr}{' '}
-              <button type="button" className="filter-chip" onClick={doFetch}>
+              <button disabled={remote} type="button" className="filter-chip" onClick={doFetch}>
                 {t('program.fetch.retry')}
               </button>
             </div>
@@ -763,7 +778,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
           )}
 
           <div className="rp-filters" role="group" aria-label={t('program.filters.aria')}>
-            <button
+            <button disabled={remote}
               type="button"
               className={`filter-chip${bands.length === 0 ? ' active' : ''}`}
               onClick={() => setBands([])}
@@ -771,7 +786,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
               {t('program.filters.allBands')}
             </button>
             {BAND_CHIPS.map((b) => (
-              <button
+              <button disabled={remote}
                 key={b}
                 type="button"
                 className={`filter-chip${bands.includes(b) ? ' active' : ''}`}
@@ -783,7 +798,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
               </button>
             ))}
             <span className="rp-filter-gap" />
-            <button
+            <button disabled={remote}
               type="button"
               className={`filter-chip${!showDigital ? ' active' : ''}`}
               onClick={() => setShowDigital(false)}
@@ -791,7 +806,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
             >
               {MODE_FM}
             </button>
-            <button
+            <button disabled={remote}
               type="button"
               className={`filter-chip${showDigital ? ' active' : ''}`}
               onClick={() => setShowDigital(true)}
@@ -799,7 +814,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
             >
               {t('program.filters.digital.label')}
             </button>
-            <button
+            <button disabled={remote}
               type="button"
               className={`filter-chip${onAirOnly ? ' active' : ''}`}
               onClick={() => setOnAirOnly((v) => !v)}
@@ -807,7 +822,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
             >
               {t('program.filters.onAir.label')}
             </button>
-            <input
+            <input disabled={remote}
               type="search"
               className="settings-input rp-search"
               value={search}
@@ -821,7 +836,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
             <div className="rp-count">
               {t('program.count', { shown: shown.length, total: result.rows.length })}
               {shown.some((r) => isProgrammable(r.record) && !inList.has(r.channel.id)) && (
-                <button type="button" className="filter-chip" onClick={addAllShown}>
+                <button disabled={remote} type="button" className="filter-chip" onClick={addAllShown}>
                   {t('program.addAll.label')}
                 </button>
               )}
@@ -846,7 +861,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
                       radius: fmtDistanceKm(effRadiusMi * 1.609344, units),
                     })}
                 {radiusMi !== 200 && (
-                  <button
+                  <button disabled={remote}
                     type="button"
                     className="filter-chip"
                     onClick={() => setRadiusMi(radiusMi === 'auto' ? 100 : 200)}
@@ -857,7 +872,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
                   </button>
                 )}
                 {!showDigital && (
-                  <button type="button" className="filter-chip" onClick={() => setShowDigital(true)}>
+                  <button disabled={remote} type="button" className="filter-chip" onClick={() => setShowDigital(true)}>
                     {t('program.results.showDigital')}
                   </button>
                 )}
@@ -898,7 +913,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
                   </span>
                   <span className="rp-actions" role="cell">
                     {programmable && (
-                      <button
+                      <button disabled={remote}
                         type="button"
                         className={`rp-star${starredIds.has(c.id) ? ' on' : ''}`}
                         onClick={() => toggleStar(row)}
@@ -913,7 +928,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
                       </button>
                     )}
                     {catOk && programmable && (
-                      <button
+                      <button disabled={remote}
                         type="button"
                         className="pota-hunt-btn rp-tune"
                         onClick={() => tuneTo(c)}
@@ -925,7 +940,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
                     <button
                       type="button"
                       className={`pota-hunt-btn rp-add${added ? ' added' : ''}`}
-                      disabled={!programmable && !added}
+                      disabled={remote || (!programmable && !added)}
                       onClick={() => addRow(row)}
                       title={
                         programmable
@@ -966,7 +981,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
             <label className="rp-cap">
               {t('program.builder.nameCap.label')}
               {/* The option labels name RIG MODELS (`features/radioprog.ts`) — tokens. */}
-              <select
+              <select disabled={remote}
                 className="settings-input"
                 value={nameCap}
                 onChange={(e) => setNameCap(Number(e.target.value))}
@@ -981,7 +996,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
             </label>
             <label className="rp-startat" title={t('program.builder.startAt.title')}>
               {t('program.builder.startAt.label')}
-              <input
+              <input disabled={remote}
                 type="number"
                 className="settings-input"
                 min={1}
@@ -1001,7 +1016,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
               return (
                 <div key={r.channel.id} className={`rp-chan-row${dup ? ' dup' : ''}`}>
                   <span className="rp-chan-num mono">{startAt + i}</span>
-                  <input
+                  <input disabled={remote}
                     type="text"
                     className={`settings-input mono rp-chan-name${dup || over ? ' invalid' : ''}`}
                     value={r.displayName}
@@ -1023,7 +1038,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
                     <button
                       type="button"
                       onClick={() => move(i, -1)}
-                      disabled={i === 0}
+                      disabled={remote || (i === 0)}
                       aria-label={t('program.chan.moveUp.aria')}
                     >
                       ▲
@@ -1031,12 +1046,12 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
                     <button
                       type="button"
                       onClick={() => move(i, 1)}
-                      disabled={i === displayRows.length - 1}
+                      disabled={remote || (i === displayRows.length - 1)}
                       aria-label={t('program.chan.moveDown.aria')}
                     >
                       ▼
                     </button>
-                    <button type="button" onClick={() => remove(i)} aria-label={t('program.chan.remove.aria')}>
+                    <button disabled={remote} type="button" onClick={() => remove(i)} aria-label={t('program.chan.remove.aria')}>
                       ✕
                     </button>
                   </span>
@@ -1046,7 +1061,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
           </div>
 
           <div className="rp-deliver">
-            <button
+            <button disabled={remote}
               type="button"
               className="settings-refresh"
               onClick={addManual}
@@ -1054,7 +1069,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
             >
               {t('program.deliver.byHand.label')}
             </button>
-            <button
+            <button disabled={remote}
               type="button"
               className="settings-refresh"
               onClick={() => importInputRef.current?.click()}
@@ -1062,7 +1077,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
             >
               {t('program.deliver.import.label')}
             </button>
-            <input
+            <input disabled={remote}
               ref={importInputRef}
               type="file"
               accept=".csv"
@@ -1076,7 +1091,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
             <button
               type="button"
               className="settings-save rp-export-chirp"
-              disabled={rows.length === 0}
+              disabled={remote || (rows.length === 0)}
               onClick={onExportChirp}
               title={t('program.deliver.exportChirp.title')}
             >
@@ -1085,7 +1100,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
             <button
               type="button"
               className="settings-refresh"
-              disabled={rows.length === 0}
+              disabled={remote || (rows.length === 0)}
               onClick={() => exportList('csv')}
               title={t('program.deliver.exportCsv.title')}
             >
@@ -1094,7 +1109,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
             <button
               type="button"
               className="settings-refresh"
-              disabled={rows.length === 0}
+              disabled={remote || (rows.length === 0)}
               onClick={saveToBank}
               title={t('program.deliver.saveBank.title')}
             >
@@ -1103,7 +1118,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
             <button
               type="button"
               className="settings-refresh rp-clear"
-              disabled={rows.length === 0}
+              disabled={remote || (rows.length === 0)}
               onClick={() => {
                 void (async () => {
                   if (
@@ -1146,7 +1161,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
         </p>
         <div className="rp-chirp-actions">
           <label className="settings-hint rp-chirp-skip">
-            <input
+            <input disabled={remote}
               type="checkbox"
               onChange={(e) => {
                 if (e.target.checked) localStorage.setItem(CHIRP_HOWTO_SEEN, '1')
@@ -1155,7 +1170,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
             />
             {t('program.chirp.dontShow')}
           </label>
-          <button
+          <button disabled={remote}
             type="button"
             className="settings-save"
             onClick={() => {

@@ -7,6 +7,8 @@ import { useEffect, useRef, useState } from 'react'
 import { getSpectrumRow } from '../api'
 import { agcRange, dbToSpan, normalize } from '../waterfall'
 import type { Spectrum } from '../types'
+import { remoteApplicationTransport, applicationSessionGeneration, onApplicationSessionChange } from '../applicationTransport'
+import { t } from '../i18n'
 
 interface Props {
   /** Poll cadence (ms). The row is a cheap cached clone backend-side. */
@@ -24,16 +26,20 @@ function fmtHz(hz: number): string {
 }
 
 export function MiniSpectrum({ pollMs = 120, height = 96, idleHint }: Props) {
+  const remote=!!remoteApplicationTransport()
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [spec, setSpec] = useState<Spectrum | null>(null)
   const [alive, setAlive] = useState(false)
 
   useEffect(() => {
     let mounted = true
+    const clear=()=>{if(mounted){setSpec(null);setAlive(false)}}
+    const unsubscribe=remote?onApplicationSessionChange(clear):()=>{}
     const tick = () => {
+      const generation=applicationSessionGeneration()
       getSpectrumRow(false)
         .then((s) => {
-          if (!mounted) return
+          if (!mounted || generation!==applicationSessionGeneration()) return
           setSpec(s)
           // "Alive" = visible dynamic range in the row (a silent/wrong device is flat).
           // On the dB axis the 0.05 threshold reads as ~6 dB of spread across the band,
@@ -48,19 +54,21 @@ export function MiniSpectrum({ pollMs = 120, height = 96, idleHint }: Props) {
           }
           setAlive(row.length > 0 && max - min > 0.05)
         })
-        .catch(() => {})
+        .catch(() => {if(remote && generation===applicationSessionGeneration())clear()})
     }
     tick()
     const iv = setInterval(tick, pollMs)
     return () => {
       mounted = false
+      unsubscribe()
       clearInterval(iv)
     }
-  }, [pollMs])
+  }, [pollMs,remote])
 
   useEffect(() => {
     const canvas = canvasRef.current
-    if (!canvas || !spec?.row?.length) return
+    if (!canvas) return
+    if(!spec?.row?.length){if(remote)canvas.getContext('2d')?.clearRect(0,0,canvas.width,canvas.height);return}
     const dpr = window.devicePixelRatio || 1
     const w = canvas.clientWidth
     const h = canvas.clientHeight
@@ -131,10 +139,10 @@ export function MiniSpectrum({ pollMs = 120, height = 96, idleHint }: Props) {
       else ctx.lineTo(x, y)
     }
     ctx.stroke()
-  }, [spec])
+  }, [spec,remote])
 
   const srcBadge =
-    spec?.source === 'flex' ? 'FLEX RF' : spec?.source === 'civ' ? 'CI-V RF' : 'AUDIO'
+    remote&&!spec?'—':spec?.source === 'flex' ? 'FLEX RF' : spec?.source === 'civ' ? 'CI-V RF' : 'AUDIO'
 
   return (
     <div className="mini-spectrum">
@@ -147,7 +155,7 @@ export function MiniSpectrum({ pollMs = 120, height = 96, idleHint }: Props) {
         </span>
       </div>
       <canvas ref={canvasRef} className="mini-spectrum-canvas" style={{ height }} />
-      {!alive && idleHint && <div className="mini-spectrum-idle">{idleHint}</div>}
+      {!alive && idleHint && <div className="mini-spectrum-idle">{remote&&!spec?t('remote.collectionUnavailable'):idleHint}</div>}
     </div>
   )
 }

@@ -1,0 +1,121 @@
+// @vitest-environment jsdom
+import { act, cleanup, renderHook } from '@testing-library/react'
+import { afterEach, expect, it, vi } from 'vitest'
+import type { ReactNode } from 'react'
+import { RemoteCollectionsContext, type RemoteCollections } from './collections'
+import { useNavigation, useSatelliteSchedule } from './useNavigation'
+import configuration from './__fixtures__/configuration-settings.json'
+import satellite from './__fixtures__/navigation-satellite.json'
+import { navigationPages } from './__fixtures__/navigation-page'
+import type { QueryArgs } from './application-query-protocol'
+
+afterEach(() => { cleanup(); vi.useRealTimers() })
+
+function fixture(reuseNativeCache = false, earlierSecondBird = false) {
+  vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout', 'performance'] })
+  let failure: string | null = null
+  const captures = new Map<string, { at: number; id: string }>()
+  if (earlierSecondBird) captures.set('AO-91', { at: -8000, id: crypto.randomUUID() })
+  const page = vi.fn(async (args: QueryArgs) => {
+    if (failure) throw new Error(failure)
+    const value = { ...satellite, name: args.search, detail: { ...satellite.detail, name: args.search },
+      schedule: satellite.schedule.map(p => ({ ...p, name: args.search })) }
+    const pages = navigationPages('satellite', value, args.search)
+    // The native planning worker reuses a document for 20 seconds while its
+    // cursor remains valid for 30 seconds. A refresh can return that same age.
+    let capture = captures.get(args.search)
+    if (!reuseNativeCache || !capture || performance.now() - capture.at >= 20_000) {
+      capture = { at: performance.now(), id: crypto.randomUUID() }; captures.set(args.search, capture)
+    }
+    for (const p of pages) {
+      const meta = (p.meta as { source: { documentAgeMs: number; contextId: string; capturedAtMs: number } }).source
+      meta.documentAgeMs = performance.now() - capture.at
+      meta.contextId = capture.id
+      meta.capturedAtMs += capture.at
+    }
+    await new Promise(resolve => setTimeout(resolve, 2000))
+    return { ...pages[0], rows: pages.flatMap(p => p.rows), nextCursor: null }
+  })
+  const source = { page } as unknown as RemoteCollections
+  const hook = renderHook(() => useSatelliteSchedule('ISS (ZARYA),AO-91,SO-50'), {
+    wrapper: ({ children }: { children: ReactNode }) =>
+      <RemoteCollectionsContext.Provider value={source}>{children}</RemoteCollectionsContext.Provider>,
+  })
+  return { ...hook, page, fail: (value: string | null) => { failure = value } }
+}
+async function advance(ms: number) { await act(async () => { await vi.advanceTimersByTimeAsync(ms) }) }
+
+it('keeps a valid Settings document through explicit refresh without extending its original deadline', async () => {
+  vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout', 'performance'] })
+  let congested = false
+  const pages = navigationPages('settings', configuration)
+  const page = vi.fn(async () => {
+    if (congested) throw Error('applicationBusy')
+    return { ...pages[0], rows: pages.flatMap(p => p.rows), nextCursor: null }
+  })
+  const source = { page } as unknown as RemoteCollections
+  const { result } = renderHook(() => useNavigation('settings'), { wrapper: ({ children }) =>
+    <RemoteCollectionsContext.Provider value={source}>{children}</RemoteCollectionsContext.Provider> })
+  await advance(0)
+  expect(result.current.value).toEqual(configuration)
+  const before = result.current.value
+  congested = true
+  act(() => result.current.refresh())
+  await advance(500)
+  expect(result.current.value).toBe(before)
+  await advance(30_000)
+  expect(result.current.value).toBeNull()
+  congested = false
+  await advance(2000)
+  expect(result.current.value).toEqual(configuration)
+})
+
+it('refreshes a slow multi-bird schedule before expiry without collapsing the displayed rows', async () => {
+  const { result, page } = fixture()
+  await advance(6000)
+  const count = satellite.schedule.length * 3
+  expect(count).toBeGreaterThan(0)
+  expect(result.current.value?.rows).toHaveLength(count)
+  for (let elapsed = 0; elapsed < 70_000; elapsed += 500) {
+    await advance(500)
+    expect(result.current.value?.rows, `schedule disappeared at ${performance.now()} ms`).toHaveLength(count)
+  }
+  expect(page.mock.calls.length).toBeGreaterThan(9)
+})
+
+it('keeps a still-valid schedule during temporary congestion, then hides it at its original deadline', async () => {
+  const { result, fail } = fixture()
+  await advance(6000)
+  const initial = result.current.value
+  expect(initial).not.toBeNull()
+  fail('applicationBusy')
+  for (let elapsed = 0; elapsed < 23_000; elapsed += 500) {
+    await advance(500)
+    expect(result.current.value).toBe(initial)
+  }
+  await advance(1500)
+  expect(result.current.value).toBeNull()
+  fail(null)
+  await advance(8500)
+  expect(result.current.value?.rows.length).toBe(satellite.schedule.length * 3)
+})
+
+it.each([false, true])('does not waste the refresh window rereading unchanged native captures (older second bird: %s)', async (earlierSecondBird) => {
+  const { result } = fixture(true, earlierSecondBird)
+  await advance(6000)
+  const count = satellite.schedule.length * 3
+  expect(result.current.value?.rows).toHaveLength(count)
+  for (let elapsed = 0; elapsed < 70_000; elapsed += 500) {
+    await advance(500)
+    expect(result.current.value?.rows, `cached schedule disappeared at ${performance.now()} ms`).toHaveLength(count)
+  }
+})
+
+it('clears the schedule when a refresh reports unavailable data', async () => {
+  const { result, fail } = fixture()
+  await advance(6000)
+  expect(result.current.value).not.toBeNull()
+  fail('applicationUnavailable')
+  await advance(23_000)
+  expect(result.current.value).toBeNull()
+})

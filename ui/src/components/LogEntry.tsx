@@ -192,6 +192,17 @@ function utcPartsToUnix(date: string, time: string): number | null {
 }
 
 interface Props {
+  /** A typed hosted log adapter. All station lookups and native side effects
+   * remain outside this form when provided; only an explicit Log submits. */
+  remote?: {
+    submit: (record: LoggedQso, time: 'station' | 'explicit') => Promise<void>
+    canSubmit: boolean
+    busy: boolean
+    pending?: boolean
+    resetKey: number
+    recall: (call: string, context?: { band: string; freqMhz: number; mode: string }) => React.ReactNode
+  }
+
   snap: AppSnapshot
   /** ADIF mode logged ('CW' / 'SSB'). */
   mode: string
@@ -317,7 +328,16 @@ export function LogEntry({
   fdMode,
   fdSubmode,
   titled = true,
+  remote,
 }: Props) {
+  const remoteMode = remote != null
+  type DraftContext = { band: string; freqMhz: number; mode: string }
+  const [remoteDraftContext, setRemoteDraftContext] = useState<DraftContext | null>(null)
+  const [remoteWorkOffer, setRemoteWorkOffer] = useState<({ call: string; ts: number } & { context: DraftContext }) | null>(null)
+  const currentDraftContext = (): DraftContext => ({ band: snap.radio.band, freqMhz: snap.radio.dialMhz, mode })
+  const rememberRemoteContext = () => {
+    if (remoteMode) setRemoteDraftContext(current => current ?? currentDraftContext())
+  }
   const fdActive = fieldDay != null
   // Does this cockpit's exchange carry a park/summit reference? See `exchange`.
   const asksForPark = exchange === 'terrestrial'
@@ -525,7 +545,7 @@ export function LogEntry({
   // also why no test here reddens on removing this line alone: `parkPicked` still catches
   // it. The guard's value is that the property no longer depends on that.)
   useEffect(() => {
-    if (!asksForPark) {
+    if (remoteMode || !asksForPark) {
       setParkHits([])
       return
     }
@@ -545,7 +565,7 @@ export function LogEntry({
     }, 180)
     return () => clearTimeout(id)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [logParkRef, logParkProgram, asksForPark])
+  }, [logParkRef, logParkProgram, asksForPark, remoteMode])
 
   // Auto-load a park's details the moment a COMPLETE valid POTA reference is entered (like HRD):
   // instant offline lookup first, then the live POTA directory if it's not in the local list. Purely
@@ -556,7 +576,7 @@ export function LogEntry({
   // it never renders.
   useEffect(() => {
     const ref = logParkRef.trim().toUpperCase()
-    if (!asksForPark || logParkProgram !== 'POTA' || !/^[A-Z0-9]{1,4}-\d{4,5}$/.test(ref)) {
+    if (remoteMode || !asksForPark || logParkProgram !== 'POTA' || !/^[A-Z0-9]{1,4}-\d{4,5}$/.test(ref)) {
       setParkDetail(null)
       return
     }
@@ -586,19 +606,25 @@ export function LogEntry({
       cancelled = true
       clearTimeout(id)
     }
-  }, [logParkRef, logParkProgram, asksForPark])
+  }, [logParkRef, logParkProgram, asksForPark, remoteMode])
 
-  const refreshLog = () => void getLog().then(setAllLog).catch(() => {})
+  const refreshLog = () => !remoteMode && void getLog().then(setAllLog).catch(() => {})
   useEffect(() => {
     // In FD mode we don't use the general logbook for dupe checking, so skip the fetch.
-    if (fdActive) return
+    if (fdActive || remoteMode) return
     refreshLog()
-  }, [fdActive])
+  }, [fdActive, remoteMode])
 
   // Click-to-work prefill: land the call + drop focus on RST so the operator types the report
   // and hits Enter. Keyed on `ts` to refire on re-click of the same call.
   useEffect(() => {
     if (!pendingWork) return
+    if (remoteMode && (remote?.pending || remoteDraftContext || logCall.trim() || logName.trim() || logQth.trim() || logComment.trim() || logNotes.trim() || logParkRef.trim() || overrideOpen || logRstSent !== defaultRst || logRstRcvd !== defaultRst)) {
+      setRemoteWorkOffer({ ...pendingWork, context: currentDraftContext() })
+      onConsumeWork?.()
+      return
+    }
+    if (remoteMode) { setRemoteDraftContext(currentDraftContext()); setRemoteWorkOffer(null) }
     setLogCall(pendingWork.call.toUpperCase())
     humanCallEditRef.current = false // a clicked spot is not a human keystroke…
     settledCallRef.current = true // …but it IS a final call, so it still gets enriched
@@ -667,7 +693,7 @@ export function LogEntry({
   const [logEntity, setLogEntity] = useState<string | null>(null)
   useEffect(() => {
     const call = logCall.trim()
-    if (!call) {
+    if (remoteMode || !call) {
       setLogEntity(null)
       return
     }
@@ -680,7 +706,7 @@ export function LogEntry({
     return () => {
       stale = true
     }
-  }, [logCall])
+  }, [logCall, remoteMode])
   const entityForBadge = logEntity ?? logCountry
   const newEntity = useMemo(() => isNewEntity(allLog, entityForBadge), [allLog, entityForBadge])
 
@@ -708,7 +734,7 @@ export function LogEntry({
   // explicit button toasts; the on-blur auto-lookup is silent on failure so an operator
   // without QRZ configured isn't nagged on every Tab.
   const lookup = async (silent: boolean) => {
-    if (qrzBusyRef.current) return
+    if (remoteMode || qrzBusyRef.current) return
     const call = logCall.trim()
     if (!call) return
     qrzBusyRef.current = true
@@ -815,6 +841,7 @@ export function LogEntry({
   }
 
   const reset = () => {
+    setRemoteDraftContext(null)
     setLogCall('')
     setLogRstSent(defaultRst)
     setLogRstRcvd(defaultRst)
@@ -828,7 +855,7 @@ export function LogEntry({
     setLogImage(null)
     setLogCoords(null)
     setLogParkRef('')
-    void setCwPeerInfo('', '', '') // clear the {HISNAME}/{HISSTATE} tokens for the next contact
+    if (!remoteMode) void setCwPeerInfo('', '', '') // clear the {HISNAME}/{HISSTATE} tokens for the next contact
     // When the other-radio override is open, refresh its UTC time to now for the next contact
     // (a run of live V/UHF contacts each get the current time, never a silently-reused stale
     // one) while KEEPING band/freq/mode — like fdClass/fdSection, so they aren't re-entered.
@@ -888,11 +915,21 @@ export function LogEntry({
   const ovFreqNum = Number(ovFreq)
   const ovFreqOk = overrideOpen && Number.isFinite(ovFreqNum) && ovFreqNum > 0
   const overrideBlocked = overrideOpen && !ovFreqOk
-  const effBand = overrideOpen ? ovBand : snap.radio.band
-  const effFreqMhz = overrideOpen ? ovFreqNum : snap.radio.dialMhz
-  const effMode = overrideOpen ? ovMode : mode
+  // Remote drafts survive navigation and other operators' QSYs. Keep their
+  // captured contact context; the explicit other-radio override still wins.
+  const draftContext = remoteMode ? remoteDraftContext : null
+  const effBand = overrideOpen ? ovBand : draftContext?.band ?? snap.radio.band
+  const effFreqMhz = overrideOpen ? ovFreqNum : draftContext?.freqMhz ?? snap.radio.dialMhz
+  const effMode = overrideOpen ? ovMode : draftContext?.mode ?? mode
+
+  useEffect(() => {
+    if (remoteMode && remote?.resetKey) reset()
+    // The explicit receipt/dismissal key alone owns this reset.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [remote?.resetKey])
 
   const logIt = async () => {
+    if (remote && (!remote.canSubmit || remote.busy || remote.pending || fdActive)) return
     const call = logCall.trim().toUpperCase()
     if (!call) return
     if (overrideBlocked) {
@@ -987,6 +1024,11 @@ export function LogEntry({
           ? { theirProgram: logParkProgram, theirRef: logParkRef.trim().toUpperCase() }
           : undefined,
     }
+    if (remote) {
+      try { await remote.submit(rec, overrideOpen ? 'explicit' : 'station'); reset() }
+      catch { /* The adapter keeps a visible outcome and the draft. */ }
+      return
+    }
     const r = await withErrorToast(() => logQso(rec), t('logEntry.logFailed'))
     if (r) {
       pushToast(t('logEntry.logged', { call, mode: effMode }), 'success')
@@ -1060,6 +1102,7 @@ export function LogEntry({
   // first — like Tab — so a single Enter pulls the callbook; once enriched, Enter logs as usual.
   const onCallEnter = (e: React.KeyboardEvent) => {
     if (e.key !== 'Enter') return
+    if (remoteMode) { e.preventDefault(); void logIt(); return }
     const call = logCall.trim()
     const cu = call.toUpperCase()
     if (
@@ -1317,8 +1360,23 @@ export function LogEntry({
     hunt.call.trim().toUpperCase().split('/')[0] === logCall.trim().toUpperCase().split('/')[0]
 
   return (
-    <div className="log-entry">
+    <div className="log-entry" onChangeCapture={remoteMode ? rememberRemoteContext : undefined}>
       {titled && <h2>{t('logEntry.title')}</h2>}
+      {remoteMode && remoteWorkOffer && <div>
+        <p role="status">{t('remote.workDraftKept', { call: remoteWorkOffer.call })}</p>
+        <div className="remote-actions"><button type="button" className="remote-button" disabled={remote?.pending}
+          onClick={() => {
+            if (remote?.pending) return
+            const next = remoteWorkOffer
+            reset()
+            setRemoteWorkOffer(null)
+            setOverrideOpen(false)
+            setRemoteDraftContext(next.context)
+            setLogCall(next.call.toUpperCase())
+            humanCallEditRef.current = false
+            settledCallRef.current = true
+          }}>{t('remote.workReplaceDraft', { call: remoteWorkOffer.call })}</button></div>
+      </div>}
 
       {hunt && (
         <div className={`le-hunt-chip${huntMatches ? ' match' : ''}`} title={t('logEntry.hunt.title')}>
@@ -1352,7 +1410,7 @@ export function LogEntry({
           type="button"
           className="le-qrz le-lookup"
           onClick={() => void lookup(false)}
-          disabled={qrzBusy || !logCall.trim()}
+          disabled={remoteMode || qrzBusy || !logCall.trim()}
           title={t('logEntry.lookup.title')}
         >
           {qrzBusy ? '…' : t('logEntry.lookup.label')}
@@ -1707,7 +1765,7 @@ export function LogEntry({
           type="button"
           className="le-log-btn"
           onClick={logIt}
-          disabled={!logCall.trim() || overrideBlocked || gridBlocked}
+          disabled={!logCall.trim() || overrideBlocked || gridBlocked || (remote != null && (!remote.canSubmit || remote.busy || remote.pending))}
           title={
             overrideBlocked
               ? t('logEntry.override.blocked')
@@ -1731,7 +1789,7 @@ export function LogEntry({
         )}
       </div>
 
-      <RecallPanel
+      {remote ? remote.recall(logCall, { band: effBand, freqMhz: effFreqMhz, mode: effMode }) : <RecallPanel
         call={logCall}
         band={snap.radio.band}
         name={logName}
@@ -1747,7 +1805,7 @@ export function LogEntry({
         newBandSlot={newBandSlot}
         newModeSlot={newModeSlot}
         onOpenLog={onOpenLogbook}
-      />
+      />}
     </div>
   )
 }

@@ -1,4 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { ReactNode } from 'react'
+import { StationDataContext, useStationCapability } from './stationAccess'
+import { QuickNavigation, useRemotePresentation } from './remote-web/presentation'
 import type { AppSnapshot, BandChannel, LoggedQso, ModeRequest, Settings, SourceKind, Tier } from './types'
 import { rigModeTransition, type RigMode } from './rigModeForView'
 import {
@@ -42,10 +45,12 @@ import {
   setBeacon as apiSetBeacon,
   setRxOffset as apiSetRxOffset,
   setTxOffset as apiSetTxOffset,
+  setBothOffsets as apiSetBothOffsets,
   setHoldTxFreq as apiSetHoldTxFreq,
   subscribeSnapshot,
 } from './api'
 import { withErrorToast, pushToast } from './toast'
+import { useReceiverSettings } from './remote-web/useReceiverSettings'
 import { t } from './i18n'
 import { setUnitsMirror } from './units'
 import { doubleBeep, processDecodes, txEarcon } from './alerts'
@@ -238,7 +243,21 @@ const OPERATE_TIERS: Tier[] = [
   'WSPR',
 ]
 
-export default function App() {
+export type BrowserWorkspace = { snapshot: AppSnapshot; settings: Settings; bandPlan: BandChannel[]; status: ReactNode; stale?: boolean; cwPhone?: boolean; keyboard?: boolean; collections?: boolean; insights?: boolean; dxpeditions?: boolean; memories?: boolean; ota?: boolean; fieldDay?: boolean; js8?: boolean; stationModes?: boolean; navigation?: boolean; configuration?: boolean }
+import { CollectionStatus, useRemoteCollection } from './remote-web/collections'
+import { RemoteInsights } from './remote-web/RemoteInsights'
+import { RemoteDxpeditions } from './remote-web/RemoteDxpeditions'
+import { RemoteFieldDay } from './remote-web/RemoteFieldDay'
+import { RemoteOta } from './remote-web/RemoteOta'
+import { RemoteMemories } from './remote-web/RemoteMemories'
+
+export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
+  const remoteWorkAllowed = useStationCapability('workSpot')
+  const display = useRemotePresentation()
+  const quick = !!remote && display?.presentation === 'quick'
+  const needsRead = useRemoteCollection('needs')
+  const spotsRead = useRemoteCollection('spots')
+  const [remoteSelection, setRemoteSelection] = useState<string | null>(null)
   const [theme, setTheme] = useTheme()
   // Field mode (outdoor/POTA): high contrast via data-contrast on <html>, larger auto-fit via
   // the useScale argument. Global — a fact about the station, like the theme.
@@ -262,7 +281,7 @@ export default function App() {
   const reveal = useReveals(features)
   // First-run setup wizard (goal-driven). Only on a genuinely fresh install.
   const [showWizard, setShowWizard] = useState<boolean>(
-    () => features.firstRun && storageWritable() && !wizardSeen(),
+    () => !remote && features.firstRun && storageWritable() && !wizardSeen(),
   )
   // Getting started guide — Help ▸ Getting started, and the wizard's optional
   // walkthrough offer. Pure documentation: it writes nothing and is never
@@ -271,7 +290,11 @@ export default function App() {
   // `scale` so the rail clamps re-run on zoom change (ceilings are zoom-relative).
   const { commitLeft, commitRight, resetWidths } = usePaneWidths(scale)
   const layoutRef = useRef<HTMLElement>(null)
-  const [snap, setSnap] = useState<AppSnapshot | null>(null)
+  const [snap, setSnap] = useState<AppSnapshot | null>(remote?.snapshot ?? null)
+  const ftRuntimeControl = useStationCapability('ftRuntime')
+  const receiverSettings = useReceiverSettings(snap, snap?.link.tier)
+  const receiverSettingsRef = useRef(receiverSettings)
+  receiverSettingsRef.current = receiverSettings
   // Two-radio launch picker: shown only when simultaneous-radios is on, ≥2 radios are configured,
   // and this window launched without a profile. `null` = not a picker launch (the common case),
   // so a single-radio station never sees any of this.
@@ -310,6 +333,10 @@ export default function App() {
   // Roam settings panel (inside the Tempo cockpit) open/closed.
   const [roamOpen, setRoamOpen] = useState(false)
   const [view, setView] = useState<View>(() => {
+    if (remote) {
+      const mode = remote.snapshot.radio.operatingMode
+      return remote.js8 && remote.snapshot.link.tier === 'JS8' ? 'js8' : mode === 'phone' ? 'phone' : mode === 'cw' ? 'cw' : mode === 'rtty' ? 'rtty' : mode === 'keyboard' ? 'psk' : mode === 'digital' && ['TempoFast', 'TempoDeep'].includes(remote.snapshot.link.tier) ? 'chat' : 'operate'
+    }
     // Deeplink > legacy merged-section deeplink > persisted view > profile landing —
     // the precedence and the clamp live in resolveBootView (pure, test-pinned): a
     // deeplink or restored view is honored only if it is an enabled section of THIS
@@ -379,6 +406,9 @@ export default function App() {
 
   useEffect(() => {
     // ── LAUNCH IS A READ-ONLY ACT ──────────────────────────────────────────────────
+    // Hosted observers inspect panels without asserting a station mode. The
+    // native mount guard and native operating transitions below stay intact.
+    if (remote) return
     // This effect also runs on mount, where `view` is merely the restored/landing section —
     // NOT a statement of operator intent. Letting it fire commanded the rig into DATA at every
     // launch and PERSISTED that over the operator's real saved mode (set_operating_mode saves
@@ -469,6 +499,7 @@ export default function App() {
   // the cockpit; Connect/Map/Prop/Logbook/Awards are GLOBAL views selected from the
   // sidebar (they never retune the radio). Default FT8/FT4 (the 80% case).
   const [area, setArea] = useState<'dx' | 'msg'>(() => {
+    if (remote) return ['TempoFast', 'TempoDeep'].includes(remote.snapshot.link.tier) ? 'msg' : 'dx'
     try {
       // coerceArea (test-pinned) also migrates the retired 'connect' area to
       // FT8/FT4 (Connect is now a global view).
@@ -480,7 +511,7 @@ export default function App() {
   // Sync the engine to the persisted mode once on load (atomic tier+mode).
   const areaSyncedRef = useRef(false)
   useEffect(() => {
-    if (areaSyncedRef.current || !snap) return
+    if (remote || areaSyncedRef.current || !snap) return
     areaSyncedRef.current = true
     void apiSetArea(area).then((s) => s && setSnap(s))
     // Reconcile the cockpit view with the mode (a persisted Tempo mode must not
@@ -496,7 +527,7 @@ export default function App() {
   // toggle lives on the Needed panel header; default stays auto-open.
   const neededPoppedRef = useRef(false)
   useEffect(() => {
-    if (neededPoppedRef.current || !snap) return
+    if (remote || neededPoppedRef.current || !snap) return
     if (features.enabled.needed === false) return
     neededPoppedRef.current = true
     try {
@@ -516,6 +547,7 @@ export default function App() {
     }
     // Switching mode lands on that mode's cockpit (FT8/FT4 → Operate, Tempo → Chat).
     setView(w === 'dx' ? 'operate' : 'chat')
+    if (remote) return // browser navigation does not command the shack's mode
     void withErrorToast(() => apiSetArea(w), t('shell.error.switchMode')).then((s) => {
       if (s) setSnap(s)
     })
@@ -851,31 +883,33 @@ export default function App() {
   const refreshNeeds = useCallback(() => {
     getNeedAlerts()
       .then((alerts) => setNeedAlerts(alerts))
-      .catch(() => {})
+      .catch(() => { if (remote) setNeedAlerts([]) })
   }, [])
   useEffect(() => {
+    if (remote?.stale) { setNeedAlerts([]); return }
     refreshNeeds()
     const id = setInterval(refreshNeeds, 30_000)
     return () => clearInterval(id)
-  }, [refreshNeeds])
+  }, [refreshNeeds, remote?.stale])
   // Raw spot firehose for the Spots panel (ungated, all modes). Polled faster than needs
   // since it's a live "what's on the air" view; the backend command just reads the buffer.
   const [allSpots, setAllSpots] = useState<SpotRow[]>([])
   useEffect(() => {
+    if (remote?.stale) { setAllSpots([]); return }
     let live = true
     const load = () =>
       getAllSpots()
         .then((s) => {
           if (live) setAllSpots(s)
         })
-        .catch(() => {})
+        .catch(() => { if (live && remote) setAllSpots([]) })
     load()
     const id = setInterval(load, 15_000)
     return () => {
       live = false
       clearInterval(id)
     }
-  }, [])
+  }, [remote?.stale])
   // Gate CW/Phone needs by the operator's enabled modes — the backend emits voice/CW
   // needs unconditionally, visibility is the frontend's call. A pure-digital op's board,
   // roster colouring, and map highlight all derive from THIS gated set, so they stay
@@ -891,6 +925,9 @@ export default function App() {
   const workNavRef = useRef<number | null>(null)
   useEffect(() => {
     const tick = snap?.workTick ?? 0
+    // Native pop-outs share this hint. Independent browser drafts/navigation
+    // follow only their own confirmed Work action, never a station broadcast.
+    if (remote) { workNavRef.current = tick; return }
     if (workNavRef.current === null) {
       workNavRef.current = tick
       return
@@ -923,10 +960,13 @@ export default function App() {
     if (wc && (target === 'cw' || target === 'phone')) {
       setPendingWork({ call: wc, view: target, ts: Date.now() })
     }
-  }, [snap?.workTick, snap?.workView, cwEnabled, phoneEnabled, rttyEnabled])
+  }, [snap?.workTick, snap?.workView, cwEnabled, phoneEnabled, rttyEnabled, remote])
   // Declared here (rather than beside bandPlan below) because the need gate reads it: the
   // band scopes live in settings and everything derived from `needAlerts` sits right below.
-  const [settings, setSettings] = useState<Settings | null>(null)
+  const [settings, setSettings] = useState<Settings | null>(remote?.settings ?? null)
+  useEffect(() => {
+    if (remote) setSettings(remote.settings)
+  }, [remote?.settings])
   // The active FD event's ruleset FACTS (banned modes + assistance policy) for the
   // warn-only advisories. get_fd_ruleset reads settings.fd_event itself (and works with
   // the master switch off), so the fetch just re-runs when the configured event changes.
@@ -973,7 +1013,10 @@ export default function App() {
   // station the board hides.
   const needByCall = useMemo(() => topNeedByCall(needAlertsByCall), [needAlertsByCall])
   const [typingTick, setTypingTick] = useState(0)
-  const [bandPlan, setBandPlan] = useState<BandChannel[]>([])
+  const [bandPlan, setBandPlan] = useState<BandChannel[]>(remote?.bandPlan ?? [])
+  useEffect(() => {
+    if (remote) setBandPlan(remote.bandPlan)
+  }, [remote?.bandPlan])
   // Operators this log has already seen (#25) — the seat-swap roster. Refreshed when the
   // operator changes, which is the moment a new name can have entered the log.
   const [opRoster, setOpRoster] = useState<string[]>([])
@@ -1062,7 +1105,8 @@ export default function App() {
   // initial load + live subscription
   useEffect(() => {
     let mounted = true
-    getSnapshot().then((s) => mounted && setSnap(s))
+    const firstSnapshot = getSnapshot().then((s) => mounted && setSnap(s))
+    if (remote) void firstSnapshot.catch(() => {}) // the hosted session owns loss/reconnect UI
     getBandPlan()
       .then((b) => mounted && setBandPlan(b))
       .catch(() => {})
@@ -1100,7 +1144,7 @@ export default function App() {
   }, [])
 
 
-  const activePeer = snap?.activePeer ?? null
+  const activePeer = remote ? remoteSelection ?? snap?.activePeer ?? null : snap?.activePeer ?? null
 
   // mark the active conversation as read whenever it updates
   useEffect(() => {
@@ -1147,16 +1191,18 @@ export default function App() {
   }, [snap, activePeer, typingTick])
 
   const handleSelect = useCallback((call: string) => {
+    if (remote) { setRemoteSelection(call); return }
     void withErrorToast(() => apiSelectPeer(call), t('shell.error.selectStation')).then(
       (s) => s && setSnap(s),
     )
-  }, [])
+  }, [!!remote])
 
   // Confirm here rather than in StationList so every host (cockpit, detached panel) gets
   // the same guard. Unconditional is right: the recents list only renders threads that
   // have messages, so there is no empty-thread case to skip. The copy names the
   // non-obvious consequence — deleting also cancels still-queued outbound traffic.
   const handleArchive = useCallback(async (peer: string) => {
+    if (remote) return
     if (
       !(await confirmDialog({
         title: t('shell.conversation.delete.title', { peer }),
@@ -1170,7 +1216,7 @@ export default function App() {
       () => apiArchiveConversation(peer),
       t('shell.conversation.delete.failed'),
     ).then((s) => s && setSnap(s))
-  }, [])
+  }, [!!remote])
 
   // The Map and the roster share ONE selection: the active peer. Clicking a map
   // dot selects (or, if already selected, clears) that station — and the roster
@@ -1313,7 +1359,7 @@ export default function App() {
 
   const handleConfirmLog = useCallback(
     (record: LoggedQso) => {
-      void withErrorToast(() => apiConfirmPendingLog(record), t('shell.log.failed')).then((s) => {
+      void withErrorToast(() => apiConfirmPendingLog(record, snap?.pendingQsoLogKey), t('shell.log.failed')).then((s) => {
         if (s) {
           setSnap(s)
           refreshNeeds() // drop the just-worked station from the roster/needs immediately
@@ -1322,14 +1368,14 @@ export default function App() {
         }
       })
     },
-    [refreshNeeds],
+    [refreshNeeds, snap?.pendingQsoLogKey],
   )
 
   const handleDiscardLog = useCallback(() => {
-    void withErrorToast(() => apiDiscardPendingLog(), t('shell.log.discard.failed')).then((s) => {
+    void withErrorToast(() => apiDiscardPendingLog(snap?.pendingQsoLogKey), t('shell.log.discard.failed')).then((s) => {
       if (s) setSnap(s)
     })
-  }, [])
+  }, [snap?.pendingQsoLogKey])
 
   const handleSend = useCallback(
     (text: string) => {
@@ -1538,7 +1584,7 @@ export default function App() {
   // WSJT-X Tx-slot click (Tx1–Tx5 buttons / Alt+N): force the row's text as the
   // next transmission to the DX. The backend starts/retargets the QSO + arms TX;
   // applying the returned snapshot makes the Tx panel's "next" dot land at once.
-  const handleOverrideTx = useCallback((call: string, grid: string | null, text: string) => {
+  const handleOverrideTx = useCallback((call: string, grid: string | null, text: string, expectedQso?: AppSnapshot['qso']) => {
     // Same own-call guard as handleCall — the engine no-ops on a self-target
     // but returns a normal snapshot, which read as silent success here.
     const me = mycallRef.current.trim().toUpperCase()
@@ -1547,7 +1593,7 @@ export default function App() {
       return
     }
     void withErrorToast(
-      () => apiOverrideNextTx(call, grid, text),
+      () => apiOverrideNextTx(call, grid, text, expectedQso),
       t('shell.overrideTx.failed', { call }),
     ).then((s) => {
       if (s) setSnap(s)
@@ -1555,28 +1601,42 @@ export default function App() {
   }, [])
 
   const handleSetTxEven = useCallback((even: boolean) => {
-    void withErrorToast(() => apiSetTxEven(even), t('shell.txPeriod.failed')).then((s) => {
+    void withErrorToast(() => apiSetTxEven(even, snap ? { expectedTier: snap.link.tier, expected: snap.remoteFtSettings } : undefined), t('shell.txPeriod.failed')).then((s) => {
       if (s) setSnap(s)
     })
-  }, [])
+  }, [snap])
 
   const handleSetTxCycleAuto = useCallback((auto: boolean) => {
-    void withErrorToast(() => apiSetTxCycleAuto(auto), t('shell.cycleMode.failed')).then(
+    void withErrorToast(() => apiSetTxCycleAuto(auto, snap ? { expectedTier: snap.link.tier, expected: snap.remoteFtSettings } : undefined), t('shell.cycleMode.failed')).then(
       (s) => {
         if (s) setSnap(s)
       },
     )
-  }, [])
+  }, [snap])
 
   const handleSetHoldTxFreq = useCallback((on: boolean) => {
-    void withErrorToast(() => apiSetHoldTxFreq(on), t('shell.holdTx.failed')).then((s) => {
+    void withErrorToast(() => apiSetHoldTxFreq(on, snap ? { expectedTier: snap.link.tier, expected: snap.remoteFtSettings } : undefined), t('shell.holdTx.failed')).then((s) => {
       if (s) setSnap(s)
     })
-  }, [])
+  }, [snap])
 
-  // Waterfall click: left-click sets the RX offset (green marker); shift-click
-  // sets the TX offset (red marker). TX follows RX unless "Hold Tx" is on.
+  // Waterfall click: left-click sets RX only; shift/right-click sets TX;
+  // Ctrl/Command sets both. Hold Tx belongs to decode/QSO selection, not this click.
   const handleTune = useCallback((hz: number, target: 'tx' | 'rx' | 'both') => {
+    if (remote) {
+      if (target === 'rx') {
+        if (ftRuntimeControl && snap?.remoteFtRuntime) {
+          const context = { expectedTier: snap.link.tier, expected: snap.remoteFtRuntime }
+          void withErrorToast(() => apiSetRxOffset(hz, context), t('shell.offset.failed')).then(s => { if (s) setSnap(s) })
+        } else receiverSettingsRef.current.tuneRx(hz)
+      }
+      else {
+        const context = snap ? { expectedTier: snap.link.tier, expected: snap.remoteFtSettings } : undefined
+        void withErrorToast(() => target === 'tx' ? apiSetTxOffset(hz, context) : apiSetBothOffsets(hz, context), t('shell.offset.failed'))
+          .then(s => { if (s) setSnap(s) })
+      }
+      return
+    }
     // Stock WSJT-X gestures (Waterfall dispatches): 'rx' = click, 'tx' = Shift, 'both' = Ctrl.
     const call =
       target === 'rx'
@@ -1587,7 +1647,7 @@ export default function App() {
     void withErrorToast(call, t('shell.offset.failed')).then((s) => {
       if (s) setSnap(s)
     })
-  }, [])
+  }, [remote, snap, ftRuntimeControl])
 
   // QSY from the Needed panel: move the rig to that band's channel and listen.
   const handleQsy = useCallback(
@@ -1623,6 +1683,7 @@ export default function App() {
   // retunes (same behavior as the Needed board's work-click).
   const recallMemory = useCallback(
     (m: Memory) => {
+      if (remote) return
       const plan = planRecall(m)
       const target = plan.view
       const opMode: 'digital' | 'phone' | 'cw' = target === 'operate' ? 'digital' : target
@@ -1702,7 +1763,7 @@ export default function App() {
         }
       })()
     },
-    [cwEnabled, phoneEnabled],
+    [cwEnabled, phoneEnabled, !!remote],
   )
 
   // Global quick-recall hotkeys: Ctrl+1..9 (or ⌘+1..9 — the native chord on macOS, where
@@ -1775,9 +1836,16 @@ export default function App() {
     }
   }, [])
 
+  const canRemoteWork = useCallback((alert: NeedAlert) => {
+    const target = workTarget(alert, bandPlan)
+    return remoteWorkAllowed && !!target &&
+      ((target.view === 'cw' && cwEnabled) || (target.view === 'phone' && phoneEnabled))
+  }, [remoteWorkAllowed, bandPlan, cwEnabled, phoneEnabled])
+
   // resolvable frequency at all falls back to a plain band QSY.
   const handleWorkNeeded = useCallback(
     (alert: NeedAlert) => {
+      if (remote && !canRemoteWork(alert)) return
       // `target`, not `t` — `t` is the translator in this file.
       const target = workTarget(alert, bandPlan)
       if (!target) {
@@ -1841,7 +1909,7 @@ export default function App() {
         )
       })()
     },
-    [bandPlan, handleQsy, cwEnabled, phoneEnabled, rttyEnabled],
+    [bandPlan, handleQsy, cwEnabled, phoneEnabled, rttyEnabled, remote, canRemoteWork],
   )
 
   // Work a spot double-clicked on the MAP — the same atomic path as the Needed
@@ -1924,6 +1992,7 @@ export default function App() {
   // act: go to that cockpit.
   const handleWorkSpotHere = useCallback(
     (cockpit: 'phone' | 'cw') => (s: SpotRow) => {
+      if (remote && !remoteWorkAllowed) return
       const kind = cockpit
       void withErrorToast(
         () => workSpot(kind as 'digital' | 'phone' | 'cw', s.freqMhz, s.band, s.call),
@@ -1931,6 +2000,7 @@ export default function App() {
       ).then((snap) => {
         if (!snap) return
         setSnap(snap)
+        if (remote) setPendingWork({ call: s.call, view: cockpit, ts: Date.now() })
         pushToast(
           t('shell.work.here', { call: s.call, band: s.band, freq: s.freqMhz.toFixed(3) }),
           'success',
@@ -1938,7 +2008,7 @@ export default function App() {
         )
       })
     },
-    [],
+    [remote, remoteWorkAllowed],
   )
   const workSpotHerePhone = useMemo(() => handleWorkSpotHere('phone'), [handleWorkSpotHere])
   const workSpotHereCw = useMemo(() => handleWorkSpotHere('cw'), [handleWorkSpotHere])
@@ -1971,26 +2041,27 @@ export default function App() {
       .catch(() => {})
   }, [])
 
-  const handleSetMode = useCallback((mode: ModeRequest) => {
-    void withErrorToast(() => apiSetMode(mode), t('shell.error.switchMode')).then((s) => {
+  const handleSetMode = useCallback((mode: ModeRequest, expectedQso?: import('./types').QsoStatus | null) => {
+    void withErrorToast(() => apiSetMode(mode, expectedQso), t('shell.error.switchMode')).then((s) => {
       if (s) setSnap(s)
     })
   }, [])
 
-  const handleQsoResend = useCallback(() => {
-    void withErrorToast(() => apiQsoResend(), t('shell.resend.qso.failed')).then((s) => {
+  const handleQsoResend = useCallback((expectedQso?: import('./types').QsoStatus | null) => {
+    void withErrorToast(() => apiQsoResend(expectedQso), t('shell.resend.qso.failed')).then((s) => {
       if (s) setSnap(s)
     })
   }, [])
 
-  const handleQsoFreetext = useCallback((text: string) => {
-    void withErrorToast(() => apiQsoFreetext(text), t('shell.freetext.failed')).then((s) => {
+  const handleQsoFreetext = useCallback((text: string, expectedQso?: import('./types').QsoStatus | null) => {
+    return withErrorToast(() => apiQsoFreetext(text, expectedQso), t('shell.freetext.failed')).then((s) => {
       if (s) setSnap(s)
+      return !!s
     })
   }, [])
 
   const handleLogCurrent = useCallback(() => {
-    void withErrorToast(() => apiLogCurrentQso(), t('shell.log.failed')).then((r) => {
+    void withErrorToast(() => apiLogCurrentQso({ expectedKey: snap?.currentQsoLogKey, expectedTier: snap?.link.tier, expectedQso: snap?.qso }), t('shell.log.failed')).then((r) => {
       if (r) {
         setSnap(r.snapshot)
         // The engine's verdict, not the call returning (#100): every false is a deliberate
@@ -2001,12 +2072,12 @@ export default function App() {
           refreshNeeds() // drop the just-worked station from the roster/needs immediately
           // QRZ/ClubLog/eQSL auto-upload happens in the BACKEND log funnel now
           // (every log path, auto-log included); outcomes toast via uploadTick.
-        } else {
+        } else if (!r.pending) {
           pushToast(t('shell.toast.nothingToLog'), 'info', 4000)
         }
       }
     })
-  }, [refreshNeeds])
+  }, [refreshNeeds, snap?.currentQsoLogKey, snap?.link.tier, snap?.qso])
 
   // Selecting a view from the nav. QSO / Field Day also request the backend mode
   // (defaulting to the "run" / "chat" role); Settings are pure UI
@@ -2020,13 +2091,14 @@ export default function App() {
     (next: View) => {
       setView(next)
       if (next !== 'settings') setSettingsTarget(undefined)
+      if (remote) return // Opening an observed screen does not change the station mode.
       // Passive-first: entering QSO / Field Day starts in Search-&-Pounce
       // (listen + answer), never auto-calling CQ. The operator hits "Call CQ" /
       // "Running" in the panel to start transmitting.
       if (next === 'chat') handleSetMode('chat')
       else if (next === 'fieldDay') handleSetMode('fieldday-sp')
     },
-    [handleSetMode],
+    [handleSetMode, !!remote],
   )
 
   /**
@@ -2112,6 +2184,7 @@ export default function App() {
         /* ignore */
       }
       setView('operate')
+      if (remote) return
       // The codec tier (FT8/FT4) is INDEPENDENT of the rig's CAT mode — switching tiers does
       // NOT command the Yaesu into DATA-U. Assert the digital rig mode explicitly here:
       // clicking a Digital sub-mode while already on the Operate screen doesn't change `view`,
@@ -2230,6 +2303,10 @@ export default function App() {
   const fdActive = settings?.fdActive === true
   const navEnabled: Record<FeatureId, boolean> = { ...features.enabled, fieldDay: fdActive }
   const isViewEnabled = (v: View): boolean => navEnabled[v as FeatureId] !== false
+  // A visible navigation item is not evidence that its station API is connected.
+  // In particular, never mount SettingsPanel with the projected operating view:
+  // it expects complete configuration and could display absent values as defaults.
+  const isRemoteViewAvailable = (v: View): boolean => !remote || v === 'operate' || v === 'chat' || (!!remote.collections && ['needed', 'spots', 'logbook'].includes(v)) || (!!remote.cwPhone && (v === 'cw' || v === 'phone')) || (!!remote.keyboard && (v === 'rtty' || v === 'psk')) || (!!remote.insights && (v === 'awards' || v === 'stats')) || (!!remote.dxpeditions && v === 'dxped') || (!!remote.memories && v === 'memories') || (!!remote.ota && v === 'pota') || (!!remote.fieldDay && v === 'fieldDay') || (!!remote.js8 && v === 'js8') || (!!remote.stationModes && (v === 'sstv' || v === 'aprs')) || (!!remote.navigation && (v === 'connect' || v === 'sats')) || (!!remote.configuration && (v === 'settings' || v === 'program'))
 
   // Recall card → Logbook, filtered to the call (#192, kr4fqg: "click a previous contact and
   // land in the log"). Same shape as the `onOpenMemories` handoffs below — `undefined` when the
@@ -2249,6 +2326,15 @@ export default function App() {
   // the master is off) → operate.
   const fallbackView: View = isViewEnabled(features.landing) ? features.landing : 'operate'
   const effectiveView: View = isViewEnabled(view) ? view : fallbackView
+  // The remote contact forms stay in their original component tree while the
+  // operator checks a needed station or the log. Mount only after first use;
+  // hidden hosts lose data interest and gesture authority, not the QSO draft.
+  // The native cockpit lifecycle (including its TX cleanup) is unchanged.
+  const [remoteContacts, setRemoteContacts] = useState({ cw: false, phone: false })
+  useEffect(() => {
+    if (!remote?.cwPhone || (effectiveView !== 'cw' && effectiveView !== 'phone')) return
+    setRemoteContacts((seen) => seen[effectiveView] ? seen : { ...seen, [effectiveView]: true })
+  }, [remote?.cwPhone, effectiveView])
   // Where the crash panel's escape button goes. The landing view normally — unless the
   // landing view is the one that just crashed (a vhf profile lands on Connect), in which
   // case Operate: it is a core section, so it can never be the disabled one.
@@ -2450,6 +2536,51 @@ export default function App() {
     </main>
   )
 
+  const cwWorkspace = (
+    <CwCockpit
+      active={!remote || (effectiveView === 'cw' && !remote.stale)}
+      onOpenLogbook={openLogbookFor}
+      pitchHz={settings?.cwPitchHz ?? 600}
+      wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
+      snap={snap}
+      theme={theme}
+      pendingWork={pendingWork?.view === 'cw' ? pendingWork : null}
+      onConsumeWork={() => setPendingWork(null)}
+      onSnap={setSnap}
+      fieldDay={snap.fieldDay}
+      spots={allSpots}
+      needByCall={needByCall}
+      typeByCall={typeByCall}
+      onWorkSpot={workSpotHereCw}
+      onRecallMemory={isViewEnabled('memories') ? recallMemory : undefined}
+      onOpenMemories={isViewEnabled('memories') ? () => setView('memories') : undefined}
+      onOpenSettings={openSettingsAt}
+      panels={cwPanels}
+    />
+  )
+  const phoneWorkspace = (
+    <PhoneCockpit
+      active={!remote || (effectiveView === 'phone' && !remote.stale)}
+      onOpenLogbook={openLogbookFor}
+      snap={snap}
+      panels={phonePanels}
+      theme={theme}
+      pendingWork={pendingWork?.view === 'phone' ? pendingWork : null}
+      onConsumeWork={() => setPendingWork(null)}
+      onSnap={setSnap}
+      fieldDay={snap.fieldDay}
+      phoneMode={settings?.phoneMode}
+      wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
+      spots={allSpots}
+      needByCall={needByCall}
+      typeByCall={typeByCall}
+      onWorkSpot={workSpotHerePhone}
+      onRecallMemory={isViewEnabled('memories') ? recallMemory : undefined}
+      onOpenMemories={isViewEnabled('memories') ? () => setView('memories') : undefined}
+      onOpenSettings={openSettingsAt}
+    />
+  )
+
   let workspace: JSX.Element | null
   switch (effectiveView) {
     case 'fieldDay':
@@ -2481,7 +2612,7 @@ export default function App() {
       // `.layout.single > .panel` already gives it the definite height, the deficit valve and
       // the measure it needs (styles.css; computed in layout-single-deficit.test.tsx and
       // fdDashboardShell.test.tsx).
-      workspace = (
+      workspace = remote ? <RemoteFieldDay tier={tier} /> : (
         <main className="layout single">
           <ContestView
             fieldDay={snap.fieldDay}
@@ -2542,12 +2673,13 @@ export default function App() {
           onQsy={(a) => handleQsy(a.band, a.freqMhz ?? undefined)}
           onSelect={handleSelect}
           onWork={handleWorkNeeded}
+          canWork={remote ? canRemoteWork : undefined}
           onPoint={
-              (settings?.rotatorModel ?? 0) > 0 || settings?.rotatorHost?.trim()
+              !remote && ((settings?.rotatorModel ?? 0) > 0 || settings?.rotatorHost?.trim())
                 ? handlePointAntenna
                 : undefined
             }
-          onPopOut={() => void openPanelWindow('needed')}
+          onPopOut={remote ? undefined : () => void openPanelWindow('needed')}
           onOpenSettings={openSettingsAt}
           phoneSource={
             feedHealth
@@ -2575,7 +2707,7 @@ export default function App() {
       break
     case 'awards':
       // Awards + Journey combined: one section, tabbed (Journey + Official Awards).
-      workspace = (
+      workspace = remote ? <RemoteInsights kind="awards" showGamification={features.isOn('gamification')} /> : (
         <AwardsJourney
           showGamification={features.isOn('gamification')}
           onOpenSettings={openSettingsAt}
@@ -2584,56 +2716,18 @@ export default function App() {
       break
     case 'stats':
       // Descriptive logbook analytics — the log sliced by band/mode/year/hour/entity.
-      workspace = <StatsView />
+      workspace = remote ? <RemoteInsights kind="statistics" /> : <StatsView />
       break
     case 'cw':
-      workspace = (
-        <CwCockpit
-          onOpenLogbook={openLogbookFor}
-          pitchHz={settings?.cwPitchHz ?? 600}
-          wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
-          snap={snap}
-          theme={theme}
-          pendingWork={pendingWork?.view === 'cw' ? pendingWork : null}
-          onConsumeWork={() => setPendingWork(null)}
-          onSnap={setSnap}
-          fieldDay={snap.fieldDay}
-          spots={allSpots}
-          needByCall={needByCall}
-          typeByCall={typeByCall}
-          onWorkSpot={workSpotHereCw}
-          onRecallMemory={isViewEnabled('memories') ? recallMemory : undefined}
-          onOpenMemories={isViewEnabled('memories') ? () => setView('memories') : undefined}
-          onOpenSettings={openSettingsAt}
-          panels={cwPanels}
-        />
-      )
+      if (remote) workspace = null
+      else workspace = cwWorkspace
       break
     case 'phone':
-      workspace = (
-        <PhoneCockpit
-          onOpenLogbook={openLogbookFor}
-          snap={snap}
-          panels={phonePanels}
-          theme={theme}
-          pendingWork={pendingWork?.view === 'phone' ? pendingWork : null}
-          onConsumeWork={() => setPendingWork(null)}
-          onSnap={setSnap}
-          fieldDay={snap.fieldDay}
-          phoneMode={settings?.phoneMode}
-          wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
-          spots={allSpots}
-          needByCall={needByCall}
-          typeByCall={typeByCall}
-          onWorkSpot={workSpotHerePhone}
-          onRecallMemory={isViewEnabled('memories') ? recallMemory : undefined}
-          onOpenMemories={isViewEnabled('memories') ? () => setView('memories') : undefined}
-          onOpenSettings={openSettingsAt}
-        />
-      )
+      if (remote) workspace = null
+      else workspace = phoneWorkspace
       break
     case 'pota':
-      workspace = (
+      workspace = remote ? <RemoteOta snap={snap} /> : (
         <main className="layout single">
           <PotaSotaView
             snap={snap}
@@ -2732,7 +2826,7 @@ export default function App() {
       )
       break
     case 'dxped':
-      workspace = (
+      workspace = remote ? <RemoteDxpeditions /> : (
         <main className="layout single">
           <DxpeditionsView
             snap={prop}
@@ -2762,7 +2856,7 @@ export default function App() {
     case 'memories':
       // A manager view — never touches the rig on entry; only an explicit
       // Tune (recallMemory) retunes + switches cockpit.
-      workspace = (
+      workspace = remote ? <RemoteMemories myGrid={settings?.mygrid ?? ''} /> : (
         <main className="layout single">
           <MemoriesView
             onPopOut={() => void openPanelWindow('memories')}
@@ -2900,8 +2994,24 @@ export default function App() {
       break
   }
 
+  if (!isRemoteViewAvailable(effectiveView)) workspace = (
+    <main className="layout single">
+      <section className="panel remote-view-unavailable" role="status">
+        <h2>{featureById(effectiveView)?.label ?? t('features.settings.label')}</h2>
+        <p>{t('remote.viewUnavailable')}</p>
+      </section>
+    </main>
+  )
+
+  if (remote?.collections && ((effectiveView === 'needed' && needsRead?.phase !== 'ready') || (effectiveView === 'spots' && spotsRead?.phase !== 'ready'))) {
+    const unavailable = remote.stale || (effectiveView === 'needed' ? needsRead : spotsRead)?.phase === 'unavailable'
+    workspace = <main className="layout single"><p role="status">{unavailable ? t('remote.collectionUnavailable') : t('remote.collectionLoading')}</p></main>
+  }
+
   return (
-    <div className="app">
+    <div className={`app${remote ? ' remote-workspace' : ''}${quick ? ' remote-quick-workspace' : ''}`} data-remote-presentation={remote ? display?.presentation ?? 'full' : undefined} data-remote-view={remote ? effectiveView : undefined} data-remote-stale={remote?.stale || undefined}>
+      {remote?.status}
+      {remote?.collections && (effectiveView === 'needed' || effectiveView === 'spots') && <div className="remote-application-status"><CollectionStatus name={effectiveView === 'needed' ? 'needs' : 'spots'} /></div>}
       <TopBar
         mycall={snap.mycall}
         mygrid={snap.mygrid}
@@ -3012,6 +3122,7 @@ export default function App() {
         feedHealth={feedHealth}
         connectEnabled={features.isOn('connect')}
         dxpedEnabled={features.isOn('dxped')}
+        needsAvailable={!remote || (needsRead?.phase === 'ready' && !remote.stale)}
         onNavigate={handleView}
         // Profile-declared chip emphasis (dangling since the profiles landed).
         // A hand-blended feature set is tagged 'custom' (no profile) → default order.
@@ -3031,7 +3142,7 @@ export default function App() {
           // master switch (navEnabled.fieldDay = fdActive) and NOT club sync — the
           // board used to be reachable only from inside ContestView once sync was
           // already on, which is exactly why nobody found it.
-          onClubBoard={() => void openPanelWindow('fdclub')}
+          onClubBoard={remote ? undefined : () => void openPanelWindow('fdclub')}
         />
         {/* CRASH CONTAINMENT — inside `.shell` and AFTER the rail, deliberately.
             A render throw in a view used to unmount the ENTIRE root (0.24.6 field
@@ -3116,12 +3227,26 @@ export default function App() {
               active={effectiveView === 'operate'}
             />
           </div>
+          {remote?.cwPhone && isViewEnabled('cw') && (remoteContacts.cw || effectiveView === 'cw') && (
+            <div className="remote-contact-host" hidden={effectiveView !== 'cw'}>
+              <StationDataContext.Provider value={effectiveView === 'cw' && !remote.stale}>
+                {cwWorkspace}
+              </StationDataContext.Provider>
+            </div>
+          )}
+          {remote?.cwPhone && isViewEnabled('phone') && (remoteContacts.phone || effectiveView === 'phone') && (
+            <div className="remote-contact-host" hidden={effectiveView !== 'phone'}>
+              <StationDataContext.Provider value={effectiveView === 'phone' && !remote.stale}>
+                {phoneWorkspace}
+              </StationDataContext.Provider>
+            </div>
+          )}
           {/* RTTY + SSTV keep-alive hosts (same pattern as .operate-host): the decoded
               RTTY stream and the always-armed SSTV VIS receiver keep accumulating in
               the backend while the operator is on another section; `active` gates only
               each view's display poll (the OperateCockpit pattern). Gated on the
               feature toggle so a disabled section mounts nothing. */}
-          {isViewEnabled('rtty') && (
+          {isRemoteViewAvailable('rtty') && isViewEnabled('rtty') && (
             <div className="rtty-host" hidden={effectiveView !== 'rtty'}>
               <RttyCockpit
                 onOpenLogbook={openLogbookFor}
@@ -3129,14 +3254,14 @@ export default function App() {
                 onSnap={setSnap}
                 active={effectiveView === 'rtty'}
                 onSetFrequency={handleSetFrequency}
-                onSetTxEnabled={handleSetTxEnabled}
+                onSetTxEnabled={remote ? undefined : handleSetTxEnabled}
                 theme={theme}
                 wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
                 panels={rttyPanels}
               />
             </div>
           )}
-          {isViewEnabled('psk') && (
+          {isRemoteViewAvailable('psk') && isViewEnabled('psk') && (
             <div className="psk-host" hidden={effectiveView !== 'psk'}>
               <PskCockpit
                 onOpenLogbook={openLogbookFor}
@@ -3144,14 +3269,14 @@ export default function App() {
                 onSnap={setSnap}
                 active={effectiveView === 'psk'}
                 onSetFrequency={handleSetFrequency}
-                onSetTxEnabled={handleSetTxEnabled}
+                onSetTxEnabled={remote ? undefined : handleSetTxEnabled}
                 theme={theme}
                 wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
                 panels={pskPanels}
               />
             </div>
           )}
-          {isViewEnabled('sstv') && (
+          {isRemoteViewAvailable('sstv') && isViewEnabled('sstv') && (
             <div className="sstv-host" hidden={effectiveView !== 'sstv'}>
               <SstvView
                 snap={snap}
@@ -3168,7 +3293,7 @@ export default function App() {
               />
             </div>
           )}
-          {isViewEnabled('aprs') && (
+          {isRemoteViewAvailable('aprs') && isViewEnabled('aprs') && (
             <div className="aprs-host" hidden={effectiveView !== 'aprs'}>
               <AprsCockpit
                 theme={theme}
@@ -3186,7 +3311,7 @@ export default function App() {
               gates the display poll and fires js8_enter on the rising edge. Gated on the
               feature toggle (JS8 ships ON, so this mounts unless the operator turned it off).
               `onSetTxEnabled` is the header pill — the only TX latch in this view. */}
-          {isViewEnabled('js8') && (
+          {isRemoteViewAvailable('js8') && isViewEnabled('js8') && (
             <div className="js8-host" hidden={effectiveView !== 'js8'}>
               <Js8Cockpit
                 onOpenLogbook={openLogbookFor}
@@ -3205,6 +3330,7 @@ export default function App() {
         </ErrorBoundary>
       </div>
 
+      {remote && <QuickNavigation view={effectiveView} onSelect={handleView} available={(v) => isViewEnabled(v) && isRemoteViewAvailable(v)} />}
       <Toasts />
       {/* Destructive actions confirm through this, not window.confirm — which is inert in the
           macOS webview and silently answered "no" to every one of them. See src/confirm.tsx. */}
@@ -3240,6 +3366,8 @@ export default function App() {
 
       {snap.pendingLog && (
         <LogConfirm
+          key={remote ? snap.pendingQsoLogKey : undefined}
+          onStop={remote ? handleHaltTx : undefined}
           record={snap.pendingLog}
           onConfirm={handleConfirmLog}
           onDiscard={handleDiscardLog}

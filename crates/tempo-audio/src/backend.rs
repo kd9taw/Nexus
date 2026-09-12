@@ -50,6 +50,11 @@ pub trait AudioBackend {
     fn spectrum_tap(&self) -> Option<(std::sync::Arc<crate::monitor::SpscRing>, u32)> {
         None
     }
+    /// Resolved decode input at open, if the backend can identify it. This is
+    /// metadata only: asking for it cannot open or change a device.
+    fn capture_input(&self) -> Option<crate::receive_audio::CaptureInput> {
+        None
+    }
     /// Set the TX audio level (0.0–1.0) applied to played samples. No-op default
     /// for non-hardware backends (the real sound card overrides it).
     fn set_tx_level(&mut self, _level: f32) {}
@@ -150,6 +155,9 @@ pub struct MockBackend {
     pub played: Vec<f32>,
     /// How many times `flush_output` was called (for hard-Stop-TX tests).
     pub flush_calls: usize,
+    /// Live gain updates received from the real audio owner, for headless tests.
+    pub rx_gain_calls: Vec<f32>,
+    pub tx_level_calls: Vec<f32>,
     /// Scripted chunks the next `voice_capture()` calls return (voice-mic tests).
     to_voice_capture: VecDeque<Vec<f32>>,
     /// Every `set_voice_mic` argument, in order (for asserting open/close behavior).
@@ -189,6 +197,12 @@ impl MockBackend {
 }
 
 impl AudioBackend for MockBackend {
+    fn set_rx_gain(&mut self, gain: f32) {
+        self.rx_gain_calls.push(gain);
+    }
+    fn set_tx_level(&mut self, level: f32) {
+        self.tx_level_calls.push(level);
+    }
     fn release_device(&mut self) {
         // Mirrors the real backend: the card is let go, and this instance is inert after.
         if let Some(card) = self.card.take() {

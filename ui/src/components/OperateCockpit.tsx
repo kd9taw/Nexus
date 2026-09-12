@@ -1,3 +1,7 @@
+import { RemoteRecall } from '../remote-web/RemoteRecall'
+import { useStationControl, useStationTierControl, useStationCapability } from '../stationAccess'
+import { useDecoderSettings } from '../remote-web/useDecoderSettings'
+import { useReceiverSettings } from '../remote-web/useReceiverSettings'
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every reading in this
 // cockpit is DATA and stays in the code — the dial, the audio offsets in Hz, the band, the
 // tier, the decode depth, the split TX frequency, the next-slot seconds — and so does the
@@ -109,18 +113,18 @@ interface Props {
   /** Commit a dial/band/mode change (the app's setFrequency handler). */
   onSetFrequency: (dialMhz: number, band: string, mode: string) => void
   /** Switch the QSO sequencer role (Call CQ / Monitor). */
-  onSetMode: (mode: ModeRequest) => void
+  onSetMode: (mode: ModeRequest, expectedQso?: import('../types').QsoStatus | null) => void
   /** Set the transmit period (Tx 1st/even vs Tx 2nd/odd). */
   onSetTxEven: (even: boolean) => void
   onSetTxCycleAuto: (auto: boolean) => void
   /** Re-arm the current QSO message. */
-  onResend: () => void
+  onResend: (expectedQso?: import('../types').QsoStatus | null) => void
   /** Send in-QSO free text (Tx5). */
-  onFreetext: (text: string) => void
+  onFreetext: (text: string, expectedQso?: import('../types').QsoStatus | null) => void | Promise<boolean>
   /** Log the active QSO now (inline button). */
   onLog: () => void
   /** WSJT-X Tx-slot click: force `text` as the next transmission to `call`. */
-  onOverrideTx: (call: string, grid: string | null, text: string) => void
+  onOverrideTx: (call: string, grid: string | null, text: string, expectedQso?: AppSnapshot['qso']) => void
   /** Halt TX immediately (the Esc key — same api as the Stop TX button). */
   onHaltTx: () => void
   /** TX-control cluster consolidated into the QSO strip (beside CQ/S&P). */
@@ -350,6 +354,14 @@ export function OperateCockpit({
   onOpenSettings,
   wheelSensitivity,
 }: Props) {
+  const control = useStationControl()
+  const messageControl = useStationCapability('ftMessages')
+  const ftSettings = useStationCapability('ftSettings') && !!snap.remoteFtSettings && (tier === 'FT8' || tier === 'FT4')
+  const ftRuntime = useStationCapability('ftRuntime') && !!snap.remoteFtRuntime && (tier === 'FT8' || tier === 'FT4')
+  const cqControl = useStationCapability('ftOperate')
+  const tierControl = useStationTierControl(snap.radio)
+  const decoderSettings = useDecoderSettings(snap, 'MSK144')
+  const receiverSettings = useReceiverSettings(snap, tier)
   // Container the waterfall-height splitter measures + writes its CSS var on.
   const bodyRef = useRef<HTMLDivElement>(null)
   // The two resizable side-rail panes in roster mode (Band Activity above, Rx Frequency
@@ -439,13 +451,19 @@ export function OperateCockpit({
       /* ignore */
     }
   }, [tuneStep])
-  // Skip Tx1 (WSJT-X parity) — session-only UI state; the backend flag is likewise not
-  // persisted, so both reset to off each launch. The toggle pushes to the engine.
-  const [skipTx1, setSkipTx1] = useState(false)
+  // Skip Tx1 remains session-only. Remote renders the station flag; the local UI
+  // retains its existing launch default and pushes each toggle to the engine.
+  const [localSkipTx1, setSkipTx1] = useState(false)
+  const skipTx1 = control ? localSkipTx1 : snap.remoteFtRuntime?.skipTx1 ?? false
   const handleSkipTx1 = useCallback((v: boolean) => {
-    setSkipTx1(v)
-    setSkipTx1Cmd(v).catch(() => {})
-  }, [])
+    if (control) {
+      setSkipTx1(v)
+      setSkipTx1Cmd(v).catch(() => {})
+    } else if (ftRuntime && snap.remoteFtRuntime) {
+      void setSkipTx1Cmd(v, { expectedTier: tier, expected: snap.remoteFtRuntime })
+        .catch(() => pushToast(t('remote.controlRequestFailed'), 'error'))
+    }
+  }, [control, ftRuntime, snap, tier])
   const recording = snap.radio.qsoRecording
   const toggleRecord = () => {
     if (recBusy) return
@@ -472,7 +490,7 @@ export function OperateCockpit({
   const specialOpLoaded = useRef(false)
   useEffect(() => {
     let alive = true
-    getSettings()
+    const load = () => getSettings()
       .then((s) => {
         if (alive) {
           setSpecialOp(s.specialOp ?? 'none')
@@ -480,8 +498,12 @@ export function OperateCockpit({
         }
       })
       .catch(() => {})
-    return () => { alive = false }
-  }, [])
+    void load()
+    // The observer cannot make this setting locally; reflect changes made at
+    // the shack. Its shared transport coalesces this with the workspace read.
+    const timer = !control ? setInterval(() => void load(), 2000) : undefined
+    return () => { alive = false; clearInterval(timer) }
+  }, [control])
 
   const handleSpecialOp = (val: NonNullable<Settings['specialOp']>) => {
     if (val === specialOp) return
@@ -699,19 +721,24 @@ export function OperateCockpit({
    * startCq(dir | null) directly; apply the returned snapshot via onSnap.
    * Tx1–Tx5 force the row's text as the next transmission to the DX. */
   const doTx = (n: number) => {
+    if (!(n === 6 ? cqControl : messageControl)) return
     if (n === 6) {
-      setLocalNext(5)
+      if (control) setLocalNext(5)
       const dir = cqDirFromText(tx6, snap.mycall)
       // dir === undefined → parse failed / malformed → fall back to plain CQ
       const resolved = dir === undefined ? null : dir
-      startCq(resolved).then((s) => onSnap?.(s)).catch(() => {})
+      startCq(resolved).then((s) => onSnap?.(s)).catch((e) => { if (!control) pushToast(String(e), 'error') })
       return
     }
     const call = dxCall.trim().toUpperCase()
     const text = rowTexts[n - 1]?.trim()
     if (!call || !text) return
-    setLocalNext(n - 1)
-    onOverrideTx(call, dxGrid.trim().toUpperCase() || null, text)
+    if (control) {
+      setLocalNext(n - 1)
+      onOverrideTx(call, dxGrid.trim().toUpperCase() || null, text)
+    } else {
+      onOverrideTx(call, dxGrid.trim().toUpperCase() || null, text, snap.qso)
+    }
   }
 
   /** Re-decode the last period (WSJT-X Decode / F6). */
@@ -868,8 +895,9 @@ export function OperateCockpit({
   })
     ? (snap.qso?.dxcall ?? null)
     : null
-  const recallCard = shownRecallCall ? (
-    <OperateRecall snap={snap} call={shownRecallCall} mode={tier} onOpenLog={onOpenLogbook} />
+  const recallCard = shownRecallCall ? (control
+    ? <OperateRecall snap={snap} call={shownRecallCall} mode={tier} onOpenLog={onOpenLogbook} />
+    : <RemoteRecall snap={snap} call={shownRecallCall} mode={tier} onOpenLog={onOpenLogbook} bounded />
   ) : null
 
   return (
@@ -880,7 +908,7 @@ export function OperateCockpit({
         modeIndicator={
           <div className="cockpit-modes" role="group" aria-label={t('operate.header.modes.aria')}>
             {MODES.map((m) => (
-              <button
+              <button disabled={!tierControl}
                 key={m.tier}
                 type="button"
                 className={`cockpit-mode${tier === m.tier ? ' active' : ''}`}
@@ -897,12 +925,16 @@ export function OperateCockpit({
                  (sbTR, mainwindow.cpp:8387) — the period is an operating decision on
                  meteor scatter, not configuration, so it lives here and not only in
                  Settings. Narrow write: a full settings apply is the #54 mid-QSO reset. */
-              <select
+              <select disabled={!control && (!decoderSettings.allowed || ![5, 10, 15, 30].includes(snap.link.periodSecs))}
                 className="cockpit-mode cm-trperiod"
                 aria-label={t('operate.header.msk144Period.aria')}
                 title={t('operate.header.msk144Period.title')}
                 value={String(snap.link.periodSecs || 15)}
-                onChange={(e) => void setMsk144Period(Number(e.target.value)).then((s2) => onSnap?.(s2))}
+                onChange={(e) => {
+                  const secs = Number(e.target.value)
+                  if (control) void setMsk144Period(secs).then((s2) => onSnap?.(s2))
+                  else decoderSettings.change({ action: 'decoder.msk144Period', expectedPeriodSecs: snap.link.periodSecs, periodSecs: secs })
+                }}
               >
                 {[5, 10, 15, 30].map((p) => (
                   <option key={p} value={p}>{`${p}s`}</option>
@@ -912,7 +944,7 @@ export function OperateCockpit({
           </div>
         }
         bandControl={
-          <FrequencyControl
+          <FrequencyControl remoteFrequency
             channels={bandPlan}
             dialMhz={snap.radio.dialMhz}
             band={snap.radio.band}
@@ -923,6 +955,8 @@ export function OperateCockpit({
             onSet={onSetFrequency}
           />
         }
+        remoteFrequency
+        remoteWorkspace="ft"
         onCommitDial={commitDial}
         digitTune
         wheelSensitivity={wheelSensitivity}
@@ -944,11 +978,13 @@ export function OperateCockpit({
                   type="button"
                   className={`cockpit-depth-chip${snap.radio.decodeDepth === d ? ' active' : ''}`}
                   aria-pressed={snap.radio.decodeDepth === d}
-                  onClick={() =>
+                  disabled={!control && !receiverSettings.depthAllowed}
+                  onClick={() => {
+                    if (!control) { receiverSettings.setDepth(d); return }
                     void setDecodeDepth(d)
                       .then((s) => onSnap?.(s))
                       .catch(() => {})
-                  }
+                  }}
                 >
                   {label}
                 </button>
@@ -1002,7 +1038,7 @@ export function OperateCockpit({
             Toggling it mid-QSO is safe by construction — a contact in flight keeps the rules it
             started under (engine.rs `hound_split`); the toggle governs the NEXT one. */}
         <div className="cockpit-specialop">
-          <button
+          <button disabled={!control}
             type="button"
             className={`cockpit-specialop-btn${isHound(specialOp) ? ' active' : ''}`}
             aria-pressed={isHound(specialOp)}
@@ -1051,7 +1087,7 @@ export function OperateCockpit({
                   })
             }
           >
-            <button
+            <button disabled={!control}
               type="button"
               className={`cs-opt${source === 'native' ? ' active' : ''}`}
               aria-pressed={source === 'native'}
@@ -1060,7 +1096,7 @@ export function OperateCockpit({
             >
               ◉ {SOURCE_NATIVE}
             </button>
-            <button
+            <button disabled={!control}
               type="button"
               className={`cs-opt${source === 'companion' ? ' active' : ''}`}
               aria-pressed={source === 'companion'}
@@ -1077,11 +1113,13 @@ export function OperateCockpit({
           {/* DF readouts: type an exact audio offset and commit on Enter/blur
               (clamped to the 200–4000 Hz passband) — WSJT-X's Rx/Tx Hz spinners. */}
           <div className="cockpit-offsets" role="group" aria-label={t('operate.header.offsets.aria')}>
-            <DfField label={DF_RX} hz={snap.radio.rxOffsetHz} onCommit={(hz) => onTune(hz, 'rx')} />
-            <DfField label={DF_TX} hz={snap.radio.txOffsetHz} onCommit={(hz) => onTune(hz, 'tx')} />
+            <DfField key={control ? 'rx' : `rx-${snap.activeRadioId}-${tier}-${snap.remoteFtRuntime?.settings.key}`} label={DF_RX} hz={snap.radio.rxOffsetHz}
+              remoteReceive={ftRuntime || receiverSettings.rxAllowed}
+              onCommit={(hz) => control || ftRuntime ? onTune(hz, 'rx') : receiverSettings.tuneRx(hz)} />
+            <DfField key={control ? 'tx' : `tx-${snap.remoteFtSettings?.key}`} label={DF_TX} hz={snap.radio.txOffsetHz} remoteReceive={ftSettings} onCommit={(hz) => onTune(hz, 'tx')} />
           </div>
           {/* Decode button — re-run the decoder over the last period's audio (F6). */}
-          <button
+          <button disabled={!control}
             type="button"
             className="cockpit-decode-btn"
             onClick={handleRedecode}
@@ -1099,7 +1137,7 @@ export function OperateCockpit({
             type="button"
             className={`ph-rec${recording ? ' on' : ''}`}
             onClick={toggleRecord}
-            disabled={recBusy}
+            disabled={!control || (recBusy)}
             aria-label={
               recording
                 ? t('operate.header.record.stop.aria')
@@ -1220,7 +1258,11 @@ export function OperateCockpit({
                   rxOffsetHz={snap.radio.rxOffsetHz}
                   txOffsetHz={snap.radio.txOffsetHz}
                   theme={theme}
-                  onTune={onTune}
+                  onTune={(hz, target) => {
+                    if (control) onTune(hz, target)
+                    else if (target === 'rx') { if (ftRuntime) onTune(hz, target); else receiverSettings.tuneRx(hz) }
+                    else if (ftSettings) onTune(hz, target)
+                  }}
                   active={active}
                   paletteScope={FT_PALETTE_SCOPE}
                   // An FT over is 13 s: the dark band reads as "that was us", and there is
@@ -1263,6 +1305,8 @@ export function OperateCockpit({
               .catch((e) => pushToast(String(e), 'error'))
           }
           onHaltTx={onHaltTx}
+          remoteFtRuntime={ftRuntime}
+          remoteFtSettings={ftSettings}
           onSetHoldTxFreq={onSetHoldTxFreq}
           onSetMode={onSetMode}
           onCallCq={() => {
@@ -1313,7 +1357,7 @@ export function OperateCockpit({
             side rail is gone — otherwise the survivor keeps its 2fr/1fr track and the
             removed panel's space is never actually reclaimed. */}
         <div
-          className={`cockpit-lower ${layoutMode}`}
+          className={`cockpit-lower ${layoutMode}${control ? '' : ' remote-cockpit-lower'}`}
           data-cols={dataCols}
           ref={layoutMode === 'classic' ? lowerClassicRef : undefined}
           style={layoutMode === 'classic' ? classicColStyle() : undefined}
@@ -1694,13 +1738,17 @@ function DfField({
   label,
   hz,
   onCommit,
+  remoteReceive = false,
 }: {
   label: string
   hz: number
   onCommit: (hz: number) => void
+  remoteReceive?: boolean
 }) {
+  const control = useStationControl()
   const [text, setText] = useState(() => String(Math.round(hz)))
   const [editing, setEditing] = useState(false)
+  const editHz = useRef(hz)
   const editingRef = useRef(editing)
   editingRef.current = editing
   // Track the live prop ONLY when it actually changes — keying the effect on
@@ -1709,12 +1757,19 @@ function DfField({
   useEffect(() => {
     if (!editingRef.current) setText(String(Math.round(hz)))
   }, [hz])
+  useEffect(() => {
+    if (!control && !remoteReceive) { setEditing(false); setText(String(Math.round(hz))) }
+  }, [control, remoteReceive, hz])
   const commit = () => {
     setEditing(false)
+    if (!control && (!remoteReceive || editHz.current !== hz)) {
+      setText(String(Math.round(hz)))
+      return
+    }
     const n = Number(text)
     if (text.trim() !== '' && Number.isFinite(n)) {
       const clamped = clampOffsetHz(n)
-      setText(String(clamped))
+      setText(String(control ? clamped : Math.round(hz)))
       if (clamped !== Math.round(hz)) onCommit(clamped)
     } else {
       setText(String(Math.round(hz))) // revert garbage
@@ -1723,7 +1778,7 @@ function DfField({
   return (
     <label className="df-field" title={t('operate.header.df.title', { label })}>
       <span className="df-label">{label}</span>
-      <input
+      <input disabled={!control && !remoteReceive}
         type="number"
         inputMode="numeric"
         min={200}
@@ -1731,7 +1786,7 @@ function DfField({
         step={1}
         value={text}
         aria-label={t('operate.header.df.aria', { label })}
-        onFocus={() => setEditing(true)}
+        onFocus={() => { editHz.current = hz; setEditing(true) }}
         onChange={(e) => setText(e.target.value)}
         onBlur={commit}
         onKeyDown={(e) => {

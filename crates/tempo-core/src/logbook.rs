@@ -732,8 +732,11 @@ impl UploadState {
 /// An in-memory logbook backed by an ADIF file.
 #[derive(Debug, Clone, Default)]
 pub struct Logbook {
-    records: Vec<QsoRecord>,
+    records: Records,
 }
+
+mod records;
+use records::Records;
 
 impl Logbook {
     pub fn new() -> Self {
@@ -742,6 +745,11 @@ impl Logbook {
 
     pub fn records(&self) -> &[QsoRecord] {
         &self.records
+    }
+    /// Identity for a consistent, chunked immutable read. Compare with Arc::ptr_eq
+    /// after each chunk and before returning; a changed token means retry the read.
+    pub fn read_token(&self) -> std::sync::Arc<()> {
+        self.records.read_token()
     }
     /// Mutable access to the records (for in-place upload-state stamping).
     pub fn records_mut(&mut self) -> &mut [QsoRecord] {
@@ -1297,7 +1305,8 @@ impl Logbook {
             Self::scrub_log_in_place(path, bytes.len(), clean);
         }
         Self {
-            records: parse_adif(&String::from_utf8_lossy(clean.as_deref().unwrap_or(&bytes))),
+            records: parse_adif(&String::from_utf8_lossy(clean.as_deref().unwrap_or(&bytes)))
+                .into(),
         }
     }
 
@@ -1610,20 +1619,44 @@ impl Logbook {
     /// Append one record to the ADIF file (creating it with a header if new).
     /// Keeps the in-memory copy in sync — call after [`Logbook::add`].
     pub fn append(path: &Path, rec: &QsoRecord) -> std::io::Result<()> {
+        Self::append_impl(path, rec, false).map(drop)
+    }
+
+    /// Retain the exact appended file for a later sync. Callers must release
+    /// station/engine locks before waiting for storage. A failed append or sync
+    /// may have written bytes; never automatically repeat the append.
+    pub fn append_for_sync(path: &Path, rec: &QsoRecord) -> std::io::Result<LogAppendReceipt> {
+        Self::append_impl(path, rec, true)
+    }
+
+    fn append_impl(
+        path: &Path,
+        rec: &QsoRecord,
+        receipt: bool,
+    ) -> std::io::Result<LogAppendReceipt> {
         use std::io::Write;
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
         let new = !path.exists();
-        let mut f = std::fs::OpenOptions::new()
+        let mut file = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(path)?;
         if new {
-            f.write_all(adif_header().as_bytes())?;
+            file.write_all(adif_header().as_bytes())?;
         }
-        f.write_all(adif_record(rec).as_bytes())?;
-        Ok(())
+        file.write_all(adif_record(rec).as_bytes())?;
+        let mut parent = None;
+        #[cfg(unix)]
+        if receipt && new {
+            if let Some(dir) = path.parent() {
+                parent = Some(std::fs::File::open(dir)?);
+            }
+        }
+        #[cfg(not(unix))]
+        let _ = (receipt, new, &mut parent);
+        Ok(LogAppendReceipt { file, parent })
     }
 
     /// Rewrite the entire ADIF file from the in-memory records (write-tmp +
@@ -3464,8 +3497,74 @@ fn unix_from_ymdhms(y: i32, m: u32, d: u32, h: u32, mi: u32, s: u32) -> u64 {
     secs.max(0) as u64
 }
 
+/// A specific append's open file handles, never a path to reopen later. This
+/// receipt can cross out of the engine lock before its potentially slow sync.
+#[derive(Debug)]
+pub struct LogAppendReceipt {
+    file: std::fs::File,
+    parent: Option<std::fs::File>,
+}
+impl LogAppendReceipt {
+    pub fn sync(self) -> std::io::Result<()> {
+        self.file.sync_all()?;
+        if let Some(parent) = self.parent {
+            parent.sync_all()?;
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn chunked_read_identity_tracks_mutation_and_clone_divergence_without_changing_adif() {
+        let mut book = Logbook::new();
+        book.add(rec("W1AW", "20m", 100));
+        let before = book.adif();
+        let token = book.read_token();
+        assert_eq!(book.records().len(), 1);
+        assert!(std::sync::Arc::ptr_eq(&token, &book.read_token()));
+        assert_eq!(
+            book.adif(),
+            before,
+            "retaining a read identity cannot change stored contacts"
+        );
+        let mut copy = book.clone();
+        copy.records_mut()[0].notes = Some("different copy".into());
+        assert!(std::sync::Arc::ptr_eq(&token, &book.read_token()));
+        assert!(!std::sync::Arc::ptr_eq(&token, &copy.read_token()));
+        assert_eq!(book.adif(), before);
+        for mutate in [
+            (|b: &mut Logbook| {
+                b.mark_qsl_card(0, true);
+            }) as fn(&mut Logbook),
+            |b| {
+                b.records_mut()[0].notes = Some("new note".into());
+            },
+            |b| {
+                b.add(rec("K1ABC", "40m", 200));
+            },
+            |b| {
+                b.delete(0);
+            },
+            |b| {
+                b.reconcile_disk(&adif_record(&rec("ZL1ABC", "20m", 300)));
+            },
+            |b| {
+                b.clear();
+            },
+        ] {
+            let old = book.read_token();
+            mutate(&mut book);
+            assert!(!std::sync::Arc::ptr_eq(&old, &book.read_token()));
+        }
+        let replacement = Logbook::new();
+        assert!(!std::sync::Arc::ptr_eq(
+            &book.read_token(),
+            &replacement.read_token()
+        ));
+    }
 
     /// #31's last unfolded example: BPSK31 is a logger spelling of ADIF's PSK31 — one mode,
     /// two strings. Re-importing a log round-tripped through such a logger must not double it.
@@ -7314,7 +7413,8 @@ mod operator_split_tests {
                 rec("W9AAA", Some("W1ABC")),
                 rec("W9BBB", Some("G0PQR")),
                 rec("W9CCC", Some("W1ABC")),
-            ],
+            ]
+            .into(),
         };
         assert_eq!(
             lb.operators(),
@@ -7328,7 +7428,7 @@ mod operator_split_tests {
     #[test]
     fn operators_invents_no_bucket_for_unstamped_contacts() {
         let lb = Logbook {
-            records: vec![rec("W9AAA", None), rec("W9BBB", Some("  "))],
+            records: vec![rec("W9AAA", None), rec("W9BBB", Some("  "))].into(),
         };
         assert!(lb.operators().is_empty());
     }
@@ -7340,7 +7440,8 @@ mod operator_split_tests {
                 rec("W9AAA", Some("W1ABC")),
                 rec("W9BBB", Some("G0PQR")),
                 rec("W9CCC", None),
-            ],
+            ]
+            .into(),
         };
         let out = lb.adif_for_operator("W1ABC");
         assert!(out.contains("W9AAA"), "their own contact is missing");
@@ -7358,7 +7459,7 @@ mod operator_split_tests {
     #[test]
     fn matching_an_operator_ignores_case_and_stray_spaces() {
         let lb = Logbook {
-            records: vec![rec("W9AAA", Some(" w1abc "))],
+            records: vec![rec("W9AAA", Some(" w1abc "))].into(),
         };
         assert!(lb.adif_for_operator("W1ABC").contains("W9AAA"));
         assert_eq!(lb.operators(), vec!["W1ABC".to_string()]);
@@ -7370,7 +7471,7 @@ mod operator_split_tests {
     #[test]
     fn an_operator_with_no_contacts_gets_an_empty_file_not_everyone_elses() {
         let lb = Logbook {
-            records: vec![rec("W9AAA", Some("W1ABC"))],
+            records: vec![rec("W9AAA", Some("W1ABC"))].into(),
         };
         let out = lb.adif_for_operator("K9NOBODY");
         assert!(!out.contains("W9AAA"));
@@ -7581,7 +7682,9 @@ mod activation_split_tests {
         // Earlier the same UTC day, from home: no park, no business in the submission.
         records.push(act("K1HOME", d + 2 * 3600, None, Some("KD9TAW")));
         records.push(act("K2HOME", d + 3 * 3600, None, Some("KD9TAW")));
-        let lb = Logbook { records };
+        let lb = Logbook {
+            records: records.into(),
+        };
 
         let adif = lb.adif_for_activation("US-1234", d, Some("KD9TAW"));
         assert_eq!(qsos(&adif), 17, "the activation file is not exactly the 17");
@@ -7607,7 +7710,8 @@ mod activation_split_tests {
                 act("W9AAA", d + 14 * 3600, Some("US-1234"), Some("KD9TAW")),
                 act("W9BBB", d + 15 * 3600, Some("US-1234"), Some("KD9TAW")),
                 act("W9CCC", d + 20 * 3600, Some("US-5678"), Some("KD9TAW")),
-            ],
+            ]
+            .into(),
         };
         let acts = lb.activations();
         assert_eq!(acts.len(), 2, "two parks in a day is two activations");
@@ -7642,7 +7746,8 @@ mod activation_split_tests {
                     Some("KD9TAW"),
                 ),
                 act("W9BBB", second + 5 * 60, Some("US-1234"), Some("KD9TAW")),
-            ],
+            ]
+            .into(),
         };
         let acts = lb.activations();
         assert_eq!(acts.len(), 2, "one park across midnight is two activations");
@@ -7670,7 +7775,8 @@ mod activation_split_tests {
             records: vec![
                 hunted,
                 act("W9AAA", d + 17 * 3600, Some("US-1234"), Some("KD9TAW")),
-            ],
+            ]
+            .into(),
         };
         let acts = lb.activations();
         assert_eq!(acts.len(), 1);
@@ -7702,7 +7808,8 @@ mod activation_split_tests {
                         Some("KD9TAW"),
                     )
                 })
-                .collect(),
+                .collect::<Vec<_>>()
+                .into(),
         };
         let acts = lb.activations();
         assert_eq!(acts.len(), 1);
@@ -7722,7 +7829,8 @@ mod activation_split_tests {
                 d + 16 * 3600,
                 Some("US-1234,US-5678"),
                 Some("KD9TAW"),
-            )],
+            )]
+            .into(),
         };
         let acts = lb.activations();
         assert_eq!(acts.len(), 2, "a two-fer is two submittable activations");
@@ -7752,7 +7860,8 @@ mod activation_split_tests {
             records: vec![
                 act("W9AAA", d + 14 * 3600, Some("US-1234"), Some("KD9TAW")),
                 act("W9BBB", d + 15 * 3600, Some("US-1234"), Some("KD9TAW/P")),
-            ],
+            ]
+            .into(),
         };
         let acts = lb.activations();
         assert_eq!(acts.len(), 2);
@@ -7773,7 +7882,7 @@ mod activation_split_tests {
         r.operator = Some("w1abc".into());
         let unstamped = act("W9BBB", d + 15 * 3600, Some("US-1234"), None);
         let lb = Logbook {
-            records: vec![r, unstamped],
+            records: vec![r, unstamped].into(),
         };
         let acts = lb.activations();
         assert_eq!(
@@ -7797,7 +7906,8 @@ mod activation_split_tests {
                 d + 14 * 3600,
                 Some(" us-1234 "),
                 Some(" kd9taw "),
-            )],
+            )]
+            .into(),
         };
         assert_eq!(lb.activations()[0].reference, "US-1234");
         assert_eq!(lb.activations()[0].callsign.as_deref(), Some("KD9TAW"));
@@ -7812,7 +7922,7 @@ mod activation_split_tests {
     fn any_second_within_the_day_selects_that_days_activation() {
         let d = day("2026-09-09");
         let lb = Logbook {
-            records: vec![act("W9AAA", d + 14 * 3600, Some("US-1234"), Some("KD9TAW"))],
+            records: vec![act("W9AAA", d + 14 * 3600, Some("US-1234"), Some("KD9TAW"))].into(),
         };
         assert_eq!(
             qsos(&lb.adif_for_activation("US-1234", d + 20 * 3600, Some("KD9TAW"))),
@@ -7826,7 +7936,7 @@ mod activation_split_tests {
     fn an_unknown_activation_gets_an_empty_file_not_the_whole_log() {
         let d = day("2026-09-09");
         let lb = Logbook {
-            records: vec![act("W9AAA", d + 14 * 3600, Some("US-1234"), Some("KD9TAW"))],
+            records: vec![act("W9AAA", d + 14 * 3600, Some("US-1234"), Some("KD9TAW"))].into(),
         };
         for out in [
             lb.adif_for_activation("US-0000", d, Some("KD9TAW")),
@@ -7846,7 +7956,7 @@ mod activation_split_tests {
         let d = day("2026-09-09");
         assert!(Logbook::default().activations().is_empty());
         let lb = Logbook {
-            records: vec![act("W9AAA", d, None, Some("KD9TAW"))],
+            records: vec![act("W9AAA", d, None, Some("KD9TAW"))].into(),
         };
         assert!(lb.activations().is_empty());
     }
@@ -7874,7 +7984,8 @@ mod activation_split_tests {
                     Some("US-3333"),
                     Some("KD9TAW"),
                 ),
-            ],
+            ]
+            .into(),
         };
         let acts = lb.activations();
         let dates: Vec<&str> = acts.iter().map(|a| a.date.as_str()).collect();
@@ -7888,7 +7999,9 @@ mod activation_split_tests {
         let d = day("2026-09-09");
         let mut r = act("W9AAA", d + 3600, Some("W7A/MN-001"), Some("KD9TAW"));
         r.ota.my_program = Some("SOTA".into());
-        let lb = Logbook { records: vec![r] };
+        let lb = Logbook {
+            records: vec![r].into(),
+        };
         let acts = lb.activations();
         assert_eq!(acts[0].program.as_deref(), Some("SOTA"));
         assert_eq!(acts[0].reference, "W7A/MN-001");

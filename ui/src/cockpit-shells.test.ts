@@ -22,7 +22,8 @@ import {
 // cascade does: same-block declaration order incl. the `overflow` shorthand resetting
 // `overflow-y`, then specificity, then source order.
 
-const css = readFileSync(fileURLToPath(new URL('./styles.css', import.meta.url)), 'utf8')
+const css = (readFileSync(fileURLToPath(new URL('./styles.css', import.meta.url)), 'utf8') + '\n' +
+  readFileSync(fileURLToPath(new URL('./remote-web/application.css', import.meta.url)), 'utf8'))
   // Strip comments first so prose can't be read as declarations (same trap documented
   // in cockpit-floors.test.ts).
   .replace(/\/\*[\s\S]*?\*\//g, '')
@@ -189,6 +190,14 @@ function winningOverflowY(
   }
   return win && { value: win.value, selector: win.selector }
 }
+
+it('hosted FT scrolls vertical deficits and contains its stacked message column', () => {
+  const native = [new Set(['app']), new Set(['shell']), new Set(['layout', 'single', 'operate-cockpit'])]
+  const remote = [new Set(['app', 'remote-workspace']), ...native.slice(1)]
+  expect(winningOverflowY(native, null)?.value).toBe('hidden')
+  expect(winningOverflowY(remote, null)?.value).toBe('auto')
+  expect(winningOverflowY([...remote, new Set(['cockpit-body']), new Set(['cockpit-lower', 'classic']), new Set(['cockpit-qsocol'])], null)?.value).toBe('auto')
+})
 
 /** Every distinct media condition that carries an overflow-declaring rule matching
  *  the element — each is a cascade context the valve must survive. */

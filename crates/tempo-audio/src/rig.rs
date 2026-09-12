@@ -12,6 +12,21 @@
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;
+use tempo_app::remote_control::WritePermission;
+
+pub mod remote;
+pub(crate) mod tuning;
+
+fn remote_permission_error(reason: tempo_app::remote_control::Reason) -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::PermissionDenied,
+        format!("Remote CAT permission: {reason:?}"),
+    )
+}
+
+#[cfg(test)]
+#[path = "rig_remote_tests.rs"]
+pub(crate) mod remote_tests;
 
 /// Which serial control line keys the transmitter for [`PttMode::Serial`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -346,6 +361,8 @@ pub struct Rig {
     /// uses a much shorter per-command deadline — a stalled serial read then can't hold the radio
     /// loop (and the fast dial poll) for 2.5 s. Default false (serial / local).
     slow_transport: bool,
+    #[cfg(test)]
+    before_remote_write: Option<Box<dyn FnOnce() + Send>>,
 }
 
 /// Does this read error mean "nothing was read, try again" rather than "the stream is broken"?
@@ -379,6 +396,8 @@ impl Rig {
             serial: None,
             keyed: false,
             slow_transport: false,
+            #[cfg(test)]
+            before_remote_write: None,
         }
     }
 
@@ -458,7 +477,16 @@ impl Rig {
         line: &str,
         deadline_ms: Option<u64>,
     ) -> std::io::Result<String> {
-        match self.command_inner(line, deadline_ms) {
+        self.command_permitted(line, deadline_ms, None)
+    }
+
+    fn command_permitted(
+        &mut self,
+        line: &str,
+        deadline_ms: Option<u64>,
+        permission: Option<&WritePermission>,
+    ) -> std::io::Result<String> {
+        match self.command_inner(line, deadline_ms, permission) {
             Ok(reply) => Ok(reply),
             Err(e) => {
                 // Diagnostic: dropping the rigctld connection is what triggers the daemon's
@@ -481,9 +509,21 @@ impl Rig {
         &mut self,
         line: &str,
         deadline_override: Option<u64>,
+        permission: Option<&WritePermission>,
     ) -> std::io::Result<String> {
+        if let Some(permission) = permission {
+            permission
+                .check(std::time::Instant::now())
+                .map_err(remote_permission_error)?;
+        }
         // Read the transport class before the mutable stream borrow below (they'd otherwise alias).
         let slow = self.slow_transport;
+        #[cfg(test)]
+        let before_write = if permission.is_some() {
+            self.before_remote_write.take()
+        } else {
+            None
+        };
         let stream = self.ensure_connected()?;
         // Discard any STALE bytes left in the socket by a prior MULTI-LINE reply — `m` (get_mode)
         // returns the mode line AND a passband line, and on a networked chain the 2nd line can
@@ -499,6 +539,18 @@ impl Rig {
         }
         stream.set_nonblocking(false)?;
         stream.set_read_timeout(Some(Duration::from_millis(500)))?; // restore blocking-with-timeout
+        #[cfg(test)]
+        if let Some(before_write) = before_write {
+            before_write();
+        }
+        // Connecting and draining a stale response may have outlived the
+        // operation. Admission before that I/O is insufficient: check again at
+        // the actual write. Local CAT/PTT calls carry no Remote permission.
+        if let Some(permission) = permission {
+            permission
+                .begin_write(std::time::Instant::now())
+                .map_err(remote_permission_error)?;
+        }
         stream.write_all(line.as_bytes())?;
         // Read until a COMPLETE reply (newline-terminated), not one 500 ms
         // gulp: a networked chain (rigctld → SmartSDR CAT → radio) can take
@@ -726,11 +778,33 @@ impl Rig {
     /// command" off the back of a refusal. A command's outcome is in its reply; throwing the
     /// reply away is throwing the outcome away.
     pub fn set_freq(&mut self, hz: u64) -> std::io::Result<()> {
+        self.set_freq_permitted(hz, None)
+    }
+
+    /// One Remote CAT frequency write. An acknowledgement is not readback;
+    /// the owning radio worker must obtain a later measurement to complete it.
+    pub fn remote_set_freq(
+        &mut self,
+        hz: u64,
+        permission: &WritePermission,
+    ) -> std::io::Result<()> {
+        self.set_freq_permitted(hz, Some(permission))
+    }
+
+    fn set_freq_permitted(
+        &mut self,
+        hz: u64,
+        permission: Option<&WritePermission>,
+    ) -> std::io::Result<()> {
         if self.control.is_none() {
-            return Ok(());
+            return if permission.is_some() {
+                Err(std::io::ErrorKind::NotConnected.into())
+            } else {
+                Ok(())
+            };
         }
-        let reply = self.command(&freq_line(hz))?;
-        if reply_ok(&reply) || reply.is_empty() {
+        let reply = self.command_permitted(&freq_line(hz), None, permission)?;
+        if reply_ok(&reply) || (permission.is_none() && reply.is_empty()) {
             Ok(())
         } else {
             Err(rprt_error("freq", &reply))
@@ -779,14 +853,48 @@ impl Rig {
     /// Surfaces a rig REJECTION (`RPRT -1`, e.g. a rig with no DATA/PKT submode) as
     /// an `Err`, so the radio loop's bounded retry can give up instead of looping.
     pub fn set_mode(&mut self, mode: &str, passband_hz: i32) -> std::io::Result<()> {
+        self.set_mode_permitted(mode, passband_hz, None)
+    }
+
+    /// One Remote CAT mode write, with the same native codec and reply parser.
+    pub fn remote_set_mode(
+        &mut self,
+        mode: &str,
+        passband_hz: i32,
+        permission: &WritePermission,
+    ) -> std::io::Result<()> {
+        if mode.is_empty()
+            || !mode
+                .bytes()
+                .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
+        {
+            return Err(std::io::ErrorKind::InvalidInput.into());
+        }
+        self.set_mode_permitted(mode, passband_hz, Some(permission))
+    }
+
+    fn set_mode_permitted(
+        &mut self,
+        mode: &str,
+        passband_hz: i32,
+        permission: Option<&WritePermission>,
+    ) -> std::io::Result<()> {
         if mode.trim().is_empty() {
-            return Ok(());
+            return if permission.is_some() {
+                Err(std::io::ErrorKind::InvalidInput.into())
+            } else {
+                Ok(())
+            };
         }
         if self.control.is_none() {
-            return Ok(());
+            return if permission.is_some() {
+                Err(std::io::ErrorKind::NotConnected.into())
+            } else {
+                Ok(())
+            };
         }
-        let reply = self.command(&mode_line(mode, passband_hz))?;
-        if reply_ok(&reply) || reply.is_empty() {
+        let reply = self.command_permitted(&mode_line(mode, passband_hz), None, permission)?;
+        if reply_ok(&reply) || (permission.is_none() && reply.is_empty()) {
             Ok(())
         } else {
             Err(rprt_error("mode", &reply))

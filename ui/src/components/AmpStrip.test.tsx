@@ -93,6 +93,14 @@ describe('AmpStrip', () => {
     expect((screen.getByRole('button', { name: /band up/i }) as HTMLButtonElement).disabled).toBe(false)
   })
 
+  it('keeps every amplifier button disabled when physical radio keying contradicts an idle amplifier flag', () => {
+    render(<AmpStrip amp={linked({ transmitting: false })} radioTransmitting />)
+    for (const button of screen.getAllByRole('button')) expect((button as HTMLButtonElement).disabled).toBe(true)
+    cleanup()
+    render(<AmpStrip amp={linked({ transmitting: false })} radioTransmitting={false} />)
+    expect(screen.getAllByRole('button').every(b => !(b as HTMLButtonElement).disabled)).toBe(true)
+  })
+
   it('disables the controls when the link is down but keeps the strip on screen', () => {
     render(<AmpStrip amp={linked({ linked: false, reason: 'noAnswer', outputWatts: null })} />)
     // The strip must not vanish: gone looks identical to never-placed.

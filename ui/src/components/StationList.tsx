@@ -10,6 +10,7 @@ import { StationCard } from './StationCard'
 import { tagsForSurface } from '../features/needs'
 import { matchAnyTerm } from '../searchQuery'
 import { t, type MessageKey } from '../i18n'
+import { useStationControl } from '../stationAccess'
 
 type Presence = Station['presence'] | 'offline'
 
@@ -88,6 +89,7 @@ export function StationList({
   band,
   feedMode,
 }: Props) {
+  const control = useStationControl()
   const [filter, setFilter] = useState<Filter>('all')
   // The search box. Deliberately NOT persisted: a filter chip is a way of working and
   // survives the session, but a search is a thing you are doing right now, and finding
@@ -220,7 +222,8 @@ export function StationList({
               <button
                 type="button"
                 className="recent-archive"
-                onClick={() => onArchive(r.peer)}
+                disabled={!control}
+                onClick={() => { if (control) onArchive(r.peer) }}
                 title={t('roster.recents.archive.title')}
                 aria-label={t('roster.recents.archive.aria', { call: r.peer })}
               >

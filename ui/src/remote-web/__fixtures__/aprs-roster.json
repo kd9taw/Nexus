@@ -1,0 +1,158 @@
+{
+  "rows": [
+    {
+      "kind": "packet",
+      "value": {
+        "lat": 41.7,
+        "lon": -72.7,
+        "symbolTable": "/",
+        "symbolCode": ">",
+        "kind": "position",
+        "text": "APRS station W1AW",
+        "speedKnots": null,
+        "courseDeg": null,
+        "path": [
+          "WIDE1-1"
+        ],
+        "raw": "W1AW>APNEXU:test",
+        "sourceKind": "rf",
+        "wx": null,
+        "source": "W1AW",
+        "dest": "APNEXU",
+        "addressee": null,
+        "msgId": null,
+        "atUnix": 1789020000
+      }
+    },
+    {
+      "kind": "packet",
+      "value": {
+        "lat": 41.800000000000004,
+        "lon": -72.60000000000001,
+        "symbolTable": "/",
+        "symbolCode": ">",
+        "kind": "position",
+        "text": "APRS station K2ABC",
+        "speedKnots": null,
+        "courseDeg": null,
+        "path": [
+          "WIDE1-1"
+        ],
+        "raw": "K2ABC>APNEXU:test",
+        "sourceKind": "inet",
+        "wx": null,
+        "source": "K2ABC",
+        "dest": "APNEXU",
+        "addressee": null,
+        "msgId": null,
+        "atUnix": 1789019990
+      }
+    },
+    {
+      "kind": "packet",
+      "value": {
+        "lat": 41.900000000000006,
+        "lon": -72.5,
+        "symbolTable": "/",
+        "symbolCode": ">",
+        "kind": "position",
+        "text": "APRS station K3TEST",
+        "speedKnots": null,
+        "courseDeg": null,
+        "path": [
+          "WIDE1-1"
+        ],
+        "raw": "K3TEST>APNEXU:test",
+        "sourceKind": "both",
+        "wx": null,
+        "source": "K3TEST",
+        "dest": "APNEXU",
+        "addressee": null,
+        "msgId": null,
+        "atUnix": 1789019980
+      }
+    },
+    {
+      "kind": "station",
+      "value": {
+        "lat": 41.7,
+        "lon": -72.7,
+        "symbolTable": "/",
+        "symbolCode": ">",
+        "kind": "position",
+        "text": "APRS station W1AW",
+        "speedKnots": null,
+        "courseDeg": null,
+        "path": [
+          "WIDE1-1"
+        ],
+        "raw": "W1AW>APNEXU:test",
+        "sourceKind": "rf",
+        "wx": null,
+        "call": "W1AW",
+        "lastHeardUnix": 1789020000,
+        "lastRfUnix": 1789020000,
+        "lastInetUnix": null,
+        "packets": 3,
+        "firstHeardUnix": 1789019700
+      }
+    },
+    {
+      "kind": "station",
+      "value": {
+        "lat": 41.800000000000004,
+        "lon": -72.60000000000001,
+        "symbolTable": "/",
+        "symbolCode": ">",
+        "kind": "position",
+        "text": "APRS station K2ABC",
+        "speedKnots": null,
+        "courseDeg": null,
+        "path": [
+          "WIDE1-1"
+        ],
+        "raw": "K2ABC>APNEXU:test",
+        "sourceKind": "inet",
+        "wx": null,
+        "call": "K2ABC",
+        "lastHeardUnix": 1789019990,
+        "lastRfUnix": null,
+        "lastInetUnix": 1789019990,
+        "packets": 3,
+        "firstHeardUnix": 1789019700
+      }
+    },
+    {
+      "kind": "station",
+      "value": {
+        "lat": 41.900000000000006,
+        "lon": -72.5,
+        "symbolTable": "/",
+        "symbolCode": ">",
+        "kind": "position",
+        "text": "APRS station K3TEST",
+        "speedKnots": null,
+        "courseDeg": null,
+        "path": [
+          "WIDE1-1"
+        ],
+        "raw": "K3TEST>APNEXU:test",
+        "sourceKind": "both",
+        "wx": null,
+        "call": "K3TEST",
+        "lastHeardUnix": 1789019980,
+        "lastRfUnix": 1789019980,
+        "lastInetUnix": 1789019980,
+        "packets": 3,
+        "firstHeardUnix": 1789019700
+      }
+    }
+  ],
+  "meta": {
+    "capturedAtMs": 1789020000000,
+    "ttlMin": 60,
+    "fadeAfterMin": 20,
+    "packets": 3,
+    "stations": 3
+  }
+}

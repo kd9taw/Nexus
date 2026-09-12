@@ -93,8 +93,9 @@ const undefinedRefs = [...references.keys()]
  * when this guard was written, and every one has been resolved onto a token the sheet already
  * has (2026-08-28). Nothing here is excused any more.
  *
- * ONE ENTRY IS NOT DEBT: `--radix-dropdown-menu-content-available-height` is set at runtime by
- * Radix on its own portaled content. It is correct and should stay.
+ * TWO ENTRIES ARE NOT DEBT: Radix sets the dropdown's available height and width
+ * on its own portaled content. Both map to its Popper measurements; the source
+ * scanner excludes node_modules, so these library-owned tokens are listed here.
  *
  * WHAT THE NINETEEN TURNED OUT TO BE — recorded because the next undefined token will be one of
  * the same three shapes, and knowing which saves re-deriving it:
@@ -123,7 +124,10 @@ const undefinedRefs = [...references.keys()]
  *
  * Growing this list needs a reason as specific as the Radix entry.
  */
-const KNOWN_UNRESOLVED = ['--radix-dropdown-menu-content-available-height']
+const KNOWN_UNRESOLVED = [
+  '--radix-dropdown-menu-content-available-height',
+  '--radix-dropdown-menu-content-available-width',
+]
 
 describe('CSS custom properties resolve', () => {
   it('is actually reading the sheets (control — an empty scan would pass everything)', () => {

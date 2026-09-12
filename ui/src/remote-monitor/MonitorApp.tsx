@@ -6,7 +6,7 @@ import { t } from '../i18n'
 import { useViewport } from '../useViewport'
 import { initialState, startMonitor } from './session'
 import type { MonitorSource, MonitorState } from './session'
-import type { MonitorAmplifier } from './protocol'
+import type { MonitorAmplifier, ReadAge } from './protocol'
 import './monitor.css'
 
 const DASH = '—'
@@ -16,7 +16,7 @@ const SWR = 'SWR'
 
 function Amplifier({ amp, current }: { amp: MonitorAmplifier; current: boolean }) {
   const [expanded, setExpanded] = useState(false)
-  const available = current && amp.linked && !amp.reason
+  const available = current && amp.linked && !!amp.reading && !amp.reason
   const state = !available || amp.operate === null ? t('monitor.unavailable')
     : amp.operate ? t('amp.operate') : t('amp.standby')
   const fault = available && amp.alarmRaised
@@ -43,6 +43,8 @@ function Amplifier({ amp, current }: { amp: MonitorAmplifier; current: boolean }
         {current && !available && <p className="rm-warning">{t('monitor.ampNoReading')}</p>}
         <AmpPane amp={display} />
         <dl className="rm-facts">
+          <Fact label={t('monitor.measurementAge')} value={current && amp.reading
+            ? t('monitor.measuredAgo', { seconds: (amp.reading.ageMs / 1000).toFixed(1) }) : null} />
           <Fact label={t('monitor.ampBand')} value={available ? amp.bandLabel : null} />
           <Fact label={t('monitor.ampTx')} value={!available || amp.transmitting === null ? null
             : amp.transmitting ? t('monitor.keyed') : t('monitor.unkeyed')} />
@@ -54,13 +56,14 @@ function Amplifier({ amp, current }: { amp: MonitorAmplifier; current: boolean }
   )
 }
 
-function Fact({ label, value }: { label: string; value: string | null }) {
-  return <div className="rm-fact"><dt>{label}</dt><dd>{value ?? DASH}</dd></div>
+function Fact({ label, value, age }: { label: string; value: string | null; age?: ReadAge | null }) {
+  return <div className="rm-fact"><dt>{label}</dt><dd>{value ?? DASH}</dd>
+    {value !== null && age && <dd className="rm-muted">{t('monitor.measuredAgo', { seconds: (age.ageMs / 1000).toFixed(1) })}</dd>}</div>
 }
 
-type Props = { source: MonitorSource; previewTools?: ReactNode; scale?: number }
+type Props = { source: MonitorSource; previewTools?: ReactNode; navigation?: ReactNode; scale?: number }
 
-function MonitorSession({ source, previewTools, scale }: Props) {
+function MonitorSession({ source, previewTools, navigation, scale }: Props) {
   const [state, setState] = useState<MonitorState>(initialState)
   const [theme, setTheme] = useState(() => document.documentElement.dataset.theme === 'light' ? 'light' : 'dark')
   useViewport(scale, true)
@@ -78,6 +81,7 @@ function MonitorSession({ source, previewTools, scale }: Props) {
     <div className="app remote-monitor-app">
       <header className="rm-header">
         <div className="rm-brand"><Radio size={23} aria-hidden="true" /><strong>{BRAND}</strong><span>{t('monitor.title')}</span></div>
+        {navigation}
         <button className="rm-theme" aria-label={theme === 'dark' ? t('monitor.light') : t('monitor.dark')}
           onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>
           {theme === 'dark' ? <Sun aria-hidden="true" size={22} /> : <Moon aria-hidden="true" size={22} />}
@@ -99,10 +103,12 @@ function MonitorSession({ source, previewTools, scale }: Props) {
               <h2>{radio?.name || t('monitor.radioStatus')}</h2>
               <dl className="rm-facts">
                 <Fact label={t('monitor.cat')} value={!current || radio?.catConnected == null ? null
-                  : radio.catConnected ? t('monitor.connected') : t('monitor.disconnected')} />
-                <Fact label={t('monitor.rigMode')} value={current ? radio?.rigMode ?? null : null} />
+                  : radio.catConnected ? t('monitor.connected') : t('monitor.disconnected')} age={radio?.readings.cat} />
+                <Fact label={t('monitor.rigDial')} value={current && radio?.rigDialMhz != null
+                  ? `${radio.rigDialMhz.toFixed(6)} ${MHZ}` : null} age={radio?.readings.dial} />
+                <Fact label={t('monitor.rigMode')} value={current ? radio?.rigMode ?? null : null} age={radio?.readings.mode} />
                 <Fact label={t('monitor.rigKeyed')} value={!current || radio?.rigKeyed == null ? null
-                  : radio.rigKeyed ? t('monitor.keyed') : t('monitor.unkeyed')} />
+                  : radio.rigKeyed ? t('monitor.keyed') : t('monitor.unkeyed')} age={radio?.readings.ptt} />
                 <Fact label={t('monitor.nexusTx')} value={!current || !radio ? null
                   : radio.nexusBusy ? t('monitor.busy') : t('monitor.idle')} />
               </dl>

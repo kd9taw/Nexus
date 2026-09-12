@@ -1,5 +1,5 @@
 // Imported ONLY by the explicit preview entry and tests, never by the native adapter.
-import fixtures from './fixtures.v1.json'
+import fixtures from './fixtures.v2.json'
 import type { MonitorSource } from './session'
 import { parseFrame } from './protocol'
 

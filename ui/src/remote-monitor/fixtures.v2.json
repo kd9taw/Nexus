@@ -1,8 +1,8 @@
 {
   "ampLost": {
-    "version": 1,
+    "version": 2,
     "source": "fixture",
-    "epoch": "example-station-v1",
+    "epoch": "example-station-v2",
     "sequence": 1,
     "generatedAtMs": 1788768000000,
     "station": {
@@ -12,14 +12,38 @@
         "id": 0,
         "name": "Radio 1",
         "dialMhz": 14.074,
+        "rigDialMhz": 14.074,
         "band": "20m",
         "mode": "FT8",
         "rigMode": null,
         "catConnected": true,
         "rigKeyed": false,
-        "nexusBusy": false
+        "nexusBusy": false,
+        "readings": {
+          "cat": {
+            "connectionGeneration": 1,
+            "readSequence": 1,
+            "ageMs": 0
+          },
+          "dial": {
+            "connectionGeneration": 1,
+            "readSequence": 1,
+            "ageMs": 0
+          },
+          "mode": null,
+          "ptt": {
+            "connectionGeneration": 1,
+            "readSequence": 1,
+            "ageMs": 0
+          }
+        }
       },
       "amplifier": {
+        "reading": {
+          "connectionGeneration": 1,
+          "readSequence": 1,
+          "ageMs": 0
+        },
         "family": "spe",
         "model": "13K",
         "followBand": true,
@@ -44,9 +68,9 @@
     }
   },
   "catLost": {
-    "version": 1,
+    "version": 2,
     "source": "fixture",
-    "epoch": "example-station-v1",
+    "epoch": "example-station-v2",
     "sequence": 1,
     "generatedAtMs": 1788768000000,
     "station": {
@@ -56,14 +80,30 @@
         "id": 0,
         "name": "Radio 1",
         "dialMhz": 14.074,
+        "rigDialMhz": null,
         "band": "20m",
         "mode": "FT8",
         "rigMode": null,
         "catConnected": false,
         "rigKeyed": null,
-        "nexusBusy": false
+        "nexusBusy": false,
+        "readings": {
+          "cat": {
+            "connectionGeneration": 1,
+            "readSequence": 1,
+            "ageMs": 0
+          },
+          "dial": null,
+          "mode": null,
+          "ptt": null
+        }
       },
       "amplifier": {
+        "reading": {
+          "connectionGeneration": 1,
+          "readSequence": 1,
+          "ageMs": 0
+        },
         "family": "kpa",
         "model": "",
         "followBand": true,
@@ -88,9 +128,9 @@
     }
   },
   "fault": {
-    "version": 1,
+    "version": 2,
     "source": "fixture",
-    "epoch": "example-station-v1",
+    "epoch": "example-station-v2",
     "sequence": 1,
     "generatedAtMs": 1788768000000,
     "station": {
@@ -100,14 +140,38 @@
         "id": 0,
         "name": "Radio 1",
         "dialMhz": 14.074,
+        "rigDialMhz": 14.074,
         "band": "20m",
         "mode": "FT8",
         "rigMode": null,
         "catConnected": true,
         "rigKeyed": false,
-        "nexusBusy": false
+        "nexusBusy": false,
+        "readings": {
+          "cat": {
+            "connectionGeneration": 1,
+            "readSequence": 1,
+            "ageMs": 0
+          },
+          "dial": {
+            "connectionGeneration": 1,
+            "readSequence": 1,
+            "ageMs": 0
+          },
+          "mode": null,
+          "ptt": {
+            "connectionGeneration": 1,
+            "readSequence": 1,
+            "ageMs": 0
+          }
+        }
       },
       "amplifier": {
+        "reading": {
+          "connectionGeneration": 1,
+          "readSequence": 1,
+          "ageMs": 0
+        },
         "family": "spe",
         "model": "13K",
         "followBand": true,
@@ -132,9 +196,9 @@
     }
   },
   "firstMiss": {
-    "version": 1,
+    "version": 2,
     "source": "fixture",
-    "epoch": "example-station-v1",
+    "epoch": "example-station-v2",
     "sequence": 1,
     "generatedAtMs": 1788768000000,
     "station": {
@@ -144,14 +208,38 @@
         "id": 0,
         "name": "Radio 1",
         "dialMhz": 14.074,
+        "rigDialMhz": 14.074,
         "band": "20m",
         "mode": "FT8",
         "rigMode": null,
         "catConnected": true,
         "rigKeyed": false,
-        "nexusBusy": false
+        "nexusBusy": false,
+        "readings": {
+          "cat": {
+            "connectionGeneration": 1,
+            "readSequence": 1,
+            "ageMs": 0
+          },
+          "dial": {
+            "connectionGeneration": 1,
+            "readSequence": 1,
+            "ageMs": 0
+          },
+          "mode": null,
+          "ptt": {
+            "connectionGeneration": 1,
+            "readSequence": 1,
+            "ageMs": 0
+          }
+        }
       },
       "amplifier": {
+        "reading": {
+          "connectionGeneration": 1,
+          "readSequence": 1,
+          "ageMs": 0
+        },
         "family": "spe",
         "model": "13K",
         "followBand": true,
@@ -176,9 +264,9 @@
     }
   },
   "knownFault": {
-    "version": 1,
+    "version": 2,
     "source": "fixture",
-    "epoch": "example-station-v1",
+    "epoch": "example-station-v2",
     "sequence": 1,
     "generatedAtMs": 1788768000000,
     "station": {
@@ -188,14 +276,38 @@
         "id": 0,
         "name": "Radio 1",
         "dialMhz": 14.074,
+        "rigDialMhz": 14.074,
         "band": "20m",
         "mode": "FT8",
         "rigMode": null,
         "catConnected": true,
         "rigKeyed": false,
-        "nexusBusy": false
+        "nexusBusy": false,
+        "readings": {
+          "cat": {
+            "connectionGeneration": 1,
+            "readSequence": 1,
+            "ageMs": 0
+          },
+          "dial": {
+            "connectionGeneration": 1,
+            "readSequence": 1,
+            "ageMs": 0
+          },
+          "mode": null,
+          "ptt": {
+            "connectionGeneration": 1,
+            "readSequence": 1,
+            "ageMs": 0
+          }
+        }
       },
       "amplifier": {
+        "reading": {
+          "connectionGeneration": 1,
+          "readSequence": 1,
+          "ageMs": 0
+        },
         "family": "spe",
         "model": "13K",
         "followBand": true,
@@ -220,9 +332,9 @@
     }
   },
   "kpa": {
-    "version": 1,
+    "version": 2,
     "source": "fixture",
-    "epoch": "example-station-v1",
+    "epoch": "example-station-v2",
     "sequence": 1,
     "generatedAtMs": 1788768000000,
     "station": {
@@ -232,14 +344,38 @@
         "id": 0,
         "name": "Radio 1",
         "dialMhz": 14.074,
+        "rigDialMhz": 14.074,
         "band": "20m",
         "mode": "FT8",
         "rigMode": null,
         "catConnected": true,
         "rigKeyed": false,
-        "nexusBusy": false
+        "nexusBusy": false,
+        "readings": {
+          "cat": {
+            "connectionGeneration": 1,
+            "readSequence": 1,
+            "ageMs": 0
+          },
+          "dial": {
+            "connectionGeneration": 1,
+            "readSequence": 1,
+            "ageMs": 0
+          },
+          "mode": null,
+          "ptt": {
+            "connectionGeneration": 1,
+            "readSequence": 1,
+            "ageMs": 0
+          }
+        }
       },
       "amplifier": {
+        "reading": {
+          "connectionGeneration": 1,
+          "readSequence": 1,
+          "ageMs": 0
+        },
         "family": "kpa",
         "model": "",
         "followBand": true,
@@ -264,9 +400,9 @@
     }
   },
   "noAmp": {
-    "version": 1,
+    "version": 2,
     "source": "fixture",
-    "epoch": "example-station-v1",
+    "epoch": "example-station-v2",
     "sequence": 1,
     "generatedAtMs": 1788768000000,
     "station": {
@@ -276,20 +412,27 @@
         "id": 1,
         "name": "Radio 2",
         "dialMhz": 14.074,
+        "rigDialMhz": null,
         "band": "20m",
         "mode": "FT8",
         "rigMode": null,
         "catConnected": null,
         "rigKeyed": null,
-        "nexusBusy": false
+        "nexusBusy": false,
+        "readings": {
+          "cat": null,
+          "dial": null,
+          "mode": null,
+          "ptt": null
+        }
       },
       "amplifier": null
     }
   },
   "spe": {
-    "version": 1,
+    "version": 2,
     "source": "fixture",
-    "epoch": "example-station-v1",
+    "epoch": "example-station-v2",
     "sequence": 1,
     "generatedAtMs": 1788768000000,
     "station": {
@@ -299,14 +442,38 @@
         "id": 0,
         "name": "Radio 1",
         "dialMhz": 14.074,
+        "rigDialMhz": 14.074,
         "band": "20m",
         "mode": "FT8",
         "rigMode": null,
         "catConnected": true,
         "rigKeyed": false,
-        "nexusBusy": false
+        "nexusBusy": false,
+        "readings": {
+          "cat": {
+            "connectionGeneration": 1,
+            "readSequence": 1,
+            "ageMs": 0
+          },
+          "dial": {
+            "connectionGeneration": 1,
+            "readSequence": 1,
+            "ageMs": 0
+          },
+          "mode": null,
+          "ptt": {
+            "connectionGeneration": 1,
+            "readSequence": 1,
+            "ageMs": 0
+          }
+        }
       },
       "amplifier": {
+        "reading": {
+          "connectionGeneration": 1,
+          "readSequence": 1,
+          "ageMs": 0
+        },
         "family": "spe",
         "model": "13K",
         "followBand": true,
@@ -331,9 +498,9 @@
     }
   },
   "waiting": {
-    "version": 1,
+    "version": 2,
     "source": "fixture",
-    "epoch": "example-station-v1",
+    "epoch": "example-station-v2",
     "sequence": 1,
     "generatedAtMs": 1788768000000,
     "station": {
@@ -343,14 +510,34 @@
         "id": 0,
         "name": "Radio 1",
         "dialMhz": 14.074,
+        "rigDialMhz": 14.074,
         "band": "20m",
         "mode": "FT8",
         "rigMode": null,
         "catConnected": true,
         "rigKeyed": false,
-        "nexusBusy": false
+        "nexusBusy": false,
+        "readings": {
+          "cat": {
+            "connectionGeneration": 1,
+            "readSequence": 1,
+            "ageMs": 0
+          },
+          "dial": {
+            "connectionGeneration": 1,
+            "readSequence": 1,
+            "ageMs": 0
+          },
+          "mode": null,
+          "ptt": {
+            "connectionGeneration": 1,
+            "readSequence": 1,
+            "ageMs": 0
+          }
+        }
       },
       "amplifier": {
+        "reading": null,
         "family": "spe",
         "model": "",
         "followBand": true,

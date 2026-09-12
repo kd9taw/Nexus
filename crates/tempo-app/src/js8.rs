@@ -133,12 +133,64 @@ impl Engine {
     /// (stay-on-miss). KEYS NOTHING: the TX latch is untouched and `tier_is_rx_only`
     /// refuses to arm it anyway.
     pub fn js8_enter(&mut self) {
+        self.js8_start_session();
+        self.set_tier(Tier::Js8);
+    }
+
+    /// Shared session-entry effects before the native decoder transition.
+    /// Remote performs that transition under the existing decoder mutex too.
+    pub(crate) fn js8_start_session(&mut self) {
         self.js8_apply_station_config();
         // Entering the view is the session start: seed the idle-watchdog baseline to now so
         // the operator's first decode doesn't read as decades idle and trip the watchdog
         // (a freshly built Station has `last_activity_ms == 0`).
         self.js8_station.mark_active(now_unix_secs() * 1000);
-        self.set_tier(Tier::Js8);
+    }
+
+    /// Borrow the native heard list for display joins without copying inbox or queue.
+    pub fn js8_heard(&self) -> &[::js8::proto::station::Heard] {
+        self.js8_station.heard()
+    }
+
+    /// A bounded copy of the ordinary display DTO. The station's retained data,
+    /// decoder, idle clock, queue and transmit policy are never changed by a read.
+    pub fn bounded_js8_state(&self) -> Option<Js8State> {
+        const TEXT: usize = 1024;
+        if self.js8_activity.len() > 200
+            || self.js8_station.heard().len() > 500
+            || self.js8_station.inbox().len() > 100
+        {
+            return None;
+        }
+        let mut bytes = self.js8_station.display_queue_budget(2048, TEXT)?;
+        let mut add = |s: &str| {
+            bytes += s.len();
+            s.len() <= TEXT && bytes <= 192 * 1024
+        };
+        for row in &self.js8_activity {
+            if !add(&row.from) || !add(&row.text) {
+                return None;
+            }
+        }
+        for row in self.js8_station.heard() {
+            if row.call.len() > 32 || !add(&row.call) || !add(row.grid.as_deref().unwrap_or("")) {
+                return None;
+            }
+        }
+        for row in self.js8_station.inbox() {
+            if row.path.len() > 8
+                || !add(&row.from)
+                || !add(&row.to)
+                || !add(&row.text)
+                || !row.path.iter().all(|hop| add(hop))
+            {
+                return None;
+            }
+        }
+        if !add(self.js8_last_error.as_deref().unwrap_or("")) {
+            return None;
+        }
+        Some(self.js8_state())
     }
 
     /// The cockpit poll. Every field is engine truth at poll time; `armed` is
@@ -403,11 +455,22 @@ impl Engine {
     /// slot clock at the new period (the audio loop follows `active_slot_secs`), and the
     /// station at the new countdown. The latch is untouched. The command layer persists.
     pub fn js8_set_speed(&mut self, speed_idx: u8) -> Result<(), String> {
+        self.js8_set_speed_with_installer(speed_idx, |engine, source| engine.install_source(source))
+    }
+
+    /// Remote may already hold the same decoder lock. Keep the native speed
+    /// policy here; the caller only supplies the serialized installation point.
+    pub(super) fn js8_set_speed_with_installer(
+        &mut self,
+        speed_idx: u8,
+        mut install: impl FnMut(&mut Engine, Box<dyn super::SignalSource>),
+    ) -> Result<(), String> {
         if Js8Speed::from_index(speed_idx).is_none() {
             return Err(format!(
                 "JS8 speed index {speed_idx} is not 0..=3 (Slow/Normal/Fast/Turbo)"
             ));
         }
+        self.remote_actuation.revoke();
         if self.settings.js8_speed == speed_idx {
             return Ok(());
         }
@@ -418,7 +481,7 @@ impl Engine {
             if let Some(kind) = self.tier_mode_kind(Tier::Js8) {
                 // Swap UNDER the lock and flush the context, exactly as `apply_settings`
                 // does for a Q65 period change — the epoch bump is the load-bearing part.
-                self.install_source(Box::new(modes::NativeSource::from_kind(kind)));
+                install(self, Box::new(modes::NativeSource::from_kind(kind)));
                 self.clear_decode_context();
             }
         }
@@ -829,6 +892,60 @@ mod tests {
     use ::js8::proto::command::Command;
     use ::js8::proto::frame::encode_frame;
     use ::js8::{Frame, I3};
+
+    #[test]
+    fn bounded_observation_preserves_native_js8_state_at_every_speed() {
+        for speed in 0..4 {
+            let mut e = Engine::with_settings(Settings {
+                mycall: "N0CALL".into(),
+                mygrid: "AA00".into(),
+                ..Default::default()
+            });
+            e.js8_set_speed(speed).unwrap();
+            e.js8_ingest(
+                &[row(&hb("W1AW", "FN31"), whole(), Js8Speed::Normal, 1500.0)],
+                1,
+            );
+            e.js8_send(None, "TEST MESSAGE WITH MULTIPLE FRAMES".into())
+                .unwrap();
+            let before = serde_json::to_value(e.js8_state()).unwrap();
+            assert!(!before["activity"].as_array().unwrap().is_empty());
+            assert!(!before["queue"].as_array().unwrap().is_empty());
+            assert_eq!(
+                serde_json::to_value(e.bounded_js8_state().unwrap()).unwrap(),
+                before
+            );
+            assert_eq!(serde_json::to_value(e.js8_state()).unwrap(), before);
+            assert!(!e.snapshot().radio.tx_enabled);
+            let mut oversized = e.js8_activity[0].clone();
+            oversized.text = "x".repeat(1025);
+            e.js8_activity.push_back(oversized);
+            assert!(e.bounded_js8_state().is_none());
+            assert_eq!(e.js8_activity.back().unwrap().text.len(), 1025);
+        }
+    }
+
+    #[test]
+    fn queue_copy_budget_counts_remaining_frames_instead_of_messages() {
+        let mut e = Engine::with_settings(Settings {
+            mycall: "N0CALL".into(),
+            ..Default::default()
+        });
+        e.js8_send(None, "TEST MESSAGE WITH MULTIPLE FRAMES".into())
+            .unwrap();
+        let rows = e.js8_state().queue;
+        assert!(rows.len() > 1);
+        assert_eq!(
+            e.js8_station.display_queue_budget(rows.len() - 1, 1024),
+            None
+        );
+        assert_eq!(
+            e.js8_station.display_queue_budget(rows.len(), 1024),
+            Some(rows.iter().map(|r| r.display.len()).sum())
+        );
+        assert_eq!(e.js8_station.display_queue_budget(rows.len(), 1), None);
+        assert_eq!(e.js8_state().queue.len(), rows.len());
+    }
 
     /// A decode row exactly as `Js8Mode::decode_frame` would emit it for `frame`.
     fn row(frame: &Frame, i3: I3, speed: Js8Speed, freq: f32) -> modes::Decode {

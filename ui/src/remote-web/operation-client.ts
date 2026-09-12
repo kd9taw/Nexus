@@ -1,0 +1,635 @@
+import type { ReceiptStorage } from './operation-storage'
+import type { ControlStorage, PendingControl } from './control-storage'
+import { actionCapability, controlContext, stationAction, type StationAction, type ControlOutcome, type ControlContext } from './station-operation'
+import { controlVersion, type OperationVersion } from './operation-version'
+import { OPERATION_RATE_LIMIT, OPERATION_RATE_WINDOW_MS } from './operation-limits'
+import {
+  manualRecord,
+  operationId,
+  operationRequest,
+  operationResponse,
+  type ManualRecord,
+  type OperationOutcome,
+  type OperationRequest,
+  type OperationState,
+  type OperationValue
+} from './operation-protocol'
+export type OperationView = {
+  supported: boolean
+  state: OperationState | null
+  fresh: boolean
+  connected: boolean
+  busy: boolean
+  submitting: boolean
+  unresolved: string | null
+  pendingDraft: ManualRecord | null
+  resolved: OperationOutcome | null
+  dismissed: string | null
+  error: string | null
+  controlPending: PendingControl | null
+  controlSending: boolean
+  controlResult: ControlOutcome | null
+  controlError: string | null
+  controlRefreshing?: boolean
+  stopSending?: boolean
+  stopAvailable?: boolean
+  stopError?: string | null
+  requestReady?: boolean
+}
+type CapturedControl = { state: OperationState; until: number }
+type Pending = {
+  request: OperationRequest
+  started: number
+  timer: ReturnType<typeof setTimeout>
+  resolve: (value: OperationValue) => void
+  reject: (error: Error) => void
+}
+/** One explicit operation at a time. Neither a reconnect nor a timeout can
+ * acquire control or resubmit a QSO. Native receipts confirm outcomes; an operator can explicitly dismiss a pending check. */
+export class OperationClient {
+  private listeners = new Set<() => void>()
+  private view: OperationView = {
+    supported: false,
+    state: null,
+    fresh: false,
+    connected: false,
+    busy: false,
+    submitting: false,
+    unresolved: null,
+    pendingDraft: null,
+    resolved: null,
+    dismissed: null,
+    error: null,
+    controlPending: null,
+    controlSending: false,
+    controlResult: null,
+    controlError: null
+  }
+  private pending: Pending | null = null
+  private pendingStop: Pending | null = null
+  private stopTarget: { stationBootId: string; leaseId: string; transmitEpoch: string } | null = null
+  // A successful mutation invalidates command context, not the controller's
+  // lease. Refresh with a heartbeat so continuous use cannot starve renewal.
+  // This token permits only renewal/release; actions still require fresh state.
+  private heartbeatLeaseId: string | null = null
+  private timer: ReturnType<typeof setInterval> | undefined
+  private stateUntil = 0
+  private controlRefreshUntil = 0
+  private polledAt = 0
+  private finished: OperationOutcome | null = null
+  private loggingIntent = false
+  private controlIntent = false
+  private resultIntent: object | null = null
+  private controlPolledAt = -Infinity
+  private requestBudget: { requestId: string; until: number }[] = []
+  constructor(
+    private send: (message: string) => void,
+    readonly enabled: boolean,
+    private now = () => performance.now(),
+    private receiptStorage?: ReceiptStorage,
+    readonly operationVersion: OperationVersion = 1,
+    private controlStorage?: ControlStorage
+  ) {
+    try {
+      const id = receiptStorage?.read()
+      if (operationId(id))
+        this.view = {
+          ...this.view,
+          unresolved: id,
+          pendingDraft: receiptStorage?.readDraft?.() ?? null
+        }
+    } catch {
+      this.view = { ...this.view, error: 'receiptStorageUnavailable' }
+    }
+    try { this.view = { ...this.view, controlPending: controlStorage?.read() ?? null } }
+    catch { this.view = { ...this.view, error: 'receiptStorageUnavailable' } }
+  }
+  subscribe = (f: () => void) => {
+    this.listeners.add(f)
+    return () => {
+      this.listeners.delete(f)
+    }
+  }
+  getSnapshot = () => this.view
+  private update(value: Partial<OperationView>) {
+    if ('unresolved' in value && value.unresolved !== this.view.unresolved) {
+      try {
+        this.receiptStorage?.write(value.unresolved ?? null, value.pendingDraft ?? undefined)
+      } catch (error) {
+        if (value.unresolved) throw error
+      }
+    }
+    this.view = {
+      ...this.view,
+      ...value,
+      requestReady: (value.connected ?? this.view.connected) && this.requestCount() < OPERATION_RATE_LIMIT,
+      controlSending: this.pending?.request.type === 'stationControl',
+      stopSending: !!this.pendingStop,
+      stopAvailable: this.operationVersion >= 4 && !!this.stopTarget && (value.connected ?? this.view.connected),
+      ...((value.error || value.connected === false || value.state) ? { controlRefreshing: false } : {}),
+      ...(value.unresolved === null ? { pendingDraft: null } : {})
+    }
+    for (const f of this.listeners) f()
+  }
+  open() {
+    if (!this.enabled) return
+    this.disconnected()
+    this.update({ connected: true, error: null })
+    this.tick()
+    this.timer = setInterval(() => this.tick(), 250)
+  }
+  disconnected() {
+    clearInterval(this.timer)
+    this.timer = undefined
+    this.resultIntent = null
+    this.stopTarget = null
+    this.heartbeatLeaseId = null
+    const stop = this.pendingStop
+    this.pendingStop = null
+    if (stop) { clearTimeout(stop.timer); stop.reject(new Error('operationUnknown')) }
+    const p = this.pending
+    this.pending = null
+    if (p) {
+      clearTimeout(p.timer)
+      this.finishBudget(p.request.requestId)
+      if (p.request.type === 'logManual') this.update({ unresolved: p.request.requestId })
+      p.reject(
+        new Error(p.request.type === 'logManual' ? 'operationUnknown' : 'stationUnavailable')
+      )
+    }
+    this.stateUntil = 0
+    this.update({ state: null, fresh: false, connected: false, busy: false, submitting: false })
+  }
+  private tick() {
+    const now = this.now(),
+      fresh = !!this.view.state && now < this.stateUntil
+    if (this.view.controlRefreshing && now >= this.controlRefreshUntil) this.update({ controlRefreshing: false })
+    if (fresh !== this.view.fresh) this.update({ fresh })
+    if ((this.view.connected && this.requestCount() < OPERATION_RATE_LIMIT) !== this.view.requestReady) this.update({})
+    if (
+      !this.view.connected ||
+      this.pending ||
+      this.loggingIntent ||
+      (this.controlIntent && !this.view.controlPending) ||
+      this.resultIntent ||
+      this.view.error === 'stationUnsupported'
+    )
+      return
+    // Hidden pages cannot retain a control lease. Expiry is also enforced by the
+    // native monotonic clock when a browser suspends timers altogether.
+    if (typeof document !== 'undefined' && document.hidden && this.heartbeatLeaseId) {
+      void this.release()
+      return
+    }
+    // Automatic reads leave one ordinary slot for an explicit operator action.
+    // After a mutation, controls remain unavailable until a fresh state can be
+    // read within this budget. Stop never enters the ordinary budget.
+    const readLimit = this.view.controlPending || this.view.unresolved ? OPERATION_RATE_LIMIT : OPERATION_RATE_LIMIT - 1
+    if (this.requestCount() >= readLimit) return
+    if (now - this.polledAt < 1000) {
+      if (this.view.controlPending && this.view.controlResult?.outcome !== 'unknown' && now - this.controlPolledAt >= 1000) {
+        this.controlPolledAt = now
+        void this.refreshControl().catch(() => {})
+      }
+      return
+    }
+    this.polledAt = now
+    const request: OperationRequest =
+      this.heartbeatLeaseId
+        ? { type: 'heartbeat', requestId: crypto.randomUUID(), leaseId: this.heartbeatLeaseId }
+        : { type: 'state', requestId: crypto.randomUUID() }
+    void this.request(request).catch(() => {})
+  }
+  private requestCount(): number {
+    this.requestBudget = this.requestBudget.filter(entry => this.now() < entry.until)
+    return this.requestBudget.length
+  }
+  private requireRequestCapacity() {
+    if (this.requestCount() >= OPERATION_RATE_LIMIT) throw Error('remoteBusy')
+  }
+  private finishBudget(requestId: string) {
+    const entry = this.requestBudget.find(entry => entry.requestId === requestId)
+    // Receipt time bounds the relay's earlier arrival without comparing clocks.
+    // Keeping a slot through the reply also handles delayed/clustered delivery.
+    if (entry) entry.until = this.now() + OPERATION_RATE_WINDOW_MS
+  }
+  private request(request: OperationRequest): Promise<OperationValue> {
+    if (!this.view.connected) return Promise.reject(new Error('stationUnavailable'))
+    if (this.pending) return Promise.reject(new Error('remoteBusy'))
+    if (this.requestCount() >= OPERATION_RATE_LIMIT) return Promise.reject(new Error('remoteBusy'))
+    operationRequest(request)
+    return new Promise((resolve, reject) => {
+      const p: Pending = {
+        request,
+        started: this.now(),
+        resolve,
+        reject,
+        timer: setTimeout(() => {
+          if (this.pending !== p) return
+          this.pending = null
+          this.heartbeatLeaseId = null
+          this.finishBudget(request.requestId)
+          const mutation = request.type === 'logManual' || request.type === 'stationControl'
+          this.update({
+            busy: false,
+            submitting: false,
+            state: null,
+            fresh: false,
+            error: mutation ? 'operationUnknown' : 'stationUnavailable',
+            ...(request.type === 'logManual' ? { unresolved: request.requestId } : {})
+          })
+          reject(new Error(mutation ? 'operationUnknown' : 'stationUnavailable'))
+        }, 7500)
+      }
+      if (request.type === 'logManual') {
+        try {
+          this.update({
+            unresolved: request.requestId,
+            pendingDraft: structuredClone(request.record)
+          })
+        } catch {
+          clearTimeout(p.timer)
+          reject(new Error('receiptStorageUnavailable'))
+          return
+        }
+      }
+      this.pending = p
+      this.requestBudget.push({ requestId: request.requestId, until: Infinity })
+      this.update({ busy: true, submitting: request.type === 'logManual', error: null })
+      try {
+        this.send(JSON.stringify({ type: 'operationRequest', ...(this.operationVersion >= 2 ? { operationVersion: this.operationVersion } : {}), request }))
+      } catch {
+        clearTimeout(p.timer)
+        this.pending = null
+        this.heartbeatLeaseId = null
+        this.finishBudget(request.requestId)
+        this.update({
+          busy: false,
+          submitting: false,
+          state: null,
+          fresh: false,
+          error: 'stationUnavailable',
+          ...(request.type === 'logManual' ? { unresolved: null } : {})
+        })
+        reject(new Error('stationUnavailable'))
+      }
+    })
+  }
+  /** Stop uses the last station-issued owner token, even while an ordinary
+   * request or receipt is unresolved. Native authority alone decides if it is
+   * still valid. Acceptance is revocation, not confirmation that RF stopped. */
+  stopTransmit(): Promise<OperationValue> {
+    if (this.operationVersion < 4) return Promise.reject(new Error('stationUnsupported'))
+    if (!this.view.connected) return Promise.reject(new Error('stationUnavailable'))
+    if (this.pendingStop) return Promise.reject(new Error('remoteBusy'))
+    if (!this.stopTarget) return Promise.reject(new Error('localPermissionRequired'))
+    const request: OperationRequest = { type: 'stopTransmit', requestId: crypto.randomUUID(), ...this.stopTarget }
+    operationRequest(request)
+    return new Promise((resolve, reject) => {
+      const p: Pending = { request, started: this.now(), resolve, reject, timer: setTimeout(() => {
+        if (this.pendingStop !== p) return
+        this.pendingStop = null
+        this.update({ stopError: 'operationUnknown' })
+        reject(new Error('operationUnknown'))
+      }, 7500) }
+      this.pendingStop = p
+      this.update({ stopError: null })
+      try { this.send(JSON.stringify({ type: 'operationRequest', operationVersion: 4, request })) }
+      catch {
+        clearTimeout(p.timer)
+        this.pendingStop = null
+        this.update({ stopError: 'operationUnknown' })
+        reject(new Error('operationUnknown'))
+      }
+    })
+  }
+  receive(raw: unknown) {
+    const r = operationResponse(raw)
+    const stop = this.pendingStop
+    if (stop?.request.requestId === r.requestId) {
+      if ('value' in r && !('stop' in r.value)) throw Error('invalidOperation')
+      clearTimeout(stop.timer)
+      this.pendingStop = null
+      if ('error' in r) {
+        this.update({ stopError: r.error })
+        stop.reject(new Error(r.error))
+      } else {
+        this.stopTarget = null
+        this.polledAt = -Infinity
+        this.update({ stopError: null })
+        stop.resolve(r.value)
+      }
+      return
+    }
+    const p = this.pending
+    if (!p || p.request.requestId !== r.requestId) return
+    if ('value' in r) {
+      if ('stop' in r.value) throw Error('invalidOperation')
+      const expectsOutcome = p.request.type === 'logManual' || p.request.type === 'stationControl' || p.request.type === 'result'
+      if (expectsOutcome !== 'outcome' in r.value) throw new Error('invalidOperation')
+      if (
+        'outcome' in r.value &&
+        r.value.operationId !==
+          (p.request.type === 'result' ? p.request.operationId : p.request.requestId)
+      )
+        throw new Error('invalidOperation')
+      if ('outcome' in r.value) {
+        const control = p.request.type === 'stationControl' ||
+          (p.request.type === 'result' && p.request.operationId === this.view.controlPending?.operationId)
+        if (control !== ('operation' in r.value)) throw Error('invalidOperation')
+      }
+    }
+    clearTimeout(p.timer)
+    this.pending = null
+    this.finishBudget(p.request.requestId)
+    if ('error' in r) {
+      this.heartbeatLeaseId = null
+      const unknown = p.request.type === 'logManual' && r.error === 'operationUnknown'
+      if (p.request.type === 'stationControl' && r.error !== 'operationUnknown') {
+        try { this.controlStorage?.write(null); this.update({ controlPending: null }) } catch {}
+      }
+      this.update({
+        busy: false,
+        submitting: false,
+        state: null,
+        fresh: false,
+        error: r.error,
+        ...(p.request.type === 'logManual'
+          ? { unresolved: unknown ? p.request.requestId : null }
+          : {})
+      })
+      p.reject(new Error(r.error))
+      return
+    }
+    if ('stop' in r.value) throw Error('invalidOperation')
+    if ('phase' in r.value) {
+      this.heartbeatLeaseId = r.value.phase === 'controlling' ? r.value.leaseId : null
+      this.stopTarget = this.operationVersion >= 4 && r.value.phase === 'controlling' && r.value.leaseId && r.value.transmitEpoch
+        ? { stationBootId: r.value.stationBootId, leaseId: r.value.leaseId, transmitEpoch: r.value.transmitEpoch } : null
+      this.stateUntil = p.started + Math.min(1200, r.value.leaseRemainingMs ?? 1200)
+      this.update({
+        supported: true,
+        busy: false,
+        submitting: false,
+        state: r.value,
+        fresh: this.now() < this.stateUntil,
+        error: null
+      })
+    } else if ('operation' in r.value) {
+      const result = r.value
+      if (p.request.type === 'logManual') throw Error('invalidOperation')
+      const terminal = result.outcome === 'applied' || result.outcome === 'rejected'
+      let cleared = false
+      if (terminal) {
+        try { this.controlStorage?.write(null); cleared = true } catch {}
+      }
+      const refreshing = result.outcome === 'applied' && (p.request.type === 'stationControl' || !this.view.state)
+      if (refreshing) this.controlRefreshUntil = this.now() + 1200
+      this.update({ busy: false, submitting: false, controlResult: result, controlError: null,
+        controlRefreshing: refreshing,
+        ...(cleared ? { controlPending: null } : {}),
+        ...(p.request.type === 'stationControl' ? { state: null, fresh: false } : {}), error: null })
+      if (p.request.type === 'stationControl') this.polledAt = -Infinity
+    } else {
+      if (p.request.type === 'stationControl') throw Error('invalidOperation')
+      this.finished = r.value
+      const retain =
+        r.value.outcome === 'unknown' ||
+        (p.request.type === 'result' && r.value.outcome === 'rejected')
+      this.update({
+        busy: false,
+        submitting: false,
+        state: null,
+        fresh: false,
+        error: null,
+        // A reopened form has no editable copy of a refused submission. Keep
+        // those fields until the operator explicitly checks the station log.
+        unresolved: retain ? r.value.operationId : null,
+        ...(p.request.type === 'result' ? { resolved: r.value } : {})
+      })
+      this.polledAt = -Infinity
+    }
+    p.resolve(r.value)
+  }
+  async acquire() {
+    const s = this.view.state
+    if (!s || !this.view.fresh || !s.allowed || s.phase !== 'available')
+      throw new Error('localPermissionRequired')
+    await this.request({
+      type: 'acquire',
+      requestId: crypto.randomUUID(),
+      stationBootId: s.stationBootId
+    })
+  }
+  async release() {
+    const leaseId = this.heartbeatLeaseId
+    this.heartbeatLeaseId = null
+    this.update({ state: null, fresh: false })
+    if (!leaseId) return
+    try {
+      await this.request({ type: 'release', requestId: crypto.randomUUID(), leaseId })
+    } catch {}
+  }
+  private waitForHeartbeat(until: number): Promise<void> {
+    if (!this.pending) return Promise.resolve()
+    if (this.pending.request.type !== 'heartbeat') return Promise.reject(new Error('remoteBusy'))
+    return new Promise((resolve, reject) => {
+      const finish = (error?: string) => {
+        clearTimeout(timer)
+        unsubscribe()
+        error ? reject(new Error(error)) : resolve()
+      }
+      const timer = setTimeout(
+        () => finish('windowExpired'),
+        Math.max(0, Math.min(500, until - this.now()))
+      )
+      const unsubscribe = this.subscribe(() => {
+        if (!this.view.connected) finish('stationUnavailable')
+        else if (!this.pending) finish()
+      })
+    })
+  }
+  private withReceiptLock<T>(action: () => T | Promise<T>): Promise<T> {
+    return this.receiptStorage?.exclusive
+      ? this.receiptStorage.exclusive(action)
+      : Promise.resolve(action())
+  }
+  /** Reserve the request slot before an asynchronous browser receipt lock.
+   * Background status polling must not consume the operator's result gesture.
+   * This admits only a receipt read; it never replays a station action. */
+  private async withResultIntent<T>(read: (current: () => void) => Promise<T>): Promise<T> {
+    if (this.pending || this.resultIntent) throw Error('remoteBusy')
+    if (!this.view.connected) throw Error('stationUnavailable')
+    const intent = {}
+    this.resultIntent = intent
+    this.update({ busy: true })
+    try {
+      return await read(() => {
+        if (this.resultIntent !== intent || !this.view.connected) throw Error('stationUnavailable')
+      })
+    } finally {
+      if (this.resultIntent === intent) {
+        this.resultIntent = null
+        this.update({ busy: !!this.pending })
+      }
+    }
+  }
+  async log(record: ManualRecord, onSubmitted?: (id: string) => void): Promise<OperationOutcome> {
+    const s = this.view.state,
+      until = this.stateUntil,
+      draft = structuredClone(manualRecord(record))
+    if (this.view.unresolved) throw new Error('operationUnknown')
+    if (this.view.controlPending || this.controlIntent) throw new Error('operationUnknown')
+    if (this.loggingIntent) throw new Error('remoteBusy')
+    if (
+      !s ||
+      !this.view.fresh ||
+      s.phase !== 'controlling' ||
+      !s.leaseId ||
+      !s.commandWindowId ||
+      s.nextSequence === null || !s.actions.includes('log.manual')
+    )
+      throw new Error('notController')
+    const intent = {
+      stationBootId: s.stationBootId,
+      leaseId: s.leaseId,
+      commandWindowId: s.commandWindowId,
+      expectedRevision: s.revision,
+      clientSequence: s.nextSequence
+    }
+    this.loggingIntent = true
+    try {
+      return await this.withReceiptLock(async () => {
+        // An automatic heartbeat can begin between pointer-down and click. Wait at
+        // most half a second for that READ; retain the click's original context,
+        // window and payload. Never let the gesture migrate to a new station state.
+        if (this.pending) await this.waitForHeartbeat(until)
+        if (this.now() >= until) throw new Error('windowExpired')
+        if (this.view.state?.leaseId !== s.leaseId || this.view.state.revision !== s.revision)
+          throw new Error('staleContext')
+        this.requireRequestCapacity()
+        const requestId = crypto.randomUUID()
+        onSubmitted?.(requestId)
+        const r = await this.request({
+          type: 'logManual',
+          requestId,
+          ...intent,
+          record: draft
+        })
+        if (!('outcome' in r) || 'operation' in r) throw new Error('invalidRequest')
+        return r
+      })
+    } finally {
+      this.loggingIntent = false
+    }
+  }
+  async resolve(): Promise<OperationOutcome> {
+    const id = this.view.unresolved
+    if (!id) throw new Error('resultExpired')
+    return this.withResultIntent(current => this.withReceiptLock(async () => {
+      current()
+      if (this.view.unresolved !== id) throw Error('resultExpired')
+      const r = await this.request({
+        type: 'result',
+        requestId: crypto.randomUUID(),
+        operationId: id
+      })
+      if (!('outcome' in r) || 'operation' in r) throw new Error('invalidRequest')
+      return r
+    }))
+  }
+  async acknowledgeAfterCheckingLog() {
+    const id = this.view.unresolved
+    if (this.view.busy || !id) return
+    return this.withReceiptLock(() => {
+      if (this.view.busy || this.view.unresolved !== id) return
+      this.update({ dismissed: id, unresolved: null, error: null })
+    })
+  }
+  getLastOutcome() {
+    return this.finished
+  }
+  /** A coalesced gesture keeps its original authority while its target is being
+   * formed. The returned sender cannot borrow a newer heartbeat or lease. */
+  prepareControl(displayed?: ControlContext): (action: StationAction) => Promise<ControlOutcome> {
+    if (!this.view.state || !this.view.fresh) throw Error('notController')
+    const captured = { state: structuredClone(this.view.state), until: this.stateUntil }
+    const context = displayed && structuredClone(displayed)
+    return action => this.controlFrom(action, context, captured)
+  }
+  async control(action: StationAction, displayed?: ControlContext): Promise<ControlOutcome> {
+    return this.controlFrom(action, displayed)
+  }
+  private async controlFrom(action: StationAction, displayed?: ControlContext, captured?: CapturedControl): Promise<ControlOutcome> {
+    this.update({ controlError: null })
+    try { return await this.executeControl(action, displayed, captured) }
+    catch (error) {
+      this.update({ controlError: error instanceof Error ? error.message : 'stationUnavailable' })
+      throw error
+    }
+  }
+  private async executeControl(action: StationAction, displayed?: ControlContext, captured?: CapturedControl): Promise<ControlOutcome> {
+    const s = captured?.state ?? this.view.state, until = captured?.until ?? this.stateUntil, intent = structuredClone(stationAction(action))
+    if (this.operationVersion < controlVersion(intent)) throw Error('stationUnsupported')
+    if (!this.controlStorage) throw Error('receiptStorageUnavailable')
+    if (this.view.unresolved || this.view.controlPending || this.controlIntent || this.loggingIntent) throw Error('operationUnknown')
+    const capability = actionCapability(intent)
+    if ('transmitEpoch' in intent && intent.transmitEpoch !== s?.transmitEpoch) throw Error('staleContext')
+    if (!s || !this.view.fresh || s.phase !== 'controlling' || !s.leaseId || !s.commandWindowId || s.nextSequence === null || !s.controls?.capabilities.includes(capability)) throw Error('notController')
+    const context = structuredClone(controlContext(displayed ?? s.controls.context))
+    const sameConnection = (current: ControlContext | undefined) => !!current &&
+      context.radioId === current.radioId && context.radioConnection === current.radioConnection && context.ampConnection === current.ampConnection
+    if (!sameConnection(s.controls.context)) throw Error('staleContext')
+    const request: OperationRequest = { type: 'stationControl', requestId: crypto.randomUUID(), stationBootId: s.stationBootId,
+      leaseId: s.leaseId, expectedRevision: s.revision, commandWindowId: s.commandWindowId, clientSequence: s.nextSequence,
+      context, action: intent }
+    this.controlIntent = true
+    try {
+      const first = await this.controlStorage.exclusive(async () => {
+        if (this.pending) await this.waitForHeartbeat(until)
+        if (this.now() >= until) throw Error('windowExpired')
+        if (this.view.state?.leaseId !== s.leaseId || this.view.state.revision !== s.revision) throw Error('staleContext')
+        if (!sameConnection(this.view.state.controls?.context)) throw Error('staleContext')
+        if ('transmitEpoch' in intent && (intent.transmitEpoch !== this.view.state.transmitEpoch || intent.transmitEpoch !== this.stopTarget?.transmitEpoch)) throw Error('staleContext')
+        this.requireRequestCapacity()
+        const saved = { operationId: request.requestId, action: intent }
+        this.controlStorage!.write(saved)
+        this.update({ controlPending: saved, controlResult: null })
+        const result = await this.request(request)
+        if (!('operation' in result)) throw Error('invalidOperation')
+        return result
+      })
+      if (first.outcome !== 'pending') return first
+      return await new Promise<ControlOutcome>((resolve, reject) => {
+        const finish = (result?: ControlOutcome) => { clearTimeout(timer); unsubscribe(); result ? resolve(result) : reject(Error('operationUnknown')) }
+        const timer = setTimeout(() => finish(), 7500)
+        const check = () => {
+          const r = this.view.controlResult
+          if (r?.operationId === request.requestId && r.outcome !== 'pending') finish(r)
+          else if (!this.view.connected) finish()
+        }
+        const unsubscribe = this.subscribe(check)
+        check()
+      })
+    } finally { this.controlIntent = false }
+  }
+  async refreshControl(): Promise<ControlOutcome> {
+    const entry = this.view.controlPending
+    if (!entry || !this.controlStorage) throw Error('resultExpired')
+    return this.withResultIntent(current => this.controlStorage!.exclusive(async () => {
+      current()
+      if (this.view.controlPending?.operationId !== entry.operationId) throw Error('resultExpired')
+      const result = await this.request({ type: 'result', requestId: crypto.randomUUID(), operationId: entry.operationId })
+      if (!('operation' in result)) throw Error('invalidOperation')
+      return result
+    }))
+  }
+  async acknowledgeControl() {
+    if (this.view.busy || !this.view.controlPending || !this.controlStorage) return
+    await this.controlStorage.exclusive(() => {
+      if (this.view.busy) throw Error('remoteBusy')
+      this.controlStorage!.write(null)
+      this.update({ controlPending: null, controlResult: null, controlError: null, error: null })
+    })
+  }
+}

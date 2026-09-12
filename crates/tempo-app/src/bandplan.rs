@@ -21,6 +21,9 @@
 
 use serde::{Deserialize, Serialize};
 
+mod licensed;
+pub use licensed::licensed_bands;
+
 /// One Tempo calling channel: a band, a recommended dial frequency, and the mode
 /// the radio should be in.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

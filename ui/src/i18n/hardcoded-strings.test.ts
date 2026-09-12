@@ -53,6 +53,20 @@ import { EN, type MessageKey } from './index'
  * proven on a real shipped sentence rather than on a fixture.
  */
 const MIGRATED = [
+  'remote-web/ModeEntry.tsx',
+  'remote-web/operations.tsx',
+  'remote-web/collections.tsx',
+  'remote-web/RemoteRecall.tsx',
+  'remote-web/RemoteInsights.tsx',
+  'remote-web/RemoteDxpeditions.tsx',
+  'remote-web/RemoteMemories.tsx',
+  'remote-web/RemoteOta.tsx',
+  'remote-web/RemoteFieldDay.tsx',
+  'remote-web/BrowserApplication.tsx',
+  'remote-web/SessionStatus.tsx',
+  'remote-web/presentation.tsx',
+  'remote-web/RemoteApp.tsx',
+  'remote-native/RemoteStation.tsx',
   'remote-monitor/MonitorApp.tsx',
   'remote-monitor/preview.tsx',
   'components/SettingsStation.tsx',

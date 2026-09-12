@@ -1,0 +1,333 @@
+/* Session status joins the existing app's flex column; the Nexus cockpit owns
+   its layout and scroll regions. Stale data stays mounted to preserve UI state. */
+.remote-application-status {
+  flex: 0 0 auto;
+  min-width: 0;
+  padding: 0.45em 0.8em;
+  color: var(--text);
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+.remote-application-status button { min-height: 48px; }
+.remote-application-status {
+  max-height: min(18em, calc(.4 * var(--vh-eff, 100vh)));
+  overflow: auto;
+}
+.remote-session-row { display: flex; align-items: flex-start; gap: .5em; min-width: 0; }
+.remote-session-row > :first-child { flex: 1 1 0; min-width: 0; }
+.remote-session-row .remote-logging-authority { min-width: 0; }
+.remote-session-row .remote-logging-authority button { min-width: 0; white-space: normal; }
+.remote-session-toggle { display: flex; align-items: center; justify-content: center; gap: .5em; flex: 0 0 auto; }
+.remote-session-toggle svg { flex: 0 0 auto; }
+.remote-session-info { padding-top: .5em; min-width: 0; }
+.remote-session-info p, .remote-session-unavailable { margin: .5em 0; overflow-wrap: anywhere; }
+.remote-session-info[hidden] { display: none; }
+[data-viewport='xs'] .remote-session-toggle { width: 48px; padding-inline: 0; }
+[data-viewport='xs'] .remote-session-toggle > span { display: none; }
+.remote-control-result { display: flex; flex: 1 1 100%; flex-wrap: wrap; gap: .5em; min-width: 0; }
+.remote-view-unavailable { padding: 1em; overflow: auto; }
+.remote-insights-view {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+.remote-insights-status {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5em 1em;
+  padding: 0.5em 1em;
+}
+.remote-insights-status button { min-height: 48px; }
+.remote-insights-status span { flex: 1 1 20em; }
+.remote-dxpeditions-view > .dxped-view { flex: 1 1 auto; min-height: 0; overflow: auto; }
+/* The board owns scrolling. Its calendar is an existing .panel, whose generic
+   flex shrink/hidden overflow would otherwise collapse it below the cards. */
+.remote-dxpeditions-view > .dxped-view > * { flex: 0 0 auto; }
+.remote-dxpeditions-view .dxped-calendar { overflow: visible; }
+/* The unchanged Nexus header can wrap above a phone-height viewport at pinned
+   zoom. Keep the app bounded, and let that excess scroll while retaining a
+   usable summary pane and the visible connection/authority status. */
+.remote-workspace:not(.remote-quick-workspace):has(.remote-insights-view, [data-three-pane]) { overflow: auto; }
+.remote-workspace > .remote-application-status {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+}
+.remote-workspace:not(.remote-quick-workspace) .shell:has(.remote-insights-view, [data-three-pane]) {
+  min-height: min(32em, calc(0.7 * var(--vh-eff, 100vh)));
+  min-width: 0;
+}
+/* The hosted status strip consumes shell height. At pinned zoom the FT header
+   and content can exceed the remaining box; allow the existing shell to scroll
+   that deficit instead of clipping its recall rail below the window. */
+.remote-workspace .layout.single.operate-cockpit { overflow-y: auto; }
+/* The hosted status/header takes height from the FT body. Its flexible
+   waterfall can otherwise pay the entire deficit and leave a zero-height
+   canvas. Keep the wrapped native toolbar plus a usable receive strip; the
+   existing cockpit scroller owns the excess. The saved splitter basis still
+   sizes the panel above that content minimum. */
+.remote-workspace .cockpit-waterfall { min-height: min-content; flex-shrink: 0; }
+/* The same wrapped toolbar can exhaust the native JS8/RTTY/PSK strip's
+   viewport-relative height. Each hosted cockpit already owns a scrollbar. */
+.remote-workspace .waterfall-wrap { min-height: min-content; }
+.remote-workspace .wf-stage { min-height: 6em; }
+/* Keep the strength legend within short receive strips. Its gradient can
+   shrink while both scale labels remain visible above the next pane. */
+.remote-workspace .wf-legend { max-height: calc(100% - 12px); box-sizing: border-box; }
+/* CW/Phone's wrapped scope controls can consume the whole saved strip height
+   at a narrow effective viewport. Preserve a real receive canvas below them;
+   the existing cockpit scroller owns any height beyond the saved basis. */
+.remote-workspace :is(.cw-cockpit, .phone-cockpit) .ph-scope-panel { min-height: min-content; flex-shrink: 0; }
+.remote-workspace :is(.ph-scope-wrap, .ph-scope) { min-height: min-content; }
+.remote-workspace .ph-scope-canvas-wrap { min-height: 6em; }
+/* A stacked Tx-message column must scroll its content rather than paint over
+   the following recall rail when the effective viewport is narrow. */
+.remote-workspace .cockpit-qsocol { overflow-y: auto; }
+/* A large pinned zoom can make the native header taller than a phone. Keep
+   a usable mode shell below it and let the application scroll to that shell. */
+.remote-workspace:not(.remote-quick-workspace):has(:is(.remote-contact-host, .operate-host, .js8-host, .sstv-host, .aprs-host, .rtty-host, .psk-host):not([hidden])) { overflow: auto; }
+.remote-workspace:not(.remote-quick-workspace) .shell:has(:is(.remote-contact-host, .operate-host, .js8-host, .sstv-host, .aprs-host, .rtty-host, .psk-host):not([hidden])) {
+  min-height: min(32em, calc(0.7 * var(--vh-eff, 100vh)));
+  min-width: 0;
+}
+/* The transcript's metadata columns must not consume the message on narrow
+   screens. Keep the same fields, with the message on its own full-width row. */
+[data-viewport='xs'] .remote-workspace .js8-row,
+[data-viewport='xs'] .remote-workspace .js8-offset-row {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+[data-viewport='xs'] .remote-workspace .js8-row > .js8-text,
+[data-viewport='xs'] .remote-workspace .js8-offset-row > .js8-text { grid-column: 1 / -1; }
+/* The APRS rail wraps its native form labels. Inputs have an intrinsic minimum
+   width which can otherwise paint across the next label on a phone. */
+.remote-workspace .aprs-beacon label { max-width: 100%; }
+.remote-workspace .aprs-beacon input { min-width: 0; }
+.remote-workspace .aprs-beacon-comment { flex: 1 1 16em; }
+/* Give the map and rail usable height below a wrapped header. The rail owns
+   vertical scrolling; its table must not shrink to a zero-height scroller. */
+.remote-workspace .aprs-body { min-height: min(28em, calc(0.7 * var(--vh-eff, 100vh))); }
+.remote-workspace .aprs-rail > * { flex-shrink: 0; }
+/* Reserve a received picture's space while its authenticated bytes arrive.
+   Loading thumbnails must not move captions out from under a scroll or tap. */
+.sstv-remote-image {
+  position: relative;
+  flex: 0 0 auto;
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+.sstv-remote-image .sstv-thumb-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+/* Retire stale readings and station controls. Quick destinations contain only
+   browser navigation, so the operator can still leave a view or return to Full. */
+.app[data-remote-stale="true"] > :not(.remote-application-status, .remote-quick-nav) {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* Stop derives authority from the live controller, independently of readings.
+   An enabled stop must remain visible and clickable inside the retired workspace. */
+.app[data-remote-stale="true"] [data-remote-stop="true"] {
+  visibility: visible;
+  pointer-events: auto;
+}
+
+/* Keep the existing Memories manager and its own list/grid scroll owner. */
+.remote-memories-view { overflow: auto; }
+.remote-memory-bank { display: contents; }
+.remote-memory-bank[hidden] { display: none; }
+/* The native layout sets display, which overrides the browser's hidden
+   default. An unavailable event must not expose the mounted empty scoreboard. */
+.remote-field-day-bank[hidden] { display: none; }
+.remote-memories-view .memories-view { min-width: 0; min-height: 20rem; flex: 1 0 20rem; }
+.remote-memories-view .mv-row-main { flex-wrap: wrap; white-space: normal; }
+.remote-memories-view .mv-row-name { max-width: 100%; }
+.remote-memories-view .mv-row-freq { flex: 0 0 auto; }
+.remote-memories-view .mv-row-main:disabled,
+.remote-memories-view .mv-star:disabled { opacity: 1; cursor: default; }
+.remote-memories-view .mv-cell[readonly] { cursor: text; }
+.remote-memory-note { margin: 0; padding: 0 12px 8px; overflow-wrap: anywhere; white-space: pre-wrap; }
+/* The native hunter panel is now nested below an observation header. Give its
+   full list a user-scrollable owner instead of the summary wrapper's clip. */
+.remote-ota-view { overflow: auto; }
+.remote-ota-bank { flex: 0 0 auto; min-width: 0; }
+.remote-ota-feeds { display: flex; flex: 0 0 auto; flex-wrap: wrap; gap: 0.25em 1em; padding: 0 1em 0.5em; }
+[data-viewport='xs'] .remote-memories-view .memories-view { flex-direction: column; min-height: 28rem; flex-basis: 28rem; }
+[data-viewport='xs'] .remote-memories-view .mv-row-name { flex-basis: 100%; }
+[data-viewport='xs'] .remote-memories-view .mv-side { flex: 0 0 auto; max-height: 9rem; }
+/* The collapsed native grid removes named areas; reset each hosted child's
+   placement too so the waterfall cannot overlap the conversation. */
+:is([data-viewport='sm'], [data-viewport='xs']) .remote-workspace .layout[data-three-pane]
+  > :is(.grid-header, .grid-stations, .grid-center, .grid-waterfall) { grid-area: auto; }
+:is([data-viewport='sm'], [data-viewport='xs']) .remote-workspace .layout[data-three-pane] { grid-auto-rows: max-content; }
+:is([data-viewport='sm'], [data-viewport='xs']) .remote-workspace .grid-center { height: max(20em, calc(0.6 * var(--vh-eff, 100vh))); }
+:is([data-viewport='sm'], [data-viewport='xs']) .remote-workspace .grid-center > .conversation { height: 100%; min-height: 0; }
+:is([data-viewport='sm'], [data-viewport='xs']) .remote-workspace .grid-waterfall { height: 420px; }
+:is([data-viewport='sm'], [data-viewport='xs']) .remote-workspace .station-list { overflow-y: auto; }
+:is([data-viewport='sm'], [data-viewport='xs']) .remote-workspace .station-list > * { flex-shrink: 0; }
+
+/* Planning pages share the native shell. Preserve a usable page below its
+   wrapped header, and let the hosted workspace scroll to it at pinned zoom. */
+.remote-workspace:not(.remote-quick-workspace):has(.connect-shell, .sats-view) { overflow: auto; }
+.remote-workspace:not(.remote-quick-workspace) .shell:has(.connect-shell, .sats-view) {
+  min-height: min(38em, calc(0.8 * var(--vh-eff, 100vh)));
+  min-width: 0;
+}
+.remote-workspace .layout.single:has(> .connect-shell) { overflow-y: auto; }
+.remote-workspace .connect-shell { min-height: min(34em, calc(0.75 * var(--vh-eff, 100vh))); }
+/* The map toolbar and planning panes need real space even in a short landscape
+   window. The surrounding native page scrolls this deficit; its canvas stays
+   within its own grid cell and never paints over the planning strip. */
+.remote-workspace .connect-header { flex-shrink: 0; }
+.remote-workspace .connect { min-height: 38em; flex-shrink: 0; }
+
+/* The native grid display overrides HTML hidden without this explicit rule. */
+.remote-workspace .rp-body[hidden] { display: none; }
+.remote-workspace .settings-panel[data-remote-configuration] { min-width: 0; }
+
+.remote-logging-authority { display: flex; align-items: center; flex-wrap: wrap; gap: .5em; }
+.remote-log-fields { border: 0; padding: 0; margin: 0; min-width: 0; }
+.remote-log-entry { min-width: 0; }
+.remote-log-entry .remote-actions { flex-wrap: wrap; }
+
+/* The shared native log form is already inside a framed cockpit pane. */
+.remote-log-fields .log-entry { padding: 0; border: 0; background: transparent; }
+
+/* The native header can consume a narrow browser's height. Preserve real
+   configuration scrollports below it; the outer workspace scrolls the deficit. */
+.remote-workspace:not(.remote-quick-workspace):has(.settings-panel[data-remote-configuration], .radioprog[data-remote-configuration]) { overflow: auto; }
+.remote-workspace:not(.remote-quick-workspace) .shell:has(.settings-panel[data-remote-configuration], .radioprog[data-remote-configuration]) {
+  min-height: min(38em, calc(0.8 * var(--vh-eff, 100vh)));
+  min-width: 0;
+}
+.remote-workspace .settings-panel[data-remote-configuration] .settings-form { min-height: 32em; }
+.remote-workspace .settings-panel[data-remote-configuration] .settings-scroll { min-height: 16em; }
+/* Keep the native Settings columns, but allow a column to fit a phone's
+   available width after browser zoom. Labels must wrap inside the scrollport. */
+.remote-workspace .settings-panel[data-remote-configuration] .settings-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
+}
+:is([data-viewport='md'], [data-viewport='lg'], [data-viewport='xl']) .remote-workspace .settings-panel[data-remote-configuration] .settings-grid {
+  grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr));
+}
+.remote-workspace .radioprog[data-remote-configuration] .rp-body { min-height: 40em; }
+.remote-workspace .radioprog[data-remote-configuration] .rp-source { overflow-y: auto; }
+.remote-workspace .radioprog[data-remote-configuration] .rp-source > * { flex-shrink: 0; }
+
+/* Pending contact details survive a browser restart without becoming a new
+   editable submission. Long notes stay readable inside the native pane. */
+.remote-log-submitted { min-width: 0; overflow-wrap: anywhere; }
+.remote-log-submitted dd { margin: 0 0 .5em; white-space: pre-wrap; }
+.remote-log-submitted dt { color: var(--text-dim); }
+
+/* Quick uses the same mounted App. Navigation changes only its selected view. */
+.remote-quick-workspace { overflow: hidden; }
+.remote-quick-workspace > .now-bar,
+.remote-quick-workspace .mode-nav { display: none; }
+.remote-quick-workspace .shell { min-height: 0; min-width: 0; overflow: auto; }
+/* These modes already own frequency and stop controls in their cockpit. Global
+   screens retain TopBar, including its stop controls and current frequency. */
+.remote-quick-workspace:is([data-remote-view='phone'], [data-remote-view='cw']) > .topbar { display: none; }
+.remote-quick-workspace .topbar > .topbar-chips,
+.remote-quick-workspace .topbar > .tier-toggle { display: none; }
+.remote-quick-nav {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  flex: 0 0 auto;
+  gap: .25em;
+  padding: .35em .5em max(.35em, env(safe-area-inset-bottom));
+  min-width: 0;
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+}
+/* Work/QSO notices remain actionable above the permanent Quick navigation. */
+.remote-quick-workspace .ui-toast-viewport {
+  bottom: calc(var(--space-4) + var(--remote-quick-nav-height, 0px));
+  max-height: calc(var(--vh-eff, 100vh) - var(--remote-quick-nav-height, 0px) - 2 * var(--space-4));
+}
+.remote-quick-nav button {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: .25em; min-width: 0; min-height: 48px; padding: .3em;
+  color: var(--text); background: var(--panel); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); font: inherit; white-space: normal;
+}
+.remote-quick-nav button[aria-current='page'] { color: var(--accent); border-color: var(--accent); }
+.remote-quick-nav button:disabled { opacity: .45; }
+/* This shared Nexus menu is portaled. Radix measures the actual available
+   window space; its existing inner wrapper applies the operator's zoom. */
+.remote-quick-mode-menu {
+  max-height: var(--radix-dropdown-menu-content-available-height);
+  max-width: var(--radix-dropdown-menu-content-available-width);
+  overflow-y: auto;
+}
+.remote-quick-mode-menu .ui-menu-item { min-height: 44px; }
+.remote-quick-details { flex: 0 0 auto; }
+/* Optional receiver detail never contains Stop TX, Tune or the amplifier. */
+.cockpit-header--brief .ch-mode-extras,
+.cockpit-header--brief .ch-freq-extras,
+.cockpit-header--brief .ch-band,
+.cockpit-header--brief .cockpit-pwr { display: none; }
+
+/* Compact header chrome keeps every stop control outside optional detail. */
+.cockpit-header--quick {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: .4em;
+  padding: .5em;
+}
+.cockpit-header--quick .ch-identity { min-width: 0; min-height: 0; margin: 0; gap: .35em; }
+.cockpit-header--quick .remote-quick-details { grid-column: 2; grid-row: 1; padding: .3em .5em; min-height: 44px; }
+.cockpit-header--quick .ch-freq { grid-column: 1 / -1; min-width: 0; margin: 0; }
+.cockpit-header--quick .ch-mode-extras { grid-column: 1 / -1; }
+.cockpit-header--quick .ch-actions { grid-column: 1 / -1; min-width: 0; margin: 0; flex-wrap: wrap; gap: .35em; }
+.cockpit-header--brief .panels-menu,
+.cockpit-header--brief .ph-mode-btn:not([aria-pressed='true']) { display: none; }
+.cockpit-header--quick .amp-strip { flex-wrap: wrap; max-width: 100%; gap: .35em; }
+.cockpit-header--quick .amp-strip button {
+  color: var(--text); background: var(--panel); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); min-height: 32px; padding: .35em .5em;
+}
+
+.remote-quick-details { display: inline-flex; align-items: center; justify-content: center; gap: .4em; }
+.remote-quick-nav button { font-size: .85em; }
+.cockpit-header--brief .amp-band-step { display: none; }
+.cockpit-header--quick .amp-watts { min-width: 0; }
+[data-viewport='xs'] .remote-quick-details { width: 44px; padding-inline: 0; }
+[data-viewport='xs'] .remote-quick-details > span { display: none; }
+
+/* The contact frame already names the general logbook in Quick. Field Day's
+   warning remains explicit; presentation does not change where a QSO is saved. */
+.remote-log-entry > p[hidden] { display: none; }
+.remote-quick-contact { --space-4: .5rem; --space-3: .4rem; }
+
+/* Match Nexus's compact navigation convention: the return icon has a full
+   accessible name, with its text label restored when there is room. */
+[data-viewport='xs'] .remote-quick-nav button:last-child > span { display: none; }
+.remote-quick-nav button > span { overflow-wrap: anywhere; }
+.cockpit-header--quick .amp-strip button { min-height: 44px; min-width: 44px; }
+
+/* Native PTT has a desktop minimum width. Keep the same button reachable in
+   Quick's narrower contact column, including enlarged text. */
+.remote-quick-contact .ph-ptt { min-width: min(220px, 100%); max-width: 100%; white-space: normal; }
+[data-viewport='xs'] .remote-quick-contact .recall-log-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+[data-viewport='xs'] .remote-quick-contact .recall-log-date { overflow-wrap: anywhere; }
+[data-viewport='xs'] .remote-quick-contact .recall-log-cmt { grid-column: 1 / -1; }
+
+/* A CW compose row wraps as a unit at the same narrow contact width. Its input
+   keeps its intrinsic text value while yielding its desktop minimum width. */
+.remote-quick-contact .cw-send { flex-wrap: wrap; }
+.remote-quick-contact .cw-type { min-width: 0; flex-basis: 9em; }

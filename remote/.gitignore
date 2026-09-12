@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.wrangler/
+.dev.vars*
+wrangler.staging.jsonc
+worker-configuration.d.ts
+staging-artifact/

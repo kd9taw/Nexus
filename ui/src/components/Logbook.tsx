@@ -254,6 +254,9 @@ function defaultAsc(k: SortKey): boolean {
   return k === 'call' || k === 'country' || k === 'mode' || k === 'sent' || k === 'rcvd' || k === 'park'
 }
 
+import { useStationControl } from '../stationAccess'
+import { useRemoteLog } from '../remote-web/useRemoteLog'
+
 export function Logbook({
   defaultBand,
   defaultFreqMhz,
@@ -261,6 +264,7 @@ export function Logbook({
   focusCall,
   onConsumeFocusCall,
 }: Props) {
+  const control = useStationControl()
   const [log, setLog] = useState<LoggedQso[]>([])
   const [showForm, setShowForm] = useState(false)
   const [draft, setDraft] = useState<DraftQso>(() => ({
@@ -290,7 +294,7 @@ export function Logbook({
     // before the log has loaded, and the extra state update it lands shifts the first few
     // renders. That is what put the Purge button's disabled read on the wrong side of a
     // waitFor in Logbook.test.tsx — a real timing change, not a flaky test.
-    if (log.length === 0) {
+    if (!control || log.length === 0) {
       setOperators((prev) => (prev.length === 0 ? prev : []))
       return
     }
@@ -302,7 +306,7 @@ export function Logbook({
         ),
       )
       .catch(() => {}) // no bridge / older core — just don't offer the split
-  }, [log.length])
+  }, [log.length, control])
   // Activations present in the log: (your park) × (UTC day) × (the callsign you signed). Same
   // shape as the operator list above, and loaded the same way — a new activation can only first
   // appear when the log grows.
@@ -343,6 +347,8 @@ export function Logbook({
   // Filter to contacts still lacking an award-eligible confirmation (the DX
   // chaser's "who do I still need a card/LoTW from" view).
   const [needsConfirmOnly, setNeedsConfirmOnly] = useState(false)
+  const remoteLog = useRemoteLog(deferredSearch, needsConfirmOnly)
+  useEffect(() => { if (remoteLog) setLog(remoteLog.rows) }, [remoteLog?.rows])
   // Purge-the-whole-log confirmation modal. `purgeText` must equal PURGE_WORD to
   // arm the danger button — a deliberate, typed gate for an irreversible wipe.
   const [showPurge, setShowPurge] = useState(false)
@@ -389,10 +395,11 @@ export function Logbook({
   }
 
   const load = useCallback(() => {
+    if (!control) return
     getLog()
       .then(setLog)
       .catch(() => {})
-  }, [])
+  }, [control])
 
   useEffect(() => {
     load()
@@ -745,7 +752,7 @@ export function Logbook({
   // re-renders). `i` is the backend get_log index, kept glued to each record so edit/delete/mark
   // still target the right row regardless of display order.
   const rows = useMemo(() => {
-    const out = log.map((q, i) => ({ q, i })).filter(({ q }) => matchesSearch(q))
+    const out = log.map((q, i) => ({ q, i })).filter(({ q }) => !control || matchesSearch(q))
     out.sort((a, b) => {
       const av = sortVal(a.q, sortKey)
       const bv = sortVal(b.q, sortKey)
@@ -753,12 +760,12 @@ export function Logbook({
       return sortAsc ? cmp : -cmp
     })
     return out
-  }, [log, matchesSearch, sortKey, sortAsc])
+  }, [log, matchesSearch, sortKey, sortAsc, control])
 
   // 3-D globe band, gated on a real GPU (software renderers would make the whole
   // Logbook crawl — those machines just get the plain table). Probed once per mount.
   const [globeOk] = useState(gpuCapableForGlobe)
-  const globeShown = globeOk && log.length > 0
+  const globeShown = control && globeOk && log.length > 0
 
   // Virtualize the row list: at 10k QSOs the old render put ~150k DOM nodes on screen (heavy scroll
   // + a full reconcile every dial-poll re-render). Now only the visible window mounts.
@@ -874,6 +881,7 @@ export function Logbook({
       type="button"
       className={`log-cell log-th${sortKey === k ? ' sorted' : ''}`}
       role="columnheader"
+      disabled={!control}
       aria-sort={sortKey === k ? (sortAsc ? 'ascending' : 'descending') : 'none'}
       onClick={() => {
         if (sortKey === k) setSortAsc((v) => !v)
@@ -893,10 +901,10 @@ export function Logbook({
       <div className="panel-header log-header">
         <div className="log-title">
           <h2>{t('logbook.title')}</h2>
-          <span className="count-badge">{log.length}</span>
-          <span className="log-sub">{t('logbook.subtitle')}</span>
+          <span className="count-badge">{remoteLog?.total ?? log.length}</span>
+          <span className="log-sub">{control ? t('logbook.subtitle') : t('remote.collectionObserver')}</span>
         </div>
-        <div className="log-actions">
+        {control && <div className="log-actions">
           <input
             ref={fileRef}
             type="file"
@@ -1193,11 +1201,11 @@ export function Logbook({
           >
             {t('logbook.purge.label')}
           </button>
-        </div>
+        </div>}
       </div>
 
 
-      {showForm && (
+      {control && showForm && (
         <form className="logbook-form" onSubmit={submit}>
           <div className="logbook-form-grid">
             <label className="logbook-field logbook-field-call">
@@ -1350,11 +1358,19 @@ export function Logbook({
               once the globe scrolls away they pin to the top and the table reads normally. */}
           <div className="log-sticky">
       <div className="log-searchbar">
+        {remoteLog && <>
+          <span role="status">{remoteLog.phase === 'loading' ? t('remote.collectionLoading') : remoteLog.phase === 'unavailable' ? t('remote.collectionUnavailable') : t('remote.logPage', { start: remoteLog.total ? remoteLog.offset + 1 : 0, end: remoteLog.offset + log.length, total: remoteLog.total })}</span>
+          {remoteLog.retained < remoteLog.total && <span>{t('remote.logWindow', { count: remoteLog.retained })}</span>}
+          <button type="button" className="log-filter-chip" disabled={remoteLog.phase !== 'ready' || !remoteLog.hasPrevious} onClick={remoteLog.previous}>{t('remote.previousPage')}</button>
+          <button type="button" className="log-filter-chip" disabled={remoteLog.phase !== 'ready' || !remoteLog.hasNext} onClick={() => void remoteLog.next()}>{t('remote.nextPage')}</button>
+          <button type="button" className="log-filter-chip" onClick={remoteLog.refresh}>{t('remote.refreshCollection')}</button>
+        </>}
         <input
           className="settings-input log-search"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder={t('logbook.search.placeholder')}
+          maxLength={control ? undefined : 32}
+          placeholder={control ? t('logbook.search.placeholder') : t('remote.logSearch')}
           autoComplete="off"
           spellCheck={false}
         />
@@ -1391,7 +1407,7 @@ export function Logbook({
           <span className="log-cell" role="columnheader" aria-label={t('logbook.column.actions')}></span>
         </div>
           </div>
-          {log.length === 0 && <p className="empty">{t('logbook.empty')}</p>}
+          {log.length === 0 && (!remoteLog || remoteLog.phase === 'ready') && <p className="empty">{t('logbook.empty')}</p>}
           {log.length > 0 && rows.length === 0 && (
             <p className="empty">{t('logbook.emptySearch', { query: deferredSearch.trim() })}</p>
           )}
@@ -1536,7 +1552,7 @@ export function Logbook({
                   )}
                   {(q.comment ?? '').trim() || ((q.notes ?? '').trim() ? '' : '—')}
                 </span>
-                <span className="log-cell log-rowactions">
+                <span className="log-cell log-rowactions">{control && <>
                   <button
                     type="button"
                     className="log-rowbtn"
@@ -1663,7 +1679,7 @@ export function Logbook({
                   >
                     ✕
                   </button>
-                </span>
+                </>} </span>
               </div>
                 )
               })}

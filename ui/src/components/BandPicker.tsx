@@ -5,10 +5,12 @@
 // The 🔒 chip is a READOUT of `txAllowed`, not a transmit control: it says the engine is already
 // blocking transmit here. Nothing on this surface keys, unkeys or stops a transmission.
 import { useEffect, useState } from 'react'
+import { useStationCapability, useStationControl } from '../stationAccess'
 import type { AppSnapshot, BandChannel } from '../types'
 import { getLicensedBandPlan, pickBand } from '../api'
 import { bandColor } from '../bandColors'
 import { t } from '../i18n'
+import { pushToast } from '../toast'
 
 interface Props {
   snap: AppSnapshot
@@ -31,16 +33,33 @@ interface Props {
  * and never the lock.
  */
 export function BandPicker({ snap, mode, onSnap }: Props) {
+  const local = useStationControl(), capability = useStationCapability('bandSelection')
+  const control = local || (capability && snap.radio.source === 'native' && snap.radio.operatingMode?.toLowerCase() === mode &&
+    snap.radio.catOk === true && !snap.radio.txEnabled && !snap.radio.transmitting && !snap.radio.rigKeyed && !snap.radio.tuning && !snap.radio.txBusyReason)
   const [plan, setPlan] = useState<BandChannel[]>([])
   useEffect(() => {
-    void getLicensedBandPlan(mode).then(setPlan).catch(() => {})
-  }, [mode])
+    if (!control) { setPlan([]); return }
+    let live = true, running = false
+    const refresh = async () => {
+      if (running) return
+      running = true
+      try { const next = await getLicensedBandPlan(mode); if (live) setPlan(next) }
+      catch { if (live) setPlan([]) }
+      finally { running = false }
+    }
+    void refresh()
+    // Native retains its existing read. Remote refreshes station license choices
+    // through the shared Settings cache and drops a late answer after loss.
+    const timer = local ? undefined : setInterval(() => { void refresh() }, 1000)
+    return () => { live = false; clearInterval(timer) }
+  }, [mode, control, local])
 
   const onPick = (band: string) => {
+    if (!control) return
     if (!plan.some((c) => c.band === band)) return
     void pickBand(band, mode)
       .then((s) => onSnap?.(s))
-      .catch(() => {})
+      .catch(() => { if (!local) pushToast(t('remote.controlRequestFailed'), 'error') })
   }
 
   // If the operator has manually tuned to a band that's not a licensed jump target (or off
@@ -62,6 +81,7 @@ export function BandPicker({ snap, mode, onSnap }: Props) {
     <div className="band-picker">
       <span className="band-picker-dot" style={{ background: col }} aria-hidden="true" />
       <select
+        disabled={!control || (!local && plan.length === 0)}
         className="band-picker-select"
         value={snap.radio.band}
         onChange={(e) => onPick(e.target.value)}

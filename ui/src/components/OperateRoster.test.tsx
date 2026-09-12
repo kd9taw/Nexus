@@ -3,6 +3,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent } from '@testing-library/react'
 import { OperateRoster, freshness } from './OperateRoster'
 import type { NeedAlert, NeedTag, Station } from '../types'
+import { StationControlContext } from '../stationAccess'
 
 // The declination fetch is the only mount-time engine call; stub it away.
 vi.mock('../api', () => ({
@@ -14,6 +15,27 @@ vi.mock('../api', () => ({
 // earlier test — or fail on one. Every roster test here renders the same callsign, so the
 // teardown is what makes these assertions mean anything.
 afterEach(cleanup)
+
+it.each([false, true])('keeps recall selection local and respects station control=%s for work gestures', control => {
+  const onSelect = vi.fn(), onCall = vi.fn(), onToggleIgnore = vi.fn(), onSpot = vi.fn()
+  const { container } = render(<StationControlContext.Provider value={control}>
+    <OperateRoster stations={[station('W1AW', 100)]} myGrid="EN52" currentSlot={100}
+      needByCall={new Map()} selectedCall="W1AW" onSelect={onSelect} onCall={onCall}
+      onToggleIgnore={onToggleIgnore} onSpot={onSpot} />
+  </StationControlContext.Provider>)
+  const row = container.querySelector('.or-row[aria-selected]')!
+  fireEvent.click(row)
+  fireEvent.keyDown(row, { key: 'Enter' })
+  expect(onSelect).toHaveBeenCalledTimes(2)
+  fireEvent.dblClick(row)
+  fireEvent.keyDown(row, { key: 'Enter', shiftKey: true })
+  fireEvent.dblClick(row, { altKey: true })
+  fireEvent.keyDown(row, { key: 'Enter', altKey: true })
+  fireEvent.click(container.querySelector('.or-spot')!)
+  expect(onCall).toHaveBeenCalledTimes(control ? 2 : 0)
+  expect(onToggleIgnore).toHaveBeenCalledTimes(control ? 2 : 0)
+  expect(onSpot).toHaveBeenCalledTimes(control ? 1 : 0)
+})
 
 function station(call: string, lastHeardSlot: number): Station {
   return {

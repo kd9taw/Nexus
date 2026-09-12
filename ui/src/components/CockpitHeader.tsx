@@ -1,3 +1,7 @@
+import { QuickRadioDetails, useRemotePresentation } from '../remote-web/presentation'
+import { useRadioLevels } from '../remote-web/useRadioLevels'
+import { useStationControl } from '../stationAccess'
+import { ModeEntry, type OperatingSection, type OperatingWorkspace } from '../remote-web/ModeEntry'
 // ⚠️ THIS FILE IS **PARTIAL** ON THE i18n LIST (i18n/hardcoded-strings.test.ts), and what is
 // deferred is the whole reason this batch exists: THE TX-ENABLE LATCH, TUNE, ATU AND STOP TX
 // stay written here. This one header draws them for SIX cockpits — Phone, CW, RTTY, PSK, SSTV
@@ -44,8 +48,8 @@ const TX_OFF = '■ TX off'
  * nothing clips off-screen at a non-maximized width or 110–125% UI zoom.
  */
 export interface CockpitHeaderPower {
-  /** 0..1 when unit='drive' (FT8 TX drive), 0..100 when unit='%' (Phone RF power). */
-  value: number
+  /** 0..1 for drive, 0..100 for RF power; null means the station has not reported it. */
+  value: number | null
   unit: '%' | 'drive'
   onChange: (v: number) => void
   label?: string
@@ -63,6 +67,10 @@ export interface CockpitHeaderProps {
   bandControl: ReactNode
   /** Commit a typed dial (MHz). Omit ⇒ the readout is display-only. */
   onCommitDial?: (mhz: number) => void
+  remoteFrequency?: boolean
+  /** Explicit Remote station entry; opening the cockpit itself stays passive. */
+  remoteMode?: OperatingSection
+  remoteWorkspace?: OperatingWorkspace
   /** Enable mouse-wheel tuning over the readout (Phone/CW). */
   wheelTune?: boolean
   /** PER-DIGIT wheel tuning on the readout (operator request): hover the 100 Hz digit and one
@@ -140,6 +148,9 @@ export function CockpitHeader({
   modeIndicator,
   bandControl,
   onCommitDial,
+  remoteFrequency = false,
+  remoteMode,
+  remoteWorkspace,
   wheelTune = false,
   digitTune = false,
   wheelStepHz = 100,
@@ -156,6 +167,11 @@ export function CockpitHeader({
   onSetTxEnabled,
   catStatus,
 }: CockpitHeaderProps) {
+  const control = useStationControl()
+  const levels = useRadioLevels(snap)
+  const remotePower = power?.unit === '%' && levels.can('power')
+  const powerInput = levels.input('power'), powerDraft = levels.draft('power')
+  const powerValue = !control && power?.unit === '%' && powerDraft !== undefined ? Math.round(powerDraft * 100) : power?.value
   const radio = snap.radio
   const catOk = radio.catOk === true
   const dial = radio.dialMhz
@@ -185,6 +201,8 @@ export function CockpitHeader({
   //
   // Do NOT re-derive this from flags. Ask the arbiter; it ships the reason with the answer.
   const tuneBy = useWheelTune(readoutRef, {
+    remoteFrequency,
+    radioId: snap.activeRadioId,
     dialMhz: dial,
     sideband: radio.sideband || 'USB',
     enabled:
@@ -220,6 +238,10 @@ export function CockpitHeader({
     onSnap,
   })
 
+  const display = useRemotePresentation()
+  const quick = display?.presentation === 'quick' && (remoteMode === 'cw' || remoteMode === 'phone')
+  const brief = quick && !display.radioDetails
+
   // ON AIR is the ARBITER's answer, not the FT slot flag: `transmitting` is written only
   // by the slot/beacon TX path, so a voice over, CW sending, the tune carrier, a held mic
   // key and SSTV all read as "RX" through it — the #57 report (FTdx10, Phone/CW showed no
@@ -229,8 +251,8 @@ export function CockpitHeader({
   const txPill = onAir ? txActiveLabel : radio.txEnabled ? TX_RX : TX_OFF
 
   return (
-    <div className="cockpit-header">
-      <div className="ch-identity">{modeIndicator}</div>
+    <div className={`cockpit-header${quick ? ' cockpit-header--quick' : ''}${brief ? ' cockpit-header--brief' : ''}`}>
+      <div className="ch-identity">{modeIndicator}<ModeEntry snap={snap} mode={remoteMode} workspace={remoteWorkspace} onSnap={onSnap} /></div>
 
       <div className="ch-freq">
         <div
@@ -258,6 +280,7 @@ export function CockpitHeader({
             // that a frequency table cannot see (a General on 14.010 read as fine before).
             txBlocked={!radio.txAllowed}
             onCommit={onCommitDial}
+            remoteFrequency={remoteFrequency}
             digitTune={digitTune}
             onTuneHz={tuneBy}
           />
@@ -268,6 +291,8 @@ export function CockpitHeader({
 
       {children != null && <div className="ch-mode-extras">{children}</div>}
 
+      {quick && <QuickRadioDetails />}
+
       <div className="ch-actions">
         {actions}
 
@@ -277,7 +302,8 @@ export function CockpitHeader({
             ⛔ Not a stop control: an amplifier in standby does not end a transmission. */}
         <AmpStrip
           amp={snap?.radio?.amp ?? null}
-          radioTransmitting={snap?.radio?.transmitting ?? false}
+          radioId={snap?.activeRadioId}
+          radioTransmitting={!!(snap?.radio?.transmitting || snap?.radio?.rigKeyed)}
         />
 
         {power && (
@@ -291,7 +317,7 @@ export function CockpitHeader({
             }
           >
             <span>{power.label ?? t('cockpit.header.power.label')}</span>
-            <input
+            <input {...powerInput} disabled={(!control && !remotePower) || powerValue == null}
               type="range"
               min={0}
               max={power.unit === '%' ? 100 : 1}
@@ -308,19 +334,22 @@ export function CockpitHeader({
               // value fails HTML5 constraint validation.
               value={
                 power.unit === 'drive'
-                  ? Math.round(Math.sqrt(power.value) * 100) / 100
-                  : power.value
+                  ? Math.round(Math.sqrt(powerValue ?? 0) * 100) / 100
+                  : powerValue ?? 0
               }
+              style={{ visibility: powerValue == null ? 'hidden' : undefined }}
               onChange={(e) => {
                 const raw = Number(e.target.value)
-                power.onChange(power.unit === 'drive' ? raw ** 2 : raw)
+                if (control) power.onChange(power.unit === 'drive' ? raw ** 2 : raw)
+                else if (remotePower) void levels.change('power', raw / 100)
+                  .catch(error => pushToast(String(error), 'error'))
               }}
-              onPointerDown={power.onPointerDown}
-              onPointerUp={power.onPointerUp}
+              onPointerDown={() => { power.onPointerDown?.(); if (remotePower) powerInput.onPointerDown() }}
+              onPointerUp={() => { power.onPointerUp?.(); if (!control) powerInput.onPointerUp() }}
               aria-label={power.label ?? t('cockpit.header.power.label')}
             />
             <span className="cockpit-pwr-val">
-              {power.unit === '%' ? `${Math.round(power.value)}%` : `${Math.round(power.value * 100)}%`}
+              {powerValue == null ? '—' : power.unit === '%' ? `${Math.round(powerValue)}%` : `${Math.round(powerValue * 100)}%`}
             </span>
           </label>
         )}
@@ -338,7 +367,7 @@ export function CockpitHeader({
             control. It moves in the transmit-path batch — see this file's header. */}
         {txState &&
           (onSetTxEnabled && !radio.transmitting ? (
-            <button
+            <button disabled={!control}
               type="button"
               className={`cockpit-txstate cockpit-txarm${radio.txEnabled ? ' armed' : ''}`}
               aria-pressed={radio.txEnabled}
@@ -368,7 +397,7 @@ export function CockpitHeader({
             className={`cockpit-tune${radio.tuning ? ' keyed' : ''}`}
             aria-pressed={radio.tuning}
             onClick={() => onTune(!radio.tuning)}
-            disabled={!radio.txAllowed}
+            disabled={!control || (!radio.txAllowed)}
             title="Key a steady carrier to tune an ATU/amp (auto-stops on the tune watchdog). Click again to stop."
           >
             {radio.tuning ? 'TUNING…' : 'Tune'}
@@ -388,7 +417,7 @@ export function CockpitHeader({
             type="button"
             className="cockpit-tune"
             onClick={onAtuTune}
-            disabled={!radio.txAllowed}
+            disabled={!control || (!radio.txAllowed)}
             title={
               radio.atu
                 ? "Run the radio's built-in antenna tuner (it transmits its own carrier for a second or two). The tuner is switched in."
@@ -402,7 +431,7 @@ export function CockpitHeader({
         {/* ⚠️ DEFERRED (i18n): THE stop control of six cockpits. Its label is the accessible
             name every stop-line sweep looks for (/^stop tx$/i). */}
         {onStopTx && (
-          <button type="button" className="cockpit-stoptx" onClick={onStopTx} title="Stop TX (Esc)">
+          <button disabled={!control} type="button" className="cockpit-stoptx" onClick={onStopTx} title="Stop TX (Esc)">
             Stop TX
           </button>
         )}

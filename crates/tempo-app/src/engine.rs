@@ -13,6 +13,25 @@
 //!
 //! [`mode`]: Engine::set_mode
 
+mod field_day_display;
+mod mode_entry;
+pub mod radio_selection;
+pub mod remote_logging;
+pub mod remote_radio;
+pub mod remote_selection;
+mod remote_settings;
+pub mod remote_transmit;
+
+/// A manual Remote log append awaiting storage confirmation. The caller must
+/// release its engine lock before syncing; connector delivery uses its existing pipeline.
+/// Unconfirmed retains the contact in memory and may also have written bytes.
+#[derive(Debug)]
+pub enum LogWriteOutcome {
+    PendingSync(Vec<tempo_core::logbook::LogAppendReceipt>),
+    Unconfirmed,
+    Duplicate,
+}
+
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -357,6 +376,47 @@ impl SpectrumFeed {
             hi_hz: audio.mean.hi_hz,
             source: audio.mean.source.clone(),
         })
+    }
+
+    /// A passive observer reads the current audio picture without consuming the
+    /// desktop's averaging window. Remote viewers must not change local display
+    /// behavior merely by connecting. Freshness and TX hold remain producer-owned.
+    pub fn peek_audio_row(&self) -> Option<Spectrum> {
+        let g = self.rows.lock().ok()?;
+        let audio = g.audio.as_ref()?;
+        let mut row = audio.mean.clone();
+        if audio.at.elapsed() >= Duration::from_secs(2) {
+            row.row.clear();
+        }
+        Some(row)
+    }
+
+    /// Observe the station's current scope without requesting a DSP span/window
+    /// or consuming the local averaging window. A remote observer follows the
+    /// producer; it cannot keep a local scope request alive after that pane closes.
+    pub fn peek_scope_row(&self) -> Option<Spectrum> {
+        let g = self.rows.lock().ok()?;
+        if let Some((row, at)) = &g.rf {
+            if at.elapsed() < Duration::from_secs(1) && !row.row.is_empty() {
+                return Some(row.clone());
+            }
+        }
+        if let (Some(req), Some(avg)) = (&g.scope_req, &g.scope) {
+            if req.at.elapsed() < Self::SCOPE_REQ_TTL
+                && avg.at.elapsed() < Duration::from_secs(2)
+                && f64::from(req.lo) == avg.mean.lo_hz
+                && f64::from(req.hi) == avg.mean.hi_hz
+                && !avg.mean.row.is_empty()
+            {
+                return Some(avg.mean.clone());
+            }
+        }
+        let audio = g.audio.as_ref()?;
+        let mut row = audio.mean.clone();
+        if audio.at.elapsed() >= Duration::from_secs(2) {
+            row.row.clear();
+        }
+        Some(row)
     }
 
     /// How long a scope-span request stands after the last poll that renewed it.
@@ -706,8 +766,7 @@ impl MeterFeed {
 }
 
 use crate::dto::{
-    AppSnapshot, DecodeRow, FieldDayQso, FieldDayStatus, OpMode, QsoStatus, QsyStatus,
-    RadioSummary, SourceKind, Spectrum, Tier,
+    AppSnapshot, DecodeRow, OpMode, QsoStatus, QsyStatus, RadioSummary, SourceKind, Spectrum, Tier,
 };
 use crate::settings::Settings;
 use crate::station::StationCore;
@@ -778,6 +837,14 @@ pub type SharedSource = Arc<Mutex<Box<dyn SignalSource>>>;
 /// it. A stale decode is caught by the CRC; a deaf receiver is caught by nothing.
 pub fn source_lock(s: &SharedSource) -> std::sync::MutexGuard<'_, Box<dyn SignalSource>> {
     s.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// The serialized decoder effects of a native operating transition. Remote
+/// commits already own this mutex; local verbs acquire it at the same points
+/// they always have. Neither path skips the reset or replaces the shared mutex.
+enum DecoderMutation {
+    Install(Box<dyn SignalSource>),
+    ResetHarq,
 }
 
 /// Lock the shared [`Engine`] mutex, RECOVERING from poison instead of
@@ -2052,6 +2119,10 @@ pub struct Engine {
     /// (WSJT-X "Prompt me to log QSO"). `Some` only while `prompt_to_log` is on
     /// and a finished contact is awaiting confirm/discard.
     pending_log: Option<QsoRecord>,
+    pending_log_identity: std::sync::Arc<()>,
+    pending_log_epoch: u64,
+    qso_log_epoch: u64,
+    remote_ft_settings_epoch: u64,
     /// Whether the active QSO has already been auto-logged (so it logs exactly
     /// once when the sequencer reaches `Done`). Reset when a new QSO starts.
     qso_logged: bool,
@@ -2236,6 +2307,14 @@ pub struct Engine {
     /// arming/QSY verbs so `commit_tx` refuses an over planned before them —
     /// see [`TxGateStamp`].
     tx_gate_gen: u64,
+    remote_receiver_gen: u64,
+    remote_actuation: crate::remote_control::Revocation,
+    remote_amp_command: Option<crate::remote_control::amplifier::Request>,
+    remote_radio_command: Option<remote_radio::Request>,
+    remote_radio_selection: Option<remote_selection::Request>,
+    remote_settings_path: Option<std::path::PathBuf>,
+    remote_selection_host_ready: bool,
+    remote_transmit: Option<crate::remote_control::transmit::TransmitPermit>,
     /// The transponder the operator selected for the tracked bird, plus their
     /// position inside its passband and what was last written to the radio.
     /// `None` = no satellite tuning in force, which is every terrestrial path.
@@ -2500,7 +2579,7 @@ pub struct Engine {
     /// read ONLY while keyed, `None` while receiving or when the rig doesn't report them.
     /// SWR ratio (1.0–6.0), ALC 0.0–1.0, Po in watts, COMP in dB. Observed-only.
     /// The rig keyed by something that is NOT Nexus (mic PTT / straight key), read back
-    /// over CAT — see [`Self::observe_rig_ptt`]. Display-only.
+    /// over CAT — see [`Self::observe_rig_ptt`]. Also vetoes amplifier changes.
     rig_keyed: bool,
     rig_tx_swr: Option<f32>,
     rig_tx_alc: Option<f32>,
@@ -2623,6 +2702,7 @@ pub struct Engine {
     /// `None` for VOX (no CAT), `Some(true/false)` for a CAT/serial rig. Written
     /// by the radio loop when it (re)opens or probes the rig.
     cat_status: (Option<bool>, String),
+    remote_readings: crate::remote_monitor::provenance::Observations,
     /// Dual-radio: LIVE read-back state for the NON-active radios, keyed by radio id. The monitor
     /// thread (one CAT poll per non-active radio, read-only) feeds these via `observe_radio_*`; the
     /// snapshot's `radios[]` shows each radio's live freq/mode/S-meter/CAT-health from here instead of
@@ -4245,6 +4325,10 @@ impl Engine {
             stalled_qso: None,
             recent_partner: None,
             pending_log: None,
+            pending_log_identity: std::sync::Arc::new(()),
+            pending_log_epoch: 0,
+            qso_log_epoch: remote_logging::next_identity(),
+            remote_ft_settings_epoch: 0,
             qso_logged: false,
             qso_start_unix: None,
             cq_running: false,
@@ -4290,6 +4374,14 @@ impl Engine {
             last_wire_decodes: Vec::new(),
             tx_dial_shift_hz: 0,
             tx_gate_gen: 0,
+            remote_receiver_gen: 0,
+            remote_actuation: Default::default(),
+            remote_amp_command: None,
+            remote_radio_command: None,
+            remote_radio_selection: None,
+            remote_settings_path: None,
+            remote_selection_host_ready: false,
+            remote_transmit: None,
             sat_tune: None,
             sat_dial_owner: None,
             sat_last_rate: None,
@@ -4385,6 +4477,7 @@ impl Engine {
             cw_stream: tempo_core::cw_decode::CwStreamDecoder::new(tempo_fast::SAMPLE_RATE, 600.0),
             qso_audio: Vec::new(),
             cat_status: (None, String::new()),
+            remote_readings: Default::default(),
             cat_probe_gen: 0,
             cat_port_hold_until: None,
             cat_port_released: false,
@@ -4626,6 +4719,7 @@ impl Engine {
     }
 
     fn apply_settings_inner(&mut self, s: Settings, keep_live_roster: bool) {
+        self.remote_readings.invalidate();
         // THE FT-710 SCOPE OPT-IN GOING OFF is the second moment the held scope state stops
         // describing anything — the first is a radio switch (`set_active_radio`). Read BEFORE the
         // new settings land, because after the assignment the old answer is gone and the edge is
@@ -4641,6 +4735,7 @@ impl Engine {
         // offsets, license class) — an over planned before it must not key
         // (commit_tx checks the generation).
         self.tx_gate_gen = self.tx_gate_gen.wrapping_add(1);
+        self.remote_actuation.revoke();
         // Boundary rule (same as set_frequency / with_settings): the stored band
         // is always the canonical award/ADIF identity, never a channel token —
         // an old UI state or stale profile can hand one in through a save.
@@ -5155,9 +5250,22 @@ impl Engine {
     /// `apply_settings`), so swinging radios mid-session never resets the operator to Chat. No-op if
     /// `id` isn't a configured radio or is already active.
     pub fn set_active_radio(&mut self, id: u32) {
+        self.set_active_radio_with_reset(id, modes::reset_ft8_a7);
+    }
+
+    /// The same native handoff after its owner has acquired decoder serialization
+    /// without waiting. The owner must separately validate Remote authority and
+    /// hardware completion; the decoder guard grants neither. Local selection
+    /// retains its existing blocking reset at the same point in the lifecycle.
+    pub fn set_active_radio_with_decoder_guard(&mut self, id: u32, guard: modes::Ft8A7ResetGuard) {
+        self.set_active_radio_with_reset(id, || guard.reset());
+    }
+
+    fn set_active_radio_with_reset(&mut self, id: u32, reset: impl FnOnce()) {
         if id == self.settings.active_radio || !self.settings.radios.iter().any(|p| p.id == id) {
             return;
         }
+        self.remote_readings.invalidate();
         // THE CONTEXT EVERY OTHER LINE IS READ AGAINST. Past the no-op guard above, so this is
         // a real transition and fires once per operator action — never on a timer.
         let from = self
@@ -5198,18 +5306,7 @@ impl Engine {
         // the new radio in — otherwise an unsaved flat change made while this radio was active (e.g. a
         // live Pwr/tx_level tweak) is discarded by `sync_flat_from_active` below. `active_radio` still
         // names the outgoing radio here, so this folds into the right profile.
-        self.settings.sync_active_from_flat();
-        // Defense-in-depth: folding the outgoing radio's flat mirror into its profile could carry a
-        // colliding rigctld/rotctld port; de-conflict immediately so a switch can never leave two
-        // radios sharing one daemon port (the flat mirror is re-pinned from the new active below).
-        self.settings.ensure_distinct_radio_ports();
-        // Persist the current radio's live tune into its profile before we leave it.
-        let cur = self.settings.active_radio;
-        if let Some(p) = self.settings.radios.iter_mut().find(|p| p.id == cur) {
-            p.last_dial_mhz = self.settings.dial_mhz;
-            p.last_band = self.settings.band.clone();
-            p.last_sideband = self.settings.sideband.clone();
-        }
+        radio_selection::bank_outgoing_profile(&mut self.settings);
         // …and a handoff is a leave-event on the RADIO axis for the per-(band, mode) dial
         // memory, for exactly the same reason: the operator is leaving a residency they were
         // running. Without this the outgoing rig's dial was simply lost and a later return
@@ -5240,7 +5337,7 @@ impl Engine {
         self.app.clear_stations();
         // The a7 cross-cycle AP table holds the OLD radio's decodes — replaying
         // them as AP hypotheses on the new radio's band would seed wrong-call decodes.
-        modes::reset_ft8_a7();
+        reset();
         self.sideband_override = None;
         // Flip active + mirror the new profile's CAT/audio into the flat fields — Transport::
         // from_settings then differs and the loop's existing swap tears down the old rig + opens
@@ -5250,38 +5347,16 @@ impl Engine {
         // Adopt the new radio's tune. Prefer its LIVE monitored dial (dual-radio: the radio has been
         // connected the whole time, so use where it ACTUALLY is — the operator may have hand-tuned it),
         // else its persisted last tune, else the mirrored dial. `band` follows the chosen dial.
-        let live = self.radio_live.get(&id).cloned();
-        if let Some(l) = live.filter(|l| l.dial_mhz.is_some()) {
-            let dial = l.dial_mhz.unwrap();
-            let band = l
-                .band
-                .filter(|b| !b.is_empty())
-                .or_else(|| crate::bandplan::band_for_dial(dial).map(str::to_string))
-                .unwrap_or_else(|| self.settings.band.clone());
-            let sb = l.sideband.unwrap_or_else(|| self.settings.sideband.clone());
-            self.settings.dial_mhz = dial;
-            self.settings.band = band.clone();
-            self.settings.sideband = sb.clone();
-            self.app.set_radio(dial, &band, &sb);
-        } else if let Some(p) = self.settings.active_profile().cloned() {
-            let (dial, band, sb) = if p.last_band.is_empty() {
-                (
-                    self.settings.dial_mhz,
-                    self.settings.band.clone(),
-                    self.settings.sideband.clone(),
-                )
-            } else {
-                (p.last_dial_mhz, p.last_band, p.last_sideband)
-            };
-            self.settings.dial_mhz = dial;
-            self.settings.band = band.clone();
-            self.settings.sideband = sb.clone();
-            self.app.set_radio(dial, &band, &sb);
-            // #35 instrumentation: the handoff restore is the unproven second contributor
-            // to the wrong-dial flash. The operator-visible instrument is the service
-            // loop's dial→rig notes (Connections log); this stderr line adds attribution
-            // in dev runs.
-            eprintln!("tempo: dial request: handoff restore -> {dial:.4} MHz ({band})");
+        let tune = radio_selection::incoming_tune(&self.settings, self.radio_live.get(&id));
+        tune.apply(&mut self.settings);
+        self.app
+            .set_radio(tune.dial_mhz, &tune.band, &tune.sideband);
+        if !tune.monitored {
+            // Retain the native handoff attribution for a saved-profile restore.
+            eprintln!(
+                "tempo: dial request: handoff restore -> {:.4} MHz ({})",
+                tune.dial_mhz, tune.band
+            );
         }
         self.immediate_retune = true;
         self.sync_fd_band();
@@ -5289,6 +5364,7 @@ impl Engine {
 
     /// Peg-lock: when on, band selection never auto-switches the active radio (P4). Light setter.
     pub fn set_radio_pegged(&mut self, on: bool) {
+        self.remote_actuation.revoke();
         self.settings.radio_pegged = on;
     }
 
@@ -5340,11 +5416,13 @@ impl Engine {
     /// Creating a roster entry and choosing which rig you OPERATE are different acts, and the
     /// second is TX-relevant. "Make active" already exists as a deliberate button.
     pub fn add_radio(&mut self) -> u32 {
+        self.remote_actuation.revoke();
         self.settings.add_radio_profile()
     }
 
     /// Remove a radio from the roster (no-op on the active or last radio). Pure roster edit.
     pub fn remove_radio(&mut self, id: u32) -> bool {
+        self.remote_actuation.revoke();
         self.settings.remove_radio_profile(id)
     }
 
@@ -5357,6 +5435,7 @@ impl Engine {
 
     /// Set a radio's band-coverage set (empty = covers everything) for auto-routing (P4). Pure edit.
     pub fn set_radio_bands(&mut self, id: u32, bands: Vec<String>) {
+        self.remote_actuation.revoke();
         if let Some(p) = self.settings.radios.iter_mut().find(|p| p.id == id) {
             p.bands = bands;
         }
@@ -5366,6 +5445,7 @@ impl Engine {
     /// at a radio that doesn't exist are dropped — a rule that can never fire is worse than no rule.
     /// Live verb, NOT part of the settings form: like the roster it must survive a stale-form Save.
     pub fn set_routing_rules(&mut self, rules: Vec<crate::settings::RoutingRule>) {
+        self.remote_actuation.revoke();
         self.settings.routing_rules = rules;
         self.settings.ensure_routing_targets();
     }
@@ -5373,6 +5453,7 @@ impl Engine {
     /// Set (or clear) the fallback radio for band+mode combinations no rule and no band coverage
     /// claims. `None` = stay on the active radio. Live verb, same reason as `set_routing_rules`.
     pub fn set_default_radio(&mut self, id: Option<u32>) {
+        self.remote_actuation.revoke();
         self.settings.default_radio = id;
         self.settings.ensure_routing_targets();
     }
@@ -5383,6 +5464,9 @@ impl Engine {
     /// re-synced from it so the running loop picks the edits up; if it isn't, the active radio (and
     /// its flat mirror) are left completely untouched. `active_radio` is never changed here.
     pub fn update_radio_profile(&mut self, id: u32, patch: crate::settings::RadioProfilePatch) {
+        // Port collision repair can also change the active profile when editing another.
+        self.remote_actuation.revoke();
+        self.remote_readings.invalidate();
         if let Some(p) = self.settings.radios.iter_mut().find(|p| p.id == id) {
             patch.apply_to(p);
         }
@@ -5457,6 +5541,17 @@ impl Engine {
     }
 
     fn tune_dial(&mut self, dial_mhz: f64, band: &str, mode: &str, origin: DialOrigin) {
+        self.tune_dial_with_reset(dial_mhz, band, mode, origin, modes::reset_ft8_a7);
+    }
+
+    fn tune_dial_with_reset(
+        &mut self,
+        dial_mhz: f64,
+        band: &str,
+        mode: &str,
+        origin: DialOrigin,
+        mut reset: impl FnMut(),
+    ) {
         // Band transitions only. The dial itself moves constantly (RIT, a click on the
         // waterfall, Doppler on a pass) and logging THAT would be per-tick noise; the band is
         // what a reader needs to make sense of the lines under it.
@@ -5533,7 +5628,7 @@ impl Engine {
                     self.settings.route_radio(band, route_mode)
                 }
             }) {
-                self.set_active_radio(id);
+                self.set_active_radio_with_reset(id, &mut reset);
             }
         }
         // A normal QSY leaves the APRS FM-simplex context (aprs_tune re-sets it right after its own
@@ -5589,7 +5684,7 @@ impl Engine {
             self.app.clear_stations();
             // The a7 cross-cycle AP table holds the OLD band's decodes — replaying
             // them as AP hypotheses on the new band would seed wrong-call decodes.
-            modes::reset_ft8_a7();
+            reset();
         }
         if band_changed {
             // ⚠️ BAND CHANGE ONLY — this is an FT-mode TX/timing behaviour and
@@ -5627,6 +5722,7 @@ impl Engine {
         // against the old dial: privileges are not uniform within a band, and
         // commit_tx re-checks nothing else (the stamp + generation are the check).
         self.tx_gate_gen = self.tx_gate_gen.wrapping_add(1);
+        self.remote_actuation.revoke();
         self.settings.dial_mhz = dial_mhz;
         self.settings.band = band.to_string();
         self.settings.sideband = mode.to_string();
@@ -5665,20 +5761,27 @@ impl Engine {
     /// * **nothing known** (empty context and no memory — a boot seed off the bands) — reads
     ///   as changed, which clears. The safe direction: nothing is claimed to still be valid.
     fn context_band_changed(&mut self, band: &str) -> bool {
-        // Spent on every crossing: from here on the context belongs to wherever we land.
-        let left = self.off_band_from.take();
+        let (changed, next) = self.context_band_transition(band);
+        self.off_band_from = next;
+        changed
+    }
+
+    // The same decision, without changing the live context, lets a Remote
+    // radio transaction prepare the mode that the native dial verb will keep.
+    fn context_band_transition(&self, band: &str) -> (bool, Option<String>) {
         let prev = if self.settings.band.is_empty() {
-            left.unwrap_or_default()
+            self.off_band_from.as_deref().unwrap_or_default()
         } else {
-            self.settings.band.clone()
+            self.settings.band.as_str()
         };
         if band.is_empty() {
             // Off the bands (or still off them — a second off-band move must not forget the
             // band the FIRST one left, or the way home stops being a way home).
-            self.off_band_from = (!prev.is_empty()).then_some(prev);
-            return false;
+            (false, (!prev.is_empty()).then(|| prev.to_string()))
+        } else {
+            // Spent on every crossing: the context now belongs to the named band.
+            (!prev.eq_ignore_ascii_case(band), None)
         }
-        !prev.eq_ignore_ascii_case(band)
     }
 
     /// The rig reported a dial frequency we did NOT set — the operator turned the VFO knob
@@ -6021,7 +6124,10 @@ impl Engine {
     /// the dial of the matching (band, mode) row; a band the stock table lacks
     /// is appended. Empty overrides = stock.
     pub fn band_plan(&self) -> Vec<crate::bandplan::BandChannel> {
-        let tier = self.app.tier();
+        self.band_plan_for_tier(self.app.tier())
+    }
+
+    fn band_plan_for_tier(&self, tier: Tier) -> Vec<crate::bandplan::BandChannel> {
         let mode_name = match tier {
             Tier::Ft8 => "FT8",
             Tier::Ft4 => "FT4",
@@ -6233,12 +6339,43 @@ impl Engine {
         om: crate::settings::OperatingMode,
     ) -> Option<(f64, String)> {
         let (dial, sideband) = self.freq_memory.get(&(band.to_string(), om))?.clone();
+        self.resolve_dial_memory(band, om, dial, sideband)
+    }
+
+    /// Resolve one memory cell through the same sideband and privilege policy,
+    /// whether it is already banked or still the current operator residency.
+    fn resolve_dial_memory(
+        &self,
+        band: &str,
+        om: crate::settings::OperatingMode,
+        dial: f64,
+        sideband: Option<String>,
+    ) -> Option<(f64, String)> {
         let sideband = match sideband {
             Some(sb) => sb,
             None => self.band_pick_default(band, om).map(|(_, sb)| sb)?,
         };
         self.emission_allowed(om, dial, &sideband)
             .then_some((dial, sideband))
+    }
+
+    /// Resolve the cell a native band pick will read after banking the current
+    /// residency, without changing that residency or any station state.
+    fn prepare_band_pick(
+        &self,
+        band: &str,
+        om: crate::settings::OperatingMode,
+    ) -> Option<(f64, String)> {
+        let memory = if let Some(r) = self
+            .dial_residency
+            .as_ref()
+            .filter(|r| r.band == band && r.mode == om)
+        {
+            self.resolve_dial_memory(band, om, r.dial_mhz, r.sideband.clone())
+        } else {
+            self.recall_dial_memory(band, om)
+        };
+        memory.or_else(|| self.band_pick_default(band, om))
     }
 
     /// Today's band-dropdown default for (`band`, `om`) — mirrors what the pickers land on
@@ -6300,6 +6437,10 @@ impl Engine {
     /// operating mode. No memory + no default = no-op — the dropdown only lists licensed
     /// bands, and the TX lockout guards the air regardless.
     pub fn pick_band(&mut self, band: &str, mode: Option<&str>) {
+        self.pick_band_with_reset(band, mode, modes::reset_ft8_a7);
+    }
+
+    fn pick_band_with_reset(&mut self, band: &str, mode: Option<&str>, reset: impl FnMut()) {
         use crate::settings::OperatingMode;
         let band = crate::bandplan::canonical_band(band);
         let om = match mode.map(str::to_ascii_lowercase).as_deref() {
@@ -6319,12 +6460,9 @@ impl Engine {
         // it just happens a moment earlier, into the same cell (the residency carries its own
         // band, so nothing is misattributed).
         self.bank_dial_memory();
-        if let Some((dial, sideband)) = self
-            .recall_dial_memory(&band, om)
-            .or_else(|| self.band_pick_default(&band, om))
-        {
+        if let Some((dial, sideband)) = self.prepare_band_pick(&band, om) {
             // Arms the retune, and opens the residency this pick should be remembered by.
-            self.set_frequency(dial, &band, &sideband);
+            self.tune_dial_with_reset(dial, &band, &sideband, DialOrigin::Operator, reset);
             // Record it in the cell the recall READ. `set_frequency` opens the residency with
             // `settings.operating_mode`, which is exactly the value that may still lag `om`
             // during cockpit entry — the race `mode` is passed to dodge. One mode decides both
@@ -6349,7 +6487,26 @@ impl Engine {
     /// `lastOpModeRef` guard means a `follow_freq` QSY only fires on a real mode change, so a
     /// manual tune within a mode survives non-operating nav.
     pub fn set_operating_mode(&mut self, mode: &str, follow_freq: bool) {
+        self.set_operating_mode_with_arming(mode, follow_freq, true);
+    }
+
+    // Remote entry shares every native section/memory/power decision but cannot
+    // acquire transmit authority as a side effect. Local entry keeps its latch.
+    fn set_operating_mode_with_arming(&mut self, mode: &str, follow_freq: bool, arm_manual: bool) {
+        self.set_operating_mode_with_reset(mode, follow_freq, arm_manual, modes::reset_ft8_a7);
+    }
+
+    fn set_operating_mode_with_reset(
+        &mut self,
+        mode: &str,
+        follow_freq: bool,
+        arm_manual: bool,
+        mut reset: impl FnMut(),
+    ) {
         use crate::settings::OperatingMode;
+        // Resolve the destination without changing the station. Remote radio
+        // transactions need this same decision before attempting hardware I/O.
+        let entry = self.prepare_mode_entry(mode, follow_freq);
         // Bank the dial being LEFT into its (band, old-mode) memory cell FIRST — before
         // the hold flags (cleared just below) stop distinguishing an operator dial from
         // machinery, and before `settings.operating_mode` stops naming the mode this
@@ -6374,15 +6531,10 @@ impl Engine {
         // (`follow_freq`), `tune_dial` clears it below exactly as any other QSY does.
         self.aprs_fm = false;
         self.fm_channel = false;
-        let om = match mode.to_ascii_lowercase().as_str() {
-            "phone" => OperatingMode::Phone,
-            "cw" => OperatingMode::Cw,
-            "rtty" => OperatingMode::Rtty,
-            "keyboard" => OperatingMode::Keyboard,
-            _ => OperatingMode::Digital,
-        };
+        let om = entry.mode;
         // A mode change invalidates any planned over (commit_tx checks the generation).
         self.tx_gate_gen = self.tx_gate_gen.wrapping_add(1);
+        self.remote_actuation.revoke();
         // …and it ends RTTY's continuous-TX latch. Leaving the section is what
         // stops RTTY today — `poll_rtty_one` simply stops being called, so the
         // queue is held and nothing keys. A LATCHED transmitter is already keyed,
@@ -6440,15 +6592,10 @@ impl Engine {
         // Phone → the bird's sideband) via `rig_mode_effective`'s existing arms. This is
         // exactly the behavior the same-mode re-entry (`follow_freq = false`) always had.
         let mut re_homed = false;
-        if follow_freq && self.sat_dial_owner.is_none() {
+        if let Some((dial, sideband)) = entry.frequency {
             let band = self.settings.band.clone();
-            if let Some((dial, sideband)) = self
-                .recall_dial_memory(&band, om)
-                .or_else(|| self.mode_home(om))
-            {
-                self.set_frequency(dial, &band, &sideband); // also flags immediate_retune
-                re_homed = true;
-            }
+            self.tune_dial_with_reset(dial, &band, &sideband, DialOrigin::Operator, &mut reset);
+            re_homed = true;
         }
         // ⭐ THE DIGITAL SECTION RE-DERIVES ITS SIDE EVEN WHEN IT DOES NOT QSY —
         // ISSUE #111 (ve3wej): "double-click puts the Flex in DIGL instead of DIGU".
@@ -6512,7 +6659,9 @@ impl Engine {
                 | OperatingMode::Rtty
                 | OperatingMode::Keyboard
         ) {
-            self.set_tx_enabled(true);
+            if arm_manual {
+                self.set_tx_enabled(true);
+            }
         } else if left_a_manual_mode {
             // …AND DISARM ON THE WAY BACK. Field incident 2026-08-19: PSK31 → FT8 → pick 20 m
             // → "it started transmitting on its own". Arming above had no counterpart, so an
@@ -6540,6 +6689,7 @@ impl Engine {
             }
             self.tx_enabled = false;
             self.tx_gate_gen = self.tx_gate_gen.wrapping_add(1);
+            self.remote_actuation.revoke();
         }
     }
 
@@ -6566,11 +6716,43 @@ impl Engine {
         band: &str,
         split_up_khz: Option<f64>,
     ) {
-        self.set_operating_mode(mode, false);
-        self.set_frequency(freq_mhz, band, "USB"); // clears split + arms the retune
-                                                   // Working a spot carries explicit mode intent — drop any manual override (even same-band)
-                                                   // so the spot's band-auto sideband applies (10 m mixes FM + SSB, so a stale FM override
-                                                   // must not key FM onto an SSB spot).
+        self.work_spot_split_with_arming(mode, freq_mhz, band, split_up_khz, true);
+    }
+
+    // The local verb keeps manual-mode arming. A guarded Remote receive QSY
+    // shares its exact context/callsign handoff without gaining TX authority.
+    fn work_spot_split_with_arming(
+        &mut self,
+        mode: &str,
+        freq_mhz: f64,
+        band: &str,
+        split_up_khz: Option<f64>,
+        arm_manual: bool,
+    ) {
+        self.work_spot_split_with_reset(
+            mode,
+            freq_mhz,
+            band,
+            split_up_khz,
+            arm_manual,
+            modes::reset_ft8_a7,
+        );
+    }
+
+    fn work_spot_split_with_reset(
+        &mut self,
+        mode: &str,
+        freq_mhz: f64,
+        band: &str,
+        split_up_khz: Option<f64>,
+        arm_manual: bool,
+        reset: impl FnMut(),
+    ) {
+        self.set_operating_mode_with_arming(mode, false, arm_manual);
+        self.tune_dial_with_reset(freq_mhz, band, "USB", DialOrigin::Operator, reset);
+        // Working a spot carries explicit mode intent — drop any manual override (even same-band)
+        // so the spot's band-auto sideband applies (10 m mixes FM + SSB, so a stale FM override
+        // must not key FM onto an SSB spot).
         self.sideband_override = None;
         if let Some(up) = split_up_khz {
             self.split_tx_mhz = Some(freq_mhz + up / 1000.0);
@@ -6643,6 +6825,7 @@ impl Engine {
 
     /// Request a RIT (receive incremental tuning) offset in Hz (0 = off); the radio loop applies it.
     pub fn request_rit(&mut self, hz: i32) {
+        self.remote_actuation.revoke();
         self.rit_hz = hz;
         self.rit_dirty = true;
     }
@@ -6655,6 +6838,7 @@ impl Engine {
     }
     /// Request an XIT (transmit incremental tuning) offset in Hz (0 = off).
     pub fn request_xit(&mut self, hz: i32) {
+        self.remote_actuation.revoke();
         self.xit_hz = hz;
         self.xit_dirty = true;
     }
@@ -6666,11 +6850,13 @@ impl Engine {
     }
     /// Select VFO A (`false`) or B (`true`).
     pub fn request_vfo(&mut self, vfo_b: bool) {
+        self.remote_actuation.revoke();
         self.active_vfo_b = vfo_b;
         self.vfo_dirty = true;
     }
     /// Swap the active VFO (A↔B).
     pub fn request_swap_vfo(&mut self) {
+        self.remote_actuation.revoke();
         self.active_vfo_b = !self.active_vfo_b;
         self.vfo_dirty = true;
     }
@@ -6760,6 +6946,7 @@ impl Engine {
     /// the radio loop applies it on the next cycle (same path the pile-up "UP n" uses). `None`
     /// returns to simplex. Marks the request dirty so `take_split_request` picks it up.
     pub fn request_split(&mut self, tx_mhz: Option<f64>) {
+        self.remote_actuation.revoke();
         self.split_tx_mhz = tx_mhz;
         self.split_dirty = true;
         // A NEW request retires the old acknowledgement immediately — the rig has not answered
@@ -6772,6 +6959,7 @@ impl Engine {
     /// from the cockpit picker; the radio loop applies it next cycle via `rig_mode_effective`. A
     /// band change clears it (see `set_frequency`), so a QSY re-asserts the band-auto sideband.
     pub fn request_sideband_override(&mut self, mode: Option<&str>) {
+        self.remote_actuation.revoke();
         // Whitelist the Phone voice modes — a broker/devtools caller can't smuggle "CW" etc. in.
         self.sideband_override = mode
             .map(|m| m.trim().to_ascii_uppercase())
@@ -7057,6 +7245,15 @@ impl Engine {
     /// A mirror would instead route a repeater click made DURING a pass on SSB, which is the
     /// disagreement the invariant is about, pointing the other way.
     pub fn route_mode(&self, band: &str, dial_mhz: f64) -> crate::settings::RouteMode {
+        self.route_mode_for(band, dial_mhz, self.settings.operating_mode)
+    }
+
+    fn route_mode_for(
+        &self,
+        band: &str,
+        dial_mhz: f64,
+        operating_mode: crate::settings::OperatingMode,
+    ) -> crate::settings::RouteMode {
         use crate::settings::{OperatingMode, RouteMode};
         if self.aprs_fm && band.eq_ignore_ascii_case("2m") {
             return RouteMode::Fm;
@@ -7072,7 +7269,7 @@ impl Engine {
         if self.sat_fm() && dial_mhz >= 29.0 {
             return RouteMode::Fm;
         }
-        match self.settings.operating_mode {
+        match operating_mode {
             OperatingMode::Cw => RouteMode::Cw,
             OperatingMode::Rtty => RouteMode::Rtty,
             // Keyboard modes route as Digital: soundcard audio through a DATA
@@ -7311,6 +7508,7 @@ impl Engine {
     /// the operator can trade CPU/battery for weak-signal decodes mid-session (a POTA field lever),
     /// not only from Settings. The decoder reads `settings.decode_depth` on the next slot.
     pub fn set_decode_depth(&mut self, depth: u8) {
+        self.remote_actuation.revoke();
         self.settings.decode_depth = depth.clamp(1, 3);
     }
 
@@ -7323,6 +7521,7 @@ impl Engine {
     /// Choose the CW keyer back-end ("cat" or "soundcard") + tone pitch (Hz; ignored
     /// if <= 0). Soundcard flips the CW rig-mode to USB; the radio loop re-applies it.
     pub fn set_cw_keyer(&mut self, backend: &str, pitch_hz: f32) {
+        self.remote_actuation.revoke();
         use crate::settings::CwKeyerBackend;
         self.cw_keyer_error = None; // a keyer change invalidates a prior keyer error
         self.settings.cw_keyer = match backend.to_ascii_lowercase().as_str() {
@@ -7511,6 +7710,7 @@ impl Engine {
     }
 
     pub fn set_rf_power(&mut self, frac: f32) {
+        self.remote_actuation.revoke();
         // SAFETY CEILING: never command the rig above the current mode's per-mode cap (FT8/FT4/
         // RTTY duty-cycle protection). The single chokepoint — every power set, from any UI path,
         // passes through here — so the cap cannot be bypassed.
@@ -7617,6 +7817,7 @@ impl Engine {
 
     /// Set desired mic gain (0.0–1.0). The radio loop applies it via the rig.
     pub fn set_mic_gain(&mut self, frac: f32) {
+        self.remote_actuation.revoke();
         self.mic_gain = Some(frac.clamp(0.0, 1.0));
     }
     /// Desired mic gain, if the operator has set one (for the radio loop).
@@ -7643,6 +7844,7 @@ impl Engine {
 
     /// Set desired noise-reduction level (0.0–1.0); the radio loop applies it.
     pub fn set_nr_level(&mut self, frac: f32) {
+        self.remote_actuation.revoke();
         self.nr_level = Some(frac.clamp(0.0, 1.0));
     }
     pub fn nr_level(&self) -> Option<f32> {
@@ -7669,6 +7871,7 @@ impl Engine {
 
     /// Speech-processor depth (0..1). #95 — the COMP toggle had no level behind it.
     pub fn set_comp_level(&mut self, frac: f32) {
+        self.remote_actuation.revoke();
         self.comp_level = Some(frac.clamp(0.0, 1.0));
     }
     pub fn comp_level(&self) -> Option<f32> {
@@ -7683,6 +7886,7 @@ impl Engine {
     /// Manual-notch frequency in HZ. Clamped to the audio passband a notch can live in: a
     /// notch commanded outside it is one the operator cannot hear and cannot find again.
     pub fn set_notch_freq_hz(&mut self, hz: f32) {
+        self.remote_actuation.revoke();
         self.notch_freq_hz = Some(hz.clamp(NOTCH_MIN_HZ, NOTCH_MAX_HZ));
     }
     pub fn notch_freq_hz(&self) -> Option<f32> {
@@ -7698,6 +7902,7 @@ impl Engine {
     /// honours even when it is the speed the loop last wrote (see [`Self::agc_to_command`]).
     pub fn set_agc(&mut self, speed: &str) {
         if Self::AGC_SPEEDS.contains(&speed) {
+            self.remote_actuation.revoke();
             self.agc = Some(speed.to_string());
             self.agc_picked = true;
         }
@@ -7760,10 +7965,15 @@ impl Engine {
     /// watts, COMP dB. Each is independently `Some`/`None` so a rig that reports only some of
     /// them still shows those. The poll reads these ONLY while keyed, mirroring the S-meter.
     /// The rig's OWN PTT, as read back over CAT (#57): TRUE means the transmitter is keyed
-    /// by something that is not Nexus — mic PTT, a straight key at the radio. Display-only
-    /// state: it feeds the cockpit TX badge and lets the TX-meter pane show a mic-keyed
-    /// over; it gates nothing and keys nothing (the radio loop's read is `t`, never `T`).
+    /// by something that is not Nexus — mic PTT, a straight key at the radio.
+    /// It feeds the cockpit TX badge/meters and cancels pending amplifier/radio
+    /// changes. It never keys the radio or changes FT sequencing/arming.
     pub fn observe_rig_ptt(&mut self, on: bool) {
+        if on && !self.rig_keyed {
+            // Cancel pending hardware changes; this does not change TX timing,
+            // the arming latch, or the transmitter's sequence generation.
+            self.remote_actuation.revoke();
+        }
         self.rig_keyed = on;
     }
 
@@ -7861,6 +8071,7 @@ impl Engine {
     /// it (and reverts if the rig rejected the set). Unknown names are ignored.
     pub fn request_rig_func(&mut self, func: &str, on: bool) {
         if let Some(i) = func_index(func) {
+            self.remote_actuation.revoke();
             self.pending_func[i] = Some(on);
             self.rig_funcs[i] = Some(on);
         }
@@ -7964,6 +8175,7 @@ impl Engine {
     /// width OPTIMISTICALLY so the snapshot reflects the click at once — rapid ± steps accumulate
     /// (rather than all reading the same stale value), and the loop's next read reconciles it.
     pub fn request_filter_width(&mut self, hz: u32) {
+        self.remote_actuation.revoke();
         self.pending_passband = Some(hz);
         self.rig_passband = Some(hz);
     }
@@ -8376,8 +8588,7 @@ impl Engine {
             let _ = std::fs::remove_file(path);
             return;
         };
-        let dto: crate::dto::LoggedQso = rec.clone().into();
-        let Ok(text) = serde_json::to_string(&dto) else {
+        let Ok(text) = remote_logging::pending_qso_json(rec) else {
             return;
         };
         if let Some(dir) = path.parent() {
@@ -8401,7 +8612,7 @@ impl Engine {
     /// held — a live hold outranks a restored one.
     pub fn load_pending_qso(&mut self, rec: QsoRecord) {
         if self.pending_log.is_none() {
-            self.pending_log = Some(rec);
+            self.replace_pending_log(Some(rec));
         }
     }
 
@@ -9175,7 +9386,119 @@ impl Engine {
         (!call.is_empty()).then(|| call.to_ascii_uppercase())
     }
 
-    pub fn log_qso(&mut self, mut rec: QsoRecord) {
+    pub fn log_qso(&mut self, rec: QsoRecord) {
+        let _ = self.log_qso_inner(rec, false);
+    }
+
+    /// Changes with native operating/profile changes, including value-identical
+    /// changes away and back. Meter ticks do not invalidate a manual log draft.
+    pub fn remote_log_context_generation(&self) -> u64 {
+        self.tx_gate_gen
+    }
+
+    pub fn remote_receiver_context_generation(&self) -> u64 {
+        self.remote_receiver_gen
+    }
+
+    pub fn remote_actuation_context_generation(&self) -> u64 {
+        self.remote_actuation.generation()
+    }
+
+    /// A local amplifier gesture supersedes pending Remote hardware work. This
+    /// does not alter the local TX latch or transmit sequence generation.
+    pub fn note_local_amplifier_command(&self) {
+        self.remote_actuation.revoke();
+    }
+
+    /// Revoked by the existing native TX/context transitions. Workers can check
+    /// this after releasing the engine, without holding its mutex across I/O.
+    pub fn remote_actuation_permit(
+        &self,
+        deadline: std::time::Instant,
+    ) -> Option<crate::remote_control::Permit> {
+        self.remote_actuation.permit(deadline)
+    }
+
+    /// Native amplifier buttons and follow-band use the same completed serial
+    /// poll. An SPE idle flag remains sufficient without CAT; KPA has no such
+    /// flag and needs a fresh physical PTT read from the current exciter link.
+    /// No amplifier state is used to arm or stop the transmitter.
+    pub fn native_amplifier_permit(
+        &self,
+        read: &crate::remote_monitor::provenance::Read,
+        deadline: std::time::Instant,
+    ) -> Option<crate::remote_control::Permit> {
+        let now = std::time::Instant::now();
+        let (amp, age) = self.remote_readings.amp_for_read(read, now)?;
+        // A thread can be descheduled after releasing Engine. Its permission
+        // must expire with the readings, rather than renewing their freshness.
+        // Subtract one millisecond because projected ages round down.
+        let mut deadline = deadline.min(
+            now + std::time::Duration::from_millis(
+                crate::remote_monitor::MEASUREMENT_STALE_MS.saturating_sub(age.age_ms + 1),
+            ),
+        );
+        let profile = self.settings.active_profile()?;
+        if !profile.amp_model.trim().eq_ignore_ascii_case(&amp.family)
+            || profile.amp_port.trim().is_empty()
+            || !amp.linked
+            || amp.transmitting == Some(true)
+            || amp.output_watts.is_some_and(|w| w > 0)
+            || self.tx_owner().is_some()
+            || self.rig_keyed
+            || self.sat_inferred_keyed
+        {
+            return None;
+        }
+        let radio = self.remote_monitor_observation_at(now).radio;
+        if radio.rig_keyed == Some(true) {
+            return None;
+        }
+        if amp.transmitting.is_none() {
+            let cat = radio.readings.cat?;
+            let ptt = radio.readings.ptt?;
+            if radio.cat_connected != Some(true)
+                || radio.rig_keyed != Some(false)
+                || ptt.connection_generation != cat.connection_generation
+                || ptt.age_ms >= 1000
+            {
+                return None;
+            }
+            deadline = deadline.min(now + std::time::Duration::from_millis(999 - ptt.age_ms));
+        }
+        self.remote_actuation_permit(deadline)
+    }
+
+    pub fn queue_remote_amp(
+        &mut self,
+        request: crate::remote_control::amplifier::Request,
+    ) -> Result<crate::remote_control::Completion, crate::remote_control::Reason> {
+        use crate::remote_control::{Outcome, Reason};
+        if self
+            .remote_amp_command
+            .as_ref()
+            .is_some_and(|r| matches!(r.completion.outcome(), Outcome::Pending))
+        {
+            return Err(Reason::StationBusy);
+        }
+        let receipt = request.completion.clone();
+        self.remote_amp_command = Some(request);
+        Ok(receipt)
+    }
+
+    /// Only the existing amplifier port owner consumes this slot.
+    pub fn take_remote_amp(&mut self) -> Option<crate::remote_control::amplifier::Request> {
+        self.remote_amp_command.take()
+    }
+
+    /// Manual Remote logging uses the existing contact enrichment, memory-first
+    /// append and connector funnel, but receives open file handles to sync outside the engine lock. This does
+    /// not change FT sequencing, pending-log semantics or desktop append timing.
+    pub fn log_qso_for_sync(&mut self, rec: QsoRecord) -> LogWriteOutcome {
+        self.log_qso_inner(rec, true)
+    }
+
+    fn log_qso_inner(&mut self, mut rec: QsoRecord, sync: bool) -> LogWriteOutcome {
         // Every log path funnels through here, so this is the one place that can tell the UI a
         // contact was written — including a backend auto-log the frontend never initiated.
         self.logged_tick = self.logged_tick.wrapping_add(1);
@@ -9263,7 +9586,7 @@ impl Engine {
                 && rec.when_unix.abs_diff(r.when_unix) <= DEDUP_WINDOW_SECS
         });
         if is_dup {
-            return;
+            return LogWriteOutcome::Duplicate;
         }
         // WHO WAS AT THE KEY (#25). `QsoRecord::operator` has existed since the logbook was
         // written, is exported as ADIF `OPERATOR`, is parsed on import, and was never once
@@ -9373,7 +9696,9 @@ impl Engine {
         // log's freshness fingerprint moves with the file. Skip it and the recovery
         // gate misses on the next upload stamp / Needed-board poll and re-parses the
         // whole log — once per contact, on every contact.
-        self.station.append_to_log(std::slice::from_ref(&rec));
+        let persisted = self
+            .station
+            .append_to_log_checked(std::slice::from_ref(&rec), sync);
         self.push_to_hrd(&rec);
         self.push_to_n1mm(&rec);
         // ...and to the WSJT-X UDP sink, which is the one a logger actually logs from. The
@@ -9403,6 +9728,10 @@ impl Engine {
             retry_after_unix: 0, // due now — a fresh log has no prior failure to back off from
         });
         self.station.refresh_worked_index();
+        match persisted {
+            Some(receipts) if sync => LogWriteOutcome::PendingSync(receipts),
+            _ => LogWriteOutcome::Unconfirmed,
+        }
     }
 
     /// Push a logged QSO to Ham Radio Deluxe Logbook over its QSO-Forwarding UDP
@@ -9562,6 +9891,14 @@ impl Engine {
     /// Set the operating mode. `spec`: `chat` | `qso-run` | `qso-monitor` |
     /// `fieldday-run` | `fieldday-sp`.
     pub fn set_mode(&mut self, spec: &str) -> Result<(), String> {
+        self.set_mode_with_decoder(spec, Self::apply_decoder_mutation)
+    }
+
+    fn set_mode_with_decoder(
+        &mut self,
+        spec: &str,
+        mut decoder: impl FnMut(&mut Self, DecoderMutation),
+    ) -> Result<(), String> {
         let mycall = self.settings.mycall.clone();
         let mygrid = self.settings.mygrid.clone();
         // A RUN mode auto-calls CQ and arms TX below — starting one on a tier that
@@ -9697,7 +10034,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // is set.
         self.persist_fd_log();
         let band = self.settings.band.clone();
-        self.mode = match spec {
+        let next_mode = match spec {
             "chat" => Mode::Chat,
             "qso-run" => Mode::Qso {
                 station: Box::new({
@@ -9744,6 +10081,11 @@ Pick the one you operate from on the Contesting tab in Settings.",
             },
             other => return Err(format!("unknown mode {other:?}")),
         };
+        // A valid local operating-spec gesture owns the newer station context,
+        // even when its label and CAT mode are unchanged. Do not let older
+        // Remote work overwrite that intent; invalid specs above change nothing.
+        self.remote_actuation.revoke();
+        self.mode = next_mode;
         // Carry the operator's RR73/RRR preference into a fresh QSO sequencer.
         if let Mode::Qso { station, .. } = &mut self.mode {
             station.confirm_with_rrr = self.settings.prefer_rrr;
@@ -9789,7 +10131,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // TX, the bubble said "sending", and it could never transmit at all. Same
         // outcome for FT8/FT4 as before (neither is `is_chat`).
         if matches!(self.mode, Mode::Chat) && !self.app.tier().is_chat() {
-            self.set_tier(Tier::TempoFast);
+            self.set_tier_with_installer(Tier::TempoFast, |engine, source| {
+                decoder(engine, DecoderMutation::Install(source));
+            });
         }
         // Running modes (Call CQ / Field-Day run) auto-call CQ, so entering one
         // must ENABLE TX like WSJT-X's run start — otherwise, after a prior Halt Tx
@@ -9812,12 +10156,12 @@ Pick the one you operate from on the Contesting tab in Settings.",
                                // starts with fresh outbound queues, but the overs already transmitted are history and
                                // stay in the Rx-Frequency pane.
                                // A new QSO (or mode change) starts a fresh auto-log window.
-        self.qso_logged = false;
+        self.reset_qso_log_identity();
         self.qso_report_sent = None;
         self.qso_start_unix = None; // a fresh QSO stamps its own start time
                                     // Clear stale receive-side IR-HARQ buffers so a new exchange never
                                     // joint-combines with retransmissions from a previous one.
-        self.harq_reset_locked();
+        decoder(self, DecoderMutation::ResetHarq);
         Ok(())
     }
 
@@ -9827,6 +10171,37 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// mode when they're incompatible with the area, so re-entering an area never
     /// resets a live QSO or chat.
     pub fn set_area(&mut self, area: &str) {
+        self.set_area_with_decoder(area, Self::apply_decoder_mutation);
+    }
+
+    /// The area's remembered decoder choice, without changing a radio, source,
+    /// conversation or QSO. The native setter and Remote preparation share it.
+    fn area_tier(&self, area: &str) -> Tier {
+        match area {
+            "msg" if !self.app.tier().is_chat() => self.last_msg_tier.unwrap_or(Tier::TempoFast),
+            "msg" => self.app.tier(),
+            _ if self.app.tier().is_chat() => self.last_dx_tier.unwrap_or(Tier::Ft8),
+            _ => self.app.tier(),
+        }
+    }
+
+    // Remote holds the stable decoder mutex at commit, just as for a tier
+    // transaction. Keep every native area side effect in this shared path.
+    fn set_area_with_decoder(
+        &mut self,
+        area: &str,
+        decoder: impl FnMut(&mut Self, DecoderMutation),
+    ) {
+        self.set_area_with_decoder_and_reset(area, decoder, modes::reset_ft8_a7);
+    }
+
+    fn set_area_with_decoder_and_reset(
+        &mut self,
+        area: &str,
+        mut decoder: impl FnMut(&mut Self, DecoderMutation),
+        mut reset: impl FnMut(),
+    ) {
+        let target = self.area_tier(area);
         match area {
             "msg" => {
                 // MSG = FT1/DX1 free-text paradigm. Remember which structured
@@ -9836,10 +10211,14 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 // hand-kept tier list.
                 if !self.app.tier().is_chat() {
                     self.last_dx_tier = Some(self.app.tier());
-                    self.set_tier(self.last_msg_tier.unwrap_or(Tier::TempoFast));
+                    self.set_tier_with_installer_and_reset(
+                        target,
+                        |engine, source| decoder(engine, DecoderMutation::Install(source)),
+                        &mut reset,
+                    );
                 }
                 if !matches!(self.mode, Mode::Chat) {
-                    let _ = self.set_mode("chat");
+                    let _ = self.set_mode_with_decoder("chat", &mut decoder);
                 }
             }
             _ => {
@@ -9856,10 +10235,14 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 // that cannot transmit.
                 if self.app.tier().is_chat() {
                     self.last_msg_tier = Some(self.app.tier());
-                    self.set_tier(self.last_dx_tier.unwrap_or(Tier::Ft8));
+                    self.set_tier_with_installer_and_reset(
+                        target,
+                        |engine, source| decoder(engine, DecoderMutation::Install(source)),
+                        &mut reset,
+                    );
                 }
                 if matches!(self.mode, Mode::Chat) {
-                    let _ = self.set_mode("qso-monitor");
+                    let _ = self.set_mode_with_decoder("qso-monitor", &mut decoder);
                 }
             }
         }
@@ -9876,6 +10259,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
 
     /// Toggle Skip Tx1 (WSJT-X parity) — a session-only preference (see the field).
     pub fn set_skip_tx1(&mut self, on: bool) {
+        self.remote_ft_settings_epoch = self.remote_ft_settings_epoch.saturating_add(1);
         self.skip_tx1 = on;
     }
 
@@ -10071,7 +10455,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 station: Box::new(station),
                 running: true,
             };
-            self.qso_logged = false;
+            self.reset_qso_log_identity();
             self.qso_report_sent = opening_report;
             self.qso_start_unix = Some(now_unix_secs()); // working a station starts the QSO clock
         }
@@ -10177,11 +10561,22 @@ Pick the one you operate from on the Contesting tab in Settings.",
 
     /// `tempo_fast::harq_reset()` serialized behind the decoder lock, so it can never race
     /// the worker thread's in-flight decode (which uses the same process-global FT1
-    /// IR-HARQ buffers). Every engine-thread reset goes through here; the decode
-    /// path's own reset already runs under the lock in [`run_decode_job`].
+    /// IR-HARQ buffers). Ordinary engine-thread resets acquire here; a native
+    /// transition already holding the guard uses `harq_reset_serialized`. The
+    /// decode path's reset runs under this same lock in [`run_decode_job`].
     fn harq_reset_locked(&self) {
-        let _g = source_lock(&self.source);
+        Self::harq_reset_serialized(&source_lock(&self.source));
+    }
+
+    fn harq_reset_serialized(_source: &std::sync::MutexGuard<'_, Box<dyn SignalSource>>) {
         tempo_fast::harq_reset();
+    }
+
+    fn apply_decoder_mutation(&mut self, mutation: DecoderMutation) {
+        match mutation {
+            DecoderMutation::Install(source) => self.install_source(source),
+            DecoderMutation::ResetHarq => self.harq_reset_locked(),
+        }
     }
 
     /// Clear the CW decode transcript + reset the stream decoder. A QSY (band change,
@@ -10241,14 +10636,14 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// Confirm-and-log a QSO held by the prompt-to-log popup. `rec` is the
     /// (possibly operator-edited) record; logs it and clears the pending hold.
     pub fn confirm_pending_log(&mut self, rec: QsoRecord) {
-        self.pending_log = None;
+        self.replace_pending_log(None);
         self.persist_pending_qso(); // clears the journal — it's in the log now
         self.log_qso(rec);
     }
 
     /// Discard a QSO held by the prompt-to-log popup without logging it.
     pub fn discard_pending_log(&mut self) {
-        self.pending_log = None;
+        self.replace_pending_log(None);
         self.persist_pending_qso(); // clears the journal — the operator said no
     }
 
@@ -10267,10 +10662,26 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// even if the sequence hasn't reached the final 73. Marks the QSO logged so it
     /// isn't also auto-logged on completion. Returns false outside a QSO / no DX.
     pub fn log_current_qso(&mut self) -> bool {
+        let Some(rec) = self.take_current_qso_record() else {
+            return false;
+        };
+        // Respect prompt-to-log just like auto-log.
+        if self.settings.prompt_to_log {
+            self.replace_pending_log(Some(rec));
+            self.persist_pending_qso();
+        } else {
+            self.log_qso(rec);
+        }
+        true
+    }
+
+    /// Shared eligibility, captured fields and write-once transition for the
+    /// local Log QSO button and its remote equivalent. No transport policy here.
+    fn take_current_qso_record(&mut self) -> Option<QsoRecord> {
         // Write-once: if this contact was already logged (manual double-click, or
         // it auto-logged on completion), don't log it again.
         if self.qso_logged {
-            return false;
+            return None;
         }
         let (dxcall, dxgrid, rx_report, report_impossible) = match &self.mode {
             Mode::Qso { station, .. } => match &station.dxcall {
@@ -10298,10 +10709,10 @@ Pick the one you operate from on the Contesting tab in Settings.",
                         }
                         (st.dxcall, st.dxgrid, st.rx_report, false)
                     }
-                    None => return false,
+                    None => return None,
                 },
             },
-            _ => return false,
+            _ => return None,
         };
         // Don't create a report-LESS record: a QSO isn't a contact until at least one
         // signal report has been exchanged (WSJT-X only logs after the report exchange).
@@ -10316,20 +10727,12 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // a CQ with nobody on it, and a QSO we have only listened to, stay unloggable
         // exactly as before.
         if rx_report.is_none() && self.qso_report_sent.is_none() && !report_impossible {
-            return false;
+            return None;
         }
         let rec = self.qso_record(dxcall, dxgrid, rx_report);
         self.qso_logged = true;
-        self.qso_start_unix = None; // contact logged — the next QSO stamps a fresh start
-                                    // Respect prompt-to-log just like auto-log: hold for the confirm popup
-                                    // instead of writing silently, so manual + auto behave the same.
-        if self.settings.prompt_to_log {
-            self.pending_log = Some(rec);
-            self.persist_pending_qso(); // a real contact — journal it before the popup waits
-        } else {
-            self.log_qso(rec);
-        }
-        true
+        self.qso_start_unix = None;
+        Some(rec)
     }
 
     /// Operator in-QSO free text (WSJT-X Tx5): override the next transmission with
@@ -10542,6 +10945,25 @@ Pick the one you operate from on the Contesting tab in Settings.",
         self.app.clear_peer();
     }
     pub fn set_tier(&mut self, tier: Tier) {
+        self.set_tier_with_installer(tier, |engine, source| engine.install_source(source));
+    }
+
+    // Remote already holds the stable decoder mutex at its bounded commit.
+    // The shared transition still owns every native side effect and no-op rule.
+    fn set_tier_with_installer(
+        &mut self,
+        tier: Tier,
+        install: impl FnOnce(&mut Self, Box<dyn SignalSource>),
+    ) {
+        self.set_tier_with_installer_and_reset(tier, install, modes::reset_ft8_a7);
+    }
+
+    fn set_tier_with_installer_and_reset(
+        &mut self,
+        tier: Tier,
+        install: impl FnOnce(&mut Self, Box<dyn SignalSource>),
+        reset: impl FnMut(),
+    ) {
         // SAME TIER ⇒ COMPLETE NO-OP (the 1.1.0 empty-roster report). The rail's FT
         // button re-issues the tier on every return to the FT view, and without this
         // guard the stale-cycle clears below fired on a plain Logbook→FT round trip —
@@ -10555,6 +10977,10 @@ Pick the one you operate from on the Contesting tab in Settings.",
         if tier == self.app.tier() {
             return;
         }
+        // A local decoder choice supersedes a pending Remote radio operation,
+        // even when both tiers use the same dial. Revoke before a decoder swap
+        // can wait on the source lock while the CAT worker is outside this lock.
+        self.remote_actuation.revoke();
         // Tier switch changes the slot period (FT8 15 s / FT4 7.5 s) — slot indices
         // from the old tier are meaningless for answer parity. Flush the context.
         self.clear_decode_context();
@@ -10682,7 +11108,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 // Swap the boxed decoder UNDER the lock (waits for any decode in
                 // flight) so the stable serialization mutex is preserved and no
                 // job can be reading the old mode as it's replaced.
-                self.install_source(Box::new(NativeSource::from_kind(kind)));
+                install(self, Box::new(NativeSource::from_kind(kind)));
             }
         }
         // WSJT-X-style: switching the mode moves the rig to the NEW mode's dial for the
@@ -10698,8 +11124,6 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // rig off a bird the moment the operator reached for FT4. Skip the QSY outright;
         // decoder, slot clock and TX periods still switch above.
         if self.source_kind == SourceKind::Native && self.sat_dial_owner.is_none() {
-            let band = self.settings.band.clone();
-            let plan = self.band_plan();
             // ⭐ FALL BACK TO THE MODE'S PRIMARY CHANNEL when the current band has
             // none. The tier-aware plans are not all all-band: MSK144 and Q65 are
             // VHF+ only, FST4/FST4W are 2200/630/160 m only. `find()` therefore
@@ -10729,16 +11153,14 @@ Pick the one you operate from on the Contesting tab in Settings.",
             // JS8 joins the stay-on-band family for the same reason FT2 does: its plan
             // (JS8Call's table) spans 160 m–2 m, so a miss is an exotic band and dragging the
             // operator to 160 m would be the same defect.
-            let stay_on_miss = matches!(tier, Tier::Ft8 | Tier::Ft4 | Tier::Ft2 | Tier::Js8);
-            let target = plan
-                .iter()
-                .find(|c| c.band.eq_ignore_ascii_case(&band))
-                .or_else(|| if stay_on_miss { None } else { plan.first() })
-                .cloned();
-            if let Some(ch) = target {
-                if (ch.dial_mhz - self.settings.dial_mhz).abs() > 0.0005 {
-                    self.set_frequency(ch.dial_mhz, &ch.band, &ch.mode);
-                }
+            if let Some(ch) = self.prepare_tier_frequency(tier) {
+                self.tune_dial_with_reset(
+                    ch.dial_mhz,
+                    &ch.band,
+                    &ch.mode,
+                    DialOrigin::Operator,
+                    reset,
+                );
             }
         }
     }
@@ -10762,8 +11184,39 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// cannot forget it. The lock IS taken here — this is the swap path, which
     /// already waits out any decode in flight, and that is unchanged.
     fn install_source(&mut self, src: Box<dyn SignalSource>) {
+        let source = Arc::clone(&self.source);
+        self.install_source_into(&mut source_lock(&source), src);
+    }
+
+    fn install_source_into(
+        &mut self,
+        slot: &mut Box<dyn SignalSource>,
+        src: Box<dyn SignalSource>,
+    ) {
         self.source_label = src.label();
-        *source_lock(&self.source) = src;
+        *slot = src;
+    }
+
+    fn prepare_tier_frequency(&self, tier: Tier) -> Option<crate::bandplan::BandChannel> {
+        self.prepare_tier_frequency_at(tier, &self.settings.band, self.settings.dial_mhz)
+    }
+
+    fn prepare_tier_frequency_at(
+        &self,
+        tier: Tier,
+        band: &str,
+        dial_mhz: f64,
+    ) -> Option<crate::bandplan::BandChannel> {
+        if self.source_kind != SourceKind::Native || self.sat_dial_owner.is_some() {
+            return None;
+        }
+        let plan = self.band_plan_for_tier(tier);
+        let stay_on_miss = matches!(tier, Tier::Ft8 | Tier::Ft4 | Tier::Ft2 | Tier::Js8);
+        plan.iter()
+            .find(|c| c.band.eq_ignore_ascii_case(band))
+            .or_else(|| if stay_on_miss { None } else { plan.first() })
+            .filter(|ch| (ch.dial_mhz - dial_mhz).abs() > 0.0005)
+            .cloned()
     }
 
     /// The active RX signal source.
@@ -10775,6 +11228,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// companion stream over UDP. Companion binds [`Settings::companion_addr`];
     /// returns `Err` (and stays on the previous source) if the socket can't bind.
     pub fn set_source(&mut self, kind: SourceKind) -> Result<(), String> {
+        self.remote_actuation.revoke();
         // Source switch invalidates the decode context — in particular a stale
         // Native early-pass marker would silently filter the first Companion
         // boundary's decodes, and history/parity belong to the old stream.
@@ -10874,9 +11328,11 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// clear the TX indicator. Wired to the WSJT-X UDP "HaltTx" control so a
     /// logger / JTAlert can stop Tempo keying.
     pub fn halt_tx(&mut self) {
+        self.remote_transmit = None;
         // Kill any over planned before this instant — even one whose gate values
         // all match again by commit time (commit_tx checks the generation).
         self.tx_gate_gen = self.tx_gate_gen.wrapping_add(1);
+        self.remote_actuation.revoke();
         // Stop transmitting AND stay stopped: disable TX so the auto-sequencer
         // doesn't immediately re-arm on the next slot (WSJT-X "Halt Tx" also
         // unchecks Enable Tx). Drop any tune carrier and queued audio too.
@@ -11209,9 +11665,16 @@ Pick the one you operate from on the Contesting tab in Settings.",
         if on && self.tier_is_rx_only(self.app.tier()) {
             return;
         }
+        // An explicit native arm owns the next transmission. Remote entry uses
+        // this same verb, then binds its separate permit after the native action.
+        // A plain TX Off retains ownership through the current FT over.
+        if on {
+            self.remote_transmit = None;
+        }
         // Arm state changed hands: an over planned under the old state must not
         // key (commit_tx checks the generation).
         self.tx_gate_gen = self.tx_gate_gen.wrapping_add(1);
+        self.remote_actuation.revoke();
         // Read-only launch: arming TX is the moment the operator commits to
         // transmitting — arm a retune NOW so the mode assert runs a tick BEFORE the
         // key on the normal FT8 path (on a slow-serial rig an assert at the key
@@ -11292,8 +11755,6 @@ Pick the one you operate from on the Contesting tab in Settings.",
         self.settings.tx_level = level.clamp(0.0, 1.0);
     }
 
-    /// Set the RX capture gain (≥1.0 multiplier on received audio before decode). Headroom for a
-    /// quiet interface; clamped to 1.0–8.0 (+18 dB). Applied live by the audio service.
     /// Set the MSK144 T/R period (s) — the cockpit's narrow write. Clamped to the mode's
     /// own set {5,10,15,30}; anything else snaps to 15. NARROW deliberately: a full
     /// settings apply resets the mode and clears the TX queue (issue #54), which is the
@@ -11304,10 +11765,14 @@ Pick the one you operate from on the Contesting tab in Settings.",
         } else {
             15
         };
+        self.remote_actuation.revoke();
         self.settings.msk144_period_s = secs;
     }
 
+    /// Set the RX capture gain (≥1.0 multiplier on received audio before decode). Headroom for a
+    /// quiet interface; clamped to 1.0–8.0 (+18 dB). Applied live by the audio service.
     pub fn set_rx_gain(&mut self, gain: f32) {
+        self.remote_actuation.revoke();
         self.settings.rx_gain = gain.clamp(1.0, 8.0);
     }
 
@@ -11415,6 +11880,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
             // A change of ownership IS a state change: an over planned under
             // the old regime must not key under the new one.
             self.tx_gate_gen = self.tx_gate_gen.wrapping_add(1);
+            self.remote_actuation.revoke();
             self.sat_dial_owner = owner;
         }
     }
@@ -12889,6 +13355,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
     pub fn set_tune(&mut self, on: bool) {
         // A tune toggle invalidates any planned over (commit_tx checks the generation).
         self.tx_gate_gen = self.tx_gate_gen.wrapping_add(1);
+        self.remote_actuation.revoke();
         // Tune is the one keying path that bypasses poll_tx (the loop keys PTT directly), so
         // the privilege lockout must gate it here: never arm a tune carrier outside privileges.
         self.tuning = on && self.tx_allowed();
@@ -13078,6 +13545,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
 
     /// Clear the streaming CW decoder's accumulated transcript (the cockpit's Clear button).
     pub fn cw_clear(&mut self) {
+        self.remote_receiver_gen = self.remote_receiver_gen.saturating_add(1);
         self.cw_stream.clear();
         self.cw_sent.clear();
         self.ai_cw_text.clear();
@@ -13097,6 +13565,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// never launches armed). Arming starts a fresh transcript; disarming keeps
     /// the transcript readable but stops the audio tap immediately.
     pub fn set_rtty_armed(&mut self, on: bool) {
+        self.remote_receiver_gen = self.remote_receiver_gen.saturating_add(1);
         if on && !self.rtty_armed {
             self.rtty_chars.clear();
             self.rtty_afc_hz = 0.0;
@@ -13160,6 +13629,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// here would claim an operator act that never happened — use [`Engine::aprs_auto_arm`] for
     /// view entry, which applies the policy rather than trusting its caller.
     pub fn set_aprs_arm(&mut self, arm: AprsArm) {
+        self.remote_receiver_gen = self.remote_receiver_gen.saturating_add(1);
         if arm == AprsArm::Off {
             self.aprs_audio.clear();
             // An operator who stopped the decoder has made a decision. Remember it for the rest of
@@ -13173,6 +13643,23 @@ Pick the one you operate from on the Contesting tab in Settings.",
             ..Default::default()
         };
         self.aprs_arm = arm;
+    }
+
+    /// An explicit Remote receive gesture has no acknowledgement/transmit
+    /// permission. It may start receive-only monitoring after an earlier Stop,
+    /// without upgrading the APRS two-act interlock to an explicit TX arm.
+    pub fn set_aprs_receive_only(&mut self, on: bool) {
+        self.remote_receiver_gen = self.remote_receiver_gen.saturating_add(1);
+        if !on {
+            self.set_aprs_arm(AprsArm::Off);
+        } else if self.aprs_arm == AprsArm::Off {
+            self.aprs_auto_arm_declined = false;
+            self.aprs_health = AprsHealth {
+                arm: AprsArm::Auto,
+                ..Default::default()
+            };
+            self.aprs_arm = AprsArm::Auto;
+        }
     }
 
     /// Arm the decoder because the operator ENTERED the APRS view — receive-only, never
@@ -13454,6 +13941,43 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// Snapshot of the decoded-APRS list for the cockpit poll (newest last).
     pub fn aprs_heard(&self) -> Vec<AprsHeard> {
         self.aprs_heard.clone()
+    }
+
+    /// Check the complete display projection before a remote reader clones it.
+    /// This never prunes either native store or changes its independent aging.
+    pub fn aprs_display_within_budget(&self, text_budget: usize) -> bool {
+        if self.aprs_heard.len() > APRS_HEARD_CAP || self.aprs_stations.len() > APRS_STATION_CAP {
+            return false;
+        }
+        let mut bytes = 0usize;
+        let mut text = |s: &str, max: usize| {
+            bytes = bytes.saturating_add(s.len());
+            s.len() <= max && bytes <= text_budget
+        };
+        for h in &self.aprs_heard {
+            if !text(&h.source, 80)
+                || !text(&h.dest, 80)
+                || !text(&h.text, 1024)
+                || !text(&h.raw, 2048)
+                || h.path.len() > 16
+                || !h.path.iter().all(|p| text(p, 80))
+                || !text(h.addressee.as_deref().unwrap_or(""), 80)
+                || !text(h.msg_id.as_deref().unwrap_or(""), 80)
+            {
+                return false;
+            }
+        }
+        for s in self.aprs_stations.values() {
+            if !text(&s.call, 80)
+                || !text(&s.text, 1024)
+                || !text(&s.raw, 2048)
+                || s.path.len() > 16
+                || !s.path.iter().all(|p| text(p, 80))
+            {
+                return false;
+            }
+        }
+        true
     }
 
     /// The up-front APRS-TX gate: every reason a beacon would be refused, checked before anything is
@@ -13858,6 +14382,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// Clear the decoded-RTTY transcript (the cockpit's Clear button). RX display
     /// only — the demodulator keeps running.
     pub fn rtty_clear(&mut self) {
+        self.remote_receiver_gen = self.remote_receiver_gen.saturating_add(1);
         self.rtty_chars.clear();
     }
 
@@ -13865,6 +14390,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// its demod and builds a fresh one — the recovery for an acquire-then-freeze
     /// AFC frozen on the wrong neighbor. RX only; no TX path touches this.
     pub fn request_rtty_afc_reset(&mut self) {
+        self.remote_receiver_gen = self.remote_receiver_gen.saturating_add(1);
         self.rtty_afc_reset = true;
         self.rtty_afc_hz = 0.0;
         self.rtty_afc_locked = false;
@@ -13888,6 +14414,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// center the same clean acquire-then-freeze way an AFC reset does. RX-only
     /// decoder state, so this is safe during TX and needs no privilege gate.
     pub fn rtty_net(&mut self, hz: f32) {
+        self.remote_receiver_gen = self.remote_receiver_gen.saturating_add(1);
         self.rtty_center = Some(hz.clamp(300.0, 3700.0));
         // Rebuild the demod around the new center (zeros AFC + arms the reset).
         self.request_rtty_afc_reset();
@@ -13903,6 +14430,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// immediately, and is REMEMBERED for the session (the decline memory), so
     /// re-entering the view cannot restart the decoder behind the operator.
     pub fn set_psk_armed(&mut self, on: bool) {
+        self.remote_receiver_gen = self.remote_receiver_gen.saturating_add(1);
         if on && !self.psk_armed {
             self.psk_chars.clear();
             self.psk_afc_hz = 0.0;
@@ -13999,6 +14527,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// Clear the decoded-PSK transcript (the cockpit's Clear button). RX display
     /// only — the demodulator keeps running.
     pub fn psk_clear(&mut self) {
+        self.remote_receiver_gen = self.remote_receiver_gen.saturating_add(1);
         self.psk_chars.clear();
     }
 
@@ -14006,6 +14535,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// thread drops its demod and builds a fresh one — a clean AFC pull from the
     /// netted center. RX only.
     pub fn request_psk_afc_reset(&mut self) {
+        self.remote_receiver_gen = self.remote_receiver_gen.saturating_add(1);
         self.psk_afc_reset = true;
         self.psk_afc_hz = 0.0;
         self.psk_signal = false;
@@ -14029,6 +14559,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// audio passband, then rebuilds the demod around the new center. RX-only
     /// decoder state, so this is safe during TX and needs no privilege gate.
     pub fn psk_net(&mut self, hz: f32) {
+        self.remote_receiver_gen = self.remote_receiver_gen.saturating_add(1);
         self.psk_center = Some(hz.clamp(300.0, 3700.0));
         self.request_psk_afc_reset();
     }
@@ -14051,6 +14582,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         mode: tempo_core::psk::PskModeKind,
         reverse: bool,
     ) -> Result<(), String> {
+        self.remote_receiver_gen = self.remote_receiver_gen.saturating_add(1);
         if (mode, reverse) == (self.psk_mode, self.psk_reverse) {
             return Ok(());
         }
@@ -14970,7 +15502,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
                     let rec = self.rtty_qso_record(&call, &exchange);
                     if self.settings.prompt_to_log {
                         // Hold for the operator's confirm-before-log popup.
-                        self.pending_log = Some(rec);
+                        self.replace_pending_log(Some(rec));
                         self.persist_pending_qso(); // journal before the popup waits
                     } else {
                         self.log_qso(rec);
@@ -15133,6 +15665,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// Disarming drops the audio tap and any in-flight decode progress; the
     /// gallery is untouched.
     pub fn set_sstv_armed(&mut self, on: bool) {
+        self.remote_receiver_gen = self.remote_receiver_gen.saturating_add(1);
         if on {
             // ⚠️ An explicit Arm is the operator's LATEST decision, so it retires an earlier
             // Stop. Without this the refusal outlives the act that caused it: stop, arm
@@ -15453,6 +15986,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// [`Self::ack_cat_port_released`]; the hold self-expires after 20 s so a prober
     /// that dies can never leave CAT torn down.
     pub fn hold_cat_port(&mut self) {
+        self.remote_actuation.revoke();
         self.cat_port_hold_until =
             Some(std::time::Instant::now() + std::time::Duration::from_secs(20));
         self.cat_port_released = false;
@@ -15532,6 +16066,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// Operator picks a fixed cycle (Tx 1st = even, Tx 2nd = odd). An explicit pick
     /// disables auto-cycle — the operator is now in manual control.
     pub fn set_tx_even(&mut self, even: bool) {
+        self.remote_ft_settings_epoch = self.remote_ft_settings_epoch.saturating_add(1);
         self.apply_cycle_parity(even);
         self.tx_cycle_auto = false;
     }
@@ -15539,6 +16074,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// Toggle smart auto-cycle (FT8-style: answer on the opposite cycle of the station
     /// you reply to). On by default; turning it back on re-enables the auto pick.
     pub fn set_tx_cycle_auto(&mut self, auto: bool) {
+        self.remote_ft_settings_epoch = self.remote_ft_settings_epoch.saturating_add(1);
         self.tx_cycle_auto = auto;
     }
 
@@ -15599,12 +16135,12 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// narrows the control itself for exactly that reason; a one-shot park on entry would
     /// leave the next drag free to walk back outside the sub-band.
     pub fn set_tx_offset(&mut self, hz: f32) {
+        self.remote_ft_settings_epoch = self.remote_ft_settings_epoch.saturating_add(1);
         let (lo, hi) = Self::tx_offset_bounds(self.app.tier());
         self.tx_offset_hz = hz.clamp(lo, hi);
         self.settings.tx_offset_hz = self.tx_offset_hz;
     }
-    /// Set the receive audio offset (Hz) — the green waterfall marker. When
-    /// "Hold Tx Freq" is off, the TX offset follows it (the common case).
+    /// Set the receive audio offset (Hz) — the green waterfall marker.
     /// Move the RX marker, and ONLY the RX marker.
     ///
     /// ⚠️ This used to drag TX along whenever Hold Tx Freq was off, and that was issue #38: a
@@ -15619,11 +16155,14 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// setter made it apply to every caller, including the one gesture that must never move TX,
     /// and a function called `set_rx_offset` that also set TX could not be read as what it said.
     pub fn set_rx_offset(&mut self, hz: f32) {
+        self.remote_ft_settings_epoch = self.remote_ft_settings_epoch.saturating_add(1);
+        self.remote_actuation.revoke();
         self.rx_offset_hz = hz.clamp(200.0, 4000.0);
         self.settings.rx_offset_hz = self.rx_offset_hz;
     }
     /// Hold the TX offset fixed when the RX offset changes (WSJT-X "Hold Tx Freq").
     pub fn set_hold_tx_freq(&mut self, on: bool) {
+        self.remote_ft_settings_epoch = self.remote_ft_settings_epoch.saturating_add(1);
         self.hold_tx_freq = on;
         self.settings.hold_tx_freq = on;
     }
@@ -15855,27 +16394,33 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// still advances on the partner's matching reply, so a forced message
     /// rejoins the normal flow (Station::override_next semantics).
     pub fn override_next_tx(&mut self, dxcall: &str, dxgrid: Option<&str>, text: &str) {
+        let _ = self.override_next_tx_checked(dxcall, dxgrid, text);
+    }
+
+    // Preserve the native void command while letting Remote distinguish a
+    // refused target from a queued message. Both use this single policy path.
+    fn override_next_tx_checked(
+        &mut self,
+        dxcall: &str,
+        dxgrid: Option<&str>,
+        text: &str,
+    ) -> Result<(), String> {
         if tempo_core::message::same_call(dxcall, &self.settings.mycall) {
-            return; // never a self-QSO
+            return Err("cannot target own callsign".into());
         }
         // Answering a decode is a TX commitment: it arms TX and asks for the
         // current period. On a receive-only tier there is no over to send, so do
         // not stage one — a queued reply the operator can see but the radio can
         // never send is the phantom this whole guard exists to prevent.
         if self.tier_is_rx_only(self.app.tier()) {
-            return;
+            return Err("transmit unavailable for this tier".into());
         }
         let on_dx = matches!(&self.mode, Mode::Qso { station, .. }
             if station.dxcall.as_deref().map(|c| tempo_core::message::same_call(c, dxcall)).unwrap_or(false));
         if !on_dx {
             // A refusal here (no derivable parity) leaves the override below un-armed too —
             // correct: the override rides a QSO that was never started.
-            if self
-                .call_station_ctx(dxcall, dxgrid, None, None, None)
-                .is_err()
-            {
-                return;
-            }
+            self.call_station_ctx(dxcall, dxgrid, None, None, None)?;
         }
         if let Mode::Qso { station, .. } = &mut self.mode {
             station.override_next(Msg::parse(text));
@@ -15886,6 +16431,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         }
         // Fire this period when it still fits (the snappy path).
         self.immediate_tx = true;
+        Ok(())
     }
 
     /// WSJT-X Split Operation: reduce a TX audio offset into the clean
@@ -16007,20 +16553,139 @@ Pick the one you operate from on the Contesting tab in Settings.",
         median < DT_OK_THRESHOLD
     }
 
+    /// The caller must bind the actual owned transport before starting I/O.
+    /// Reopening retires all previous measurements, even for the same radio ID.
+    pub fn remote_open_radio(&mut self) -> Option<crate::remote_monitor::provenance::Connection> {
+        self.remote_actuation.revoke();
+        self.remote_readings.open_radio(self.settings.active_radio)
+    }
+
+    pub fn remote_close_radio(&mut self) {
+        self.remote_actuation.revoke();
+        self.remote_readings.invalidate_radio();
+    }
+
+    pub fn remote_open_amp(&mut self) -> Option<crate::remote_monitor::provenance::Connection> {
+        self.remote_actuation.revoke();
+        self.remote_readings.open_amp(self.settings.active_radio)
+    }
+
+    pub fn remote_radio_read(
+        &mut self,
+        connection: &crate::remote_monitor::provenance::Connection,
+        now: std::time::Instant,
+    ) -> Option<crate::remote_monitor::provenance::Read> {
+        self.remote_readings.radio_read(connection, now)
+    }
+
+    pub fn remote_amp_read(
+        &mut self,
+        connection: &crate::remote_monitor::provenance::Connection,
+        now: std::time::Instant,
+    ) -> Option<crate::remote_monitor::provenance::Read> {
+        self.remote_readings.amp_read(connection, now)
+    }
+
+    pub fn remote_observe_cat(
+        &mut self,
+        read: Option<&crate::remote_monitor::provenance::Read>,
+        value: Option<bool>,
+    ) {
+        self.remote_readings.cat(read, value);
+    }
+
+    pub fn remote_observe_dial(
+        &mut self,
+        read: Option<&crate::remote_monitor::provenance::Read>,
+        hz: Option<u64>,
+    ) {
+        self.remote_readings.dial(read, hz);
+    }
+
+    pub fn remote_observe_mode(
+        &mut self,
+        read: Option<&crate::remote_monitor::provenance::Read>,
+        value: Option<&str>,
+    ) {
+        self.remote_readings.mode(read, value);
+    }
+
+    pub fn remote_observe_ptt(
+        &mut self,
+        read: Option<&crate::remote_monitor::provenance::Read>,
+        value: Option<bool>,
+    ) {
+        let became_keyed = self.remote_readings.ptt(read, value);
+        // Only an accepted current reading may cancel work. A delayed sample
+        // from a retired link cannot acquire the current radio's authority.
+        if became_keyed {
+            self.remote_actuation.revoke();
+        }
+    }
+
+    pub fn remote_observe_amp(
+        &mut self,
+        read: Option<&crate::remote_monitor::provenance::Read>,
+        status: crate::dto::AmpStatusDto,
+    ) {
+        self.remote_readings.amp(read, status);
+    }
+
+    /// Finish the port owner's poll after button/follow writes. A failed write
+    /// retires that exact link; publishing another value with the same read
+    /// sequence would be ignored by the ordered observation cache. Late work
+    /// cannot clear or replace a newly connected amplifier's native display.
+    pub fn finish_amp_poll(
+        &mut self,
+        id: u32,
+        read: Option<&crate::remote_monitor::provenance::Read>,
+        status: crate::dto::AmpStatusDto,
+        linked: bool,
+    ) {
+        let Some(read) = read.filter(|r| self.remote_readings.current_amp_read(r)) else {
+            return;
+        };
+        if id != self.settings.active_radio {
+            return;
+        }
+        if linked
+            && self
+                .remote_readings
+                .amp_for_read(read, std::time::Instant::now())
+                .is_some()
+        {
+            self.observe_amp_status(id, status);
+        } else {
+            if !linked {
+                self.remote_readings.retire_amp_read(read);
+                self.remote_actuation.revoke();
+            }
+            self.observe_amp_miss(id, &status.family, "noAnswer");
+            if !linked {
+                if let Some(entry) = self.amp_live.get_mut(&id) {
+                    entry.status.linked = false;
+                }
+            }
+        }
+    }
+
     /// Constant-size monitoring read. Never builds the full snapshot, scans the
     /// logbook or drains decode output. Radio and amp are copied in one engine borrow.
     pub fn remote_monitor_observation(&self) -> crate::remote_monitor::Observation {
-        use crate::remote_monitor::{bounded, Amplifier, Observation, Radio};
+        self.remote_monitor_observation_at(std::time::Instant::now())
+    }
+
+    pub fn remote_monitor_observation_at(
+        &self,
+        now: std::time::Instant,
+    ) -> crate::remote_monitor::Observation {
+        use crate::remote_monitor::{bounded, Observation, Radio};
         let profile = self.settings.active_profile();
         let amplifier = profile
             .filter(|p| !p.amp_model.is_empty() && !p.amp_port.is_empty())
             .map(|p| {
-                let waiting = crate::dto::AmpStatusDto {
-                    family: bounded(&p.amp_model),
-                    ..Default::default()
-                };
-                let status = self.amp_live(p.id).filter(|a| a.family == p.amp_model);
-                Amplifier::from_status(status.unwrap_or(&waiting), p.amp_follow_band)
+                self.remote_readings
+                    .project_amp(&p.amp_model, p.amp_follow_band, now)
             });
         let mode = match self.settings.operating_mode {
             crate::settings::OperatingMode::Digital => self.tier().label(),
@@ -16029,7 +16694,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
             crate::settings::OperatingMode::Rtty => "RTTY",
             crate::settings::OperatingMode::Keyboard => "Keyboard",
         };
-        Observation {
+        let mut observation = Observation {
             call: bounded(&self.app.mycall),
             grid: bounded(&self.app.mygrid),
             radio: Radio {
@@ -16042,17 +16707,19 @@ Pick the one you operate from on the Contesting tab in Settings.",
                     .then_some(self.settings.dial_mhz),
                 band: bounded(&self.settings.band),
                 mode: bounded(mode),
-                // The legacy CAT/mode/PTT mirrors carry no radio identity or read
-                // generation. A poll can straddle a handoff, and the default PTT
-                // false is not a measurement. Do not attribute those mirrors to
-                // this radio until the producer supplies observation provenance.
+                // Only the provenance cache below may populate hardware readings.
+                rig_dial_mhz: None,
                 rig_mode: None,
                 cat_connected: None,
                 rig_keyed: None,
                 nexus_busy: self.tx_owner().is_some(),
+                readings: Default::default(),
             },
             amplifier,
-        }
+        };
+        self.remote_readings
+            .project_radio(&mut observation.radio, now);
+        observation
     }
 
     /// The session-scoped B4 index (§3.1), or `None` when no contest session is open.
@@ -16407,133 +17074,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
             // chrome while `fd_active` is false, so a lingering `Mode::FieldDay`
             // can't strand the operator in Field Day after the master flips off.
             Mode::FieldDay { .. } if !self.settings.fd_active => s.mode = OpMode::Chat,
-            Mode::FieldDay { station, running } => {
+            Mode::FieldDay { .. } => {
                 s.mode = OpMode::FieldDay;
-                let log = &station.log;
-                // The SESSION's ruleset — the only lookup that can name a contest
-                // `FdEvent` has no arm for (`FieldDayLog::ruleset`).
-                let rs = log.ruleset();
-                // ⭐ `scored` is the total AFTER the post-multiplier and the
-                // multipliers: for both Field Day events that is the power-tier total
-                // it has always been (neither declares a multiplier), and for a QSO
-                // party it is the points × mults the sponsor's rules ask for.
-                let (qso_pts, _powered, mult_count, scored) = rs
-                    .scoring
-                    .score(log.score_rows(), self.settings.fd_power_mult);
-                let bonus = rs.bonus_points(&self.settings.fd_bonuses);
-                // The exchange and the role this session is running — read ONCE here,
-                // so the strip's boxes, the sent display and the multiplier boards
-                // cannot disagree about which role the operator is in.
-                let spec = log.session.exchange;
-                let role = log.session.role();
-                // The running-or-next event window, from the rules data (the
-                // banner/countdown's single source — no TS date math).
-                let event_window = rs.next_or_running(now_unix_secs());
-                s.field_day = Some(FieldDayStatus {
-                    running: *running,
-                    state: format!("{:?}", station.state),
-                    dxcall: station.dxcall.clone(),
-                    qso_count: log.qso_count(),
-                    sections: log.sections(),
-                    worked_sections: log.worked_sections(),
-                    points: qso_pts,
-                    // ⭐ How many multipliers this log has earned, by the ruleset's own
-                    // rules and scopes. 0 for an event that has no such concept, which
-                    // is both Field Day events.
-                    mult_count,
-                    // ⭐ The RULES-FILE event id, off the session — `"tnqp"`, not the
-                    // two-arm Field Day enum this read before, which reported every QSO
-                    // party as ARRL Field Day to every surface downstream.
-                    event: log.session.event_id.clone(),
-                    powered_points: scored,
-                    bonus_points: bonus,
-                    total_score: scored + bonus,
-                    event_start_unix: event_window.start_unix,
-                    event_end_unix: event_window.end_unix,
-                    rules_year: rs.rules_year,
-                    // The ruleset says what its own score leaves out; the UI renders
-                    // it beside the total. Empty for both Field Day events.
-                    score_note_key: rs.score_note_key.to_string(),
-                    rules_generated: tempo_core::fd_rules::active_generated().to_string(),
-                    // The effectively-ON assistance sources, by their display
-                    // labels — the advisory UI's single source (never re-derived).
-                    assistance_on: self
-                        .settings
-                        .assistance_sources()
-                        .iter()
-                        .filter(|&&(_, on)| on)
-                        .map(|&(label, _)| label.to_string())
-                        .collect(),
-                    log: log
-                        .qsos()
-                        .iter()
-                        .map(|q| FieldDayQso {
-                            call: q.call.clone(),
-                            class: q.class().to_string(),
-                            section: q.section().to_string(),
-                            band: q.band.clone(),
-                            mode: q.mode.clone(),
-                            submode: q.submode.clone(),
-                            when_unix: q.when_unix,
-                            // ⭐ THE ROW'S OWN SENT EXCHANGE (§3.3). Rendered from the
-                            // row by the one function that renders one, so an emitter
-                            // looping over these rows has the right value in hand and
-                            // no reason to reach out to the session.
-                            mex: tempo_core::contest::sent_exchange_string(q, spec),
-                        })
-                        .collect(),
-                    club: self.fd_club_dto(log),
-                    upload: crate::dto::FdUploadDto {
-                        enabled: log.session.upload.enabled,
-                        destinations: log.session.upload.destinations.clone(),
-                        available: upload_legs::IDS.iter().map(|s| s.to_string()).collect(),
-                        hint: tempo_core::contest::UPLOAD_CLUBLOG_SWEEP_HINT.to_string(),
-                    },
-                    // ⭐ THE DYNAMIC ENTRY STRIP'S SHAPE (§9). The strip renders Call
-                    // plus one box per slot HERE, in this order — never a hardcoded
-                    // Class/Section pair. Field Day's role receives exactly those two,
-                    // so the shipped strip is what this produces.
-                    receives: role
-                        .receives
-                        .iter()
-                        .filter_map(|k| spec.field(k))
-                        .map(|f| crate::dto::FdFieldDto {
-                            key: f.key.to_string(),
-                            kind: crate::dto::field_kind_tag(&f.kind).to_string(),
-                            required: f.required,
-                            domain: match f.kind {
-                                tempo_core::contest::FieldKind::Enum { domain } => {
-                                    Some(domain.id.to_string())
-                                }
-                                _ => None,
-                            },
-                        })
-                        .collect(),
-                    // The read-only sent display, as a VECTOR — §3.3 mechanism 2. It
-                    // describes the session, which is what is about to go on the air;
-                    // nothing that describes a row already logged may read it.
-                    composing: log
-                        .session
-                        .my_exchange
-                        .iter()
-                        .map(|v| crate::dto::FdFieldValueDto {
-                            key: v.key.to_string(),
-                            raw: v.raw.clone(),
-                            domain: v.domain.map(|d| d.to_string()),
-                        })
-                        .collect(),
-                    role: role.id.to_string(),
-                    boards: tempo_core::contest::boards(&rs.scoring, spec, role)
-                        .into_iter()
-                        .map(|b| crate::dto::FdBoardDto {
-                            id: b.id.to_string(),
-                            slot: b.slot.to_string(),
-                            domain: b.domain.map(|d| d.to_string()),
-                            scope: crate::dto::mult_scope_tag(b.scope).to_string(),
-                            worked: log.worked_values(b.slot),
-                        })
-                        .collect(),
-                });
+                s.field_day = self.field_day_status();
             }
         }
 
@@ -16961,6 +17504,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
     }
 
     pub fn plan_tx(&mut self, slot: u64) -> Option<TxPlan> {
+        self.poll_remote_transmit(std::time::Instant::now());
         // Coordinated QSY: execute a scheduled move the moment it comes due,
         // regardless of TX/RX/mute state (no-op while the feature is disabled).
         self.qsy_execute_due(slot);
@@ -17569,6 +18113,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// emission, precisely what the transmit guards exist to prevent. The check is
     /// cheap and makes the race unrepresentable rather than merely unlikely.
     pub fn commit_tx(&mut self, plan: &TxPlan, wave: Vec<f32>, current_slot: u64) -> Vec<Vec<f32>> {
+        self.poll_remote_transmit(std::time::Instant::now());
         // WHOLE-plan validity, not just the tier. Everything the gate read when
         // planning — dial, sideband, TX offset, operating mode, plus the arming
         // verbs via the generation — can move while the engine is unlocked for
@@ -18645,7 +19190,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 if self.settings.prompt_to_log {
                     // Hold for the operator's confirm-before-log popup instead of
                     // writing it silently.
-                    self.pending_log = Some(rec);
+                    self.replace_pending_log(Some(rec));
                     self.persist_pending_qso(); // journal before the popup waits
                 } else {
                     self.log_qso(rec);
@@ -18826,7 +19371,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
             // keeps going out. Clear the QSO-start stamp too — the NEXT caller stamps
             // its own TIME_ON; otherwise this QSO's start would leak into the next
             // contact's logged TIME_ON (e.g. after a manual Log-QSO mid-run).
-            self.qso_logged = false;
+            self.reset_qso_log_identity();
             self.qso_report_sent = None;
             self.qso_start_unix = None;
             self.reset_tx_watchdog();
@@ -19546,6 +20091,16 @@ Pick the one you operate from on the Contesting tab in Settings.",
         text: &str,
     ) -> (usize, tempo_core::reconcile::ReconcileSummary) {
         self.station.merge_qrz_report(text)
+    }
+
+    /// Immutable log view for bounded read models. Does not sync, recover or write a file.
+    pub fn log_records(&self) -> &[QsoRecord] {
+        self.station.logbook.records()
+    }
+
+    /// Retain across chunked reads to detect any intervening log mutation/replacement.
+    pub fn log_read_token(&self) -> std::sync::Arc<()> {
+        self.station.logbook.read_token()
     }
 
     /// See [`StationCore::get_log`].
@@ -33491,6 +34046,107 @@ mod tests {
             "audio",
             "clearing RF falls straight back to the audio FFT"
         );
+    }
+
+    #[test]
+    fn passive_audio_observers_preserve_desktop_averaging_and_staleness() {
+        let feed = SpectrumFeed::default();
+        assert!(feed.peek_audio_row().is_none());
+        for value in [0.1, 0.4] {
+            feed.publish_audio(Spectrum {
+                row: vec![value; 8],
+                lo_hz: 0.0,
+                hi_hz: 4000.0,
+                source: "audio".into(),
+            });
+        }
+        let current = feed.peek_audio_row().unwrap();
+        for _ in 0..10 {
+            assert_eq!(feed.peek_audio_row().unwrap().row, current.row);
+            assert_eq!(
+                feed.audio_frames_pending_for_test(),
+                2,
+                "a remote observer must not consume the local averaging window"
+            );
+        }
+        assert_eq!(feed.audio_row().unwrap().row, current.row);
+        assert_eq!(
+            feed.audio_frames_pending_for_test(),
+            0,
+            "the existing desktop reader must still close its averaging window"
+        );
+        feed.backdate_audio_for_test(Duration::from_secs(3));
+        let stale = feed.peek_audio_row().unwrap();
+        assert!(
+            stale.row.is_empty(),
+            "stale audio must not become a frozen live picture"
+        );
+        assert_eq!(stale.source, "audio");
+    }
+
+    #[test]
+    fn passive_scope_observers_preserve_span_window_averaging_and_request_expiry() {
+        let feed = SpectrumFeed::default();
+        feed.publish_audio(Spectrum {
+            row: vec![0.2; 8],
+            lo_hz: 0.0,
+            hi_hz: 4000.0,
+            source: "audio".into(),
+        });
+        assert_eq!(feed.peek_scope_row().unwrap().hi_hz, 4000.0);
+        assert!(
+            feed.scope_request().is_none(),
+            "observation cannot create DSP demand"
+        );
+        feed.scope_row(300.0, 1100.0, spectrum::WindowN::Sharp);
+        for value in [0.2, 0.6] {
+            feed.publish_scope(Spectrum {
+                row: vec![value; 8],
+                lo_hz: 300.0,
+                hi_hz: 1100.0,
+                source: "audio".into(),
+            });
+        }
+        let before = feed.scope_request();
+        let row = feed.peek_scope_row().unwrap();
+        for _ in 0..10 {
+            assert_eq!(feed.peek_scope_row().unwrap().row, row.row);
+        }
+        assert_eq!(feed.scope_request(), before);
+        feed.publish_scope(Spectrum {
+            row: vec![1.0; 8],
+            lo_hz: 300.0,
+            hi_hz: 1100.0,
+            source: "audio".into(),
+        });
+        let averaged = feed
+            .scope_row(300.0, 1100.0, spectrum::WindowN::Sharp)
+            .unwrap();
+        let expected = power_mean(&[0.2, 0.6, 1.0]);
+        assert!(
+            averaged
+                .row
+                .iter()
+                .all(|value| (*value - expected).abs() < 1e-6),
+            "all three producer frames must reach the local averaging window"
+        );
+        feed.backdate_scope_req_for_test(Duration::from_secs(3));
+        assert_eq!(
+            feed.peek_scope_row().unwrap().hi_hz,
+            4000.0,
+            "expired station request falls back to audio"
+        );
+        assert!(feed.scope_request().is_none());
+        feed.publish_rf(Spectrum {
+            row: vec![0.9; 8],
+            lo_hz: 14_000_000.0,
+            hi_hz: 14_100_000.0,
+            source: "yaesu".into(),
+        });
+        assert_eq!(feed.peek_scope_row().unwrap().source, "yaesu");
+        feed.clear_rf();
+        feed.backdate_audio_for_test(Duration::from_secs(3));
+        assert!(feed.peek_scope_row().unwrap().row.is_empty());
     }
 
     /// An EMPTY native row must never win — a panadapter that streams nothing would otherwise
