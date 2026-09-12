@@ -119,3 +119,24 @@ it('shows the account id as an instruction only while there is something to pair
   // Still present for quoting when asking for help, just no longer presented as a step.
   expect(document.body.textContent).toContain(paired.accountId)
 })
+
+// pair/claim allows five attempts per ten minutes, and the code itself lives ten minutes. A typo
+// that reaches the service costs one of those attempts, so the alphabet is checked here first.
+it('refuses a malformed pairing code locally instead of spending a rate-limited attempt', async () => {
+  const session = account(), service = client(session)
+  render(<RemoteApp />)
+  const input = await screen.findByLabelText('Pairing code')
+  // Sixteen characters, but with the classic O-for-0 substitution off a shack screen.
+  fireEvent.change(input, { target: { value: 'O123456789abcdef' } })
+  const claim = screen.getByRole('button', { name: 'Link to my account' })
+  expect((claim as HTMLButtonElement).disabled).toBe(true)
+  await screen.findByText(/sixteen characters/i)
+  fireEvent.submit(input.closest('form')!)
+  expect(service.post).not.toHaveBeenCalledWith('pair/claim', expect.anything())
+
+  // The same code with a real zero is accepted and normalised.
+  fireEvent.change(input, { target: { value: '0123-4567 89ABCDEF' } })
+  expect((screen.getByRole('button', { name: 'Link to my account' }) as HTMLButtonElement).disabled).toBe(false)
+  fireEvent.submit(input.closest('form')!)
+  await waitFor(() => expect(service.post).toHaveBeenCalledWith('pair/claim', { code: '0123456789abcdef' }))
+})

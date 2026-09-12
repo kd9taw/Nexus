@@ -84,11 +84,27 @@ export function RemoteApp() {
   // Written out rather than looked up in a map: the catalog's orphan check scans for literal
   // t() calls, so a dynamic lookup reads as "nobody uses these keys" and the compiler stops
   // checking them too. Anything the service refuses without a name falls through to the last arm.
+  // A pairing code is sixteen hex characters. Checking only the LENGTH let an O-for-0 typo reach
+  // the service, and `pair/claim` is rate limited to five attempts per ten minutes - the same ten
+  // minutes the code itself lives. Three typos off the shack screen could cost the whole code.
+  const pairingCode = code.replace(/[\s-]/g, '').toLowerCase()
+  const pairingCodeReady = /^[0-9a-f]{16}$/.test(pairingCode)
+  const pairingCodeMalformed = pairingCode.length === 16 && !pairingCodeReady
+
+  // Every code below is one the BROWSER can actually receive. `stationLimit` and `pairingExpired`
+  // are thrown only inside enroll/check and enroll/approve, which refuse any request carrying an
+  // Origin header - the shack's native client only - so naming them here was answering questions
+  // nobody in a browser can ask, while the refusals operators really hit fell through to the
+  // generic sentence about checking the connection.
   const refusal = (code: string) =>
     code === 'trialEnded' ? t('remote.trialEnded')
     : code === 'trialDisabled' ? t('remote.trialDisabled')
+    : code === 'trialRequired' ? t('remote.trialEnded')
+    : code === 'invalidPairingCode' ? t('remote.pairingExpired')
     : code === 'stationLimit' ? t('remote.stationLimitReached')
-    : code === 'pairingExpired' ? t('remote.pairingExpired')
+    : code === 'deviceLimit' ? t('remote.deviceLimitReached')
+    : code === 'signInRequired' ? t('remote.signInAgain')
+    : code === 'stationUnavailable' ? t('remote.stationOffline')
     : t('remote.requestFailed')
   return <div className="app remote-monitor-app remote-service-app">
     <AccountViewport />
@@ -146,11 +162,14 @@ export function RemoteApp() {
         </section>)}
         {canPair && session.stations.length < 2 && <section className="rm-card remote-section">
           <h2>{t('remote.pairStation')}</h2><p>{t('remote.enterCodeHint')}</p>
-          <form onSubmit={event => { event.preventDefault(); void act(async () => {
-            await client?.post('pair/claim', { code: code.replace(/[\s-]/g, '').toLowerCase() }); setCode(''); setClaimed(true); await refresh()
+          {/* Guarded on the SUBMIT, not only the button: Enter in the field submits a form whose
+              button is disabled, which would spend a rate-limited attempt on a typo anyway. */}
+          <form onSubmit={event => { event.preventDefault(); if (!pairingCodeReady) return; void act(async () => {
+            await client?.post('pair/claim', { code: pairingCode }); setCode(''); setClaimed(true); await refresh()
           }) }}>
             <label>{t('remote.pairingCode')}<input autoComplete="off" spellCheck={false} value={code} maxLength={24} required onChange={event => setCode(event.target.value)} /></label>
-            <button className="remote-button" disabled={busy || code.replace(/[\s-]/g, '').length !== 16}>{t('remote.claimStation')}</button>
+            <button className="remote-button" disabled={busy || !pairingCodeReady}>{t('remote.claimStation')}</button>
+          {pairingCodeMalformed && <p role="status">{t('remote.pairingCodeMalformed')}</p>}
           </form>
           {claimed && <p role="status">{t('remote.approveInShack')}</p>}
         </section>}
