@@ -1085,6 +1085,44 @@ test('an unverified address neither protects nor punishes', async () => {
   }
 })
 
+// THE SHAPE PRODUCTION ACTUALLY SENDS. The browser authenticates with `getTokenSilently()`, which
+// returns the ACCESS token for our own API audience; the `email` scope populates the ID token and
+// /userinfo, not that one. So the claims arrive only if a login Action puts them there, and Auth0
+// silently drops a non-namespaced custom claim on a custom-API audience - the namespaced pair is
+// the only spelling that can survive the trip. Every other test here mints the bare names, so the
+// whole suite passed while the check identified nobody in production.
+test('the namespaced claims are read, and the session says whether identity is live', async () => {
+  const ns = 'https://nexus.hamradiotools.io/'
+  const address = `op-${crypto.randomUUID()}@example.invalid`
+  const delivered = email => ({ [`${ns}email`]: email, [`${ns}email_verified`]: true })
+
+  const first = app.client(await app.token(`auth0|${crypto.randomUUID()}`, delivered(address)))
+  const { value: firstAccount } = await first.post('session')
+  assert.equal(firstAccount.identityVerified, true, 'the namespaced claims identify the account')
+
+  const desktop = app.client()
+  const { value: enrollment } = await desktop.post('enroll', { name: 'Shack' })
+  await first.post('pair/claim', { code: enrollment.code })
+  const credential = crypto.getRandomValues(new Uint8Array(32)).reduce((s, b) => s + b.toString(16).padStart(2, '0'), '')
+  await desktop.post('enroll/approve', { id: enrollment.id, proof: enrollment.proof, credential })
+
+  // The same human through a second connection is still the same human.
+  const second = app.client(await app.token(`google-oauth2|${crypto.randomUUID()}`, delivered(address)))
+  const { value: secondAccount } = await second.post('session')
+  assert.notEqual(secondAccount.accountId, firstAccount.accountId)
+  assert.equal(secondAccount.entitlement.state, 'none')
+  const other = app.client()
+  const { value: again } = await other.post('enroll', { name: 'Same shack again' })
+  const { value: refused } = await second.post('pair/claim', { code: again.code }, 403)
+  assert.equal(refused.error, 'trialActiveElsewhere')
+
+  // And the diagnostic half: a token carrying NO address says so, which is the state in which the
+  // protection above silently does nothing. Telling those two apart from outside is the point.
+  const anonymous = app.client(await app.token(`auth0|${crypto.randomUUID()}`))
+  const { value: anonymousAccount } = await anonymous.post('session')
+  assert.equal(anonymousAccount.identityVerified, false, 'no address means no identity to key on')
+})
+
 // 0002_trial.sql and grant-trial.mjs both exist to keep a hand grant and a self-serve trial
 // tellable apart forever. An admin extension used to overwrite both columns that carry that.
 test('extending a trial by hand records that it began as self-serve', async () => {

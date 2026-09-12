@@ -194,7 +194,10 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
   // Every remaining operation is account-authenticated and subject to exact Origin.
   // Destructured off deliberately: `identity` is spread into the browser identity below and on
   // into relay socket state, and the provider subject has no business travelling with it.
-  const { subject, ...identity } = await account(request, env, now)
+  // `verified` is destructured off for the same reason `subject` is: `identity` is spread into
+  // the browser identity and on into relay socket state, and how this account was identified is
+  // not something the wire needs to carry.
+  const { subject, verified, ...identity } = await account(request, env, now)
   await rate(env, `account:${identity.accountId}`, now, 120)
   const entitlement = await trial(env, identity.accountId, now)
   // The only privileged write in the service. It exists because every trial in a closed beta is
@@ -245,7 +248,12 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
       WHERE account_id=? AND approved=0 AND expires_at>? ORDER BY expires_at DESC LIMIT 1`)
       .bind(identity.accountId, now).first<{ id: string; name: string; expires_at: number }>()
     const pending = claimed ? { id: claimed.id, name: claimed.name, expiresAt: claimed.expires_at } : null
-    return json({ accountId: identity.accountId, entitlement, stations, pending, serverNow: now })
+    // `identityVerified` is the signal that the one-trial-per-person check is actually LIVE. It
+    // is false whenever the token carried no verified address - which is exactly the state in which
+    // that check silently protects nothing. Without it there is no way to tell the two apart from
+    // outside, and a provider that never sends the claim looks identical to one that does.
+    return json({ accountId: identity.accountId, entitlement, stations, pending,
+      identityVerified: verified, serverNow: now })
   }
   if (path === 'pair/claim') {
     requireEligible(entitlement)

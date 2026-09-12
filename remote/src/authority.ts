@@ -77,7 +77,13 @@ export function bearer(request: Request): string {
   return header.slice(7)
 }
 let jwks: { issuer: string; keys: ReturnType<typeof createRemoteJWKSet> } | undefined
-export async function account(request: Request, env: RemoteEnv, now: number): Promise<Identity & { subject: string }> {
+/** The namespace an Auth0 login Action must use to put the email claims on the access token.
+ *  Hardcoded rather than configured because it has to match the Action byte for byte, and a second
+ *  place to set it is a second place for it to drift - a drift that fails SILENTLY, by simply never
+ *  identifying anyone again. STAGING.md carries the Action to paste. */
+const CLAIM_NS = 'https://nexus.hamradiotools.io/'
+
+export async function account(request: Request, env: RemoteEnv, now: number): Promise<Identity & { subject: string; verified: boolean }> {
   browserOrigin(request, env)
   requireValue(env.AUTH0_ISSUER.startsWith('https://') && env.AUTH0_ISSUER.endsWith('/') &&
     env.AUTH0_CLIENT_ID !== 'unconfigured', 'serviceNotConfigured', 503)
@@ -97,9 +103,18 @@ export async function account(request: Request, env: RemoteEnv, now: number): Pr
     // Only a VERIFIED address counts. An unverified one is a claim the holder typed, so keying
     // entitlement on it would replace "one sign-up per trial" with "one typed address per trial" -
     // no better, and it would wrongly bind two strangers who typed the same thing.
-    if (payload.email_verified === true && typeof payload.email === 'string' &&
-        payload.email.length > 0 && payload.email.length <= 320) {
-      email = payload.email.trim().toLowerCase()
+    // Read BOTH spellings. `getTokenSilently()` returns the ACCESS token for our own API
+    // audience, and the `email` scope populates the ID token and /userinfo - not that. The claims
+    // reach an access token only when a login Action puts them there, and Auth0 SILENTLY DROPS a
+    // non-namespaced custom claim on a custom-API audience ("the transaction won't fail, but your
+    // custom claim won't be added"), so the namespaced pair is the only one an Action can deliver.
+    // The bare names are still read first: a provider that sends the OIDC-standard claims natively
+    // is no less trustworthy, and reading both means neither arrangement silently does nothing.
+    const verifiedClaim = payload.email_verified ?? payload[`${CLAIM_NS}email_verified`]
+    const emailClaim = payload.email ?? payload[`${CLAIM_NS}email`]
+    if (verifiedClaim === true && typeof emailClaim === 'string' &&
+        emailClaim.length > 0 && emailClaim.length <= 320) {
+      email = emailClaim.trim().toLowerCase()
     }
   } catch { throw new Refusal('signInRequired', 401) }
   const emailHash = email ? await digest(`email:${email}`) : null
@@ -118,7 +133,7 @@ export async function account(request: Request, env: RemoteEnv, now: number): Pr
   // `subject` rides alongside Identity rather than inside it. The caller destructures it off, so
   // it never reaches the object that index.ts spreads into the browser identity and on into relay
   // socket state - the provider subject is not something the wire needs to carry.
-  return { accountId: row.id, expiresAt: until, subject }
+  return { accountId: row.id, expiresAt: until, subject, verified: email !== null }
 }
 
 /** Only the pinned provider subject may administer trials.

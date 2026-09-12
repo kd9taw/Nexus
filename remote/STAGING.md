@@ -55,10 +55,31 @@ the cost of one sign-up.
 
 Two tenant settings carry that defence, and neither is visible from this repository:
 
-1. The SPA must be allowed the `email` scope, and the tenant must put `email` and
-   `email_verified` in the access token. The browser requests `openid profile email`; if the
-   tenant does not supply the claims, the service records no identity and silently falls back to
-   the weaker per-`sub` rule.
+1. **A login Action must put the claims on the ACCESS token, under the namespace below.** This
+   is the step that is easy to believe is already done. The browser authenticates with
+   `getTokenSilently()`, which returns the access token for this API's audience — and the `email`
+   scope populates the *ID token* and `/userinfo`, not that token. Worse, Auth0 **silently drops**
+   a non-namespaced custom claim on a custom-API audience: "the transaction won't fail, but your
+   custom claim won't be added to your tokens." A plain `email` claim therefore vanishes without
+   an error anywhere. Add this Action on the **Login** flow:
+
+   ```js
+   exports.onExecutePostLogin = async (event, api) => {
+     const ns = 'https://nexus.hamradiotools.io/'
+     if (event.user.email_verified === true && event.user.email) {
+       api.accessToken.setCustomClaim(ns + 'email', event.user.email)
+       api.accessToken.setCustomClaim(ns + 'email_verified', true)
+     }
+   }
+   ```
+
+   The namespace must match `CLAIM_NS` in `src/authority.ts` byte for byte. The Worker also reads
+   the bare `email`/`email_verified` names, so a provider that supplies them natively works too.
+
+   **Verify it rather than assuming it.** Sign in on the Remote site and check the `session`
+   response: `identityVerified: true` means the claims arrived and the one-trial-per-person check
+   is live. `false` means it is not, and that is indistinguishable from a healthy service in every
+   other way — no error, no log line, just a trial anyone can take again by signing up twice.
 2. **Email verification must be enforced on the database connection.** An unverified address is
    a string somebody typed, so the service ignores it deliberately — binding on it would swap
    one sign-up per trial for one typed address per trial, and would wrongly tie together two
