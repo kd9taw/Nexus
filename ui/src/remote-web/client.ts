@@ -63,7 +63,7 @@ export class BrowserClient {
     if (issuer.protocol !== 'https:' || issuer.username || issuer.password || issuer.search || issuer.hash) throw new RemoteError(503)
     const auth = new Auth0Client({ domain: issuer.host, clientId: config.clientId,
       cacheLocation: 'memory', useRefreshTokens: false, httpTimeoutInSeconds: 10,
-      authorizationParams: { audience: config.audience, redirect_uri: window.location.origin, scope: 'openid profile' } })
+      authorizationParams: { audience: config.audience, redirect_uri: window.location.origin, scope: 'openid profile email' } })
     const query = new URLSearchParams(window.location.search)
     if (query.has('code') || query.has('error')) {
       try { await auth.handleRedirectCallback() }

@@ -1,6 +1,6 @@
 // Same-origin browser API and outbound station admission. No radio command router.
 import { account, access, body, browserOrigin, cookie, device, digest, id, label,
-  native, proof, rate, Refusal, requireAdmin, requireEligible, requireTrial, requireValue, secret, station,
+  native, proof, rate, Refusal, requireAdmin, requireEligible, requireTrial, requireUnspentIdentity, requireValue, secret, station,
   trial, TRIAL_MS, uuid } from './authority'
 import type { RemoteEnv, StationRow } from './authority'
 import { observerDeadline } from '../../ui/src/remote-monitor/relay'
@@ -127,6 +127,7 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
     if (path.endsWith('check')) return json({ accountId: pending.account_id, approved: pending.approved === 1 })
     requireValue(pending.account_id, 'accountNotClaimed', 409)
     requireEligible(await trial(env, pending.account_id, now))
+    await requireUnspentIdentity(env, pending.account_id, now)
     const credentialHash = await digest(proof(input.credential))
     // Approval at the shack is the moment the trial starts, so the clock is written in the same
     // batch as the station. Station insert first on purpose: a trial with no station is
@@ -241,6 +242,7 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
   }
   if (path === 'pair/claim') {
     requireEligible(entitlement)
+    await requireUnspentIdentity(env, identity.accountId, now)
     await rate(env, `claim:${identity.accountId}`, now, 5, 600000)
     const input = await body(request, ['code'])
     requireValue(typeof input.code === 'string' && /^[0-9a-f]{16}$/.test(input.code), 'invalidPairingCode', 400)

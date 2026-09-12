@@ -1018,3 +1018,69 @@ test('a stranger cannot mint unbounded rate rows through enroll/check', async ()
   const other = app.client()
   await other.post('enroll/check', { id: crypto.randomUUID(), proof }, 410)
 })
+
+// "One trial, ever" was one trial per PROVIDER SUBJECT. The same human signing in through a
+// different Auth0 connection - the same address via Google instead of a password - gets a
+// different `sub`, and UNIQUE(issuer, subject) treats that as an unrelated person: new account,
+// new clock, repeatable for the cost of one sign-up.
+test('a second sign-in by the same verified person does not earn a second trial', async () => {
+  const address = `op-${crypto.randomUUID()}@example.invalid`
+  const verified = email => ({ email, email_verified: true })
+
+  // First identity: password connection. Pairs and consumes its trial.
+  const first = app.client(await app.token(`auth0|${crypto.randomUUID()}`, verified(address)))
+  const { value: firstAccount } = await first.post('session')
+  const desktop = app.client()
+  const { value: enrollment } = await desktop.post('enroll', { name: 'Shack' })
+  await first.post('pair/claim', { code: enrollment.code })
+  const credential = crypto.getRandomValues(new Uint8Array(32)).reduce((s, b) => s + b.toString(16).padStart(2, '0'), '')
+  await desktop.post('enroll/approve', { id: enrollment.id, proof: enrollment.proof, credential })
+  const { value: running } = await first.post('session')
+  assert.equal(running.entitlement.state, 'active')
+
+  // THE ATTACK: same human, same verified address, different connection, so a different `sub`.
+  const second = app.client(await app.token(`google-oauth2|${crypto.randomUUID()}`, verified(address)))
+  const { value: secondAccount } = await second.post('session')
+  assert.notEqual(secondAccount.accountId, firstAccount.accountId, 'it really is a separate account row')
+  assert.equal(secondAccount.entitlement.state, 'none', 'and it has no trial of its own')
+
+  // ...and it cannot start one. The sibling trial is still running, so the refusal says so rather
+  // than claiming this person's fortnight is over.
+  const other = app.client()
+  const { value: second_enrollment } = await other.post('enroll', { name: 'Same shack again' })
+  const { value: refused } = await second.post('pair/claim', { code: second_enrollment.code }, 403)
+  assert.equal(refused.error, 'trialActiveElsewhere')
+
+  // Once the first trial has ENDED it is still spent, and the refusal changes to say so.
+  await app.db.prepare('UPDATE trials SET expires_at=? WHERE account_id=?')
+    .bind(Date.now() - 1000, firstAccount.accountId).run()
+  const { value: ended } = await second.post('pair/claim', { code: second_enrollment.code }, 403)
+  assert.equal(ended.error, 'trialEnded')
+
+  // A DIFFERENT person is unaffected - this must bind identities, not everyone.
+  const stranger = app.client(await app.token(`auth0|${crypto.randomUUID()}`, verified(`other-${crypto.randomUUID()}@example.invalid`)))
+  await stranger.post('session')
+  await stranger.post('pair/claim', { code: second_enrollment.code })
+})
+
+// An UNVERIFIED address is a string the holder typed. Keying on it would swap "one sign-up per
+// trial" for "one typed address per trial" - no better - and would wrongly bind two strangers who
+// happened to type the same thing. So it is ignored, and such an account keeps the old behaviour.
+test('an unverified address neither protects nor punishes', async () => {
+  const shared = `claimed-${crypto.randomUUID()}@example.invalid`
+  const a = app.client(await app.token(`auth0|${crypto.randomUUID()}`, { email: shared, email_verified: false }))
+  const b = app.client(await app.token(`auth0|${crypto.randomUUID()}`, { email: shared }))
+  const { value: accountA } = await a.post('session')
+  await b.post('session')
+
+  const hashes = await app.db.prepare('SELECT COUNT(*) AS n FROM accounts WHERE email_hash IS NOT NULL AND id=?')
+    .bind(accountA.accountId).first()
+  assert.equal(hashes.n, 0, 'an unverified address is never recorded as identity')
+
+  // Both can still pair: the weaker per-subject rule, not a lockout.
+  for (const who of [a, b]) {
+    const desk = app.client()
+    const { value: e } = await desk.post('enroll', { name: 'Unverified' })
+    await who.post('pair/claim', { code: e.code })
+  }
+})

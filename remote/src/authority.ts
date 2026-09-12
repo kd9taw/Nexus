@@ -84,7 +84,7 @@ export async function account(request: Request, env: RemoteEnv, now: number): Pr
   if (jwks?.issuer !== env.AUTH0_ISSUER) {
     jwks = { issuer: env.AUTH0_ISSUER, keys: createRemoteJWKSet(new URL('.well-known/jwks.json', env.AUTH0_ISSUER)) }
   }
-  let subject: string, until: number
+  let subject: string, until: number, email: string | null = null
   try {
     const { payload } = await jwtVerify(bearer(request), jwks.keys, {
       issuer: env.AUTH0_ISSUER, audience: env.AUTH0_AUDIENCE, algorithms: ['RS256'],
@@ -94,9 +94,24 @@ export async function account(request: Request, env: RemoteEnv, now: number): Pr
       payload.azp === env.AUTH0_CLIENT_ID && typeof payload.iat === 'number' && payload.iat * 1000 <= now + 30000)
     subject = payload.sub
     until = Math.min(Number(payload.exp) * 1000, now + 3600000)
+    // Only a VERIFIED address counts. An unverified one is a claim the holder typed, so keying
+    // entitlement on it would replace "one sign-up per trial" with "one typed address per trial" -
+    // no better, and it would wrongly bind two strangers who typed the same thing.
+    if (payload.email_verified === true && typeof payload.email === 'string' &&
+        payload.email.length > 0 && payload.email.length <= 320) {
+      email = payload.email.trim().toLowerCase()
+    }
   } catch { throw new Refusal('signInRequired', 401) }
-  await env.DB.prepare('INSERT OR IGNORE INTO accounts(id, issuer, subject) VALUES(?,?,?)')
-    .bind(uuid(), env.AUTH0_ISSUER, subject).run()
+  const emailHash = email ? await digest(`email:${email}`) : null
+  await env.DB.prepare('INSERT OR IGNORE INTO accounts(id, issuer, subject, email_hash) VALUES(?,?,?,?)')
+    .bind(uuid(), env.AUTH0_ISSUER, subject, emailHash).run()
+  // Backfill only: an account created before this migration, or before its provider supplied a
+  // verified address, learns its hash on the next sign-in. Never overwrites a hash with null, so a
+  // provider that stops sending the claim cannot quietly unpick an account's identity.
+  if (emailHash) {
+    await env.DB.prepare('UPDATE accounts SET email_hash=? WHERE issuer=? AND subject=? AND email_hash IS NULL')
+      .bind(emailHash, env.AUTH0_ISSUER, subject).run()
+  }
   const row = await env.DB.prepare('SELECT id FROM accounts WHERE issuer=? AND subject=?')
     .bind(env.AUTH0_ISSUER, subject).first<{ id: string }>()
   requireValue(row, 'serviceUnavailable', 503)
@@ -152,6 +167,31 @@ export function requireTrial(entitlement: Entitlement, now: number): void {
 export function requireEligible(entitlement: Entitlement): void {
   if (entitlement.state === 'active' || entitlement.state === 'none') return
   throw new Refusal(entitlement.state === 'ended' ? 'trialEnded' : 'trialDisabled')
+}
+
+/** Has the PERSON behind this account already consumed a trial under another sign-in?
+ *
+ *  `one trial, ever` was one trial per provider subject: the same human signing in through a
+ *  different Auth0 connection got a different `sub`, a new account row, and a fresh clock. A
+ *  verified email is what those identities actually share, so a trial already spent under any
+ *  account carrying the same verified address counts against this one.
+ *
+ *  An account with no verified address is not refused - it simply gets no extra protection, which
+ *  is the old behaviour. The real ceiling on this is whether the tenant enforces verification at
+ *  all; without that, a fresh unverified address is still a fresh trial. Documented in STAGING.md
+ *  as an operator responsibility rather than pretended away here. */
+export async function requireUnspentIdentity(env: RemoteEnv, accountId: string, now: number): Promise<void> {
+  const self = await env.DB.prepare('SELECT email_hash FROM accounts WHERE id=?')
+    .bind(accountId).first<{ email_hash: string | null }>()
+  if (!self?.email_hash) return
+  const spent = await env.DB.prepare(`SELECT t.expires_at FROM trials t
+    JOIN accounts a ON a.id = t.account_id
+    WHERE a.email_hash = ? AND a.id != ? LIMIT 1`)
+    .bind(self.email_hash, accountId).first<{ expires_at: number }>()
+  if (!spent) return
+  // A sibling account is still RUNNING a trial: that is the same person with two sign-ins, not a
+  // second entitlement, so point them at the one they already have rather than starting another.
+  throw new Refusal(spent.expires_at > now ? 'trialActiveElsewhere' : 'trialEnded')
 }
 export type StationRow = { id: string; account_id: string; name: string; enabled: number; generation: number; policy_version: number }
 export async function station(env: RemoteEnv, stationId: string): Promise<StationRow> {

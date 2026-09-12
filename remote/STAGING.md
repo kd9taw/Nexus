@@ -46,6 +46,28 @@ The staging API audience is fixed in the tooling. The preflight checks public OI
 discovery and signing keys; it cannot read the app's callback list or prove a real
 sign-in. Complete those acceptance checks in the actual browser.
 
+## Email verification is load-bearing
+
+Trial eligibility keys on a **verified** email address, not only on the Auth0 `sub`. Without
+that, the same person signing in through a different connection — the same address via Google
+rather than a password — gets a different `sub`, a new account and a fresh fourteen days, for
+the cost of one sign-up.
+
+Two tenant settings carry that defence, and neither is visible from this repository:
+
+1. The SPA must be allowed the `email` scope, and the tenant must put `email` and
+   `email_verified` in the access token. The browser requests `openid profile email`; if the
+   tenant does not supply the claims, the service records no identity and silently falls back to
+   the weaker per-`sub` rule.
+2. **Email verification must be enforced on the database connection.** An unverified address is
+   a string somebody typed, so the service ignores it deliberately — binding on it would swap
+   one sign-up per trial for one typed address per trial, and would wrongly tie together two
+   strangers who typed the same thing. If verification is not enforced, a fresh unverified
+   address is still a fresh trial.
+
+So the ceiling on this defence is the tenant, not the code. Confirm both before treating
+"one trial, ever" as true, and before charging for anything.
+
 ## Administrator identity
 
 The service has exactly one privileged write: granting or extending a trial
