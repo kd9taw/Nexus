@@ -110,10 +110,24 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       window.__waterfallDraws=0;const draw=CanvasRenderingContext2D.prototype.putImageData;
       CanvasRenderingContext2D.prototype.putImageData=function(...args){if(this.canvas.classList.contains('waterfall-canvas'))window.__waterfallDraws++;return draw.apply(this,args)};
     }`},session)
-    const evaluate=async expression=>{
+    const runEvaluate=async expression=>{
       const value=await browser.call('Runtime.evaluate',{expression,returnByValue:true,awaitPromise:true},session)
       if(value.exceptionDetails)throw new Error('Browser evaluation failed: '+String(value.exceptionDetails.exception?.description??value.exceptionDetails.text).split('\n')[0])
       return value.result?.value
+    }
+    // A measurement can arrive between React committing and the node existing, and on a loaded
+    // runner that window is wide: CI has measured a single case at 165 s against ~60 s here, and
+    // read getBoundingClientRect off a null querySelector for it. Two animation frames prove a
+    // PAINT happened, not that the element was ever mounted, so settledLayout cannot close it.
+    // One bounded retry after a settle does. This cannot hide a genuinely missing element - that
+    // fails both attempts and still throws, with the same message it always had.
+    const evaluate=async expression=>{
+      try { return await runEvaluate(expression) }
+      catch (error) {
+        if(!/Cannot read properties of null|Cannot read property .* of null/.test(String(error.message)))throw error
+        await runEvaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(true))))')
+        return await runEvaluate(expression)
+      }
     }
     // useViewport publishes dimensions on an animation frame. A fixed sleep can
     // measure the previous viewport on a busy renderer. Wait through the update
