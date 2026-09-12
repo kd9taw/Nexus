@@ -48,7 +48,9 @@ second station never restarts the first.
 because `enabled` plus an expiry cannot tell them apart and they are different
 sentences to an operator. Two gates consume them: `requireEligible()` admits
 pairing while a trial runs **or** has never started, and `requireTrial()` guards
-everything that actually operates.
+`device`, `ticket` and `renew` — that is its only call site. Observation is gated
+separately by `observerDeadline` in the relay, which also expires a session already
+in flight, so neither function is the whole entitlement story on its own.
 
 `trials.started_at` is null for rows written before migration `0002`, and is never
 backfilled — `expires_at` minus fourteen days would invent a start date, and an

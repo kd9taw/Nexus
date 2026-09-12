@@ -114,7 +114,12 @@ export async function trial(env: RemoteEnv, accountId: string, now: number): Pro
     state, startedAt: row?.started_at ?? null, source: row?.source ?? null }
 }
 
-// The strict gate: is the service usable right now? Guards device, ticket, renew and observe.
+// The strict gate: is the service usable right now? ONE call site, index.ts:222, and it is
+// reached only by `device`, `ticket` and `renew` - the `observe` route returns before it.
+// Observe IS entitlement-gated, but by observerDeadline inside connectObserver (relay.ts:41),
+// which is also what expires a session already in flight. Do not read this function as the
+// whole entitlement story; an audit that does will conclude observe is unguarded here, or that
+// it is guarded here, and both are wrong.
 export function requireTrial(entitlement: Entitlement, now: number): void {
   requireValue(entitlement.enabled && entitlement.expiresAt > now, 'trialRequired')
 }

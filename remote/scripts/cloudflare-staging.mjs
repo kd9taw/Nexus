@@ -5,11 +5,23 @@ import { createHash } from 'node:crypto'
 import { pathToFileURL } from 'node:url'
 import { STAGING, databaseId, revision, identityFromEnv, stagingConfig, requireValue, requestJson, requestBytes } from './staging-common.mjs'
 
-const legacyModuleNames = ['assets/index.html', 'assets/remote-licenses.txt', 'migrations/0001_observation.sql']
+// The two fixed assets, plus one or more D1 migrations matched by PATTERN - deliberately not a
+// hardcoded list of migration filenames. This previously pinned the exact three names shipped at
+// the time, so the first new migration (0002_trial.sql) silently made every future partial upload
+// unrecoverable: the inventory no longer matched, and recover refused rather than explaining why.
+// staging-artifact.mjs validates the forward path the same way, and the two must agree.
+// Still strict: nothing outside these shapes is accepted into a recovery.
+const recoveryAssetNames = ['assets/index.html', 'assets/remote-licenses.txt']
+const migrationModule = /^migrations\/\d{4}_[a-z0-9_]+\.sql$/
 function recoveryModules(value = {}) {
   requireValue(value && typeof value === 'object' && !Array.isArray(value), 'Recovery module hashes must be an object')
   const names = Object.keys(value).sort()
-  requireValue(names.length === 0 || JSON.stringify(names) === JSON.stringify(legacyModuleNames), 'Unexpected recovery module inventory')
+  if (names.length > 0) {
+    const assets = names.filter(name => recoveryAssetNames.includes(name))
+    const migrations = names.filter(name => migrationModule.test(name))
+    requireValue(assets.length === recoveryAssetNames.length && migrations.length > 0
+      && assets.length + migrations.length === names.length, 'Unexpected recovery module inventory')
+  }
   requireValue(Object.values(value).every(hash => typeof hash === 'string' && /^[0-9a-f]{64}$/.test(hash)), 'Recovery module SHA-256 values are required')
   return value
 }
