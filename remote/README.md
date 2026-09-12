@@ -897,8 +897,8 @@ flag, plus the original controller window and transmit generation. A changed
 exchange is refused before the native verb runs. S&P uses the native decoder reset
 under a nonblocking lock; none of these commands changes the TX-enable policy.
 Remote free-text drafts remain until confirmation, including when a request is
-refused or its outcome is uncertain. Period and TX-offset controls
-and complete durable QSO logging still require their own operation paths.
+refused or its outcome is uncertain. Period, TX-offset and QSO logging controls
+use their separate capabilities.
 
 The separate `ftMessages` capability connects the existing Tx1–Tx5 buttons and
 Alt+number shortcuts, including deliberately typed targets. Tx6 uses the existing
@@ -906,10 +906,27 @@ directed-CQ parser and `ftOperate`. Each message choice binds the displayed QSO
 before asynchronous work; the station compares it before the shared native
 override. Native arming preference, parity and immediate-slot behavior remain.
 Draft editing and Generate/Clear stay local to the browser, while the next-message
-indicator follows station confirmation. Full QSO logging and TX settings remain
-incomplete.
+indicator follows station confirmation. QSO Log/Confirm/Discard uses `qsoLogging`;
+the FT preferences below use `ftSettings`.
 
 Decode/roster Call selection currently requires the native 240-row history or current roster.
-Older displayed history, typed Call-button targets, complete QSO progression and logging,
+Older displayed history, typed Call-button targets, remaining FT options,
 other modes, browser audio and hardware/WAN acceptance remain incomplete.
+The current FT8/FT4 exchange and direct/confirmed logging have automated native/cloud
+evidence; that does not establish physical remotely operated contacts.
 Source verification is not installation or deployment.
+
+
+The separate `ftSettings` capability connects the existing TX offset field,
+Shift/right-click TX marker, Ctrl/Command combined markers, Hold and Auto/1st/2nd
+period controls for FT8/FT4. It requires the local transmit grant but cannot arm
+or renew TX. The gesture captures its displayed tier, values and opaque native
+context before asynchronous work. Local changes away and back retire it. Narrow
+Settings projections use the native atomic save, then the existing setters;
+a failed save changes no runtime choice. Auto-period selection remains runtime-only,
+as in the desktop command. Hold belongs to decoded-station selection; a plain
+waterfall click remains RX-only. Combined marker changes save together before
+applying both native setters. Receipts distinguish saved preferences from runtime
+state, and the browser waits for a later station snapshot. These controls preserve
+native parity, offsets and slot behavior; they do not complete the remaining FT
+options, other-mode operation, media or hardware/WAN acceptance.

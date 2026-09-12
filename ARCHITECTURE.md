@@ -199,8 +199,8 @@ control window. The Engine compares that exchange before calling its existing
 verb; it preserves the TX latch, settings and slot behavior. S&P takes the stable
 decoder lock without waiting and uses the shared native reset callback. Remote
 free-text drafts clear only after confirmation and retain edits made while a
-request is pending. This does not add Tx-slot selection, offset/period settings
-or complete QSO logging/confirmation.
+request is pending. Tx-message selection, offset/period settings and QSO logging use the
+separate capabilities described below.
 The `ftMessages` capability connects the existing Tx1–Tx5 choices to a checked
 form of the same native message override, including deliberate typed targets,
 manual-arming preference, parity and immediate-slot policy. Tx6 uses `ftOperate`
@@ -220,6 +220,21 @@ cannot clear a newer hold, even one with identical fields. Only the four existin
 dialog fields are editable remotely. Storage synchronization releases Engine,
 and Stop keeps its independent route and a control inside the pending dialog.
 These operations use the existing lease, result recovery and no-replay contract.
+
+
+The separate `ftSettings` capability connects the existing TX offset field,
+Shift/right-click TX marker, Ctrl/Command combined markers, Hold and Auto/1st/2nd
+period controls for FT8/FT4. It requires the local transmit grant but cannot arm
+or renew TX. The gesture captures its displayed tier, values and opaque native
+context before asynchronous work. Local changes away and back retire it. Narrow
+Settings projections use the native atomic save, then the existing setters;
+a failed save changes no runtime choice. Auto-period selection remains runtime-only,
+as in the desktop command. Hold belongs to decoded-station selection; a plain
+waterfall click remains RX-only. Combined marker changes save together before
+applying both native setters. Receipts distinguish saved preferences from runtime
+state, and the browser waits for a later station snapshot. These controls preserve
+native parity, offsets and slot behavior; they do not complete the remaining FT
+options, other-mode operation, media or hardware/WAN acceptance.
 
 
 The receive-audio foundation is local to `tempo-audio`: the sole `RxDsp` capture
