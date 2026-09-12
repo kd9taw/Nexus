@@ -187,6 +187,15 @@ export class HostedConnection {
           if (message.type === 'session' && Object.keys(message).length === 2 && typeof message.sessionId === 'string' && /^[0-9a-f-]{36}$/.test(message.sessionId)) {
             if (this.applicationMode) { this.application.open(); this.operations.open() }
             this.sessionId = message.sessionId
+            // A session proves the SERVICE is reachable, so the reconnect backoff starts over
+            // here rather than only when a data frame lands. Those are different failures and
+            // deserve different patience: a station that is up but briefly quiet - a busy Nexus,
+            // a WAN blip - used to escalate exactly like an unreachable one, because every
+            // reconnect during the quiet period incremented `attempt` and none of them carried
+            // data to reset it. After a short outage the next retry was already 16 to 30 seconds
+            // away, and the workspace sat on "Station data unavailable" for all of it. Genuine
+            // connect failures never reach this line, so they still back off as before.
+            this.attempt = 0
             clearInterval(this.renewal)
             this.renewal = setInterval(() => {void this.renew(socket)},30000)
           } else if (message.type === 'observation' && Object.keys(message).length === 3 && Number.isSafeInteger(message.sentAtMs) && this.anchor) {

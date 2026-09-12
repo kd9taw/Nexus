@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { ApplicationClient } from './application-client'
+import { ApplicationStreamClient } from './application-stream-client'
 import { ApplicationRelay } from './application-relay'
 import { APPLICATION_COMMANDS, applicationReply } from './application-protocol'
 import { STREAM_TOPICS, streamUpdates } from './application-stream-protocol'
@@ -147,4 +148,31 @@ it('includes the browser credit round trip in freshness and falls back to the ol
   expect(client.supports('get_cw_state')).toBe(false)
   await expect(client.invoke('get_cw_state')).rejects.toThrow('applicationUnsupported')
   client.disconnected()
+})
+
+// A station can stop answering WITHOUT the socket dropping — a stalled shack PC, a WAN blip, a
+// Nexus that is briefly too busy to serve. The browser must not go permanently silent when that
+// happens. Measured against the real browser before this test existed: served-request counters
+// were byte-identical over eleven seconds after data resumed, because flush() early-returns while
+// the topic list is unchanged and the stale credit is never re-primed. The workspace then sits on
+// "Station data unavailable" until some navigation happens to change the topic set.
+it('does not go silent when a credit is never answered', async () => {
+  vi.useFakeTimers()
+  const send = vi.fn<(message: string) => void>()
+  const fail = vi.fn<() => void>()
+  const client = new ApplicationStreamClient(send, fail)
+  void client.invoke<unknown>('get_snapshot')
+  await vi.advanceTimersByTimeAsync(1)
+  const first = JSON.parse(send.mock.lastCall![0]) as { type: string; requestId: string | null }
+  expect(first.type).toBe('applicationSubscribe')
+  expect(first.requestId).toBeTruthy()
+
+  // The station consumes that credit and answers nothing, ever.
+  send.mockClear()
+  await vi.advanceTimersByTimeAsync(10_000)
+
+  // Something must reach the wire or the connection must be failed. Silence is the bug: the
+  // station is waiting for a credit that will never arrive, and so is the operator.
+  expect(send.mock.calls.length + fail.mock.calls.length,
+    'a stalled credit must either be re-primed or fail the connection, never leave it silent').toBeGreaterThan(0)
 })
