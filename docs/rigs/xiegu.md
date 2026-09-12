@@ -119,5 +119,26 @@ PTT method.
 
 ---
 
+## Known limitation: the SWR reading is wrong on Xiegu radios
+
+Nexus reads the transmit meters over CI-V and converts the raw value with an
+Icom calibration curve. Xiegu radios speak CI-V, but they are not Icoms and their
+meters use their own scale, so the SWR figure Nexus shows can be far higher than
+the truth — a G90 sitting at 1.2:1 on its own meter has been reported as 6:1 in
+Nexus. The number pins at the top of the Icom curve rather than tracking anything
+real.
+
+**Trust the radio's own meter, not this reading.** Use the G90's SWR scanner or a
+bracket of the antenna at the frequency you are working. Nothing about the RF path
+is wrong when this happens; only the number on screen is.
+
+The same applies to the ALC and power readings on these radios, for the same
+reason. Fixing it properly needs a bench capture of what each model actually
+returns at a known SWR, so the curve can be built from the radio instead of
+borrowed from another manufacturer. Until that exists, the reading stays
+uncalibrated for non-Icom CI-V rigs.
+
+---
+
 *Port detected but CAT won't answer, or audio device confusion with a CE-19 /
 Digirig? See [Troubleshooting](../troubleshooting.md).*

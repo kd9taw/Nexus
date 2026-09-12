@@ -553,6 +553,17 @@ fn interp_cal(raw: u16, table: &[(u16, f32)]) -> f32 {
 }
 
 // IC-9700 calibration tables (Hamlib rigs/icom/ic7300.c: IC9700_*_CAL).
+//
+// ⚠️ THESE ARE ICOM CURVES AND THEY ARE APPLIED TO EVERY CI-V RIG. A Xiegu speaks CI-V but is
+// not an Icom, and its meters use their own scale, so the converted figure is not the rig's.
+// A G90 reading 1.2:1 on its own meter has been reported as 6:1 here - raw values land at or
+// past the last SWR_CAL entry, and interp_cal clamps there, so the display pins at 6.0 rather
+// than tracking anything. Documented for operators in docs/rigs/xiegu.md.
+//
+// Fixing it needs a bench capture of what each non-Icom model returns at a known SWR; building
+// a second curve by guesswork would just be a different wrong answer. This is the
+// vendor-spec-not-the-wrapper trap: these numbers came from Hamlib's reading of the protocol,
+// which is not the same thing as the protocol.
 const SWR_CAL: &[(u16, f32)] = &[(0, 1.0), (48, 1.5), (80, 2.0), (120, 3.0), (240, 6.0)];
 const ALC_CAL: &[(u16, f32)] = &[(0, 0.0), (120, 1.0)];
 const PO_WATTS_CAL: &[(u16, f32)] = &[
