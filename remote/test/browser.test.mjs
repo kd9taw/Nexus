@@ -655,10 +655,12 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         for(const type of ['keyDown','keyUp'])await browser.call('Input.dispatchKeyEvent',{type,key:'Enter',code:'Enter',windowsVirtualKeyCode:13},session)
         await until(`document.querySelector('${txField}').value==='1800'&&!document.querySelector('${txField}').disabled`)
         assert.equal(stationRequests.length,++preferences);assert.equal(stationRequests.at(-1).action.change.kind,'txOffset')
-        for(const [selector,kind]of [['.op-btn.hold','hold'],['.cq-period','even'],['.cq-period','even'],['.cq-period','auto']]){
+        for(const [selector,kind,label]of [['.op-btn.hold','hold',null],['.cq-period','even','TX 1st / even'],['.cq-period','even','TX 2nd / odd'],['.cq-period','auto','TX AUTO / 2nd']]){
           await click(`document.querySelector('.cockpit-qso ${selector}')`)
           for(let i=0;i<100&&stationRequests.length===preferences;i++)await sleep(50)
           assert.equal(stationRequests.length,++preferences);assert.equal(stationRequests.at(-1).action.change.kind,kind)
+          if(label)await until(`document.querySelector('.cockpit-qso .cq-period')?.textContent.trim()===${JSON.stringify(label)}`)
+          else await until(`document.querySelector('.cockpit-qso .op-btn.hold')?.getAttribute('aria-pressed')==='true'`)
           await until(`!document.querySelector('${txField}').disabled`)
         }
         // Real modified waterfall gestures retain native TX-only / both semantics.
@@ -669,8 +671,20 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
           for(const type of ['mousePressed','mouseReleased'])await browser.call('Input.dispatchMouseEvent',{type,x:point.x,y:point.y,button:'left',modifiers,clickCount:1},session)
           for(let i=0;i<100&&stationRequests.length===preferences;i++)await sleep(50)
           assert.equal(stationRequests.length,++preferences);assert.equal(stationRequests.at(-1).action.change.kind,kind)
+          const hz=stationRequests.at(-1).action.change.hz
+          await until(`document.querySelector('${txField}').value===${JSON.stringify(String(Math.round(hz)))}`)
+          if(kind==='bothOffsets')await until(`document.querySelector('.operate-cockpit .df-field:first-child input').value===${JSON.stringify(String(Math.round(hz)))}`)
           await until(`!document.querySelector('${txField}').disabled`)
         }
+        // A changed station context retires an in-progress frequency draft.
+        await click(`document.querySelector('${txField}')`);await evaluate(`document.querySelector('${txField}').select()`)
+        await browser.call('Input.insertText',{text:'2900'},session)
+        applicationData.get_snapshot.radio.txOffsetHz=2300
+        applicationData.get_snapshot.remoteFtSettings.txOffsetHz=2300
+        applicationData.get_snapshot.remoteFtSettings.key=(BigInt('0x'+applicationData.get_snapshot.remoteFtSettings.key)+1n).toString(16).padStart(32,'0')
+        applicationRevision++
+        await until(`document.querySelector('${txField}').value==='2300'`)
+        await evaluate(`document.activeElement.blur()`);assert.equal(stationRequests.length,preferences)
         let count=stationRequests.length
         await click(`document.querySelector('${cq}')`)
         await until(`document.querySelector('${tx}')?.textContent.trim()==='TX On'&&!document.querySelector('${tx}').disabled`)
