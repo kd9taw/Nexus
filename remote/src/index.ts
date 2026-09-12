@@ -1,6 +1,6 @@
 // Same-origin browser API and outbound station admission. No radio command router.
 import { account, access, body, browserOrigin, cookie, device, digest, id, label,
-  native, proof, rate, Refusal, requireAdmin, requireEligible, requireTrial, requireUnspentIdentity, requireValue, secret, station,
+  native, proof, rate, Refusal, requireAdmin, requireEligible, requireTrial, requireUnspentIdentity, requireVerifiedIdentity, requireValue, secret, station,
   trial, TRIAL_MS, uuid } from './authority'
 import type { RemoteEnv, StationRow } from './authority'
 import { observerDeadline } from '../../ui/src/remote-monitor/relay'
@@ -128,6 +128,10 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
     requireValue(pending.account_id, 'accountNotClaimed', 409)
     requireEligible(await trial(env, pending.account_id, now))
     await requireUnspentIdentity(env, pending.account_id, now)
+    // The floor, at the point the trial is actually minted. pair/claim refuses this first and says
+    // so in the browser, where the operator can act on it - but the entitlement check belongs at
+    // the mint rather than depending on another endpoint having been strict.
+    await requireVerifiedIdentity(env, pending.account_id)
     const credentialHash = await digest(proof(input.credential))
     // Approval at the shack is the moment the trial starts, so the clock is written in the same
     // batch as the station. Station insert first on purpose: a trial with no station is
@@ -258,6 +262,10 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
   if (path === 'pair/claim') {
     requireEligible(entitlement)
     await requireUnspentIdentity(env, identity.accountId, now)
+    // Refused HERE as well as at approve, because enroll/approve rejects any request carrying an
+    // Origin header - it answers the shack's native client only. A refusal raised there reaches the
+    // radio, not the person who has to go and open a confirmation mail.
+    await requireVerifiedIdentity(env, identity.accountId)
     await rate(env, `claim:${identity.accountId}`, now, 5, 600000)
     const input = await body(request, ['code'])
     requireValue(typeof input.code === 'string' && /^[0-9a-f]{16}$/.test(input.code), 'invalidPairingCode', 400)

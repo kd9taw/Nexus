@@ -113,6 +113,7 @@ export function RemoteApp() {
   const refusal = (code: string) =>
     // Same sentence the state line uses, so the two never disagree about the date.
     code === 'trialEnded' && trial ? t('remote.trialEnded', { until: utcDate(trial.expiresAt) })
+    : code === 'emailNotVerified' ? t('remote.emailNotVerified')
     : code === 'trialDisabled' ? t('remote.trialDisabled')
     : code === 'invalidPairingCode' ? t('remote.pairingExpired')
     : code === 'stationLimit' ? t('remote.stationLimitReached')

@@ -115,6 +115,7 @@ export const ES: PartialCatalog = {
   "remote.trialRunning": "El acceso de prueba está activo. Días restantes: {{days}}. Comenzó el {{from}}, termina el {{until}} UTC.",
   "remote.trialUnknownStart": "El acceso de prueba está activo hasta el {{until}} UTC. Esta cuenta es anterior al reloj de prueba, por lo que no se registró su fecha de inicio.",
   "remote.trialEnded": "Los catorce días terminaron el {{until}} UTC. Nada ha cambiado en tu estación: Nexus en tu PC no se ve afectado.",
+  "remote.emailNotVerified": "Confirma tu dirección de correo antes de iniciar una prueba. Abre el enlace del mensaje del servicio de acceso y vuelve a emparejar.",
   "remote.trialDisabled": "El acceso al servicio de esta cuenta ha sido desactivado. No es lo mismo que el fin del periodo de prueba.",
   "remote.askAboutAccess": "Pregunta por el acceso en el canal beta",
   "remote.stationLimitReached": "Esta cuenta ya tiene dos estaciones. Revoca una que no uses antes de vincular otra.",

@@ -1063,10 +1063,12 @@ test('a second sign-in by the same verified person does not earn a second trial'
   await stranger.post('pair/claim', { code: second_enrollment.code })
 })
 
-// An UNVERIFIED address is a string the holder typed. Keying on it would swap "one sign-up per
-// trial" for "one typed address per trial" - no better - and would wrongly bind two strangers who
-// happened to type the same thing. So it is ignored, and such an account keeps the old behaviour.
-test('an unverified address neither protects nor punishes', async () => {
+// An UNVERIFIED address is a string the holder typed. Keying identity on it would swap "one
+// sign-up per trial" for "one typed address per trial" - no better - and would wrongly bind two
+// strangers who happened to type the same thing. So it is never recorded as identity. It is also
+// no longer enough to START a trial: with nothing to key on, the per-person rule cannot hold, so
+// such an account is asked to confirm its address rather than quietly given an unlimited supply.
+test('an unverified address is never identity, and cannot start a trial', async () => {
   const shared = `claimed-${crypto.randomUUID()}@example.invalid`
   const a = app.client(await app.token(`auth0|${crypto.randomUUID()}`, { email: shared, email_verified: false }))
   const b = app.client(await app.token(`auth0|${crypto.randomUUID()}`, { email: shared }))
@@ -1077,12 +1079,43 @@ test('an unverified address neither protects nor punishes', async () => {
     .bind(accountA.accountId).first()
   assert.equal(hashes.n, 0, 'an unverified address is never recorded as identity')
 
-  // Both can still pair: the weaker per-subject rule, not a lockout.
+  // Neither can start a trial, and both are told the same actionable thing.
   for (const who of [a, b]) {
     const desk = app.client()
     const { value: e } = await desk.post('enroll', { name: 'Unverified' })
-    await who.post('pair/claim', { code: e.code })
+    const { value: refused } = await who.post('pair/claim', { code: e.code }, 403)
+    assert.equal(refused.error, 'emailNotVerified')
   }
+})
+
+// Without a verified address there is no identity to key on, so "one trial per person" becomes
+// "one trial per address anybody can type": sign up, never open the confirmation mail, repeat.
+test('a new trial needs a verified address, and an existing one is never retracted', async () => {
+  const ns = 'https://nexus.hamradiotools.io/'
+  const unverified = app.client(await app.token(`auth0|${crypto.randomUUID()}`, { email: `x-${crypto.randomUUID()}@example.invalid` }))
+  const { value: account } = await unverified.post('session')
+  assert.equal(account.identityVerified, false)
+
+  const desktop = app.client()
+  const { value: enrollment } = await desktop.post('enroll', { name: 'Unconfirmed' })
+  const { value: refused } = await unverified.post('pair/claim', { code: enrollment.code }, 403)
+  assert.equal(refused.error, 'emailNotVerified', 'refused in the BROWSER, where the operator can act on it')
+
+  // A verified person is unaffected.
+  const ok = app.client(await app.token(`auth0|${crypto.randomUUID()}`,
+    { [`${ns}email`]: `ok-${crypto.randomUUID()}@example.invalid`, [`${ns}email_verified`]: true }))
+  await ok.post('session')
+  await ok.post('pair/claim', { code: enrollment.code })
+
+  // AND THE HALF THAT MUST NOT REGRESS: an account that already holds a trial keeps working even
+  // with no verified address. This gate may only stop a trial being MINTED - never retract one.
+  const held = app.client(await app.token(`auth0|${crypto.randomUUID()}`, { email: undefined }))
+  const { value: heldAccount } = await held.post('session')
+  await app.db.prepare(`INSERT INTO trials(account_id, enabled, expires_at, started_at, source)
+    VALUES(?,1,?,?,'manual')`).bind(heldAccount.accountId, Date.now() + 86400000, Date.now()).run()
+  const second = app.client()
+  const { value: theirs } = await second.post('enroll', { name: 'Hand granted' })
+  await held.post('pair/claim', { code: theirs.code })
 })
 
 // THE SHAPE PRODUCTION ACTUALLY SENDS. The browser authenticates with `getTokenSilently()`, which
@@ -1118,7 +1151,7 @@ test('the namespaced claims are read, and the session says whether identity is l
 
   // And the diagnostic half: a token carrying NO address says so, which is the state in which the
   // protection above silently does nothing. Telling those two apart from outside is the point.
-  const anonymous = app.client(await app.token(`auth0|${crypto.randomUUID()}`))
+  const anonymous = app.client(await app.token(`auth0|${crypto.randomUUID()}`, { email: undefined }))
   const { value: anonymousAccount } = await anonymous.post('session')
   assert.equal(anonymousAccount.identityVerified, false, 'no address means no identity to key on')
 })

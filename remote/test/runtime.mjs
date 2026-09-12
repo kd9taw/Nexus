@@ -47,7 +47,16 @@ export async function runtime({ bindings = {} } = {}) {
       .split('\n').filter(line => !line.trimStart().startsWith('--')).join('\n')
     for (const statement of migration.split(';').map(s => s.trim()).filter(Boolean)) await db.prepare(statement).run()
   }
-  const token = (subject, claims = {}, key = privateKey) => new SignJWT({ azp: 'remote-test-client', ...claims })
+  // Default to a VERIFIED, UNIQUE identity, because that is what a tenant running the login Action
+  // in STAGING.md actually sends, and it is the state every test not specifically about
+  // verification should exercise. Unique per token: a shared address would make two accounts the
+  // same person and collide on the one-trial-per-person rule. Pass ANY email claim - including
+  // `{ email: undefined }` for "no address at all" - to opt out. `in` rather than a truth test, so
+  // opting out to nothing works.
+  const CLAIM_NS = 'https://nexus.hamradiotools.io/'
+  const identified = claims => 'email' in claims || `${CLAIM_NS}email` in claims ? claims
+    : { ...claims, [`${CLAIM_NS}email`]: `t-${crypto.randomUUID()}@example.invalid`, [`${CLAIM_NS}email_verified`]: true }
+  const token = (subject, claims = {}, key = privateKey) => new SignJWT({ azp: 'remote-test-client', ...identified(claims) })
     .setProtectedHeader({ alg: 'RS256', kid: publicJwk.kid }).setIssuer(issuer).setAudience('remote-test-api')
     .setSubject(subject).setIssuedAt().setExpirationTime('1h').sign(key)
   const idToken = (subject, nonce) => new SignJWT({ nonce })

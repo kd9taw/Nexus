@@ -173,6 +173,7 @@ export const EN = {
   "remote.trialRunning": "Trial access is running. Days remaining: {{days}}. Started {{from}}, ends {{until}} UTC.",
   "remote.trialUnknownStart": "Trial access is running until {{until}} UTC. This account predates the trial clock, so its start date is not recorded.",
   "remote.trialEnded": "The fourteen days ended {{until}} UTC. Nothing at your station has changed — Nexus on your PC is unaffected.",
+  "remote.emailNotVerified": "Confirm your email address before starting a trial. Open the link in the message from the sign-in service, then come back and pair again.",
   "remote.trialDisabled": "Service access for this account has been switched off. This is not the same as the trial running out.",
   "remote.askAboutAccess": "Ask about access in the beta channel",
   "remote.stationLimitReached": "This account already has two stations. Revoke one you are not using before pairing another.",

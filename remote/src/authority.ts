@@ -184,6 +184,30 @@ export function requireEligible(entitlement: Entitlement): void {
   throw new Refusal(entitlement.state === 'ended' ? 'trialEnded' : 'trialDisabled')
 }
 
+/** A NEW self-serve trial must attach to a person the provider has actually verified.
+ *
+ *  Without this, "one trial per person" degrades to "one trial per address anybody can type": sign
+ *  up, never open the confirmation mail, take another fortnight. The per-person check cannot help,
+ *  because an unverified account has no identity to be the same as.
+ *
+ *  Only the MINTING of a new trial is blocked. An account that already has a trials row - a hand
+ *  grant, or approving a second station while a trial runs - is untouched, so this can never
+ *  retract access somebody already has. Existing trials are equally unaffected.
+ *
+ *  This is the half of the defence that lives in the tenant, not here: it refuses everyone unless
+ *  the login Action described in STAGING.md is putting the namespaced claims on the access token.
+ *  Confirm `identityVerified: true` on a real sign-in BEFORE this ships, or no one can start a
+ *  trial at all.
+ */
+export async function requireVerifiedIdentity(env: RemoteEnv, accountId: string): Promise<void> {
+  const row = await env.DB.prepare(`SELECT
+      (a.email_hash IS NOT NULL) AS verified,
+      EXISTS(SELECT 1 FROM trials t WHERE t.account_id = a.id) AS holds
+    FROM accounts a WHERE a.id = ?`).bind(accountId).first<{ verified: number; holds: number }>()
+  requireValue(row, 'serviceUnavailable', 503)
+  requireValue(row.verified === 1 || row.holds === 1, 'emailNotVerified', 403)
+}
+
 /** Has the PERSON behind this account already consumed a trial under another sign-in?
  *
  *  `one trial, ever` was one trial per provider subject: the same human signing in through a

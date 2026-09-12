@@ -105,6 +105,7 @@ export const JA: PartialCatalog = {
   "remote.trialRunning": "試用アクセスは有効です。残り日数: {{days}}。開始 {{from}}、終了 {{until}} UTC。",
   "remote.trialUnknownStart": "試用アクセスは {{until}} UTC まで有効です。このアカウントは試用タイマーより前のもので、開始日は記録されていません。",
   "remote.trialEnded": "14 日間は {{until}} UTC に終了しました。あなたの局では何も変わりません。PC 上の Nexus に影響はありません。",
+  "remote.emailNotVerified": "試用を開始する前にメールアドレスを確認してください。サインインサービスから届いたメールのリンクを開いてから、もう一度ペアリングしてください。",
   "remote.trialDisabled": "このアカウントのサービスアクセスは停止されています。試用期間の満了とは別です。",
   "remote.askAboutAccess": "ベータチャンネルでアクセスについて問い合わせる",
   "remote.stationLimitReached": "このアカウントにはすでに 2 つのステーションがあります。別のものをペアリングする前に、使っていないものを解除してください。",
