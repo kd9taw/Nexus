@@ -27,9 +27,14 @@ on:
     tags: ['v*']
   workflow_dispatch: {}
 
-# Creating a Release needs write access to the repo contents.
+# READ by default. Only `publish` and `publish-pi` create or upload to a Release, and both declare
+# their own write - a job-level block REPLACES this one, so the write lives where it is used. The
+# build jobs below compile Rust and Node dependency trees, which means build.rs and npm postinstall
+# run third-party code; there is no reason for that code to be holding a token that can push to the
+# repository. Every checkout also drops the token from .git/config, since nothing here writes via
+# git - the release operations all go through `gh`, which takes GH_TOKEN from the environment.
 permissions:
-  contents: write
+  contents: read
 
 env:
   # The DeepCW model is gitignored (AGPL-3.0 (c) e04); every build job stages it from this
@@ -72,6 +77,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       # EVERY job that builds or names an artifact stamps, and it stamps FIRST: a prerelease tag
       # must produce artifacts and an app that say 1.11.0-beta.3, not 1.11.0. A stable tag is a
@@ -255,6 +262,8 @@ jobs:
       CLUBLOG_API_KEY: ${{ secrets.CLUBLOG_API_KEY }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       # See linux-x86: every artifact-producing job stamps, first, or this platform's installer
       # carries a different version from its siblings.
@@ -383,6 +392,8 @@ jobs:
       CLUBLOG_API_KEY: ${{ secrets.CLUBLOG_API_KEY }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       # See linux-x86: every artifact-producing job stamps, first. The DMG, the .app's
       # CFBundleShortVersionString and the updater tarball all take their version from here.
@@ -600,6 +611,8 @@ jobs:
       # minisign pubkey out of src-tauri/tauri.conf.json, and checkout's default clean
       # would delete an already-downloaded dist/ as untracked files.
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - uses: actions/download-artifact@v4
         with:
@@ -707,6 +720,8 @@ jobs:
         base: [bookworm, trixie]
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       # See linux-x86: every artifact-producing job stamps, first. BOTH Pi bases go through
       # this job, and the stamp is on the RUNNER — Dockerfile.pi COPYs the build context, so
@@ -818,6 +833,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       # See linux-x86: the cover version below is read straight out of tauri.conf.json, so the
       # manual attached to a prerelease says 1.11.0-beta.3 like everything else in the release.
       - name: Stamp the tag's version into tauri.conf.json
@@ -869,6 +886,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          persist-credentials: false
           fetch-depth: 0   # need tags + history for the notes range
 
       - uses: actions/download-artifact@v4
@@ -1048,6 +1066,9 @@ jobs:
           fi
 
   publish-pi:
+    # Uploads the Pi artifacts and the amended SHA256SUMS.txt to the Release.
+    permissions:
+      contents: write
     name: Attach Raspberry Pi .debs
     needs: [publish, pi]
     if: github.event_name == 'push'

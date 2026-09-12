@@ -39,6 +39,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       # node is here only for the optional `npx wrangler` R2 step at the bottom.
       - uses: actions/setup-node@v7
         with:
