@@ -1288,6 +1288,14 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       assert.equal(await evaluate(`document.querySelector('${call}').value`),'N3QSO')
       assert.equal(stationRequests.length,2);assert.equal(loggedRequests.length,1)
       applicationAvailable=true
+      // Withholding a station credit can legitimately expire BOTH sockets. The
+      // fixture must reconnect the native endpoint as the real controller does;
+      // restoring an in-memory boolean cannot revive an expired WebSocket. This
+      // case passed WITHOUT this only by accident of timing: the chooseView
+      // switches above change the topic union, so refresh() re-issues the watch
+      // credit and postpones the station's expiry past the browser's reconnect.
+      // Remove a view switch and it would have failed like session layout did.
+      station.close();station=await pair.native.open(pair.stationId,undefined,101,stationHeaders)
       await until(`document.querySelector('.app').dataset.remoteStale!=='true'`)
       await until(`!!${button('Take station control')}`)
       assert.equal(loggingLease,null,'data recovery must not restore station authority')
