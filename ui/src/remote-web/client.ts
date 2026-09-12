@@ -19,6 +19,10 @@ export type AccountSession = {
    *  with the wrong time still shows the right number of days remaining. */
   serverNow: number
   stations: { id: string; name: string; device: { id: string; name: string; approved: number } | null }[]
+  /** A code this account has claimed that the shack has not approved yet, or null. Durable on the
+   *  server, so the waiting-for-approval state survives a reload instead of living in component
+   *  state that a refresh throws away. Never carries the pairing credentials. */
+  pending: { id: string; name: string; expiresAt: number } | null
 }
 export class RemoteError extends Error {
   // `code` is the service's own word for what it refused - trialEnded, trialDisabled,

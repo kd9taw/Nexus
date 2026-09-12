@@ -23,7 +23,6 @@ export function RemoteApp() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [code, setCode] = useState('')
-  const [claimed, setClaimed] = useState(false)
   const [deviceName, setDeviceName] = useState('')
   const [loadAttempt, setLoadAttempt] = useState(0)
 
@@ -171,18 +170,29 @@ export function RemoteApp() {
             <button className="remote-button" disabled={busy} onClick={() => void act(async () => { await client?.post(`stations/${station.id}/revoke`); await refresh() })}>{t('remote.revokeStation')}</button>
           </details>
         </section>)}
-        {canPair && session.stations.length < 2 && <section className="rm-card remote-section">
+        {/* Waiting for the shack, as its own card rather than a line under a form that is not
+            being shown. The server remembers this now, so a reload no longer drops the operator
+            back to an empty pairing form - which used to look like the claim had failed, and led
+            to re-typing a code that is then refused because the claim already consumed it. */}
+        {session.pending && <section className="rm-card remote-section">
+          <h2>{t('remote.pairStation')}</h2>
+          <p role="status">{t('remote.approveInShackNamed', {
+            station: session.pending.name,
+            minutes: Math.max(0, Math.ceil((session.pending.expiresAt - session.serverNow) / 60000)),
+          })}</p>
+          <p>{t('remote.accountMatch')} <code>{session.accountId}</code></p>
+        </section>}
+        {canPair && !session.pending && session.stations.length < 2 && <section className="rm-card remote-section">
           <h2>{t('remote.pairStation')}</h2><p>{t('remote.enterCodeHint')}</p>
           {/* Guarded on the SUBMIT, not only the button: Enter in the field submits a form whose
               button is disabled, which would spend a rate-limited attempt on a typo anyway. */}
           <form onSubmit={event => { event.preventDefault(); if (!pairingCodeReady) return; void act(async () => {
-            await client?.post('pair/claim', { code: pairingCode }); setCode(''); setClaimed(true); await refresh()
+            await client?.post('pair/claim', { code: pairingCode }); setCode(''); await refresh()
           }) }}>
             <label>{t('remote.pairingCode')}<input autoComplete="off" spellCheck={false} value={code} maxLength={24} required onChange={event => setCode(event.target.value)} /></label>
             <button className="remote-button" disabled={busy || !pairingCodeReady}>{t('remote.claimStation')}</button>
           {pairingCodeMalformed && <p role="status">{t('remote.pairingCodeMalformed')}</p>}
           </form>
-          {claimed && <p role="status">{t('remote.approveInShack')}</p>}
         </section>}
       </>}
       <a href="/remote-licenses.txt">{t('remote.licenses')}</a>

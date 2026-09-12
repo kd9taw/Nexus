@@ -135,7 +135,7 @@ export const ES: PartialCatalog = {
   "remote.enterCodeHint": "En Nexus, en la estación, abre Ajustes → Estación → Acceso remoto e inicia la vinculación. Introduce el código que aparece allí.",
   "remote.pairingCode": "Código de vinculación",
   "remote.claimStation": "Vincular a mi cuenta",
-  "remote.approveInShack": "La cuenta está vinculada. Comprueba el ID de cuenta y aprueba la vinculación en Nexus, en la estación.",
+  "remote.approveInShackNamed": "«{{station}}» está vinculada a tu cuenta y espera aprobación en Nexus, en la caseta. Compara allí el ID de cuenta y apruébala. El código sirve unos {{minutes}} minutos más.",
   "remote.licenses": "Licencias y créditos",
   "remote.nativeIntro": "Vincula esta estación a tu cuenta remota y autoriza aquí cada navegador. La observación remota comparte datos de estación, contactos, radio y amplificador con los navegadores autorizados.",
   "remote.openNexus": "Abrir Nexus",

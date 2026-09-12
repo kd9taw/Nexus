@@ -193,7 +193,7 @@ export const EN = {
   "remote.enterCodeHint": "In Nexus at the shack, open Settings → Station → Remote access and start pairing. Enter the code shown there.",
   "remote.pairingCode": "Pairing code",
   "remote.claimStation": "Link to my account",
-  "remote.approveInShack": "The account is linked. Match the account ID and approve pairing in Nexus at the shack.",
+  "remote.approveInShackNamed": "\"{{station}}\" is linked to your account and waiting for approval in Nexus at the shack. Match the account ID there and approve it. The code is good for about {{minutes}} more minutes.",
   "remote.licenses": "Licenses and credits",
   "remote.nativeIntro": "Pair this station with your Remote account, then approve each browser here. Remote observation shares station, contact, radio and amplifier data with approved browsers.",
   "remote.openNexus": "Open Nexus",

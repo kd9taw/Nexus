@@ -125,7 +125,7 @@ export const JA: PartialCatalog = {
   "remote.enterCodeHint": "シャックのNexusで「設定 → 局 → リモートアクセス」を開き、ペアリングを開始してください。表示されたコードを入力します。",
   "remote.pairingCode": "ペアリングコード",
   "remote.claimStation": "自分のアカウントに関連付ける",
-  "remote.approveInShack": "アカウントを関連付けました。IDを確認して、シャックのNexusでペアリングを承認してください。",
+  "remote.approveInShackNamed": "「{{station}}」はアカウントに紐付けられ、シャックの Nexus での承認を待っています。そちらでアカウント ID を照合して承認してください。コードの残り有効時間は約 {{minutes}} 分です。",
   "remote.licenses": "ライセンスとクレジット",
   "remote.nativeIntro": "この局をリモートアカウントとペアリングし、ここで各ブラウザーを承認します。リモート表示は、局、交信、無線機、アンプのデータを承認済みブラウザーと共有します。",
   "remote.openNexus": "Nexusを開く",

@@ -135,7 +135,7 @@ export const FR: PartialCatalog = {
   "remote.enterCodeHint": "Dans Nexus à la station, ouvrez Paramètres → Station → Accès à distance et lancez l’association. Saisissez le code affiché.",
   "remote.pairingCode": "Code d’association",
   "remote.claimStation": "Lier à mon compte",
-  "remote.approveInShack": "Le compte est lié. Vérifiez l’identifiant et approuvez l’association dans Nexus à la station.",
+  "remote.approveInShackNamed": "« {{station}} » est reliée à votre compte et attend une approbation dans Nexus au shack. Comparez-y l'identifiant de compte et approuvez l'appairage. Le code reste valable environ {{minutes}} minutes.",
   "remote.licenses": "Licences et crédits",
   "remote.nativeIntro": "Associez cette station à votre compte distant, puis autorisez chaque navigateur ici. L’observation distante partage les données de station, de contacts, de radio et d’amplificateur avec les navigateurs autorisés.",
   "remote.openNexus": "Ouvrir Nexus",

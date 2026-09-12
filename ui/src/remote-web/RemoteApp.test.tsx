@@ -9,7 +9,7 @@ afterEach(() => { cleanup(); vi.restoreAllMocks() })
 function account(entitled = true): AccountSession {
   const accountId = crypto.randomUUID()
   const now = Date.now()
-  return { accountId, serverNow: now, stations: [],
+  return { accountId, serverNow: now, stations: [], pending: null,
     entitlement: { accountId, enabled: entitled, expiresAt: now + 3600000,
       state: entitled ? 'active' : 'none', startedAt: entitled ? now : null,
       source: entitled ? 'trial' : null } }
@@ -69,8 +69,23 @@ it('claims the typed pairing code and requires approval at the shack', async () 
   fireEvent.change(input, { target: { value: code.toUpperCase() } })
   fireEvent.submit(input.closest('form')!)
   await waitFor(() => expect(service.post).toHaveBeenCalledWith('pair/claim', { code }))
-  expect(screen.getByText(/approve.*shack|shack.*approve/i, { selector: '[role="status"]' })).toBeTruthy()
+  // What the claim DISPLAYS is now the server's to report, so it is asserted in the reload test
+  // below against a session that carries it. This one stays about the request being sent.
   expect(screen.queryByRole('button', { name: 'Observe station' })).toBeNull()
+})
+
+// The whole point of putting the claim on the wire: a reload used to drop the operator back to an
+// empty pairing form, which reads as "it failed", and re-typing the same code is then refused
+// because the claim already consumed it.
+it('still shows the claim after a reload, and stops asking for a code it already holds', async () => {
+  const session = account()
+  session.pending = { id: crypto.randomUUID(), name: 'Portable', expiresAt: session.serverNow + 4 * 60000 }
+  client(session)
+  render(<RemoteApp />)   // a fresh mount is exactly what a reload is
+  const waiting = await screen.findByText(/waiting for approval/i, { selector: '[role="status"]' })
+  expect(waiting.textContent).toContain('Portable')
+  expect(waiting.textContent).toContain('4')          // the code's remaining life, off serverNow
+  expect(screen.queryByLabelText('Pairing code')).toBeNull()
 })
 it('browser enrollment displays the local comparison code and does not imply approval', async () => {
   const session = account(), stationId = crypto.randomUUID(), deviceId = crypto.randomUUID()

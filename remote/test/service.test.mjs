@@ -799,3 +799,39 @@ test('FT Stop crosses the real relay alongside pending operations and survives h
   assert.equal(live.station.closed, false)
   live.browser.close(); live.station.close()
 })
+
+// A claim is durable on the enrollment row, but until it reached the wire the browser could only
+// remember "waiting for approval" in component state, so a reload lost it and re-entering the same
+// code was refused - the claim UPDATE requires account_id IS NULL. The operator concluded pairing
+// had failed when it had in fact worked.
+test('session reports a claimed-but-unapproved code, without ever carrying its credentials', async () => {
+  const account = await app.owner(false), desktop = app.client()
+  const { value: before } = await account.post('session')
+  assert.equal(before.pending, null, 'nothing claimed yet')
+
+  const { value: enrollment } = await desktop.post('enroll', { name: 'Field station' })
+  await account.post('pair/claim', { code: enrollment.code })
+
+  const { value: waiting } = await account.post('session')
+  assert.equal(waiting.pending.id, enrollment.id)
+  assert.equal(waiting.pending.name, 'Field station')
+  assert.ok(waiting.pending.expiresAt > waiting.serverNow, 'the code still has life to show')
+  assert.equal(waiting.stations.length, 0, 'claimed is not paired - approval happens at the radio')
+
+  // The credentials this table exists to protect must never leave the Worker. Asserted on the
+  // whole serialized response, not just the field list, so a future nesting cannot smuggle one.
+  const serialized = JSON.stringify(waiting)
+  for (const secret of [enrollment.code, enrollment.proof])
+    assert.ok(!serialized.includes(secret), 'a pairing credential reached the browser')
+  assert.deepEqual(Object.keys(waiting.pending).sort(), ['expiresAt', 'id', 'name'])
+
+  // Positive control: the check can fail. The same search finds a value that IS legitimately there.
+  assert.ok(serialized.includes(enrollment.id), 'control: the enrollment id really is in the response')
+
+  // Once approved it is a station, not a pending claim.
+  const credential = crypto.getRandomValues(new Uint8Array(32)).reduce((s, b) => s + b.toString(16).padStart(2, '0'), '')
+  await desktop.post('enroll/approve', { id: enrollment.id, proof: enrollment.proof, credential })
+  const { value: paired } = await account.post('session')
+  assert.equal(paired.pending, null, 'an approved enrollment is no longer pending')
+  assert.equal(paired.stations.length, 1)
+})

@@ -120,7 +120,7 @@ export const DE: PartialCatalog = {
   "remote.enterCodeHint": "In Nexus an der Station Einstellungen → Station → Fernzugriff öffnen und die Kopplung starten. Den dort angezeigten Code eingeben.",
   "remote.pairingCode": "Kopplungscode",
   "remote.claimStation": "Mit meinem Konto verknüpfen",
-  "remote.approveInShack": "Das Konto ist verknüpft. Konto-ID vergleichen und die Kopplung in Nexus an der Station bestätigen.",
+  "remote.approveInShackNamed": "„{{station}}“ ist mit deinem Konto verknüpft und wartet auf die Freigabe in Nexus in der Funkbude. Vergleiche dort die Konto-ID und gib die Kopplung frei. Der Code gilt noch etwa {{minutes}} Minuten.",
   "remote.licenses": "Lizenzen und Mitwirkende",
   "remote.nativeIntro": "Diese Station mit deinem Remote-Konto koppeln und jeden Browser hier freigeben. Die Fernbeobachtung teilt Stations-, Kontakt-, Funkgeräte- und Verstärkerdaten mit freigegebenen Browsern.",
   "remote.openNexus": "Nexus öffnen",

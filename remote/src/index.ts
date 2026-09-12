@@ -186,7 +186,18 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
       .bind(identity.accountId).all<{ id: string; name: string; enabled: number }>()
     const stations = await Promise.all(rows.results.map(async row => ({ id: row.id, name: row.name,
       device: await device(request, env, row.id, identity.accountId, now) })))
-    return json({ accountId: identity.accountId, entitlement, stations, serverNow: now })
+    // A claim is durable on the enrollment row, but nothing put it on the wire, so the browser
+    // could only remember "waiting for approval" in component state. A reload lost it, the
+    // operator saw the pairing form again, re-typed the code and was refused - the claim UPDATE
+    // requires account_id IS NULL - and concluded pairing had failed when it had actually worked.
+    // SELECT the columns the browser can show and NOTHING ELSE: code_hash and proof_hash are the
+    // credentials this table exists to protect and must never leave the Worker. `name` is the
+    // string the operator typed at their own shack and pair/claim already returns it.
+    const claimed = await env.DB.prepare(`SELECT id,name,expires_at FROM enrollments
+      WHERE account_id=? AND approved=0 AND expires_at>? ORDER BY expires_at DESC LIMIT 1`)
+      .bind(identity.accountId, now).first<{ id: string; name: string; expires_at: number }>()
+    const pending = claimed ? { id: claimed.id, name: claimed.name, expiresAt: claimed.expires_at } : null
+    return json({ accountId: identity.accountId, entitlement, stations, pending, serverNow: now })
   }
   if (path === 'pair/claim') {
     requireEligible(entitlement)
