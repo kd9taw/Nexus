@@ -1381,7 +1381,10 @@ pub struct FieldDayStatus {
     pub worked_sections: Vec<String>,
     /// Raw per-mode QSO points (phone 1, CW/digital 2) before multipliers.
     pub points: u32,
-    /// Which event: "arrlfd" | "wfd".
+    /// The rules-file event id. NOT a closed pair - the rules table carries every contest
+    /// Nexus scores (15 at the time of writing: both Field Days, Sweepstakes, the VHF
+    /// runnings, CQ WW and WPX, and the state QSO parties) and grows with the file. Anything
+    /// validating this downstream must match its shape, never an enumeration.
     #[serde(default)]
     pub event: String,
     /// QSO points × the power multiplier (the submittable QSO score).

@@ -5,6 +5,13 @@ export const FIELD_DAY_TTL_MS = 60_000
 const integer = (v: unknown) => Number.isSafeInteger(v) && Number(v) >= 0
 const text = (v: unknown): v is string => typeof v === 'string' && new TextEncoder().encode(v).length <= 1024 && !/[\uD800-\uDFFF]/u.test(v)
 const texts = (v: unknown, max: number) => Array.isArray(v) && v.length <= max && v.every(text)
+// The rules file is DATA and it grows: it already carries 15 events (ARRL FD and Winter FD, the
+// Sweepstakes and VHF runnings, CQ WW and WPX, and the state QSO parties), and each new contest
+// adds another. Matching a hardcoded pair here rejected the whole Field Day payload the moment a
+// station ran anything but ARRL FD or WFD - thirteen of the fifteen. Validate the SHAPE of the id
+// instead, which is what fd_rules.rs guarantees; the ruleset itself is the authority on which ids
+// are real, and it is not reachable from the browser.
+const eventId = (v: unknown) => typeof v === 'string' && /^[a-z][a-z0-9_]{1,31}$/.test(v)
 function object(v: unknown, keys: string[], optional: string[] = []): Record<string, unknown> {
   if (!v || typeof v !== 'object' || Array.isArray(v) || !keys.every(k => Object.prototype.hasOwnProperty.call(v, k)) ||
     Object.keys(v).some(k => !keys.includes(k) && !optional.includes(k))) throw new Error('invalidFieldDay')
@@ -14,7 +21,7 @@ function status(v: unknown): void {
   const f = object(v, ['myClass','mySection','running','state','dxcall','qsoCount','sections','workedSections','points','event',
     'poweredPoints','bonusPoints','totalScore','eventStartUnix','eventEndUnix','rulesYear','rulesGenerated','assistanceOn','log'], ['club'])
   if (![f.myClass,f.mySection,f.state,f.rulesGenerated].every(text) || (f.dxcall !== null && !text(f.dxcall)) ||
-    typeof f.running !== 'boolean' || !['arrlfd','wfd'].includes(String(f.event)) ||
+    typeof f.running !== 'boolean' || !eventId(f.event) ||
     ![f.qsoCount,f.sections,f.points,f.poweredPoints,f.bonusPoints,f.totalScore,f.eventStartUnix,f.eventEndUnix,f.rulesYear].every(integer) ||
     Number(f.eventEndUnix) <= Number(f.eventStartUnix) || !texts(f.workedSections,2048) || !texts(f.assistanceOn,64) ||
     !Array.isArray(f.log) || f.log.length > 2048 || f.qsoCount !== f.log.length || f.sections !== (f.workedSections as unknown[]).length) throw new Error('invalidFieldDay')
