@@ -1362,6 +1362,10 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       const loss=await evaluate(`(()=>{const e=document.querySelector('.remote-application-status'),warning=e.querySelector('.remote-session-unavailable');return {visible:!!warning&&warning.getBoundingClientRect().height>0&&warning.closest('.remote-session-info')===null,text:e.textContent}})()`)
       assert.ok(loss.visible&&loss.text.includes('Station data unavailable'),'loss must remain visible outside the collapsed details')
       applicationAvailable=true
+      // Withholding a station credit can legitimately expire BOTH sockets. The
+      // fixture must reconnect the native endpoint as the real controller does;
+      // restoring an in-memory boolean cannot revive an expired WebSocket.
+      station.close();station=await pair.native.open(pair.stationId,undefined,101,stationHeaders)
       await until(`document.querySelector('.app')?.dataset.remoteStale!=='true'`)
       assert.equal(await evaluate(`document.querySelector('.app')===window.__sessionApp`),true)
       assert.equal(stationRequests.length,0);assert.equal(loggedRequests.length,0)
