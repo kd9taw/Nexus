@@ -56,3 +56,36 @@ it('keeps the browser settings schema identical to the native projection it must
   expect(SETTINGS_KEYS.filter(key => (WITHHELD_SETTINGS_KEYS as readonly string[]).includes(key)),
     'a withheld key must never also be exposed').toEqual([])
 })
+
+// Relaxing the exact key count is what lets a station one release ahead be understood at all.
+// It also removes the arithmetic that INCIDENTALLY caught a leaked credential, so the leak check
+// is now stated outright - and this is the test that proves it did not become weaker.
+it('understands a station one release ahead, and still refuses a leaked credential', () => {
+  const base = structuredClone(settings) as unknown as { settings: Record<string, unknown> }
+
+  // A setting this browser has never heard of must not sink the whole document.
+  const ahead = structuredClone(base)
+  ahead.settings.somethingAddedNextRelease = 'value'
+  expect(() => parseConfiguration(ahead, 'settings')).not.toThrow()
+
+  // A withheld key appearing in the payload is a credential leak and must be refused, by name
+  // rather than by the key count happening to come out wrong.
+  for (const key of WITHHELD_SETTINGS_KEYS) {
+    const leaked = structuredClone(base)
+    leaked.settings[key] = 'secret'
+    expect(() => parseConfiguration(leaked, 'settings'), `${key} leaked into settings`).toThrow('invalidConfiguration')
+  }
+
+  // Positive control: the leak check is doing the refusing, not some unrelated guard. Removing
+  // the extra key from the same document makes it parse again.
+  const control = structuredClone(base)
+  control.settings[WITHHELD_SETTINGS_KEYS[0]] = 'secret'
+  delete control.settings[WITHHELD_SETTINGS_KEYS[0]]
+  expect(() => parseConfiguration(control, 'settings')).not.toThrow()
+
+  // A known key that is MISSING is still a refusal - this relaxes what may be extra, never what
+  // must be present.
+  const short = structuredClone(base)
+  delete short.settings.mycall
+  expect(() => parseConfiguration(short, 'settings')).toThrow()
+})

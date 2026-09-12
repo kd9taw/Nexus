@@ -6,6 +6,20 @@ export const text = (v: unknown, max = 1024): v is string => typeof v === 'strin
 export const bool = (v: unknown) => typeof v === 'boolean'
 export const nullableTime = (v: unknown) => v === null || integer(v)
 export const nullableNumber = (v: unknown) => v === null || finite(v)
+/** Like `object`, but tolerates keys it does not know while still REQUIRING the listed ones.
+ *
+ *  For a document whose shape grows with the station's version, an exact key count makes every
+ *  addition a two-way break: an older station sends fewer keys and is refused, a newer one sends
+ *  more and is refused too. Eleven settings drifted exactly that way and Remote's settings and
+ *  Field Day surfaces went dark for every operator.
+ *
+ *  ⚠️ Callers MUST check separately that nothing withheld appears. With an exact count that was
+ *  incidental - a leaked key made the arithmetic wrong - and relaxing the count removes it. The
+ *  caller states it instead, which is a better home for a rule that load-bearing. */
+export function openObject(v: unknown, keys: string[]): Record<string, unknown> {
+  if (!v || typeof v !== 'object' || Array.isArray(v) || !keys.every(k => Object.prototype.hasOwnProperty.call(v,k))) throw new Error('invalidStationDisplay')
+  return v as Record<string, unknown>
+}
 export function object(v: unknown, keys: string[]): Record<string, unknown> {
   if (!v || typeof v !== 'object' || Array.isArray(v) || Object.keys(v).length !== keys.length || !keys.every(k => Object.prototype.hasOwnProperty.call(v,k))) throw new Error('invalidStationDisplay')
   return v as Record<string,unknown>

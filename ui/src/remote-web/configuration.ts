@@ -1,6 +1,6 @@
 import type { Settings, RadioProgProject } from '../types'
 import { SETTINGS_KEYS, SETTINGS_SHAPES, WITHHELD_SETTINGS_KEYS } from './configuration-schema'
-import { finite, integer, object, text } from './display-validation'
+import { finite, integer, object, openObject, text } from './display-validation'
 export type SettingsConfiguration = {settings:Record<string,unknown>;withheld:readonly string[];revision:string;platform:'linux'|'windows'|'macos'}
 export type ProgrammingConfiguration = {mygrid:string;projects:RadioProgProject[];revision:string;saved:boolean}
 const bad=():never=>{throw new Error('invalidConfiguration')}
@@ -8,7 +8,13 @@ const revision=(v:unknown)=>typeof v==='string'&&/^[0-9a-f]{64}$/.test(v)
 export function parseConfiguration(raw:unknown,kind:'settings'|'programming'):SettingsConfiguration|ProgrammingConfiguration {
   if(kind==='settings'){
     const v=object(raw,['settings','withheld','revision','platform'])
-    const values=object(v.settings,[...SETTINGS_KEYS])
+    // Tolerates a setting this browser has not heard of, so a station one release ahead is not
+    // refused wholesale; every key we DO know must still be present and correctly typed.
+    const values=openObject(v.settings,[...SETTINGS_KEYS])
+    // The credential proof, stated rather than inferred. It used to rest on the key COUNT being
+    // exact, which caught a leak only as arithmetic; now a withheld key appearing in the payload
+    // is refused because it is withheld.
+    if(WITHHELD_SETTINGS_KEYS.some(k=>Object.prototype.hasOwnProperty.call(values,k)))bad()
     if(!['linux','windows','macos'].includes(String(v.platform))||!revision(v.revision)||JSON.stringify(v.withheld)!==JSON.stringify(WITHHELD_SETTINGS_KEYS))bad()
     for(const [key,shape]of Object.entries(SETTINGS_SHAPES)){
       const value=values[key]
