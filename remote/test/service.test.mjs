@@ -866,3 +866,38 @@ test('a revoked station learns it was revoked; a wrong credential still learns n
   // revoke stays reachable with allowRevoked, so a station can still retire itself cleanly.
   await revoked.post(`stations/${pair.stationId}/native/revoke`, {}, 200)
 })
+
+// A station is named at the shack while pairing, and that name was permanent — a typo you had to
+// live with, or revoke and re-pair to fix.
+test('renaming a station is housekeeping: allowed on your own, and survives a lapsed trial', async () => {
+  const pair = await app.paired()
+  const { value: renamed } = await pair.browser.post(`stations/${pair.stationId}/rename`, { name: '  Portable — VE3  ' })
+  assert.equal(renamed.id, pair.stationId)
+  const { value: session } = await pair.browser.post('session')
+  assert.equal(session.stations[0].name, renamed.name, 'the session reports the new name')
+  assert.ok(renamed.name.length > 0 && renamed.name.length <= 48, 'label() bounds it')
+
+  // Above requireTrial, like revoke and forget-device: someone whose service access has lapsed
+  // can still tidy their own account. Only operating is gated, not housekeeping.
+  await app.db.prepare('UPDATE trials SET expires_at=? WHERE account_id=?')
+    .bind(Date.now() - 1000, pair.browser.accountId).run()
+  await pair.browser.post(`stations/${pair.stationId}/rename`, { name: 'Still mine' })
+  const { value: after } = await pair.browser.post('session')
+  assert.equal(after.stations[0].name, 'Still mine')
+  // ...while operating is refused, which is the line this sits above.
+  await pair.browser.post(`stations/${pair.stationId}/device`, { name: 'Browser' }, 403)
+
+  // Somebody else's station is not theirs to rename.
+  const other = await app.owner()
+  await other.post(`stations/${pair.stationId}/rename`, { name: 'Mine now' }, 404)
+  const { value: unchanged } = await pair.browser.post('session')
+  assert.equal(unchanged.stations[0].name, 'Still mine', 'an outsider cannot rename it')
+
+  // Junk is refused rather than stored. An oversized name never reaches label() at all - the
+  // body-size guard turns it away first, which is why it answers 413 and not 400.
+  for (const bad of [{}, { name: '' }, { name: 42 }])
+    await pair.browser.post(`stations/${pair.stationId}/rename`, bad, 400)
+  await pair.browser.post(`stations/${pair.stationId}/rename`, { name: 'x'.repeat(4096) }, 413)
+  const { value: stillThere } = await pair.browser.post('session')
+  assert.equal(stillThere.stations[0].name, 'Still mine', 'no refused name was stored')
+})

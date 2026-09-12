@@ -24,6 +24,9 @@ export function RemoteApp() {
   const [error, setError] = useState<string | null>(null)
   const [code, setCode] = useState('')
   const [deviceName, setDeviceName] = useState('')
+  // Keyed by station id: two cards must not share one edit box, and opening one must not put the
+  // other into edit mode. null means nobody is renaming.
+  const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null)
   const [loadAttempt, setLoadAttempt] = useState(0)
 
   useEffect(() => {
@@ -149,7 +152,24 @@ export function RemoteApp() {
         {trial?.state === 'ended' && <p role="status">{t('remote.trialEnded', { until: utcDate(trial.expiresAt) })}</p>}
         {trial?.state === 'disabled' && <p role="status">{t('remote.trialDisabled')}</p>}
         {session.stations.map(station => <section className="rm-card remote-section" key={station.id}>
-          <h2>{station.name}</h2>
+          {/* A station is named at the shack while pairing, and that name used to be permanent:
+              a typo meant revoking and re-pairing to fix. Renaming is housekeeping on your own
+              account, so it stays available even when the trial has lapsed. */}
+          {renaming?.id === station.id
+            ? <form onSubmit={event => { event.preventDefault(); const name = renaming.name.trim(); if (!name) return
+                void act(async () => { await client?.post(`stations/${station.id}/rename`, { name }); setRenaming(null); await refresh() }) }}>
+                <label>{t('remote.stationName')}<input autoFocus value={renaming.name} maxLength={48}
+                  onChange={event => setRenaming({ id: station.id, name: event.target.value })} /></label>
+                <div className="remote-actions">
+                  <button className="remote-button" disabled={busy || !renaming.name.trim()}>{t('remote.saveName')}</button>
+                  <button type="button" className="remote-button" disabled={busy} onClick={() => setRenaming(null)}>{t('remote.cancelRename')}</button>
+                </div>
+              </form>
+            : <div className="remote-actions">
+                <h2>{station.name}</h2>
+                <button type="button" className="remote-button" disabled={busy}
+                  onClick={() => setRenaming({ id: station.id, name: station.name })}>{t('remote.renameStation')}</button>
+              </div>}
           {station.device?.approved === 1 ? <div className="remote-actions">
             <button className="remote-button" disabled={busy || !entitled} onClick={() => {
               const next = new HostedConnection(client!, station.id, true); setWorkspace(true); setConnection(next); next.start()

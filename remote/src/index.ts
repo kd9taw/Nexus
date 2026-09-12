@@ -213,6 +213,17 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
   requireValue(match, 'notFound', 404)
   const row = await station(env, match[1]), verb = match[2]
   requireValue(row.account_id === identity.accountId && row.enabled === 1, 'stationUnavailable', 404)
+  // Above requireTrial, with revoke and forget-device: renaming is housekeeping on your own
+  // account, and an operator whose service access has lapsed should still be able to tidy it.
+  // `name` is not part of StationAccess, so no policy version moves and no room needs syncing -
+  // this changes a label, not an authority.
+  if (verb === 'rename') {
+    const input = await body(request, ['name'])
+    const name = label(input.name)
+    await env.DB.prepare('UPDATE stations SET name=? WHERE id=? AND account_id=?')
+      .bind(name, row.id, identity.accountId).run()
+    return json({ id: row.id, name })
+  }
   if (verb === 'revoke') {
     await body(request, [])
     await revokeStation(env, row.id, now)

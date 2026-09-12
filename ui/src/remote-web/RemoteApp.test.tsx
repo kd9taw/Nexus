@@ -179,3 +179,38 @@ it('shows the trial window, and leaves a pilot account\'s unknown start unknown'
   expect(unknown.textContent).toContain('2026-09-26')
   expect(unknown.textContent).not.toContain('2026-09-12')
 })
+
+// A station is named at the shack while pairing, and that name used to be permanent.
+it('renames a station in place, and keeps the two cards independent', async () => {
+  const session = account()
+  const a = crypto.randomUUID(), b = crypto.randomUUID()
+  session.stations = [
+    { id: a, name: 'Shck', device: null },
+    { id: b, name: 'Portable', device: null },
+  ]
+  const service = client(session)
+  render(<RemoteApp />)
+
+  const rename = await screen.findAllByRole('button', { name: 'Rename' })
+  expect(rename).toHaveLength(2)
+  fireEvent.click(rename[0])
+
+  // Only the card that was clicked goes into edit mode; the other keeps its heading.
+  const input = await screen.findByLabelText('Station name')
+  expect((input as HTMLInputElement).value).toBe('Shck')
+  expect(screen.getByText('Portable')).toBeTruthy()
+  expect(screen.getAllByLabelText('Station name')).toHaveLength(1)
+
+  fireEvent.change(input, { target: { value: '  Shack  ' } })
+  fireEvent.submit(input.closest('form')!)
+  await waitFor(() => expect(service.post).toHaveBeenCalledWith(`stations/${a}/rename`, { name: 'Shack' }))
+
+  // An empty name is not submittable - the station would lose its label for nothing.
+  fireEvent.click((await screen.findAllByRole('button', { name: 'Rename' }))[1])
+  const second = await screen.findByLabelText('Station name')
+  fireEvent.change(second, { target: { value: '   ' } })
+  expect((screen.getByRole('button', { name: 'Save name' }) as HTMLButtonElement).disabled).toBe(true)
+  service.post.mockClear()
+  fireEvent.submit(second.closest('form')!)
+  expect(service.post).not.toHaveBeenCalled()
+})
