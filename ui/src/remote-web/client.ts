@@ -13,11 +13,27 @@ import { APPLICATION_MAX_BYTES } from './application-protocol'
 
 export type AccountSession = {
   accountId: string
-  entitlement: { accountId: string; enabled: boolean; expiresAt: number }
+  entitlement: { accountId: string; enabled: boolean; expiresAt: number
+    state: 'none' | 'active' | 'ended' | 'disabled'; startedAt: number | null; source: string | null }
+  /** The service's clock. Dates are derived from this, never the browser's own, so a laptop
+   *  with the wrong time still shows the right number of days remaining. */
+  serverNow: number
   stations: { id: string; name: string; device: { id: string; name: string; approved: number } | null }[]
 }
 export class RemoteError extends Error {
-  constructor(readonly status: number) { super('remoteUnavailable') }
+  // `code` is the service's own word for what it refused - trialEnded, trialDisabled,
+  // stationLimit, pairingExpired. Without it every refusal arrives as a bare status number and
+  // the browser can only show one vague wall for situations that need different sentences.
+  constructor(readonly status: number, readonly code = 'remoteUnavailable') { super(code) }
+}
+// The service answers a refusal with {error: code}. A body that is missing, truncated or not
+// JSON is not a failure worth reporting on its own - the status still stands - so this falls
+// back to the generic code rather than throwing a second error on top of the first.
+async function refusalCode(response: Response): Promise<string> {
+  try {
+    const body = await response.json() as { error?: unknown }
+    return typeof body?.error === 'string' && body.error ? body.error : 'remoteUnavailable'
+  } catch { return 'remoteUnavailable' }
 }
 async function boundedJson<T>(path: string, options: RequestInit): Promise<T> {
   const controller = new AbortController()
@@ -27,7 +43,7 @@ async function boundedJson<T>(path: string, options: RequestInit): Promise<T> {
   const timer = setTimeout(cancel, 10000)
   try {
     const response = await fetch(path, { ...options, signal: controller.signal })
-    if (!response.ok) throw new RemoteError(response.status)
+    if (!response.ok) throw new RemoteError(response.status, await refusalCode(response))
     // Keep both cancellation and the deadline active until the body is read.
     return await response.json() as T
   }

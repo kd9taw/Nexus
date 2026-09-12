@@ -8,7 +8,11 @@ import { RemoteApp } from './RemoteApp'
 afterEach(() => { cleanup(); vi.restoreAllMocks() })
 function account(entitled = true): AccountSession {
   const accountId = crypto.randomUUID()
-  return { accountId, entitlement: { accountId, enabled: entitled, expiresAt: Date.now()+3600000 }, stations: [] }
+  const now = Date.now()
+  return { accountId, serverNow: now, stations: [],
+    entitlement: { accountId, enabled: entitled, expiresAt: now + 3600000,
+      state: entitled ? 'active' : 'none', startedAt: entitled ? now : null,
+      source: entitled ? 'trial' : null } }
 }
 function client(value: AccountSession | null) {
   const post = vi.fn(async (_path: string, _body?: object): Promise<unknown> => value)
@@ -27,11 +31,35 @@ it('offers a working retry after configuration failure instead of a sign-in butt
   expect(document.querySelectorAll('main.rm-scroll')).toHaveLength(1)
   expect(document.querySelectorAll('.remote-monitor-app')).toHaveLength(1)
 })
-it('a signed-in account without a manual trial cannot start station pairing', async () => {
+it('a signed-in account with no trial yet can start pairing, and is told the clock has not started', async () => {
   client(account(false)); render(<RemoteApp />)
-  await screen.findByText(/trial/i, { selector: '[role="status"]' })
-  expect(screen.queryByRole('textbox')).toBeNull()
+  // Said in the service's own words, not inferred from enabled plus an expiry against our clock.
+  await screen.findByText(/pair a station from the shack/i, { selector: '[role="status"]' })
+  // The self-serve path: the pairing form has to be reachable by exactly the account that has
+  // never had a trial. Gating it on entitlement made it unreachable for those people.
+  expect(await screen.findByLabelText('Pairing code')).toBeTruthy()
+  // Nothing is operable yet - no station is paired and no clock is running.
   expect(screen.queryByRole('button', { name: 'Observe station' })).toBeNull()
+})
+it('an ended trial and a disabled account read as different things, not one vague wall', async () => {
+  const ended = account(); ended.entitlement.state = 'ended'
+  client(ended); const view = render(<RemoteApp />)
+  await screen.findByText(/fourteen days are over/i, { selector: '[role="status"]' })
+  // The fortnight running out must never be mistaken for the account being switched off.
+  expect(screen.queryByText(/switched off/i)).toBeNull()
+  // ...and an ended trial cannot start another one.
+  expect(screen.queryByLabelText('Pairing code')).toBeNull()
+  view.unmount()
+
+  const off = account(); off.entitlement.state = 'disabled'
+  client(off); render(<RemoteApp />)
+  await screen.findByText(/switched off/i, { selector: '[role="status"]' })
+  expect(screen.queryByLabelText('Pairing code')).toBeNull()
+})
+it('a pilot account with no recorded start says so rather than inventing a date', async () => {
+  const pilot = account(); pilot.entitlement.startedAt = null
+  client(pilot); render(<RemoteApp />)
+  await screen.findByText(/start date is not recorded/i, { selector: '[role="status"]' })
 })
 it('claims the typed pairing code and requires approval at the shack', async () => {
   const session = account(), service = client(session)
@@ -41,7 +69,7 @@ it('claims the typed pairing code and requires approval at the shack', async () 
   fireEvent.change(input, { target: { value: code.toUpperCase() } })
   fireEvent.submit(input.closest('form')!)
   await waitFor(() => expect(service.post).toHaveBeenCalledWith('pair/claim', { code }))
-  expect(screen.getByText(/approve.*shack|shack.*approve/i)).toBeTruthy()
+  expect(screen.getByText(/approve.*shack|shack.*approve/i, { selector: '[role="status"]' })).toBeTruthy()
   expect(screen.queryByRole('button', { name: 'Observe station' })).toBeNull()
 })
 it('browser enrollment displays the local comparison code and does not imply approval', async () => {
