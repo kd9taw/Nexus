@@ -961,3 +961,60 @@ test('only the pinned subject may grant a trial, and an unset pin admits nobody'
     assert.equal(orphans.n, 0, 'no trial row exists without an account behind it')
   } finally { await locked.mf.dispose() }
 })
+
+// One host could deny pairing to every operator on the service, and stop its only garbage
+// collection while doing it. rate() increments whenever a bucket is under its OWN limit, so
+// checking the shared bucket first meant a caller already refused by the per-IP limit had
+// already spent a global slot.
+test('a flooding caller cannot spend the shared enroll budget, and cleanup keeps running', async () => {
+  // Measured as a DELTA: enroll-global is shared with every other test in this file and the
+  // window is ten minutes, so its absolute value says nothing about this flood.
+  const bucket = [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode('enroll-global')))]
+    .map(b => b.toString(16).padStart(2, '0')).join('')
+  const sharedHits = async () => (await app.db.prepare('SELECT hits FROM rate_limits WHERE id=?').bind(bucket).first())?.hits ?? 0
+  const sharedBefore = await sharedHits()
+
+  const flooder = app.client()
+  // Five succeed, the rest are refused by the per-IP limit.
+  for (let i = 0; i < 5; i++) await flooder.post('enroll', { name: 'Flood' })
+  for (let i = 0; i < 12; i++) await flooder.post('enroll', { name: 'Flood' }, 429)
+
+  // THE PROPERTY, measured on the counter itself rather than on a symptom. Asserting that a
+  // bystander still works proves nothing at this scale - the shared bucket holds 1000 and this
+  // test sends 17, so it passes with the bug present. Read enroll-global's hits instead: the 12
+  // refused requests must not appear in it.
+  const spent = await sharedHits() - sharedBefore
+  assert.ok(sharedBefore > 0 || spent > 0, 'control: the shared bucket is really being counted')
+  assert.ok(spent <= 5, `a refused caller must not spend the shared budget (it spent ${spent} for 5 accepted + 12 refused)`)
+
+  const bystander = app.client()
+  const { value: stillWorks } = await bystander.post('enroll', { name: 'Somebody else' })
+  assert.ok(stillWorks.code, 'another operator can still pair while one host is being refused')
+
+  // Cleanup runs ahead of the shared gate, so an expired row is reaped even under pressure.
+  // rate_limits, enrollments and tickets are swept nowhere else and there is no cron trigger.
+  await app.db.prepare("INSERT INTO enrollments(id,name,proof_hash,code_hash,expires_at) VALUES(?,?,?,?,?)")
+    .bind(crypto.randomUUID(), 'Expired', 'a'.repeat(64), 'b'.repeat(64), Date.now() - 1000).run()
+  const before = await app.db.prepare('SELECT COUNT(*) AS n FROM enrollments WHERE expires_at<=?').bind(Date.now()).first()
+  assert.ok(before.n >= 1, 'control: an expired row really is present before the sweep')
+  await bystander.post('enroll', { name: 'Sweeper' })
+  const after = await app.db.prepare('SELECT COUNT(*) AS n FROM enrollments WHERE expires_at<=?').bind(Date.now()).first()
+  assert.equal(after.n, 0, 'the sweep reaped it')
+})
+
+// enroll/check was bounded only by a bucket keyed on the station id the CALLER supplies, and
+// rate() writes one row per distinct key - so fresh random UUIDs minted unbounded rows, each
+// request refused 410 and each leaving a row behind.
+test('a stranger cannot mint unbounded rate rows through enroll/check', async () => {
+  const stranger = app.client()
+  const proof = 'c'.repeat(64)
+  // Each unknown id answers 410 and, before the fix, left a rate_limits row behind for free.
+  for (let i = 0; i < 60; i++) await stranger.post('enroll/check', { id: crypto.randomUUID(), proof }, 410)
+  // The 61st is refused for FLOODING, not for the id - the caller is bounded before the key it
+  // chose is, so row creation is bounded by caller rather than by imagination.
+  await stranger.post('enroll/check', { id: crypto.randomUUID(), proof }, 429)
+
+  // Another host is unaffected: the bound is per caller, not shared.
+  const other = app.client()
+  await other.post('enroll/check', { id: crypto.randomUUID(), proof }, 410)
+})

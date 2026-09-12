@@ -90,22 +90,36 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
 
   if (path === 'enroll') {
     requireValue(!request.headers.has('origin'), 'originDenied')
-    await rate(env, 'enroll-global', now, 1000, 600000)
+    // PER-IP FIRST. `rate()` increments whenever a bucket is under its OWN limit, so checking the
+    // shared bucket first let one refused caller spend a global slot on every rejected request:
+    // ~1000 requests from a single host exhausted enroll-global and no operator anywhere could
+    // pair a station until the fixed ten-minute window rolled. A caller already over its own
+    // limit must never be able to touch the shared budget.
     await rate(env, `enroll:${request.headers.get('cf-connecting-ip') ?? 'local'}`, now, 5, 600000)
-    const input = await body(request, ['name']), stationId = uuid(), credential = secret(), code = secret().slice(0, 16)
+    // The sweep runs BEFORE the shared gate, and it is the service's only garbage collection:
+    // enrollments, tickets and rate_limits are reaped nowhere else and there is no cron trigger.
+    // Behind the shared gate, exhausting that bucket also stopped all cleanup - the denial and
+    // the unbounded growth were the same bug, and the growth outlived the window.
     await env.DB.batch([
       env.DB.prepare('DELETE FROM enrollments WHERE expires_at<=?').bind(now),
       env.DB.prepare('DELETE FROM tickets WHERE expires_at<=?').bind(now),
       env.DB.prepare('DELETE FROM rate_limits WHERE expires_at<=?').bind(now),
-      env.DB.prepare('INSERT INTO enrollments(id,name,proof_hash,code_hash,expires_at) VALUES(?,?,?,?,?)')
-        .bind(stationId, label(input.name), await digest(credential), await digest(code), now + 600000),
     ])
+    await rate(env, 'enroll-global', now, 1000, 600000)
+    const input = await body(request, ['name']), stationId = uuid(), credential = secret(), code = secret().slice(0, 16)
+    await env.DB.prepare('INSERT INTO enrollments(id,name,proof_hash,code_hash,expires_at) VALUES(?,?,?,?,?)')
+      .bind(stationId, label(input.name), await digest(credential), await digest(code), now + 600000).run()
     return json({ id: stationId, proof: credential, code, expiresAt: now + 600000 })
   }
   if (path === 'enroll/check' || path === 'enroll/approve') {
     requireValue(!request.headers.has('origin'), 'originDenied')
     const input = await body(request, path.endsWith('approve') ? ['id', 'proof', 'credential'] : ['id', 'proof'])
     const stationId = id(input.id), hash = await digest(proof(input.proof))
+    // Bounded by CALLER before it is bounded by the id the caller chose. The per-station bucket
+    // is keyed on attacker-supplied input, and rate() writes one rate_limits row per distinct
+    // key, so without this a stranger could mint unbounded rows by sending fresh random UUIDs -
+    // each refused 410, each leaving a row behind.
+    await rate(env, `enrollcheck:${request.headers.get('cf-connecting-ip') ?? 'local'}`, now, 60, 600000)
     await rate(env, `enrollment:${stationId}`, now, 30)
     const pending = await env.DB.prepare('SELECT account_id,approved FROM enrollments WHERE id=? AND proof_hash=? AND expires_at>?')
       .bind(stationId, hash, now).first<{ account_id: string | null; approved: number }>()
