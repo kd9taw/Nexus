@@ -44,7 +44,7 @@ it('a signed-in account with no trial yet can start pairing, and is told the clo
 it('an ended trial and a disabled account read as different things, not one vague wall', async () => {
   const ended = account(); ended.entitlement.state = 'ended'
   client(ended); const view = render(<RemoteApp />)
-  await screen.findByText(/fourteen days are over/i, { selector: '[role="status"]' })
+  await screen.findByText(/fourteen days ended/i, { selector: '[role="status"]' })
   // The fortnight running out must never be mistaken for the account being switched off.
   expect(screen.queryByText(/switched off/i)).toBeNull()
   // ...and an ended trial cannot start another one.
@@ -139,4 +139,28 @@ it('refuses a malformed pairing code locally instead of spending a rate-limited 
   expect((screen.getByRole('button', { name: 'Link to my account' }) as HTMLButtonElement).disabled).toBe(false)
   fireEvent.submit(input.closest('form')!)
   await waitFor(() => expect(service.post).toHaveBeenCalledWith('pair/claim', { code: '0123456789abcdef' }))
+})
+
+// Dates are rendered as invariant UTC calendar dates, and the pilot branch must never invent one.
+it('shows the trial window, and leaves a pilot account\'s unknown start unknown', async () => {
+  const started = Date.UTC(2026, 8, 12, 3, 0, 0)
+  const running = account()
+  running.entitlement.startedAt = started
+  running.entitlement.expiresAt = started + 14 * 86400000
+  running.serverNow = started + 86400000
+  client(running); const view = render(<RemoteApp />)
+  const line = await screen.findByText(/Trial access is running/i)
+  expect(line.textContent).toContain('2026-09-12')   // start, as sent
+  expect(line.textContent).toContain('2026-09-26')   // fourteen days later
+  view.unmount()
+
+  // migration 0002 deliberately did not backfill: an invented start cannot later be told from a
+  // real one, so this must show the end date and say the start is not recorded.
+  const pilot = account()
+  pilot.entitlement.startedAt = null
+  pilot.entitlement.expiresAt = started + 14 * 86400000
+  client(pilot); render(<RemoteApp />)
+  const unknown = await screen.findByText(/start date is not recorded/i)
+  expect(unknown.textContent).toContain('2026-09-26')
+  expect(unknown.textContent).not.toContain('2026-09-12')
 })

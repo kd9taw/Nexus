@@ -81,6 +81,10 @@ export function RemoteApp() {
   const daysLeft = trial && session
     ? Math.max(0, Math.ceil((trial.expiresAt - session.serverNow) / 86400000))
     : 0
+  // Formatted invariantly as a UTC calendar date, not through Intl.DateTimeFormat: this project
+  // forbids locale date formatting on this path, and for a date an operator may be planning
+  // around, 2026-09-26 cannot be misread the way 09/12 can between one country and the next.
+  const utcDate = (ms: number) => new Date(ms).toISOString().slice(0, 10)
   // Written out rather than looked up in a map: the catalog's orphan check scans for literal
   // t() calls, so a dynamic lookup reads as "nobody uses these keys" and the compiler stops
   // checking them too. Anything the service refuses without a name falls through to the last arm.
@@ -91,15 +95,18 @@ export function RemoteApp() {
   const pairingCodeReady = /^[0-9a-f]{16}$/.test(pairingCode)
   const pairingCodeMalformed = pairingCode.length === 16 && !pairingCodeReady
 
+  // `trialRequired` is deliberately absent: the trial-state line above already tells the operator
+  // which of the four states the account is in, with dates, and repeating it in the refusal banner
+  // says the same thing twice in different words.
   // Every code below is one the BROWSER can actually receive. `stationLimit` and `pairingExpired`
   // are thrown only inside enroll/check and enroll/approve, which refuse any request carrying an
   // Origin header - the shack's native client only - so naming them here was answering questions
   // nobody in a browser can ask, while the refusals operators really hit fell through to the
   // generic sentence about checking the connection.
   const refusal = (code: string) =>
-    code === 'trialEnded' ? t('remote.trialEnded')
+    // Same sentence the state line uses, so the two never disagree about the date.
+    code === 'trialEnded' && trial ? t('remote.trialEnded', { until: utcDate(trial.expiresAt) })
     : code === 'trialDisabled' ? t('remote.trialDisabled')
-    : code === 'trialRequired' ? t('remote.trialEnded')
     : code === 'invalidPairingCode' ? t('remote.pairingExpired')
     : code === 'stationLimit' ? t('remote.stationLimitReached')
     : code === 'deviceLimit' ? t('remote.deviceLimitReached')
@@ -134,9 +141,13 @@ export function RemoteApp() {
           : <details><summary>{t('remote.supportDetails')}</summary>
               <p>{t('remote.accountMatch')} <code>{session.accountId}</code></p></details>}
         {trial?.state === 'none' && <p role="status">{t('remote.trialNotStarted')}</p>}
+        {/* The pilot branch must survive: an absent start stays absent and is NEVER computed as
+            expiresAt minus fourteen days. Migration 0002 deliberately did not backfill, because an
+            invented start cannot afterwards be told from a real one. */}
         {trial?.state === 'active' && <p role="status">{trial.startedAt === null
-          ? t('remote.trialUnknownStart') : t('remote.trialRunning', { days: daysLeft })}</p>}
-        {trial?.state === 'ended' && <p role="status">{t('remote.trialEnded')}</p>}
+          ? t('remote.trialUnknownStart', { until: utcDate(trial.expiresAt) })
+          : t('remote.trialRunning', { days: daysLeft, from: utcDate(trial.startedAt), until: utcDate(trial.expiresAt) })}</p>}
+        {trial?.state === 'ended' && <p role="status">{t('remote.trialEnded', { until: utcDate(trial.expiresAt) })}</p>}
         {trial?.state === 'disabled' && <p role="status">{t('remote.trialDisabled')}</p>}
         {session.stations.map(station => <section className="rm-card remote-section" key={station.id}>
           <h2>{station.name}</h2>
