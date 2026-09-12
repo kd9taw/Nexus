@@ -1,6 +1,6 @@
 // Same-origin browser API and outbound station admission. No radio command router.
 import { account, access, body, browserOrigin, cookie, device, digest, id, label,
-  native, proof, rate, Refusal, requireEligible, requireTrial, requireValue, secret, station,
+  native, proof, rate, Refusal, requireAdmin, requireEligible, requireTrial, requireValue, secret, station,
   trial, TRIAL_MS, uuid } from './authority'
 import type { RemoteEnv, StationRow } from './authority'
 import { observerDeadline } from '../../ui/src/remote-monitor/relay'
@@ -177,9 +177,35 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
   }
 
   // Every remaining operation is account-authenticated and subject to exact Origin.
-  const identity = await account(request, env, now)
+  // Destructured off deliberately: `identity` is spread into the browser identity below and on
+  // into relay socket state, and the provider subject has no business travelling with it.
+  const { subject, ...identity } = await account(request, env, now)
   await rate(env, `account:${identity.accountId}`, now, 120)
   const entitlement = await trial(env, identity.accountId, now)
+  // The only privileged write in the service. It exists because every trial in a closed beta is
+  // granted by hand, and the alternative was a wrangler command the operator can only run from a
+  // laptop. Deliberately ONE action: each further admin verb is another way for a mistake here to
+  // become an entitlement bypass.
+  if (path === 'admin/grant-trial') {
+    requireAdmin(env, subject)
+    const input = await body(request, ['accountId', 'days'])
+    const target = id(input.accountId)
+    requireValue(Number.isInteger(input.days) && (input.days as number) >= 1 && (input.days as number) <= 365,
+      'invalidRequest', 400)
+    const expiresAt = now + (input.days as number) * 86400000
+    // Selecting FROM accounts means an id that does not exist grants nothing rather than leaving
+    // an orphan row. UPDATE on conflict, never DELETE: the trials row is the durable proof an
+    // account consumed its trial, and removing it re-opens the reinstall and re-pair abuse the
+    // one-trial-ever rule exists to refuse.
+    await env.DB.prepare(`INSERT INTO trials(account_id, enabled, expires_at, started_at, source)
+      SELECT id, 1, ?, ?, 'manual' FROM accounts WHERE id=?
+      ON CONFLICT(account_id) DO UPDATE SET enabled=1, expires_at=excluded.expires_at,
+        started_at=excluded.started_at, source='manual'`)
+      .bind(expiresAt, now, target).run()
+    const granted = await trial(env, target, now)
+    requireValue(granted.state === 'active', 'stationUnavailable', 404)
+    return json({ accountId: target, entitlement: granted })
+  }
   if (path === 'session') {
     await body(request, [])
     const rows = await env.DB.prepare('SELECT id,name,enabled FROM stations WHERE account_id=? AND enabled=1 ORDER BY id LIMIT 2')

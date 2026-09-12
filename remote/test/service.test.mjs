@@ -901,3 +901,63 @@ test('renaming a station is housekeeping: allowed on your own, and survives a la
   const { value: stillThere } = await pair.browser.post('session')
   assert.equal(stillThere.stations[0].name, 'Still mine', 'no refused name was stored')
 })
+
+// The only privileged write in the service, and the first authorisation tier of any kind. The
+// failure that matters is not "the operator cannot grant" - it is a check that admits everyone,
+// because granting yourself a trial is exactly the abuse the one-trial-ever rule refuses.
+test('only the pinned subject may grant a trial, and an unset pin admits nobody', async () => {
+  const adminSubject = `synthetic|admin-${crypto.randomUUID()}`
+
+  // 1. FAIL CLOSED. With no ADMIN_SUBJECT configured the endpoint refuses everyone. The bug this
+  //    actually catches is the realistic one - "not configured yet, so do not block anyone",
+  //    which is open during a beta and open forever after; poisoning requireAdmin that way turns
+  //    this red. (An EMPTY caller subject is not the risk: account() already refuses a JWT whose
+  //    sub is empty, so two empty strings can never meet here. Checked, not assumed.)
+  const open = await runtime()
+  try {
+    const nobody = open.client(await open.token(adminSubject))
+    const { value: target } = await nobody.post('session')
+    await nobody.post('admin/grant-trial', { accountId: target.accountId, days: 14 }, 403)
+  } finally { await open.mf.dispose() }
+
+  const locked = await runtime({ bindings: { ADMIN_SUBJECT: adminSubject } })
+  try {
+    const admin = locked.client(await locked.token(adminSubject))
+    const { value: adminAccount } = await admin.post('session')
+    const victim = locked.client(await locked.token(`synthetic|${crypto.randomUUID()}`))
+    const { value: victimAccount } = await victim.post('session')
+
+    // 2. Someone who is not the pinned subject cannot grant - not to others, and not to themselves.
+    await victim.post('admin/grant-trial', { accountId: victimAccount.accountId, days: 14 }, 403)
+    await victim.post('admin/grant-trial', { accountId: adminAccount.accountId, days: 14 }, 403)
+    const { value: stillNone } = await victim.post('session')
+    assert.equal(stillNone.entitlement.state, 'none', 'a refused grant wrote nothing')
+
+    // 3. The pinned subject can, and the grant is honestly marked as hand-made.
+    const { value: granted } = await admin.post('admin/grant-trial', { accountId: victimAccount.accountId, days: 14 })
+    assert.equal(granted.entitlement.state, 'active')
+    assert.equal(granted.entitlement.source, 'manual', 'a hand grant must never look self-serve')
+    const { value: nowActive } = await victim.post('session')
+    assert.equal(nowActive.entitlement.state, 'active')
+
+    // 4. It re-grants an ENDED trial, which is the whole reason it exists.
+    await locked.db.prepare('UPDATE trials SET expires_at=? WHERE account_id=?')
+      .bind(Date.now() - 1000, victimAccount.accountId).run()
+    const { value: expired } = await victim.post('session')
+    assert.equal(expired.entitlement.state, 'ended')
+    await admin.post('admin/grant-trial', { accountId: victimAccount.accountId, days: 7 })
+    const { value: revived } = await victim.post('session')
+    assert.equal(revived.entitlement.state, 'active')
+
+    // 5. Junk is refused, and an account that does not exist grants nothing rather than orphaning
+    //    a row against an id with no account behind it.
+    for (const bad of [{ accountId: victimAccount.accountId, days: 0 },
+                       { accountId: victimAccount.accountId, days: 366 },
+                       { accountId: victimAccount.accountId, days: 1.5 }])
+      await admin.post('admin/grant-trial', bad, 400)
+    await admin.post('admin/grant-trial', { accountId: 'not-a-uuid', days: 14 }, 400)
+    await admin.post('admin/grant-trial', { accountId: crypto.randomUUID(), days: 14 }, 404)
+    const orphans = await locked.db.prepare('SELECT COUNT(*) AS n FROM trials WHERE account_id NOT IN (SELECT id FROM accounts)').first()
+    assert.equal(orphans.n, 0, 'no trial row exists without an account behind it')
+  } finally { await locked.mf.dispose() }
+})

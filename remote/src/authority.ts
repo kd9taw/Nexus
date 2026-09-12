@@ -11,6 +11,10 @@ export interface RemoteEnv {
   AUTH0_ISSUER: string
   AUTH0_AUDIENCE: string
   AUTH0_CLIENT_ID: string
+  /** The provider subject allowed to administer trials. Unset or empty means NOBODY can, which is
+   *  the only safe default: this gates a write to the entitlement table, so a check that fails
+   *  OPEN would let anyone grant themselves the trial the one-trial-ever rule exists to refuse. */
+  ADMIN_SUBJECT?: string
   REMOTE_BUILD_REVISION?: string
 }
 
@@ -73,7 +77,7 @@ export function bearer(request: Request): string {
   return header.slice(7)
 }
 let jwks: { issuer: string; keys: ReturnType<typeof createRemoteJWKSet> } | undefined
-export async function account(request: Request, env: RemoteEnv, now: number): Promise<Identity> {
+export async function account(request: Request, env: RemoteEnv, now: number): Promise<Identity & { subject: string }> {
   browserOrigin(request, env)
   requireValue(env.AUTH0_ISSUER.startsWith('https://') && env.AUTH0_ISSUER.endsWith('/') &&
     env.AUTH0_CLIENT_ID !== 'unconfigured', 'serviceNotConfigured', 503)
@@ -96,7 +100,23 @@ export async function account(request: Request, env: RemoteEnv, now: number): Pr
   const row = await env.DB.prepare('SELECT id FROM accounts WHERE issuer=? AND subject=?')
     .bind(env.AUTH0_ISSUER, subject).first<{ id: string }>()
   requireValue(row, 'serviceUnavailable', 503)
-  return { accountId: row.id, expiresAt: until }
+  // `subject` rides alongside Identity rather than inside it. The caller destructures it off, so
+  // it never reaches the object that index.ts spreads into the browser identity and on into relay
+  // socket state - the provider subject is not something the wire needs to carry.
+  return { accountId: row.id, expiresAt: until, subject }
+}
+
+/** Only the pinned provider subject may administer trials.
+ *
+ *  Fails CLOSED: with ADMIN_SUBJECT unset or empty this refuses everyone, including the operator.
+ *  The bug that shape guards against is "not configured yet, so do not block anyone" - open during
+ *  a beta and open forever after. The empty-subject half is defence in depth rather than the thing
+ *  holding it up: account() already refuses a JWT whose sub is empty, so an unset pin cannot match
+ *  a caller regardless. There is no role table and no second credential - one equality against an
+ *  identity the service has already cryptographically verified. */
+export function requireAdmin(env: RemoteEnv, subject: string): void {
+  const pinned = env.ADMIN_SUBJECT ?? ''
+  requireValue(pinned.length > 0 && subject.length > 0 && subject === pinned, 'accessDenied')
 }
 
 // Fourteen days, measured from the moment a station is approved at the shack — not from
