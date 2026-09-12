@@ -16,6 +16,17 @@ export function controlTransport(reads: ApplicationTransport, client: Applicatio
       let qsoResult: 'logged' | 'pending' | 'none' | null = null
       let captured: ReturnType<OperationClient['prepareControl']> | undefined
       switch (command) {
+        case 'set_rx_offset': case 'set_skip_tx1': {
+          const field = command === 'set_rx_offset' ? 'hz' : 'enabled', keys = [field, 'expectedTier', 'expected']
+          if (!args || Object.keys(args).length !== keys.length || Object.keys(args).some(k => !keys.includes(k))) throw Error('invalidOperation')
+          const gesture = structuredClone(args), state = operations.getSnapshot().state
+          if (!state?.transmitEpoch) throw Error('localPermissionRequired')
+          captured = operations.prepareControl()
+          action = stationAction({ action: 'ft.runtime', expectedTier: gesture.expectedTier, expected: gesture.expected, transmitEpoch: state.transmitEpoch,
+            change: command === 'set_rx_offset' ? { kind: 'rxOffset', hz: gesture.hz } : { kind: 'skipTx1', on: gesture.enabled } })
+          read = 'get_snapshot'
+          break
+        }
         case 'set_tx_offset': case 'set_ft_both_offsets': case 'set_hold_tx_freq': case 'set_tx_even': case 'set_tx_cycle_auto': {
           const field = command === 'set_tx_offset' || command === 'set_ft_both_offsets' ? 'hz' : command === 'set_hold_tx_freq' ? 'on' : command === 'set_tx_even' ? 'even' : 'auto'
           const keys = [field, 'expectedTier', 'expected']
@@ -166,6 +177,7 @@ export function controlTransport(reads: ApplicationTransport, client: Applicatio
         const result = await (captured ? captured(action) : operations.control(action, displayed))
         if (action.action === 'qso.logCurrent' && result.outcome === 'rejected' && ['noEligibleContact', 'alreadyPresent'].includes(result.reason)) qsoResult = 'none'
         else if (result.outcome !== 'applied') throw Error(result.outcome === 'rejected' ? result.reason : 'operationUnknown')
+        if (action.action === 'ft.runtime' && (result.outcome !== 'applied' || result.evidence !== (action.change.kind === 'rxOffset' ? 'settingsSaved' : 'stationState'))) throw Error('operationUnknown')
         if (action.action === 'ft.setting' && (result.outcome !== 'applied' || result.evidence !== (action.change.kind === 'auto' ? 'stationState' : 'settingsSaved'))) throw Error('operationUnknown')
         if (action.action === 'qso.logCurrent' && result.outcome === 'applied') {
           if (result.evidence === 'fileSynced') qsoResult = 'logged'

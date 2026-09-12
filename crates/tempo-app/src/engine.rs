@@ -9822,6 +9822,7 @@ impl Engine {
 
     /// Toggle Skip Tx1 (WSJT-X parity) — a session-only preference (see the field).
     pub fn set_skip_tx1(&mut self, on: bool) {
+        self.remote_ft_settings_epoch = self.remote_ft_settings_epoch.saturating_add(1);
         self.skip_tx1 = on;
     }
 

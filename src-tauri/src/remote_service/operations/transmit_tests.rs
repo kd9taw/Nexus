@@ -693,3 +693,81 @@ fn ft_preferences_refuse_lost_grant_changed_context_and_unavailable_radio() {
         assert!(!f.dir.join("settings.json").exists());
     }
 }
+
+#[test]
+fn ft_runtime_rx_and_skip_work_through_the_current_lease_without_owning_local_tx() {
+    for tier in [tempo_app::dto::Tier::Ft8, tempo_app::dto::Tier::Ft4] {
+        for armed in [false, true] {
+            let (f, _, state) = ready_ft(tier);
+            assert!(state["controls"]["capabilities"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("ftRuntime")));
+            if armed {
+                let request = ft_command(
+                    &state,
+                    json!({"action":"ft.cq","expectedTier":tier,"transmitEpoch":state["transmitEpoch"],"direction":null}),
+                );
+                assert_eq!(ft_run(&f, &request).unwrap()["outcome"], "applied");
+                f.engine.lock().unwrap().take_immediate_retune();
+            }
+            for change in [
+                json!({"kind":"rxOffset","hz":900}),
+                json!({"kind":"skipTx1","on":true}),
+            ] {
+                let state = control_state_version(&f, Instant::now(), 4);
+                let expected = f.engine.lock().unwrap().remote_ft_runtime().unwrap();
+                let request = ft_command(
+                    &state,
+                    json!({"action":"ft.runtime","expectedTier":tier,"transmitEpoch":state["transmitEpoch"],"expected":expected,"change":change}),
+                );
+                let response = ft_run(&f, &request).unwrap();
+                assert_eq!(response["outcome"], "applied", "{response}");
+                assert_eq!(
+                    response["evidence"],
+                    if change["kind"] == "rxOffset" {
+                        "settingsSaved"
+                    } else {
+                        "stationState"
+                    }
+                );
+                let after = f.engine.lock().unwrap().remote_ft_runtime().unwrap();
+                assert_eq!(after.settings.tx_offset_hz, expected.settings.tx_offset_hz);
+                assert_eq!(after.settings.rx_offset_hz, 900.0);
+                if change["kind"] == "skipTx1" {
+                    assert!(after.skip_tx1);
+                }
+                assert_eq!(f.engine.lock().unwrap().tx_enabled(), armed);
+                assert_eq!(ft_run(&f, &request).unwrap(), response);
+                assert_eq!(f.engine.lock().unwrap().remote_ft_runtime(), Some(after));
+            }
+        }
+    }
+}
+
+#[test]
+fn ft_runtime_refuses_local_skip_change_or_revoked_transmit_grant() {
+    for revoked in [false, true] {
+        let (f, _, state) = ready_ft(tempo_app::dto::Tier::Ft8);
+        let expected = f.engine.lock().unwrap().remote_ft_runtime().unwrap();
+        let request = ft_command(
+            &state,
+            json!({"action":"ft.runtime","expectedTier":"FT8","transmitEpoch":state["transmitEpoch"],"expected":expected,"change":{"kind":"skipTx1","on":true}}),
+        );
+        if revoked {
+            f.authority.permit_transmit(DEVICE, false).unwrap();
+        } else {
+            let mut e = f.engine.lock().unwrap();
+            e.set_skip_tx1(true);
+            e.set_skip_tx1(false);
+        }
+        let result = ft_run(&f, &request);
+        if revoked {
+            assert!(result.is_err());
+        } else {
+            assert_eq!(result.unwrap()["outcome"], "rejected");
+        }
+        assert!(!f.engine.lock().unwrap().skip_tx1());
+        assert!(!f.dir.join("settings.json").exists());
+    }
+}

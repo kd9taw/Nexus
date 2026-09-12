@@ -65,6 +65,15 @@ pub enum KeyboardReceiver {
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(tag = "action", deny_unknown_fields)]
 pub enum Action {
+    #[serde(rename = "ft.runtime")]
+    FtRuntime {
+        #[serde(rename = "expectedTier")]
+        expected_tier: tempo_app::dto::Tier,
+        #[serde(rename = "transmitEpoch")]
+        transmit_epoch: String,
+        expected: tempo_app::engine::remote_transmit::runtime::FtRuntimeContext,
+        change: tempo_app::engine::remote_transmit::runtime::FtRuntimeChange,
+    },
     #[serde(rename = "ft.setting")]
     FtSetting {
         #[serde(rename = "expectedTier")]
@@ -313,6 +322,7 @@ pub fn execute(
         | Action::FtCall { .. }
         | Action::FtExchange { .. }
         | Action::FtSetting { .. }
+        | Action::FtRuntime { .. }
         | Action::FtMessage { .. } => return Err(Reason::UnsupportedAction),
         #[cfg(feature = "radio")]
         Action::Radio { radio_id } => {
@@ -786,6 +796,7 @@ impl Action {
             | Self::FtCall { .. }
             | Self::FtExchange { .. }
             | Self::FtSetting { .. }
+            | Self::FtRuntime { .. }
             | Self::FtMessage { .. } => 4,
             Self::Level { .. }
             | Self::Frequency { .. }
@@ -854,6 +865,7 @@ impl Action {
             | Self::FtCall { transmit_epoch, .. }
             | Self::FtExchange { transmit_epoch, .. }
             | Self::FtSetting { transmit_epoch, .. }
+            | Self::FtRuntime { transmit_epoch, .. }
             | Self::FtMessage { transmit_epoch, .. } => Some(transmit_epoch),
             _ => None,
         }
@@ -870,6 +882,31 @@ pub fn execute_transmit(
         return Err(Reason::ContextChanged);
     }
     match action {
+        Action::FtRuntime {
+            expected_tier,
+            expected,
+            change,
+            ..
+        } => {
+            engine.validate_remote_ft_radio(
+                *expected_tier,
+                context.radio_connection.ok_or(Reason::ReadingUnavailable)?,
+                &permit,
+            )?;
+            engine.change_remote_ft_runtime(&permit, expected, change)?;
+            let result = Completion::default();
+            result.finish(Outcome::Applied {
+                evidence: if matches!(
+                    change,
+                    tempo_app::engine::remote_transmit::runtime::FtRuntimeChange::RxOffset { .. }
+                ) {
+                    Evidence::SettingsSaved
+                } else {
+                    Evidence::StationState
+                },
+            });
+            return Ok(result);
+        }
         Action::FtSetting {
             expected_tier,
             expected,

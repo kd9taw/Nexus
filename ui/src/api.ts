@@ -1213,8 +1213,8 @@ export async function sstvDeleteImage(path: string): Promise<void> {
 }
 
 /** Toggle Skip Tx1 (WSJT-X parity) — a session-only flag, resets each launch. */
-export async function setSkipTx1(enabled: boolean): Promise<void> {
-  await invoke('set_skip_tx1', { enabled })
+export async function setSkipTx1(enabled: boolean, context?: FtRuntimeGesture): Promise<void> {
+  await invoke('set_skip_tx1', { enabled, ...ftRuntimeArgs(context) })
 }
 
 /** Write text to the operator's Downloads folder; returns the full saved path. Reliable in a
@@ -2367,6 +2367,9 @@ export async function sstvStop(): Promise<SstvState> {
 }
 
 /** Set the TX period: true = even/"1st" slots, false = odd/"2nd". */
+type FtRuntimeGesture = { expectedTier: string; expected: import('./remote-web/station-operation').FtRuntimeContext | null | undefined }
+const ftRuntimeArgs = (context?: FtRuntimeGesture) => remoteApplicationTransport() ? { expectedTier: context?.expectedTier, expected: context?.expected } : {}
+
 type FtSettingsGesture = { expectedTier: string; expected: import('./remote-web/station-operation').FtSettingsContext | null | undefined }
 const ftSettingsArgs = (context?: FtSettingsGesture) => remoteApplicationTransport() ? { expectedTier: context?.expectedTier, expected: context?.expected } : {}
 
@@ -2382,9 +2385,9 @@ export async function setTxEven(even: boolean, context?: FtSettingsGesture): Pro
   return invoke<AppSnapshot>('set_tx_even', { even, ...ftSettingsArgs(context) })
 }
 
-/** Set the receive audio offset (Hz) — the green marker. TX follows unless Hold Tx. */
-export async function setRxOffset(hz: number): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('set_rx_offset', { hz })
+/** Set the receive audio offset (Hz) — the green marker; TX stays unchanged. */
+export async function setRxOffset(hz: number, context?: FtRuntimeGesture): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_rx_offset', { hz, ...ftRuntimeArgs(context) })
 }
 
 /** Set the transmit audio offset (Hz) — the red marker. */

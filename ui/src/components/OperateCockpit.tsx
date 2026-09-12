@@ -357,6 +357,7 @@ export function OperateCockpit({
   const control = useStationControl()
   const messageControl = useStationCapability('ftMessages')
   const ftSettings = useStationCapability('ftSettings') && !!snap.remoteFtSettings && (tier === 'FT8' || tier === 'FT4')
+  const ftRuntime = useStationCapability('ftRuntime') && !!snap.remoteFtRuntime && (tier === 'FT8' || tier === 'FT4')
   const cqControl = useStationCapability('ftOperate')
   const tierControl = useStationTierControl(snap.radio)
   const decoderSettings = useDecoderSettings(snap, 'MSK144')
@@ -452,11 +453,17 @@ export function OperateCockpit({
   }, [tuneStep])
   // Skip Tx1 (WSJT-X parity) — session-only UI state; the backend flag is likewise not
   // persisted, so both reset to off each launch. The toggle pushes to the engine.
-  const [skipTx1, setSkipTx1] = useState(false)
+  const [localSkipTx1, setSkipTx1] = useState(false)
+  const skipTx1 = control ? localSkipTx1 : snap.remoteFtRuntime?.skipTx1 ?? false
   const handleSkipTx1 = useCallback((v: boolean) => {
-    setSkipTx1(v)
-    setSkipTx1Cmd(v).catch(() => {})
-  }, [])
+    if (control) {
+      setSkipTx1(v)
+      setSkipTx1Cmd(v).catch(() => {})
+    } else if (ftRuntime && snap.remoteFtRuntime) {
+      void setSkipTx1Cmd(v, { expectedTier: tier, expected: snap.remoteFtRuntime })
+        .catch(() => pushToast(t('remote.controlRequestFailed'), 'error'))
+    }
+  }, [control, ftRuntime, snap, tier])
   const recording = snap.radio.qsoRecording
   const toggleRecord = () => {
     if (recBusy) return
@@ -1106,9 +1113,9 @@ export function OperateCockpit({
           {/* DF readouts: type an exact audio offset and commit on Enter/blur
               (clamped to the 200–4000 Hz passband) — WSJT-X's Rx/Tx Hz spinners. */}
           <div className="cockpit-offsets" role="group" aria-label={t('operate.header.offsets.aria')}>
-            <DfField key={control ? 'rx' : `rx-${snap.activeRadioId}-${tier}`} label={DF_RX} hz={snap.radio.rxOffsetHz}
-              remoteReceive={receiverSettings.rxAllowed}
-              onCommit={(hz) => control ? onTune(hz, 'rx') : receiverSettings.tuneRx(hz)} />
+            <DfField key={control ? 'rx' : `rx-${snap.activeRadioId}-${tier}-${snap.remoteFtRuntime?.settings.key}`} label={DF_RX} hz={snap.radio.rxOffsetHz}
+              remoteReceive={ftRuntime || receiverSettings.rxAllowed}
+              onCommit={(hz) => control || ftRuntime ? onTune(hz, 'rx') : receiverSettings.tuneRx(hz)} />
             <DfField key={control ? 'tx' : `tx-${snap.remoteFtSettings?.key}`} label={DF_TX} hz={snap.radio.txOffsetHz} remoteReceive={ftSettings} onCommit={(hz) => onTune(hz, 'tx')} />
           </div>
           {/* Decode button — re-run the decoder over the last period's audio (F6). */}
@@ -1253,7 +1260,7 @@ export function OperateCockpit({
                   theme={theme}
                   onTune={(hz, target) => {
                     if (control) onTune(hz, target)
-                    else if (target === 'rx') receiverSettings.tuneRx(hz)
+                    else if (target === 'rx') { if (ftRuntime) onTune(hz, target); else receiverSettings.tuneRx(hz) }
                     else if (ftSettings) onTune(hz, target)
                   }}
                   active={active}
@@ -1298,6 +1305,7 @@ export function OperateCockpit({
               .catch((e) => pushToast(String(e), 'error'))
           }
           onHaltTx={onHaltTx}
+          remoteFtRuntime={ftRuntime}
           remoteFtSettings={ftSettings}
           onSetHoldTxFreq={onSetHoldTxFreq}
           onSetMode={onSetMode}

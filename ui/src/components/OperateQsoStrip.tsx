@@ -79,6 +79,7 @@ interface Props {
   // strip, and relocation must not change behaviour.
   /** Transmit-period control (TX AUTO / 1st / 2nd) — rendered when BOTH handlers
    *  and `radio` are present. */
+  remoteFtRuntime?: boolean
   remoteFtSettings?: boolean
   onSetTxEven?: (even: boolean) => void
   onSetTxCycleAuto?: (auto: boolean) => void
@@ -125,6 +126,7 @@ export function OperateQsoStrip({
   onSetHoldTxFreq,
   rxOnly,
   beacon,
+  remoteFtRuntime = false,
   remoteFtSettings = false,
   onSetTxEven,
   onSetTxCycleAuto,
@@ -137,6 +139,8 @@ export function OperateQsoStrip({
 }: Props) {
   const logging = useStationCapability('qsoLogging')
   const control = useStationControl(), ftControl = useStationCapability('ftOperate'), ftExchange = useStationCapability('ftExchange')
+  const runtimeCapability = useStationCapability('ftRuntime')
+  const runtimeControl = control || (remoteFtRuntime && runtimeCapability)
   const settingsCapability = useStationCapability('ftSettings')
   const ftSettings = control || (remoteFtSettings && settingsCapability)
   // ⚠️ cqRunning, NOT qso.running. `running` is also true through a directed S&P call (the
@@ -411,7 +415,7 @@ export function OperateQsoStrip({
         </button>
       )}
       {onSkipTx1 && (
-        <button disabled={!control}
+        <button disabled={!runtimeControl}
           type="button"
           className={`cq-skiptx1${skipTx1 ? ' on' : ''}`}
           aria-pressed={skipTx1 ?? false}

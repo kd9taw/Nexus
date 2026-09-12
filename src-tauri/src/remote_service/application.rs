@@ -294,11 +294,13 @@ impl Publisher {
                 }
                 Command::Snapshot => {
                     let snapshot = eng.snapshot();
+                    let ft_runtime = eng.remote_ft_runtime();
                     let ft_settings = eng.remote_ft_settings();
                     let current_key = eng.current_qso_log_key();
                     let pending_key = eng.pending_qso_log_key();
                     drop(eng);
                     serde_json::to_value(snapshot).map(|mut value| {
+                        value["remoteFtRuntime"] = serde_json::json!(ft_runtime);
                         value["remoteFtSettings"] = serde_json::json!(ft_settings);
                         value["currentQsoLogKey"] = serde_json::json!(current_key);
                         value["pendingQsoLogKey"] = serde_json::json!(pending_key);

@@ -579,6 +579,7 @@ impl Authority {
                         "ftExchange",
                         "ftMessages",
                         "ftSettings",
+                        "ftRuntime",
                     ]);
                 }
             }

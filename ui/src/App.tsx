@@ -291,6 +291,7 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   const { commitLeft, commitRight, resetWidths } = usePaneWidths(scale)
   const layoutRef = useRef<HTMLElement>(null)
   const [snap, setSnap] = useState<AppSnapshot | null>(remote?.snapshot ?? null)
+  const ftRuntimeControl = useStationCapability('ftRuntime')
   const receiverSettings = useReceiverSettings(snap, snap?.link.tier)
   const receiverSettingsRef = useRef(receiverSettings)
   receiverSettingsRef.current = receiverSettings
@@ -1623,7 +1624,12 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // Ctrl/Command sets both. Hold Tx belongs to decode/QSO selection, not this click.
   const handleTune = useCallback((hz: number, target: 'tx' | 'rx' | 'both') => {
     if (remote) {
-      if (target === 'rx') receiverSettingsRef.current.tuneRx(hz)
+      if (target === 'rx') {
+        if (ftRuntimeControl && snap?.remoteFtRuntime) {
+          const context = { expectedTier: snap.link.tier, expected: snap.remoteFtRuntime }
+          void withErrorToast(() => apiSetRxOffset(hz, context), t('shell.offset.failed')).then(s => { if (s) setSnap(s) })
+        } else receiverSettingsRef.current.tuneRx(hz)
+      }
       else {
         const context = snap ? { expectedTier: snap.link.tier, expected: snap.remoteFtSettings } : undefined
         void withErrorToast(() => target === 'tx' ? apiSetTxOffset(hz, context) : apiSetBothOffsets(hz, context), t('shell.offset.failed'))
@@ -1641,7 +1647,7 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     void withErrorToast(call, t('shell.offset.failed')).then((s) => {
       if (s) setSnap(s)
     })
-  }, [remote, snap])
+  }, [remote, snap, ftRuntimeControl])
 
   // QSY from the Needed panel: move the rig to that band's channel and listen.
   const handleQsy = useCallback(
