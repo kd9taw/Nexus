@@ -1084,3 +1084,45 @@ test('an unverified address neither protects nor punishes', async () => {
     await who.post('pair/claim', { code: e.code })
   }
 })
+
+// 0002_trial.sql and grant-trial.mjs both exist to keep a hand grant and a self-serve trial
+// tellable apart forever. An admin extension used to overwrite both columns that carry that.
+test('extending a trial by hand records that it began as self-serve', async () => {
+  const adminSubject = `synthetic|admin-${crypto.randomUUID()}`
+  const locked = await runtime({ bindings: { ADMIN_SUBJECT: adminSubject } })
+  try {
+    const admin = locked.client(await locked.token(adminSubject))
+    await admin.post('session')
+
+    // An account that EARNS its trial the self-serve way. Note paired() cannot be used here:
+    // owner() seeds a trials row with no source, so it defaults to 'manual' and the approve's
+    // insert no-ops on conflict - every paired() account looks hand-granted.
+    const browser = await locked.owner(false)
+    const desktop = locked.client()
+    const { value: enrollment } = await desktop.post('enroll', { name: 'Earned it' })
+    await browser.post('pair/claim', { code: enrollment.code })
+    const credential = crypto.getRandomValues(new Uint8Array(32)).reduce((a, b) => a + b.toString(16).padStart(2, '0'), '')
+    await desktop.post('enroll/approve', { id: enrollment.id, proof: enrollment.proof, credential })
+    const pair = { browser }
+    const earned = await locked.db.prepare('SELECT started_at, source, expires_at FROM trials WHERE account_id=?')
+      .bind(pair.browser.accountId).first()
+    assert.equal(earned.source, 'trial')
+    assert.ok(earned.started_at > 0, 'control: a self-serve trial records when it began')
+
+    // The operator extends it by hand.
+    await admin.post('admin/grant-trial', { accountId: pair.browser.accountId, days: 30 })
+    const extended = await locked.db.prepare('SELECT started_at, source, expires_at FROM trials WHERE account_id=?')
+      .bind(pair.browser.accountId).first()
+    assert.equal(extended.started_at, earned.started_at, 'the original start survives the extension')
+    assert.equal(extended.source, 'trial+manual', 'and the row still says it began as self-serve')
+    assert.ok(extended.expires_at > earned.expires_at, 'the extension really did extend it')
+
+    // A pure hand grant to an account that never earned one is still plainly 'manual'.
+    const fresh = locked.client(await locked.token(`synthetic|${crypto.randomUUID()}`))
+    const { value: freshAccount } = await fresh.post('session')
+    await admin.post('admin/grant-trial', { accountId: freshAccount.accountId, days: 14 })
+    const granted = await locked.db.prepare('SELECT source FROM trials WHERE account_id=?')
+      .bind(freshAccount.accountId).first()
+    assert.equal(granted.source, 'manual', 'never earned, so never claims to have been')
+  } finally { await locked.mf.dispose() }
+})

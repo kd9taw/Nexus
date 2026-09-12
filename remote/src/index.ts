@@ -212,10 +212,17 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
     // an orphan row. UPDATE on conflict, never DELETE: the trials row is the durable proof an
     // account consumed its trial, and removing it re-opens the reinstall and re-pair abuse the
     // one-trial-ever rule exists to refuse.
+    //
+    // The first grant's `started_at` is KEPT, and a self-serve trial that is later extended by
+    // hand records BOTH as 'trial+manual'. Overwriting them destroyed exactly the distinction
+    // 0002_trial.sql and grant-trial.mjs both exist to preserve - that a hand grant and a
+    // self-serve trial stay tellable apart forever. After an extension the honest answer to "did
+    // this account ever earn a trial on its own?" is yes, and the row should still say so.
     await env.DB.prepare(`INSERT INTO trials(account_id, enabled, expires_at, started_at, source)
       SELECT id, 1, ?, ?, 'manual' FROM accounts WHERE id=?
       ON CONFLICT(account_id) DO UPDATE SET enabled=1, expires_at=excluded.expires_at,
-        started_at=excluded.started_at, source='manual'`)
+        started_at=COALESCE(trials.started_at, excluded.started_at),
+        source=CASE WHEN trials.source='trial' THEN 'trial+manual' ELSE 'manual' END`)
       .bind(expiresAt, now, target).run()
     const granted = await trial(env, target, now)
     requireValue(granted.state === 'active', 'stationUnavailable', 404)
