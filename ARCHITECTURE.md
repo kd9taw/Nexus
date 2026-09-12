@@ -222,6 +222,16 @@ and Stop keeps its independent route and a control inside the pending dialog.
 These operations use the existing lease, result recovery and no-replay contract.
 
 
+The separate `ftRuntime` capability connects RX offset entry, plain waterfall
+selection and Skip Tx1 for FT8/FT4, including during an owned Remote FT session.
+It captures the displayed settings and session flag, validates the current
+transmit permission and native ownership, and calls the existing native setters.
+RX saves only its own preference before changing runtime state; TX frequency is
+unchanged even when Hold is off. Skip Tx1 remains session-only and follows station
+snapshots in the browser. Local changes retire captured gestures, including changes
+away and back. Neither action acquires or renews transmit ownership. The existing
+receiver-only path remains available when transmit permission is absent.
+
 The separate `ftSettings` capability connects the existing TX offset field,
 Shift/right-click TX marker, Ctrl/Command combined markers, Hold and Auto/1st/2nd
 period controls for FT8/FT4. It requires the local transmit grant but cannot arm

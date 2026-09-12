@@ -679,6 +679,22 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
        const cq = await action(ft,{action:'ft.cq',expectedTier:tier,direction:'DX'})
        assert.equal(cq.response.value?.outcome,'applied',JSON.stringify(cq.response))
        assert.deepEqual(await probe.send({type:'ftEvidence'}),{tier,txEnabled:true,owned:true,logCount:1})
+       // Live RX and Skip Tx1 use the active FT owner without acquiring a new
+       // transmitter or moving the TX marker. Exercise the actual cloud/host path.
+       for(const change of [{kind:'rxOffset',hz:900},{kind:'skipTx1',on:true},{kind:'skipTx1',on:false}]){
+         const before=await probe.send({type:'ftRuntimeEvidence'})
+         ft=await ftState();assert.equal(ft.txArmed,true)
+         assert.ok(ft.controls.capabilities.includes('ftRuntime'))
+         const changed=await action(ft,{action:'ft.runtime',expectedTier:tier,expected:before.runtime,change})
+         assert.equal(changed.response.value?.outcome,'applied',JSON.stringify(changed.response))
+         assert.equal(changed.response.value?.evidence,change.kind==='rxOffset'?'settingsSaved':'stationState')
+         const after=await probe.send({type:'ftRuntimeEvidence'})
+         assert.equal(after.txEnabled,true);assert.equal(after.owned,true)
+         assert.equal(after.runtime.settings.txOffsetHz,before.runtime.settings.txOffsetHz)
+         assert.notEqual(after.runtime.settings.key,before.runtime.settings.key)
+         if(change.kind==='rxOffset')assert.equal(after.runtime.settings.rxOffsetHz,900)
+         else assert.equal(after.runtime.skipTx1,change.on)
+       }
        ft = await ftState()
        assert.equal(ft.txArmed,true)
        assert.equal((await action(ft,{action:'ft.txEnabled',expectedTier:tier,on:false})).response.value?.outcome,'applied')

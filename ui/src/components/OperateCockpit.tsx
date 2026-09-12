@@ -451,8 +451,8 @@ export function OperateCockpit({
       /* ignore */
     }
   }, [tuneStep])
-  // Skip Tx1 (WSJT-X parity) — session-only UI state; the backend flag is likewise not
-  // persisted, so both reset to off each launch. The toggle pushes to the engine.
+  // Skip Tx1 remains session-only. Remote renders the station flag; the local UI
+  // retains its existing launch default and pushes each toggle to the engine.
   const [localSkipTx1, setSkipTx1] = useState(false)
   const skipTx1 = control ? localSkipTx1 : snap.remoteFtRuntime?.skipTx1 ?? false
   const handleSkipTx1 = useCallback((v: boolean) => {

@@ -433,6 +433,15 @@ fn cloud_runtime_probe() {
             std::io::stdout().flush().unwrap();
             continue;
         }
+        if value["type"] == "ftRuntimeEvidence" {
+            let e = engine.lock().unwrap();
+            println!(
+                "REMOTE_TEST:{}",
+                json!({"runtime":e.remote_ft_runtime(),"txEnabled":e.tx_enabled(),"owned":e.remote_ft_tx_owned()})
+            );
+            std::io::stdout().flush().unwrap();
+            continue;
+        }
         if value["type"] == "ftSettingsEvidence" {
             let e = engine.lock().unwrap();
             println!(

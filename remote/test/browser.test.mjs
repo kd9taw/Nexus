@@ -323,7 +323,19 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
             if(c.kind==='auto')s.radio.txCycleAuto=c.auto
             s.remoteFtSettings={key:(BigInt('0x'+before.key)+1n).toString(16).padStart(32,'0'),
               ...Object.fromEntries(['txOffsetHz','rxOffsetHz','holdTxFreq','txEven','txCycleAuto'].map(k=>[k,s.radio[k]]))}
+            s.remoteFtRuntime={settings:s.remoteFtSettings,skipTx1:s.remoteFtRuntime.skipTx1}
             qsoEvidence=c.kind==='auto'?'stationState':'settingsSaved'
+          }else if(a.action==='ft.runtime'){
+            assert.ok(ftOperating&&transmitAllowed);assert.equal(a.transmitEpoch,transmitEpoch)
+            const s=applicationData.get_snapshot
+            assert.equal(a.expectedTier,s.link.tier);assert.deepEqual(a.expected,s.remoteFtRuntime)
+            assert.equal(s.radio.txEnabled,true,'browser runtime actions must exercise an owned FT session')
+            if(a.change.kind==='rxOffset')s.radio.rxOffsetHz=a.change.hz
+            else {assert.equal(a.change.kind,'skipTx1');s.remoteFtRuntime.skipTx1=a.change.on}
+            s.remoteFtSettings={...s.remoteFtSettings,rxOffsetHz:s.radio.rxOffsetHz,
+              key:(BigInt('0x'+s.remoteFtSettings.key)+1n).toString(16).padStart(32,'0')}
+            s.remoteFtRuntime={settings:s.remoteFtSettings,skipTx1:s.remoteFtRuntime.skipTx1}
+            qsoEvidence=a.change.kind==='rxOffset'?'settingsSaved':'stationState'
           }else if(a.action==='qso.logCurrent'){
             assert.ok(loggingAllowed)
             assert.equal(a.expectedKey,applicationData.get_snapshot.currentQsoLogKey)
@@ -501,7 +513,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
           loggingReceipts.set(r.requestId,value);loggingRevision++;applicationRevision++
           if(loseSpotReply&&a.action==='radio.workSpot')continue
         }else if(r.type==='result'){value=loggingReceipts.get(r.operationId);if(!value)error='resultExpired';else if(loseSpotReply&&value.operation==='stationControl')value={operation:'stationControl',operationId:r.operationId,outcome:'unknown',reason:'hardwareUnconfirmed'}}
-        else value={stationBootId:loggingBoot,allowed:loggingAllowed||stationControls,phase:loggingLease?'controlling':loggingAllowed||stationControls?'available':'localPermissionRequired',leaseId:loggingLease,revision:loggingRevision,commandWindowId:loggingLease?loggingWindow:null,nextSequence:loggingLease?loggingSequence+1:null,leaseRemainingMs:loggingLease?Math.max(0,Math.floor(loggingLeaseUntil-performance.now())):null,actions:loggingAllowed?['log.manual']:[],txArmed:!!ftOperating&&!!loggingLease&&transmitAllowed&&applicationData.get_snapshot.radio.txEnabled,...(ftOperating?{transmitEpoch:transmitAllowed?transmitEpoch:null}:{}),...(stationControls?{controls:{context:controlContext(),capabilities:request.operationVersion>=3?['decoder','amplifier','frequency','mode','tier','ampFollowBand','workspace','decoderSettings','receiverSettings','receiverGain','bandSelection','receiverFilter','receiverDsp','phoneMode','fmTuning','fmReceiver','radioLevels',...(transmitAllowed?['ftOperate','ftCall','ftExchange','ftMessages','ftSettings']:[]),...(ftOperating&&loggingAllowed?['qsoLogging']:[]),...(workSpot?['workSpot']:[]),...(radioSelection?['radioSelection']:[])]:['decoder','amplifier']}}:{})}
+        else value={stationBootId:loggingBoot,allowed:loggingAllowed||stationControls,phase:loggingLease?'controlling':loggingAllowed||stationControls?'available':'localPermissionRequired',leaseId:loggingLease,revision:loggingRevision,commandWindowId:loggingLease?loggingWindow:null,nextSequence:loggingLease?loggingSequence+1:null,leaseRemainingMs:loggingLease?Math.max(0,Math.floor(loggingLeaseUntil-performance.now())):null,actions:loggingAllowed?['log.manual']:[],txArmed:!!ftOperating&&!!loggingLease&&transmitAllowed&&applicationData.get_snapshot.radio.txEnabled,...(ftOperating?{transmitEpoch:transmitAllowed?transmitEpoch:null}:{}),...(stationControls?{controls:{context:controlContext(),capabilities:request.operationVersion>=3?['decoder','amplifier','frequency','mode','tier','ampFollowBand','workspace','decoderSettings','receiverSettings','receiverGain','bandSelection','receiverFilter','receiverDsp','phoneMode','fmTuning','fmReceiver','radioLevels',...(transmitAllowed?['ftOperate','ftCall','ftExchange','ftMessages','ftSettings','ftRuntime']:[]),...(ftOperating&&loggingAllowed?['qsoLogging']:[]),...(workSpot?['workSpot']:[]),...(radioSelection?['radioSelection']:[])]:['decoder','amplifier']}}:{})}
         source.send({type:'operationResponse',sessionId:request.sessionId,requestId:r.requestId,...(error?{error}:{value})});continue
       }
       if (request.type === 'applicationQuery') {
@@ -644,6 +656,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         applicationData.get_snapshot.link.tier=tier
         Object.assign(applicationData.get_snapshot.radio,{txOffsetHz:1500,rxOffsetHz:1500,holdTxFreq:false,txEven:true,txCycleAuto:true})
         applicationData.get_snapshot.remoteFtSettings={key:(tier==='FT8'?'1':'2').padStart(32,'0'),txOffsetHz:1500,rxOffsetHz:1500,holdTxFreq:false,txEven:true,txCycleAuto:true}
+        applicationData.get_snapshot.remoteFtRuntime={settings:applicationData.get_snapshot.remoteFtSettings,skipTx1:false}
         applicationRevision++
         await until(`[...document.querySelectorAll('.tier-btn.active')].some(e=>e.textContent.trim()===${JSON.stringify(tier)})`)
         await until(`!document.querySelector('${cq}').disabled`)
@@ -698,6 +711,46 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         await until(`document.querySelector('${tx}')?.textContent.trim()==='TX On'&&!document.querySelector('${tx}').disabled`)
         assert.equal(stationRequests.length,count+1);assert.equal(stationRequests.at(-1).action.action,'ft.cq')
         assert.equal(stationRequests.at(-1).action.expectedTier,tier)
+        const rxField='.operate-cockpit .df-field:first-child input'
+        const skip="[...document.querySelectorAll('.cockpit-qso button')].find(e=>e.textContent.trim()==='Skip Tx1')"
+        let runtimeActions=stationRequests.length
+        const txOffset=applicationData.get_snapshot.radio.txOffsetHz
+        await until(`!document.querySelector('${rxField}').disabled`)
+        await click(`document.querySelector('${rxField}')`);await evaluate(`document.querySelector('${rxField}').select()`)
+        await browser.call('Input.insertText',{text:'850'},session)
+        for(const type of ['keyDown','keyUp'])await browser.call('Input.dispatchKeyEvent',{type,key:'Enter',code:'Enter',windowsVirtualKeyCode:13},session)
+        await until(`document.querySelector('${rxField}').value==='850'&&!document.querySelector('${rxField}').disabled`)
+        assert.equal(stationRequests.length,++runtimeActions)
+        assert.deepEqual(stationRequests.at(-1).action.change,{kind:'rxOffset',hz:850})
+        assert.equal(stationRequests.at(-1).action.action,'ft.runtime')
+        await evaluate(`document.querySelector('.operate-cockpit .waterfall-canvas').scrollIntoView({block:'center',behavior:'instant'})`);await settledLayout()
+        const point=await evaluate(`(()=>{const e=document.querySelector('.operate-cockpit .waterfall-canvas'),r=e.getBoundingClientRect(),x=r.left+r.width*.3,y=r.top+r.height*.5;return{x,y,hit:e.contains(document.elementFromPoint(x,y))}})()`)
+        assert.equal(point.hit,true)
+        for(const type of ['mousePressed','mouseReleased'])await browser.call('Input.dispatchMouseEvent',{type,x:point.x,y:point.y,button:'left',modifiers:0,clickCount:1},session)
+        for(let i=0;i<100&&stationRequests.length===runtimeActions;i++)await sleep(50)
+        assert.equal(stationRequests.length,++runtimeActions)
+        assert.equal(stationRequests.at(-1).action.action,'ft.runtime')
+        assert.equal(stationRequests.at(-1).action.change.kind,'rxOffset')
+        await until(`document.querySelector('${rxField}').value===${JSON.stringify(String(Math.round(stationRequests.at(-1).action.change.hz)))}`)
+        for(const on of [true,false]){
+          await until(`!${skip}?.disabled`);await click(skip)
+          await until(`${skip}?.getAttribute('aria-pressed')===${JSON.stringify(String(on))}`)
+          assert.equal(stationRequests.length,++runtimeActions)
+          assert.deepEqual(stationRequests.at(-1).action.change,{kind:'skipTx1',on})
+          assert.equal(stationRequests.at(-1).action.action,'ft.runtime')
+        }
+        // A local Skip change appears without a browser action or optimistic copy.
+        for(const on of [true,false]){
+          applicationData.get_snapshot.remoteFtRuntime.skipTx1=on
+          applicationData.get_snapshot.remoteFtSettings.key=(BigInt('0x'+applicationData.get_snapshot.remoteFtSettings.key)+1n).toString(16).padStart(32,'0')
+          applicationRevision++
+          await until(`${skip}?.getAttribute('aria-pressed')===${JSON.stringify(String(on))}`)
+          assert.equal(stationRequests.length,runtimeActions)
+        }
+        assert.equal(applicationData.get_snapshot.radio.txEnabled,true)
+        assert.equal(applicationData.get_snapshot.radio.txOffsetHz,txOffset)
+        await until(`document.querySelector('${txField}').value===${JSON.stringify(String(txOffset))}`)
+        count+=4
         await click(`document.querySelector('${tx}')`)
         await until(`document.querySelector('${tx}')?.textContent.trim()==='TX Off'&&!document.querySelector('${tx}').disabled`)
         assert.equal(stationRequests.length,count+2);assert.equal(stationRequests.at(-1).action.on,false)
@@ -798,12 +851,12 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       await until(`!document.querySelector('${log}').disabled&&document.querySelector('.cockpit-qso .cq-dx')?.textContent==='K2ABC'`)
       await click(`document.querySelector('${log}')`)
       for(let i=0;i<100&&stationRequests.length<50;i++)await sleep(50)
-      assert.equal(stationRequests.length,50)
+      assert.equal(stationRequests.length,58)
       assert.equal(stationRequests.at(-1).action.action,'qso.logCurrent')
       assert.equal(await evaluate(`!!document.querySelector('.logconfirm')`),false)
       transmitAllowed=false
       await until(`document.querySelector('${cq}').disabled&&document.querySelector('${tx}').disabled&&document.querySelector('${stop}').disabled`)
-      assert.equal(stationRequests.length,50);assert.equal(stopRequests.length,3)
+      assert.equal(stationRequests.length,58);assert.equal(stopRequests.length,3)
       await evaluate(`document.activeElement.blur()`)
       await browser.call('Input.dispatchKeyEvent',{type:'keyDown',key:'1',code:'Digit1',windowsVirtualKeyCode:49,modifiers:1},session)
       await browser.call('Input.dispatchKeyEvent',{type:'keyUp',key:'1',code:'Digit1',windowsVirtualKeyCode:49,modifiers:1},session)
