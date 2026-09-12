@@ -1,6 +1,7 @@
 // Same-origin browser API and outbound station admission. No radio command router.
 import { account, access, body, browserOrigin, cookie, device, digest, id, label,
-  native, proof, rate, Refusal, requireTrial, requireValue, secret, station, trial, uuid } from './authority'
+  native, proof, rate, Refusal, requireEligible, requireTrial, requireValue, secret, station,
+  trial, TRIAL_MS, uuid } from './authority'
 import type { RemoteEnv, StationRow } from './authority'
 import { observerDeadline } from '../../ui/src/remote-monitor/relay'
 import { advertisedOperationVersion } from '../../ui/src/remote-web/operation-version'
@@ -83,7 +84,7 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
     return room(env, stationId, 'browser', { access: await access(env, row, now), sessionId: uuid(),
       identity: { accountId: ticket.account_id, deviceId: ticket.device_id,
         deviceGeneration: ticket.device_generation, expiresAt: ticket.identity_until },
-      entitlement: await trial(env, ticket.account_id) })
+      entitlement: await trial(env, ticket.account_id, now) })
   }
   requireValue(request.method === 'POST', 'methodNotAllowed', 405)
 
@@ -111,8 +112,14 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
     requireValue(pending, 'pairingExpired', 410)
     if (path.endsWith('check')) return json({ accountId: pending.account_id, approved: pending.approved === 1 })
     requireValue(pending.account_id, 'accountNotClaimed', 409)
-    requireTrial(await trial(env, pending.account_id), now)
+    requireEligible(await trial(env, pending.account_id, now))
     const credentialHash = await digest(proof(input.credential))
+    // Approval at the shack is the moment the trial starts, so the clock is written in the same
+    // batch as the station. Station insert first on purpose: a trial with no station is
+    // unrecoverable by the operator, whereas a station with no trial is repaired by the native
+    // client's existing retry, which reuses the same credential. ON CONFLICT DO NOTHING against
+    // the account_id primary key IS the concurrency argument, and it is also "one trial, ever"
+    // written in SQL - two approvals racing cannot produce two clocks.
     await env.DB.batch([
       env.DB.prepare(`INSERT OR IGNORE INTO stations(id,account_id,name,credential_hash)
         SELECT id,account_id,name,? FROM enrollments e WHERE id=? AND proof_hash=? AND expires_at>?
@@ -121,11 +128,20 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
       env.DB.prepare(`UPDATE enrollments SET approved=1 WHERE id=? AND proof_hash=?
         AND EXISTS(SELECT 1 FROM stations WHERE id=? AND credential_hash=?)`)
         .bind(stationId, hash, stationId, credentialHash),
+      env.DB.prepare(`INSERT INTO trials(account_id, enabled, expires_at, started_at, source)
+        SELECT ?,1,?,?,'trial' WHERE EXISTS(SELECT 1 FROM stations WHERE id=? AND credential_hash=?)
+        ON CONFLICT(account_id) DO NOTHING`)
+        .bind(pending.account_id, now + TRIAL_MS, now, stationId, credentialHash),
     ])
+    // Read both rows back before answering 200. That makes "the station and the clock landed
+    // together" an observable property of the response rather than a claim about D1's rollback
+    // semantics, which are unproven here: every test runs against local Miniflare D1.
     const accepted = await env.DB.prepare('SELECT id FROM stations WHERE id=? AND credential_hash=? AND enabled=1')
       .bind(stationId, credentialHash).first()
     requireValue(accepted, 'stationLimit', 409)
-    return json({ stationId, accountId: pending.account_id })
+    const started = await trial(env, pending.account_id, now)
+    requireValue(started.state === 'active', 'serviceUnavailable', 503)
+    return json({ stationId, accountId: pending.account_id, entitlement: started })
   }
 
   if (match?.[2].startsWith('native/')) {
@@ -163,17 +179,17 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
   // Every remaining operation is account-authenticated and subject to exact Origin.
   const identity = await account(request, env, now)
   await rate(env, `account:${identity.accountId}`, now, 120)
-  const entitlement = await trial(env, identity.accountId)
+  const entitlement = await trial(env, identity.accountId, now)
   if (path === 'session') {
     await body(request, [])
     const rows = await env.DB.prepare('SELECT id,name,enabled FROM stations WHERE account_id=? AND enabled=1 ORDER BY id LIMIT 2')
       .bind(identity.accountId).all<{ id: string; name: string; enabled: number }>()
     const stations = await Promise.all(rows.results.map(async row => ({ id: row.id, name: row.name,
       device: await device(request, env, row.id, identity.accountId, now) })))
-    return json({ accountId: identity.accountId, entitlement, stations })
+    return json({ accountId: identity.accountId, entitlement, stations, serverNow: now })
   }
   if (path === 'pair/claim') {
-    requireTrial(entitlement, now)
+    requireEligible(entitlement)
     await rate(env, `claim:${identity.accountId}`, now, 5, 600000)
     const input = await body(request, ['code'])
     requireValue(typeof input.code === 'string' && /^[0-9a-f]{16}$/.test(input.code), 'invalidPairingCode', 400)

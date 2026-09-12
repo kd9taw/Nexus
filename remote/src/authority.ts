@@ -99,13 +99,34 @@ export async function account(request: Request, env: RemoteEnv, now: number): Pr
   return { accountId: row.id, expiresAt: until }
 }
 
-export async function trial(env: RemoteEnv, accountId: string): Promise<Entitlement> {
-  const row = await env.DB.prepare('SELECT enabled, expires_at FROM trials WHERE account_id=?')
-    .bind(accountId).first<{ enabled: number; expires_at: number }>()
-  return { accountId, enabled: row?.enabled === 1, expiresAt: row?.expires_at ?? 0 }
+// Fourteen days, measured from the moment a station is approved at the shack — not from
+// sign-in, because an account with no paired station cannot use the service and would burn
+// its trial waiting. The one place that writes this is the approve batch in index.ts.
+export const TRIAL_MS = 14 * 24 * 60 * 60 * 1000
+
+export async function trial(env: RemoteEnv, accountId: string, now: number): Promise<Entitlement> {
+  const row = await env.DB.prepare('SELECT enabled, expires_at, started_at, source FROM trials WHERE account_id=?')
+    .bind(accountId).first<{ enabled: number; expires_at: number; started_at: number | null; source: string | null }>()
+  // Four distinct situations, named. Callers must never re-derive these from enabled+expiresAt:
+  // that is the arithmetic this field exists to stop two separate consumers from guessing at.
+  const state = !row ? 'none' : row.enabled !== 1 ? 'disabled' : row.expires_at > now ? 'active' : 'ended'
+  return { accountId, enabled: row?.enabled === 1, expiresAt: row?.expires_at ?? 0,
+    state, startedAt: row?.started_at ?? null, source: row?.source ?? null }
 }
+
+// The strict gate: is the service usable right now? Guards device, ticket, renew and observe.
 export function requireTrial(entitlement: Entitlement, now: number): void {
   requireValue(entitlement.enabled && entitlement.expiresAt > now, 'trialRequired')
+}
+
+// The admission gate, for the two endpoints that can START a trial. An account may pair while
+// its trial runs, or if it has never had one. Ended and disabled are refused under their own
+// codes, so the browser can say which of the two happened instead of showing one vague wall.
+// There is deliberately no path back to `none`: the trials row is the durable proof that the
+// trial was consumed, so deleting it is what would reopen reinstall and re-pair abuse.
+export function requireEligible(entitlement: Entitlement): void {
+  if (entitlement.state === 'active' || entitlement.state === 'none') return
+  throw new Refusal(entitlement.state === 'ended' ? 'trialEnded' : 'trialDisabled')
 }
 export type StationRow = { id: string; account_id: string; name: string; enabled: number; generation: number; policy_version: number }
 export async function station(env: RemoteEnv, stationId: string): Promise<StationRow> {

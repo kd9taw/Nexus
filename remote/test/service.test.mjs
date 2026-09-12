@@ -408,10 +408,80 @@ test('provider signatures, authorized client and exact Origin are required; acco
   const { privateKey } = await generateKeyPair('RS256')
   const wrongKey = app.client(await app.token('synthetic|wrong-key', {}, privateKey))
   await wrongKey.post('session', {}, 401)
+  // An account that has never held a trial may claim a code: that is the self-serve path.
+  // What signing in must never do is start the clock, so both rows are still absent here -
+  // the trial begins at approval, standing at the radio, and nowhere earlier.
   const anon = app.client(), { value: enrollment } = await anon.post('enroll', { name: 'Trial gate' })
-  await account.post('pair/claim', { code: enrollment.code }, 403)
+  await account.post('pair/claim', { code: enrollment.code })
   const counts = await app.db.prepare('SELECT COUNT(*) AS count FROM stations WHERE account_id=?').bind(account.accountId).first()
   assert.equal(counts.count, 0)
+  const clock = await app.db.prepare('SELECT COUNT(*) AS count FROM trials WHERE account_id=?').bind(account.accountId).first()
+  assert.equal(clock.count, 0, 'claiming a code must not start the trial')
+})
+
+const credential = () => crypto.getRandomValues(new Uint8Array(32)).reduce((s, b) => s + b.toString(16).padStart(2, '0'), '')
+
+// Approval at the radio is the only thing that starts the clock, and it starts exactly one.
+test('approval starts one fourteen-day trial; a second station never restarts it', async () => {
+  const account = await app.owner(false), desktop = app.client()
+  const { value: first } = await desktop.post('enroll', { name: 'First station' })
+  await account.post('pair/claim', { code: first.code })
+  const before = Date.now()
+  const { value: approved } = await desktop.post('enroll/approve', { id: first.id, proof: first.proof, credential: credential() })
+  assert.equal(approved.entitlement.state, 'active', 'approve reports the clock it just started')
+  assert.equal(approved.entitlement.source, 'trial')
+  const started = await app.db.prepare('SELECT enabled,expires_at,started_at,source FROM trials WHERE account_id=?')
+    .bind(account.accountId).first()
+  assert.equal(started.enabled, 1)
+  assert.equal(started.source, 'trial', 'a self-serve trial is never recorded as a hand-made grant')
+  assert.ok(started.started_at >= before - 5000 && started.started_at <= Date.now() + 5000, 'start is stamped, not invented')
+  assert.equal(started.expires_at - started.started_at, 14 * 24 * 60 * 60 * 1000, 'exactly fourteen days')
+
+  const second = app.client()
+  const { value: more } = await second.post('enroll', { name: 'Second station' })
+  await account.post('pair/claim', { code: more.code })
+  await second.post('enroll/approve', { id: more.id, proof: more.proof, credential: credential() })
+  const after = await app.db.prepare('SELECT expires_at,started_at FROM trials WHERE account_id=?')
+    .bind(account.accountId).first()
+  assert.equal(after.started_at, started.started_at, 'a second station must not restart the trial')
+  assert.equal(after.expires_at, started.expires_at)
+})
+
+// An account whose fortnight is over is refused under its own name, not a shared 403, because
+// the browser has to be able to say which of the two things happened.
+test('an ended trial refuses pairing under its own code and cannot be restarted', async () => {
+  const account = await app.owner(false), desktop = app.client()
+  const ended = Date.now() - 24 * 60 * 60 * 1000
+  await app.db.prepare("INSERT INTO trials(account_id,enabled,expires_at,started_at,source) VALUES(?,1,?,?,'trial')")
+    .bind(account.accountId, ended, ended - 14 * 24 * 60 * 60 * 1000).run()
+  const { value: enrollment } = await desktop.post('enroll', { name: 'Ended trial' })
+  const { value: refusal } = await account.post('pair/claim', { code: enrollment.code }, 403)
+  assert.equal(refusal.error, 'trialEnded', 'the reason is named, not folded into accessDenied')
+  const unchanged = await app.db.prepare('SELECT expires_at FROM trials WHERE account_id=?').bind(account.accountId).first()
+  assert.equal(unchanged.expires_at, ended, 'a refused claim leaves the consumed trial exactly as it was')
+})
+
+// A hand-disabled account is a different situation again, and must not read as "expired".
+test('a disabled trial refuses pairing as disabled, not as ended', async () => {
+  const account = await app.owner(false), desktop = app.client()
+  await app.db.prepare("INSERT INTO trials(account_id,enabled,expires_at,started_at,source) VALUES(?,0,?,?,'manual')")
+    .bind(account.accountId, Date.now() + 60 * 60 * 1000, Date.now()).run()
+  const { value: enrollment } = await desktop.post('enroll', { name: 'Disabled' })
+  const { value: refusal } = await account.post('pair/claim', { code: enrollment.code }, 403)
+  assert.equal(refusal.error, 'trialDisabled')
+})
+
+// Pilot rows predate migration 0002 and carry no start date. The service must report that as
+// unknown rather than computing expires_at minus fourteen days, which would be a fabrication.
+test('a pilot row with no start date reports an unknown start, never a computed one', async () => {
+  const account = await app.owner(false)
+  await app.db.prepare('INSERT INTO trials(account_id,enabled,expires_at) VALUES(?,1,?)')
+    .bind(account.accountId, Date.now() + 60 * 60 * 1000).run()
+  const { value: session } = await account.post('session')
+  assert.equal(session.entitlement.state, 'active')
+  assert.equal(session.entitlement.startedAt, null, 'an absent start stays absent')
+  assert.equal(session.entitlement.source, 'manual', 'the pre-0002 default marks it as hand-made')
+  assert.ok(Number.isSafeInteger(session.serverNow), 'the browser is given the service clock')
 })
 
 test('account claim needs local proof approval; device cookies and station boundaries remain separate', async () => {

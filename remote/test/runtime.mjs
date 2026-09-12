@@ -2,7 +2,7 @@
 // generated in memory; none are fixtures, log fields or test output.
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare'
 import { generateKeyPair, exportJWK, SignJWT } from 'jose'
-import { readFile } from 'node:fs/promises'
+import { readFile, readdir } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import assert from 'node:assert/strict'
 import WebSocket from 'ws'
@@ -36,8 +36,17 @@ export async function runtime({ bindings = {} } = {}) {
   }))
   await mf.ready
   const db = await mf.getD1Database('DB')
-  const migration = await readFile(new URL('../migrations/0001_observation.sql', import.meta.url), 'utf8')
-  for (const statement of migration.split(';').map(s => s.trim()).filter(Boolean)) await db.prepare(statement).run()
+  // Every migration, in order - never one named file. Pinning this to 0001 meant a newly added
+  // migration silently did not exist in the test database, and the suite went red against a
+  // healthy build. Sorting the directory keeps this correct for 0003 without another edit.
+  const migrationsDir = new URL('../migrations/', import.meta.url)
+  for (const file of (await readdir(migrationsDir)).filter(name => name.endsWith('.sql')).sort()) {
+    // Strip -- comment lines before splitting: a semicolon inside a comment would otherwise cut
+    // it in half and hand D1 a statement that is nothing but prose, which it rejects outright.
+    const migration = (await readFile(new URL(file, migrationsDir), 'utf8'))
+      .split('\n').filter(line => !line.trimStart().startsWith('--')).join('\n')
+    for (const statement of migration.split(';').map(s => s.trim()).filter(Boolean)) await db.prepare(statement).run()
+  }
   const token = (subject, claims = {}, key = privateKey) => new SignJWT({ azp: 'remote-test-client', ...claims })
     .setProtectedHeader({ alg: 'RS256', kid: publicJwk.kid }).setIssuer(issuer).setAudience('remote-test-api')
     .setSubject(subject).setIssuedAt().setExpirationTime('1h').sign(key)

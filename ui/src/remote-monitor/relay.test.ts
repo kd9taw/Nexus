@@ -6,7 +6,8 @@ import fixtures from './fixtures.v2.json'
 const access = (): StationAccess => ({ stationId: 'station-a', accountId: 'account-a', enabled: true,
   policyVersion: 1, stationGeneration: 1, devices: [{ id: 'browser-a', generation: 1, approved: true }] })
 const browser = (): BrowserIdentity => ({ accountId: 'account-a', deviceId: 'browser-a', deviceGeneration: 1, expiresAt: 120000 })
-const trial = () => ({ accountId: 'account-a', enabled: true, expiresAt: 120000 })
+const trial = () => ({ accountId: 'account-a', enabled: true, expiresAt: 120000,
+  state: 'active' as const, startedAt: 0, source: 'trial' })
 const peer = () => ({ send: vi.fn<(message: string) => void>(), close: vi.fn<(code: number, reason: string) => void>() })
 const frame = (sequence: number) => JSON.stringify({ ...fixtures.spe, source: 'native', sequence })
 const ack = (sequence: number) => JSON.stringify({ type: 'ack', epoch: fixtures.spe.epoch, sequence })

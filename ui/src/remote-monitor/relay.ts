@@ -15,7 +15,15 @@ export type StationAccess = {
   devices: ReadonlyArray<{ id: string; generation: number; approved: boolean }>
 }
 export type Identity = { accountId: string; expiresAt: number }
-export type Entitlement = { accountId: string; expiresAt: number; enabled: boolean }
+// `enabled` and `expiresAt` stay on the wire exactly as they were: observerDeadline below and
+// every already-shipped browser gate on them, and this type is the contract between them.
+// `state` is additive and is what a browser should render, because enabled+expiresAt cannot
+// tell a trial that never started from one that ended from one that was switched off by hand,
+// and those are three different sentences to an operator. `startedAt` is null for pilot rows
+// written before migration 0002 — an unknown start, never a computed one.
+export type TrialState = 'none' | 'active' | 'ended' | 'disabled'
+export type Entitlement = { accountId: string; expiresAt: number; enabled: boolean
+  state: TrialState; startedAt: number | null; source: string | null }
 export type StationIdentity = Identity & { stationId: string; generation: number }
 export type BrowserIdentity = Identity & { deviceId: string; deviceGeneration: number }
 export type Peer = { send: (message: string) => void; close: (code: number, reason: string) => void }
