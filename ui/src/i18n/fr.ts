@@ -218,6 +218,8 @@ export const FR: PartialCatalog = {
   "remote.connected": "Connecté au service à distance",
   "remote.reconnecting": "Reconnexion au service à distance",
   "remote.vaultFailed": "Déverrouillez le coffre d’identifiants du système et réessayez. L’accès reste désactivé si l’identifiant ne peut pas être enregistré en sécurité.",
+  "remote.nativeRevoked": "L'accès de cette station a été révoqué depuis un navigateur, elle ne se connecte donc plus. Rien n'est cassé ici — réappairez-la ci-dessous quand vous la voudrez de nouveau.",
+  "remote.nativeServiceOver": "L'accès au service de ce compte est arrivé à son terme, cette station ne se connecte donc plus. Votre radio, votre journal et vos réglages sont intacts ; seul le lien navigateur est coupé.",
   "remote.stationName": "Nom de la station",
   "remote.openService": "Connectez-vous au service :",
   "remote.codeExpires": "Ce code expire après dix minutes.",

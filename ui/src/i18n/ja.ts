@@ -208,6 +208,8 @@ export const JA: PartialCatalog = {
   "remote.connected": "リモートサービスに接続済み",
   "remote.reconnecting": "リモートサービスに再接続中",
   "remote.vaultFailed": "OSの資格情報ストアを解除して再試行してください。資格情報を安全に保存できない場合、リモートは無効のままです。",
+  "remote.nativeRevoked": "この局のアクセスはブラウザーから取り消されたため、接続を停止しました。ここに異常はありません。必要になったら下から再度ペアリングしてください。",
+  "remote.nativeServiceOver": "このアカウントのサービスアクセスが終了したため、この局は接続を停止しました。無線機、ログ、設定はそのままです。ブラウザーとの接続だけが切れています。",
   "remote.stationName": "局の名前",
   "remote.openService": "サービスにログイン：",
   "remote.codeExpires": "このコードの有効期限は10分です。",

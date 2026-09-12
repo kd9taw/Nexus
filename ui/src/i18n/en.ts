@@ -282,6 +282,8 @@ export const EN = {
   "remote.connected": "Connected to the Remote service",
   "remote.reconnecting": "Reconnecting to the Remote service",
   "remote.vaultFailed": "Unlock your operating system’s credential store and try again. Remote stays disabled if its credential cannot be stored securely.",
+  "remote.nativeRevoked": "This station's access was revoked from a browser, so it has stopped connecting. Nothing here is broken — pair it again below when you want it back.",
+  "remote.nativeServiceOver": "Service access for this account has run out, so this station has stopped connecting. Your radio, your log and your settings are untouched; only the browser link is off.",
   "remote.stationName": "Station name",
   "remote.openService": "Sign in to the service:",
   "remote.codeExpires": "This code expires after ten minutes.",

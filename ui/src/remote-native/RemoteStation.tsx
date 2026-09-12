@@ -42,7 +42,14 @@ export function RemoteStation() {
     <p role="status">{phase === 'unpaired' ? t('remote.unpaired') : phase === 'pairing' ? t('remote.pairing')
       : phase === 'approval' ? t('remote.localApproval') : phase === 'disabled' ? t('remote.disabled')
       : phase === 'connected' ? t('remote.connected') : phase === 'reconnecting' ? t('remote.reconnecting') : t('monitor.connecting')}</p>
-    {issue && <p role="alert">{issue === 'credentialStoreUnavailable' ? t('remote.vaultFailed') : t('remote.requestFailed')}</p>}
+    {/* Every refusal except the vault one used to render "the request could not be completed",
+        which points at the network. A station whose access was revoked from a browser, or whose
+        service access has run out, has not got a network problem and cannot fix one. */}
+    {issue && <p role="alert">{
+      issue === 'credentialStoreUnavailable' ? t('remote.vaultFailed')
+      : issue === 'stationRevoked' ? t('remote.nativeRevoked')
+      : issue === 'trialEnded' || issue === 'trialDisabled' ? t('remote.nativeServiceOver')
+      : t('remote.requestFailed')}</p>}
     {phase === 'unpaired' && <>
       <label>{t('remote.stationName')}<input value={name} maxLength={48} onChange={event => setName(event.target.value)} /></label>
       <button type="button" className="remote-button" disabled={busy || !name.trim()} onClick={() => void act({ type: 'begin', name })}>{t('remote.pairStation')}</button>

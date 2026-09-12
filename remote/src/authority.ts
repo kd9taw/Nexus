@@ -144,9 +144,18 @@ export async function native(request: Request, env: RemoteEnv, stationId: string
   // The native client has no Origin. A page cannot use this as a cookie-auth path.
   requireValue(!request.headers.has('origin'), 'originDenied')
   const hash = await digest(proof(bearer(request)))
-  const row = await env.DB.prepare('SELECT id,account_id,name,enabled,generation,policy_version FROM stations WHERE id=? AND credential_hash=? AND (enabled=1 OR ?=1)')
-    .bind(id(stationId), hash, allowRevoked ? 1 : 0).first<StationRow>()
+  // The credential match ALONE selects the row. `enabled` is judged afterwards, so a station whose
+  // access was revoked can be told that it was revoked instead of being left to guess from the
+  // same 401 a wrong credential gets - the shack could see only that it had stopped working.
+  //
+  // ⚠️ The order is the security property, not a style choice. A caller who does NOT hold the
+  // station's credential still gets the undifferentiated `stationNotApproved`, so this cannot be
+  // used to ask whether a station id exists or what became of it. Never hoist the enabled check
+  // above the credential match to simplify this.
+  const row = await env.DB.prepare('SELECT id,account_id,name,enabled,generation,policy_version FROM stations WHERE id=? AND credential_hash=?')
+    .bind(id(stationId), hash).first<StationRow>()
   requireValue(row, 'stationNotApproved', 401)
+  requireValue(allowRevoked || row.enabled === 1, 'stationRevoked', 401)
   return row
 }
 export async function access(env: RemoteEnv, row: StationRow, now: number): Promise<StationAccess> {

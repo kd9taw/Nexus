@@ -203,6 +203,8 @@ export const DE: PartialCatalog = {
   "remote.connected": "Mit dem Remote-Dienst verbunden",
   "remote.reconnecting": "Verbindung zum Remote-Dienst wird erneuert",
   "remote.vaultFailed": "Entsperre den Zugangsdaten-Speicher des Betriebssystems und versuche es erneut. Ohne sichere Speicherung bleibt der Fernzugriff deaktiviert.",
+  "remote.nativeRevoked": "Der Zugang dieser Station wurde über einen Browser entzogen, daher verbindet sie sich nicht mehr. Hier ist nichts kaputt — koppele sie unten erneut, wenn du sie zurück willst.",
+  "remote.nativeServiceOver": "Der Dienstzugang dieses Kontos ist abgelaufen, daher verbindet sich diese Station nicht mehr. Funkgerät, Log und Einstellungen bleiben unberührt; nur die Browser-Verbindung ist aus.",
   "remote.stationName": "Stationsname",
   "remote.openService": "Beim Dienst anmelden:",
   "remote.codeExpires": "Dieser Code läuft nach zehn Minuten ab.",

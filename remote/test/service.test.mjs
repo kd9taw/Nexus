@@ -835,3 +835,34 @@ test('session reports a claimed-but-unapproved code, without ever carrying its c
   assert.equal(paired.pending, null, 'an approved enrollment is no longer pending')
   assert.equal(paired.stations.length, 1)
 })
+
+// A revoked station used to get the same 401 as a wrong credential, so the shack could only see
+// that it had stopped working. It can now be told which - but ONLY if it holds the credential.
+test('a revoked station learns it was revoked; a wrong credential still learns nothing', async () => {
+  const pair = await app.paired()
+  const revoked = app.client(null, '', pair.stationCredential)
+
+  // Working before revocation.
+  await revoked.post(`stations/${pair.stationId}/native/devices`, {}, 200)
+
+  await pair.browser.post(`stations/${pair.stationId}/revoke`)
+
+  // The credential holder is told what happened.
+  const { value: told } = await revoked.post(`stations/${pair.stationId}/native/devices`, {}, 401)
+  assert.equal(told.error, 'stationRevoked')
+
+  // THE SECURITY PROPERTY. Someone without the credential must not be able to use this to ask
+  // whether a station exists or what became of it: same station id, wrong credential, and the
+  // answer is the undifferentiated refusal it always was.
+  const wrong = crypto.getRandomValues(new Uint8Array(32)).reduce((s, b) => s + b.toString(16).padStart(2, '0'), '')
+  const impostor = app.client(null, '', wrong)
+  const { value: nothing } = await impostor.post(`stations/${pair.stationId}/native/devices`, {}, 401)
+  assert.equal(nothing.error, 'stationNotApproved', 'a wrong credential must not learn the station was revoked')
+
+  // And an id that never existed answers identically, so neither can be told from the other.
+  const { value: unknown } = await impostor.post(`stations/${crypto.randomUUID()}/native/devices`, {}, 401)
+  assert.equal(unknown.error, 'stationNotApproved')
+
+  // revoke stays reachable with allowRevoked, so a station can still retire itself cleanly.
+  await revoked.post(`stations/${pair.stationId}/native/revoke`, {}, 200)
+})

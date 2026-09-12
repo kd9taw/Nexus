@@ -90,11 +90,31 @@ impl Client {
         }
         let mut response = request.send().await.map_err(|_| "serviceUnavailable")?;
         if !response.status().is_success() {
-            return Err(match response.status().as_u16() {
-                401 | 403 => "accessDenied",
-                410 => "pairingExpired",
-                429 => "tryLater",
-                _ => "serviceUnavailable",
+            let status = response.status().as_u16();
+            // The service names what it refused. Mapping on the status alone threw that away, so a
+            // station whose access had been revoked reported the same `accessDenied` as a bad
+            // token, and the shack could only show that it had stopped working.
+            //
+            // An ALLOW-LIST, not a pass-through: the error type is &'static str, and a refusal code
+            // is attacker-adjacent input that has no business becoming a string this side renders
+            // verbatim. Anything unrecognised keeps the old status mapping exactly.
+            let named = response
+                .chunk()
+                .await
+                .ok()
+                .flatten()
+                .and_then(|chunk| serde_json::from_slice::<Value>(&chunk).ok())
+                .and_then(|body| body.get("error")?.as_str().map(str::to_owned));
+            return Err(match named.as_deref() {
+                Some("stationRevoked") => "stationRevoked",
+                Some("trialEnded") => "trialEnded",
+                Some("trialDisabled") => "trialDisabled",
+                _ => match status {
+                    401 | 403 => "accessDenied",
+                    410 => "pairingExpired",
+                    429 => "tryLater",
+                    _ => "serviceUnavailable",
+                },
             });
         }
         let mut bytes = Vec::new();

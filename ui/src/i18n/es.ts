@@ -218,6 +218,8 @@ export const ES: PartialCatalog = {
   "remote.connected": "Conectado al servicio remoto",
   "remote.reconnecting": "Reconectando al servicio remoto",
   "remote.vaultFailed": "Desbloquea el almacén de credenciales del sistema y vuelve a intentarlo. El acceso remoto permanece desactivado si no puede guardar la credencial de forma segura.",
+  "remote.nativeRevoked": "El acceso de esta estación se revocó desde un navegador, por eso ha dejado de conectarse. Aquí no hay nada roto: vuelve a vincularla abajo cuando quieras recuperarla.",
+  "remote.nativeServiceOver": "El acceso al servicio de esta cuenta se ha agotado, por eso esta estación ha dejado de conectarse. Tu equipo, tu log y tus ajustes están intactos; solo se ha apagado el enlace con el navegador.",
   "remote.stationName": "Nombre de la estación",
   "remote.openService": "Inicia sesión en el servicio:",
   "remote.codeExpires": "Este código caduca a los diez minutos.",
