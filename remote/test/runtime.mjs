@@ -95,6 +95,9 @@ export async function runtime({ bindings = {} } = {}) {
     const browser = await owner(), enrollmentClient = client()
     const { value: enrollment } = await enrollmentClient.post('enroll', { name: 'Synthetic test station' })
     await browser.post('pair/claim', { code: enrollment.code })
+    // Typing a code is no longer agreement to attach a station - the operator confirms the one
+    // they are about to take on. Every fixture has to do what a real operator does.
+    await browser.post('pair/confirm', { id: enrollment.id })
     const stationCredential = crypto.getRandomValues(new Uint8Array(32)).reduce((s, b) => s + b.toString(16).padStart(2, '0'), '')
     await enrollmentClient.post('enroll/approve', { id: enrollment.id, proof: enrollment.proof, credential: stationCredential })
     return { browser, native: client(null, '', stationCredential), stationId: enrollment.id, stationCredential }

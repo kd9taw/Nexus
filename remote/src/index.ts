@@ -121,11 +121,20 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
     // each refused 410, each leaving a row behind.
     await rate(env, `enrollcheck:${request.headers.get('cf-connecting-ip') ?? 'local'}`, now, 60, 600000)
     await rate(env, `enrollment:${stationId}`, now, 30)
-    const pending = await env.DB.prepare('SELECT account_id,approved FROM enrollments WHERE id=? AND proof_hash=? AND expires_at>?')
-      .bind(stationId, hash, now).first<{ account_id: string | null; approved: number }>()
+    const pending = await env.DB.prepare('SELECT account_id,approved,confirmed FROM enrollments WHERE id=? AND proof_hash=? AND expires_at>?')
+      .bind(stationId, hash, now).first<{ account_id: string | null; approved: number; confirmed: number }>()
     requireValue(pending, 'pairingExpired', 410)
-    if (path.endsWith('check')) return json({ accountId: pending.account_id, approved: pending.approved === 1 })
+    // `confirmed` rides on check so the shack can say WHY it is still waiting. Without it a station
+    // whose code was typed sits on "waiting for approval" with nothing to approve, and the operator
+    // has no way to learn that the browser is holding a question for them.
+    if (path.endsWith('check')) return json({ accountId: pending.account_id, approved: pending.approved === 1,
+      confirmed: pending.confirmed === 1 })
     requireValue(pending.account_id, 'accountNotClaimed', 409)
+    // THE GATE. Typing a code is not agreement to attach a station: a code the operator RECEIVED
+    // from somebody else reaches exactly this point, and approval happens at the sender's own
+    // shack, so the two-act protection cannot see it. Everything permanent is below this line -
+    // the station row, its credential, and the trial clock that can never return to 'none'.
+    requireValue(pending.confirmed === 1, 'awaitingConfirmation', 409)
     requireEligible(await trial(env, pending.account_id, now))
     await requireUnspentIdentity(env, pending.account_id, now)
     const credentialHash = await digest(proof(input.credential))
@@ -244,10 +253,10 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
     // SELECT the columns the browser can show and NOTHING ELSE: code_hash and proof_hash are the
     // credentials this table exists to protect and must never leave the Worker. `name` is the
     // string the operator typed at their own shack and pair/claim already returns it.
-    const claimed = await env.DB.prepare(`SELECT id,name,expires_at FROM enrollments
+    const claimed = await env.DB.prepare(`SELECT id,name,expires_at,confirmed FROM enrollments
       WHERE account_id=? AND approved=0 AND expires_at>? ORDER BY expires_at DESC LIMIT 1`)
-      .bind(identity.accountId, now).first<{ id: string; name: string; expires_at: number }>()
-    const pending = claimed ? { id: claimed.id, name: claimed.name, expiresAt: claimed.expires_at } : null
+      .bind(identity.accountId, now).first<{ id: string; name: string; expires_at: number; confirmed: number }>()
+    const pending = claimed ? { id: claimed.id, name: claimed.name, expiresAt: claimed.expires_at, confirmed: claimed.confirmed === 1 } : null
     // `identityVerified` is the signal that the one-trial-per-person check is actually LIVE. It
     // is false whenever the token carried no verified address - which is exactly the state in which
     // that check silently protects nothing. Without it there is no way to tell the two apart from
@@ -264,6 +273,21 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
     const row = await env.DB.prepare(`UPDATE enrollments SET account_id=? WHERE code_hash=? AND expires_at>?
       AND account_id IS NULL AND approved=0 RETURNING id,name`)
       .bind(identity.accountId, await digest(input.code), now).first()
+    requireValue(row, 'invalidPairingCode', 400)
+    return json({ station: row, accountId: identity.accountId })
+  }
+  if (path === 'pair/confirm') {
+    requireEligible(entitlement)
+    await requireUnspentIdentity(env, identity.accountId, now)
+    await rate(env, `confirm:${identity.accountId}`, now, 10, 600000)
+    const input = await body(request, ['id'])
+    requireValue(typeof input.id === 'string' && /^[0-9a-f-]{36}$/.test(input.id), 'invalidPairingCode', 400)
+    // Scoped to this account's own unapproved claim. An id alone is not authority: another account
+    // holding the same id confirms nothing, and a claim already approved is past the point this
+    // gate protects.
+    const row = await env.DB.prepare(`UPDATE enrollments SET confirmed=1
+      WHERE id=? AND account_id=? AND approved=0 AND expires_at>? RETURNING id,name`)
+      .bind(input.id, identity.accountId, now).first()
     requireValue(row, 'invalidPairingCode', 400)
     return json({ station: row, accountId: identity.accountId })
   }

@@ -203,10 +203,23 @@ export function RemoteApp() {
             to re-typing a code that is then refused because the claim already consumed it. */}
         {session.pending && <section className="rm-card remote-section">
           <h2>{t('remote.pairStation')}</h2>
-          <p role="status">{t('remote.approveInShackNamed', {
-            station: session.pending.name,
-            minutes: Math.max(0, Math.ceil((session.pending.expiresAt - session.serverNow) / 60000)),
-          })}</p>
+          {/* A code can be typed because the operator's own Nexus printed it, or because somebody
+              sent it to them. The service cannot tell those apart, and the name on the station is
+              chosen by whoever created the code - so it is no evidence either. What the operator
+              CAN be asked is whether they meant to take this on at all, before anything permanent
+              exists: the station, its credential, and a trial clock that never returns to 'none'. */}
+          {session.pending.confirmed
+            ? <p role="status">{t('remote.approveInShackNamed', {
+                station: session.pending.name,
+                minutes: Math.max(0, Math.ceil((session.pending.expiresAt - session.serverNow) / 60000)),
+              })}</p>
+            : <>
+                <p role="status">{t('remote.confirmAttachPrompt', { station: session.pending.name })}</p>
+                <p className="remote-warning">{t('remote.confirmAttachWarning')}</p>
+                <button type="button" onClick={() => void (async () => {
+                  await client?.post('pair/confirm', { id: session.pending!.id }); await refresh()
+                })()}>{t('remote.confirmAttach')}</button>
+              </>}
           <p>{t('remote.accountMatch')} <code>{session.accountId}</code></p>
         </section>}
         {canPair && !session.pending && session.stations.length < 2 && <section className="rm-card remote-section">

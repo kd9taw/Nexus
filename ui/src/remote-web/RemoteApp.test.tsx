@@ -96,13 +96,32 @@ it('claims the typed pairing code and requires approval at the shack', async () 
 // because the claim already consumed it.
 it('still shows the claim after a reload, and stops asking for a code it already holds', async () => {
   const session = account()
-  session.pending = { id: crypto.randomUUID(), name: 'Portable', expiresAt: session.serverNow + 4 * 60000 }
+  session.pending = { id: crypto.randomUUID(), name: 'Portable', expiresAt: session.serverNow + 4 * 60000, confirmed: true }
   client(session)
   render(<RemoteApp />)   // a fresh mount is exactly what a reload is
   const waiting = await screen.findByText(/waiting for approval/i, { selector: '[role="status"]' })
   expect(waiting.textContent).toContain('Portable')
   expect(waiting.textContent).toContain('4')          // the code's remaining life, off serverNow
   expect(screen.queryByLabelText('Pairing code')).toBeNull()
+})
+// A code the operator RECEIVED reaches the same screen as one their own Nexus printed, and the
+// station name is chosen by whoever made the code, so it is no evidence either. The browser must
+// therefore ASK - before a station, a credential or an unrepeatable trial clock exists.
+it('asks before attaching a claimed station, and says where a code must have come from', async () => {
+  const session = account(), id = crypto.randomUUID()
+  session.pending = { id, name: 'KD9TAW Home', expiresAt: session.serverNow + 9 * 60000, confirmed: false }
+  const service = client(session)
+  render(<RemoteApp />)
+  const asked = await screen.findByText(/attach/i, { selector: '[role="status"]' })
+  expect(asked.textContent).toContain('KD9TAW Home')
+  expect(asked.textContent).toMatch(/14-day trial/i)
+  // The warning is the only thing on this screen that can actually help: the service cannot tell a
+  // self-made code from a received one, so the operator is the only one who can.
+  expect(screen.getByText(/your own copy of Nexus/i)).toBeTruthy()
+  // Nothing is confirmed until the operator says so.
+  expect(service.post).not.toHaveBeenCalledWith('pair/confirm', expect.anything())
+  fireEvent.click(screen.getByRole('button', { name: /attach this station/i }))
+  await waitFor(() => expect(service.post).toHaveBeenCalledWith('pair/confirm', { id }))
 })
 it('browser enrollment displays the local comparison code and does not imply approval', async () => {
   const session = account(), stationId = crypto.randomUUID(), deviceId = crypto.randomUUID()

@@ -426,6 +426,7 @@ test('approval starts one fourteen-day trial; a second station never restarts it
   const account = await app.owner(false), desktop = app.client()
   const { value: first } = await desktop.post('enroll', { name: 'First station' })
   await account.post('pair/claim', { code: first.code })
+  await account.post('pair/confirm', { id: first.id })
   const before = Date.now()
   const { value: approved } = await desktop.post('enroll/approve', { id: first.id, proof: first.proof, credential: credential() })
   assert.equal(approved.entitlement.state, 'active', 'approve reports the clock it just started')
@@ -440,6 +441,7 @@ test('approval starts one fourteen-day trial; a second station never restarts it
   const second = app.client()
   const { value: more } = await second.post('enroll', { name: 'Second station' })
   await account.post('pair/claim', { code: more.code })
+  await account.post('pair/confirm', { id: more.id })
   await second.post('enroll/approve', { id: more.id, proof: more.proof, credential: credential() })
   const after = await app.db.prepare('SELECT expires_at,started_at FROM trials WHERE account_id=?')
     .bind(account.accountId).first()
@@ -488,6 +490,7 @@ test('account claim needs local proof approval; device cookies and station bound
   const browser = await app.owner(), other = await app.owner(), desktop = app.client()
   const { value: enrollment } = await desktop.post('enroll', { name: 'Pair approval' })
   await browser.post('pair/claim', { code: enrollment.code })
+  await browser.post('pair/confirm', { id: enrollment.id })
   await other.post('pair/claim', { code: enrollment.code }, 400)
   const wrongProof = crypto.getRandomValues(new Uint8Array(32)).reduce((s,b) => s+b.toString(16).padStart(2,'0'), '')
   await desktop.post('enroll/approve', { id: enrollment.id, proof: wrongProof, credential: wrongProof }, 410)
@@ -817,13 +820,17 @@ test('session reports a claimed-but-unapproved code, without ever carrying its c
   assert.equal(waiting.pending.name, 'Field station')
   assert.ok(waiting.pending.expiresAt > waiting.serverNow, 'the code still has life to show')
   assert.equal(waiting.stations.length, 0, 'claimed is not paired - approval happens at the radio')
+  assert.equal(waiting.pending.confirmed, false, 'typing a code is not yet agreeing to attach it')
+  await account.post('pair/confirm', { id: enrollment.id })
+  const { value: agreed } = await account.post('session')
+  assert.equal(agreed.pending.confirmed, true, 'and the browser can see the operator has agreed')
 
   // The credentials this table exists to protect must never leave the Worker. Asserted on the
   // whole serialized response, not just the field list, so a future nesting cannot smuggle one.
   const serialized = JSON.stringify(waiting)
   for (const secret of [enrollment.code, enrollment.proof])
     assert.ok(!serialized.includes(secret), 'a pairing credential reached the browser')
-  assert.deepEqual(Object.keys(waiting.pending).sort(), ['expiresAt', 'id', 'name'])
+  assert.deepEqual(Object.keys(waiting.pending).sort(), ['confirmed', 'expiresAt', 'id', 'name'])
 
   // Positive control: the check can fail. The same search finds a value that IS legitimately there.
   assert.ok(serialized.includes(enrollment.id), 'control: the enrollment id really is in the response')
@@ -1033,6 +1040,7 @@ test('a second sign-in by the same verified person does not earn a second trial'
   const desktop = app.client()
   const { value: enrollment } = await desktop.post('enroll', { name: 'Shack' })
   await first.post('pair/claim', { code: enrollment.code })
+  await first.post('pair/confirm', { id: enrollment.id })
   const credential = crypto.getRandomValues(new Uint8Array(32)).reduce((s, b) => s + b.toString(16).padStart(2, '0'), '')
   await desktop.post('enroll/approve', { id: enrollment.id, proof: enrollment.proof, credential })
   const { value: running } = await first.post('session')
@@ -1085,6 +1093,47 @@ test('an unverified address neither protects nor punishes', async () => {
   }
 })
 
+// A pairing code the operator RECEIVED is the whole primitive: an attacker enrolls their own host,
+// gets the victim to type the code ("here is your pairing code"), then approves at their OWN shack.
+// The two-act protection cannot see it - they legitimately own both halves of their enrollment - and
+// the victim ends up with an attacker-credentialled station on their account, a slot gone, and the
+// one trial that can never return to 'none' permanently burned.
+test('a code the operator merely typed cannot attach a station or burn their trial', async () => {
+  const attacker = app.client()
+  const { value: bait } = await attacker.post('enroll', { name: 'KD9TAW Home' })   // any name they like
+  const victim = await app.owner(false)
+  const { value: fresh } = await victim.post('session')
+  assert.equal(fresh.entitlement.state, 'none')
+
+  // The victim types it. The claim still binds - the code is consumed so nobody else can race it -
+  // but nothing has been created and no clock has started.
+  await victim.post('pair/claim', { code: bait.code })
+  const credential = crypto.getRandomValues(new Uint8Array(32)).reduce((s, b) => s + b.toString(16).padStart(2, '0'), '')
+  const { value: refused } = await attacker.post('enroll/approve',
+    { id: bait.id, proof: bait.proof, credential }, 409)
+  assert.equal(refused.error, 'awaitingConfirmation')
+
+  // THE POINT: nothing permanent happened. No station, and the trial is untouched.
+  const { value: after } = await victim.post('session')
+  assert.equal(after.stations.length, 0, 'no station was attached')
+  assert.equal(after.entitlement.state, 'none', 'and the one trial was NOT burned')
+  assert.equal(after.pending.confirmed, false, 'the browser can see a question is waiting')
+
+  // A different account cannot answer that question either - an id is not authority.
+  const bystander = await app.owner(false)
+  await bystander.post('pair/confirm', { id: bait.id }, 400)
+  const { value: stillRefused } = await attacker.post('enroll/approve',
+    { id: bait.id, proof: bait.proof, credential }, 409)
+  assert.equal(stillRefused.error, 'awaitingConfirmation')
+
+  // And the honest path still works: the operator agrees, and approval proceeds as before.
+  await victim.post('pair/confirm', { id: bait.id })
+  await attacker.post('enroll/approve', { id: bait.id, proof: bait.proof, credential })
+  const { value: paired } = await victim.post('session')
+  assert.equal(paired.stations.length, 1)
+  assert.equal(paired.entitlement.state, 'active', 'consent is what starts the clock')
+})
+
 // THE SHAPE PRODUCTION ACTUALLY SENDS. The browser authenticates with `getTokenSilently()`, which
 // returns the ACCESS token for our own API audience; the `email` scope populates the ID token and
 // /userinfo, not that one. So the claims arrive only if a login Action puts them there, and Auth0
@@ -1103,6 +1152,7 @@ test('the namespaced claims are read, and the session says whether identity is l
   const desktop = app.client()
   const { value: enrollment } = await desktop.post('enroll', { name: 'Shack' })
   await first.post('pair/claim', { code: enrollment.code })
+  await first.post('pair/confirm', { id: enrollment.id })
   const credential = crypto.getRandomValues(new Uint8Array(32)).reduce((s, b) => s + b.toString(16).padStart(2, '0'), '')
   await desktop.post('enroll/approve', { id: enrollment.id, proof: enrollment.proof, credential })
 
@@ -1139,6 +1189,7 @@ test('extending a trial by hand records that it began as self-serve', async () =
     const desktop = locked.client()
     const { value: enrollment } = await desktop.post('enroll', { name: 'Earned it' })
     await browser.post('pair/claim', { code: enrollment.code })
+    await browser.post('pair/confirm', { id: enrollment.id })
     const credential = crypto.getRandomValues(new Uint8Array(32)).reduce((a, b) => a + b.toString(16).padStart(2, '0'), '')
     await desktop.post('enroll/approve', { id: enrollment.id, proof: enrollment.proof, credential })
     const pair = { browser }
