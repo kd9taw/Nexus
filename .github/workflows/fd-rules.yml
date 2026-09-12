@@ -27,15 +27,24 @@ on:
       - .github/workflows/fd-rules.yml
   workflow_dispatch: {}
 
+# READ. The job below compiles and RUNS this repository's own code - `cargo run` on the very
+# change that triggered the workflow - so it must not hold a token that can publish. The `publish`
+# job declares its own write and runs no repo code at all: it downloads an artifact and calls `gh`.
+#
+# The design note above is right that "the gate IS the loader", and that is the correct
+# architecture. But it also means the validator and the published data arrive in the same change: a
+# PR that relaxes parse_spec relaxes its own gate, and the result reaches every installed Nexus.
+# Splitting the token off does not fix that - review is still what stands there - but it does stop
+# a build step that runs merged code from also being able to push.
 permissions:
-  contents: write # publish the rolling Release asset
+  contents: read
 
 concurrency:
   group: fd-rules
   cancel-in-progress: false
 
 jobs:
-  build:
+  validate:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -96,6 +105,23 @@ jobs:
           path: out/*
           retention-days: 14
 
+  # Runs NO repository code: no checkout, no build, no cargo. It takes the bytes the validator
+  # already approved and uploads them. This is the only job in the file that can write.
+  publish:
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # publish the rolling Release asset
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: fd-rules
+          path: out
+      # node is here only for the optional `npx wrangler` R2 step at the bottom.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+
       - name: Publish to the rolling `fd-rules` Release (automatic source, no secrets)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -116,4 +142,4 @@ jobs:
             echo "No CLOUDFLARE_API_TOKEN secret — skipping R2 publish (the Release above is the source)."
             exit 0
           fi
-          npx --yes wrangler r2 object put nexus-data/fd-rules.json --file out/fd-rules.json --content-type application/json
+          npx --yes wrangler@4.129.1 r2 object put nexus-data/fd-rules.json --file out/fd-rules.json --content-type application/json
