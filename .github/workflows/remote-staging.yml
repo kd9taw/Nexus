@@ -88,25 +88,44 @@ jobs:
             *) echo 'Unknown Remote staging operation'; exit 1 ;;
           esac
 
+      # The Remote token used to fall back to CLOUDFLARE_API_TOKEN with `||`, which made having the
+      # right one OPTIONAL AND SILENT. That other secret is the SITE's Pages deploy token - per
+      # docs/publish-secrets.md, possibly the broad "Edit Cloudflare Workers" template - and under
+      # the fallback it was also uploading Workers, creating D1 databases and attaching custom
+      # domains, with nothing in the run output saying which of the two had been used. A
+      # misconfiguration that works is a misconfiguration nobody fixes.
+      - name: Require the Remote-scoped Cloudflare token
+        env:
+          REMOTE_CLOUDFLARE_API_TOKEN: ${{ secrets.REMOTE_CLOUDFLARE_API_TOKEN }}
+        run: |
+          if [ -z "$REMOTE_CLOUDFLARE_API_TOKEN" ]; then
+            echo "::error::REMOTE_CLOUDFLARE_API_TOKEN is not set on the production environment."
+            echo "Set it to a token scoped to the Remote staging Worker and its D1 database."
+            echo "This no longer falls back to CLOUDFLARE_API_TOKEN: that is the site's Pages"
+            echo "deploy token, and borrowing it here silently widened what a staging run could do."
+            exit 1
+          fi
+          echo "Using REMOTE_CLOUDFLARE_API_TOKEN (no fallback)."
+
       - name: Inspect existing Cloudflare access and staging resources
         if: inputs.operation == 'inspect'
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.REMOTE_CLOUDFLARE_API_TOKEN || secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.REMOTE_CLOUDFLARE_API_TOKEN }}
         run: node remote/scripts/cloudflare-staging.mjs inspect
 
       - name: Create or reuse the dedicated staging D1 database
         if: inputs.operation == 'provision'
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.REMOTE_CLOUDFLARE_API_TOKEN || secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.REMOTE_CLOUDFLARE_API_TOKEN }}
         run: node remote/scripts/cloudflare-staging.mjs provision
 
       - name: Recover ownership only after matching a reviewed deployment receipt
         if: inputs.operation == 'recover'
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.REMOTE_CLOUDFLARE_API_TOKEN || secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.REMOTE_CLOUDFLARE_API_TOKEN }}
           REMOTE_AUTH0_ISSUER: ${{ vars.REMOTE_AUTH0_ISSUER }}
           REMOTE_AUTH0_CLIENT_ID: ${{ vars.REMOTE_AUTH0_CLIENT_ID }}
           REMOTE_RECOVERY_REVISION: ${{ inputs.recovery_revision }}
@@ -138,7 +157,7 @@ jobs:
         id: database
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.REMOTE_CLOUDFLARE_API_TOKEN || secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.REMOTE_CLOUDFLARE_API_TOKEN }}
         run: node remote/scripts/cloudflare-staging.mjs resolve
 
       - name: Package the tested bytes and their source receipt
@@ -166,14 +185,14 @@ jobs:
         if: inputs.operation == 'deploy'
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.REMOTE_CLOUDFLARE_API_TOKEN || secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.REMOTE_CLOUDFLARE_API_TOKEN }}
         run: node remote/scripts/deploy-staging.mjs migrate
 
       - name: Upload the verified Worker and browser bytes
         if: inputs.operation == 'deploy'
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.REMOTE_CLOUDFLARE_API_TOKEN || secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.REMOTE_CLOUDFLARE_API_TOKEN }}
         run: node remote/scripts/deploy-staging.mjs deploy
 
       - name: Verify the live Worker, browser bytes and admission refusals

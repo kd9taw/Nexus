@@ -124,10 +124,17 @@ one-trial rule exists to refuse.
 
 ## Cloudflare and deployment
 
-The workflow `.github/workflows/remote-staging.yml` reuses the existing **production**
-environment's `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN`. If the Pages token
-lacks the required grants, place a separately scoped token in the same environment
-as `REMOTE_CLOUDFLARE_API_TOKEN`; Remote prefers it without changing the site token.
+The workflow `.github/workflows/remote-staging.yml` uses the **production** environment's
+`CLOUDFLARE_ACCOUNT_ID` and **requires** `REMOTE_CLOUDFLARE_API_TOKEN` — a token scoped to the
+Remote staging Worker and its D1 database. It is not optional and there is no fallback: the run
+fails on the first step with a message naming the secret.
+
+It used to fall back to `CLOUDFLARE_API_TOKEN` with `||`, which made having the right token
+optional and silent. That secret is the **site's Pages deploy token** (see
+`docs/publish-secrets.md`), and under the fallback it was also uploading Workers, creating D1
+databases and attaching custom domains — with nothing in the run output saying which of the two had
+been used. A misconfiguration that works is a misconfiguration nobody fixes.
+
 Token values stay in GitHub secrets and are passed only to administrator steps.
 
 Cloudflare documents its [CI token setup](https://developers.cloudflare.com/workers/ci-cd/external-cicd/github-actions/).
