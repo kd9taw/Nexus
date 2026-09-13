@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { BrowserClient } from './client'
+import { BrowserClient, RemoteError } from './client'
 import type { AccountSession } from './client'
 import { RemoteApp } from './RemoteApp'
 
@@ -30,6 +30,20 @@ it('offers a working retry after configuration failure instead of a sign-in butt
   await waitFor(() => expect(service.signIn).toHaveBeenCalledTimes(1))
   expect(document.querySelectorAll('main.rm-scroll')).toHaveLength(1)
   expect(document.querySelectorAll('.remote-monitor-app')).toHaveLength(1)
+})
+// A fresh password sign-up is turned away until its address is confirmed. The page used to show
+// its generic "check the connection" wall for that, so a new ham went looking for a network fault
+// instead of opening the email that was already waiting for them.
+it('tells a new account to confirm its email when the sign-in is refused, and keeps the way back in', async () => {
+  const service = client(null)
+  vi.mocked(BrowserClient.load).mockRejectedValueOnce(new RemoteError(401, 'signInRefused'))
+  render(<RemoteApp />)
+  const alert = await screen.findByRole('alert')
+  expect(alert.textContent).toMatch(/confirm your email/i)
+  expect(alert.textContent).not.toMatch(/check the connection/i)
+  fireEvent.click(await screen.findByRole('button', { name: 'Try again' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Sign in or create an account' }))
+  await waitFor(() => expect(service.signIn).toHaveBeenCalledTimes(1))
 })
 it('a signed-in account with no trial yet can start pairing, and is told the clock has not started', async () => {
   client(account(false)); render(<RemoteApp />)

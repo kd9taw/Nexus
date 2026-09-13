@@ -115,6 +115,7 @@ export const JA: PartialCatalog = {
   "remote.pairingCodeMalformed": "ペアリングコードは 16 文字で、数字 0-9 と英字 a-f のみです。ゼロのところに O が入っていないか確認してください。",
   "remote.deviceLimitReached": "この局では承認済みブラウザーが上限に達しています。使っていないものを解除してから、もう一度お試しください。",
   "remote.signInAgain": "サインインの有効期限が切れました。続けるにはもう一度サインインしてください。",
+  "remote.signInRefused": "サインインが拒否されました。アカウントを作成したばかりの場合は、送信されたリンクからメールアドレスを確認してから、もう一度サインインしてください。",
   "remote.stationOffline": "その局に到達できません。シャックで Nexus が動作し、PC が起動しているか確認してください。",
   "remote.observe": "局の状態を表示",
   "remote.disconnect": "切断して局一覧に戻る",

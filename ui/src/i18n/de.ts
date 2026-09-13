@@ -110,6 +110,7 @@ export const DE: PartialCatalog = {
   "remote.pairingCodeMalformed": "Ein Kopplungscode hat sechzehn Zeichen, nur Ziffern 0-9 und Buchstaben a-f. Achte auf ein O, wo eine Null stehen sollte.",
   "remote.deviceLimitReached": "Diese Station hat bereits so viele freigegebene Browser wie erlaubt. Vergiss einen nicht mehr genutzten und versuche es erneut.",
   "remote.signInAgain": "Deine Anmeldung ist abgelaufen. Melde dich erneut an, um fortzufahren.",
+  "remote.signInRefused": "Die Anmeldung wurde abgelehnt. Wenn du gerade ein Konto angelegt hast, bestätige deine E-Mail-Adresse über den zugesandten Link und melde dich dann erneut an.",
   "remote.stationOffline": "Diese Station ist nicht erreichbar. Prüfe, ob Nexus in der Funkbude läuft und der Rechner wach ist.",
   "remote.observe": "Station beobachten",
   "remote.disconnect": "Trennen und zu den Stationen",

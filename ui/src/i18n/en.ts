@@ -183,6 +183,7 @@ export const EN = {
   "remote.pairingCodeMalformed": "A pairing code is sixteen characters, digits 0-9 and letters a-f only. Check for a letter O where a zero should be.",
   "remote.deviceLimitReached": "This station already has as many approved browsers as it allows. Forget one you no longer use, then try again.",
   "remote.signInAgain": "Your sign-in has expired. Sign in again to carry on.",
+  "remote.signInRefused": "Sign-in was refused. If you have just created an account, confirm your email with the link we sent, then sign in again.",
   "remote.stationOffline": "That station is not reachable. Check that Nexus is running at the shack and the computer is awake.",
   "remote.observe": "Observe station",
   "remote.disconnect": "Disconnect and return to stations",

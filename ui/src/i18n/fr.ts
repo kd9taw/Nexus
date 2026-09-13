@@ -125,6 +125,7 @@ export const FR: PartialCatalog = {
   "remote.pairingCodeMalformed": "Un code d'appairage comporte seize caractères, uniquement les chiffres 0-9 et les lettres a-f. Vérifiez s'il y a un O à la place d'un zéro.",
   "remote.deviceLimitReached": "Cette station a déjà autant de navigateurs approuvés qu'elle en autorise. Oubliez-en un que vous n'utilisez plus, puis réessayez.",
   "remote.signInAgain": "Votre connexion a expiré. Reconnectez-vous pour continuer.",
+  "remote.signInRefused": "La connexion a été refusée. Si vous venez de créer un compte, confirmez votre adresse e-mail avec le lien que nous vous avons envoyé, puis reconnectez-vous.",
   "remote.stationOffline": "Cette station est injoignable. Vérifiez que Nexus tourne au shack et que l'ordinateur est réveillé.",
   "remote.observe": "Observer la station",
   "remote.disconnect": "Déconnecter et revenir aux stations",

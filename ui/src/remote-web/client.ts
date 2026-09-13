@@ -66,7 +66,16 @@ export class BrowserClient {
       authorizationParams: { audience: config.audience, redirect_uri: window.location.origin, scope: 'openid profile email' } })
     const query = new URLSearchParams(window.location.search)
     if (query.has('code') || query.has('error')) {
+      // `access_denied` is the account service refusing the sign-in itself - today that is the
+      // login Action turning away an address nobody has confirmed. Named here, because unnamed it
+      // reached the page as "check the connection", which sent a new ham looking for a network
+      // fault instead of their inbox. Matched on the protocol's error code, never on the Action's
+      // wording, so rewording the Action cannot silently undo this.
       try { await auth.handleRedirectCallback() }
+      catch (cause) {
+        if ((cause as { error?: unknown })?.error === 'access_denied') throw new RemoteError(401, 'signInRefused')
+        throw cause
+      }
       finally { window.history.replaceState({}, '', '/') }
     } else {
       try { await auth.checkSession() } catch { /* interactive login stays available */ }

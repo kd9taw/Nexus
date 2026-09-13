@@ -125,6 +125,7 @@ export const ES: PartialCatalog = {
   "remote.pairingCodeMalformed": "Un código de vinculación tiene dieciséis caracteres, solo dígitos 0-9 y letras a-f. Comprueba si hay una O donde debería ir un cero.",
   "remote.deviceLimitReached": "Esta estación ya tiene todos los navegadores aprobados que permite. Olvida uno que no uses y vuelve a intentarlo.",
   "remote.signInAgain": "Tu sesión ha caducado. Vuelve a iniciar sesión para continuar.",
+  "remote.signInRefused": "Se rechazó el inicio de sesión. Si acabas de crear una cuenta, confirma tu correo con el enlace que te enviamos y vuelve a iniciar sesión.",
   "remote.stationOffline": "No se puede alcanzar esa estación. Comprueba que Nexus esté funcionando en la caseta y que el ordenador esté despierto.",
   "remote.observe": "Observar estación",
   "remote.disconnect": "Desconectar y volver a las estaciones",

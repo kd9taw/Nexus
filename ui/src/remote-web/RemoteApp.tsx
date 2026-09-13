@@ -118,6 +118,7 @@ export function RemoteApp() {
     : code === 'stationLimit' ? t('remote.stationLimitReached')
     : code === 'deviceLimit' ? t('remote.deviceLimitReached')
     : code === 'signInRequired' ? t('remote.signInAgain')
+    : code === 'signInRefused' ? t('remote.signInRefused')
     : code === 'stationUnavailable' ? t('remote.stationOffline')
     : t('remote.requestFailed')
   return <div className="app remote-monitor-app remote-service-app">
