@@ -12,7 +12,7 @@ import { STAGING, stagingConfig, verifyIdentity, requestBytes, requestJson } fro
 import { cloudflare, workerDigest } from '../scripts/cloudflare-staging.mjs'
 import { createArtifact, verifyArtifact, verifyLive, verifyPublicSource } from '../scripts/staging-artifact.mjs'
 import { runtime } from './runtime.mjs'
-import { uploadArtifact } from '../scripts/deploy-staging.mjs'
+import { uploadArtifact, compareSchema } from '../scripts/deploy-staging.mjs'
 
 const root = fileURLToPath(new URL('../../', import.meta.url))
 const ids = { issuer: 'https://nexus-staging-test.us.auth0.com/', clientId: 'synthetic-client-id',
@@ -33,6 +33,35 @@ before(async () => {
     AUTH0_CLIENT_ID: ids.clientId, AUTH0_AUDIENCE: ids.audience, REMOTE_BUILD_REVISION: ids.revision } })
 })
 after(async () => { await app?.mf.dispose(); if (scratch) await rm(scratch, { recursive: true, force: true }) })
+
+// The live verification checks the Worker, every browser asset, the security headers and both
+// admission refusals - and touches the database not at all, because `ready` is a var comparison and
+// both admission probes are refused before any query runs. So the migrate step's exit code was the
+// only evidence the schema had landed. A schema that did not land is not a loud failure: it is
+// endpoints refusing with serviceUnavailable the first time an operator uses them.
+test('the schema check compares what the database reports against what the artifact ships', () => {
+  const wrangler = names =>
+    `\n [info] some wrangler chatter\n${JSON.stringify([{ results: names.map(name => ({ name })), success: true }])}\n`
+
+  // Agreement, including a database that is AHEAD - a migration applied by an earlier deploy is
+  // not a fault, only a missing one is.
+  assert.deepEqual(
+    compareSchema(wrangler(['0001_a.sql', '0002_b.sql', '0003_c.sql']), ['0001_a.sql', '0002_b.sql']),
+    { applied: 3, shipped: 2 })
+
+  // THE CASE THIS EXISTS FOR: migrate reported success, the newest migration is not there.
+  assert.throws(() => compareSchema(wrangler(['0001_a.sql']), ['0001_a.sql', '0002_b.sql']),
+    /missing migrations: 0002_b\.sql/)
+
+  // Neither side may pass as agreement by being empty - the shape a lenient parser produces.
+  assert.throws(() => compareSchema(wrangler([]), ['0001_a.sql']), /reports no applied migrations/)
+  assert.throws(() => compareSchema(wrangler(['0001_a.sql']), []), /no migrations to verify against/)
+
+  // Unreadable output must refuse rather than silently compare nothing.
+  assert.throws(() => compareSchema('wrangler exploded', ['0001_a.sql']), /readable JSON/)
+  assert.throws(() => compareSchema('[{"results":[{"nombre":"x"}]}]', ['0001_a.sql']),
+    /reports no applied migrations/)
+})
 
 test('staging configuration requires exact service/database scope and public Auth0 tenant values', () => {
   const config = stagingConfig(template, ids)

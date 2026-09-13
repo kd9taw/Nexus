@@ -198,3 +198,14 @@ jobs:
       - name: Verify the live Worker, browser bytes and admission refusals
         if: inputs.operation == 'deploy'
         run: node remote/scripts/staging-artifact.mjs verify
+
+      # The step above never touches the database: `ready` is a var comparison and both admission
+      # probes are refused before any query runs. So `migrate`'s exit code was the only evidence
+      # the schema landed, and a schema that did not land fails later and quietly - as endpoints
+      # refusing with serviceUnavailable the first time an operator uses them.
+      - name: Verify the live schema matches the artifact's migrations
+        if: inputs.operation == 'deploy'
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.REMOTE_CLOUDFLARE_API_TOKEN }}
+        run: node remote/scripts/deploy-staging.mjs verify-schema
