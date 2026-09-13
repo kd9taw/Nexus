@@ -1009,6 +1009,14 @@ test('a flooding caller cannot spend the shared enroll budget, and cleanup keeps
   assert.equal(after.n, 0, 'the sweep reaped it')
 })
 
+// rate() counts in FIXED ten-minute windows, so a run that crosses a boundary restarts every counter
+// part-way through and a limit assertion reads short - the enroll/check case below went red at
+// exactly 17:40:00. Start the timed part only when all of it fits inside the current window.
+const insideOneWindow = async needMs => {
+  const left = 600000 - Date.now() % 600000
+  if (left < needMs) await delay(left + 250)
+}
+
 // The per-caller enroll bucket was keyed on the FULL cf-connecting-ip. One IPv6 /64 holds 2^64
 // addresses, so rotating through them walked straight past the per-caller limit and drained the
 // shared enroll-global budget: the security review's proof got a brand-new operator a 429 after
@@ -1017,6 +1025,7 @@ test('a flooding caller cannot spend the shared enroll budget, and cleanup keeps
 test('rotating addresses inside one IPv6 prefix cannot deny pairing to anybody else', async () => {
   const isolated = await runtime()
   try {
+    await insideOneWindow(40000)
     const at = address => ({ 'cf-connecting-ip': address })
     const enroll = address => isolated.mf.dispatchFetch(`${isolated.origin}/api/remote/enroll`, {
       method: 'POST', headers: { 'content-type': 'application/json', ...at(address) }, body: JSON.stringify({ name: 'Flood' }),
@@ -1071,6 +1080,7 @@ test('rotating addresses inside one IPv6 prefix cannot deny pairing to anybody e
 // enroll/check's per-caller bound exists to stop a stranger minting rate rows with fresh station
 // ids. Keyed on the full address, rotating inside one /64 minted them without limit again.
 test('enroll/check bounds a caller by its IPv6 /64, not by each address in it', async () => {
+  await insideOneWindow(15000)
   const proof = 'c'.repeat(64)
   const check = address => app.mf.dispatchFetch(`${app.origin}/api/remote/enroll/check`, {
     method: 'POST', headers: { 'content-type': 'application/json', 'cf-connecting-ip': address },
