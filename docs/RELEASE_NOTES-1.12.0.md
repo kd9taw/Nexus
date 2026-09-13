@@ -50,17 +50,39 @@ browser at the radio, and you get the same Nexus you use at the shack — decode
 logbook, spots, awards, the lot. Your log, settings and radio stay on your computer. The service
 only carries the picture and your commands, and if it goes down nothing at the station changes.
 
-- **You decide at the shack what a browser may do**, and it resets every time Nexus restarts:
-  station controls (tuning, modes, filters and DSP, power, the amplifier, which radio is active),
-  logging contacts, and FT8/FT4 transmit.
+- **You decide at the shack what a browser may do**: station controls (tuning, modes, filters and
+  DSP, power, the amplifier, which radio is active), logging contacts, and FT8/FT4 transmit.
+- **Remote stays on when Nexus restarts.** A browser you approved keeps its station control and
+  logging, so a power blip at the shack doesn't lock you out. FT8/FT4 transmit is the exception:
+  that permission ends with every restart, and you give it again at the radio.
+- **Start Nexus when you sign in** — a new switch under Settings ▸ Appearance, off unless you turn
+  it on. The first time you turn Remote on, Nexus offers it once.
 - **FT8 and FT4 transmit from the browser** — CQ, answering, Tx1–Tx6, free text. It goes through
   your normal TX switch and watchdog, Stop TX works from the browser, and if the browser drops off
   the station stops transmitting within five seconds. No other mode transmits remotely.
+- **If the link is slow, a click can be refused rather than sent late.** The browser now says "Not
+  sent" when nothing reached the station, so you know to try again, and keeps "not confirmed" for a
+  command that was sent but never answered.
 - **No audio yet**, in either direction.
 
 It runs on a test server that may be reset, and approving a station starts a 14-day trial. Most of
 the radio controls haven't met many real radios yet, so if something misbehaves on yours, tell me
 which rig.
+
+**Connect: less clutter, and much lighter on your PC.**
+
+- **Close any pane you don't use**, with the ✕ on its header, and bring it back from the Panels
+  menu. Close a whole side and the map takes the room. Drag the edge of a side column to make the
+  map bigger. Reset layout puts everything back the way it started.
+- **Each view keeps its own map.** Chase DX, POTA/SOTA and the others each remember their own
+  projection, layers and 2-D or 3-D, so a trip to POTA/SOTA no longer resets your Chase DX map.
+- **2-D means a flat map.** Switching off the 3-D globe used to land on a 2-D globe that looked the
+  same, so the switch seemed to do nothing.
+- **Layers folds away** like Conditions, and sits in the same corner in 2-D and 3-D.
+- **Far less CPU.** The 3-D globe used to redraw constantly even with nothing moving, and the 2-D
+  map redrew every country outline every few hundred milliseconds. Both now sit near idle until
+  something on them changes. If Connect made your laptop fan spin up, try it again.
+- On a 1024×768 screen the map toolbar was cut off, hiding Reset and Full screen. It now wraps.
 
 **Also new**
 
