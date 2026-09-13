@@ -19,6 +19,7 @@ import { useContext } from 'react'
 import { NavigationMapContext } from '../remote-web/useNavigation'
 import { heatPulse, sectorPulse } from '../features/pulse'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
+import { useStableByKey } from '../features/useStableByKey'
 import {
   filterSatsToChased,
   isSatChased,
@@ -629,7 +630,14 @@ export default function Globe3D({
   // surfaces cannot drift. That also fixes an uncapped set here: this drew one arc per
   // heard-me spot with no ceiling, which on a good run is the spider's web the cap exists
   // to prevent.
-  const arcs = useMemo(() => {
+  //
+  // ⚠️ CONTENT-KEYED, NOT IDENTITY-KEYED. react-kapsule forwards `arcsData` whenever the array
+  // is a new reference, and three-globe then disposes and recreates EVERY arc — material
+  // included, which is a shader-program compile per arc. `stations` is a new array on every
+  // 300 ms snapshot, so this memo alone recompiled the arc shaders ~3×/s with nothing on screen
+  // changing (29324da8; 65–72% main thread measured in headless Chrome). `useStableByKey` hands
+  // globe.gl the previous array until an arc's endpoints or colour actually differ.
+  const arcsBuilt = useMemo(() => {
     if (!qth) return []
     const leg = (endLat: number, endLng: number, color: string) => ({
       startLat: qth.lat,
@@ -652,6 +660,7 @@ export default function Globe3D({
     }
     return out
   }, [spots, stations, selectedCall, qth, show.arcs, show.rxarcs])
+  const arcs = useStableByKey(arcsBuilt, JSON.stringify(arcsBuilt))
 
   // US state borders as globe paths (one path per border line-string).
   const statePaths = useMemo(() => {
