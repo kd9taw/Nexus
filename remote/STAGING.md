@@ -66,12 +66,21 @@ Two tenant settings carry that defence, and neither is visible from this reposit
    ```js
    exports.onExecutePostLogin = async (event, api) => {
      const ns = 'https://nexus.hamradiotools.io/'
-     if (event.user.email_verified === true && event.user.email) {
+     if (event.user.email_verified !== true) {
+       api.access.deny('Please verify your email address using the link we sent, then sign in again.')
+       return
+     }
+     if (event.user.email) {
        api.accessToken.setCustomClaim(ns + 'email', event.user.email)
        api.accessToken.setCustomClaim(ns + 'email_verified', true)
      }
    }
    ```
+
+   The `deny` half is item 2 below: Auth0 has no database-connection switch that refuses an
+   unverified sign-in, so the Action does it. Google sign-ins arrive verified and pass straight
+   through. The tenant is dedicated to this service, so refusing every unverified sign-in in it
+   affects nothing else.
 
    The namespace must match `CLAIM_NS` in `src/authority.ts` byte for byte. The Worker also reads
    the bare `email`/`email_verified` names, so a provider that supplies them natively works too.
