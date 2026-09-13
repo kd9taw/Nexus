@@ -126,9 +126,8 @@ Other radios remain available. Failed-open entries retain their retry deadline
 and failure count, increasing the wait to one minute; configuration changes retry
 immediately and successful opens clear the backoff. These tokens cover temporary
 pool/open ownership, not the complete Remote selection transaction.
-Radio handoffs, mode-specific operating actions and remote transmission remain
-incomplete; no arbitrary Tauri bridge exists.
-See [the Remote contract and limits](remote/README.md#existing-nexus-workspace).
+No arbitrary Tauri bridge exists.
+See [the Remote contract and limits](remote/README.md#bounds).
 
 Remote Phone and CW contact forms mount on first visit and retain their component
 identity across workspace navigation. Hidden hosts pause scopes, meters, CW display

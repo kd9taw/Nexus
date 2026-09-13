@@ -62,22 +62,40 @@ recommendations.*
 
 ### Remote access
 
-The Remote observation pilot shares radio and amplifier status with approved
-browsers. It requires an account with trial access on a configured Remote service.
+Remote lets you use this station from a web browser. It is an early pilot on a test
+service that may be reset. The shack PC keeps the radio and stays in charge: the
+browser sends your gestures and shows what the station reports back, and your log,
+settings and radio never leave this computer.
 
-Start **Pair a station**, enter its code in the service, then compare the account
-ID on both screens and approve the pairing here. Each browser requests its own
-approval; compare its name and code before approving it at the shack.
+**Pairing.** Give the station a **Station name** and start **Pair a station**. In the
+browser, sign in, enter the code and choose **Attach this station**. Back here,
+compare the account ID on both screens and choose **Approve this account pairing** —
+that starts the account's 14-day trial. Each browser then requests its own approval;
+compare its name and code before **Approve browser**.
 
 **Enable Remote observation** opens an outbound encrypted connection. No port
-forwarding is required. **Disable Remote observation** disconnects remote viewers.
-Pairing stays in the operating system's credential store; for this pilot,
-observation must be enabled locally after every Nexus restart. A locked or
-unavailable credential store leaves Remote disabled.
+forwarding is required. Pairing stays in the operating system's credential store,
+but Remote is off after every Nexus restart until you enable it again, and every
+permission below starts cleared. A locked or unavailable credential store leaves
+Remote disabled.
 
-**Revoke station access** disconnects the station and removes its Remote pairing.
-Pair again to reconnect. The pilot provides observation only; audio, operating
-controls and QSO logging are not available through it.
+**What a browser may do** is granted per browser, here at the station. Without any of
+these it can watch the station but not change it.
+
+- **Allow station controls** — tuning, band and mode changes, receiver filters and
+  DSP, RF power and mic gain, decoder settings, the amplifier, and which radio is
+  active. One browser holds control at a time.
+- **Allow remote logging** — the browser's Log QSO form writes to your logbook. Field
+  Day contacts still log at the station.
+- **Allow FT8/FT4 transmission** — calling CQ, answering and sending FT8/FT4 messages.
+  It also needs station controls, and it goes through the normal TX switch and TX
+  watchdog. If the browser goes away the station stops transmitting within five
+  seconds, and **Revoke transmission permission** stops it at once. No other mode
+  transmits remotely.
+
+No audio reaches the browser. **Revoke browser approval** removes one browser.
+**Disable Remote observation** disconnects every browser. **Revoke station access**
+disconnects the station and removes its Remote pairing; pair again to reconnect.
 
 ---
 
