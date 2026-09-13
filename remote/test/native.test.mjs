@@ -765,6 +765,19 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
   assert.equal((await probe.send({type:'takeOverLogging'})).ok,true);const refused=await operation({...logged.request,requestId:crypto.randomUUID(),expectedRevision:current.revision,commandWindowId:current.commandWindowId,clientSequence:current.nextSequence,record:{...record,call:'K2ABC'}});assert.equal(refused.response.error,'localPermissionRequired');assert.deepEqual(await probe.send({type:'loggingEvidence'}),evidence)
   await probe.send({type:'loggingPermission',deviceId:device.deviceId,allow:true});assert.equal((await operation({type:'result',operationId:logged.request.requestId})).response.value.outcome,'applied')
   socket.close();socket=null
-  const restarted=await probe.send({type:'restart'});assert.equal(restarted.status.phase,'disabled');assert.deepEqual(restarted.status.loggingPermissions,[]);assert.equal(restarted.status.loggingController,null)
+  // Remote remembers being on (operator decision 2026-09-13). Restarting the actual native controller
+  // turns Remote back on and gives remote logging (and, for v4, station control) back to a browser the
+  // actual service still lists at the same approval. FT8/FT4 transmit permission never comes back, and
+  // no lease survives the restart.
+  if(operationVersion===4){
+   assert.equal((await probe.send({type:'stationPermission',deviceId:device.deviceId,allow:true})).ok,true)
+   const held=await probe.send({type:'transmitPermission',deviceId:device.deviceId,allow:true})
+   assert.deepEqual(held.status.transmitPermissions,[device.deviceId],'positive control: transmit permission was held before the restart')
+  }
+  await delay(200)
+  let restarted=await probe.send({type:'restart'});assert.notEqual(restarted.status.phase,'disabled');assert.ok(restarted.status.observationGeneration)
+  for(let i=0;i<50&&!restarted.status.loggingPermissions.includes(device.deviceId);i++){await delay(100);restarted=await probe.send({type:'status'})}
+  assert.deepEqual(restarted.status.loggingPermissions,[device.deviceId]);assert.deepEqual(restarted.status.transmitPermissions,[]);assert.equal(restarted.status.loggingController,null)
+  if(operationVersion===4)assert.deepEqual(restarted.status.stationPermissions,[device.deviceId])
  }finally{socket?.close();try{await probe.stop()}finally{await app.mf.dispose()}}
 })

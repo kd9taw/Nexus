@@ -57,6 +57,32 @@ impl Vault for MemoryVault {
         values.remove("binding");
         Ok(())
     }
+    // A locked store refuses the remembered state the same way it refuses the credential.
+    fn state(&self) -> Result<Option<vault::State>, &'static str> {
+        if self.fail.load(Ordering::Relaxed) {
+            return Err("credentialStoreUnavailable");
+        }
+        Ok(self
+            .values
+            .lock()
+            .unwrap()
+            .get("state")
+            .and_then(|v| serde_json::from_str(v).ok()))
+    }
+    fn save_state(&self, state: &vault::State) -> Result<(), &'static str> {
+        if self.fail.load(Ordering::Relaxed) {
+            return Err("credentialStoreUnavailable");
+        }
+        self.values
+            .lock()
+            .unwrap()
+            .insert("state".into(), serde_json::to_string(state).unwrap());
+        Ok(())
+    }
+    fn remove_state(&self) -> Result<(), &'static str> {
+        self.values.lock().unwrap().remove("state");
+        Ok(())
+    }
 }
 
 #[test]
@@ -817,6 +843,364 @@ fn actual_native_socket_refuses_cloud_commands_after_a_valid_publication() {
             assert_eq!(serde_json::to_value(engine.lock().unwrap().snapshot().radio).unwrap(), before);
         }
     });
+}
+
+// ---- Remote across a Nexus restart (operator decision 2026-09-13) --------------------------------
+//
+// A restart is simulated the way the probe's `restart` does it: drop the Service and start a new
+// one over the SAME vault and engine. Nothing else carries across, so anything that survives came
+// through the vault. The cloud is a fake HTTP responder on 127.0.0.1: it answers the native device
+// list and station revoke, and refuses everything else, so the transport's WebSocket attempt fails
+// and backs off (`reconnecting`) without any real service.
+
+const BROWSER: &str = "10000000-0000-4000-8000-00000000000b";
+const STATION: &str = "20000000-0000-4000-8000-00000000000a";
+const ACCOUNT: &str = "30000000-0000-4000-8000-00000000000c";
+const APPROVED_UNTIL: u64 = 4_102_444_800_000; // 2100-01-01, far past any test run
+
+struct FakeCloud {
+    origin: String,
+    devices: Arc<Mutex<String>>,
+}
+fn device_list(approved: u8, expires_at: u64) -> String {
+    json!({"devices":[{"id":BROWSER,"name":"Test browser","approved":approved,"expiresAt":expires_at}]})
+        .to_string()
+}
+async fn fake_cloud() -> FakeCloud {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let devices = Arc::new(Mutex::new(device_list(1, APPROVED_UNTIL)));
+    let served = devices.clone();
+    tokio::spawn(async move {
+        while let Ok((mut socket, _)) = listener.accept().await {
+            let served = served.clone();
+            tokio::spawn(async move {
+                let mut request = Vec::new();
+                let mut chunk = [0u8; 4096];
+                // Read the head, then whatever body its Content-Length names.
+                let head_end = loop {
+                    let Ok(n) = socket.read(&mut chunk).await else {
+                        return;
+                    };
+                    if n == 0 {
+                        return;
+                    }
+                    request.extend_from_slice(&chunk[..n]);
+                    if let Some(at) = request.windows(4).position(|w| w == b"\r\n\r\n") {
+                        break at + 4;
+                    }
+                };
+                let head = String::from_utf8_lossy(&request[..head_end]).to_ascii_lowercase();
+                let length = head
+                    .lines()
+                    .find_map(|l| l.strip_prefix("content-length:"))
+                    .and_then(|v| v.trim().parse::<usize>().ok())
+                    .unwrap_or(0);
+                while request.len() < head_end + length {
+                    let Ok(n) = socket.read(&mut chunk).await else {
+                        return;
+                    };
+                    if n == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&chunk[..n]);
+                }
+                let (status, body) = if head.contains("/native/devices ") {
+                    ("200 OK", served.lock().unwrap().clone())
+                } else if head.contains("/native/revoke ") {
+                    ("200 OK", r#"{"ok":true}"#.to_string())
+                } else {
+                    ("503 Service Unavailable", "{}".to_string())
+                };
+                let response = format!(
+                    "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = socket.write_all(response.as_bytes()).await;
+                let _ = socket.shutdown().await;
+            });
+        }
+    });
+    FakeCloud { origin, devices }
+}
+fn paired_vault(origin: &str) -> MemoryVault {
+    let vault = MemoryVault::default();
+    let binding = Binding {
+        origin: origin.into(),
+        station_id: STATION.into(),
+        account_id: ACCOUNT.into(),
+    };
+    vault
+        .save(&binding, &transport::random_secret().unwrap())
+        .unwrap();
+    vault
+}
+fn launch(cloud: &FakeCloud, vault: &MemoryVault, engine: &crate::SharedEngine) -> Service {
+    Service::configured(
+        cloud.origin.clone(),
+        Box::new(vault.clone()),
+        engine.clone(),
+        crate::remote_monitor::Publisher::default(),
+    )
+}
+async fn eventually(service: &Service, what: &str, test: impl Fn(&Status) -> bool) -> Status {
+    for _ in 0..250 {
+        let status = service.status().unwrap();
+        if test(&status) {
+            return status;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!(
+        "{what}: never happened; last status {}",
+        serde_json::to_string(&service.status().unwrap()).unwrap()
+    );
+}
+fn on(status: &Status) -> bool {
+    status.observation_generation.is_some()
+        && ["connecting", "connected", "reconnecting"].contains(&status.phase.as_str())
+}
+/// Settle the launch, and let an asynchronous vault write land before the simulated exit.
+async fn settle() {
+    tokio::time::sleep(Duration::from_millis(300)).await;
+}
+/// Turn Remote on, list the browser, and grant it station control and remote logging.
+async fn on_with_grants(service: &Service) {
+    eventually(service, "the pairing loaded", |s| s.station_id.is_some()).await;
+    service.action(Action::Enable {}).await.unwrap();
+    service.action(Action::Refresh {}).await.unwrap();
+    service
+        .action(Action::StationPermission {
+            device_id: BROWSER.into(),
+            allow: true,
+        })
+        .await
+        .unwrap();
+    service
+        .action(Action::LoggingPermission {
+            device_id: BROWSER.into(),
+            allow: true,
+        })
+        .await
+        .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn remote_that_was_on_turns_itself_back_on_after_a_restart() {
+    let cloud = fake_cloud().await;
+    let vault = paired_vault(&cloud.origin);
+    let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
+    let service = launch(&cloud, &vault, &engine);
+    let first = eventually(&service, "the pairing loaded", |s| s.station_id.is_some()).await;
+    assert_eq!(
+        first.phase, "disabled",
+        "a pairing with nothing remembered starts off"
+    );
+    assert!(on(&service.action(Action::Enable {}).await.unwrap()));
+    settle().await;
+    drop(service);
+
+    let service = launch(&cloud, &vault, &engine);
+    let status = eventually(&service, "Remote turned itself back on", on).await;
+    assert_eq!(status.station_id.as_deref(), Some(STATION));
+    assert!(
+        !engine.lock().unwrap().tx_enabled(),
+        "turning Remote back on never arms the transmitter"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn remote_that_was_turned_off_stays_off_after_a_restart() {
+    let cloud = fake_cloud().await;
+    let vault = paired_vault(&cloud.origin);
+    let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
+    let service = launch(&cloud, &vault, &engine);
+    eventually(&service, "the pairing loaded", |s| s.station_id.is_some()).await;
+    assert!(
+        on(&service.action(Action::Enable {}).await.unwrap()),
+        "positive control: it was on"
+    );
+    settle().await;
+    service.action(Action::Disable {}).await.unwrap();
+    settle().await;
+    drop(service);
+
+    let service = launch(&cloud, &vault, &engine);
+    eventually(&service, "the pairing loaded", |s| s.station_id.is_some()).await;
+    settle().await;
+    let status = service.status().unwrap();
+    assert_eq!(status.phase, "disabled", "Turn off Remote is remembered");
+    assert!(status.observation_generation.is_none());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn revoking_station_access_is_remembered_as_off() {
+    let cloud = fake_cloud().await;
+    let vault = paired_vault(&cloud.origin);
+    let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
+    let service = launch(&cloud, &vault, &engine);
+    on_with_grants(&service).await;
+    settle().await;
+    let revoked = service.action(Action::Forget {}).await.unwrap();
+    assert_eq!(revoked.station_id, None);
+    settle().await;
+    drop(service);
+
+    // Pair the same station id again (as a fresh approval would store it). The old "on" and the
+    // old grants belonged to the revoked pairing and must not come back with the new one.
+    let vault2 = paired_vault(&cloud.origin);
+    *vault2.values.lock().unwrap() = {
+        let mut values = vault.values.lock().unwrap().clone();
+        values.extend(vault2.values.lock().unwrap().clone());
+        values
+    };
+    let service = launch(&cloud, &vault2, &engine);
+    eventually(&service, "the pairing loaded", |s| s.station_id.is_some()).await;
+    settle().await;
+    let status = service.status().unwrap();
+    assert_eq!(
+        status.phase, "disabled",
+        "Revoke station access is remembered as off"
+    );
+    assert!(status.station_permissions.is_empty() && status.logging_permissions.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_locked_credential_store_leaves_remote_off_after_a_restart() {
+    let cloud = fake_cloud().await;
+    let vault = paired_vault(&cloud.origin);
+    let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
+    let service = launch(&cloud, &vault, &engine);
+    eventually(&service, "the pairing loaded", |s| s.station_id.is_some()).await;
+    assert!(
+        on(&service.action(Action::Enable {}).await.unwrap()),
+        "positive control: it was on"
+    );
+    settle().await;
+    drop(service);
+
+    vault.fail.store(true, Ordering::Relaxed);
+    let service = launch(&cloud, &vault, &engine);
+    settle().await;
+    let status = service.status().unwrap();
+    assert!(
+        !on(&status),
+        "a locked vault never turns Remote on: {}",
+        status.phase
+    );
+    assert_eq!(status.error, Some("credentialStoreUnavailable"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn station_and_logging_grants_survive_a_restart_for_a_still_approved_browser() {
+    let cloud = fake_cloud().await;
+    let vault = paired_vault(&cloud.origin);
+    let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
+    let service = launch(&cloud, &vault, &engine);
+    on_with_grants(&service).await;
+    settle().await;
+    drop(service);
+
+    let service = launch(&cloud, &vault, &engine);
+    // Nobody opens Settings after an unattended restart: the station must fetch the browser list
+    // itself before it can restore anything.
+    let status = eventually(&service, "grants restored", |s| {
+        s.station_permissions == [BROWSER] && s.logging_permissions == [BROWSER]
+    })
+    .await;
+    assert!(on(&status));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn grants_are_not_restored_for_a_revoked_or_reapproved_browser() {
+    for (case, after_restart) in [
+        ("revoked", device_list(0, APPROVED_UNTIL)),
+        (
+            "re-approved (a new approval generation)",
+            device_list(1, APPROVED_UNTIL + 1),
+        ),
+        ("gone from the station", json!({"devices":[]}).to_string()),
+        (
+            "positive control: unchanged",
+            device_list(1, APPROVED_UNTIL),
+        ),
+    ] {
+        let cloud = fake_cloud().await;
+        let vault = paired_vault(&cloud.origin);
+        let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
+        let service = launch(&cloud, &vault, &engine);
+        on_with_grants(&service).await;
+        settle().await;
+        drop(service);
+
+        *cloud.devices.lock().unwrap() = after_restart;
+        let service = launch(&cloud, &vault, &engine);
+        eventually(&service, "Remote back on", on).await;
+        // Let the station's own device fetch run, then look.
+        settle().await;
+        service.action(Action::Refresh {}).await.unwrap();
+        let status = service.status().unwrap();
+        let restored =
+            !status.station_permissions.is_empty() || !status.logging_permissions.is_empty();
+        assert_eq!(
+            restored,
+            case.starts_with("positive"),
+            "{case}: {}",
+            serde_json::to_string(&status).unwrap()
+        );
+    }
+}
+
+/// THE KEY SAFETY TEST. FT8/FT4 transmit permission is granted at the shack and dies with the
+/// process. Station control survives a restart; transmit never does, not even for the browser
+/// that held it a moment before.
+#[tokio::test(flavor = "multi_thread")]
+async fn transmit_grant_never_survives_a_restart() {
+    let cloud = fake_cloud().await;
+    let vault = paired_vault(&cloud.origin);
+    let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
+    let service = launch(&cloud, &vault, &engine);
+    on_with_grants(&service).await;
+    let before = service
+        .action(Action::TransmitPermission {
+            device_id: BROWSER.into(),
+            allow: true,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        before.transmit_permissions,
+        [BROWSER],
+        "positive control: the grant existed before the restart"
+    );
+    settle().await;
+    drop(service);
+
+    let service = launch(&cloud, &vault, &engine);
+    let status = eventually(&service, "station control restored", |s| {
+        s.station_permissions == [BROWSER]
+    })
+    .await;
+    assert!(
+        status.transmit_permissions.is_empty(),
+        "transmit permission must start empty after a restart"
+    );
+    // And nothing in the vault could carry it: no persisted record mentions transmission.
+    for value in vault.values.lock().unwrap().values() {
+        assert!(
+            !value.to_ascii_lowercase().contains("transmit"),
+            "vault holds transmit state: {value}"
+        );
+    }
+    assert!(
+        !engine.lock().unwrap().tx_enabled(),
+        "the TX-enable latch is still off"
+    );
+    // The browser can have its station control back, but asking for FT8/FT4 is refused until the
+    // operator grants it again here.
+    let authority = service.control.lock().unwrap().operations.clone();
+    assert_eq!(authority.local_status()["transmitDevices"], json!([]));
 }
 
 #[tokio::test]

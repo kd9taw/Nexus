@@ -74,13 +74,22 @@ that starts the account's 14-day trial. Each browser then requests its own appro
 compare its name and code before **Approve browser**.
 
 **Turn on Remote** opens an outbound encrypted connection. No port
-forwarding is required. Pairing stays in the operating system's credential store,
-but Remote is off after every Nexus restart until you turn it on again, and every
-permission below starts cleared. A locked or unavailable credential store leaves
-Remote disabled.
+forwarding is required. Pairing stays in the operating system's credential store, and
+so does whether Remote is on: if Remote was on when Nexus closed, it turns itself back
+on and reconnects the next time Nexus starts, with no click needed. If you turned it
+off, or revoked the station's access, it stays off. A locked or unavailable credential
+store leaves Remote off.
+
+Remote can only come back after the computer itself restarts if Nexus starts too. The
+first time you turn Remote on, Nexus offers to start when you sign in to this computer;
+that is the **Start at sign-in** setting under Appearance, and it stays off unless you
+say yes.
 
 **What a browser may do** is granted per browser, here at the station. Without any of
-these it can watch the station but not change it.
+these it can watch the station but not change it. Station controls and remote logging
+are kept when Nexus restarts, for as long as that browser stays approved: a browser
+whose approval was revoked, or given again, starts with neither. Permission to transmit
+FT8/FT4 is never kept — grant it again after every restart.
 
 - **Allow station controls** — tuning, band and mode changes, receiver filters and
   DSP, RF power and mic gain, decoder settings, the amplifier, and which radio is
@@ -1885,6 +1894,18 @@ sections cannot be turned off.*
 ### App updates
 
 Turn on **Receive beta (pre-release) updates** to have the updater offer pre-release builds — newer features sooner, but less tested; leave it off to stay on stable releases only.
+
+### Start at sign-in
+
+Turn on **Start Nexus when I sign in to this computer** to have Nexus open by itself when you
+sign in: through the startup list on Windows, a login item on macOS, or the desktop's autostart
+folder on Linux. It is off unless you turn it on, and it changes nothing else. Nexus starts
+listening, with transmit off, exactly as if you had opened it yourself.
+
+This is what lets Remote come back after the computer itself restarts, so the first time you
+turn Remote on (Station ▸ Remote access), Nexus offers to switch this on. The offer is made
+once, and your answer is remembered either way. If your computer will not let Nexus start at
+sign-in, the switch stays off and says so.
 
 ### Accessibility & eyes-free
 

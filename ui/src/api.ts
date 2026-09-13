@@ -2513,6 +2513,22 @@ export async function setBetaUpdates(on: boolean): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_beta_updates', { on })
 }
 
+/** Start Nexus when the operator signs in to this computer — the ONE write path for Settings ▸
+ * Start at sign-in, for the same stale-snapshot reason as `setBetaUpdates`. The backend changes
+ * the operating system's login entry first and persists the choice only when that succeeded, so
+ * a platform that refuses rejects here with the reason, and the switch never shows a state the
+ * computer is not in. Starting at sign-in changes nothing else: transmit stays off at launch. */
+export async function setLaunchAtLogin(on: boolean): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_launch_at_login', { on })
+}
+
+/** Record that the operator answered Remote's one-time "start Nexus at sign-in?" offer, either
+ * way, so it is never asked again. A separate verb from `setLaunchAtLogin` because "No thanks"
+ * must be remembered without touching the login entry. */
+export async function answerRemoteAutostartOffer(): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('answer_remote_autostart_offer')
+}
+
 /** Set (or clear, with '') who is at the key — the ONE write path for the seat-swap chip,
  * the Field Day panel's Operator field and the pop-out scoreboard. Narrow write: never the
  * heavyweight settings save, which clears the TX queue and re-derives the TX cycle from the

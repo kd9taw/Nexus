@@ -12607,6 +12607,47 @@ fn set_beta_updates(state: State<'_, SharedEngine>, on: bool) -> Result<AppSnaps
     Ok(eng.snapshot())
 }
 
+/// Start Nexus when the operator signs in to this computer — Settings ▸ Start at sign-in, and the
+/// ONE write path for `launch_at_login`. The operating system's login entry is changed FIRST (the
+/// Windows Run key, a macOS LaunchAgent, an XDG autostart file on Linux, through
+/// tauri-plugin-autostart); the choice is recorded and persisted only if that succeeded, so a
+/// platform that refuses returns the refusal and the switch never claims a state the computer is
+/// not in. Nothing else changes: a launch at sign-in is an ordinary launch, TX-enable latch off.
+#[tauri::command(async)]
+fn set_launch_at_login(
+    app: tauri::AppHandle,
+    state: State<'_, SharedEngine>,
+    on: bool,
+) -> Result<AppSnapshot, String> {
+    use tauri_plugin_autostart::ManagerExt;
+    let launcher = app.autolaunch();
+    let changed = if on {
+        launcher.enable()
+    } else {
+        launcher.disable()
+    };
+    changed.map_err(|_| "launchAtLoginUnsupported".to_string())?;
+    let mut eng = engine_lock(&state);
+    let s = eng.set_launch_at_login(on);
+    if let Err(e) = s.save(&settings_path()) {
+        eprintln!("tempo: failed to persist start at sign-in: {e}");
+    }
+    Ok(eng.snapshot())
+}
+
+/// Record that Remote's one-time "start Nexus at sign-in?" offer was answered, either way, so it
+/// is never asked again. Its own verb so that "No thanks" is remembered without touching the login
+/// entry.
+#[tauri::command(async)]
+fn answer_remote_autostart_offer(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
+    let mut eng = engine_lock(&state);
+    let s = eng.answer_remote_autostart_offer();
+    if let Err(e) = s.save(&settings_path()) {
+        eprintln!("tempo: failed to persist the Remote start-at-sign-in answer: {e}");
+    }
+    Ok(eng.snapshot())
+}
+
 /// Replace the blocked-callsigns list (the Alt-double-click gesture + the Settings
 /// editor's one write path). A NARROW write — never `apply_settings` (#54: the heavyweight
 /// path resets the mode and clears the TX queue, and this gets clicked mid-QSO). Persists;
@@ -22264,6 +22305,8 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        // Start at sign-in. Driven from Rust only (`set_launch_at_login`); no capability entry.
+        .plugin(tauri_plugin_autostart::Builder::new().build())
         .manage(d.engine)
         .manage(remote_publisher)
         .manage(remote_service)
@@ -22539,6 +22582,8 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             set_hold_tx_freq,
             set_blocked_calls,
             set_beta_updates,
+            set_launch_at_login,
+            answer_remote_autostart_offer,
             set_fd_operator,
             call_station,
             open_panel_window,

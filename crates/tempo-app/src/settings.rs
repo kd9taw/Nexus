@@ -929,6 +929,25 @@ pub struct Settings {
     /// the `set_beta_updates` command; nothing in Rust reads it today.
     #[serde(default)]
     pub beta_updates: bool,
+    /// Start Nexus when the operator signs in to this computer (Settings ▸ Start at sign-in).
+    /// **Off by default** — nothing starts itself unasked.
+    ///
+    /// ⛔ **ONE WRITER: `set_launch_at_login` (src-tauri)**, which changes the operating system's
+    /// login entry FIRST and records the choice here only when that succeeded.
+    /// [`Engine::apply_settings`](crate::engine::Engine::apply_settings) keeps the live value on
+    /// every path, restore and reset included: this field mirrors an OS entry that a settings
+    /// save never touches, so taking a payload's value would leave the switch disagreeing with
+    /// what the computer will actually do at the next sign-in.
+    ///
+    /// Starting at sign-in changes no transmit default: the launch is an ordinary launch, with
+    /// the TX-enable latch off.
+    #[serde(default)]
+    pub launch_at_login: bool,
+    /// Remote's one-time offer to turn on `launch_at_login` has been answered, either way, so it
+    /// is never shown again. ONE WRITER: `answer_remote_autostart_offer`; kept live across a form
+    /// save for the same stale-snapshot reason as `beta_updates`.
+    #[serde(default)]
+    pub remote_autostart_offer_answered: bool,
     /// Periodically transmit a presence beacon ("CQ <call> <grid>") in Chat
     /// mode. **Off by default** — the app starts passive (hunt-and-pounce):
     /// it listens and only transmits when the operator acts (sends a message,
@@ -3521,6 +3540,8 @@ impl Default for Settings {
             connect_web: false, // same rule: exposing the station on the LAN is opt-in
             connect_web_port: default_connect_web_port(),
             beta_updates: false, // stable channel by default; MUST match the serde default (false)
+            launch_at_login: false, // nothing starts itself unasked; MUST match the serde default
+            remote_autostart_offer_answered: false,
             beacon: false,
             harq_enabled: true,
             ptt_method: "vox".to_string(),
@@ -7435,6 +7456,56 @@ mod tests {
         assert!(back.fd_scoreboard);
         assert_eq!(back.fd_scoreboard_port, 7474);
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// ⛔ **Start at sign-in and Remote's one-time offer default OFF, survive the file round trip
+    /// under their wire keys, and an upgrade never turns either on by itself.** Nothing starts
+    /// itself unasked, and an answered offer stays answered.
+    #[test]
+    fn launch_at_login_and_the_remote_offer_round_trip_and_default_off() {
+        let older = r#"{"mycall":"W9XYZ","mygrid":"EN37"}"#;
+        let s: Settings = serde_json::from_str(older).unwrap();
+        assert!(
+            !s.launch_at_login,
+            "an upgrade never makes Nexus start at sign-in"
+        );
+        assert!(
+            !s.remote_autostart_offer_answered,
+            "an upgrade has answered nothing"
+        );
+        let default = Settings::default();
+        assert!(!default.launch_at_login && !default.remote_autostart_offer_answered);
+
+        let dir = std::env::temp_dir().join(format!("tempo_launch_rt_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        std::fs::write(
+            &path,
+            r#"{"mycall":"KD9TAW","launchAtLogin":true,"remoteAutostartOfferAnswered":true}"#,
+        )
+        .unwrap();
+        let loaded = Settings::load(&path);
+        assert!(
+            loaded.launch_at_login && loaded.remote_autostart_offer_answered,
+            "both loaded under the keys the UI sends"
+        );
+        loaded.save(&path).unwrap();
+        let again = Settings::load(&path);
+        assert!(
+            again.launch_at_login && again.remote_autostart_offer_answered,
+            "an ordinary save dropped them"
+        );
+        // The control: OFF sticks too, so this is a round trip and not "always true".
+        let off = Settings {
+            launch_at_login: false,
+            remote_autostart_offer_answered: false,
+            ..again
+        };
+        off.save(&path).unwrap();
+        let reloaded = Settings::load(&path);
+        assert!(!reloaded.launch_at_login && !reloaded.remote_autostart_offer_answered);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// ⛔ **The beta-channel opt-in must survive the file round trip, and an upgrade must

@@ -324,6 +324,10 @@ pub(super) const WITHHELD_KEYS: &[&str] = &[
     "cloudlogStationId",
     "cloudlogKey",
     "voiceMessages",
+    // How THIS computer starts, and the answer to a one-time prompt at the shack: station-local
+    // facts no browser needs, so they stay home rather than widening the settings document.
+    "launchAtLogin",
+    "remoteAutostartOfferAnswered",
 ];
 /// The per-radio projection, under the same rule as `SETTINGS_KEYS`: a new `RadioProfile` field
 /// is PRIVATE by default, and the schema-coverage test refuses to go green until it is named on

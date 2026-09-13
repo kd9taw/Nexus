@@ -594,6 +594,10 @@ principal third-party components, not a substitute for that gate:
   Its desktop backends **notify-rust** (Linux) — MIT OR Apache-2.0,
   **mac-notification-sys** (macOS) — MIT/Apache-2.0, and **tauri-winrt-notification**
   (Windows) — MIT OR Apache-2.0, arrive with it.
+- **tauri-plugin-autostart** (Settings ▸ Start at sign-in: writes the Windows Run key, a macOS
+  LaunchAgent or an XDG autostart entry so Nexus can start when you sign in) — Apache-2.0 OR MIT.
+  It arrives with **auto-launch** — MIT, **dirs** and **dirs-sys** (Linux and macOS) — MIT OR
+  Apache-2.0, **redox_users** — MIT, and **winreg** (Windows) — MIT.
 - **cpal** (sound-card audio transport) — MIT OR Apache-2.0.
 - **alsa** (Linux only: reading ALSA's PCM device hints, so the audio picker can show the
   card description the operator's own system shows — cpal keeps only the raw PCM name) —

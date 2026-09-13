@@ -102,8 +102,12 @@ fn transmit_revocation_is_synchronous_even_while_engine_is_busy() {
         let mut e = f.engine.lock().unwrap();
         match cause {
             "grant" => f.authority.permit_transmit(DEVICE, false).unwrap(),
-            "stationGrant" => f.authority.permit_station(DEVICE, false).unwrap(),
-            "loggingGrant" => f.authority.permit(DEVICE, false).unwrap(),
+            "stationGrant" => {
+                f.authority.permit_station(DEVICE, false).unwrap();
+            }
+            "loggingGrant" => {
+                f.authority.permit(DEVICE, false).unwrap();
+            }
             "disconnect" => f.authority.disconnect_session(SESSION),
             "connection" => {
                 f.authority.start_connection();

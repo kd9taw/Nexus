@@ -3311,6 +3311,13 @@ export interface Settings {
    * save, so putting it in a `setSettings` payload does nothing. Write it with `setBetaUpdates`
    * (api.ts), which is the ONE writer — see that function for why. */
   betaUpdates?: boolean
+  /** Start Nexus when the operator signs in to this computer. Off by default. READ-ONLY through
+   * this struct, like `betaUpdates`: write it with `setLaunchAtLogin` (api.ts), which changes the
+   * operating system's login entry and persists only on success. */
+  launchAtLogin?: boolean
+  /** Remote's one-time offer to turn on `launchAtLogin` has been answered (either way), so it is
+   * never shown again. READ-ONLY through this struct: write it with `answerRemoteAutostartOffer`. */
+  remoteAutostartOfferAnswered?: boolean
   /** N3FJP real-time push (club master log). Empty host = off. */
   n3fjpHost?: string
   n3fjpPort?: number

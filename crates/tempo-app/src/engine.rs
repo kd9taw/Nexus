@@ -4812,6 +4812,12 @@ impl Engine {
         // way no other setting's is: the operator is quietly moved back to the stable channel,
         // the betas stop arriving, and there is no error, no toast and no log line to notice.
         let live_beta_updates = self.settings.beta_updates;
+        // Start at sign-in and Remote's one-time offer to switch it on: the same ONE-WRITER shape
+        // as the beta channel. `launch_at_login` mirrors the operating system's login entry, which
+        // only `set_launch_at_login` changes, so a payload's copy would make the switch disagree
+        // with what the computer does at the next sign-in.
+        let live_launch_at_login = self.settings.launch_at_login;
+        let live_remote_autostart_offer_answered = self.settings.remote_autostart_offer_answered;
         // The Cloudlog key is a WRITE-ONLY credential, not editable state, so it is captured here and
         // restored below UNCONDITIONALLY — on a form save AND on a restore/reset, unlike the roster
         // fields above. `get_settings` clears it on the way OUT to the frontend (round 9), so the
@@ -4876,7 +4882,12 @@ impl Engine {
         // as it does with every other setting it promises to clear.
         if keep_live_roster {
             self.settings.beta_updates = live_beta_updates;
+            self.settings.remote_autostart_offer_answered = live_remote_autostart_offer_answered;
         }
+        // Start at sign-in is kept on EVERY path, restore and factory reset included: it mirrors
+        // the operating system's login entry, which neither of them changes, so taking the
+        // bundle's value would leave the switch reading off while the computer still starts Nexus.
+        self.settings.launch_at_login = live_launch_at_login;
         self.settings.ensure_radio_profiles();
         // Fold the form's flat rig/audio edits into the profile the FORM was editing — the flat fields
         // describe the radio SHOWN in the form, which may differ from the live active radio if a
@@ -5226,6 +5237,22 @@ impl Engine {
     /// only has to persist (the caller saves) and be visible to the next `get_settings`.
     pub fn set_beta_updates(&mut self, on: bool) -> &Settings {
         self.settings.beta_updates = on;
+        &self.settings
+    }
+
+    /// ⛔ **THE ONE WRITER of `launch_at_login`** (Settings ▸ Start at sign-in). The caller has
+    /// already changed the operating system's login entry and calls this only when that worked;
+    /// `apply_settings` keeps the live value, so a stale Settings payload cannot contradict it.
+    /// It touches nothing else — starting at sign-in changes no transmit default.
+    pub fn set_launch_at_login(&mut self, on: bool) -> &Settings {
+        self.settings.launch_at_login = on;
+        &self.settings
+    }
+
+    /// ⛔ **THE ONE WRITER of `remote_autostart_offer_answered`**: Remote's one-time offer to start
+    /// Nexus at sign-in was answered, either way, and is never shown again.
+    pub fn answer_remote_autostart_offer(&mut self) -> &Settings {
+        self.settings.remote_autostart_offer_answered = true;
         &self.settings
     }
 
@@ -24909,6 +24936,54 @@ mod tests {
         assert!(
             !e.settings().beta_updates,
             "and back off — the switch is two-way"
+        );
+    }
+
+    /// ⛔ **No settings payload moves Start at sign-in, on ANY path.** `set_launch_at_login` is
+    /// its one writer and runs only after the operating system's login entry changed; a form save,
+    /// a restore and a factory reset all keep the live value, because none of them touches that
+    /// entry. Remote's one-time offer answer is form-proof the same way. And neither verb changes
+    /// a transmit default.
+    #[test]
+    fn no_settings_payload_moves_start_at_sign_in_or_the_remote_offer_answer() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        assert!(!e.settings().launch_at_login, "baseline: off by default");
+        assert!(!e.tx_enabled(), "baseline: the TX-enable latch is off");
+        e.set_launch_at_login(true);
+        e.answer_remote_autostart_offer();
+        assert!(
+            e.settings().launch_at_login && e.settings().remote_autostart_offer_answered,
+            "the verbs move them"
+        );
+        assert!(!e.tx_enabled(), "starting at sign-in changes no TX default");
+
+        let mut stale = e.settings().clone();
+        stale.launch_at_login = false;
+        stale.remote_autostart_offer_answered = false;
+        e.apply_settings(stale);
+        assert!(
+            e.settings().launch_at_login,
+            "a stale form payload turned start at sign-in off"
+        );
+        assert!(
+            e.settings().remote_autostart_offer_answered,
+            "a stale form payload re-armed the one-time offer"
+        );
+
+        e.apply_restored_settings(Settings::default()); // what reset_settings sends
+        assert!(
+            e.settings().launch_at_login,
+            "a reset cannot remove the OS login entry, so the switch must keep saying on"
+        );
+
+        // The positive control: the verb is two-way, and a stale `true` cannot turn it on.
+        e.set_launch_at_login(false);
+        let mut stale_on = e.settings().clone();
+        stale_on.launch_at_login = true;
+        e.apply_settings(stale_on);
+        assert!(
+            !e.settings().launch_at_login,
+            "a stale form payload turned start at sign-in on"
         );
     }
 

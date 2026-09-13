@@ -541,6 +541,13 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'auto update', 'early access'],
   },
   {
+    id: 'start-at-sign-in',
+    label: 'Start at sign-in',
+    tab: 'appearance',
+    keywords: ['autostart', 'auto start', 'launch at login', 'startup', 'start up', 'boot',
+      'reboot', 'log in', 'login', 'sign in', 'run at startup', 'remote'],
+  },
+  {
     id: 'accessibility',
     label: 'Accessibility & eyes-free',
     tab: 'appearance',

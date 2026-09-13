@@ -136,6 +136,7 @@ import {
   CREDENTIALS_CHANGED,
   setUnassistedMode,
   setBetaUpdates,
+  setLaunchAtLogin,
 } from '../api'
 import { AssistanceNote } from './AssistanceNote'
 import { fetchLotwUsers, getLotwUsersStatus, type LotwUsersStatus } from '../api'
@@ -2016,6 +2017,23 @@ export function SettingsPanel({
       onSaved?.()
     })
   }
+  // --- Start at sign-in. The same ONE-WRITER shape as the beta channel above, with one
+  // difference: the switch moves only after the backend answers, because the backend changes
+  // the operating system's login entry FIRST and persists the choice only if that worked. An
+  // optimistic flip would show "on" on a computer that refused, which is exactly the lie the
+  // unsupported-platform message exists to prevent.
+  const [launchAtLoginError, setLaunchAtLoginError] = useState<string | null>(null)
+  const toggleLaunchAtLogin = (on: boolean) => {
+    setLaunchAtLoginError(null)
+    void setLaunchAtLogin(on).then(
+      () => {
+        setForm((prev) => (prev ? { ...prev, launchAtLogin: on } : prev))
+        if (savedRef.current) savedRef.current = { ...savedRef.current, launchAtLogin: on }
+        onSaved?.()
+      },
+      () => setLaunchAtLoginError(t('settings.launchAtLogin.unsupported')),
+    )
+  }
   const handleAddRule = () => {
     const first = form?.radios?.[0]?.id ?? 0
     mutateRules([...(form?.routingRules ?? []), { bands: [], mode: null, radio: first }])
@@ -3540,6 +3558,32 @@ export function SettingsPanel({
               </button>
               <span className="settings-hint">{t('settings.betaUpdates.hint')}</span>
             </label>
+          </fieldset>
+          )}
+
+          {/* ---- Start at sign-in: launch Nexus when the operator signs in to this computer ---- */}
+          {tab === 'appearance' && (
+          <fieldset className="settings-section" id="settings-start-at-sign-in">
+            <legend>{t('settings.launchAtLogin.legend')}</legend>
+            <label className="settings-field">
+              <span className="settings-label">{t('settings.launchAtLogin.label')}</span>
+              <button disabled={remote}
+                type="button"
+                role="switch"
+                aria-checked={!!form.launchAtLogin}
+                className={`toggle${form.launchAtLogin ? ' on' : ''}`}
+                onClick={() => toggleLaunchAtLogin(!form.launchAtLogin)}
+                aria-label={
+                  form.launchAtLogin
+                    ? t('settings.launchAtLogin.aria.disable')
+                    : t('settings.launchAtLogin.aria.enable')
+                }
+              >
+                <span className="toggle-knob" />
+              </button>
+              <span className="settings-hint">{t('settings.launchAtLogin.hint')}</span>
+            </label>
+            {launchAtLoginError && <p className="settings-note" role="alert">{launchAtLoginError}</p>}
           </fieldset>
           )}
 

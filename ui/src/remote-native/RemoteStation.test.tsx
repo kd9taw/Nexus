@@ -104,6 +104,96 @@ it('keeps transmit revocation available during a pending refresh and discards it
  expect(screen.getByRole('button',{name:'Allow FT8/FT4 transmission'})).toBeTruthy()
 })
 
+// Remote remembers being on (operator decision 2026-09-13). The shack has to say so, and has to say
+// that FT8/FT4 transmit permission is the one thing a restart does not bring back.
+it('tells the operator Remote stays on across a restart and transmit permission does not', async () => {
+  const deviceId = crypto.randomUUID()
+  const status: RemoteStationStatus = { phase: 'connected', origin: 'https://remote-staging.hamradiotools.io',
+    stationId: crypto.randomUUID(), accountId: crypto.randomUUID(), pairingId: null, pairingCode: null, expiresAt: null,
+    devices: [{ id: deviceId, name: 'FT browser', approved: 1, expiresAt: Date.now() + 600000 }], error: null,
+    loggingPermissions: [], stationPermissions: [deviceId], transmitPermissions: [] }
+  const invoke = async (command: string) => {
+    if (command === 'get_remote_station_status') return status
+    throw new Error('unexpectedCommand')
+  }
+  window.__TAURI_INTERNALS__ = { invoke: invoke as NonNullable<Window['__TAURI_INTERNALS__']>['invoke'] }
+  render(<RemoteStation />)
+  await screen.findByRole('button', { name: 'Turn off Remote' })
+  expect(screen.getByText(/stays on when Nexus restarts/)).toBeTruthy()
+  expect(screen.getByText(/transmit permission is not kept/)).toBeTruthy()
+  // Beside the transmit permission itself, not only in the general hint.
+  expect(screen.getByText(/FT8\/FT4 transmission requires station control/).textContent).toMatch(/resets whenever Nexus restarts/)
+  expect(screen.getByText(/Allow station controls for each browser/).textContent).toMatch(/kept when Nexus restarts/)
+  expect(screen.queryByText(/turns off whenever Nexus restarts/)).toBeNull()
+})
+
+function offerHarness(options: { failLaunchAtLogin?: boolean } = {}) {
+  const settings = { launchAtLogin: false, remoteAutostartOfferAnswered: false }
+  let status: RemoteStationStatus = { phase: 'disabled', origin: 'https://remote-staging.hamradiotools.io',
+    stationId: crypto.randomUUID(), accountId: crypto.randomUUID(), pairingId: null, pairingCode: null, expiresAt: null,
+    devices: [], error: null }
+  const calls: string[] = []
+  const invoke = async (command: string, input?: unknown) => {
+    calls.push(command)
+    if (command === 'get_remote_station_status') return status
+    if (command === 'get_settings') return { ...settings }
+    if (command === 'answer_remote_autostart_offer') { settings.remoteAutostartOfferAnswered = true; return {} }
+    if (command === 'set_launch_at_login') {
+      if (options.failLaunchAtLogin) throw 'launchAtLoginUnsupported'
+      settings.launchAtLogin = (input as { on: boolean }).on; return {}
+    }
+    if (command !== 'remote_station_action') throw new Error('unexpectedCommand')
+    const action = (input as { action: RemoteStationAction }).action
+    if (action.type === 'enable') status = { ...status, phase: 'connecting' }
+    if (action.type === 'disable') status = { ...status, phase: 'disabled' }
+    return status
+  }
+  window.__TAURI_INTERNALS__ = { invoke: invoke as NonNullable<Window['__TAURI_INTERNALS__']>['invoke'] }
+  return { settings, calls }
+}
+
+it('offers start at sign-in once, only when the operator turns Remote on, and remembers "No thanks"', async () => {
+  const { settings, calls } = offerHarness()
+  render(<RemoteStation />)
+  await screen.findByRole('button', { name: 'Turn on Remote' })
+  // Nothing is asked before the operator acts — a launch that turned Remote back on asks nothing.
+  expect(screen.queryByRole('button', { name: 'Start Nexus when I sign in' })).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: 'Turn on Remote' }))
+  await screen.findByRole('button', { name: 'Start Nexus when I sign in' })
+  expect(calls).not.toContain('set_launch_at_login')
+  fireEvent.click(screen.getByRole('button', { name: 'No thanks' }))
+  await waitFor(() => expect(settings.remoteAutostartOfferAnswered).toBe(true))
+  expect(screen.queryByRole('button', { name: 'Start Nexus when I sign in' })).toBeNull()
+  expect(settings.launchAtLogin).toBe(false)
+  expect(calls).not.toContain('set_launch_at_login')
+  // Answered once: off and on again does not ask again.
+  fireEvent.click(await screen.findByRole('button', { name: 'Turn off Remote' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Turn on Remote' }))
+  await screen.findByRole('button', { name: 'Turn off Remote' })
+  await waitFor(() => expect(calls.filter(c => c === 'get_settings').length).toBe(2))
+  expect(screen.queryByRole('button', { name: 'Start Nexus when I sign in' })).toBeNull()
+})
+
+it('switches start at sign-in on only when the operator accepts, and says so if the computer refuses', async () => {
+  const accepted = offerHarness()
+  render(<RemoteStation />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Turn on Remote' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Start Nexus when I sign in' }))
+  await waitFor(() => expect(accepted.settings.launchAtLogin).toBe(true))
+  expect(accepted.settings.remoteAutostartOfferAnswered).toBe(true)
+  expect(screen.queryByRole('alert')).toBeNull()
+  cleanup()
+
+  const refused = offerHarness({ failLaunchAtLogin: true })
+  render(<RemoteStation />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Turn on Remote' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Start Nexus when I sign in' }))
+  expect((await screen.findByRole('alert')).textContent).toMatch(/did not let Nexus start at sign-in/)
+  expect(refused.settings.launchAtLogin).toBe(false)
+  // Still answered: a refusal is not a reason to ask again; the switch in Settings remains.
+  expect(refused.settings.remoteAutostartOfferAnswered).toBe(true)
+})
+
 // Approving at the radio before agreeing in the browser used to fall through to the generic refusal,
 // which points at the network. The service refused for a reason the operator can fix in one click.
 it('tells an operator to confirm in the browser when they approve at the shack first', async () => {

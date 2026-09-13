@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { getRemoteStationStatus, remoteStationAction } from '../api'
+import { answerRemoteAutostartOffer, getRemoteStationStatus, getSettings, remoteStationAction, setLaunchAtLogin } from '../api'
 import { t } from '../i18n'
 import type { RemoteStationAction, RemoteStationStatus } from './types'
 import '../remote-web/remote.css'
@@ -9,6 +9,8 @@ export function RemoteStation() {
   const [name, setName] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [offer, setOffer] = useState(false)
+  const [offerFailed, setOfferFailed] = useState(false)
   const pending = useRef(false), mounted = useRef(true), requestEpoch = useRef(0)
   useEffect(() => {
     mounted.current = true
@@ -31,9 +33,29 @@ export function RemoteStation() {
     if (pending.current && action.type !== 'disable' && action.type !== 'takeOverLogging' && !(action.type === 'transmitPermission' && !action.allow)) return
     const epoch = ++requestEpoch.current
     pending.current = true; setBusy(true); setError(null)
-    try { const next = await remoteStationAction(action); if (mounted.current && epoch === requestEpoch.current) setStatus(next) }
+    try {
+      const next = await remoteStationAction(action)
+      if (mounted.current && epoch === requestEpoch.current) setStatus(next)
+      if (action.type === 'enable') void offerStartAtSignIn()
+    }
     catch (error) { if (mounted.current && epoch === requestEpoch.current) setError(typeof error === 'string' ? error : 'serviceUnavailable') }
     finally { if (epoch === requestEpoch.current) { pending.current = false; if (mounted.current) setBusy(false) } }
+  }
+  // Remote comes back after a restart only if Nexus itself starts. So when the operator turns Remote
+  // on, and Nexus is not set to start at sign-in, offer it: once, only on that click (never on a
+  // launch that turned Remote back on by itself), never switched on without a click, and never
+  // asked again once answered either way.
+  async function offerStartAtSignIn() {
+    try {
+      const settings = await getSettings()
+      if (mounted.current && !settings.launchAtLogin && !settings.remoteAutostartOfferAnswered) setOffer(true)
+    } catch { /* no settings, no offer: the switch in Settings is always there */ }
+  }
+  async function answerOffer(accept: boolean) {
+    setOffer(false); setOfferFailed(false)
+    try { await answerRemoteAutostartOffer() } catch { /* closed for this session either way */ }
+    if (!accept) return
+    try { await setLaunchAtLogin(true) } catch { if (mounted.current) setOfferFailed(true) }
   }
   const connected = status && ['connected', 'connecting', 'reconnecting'].includes(status.phase)
   const issue = error ?? status?.error, phase = status?.phase
@@ -78,6 +100,14 @@ export function RemoteStation() {
           {connected ? t('remote.disable') : t('remote.enable')}</button>
         <button type="button" className="remote-button" disabled={busy} onClick={() => void act({ type: 'refresh' })}>{t('remote.refreshDevices')}</button>
       </div>
+      {offer && <div role="group" aria-label={t('settings.launchAtLogin.legend')}>
+        <p>{t('remote.autostartOffer')}</p>
+        <div className="remote-actions">
+          <button type="button" className="remote-button" onClick={() => void answerOffer(true)}>{t('remote.autostartOfferAccept')}</button>
+          <button type="button" className="remote-button" onClick={() => void answerOffer(false)}>{t('remote.autostartOfferDismiss')}</button>
+        </div>
+      </div>}
+      {offerFailed && <p role="alert">{t('remote.autostartOfferFailed')}</p>}
       {status.loggingPermissions && <><p>{t('remote.loggingLocalHint')}</p><button type="button" className="remote-button" onClick={()=>void act({type:'takeOverLogging'})}>{status.stationPermissions ? t('remote.controlTakeOver') : t('remote.loggingTakeOver')}</button></>}
       {status.stationPermissions && <p>{t('remote.controlLocalHint')}</p>}
       {status.transmitPermissions && <p>{t('remote.transmitLocalHint')}</p>}

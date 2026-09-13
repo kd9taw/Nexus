@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Nexus Remote stays on across a restart.** If Remote was on when Nexus closed, it turns itself
+  back on and reconnects when Nexus starts again — no trip to Settings, no click at the shack. If
+  you turned it off, or revoked the station's access, it stays off. A locked credential store still
+  leaves it off.
+
+  Each browser's station-control and remote-logging permissions come back with it, but only for a
+  browser that is still approved exactly as it was: revoke a browser, or approve it again, and it
+  starts with nothing. **Permission to transmit FT8/FT4 never survives a restart.** Grant it again
+  at the shack each time; the TX switch is still off at every launch, as it always has been.
+
+- **Start Nexus when you sign in to this computer.** A new switch under Settings ▸ Appearance ▸
+  Start at sign-in, off by default. It is what lets Remote come back after the computer itself
+  restarts, so the first time you turn Remote on, Nexus offers to switch it on for you — once, and
+  only if you say yes. If your computer will not let Nexus start at sign-in, Nexus says so and the
+  switch stays off. Starting at sign-in is an ordinary start: Nexus listens, and transmit stays off.
+
 - **Export one POTA activation, not a date range.** The Logbook's export area now lists your
   activations — park, UTC date and contact count — and exports exactly that one. Previously the only
   filter was a date range, so an activation shared a day with any ordinary contacts you made and they
