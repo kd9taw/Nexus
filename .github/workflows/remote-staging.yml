@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       operation:
-        description: 'Inspect, provision D1, deploy the tested service, or recover a verified partial upload'
+        description: 'Inspect, provision D1, deploy the tested service, recover a verified partial upload, or grant one account a trial'
         type: choice
         required: true
         default: inspect
@@ -15,6 +15,7 @@ on:
           - provision
           - deploy
           - recover
+          - grant-trial
       recovery_revision:
         description: 'Recover only: full source SHA from the reviewed failed deployment receipt'
         type: string
@@ -31,6 +32,16 @@ on:
         description: 'Recover only: optional JSON of the three legacy text-module hashes from the same receipt'
         type: string
         default: ''
+      # This repository is public, and so are these inputs in the run's metadata. Give the account
+      # UUID from Support details and nothing else: never an email address or a name.
+      grant_account_id:
+        description: 'Grant-trial only: the account UUID from Support details in the Remote browser'
+        type: string
+        default: ''
+      grant_days:
+        description: 'Grant-trial only: whole days from now, 1-365'
+        type: string
+        default: '14'
 
 permissions:
   contents: read
@@ -84,7 +95,7 @@ jobs:
           REMOTE_STAGING_OPERATION: ${{ inputs.operation }}
         run: |
           case "$REMOTE_STAGING_OPERATION" in
-            inspect|provision|deploy|recover) ;;
+            inspect|provision|deploy|recover|grant-trial) ;;
             *) echo 'Unknown Remote staging operation'; exit 1 ;;
           esac
 
@@ -153,12 +164,28 @@ jobs:
           TMPDIR="$RUNNER_TEMP/remote-gates" scripts/gates --job remote-web --allow-partial
 
       - name: Resolve the provisioned staging database
-        if: inputs.operation == 'deploy'
+        if: inputs.operation == 'deploy' || inputs.operation == 'grant-trial'
         id: database
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.REMOTE_CLOUDFLARE_API_TOKEN }}
         run: node remote/scripts/cloudflare-staging.mjs resolve
+
+      # The operator's path to a trial with no wrangler login and no admin session: the same
+      # statement grant-trial.mjs prints and admin/grant-trial runs, sent through the D1 query API
+      # with the Remote-scoped token, the account bound as a parameter. Inputs reach the script only
+      # through the environment, never spliced into this shell. The script refuses bad input before
+      # any request, confirms the database by inventory, requires exactly one changed row and reads
+      # the trial back; it prints the trial state, never the account.
+      - name: Grant or extend one account's trial in the staging database
+        if: inputs.operation == 'grant-trial'
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.REMOTE_CLOUDFLARE_API_TOKEN }}
+          REMOTE_D1_DATABASE_ID: ${{ steps.database.outputs.database_id }}
+          REMOTE_GRANT_ACCOUNT: ${{ inputs.grant_account_id }}
+          REMOTE_GRANT_DAYS: ${{ inputs.grant_days }}
+        run: node remote/scripts/cloudflare-staging.mjs grant-trial
 
       - name: Package the tested bytes and their source receipt
         if: inputs.operation == 'deploy'

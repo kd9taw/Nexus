@@ -4,6 +4,7 @@ import { appendFile } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { pathToFileURL } from 'node:url'
 import { STAGING, databaseId, revision, identityFromEnv, stagingConfig, requireValue, requestJson, requestBytes } from './staging-common.mjs'
+import { trialGrant } from './grant-trial.mjs'
 
 // The two fixed assets, plus one or more D1 migrations matched by PATTERN - deliberately not a
 // hardcoded list of migration filenames. This previously pinned the exact three names shipped at
@@ -187,13 +188,41 @@ export function cloudflare(env = process.env, fetcher = fetch) {
     requireValue(await databases() === id, 'The created staging database was not confirmed by inventory')
     return { ...current, databaseId: id, created: true }
   }
-  return { inspect, provision, confirmUpload, markUpload, attachDomain, recover }
+  // One account's trial, granted or extended through the D1 query API with the Remote-scoped token:
+  // the path for an operator with no wrangler login, dispatched as the workflow's grant-trial
+  // operation. It runs the statement grant-trial.mjs prints and admin/grant-trial runs - UPDATE on
+  // conflict, never DELETE, a hand grant kept tellable from an earned trial - with the account BOUND
+  // as a parameter rather than spliced into SQL. Input is refused before anything is sent, the
+  // database must be the staging one inventory confirms, and exactly one row must change.
+  // Nothing identifying is printed: the result carries the trial state, never the account.
+  async function grantTrial(database, account, days) {
+    const grant = trialGrant(account, days)
+    const id = databaseId(database)
+    requireValue(await databases() === id, 'The resolved database is not the staging database; nothing was written')
+    const query = async (label, sql, params) => {
+      const response = await api(`/d1/database/${id}/query`, label, { sql, params })
+      const first = Array.isArray(response.result) ? response.result[0] : null
+      requireValue(first && first.success !== false && first.meta && typeof first.meta === 'object', `${label} returned an unexpected shape`)
+      return first
+    }
+    const written = await query('Trial grant', grant.statement, grant.params)
+    requireValue(written.meta.changes === 1, written.meta.changes === 0
+      ? 'That account does not exist in the staging database; nothing was granted'
+      : 'The trial grant changed an unexpected number of rows')
+    const read = await query('Trial read-back', 'SELECT enabled, source, expires_at FROM trials WHERE account_id = ?', grant.params)
+    const row = Array.isArray(read.results) && read.results.length === 1 ? read.results[0] : null
+    const now = Date.now()
+    requireValue(row && row.enabled === 1 && Number.isSafeInteger(row.expires_at) && row.expires_at > now,
+      'The grant did not leave the trial active')
+    return { service: STAGING.name, trial: 'active', source: row.source, daysLeft: Math.round((row.expires_at - now) / 86400000) }
+  }
+  return { inspect, provision, confirmUpload, markUpload, attachDomain, recover, grantTrial }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
     const mode = process.argv[2]
-    requireValue(process.argv.length === 3 && ['inspect', 'provision', 'resolve', 'recover'].includes(mode), 'Use inspect, provision, resolve or recover')
+    requireValue(process.argv.length === 3 && ['inspect', 'provision', 'resolve', 'recover', 'grant-trial'].includes(mode), 'Use inspect, provision, resolve, recover or grant-trial')
     const api = cloudflare()
     let result
     if (mode === 'recover') {
@@ -208,6 +237,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       try { additional = JSON.parse(process.env.REMOTE_RECOVERY_ADDITIONAL_MODULES || '{}') }
       catch { throw new Error('Recovery module hashes must be valid JSON') }
       result = await api.recover(config, process.env.REMOTE_RECOVERY_WORKER_SHA256, additional)
+    } else if (mode === 'grant-trial') {
+      result = await api.grantTrial(process.env.REMOTE_D1_DATABASE_ID, process.env.REMOTE_GRANT_ACCOUNT, Number(process.env.REMOTE_GRANT_DAYS))
     } else result = mode === 'provision' ? await api.provision() : await api.inspect()
     if (mode === 'resolve') requireValue(result.databaseId, 'The staging database is absent; run provision first')
     if (process.env.GITHUB_OUTPUT && result.databaseId) await appendFile(process.env.GITHUB_OUTPUT, `database_id=${result.databaseId}\n`)

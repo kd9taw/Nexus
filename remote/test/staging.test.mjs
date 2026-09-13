@@ -13,6 +13,7 @@ import { cloudflare, workerDigest } from '../scripts/cloudflare-staging.mjs'
 import { createArtifact, verifyArtifact, verifyLive, verifyPublicSource } from '../scripts/staging-artifact.mjs'
 import { runtime } from './runtime.mjs'
 import { uploadArtifact, compareSchema } from '../scripts/deploy-staging.mjs'
+import { trialGrant } from '../scripts/grant-trial.mjs'
 
 const root = fileURLToPath(new URL('../../', import.meta.url))
 const ids = { issuer: 'https://nexus-staging-test.us.auth0.com/', clientId: 'synthetic-client-id',
@@ -78,9 +79,9 @@ test('staging configuration requires exact service/database scope and public Aut
   assert.throws(() => stagingConfig({ ...template, name: 'hamradiotools' }, ids), /dedicated staging/)
 })
 
-function provider({ database = null, domains = [], workers = [], denied = false, ambiguous = false, loseWrite = false } = {}) {
+function provider({ database = null, domains = [], workers = [], denied = false, ambiguous = false, loseWrite = false, grantChanges = 1 } = {}) {
   const env = { CLOUDFLARE_ACCOUNT_ID: randomBytes(16).toString('hex'), CLOUDFLARE_API_TOKEN: randomBytes(32).toString('hex') }
-  const calls = [], privateText = randomBytes(20).toString('hex')
+  const calls = [], queries = [], privateText = randomBytes(20).toString('hex')
   let current = database
   const fetcher = async (input, options) => {
     const url = new URL(input)
@@ -91,6 +92,16 @@ function provider({ database = null, domains = [], workers = [], denied = false,
     calls.push({ path: url.pathname.split('/').slice(5).join('/'), method: options.method })
     if (denied) return new Response(privateText, { status: 403 })
     let result
+    if (url.pathname.endsWith('/query')) {
+      assert.equal(options.method, 'POST')
+      assert.ok(url.pathname.endsWith(`/d1/database/${current}/query`), 'queries go only to the inventoried staging database')
+      const body = JSON.parse(options.body)
+      queries.push(body)
+      const expires = Date.now() + 365 * 86400000
+      return Response.json({ success: true, result: [/^INSERT INTO trials/.test(body.sql)
+        ? { success: true, meta: { changes: grantChanges }, results: [] }
+        : { success: true, meta: { changes: 0 }, results: [{ enabled: 1, source: 'manual', expires_at: expires }] }] })
+    }
     if (url.pathname.endsWith('/d1/database')) {
       if (options.method === 'POST') {
         assert.deepEqual(JSON.parse(options.body), { name: STAGING.name, primary_location_hint: 'enam', read_replication: { mode: 'disabled' } })
@@ -110,8 +121,54 @@ function provider({ database = null, domains = [], workers = [], denied = false,
     }
     return Response.json({ success: true, result })
   }
-  return { api: cloudflare(env, fetcher), calls, privateText }
+  return { api: cloudflare(env, fetcher), calls, queries, privateText }
 }
+
+// The workflow's grant-trial operation is how an operator with no wrangler login gets a trial
+// granted, so it writes production-shaped data with a real token. It must run exactly the statement
+// grant-trial.mjs prints (which service.test.mjs executes against D1), bind the account rather than
+// splice it, write only the inventoried staging database, and prove the result.
+test('a trial grant binds one account, writes only the staging database and reads the trial back', async () => {
+  const p = provider({ database: ids.databaseId }), account = randomUUID()
+  const result = await p.api.grantTrial(ids.databaseId, account, 365)
+  assert.deepEqual({ trial: result.trial, source: result.source }, { trial: 'active', source: 'manual' })
+  assert.ok(result.daysLeft >= 364 && !JSON.stringify(result).includes(account), 'the result reports the trial, never the account')
+  assert.equal(p.queries.length, 2)
+  const [write, read] = p.queries
+  assert.match(write.sql, /^INSERT INTO trials/)
+  assert.doesNotMatch(write.sql, /DELETE/i)
+  assert.ok(!write.sql.includes(account), 'the account travels as a parameter, never spliced into SQL')
+  assert.deepEqual(write.params, [account])
+  assert.ok(write.sql.includes(`unixepoch() + ${365 * 86400}`))
+  assert.deepEqual(read.params, [account])
+  assert.deepEqual(p.calls.map(call => call.method), ['GET', 'POST', 'POST'], 'the database was confirmed by inventory before any write')
+  // One source for the printed and executed forms: bind the account back in and they are identical.
+  const grant = trialGrant(account, 365)
+  assert.equal(grant.statement.replace('?', `'${account}'`), grant.printable)
+})
+
+test('a trial grant refuses bad input unsent, an unknown account, a foreign database and leaks no provider body', async () => {
+  const p = provider({ database: ids.databaseId })
+  for (const [account, days] of [['not-a-uuid', 14], [randomUUID(), 0], [randomUUID(), 366], [randomUUID(), 1.5],
+    [randomUUID(), Number.NaN], [`${randomUUID()}' OR '1'='1`, 14], [randomUUID().toUpperCase(), 14]]) {
+    await assert.rejects(p.api.grantTrial(ids.databaseId, account, days))
+  }
+  assert.equal(p.calls.length, 0, 'nothing was sent for invalid input')
+  // Positive control for the loop above: the same provider accepts a valid grant.
+  await p.api.grantTrial(ids.databaseId, randomUUID(), 14)
+  assert.equal(p.queries.length, 2)
+
+  const missing = provider({ database: ids.databaseId, grantChanges: 0 })
+  await assert.rejects(missing.api.grantTrial(ids.databaseId, randomUUID(), 14), /does not exist in the staging database/)
+  assert.equal(missing.queries.length, 1, 'no read-back after a grant that wrote nothing')
+
+  const foreign = provider({ database: ids.databaseId })
+  await assert.rejects(foreign.api.grantTrial(randomUUID(), randomUUID(), 14), /not the staging database/)
+  assert.equal(foreign.queries.length, 0)
+
+  const denied = provider({ database: ids.databaseId, denied: true })
+  await assert.rejects(denied.api.grantTrial(ids.databaseId, randomUUID(), 14), error => !error.message.includes(denied.privateText))
+})
 
 test('inspection makes only reads and does not misrepresent write permissions', async () => {
   const p = provider({ database: ids.databaseId, workers: [{ id: STAGING.name, tags: [STAGING.tag] }] }), result = await p.api.inspect()

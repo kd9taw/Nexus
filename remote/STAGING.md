@@ -140,7 +140,19 @@ and prints the command to run it with. It executes nothing and holds no credenti
 node remote/scripts/grant-trial.mjs --account <account-uuid> [--days 14]
 ```
 
-Both paths write `source='manual'` and UPDATE rather than DELETE. The trials row is the durable
+With no wrangler login at all, dispatch the workflow's `grant-trial` operation instead. It runs the
+same statement through the D1 query API with the Remote-scoped token, binds the account as a
+parameter, and reads the trial back:
+
+```sh
+gh workflow run remote-staging.yml --repo kd9taw/Nexus --ref main \
+  -f operation=grant-trial -f grant_account_id=<account-uuid> -f grant_days=14
+```
+
+This repository is public, and so are a run's inputs: pass the account UUID and nothing else,
+never an email address or a name.
+
+All three paths write `source='manual'` and UPDATE rather than DELETE. The trials row is the durable
 proof an account consumed its trial; removing it re-opens the reinstall and re-pair abuse the
 one-trial rule exists to refuse.
 
