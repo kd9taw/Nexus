@@ -1,0 +1,452 @@
+From e6a7e3f66582c353c28f7ddb1a278e3061342556 Mon Sep 17 00:00:00 2001
+From: KD9TAW <kd9taw@protonmail.com>
+Date: Sat, 12 Sep 2026 22:49:07 -0500
+Subject: [PATCH] verify: preserve PTT context-door probe tests (not for main
+ as-is)
+
+Found while reconciling local worktrees: an automated verification run left
+these four scenario tests uncommitted in a detached worktree. The PTT fix they
+probed is on main, but three of them drive paths main's own tests never
+exercise with PTT armed - the satellite coverage fallback keeping Phone armed,
+a real satellite pick followed by 20 m still keying the Yaesu through the real
+service loop, and an operator radio button plus a peg-locked band change still
+keying.
+
+The fourth, verify_the_adjacent_band_pick_default_defect_is_real_and_unfixed,
+is obsolete: phone_home fixed that defect, so it fails against current main.
+
+Preserved on a branch rather than landed. They are written in the
+verification-lens style and would need renaming and review before becoming
+regression guards on main, and they exercise the transmit path.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01Xxa5mYyWRrK4DQZpVYsAMd
+---
+ crates/tempo-app/src/engine.rs    |  78 ++++++++
+ crates/tempo-audio/src/service.rs | 321 ++++++++++++++++++++++++++++++
+ 2 files changed, 399 insertions(+)
+
+diff --git a/crates/tempo-app/src/engine.rs b/crates/tempo-app/src/engine.rs
+index 69ff24df..a05b7f0e 100644
+--- a/crates/tempo-app/src/engine.rs
++++ b/crates/tempo-app/src/engine.rs
+@@ -15315,6 +15315,84 @@ mod tests {
+         );
+     }
+ 
++    /// VERIFY LENS — the SATELLITE COVERAGE FALLBACK is a third door into `set_active_radio`
++    /// (`sat_fallback_radio`: the active rig provably cannot reach the downlink and exactly
++    /// one other enabled radio exists). It must not disarm the mic either.
++    #[test]
++    fn verify_the_satellite_coverage_fallback_keeps_phone_armed() {
++        use tempo_core::doppler::{DownlinkClass, Transponder};
++        let mut e = Engine::new("KD9TAW", "EN52", 0);
++        e.set_license_class("extra");
++        e.settings.ensure_radio_profiles();
++        let other = e.add_radio();
++        e.set_active_radio(0);
++        // No rule, no band lists — the shape the fallback exists for. The active rig's OWN
++        // RX ranges say it cannot hear 435 MHz, so the only possible destination is `other`.
++        e.observe_rig_rx_ranges(Some(vec![(30_000, 56_000_000)]));
++        e.set_operating_mode("phone", true);
++        assert!(e.tx_enabled(), "baseline: entering Phone arms transmit");
++        e.set_sat_transponder(Some((
++            "RS-44".to_string(),
++            0,
++            Transponder {
++                uplink_centre_hz: 145_965_000,
++                downlink_centre_hz: 435_640_000,
++                invert: true,
++                half_width_hz: 30_000,
++            },
++        )));
++        let b = e.sat_tune_nominal(DownlinkClass::Usb, 0);
++        assert_eq!(
++            e.settings.active_radio, other,
++            "scene guard: the coverage fallback handed the QSY to the only other radio ({:?})",
++            b.note
++        );
++        assert!(
++            e.tx_enabled(),
++            "the satellite coverage fallback must not take the operator's mic"
++        );
++        // …and what that MEANS at the key, measured rather than assumed: the mic is now live
++        // on the BIRD'S DOWNLINK. Before this fix the routing halt left the latch down here.
++        assert!(
++            (e.settings.dial_mhz - 435.640).abs() < 1e-6,
++            "the rig is parked on the downlink"
++        );
++        e.set_ptt(true);
++        assert!(
++            e.manual_ptt(),
++            "MEASURED CONSEQUENCE: a Phone PTT press after a satellite pick now keys the rig \
++             on the satellite DOWNLINK — the routing halt used to disarm it"
++        );
++    }
++
++    /// VERIFY LENS — the implementer flagged `band_pick_default` as an ADJACENT, UNFIXED
++    /// defect: Phone parks on the raw `segment_start` while `mode_home` lifts an LSB home by
++    /// the SSB passband, so an Extra picking 40 m in Phone lands somewhere `tx_allowed()` is
++    /// false and PTT dies through the OTHER term of `set_ptt`. This pins the claim so it is
++    /// a measured fact rather than a note. If this test ever starts failing, that defect was
++    /// fixed and this test should become the regression guard for the fix.
++    #[test]
++    fn verify_the_adjacent_band_pick_default_defect_is_real_and_unfixed() {
++        let mut e = Engine::new("KD9TAW", "EN52", 0);
++        e.set_license_class("extra");
++        e.set_operating_mode("phone", true);
++        e.pick_band("40m", Some("phone"));
++        assert!(
++            e.tx_enabled(),
++            "the Enable-TX latch survives the pick — this fix works"
++        );
++        assert!(
++            !e.tx_allowed(),
++            "…but the 40 m Phone pick still parks on a dial the license gate refuses \
++             (segment_start, not a passband-lifted home) — the adjacent defect, unfixed"
++        );
++        e.set_ptt(true);
++        assert!(
++            !e.manual_ptt(),
++            "…so PTT is STILL dead after picking 40 m in Phone, through tx_allowed"
++        );
++    }
++
+     #[test]
+     fn halt_tx_stops_and_stays_stopped() {
+         // Stop TX must actually stop: an armed QSO sequencer would otherwise
+diff --git a/crates/tempo-audio/src/service.rs b/crates/tempo-audio/src/service.rs
+index 95d33484..96997de3 100644
+--- a/crates/tempo-audio/src/service.rs
++++ b/crates/tempo-audio/src/service.rs
+@@ -7969,6 +7969,327 @@ mod tests {
+         assert!(rig.keyed, "…and Rig::ptt(true) actually ran");
+     }
+ 
++    /// VERIFY LENS — the operator's sequence driven through the REAL satellite door
++    /// (`set_sat_transponder` + `sat_tune_nominal`), not a stand-in band pick, and through
++    /// the real loop. Everything else mirrors the report: Satellites → work a transponder on
++    /// the IC-9700 → back to Phone → pick 20 m (routes to the Yaesu) → key.
++    #[test]
++    fn verify_the_real_satellite_pick_then_20m_still_keys_the_yaesu() {
++        use tempo_core::doppler::{DownlinkClass, Transponder};
++        let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
++        let (icom, icom_profile, yaesu_transport) = {
++            let mut e = engine.lock().unwrap();
++            e.set_license_class("extra");
++            let mut s = e.settings().clone();
++            s.ptt_method = "rts".to_string();
++            s.rig_model = 1042;
++            s.serial_port = "/dev/tempo-verify-cat-a".to_string();
++            s.ptt_serial_port = "/dev/tempo-verify-key-a".to_string();
++            s.rigctld_port = 4542;
++            s.audio_in = "FTDX10 codec".to_string();
++            s.audio_out = "FTDX10 codec".to_string();
++            e.apply_settings(s);
++            e.set_radio_bands(0, vec!["20m".to_string(), "40m".to_string()]);
++            let icom = e.add_radio();
++            let mut s = e.settings().clone();
++            s.ptt_method = "cat".to_string();
++            s.rig_model = 3081;
++            s.serial_port = "/dev/tempo-verify-cat-b".to_string();
++            s.ptt_serial_port = String::new();
++            s.rigctld_port = 4543;
++            s.audio_in = "IC-9700 codec".to_string();
++            s.audio_out = "IC-9700 codec".to_string();
++            e.apply_settings(s);
++            e.set_radio_bands(icom, vec!["2m".to_string(), "70cm".to_string()]);
++            e.set_active_radio(0);
++            e.set_operating_mode("phone", true);
++            let icom_profile = e
++                .settings()
++                .radios
++                .iter()
++                .find(|p| p.id == icom)
++                .unwrap()
++                .clone();
++            let yaesu_transport = Transport::from_settings(e.settings());
++            (icom, icom_profile, yaesu_transport)
++        };
++        let mut backend = MockBackend::new();
++        let mut rig = Rig::with_control(
++            Some("127.0.0.1:4542".to_string()),
++            ptt_mode_for(&yaesu_transport),
++        );
++        let mut state = loop_state();
++        state.applied = yaesu_transport;
++        let mut last_active = 0u32;
++        let pool: MonitorPool = Arc::new(Mutex::new(vec![MonitorConn {
++            id: icom,
++            transport: Transport::from_profile(&icom_profile),
++            rig: Rig::with_control(Some("127.0.0.1:4543".to_string()), PttMode::Vox),
++            rigctld_proc: None,
++            last_poll: 0.0,
++            ticks: 0,
++            smeter_supported: None,
++            freq_misses: 0,
++            open_failures: 0,
++            retry_after_ms: 0.0,
++        }]));
++
++        // 1. THE REAL SATELLITE DOOR: hold RS-44's linear transponder (70 cm down / 2 m up)
++        //    and click to tune. This is `sat_tune_nominal` → machinery_tune → tune_dial →
++        //    set_active_radio, the path the operator actually drove.
++        {
++            let mut e = engine.lock().unwrap();
++            e.set_sat_transponder(Some((
++                "RS-44".to_string(),
++                0,
++                Transponder {
++                    uplink_centre_hz: 145_965_000,
++                    downlink_centre_hz: 435_640_000,
++                    invert: true,
++                    half_width_hz: 30_000,
++                },
++            )));
++            let b = e.sat_tune_nominal(DownlinkClass::Usb, 0);
++            assert!(
++                b.pending_downlink_mhz.is_some(),
++                "scene guard: the pick actually tuned a downlink ({:?})",
++                b.note
++            );
++        }
++        assert_eq!(
++            engine.lock().unwrap().settings().active_radio,
++            icom,
++            "the satellite pick routed the active radio to the Icom"
++        );
++        loop_tick(
++            &engine,
++            &pool,
++            &mut rig,
++            &mut state,
++            &mut last_active,
++            &mut backend,
++            0.0,
++        );
++
++        // 2. Back to Phone.
++        engine.lock().unwrap().set_operating_mode("phone", true);
++        // 3. Pick 20 m — band routing hands back to the Yaesu.
++        engine.lock().unwrap().pick_band("20m", Some("phone"));
++        assert_eq!(
++            engine.lock().unwrap().settings().active_radio,
++            0,
++            "the 20 m pick routed back to the Yaesu"
++        );
++        // 4. Let the loop catch up BEFORE the thumb reaches PTT.
++        for tick in 1..=3 {
++            loop_tick(
++                &engine,
++                &pool,
++                &mut rig,
++                &mut state,
++                &mut last_active,
++                &mut backend,
++                f64::from(tick) * 20.0,
++            );
++        }
++        // 5. Key. (Scene guard first: the license gate is the OTHER term of `set_ptt`, so
++        //    prove it is not what this test is measuring.)
++        assert!(
++            engine.lock().unwrap().tx_allowed(),
++            "scene guard: the 20 m phone dial is legal for Extra — this test is about the latch"
++        );
++        engine.lock().unwrap().set_ptt(true);
++        loop_tick(
++            &engine,
++            &pool,
++            &mut rig,
++            &mut state,
++            &mut last_active,
++            &mut backend,
++            80.0,
++        );
++        assert_eq!(
++            rig.ptt_mode(),
++            &PttMode::Serial {
++                port: "/dev/tempo-verify-key-a".to_string(),
++                line: SerialLine::Rts,
++            },
++            "the active rig keys the Yaesu's RTS line on its dedicated keyline port"
++        );
++        assert!(
++            state.manual_ptt_applied,
++            "the loop issued the key after the REAL satellite → Phone → 20 m sequence"
++        );
++        assert!(rig.keyed, "…and Rig::ptt(true) actually ran");
++    }
++
++    /// VERIFY LENS — generality. The same wire-level check for the paths that change the
++    /// active radio (or the band) WITHOUT the reported sequence: the operator's own radio
++    /// button, and a peg-locked band change (no switch at all).
++    #[test]
++    fn verify_an_operator_radio_button_and_a_peg_locked_band_change_still_key() {
++        let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
++        let (second, second_profile, yaesu_transport) = {
++            let mut e = engine.lock().unwrap();
++            e.set_license_class("extra");
++            let mut s = e.settings().clone();
++            s.ptt_method = "rts".to_string();
++            s.rig_model = 1042;
++            s.serial_port = "/dev/tempo-verify2-cat-a".to_string();
++            s.ptt_serial_port = "/dev/tempo-verify2-key-a".to_string();
++            s.rigctld_port = 4552;
++            s.audio_in = "FTDX10 codec".to_string();
++            s.audio_out = "FTDX10 codec".to_string();
++            e.apply_settings(s);
++            e.set_radio_bands(0, vec!["20m".to_string(), "40m".to_string()]);
++            let second = e.add_radio();
++            let mut s = e.settings().clone();
++            s.ptt_method = "cat".to_string();
++            s.rig_model = 3081;
++            s.serial_port = "/dev/tempo-verify2-cat-b".to_string();
++            s.ptt_serial_port = String::new();
++            s.rigctld_port = 4553;
++            s.audio_in = "IC-9700 codec".to_string();
++            s.audio_out = "IC-9700 codec".to_string();
++            e.apply_settings(s);
++            e.set_radio_bands(second, vec!["2m".to_string(), "70cm".to_string()]);
++            e.set_active_radio(0);
++            e.set_operating_mode("phone", true);
++            let second_profile = e
++                .settings()
++                .radios
++                .iter()
++                .find(|p| p.id == second)
++                .unwrap()
++                .clone();
++            let yaesu_transport = Transport::from_settings(e.settings());
++            (second, second_profile, yaesu_transport)
++        };
++        let mut backend = MockBackend::new();
++        let mut rig = Rig::with_control(
++            Some("127.0.0.1:4552".to_string()),
++            ptt_mode_for(&yaesu_transport),
++        );
++        let mut state = loop_state();
++        state.applied = yaesu_transport;
++        let mut last_active = 0u32;
++        let pool: MonitorPool = Arc::new(Mutex::new(vec![MonitorConn {
++            id: second,
++            transport: Transport::from_profile(&second_profile),
++            rig: Rig::with_control(Some("127.0.0.1:4553".to_string()), PttMode::Vox),
++            rigctld_proc: None,
++            last_poll: 0.0,
++            ticks: 0,
++            smeter_supported: None,
++            freq_misses: 0,
++            open_failures: 0,
++            retry_after_ms: 0.0,
++        }]));
++
++        // A) The operator's own radio button: switch to the Icom and straight back.
++        engine.lock().unwrap().set_active_radio(second);
++        for tick in 1..=2 {
++            loop_tick(
++                &engine,
++                &pool,
++                &mut rig,
++                &mut state,
++                &mut last_active,
++                &mut backend,
++                f64::from(tick) * 20.0,
++            );
++        }
++        engine.lock().unwrap().set_active_radio(0);
++        for tick in 3..=5 {
++            loop_tick(
++                &engine,
++                &pool,
++                &mut rig,
++                &mut state,
++                &mut last_active,
++                &mut backend,
++                f64::from(tick) * 20.0,
++            );
++        }
++        assert!(
++            engine.lock().unwrap().tx_allowed(),
++            "scene guard: back on the Yaesu's 20 m phone dial, legal for Extra"
++        );
++        engine.lock().unwrap().set_ptt(true);
++        loop_tick(
++            &engine,
++            &pool,
++            &mut rig,
++            &mut state,
++            &mut last_active,
++            &mut backend,
++            140.0,
++        );
++        assert!(
++            state.manual_ptt_applied && rig.keyed,
++            "a bare operator radio-button switch must leave Phone PTT alive"
++        );
++        assert_eq!(
++            rig.ptt_mode(),
++            &PttMode::Serial {
++                port: "/dev/tempo-verify2-key-a".to_string(),
++                line: SerialLine::Rts,
++            },
++            "…on the Yaesu's own keyline"
++        );
++        engine.lock().unwrap().set_ptt(false);
++        loop_tick(
++            &engine,
++            &pool,
++            &mut rig,
++            &mut state,
++            &mut last_active,
++            &mut backend,
++            160.0,
++        );
++
++        // B) PEG-LOCK: no radio switch at all, just 20 m → 40 m on the one rig. The dial is
++        //    named explicitly (7.200 LSB, inside the Extra phone segment) so this test judges
++        //    the Enable-TX latch and nothing else — `pick_band`'s own choice of 40 m dial is a
++        //    separate question, pinned in the engine tests.
++        {
++            let mut e = engine.lock().unwrap();
++            e.set_radio_pegged(true);
++            e.set_frequency(7.200, "40m", "LSB");
++            assert_eq!(
++                e.settings().active_radio,
++                0,
++                "peg-lock pins the radio — this is a band change with NO switch"
++            );
++            assert!(e.tx_allowed(), "scene guard: 7.200 LSB is legal for Extra");
++        }
++        for tick in 9..=11 {
++            loop_tick(
++                &engine,
++                &pool,
++                &mut rig,
++                &mut state,
++                &mut last_active,
++                &mut backend,
++                f64::from(tick) * 20.0,
++            );
++        }
++        engine.lock().unwrap().set_ptt(true);
++        loop_tick(
++            &engine,
++            &pool,
++            &mut rig,
++            &mut state,
++            &mut last_active,
++            &mut backend,
++            260.0,
++        );
++        assert!(
++            state.manual_ptt_applied && rig.keyed,
++            "a peg-locked band change must leave Phone PTT alive too"
++        );
++    }
++
+     #[test]
+     fn handoff_skips_a_dead_conn_and_reopens_fresh() {
+         // The IC-9700 CAT-dead bug: a monitor conn whose rigctld failed to bind is parked as a
+-- 
+2.43.0
+
