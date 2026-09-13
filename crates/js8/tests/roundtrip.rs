@@ -10,6 +10,7 @@ mod common;
 use js8::proto::callsign::{is_base_call, pack28, unpack28, CallRef};
 use js8::proto::command::Command;
 use js8::proto::compose::frames;
+use js8::proto::crc16::checksum3;
 use js8::proto::frame::{decode_word, encode_frame, pack_data_prefix, Frame, FrameError};
 use js8::proto::jsc;
 use js8::proto::reassembly::{MessageEvent, Reassembler};
@@ -117,8 +118,17 @@ proptest! {
     }
 
     /// The reassembly safety property (Task B4.6): compose a multi-frame checksummed message,
-    /// then feed its frames with one dropped. A closed message either carries the EXACT body or
-    /// is reported incomplete/checksum-bad — a lossy stream never yields confident WRONG text.
+    /// then feed its frames with one dropped. A closed message either carries the EXACT body, or
+    /// is reported incomplete/checksum-bad, or - the one exception the protocol cannot rule out -
+    /// its text collides with the real body on the 16-bit checksum.
+    ///
+    /// This used to claim "never wrong", and proptest found the counterexample saved beside this
+    /// file: drop the middle frame of `MSG 1K  7 4 YDVD 0` at Slow and the surviving tail `0 7M6`
+    /// verifies, because CRC-16/KERMIT("0") == CRC-16/KERMIT("1K  7 4 YDVD 0") == 0x3183. JS8Call
+    /// checks the same CRC over the same text (mainwindow.cpp checksum16Valid), so it accepts the
+    /// same wrong message; a 16-bit checksum bounds this at roughly 1 in 65,536, it cannot remove
+    /// it. The assertion below pins what IS guaranteed: a wrong complete text must be a genuine
+    /// collision, so a reassembler that stopped verifying the checksum still fails here.
     #[test]
     fn reassembly_is_exact_or_incomplete_never_wrong(to in base_call(), body in "[A-Z0-9 ]{3,30}", speed in speed()) {
         let body = body.trim().to_string();
@@ -143,11 +153,13 @@ proptest! {
         let whole = feed(None);
         prop_assert_eq!(whole.len(), 1);
         prop_assert!(whole[0].complete && whole[0].text == body, "whole: {:?}", whole[0]);
-        // Dropping any one frame: no closed message may claim the wrong body as complete.
+        // Dropping any one frame: a closed message claiming the wrong body as complete is only
+        // possible through a genuine checksum collision (see the doc comment above).
         for d in 0..seq.len() {
             for m in feed(Some(d)) {
-                if m.complete {
-                    prop_assert_eq!(&m.text, &body, "lossy drop {} produced wrong complete text", d);
+                if m.complete && m.text != body {
+                    prop_assert_eq!(checksum3(&m.text), checksum3(&body),
+                        "lossy drop {} produced wrong complete text that is NOT a checksum collision: {:?}", d, m.text);
                 }
             }
         }

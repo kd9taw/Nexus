@@ -19,7 +19,11 @@
 //!   append to the body (:4004-4008); a queued `Compound` frame resolves a `<....>` (:8420-8440).
 //! - On close, buffered commands that are checksummed (`Command::is_checksummed`) VERIFY the
 //!   trailing 3-char base-41 CRC-16/KERMIT (`crc16::verify_checksum3`); on failure the message is
-//!   emitted `complete:false` with `Checksum::Bad` and the raw body — never a silently merged text.
+//!   emitted `complete:false` with `Checksum::Bad` and the raw body. The one thing verification
+//!   cannot stop is a genuine collision: a lossy or merged body whose 16-bit CRC happens to equal
+//!   the transmitted one verifies and closes complete. That is bounded near 1 in 65,536 and is
+//!   identical in JS8Call, which checks the same CRC over the same text (checksum16Valid,
+//!   mainwindow.cpp:8534) - see `tests/roundtrip.rs` and its saved counterexample.
 //! - `render_directed` reproduces the DIRECTED.TXT line JS8Call writes (:8648-8686): the join of
 //!   `"{from}: {to}{cmd}"`, the SNR/number extra, and the reassembled body, rstripped (the ♢ EOT
 //!   and trailing space are added at write time and are what the fixture sanitiser removed).
@@ -27,9 +31,10 @@
 //! ⚠️ KNOWN UPSTREAM FLAW, reproduced for parity but surfaced honestly: buffers are keyed by
 //! offset alone, so two stations transmitting on the same 50 Hz slot MERGE into one buffer. We
 //! reproduce the merge (a `First` at the offset clears the prior buffer; a stray tail attaches to
-//! whatever is open) but never present a merged body as confident text — a checksummed command
-//! whose CRC then fails closes `complete:false`/`Checksum::Bad`, and a non-checksummed merge is
-//! marked by `frames`/`complete` for the caller to judge, not asserted as correct.
+//! whatever is open) and do not present a merged body as confident text unless its checksum
+//! verifies - a checksummed command whose CRC fails closes `complete:false`/`Checksum::Bad` (a CRC
+//! collision is the bounded exception above), and a non-checksummed merge is marked by
+//! `frames`/`complete` for the caller to judge, not asserted as correct.
 //!
 //! `to: Option<CallRef>` (the interfaces field) cannot represent a compound destination
 //! ("N3CHX/P1") or an unlisted group ("@SITREP"), both of which appear in real traffic, so the
