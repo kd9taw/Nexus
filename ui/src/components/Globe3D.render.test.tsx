@@ -44,11 +44,25 @@ vi.mock('react-globe.gl', async () => {
       return () => s
     })(),
     postProcessingComposer: () => ({ addPass() {}, passes: [] }),
-    controls: () => ({ autoRotate: false, autoRotateSpeed: 0, addEventListener() {}, removeEventListener() {} }),
+    controls: () => controls,
     pointOfView: () => {},
-    pauseAnimation: () => {},
-    resumeAnimation: () => {},
+    // globe.gl's render loop, reduced to the one fact the tests read: is it running?
+    paused: false,
+    /** Frames drawn: globe.gl's resume draws one synchronously, so each resume is a frame. */
+    frames: 0,
+    pauseAnimation: () => {
+      fake.paused = true
+    },
+    resumeAnimation: () => {
+      fake.paused = false
+      fake.frames++
+    },
   }
+  // ONE controls object, and a real event dispatcher: OrbitControls fires start/change/end.
+  const controls = Object.assign(new THREE.EventDispatcher<Record<string, object>>(), {
+    autoRotate: false,
+    autoRotateSpeed: 0,
+  })
   const Globe = forwardRef<unknown, Record<string, unknown>>(function Globe(props, ref) {
     useImperativeHandle(ref, () => fake, [])
     renders.push(props)
@@ -58,12 +72,25 @@ vi.mock('react-globe.gl', async () => {
     }, [])
     return <div data-testid="globe" />
   })
-  return { default: Globe }
+  return { default: Globe, __fake: fake }
 })
 
 import Globe3D from './Globe3D'
+import * as ReactGlobe from 'react-globe.gl'
 
+type FakeGlobe = {
+  paused: boolean
+  frames: number
+  controls: () => { autoRotate: boolean; dispatchEvent: (e: { type: string }) => void }
+}
+const fake = (ReactGlobe as unknown as { __fake: FakeGlobe }).__fake
+
+/** The last ResizeObserver callback Globe3D installed — fired by hand to simulate a resize. */
+let roCallback: (() => void) | null = null
 class RO {
+  constructor(cb: () => void) {
+    roCallback = cb
+  }
   observe() {}
   unobserve() {}
   disconnect() {}
@@ -71,6 +98,9 @@ class RO {
 
 beforeEach(() => {
   renders.length = 0
+  fake.paused = false
+  fake.frames = 0
+  roCallback = null
   localStorage.clear()
   ;(globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = RO
   // `webglOk()` asks for a context; jsdom has none. And the globe only mounts once its box has
@@ -82,6 +112,8 @@ beforeEach(() => {
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(
     () => ctx as unknown as RenderingContext,
   )
+  // jsdom reports every document as hidden, and both maps skip their 1 s ticks for a hidden tab.
+  vi.spyOn(document, 'hidden', 'get').mockReturnValue(false)
   vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(600)
   vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(400)
 })
@@ -154,5 +186,124 @@ describe('Globe3D arcs follow their content, not the snapshot identity', () => {
       r.rerender(<Globe3D {...props(prop, [station('K1AB', 'FN42'), station('W6XY', 'DM12')])} />)
     })
     expect(lastArcs()).not.toBe(before)
+  })
+})
+
+// 2. THE GLOBE DRAWS ON CHANGE, NOT ON EVERY FRAME.
+//    globe.gl runs requestAnimationFrame forever and renders the bloom composer each time: ~76 fps
+//    and 238 GL draws/s in headless Chrome with every layer OFF and nothing moving. Globe3D now
+//    pauses that loop once the scene has been still for a moment, and resumes it for anything that
+//    can change a pixel: a drag/zoom (the controls), spin, a data change, a resize. What globe.gl
+//    does while resumed is measured in the browser harness, not here — this pins Globe3D's half.
+describe('Globe3D renders on change only', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  const prop = snapshot([spot('DL1AA', 50, 8, true)]) // an animated-dash arc + the QTH ring are on
+
+  async function mount() {
+    let r!: ReturnType<typeof render>
+    await act(async () => {
+      r = render(<Globe3D {...props(prop, ROSTER)} />)
+    })
+    return r
+  }
+  const settle = () => act(async () => void vi.advanceTimersByTime(5_000))
+
+  it('a still globe stops rendering — animated dashes and the QTH ring do not keep it awake', async () => {
+    await mount()
+    expect(fake.paused, 'CONTROL: it renders while the scene first comes up').toBe(false)
+    await settle()
+    expect(fake.paused).toBe(true)
+  })
+
+  it('identical 300 ms snapshots leave it asleep', async () => {
+    const r = await mount()
+    await settle()
+    const frames = fake.frames
+    for (let i = 0; i < 5; i++) {
+      await act(async () => {
+        r.rerender(<Globe3D {...props(prop, clone(ROSTER))} />)
+        vi.advanceTimersByTime(300)
+      })
+      expect(fake.paused, `snapshot ${i} woke the render loop`).toBe(true)
+    }
+    expect(fake.frames, 'nothing changed, so nothing may be drawn').toBe(frames)
+  })
+
+  it('a drag wakes it for as long as the pointer is down, then it sleeps again', async () => {
+    await mount()
+    await settle()
+    const c = fake.controls()
+    await act(async () => c.dispatchEvent({ type: 'start' }))
+    expect(fake.paused).toBe(false)
+    await act(async () => {
+      c.dispatchEvent({ type: 'change' })
+      vi.advanceTimersByTime(10_000) // a long, slow drag
+    })
+    expect(fake.paused, 'must not sleep mid-drag').toBe(false)
+    await act(async () => c.dispatchEvent({ type: 'end' }))
+    expect(fake.paused, 'damping still settling right after release').toBe(false)
+    await settle()
+    expect(fake.paused).toBe(true)
+  })
+
+  it('a wheel zoom (a lone change event) wakes it', async () => {
+    await mount()
+    await settle()
+    await act(async () => fake.controls().dispatchEvent({ type: 'change' }))
+    expect(fake.paused).toBe(false)
+    await settle()
+    expect(fake.paused).toBe(true)
+  })
+
+  it('spin keeps it rendering until spin is turned off', async () => {
+    const r = await mount()
+    await settle()
+    const spinBtn = r.container.querySelector('.globe3d-spin') as HTMLButtonElement
+    await act(async () => spinBtn.click())
+    expect(fake.controls().autoRotate).toBe(true)
+    await settle()
+    expect(fake.paused, 'spinning globe must keep rendering').toBe(false)
+    await act(async () => spinBtn.click())
+    await settle()
+    expect(fake.paused).toBe(true)
+  })
+
+  it('the 1 s breath of an open band draws ONE frame per tick and goes straight back to sleep', async () => {
+    // Heat + opening wedges are on by default and there is an opening: the pulse ticks every
+    // second. Each tick changes two material opacities, which one frame shows — holding the loop
+    // awake for a whole wake window per tick would be rendering continuously by another name.
+    const open = {
+      ...snapshot([spot('DL1AA', 50, 8, false)]),
+      openings: [{ band: '20m', mode: 'F2', octant: 'E', bearingDeg: 60, maxKm: 7000, probability: 0.7 }],
+    } as unknown as PropagationSnapshot
+    await act(async () => {
+      render(<Globe3D {...props(open, ROSTER)} />)
+    })
+    await settle()
+    expect(fake.paused).toBe(true)
+    const before = fake.frames
+    // One act per tick: a single 3 s act would batch three ticks into one commit.
+    for (let i = 0; i < 3; i++) await act(async () => void vi.advanceTimersByTime(1_000))
+    expect(fake.frames - before, 'CONTROL: the breath really did draw').toBeGreaterThanOrEqual(3)
+    expect(fake.paused, 'and never stayed awake between ticks').toBe(true)
+  })
+
+  it('a real data change wakes it', async () => {
+    const r = await mount()
+    await settle()
+    await act(async () => {
+      r.rerender(<Globe3D {...props(snapshot([spot('DL1AA', 50, 8, true), spot('VK2QQ', -33, 151, true)]), clone(ROSTER))} />)
+    })
+    expect(fake.paused).toBe(false)
+  })
+
+  it('a resize wakes it', async () => {
+    await mount()
+    await settle()
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(900)
+    await act(async () => roCallback?.())
+    expect(fake.paused).toBe(false)
   })
 })
