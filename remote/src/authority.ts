@@ -241,6 +241,52 @@ export async function access(env: RemoteEnv, row: StationRow, now: number): Prom
     policyVersion: row.policy_version, stationGeneration: row.generation,
     devices: devices.results.map(d => ({ id: d.id, generation: d.generation, approved: d.approved === 1 })) }
 }
+/** Who an anonymous caller is, for rate limiting, and the wider network they sit in.
+ *
+ *  IPv4 is the FULL address, exactly as before, and has no wider network: carrier NAT puts whole
+ *  towns behind one /24, so grouping by prefix there would refuse strangers for each other.
+ *
+ *  IPv6 is NOT the full address. Every VPS is handed a /64, 2^64 addresses it can source from at
+ *  will, so a per-address bucket is no bound at all - rotating through them drained the shared
+ *  enroll budget and nobody anywhere could pair a station. The caller is the /64, which is one
+ *  host or one LAN, and the network is the /48, which is what one home connection, one site or
+ *  one free tunnel is given (a /56 alone holds 256 /64s). Spellings are parsed, not string-sliced:
+ *  `2001:db8:1::5` and `2001:0DB8:0001:0:0:0:0:5` are the same caller.
+ *
+ *  An IPv4-mapped address is an IPv4 caller. Anything unparseable is keyed on its own text, which
+ *  is no weaker than the full-address key it replaces; Cloudflare sets this header, not the caller. */
+export function caller(address: string | null): { caller: string; network: string | null } {
+  const text = (address ?? 'local').trim().toLowerCase()
+  const groups = text.includes(':') ? ipv6(text) : null
+  if (!groups) return { caller: text, network: null }
+  if (groups.slice(0, 5).every(group => group === 0) && groups[5] === 0xffff) {
+    return { caller: [groups[6] >> 8, groups[6] & 255, groups[7] >> 8, groups[7] & 255].join('.'), network: null }
+  }
+  const prefix = (count: number) => groups.slice(0, count).map(group => group.toString(16)).join(':')
+  return { caller: `${prefix(4)}::/64`, network: `${prefix(3)}::/48` }
+}
+function ipv6(text: string): number[] | null {
+  const halves = text.split('%')[0].split('::')
+  if (halves.length > 2) return null
+  const parse = (part: string, last: boolean): number[] | null => {
+    if (!part) return []
+    const groups: number[] = [], pieces = part.split(':')
+    for (const [index, piece] of pieces.entries()) {
+      if (/^[0-9a-f]{1,4}$/.test(piece)) { groups.push(parseInt(piece, 16)); continue }
+      // A dotted IPv4 tail is legal only as the very last thing in the address.
+      const octets = piece.split('.').map(Number)
+      if (!last || index !== pieces.length - 1 || !/^\d{1,3}(\.\d{1,3}){3}$/.test(piece) || octets.some(o => o > 255)) return null
+      groups.push(octets[0] << 8 | octets[1], octets[2] << 8 | octets[3])
+    }
+    return groups
+  }
+  const head = parse(halves[0], halves.length === 1), tail = halves.length === 2 ? parse(halves[1], true) : []
+  if (!head || !tail) return null
+  if (halves.length === 1) return head.length === 8 ? head : null
+  const fill = 8 - head.length - tail.length
+  return fill >= 1 ? [...head, ...new Array<number>(fill).fill(0), ...tail] : null
+}
+
 export async function rate(env: RemoteEnv, key: string, now: number, limit = 30, windowMs = 60000): Promise<void> {
   // One bounded counter per authority/IP, rather than a new stored row each
   // minute of a long observation session. The UPSERT also arbitrates races.

@@ -1009,6 +1009,78 @@ test('a flooding caller cannot spend the shared enroll budget, and cleanup keeps
   assert.equal(after.n, 0, 'the sweep reaped it')
 })
 
+// The per-caller enroll bucket was keyed on the FULL cf-connecting-ip. One IPv6 /64 holds 2^64
+// addresses, so rotating through them walked straight past the per-caller limit and drained the
+// shared enroll-global budget: the security review's proof got a brand-new operator a 429 after
+// 994 rotated requests, with no account and no credential. A fresh runtime, because the flood
+// really does fill the shared bucket when the bug is present and would starve every later test.
+test('rotating addresses inside one IPv6 prefix cannot deny pairing to anybody else', async () => {
+  const isolated = await runtime()
+  try {
+    const at = address => ({ 'cf-connecting-ip': address })
+    const enroll = address => isolated.mf.dispatchFetch(`${isolated.origin}/api/remote/enroll`, {
+      method: 'POST', headers: { 'content-type': 'application/json', ...at(address) }, body: JSON.stringify({ name: 'Flood' }),
+    }).then(async response => { await response.body?.cancel(); return response.status })
+    const flood = async addresses => {
+      const statuses = []
+      for (let i = 0; i < addresses.length; i += 25) statuses.push(...await Promise.all(addresses.slice(i, i + 25).map(enroll)))
+      return { accepted: statuses.filter(s => s === 200).length, refused: statuses.filter(s => s === 429).length, other: statuses.filter(s => s !== 200 && s !== 429) }
+    }
+    const hex = n => n.toString(16)
+
+    // 1. THE REVIEW'S PROOF, inverted. 1005 distinct addresses in 2001:db8:1::/64 is more than the
+    //    whole 1000-per-window shared budget. Spellings are mixed on purpose - compressed, fully
+    //    expanded with leading zeros, upper case - because they are all the same /64 and a prefix
+    //    taken off the raw string would treat them as different callers.
+    const oneSubnet = Array.from({ length: 1005 }, (_, i) => [
+      `2001:db8:1::${hex(i + 1)}`,
+      `2001:0db8:0001:0000:0000:0000:${hex(i >> 16)}:${hex((i + 1) & 0xffff)}`,
+      `2001:DB8:1:0:${hex(i + 1).toUpperCase()}::1`,
+    ][i % 3])
+    const subnet = await flood(oneSubnet)
+    assert.deepEqual(subnet.other, [])
+    assert.ok(subnet.accepted >= 1, 'control: the flood really was enrolling before it was limited')
+    assert.ok(subnet.accepted <= 5, `one /64 is one caller: it got ${subnet.accepted} enrollments`)
+
+    // 2. Rotating /64s instead, inside one /48 - which is what a single home connection or a free
+    //    tunnel is given. The per-/64 bound alone would let this spend 5 x 65536 shared slots.
+    const oneSite = await flood(Array.from({ length: 300 }, (_, i) => `2001:db8:3:${hex(i)}::1`))
+    assert.deepEqual(oneSite.other, [])
+    assert.ok(oneSite.accepted >= 5, 'control: several distinct /64s really were accepted')
+    assert.ok(oneSite.accepted <= 20, `one /48 must not spend the shared budget freely: it got ${oneSite.accepted}`)
+
+    // THE PROPERTY: an operator on a different network can still pair - over IPv6 and over IPv4.
+    assert.equal(await enroll('2001:db8:2::1'), 200, 'a caller from another IPv6 network was refused')
+    assert.equal(await enroll('192.0.2.77'), 200, 'a caller on IPv4 was refused')
+
+    // Measured on the shared counter as well as on the symptom: both floods together spent a small
+    // bounded slice of it, not the whole pool.
+    const bucket = [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode('enroll-global')))]
+      .map(b => b.toString(16).padStart(2, '0')).join('')
+    const shared = await isolated.db.prepare('SELECT hits FROM rate_limits WHERE id=?').bind(bucket).first()
+    assert.ok(shared.hits <= subnet.accepted + oneSite.accepted + 2, `the shared budget spent ${shared.hits}`)
+
+    // 3. IPv4 is keyed on the full address exactly as before: five, then refused; the next address
+    //    along - same /24 - is its own caller. Carrier NAT puts whole towns behind one /24.
+    for (let i = 0; i < 5; i++) assert.equal(await enroll('192.0.2.10'), 200)
+    assert.equal(await enroll('192.0.2.10'), 429, 'control: a single IPv4 caller is still limited')
+    assert.equal(await enroll('192.0.2.11'), 200, 'a neighbouring IPv4 address is a different caller')
+  } finally { await isolated.mf.dispose() }
+})
+
+// enroll/check's per-caller bound exists to stop a stranger minting rate rows with fresh station
+// ids. Keyed on the full address, rotating inside one /64 minted them without limit again.
+test('enroll/check bounds a caller by its IPv6 /64, not by each address in it', async () => {
+  const proof = 'c'.repeat(64)
+  const check = address => app.mf.dispatchFetch(`${app.origin}/api/remote/enroll/check`, {
+    method: 'POST', headers: { 'content-type': 'application/json', 'cf-connecting-ip': address },
+    body: JSON.stringify({ id: crypto.randomUUID(), proof }),
+  }).then(async response => { await response.body?.cancel(); return response.status })
+  for (let i = 1; i <= 60; i++) assert.equal(await check(`2001:db8:c0de::${i.toString(16)}`), 410)
+  assert.equal(await check('2001:db8:c0de::ffff'), 429, 'the 61st address in the same /64 is the same caller')
+  assert.equal(await check('2001:db8:c0df::1'), 410, 'a different /64 is a different caller')
+})
+
 // enroll/check was bounded only by a bucket keyed on the station id the CALLER supplies, and
 // rate() writes one row per distinct key - so fresh random UUIDs minted unbounded rows, each
 // request refused 410 and each leaving a row behind.

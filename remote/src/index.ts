@@ -1,5 +1,5 @@
 // Same-origin browser API and outbound station admission. No radio command router.
-import { account, access, body, browserOrigin, cookie, device, digest, id, label,
+import { account, access, body, browserOrigin, caller, cookie, device, digest, id, label,
   native, proof, rate, Refusal, requireAdmin, requireEligible, requireTrial, requireUnspentIdentity, requireValue, secret, station,
   trial, TRIAL_MS, uuid } from './authority'
 import type { RemoteEnv, StationRow } from './authority'
@@ -90,12 +90,24 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
 
   if (path === 'enroll') {
     requireValue(!request.headers.has('origin'), 'originDenied')
-    // PER-IP FIRST. `rate()` increments whenever a bucket is under its OWN limit, so checking the
-    // shared bucket first let one refused caller spend a global slot on every rejected request:
+    // PER-CALLER FIRST. `rate()` increments whenever a bucket is under its OWN limit, so checking
+    // the shared bucket first let one refused caller spend a global slot on every rejected request:
     // ~1000 requests from a single host exhausted enroll-global and no operator anywhere could
     // pair a station until the fixed ten-minute window rolled. A caller already over its own
     // limit must never be able to touch the shared budget.
-    await rate(env, `enroll:${request.headers.get('cf-connecting-ip') ?? 'local'}`, now, 5, 600000)
+    //
+    // WHY THE SHARED BUDGET CANNOT BE STARVED FROM ONE NETWORK. A caller is an IPv4 address or an
+    // IPv6 /64 (see caller()), and every IPv6 caller is also capped per /48, in that order, before
+    // anything reaches enroll-global. So one /64 can spend at most 5 shared slots and one /48 at
+    // most 20, out of 1000: draining the pool takes 50 separate /48s or 200 separate IPv4
+    // addresses, which is a distributed attacker and a job for an edge rule, not for this counter.
+    // Keyed on the full address instead, one /64 spent the whole pool (security review H1).
+    // The /48 cap still sits AFTER the /64 one, so a single flooding host cannot use up its
+    // neighbours' share either. It also bounds rate_limits growth: at most one row per /64 the
+    // caller holds, where a full-address key minted one per address.
+    const { caller: from, network } = caller(request.headers.get('cf-connecting-ip'))
+    await rate(env, `enroll:${from}`, now, 5, 600000)
+    if (network) await rate(env, `enroll-network:${network}`, now, 20, 600000)
     // The sweep runs BEFORE the shared gate, and it is the service's only garbage collection:
     // enrollments, tickets and rate_limits are reaped nowhere else and there is no cron trigger.
     // Behind the shared gate, exhausting that bucket also stopped all cleanup - the denial and
@@ -118,8 +130,12 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
     // Bounded by CALLER before it is bounded by the id the caller chose. The per-station bucket
     // is keyed on attacker-supplied input, and rate() writes one rate_limits row per distinct
     // key, so without this a stranger could mint unbounded rows by sending fresh random UUIDs -
-    // each refused 410, each leaving a row behind.
-    await rate(env, `enrollcheck:${request.headers.get('cf-connecting-ip') ?? 'local'}`, now, 60, 600000)
+    // each refused 410, each leaving a row behind. The caller is an IPv4 address or an IPv6 /64,
+    // with a /48 cap behind it, for the reason given at `enroll`: keyed on the full address, one
+    // /64 rotating its addresses minted those rows without limit again.
+    const { caller: from, network } = caller(request.headers.get('cf-connecting-ip'))
+    await rate(env, `enrollcheck:${from}`, now, 60, 600000)
+    if (network) await rate(env, `enrollcheck-network:${network}`, now, 240, 600000)
     await rate(env, `enrollment:${stationId}`, now, 30)
     const pending = await env.DB.prepare('SELECT account_id,approved,confirmed FROM enrollments WHERE id=? AND proof_hash=? AND expires_at>?')
       .bind(stationId, hash, now).first<{ account_id: string | null; approved: number; confirmed: number }>()
