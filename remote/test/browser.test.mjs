@@ -136,6 +136,15 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
     const sessionDiagnostic=()=>evaluate(`(()=>{const e=document.querySelector('.app');let fiber=e?.[Object.keys(e).find(k=>k.startsWith('__reactFiber$'))],client;while(fiber){client=fiber.memoizedProps?.connection?.application;if(client)break;fiber=fiber.return}return {now:performance.now(),stale:e?.dataset.remoteStale,phase:client?.getPhase(),snapshotAge:client?.age('get_snapshot'),topics:client?.stream?.topics,waiting:client?.stream?.waiting?[...client.stream.waiting.keys()]:null,interests:client?.stream?.interests?[...client.stream.interests].map(([name,at])=>({name,age:performance.now()-at})):null,closures:window.__socketClosures,trace:window.__protocolTrace}})()`)
     async function until(expression,timeout=12000) { for(let i=0;i<Math.ceil(timeout/100);i++){ if(providerFailure)throw new Error('Simulated provider failed'); if(await evaluate(expression))return;await sleep(100) } if(operating)console.log('Operation diagnostic',expression,operationWire.slice(-30),loggedRequests.map(r=>({call:r.record.call,mode:r.record.mode})),await evaluate(`({status:document.querySelector('.remote-application-status')?.textContent,entries:[...document.querySelectorAll('.remote-log-entry')].map(e=>({text:e.textContent,error:e.dataset.operationError}))})`));throw new Error('Expected browser state did not appear') }
     const button=name=>`[...document.querySelectorAll('button')].find(e=>e.textContent===${JSON.stringify(name)})`
+    // A logManual or stationControl reply clears the client's station state in the same update
+    // that shows its outcome (operation-client.ts receive(): state:null beside controlResult or
+    // resolved), and only the next heartbeat reply restores it. Until then the Release/Take button
+    // is unmounted and the sticky session banner has a different height, so every control below
+    // it moves when that reply lands. Traced under contention: banner 116.6 px (pending) -> 61.6
+    // ("Updating station controls", outcome shown) -> 84.6 (state re-read, Release back), nav +23 px;
+    // the next tab click was measured at 61.6, dispatched 12 ms after the re-read, and landed in
+    // the rail's gap. The outcome text is the first half of the round trip; wait for both halves.
+    const stationStateRead=`!!document.querySelector('.remote-logging-authority > button')`
     async function click(expression, clickCount = 1) {
       let point
       try {
@@ -921,7 +930,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
           await measure(entry,'routed-workspace')
           await fresh();await click(entry)
           await until(`${pill(id)}?.getAttribute('aria-pressed')==='true'`)
-          await until(`document.querySelector('.remote-control-result')?.textContent.includes('confirmed')`)
+          await until(`document.querySelector('.remote-control-result')?.textContent.includes('confirmed')&&${stationStateRead}`)
           assert.equal(stationRequests.length,before+1)
           assert.deepEqual(stationRequests.at(-1).action,{action:'radio.workspace',workspace})
           assert.deepEqual(stationRequests.at(-1).context,context)
@@ -951,7 +960,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
           await fresh();await click(entry)
           await until(`${entry}?.getAttribute('aria-pressed')==='true'`)
           await until(`${pill(id)}?.getAttribute('aria-pressed')==='true'`)
-          await until(`document.querySelector('.remote-control-result')?.textContent.includes('confirmed')`)
+          await until(`document.querySelector('.remote-control-result')?.textContent.includes('confirmed')&&${stationStateRead}`)
           assert.equal(stationRequests.length,before+1)
           assert.deepEqual(stationRequests.at(-1).action,{action:'radio.tier',tier})
           assert.deepEqual(stationRequests.at(-1).context,context)
@@ -971,7 +980,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       await measure(pill(2),'switcher')
       await fresh();await click(pill(2))
       await until(`${pill(2)}?.getAttribute('aria-pressed')==='true'`)
-      await until(`document.querySelector('.remote-control-result')?.textContent.includes('confirmed')`)
+      await until(`document.querySelector('.remote-control-result')?.textContent.includes('confirmed')&&${stationStateRead}`)
       assert.equal(stationRequests.length,1)
       assert.deepEqual(stationRequests[0].action,{action:'radio.select',radioId:2})
       assert.equal(stationRequests[0].context.radioId,1)
@@ -1008,7 +1017,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         for(const type of ['keyDown','keyUp'])await browser.call('Input.dispatchKeyEvent',{type,key:'Enter',code:'Enter',windowsVirtualKeyCode:13},session)
         await until(`document.querySelector('.operate-cockpit .readout-val')?.textContent.includes('${mhz.toFixed(4)}')`)
         await until(`${pill(1)}?.getAttribute('aria-pressed')==='true'`)
-        await until(`document.querySelector('.remote-control-result')?.textContent.includes('confirmed')`)
+        await until(`document.querySelector('.remote-control-result')?.textContent.includes('confirmed')&&${stationStateRead}`)
         assert.equal(stationRequests.length,before+1)
         assert.deepEqual(stationRequests.at(-1).context,context)
         assert.equal(context.radioId,index===0?2:1)
@@ -1027,7 +1036,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         await fresh();await click(entry)
         await until(`!${entry}`)
         await until(`${pill(id)}?.getAttribute('aria-pressed')==='true'`)
-        await until(`document.querySelector('.remote-control-result')?.textContent.includes('confirmed')`)
+        await until(`document.querySelector('.remote-control-result')?.textContent.includes('confirmed')&&${stationStateRead}`)
         assert.equal(stationRequests.length,before+1)
         assert.deepEqual(stationRequests.at(-1).action,{action:'radio.mode',mode,followFrequency:true})
         assert.deepEqual(stationRequests.at(-1).context,context)
@@ -1072,7 +1081,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       const work=async(call,mode,open=()=>click(button('Needed')))=>{
         await open();await until(`!!${row(call)}`);await fresh()
         const before=stationRequests.length,context=controlContext();await click(row(call))
-        await until(visible(mode));await until(`document.querySelector('.remote-control-result')?.textContent.includes('confirmed')`)
+        await until(visible(mode));await until(`document.querySelector('.remote-control-result')?.textContent.includes('confirmed')&&${stationStateRead}`)
         assert.equal(stationRequests.length,before+1)
         assert.equal(stationRequests.at(-1).action.action,'radio.workSpot')
         assert.equal(stationRequests.at(-1).action.call,call)
@@ -1096,7 +1105,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       assert.equal(await evaluate(`${input('phone')}.value`),'N2DXPH')
       assert.ok(await evaluate(`document.querySelector('.phone-cockpit .le-hint')?.textContent.includes('14.199')`))
       await fresh();await click(`document.querySelector('.phone-cockpit .le-log-btn')`)
-      await until(`document.querySelector('.phone-cockpit .remote-log-entry')?.textContent.includes('QSO saved')`)
+      await until(`document.querySelector('.phone-cockpit .remote-log-entry')?.textContent.includes('QSO saved')&&${stationStateRead}`)
       assert.equal(loggedRequests.length,1)
       assert.deepEqual({call:loggedRequests[0].record.call,band:loggedRequests[0].record.band,freqMhz:loggedRequests[0].record.freqMhz,mode:loggedRequests[0].record.mode},{call:'N2DXPH',band:'20m',freqMhz:14.19876,mode:'SSB'})
       // Work N3DXCW from Quick Operate, so its confirmation toast is checked against Quick's
@@ -1138,7 +1147,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       await click(button('Needed'));await until(`!!${row('N4DXCW')}`);await fresh()
       loseSpotReply=true;await click(row('N4DXCW'))
       for(let i=0;i<100&&stationRequests.length<4;i++)await sleep(50)
-      await until(`document.querySelector('.remote-control-result')?.textContent.includes('may have taken effect')&&${button('Check command result')}?.disabled===false`,20000)
+      await until(`document.querySelector('.remote-control-result')?.textContent.includes('may have taken effect')&&${button('Check command result')}?.disabled===false&&${stationStateRead}`,20000)
       assert.equal(stationRequests.length,4)
       assert.equal(await evaluate(visible('cw')),false,'a lost receipt cannot navigate from the station Work hint')
       assert.equal(await evaluate(`${input('cw')}.value`),'N3DXCW')
@@ -1150,7 +1159,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       assert.ok(unknownResults>0,'the station must report the lost receipt as unknown before the operator checks it')
       loseSpotReply=false
       await click(`[...document.querySelectorAll('.remote-control-result button')].find(e=>e.textContent.includes('Check'))`)
-      await until(`document.querySelector('.remote-control-result')?.textContent.includes('confirmed')`)
+      await until(`document.querySelector('.remote-control-result')?.textContent.includes('confirmed')&&${stationStateRead}`)
       assert.equal(stationRequests.length,4,'checking a result cannot replay Work')
       assert.equal(await evaluate(visible('cw')),false,'a late result cannot replay navigation or prefill')
       assert.equal(await evaluate(`${input('cw')}.value`),'N3DXCW')
@@ -1278,7 +1287,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       // A lost append reply must survive Full/Quick switches without replay.
       loseLogReply=true
       await freshWindow();await click(`document.querySelector('.${quickMode}-cockpit .le-log-btn')`)
-      await until(`document.querySelector('.${quickMode}-cockpit .remote-log-entry')?.textContent.includes('may already be logged')`,12000)
+      await until(`document.querySelector('.${quickMode}-cockpit .remote-log-entry')?.textContent.includes('may already be logged')&&${stationStateRead}`,12000)
       assert.equal(loggedRequests.length,1);assert.equal(loggedRequests[0].record.call,'N2QUICK')
       await click(navButton('Full Nexus'));await until(`document.querySelector('.app').dataset.remotePresentation==='full'`)
       assert.equal(await evaluate(`document.querySelector('${call}')===window.__quickNodes.call&&document.querySelector('${call}').value==='N2QUICK'`),true)
@@ -1290,7 +1299,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       await evaluate(`(()=>{window.__quickResultEvents=[];for(const type of ['pointerdown','pointerup','click'])document.addEventListener(type,e=>{window.__quickResultEvents.push({type,target:e.target?.outerHTML,at:performance.now(),x:e.clientX,y:e.clientY})},{capture:true})})()`)
       await click(`[...document.querySelectorAll('.${quickMode}-cockpit .remote-log-entry button')].find(e=>e.textContent==='Check submitted QSO result')`)
       if(artifacts)await writeFile(join(artifacts,'result-click.json'),JSON.stringify({events:await evaluate('window.__quickResultEvents'),wire:operationWire.slice(-8),session:await sessionDiagnostic()},null,2))
-      await until(`document.querySelector('.${quickMode}-cockpit .remote-log-entry')?.textContent.includes('QSO saved to the station log file')`)
+      await until(`document.querySelector('.${quickMode}-cockpit .remote-log-entry')?.textContent.includes('QSO saved to the station log file')&&${stationStateRead}`)
       assert.equal(loggedRequests.length,1);assert.equal(await evaluate(`document.querySelector('${call}').value`),'')
       await click(`document.querySelector('${call}')`);await browser.call('Input.insertText',{text:'N3QSO'},session)
       applicationAvailable=false
@@ -1432,15 +1441,6 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       console.log('Compiled session layout: eight compact layouts, details, preserved authority and explicit release passed');return
     }
     if(operating){
-      // A logManual or stationControl reply clears the client's station state in the same update
-      // that shows its outcome (operation-client.ts receive(): state:null beside controlResult or
-      // resolved), and only the next heartbeat reply restores it. Until then the Release/Take button
-      // is unmounted and the sticky session banner has a different height, so every control below
-      // it moves when that reply lands. Traced under contention: banner 116.6 px (pending) -> 61.6
-      // ("Updating station controls", outcome shown) -> 84.6 (state re-read, Release back), nav +23 px;
-      // the next tab click was measured at 61.6, dispatched 12 ms after the re-read, and landed in
-      // the rail's gap. The outcome text is the first half of the round trip; wait for both halves.
-      const stationStateRead=`!!document.querySelector('.remote-logging-authority > button')`
       // Scroll a target into view and measure it while it is MOUNTED, in one page turn. Resolves null
       // only if it never mounts within 12 s; the caller's predicate runs once, on a mounted node.
       const mountedMeasure=(selector,measure)=>`new Promise(resolve=>{const deadline=performance.now()+12000,attempt=()=>{const e=document.querySelector(${JSON.stringify(selector)});if(!e)return performance.now()>deadline?resolve(null):requestAnimationFrame(attempt);e.scrollIntoView({block:'center',inline:'center',behavior:'instant'});requestAnimationFrame(()=>requestAnimationFrame(()=>{const e=document.querySelector(${JSON.stringify(selector)});if(!e)return attempt();resolve((${measure})(e))}))};attempt()})`
@@ -1505,7 +1505,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         if(label==='PSK')loseLogReply=true
         await click(`document.querySelector('${selector} .le-log-btn')`)
         if(label==='PSK'){
-          await until(`document.querySelector('${selector} .remote-log-entry')?.textContent.includes('may already be logged')`,12000)
+          await until(`document.querySelector('${selector} .remote-log-entry')?.textContent.includes('may already be logged')&&${stationStateRead}`,12000)
           assert.equal(await evaluate(`document.querySelector('${selector} .le-call').value`),call)
           await until(`document.querySelector('${selector} .remote-log-entry button')!==null`)
           assert.equal(loggedRequests[loggedRequests.length-1].record.call,call)
