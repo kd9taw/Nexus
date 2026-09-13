@@ -1134,6 +1134,55 @@ test('a code the operator merely typed cannot attach a station or burn their tri
   assert.equal(paired.entitlement.state, 'active', 'consent is what starts the clock')
 })
 
+// grant-trial.mjs is how a beta tester's trial gets extended by hand, and it is a SEPARATE copy of
+// admin/grant-trial's SQL - so it drifted. Its conflict clause overwrote started_at and source
+// outright, the exact erasure the endpoint was fixed for, and nothing tested it because the script
+// only ever printed a string. So run the statement it actually PRINTS, not a paraphrase of it.
+test('the grant script extends a trial without erasing how it began', async () => {
+  const { spawnSync } = await import('node:child_process')
+  const grant = accountId => {
+    const out = spawnSync(process.execPath,
+      [new URL('../scripts/grant-trial.mjs', import.meta.url).pathname, '--account', accountId, '--days', '14'],
+      { encoding: 'utf8' })
+    assert.equal(out.status, 0, out.stderr)
+    const match = out.stdout.match(/--command "(.*)"\n/)
+    assert.ok(match, 'positive control: the script really printed a runnable command')
+    return match[1].replace(/\\"/g, '"')
+  }
+  const row = id => app.db.prepare('SELECT started_at, source, expires_at FROM trials WHERE account_id=?').bind(id).first()
+
+  // An operator who EARNED their trial by pairing at the radio.
+  const earned = await app.owner(false), desktop = app.client()
+  const { value: enrollment } = await desktop.post('enroll', { name: 'Shack' })
+  await earned.post('pair/claim', { code: enrollment.code })
+  await earned.post('pair/confirm', { id: enrollment.id })
+  const credential = crypto.getRandomValues(new Uint8Array(32)).reduce((s, b) => s + b.toString(16).padStart(2, '0'), '')
+  await desktop.post('enroll/approve', { id: enrollment.id, proof: enrollment.proof, credential })
+  const { value: earnedSession } = await earned.post('session')
+  // Let it END first. That is the real case - a tester whose trial ran out - and it is also the
+  // only honest way to check extension: a 14-day grant on a trial that began a second ago moves
+  // expires_at by nothing, because unixepoch() is whole seconds.
+  await app.db.prepare('UPDATE trials SET expires_at=? WHERE account_id=?').bind(Date.now() - 1000, earnedSession.accountId).run()
+  const { value: lapsed } = await earned.post('session')
+  assert.equal(lapsed.entitlement.state, 'ended')
+  const before = await row(earnedSession.accountId)
+  assert.equal(before.source, 'trial')
+
+  await app.db.prepare(grant(earnedSession.accountId)).run()
+  const after = await row(earnedSession.accountId)
+  assert.equal(after.source, 'trial+manual', 'extending it by hand still records that it was earned')
+  assert.equal(after.started_at, before.started_at, 'and keeps the start it actually had')
+  assert.ok(after.expires_at > before.expires_at, 'while really extending it')
+  const { value: revived } = await earned.post('session')
+  assert.equal(revived.entitlement.state, 'active', 'and the operator is back in')
+
+  // A pure hand grant to an account that never earned one is plainly manual.
+  const invited = await app.owner(false)
+  const { value: invitedSession } = await invited.post('session')
+  await app.db.prepare(grant(invitedSession.accountId)).run()
+  assert.equal((await row(invitedSession.accountId)).source, 'manual')
+})
+
 // THE SHAPE PRODUCTION ACTUALLY SENDS. The browser authenticates with `getTokenSilently()`, which
 // returns the ACCESS token for our own API audience; the `email` scope populates the ID token and
 // /userinfo, not that one. So the claims arrive only if a login Action puts them there, and Auth0
