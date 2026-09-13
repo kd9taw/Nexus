@@ -28,8 +28,12 @@ import {
   fitRails,
   loadRailWidths,
   railRoom,
+  resetRail,
   saveRailWidths,
+  stepRail,
+  type RailFitContext,
   type RailSide,
+  type RailState,
   type RailWidths,
 } from '../../features/connectRails'
 
@@ -90,19 +94,33 @@ export function useRailWidths(
     return { room: railRoom(g.w, g.pad, g.gap, 1 + (p.left ? 1 : 0) + (p.right ? 1 : 0)), defaultPx: g.defaultPx }
   }, [gridRef])
 
-  const fit = useCallback(() => {
+  /** The box a move or a fit happens in: measured now, or the last measurement when the grid is
+   *  not mounted. */
+  const context = useCallback((): RailFitContext => {
     const m = measure()
-    if (!m) return
-    const applied = fitRails(prefRef.current!, { room: m.room, present: presentRef.current, defaultPx: m.defaultPx })
+    return {
+      room: m?.room ?? viewRef.current.room,
+      present: presentRef.current,
+      defaultPx: m?.defaultPx ?? viewRef.current.defaultPx,
+    }
+  }, [measure])
+
+  /** Re-fit from the PREFERENCES — load, window resize, a rail opening or closing, Reset layout.
+   *  This is the one path allowed to move both rails at once. */
+  const fit = useCallback(() => {
+    const ctx = context()
+    const applied = fitRails(prefRef.current!, ctx)
+    const next = { applied, room: ctx.room, defaultPx: ctx.defaultPx }
+    viewRef.current = next
     setView((v) =>
-      v.room === m.room &&
-      v.defaultPx === m.defaultPx &&
+      v.room === next.room &&
+      v.defaultPx === next.defaultPx &&
       v.applied.left === applied.left &&
       v.applied.right === applied.right
         ? v
-        : { applied, room: m.room, defaultPx: m.defaultPx },
+        : next,
     )
-  }, [measure])
+  }, [context])
 
   // Before first paint, and whenever a rail opens or closes (the room changes by a gap and a
   // track even though the box did not move).
@@ -120,29 +138,49 @@ export function useRailWidths(
     return () => ro.disconnect()
   }, [fit, gridRef])
 
+  // …and every change of the viewport TIER. A window resize fires the observer above BEFORE
+  // useViewport's next frame moves data-viewport, so that fit reads the old tier's --cn-rail
+  // default. When the flip then changes the default without resizing the grid box, nothing else
+  // re-fits — and an unsized rail growing 248 → 300 beside a stored one can overrun the map's
+  // floor, while the separators keep reporting the old tier's width and room.
+  useLayoutEffect(() => {
+    if (typeof MutationObserver === 'undefined') return
+    const mo = new MutationObserver(() => fit())
+    mo.observe(document.documentElement, { attributes: true, attributeFilter: ['data-viewport'] })
+    return () => mo.disconnect()
+  }, [fit])
+
   const widthOf = (side: RailSide) => viewRef.current.applied[side] ?? viewRef.current.defaultPx
   const otherOf = (side: RailSide) => {
     const o: RailSide = side === 'left' ? 'right' : 'left'
     return presentRef.current[o] ? widthOf(o) : 0
   }
-  const clamp = (side: RailSide, px: number) => clampRail(px, otherOf(side), measure()?.room ?? viewRef.current.room)
-  const apply = (next: RailWidths) => {
-    prefRef.current = next
-    saveRailWidths(next)
-    setView((v) => ({ ...v, applied: { left: next.left, right: next.right } }))
+  const clamp = (side: RailSide, px: number) => clampRail(px, otherOf(side), context().room)
+  /** A ONE-RAIL move: persist the preferences, render the moved rail, and leave the other rail's
+   *  applied width exactly as it was (stepRail / resetRail hold it). Never a re-fit. */
+  const move = (next: RailState) => {
+    prefRef.current = next.pref
+    saveRailWidths(next.pref)
+    const v = { ...viewRef.current, applied: next.applied }
+    viewRef.current = v
+    setView(v)
   }
+  const state = (): RailState => ({ pref: prefRef.current!, applied: viewRef.current.applied })
 
   return {
     applied: view.applied,
     widthOf,
     maxOf: (side) => clampRail(Infinity, otherOf(side), view.room),
     clamp,
-    commit: (side, px) => {
-      const v = clamp(side, px)
-      apply({ ...prefRef.current!, [side]: v })
+    commit: (side, px) => move(stepRail(state(), side, px, context())),
+    reset: (side) => move(resetRail(state(), side, context())),
+    // Reset layout: BOTH rails back to their defaults, so this one does re-fit — the defaults
+    // themselves must shrink in a box too small for them.
+    resetAll: () => {
+      prefRef.current = { left: null, right: null }
+      saveRailWidths(prefRef.current)
+      fit()
     },
-    reset: (side) => apply({ ...prefRef.current!, [side]: null }),
-    resetAll: () => apply({ left: null, right: null }),
   }
 }
 
