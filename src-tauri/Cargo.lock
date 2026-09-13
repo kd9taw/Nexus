@@ -5136,7 +5136,7 @@ dependencies = [
 
 [[package]]
 name = "tempo"
-version = "1.12.0-beta.1"
+version = "1.12.0"
 dependencies = [
  "futures-util",
  "gdk",
