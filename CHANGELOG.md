@@ -25,6 +25,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   only if you say yes. If your computer will not let Nexus start at sign-in, Nexus says so and the
   switch stays off. Starting at sign-in is an ordinary start: Nexus listens, and transmit stays off.
 
+- **Remote says "Not sent" when a command never reached the station.** On a slow link the browser
+  refuses to send a command against a station reading that is out of date, rather than sending it
+  late. It used to report that as "not confirmed", as if it might have taken effect. It now says
+  nothing reached the station, so nothing changed there, and to try again; "not confirmed" is kept
+  for a command that was sent and never answered. Stop TX is never held back this way.
+
 - **Export one POTA activation, not a date range.** The Logbook's export area now lists your
   activations — park, UTC date and contact count — and exports exactly that one. Previously the only
   filter was a date range, so an activation shared a day with any ordinary contacts you made and they
