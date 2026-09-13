@@ -292,7 +292,9 @@ describe('resizing the rails', () => {
 
       fireEvent.keyDown(sep, { key: 'ArrowRight' })
       expect(grid(container).style.getPropertyValue('--cn-rail-l')).toBe('316px')
-      expect(JSON.parse(localStorage.getItem(WIDTHS)!)).toEqual({ left: 316 })
+      // `last` records which rail the operator set most recently: it keeps its width when a
+      // smaller window cannot hold both preferences (features/connectRails fitRails).
+      expect(JSON.parse(localStorage.getItem(WIDTHS)!)).toEqual({ left: 316, last: 'left' })
       expect(sep.getAttribute('aria-valuenow')).toBe('316')
 
       // End = as wide as this box allows: the room minus the right rail's 300.
@@ -319,10 +321,108 @@ describe('resizing the rails', () => {
     const restore = fakeBoxes(1024)
     try {
       const { container } = await mount()
-      expect(grid(container).style.getPropertyValue('--cn-rail-l')).toBe(`${1024 - MAP_MIN - 300}px`)
+      // jsdom carries no sheet, so padding and gaps read as 0: the room is 1024 − MAP_MIN. The
+      // stored side is the one the operator set, so it keeps what the floored other rail leaves.
+      expect(grid(container).style.getPropertyValue('--cn-rail-l')).toBe(`${1024 - MAP_MIN - RAIL_MIN}px`)
+      expect(grid(container).style.getPropertyValue('--cn-rail-r')).toBe(`${RAIL_MIN}px`)
       expect(JSON.parse(localStorage.getItem(WIDTHS)!), 'a re-clamp must not overwrite the choice').toEqual({ left: 5000 })
     } finally {
       restore()
+    }
+  })
+
+  it('with BOTH widths stored and oversized, a keyboard step moves only its own rail and never overruns the map', async () => {
+    // D1 (found in a real browser, 2026-09-13): 600/500 fitted to 368/307 on load, then one
+    // ArrowRight on the left rail put the right rail back to its raw stored 500 — map 86.9 px,
+    // ten map controls unreachable — and left aria-valuenow above aria-valuemax.
+    localStorage.setItem(WIDTHS, JSON.stringify({ left: 600, right: 500 }))
+    // jsdom carries no sheet: padding and gaps read 0 and the tier default reads the hook's 300.
+    // A FRACTIONAL box, as a real one is (1024×768 measures 674.9 of room): a whole-pixel room
+    // hides the round-down rule that keeps a fitted pair from overrunning it.
+    const W = 955.5
+    const JSDOM_DEFAULT = 300
+    const restore = fakeBoxes(W)
+    try {
+      const { container } = await mount()
+      const px = (v: string) => {
+        const s = grid(container).style.getPropertyValue(v)
+        return s ? parseFloat(s) : JSDOM_DEFAULT // unset ⇒ the rail renders the tier default
+      }
+      const room = W - MAP_MIN
+      const assertFits = (when: string) => {
+        const l = px('--cn-rail-l')
+        const r = px('--cn-rail-r')
+        expect(l + r, `${when}: rails ${l}+${r} overrun the room ${room}`).toBeLessThanOrEqual(room)
+        for (const sep of screen.getAllByRole('separator', { name: /panel column width/ })) {
+          const now = Number(sep.getAttribute('aria-valuenow'))
+          expect(now, `${when}: ${sep.getAttribute('aria-label')} valuenow`).toBeGreaterThanOrEqual(Number(sep.getAttribute('aria-valuemin')))
+          expect(now, `${when}: ${sep.getAttribute('aria-label')} valuenow`).toBeLessThanOrEqual(Number(sep.getAttribute('aria-valuemax')))
+        }
+        return { l, r }
+      }
+      // The exact load numbers are fitRails' business (connectRails.test.ts); what is on screen
+      // here is the pair fitting, and then what one step does to it.
+      const loaded = assertFits('load')
+      expect(loaded.l, 'control: the stored pair really was squeezed on load').toBeLessThan(600)
+      expect(loaded.r, 'control: the stored pair really was squeezed on load').toBeLessThan(500)
+
+      const left = screen.getByRole('separator', { name: 'Left panel column width' })
+      fireEvent.keyDown(left, { key: 'ArrowRight' })
+      expect(assertFits('ArrowRight'), 'no room to grow: nothing moves, least of all the right rail').toEqual(loaded)
+
+      fireEvent.keyDown(left, { key: 'ArrowLeft' })
+      expect(assertFits('ArrowLeft')).toEqual({ l: loaded.l - 16, r: loaded.r })
+      expect(JSON.parse(localStorage.getItem(WIDTHS)!).right, 'the right rail keeps its preference').toBe(500)
+
+      fireEvent.doubleClick(left)
+      assertFits('double-click reset')
+      expect(px('--cn-rail-r'), 'resetting one rail leaves the other where it is').toBe(loaded.r)
+    } finally {
+      restore()
+    }
+  })
+
+  it('re-fits when the viewport TIER flips, not only when the grid box resizes', async () => {
+    // A window resize fires the grid's ResizeObserver BEFORE useViewport's next frame moves
+    // data-viewport, so that fit reads the OLD tier's --cn-rail default. When the tier flip then
+    // changes the default without changing the box, nothing re-fits: widening sm → md here grows
+    // an unsized rail 248 → 300 beside a stored 450 in a 748 room — 2 px past the map's floor.
+    // jsdom resolves a sheet's custom property through [data-viewport] (probed), so the sheet the
+    // tier default lives in is modelled exactly.
+    const sheet = document.createElement('style')
+    sheet.textContent = ".connect { --cn-rail: 300px; } [data-viewport='sm'] .connect { --cn-rail: 248px; }"
+    document.head.appendChild(sheet)
+    const html = document.documentElement
+    const vpBefore = html.getAttribute('data-viewport')
+    html.setAttribute('data-viewport', 'sm')
+    localStorage.setItem(WIDTHS, JSON.stringify({ right: 450, last: 'right' }))
+    const W = 1028.5 // jsdom: room = W − MAP_MIN = 748.5
+    const restore = fakeBoxes(W)
+    try {
+      const { container } = await mount()
+      const shownWidth = (v: string, tierDefault: number) => {
+        const s = grid(container).style.getPropertyValue(v)
+        return s ? parseFloat(s) : tierDefault
+      }
+      const room = W - MAP_MIN
+      // control: at sm the pair fits with the left rail on the stylesheet default
+      expect(grid(container).style.getPropertyValue('--cn-rail-l')).toBe('')
+      expect(shownWidth('--cn-rail-l', 248) + shownWidth('--cn-rail-r', 248)).toBeLessThanOrEqual(room)
+
+      await act(async () => {
+        html.setAttribute('data-viewport', 'md')
+        // one MutationObserver turn + a React commit
+        await new Promise((r) => setTimeout(r, 0))
+      })
+      const l = shownWidth('--cn-rail-l', 300)
+      const r = shownWidth('--cn-rail-r', 300)
+      expect(l + r, `after sm → md the rails render ${l}+${r} in a ${room} room — the map is below its floor`).toBeLessThanOrEqual(room)
+      expect(r, 'the stored rail was set last, so it keeps its width').toBe(450)
+    } finally {
+      restore()
+      sheet.remove()
+      if (vpBefore == null) html.removeAttribute('data-viewport')
+      else html.setAttribute('data-viewport', vpBefore)
     }
   })
 
