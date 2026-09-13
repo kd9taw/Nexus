@@ -19,7 +19,7 @@ for (const tier of ['FT8', 'FT4']) for (const prompt of [false, true]) test(`act
     await probe.ready()
     const browser = await app.owner(), begin = await probe.send({ type: 'begin', name: 'FT QSO synthetic bench' })
     const stationId = begin.status.pairingId
-    await browser.post('pair/claim', { code: begin.status.pairingCode }); await probe.send({ type: 'refresh' })
+    await browser.post('pair/claim', { code: begin.status.pairingCode }); await browser.post('pair/confirm', { id: stationId }); await probe.send({ type: 'refresh' })
     assert.equal((await probe.send({ type: 'approve', enrollmentId: stationId, accountId: browser.accountId })).ok, true)
     const { value: device, response } = await browser.post(`stations/${stationId}/device`, { name: 'FT logging browser' })
     browser.setCookie(response.headers.get('set-cookie')); await probe.send({ type: 'refresh' })
@@ -159,6 +159,12 @@ test('actual native controller pairs, stores authority, publishes real DTOs, dis
     const check = await probe.send({ type: 'refresh' })
     assert.equal(check.status.accountId, browser.accountId)
     const approve = { type: 'approve', enrollmentId: stationId, accountId: browser.accountId }
+    // Typing a code is not agreeing to attach the station. Approving at the shack first must be
+    // refused with a reason the operator can act on - not "serviceUnavailable" - and create nothing.
+    const early = await probe.send(approve)
+    assert.equal(early.ok, false); assert.equal(early.error, 'awaitingConfirmation')
+    assert.equal((await app.db.prepare('SELECT COUNT(*) AS count FROM stations WHERE id=?').bind(stationId).first()).count, 0)
+    await browser.post('pair/confirm', { id: stationId })
     await probe.send({ type: 'vaultFailure', enabled: true })
     const refused = await probe.send(approve)
     assert.equal(refused.ok, false); assert.equal(refused.error, 'credentialStoreUnavailable')
@@ -612,7 +618,7 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
  let socket
  try{
   await probe.ready();const browser=await app.owner();const begin=await probe.send({type:'begin',name:'Logging synthetic bench'}),stationId=begin.status.pairingId
-  await browser.post('pair/claim',{code:begin.status.pairingCode});await probe.send({type:'refresh'});assert.equal((await probe.send({type:'approve',enrollmentId:stationId,accountId:browser.accountId})).ok,true)
+  await browser.post('pair/claim',{code:begin.status.pairingCode});await browser.post('pair/confirm',{id:begin.status.pairingId});await probe.send({type:'refresh'});assert.equal((await probe.send({type:'approve',enrollmentId:stationId,accountId:browser.accountId})).ok,true)
   const {value:device,response}=await browser.post(`stations/${stationId}/device`,{name:'Logging browser'});browser.setCookie(response.headers.get('set-cookie'));await probe.send({type:'refresh'});await probe.send({type:'device',deviceId:device.deviceId,approve:true});await probe.send({type:'enable'})
   const roomNamespace=await app.mf.getDurableObjectNamespace('STATIONS'),room=roomNamespace.get(roomNamespace.idFromName(stationId));for(let i=0;i<30&&!(await roomStatus(room)).online;i++)await delay(100);assert.equal((await roomStatus(room)).online,true)
   assert.deepEqual(await probe.send({type:'seedLogging'}),{count:0,adif:'',txEnabled:false})

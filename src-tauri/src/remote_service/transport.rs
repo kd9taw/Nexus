@@ -109,6 +109,11 @@ impl Client {
                 Some("stationRevoked") => "stationRevoked",
                 Some("trialEnded") => "trialEnded",
                 Some("trialDisabled") => "trialDisabled",
+                // Approve refused because the browser has not yet agreed to attach this station.
+                // Unnamed, a 409 falls through to serviceUnavailable - which tells an operator
+                // standing at the radio that the service is down, when the fix is one click in
+                // their browser.
+                Some("awaitingConfirmation") => "awaitingConfirmation",
                 _ => match status {
                     401 | 403 => "accessDenied",
                     410 => "pairingExpired",

@@ -103,3 +103,20 @@ it('keeps transmit revocation available during a pending refresh and discards it
  expect(screen.queryByRole('button',{name:'Revoke transmission permission'})).toBeNull()
  expect(screen.getByRole('button',{name:'Allow FT8/FT4 transmission'})).toBeTruthy()
 })
+
+// Approving at the radio before agreeing in the browser used to fall through to the generic refusal,
+// which points at the network. The service refused for a reason the operator can fix in one click.
+it('tells an operator to confirm in the browser when they approve at the shack first', async () => {
+  const status: RemoteStationStatus = { phase: 'approval', origin: 'https://remote-staging.hamradiotools.io',
+    stationId: null, accountId: crypto.randomUUID(), pairingId: crypto.randomUUID(),
+    pairingCode: crypto.randomUUID().replace(/-/g,'').slice(0,16), expiresAt: Date.now()+600000, devices: [],
+    error: 'awaitingConfirmation' }
+  const invoke = async (command: string) => {
+    if (command === 'get_remote_station_status') return status
+    throw new Error('unexpectedCommand')
+  }
+  window.__TAURI_INTERNALS__ = { invoke: invoke as NonNullable<Window['__TAURI_INTERNALS__']>['invoke'] }
+  render(<RemoteStation />)
+  const alert = await screen.findByRole('alert')
+  expect(alert.textContent).toMatch(/confirm this station in your browser/i)
+})

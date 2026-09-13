@@ -124,11 +124,12 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
     const pending = await env.DB.prepare('SELECT account_id,approved,confirmed FROM enrollments WHERE id=? AND proof_hash=? AND expires_at>?')
       .bind(stationId, hash, now).first<{ account_id: string | null; approved: number; confirmed: number }>()
     requireValue(pending, 'pairingExpired', 410)
-    // `confirmed` rides on check so the shack can say WHY it is still waiting. Without it a station
-    // whose code was typed sits on "waiting for approval" with nothing to approve, and the operator
-    // has no way to learn that the browser is holding a question for them.
-    if (path.endsWith('check')) return json({ accountId: pending.account_id, approved: pending.approved === 1,
-      confirmed: pending.confirmed === 1 })
+    // Exactly these two fields, and NEVER a third. The shack parses this with deny_unknown_fields
+    // (src-tauri remote_service/mod.rs, `struct Check`), so an added field fails every check on every
+    // Nexus build that predates it - pairing silently stops working. `confirmed` was added here for a
+    // day and did precisely that. The browser learns it from session.pending; the shack learns it as
+    // an `awaitingConfirmation` refusal from approve, which it can already parse.
+    if (path.endsWith('check')) return json({ accountId: pending.account_id, approved: pending.approved === 1 })
     requireValue(pending.account_id, 'accountNotClaimed', 409)
     // THE GATE. Typing a code is not agreement to attach a station: a code the operator RECEIVED
     // from somebody else reaches exactly this point, and approval happens at the sender's own
