@@ -7,11 +7,30 @@ import { createServer } from 'node:net'
 import assert from 'node:assert/strict'
 import WebSocket from 'ws'
 
-export async function runtime({ bindings = {} } = {}) {
-  const reservation = createServer()
-  await new Promise(resolve => reservation.listen(0, '127.0.0.1', resolve))
-  const port = reservation.address().port
-  await new Promise(resolve => reservation.close(resolve))
+// The Worker checks requests against PUBLIC_REMOTE_ORIGIN, so its port has to be chosen before
+// workerd starts, and between the choice and workerd's bind nothing holds it. A port taken with
+// listen(0) comes from the kernel's ephemeral range - the same pool that Miniflare's loopback
+// server, workerd's port-0 sockets, Chrome's --remote-debugging-port=0 and every outgoing
+// connection draw from - and one of them took it in staging run 34769726458 ("::bind(...):
+// Address already in use; 127.0.0.1:35651"). Choose a free port BELOW that range instead, where no
+// port-0 allocation can land. (A port Miniflare picks itself cannot work: the origin binding has to
+// name it, and setOptions restarts workerd, releasing and rebinding the port.)
+async function freePortOutsideEphemeralRange() {
+  let low = 32768
+  try { low = Number((await readFile('/proc/sys/net/ipv4/ip_local_port_range', 'utf8')).trim().split(/\s+/)[0]) || low } catch {}
+  const floor = 20000, ceiling = Math.min(low, 32768)
+  assert.ok(ceiling > floor, `no non-ephemeral port range below ${low}`)
+  for (let attempt = 0; attempt < 64; attempt++) {
+    const candidate = floor + Math.floor(Math.random() * (ceiling - floor))
+    const probe = createServer()
+    const free = await new Promise(resolve => { probe.once('error', () => resolve(false)); probe.listen(candidate, '127.0.0.1', () => resolve(true)) })
+    if (free) { await new Promise(resolve => probe.close(resolve)); return candidate }
+  }
+  throw new Error(`no free port found in ${floor}-${ceiling - 1}`)
+}
+
+export async function runtime({ bindings = {}, port: requestedPort } = {}) {
+  const port = requestedPort ?? await freePortOutsideEphemeralRange()
   const origin = `http://127.0.0.1:${port}`, issuer = 'https://identity.remote-test.invalid/'
   const { privateKey, publicKey } = await generateKeyPair('RS256', { extractable: true })
   const publicJwk = { ...await exportJWK(publicKey), kid: crypto.randomUUID(), alg: 'RS256', use: 'sig' }
@@ -34,18 +53,28 @@ export async function runtime({ bindings = {} } = {}) {
       return Response.json({ keys: [publicJwk] })
     },
   }))
-  await mf.ready
-  const db = await mf.getD1Database('DB')
-  // Every migration, in order - never one named file. Pinning this to 0001 meant a newly added
-  // migration silently did not exist in the test database, and the suite went red against a
-  // healthy build. Sorting the directory keeps this correct for 0003 without another edit.
-  const migrationsDir = new URL('../migrations/', import.meta.url)
-  for (const file of (await readdir(migrationsDir)).filter(name => name.endsWith('.sql')).sort()) {
-    // Strip -- comment lines before splitting: a semicolon inside a comment would otherwise cut
-    // it in half and hand D1 a statement that is nothing but prose, which it rejects outright.
-    const migration = (await readFile(new URL(file, migrationsDir), 'utf8'))
-      .split('\n').filter(line => !line.trimStart().startsWith('--')).join('\n')
-    for (const statement of migration.split(';').map(s => s.trim()).filter(Boolean)) await db.prepare(statement).run()
+  // Until this function returns, no caller holds `mf` and nobody else can dispose it. A failed
+  // start used to leave Miniflare's loopback server and dispatchers open, which kept node --test
+  // alive after the last case (55 minutes in staging run 34769726458, then the job timeout).
+  let db
+  try {
+    await mf.ready
+    db = await mf.getD1Database('DB')
+    // Every migration, in order - never one named file. Pinning this to 0001 meant a newly added
+    // migration silently did not exist in the test database, and the suite went red against a
+    // healthy build. Sorting the directory keeps this correct for 0003 without another edit.
+    const migrationsDir = new URL('../migrations/', import.meta.url)
+    for (const file of (await readdir(migrationsDir)).filter(name => name.endsWith('.sql')).sort()) {
+      // Strip -- comment lines before splitting: a semicolon inside a comment would otherwise cut
+      // it in half and hand D1 a statement that is nothing but prose, which it rejects outright.
+      const migration = (await readFile(new URL(file, migrationsDir), 'utf8'))
+        .split('\n').filter(line => !line.trimStart().startsWith('--')).join('\n')
+      for (const statement of migration.split(';').map(s => s.trim()).filter(Boolean)) await db.prepare(statement).run()
+    }
+  } catch (error) {
+    // dispose() rethrows the startup error it already saw; the original is the one to report.
+    await mf.dispose().catch(() => {})
+    throw error
   }
   const token = (subject, claims = {}, key = privateKey) => new SignJWT({ azp: 'remote-test-client', ...claims })
     .setProtectedHeader({ alg: 'RS256', kid: publicJwk.kid }).setIssuer(issuer).setAudience('remote-test-api')
