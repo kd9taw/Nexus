@@ -37,6 +37,7 @@ import { PaneFrame } from './connect/PaneFrame'
 import type { PaneContext } from './connect/paneContext'
 import { useConnectConfig, type SlotId } from '../features/connectConfig'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
+import { loadIntentSetup, saveIntentSetup } from '../features/intentMapSettings'
 import { useEntityCentroids } from '../features/entityCentroids'
 import { t } from '../i18n'
 import { NavigationMapContext, useNavigation, useSatelliteLive } from '../remote-web/useNavigation'
@@ -151,6 +152,11 @@ export function ConnectView({
     persisted('nexus.connect.intent', ['dx', 'pota', 'casual', 'vhf'] as const, 'dx'),
   )
   const pickIntent = (id: MapIntent) => {
+    // PER-INTENT 2-D/3-D (features/intentMapSettings): the intent being left keeps the renderer it
+    // was on, and the next one comes back on its own. The map keeps the rest of each intent's setup.
+    saveIntentSetup(intent, { map3d })
+    const next = loadIntentSetup(id)?.map3d
+    if (next != null) setMap3d(next)
     setIntent(id)
     surfaceSet('nexus.connect.intent', id)
   }
@@ -159,17 +165,18 @@ export function ConnectView({
   // can actually handle it (gpuCapableForGlobe) — capable PCs get the good globe out of the
   // box, low-end/software renderers stay on the everywhere-compatible 2-D map.
   // PER-SURFACE: 2-D/3-D is per-window rendering AND per-window GPU cost — the good globe
-  // on the showpiece screen, the cheap map on the working board.
+  // on the showpiece screen, the cheap map on the working board. And PER-INTENT: it is part of
+  // each intent's remembered map setup (the old shared `nexus.connect.map3d` migrates into the
+  // intent active on first load).
   const [map3d, setMap3d] = useState<boolean>(() => {
-    const saved = surfaceGet('nexus.connect.map3d')
-    if (saved === '1') return true
-    if (saved === '0') return false
+    const saved = loadIntentSetup(intent)?.map3d
+    if (saved != null) return saved
     return gpuCapableForGlobe()
   })
   const toggleMap3d = () =>
     setMap3d((v) => {
       const nv = !v
-      surfaceSet('nexus.connect.map3d', nv ? '1' : '0')
+      saveIntentSetup(intent, { map3d: nv })
       return nv
     })
   // FULL-SCREEN MAP (operator request): the map fills the window and everything framing it

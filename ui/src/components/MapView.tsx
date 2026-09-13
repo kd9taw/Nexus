@@ -60,6 +60,7 @@ import { decollideLabels } from '../features/mapLabels'
 import { SAT_ICON_RECTS, SAT_ICON_TILT_DEG } from '../features/satIcon'
 import { surfaceGet, surfaceHasOwn, surfaceSet } from '../features/windowScope'
 import { useStableByKey } from '../features/useStableByKey'
+import { loadIntentSetup, saveIntentSetup } from '../features/intentMapSettings'
 import {
   gridToLatLon,
   haversineKm,
@@ -121,12 +122,13 @@ interface Props {
   /** Connect intent preset — applied (soft) on change. Omitted = no preset. */
   intent?: MapIntent
   /** This surface exists SOLELY for its `intent` (a dedicated pop-out like the POTA map), so it
-   * must NOT inherit another surface's layer picks. A general map inherits the primary surface's
-   * stored layers on first open (the #199 carry-over via `surfaceGet`) — right when a torn-off
+   * must NOT inherit another surface's map setup. A general map inherits the primary surface's
+   * stored setup on first open (the #199 carry-over via `surfaceGet`) — right when a torn-off
    * Connect map should keep the operator's picks. But on a dedicated surface that inherited value
-   * is a DIFFERENT purpose's setup, and it silently suppressed this intent's own preset (e.g. the
-   * POTA map opening with Parks off). Set true to make the preset yield only to a pick made ON
-   * THIS surface. Default false keeps every existing (inheriting) call site unchanged. */
+   * is another surface's setup, and it once silently suppressed this intent's own preset (the
+   * POTA map opening with Parks off). Set true to make the preset yield only to a setup saved ON
+   * THIS surface (see features/intentMapSettings). Default false keeps every inheriting call
+   * site unchanged. */
   dedicatedIntent?: boolean
   /** The map's full-screen toggle changed (the toolbar button, or Escape leaving it). The map
    * hides its OWN chrome by itself; a host that frames it — Connect, with a header, four rail
@@ -240,26 +242,22 @@ const INTENT_PRESETS: Record<
   vhf: { kind: 'globe', colorBy: 'snr', layers: { dxped: false, rings: true, heat: true, openings: true } },
 }
 
-/** The operator's chosen projection is persisted (like the Connect intent) so a torn-off
- * window — and the next launch — restore the SAME globe/beam/world they were using, instead
- * of snapping back to the intent preset (the mount-time intent effect would otherwise reset
- * it). Still load-bearing now that every intent presets to a globe: the operator's own
- * Beam/World pick has to survive a detach and a relaunch. */
-// PER-SURFACE: the projection suits the WINDOW's aspect (a tall pop-out and a wide main
-// map want different ones). A brand-new surface still inherits the main window's pick —
-// that carry-over is the reason this key exists, and `surfaceGet` preserves it.
-const PROJECTION_KEY = 'nexus.connect.projection'
-function loadProjection(): Projection | null {
-  const v = surfaceGet(PROJECTION_KEY)
-  return v === 'globe' || v === 'aeqd' || v === 'world' ? v : null
+/** An intent's preset applied SOFTLY over a layer table: only the layers it names change, so the
+ *  operator's other picks carry into an intent they open for the first time. */
+function withIntentPreset(L: Record<LayerKey, Layer>, intent: MapIntent): Record<LayerKey, Layer> {
+  const p = INTENT_PRESETS[intent]
+  const next = { ...L }
+  for (const k of Object.keys(p.layers) as LayerKey[]) {
+    next[k] = { ...next[k], visible: p.layers[k]! }
+  }
+  return next
 }
 
-// The operator's layer picks (#199) — same per-surface scoping and carry-over as the
-// projection above, and for the same reason: which layers you run is a deliberate setup,
-// and it reset to defaults-plus-preset on every launch while the control beside it
-// persisted. The embedded sat/APRS maps never touch this key (they force their own sets,
-// exactly as the detail globe force-locks its projection).
-const LAYERS_KEY = 'nexus.connect.layers'
+// THE OPERATOR'S MAP SETUP — projection, layer picks (#199) and colour mode — is remembered PER
+// INTENT and PER SURFACE by features/intentMapSettings (with the 2-D/3-D choice ConnectView keeps
+// there too). It used to be one shared projection key and one shared layer key that every intent
+// switch overwrote with that intent's preset. The embedded sat/APRS maps never touch it: they
+// force their own layer sets, exactly as the detail globe force-locks its projection.
 
 /** Stored blob → a full layer table, or `null` for anything unusable. Everything accepted
  *  is CLAMPED against the current table: unknown keys dropped, missing keys defaulted,
@@ -273,6 +271,11 @@ export function layersFromStored(v: string | null): Record<LayerKey, Layer> | nu
   } catch {
     return null
   }
+  return layersFromValue(raw)
+}
+
+/** `layersFromStored` for an already-parsed value (the per-intent store holds the table as JSON). */
+function layersFromValue(raw: unknown): Record<LayerKey, Layer> | null {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null
   const blob = raw as Record<string, { visible?: unknown; opacity?: unknown }>
   const out = { ...DEFAULT_LAYERS }
@@ -670,30 +673,40 @@ export function MapView({
         .map((s) => ({ lat: s.lat, lon: s.lon, muf: s.mufMhz as number })),
     [muf],
   )
-  // Restore the operator's persisted projection (so a detached window shows the same
-  // globe/beam/world); fall back to the intent preset, then the globe. The embedded
-  // detail globe force-locks 'globe' and ignores the persisted pick (it's a transient
-  // inset — reading/writing that key would fight the operator's real Connect-map view).
-  const [kind, setKind] = useState<Projection>(() =>
-    embedded ? 'globe' : loadProjection() ?? (intent ? INTENT_PRESETS[intent].kind : 'globe'),
+  // THE OPERATOR'S SETUP FOR THIS INTENT (features/intentMapSettings): what they left here, or —
+  // the first time this intent is used on this surface — its preset. The embedded detail/APRS maps
+  // force their own projection and layers and never read or write it (they are transient insets;
+  // touching it would fight the operator's real Connect map).
+  const [initialSetup] = useState(() =>
+    !embedded && intent ? loadIntentSetup(intent, dedicatedIntent) : null,
   )
-  const [colorBy, setColorBy] = useState<'need' | 'snr'>('need')
+  const [kind, setKind] = useState<Projection>(() =>
+    embedded ? 'globe' : initialSetup?.kind ?? (intent ? INTENT_PRESETS[intent].kind : 'globe'),
+  )
+  const [colorBy, setColorBy] = useState<'need' | 'snr'>(
+    () => initialSetup?.colorBy ?? (intent ? INTENT_PRESETS[intent].colorBy : 'need'),
+  )
   const [pathMode, setPathMode] = useState<'sp' | 'lp'>('sp')
   const [layers, setLayers] = useState(() =>
     embedded
       ? embedded.aprs
         ? APRS_EMBED_LAYERS
         : EMBED_LAYERS
-      : (layersFromStored(surfaceGet(LAYERS_KEY)) ?? DEFAULT_LAYERS),
+      : (layersFromValue(initialSetup?.layers) ??
+        (intent ? withIntentPreset(DEFAULT_LAYERS, intent) : DEFAULT_LAYERS)),
   )
-  // Whether a persisted layer pick seeded the state above — the intent preset yields to it
-  // on first mount, exactly as it yields to the persisted projection. A DEDICATED surface
-  // (`dedicatedIntent`) counts only a pick made ON ITSELF: `surfaceGet` above still inherits the
-  // primary surface's layers so the map opens on something sensible, but an inherited value is
-  // another surface's setup, not a reason to suppress THIS surface's preset — see the prop doc.
-  const hadStoredLayers = useRef(
-    !embedded && (dedicatedIntent ? surfaceHasOwn(LAYERS_KEY) : surfaceGet(LAYERS_KEY) != null),
-  )
+  // SWITCHING INTENT restores that intent's setup — or applies its preset if it has never been used
+  // here. Done DURING RENDER (React's "adjust state when a prop changes" pattern), not in an effect:
+  // the persist effect below then never sees the new intent paired with the old intent's state, so
+  // it can never write one intent's picks into another's record.
+  const [setupIntent, setSetupIntent] = useState(intent)
+  if (!embedded && intent && intent !== setupIntent) {
+    setSetupIntent(intent)
+    const saved = loadIntentSetup(intent, dedicatedIntent)
+    setKind(saved?.kind ?? INTENT_PRESETS[intent].kind)
+    setColorBy(saved?.colorBy ?? INTENT_PRESETS[intent].colorBy)
+    setLayers((L) => layersFromValue(saved?.layers) ?? withIntentPreset(L, intent))
+  }
   // Full screen: everything but the map goes. The embedded detail globe has no chrome to
   // hide and no toolbar to hold the way back, so it is never full-screen.
   const [full, setFull] = useState(() => !embedded && loadFull())
@@ -904,52 +917,15 @@ export function MapView({
     }, aprsRedraw)
     return () => clearInterval(id)
   }, [aprsRedraw])
-  // Apply the Connect intent preset (soft) whenever it changes — sets projection,
-  // default color-by, and which optional layers are on. The user can still tweak
-  // any control afterwards; switching intent re-applies.
-  const intentFirstRun = useRef(true)
+  // Persist this intent's setup whenever any of it changes — a projection pick, a layer toggle or
+  // opacity nudge, the colour mode, a Reset, or a preset applied on first use — so the next visit,
+  // window and launch restore it. Writing on mount is what makes a preset a FIRST-use default: the
+  // intent has a record from then on. (On a `dedicatedIntent` surface that record is this surface's
+  // own, so its preset forces exactly once.) The embedded maps are exempt, as above.
   useEffect(() => {
-    if (!intent) return
-    const p = INTENT_PRESETS[intent]
-    // On the FIRST mount, honor the persisted projection (kind is seeded from it above) so a
-    // detached window keeps the operator's globe/beam/world. The preset only re-sets the
-    // projection when the operator actively SWITCHES intent afterward. colorBy/layers always
-    // follow the intent — they're derived identically in every window, so they carry over.
-    if (!intentFirstRun.current) setKind(p.kind)
-    // Same first-mount rule for the layers (#199): a persisted pick seeded the state, and
-    // the preset only re-applies when the operator actively SWITCHES intent afterward. "A pick"
-    // means a pick this surface should honour — for a `dedicatedIntent` surface only its OWN
-    // stored layers count (see `hadStoredLayers`), so the true first open of a dedicated pop-out
-    // takes its intent's preset instead of inheriting another surface's layers. The persist
-    // effect writes this surface's own key on mount, so that force applies exactly ONCE: a later
-    // toggle here is then a pick of its own and is honoured on reopen.
-    const skipLayers = intentFirstRun.current && hadStoredLayers.current
-    intentFirstRun.current = false
-    setColorBy(p.colorBy)
-    if (skipLayers) return
-    setLayers((L) => {
-      const next = { ...L }
-      for (const k of Object.keys(p.layers) as LayerKey[]) {
-        next[k] = { ...next[k], visible: p.layers[k]! }
-      }
-      return next
-    })
-  }, [intent])
-
-  // Persist the projection whenever it changes (operator's Globe/Beam/World pick, or a
-  // preset applied on intent switch) so the next window/launch restores it. The embedded
-  // detail globe is exempt — it force-locks 'globe' and must never clobber that pick.
-  useEffect(() => {
-    if (embedded) return
-    surfaceSet(PROJECTION_KEY, kind)
-  }, [kind, embedded])
-
-  // Persist the layer picks the same way (#199) — every toggle, opacity nudge, preset
-  // application and Reset writes through, so the next launch opens the map you left.
-  useEffect(() => {
-    if (embedded) return
-    surfaceSet(LAYERS_KEY, JSON.stringify(layers))
-  }, [layers, embedded])
+    if (embedded || !setupIntent) return
+    saveIntentSetup(setupIntent, { kind, layers, colorBy }, dedicatedIntent)
+  }, [kind, layers, colorBy, setupIntent, embedded, dedicatedIntent])
 
   // Tell the host, including on mount so a surface restored as full-screen opens with the
   // host's chrome already gone rather than flashing it away a frame later.

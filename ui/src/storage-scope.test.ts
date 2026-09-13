@@ -30,6 +30,10 @@ export const PER_SURFACE = [
   'nexus.connect.globe3d.layers',
   'nexus.connect.insights.collapsed',
   'nexus.connect.intent',
+  // Each Connect intent's remembered map (projection, layers, colour mode, 2-D/3-D) —
+  // features/intentMapSettings. Per-surface for the reasons projection and layers were; the
+  // old shared projection/layers/map3d keys stay listed because it still READS them to migrate.
+  'nexus.connect.intents',
   'nexus.connect.layers',
   'nexus.connect.map3d',
   // The map's full-screen chrome-hide. Per-surface for the same reason map3d is — it is a
