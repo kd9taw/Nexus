@@ -26,6 +26,7 @@ import {
   type OperatePanelId,
 } from './panelState'
 import { scopedKey, windowInstance } from './windowScope'
+import { SLOT_IDS } from './connectConfig'
 
 const KEY = panelStorageKey('operate')
 
@@ -100,6 +101,28 @@ describe('persistence', () => {
     }
     savePanelLayout(KEY, stored)
     expect(loadPanelLayout(OPERATE_PANELS).state.waterfall).toBe('removed')
+  })
+
+  it('a surface with no record of its own inherits another surface’s, and writes only its own', () => {
+    // The surfaceGet contract, for the panel record: a torn-off copy opens on the operator's
+    // layout instead of first-run defaults, and its first change makes the record its own
+    // without touching the window it inherited from.
+    savePanelLayout(panelStorageKey('operate', 'main'), { v: 1, state: { waterfall: 'removed' }, share: {} })
+    expect(loadPanelLayout(OPERATE_PANELS, 'w1').state.waterfall, 'control: no inheritance unless asked').toBeUndefined()
+    expect(loadPanelLayout(OPERATE_PANELS, 'w1', 'main').state.waterfall).toBe('removed')
+
+    const { result } = renderHook(() => usePanelLayout(OPERATE_PANELS, 'w1', 'main'))
+    expect(result.current.stateOf('waterfall')).toBe('removed')
+    act(() => result.current.setPanelState('stations', 'removed'))
+    expect(JSON.parse(localStorage.getItem(panelStorageKey('operate', 'w1'))!).state).toEqual({
+      waterfall: 'removed',
+      stations: 'removed',
+    })
+    expect(JSON.parse(localStorage.getItem(panelStorageKey('operate', 'main'))!).state).toEqual({ waterfall: 'removed' })
+
+    // Once it has its own, the other surface no longer speaks for it.
+    savePanelLayout(panelStorageKey('operate', 'main'), { v: 1, state: {}, share: {} })
+    expect(loadPanelLayout(OPERATE_PANELS, 'w1', 'main').state.stations).toBe('removed')
   })
 })
 
@@ -318,6 +341,11 @@ describe('cockpit vocabularies (TX-safety: the STOP line)', () => {
     for (const w of ['ptt', 'stoptx', 'stop', 'tune', 'halt', 'halttx', 'abort', 'enabletx']) {
       expect((STOP_CONTROL_WORDS as readonly string[]).includes(w), `${w} dropped`).toBe(true)
     }
+  })
+
+  it('Connect’s vocabulary is its slot list — visibility is per SLOT, placement stays in connectConfig', () => {
+    expect([...panelState.CONNECT_PANELS.panelIds]).toEqual([...SLOT_IDS])
+    expect(ALL_PANEL_VOCABULARIES).toContain(panelState.CONNECT_PANELS)
   })
 
   it('lists the expected content panels per cockpit', () => {

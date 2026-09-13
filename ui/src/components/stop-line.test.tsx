@@ -672,6 +672,13 @@ describe('the stop line, computed against the real cockpits', () => {
         'OperateCockpit.structure.test.tsx — "every protected control renders INSIDE ' +
         '.cockpit-qso with every panel id removed" (PRESENCE-ONLY: all ids at once, no ' +
         'baseline, no disabled comparison)',
+      // Connect has a ⊞ vocabulary (its seven slots) and NO transmit control of any kind, so
+      // there is no stop to lose — what is swept is the property that remains meaningful:
+      // closing a pane, singly and all at once, leaves every control outside the panes on
+      // screen (the map toolbar, the header). The TopBar's TX cluster is outside the view.
+      connect:
+        'ConnectView.panes.test.tsx — "hiding every pane leaves every control outside the ' +
+        'panes on screen" (Connect renders no transmit control; PRESENCE-ONLY, by name)',
     }
     const here = new Set(CASES.map((c) => c.view))
     for (const vocab of ALL_PANEL_VOCABULARIES) {
