@@ -1432,6 +1432,18 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       console.log('Compiled session layout: eight compact layouts, details, preserved authority and explicit release passed');return
     }
     if(operating){
+      // A logManual or stationControl reply clears the client's station state in the same update
+      // that shows its outcome (operation-client.ts receive(): state:null beside controlResult or
+      // resolved), and only the next heartbeat reply restores it. Until then the Release/Take button
+      // is unmounted and the sticky session banner has a different height, so every control below
+      // it moves when that reply lands. Traced under contention: banner 116.6 px (pending) -> 61.6
+      // ("Updating station controls", outcome shown) -> 84.6 (state re-read, Release back), nav +23 px;
+      // the next tab click was measured at 61.6, dispatched 12 ms after the re-read, and landed in
+      // the rail's gap. The outcome text is the first half of the round trip; wait for both halves.
+      const stationStateRead=`!!document.querySelector('.remote-logging-authority > button')`
+      // Scroll a target into view and measure it while it is MOUNTED, in one page turn. Resolves null
+      // only if it never mounts within 12 s; the caller's predicate runs once, on a mounted node.
+      const mountedMeasure=(selector,measure)=>`new Promise(resolve=>{const deadline=performance.now()+12000,attempt=()=>{const e=document.querySelector(${JSON.stringify(selector)});if(!e)return performance.now()>deadline?resolve(null):requestAnimationFrame(attempt);e.scrollIntoView({block:'center',inline:'center',behavior:'instant'});requestAnimationFrame(()=>requestAnimationFrame(()=>{const e=document.querySelector(${JSON.stringify(selector)});if(!e)return attempt();resolve((${measure})(e))}))};attempt()})`
       await click(button('CW'))
       await until(`!!document.querySelector('.cw-cockpit .remote-log-entry .le-log-btn')`)
       assert.equal(await evaluate(`document.querySelector('.cw-cockpit .le-log-btn').disabled`),true)
@@ -1451,6 +1463,11 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       for(const [label,selector,call,mode] of [['CW','.cw-cockpit','K1OPS','CW'],['Phone','.phone-cockpit','K2OPS','SSB'],['RTTY','.rtty-cockpit','K3OPS','RTTY'],['PSK','.psk-cockpit','K4OPS','QPSK31'],['JS8','.js8-cockpit','K5OPS','JS8']]){
         console.log('Logging form',label);await click(button(label));
         if(label==='JS8'){await until(`!!${button('Take logging control')}`);await click(button('Take logging control'))}await until(`!!document.querySelector('${selector} .remote-log-entry .le-call')`)
+        // The cockpits stay mounted while hidden, so the form exists before this view has its own
+        // station data. RTTY's first sample fills its decode feed and moves the contact form: traced
+        // with the call input measured at y 496-540 and the mousedown 11 ms later landing on
+        // .cw-decode-text ("CQ W1AW"). Click the form once that sample is on screen.
+        if(label==='RTTY'){await until(`document.querySelector('.rtty-cockpit .cw-decode-text')?.textContent.includes('CQ W1AW')`);await settledLayout()}
         await click(`document.querySelector('${selector} .remote-log-entry .le-call')`)
         const focused=await evaluate(`document.activeElement===document.querySelector('${selector} .remote-log-entry .le-call')`)
         assert.equal(focused,true,`${label} call input receives the actual mouse gesture`)
@@ -1505,7 +1522,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
           await click(`[...document.querySelectorAll('${selector} button')].find(e=>e.textContent==='Check submitted QSO result')`);
           console.log('RELOAD RECOVERY',JSON.stringify({storedCall:retained.record.call,operationId:retained.operationId,requestsBeforeReload:count,requestsAfterReload:loggedRequests.length}));
         }
-        await until(`document.querySelector('${selector} .remote-log-entry')?.textContent.includes('QSO saved to the station log file')`)
+        await until(`document.querySelector('${selector} .remote-log-entry')?.textContent.includes('QSO saved to the station log file')&&${stationStateRead}`)
         assert.equal(await evaluate(`document.querySelector('${selector} .le-call').value`),'')
         assert.equal(loggedRequests[loggedRequests.length-1].record.call,call)
         assert.equal(loggedRequests[loggedRequests.length-1].record.mode,mode)
@@ -1538,7 +1555,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         for(let i=0;i<100&&stationRequests.length===before;i++)await sleep(100)
         assert.equal(stationRequests.length,before+1,`one gesture must send one ${expected} action`)
         assert.equal(stationRequests.at(-1).action.action,expected)
-        await until(`document.querySelector('.remote-control-result')?.textContent.includes('${['amplifier.followBand','decoder.js8Speed','decoder.msk144Period','decoder.depth','receiver.rxOffset','receiver.rxGain'].includes(expected)?'saved':'confirmed'}')`)
+        await until(`document.querySelector('.remote-control-result')?.textContent.includes('${['amplifier.followBand','decoder.js8Speed','decoder.msk144Period','decoder.depth','receiver.rxOffset','receiver.rxGain'].includes(expected)?'saved':'confirmed'}')&&${stationStateRead}`)
       }
       for(const [tab,root,selector,receiver] of [
         ['RTTY','.rtty-cockpit','.cw-decode-head .rtty-arm','rtty'],
@@ -1563,7 +1580,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
           // moving every control below them). A click measured before that shift and dispatched
           // after it lands on nothing. Settle the round trip, exactly as gesture() does - which
           // also makes this branch finally assert that the station confirmed anything at all.
-          await until(`document.querySelector('.remote-control-result')?.textContent.includes('confirmed')`)
+          await until(`document.querySelector('.remote-control-result')?.textContent.includes('confirmed')&&${stationStateRead}`)
         }else await gesture(actual,'decoder.arm')
         assert.equal(stationRequests.at(-1).action.receiver,receiver)
       }
@@ -1627,7 +1644,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         assert.equal(stationRequests.length,count+1,`one ${tab} dial gesture`)
         assert.equal(stationRequests.at(-1).action.action,'radio.frequency');assert.equal(stationRequests.at(-1).action.dialMhz,mhz)
         assert.equal(stationRequests.at(-1).action.band,mhz===10?'':'40m')
-        await until(`document.querySelector('.remote-control-result')?.textContent.includes('confirmed')`)
+        await until(`document.querySelector('.remote-control-result')?.textContent.includes('confirmed')&&${stationStateRead}`)
         await until(`document.querySelector('${root} .ch-readout .readout-val')?.textContent.includes('${mhz.toFixed(4)}')`)
         }
       }
@@ -1673,7 +1690,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
             for(let i=0;i<100&&stationRequests.length===count;i++)await sleep(100)
             assert.equal(stationRequests.length,count+1,`one ${mode} band gesture`)
             assert.deepEqual(stationRequests.at(-1).action,{action:'radio.band',band,mode})
-            await until(`document.querySelector('.remote-control-result')?.textContent.includes('confirmed')`)
+            await until(`document.querySelector('.remote-control-result')?.textContent.includes('confirmed')&&${stationStateRead}`)
             const dial=applicationData.get_snapshot.radio.dialMhz.toFixed(4)
             await until(`document.querySelector('${root} .readout-val')?.textContent.includes('${dial}')`)
             assert.equal(applicationData.get_snapshot.radio.txEnabled,false)
@@ -1777,9 +1794,13 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
             for(const target of targets)for(const [width,height,zoom]of [[390,844,1],[1280,800,1],[390,844,1.75],[1280,800,1.75]])for(const theme of ['dark','light']){
               await browser.call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false},session)
               await evaluate(`document.documentElement.style.setProperty('--ui-zoom','${zoom}');document.documentElement.dataset.theme='${theme}';window.dispatchEvent(new Event('resize'))`);await settledLayout()
-              await until(`!!document.querySelector('${target}')`)
-              await evaluate(`document.querySelector('${target}').scrollIntoView({block:'center',inline:'center',behavior:'instant'})`);await settledLayout()
-              const shape=await evaluate(`(()=>{const e=document.querySelector('${target}'),r=e.getBoundingClientRect(),hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);return{rect:r.toJSON(),hit:hit?.outerHTML.slice(0,250),good:r.width>0&&r.height>0&&e.contains(hit)&&document.documentElement.scrollWidth<=innerWidth+1&&document.documentElement.scrollHeight<=innerHeight+1}})()`)
+              // Digit hit regions exist only while frequency control is fresh (FrequencyReadout digitTune
+              // <- useRemoteWheelTuning().allowed <- a fresh station state), and a heartbeat reply later than
+              // that 1.2 s window unmounts them until the next reply. Across the three CDP round trips this
+              // took (presence, scroll, measure) such a gap could remove the node after its presence was
+              // proven. Measure a node that is mounted when measured; the predicate is unchanged.
+              const shape=await evaluate(mountedMeasure(target,`e=>{const r=e.getBoundingClientRect(),hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);return{rect:r.toJSON(),hit:hit?.outerHTML.slice(0,250),good:r.width>0&&r.height>0&&e.contains(hit)&&document.documentElement.scrollWidth<=innerWidth+1&&document.documentElement.scrollHeight<=innerHeight+1}}`))
+              assert.ok(shape,`Tuning target must mount: ${mode} ${target} ${width} ${zoom} ${theme}`)
               if(!shape.good&&artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'wheel-layout-failure.png'),Buffer.from(shot.data,'base64'));await writeFile(join(artifacts,'wheel-layout-failure.json'),JSON.stringify({mode,target,width,height,zoom,theme,shape},null,2))}
               assert.equal(shape.good,true,`Tuning target reachable ${mode} ${target} ${width} ${zoom}: ${JSON.stringify(shape)}`);wheelGeometry++
               if(target===scope&&width===1280&&zoom===1.75&&theme==='light'&&artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,`scope-${mode}-1280-175-light.png`),Buffer.from(shot.data,'base64'))}
@@ -1788,7 +1809,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
               await until(`!!document.querySelector('${digit}')`)
               const before=stationRequests.length,from=applicationData.get_snapshot.radio.dialMhz
               const target=kind==='scope'?scope:kind==='nudge'?root+' .tuning-nudge:nth-of-type(3)':digit
-              await evaluate(`document.querySelector('${target}').scrollIntoView({block:'center',inline:'center',behavior:'instant'})`);await settledLayout()
+              assert.ok(await evaluate(mountedMeasure(target,'()=>true')),`Tuning target must mount: ${mode} ${kind}`)
               // The positive gesture starts AFTER scrolling and layout settle.
               // Prove both independent feeds fresh; a current lease does not
               // make an aged radio snapshot safe to tune. Never retry an input.
@@ -1815,7 +1836,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
               assert.equal(stationRequests.length,before+1,`one ${mode} ${kind} tuning burst`)
               const expected=Math.round(from*1e6+(kind==='digit'?1000:100))/1e6
               assert.equal(stationRequests.at(-1).action.action,'radio.frequency');assert.equal(stationRequests.at(-1).action.dialMhz,expected)
-              await until(`document.querySelector('.remote-control-result')?.textContent.includes('confirmed')`)
+              await until(`document.querySelector('.remote-control-result')?.textContent.includes('confirmed')&&${stationStateRead}`)
               await until(`document.querySelector('${root} .readout-val')?.textContent.includes('${expected.toFixed(4)}')`)
               assert.equal(applicationData.get_snapshot.radio.txEnabled,false)
             }
@@ -1861,7 +1882,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
               const action=stationRequests.at(-1).action
               assert.equal(action.action,'radio.frequency');assert.equal(action.sideband,radio.sideband)
               assert.ok(Math.abs(action.dialMhz-radio.dialMhz)>0&&Math.abs(action.dialMhz-radio.dialMhz)<0.004,'native scope resolves a nearby receive target')
-              await until(`document.querySelector('.remote-control-result')?.textContent.includes('confirmed')`)
+              await until(`document.querySelector('.remote-control-result')?.textContent.includes('confirmed')&&${stationStateRead}`)
               await until(`document.querySelector('${root} .readout-val')?.textContent.includes('${action.dialMhz.toFixed(4)}')`)
               assert.equal(applicationData.get_snapshot.radio.txEnabled,false)
               assert.equal(applicationData.get_snapshot.radio.operatingMode,radio.operatingMode)
@@ -1936,7 +1957,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         for(let i=0;i<100&&stationRequests.length===before;i++)await sleep(100)
         assert.equal(stationRequests.length,before+1,'one committed MSK144 choice')
         assert.deepEqual(stationRequests.at(-1).action,{action:'decoder.msk144Period',expectedPeriodSecs,periodSecs})
-        await until(`document.querySelector('.remote-control-result')?.textContent.includes('saved')`)
+        await until(`document.querySelector('.remote-control-result')?.textContent.includes('saved')&&${stationStateRead}`)
         await until(`document.querySelector('${periodSelector}').value==='${periodSecs}'`)
       }
       await gesture('.operate-cockpit .cockpit-modes > button:first-child','radio.tier')
@@ -2030,6 +2051,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         }
         assert.equal(stationRequests.length,before+1,`one ${tab} RX waterfall gesture`)
         assert.deepEqual(stationRequests.at(-1).action,{action:'receiver.rxOffset',expectedTier,expectedHz,hz})
+        await until(`document.querySelector('.remote-control-result')?.textContent.includes('saved')&&${stationStateRead}`)
         await until(`document.querySelector('${rxField}').value==='${hz}'`)
         assert.equal(applicationData.get_snapshot.radio.txOffsetHz,1500)
         if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,`receiver-${tab.toLowerCase()}-1280.png`),Buffer.from(shot.data,'base64'))}
@@ -2043,6 +2065,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         for(let i=0;i<100&&stationRequests.length===before;i++)await sleep(100)
         assert.equal(stationRequests.length,before+1,'one pointer release at the middle of the native gain slider')
         assert.deepEqual(stationRequests.at(-1).action,{action:'receiver.rxGain',radioId:1,expectedSettingsRevision,expectedGain,gain:4.5})
+        await until(`document.querySelector('.remote-control-result')?.textContent.includes('saved')&&${stationStateRead}`)
         await until(`document.querySelector('${gainSelector}').value==='4.5'&&!document.querySelector('${gainSelector}').disabled`)
       }
       for(const key of ['ArrowRight','Home']){
@@ -2060,7 +2083,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         for(let i=0;i<100&&stationRequests.length===before;i++)await sleep(100)
         assert.equal(stationRequests.length,before+1,'one RX gain release')
         assert.deepEqual(stationRequests.at(-1).action,{action:'receiver.rxGain',radioId:1,expectedSettingsRevision,expectedGain,gain})
-        await until(`document.querySelector('.remote-control-result')?.textContent.includes('saved')`)
+        await until(`document.querySelector('.remote-control-result')?.textContent.includes('saved')&&${stationStateRead}`)
         await until(`document.querySelector('${gainSelector}').value==='${gain}'&&!document.querySelector('${gainSelector}').disabled`)
         assert.equal(await evaluate(`document.querySelector('#settings-audio input[aria-label="Transmit drive level"]').disabled`),true)
       }
@@ -2111,7 +2134,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
           }
           assert.equal(stationRequests.length,before+1,`one ${mode} ${level} input gesture`)
           assert.deepEqual(stationRequests.at(-1).action,{action:'radio.level',mode,level,expected,value})
-          await until(`document.querySelector('.remote-control-result')?.textContent.includes('confirmed')`)
+          await until(`document.querySelector('.remote-control-result')?.textContent.includes('confirmed')&&${stationStateRead}`)
           await until(`Number(document.querySelector('${selector}').value)===${target}&&!document.querySelector('${selector}').disabled`)
           await browser.call('Emulation.setDeviceMetricsOverride',{width:1280,height:800,deviceScaleFactor:1,mobile:false},session)
           await evaluate(`document.documentElement.style.setProperty('--ui-zoom','1');window.dispatchEvent(new Event('resize'))`);await settledLayout()
@@ -2132,7 +2155,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
           for(let i=0;i<100&&stationRequests.length===start;i++)await sleep(100)
           assert.equal(stationRequests.length,start+1,`one released ${mode} ${level} drag`)
           assert.deepEqual(stationRequests.at(-1).action,{action:'radio.level',mode,level,expected:prior,value:level==='notch'?released:released/100})
-          await until(`document.querySelector('.remote-control-result')?.textContent.includes('confirmed')`)
+          await until(`document.querySelector('.remote-control-result')?.textContent.includes('confirmed')&&${stationStateRead}`)
           await until(`Number(document.querySelector('${selector}').value)===${released}&&!document.querySelector('${selector}').disabled`)
 
         }
