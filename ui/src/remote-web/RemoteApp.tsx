@@ -192,6 +192,12 @@ export function RemoteApp() {
           }}>
             <label>{t('remote.browserName')}<input value={deviceName} maxLength={48} required onChange={event => setDeviceName(event.target.value)} /></label>
             <button className="remote-button" disabled={busy || !entitled || !deviceName.trim()}>{t('remote.requestApproval')}</button>
+            {/* The reason sits WITH the control it disables. The trial line at the top of the page
+                already said why, but on a phone that line is off-screen by the time an operator
+                reaches this form - and a greyed button with nothing beside it reads as broken. */}
+            {!entitled && <p role="note">{trial?.state === 'ended'
+              ? t('remote.trialEnded', { until: utcDate(trial.expiresAt) })
+              : trial?.state === 'disabled' ? t('remote.trialDisabled') : t('remote.trialNotStarted')}</p>}
           </form>}
           <details><summary>{t('remote.stationAccess')}</summary><p>{t('remote.revokeHint')}</p>
             <button className="remote-button" disabled={busy} onClick={() => void act(async () => { await client?.post(`stations/${station.id}/revoke`); await refresh() })}>{t('remote.revokeStation')}</button>

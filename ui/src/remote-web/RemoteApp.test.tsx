@@ -44,7 +44,7 @@ it('a signed-in account with no trial yet can start pairing, and is told the clo
 it('an ended trial and a disabled account read as different things, not one vague wall', async () => {
   const ended = account(); ended.entitlement.state = 'ended'
   client(ended); const view = render(<RemoteApp />)
-  await screen.findByText(/fourteen days ended/i, { selector: '[role="status"]' })
+  await screen.findByText(/trial ended/i, { selector: '[role="status"]' })
   // The fortnight running out must never be mistaken for the account being switched off.
   expect(screen.queryByText(/switched off/i)).toBeNull()
   // ...and an ended trial cannot start another one.
