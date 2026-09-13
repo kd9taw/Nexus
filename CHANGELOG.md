@@ -69,6 +69,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that the total excludes bonuses: the log is submittable, the number on screen is not your final
   claimed score.
 
+- **Close and resize Connect's panes.** Every pane on Connect has a ✕, and a Panels menu brings back
+  anything you closed, with Undo and Reset layout. When a pane closes, its neighbour takes the space;
+  close a whole side and the map takes the width. Drag the edge of a side rail to make it wider or
+  narrower, or drag between its two panes (both also work from the keyboard, and a double-click puts
+  the default back). What you close and how wide you make things is remembered per window, and a
+  saved width is trimmed to fit a smaller screen. Nothing changes until you use it, and Reset layout
+  returns Connect to exactly how it first opened.
+
 - **Full-screen map.** One button on the map toolbar hides the surrounding chrome and gives the map
   the window; the same button and Escape both bring it back. The choice is remembered per surface,
   so a popped-out map does not inherit what you hid on the main window.
@@ -125,6 +133,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   yet been checked against a real radio.
 
 ### Fixed
+
+- **Connect's map remembers each intent's setup.** Moving from Chase DX to POTA/SOTA and back used to
+  reset Chase DX to its preset, because every intent shared one projection, one set of layers and one
+  colour mode. Each intent now keeps its own, including 2-D or 3-D; a preset applies only the first
+  time you use an intent, and whatever you had set before this change is kept for the intent you
+  were on.
+
+- **"2-D" shows a flat map.** Leaving the 3-D globe opened the 2-D map in its own Globe projection,
+  which looks almost the same, so the switch seemed to do nothing. 2-D now opens the World map; the
+  Globe projection is still there to pick. Layers sits top-left in both modes and folds away the same
+  way Conditions does.
+
+- **The map costs far less CPU.** The 3-D globe drew every frame even with nothing moving; it now
+  draws only when something changes, and wakes on drag, zoom, spin, new data or a resize (the arc
+  dashes and your station's ring pause while it is idle). The 2-D map redrew itself, country outlines
+  and all, every time new data arrived, even when nothing on it had changed; it now redraws only when
+  what it shows changes. With every layer off, both now sit near zero while idle.
+
+- **Every map toolbar control is reachable at 1024×768.** The toolbar could not wrap, so on a small
+  window the map drew wider than its space and Reset, Full screen and the LIVE badge were cut off,
+  and the Layers panel could sit entirely off screen. The toolbar now wraps onto a second row.
 
 - **A long over went silent partway through and left the rig keyed.** WSPR transmitted for about
   twenty seconds, the audio stopped, the power meter fell to zero — and the radio stayed on the air
