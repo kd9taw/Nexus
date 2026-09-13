@@ -677,9 +677,32 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       // txEnabled and its transitions, the wire with each reply's outcome, and the browser's
       // operation client state (controlError is what renders "The command was not confirmed").
       // Both sides stamp Date.now(), so their timelines line up.
-      console.log('FT TX TRACE installed',await evaluate(`(()=>{if(window.__opTrace)return true;const e=document.querySelector('.remote-logging-authority');let f=e?.[Object.keys(e).find(k=>k.startsWith('__reactFiber$'))],client;while(f&&!client){if(f.memoizedProps?.client?.getSnapshot)client=f.memoizedProps.client;f=f.return}if(!client)return false;window.__opTrace=[];let last='';const record=()=>{const v=client.getSnapshot(),cur={controlError:v.controlError,pending:v.controlPending?.action?.action??null,result:v.controlResult?.outcome??null,fresh:v.fresh,phase:v.state?.phase??null,busy:v.busy};const key=JSON.stringify(cur);if(key!==last){last=key;window.__opTrace.push({t:Date.now(),...cur});window.__opTrace=window.__opTrace.slice(-60)}};client.subscribe(record);record();return true})()`))
-      const txEvidence=async label=>console.log('FT TX EVIDENCE',label,JSON.stringify({t:Date.now(),fixtureTxEnabled:applicationData.get_snapshot.radio.txEnabled,ftTxLog:ftTxLog.slice(-4),requests:stationRequests.slice(-3).map(r=>r.action),wire:operationWire.slice(-10),page:await evaluate(`({tx:(()=>{const e=document.querySelector('${tx}');return e&&{text:e.textContent.trim(),disabled:e.disabled}})(),result:document.querySelector('.remote-control-result')?.textContent??null,opTrace:(window.__opTrace||'uninstalled').slice(-16)})`)}))
+      console.log('FT TX TRACE installed',await evaluate(`(()=>{if(window.__opTrace)return true;const e=document.querySelector('.remote-logging-authority');let f=e?.[Object.keys(e).find(k=>k.startsWith('__reactFiber$'))],client;while(f&&!client){if(f.memoizedProps?.client?.getSnapshot)client=f.memoizedProps.client;f=f.return}if(!client)return false;window.__opTrace=[];window.__clickTrace=[];for(const type of ['mousedown','click'])window.addEventListener(type,e=>{window.__clickTrace.push({t:Date.now(),type,target:e.target?.outerHTML?.slice(0,120)});window[type==='mousedown'?'__lastDown':'__lastClick']={t:Date.now(),el:e.target};window.__clickTrace=window.__clickTrace.slice(-8)},true);let last='';const record=()=>{const v=client.getSnapshot(),cur={controlError:v.controlError,pending:v.controlPending?.action?.action??null,result:v.controlResult?.outcome??null,fresh:v.fresh,phase:v.state?.phase??null,busy:v.busy};const key=JSON.stringify(cur);if(key!==last){last=key;window.__opTrace.push({t:Date.now(),...cur});window.__opTrace=window.__opTrace.slice(-60)}};client.subscribe(record);record();window.__attempts=[];const controlFrom=client.controlFrom;if(typeof controlFrom!=='function')return false;client.controlFrom=async function(...args){const attempt={t:Date.now()};window.__attempts.push(attempt);window.__attempts=window.__attempts.slice(-20);try{const result=await controlFrom.apply(this,args);attempt.end=Date.now();attempt.sent=true;return result}catch(error){attempt.end=Date.now();attempt.sent=error?.sent;attempt.code=error?.message;throw error}};return true})()`))
+      const txEvidence=async label=>console.log('FT TX EVIDENCE',label,JSON.stringify({t:Date.now(),fixtureTxEnabled:applicationData.get_snapshot.radio.txEnabled,ftTxLog:ftTxLog.slice(-4),requests:stationRequests.slice(-3).map(r=>r.action),wire:operationWire.slice(-10),page:await evaluate(`({tx:(()=>{const e=document.querySelector('${tx}');return e&&{text:e.textContent.trim(),disabled:e.disabled}})(),result:document.querySelector('.remote-control-result')?.textContent??null,opTrace:(window.__opTrace||'uninstalled').slice(-16),attempts:(window.__attempts||[]).slice(-6),clicks:window.__clickTrace||[],toasts:[...document.querySelectorAll('.ui-toast-msg')].map(e=>e.textContent)})`)}))
       const txWatch=async(label,wait)=>{try{return await wait()}catch(error){await txEvidence(label);throw error}}
+      // One operator gesture on a station command, retried only where an operator would click again
+      // and the station received nothing: (a) this click's own command attempt ended not sent (the
+      // client records whether its request left the browser), or (b) the press never became a click
+      // (the button disabled between the two CDP mouse events) and so started no attempt. A command
+      // that was sent and not confirmed never satisfies `done` and still fails with the evidence.
+      const operatorGesture=async(label,target,done)=>{
+        for(let attempt=1;;attempt++){
+          const before=stationRequests.length,started=Date.now()
+          await click(target)
+          const lost=await evaluate(`(()=>{const b=${target},d=window.__lastDown,c=window.__lastClick;return !!b&&!!d&&d.t>=${started}&&b.contains(d.el)&&!(c&&c.t>=d.t&&b.contains(c.el))&&!(window.__attempts||[]).some(a=>a.t>=${started})})()`)
+          let outcome='done'
+          if(lost)outcome='lost click'
+          else{
+            await txWatch(label,()=>until(`(${done})||(window.__attempts||[]).some(a=>a.t>=${started}&&a.end&&a.sent===false)`))
+            if(!await evaluate(done))outcome='not sent'
+          }
+          if(outcome==='done')return attempt
+          if(stationRequests.length!==before)await txEvidence(`${label} ${outcome}`)
+          assert.equal(stationRequests.length,before,`${label}: a ${outcome} must not reach the station`)
+          assert.ok(attempt<5,`${label}: ${outcome} ${attempt} times in a row`)
+          console.log('FT operator retry',label,outcome,attempt)
+        }
+      }
       assert.equal(await evaluate(`document.querySelector('${cq}').disabled`),true)
       transmitAllowed=true
       for(const tier of ['FT8','FT4']){
@@ -737,8 +760,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         await until(`document.querySelector('${txField}').value==='2300'`)
         await evaluate(`document.activeElement.blur()`);assert.equal(stationRequests.length,preferences)
         let count=stationRequests.length
-        await click(`document.querySelector('${cq}')`)
-        await txWatch('tx-on',()=>until(`document.querySelector('${tx}')?.textContent.trim()==='TX On'&&!document.querySelector('${tx}').disabled`))
+        await operatorGesture('cq',`document.querySelector('${cq}')`,`document.querySelector('${tx}')?.textContent.trim()==='TX On'&&!document.querySelector('${tx}').disabled`)
         assert.equal(stationRequests.length,count+1);assert.equal(stationRequests.at(-1).action.action,'ft.cq')
         assert.equal(stationRequests.at(-1).action.expectedTier,tier)
         const rxField='.operate-cockpit .df-field:first-child input'
@@ -781,11 +803,9 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         assert.equal(applicationData.get_snapshot.radio.txOffsetHz,txOffset)
         await until(`document.querySelector('${txField}').value===${JSON.stringify(String(txOffset))}`)
         count+=4
-        await click(`document.querySelector('${tx}')`)
-        await txWatch('tx-off',()=>until(`document.querySelector('${tx}')?.textContent.trim()==='TX Off'&&!document.querySelector('${tx}').disabled`))
+        await operatorGesture('tx-off',`document.querySelector('${tx}')`,`document.querySelector('${tx}')?.textContent.trim()==='TX Off'&&!document.querySelector('${tx}').disabled`)
         assert.equal(stationRequests.length,count+2);assert.equal(stationRequests.at(-1).action.on,false)
-        await click(`document.querySelector('${tx}')`)
-        await txWatch('tx-on',()=>until(`document.querySelector('${tx}')?.textContent.trim()==='TX On'&&!document.querySelector('${tx}').disabled`))
+        await operatorGesture('tx-on',`document.querySelector('${tx}')`,`document.querySelector('${tx}')?.textContent.trim()==='TX On'&&!document.querySelector('${tx}').disabled`)
         assert.equal(stationRequests.length,count+3);assert.equal(stationRequests.at(-1).action.on,true)
         await evaluate(`window.__ftRowEvents=[];for(const type of ['click','dblclick'])document.addEventListener(type,e=>{if(e.target.closest('.or-row'))window.__ftRowEvents.push({type,detail:e.detail,target:e.target.className,button:!!e.target.closest('button')})},{capture:true,once:true})`)
         await click(`[...document.querySelectorAll('.or-row[aria-selected]')].find(e=>e.textContent.includes('W1AW'))`,2)
@@ -853,8 +873,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       applicationData.get_snapshot.radio.txEnabled=true;applicationRevision++
       const log='.cockpit-qso .cq-log',confirm='.logconfirm-log',discard='.logconfirm-discard'
       await until(`!document.querySelector('${log}').disabled`)
-      await click(`document.querySelector('${log}')`)
-      await txWatch('log-confirm',()=>until(`!!document.querySelector('.logconfirm')&&!document.querySelector('${confirm}').disabled`))
+      await operatorGesture('log-confirm',`document.querySelector('${log}')`,`!!document.querySelector('.logconfirm')&&!document.querySelector('${confirm}').disabled`)
       assert.equal(stationRequests.at(-1).action.action,'qso.logCurrent')
       const grid=`document.querySelectorAll('.logconfirm input')[1]`
       await click(grid);await evaluate(`${grid}.select()`);await browser.call('Input.insertText',{text:'FN32'},session)
