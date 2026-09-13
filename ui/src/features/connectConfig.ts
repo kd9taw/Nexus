@@ -124,6 +124,10 @@ export interface ConnectConfigApi extends ConnectConfig {
    *  displaced pane keeps a home (the grid stays a permutation — nothing vanishes). */
   assignPane: (slotId: SlotId, paneId: PaneId) => void
   setOverlay: (overlayId: string, on: boolean) => void
+  /** Every slot back to its DEFAULT_SLOTS pane (⊞ Reset layout — operator 2026-09-13). */
+  resetSlots: () => void
+  /** Put a whole placement back (⊞ Undo after a Reset). Coerced, so it stays a permutation. */
+  restoreSlots: (slots: Record<SlotId, PaneId>) => void
 }
 
 export function useConnectConfig(): ConnectConfigApi {
@@ -145,5 +149,15 @@ export function useConnectConfig(): ConnectConfigApi {
     [commit],
   )
 
-  return { ...cfg, assignPane, setOverlay }
+  const resetSlots = useCallback(
+    () => setCfg((c) => commit({ ...c, slots: { ...DEFAULT_SLOTS } })),
+    [commit],
+  )
+
+  const restoreSlots = useCallback(
+    (slots: Record<SlotId, PaneId>) => setCfg((c) => commit({ ...c, slots: coerceSlots(slots) })),
+    [commit],
+  )
+
+  return { ...cfg, assignPane, setOverlay, resetSlots, restoreSlots }
 }

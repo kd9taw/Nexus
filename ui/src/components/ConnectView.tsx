@@ -199,7 +199,7 @@ export function ConnectView({
   // which holds the 2-D/3-D toggle — with nothing on screen able to bring it back.
   const [mapFull, setMapFull] = useState(false)
   // Basic/Expert + the per-slot pane assignment (persisted; basic-default, remember-last).
-  const { slots, assignPane } = useConnectConfig()
+  const { slots, assignPane, resetSlots, restoreSlots } = useConnectConfig()
   // Band focus (advisor/opening row click) — the map highlights that band's heat
   // + spots; click the same band again (or the clear chip) to release.
   const [focusBand, setFocusBand] = useState<string | null>(null)
@@ -436,6 +436,17 @@ export function ConnectView({
   // until it makes a change of its own.
   const surface = useMemo(() => surfaceId(), [])
   const panels = usePanelLayout(CONNECT_PANELS, surface, 'main')
+  // RESET LAYOUT IS THE OUT-OF-BOX STATE (operator 2026-09-13): default pane in every slot, every
+  // pane open, default widths and splits. The panel record's one-level Undo already covers the
+  // visibility + split half of a Reset; the slot placement lives in the config, so the placement
+  // Reset replaced is held here and put back by the SAME Undo press. It is dropped by the next
+  // change of any kind, so Undo only ever reverts the last change. Widths are not undo steps
+  // (operator ruling), so an Undo after Reset leaves them at their defaults.
+  const slotsBeforeReset = useRef<typeof slots | null>(null)
+  const change = <A extends unknown[]>(fn: (...a: A) => void) => (...a: A) => {
+    slotsBeforeReset.current = null
+    fn(...a)
+  }
   const shown = (s: SlotId) => panels.stateOf(s) !== 'removed'
   const leftSlots = (['left1', 'left2'] as const).filter(shown)
   const rightSlots = (['right1', 'right2'] as const).filter(shown)
@@ -460,9 +471,9 @@ export function ConnectView({
       slotId={s}
       paneId={slots[s]}
       ctx={ctx}
-      onAssign={assignPane}
+      onAssign={change(assignPane)}
       share={share}
-      onHide={() => panels.setPanelState(s, 'removed')}
+      onHide={change(() => panels.setPanelState(s, 'removed'))}
     />
   )
   const rail = (side: 'left' | 'right', ids: readonly SlotId[]) => {
@@ -479,12 +490,12 @@ export function ConnectView({
           <RailSplitHandle
             label={side === 'left' ? t('connect.rail.left.split') : t('connect.rail.right.split')}
             fraction={fraction}
-            onCommit={(above, below) => {
+            onCommit={change((above: number, below: number) => {
               const next: Partial<Record<SlotId, number>> = {}
               next[top] = above
               next[bottom] = below
               panels.setShares(next)
-            }}
+            })}
           />
         )}
         <RailWidthHandle
@@ -536,11 +547,18 @@ export function ConnectView({
               label: t('connect.panels.item', { title: paneById(slots[s])?.title ?? '', where: SLOT_WHERE[s]() }),
               state: panels.stateOf(s),
             }))}
-            onToggle={(id, show) => panels.setPanelState(id as SlotId, show ? 'docked' : 'removed')}
-            onUndo={panels.undo}
+            onToggle={change((id: string, show: boolean) => panels.setPanelState(id as SlotId, show ? 'docked' : 'removed'))}
+            onUndo={() => {
+              const before = slotsBeforeReset.current
+              slotsBeforeReset.current = null
+              panels.undo()
+              if (before) restoreSlots(before)
+            }}
             canUndo={panels.canUndo}
             onReset={() => {
+              slotsBeforeReset.current = slots
               panels.reset()
+              resetSlots()
               widths.resetAll()
             }}
           />

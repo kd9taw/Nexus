@@ -34,7 +34,7 @@ vi.mock('../api', async (importOriginal) => ({
   getContests: vi.fn(async () => []),
 }))
 import { ConnectView } from './ConnectView'
-import { SLOT_IDS, type SlotId } from '../features/connectConfig'
+import { DEFAULT_SLOTS, SLOT_IDS, type SlotId } from '../features/connectConfig'
 import { MAP_MIN, RAIL_MAX, RAIL_MIN } from '../features/connectRails'
 
 const RECORD = 'nexus.panels.connect.main'
@@ -184,6 +184,65 @@ describe('closing and restoring panes', () => {
     expect(slotsOn(container).sort()).toEqual([...SLOT_IDS].sort())
     expect(grid(container).getAttribute('data-rails')).toBe('both')
     expect(record().state).toEqual({})
+  })
+
+  it('Reset layout returns Connect to the out-of-box state — default pane in every slot too', async () => {
+    // Operator ruling 2026-09-13: Reset layout is "exactly as installed" — which pane sits in
+    // each slot, every pane open, default rail widths and splits.
+    const restore = fakeBoxes(1280)
+    try {
+      const { container } = await mount()
+      const paneIn = (s: SlotId) => container.querySelector(`.pane-frame[data-slot="${s}"]`)?.getAttribute('data-pane')
+      const defaults = Object.fromEntries(SLOT_IDS.map((s) => [s, paneIn(s)]))
+      expect(defaults.left1, 'control: the default layout is on screen').toBe(DEFAULT_SLOTS.left1)
+
+      // 1. swap a slot's pane from its picker
+      const picker = container.querySelector('.pane-frame[data-slot="left1"] select') as HTMLSelectElement
+      fireEvent.change(picker, { target: { value: 'greyline' } })
+      expect(paneIn('left1')).toBe('greyline')
+      // 2. close a pane
+      closeSlot(container, 'right2')
+      // 3. drag a rail width
+      const sep = screen.getByRole('separator', { name: 'Left panel column width' })
+      fireEvent.pointerDown(sep, { button: 0, clientX: 300, pointerId: 1 })
+      fireEvent.pointerMove(window, { clientX: 400, pointerId: 1 })
+      fireEvent.pointerUp(window, { clientX: 400, pointerId: 1 })
+      expect(grid(container).style.getPropertyValue('--cn-rail-l'), 'control: the drag took').toBe('400px')
+      // …and a split
+      fireEvent.keyDown(screen.getByRole('separator', { name: 'Split between the left panels' }), { key: 'ArrowDown' })
+
+      fireEvent.click(screen.getByRole('button', { name: /⊞ Panels/ }))
+      fireEvent.click(screen.getByRole('button', { name: 'Reset layout' }))
+
+      for (const s of SLOT_IDS) expect(paneIn(s), `slot ${s} after Reset`).toBe(DEFAULT_SLOTS[s])
+      expect(grid(container).style.getPropertyValue('--cn-rail-l')).toBe('')
+      expect(JSON.parse(localStorage.getItem(WIDTHS) ?? '{}')).toEqual({})
+      expect(record().state).toEqual({})
+      expect(record().share).toEqual({})
+      expect(JSON.parse(localStorage.getItem('nexus.connect.config')!).slots).toEqual(DEFAULT_SLOTS)
+
+      // Undo after Reset puts back what Reset took: the swapped pane and the closed pane.
+      // Width drags are not undo steps (operator ruling), so the width stays at its default.
+      fireEvent.click(screen.getByRole('button', { name: 'Undo last change' }))
+      expect(paneIn('left1')).toBe('greyline')
+      expect(paneIn('right2'), 'the pane closed before Reset is closed again').toBeUndefined()
+      expect(grid(container).style.getPropertyValue('--cn-rail-l')).toBe('')
+      expect(JSON.parse(localStorage.getItem('nexus.connect.config')!).slots.left1).toBe('greyline')
+    } finally {
+      restore()
+    }
+  })
+
+  it('a change made after Reset is what Undo reverts — never the slots from before Reset', async () => {
+    const { container } = await mount()
+    const paneIn = (s: SlotId) => container.querySelector(`.pane-frame[data-slot="${s}"]`)?.getAttribute('data-pane')
+    fireEvent.change(container.querySelector('.pane-frame[data-slot="left1"] select')!, { target: { value: 'greyline' } })
+    fireEvent.click(screen.getByRole('button', { name: /⊞ Panels/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Reset layout' }))
+    closeSlot(container, 'bottom1')
+    fireEvent.click(screen.getByRole('button', { name: 'Undo last change' }))
+    expect(paneIn('bottom1'), 'the close is undone').toBe(DEFAULT_SLOTS.bottom1)
+    expect(paneIn('left1'), 'Reset’s slot snapshot is gone once another change lands').toBe(DEFAULT_SLOTS.left1)
   })
 
   it('a closed pane stays closed across a remount', async () => {
