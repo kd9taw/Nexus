@@ -943,9 +943,16 @@ jobs:
         run: |
           set -euo pipefail
           ver="${{ steps.ver.outputs.ver }}"
+          base_ver="${ver%%-*}"
           notes="dist/NOTES.md"
           if [ -f "docs/RELEASE_NOTES-$ver.md" ]; then
             cp "docs/RELEASE_NOTES-$ver.md" "$notes"
+          elif [ -f "docs/RELEASE_NOTES-$base_ver.md" ]; then
+            # A prerelease uses its release's notes. They are written under the BASE version
+            # because that is the name publish.yml and scripts/release-docs.mjs read, so a beta
+            # looking only for RELEASE_NOTES-1.12.0-beta.1.md found nothing and published a raw
+            # commit list as its release page (v1.11.1-beta.1).
+            cp "docs/RELEASE_NOTES-$base_ver.md" "$notes"
           else
             # Fall back to the commit range since the previous tag. Hand-written notes in
             # docs/RELEASE_NOTES-<ver>.md take precedence when present.
