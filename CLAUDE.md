@@ -177,7 +177,6 @@ only trigger is somebody remembering is not a gate. Never pipe a gate into `grep
   however large. The rule exists because the literal semver reading (any feature ⇒ minor) turned
   the minor number into a batch counter: 1.0.0 → 1.6.0 in twelve days, with 1.5.0 and 1.6.0
   shipping fifteen hours apart, which left the number unable to signal that a release mattered.
-  Next release under the rule is **1.7.0** (PSK31 + QPSK31, the macOS platform work).
 - **Tester builds never consume a public version number.** They take a prerelease suffix
   (`1.7.0-test1`), never the next free patch. A tester build sharing a number with a later public
   release strands its holder forever: the updater only offers a *strictly newer* version, so

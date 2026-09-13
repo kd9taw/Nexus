@@ -40,12 +40,13 @@ is how you check the file. Report what breaks.
 ## How the project is organized
 
 Nexus is a Cargo workspace (Rust 2021) plus a Vite/React/TypeScript UI and a
-Fortran/C/C++ modem. The workspace members (`Cargo.toml`) are:
+Fortran/C/C++ modem. Core workspace members are listed below; `Cargo.toml` holds
+the complete member list.
 
 | Crate | Path | Responsibility |
 |-------|------|----------------|
-| `tempofast-sys` | `crates/tempofast-sys` | Raw FFI to `libtempo`. Its `build.rs` runs CMake to build the modem (cross-aware for `windows-gnu`). |
-| `tempofast` | `crates/tempofast` | Safe wrapper over `libtempo`; includes a `tempodeep` module (TempoDeep mode, in `src/lib.rs`) and a `win_smoke` example (`examples/win_smoke.rs`). |
+| `tempo-fast-sys` | `crates/tempo-fast-sys` | Raw FFI to `libtempo`. Its `build.rs` runs CMake to build the modem (cross-aware for `windows-gnu`). |
+| `tempo-fast` | `crates/tempo-fast` | Safe wrapper over `libtempo`; includes a `deep` module (TempoDeep mode, in `src/lib.rs`) and a `win_smoke` example (`examples/win_smoke.rs`). |
 | `tempo-core` | `crates/tempo-core` | Protocol/domain logic: slot timing, virtual channel, message, QSO, roster, inbox, store-and-forward, Field Day, spectrum, text chunking, TX. |
 | `tempo-app` | `crates/tempo-app` | UI-facing logic: serde DTOs (camelCase, `src/dto.rs`), settings, and the live TX/RX `Engine` (Chat / QSO / Field Day modes). Headless-testable. |
 | `tempo-audio` | `crates/tempo-audio` | Real transport: `cpal` sound card (feature `device`), rig control (`rigctld` launch / serial RTS-DTR / VOX, feature `serial`), rig models (`src/rigmodels.rs`), and the slot-clock service loop. |
@@ -78,7 +79,7 @@ Outside the workspace:
 - **WSJT-X UDP or PSK Reporter changes** → `tempo-net`.
 - **UI** → `ui/src`.
 - **Modem / waveform changes (TempoFast, TempoDeep, the C ABI)** → `libtempo`, then surface
-  through `tempofast-sys` (raw) and `tempofast` (safe).
+  through `tempo-fast-sys` (raw) and `tempo-fast` (safe).
 
 When in doubt, match the crate whose responsibility (table above) best fits the
 change, and keep the boundary clean — `tempo-core` stays free of I/O,
@@ -91,7 +92,7 @@ change, and keep the boundary clean — `tempo-core` stays free of I/O,
 ### Rust workspace (modem + core + engine + net)
 
 `cargo test --workspace` builds and runs the headless test suite (modem,
-engine, net, and TempoDeep round-trips). Because `tempofast-sys` compiles `libtempo` via
+engine, net, and TempoDeep round-trips). Because `tempo-fast-sys` compiles `libtempo` via
 CMake, the Rust build needs the native modem toolchain available. On
 Debian/Ubuntu (or WSL2):
 
@@ -124,7 +125,7 @@ npm --prefix ui run build   # tsc -b && vite build
 Type-check and run the UI test suite:
 
 ```sh
-cd ui && npx tsc --noEmit && npx vitest run
+cd ui && npx tsc -b && npx vitest run
 ```
 
 `npm --prefix ui run dev` starts the Vite dev server for UI work.
@@ -211,7 +212,7 @@ Apple Silicon, documented fully in [`MACOS.md`](MACOS.md). Needs
 2. Make your change on a topic branch, with focused commits.
 3. Run `cargo fmt --all`, `cargo clippy --all-targets`, and
    `cargo test --workspace` locally; if you touched the UI, also run
-   `cd ui && npx tsc --noEmit && npx vitest run`; for a cross-compiled Windows
+   `cd ui && npx tsc -b && npx vitest run`; for a cross-compiled Windows
    build, run `./scripts/build-windows-cross.sh`.
 4. Open a pull request against `main` describing **what** changed and **why**.
    For modem/waveform or protocol changes, say how you validated it (and call
