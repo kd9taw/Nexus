@@ -227,19 +227,20 @@ const INTENT_PRESETS: Record<
   MapIntent,
   { kind: Projection; colorBy: 'need' | 'snr'; layers: Partial<Record<LayerKey, boolean>> }
 > = {
-  // Chase DX: spinnable globe, need-colored, openings + DXpeditions + rings on.
-  dx: { kind: 'globe', colorBy: 'need', layers: { dxped: false, rings: true, heat: true } },
-  // POTA/SOTA: globe, need-colored activators; de-emphasize rings.
-  // Was the flat 'world' projection on the theory that activators are mostly domestic so a
-  // world view shows more at once. Operator ruling 2026-07-26: POTA must behave like every
-  // other intent — Chase DX, Ragchew and 6m/VHF are all globes, and having one intent silently
-  // flip the map to flat reads as a rendering bug, not a preset. Only the projection changed;
-  // the rings/heat de-emphasis is still right for this intent.
-  pota: { kind: 'globe', colorBy: 'need', layers: { dxped: false, rings: false, heat: false, ota: true } },
-  // Ragchew: globe, who-can-I-hear (signal), calm — dxped off.
-  casual: { kind: 'globe', colorBy: 'snr', layers: { dxped: false, rings: true, heat: false } },
+  // ⭐ EVERY INTENT OPENS THE FLAT WORLD MAP (operator ruling 2026-09-13: "2D" is the flat map).
+  // The 2-D renderer's Globe projection is an orthographic sphere, and a first visit to an intent
+  // that landed on it read as "the 3D map is stuck on" (tester report). Globe and Beam stay one
+  // click away in the toolbar, and a projection the operator picks is remembered per intent. All
+  // four presets still agree, which is the 2026-07-26 ruling (one intent silently switching
+  // projection reads as a rendering bug, not a preset) — they now agree on World.
+  // Chase DX: need-colored, openings + DXpeditions + rings on.
+  dx: { kind: 'world', colorBy: 'need', layers: { dxped: false, rings: true, heat: true } },
+  // POTA/SOTA: need-colored activators; de-emphasize rings and heat.
+  pota: { kind: 'world', colorBy: 'need', layers: { dxped: false, rings: false, heat: false, ota: true } },
+  // Ragchew: who-can-I-hear (signal), calm — dxped off.
+  casual: { kind: 'world', colorBy: 'snr', layers: { dxped: false, rings: true, heat: false } },
   // 6m/VHF: heat ON — visualizing the Es/F2 opening footprint IS this intent.
-  vhf: { kind: 'globe', colorBy: 'snr', layers: { dxped: false, rings: true, heat: true, openings: true } },
+  vhf: { kind: 'world', colorBy: 'snr', layers: { dxped: false, rings: true, heat: true, openings: true } },
 }
 
 /** An intent's preset applied SOFTLY over a layer table: only the layers it names change, so the
@@ -681,7 +682,7 @@ export function MapView({
     !embedded && intent ? loadIntentSetup(intent, dedicatedIntent) : null,
   )
   const [kind, setKind] = useState<Projection>(() =>
-    embedded ? 'globe' : initialSetup?.kind ?? (intent ? INTENT_PRESETS[intent].kind : 'globe'),
+    embedded ? 'globe' : initialSetup?.kind ?? (intent ? INTENT_PRESETS[intent].kind : 'world'),
   )
   const [colorBy, setColorBy] = useState<'need' | 'snr'>(
     () => initialSetup?.colorBy ?? (intent ? INTENT_PRESETS[intent].colorBy : 'need'),

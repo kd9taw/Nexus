@@ -173,10 +173,14 @@ export function ConnectView({
     if (saved != null) return saved
     return gpuCapableForGlobe()
   })
+  // "2D" IS THE FLAT MAP (operator ruling 2026-09-13). Leaving 3-D is an explicit request for the
+  // flat map, so it lands on World even when this intent last used the 2-D Globe projection — a
+  // sphere under a "2D" label is what read as "3D stuck on". Every other way into the 2-D map (an
+  // intent switch, a relaunch) restores the projection the operator left.
   const toggleMap3d = () =>
     setMap3d((v) => {
       const nv = !v
-      saveIntentSetup(intent, { map3d: nv })
+      saveIntentSetup(intent, nv ? { map3d: true } : { map3d: false, kind: 'world' })
       return nv
     })
   // FULL-SCREEN MAP (operator request): the map fills the window and everything framing it
