@@ -1167,6 +1167,8 @@ export const JA: PartialCatalog = {
   "map.flare.preview.start": "☀ プレビュー",
   "map.layers.head": "レイヤー",
   "map.layers.toggle.title": "レイヤーパネルの表示/非表示",
+  "map.layers.collapse": "レイヤーを折りたたむ",
+  "map.layers.expand.title": "レイヤーパネルを表示",
   "map.layer.opacity.aria": "{{layer}}の不透明度",
   "map.layer.daynight.label": "昼／夜（グレーライン）",
   "map.layer.relief.label": "地形（世界表示）",

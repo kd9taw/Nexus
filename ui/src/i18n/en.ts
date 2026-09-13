@@ -1814,6 +1814,8 @@ export const EN = {
   // The full-screen toolbar's way back to the panel it hid (it reuses the heading above as
   // its label, so only the tooltip is new).
   'map.layers.toggle.title': 'Show or hide the Layers panel',
+  'map.layers.collapse': 'Collapse Layers',
+  'map.layers.expand.title': 'Show the Layers panel',
   'map.layer.opacity.aria': '{{layer}} opacity',
   'map.layer.daynight.label': 'Day / night (greyline)',
   'map.layer.relief.label': 'Relief (World view)',

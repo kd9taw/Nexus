@@ -1960,6 +1960,8 @@ export const ES: PartialCatalog = {
   "map.layer.stations.label": "Mis decodificaciones",
   "map.layers.head": "Capas",
   "map.layers.toggle.title": "Mostrar u ocultar el panel de capas",
+  "map.layers.collapse": "Plegar las capas",
+  "map.layers.expand.title": "Mostrar el panel de capas",
   "map.legend.confirm": "confirmar",
   "map.legend.heat.label": "calor = actividad de banda",
   "map.legend.heat.title": "Auras de color = densidad de spots en vivo por banda; parpadeo = apertura detectada",

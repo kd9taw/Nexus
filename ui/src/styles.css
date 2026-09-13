@@ -1483,31 +1483,89 @@ button.nb-chip:hover {
   color: var(--accent);
   border-color: var(--accent);
 }
-/* 3-D layers panel — top-left overlay, matches the 2-D map's Layers aside. */
+/* ⭐ THE LAYERS PANEL — ONE PLACE ON BOTH MAP SURFACES: 2-D `.map-layers` (MapView) and 3-D
+   `.globe3d-layers` (Globe3D), both framed by MapLayersPanel.tsx. An overlay pinned top-left of the
+   map, mirroring the Conditions rail pinned right (`.map-insights`) and folding the same way.
+   WHY AN OVERLAY, not the 2-D map's old 200px in-flow column (the pane-grid contract):
+   1. The map is the centre cell of Connect's grid (`.connect-map`, overflow:hidden). At the
+      1024×768 floor that cell is ~460px wide and the in-flow column was pushed PAST its right edge,
+      where overflow:hidden clipped the whole panel off screen (headless Chrome: panel left 769px,
+      cell right 742px). An overlay is positioned inside the box it belongs to and cannot leave it.
+   2. Folding, unfolding, or peeking it in full screen never resizes the canvas — no 2-D
+      re-projection, no WebGL resize — so opening it for one checkbox costs nothing.
+   3. It is the ONE scroller in its corner: capped to the map's height, it scrolls its own rows
+      instead of being a hard-floored child under the cell's overflow:hidden.
+   z-index 4: under the hover card (5) and the selected-path chip (6). */
+.map-layers,
 .globe3d-layers {
   position: absolute;
   top: 8px;
   left: 8px;
-  z-index: 3;
+  z-index: 4;
   display: flex;
   flex-direction: column;
   gap: 2px;
+  max-height: calc(100% - 16px);
+  overflow-y: auto;
   padding: var(--space-2) 10px;
   background: color-mix(in srgb, var(--bg) 82%, transparent);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  font-size: 0.72rem;
-  /* Scroll the toggle list inside the globe cell instead of clipping the bottom rows against the
-     parent .connect-map (overflow:hidden) when the cell is short (pop-out / small window). */
-  max-height: calc(100% - 16px);
-  overflow-y: auto;
+  box-shadow: var(--elev-2);
 }
-.globe3d-layers-h {
+.globe3d-layers {
+  font-size: 0.72rem;
+}
+/* The head: the panel's name and its fold chevron (the Conditions rail's `.mi-head` shape). */
+.ml-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: 2px;
+}
+.ml-title {
+  font-size: var(--fs-label);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+}
+.ml-collapse {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.ml-collapse:hover {
+  color: var(--text);
+}
+/* FOLDED: the `.map-insights.collapsed` pill, on the left edge. A declared width, so the flare/PCA
+   chips beside it (below) know where it ends. */
+.map-layers.collapsed,
+.globe3d-layers.collapsed {
+  width: 2rem;
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-2) 0;
+  writing-mode: vertical-rl;
+  font-size: var(--fs-micro);
   font-weight: 700;
   color: var(--text-dim);
-  margin-bottom: 2px;
+  cursor: pointer;
+}
+.map-layers.collapsed:hover,
+.globe3d-layers.collapsed:hover {
+  color: var(--text);
+}
+.ml-pill-label {
+  letter-spacing: 0.04em;
 }
 .globe3d-layers label {
   display: flex;
@@ -3094,19 +3152,18 @@ button.nb-chip:hover {
   height: 8px;
   border-radius: 4px;
 }
+/* 2-D Layers rows carry an opacity slider, so the open panel has a width to give them. Placement,
+   fold and scroll are the shared overlay rule beside `.globe3d-layers`. */
 .map-layers {
-  width: 200px;
-  flex: none;
-  border-left: 1px solid var(--border);
-  padding: var(--space-3);
-  overflow: auto;
+  width: min(200px, calc(100% - 16px));
 }
-.map-layers h3 {
-  font-size: var(--fs-label);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--text-dim);
-  margin: 0 0 var(--space-2);
+/* The flare/PCA chips share the map's top-left corner with the Layers panel (rendered before them
+   in MapView for this selector): they sit just right of it, open or folded, instead of under it. */
+.map-layers ~ .flare-chip {
+  left: calc(16px + min(200px, calc(100% - 16px)));
+}
+.map-layers.collapsed ~ .flare-chip {
+  left: calc(16px + 2rem);
 }
 .map-layer {
   margin-bottom: var(--space-3);
@@ -3133,26 +3190,6 @@ button.nb-chip:hover {
   color: var(--text);
 }
 
-/* FULL-SCREEN MAP — the Layers panel PEEKED over the map instead of beside it.
-   In flow it is a 200px column, so opening it to flip one checkbox would narrow the canvas,
-   re-fire the ResizeObserver and re-project the whole map, twice per peek. Out of flow the
-   map's geometry never moves. Opaque background because it sits over live pixels (the
-   sticky/pinned-surface rule); it keeps its own `overflow:auto` from the base rule, so it is
-   still the only scroller in this corner. `.map-body` is only made a containing block here —
-   every existing overlay (hover, path, legends, insight rail) hangs off `.map-canvas-wrap`,
-   which is already relative, so nothing else moves. */
-.map-view.map-full .map-body {
-  position: relative;
-}
-.map-view.map-full .map-layers {
-  position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 6;
-  background: var(--bg-elev);
-  box-shadow: var(--elev-2);
-}
 
 /* Logbook header action buttons (Import ADIF / Log QSO). */
 /* Export date range (#98) — compact from/to beside Export ADIF. Vars only, so both themes hold. */

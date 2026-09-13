@@ -14,7 +14,7 @@
 //    and recompiled ~3×/s with nothing on screen changing (65–72% main thread in headless Chrome).
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { forwardRef, useEffect, useImperativeHandle } from 'react'
-import { render, cleanup, act } from '@testing-library/react'
+import { render, cleanup, act, fireEvent, screen } from '@testing-library/react'
 import type { MapSpot, PropagationSnapshot, Station } from '../types'
 
 vi.mock('../api', () => ({
@@ -305,5 +305,36 @@ describe('Globe3D renders on change only', () => {
     vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(900)
     await act(async () => roCallback?.())
     expect(fake.paused).toBe(false)
+  })
+})
+
+// 3. THE 3-D LAYERS PANEL FOLDS LIKE THE 2-D ONE, AND SHARES ITS RECORD.
+//    Same component, same place, same per-window record (MapView.layersCollapse.test.tsx drives the
+//    2-D half): folding the panel on one surface leaves it folded across the 2D/3D toggle.
+describe('the 3-D Layers panel', () => {
+  const panel = () => screen.queryByRole('complementary', { name: 'Layers' })
+
+  it('collapses to a pill and back, with the state exposed to assistive tech', async () => {
+    await act(async () => {
+      render(<Globe3D {...props(snapshot([]), ROSTER)} />)
+    })
+    expect(panel(), 'CONTROL: open by default').not.toBeNull()
+    const btn = screen.getByRole('button', { name: 'Collapse Layers' })
+    expect(btn.getAttribute('aria-expanded')).toBe('true')
+    fireEvent.click(btn)
+    expect(panel()).toBeNull()
+    const pill = screen.getByRole('button', { name: 'Layers' })
+    expect(pill.getAttribute('aria-expanded')).toBe('false')
+    fireEvent.click(pill)
+    expect(panel()).not.toBeNull()
+  })
+
+  it('opens folded when the panel was left folded on the 2-D map — one place, one record', async () => {
+    localStorage.setItem('nexus.connect.layersPanel.collapsed', '1')
+    await act(async () => {
+      render(<Globe3D {...props(snapshot([]), ROSTER)} />)
+    })
+    expect(panel()).toBeNull()
+    expect(screen.getByRole('button', { name: 'Layers' })).toBeTruthy()
   })
 })

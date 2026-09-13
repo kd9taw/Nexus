@@ -52,6 +52,7 @@ import { spotTooltip } from '../propViz'
 import { txPaths, rxPaths } from '../features/mapPaths'
 import { t, type MessageKey } from '../i18n'
 import { MapInsightRail } from './prop/MapInsightRail'
+import { MapLayersPanel } from './MapLayersPanel'
 import { MapLegend, MufLegend } from './MapLegend'
 import type {
   PropagationSnapshot,
@@ -1645,11 +1646,10 @@ export default function Globe3D({
       >
         {spin ? t('globe.spin.pause') : t('globe.spin.play')}
       </button>
-      {/* Layers panel, matching the 2-D map. Grows as Phase B adds layers. (Was gated on the
-          Expert detail level, removed 2026-07-26 — the layer list is now always available.) */}
+      {/* Layers panel — the same place and the same fold as the 2-D map's (MapLayersPanel). Grows
+          as Phase B adds layers. (Was gated on the Expert detail level, removed 2026-07-26.) */}
       {(
-        <div className="globe3d-layers">
-          <span className="globe3d-layers-h">{t('globe.layers.head')}</span>
+        <MapLayersPanel className="globe3d-layers" title={t('globe.layers.head')}>
           {LAYER_ROWS.map((row) => (
             <Fragment key={row.k}>
               <label>
@@ -1677,7 +1677,7 @@ export default function Globe3D({
               )}
             </Fragment>
           ))}
-        </div>
+        </MapLayersPanel>
       )}
       {satAllHidden > 0 && (
         // The 2-D map renders this same hint word for word — one key, deliberately.

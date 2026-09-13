@@ -35,6 +35,9 @@ export const PER_SURFACE = [
   // old shared projection/layers/map3d keys stay listed because it still READS them to migrate.
   'nexus.connect.intents',
   'nexus.connect.layers',
+  // The Layers panel folded to its pill (MapLayersPanel) — per window, like the Conditions rail,
+  // and one record for the 2-D and 3-D panels, which sit in the same place.
+  'nexus.connect.layersPanel.collapsed',
   'nexus.connect.map3d',
   // The map's full-screen chrome-hide. Per-surface for the same reason map3d is — it is a
   // statement about ONE window — and the one per-surface key here that is deliberately read

@@ -2514,6 +2514,8 @@ export const DE: PartialCatalog = {
   "map.flare.preview.start": "☀ Vorschau",
   "map.layers.head": "Ebenen",
   "map.layers.toggle.title": "Ebenen-Panel ein-/ausblenden",
+  "map.layers.collapse": "Ebenen einklappen",
+  "map.layers.expand.title": "Ebenen-Panel anzeigen",
   "map.layer.opacity.aria": "Deckkraft {{layer}}",
   "map.layer.daynight.label": "Tag / Nacht (Greyline)",
   "map.layer.relief.label": "Relief (Weltansicht)",

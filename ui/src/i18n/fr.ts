@@ -1960,6 +1960,8 @@ export const FR: PartialCatalog = {
   "map.layer.stations.label": "Mes décodages",
   "map.layers.head": "Couches",
   "map.layers.toggle.title": "Afficher ou masquer le panneau des couches",
+  "map.layers.collapse": "Réduire les couches",
+  "map.layers.expand.title": "Afficher le panneau des couches",
   "map.legend.confirm": "confirmé",
   "map.legend.heat.label": "chaleur = activité bande",
   "map.legend.heat.title": "Auras colorées = densité de spots en direct par bande ; pulsation = ouverture détectée",

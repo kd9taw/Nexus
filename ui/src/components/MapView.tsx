@@ -42,6 +42,7 @@ import type {
   WorkableCard,
 } from '../types'
 import { MapInsightRail } from './prop/MapInsightRail'
+import { MapLayersPanel } from './MapLayersPanel'
 import type { Theme } from '../useTheme'
 import { getAurora, getDeclination, getPca, getSatellites, getLog, getLogStats, getOtaMapSpots } from '../api'
 // CQ-zone boundaries (HB9HIL hamradio-zones-geojson, MIT — see NOTICE): bundled
@@ -713,7 +714,7 @@ export function MapView({
   const [full, setFull] = useState(() => !embedded && loadFull())
   // The Layers panel, peeked while full-screen. Transient by design: full screen means the
   // panel is away, and re-hiding it on the way in/out is what makes ONE button the whole
-  // story. It comes back as an overlay (see `.map-view.map-full .map-layers`) so peeking at
+  // story. It comes back as the same overlay it always is (see `.map-layers`) so peeking at
   // a layer never re-flows the canvas — a 200 px shove would re-project and repaint the
   // whole map twice for a checkbox.
   const [layersPeek, setLayersPeek] = useState(false)
@@ -3218,6 +3219,80 @@ export function MapView({
           )}
           {!embedded && <MapLegend />}
           {layers.muf.visible && <MufLegend />}
+          {/* THE LAYERS PANEL — an overlay pinned top-left of the map: the same place and the same fold
+              as on the 3-D globe (MapLayersPanel; why an overlay, not a column: `.map-layers` in
+              styles.css). Gated on the embedded/standalone distinction only (the Expert gate went
+              2026-07-26). Full screen is the third state: the panel is away, and the toolbar's
+              Layers button peeks it back (see `layersPeek`). Rendered BEFORE the flare/PCA chips: they
+              sit beside it via a sibling selector (`.map-layers ~ .flare-chip`). */}
+          {!embedded && (!full || layersPeek) && (
+            <MapLayersPanel className="map-layers" title={t('map.layers.head')}>
+              {(Object.keys(layers) as LayerKey[]).map((k) => (
+                <div className="map-layer" key={k}>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={layers[k].visible}
+                      onChange={(e) => setLayers((L) => ({ ...L, [k]: { ...L[k], visible: e.target.checked } }))}
+                    />
+                    {layerLabel(k)}
+                  </label>
+                  {k === 'flare' && (
+                    // The layer is event-driven (nothing draws below an M1 flare), so
+                    // give the operator a way to SEE it on a quiet sun: a 60 s
+                    // simulated X2, map visuals only, chip labeled PREVIEW.
+                    <button
+                      type="button"
+                      className={`flare-preview${flarePreview ? ' active' : ''}`}
+                      onClick={() => setFlarePreview((p) => !p)}
+                      title={t('map.flare.preview.title')}
+                    >
+                      {flarePreview ? t('map.flare.preview.stop') : t('map.flare.preview.start')}
+                    </button>
+                  )}
+                  {k === 'sats' && layers.sats.visible && (
+                    // The ★/All chip, ON the surface it filters. The Passes pane
+                    // carries the same chip, but that pane may not be placed in the
+                    // layout at all — a persisted default-ON filter with no control
+                    // in sight would silently thin the sky. Also the road back after
+                    // a double-click unstar hides a bird in ★-only view.
+                    <button
+                      type="button"
+                      className={`sat-fav-toggle${satFav ? ' on' : ''}`}
+                      aria-label={t('map.sats.filter.aria')}
+                      aria-pressed={satFav}
+                      title={satFav ? t('map.sats.filter.on.title') : t('map.sats.filter.off.title')}
+                      onClick={() => setSatFavOnly(!satFav)}
+                    >
+                      {satFav ? '★' : t('map.sats.filter.all')}
+                    </button>
+                  )}
+                  {k === 'coverage' && (
+                    <select
+                      className="map-coverage-dim"
+                      value={coverageDim}
+                      onChange={(e) => setCoverageDim(e.target.value as 'grids' | 'zones')}
+                      title={t('map.coverage.dim.title')}
+                      aria-label={t('map.coverage.dim.aria')}
+                    >
+                      {/* The <option> VALUES are persisted tokens; only these labels are read. */}
+                      <option value="grids">{t('map.coverage.dim.grids')}</option>
+                      <option value="zones">{t('map.coverage.dim.zones')}</option>
+                    </select>
+                  )}
+                  <input
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    value={layers[k].opacity}
+                    onChange={(e) => setLayers((L) => ({ ...L, [k]: { ...L[k], opacity: Number(e.target.value) } }))}
+                    aria-label={t('map.layer.opacity.aria', { layer: layerLabel(k) })}
+                  />
+                </div>
+              ))}
+            </MapLayersPanel>
+          )}
           {flarePulsing && xrayEff != null && (
             <FlareChip
               xrayLong={xrayEff}
@@ -3240,80 +3315,6 @@ export function MapView({
             />
           )}
         </div>
-
-        {/* The layer panel used to be gated on Connect's Expert detail level too; that toggle
-            was removed 2026-07-26, so only the embedded/standalone distinction remains.
-            Full screen is the third state: the panel is away, and the toolbar's Layers
-            button brings it back over the map (never beside it — see `layersPeek`). */}
-        {!embedded && (!full || layersPeek) && (
-        <aside className="map-layers">
-          <h3>{t('map.layers.head')}</h3>
-          {(Object.keys(layers) as LayerKey[]).map((k) => (
-            <div className="map-layer" key={k}>
-              <label>
-                <input
-                  type="checkbox"
-                  checked={layers[k].visible}
-                  onChange={(e) => setLayers((L) => ({ ...L, [k]: { ...L[k], visible: e.target.checked } }))}
-                />
-                {layerLabel(k)}
-              </label>
-              {k === 'flare' && (
-                // The layer is event-driven (nothing draws below an M1 flare), so
-                // give the operator a way to SEE it on a quiet sun: a 60 s
-                // simulated X2, map visuals only, chip labeled PREVIEW.
-                <button
-                  type="button"
-                  className={`flare-preview${flarePreview ? ' active' : ''}`}
-                  onClick={() => setFlarePreview((p) => !p)}
-                  title={t('map.flare.preview.title')}
-                >
-                  {flarePreview ? t('map.flare.preview.stop') : t('map.flare.preview.start')}
-                </button>
-              )}
-              {k === 'sats' && layers.sats.visible && (
-                // The ★/All chip, ON the surface it filters. The Passes pane
-                // carries the same chip, but that pane may not be placed in the
-                // layout at all — a persisted default-ON filter with no control
-                // in sight would silently thin the sky. Also the road back after
-                // a double-click unstar hides a bird in ★-only view.
-                <button
-                  type="button"
-                  className={`sat-fav-toggle${satFav ? ' on' : ''}`}
-                  aria-label={t('map.sats.filter.aria')}
-                  aria-pressed={satFav}
-                  title={satFav ? t('map.sats.filter.on.title') : t('map.sats.filter.off.title')}
-                  onClick={() => setSatFavOnly(!satFav)}
-                >
-                  {satFav ? '★' : t('map.sats.filter.all')}
-                </button>
-              )}
-              {k === 'coverage' && (
-                <select
-                  className="map-coverage-dim"
-                  value={coverageDim}
-                  onChange={(e) => setCoverageDim(e.target.value as 'grids' | 'zones')}
-                  title={t('map.coverage.dim.title')}
-                  aria-label={t('map.coverage.dim.aria')}
-                >
-                  {/* The <option> VALUES are persisted tokens; only these labels are read. */}
-                  <option value="grids">{t('map.coverage.dim.grids')}</option>
-                  <option value="zones">{t('map.coverage.dim.zones')}</option>
-                </select>
-              )}
-              <input
-                type="range"
-                min={0}
-                max={1}
-                step={0.05}
-                value={layers[k].opacity}
-                onChange={(e) => setLayers((L) => ({ ...L, [k]: { ...L[k], opacity: Number(e.target.value) } }))}
-                aria-label={t('map.layer.opacity.aria', { layer: layerLabel(k) })}
-              />
-            </div>
-          ))}
-        </aside>
-        )}
       </div>
     </div>
   )
