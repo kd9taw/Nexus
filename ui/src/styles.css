@@ -1597,6 +1597,9 @@ button.nb-chip:hover {
 }
 .connect-map > .map-view {
   flex: 1;
+  /* The cell decides the map's width, never its toolbar's content (a flex item's auto min-width is
+     its min-content — the overflow that clipped the toolbar at 1024). map-toolbar.test.ts. */
+  min-width: 0;
 }
 /* The operatemap pop-out mounts a bare MapView with no .connect-map wrapper — same
    flex-fill rule, direct child of the detached window's own flex column instead. */
@@ -2563,7 +2566,14 @@ button.nb-chip:hover {
 .map-toolbar {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
+  /* ⭐ WRAPS. A control strip that cannot wrap has its min-content as the map's minimum width: at
+     the 1024×768 floor (a ~460px Connect cell) that pushed the map past the cell's right edge and
+     `.connect-map { overflow: hidden }` clipped Reset and Full screen out of reach; with the rails
+     dragged wider the cell reaches 280px. Wrapping keeps every control where it is, with its label
+     (any locale), and the strip simply grows a row — it is content-sized, and the canvas below is
+     the grower that absorbs the height (`.map-body { flex: 1; min-height: 0 }`). map-toolbar.test.ts. */
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-3);
   padding: var(--space-2) var(--space-3);
   border-bottom: 1px solid var(--border);
 }
@@ -2733,7 +2743,9 @@ button.nb-chip:hover {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: var(--elev-2);
-  z-index: 5;
+  /* Under the Layers panel (4): on a narrow map the two overlays meet, and the Layers rows and fold
+     chevron must stay on top — this rail's own chevron is on its far edge, clear of Layers. */
+  z-index: 3;
   scrollbar-width: thin;
   scrollbar-color: color-mix(in srgb, var(--text-dim) 55%, transparent) transparent;
 }
