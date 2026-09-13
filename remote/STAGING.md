@@ -101,6 +101,19 @@ Set it as a SECRET, never a var:
 wrangler secret put ADMIN_SUBJECT --name nexus-remote-staging
 ```
 
+**Until you do, the deploy refuses.** `wrangler.jsonc` declares it under `secrets.required`, so
+wrangler checks it exists on the Worker before uploading and stops with:
+
+```
+✘ [ERROR] The following required secrets have not been set: ADMIN_SUBJECT
+```
+
+That is fail-closed and deliberate — the alternative arrangements were worse, see below — but it
+is easy to read as a broken pipeline rather than an unfinished setup step. It cost three deploy
+runs to identify, because the deploy script used to discard Wrangler's output entirely and report
+only "Wrangler deploy failed (exit 1); inspect Cloudflare deployment state before retrying". It now
+prints the reason, redacted.
+
 A var would be readable by anyone with dashboard read access, is echoed back as plain text by
 the Worker settings endpoint, and — because `keep_vars` defaults false — wrangler would DELETE
 it on the next deploy while the deploy stayed green and the gate silently admitted nobody.
