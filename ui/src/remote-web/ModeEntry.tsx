@@ -5,6 +5,7 @@ import { CONTROL_TIERS, type StationAction } from './station-operation'
 import { setOperatingMode } from '../api'
 import type { AppSnapshot } from '../types'
 import { t } from '../i18n'
+import { controlFailureMessage } from './control-failure'
 import { pushToast } from '../toast'
 
 export type OperatingSection = Parameters<typeof setOperatingMode>[0]
@@ -38,9 +39,9 @@ export function ModeEntry({ snap, mode, workspace, onSnap }: {
         void operations.control({ action: 'radio.workspace', workspace }, observation.context).then(result => {
           if (result.outcome !== 'applied') throw Error('operationUnconfirmed')
           // The subscribed native snapshot supplies the actual resulting state.
-        }).catch(() => pushToast(t('remote.controlRequestFailed'), 'error'))
+        }).catch(error => pushToast(controlFailureMessage(error), 'error'))
       } else if (mode) {
-        void setOperatingMode(mode, true).then(s => onSnap?.(s)).catch(() => pushToast(t('remote.controlRequestFailed'), 'error'))
+        void setOperatingMode(mode, true).then(s => onSnap?.(s)).catch(error => pushToast(controlFailureMessage(error), 'error'))
       }
     }}>
     {t('remote.modeEntry.label')}

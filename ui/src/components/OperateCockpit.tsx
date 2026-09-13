@@ -15,6 +15,7 @@ import { useReceiverSettings } from '../remote-web/useReceiverSettings'
 // binding below, which is a keyboard handler with no string of its own.
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { t } from '../i18n'
+import { controlFailureMessage } from '../remote-web/control-failure'
 import { engagedInQso } from '../alerts'
 import type {
   AppSnapshot,
@@ -461,7 +462,7 @@ export function OperateCockpit({
       setSkipTx1Cmd(v).catch(() => {})
     } else if (ftRuntime && snap.remoteFtRuntime) {
       void setSkipTx1Cmd(v, { expectedTier: tier, expected: snap.remoteFtRuntime })
-        .catch(() => pushToast(t('remote.controlRequestFailed'), 'error'))
+        .catch((error) => pushToast(controlFailureMessage(error), 'error'))
     }
   }, [control, ftRuntime, snap, tier])
   const recording = snap.radio.qsoRecording

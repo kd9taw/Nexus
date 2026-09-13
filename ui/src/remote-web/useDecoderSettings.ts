@@ -2,7 +2,7 @@ import { useContext } from 'react'
 import { RemoteOperationsContext, useStationCapability } from '../stationAccess'
 import type { AppSnapshot, Tier } from '../types'
 import { pushToast } from '../toast'
-import { t } from '../i18n'
+import { controlFailureMessage } from './control-failure'
 import { useRemoteStation } from './amplifier-observation'
 import type { StationAction } from './station-operation'
 
@@ -27,7 +27,7 @@ export function useSavedReceiverSetting<A extends StationAction>(
     if (!allowed || !client || !observation.context) return
     void client.control(action, observation.context).then(result => {
       if (result.outcome !== 'applied' || result.evidence !== 'settingsSaved') throw Error('operationUnconfirmed')
-    }).catch(() => pushToast(t('remote.controlRequestFailed'), 'error'))
+    }).catch(error => pushToast(controlFailureMessage(error), 'error'))
   }
   return { allowed, change }
 }

@@ -358,3 +358,33 @@ it('finishes revocation when disconnected peers can no longer accept close notif
   expect(() => relay.sync({ peer: station, supported: true }, [], 104)).not.toThrow()
   expect(station.close).toHaveBeenCalledWith(1011, 'stationUnavailable')
 })
+
+it('records whether a failed manual log left the browser', async () => {
+  for (const answered of [true, false]) {
+    const { c, sent, reply, advance } = setup()
+    const a = c.acquire(),
+      owned = state(true)
+    reply(owned)
+    await a
+    advance(1000)
+    await vi.advanceTimersByTimeAsync(250)
+    expect(sent[sent.length - 1]!.request.type).toBe('heartbeat')
+    const action = c.log(record()).catch((e) => e)
+    if (answered) {
+      // Positive control for the spy: the heartbeat returns in time, so the QSO IS sent.
+      reply({ ...owned })
+      await Promise.resolve()
+      await Promise.resolve()
+      const request = sent.filter((m) => m.request.type === 'logManual')
+      expect(request).toHaveLength(1)
+      c.receive({ type: 'operationResponse', requestId: request[0]!.request.requestId, error: 'staleContext' })
+      expect(await action).toMatchObject({ message: 'staleContext', sent: true })
+    } else {
+      advance(201)
+      await vi.advanceTimersByTimeAsync(201)
+      expect(await action).toMatchObject({ message: 'windowExpired', sent: false })
+      expect(sent.some((m) => m.request.type === 'logManual')).toBe(false)
+    }
+    c.disconnected()
+  }
+})

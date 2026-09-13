@@ -378,3 +378,41 @@ it('refuses stale radio displays, unconfigured targets, extra arguments and pre-
   await expect(legacy.client.control({action:'radio.select',radioId:2})).rejects.toThrow('stationUnsupported')
   legacy.client.disconnected()
 })
+
+it('records whether a failed control left the browser, and sends nothing for one refused before sending', async () => {
+  // Positive control for the transport spy: this request IS sent, and the station refuses it.
+  const answered = setup()
+  const refused = answered.client.control(action).catch(e => e)
+  await Promise.resolve(); await Promise.resolve()
+  const request = answered.sent.filter(w => w.request.type === 'stationControl')
+  expect(request).toHaveLength(1)
+  answered.client.receive({ type: 'operationResponse', requestId: request[0].request.requestId, error: 'staleContext' })
+  expect(await refused).toMatchObject({ message: 'staleContext', sent: true })
+  expect(answered.client.getSnapshot().controlError).toEqual({ code: 'staleContext', sent: true })
+  answered.client.disconnected()
+
+  // A heartbeat in flight outlives the click's freshness window: refused before anything is sent.
+  const h = setup()
+  await h.advance(1000)
+  expect(h.sent[h.sent.length - 1].request.type).toBe('heartbeat')
+  const dropped = h.client.control(action).catch(e => e)
+  await h.advance(250)
+  expect(await dropped).toMatchObject({ message: 'windowExpired', sent: false })
+  expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(0)
+  expect(h.client.getSnapshot().controlError).toEqual({ code: 'windowExpired', sent: false })
+  h.client.disconnected()
+})
+
+it('marks a Log QSO gesture refused before sending as not sent', async () => {
+  const h = setup(storage(), ['qsoLogging'], 4)
+  await h.advance(1000)
+  expect(h.sent[h.sent.length - 1].request.type).toBe('heartbeat')
+  const reads = { kind: 'remote', invoke: vi.fn() } as unknown as ApplicationTransport
+  const transport = controlTransport(reads, { age: () => Infinity } as unknown as ApplicationClient, h.client)
+  const dropped = transport.invoke('log_current_qso', { expectedKey: '0'.repeat(31) + '1', expectedTier: 'FT8',
+    expectedQso: { dxcall: 'W1AW', state: 'done', txNow: null, cqRunning: false } }).catch(e => e)
+  await h.advance(250)
+  expect(await dropped).toMatchObject({ message: 'windowExpired', sent: false })
+  expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(0)
+  h.client.disconnected()
+})

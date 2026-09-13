@@ -6,7 +6,7 @@ import { useStationData, RemoteOperationsContext } from '../stationAccess'
 export { RemoteOperationsContext } from '../stationAccess'
 import type { LoggedQso } from '../types'
 import { manualRecord, type ManualRecord } from './operation-protocol'
-import type { OperationClient } from './operation-client'
+import { OperationFailure, type OperationClient } from './operation-client'
 import { ObserverRecallEntry, RemoteRecall, type RemoteRecallEntryProps } from './RemoteRecall'
 // Radio units are invariant protocol tokens, never translated or locale-formatted.
 const FREQUENCY_UNIT = 'MHz'
@@ -55,7 +55,7 @@ export function LoggingAuthority({ client }: { client: OperationClient }) {
         </button>
       )}
       {(view.controlPending || view.controlResult || view.controlError) && <div className="remote-control-result">
-        {view.controlError && !view.controlPending ? <span role="alert">{t('remote.controlRequestFailed')}</span> :
+        {view.controlError && !view.controlPending ? <span role="alert" data-control-failure={view.controlError.sent ? 'unconfirmed' : 'notSent'}>{view.controlError.sent ? t('remote.controlRequestFailed') : t('remote.controlNotSent')}</span> :
         <span role="status">{view.controlResult?.outcome === 'applied' ? view.controlResult.evidence === 'settingsSaved' ? t('remote.controlSettingsSaved') : t('remote.controlApplied')
           : view.controlResult?.outcome === 'rejected' ? t('remote.controlRefused')
           : (view.controlSending || view.controlResult?.outcome === 'pending') && view.connected ? t('remote.controlPending') : t('remote.controlUnknown')}</span>}
@@ -118,7 +118,9 @@ export function RemoteLogEntry({
     available = useStationData()
   const [error, setError] = useState<string | null>(null),
     [resetKey, setResetKey] = useState(0),
-    [logged, setLogged] = useState(false)
+    [logged, setLogged] = useState(false),
+    // Whether the failed entry's request left this browser; only an unsent one says "not sent".
+    [errorSent, setErrorSent] = useState(true)
   const submitted = useRef<string | null>(null)
   useEffect(() => {
     const result = view.resolved,
@@ -127,6 +129,7 @@ export function RemoteLogEntry({
     if (result?.operationId === own && result.outcome !== 'unknown') {
       submitted.current = null
       setError(result.outcome === 'rejected' ? 'rejected' : null)
+      setErrorSent(true)
       if (result.outcome === 'applied') {
         setResetKey((k) => k + 1)
         setLogged(true)
@@ -158,6 +161,7 @@ export function RemoteLogEntry({
       setLogged(true)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'unconfirmed')
+      setErrorSent(!(e instanceof OperationFailure) || e.sent)
       throw e
     }
   }
@@ -168,8 +172,10 @@ export function RemoteLogEntry({
       const result = await client.resolve()
       if (result.outcome === 'applied') setLogged(true)
       else setError(result.outcome === 'rejected' ? 'rejected' : 'unconfirmed')
+      setErrorSent(true)
     } catch {
       setError('unconfirmed')
+      setErrorSent(true)
     }
   }
   if (!view.supported && !view.unresolved)
@@ -188,7 +194,7 @@ export function RemoteLogEntry({
       {view.submitting && <p role="status">{t('remote.loggingSaving')}</p>}
       {!view.submitting && (error || view.unresolved) && (
         <p role="alert">
-          {view.unresolved ? t('remote.loggingUnknown') : t('remote.loggingRefused')}
+          {view.unresolved ? t('remote.loggingUnknown') : errorSent ? t('remote.loggingRefused') : t('remote.loggingNotSent')}
         </p>
       )}
       {view.unresolved && !view.submitting && view.pendingDraft && (
@@ -212,7 +218,10 @@ export function RemoteLogEntry({
               void client
                 .acknowledgeAfterCheckingLog()
                 .then(() => setError(null))
-                .catch(() => setError('unconfirmed'))
+                .catch(() => {
+                  setError('unconfirmed')
+                  setErrorSent(true)
+                })
             }}
           >
             {t('remote.loggingCheckedLog')}

@@ -14,6 +14,7 @@ import type { AppSnapshot, BandChannel, Settings } from '../types'
 import { installApplicationTransport } from '../applicationTransport'
 import { ErrorBoundary } from '../components/ErrorBoundary'
 import { t } from '../i18n'
+import { controlFailureMessage } from './control-failure'
 import { StationControlContext, StationDataContext } from '../stationAccess'
 import { RemoteObservationContext } from './amplifier-observation'
 import { initialState, startMonitor } from '../remote-monitor/session'
@@ -30,7 +31,7 @@ export function BrowserApplication({ connection, disconnect }: { connection: Hos
   const client = connection.application
   const collections = useMemo(() => new RemoteCollections(client), [client])
   const tuning = useMemo(() => connection.operations ? new WheelTuning(connection.operations, client,
-    () => pushToast(t('remote.controlRequestFailed'), 'error')) : null, [client, connection.operations])
+    error => pushToast(controlFailureMessage(error), 'error')) : null, [client, connection.operations])
   useEffect(() => { tuning?.activate(); return () => tuning?.dispose() }, [tuning])
   const [history, setHistory] = useState<RemoteHistory | null>(null)
   const [observation, setObservation] = useState(initialState)

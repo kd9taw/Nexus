@@ -14,6 +14,15 @@ import {
   type OperationState,
   type OperationValue
 } from './operation-protocol'
+/** A station command or manual log that failed. `sent` records whether its request actually left
+ * this browser: false means nothing reached the station, so nothing there changed. The view says
+ * "not sent" only then; a request that left and got no confirmation stays "not confirmed". */
+export class OperationFailure extends Error {
+  constructor(message: string, readonly sent: boolean) {
+    super(message)
+  }
+}
+export type ControlFailure = { code: string; sent: boolean }
 export type OperationView = {
   supported: boolean
   state: OperationState | null
@@ -29,7 +38,7 @@ export type OperationView = {
   controlPending: PendingControl | null
   controlSending: boolean
   controlResult: ControlOutcome | null
-  controlError: string | null
+  controlError: ControlFailure | null
   controlRefreshing?: boolean
   stopSending?: boolean
   stopAvailable?: boolean
@@ -213,7 +222,7 @@ export class OperationClient {
     // Keeping a slot through the reply also handles delayed/clustered delivery.
     if (entry) entry.until = this.now() + OPERATION_RATE_WINDOW_MS
   }
-  private request(request: OperationRequest): Promise<OperationValue> {
+  private request(request: OperationRequest, onSent?: () => void): Promise<OperationValue> {
     if (!this.view.connected) return Promise.reject(new Error('stationUnavailable'))
     if (this.pending) return Promise.reject(new Error('remoteBusy'))
     if (this.requestCount() >= OPERATION_RATE_LIMIT) return Promise.reject(new Error('remoteBusy'))
@@ -258,6 +267,7 @@ export class OperationClient {
       this.update({ busy: true, submitting: request.type === 'logManual', error: null })
       try {
         this.send(JSON.stringify({ type: 'operationRequest', ...(this.operationVersion >= 2 ? { operationVersion: this.operationVersion } : {}), request }))
+        onSent?.()
       } catch {
         clearTimeout(p.timer)
         this.pending = null
@@ -475,6 +485,14 @@ export class OperationClient {
     }
   }
   async log(record: ManualRecord, onSubmitted?: (id: string) => void): Promise<OperationOutcome> {
+    const attempt = { sent: false }
+    try {
+      return await this.submitLog(record, onSubmitted, attempt)
+    } catch (error) {
+      throw new OperationFailure(error instanceof Error ? error.message : 'stationUnavailable', attempt.sent)
+    }
+  }
+  private async submitLog(record: ManualRecord, onSubmitted: ((id: string) => void) | undefined, attempt: { sent: boolean }): Promise<OperationOutcome> {
     const s = this.view.state,
       until = this.stateUntil,
       draft = structuredClone(manualRecord(record))
@@ -515,7 +533,7 @@ export class OperationClient {
           requestId,
           ...intent,
           record: draft
-        })
+        }, () => { attempt.sent = true })
         if (!('outcome' in r) || 'operation' in r) throw new Error('invalidRequest')
         return r
       })
@@ -552,7 +570,7 @@ export class OperationClient {
   /** A coalesced gesture keeps its original authority while its target is being
    * formed. The returned sender cannot borrow a newer heartbeat or lease. */
   prepareControl(displayed?: ControlContext): (action: StationAction) => Promise<ControlOutcome> {
-    if (!this.view.state || !this.view.fresh) throw Error('notController')
+    if (!this.view.state || !this.view.fresh) throw new OperationFailure('notController', false)
     const captured = { state: structuredClone(this.view.state), until: this.stateUntil }
     const context = displayed && structuredClone(displayed)
     return action => this.controlFrom(action, context, captured)
@@ -561,14 +579,16 @@ export class OperationClient {
     return this.controlFrom(action, displayed)
   }
   private async controlFrom(action: StationAction, displayed?: ControlContext, captured?: CapturedControl): Promise<ControlOutcome> {
+    const attempt = { sent: false }
     this.update({ controlError: null })
-    try { return await this.executeControl(action, displayed, captured) }
+    try { return await this.executeControl(action, displayed, captured, attempt) }
     catch (error) {
-      this.update({ controlError: error instanceof Error ? error.message : 'stationUnavailable' })
-      throw error
+      const code = error instanceof Error ? error.message : 'stationUnavailable'
+      this.update({ controlError: { code, sent: attempt.sent } })
+      throw new OperationFailure(code, attempt.sent)
     }
   }
-  private async executeControl(action: StationAction, displayed?: ControlContext, captured?: CapturedControl): Promise<ControlOutcome> {
+  private async executeControl(action: StationAction, displayed: ControlContext | undefined, captured: CapturedControl | undefined, attempt: { sent: boolean }): Promise<ControlOutcome> {
     const s = captured?.state ?? this.view.state, until = captured?.until ?? this.stateUntil, intent = structuredClone(stationAction(action))
     if (this.operationVersion < controlVersion(intent)) throw Error('stationUnsupported')
     if (!this.controlStorage) throw Error('receiptStorageUnavailable')
@@ -595,7 +615,7 @@ export class OperationClient {
         const saved = { operationId: request.requestId, action: intent }
         this.controlStorage!.write(saved)
         this.update({ controlPending: saved, controlResult: null })
-        const result = await this.request(request)
+        const result = await this.request(request, () => { attempt.sent = true })
         if (!('operation' in result)) throw Error('invalidOperation')
         return result
       })

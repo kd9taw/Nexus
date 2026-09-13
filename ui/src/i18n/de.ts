@@ -28,6 +28,7 @@ export const DE: PartialCatalog = {
   "remote.loggingLocalHint": "Jeder Browser braucht eine eigene Erlaubnis zur Fernprotokollierung. Sie bleibt bei einem Neustart von Nexus erhalten, solange der Browser freigegeben bleibt. Diese erlaubt keine Funkgeräte- oder Sendesteuerung.",
   "remote.loggingTakeOver": "Fernprotokollierung beenden und Berechtigungen löschen",
   "remote.controlRequestFailed": "Der Befehl wurde nicht bestätigt. Prüfen Sie die Berechtigung zur Stationssteuerung und die aktuellen Messwerte.",
+  "remote.controlNotSent": "Nicht gesendet. Nichts hat die Station erreicht, dort hat sich also nichts geändert. Versuchen Sie es erneut.",
   "remote.controlLocalHint": "Erlaube die Stationssteuerung für jeden Browser einzeln. Diese Berechtigung umfasst unterstützte Empfänger-, Funkgeräte- und Verstärkerfunktionen und bleibt bei einem Neustart von Nexus erhalten, solange der Browser freigegeben bleibt. Senden erfordert eine eigene Berechtigung.",
   "remote.transmitAllow": "FT8/FT4-Senden erlauben",
   "remote.transmitRevoke": "Sendeberechtigung entziehen",
@@ -80,6 +81,7 @@ export const DE: PartialCatalog = {
   "remote.loggingSaved": "QSO in der Logdatei der Station gespeichert. Externe Übertragungen nutzen die bestehenden Warteschlangen der Station.",
   "remote.loggingUnknown": "Das QSO könnte bereits protokolliert sein. Diesen Eintrag behalten und das Ergebnis vor einem erneuten Versuch prüfen.",
   "remote.loggingRefused": "Die Station hat diesen Eintrag nicht bestätigt. Protokollierungssteuerung und aktuelle Betriebsart der Station prüfen, dann erneut versuchen.",
+  "remote.loggingNotSent": "Nicht gesendet. Nichts hat die Station erreicht, dieses QSO wurde also nicht geloggt. Versuchen Sie es erneut.",
   "remote.loggingCheckResult": "Ergebnis des übermittelten QSO prüfen",
   "remote.loggingCheckedLog": "Stationslogbuch geprüft — Prüfung abschließen",
   // Hosted Remote observation and local station approval.

@@ -2,7 +2,7 @@ import type { AppSnapshot } from '../types'
 import { bandLabelForMhz } from '../band'
 import { clampWheelTarget } from '../wheelTuningPolicy'
 import type { ApplicationClient } from './application-client'
-import type { OperationClient } from './operation-client'
+import { OperationFailure, type OperationClient } from './operation-client'
 import type { StationAction, ControlOutcome, ControlContext } from './station-operation'
 
 export type WheelSource = { dialMhz: number; sideband: string; owner?: object; context?: ControlContext | null }
@@ -29,7 +29,7 @@ export class WheelTuning {
   private live = false
   private sending = false
   private listeners = new Set<() => void>()
-  constructor(private operations: OperationClient, private application: ApplicationClient, private failed: () => void) {}
+  constructor(private operations: OperationClient, private application: ApplicationClient, private failed: (error: OperationFailure) => void) {}
   subscribe = (f: () => void) => { this.listeners.add(f); return () => { this.listeners.delete(f) } }
   getPending = () => this.sending
   private notify() { for (const f of this.listeners) f() }
@@ -124,6 +124,7 @@ export class WheelTuning {
     this.burst = null
     if (b.targetHz === b.fromHz) return
     this.reading = b; this.sending = true; this.notify()
+    let submitted = false
     try {
       // Re-read the shared station stream before dispatch. A local dial change,
       // unavailable sample or another radio's snapshot cancels the entire burst.
@@ -134,9 +135,13 @@ export class WheelTuning {
         Math.round(radio.dialMhz * 1e6) !== b.fromHz || radio.sideband !== b.sideband) throw Error('staleContext')
       const dialMhz = b.targetHz / 1e6
       this.reading = null
+      submitted = true
       const result = await b.send({ action: 'radio.frequency', dialMhz, band: bandLabelForMhz(dialMhz), sideband: b.sideband as 'USB' | 'LSB' | 'AM' | 'FM' })
       if (result.outcome !== 'applied' || result.evidence !== 'radioReadback') throw Error('operationUnconfirmed')
-    } catch { if (this.live && generation === this.generation) this.failed() }
+    } catch (error) {
+      if (this.live && generation === this.generation)
+        this.failed(error instanceof OperationFailure ? error : new OperationFailure(error instanceof Error ? error.message : 'operationUnconfirmed', submitted))
+    }
     finally { if (generation === this.generation) { this.reading = null; this.sending = false; this.notify() } }
   }
 }
