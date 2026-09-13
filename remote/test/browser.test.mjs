@@ -275,7 +275,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
     let loggingAllowed=false,loggingLease=null,loggingRevision=1,loggingSequence=0,loseLogReply=false
     let qsoPrompt=true
     const qsoRecord={call:'W1AW',grid:'FN31',country:null,state:null,band:'20m',freqMhz:14.0755,mode:'FT8',rstSent:'-10',rstRcvd:'-12',name:null,qth:null,comment:null,notes:null,whenUnix:1700000000,confirmed:false,awardConfirmed:false}
-    let stationControls=false,loseSpotReply=false,transmitAllowed=false,transmitEpoch='0000000000000001'
+    let stationControls=false,loseSpotReply=false,unknownResults=0,transmitAllowed=false,transmitEpoch='0000000000000001'
     const stopRequests=[]
     if(workSpot){
       const original=collections.needs.rows[0]
@@ -526,7 +526,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
           value={operation:'stationControl',operationId:r.requestId,outcome:'applied',evidence:qsoEvidence??(a.action.startsWith('ft.')?'stationState':['amplifier.followBand','decoder.js8Speed','decoder.msk144Period','decoder.depth','receiver.rxOffset','receiver.rxGain'].includes(a.action)?'settingsSaved':a.action.startsWith('radio.')?'radioReadback':a.action.startsWith('amplifier.')?'amplifierReadback':'receiverState')}
           loggingReceipts.set(r.requestId,value);loggingRevision++;applicationRevision++
           if(loseSpotReply&&a.action==='radio.workSpot')continue
-        }else if(r.type==='result'){value=loggingReceipts.get(r.operationId);if(!value)error='resultExpired';else if(loseSpotReply&&value.operation==='stationControl')value={operation:'stationControl',operationId:r.operationId,outcome:'unknown',reason:'hardwareUnconfirmed'}}
+        }else if(r.type==='result'){value=loggingReceipts.get(r.operationId);if(!value)error='resultExpired';else if(loseSpotReply&&value.operation==='stationControl'){value={operation:'stationControl',operationId:r.operationId,outcome:'unknown',reason:'hardwareUnconfirmed'};unknownResults++}}
         else value={stationBootId:loggingBoot,allowed:loggingAllowed||stationControls,phase:loggingLease?'controlling':loggingAllowed||stationControls?'available':'localPermissionRequired',leaseId:loggingLease,revision:loggingRevision,commandWindowId:loggingLease?loggingWindow:null,nextSequence:loggingLease?loggingSequence+1:null,leaseRemainingMs:loggingLease?Math.max(0,Math.floor(loggingLeaseUntil-performance.now())):null,actions:loggingAllowed?['log.manual']:[],txArmed:!!ftOperating&&!!loggingLease&&transmitAllowed&&applicationData.get_snapshot.radio.txEnabled,...(ftOperating?{transmitEpoch:transmitAllowed?transmitEpoch:null}:{}),...(stationControls?{controls:{context:controlContext(),capabilities:request.operationVersion>=3?['decoder','amplifier','frequency','mode','tier','ampFollowBand','workspace','decoderSettings','receiverSettings','receiverGain','bandSelection','receiverFilter','receiverDsp','phoneMode','fmTuning','fmReceiver','radioLevels',...(transmitAllowed?['ftOperate','ftCall','ftExchange','ftMessages','ftSettings','ftRuntime']:[]),...(ftOperating&&loggingAllowed?['qsoLogging']:[]),...(workSpot?['workSpot']:[]),...(radioSelection?['radioSelection']:[])]:['decoder','amplifier']}}:{})}
         source.send({type:'operationResponse',sessionId:request.sessionId,requestId:r.requestId,...(error?{error}:{value})});continue
       }
@@ -1069,8 +1069,8 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       await until(`document.querySelector('.remote-logging-authority')?.textContent.includes('Station control active')`)
       await fresh();await click(row('N2DIG'));await sleep(250)
       assert.equal(stationRequests.length,0,'digital Work is still unsupported and cannot fall back to a plain QSY')
-      const work=async(call,mode)=>{
-        await click(button('Needed'));await until(`!!${row(call)}`);await fresh()
+      const work=async(call,mode,open=()=>click(button('Needed')))=>{
+        await open();await until(`!!${row(call)}`);await fresh()
         const before=stationRequests.length,context=controlContext();await click(row(call))
         await until(visible(mode));await until(`document.querySelector('.remote-control-result')?.textContent.includes('confirmed')`)
         assert.equal(stationRequests.length,before+1)
@@ -1099,28 +1099,36 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       await until(`document.querySelector('.phone-cockpit .remote-log-entry')?.textContent.includes('QSO saved')`)
       assert.equal(loggedRequests.length,1)
       assert.deepEqual({call:loggedRequests[0].record.call,band:loggedRequests[0].record.band,freqMhz:loggedRequests[0].record.freqMhz,mode:loggedRequests[0].record.mode},{call:'N2DXPH',band:'20m',freqMhz:14.19876,mode:'SSB'})
-      await work('N3DXCW','cw')
+      // Work N3DXCW from Quick Operate, so its confirmation toast is checked against Quick's
+      // navigation while it is on screen. That toast lives 4 s; it used to be looked for after
+      // the eight-layout sweep below, which a loaded runner does not finish inside 4 s.
+      await click(`document.querySelector('.remote-session-toggle')`);await click(button('Quick Operate'))
+      await until(`document.querySelector('.app')?.dataset.remotePresentation==='quick'`)
+      const quickNav=label=>`[...document.querySelectorAll('.remote-quick-nav button')].find(e=>e.textContent===${JSON.stringify(label)})`
+      await work('N3DXCW','cw',async()=>{await click(quickNav('Hunt'));await until(`document.querySelector('.app').dataset.remoteView==='needed'`)})
+      await until(`document.querySelector('.ui-toast-msg')?.textContent.includes('N3DXCW')`)
+      assert.ok(await evaluate(`(()=>{const nav=document.querySelector('.remote-quick-nav'),r=nav.getBoundingClientRect(),toast=document.querySelector('.ui-toast-viewport').getBoundingClientRect();return toast.bottom<r.top&&[...nav.querySelectorAll('button')].every(e=>{const b=e.getBoundingClientRect();return e.contains(document.elementFromPoint(b.x+b.width/2,b.y+b.height/2))})})()`),'the actual Work toast must leave every Quick destination accessible')
       await until(`!!${button('Clear draft and use N3DXCW')}`)
       assert.equal(await evaluate(`${input('cw')}.value`),'N2DXCW')
       assert.equal(await evaluate(`${input('cw')}===window.__dxCwInput`),true)
       assert.ok(await evaluate(`document.querySelector('.cw-cockpit .le-hint')?.textContent.includes('14.023')`))
-      await click(`document.querySelector('.remote-session-toggle')`);await click(button('Quick Operate'))
-      await until(`document.querySelector('.app')?.dataset.remotePresentation==='quick'`)
       const draftLayouts=[]
       for(const [width,height,zoom]of [[390,844,1],[1280,800,1],[390,844,1.75],[1280,800,1.75]])for(const theme of ['dark','light']){
         await browser.call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false},session)
         await evaluate(`document.documentElement.style.setProperty('--ui-zoom','${zoom}');document.documentElement.dataset.theme='${theme}';window.dispatchEvent(new Event('resize'))`);await settledLayout()
         await evaluate(`${button('Clear draft and use N3DXCW')}.scrollIntoView({block:'center',behavior:'instant'});true`);await settledLayout()
-        const shape=await evaluate(`(()=>{const e=${button('Clear draft and use N3DXCW')},r=e.getBoundingClientRect(),input=${input('cw')};return {target:r.toJSON(),hit:e.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)),sameInput:input===window.__dxCwInput,call:input.value,docW:document.documentElement.scrollWidth,horizontal:[...document.querySelectorAll('.cw-cockpit, .cw-cockpit *')].filter(e=>e.clientWidth>0&&e.scrollWidth>e.clientWidth+1&&/auto|scroll/.test(getComputedStyle(e).overflowX)).map(e=>e.className)}})()`)
+        const shape=await evaluate(`(()=>{const e=${button('Clear draft and use N3DXCW')},r=e.getBoundingClientRect(),input=${input('cw')};return {target:r.toJSON(),hit:e.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)),hitElement:document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)?.outerHTML.slice(0,200)??null,stale:document.querySelector('.app')?.dataset.remoteStale??null,availability:window.__availabilityTrace.slice(-4),toast:[...document.querySelectorAll('.ui-toast-msg')].map(m=>({text:m.textContent,rect:(m.closest('li')??m).getBoundingClientRect().toJSON()})),nav:document.querySelector('.remote-quick-nav')?.getBoundingClientRect().toJSON()??null,sameInput:input===window.__dxCwInput,call:input.value,docW:document.documentElement.scrollWidth,horizontal:[...document.querySelectorAll('.cw-cockpit, .cw-cockpit *')].filter(e=>e.clientWidth>0&&e.scrollWidth>e.clientWidth+1&&/auto|scroll/.test(getComputedStyle(e).overflowX)).map(e=>e.className)}})()`)
         if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,`draft-${width}-${zoom}-${theme}.png`),Buffer.from(shot.data,'base64'))}
-        assert.ok(shape.sameInput&&shape.call==='N2DXCW'&&shape.hit&&shape.docW<=width+1)
+        const draftShape=JSON.stringify({width,height,zoom,theme,shape})
+        assert.ok(shape.sameInput,'the CW contact input must not remount across a draft layout: '+draftShape)
+        assert.equal(shape.call,'N2DXCW','the CW draft must survive a layout change: '+draftShape)
+        assert.ok(shape.hit,'the draft replacement button must be the hit target at its center: '+draftShape)
+        assert.ok(shape.docW<=width+1,'the document must not scroll sideways: '+draftShape)
         assert.deepEqual(shape.horizontal,[],'explicit Work draft replacement must fit without sideways scrolling')
         assert.equal(stationRequests.length,3);draftLayouts.push({width,height,zoom,theme,shape})
       }
       await click(button('Clear draft and use N3DXCW'))
-      await until(`document.querySelector('.ui-toast-msg')?.textContent.includes('N3DXCW')`)
-      assert.ok(await evaluate(`(()=>{const nav=document.querySelector('.remote-quick-nav'),r=nav.getBoundingClientRect(),toast=document.querySelector('.ui-toast-viewport').getBoundingClientRect();return toast.bottom<r.top&&[...nav.querySelectorAll('button')].every(e=>{const b=e.getBoundingClientRect();return e.contains(document.elementFromPoint(b.x+b.width/2,b.y+b.height/2))})})()`),'the actual Work toast must leave every Quick destination accessible')
-      await click(`[...document.querySelectorAll('.remote-quick-nav button')].find(e=>e.textContent==='Full Nexus')`)
+      await click(quickNav('Full Nexus'))
       await until(`document.querySelector('.app')?.dataset.remotePresentation==='full'`)
       await browser.call('Emulation.setDeviceMetricsOverride',{width:1280,height:800,deviceScaleFactor:1,mobile:false},session)
       await evaluate(`document.documentElement.style.setProperty('--ui-zoom','1');window.dispatchEvent(new Event('resize'))`);await settledLayout()
@@ -1134,6 +1142,12 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       assert.equal(stationRequests.length,4)
       assert.equal(await evaluate(visible('cw')),false,'a lost receipt cannot navigate from the station Work hint')
       assert.equal(await evaluate(`${input('cw')}.value`),'N3DXCW')
+      // The client polls `result` by itself once a second until the station answers 'unknown'.
+      // That text also shows while no answer has arrived yet, so the wait above can pass first;
+      // clearing the loss then let the automatic poll confirm the command and unmount Check
+      // before the gesture below reached it. Clear it only after the station has said 'unknown'.
+      for(let i=0;i<200&&unknownResults===0;i++)await sleep(50)
+      assert.ok(unknownResults>0,'the station must report the lost receipt as unknown before the operator checks it')
       loseSpotReply=false
       await click(`[...document.querySelectorAll('.remote-control-result button')].find(e=>e.textContent.includes('Check'))`)
       await until(`document.querySelector('.remote-control-result')?.textContent.includes('confirmed')`)
