@@ -256,7 +256,7 @@ it.each(['rtty', 'psk'])('observes the actual %s cockpit without decoder, keyboa
   await waitFor(() => expect(container.querySelector(`.${mode}-cockpit .cw-decode-text`)?.textContent).toBe(data.text))
   const root = container.querySelector(`.${mode}-cockpit`)!
   expect(root.querySelector('.pane-frame[data-pane="log"]')).not.toBeNull()
-  expect(root.textContent).toContain('Remote QSO entry is not connected yet.')
+  expect(root.textContent).toContain('Logging from this browser is not available right now.')
   expect(root.querySelector('.cw-decode-text span')?.getAttribute('style')).toContain('opacity:')
   expect(root.querySelector('.cockpit-pwr-val')?.textContent).toBe('—')
   const controls = root.querySelectorAll<HTMLInputElement | HTMLButtonElement | HTMLSelectElement>(
@@ -381,7 +381,7 @@ it.each(['cw', 'phone'])('opens the actual %s cockpit as an observer without key
     <App remote={{ snapshot: current, settings, bandPlan: [], cwPhone: true, status: <div>Observer</div> }} />
   </StationControlContext.Provider>)
   await waitFor(() => expect(container.querySelector(`.${mode}-cockpit`)).not.toBeNull())
-  expect(container.textContent).toContain('Remote QSO entry is not connected yet.')
+  expect(container.textContent).toContain('Logging from this browser is not available right now.')
   expect(container.textContent).toContain('Update the station app to view cockpit contact history.')
   const root = container.querySelector(`.${mode}-cockpit`)!
   if (mode === 'phone') {

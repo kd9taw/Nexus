@@ -45,6 +45,18 @@ it('tells a new account to confirm its email when the sign-in is refused, and ke
   fireEvent.click(await screen.findByRole('button', { name: 'Sign in or create an account' }))
   await waitFor(() => expect(service.signIn).toHaveBeenCalledTimes(1))
 })
+// After signing up, Auth0 shows its own "verified" page and never sends the operator back here, so
+// the way back has to be said before they leave.
+it('tells a signed-out visitor to confirm their email and come back, and drops the hint once signed in', async () => {
+  client(null)
+  const view = render(<RemoteApp />)
+  await screen.findByRole('button', { name: 'Create an account' })
+  expect(screen.getByText(/check your email.*confirmation link.*come back to this page and sign in/i)).toBeTruthy()
+  view.unmount()
+  client(account()); render(<RemoteApp />)
+  await screen.findByRole('button', { name: 'Sign out' })
+  expect(screen.queryByText(/confirmation link/i)).toBeNull()
+})
 it('a signed-in account with no trial yet can start pairing, and is told the clock has not started', async () => {
   client(account(false)); render(<RemoteApp />)
   // Said in the service's own words, not inferred from enabled plus an expiry against our clock.

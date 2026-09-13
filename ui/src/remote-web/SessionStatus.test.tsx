@@ -103,5 +103,5 @@ it.each([null, false])('identifies an observation-only session without offering 
   expect(screen.getByRole('status').textContent).toBe('Monitoring only')
   expect(screen.getAllByRole('button')).toHaveLength(1)
   fireEvent.click(toggle())
-  expect(screen.getByText('Monitoring only. Operating controls are not available in this preview.')).toBeTruthy()
+  expect(screen.getByText('Monitoring only. Operating controls are not available to this browser.')).toBeTruthy()
 })

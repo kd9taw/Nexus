@@ -133,12 +133,15 @@ export function RemoteApp() {
       {!ready && <p role="status">{t('monitor.connecting')}</p>}
       {ready && !configured && <p role="status">{t('remote.notConfigured')}</p>}
       {ready && error !== null && !client && <button className="remote-button" onClick={() => setLoadAttempt(value => value + 1)}>{t('shell.crash.retry')}</button>}
-      {ready && client && !session && <div className="remote-actions">
+      {ready && client && !session && <><div className="remote-actions">
         <button className="remote-button" disabled={busy} onClick={() => void act(async () => { await client.signIn() })}>{t('remote.signIn')}</button>
         {/* A first-time operator should not have to find a sign-up link on somebody else's login
             form. This is the same flow, opened on the create-account screen instead. */}
         <button className="remote-button" disabled={busy} onClick={() => void act(async () => { await client.signIn(true) })}>{t('remote.createAccount')}</button>
-      </div>}
+      </div>
+        {/* After confirming the email, Auth0 shows its own "verified" page and does not send the
+            operator back here, so the way back is said before they leave. */}
+        <p>{t('remote.signUpHint')}</p></>}
       {session && <>
         {/* The account id is only an instruction while there is something to pair. Once stations
             are approved it is support detail, not a step, and a raw UUID presented as a standing

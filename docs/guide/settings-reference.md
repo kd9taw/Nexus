@@ -63,9 +63,9 @@ recommendations.*
 ### Remote access
 
 Remote lets you use this station from a web browser. It is an early pilot on a test
-service that may be reset. The shack PC keeps the radio and stays in charge: the
-browser sends your gestures and shows what the station reports back, and your log,
-settings and radio never leave this computer.
+service that may be reset. The shack PC keeps the radio and stays in charge: what
+you click and type in the browser goes to the station, the browser shows what the
+station reports back, and your log, settings and radio never leave this computer.
 
 **Pairing.** Give the station a **Station name** and start **Pair a station**. In the
 browser, sign in, enter the code and choose **Attach this station**. Back here,
@@ -73,9 +73,9 @@ compare the account ID on both screens and choose **Approve this account pairing
 that starts the account's 14-day trial. Each browser then requests its own approval;
 compare its name and code before **Approve browser**.
 
-**Enable Remote observation** opens an outbound encrypted connection. No port
+**Turn on Remote** opens an outbound encrypted connection. No port
 forwarding is required. Pairing stays in the operating system's credential store,
-but Remote is off after every Nexus restart until you enable it again, and every
+but Remote is off after every Nexus restart until you turn it on again, and every
 permission below starts cleared. A locked or unavailable credential store leaves
 Remote disabled.
 
@@ -94,7 +94,7 @@ these it can watch the station but not change it.
   transmits remotely.
 
 No audio reaches the browser. **Revoke browser approval** removes one browser.
-**Disable Remote observation** disconnects every browser. **Revoke station access**
+**Turn off Remote** disconnects every browser. **Revoke station access**
 disconnects the station and removes its Remote pairing; pair again to reconnect.
 
 ---

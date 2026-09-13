@@ -28,11 +28,11 @@ it('renders local pairing and device approval through only the isolated Remote c
   fireEvent.click(screen.getByRole('button', { name: 'Approve this account pairing' }))
   await screen.findByText(deviceId.slice(-6))
   fireEvent.click(screen.getByRole('button', { name: 'Approve browser' }))
-  await waitFor(() => expect((screen.getByRole('button', { name: 'Enable Remote observation' }) as HTMLButtonElement).disabled).toBe(false))
-  fireEvent.click(screen.getByRole('button', { name: 'Enable Remote observation' }))
-  await screen.findByRole('button', { name: 'Disable Remote observation' })
-  fireEvent.click(screen.getByRole('button', { name: 'Disable Remote observation' }))
-  await screen.findByRole('button', { name: 'Enable Remote observation' })
+  await waitFor(() => expect((screen.getByRole('button', { name: 'Turn on Remote' }) as HTMLButtonElement).disabled).toBe(false))
+  fireEvent.click(screen.getByRole('button', { name: 'Turn on Remote' }))
+  await screen.findByRole('button', { name: 'Turn off Remote' })
+  fireEvent.click(screen.getByRole('button', { name: 'Turn off Remote' }))
+  await screen.findByRole('button', { name: 'Turn on Remote' })
   expect(actions).toContainEqual({ type: 'approve', accountId, enrollmentId: pairingId })
   expect(actions).toContainEqual({ type: 'device', deviceId, approve: true })
   expect(actions).toContainEqual({ type: 'disable' })
@@ -119,4 +119,27 @@ it('tells an operator to confirm in the browser when they approve at the shack f
   render(<RemoteStation />)
   const alert = await screen.findByRole('alert')
   expect(alert.textContent).toMatch(/confirm this station in your browser/i)
+})
+
+// The service refuses approval as `trialEnded` or `trialDisabled`, and the shack used to show one
+// shared "service access has run out" sentence for both. They need different next steps.
+it.each([
+  ['trialEnded', /trial has ended/i, /switched off/i],
+  ['trialDisabled', /switched off/i, /trial has ended/i],
+] as const)('tells the operator at the shack which refusal %s is', async (code, says, doesNotSay) => {
+  const status: RemoteStationStatus = { phase: 'approval', origin: 'https://remote-staging.hamradiotools.io',
+    stationId: null, accountId: crypto.randomUUID(), pairingId: crypto.randomUUID(),
+    pairingCode: crypto.randomUUID().replace(/-/g,'').slice(0,16), expiresAt: Date.now()+600000, devices: [],
+    error: code }
+  const invoke = async (command: string) => {
+    if (command === 'get_remote_station_status') return status
+    throw new Error('unexpectedCommand')
+  }
+  window.__TAURI_INTERNALS__ = { invoke: invoke as NonNullable<Window['__TAURI_INTERNALS__']>['invoke'] }
+  render(<RemoteStation />)
+  const alert = await screen.findByRole('alert')
+  expect(alert.textContent).toMatch(says)
+  expect(alert.textContent).not.toMatch(doesNotSay)
+  // Refused at approval, the station was never attached, so it cannot have "stopped connecting".
+  expect(alert.textContent).not.toMatch(/stopped connecting/i)
 })

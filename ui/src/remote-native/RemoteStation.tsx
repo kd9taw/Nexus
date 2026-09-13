@@ -48,7 +48,10 @@ export function RemoteStation() {
     {issue && <p role="alert">{
       issue === 'credentialStoreUnavailable' ? t('remote.vaultFailed')
       : issue === 'stationRevoked' ? t('remote.nativeRevoked')
-      : issue === 'trialEnded' || issue === 'trialDisabled' ? t('remote.nativeServiceOver')
+      // The service returns these two only from approval, so the station was never attached. They
+      // need different next steps: an ended trial is not an account that was switched off.
+      : issue === 'trialEnded' ? t('remote.nativeTrialEnded')
+      : issue === 'trialDisabled' ? t('remote.nativeTrialDisabled')
       // Approving at the shack before the browser agreed to attach the station. Falling through to
       // requestFailed would point an operator standing at the radio at their network.
       : issue === 'awaitingConfirmation' ? t('remote.nativeAwaitingConfirmation')
