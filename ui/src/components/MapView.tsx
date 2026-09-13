@@ -59,6 +59,7 @@ import {
 import { decollideLabels } from '../features/mapLabels'
 import { SAT_ICON_RECTS, SAT_ICON_TILT_DEG } from '../features/satIcon'
 import { surfaceGet, surfaceHasOwn, surfaceSet } from '../features/windowScope'
+import { useStableByKey } from '../features/useStableByKey'
 import {
   gridToLatLon,
   haversineKm,
@@ -624,7 +625,7 @@ function snrToken(snr: number): { v: string; r: number } {
 export function MapView({
   myGrid,
   theme,
-  stations,
+  stations: stationsProp,
   prop,
   selectedCall,
   onSelectCall,
@@ -652,6 +653,10 @@ export function MapView({
   const remoteConnect=remoteMap?.connect
   const remoteFeed=<T,>(feed:{value:T;ageMs:number;validForMs:number}|null|undefined):T|null=>
     feed&&feed.ageMs+(remoteMap?.ageMs??Infinity)<feed.validForMs?feed.value:null
+  // The roster, CONTENT-keyed. App sends a new array on every 300 ms snapshot whether or not
+  // anything was decoded; `placed`, `rxLines`, `selStation` and the draw effect all key on this,
+  // so identity-keyed they cleared and redrew the whole canvas ~3×/s for identical content.
+  const stations = useStableByKey(stationsProp, JSON.stringify(stationsProp))
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const wrapRef = useRef<HTMLDivElement>(null)
   // Flare effects overlay (the animated sun + rays) — a separate transparent
@@ -718,6 +723,12 @@ export function MapView({
   const heatCanvasRef = useRef<HTMLCanvasElement | null>(null)
   // Same reuse for the flare-absorption field's offscreen canvas.
   const flareCanvasRef = useRef<HTMLCanvasElement | null>(null)
+  // The cached base map (see "THE BASE MAP IS CACHED" in the draw effect) and the inputs it was
+  // drawn from.
+  const baseRef = useRef<{ canvas: HTMLCanvasElement | null; deps: readonly unknown[] }>({
+    canvas: null,
+    deps: [],
+  })
   // Opening-pulse tick: the main nowMs clock is a 60 s greyline tick, far too
   // coarse to animate the heat pulse (it froze the sine). Run a 1 s tick ONLY
   // while the heat layer is on AND an opening is actually detected — an idle map
@@ -1383,215 +1394,246 @@ export function MapView({
     const path = geoPath(proj, ctx)
     const c = showQth ? project(proj, myQth ?? me) : null
 
-    // Globe space backdrop: a star field + an atmospheric halo, so the orthographic
-    // disc reads as a planet in space rather than a flat green coin. Read the disc
-    // geometry straight off the projection so everything aligns with the sphere path
-    // under any zoom/spin (orthographic: screen radius = scale, center = translate).
-    const isGlobe = kind === 'globe'
-    const [gcx, gcy] = proj.translate()
-    const gR = proj.scale()
-    if (isGlobe) {
-      for (const s of stars) {
-        ctx.globalAlpha = s.a
+    // ⭐ THE BASE MAP IS CACHED. Everything from the space backdrop to the coverage fill changes only
+    // with the VIEW (projection, pan/zoom/spin, size, device scale, QTH), the theme and those layers'
+    // own toggles — never with a decode, a spot, the 1 s pulse or a hover. Re-projecting every
+    // country outline, state border and graticule line for each of those redraws was most of the
+    // 2-D map's idle cost, so it is drawn once into an offscreen canvas of the same device size and
+    // blitted. Everything that follows (APRS onward) still draws live, in the same order as before.
+    // Cost: one extra backing store the size of the map canvas.
+    const drawBase = (ctx: CanvasRenderingContext2D, path: ReturnType<typeof geoPath>) => {
+      // Globe space backdrop: a star field + an atmospheric halo, so the orthographic
+      // disc reads as a planet in space rather than a flat green coin. Read the disc
+      // geometry straight off the projection so everything aligns with the sphere path
+      // under any zoom/spin (orthographic: screen radius = scale, center = translate).
+      const isGlobe = kind === 'globe'
+      const [gcx, gcy] = proj.translate()
+      const gR = proj.scale()
+      if (isGlobe) {
+        for (const s of stars) {
+          ctx.globalAlpha = s.a
+          ctx.beginPath()
+          ctx.arc(s.x * w, s.y * h, s.r, 0, Math.PI * 2)
+          ctx.fillStyle = '#cdd9ec'
+          ctx.fill()
+        }
+        ctx.globalAlpha = 1
+        // Atmosphere: a soft blue halo just outside the limb, drawn BEFORE the body so
+        // the sphere covers the inner half and only the outer glow shows.
+        const atmo = ctx.createRadialGradient(gcx, gcy, gR * 0.9, gcx, gcy, gR * 1.19)
+        atmo.addColorStop(0, 'rgba(104, 168, 226, 0)')
+        atmo.addColorStop(0.42, 'rgba(120, 182, 240, 0.32)')
+        atmo.addColorStop(0.6, MAP_ATMO) // brightest right at the limb
+        atmo.addColorStop(1, 'rgba(104, 168, 226, 0)')
         ctx.beginPath()
-        ctx.arc(s.x * w, s.y * h, s.r, 0, Math.PI * 2)
-        ctx.fillStyle = '#cdd9ec'
+        ctx.arc(gcx, gcy, gR * 1.19, 0, Math.PI * 2)
+        ctx.fillStyle = atmo
         ctx.fill()
       }
+
+      // Ocean / sphere body so the map has substance (and AEQD reads as a globe, not
+      // floating coastlines). On the globe a radial gradient (lit toward a top-left
+      // light source, deepening to a dark limb) gives the disc real spherical depth;
+      // AEQD/World keep the flat sea fill. A soft rim defines the disc edge.
       ctx.globalAlpha = 1
-      // Atmosphere: a soft blue halo just outside the limb, drawn BEFORE the body so
-      // the sphere covers the inner half and only the outer glow shows.
-      const atmo = ctx.createRadialGradient(gcx, gcy, gR * 0.9, gcx, gcy, gR * 1.19)
-      atmo.addColorStop(0, 'rgba(104, 168, 226, 0)')
-      atmo.addColorStop(0.42, 'rgba(120, 182, 240, 0.32)')
-      atmo.addColorStop(0.6, MAP_ATMO) // brightest right at the limb
-      atmo.addColorStop(1, 'rgba(104, 168, 226, 0)')
       ctx.beginPath()
-      ctx.arc(gcx, gcy, gR * 1.19, 0, Math.PI * 2)
-      ctx.fillStyle = atmo
-      ctx.fill()
-    }
-
-    // Ocean / sphere body so the map has substance (and AEQD reads as a globe, not
-    // floating coastlines). On the globe a radial gradient (lit toward a top-left
-    // light source, deepening to a dark limb) gives the disc real spherical depth;
-    // AEQD/World keep the flat sea fill. A soft rim defines the disc edge.
-    ctx.globalAlpha = 1
-    ctx.beginPath()
-    path({ type: 'Sphere' } as unknown as Parameters<typeof path>[0])
-    if (isGlobe) {
-      const sea = ctx.createRadialGradient(
-        gcx - gR * 0.38,
-        gcy - gR * 0.38,
-        gR * 0.05,
-        gcx,
-        gcy,
-        gR * 1.02,
-      )
-      sea.addColorStop(0, MAP_OCEAN_LIT)
-      sea.addColorStop(0.55, MAP_OCEAN)
-      sea.addColorStop(1, MAP_OCEAN_DEEP)
-      ctx.fillStyle = sea
-    } else {
-      ctx.fillStyle = MAP_OCEAN
-    }
-    ctx.fill()
-    ctx.strokeStyle = MAP_RIM
-    ctx.lineWidth = 1
-    ctx.stroke()
-
-    const useRelief = kind === 'world' && layers.relief.visible && reliefRef.current
-    if (useRelief) {
-      // Geochron-style shaded relief: a direct stretch-blit to the equirectangular
-      // bounds (lon/lat map linearly here, so no per-pixel reprojection). The
-      // greyline night shading draws on top → a true day/night terrain map. Only
-      // World; AEQD stays on filled vectors (a raster there needs slow inverse-proj).
-      const tl = project(proj, { lat: 90, lon: -180 })
-      const br = project(proj, { lat: -90, lon: 180 })
-      if (tl && br) {
-        ctx.drawImage(reliefRef.current!, tl[0], tl[1], br[0] - tl[0], br[1] - tl[1])
+      path({ type: 'Sphere' } as unknown as Parameters<typeof path>[0])
+      if (isGlobe) {
+        const sea = ctx.createRadialGradient(
+          gcx - gR * 0.38,
+          gcy - gR * 0.38,
+          gR * 0.05,
+          gcx,
+          gcy,
+          gR * 1.02,
+        )
+        sea.addColorStop(0, MAP_OCEAN_LIT)
+        sea.addColorStop(0.55, MAP_OCEAN)
+        sea.addColorStop(1, MAP_OCEAN_DEEP)
+        ctx.fillStyle = sea
+      } else {
+        ctx.fillStyle = MAP_OCEAN
       }
-      if (layers.coast.visible) {
-        // A faint coastline keeps borders crisp over the raster.
-        ctx.globalAlpha = layers.coast.opacity * 0.5
+      ctx.fill()
+      ctx.strokeStyle = MAP_RIM
+      ctx.lineWidth = 1
+      ctx.stroke()
+
+      const useRelief = kind === 'world' && layers.relief.visible && reliefRef.current
+      if (useRelief) {
+        // Geochron-style shaded relief: a direct stretch-blit to the equirectangular
+        // bounds (lon/lat map linearly here, so no per-pixel reprojection). The
+        // greyline night shading draws on top → a true day/night terrain map. Only
+        // World; AEQD stays on filled vectors (a raster there needs slow inverse-proj).
+        const tl = project(proj, { lat: 90, lon: -180 })
+        const br = project(proj, { lat: -90, lon: 180 })
+        if (tl && br) {
+          ctx.drawImage(reliefRef.current!, tl[0], tl[1], br[0] - tl[0], br[1] - tl[1])
+        }
+        if (layers.coast.visible) {
+          // A faint coastline keeps borders crisp over the raster.
+          ctx.globalAlpha = layers.coast.opacity * 0.5
+          ctx.beginPath()
+          path(basemap())
+          ctx.strokeStyle = MAP_COAST
+          ctx.lineWidth = 0.5
+          ctx.stroke()
+          ctx.globalAlpha = 1
+        }
+      } else {
+        // Filled-vector land (the AEQD beam map, or World with relief off).
         ctx.beginPath()
         path(basemap())
-        ctx.strokeStyle = MAP_COAST
+        ctx.fillStyle = isGlobe ? MAP_LAND_GLOBE : MAP_LAND
+        ctx.fill()
+        if (layers.coast.visible) {
+          ctx.globalAlpha = layers.coast.opacity
+          ctx.strokeStyle = MAP_COAST
+          ctx.lineWidth = 0.6
+          ctx.stroke()
+          ctx.globalAlpha = 1
+        }
+      }
+      // US state borders — a CORE operating layer: an op reads which STATE a spot or
+      // their own QTH sits in (WAS, state QSOs), not just the coastline. A single-line
+      // mesh (shared borders once), thin + quiet so it adds detail without burying spots.
+      if (layers.states.visible) {
+        ctx.globalAlpha = layers.states.opacity
+        ctx.beginPath()
+        path(usStateBorders())
+        ctx.strokeStyle = MAP_STATE
         ctx.lineWidth = 0.5
         ctx.stroke()
         ctx.globalAlpha = 1
       }
-    } else {
-      // Filled-vector land (the AEQD beam map, or World with relief off).
-      ctx.beginPath()
-      path(basemap())
-      ctx.fillStyle = isGlobe ? MAP_LAND_GLOBE : MAP_LAND
-      ctx.fill()
-      if (layers.coast.visible) {
-        ctx.globalAlpha = layers.coast.opacity
-        ctx.strokeStyle = MAP_COAST
-        ctx.lineWidth = 0.6
-        ctx.stroke()
-        ctx.globalAlpha = 1
+      // Globe limb darkening: deepen the sphere toward its edge (over ocean AND land)
+      // so the curvature reads as 3-D. Clipped to the disc; drawn under greyline/spots
+      // so stations stay bright.
+      if (isGlobe) {
+        const limb = ctx.createRadialGradient(gcx, gcy, gR * 0.6, gcx, gcy, gR)
+        limb.addColorStop(0, 'rgba(2, 6, 14, 0)')
+        limb.addColorStop(1, 'rgba(2, 6, 14, 0.5)')
+        ctx.save()
+        ctx.beginPath()
+        path({ type: 'Sphere' } as unknown as Parameters<typeof path>[0])
+        ctx.clip()
+        ctx.fillStyle = limb
+        ctx.fillRect(gcx - gR * 1.1, gcy - gR * 1.1, gR * 2.2, gR * 2.2)
+        ctx.restore()
       }
-    }
-    // US state borders — a CORE operating layer: an op reads which STATE a spot or
-    // their own QTH sits in (WAS, state QSOs), not just the coastline. A single-line
-    // mesh (shared borders once), thin + quiet so it adds detail without burying spots.
-    if (layers.states.visible) {
-      ctx.globalAlpha = layers.states.opacity
-      ctx.beginPath()
-      path(usStateBorders())
-      ctx.strokeStyle = MAP_STATE
-      ctx.lineWidth = 0.5
-      ctx.stroke()
-      ctx.globalAlpha = 1
-    }
-    // Globe limb darkening: deepen the sphere toward its edge (over ocean AND land)
-    // so the curvature reads as 3-D. Clipped to the disc; drawn under greyline/spots
-    // so stations stay bright.
-    if (isGlobe) {
-      const limb = ctx.createRadialGradient(gcx, gcy, gR * 0.6, gcx, gcy, gR)
-      limb.addColorStop(0, 'rgba(2, 6, 14, 0)')
-      limb.addColorStop(1, 'rgba(2, 6, 14, 0.5)')
-      ctx.save()
-      ctx.beginPath()
-      path({ type: 'Sphere' } as unknown as Parameters<typeof path>[0])
-      ctx.clip()
-      ctx.fillStyle = limb
-      ctx.fillRect(gcx - gR * 1.1, gcy - gR * 1.1, gR * 2.2, gR * 2.2)
-      ctx.restore()
-    }
-    if (layers.grid.visible) {
-      ctx.globalAlpha = layers.grid.opacity
-      ctx.beginPath()
-      path(graticule())
-      ctx.strokeStyle = cssVar('--border-soft')
-      ctx.lineWidth = 0.5
-      ctx.stroke()
-    }
-    // Maidenhead labels (default off): 2-char FIELD letters when a field spans
-    // enough pixels to read, densifying to 4-char squares only inside fields
-    // that are large on screen (zoomed in) — bounded work, nothing at low zoom.
-    if (layers.gridLabels.visible) {
-      ctx.globalAlpha = layers.gridLabels.opacity
-      ctx.fillStyle = cssVar('--text-faint')
-      ctx.textAlign = 'center'
-      ctx.textBaseline = 'middle'
-      for (let fi = 0; fi < 18; fi++) {
-        for (let fj = 0; fj < 18; fj++) {
-          const clon = -180 + fi * 20 + 10
-          const clat = -90 + fj * 10 + 5
-          const pc = project(proj, { lat: clat, lon: clon })
-          if (!pc || pc[0] < -40 || pc[0] > w + 40 || pc[1] < -40 || pc[1] > h + 40) continue
-          // Field width in px via a 2° probe at the field center.
-          const probe = project(proj, { lat: clat, lon: clon + 2 })
-          const sqW = probe ? Math.hypot(probe[0] - pc[0], probe[1] - pc[1]) : 0
-          const fieldW = sqW * 10
-          if (fieldW < 70) continue
-          const field = String.fromCharCode(65 + fi) + String.fromCharCode(65 + fj)
-          if (fieldW < 420) {
-            ctx.font = `600 ${Math.min(22, 10 + fieldW / 40)}px ${cssVar('--font-mono') || 'monospace'}`
-            ctx.fillText(field, pc[0], pc[1])
-          } else {
-            // Zoomed in: label the 10×10 squares of this field instead.
-            ctx.font = `500 11px ${cssVar('--font-mono') || 'monospace'}`
-            for (let di = 0; di < 10; di++) {
-              for (let dj = 0; dj < 10; dj++) {
-                const p = project(proj, {
-                  lat: -90 + fj * 10 + dj + 0.5,
-                  lon: -180 + fi * 20 + di * 2 + 1,
-                })
-                if (!p || p[0] < 0 || p[0] > w || p[1] < 0 || p[1] > h) continue
-                ctx.fillText(`${field}${di}${dj}`, p[0], p[1])
+      if (layers.grid.visible) {
+        ctx.globalAlpha = layers.grid.opacity
+        ctx.beginPath()
+        path(graticule())
+        ctx.strokeStyle = cssVar('--border-soft')
+        ctx.lineWidth = 0.5
+        ctx.stroke()
+      }
+      // Maidenhead labels (default off): 2-char FIELD letters when a field spans
+      // enough pixels to read, densifying to 4-char squares only inside fields
+      // that are large on screen (zoomed in) — bounded work, nothing at low zoom.
+      if (layers.gridLabels.visible) {
+        ctx.globalAlpha = layers.gridLabels.opacity
+        ctx.fillStyle = cssVar('--text-faint')
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'middle'
+        for (let fi = 0; fi < 18; fi++) {
+          for (let fj = 0; fj < 18; fj++) {
+            const clon = -180 + fi * 20 + 10
+            const clat = -90 + fj * 10 + 5
+            const pc = project(proj, { lat: clat, lon: clon })
+            if (!pc || pc[0] < -40 || pc[0] > w + 40 || pc[1] < -40 || pc[1] > h + 40) continue
+            // Field width in px via a 2° probe at the field center.
+            const probe = project(proj, { lat: clat, lon: clon + 2 })
+            const sqW = probe ? Math.hypot(probe[0] - pc[0], probe[1] - pc[1]) : 0
+            const fieldW = sqW * 10
+            if (fieldW < 70) continue
+            const field = String.fromCharCode(65 + fi) + String.fromCharCode(65 + fj)
+            if (fieldW < 420) {
+              ctx.font = `600 ${Math.min(22, 10 + fieldW / 40)}px ${cssVar('--font-mono') || 'monospace'}`
+              ctx.fillText(field, pc[0], pc[1])
+            } else {
+              // Zoomed in: label the 10×10 squares of this field instead.
+              ctx.font = `500 11px ${cssVar('--font-mono') || 'monospace'}`
+              for (let di = 0; di < 10; di++) {
+                for (let dj = 0; dj < 10; dj++) {
+                  const p = project(proj, {
+                    lat: -90 + fj * 10 + dj + 0.5,
+                    lon: -180 + fi * 20 + di * 2 + 1,
+                  })
+                  if (!p || p[0] < 0 || p[0] > w || p[1] < 0 || p[1] > h) continue
+                  ctx.fillText(`${field}${di}${dj}`, p[0], p[1])
+                }
               }
             }
           }
         }
+        ctx.globalAlpha = 1
       }
-      ctx.globalAlpha = 1
-    }
-    // CQ-zone boundaries (MIT, HB9HIL) — thin amber borders + zone numbers at
-    // each zone's label anchor. Only drawn once the lazy asset has loaded.
-    if (layers.cqzones.visible && cqzones) {
-      ctx.globalAlpha = layers.cqzones.opacity
-      ctx.strokeStyle = 'rgba(217, 164, 65, 0.75)'
-      ctx.lineWidth = 0.8
-      for (const f of cqzones) {
-        ctx.beginPath()
-        path(f.geometry)
-        ctx.stroke()
-      }
-      ctx.font = `700 12px ${cssVar('--font-mono') || 'monospace'}`
-      ctx.fillStyle = 'rgba(217, 164, 65, 0.9)'
-      ctx.textAlign = 'center'
-      ctx.textBaseline = 'middle'
-      for (const f of cqzones) {
-        const [lat, lon] = f.properties.cq_zone_name_loc
-        const p = project(proj, { lat, lon })
-        if (p) ctx.fillText(String(f.properties.cq_zone_number), p[0], p[1])
-      }
-      ctx.globalAlpha = 1
-    }
-    // Coverage: fill the operator's WORKED grid squares / CQ zones so award progress (VUCC / WAZ)
-    // reads at a glance. Behind the layer toggle + opacity; the data is lazy-loaded above.
-    if (layers.coverage.visible) {
-      ctx.globalAlpha = layers.coverage.opacity
-      ctx.fillStyle = 'rgba(78, 163, 255, 0.5)' // the "worked/confirm" blue from the map legend
-      if (coverageDim === 'grids' && coverageGridGeo) {
-        ctx.beginPath()
-        path(coverageGridGeo)
-        ctx.fill()
-      } else if (coverageDim === 'zones' && cqzones && workedZones) {
+      // CQ-zone boundaries (MIT, HB9HIL) — thin amber borders + zone numbers at
+      // each zone's label anchor. Only drawn once the lazy asset has loaded.
+      if (layers.cqzones.visible && cqzones) {
+        ctx.globalAlpha = layers.cqzones.opacity
+        ctx.strokeStyle = 'rgba(217, 164, 65, 0.75)'
+        ctx.lineWidth = 0.8
         for (const f of cqzones) {
-          if (!workedZones.has(f.properties.cq_zone_number)) continue
           ctx.beginPath()
           path(f.geometry)
-          ctx.fill()
+          ctx.stroke()
         }
+        ctx.font = `700 12px ${cssVar('--font-mono') || 'monospace'}`
+        ctx.fillStyle = 'rgba(217, 164, 65, 0.9)'
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'middle'
+        for (const f of cqzones) {
+          const [lat, lon] = f.properties.cq_zone_name_loc
+          const p = project(proj, { lat, lon })
+          if (p) ctx.fillText(String(f.properties.cq_zone_number), p[0], p[1])
+        }
+        ctx.globalAlpha = 1
       }
-      ctx.globalAlpha = 1
+      // Coverage: fill the operator's WORKED grid squares / CQ zones so award progress (VUCC / WAZ)
+      // reads at a glance. Behind the layer toggle + opacity; the data is lazy-loaded above.
+      if (layers.coverage.visible) {
+        ctx.globalAlpha = layers.coverage.opacity
+        ctx.fillStyle = 'rgba(78, 163, 255, 0.5)' // the "worked/confirm" blue from the map legend
+        if (coverageDim === 'grids' && coverageGridGeo) {
+          ctx.beginPath()
+          path(coverageGridGeo)
+          ctx.fill()
+        } else if (coverageDim === 'zones' && cqzones && workedZones) {
+          for (const f of cqzones) {
+            if (!workedZones.has(f.properties.cq_zone_number)) continue
+            ctx.beginPath()
+            path(f.geometry)
+            ctx.fill()
+          }
+        }
+        ctx.globalAlpha = 1
+      }
     }
+    const baseDeps = [kind, w, h, dpr, view, me, theme, reliefReady, stars, layers.relief, layers.coast, layers.states, layers.grid, layers.gridLabels, layers.cqzones, layers.coverage, cqzones, coverageDim, coverageGridGeo, workedZones]
+    const cache = baseRef.current
+    const base = cache.canvas ?? (cache.canvas = document.createElement('canvas'))
+    if (
+      base.width !== devW ||
+      base.height !== devH ||
+      baseDeps.length !== cache.deps.length ||
+      baseDeps.some((d, k) => d !== cache.deps[k])
+    ) {
+      if (base.width !== devW) base.width = devW
+      if (base.height !== devH) base.height = devH
+      const bctx = base.getContext('2d')
+      if (bctx) {
+        bctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+        bctx.clearRect(0, 0, w, h)
+        drawBase(bctx, geoPath(proj, bctx))
+        cache.deps = baseDeps
+      }
+    }
+    // Device pixels onto device pixels (the transform maps w×h layout px to devW×devH).
+    ctx.globalAlpha = 1
+    ctx.drawImage(base, 0, 0, w, h)
     // APRS stations: a dot per positioned station, the operator's selection
     // accented, plus a short course/speed vector for anything moving. Fed by the
     // APRS section rather than polled here, so the layer is inert on Connect
