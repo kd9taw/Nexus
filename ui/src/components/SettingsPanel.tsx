@@ -3562,7 +3562,7 @@ export function SettingsPanel({
           )}
 
           {/* ---- Start at sign-in: launch Nexus when the operator signs in to this computer ---- */}
-          {tab === 'appearance' && (
+          {tab === 'appearance' && !remote && (
           <fieldset className="settings-section" id="settings-start-at-sign-in">
             <legend>{t('settings.launchAtLogin.legend')}</legend>
             <label className="settings-field">

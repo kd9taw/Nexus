@@ -1,5 +1,5 @@
 import type { Settings, RadioProgProject } from '../types'
-import { SETTINGS_KEYS, SETTINGS_SHAPES, WITHHELD_RADIO_KEYS, WITHHELD_SETTINGS_KEYS } from './configuration-schema'
+import { SETTINGS_KEYS, SETTINGS_SHAPES, STATION_LOCAL_SETTINGS_KEYS, WITHHELD_RADIO_KEYS, WITHHELD_SETTINGS_KEYS } from './configuration-schema'
 import { finite, integer, object, openObject, text } from './display-validation'
 export type SettingsConfiguration = {settings:Record<string,unknown>;withheld:readonly string[];revision:string;platform:'linux'|'windows'|'macos'}
 export type ProgrammingConfiguration = {mygrid:string;projects:RadioProgProject[];revision:string;saved:boolean}
@@ -77,5 +77,5 @@ export function parseConfiguration(raw:unknown,kind:'settings'|'programming'):Se
  * values: their account/backup sections are replaced by a station-managed note,
  * and all station writes are disabled. Never submit this adapter's output. */
 export function settingsForm(doc:SettingsConfiguration):Settings {
-  return {...doc.settings,...Object.fromEntries(WITHHELD_SETTINGS_KEYS.map(k=>[k,k==='voiceMessages'?[]:'']))} as unknown as Settings
+  return {...doc.settings,...Object.fromEntries(WITHHELD_SETTINGS_KEYS.map(k=>[k,k==='voiceMessages'?[]:''])),...Object.fromEntries(STATION_LOCAL_SETTINGS_KEYS.map(k=>[k,false]))} as unknown as Settings
 }

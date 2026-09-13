@@ -362,6 +362,8 @@
     "cloudlogUrl",
     "cloudlogStationId",
     "cloudlogKey",
-    "voiceMessages"
+    "voiceMessages",
+    "launchAtLogin",
+    "remoteAutostartOfferAnswered"
   ]
 }

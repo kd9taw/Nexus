@@ -2,7 +2,7 @@ import {expect,it} from 'vitest'
 import settings from './__fixtures__/configuration-settings.json'
 import programming from './__fixtures__/configuration-programming.json'
 import {parseConfiguration,settingsForm,type SettingsConfiguration} from './configuration'
-import {SETTINGS_KEYS,WITHHELD_RADIO_KEYS,WITHHELD_SETTINGS_KEYS} from './configuration-schema'
+import {SETTINGS_KEYS,STATION_LOCAL_SETTINGS_KEYS,WITHHELD_RADIO_KEYS,WITHHELD_SETTINGS_KEYS} from './configuration-schema'
 it('accepts the native serialized station choices and excludes account fields instead of supplying defaults',()=>{
   const parsed=parseConfiguration(structuredClone(settings),'settings') as SettingsConfiguration
   expect(parsed.settings.mycall).toBe('W1AW');expect(parsed.settings.mygrid).toBe('FN31RX09')
@@ -36,6 +36,16 @@ it('accepts a station that withholds MORE than this browser knows, in any order'
   const short = structuredClone(settings) as Record<string, unknown>
   short.withheld = (short.withheld as string[]).slice(1)
   expect(() => parseConfiguration(short, 'settings')).toThrow()
+})
+
+// A station older than the start-at-sign-in fields cannot declare them withheld. They are station-local,
+// not credentials, so that station must still be accepted - one browser serves every station version.
+it('accepts an older station that predates the station-local withheld keys', () => {
+  const older = structuredClone(settings) as Record<string, unknown>
+  older.withheld = (older.withheld as string[]).filter(k => !(STATION_LOCAL_SETTINGS_KEYS as readonly string[]).includes(k))
+  expect((older.withheld as string[]).length, 'positive control: the fixture declared them').toBe((settings.withheld as string[]).length - STATION_LOCAL_SETTINGS_KEYS.length)
+  expect(() => parseConfiguration(older, 'settings')).not.toThrow()
+  expect(settingsForm(parseConfiguration(older, 'settings') as SettingsConfiguration).launchAtLogin).toBe(false)
 })
 
 // RADIO_WITHHELD_KEYS is empty today, so this pins the mechanism rather than a current secret: the
@@ -124,7 +134,7 @@ it('keeps the browser settings schema identical to the native projection it must
   const CONFIG = '../src-tauri/src/remote_service/query/configuration.rs'
   const withheld = named(CONFIG, 'WITHHELD_KEYS')
   expect(withheld.length, 'positive control: the reader really finds withheld keys').toBeGreaterThan(10)
-  expect([...WITHHELD_SETTINGS_KEYS].sort()).toEqual([...withheld].sort())
+  expect([...WITHHELD_SETTINGS_KEYS, ...STATION_LOCAL_SETTINGS_KEYS].sort()).toEqual([...withheld].sort())
 
   // RADIO_WITHHELD_KEYS is empty today and that is the point - it is where the first per-radio
   // credential goes. Empty on both sides is agreement; empty on one is the drift this catches.
