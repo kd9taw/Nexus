@@ -1,0 +1,103 @@
+**This is a beta.** It reaches you only if you turned on Settings ▸ App updates ▸ Receive beta
+(pre-release) updates — nobody is auto-updated onto it. If something is wrong, say so on GitHub and
+I'll fix it before 1.12.0 goes out properly.
+
+**Contests beyond Field Day.**
+
+Pick a contest in Settings ▸ Contesting and the whole operating path follows it: the entry strip
+shows that contest's exchange, dupes follow that sponsor's rule, the scoreboard counts its
+multipliers, and the Cabrillo and ADIF exports carry the right names. Every rule was read from the
+sponsor's current rules page.
+
+- **ARRL November Sweepstakes**, CW and Phone. The long exchange is handled, callsign and check
+  included, and Nexus tells you if your check changes partway through the weekend.
+- **CQ World-Wide DX and CQ WPX**, CW and SSB. Their multipliers come from the other station's
+  callsign — country, CQ zone, prefix — so Nexus works out each contact's country and zone as you
+  log it.
+- **ARRL VHF** — January, June and September, each scored its own way.
+- **Four state QSO parties** — California, Ohio, Tennessee and Texas. Tennessee's and Texas's
+  bonus points aren't in the on-screen total, and the scoreboard says so.
+- **A rate meter** on the scoreboard: contacts per hour over your last 10, your last 100 and the last
+  60 minutes. It drops when you stop rather than showing your best run on a dead band.
+- **One button merges the contest into your logbook** afterwards, and tells you how many it added.
+- A club running multi-op can declare it, and a solo entry no longer tells the sponsor it was
+  multi-op — which every solo Field Day log Nexus exported used to do.
+
+If a score or an export looks wrong for a contest you know well, that's exactly the report I want.
+
+**Two things worth reading even if nothing looked wrong.**
+
+- **A long transmission could go silent and leave your rig keyed.** On WSPR the audio stopped about
+  twenty seconds in and the radio stayed keyed for the rest of the two-minute over, every over. It
+  wasn't only WSPR: JT65, Q65 and FST4/FST4W at 30 seconds and longer did the same, and so did a
+  one-shot PSK31 message longer than a couple of lines. FT8, FT4 and the other short modes never
+  had the problem. The whole transmission now goes out, and the rig unkeys when the audio ends.
+- **Your transmit timing leaned on a single network reply.** Nexus corrects for your PC clock
+  being off, and that correction came from whichever time server answered first. It now asks three
+  and needs two to agree. It also holds the last good correction when you lose internet, refuses to
+  steer by a clock more than a minute out and tells you instead, and re-measures straight away when
+  a laptop wakes from sleep instead of applying a correction that no longer fits.
+
+The clock chip in the top bar now says what Nexus is doing about your clock rather than showing a
+red alarm on a station whose timing is fine. On Windows, if the time service itself is broken —
+switched off by a "debloat" script, or never synced — Nexus fixes it with one administrator
+prompt, and leaves a healthy machine, or one running its own time program, completely alone.
+
+**Nexus Remote — an early pilot.**
+
+Run your station from a browser. Pair it under Settings ▸ Station ▸ Remote access, approve the
+browser at the radio, and you get the same Nexus you use at the shack — decodes, waterfalls, the
+logbook, spots, awards, the lot. Your log, settings and radio stay on your computer. The service
+only carries the picture and your commands, and if it goes down nothing at the station changes.
+
+- **You decide at the shack what a browser may do**, and it resets every time Nexus restarts:
+  station controls (tuning, modes, filters and DSP, power, the amplifier, which radio is active),
+  logging contacts, and FT8/FT4 transmit.
+- **FT8 and FT4 transmit from the browser** — CQ, answering, Tx1–Tx6, free text. It goes through
+  your normal TX switch and watchdog, Stop TX works from the browser, and if the browser drops off
+  the station stops transmitting within five seconds. No other mode transmits remotely.
+- **No audio yet**, in either direction.
+
+It runs on a test server that may be reset, and approving a station starts a 14-day trial. Most of
+the radio controls haven't met many real radios yet, so if something misbehaves on yours, tell me
+which rig.
+
+**Also new**
+
+- **Export one POTA activation.** The Logbook lists your activations — park, date, contact count —
+  and exports exactly the one you pick, named the way POTA wants it. An activation that crosses UTC
+  midnight shows as two, so you can see before uploading that neither day reached ten.
+- **Full-screen map**: one button in, the same button or Escape out.
+- **The map draws your paths**: green great circles to the stations that heard you, and (off by
+  default, one checkbox in Layers) blue ones to the stations you heard.
+
+**Also fixed**
+
+- Nexus was switching your radio to CW-R on 40, 80 and 160 m. It now asks for plain CW everywhere,
+  and there's a Reverse CW checkbox under Settings ▸ CW if you want it.
+- An AM contact was logged as SSB. The log now follows the mode your radio is actually on, and AM
+  is on the Phone screen's mode picker on every band — 14.286 had no AM button.
+- The ARRL section list was out of date: 85 sections now. `GTA` and `NT` are renamed for you; if you
+  had `MAR`, Nexus asks which of `NB`, `NS` or `PE` you're in. Field Day also refuses a section
+  ARRL doesn't list, where before it let you start anyway.
+- Correcting a busted callsign in the Logbook now re-sends the contact to QRZ, ClubLog, eQSL and
+  the other services you upload to. Before, they all kept the wrong call. The Logbook's CALL box
+  also shows the whole callsign now.
+- Three Cabrillo contest names were wrong (Field Day, Ohio, Texas), and N1MM broadcasts named the
+  wrong contest.
+- The WSJT-X and N1MM feeds stamped your current exchange on every contact, so a mobile station
+  that changed county mislabelled everything it had already worked.
+- The RTTY sequencer's sign-off sent the next contact's serial number.
+- The beta-updates switch could quietly turn itself off after you touched an APRS control.
+- A torn-off POTA/SOTA board couldn't be scrolled.
+- Map markers were blurry at UI scales above 100%.
+- Amplifier band-following could show one setting while using another, and now re-checks your setup
+  before every command it sends to the amp.
+- A radio that won't connect backs off between retries instead of trying again and again.
+- On Windows, a sound card glitch could fill the log with "capture stream died" when nothing had
+  died. Receive audio also gets more buffer, and the "no decodes" log line now says whether any
+  audio is arriving at all.
+- On Xiegu radios, trust the radio's own SWR meter — Nexus reads it on an Icom scale, so a G90 at
+  1.2:1 can show 6:1. The rig guide now says so.
+
+73 — KD9TAW
