@@ -214,12 +214,12 @@ describe('connect layout invariants', () => {
 
     it('POSITIVE CONTROL — without the class the viewport rules still win their layouts', () => {
       // The resolver really is seeing the [data-viewport] competitors: at xs the stacked
-      // six-row template wins, at lg the two-rail one does. Without this, the assertions
-      // above would pass on a resolver that had silently skipped every rival rule.
+      // template wins, at lg the two-rail one does. Without this, the assertions above would
+      // pass on a resolver that had silently skipped every rival rule. (Since the 2026-09-13
+      // close + resize work the rows are `minmax(0, 1fr)` in BOTH layouts — the strip rides an
+      // implicit row — so the two-rail discriminator is its areas, which full screen replaces.)
       expect(winner(chainAt('xs', false), 'grid-template-rows')!.value).toContain('280px')
-      expect(winner(chainAt('lg', false), 'grid-template-rows')!.value).toBe(
-        'minmax(0, 1fr) minmax(0, 1fr) auto',
-      )
+      expect(winner(chainAt('lg', false), 'grid-template-areas')!.value).toBe("'left center right'")
       expect(winner(chainAt('sm', false), 'grid-template-columns')!.value).toContain('--cn-rail')
     })
 

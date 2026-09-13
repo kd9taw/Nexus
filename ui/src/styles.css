@@ -1408,17 +1408,24 @@ button.nb-chip:hover {
    over it as a translucent card (HamClock/Geochron model — everything around the
    world), instead of a co-equal side column. */
 /* Wrap-the-globe assignable pane grid (B1): the globe is the center cell; reassignable
-   panes frame it (2 left, 2 right, a 3-up bottom strip). The map keeps a definite size —
-   center column minmax(0,1fr) (never bare 1fr, or the 100%-width canvas runs away) over
-   TWO 1fr rows (definite height for .map-view{height:100%}); the min-*:0 chain stays. */
-.connect {
-  flex: 1;
-  min-height: 0;
-  display: grid;
-  gap: var(--space-3);
-  padding: var(--space-3);
-  grid-template-columns: var(--cn-rail, 300px) minmax(0, 1fr) var(--cn-rail, 300px);
-  /* Strip row: CONTENT-sized, with the 30%-of-effective-viewport ceiling on the PANES
+   panes frame it (a left rail, a right rail, a bottom strip). The map keeps a definite size —
+   center column minmax(0,1fr) (never bare 1fr, or the 100%-width canvas runs away) over ONE
+   minmax(0,1fr) row (definite height for .map-view{height:100%}); the min-*:0 chain stays.
+
+   CLOSE + RESIZE (2026-09-13). Every pane can be closed from its frame and restored from
+   ⊞ Panels, and each rail is drag/keyboard resizable, so this template may never assume what
+   is mounted — connect-layout.test.ts computes each of these against the rendered states:
+   · COLUMNS follow [data-rails] (both|left|right|none, stamped by ConnectView from the rails
+     it actually renders). A rail track with no rail in it is a dead band beside the map. The
+     state rules sit in :where() so they stay (0,1,0) — the xs stack (0,2,0) and map-full
+     (0,3,0) below must keep winning whatever the rails say.
+   · Each rail track reads its OWN width (--cn-rail-l / --cn-rail-r), written inline only once
+     the operator sizes that rail and clamped against this box on load, on every resize and on
+     every step (useRailWidths). Unsized, it falls back to the tier default --cn-rail, i.e. the
+     exact pre-feature template.
+   · ROWS: the map row is the only explicit one. The strip spans the grid in an IMPLICIT row
+     sized by grid-auto-rows, so a closed strip leaves no track and no gap. That row is
+     CONTENT-sized, with the 30%-of-effective-viewport ceiling on the PANES
      (`.connect-strip > .pane-frame` below), NOT on the track. Two dead spellings of a
      track cap shipped here — `minmax(0, X)` and then `minmax(auto, X)`: grid
      maximize-tracks (css-grid §11.6) grows ANY fixed-max track to its growth limit
@@ -1427,12 +1434,49 @@ button.nb-chip:hover {
      from the globe's 1fr rows on every tall window (review 2026-07-31, verified in
      Chrome: minmax(0,300px) and minmax(auto,300px) both render 300px). An `auto` track
      is exactly as tall as its tallest (max-height-capped) pane; a tall pane reassigned
-     into the strip scrolls inside its own .pane-body. */
-  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr) auto;
-  grid-template-areas:
-    'left1  center right1'
-    'left2  center right2'
-    'strip  strip  strip';
+     into the strip scrolls inside its own .pane-body.
+   · A rail is a flex column of its visible frames (`.connect-rail`), so a closed pane's
+     sibling takes the whole rail — two equal 1fr rows with a gap and a 1:1 flex column with
+     the same gap are the same rectangles, which is why the default geometry did not move. */
+.connect {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  grid-template-columns: var(--cn-rail-l, var(--cn-rail, 300px)) minmax(0, 1fr) var(--cn-rail-r, var(--cn-rail, 300px));
+  grid-template-rows: minmax(0, 1fr);
+  grid-auto-rows: auto;
+  grid-template-areas: 'left center right';
+}
+.connect:where([data-rails='left']) {
+  grid-template-columns: var(--cn-rail-l, var(--cn-rail, 300px)) minmax(0, 1fr);
+  grid-template-areas: 'left center';
+}
+.connect:where([data-rails='right']) {
+  grid-template-columns: minmax(0, 1fr) var(--cn-rail-r, var(--cn-rail, 300px));
+  grid-template-areas: 'center right';
+}
+.connect:where([data-rails='none']) {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas: 'center';
+}
+/* One rail: its visible frames split the height by share (the frame's inline
+   `flex: var(--connect-pane-flex, var(--connect-share) 1 0)`). Positioned only so its two
+   handles can sit in the gaps beside and inside it without taking a track or a flex slot. */
+.connect-rail {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+  min-height: 0;
+}
+.connect-rail:where([data-side='left']) {
+  grid-area: left;
+}
+.connect-rail:where([data-side='right']) {
+  grid-area: right;
 }
 .connect-map {
   grid-area: center;
@@ -1606,10 +1650,15 @@ button.nb-chip:hover {
 .app.detached > .map-view {
   flex: 1;
 }
+/* The strip spans every column in the grid's IMPLICIT auto row (no named area — an area
+   would re-create the explicit row, and its gap, for a strip that is closed). Its panes are
+   AUTO columns, so however many are open split the width evenly: a fixed `repeat(3, 1fr)`
+   left a dead third beside two panes. */
 .connect-strip {
-  grid-area: strip;
+  grid-column: 1 / -1;
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
   gap: var(--space-3);
   min-width: 0;
 }
@@ -1659,6 +1708,37 @@ button.nb-chip:hover {
   border: 1px solid var(--border);
   border-radius: 5px;
   padding: 1px var(--space-1);
+}
+/* Connect's ✕ (close this slot) — no taller than the picker beside it, so adding it changes no
+   pane head's height. Measured, 2026-09-13: the cockpit frame's 24px icon button grew every
+   Connect head by 8px, and the strip row took that height straight out of the map. */
+/* The picker + ✕ cluster in a Connect pane head. It may SHRINK (min-width: 0) and the picker
+   gives up its width first, so the ✕ is never cut off by the frame's clip. Measured, 2026-09-13:
+   with neither shrinkable, the Conditions pane's long picker pushed its ✕ past the frame edge
+   at the 248px default rail, and at a 200px rail both controls of both left panes were gone. */
+.pane-acts {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.pane-acts > .pane-pick {
+  min-width: 0;
+}
+.pane-close {
+  flex: none;
+  font-size: var(--fs-micro);
+  line-height: 1;
+  color: var(--text-dim);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 1px var(--space-1);
+  cursor: pointer;
+}
+.pane-close:hover {
+  color: var(--text);
+  border-color: var(--accent);
 }
 .pane-body {
   flex: 1;
@@ -1793,14 +1873,11 @@ button.nb-chip:hover {
 }
 [data-viewport='xs'] .connect {
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: minmax(280px, calc(0.46 * var(--vh-eff, 100vh))) auto auto auto auto auto;
-  grid-template-areas:
-    'center'
-    'left1'
-    'left2'
-    'right1'
-    'right2'
-    'strip';
+  /* The globe row is the only explicit one here too: the rails and the strip auto-place into
+     implicit `auto` rows under it (grid-auto-rows on .connect), in DOM order — so a closed
+     rail or strip takes no row and leaves no gap in the stack. */
+  grid-template-rows: minmax(280px, calc(0.46 * var(--vh-eff, 100vh)));
+  grid-template-areas: 'center';
   /* THE STACK NEEDS ITS OWN SCROLLER. Nothing above it scrolls — the shell rule on
      .layout.single, .connect-shell and .connect itself all clip or declare no overflow,
      and every row is a .pane-frame that clips. So at xs, where the globe keeps a 280px
@@ -1810,7 +1887,67 @@ button.nb-chip:hover {
   overflow-y: auto;
 }
 [data-viewport='xs'] .connect-strip {
-  grid-template-columns: 1fr;
+  grid-auto-flow: row;
+}
+/* No 'left'/'right' area exists in the xs template — a named area would drop the rail into an
+   implicit track OUTSIDE the grid — so the rail auto-places under the map. Its frames are
+   content-height in a content-height stack (a basis-0 grower collapses there), which is what
+   the old per-pane `auto` rows gave them. */
+[data-viewport='xs'] .connect-rail {
+  grid-area: auto;
+  --connect-pane-flex: 0 0 auto;
+}
+
+/* THE RAIL HANDLES (components/connect/RailHandles.tsx). Out of flow by design: each sits in a
+   gap the grid already has — the column gap beside a rail, or the rail's own gap between its
+   two panes — so no handle can move a rectangle of the default layout. Focusable separators;
+   the focus ring is drawn inside the box so it is not clipped by a neighbour. */
+.connect-sep {
+  position: absolute;
+  z-index: 3;
+  touch-action: none;
+  border-radius: 4px;
+  background: transparent;
+  transition: background var(--transition);
+}
+.connect-sep:where([aria-orientation='vertical']) {
+  top: 0;
+  bottom: 0;
+  width: var(--space-3);
+  cursor: col-resize;
+}
+/* The left rail's handle is in the gap AFTER it, the right rail's in the gap BEFORE it. */
+.connect-sep:where([data-edge='end']) {
+  left: 100%;
+}
+.connect-sep:where([data-edge='start']) {
+  right: 100%;
+}
+/* The split seam: in the rail's gap between its two panes. The top pane is
+   (railHeight − gap) × split tall, so that is where the gap starts. */
+.connect-sep:where([aria-orientation='horizontal']) {
+  left: 0;
+  right: 0;
+  height: var(--space-3);
+  top: calc((100% - var(--space-3)) * var(--connect-split, 0.5));
+  cursor: row-resize;
+}
+.connect-sep:hover,
+.connect-sep:focus-visible {
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.connect-sep:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+/* Nothing to resize in a single stacked column. */
+[data-viewport='xs'] .connect-sep {
+  display: none;
+}
+/* The row-resize twin of body.resizing (a split drag): the cursor holds, text never selects. */
+body.resizing-row {
+  cursor: row-resize;
+  user-select: none;
 }
 /* FULL-SCREEN MAP — one cell, no frame. The header, the four rail panes and the bottom
    strip are UNMOUNTED by ConnectView, so this only has to collapse the grid they were laid

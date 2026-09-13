@@ -45,6 +45,9 @@ export const PER_SURFACE = [
   // brand-new pop-out opens it with chrome the operator never hid.
   'nexus.connect.mapfull',
   'nexus.connect.projection',
+  // The two rail widths the operator dragged (2026-09-13). A width is a statement about one
+  // window's shape: a pop-out inherits it on first open and clamps it against its own box.
+  'nexus.connect.railWidths',
   'nexus.decodes.filter',
   'nexus.decodes.hideB4',
   'nexus.decodes.hideBlocked',

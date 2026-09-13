@@ -6432,6 +6432,23 @@ export const EN = {
   'connect.slot.pick.aria': 'Choose what the {{slot}} slot shows',
   'connect.slot.pick.title': 'Choose what this slot shows',
   'connect.slot.group.core': 'Panels',
+  // ── Close + resize (2026-09-13) ── A ⊞ Panels entry names the pane AND where it comes back:
+  // which pane sits in a slot is the operator's pick, so the title alone says nothing about
+  // where the space will be taken from.
+  'connect.panels.item': '{{title}} · {{where}}',
+  'connect.slot.where.left1': 'left, top',
+  'connect.slot.where.left2': 'left, bottom',
+  'connect.slot.where.right1': 'right, top',
+  'connect.slot.where.right2': 'right, bottom',
+  'connect.slot.where.bottom1': 'bottom, left',
+  'connect.slot.where.bottom2': 'bottom, middle',
+  'connect.slot.where.bottom3': 'bottom, right',
+  // The rail handles' accessible names; `{{label}}` in the tooltip is one of them.
+  'connect.rail.left.width': 'Left panel column width',
+  'connect.rail.right.width': 'Right panel column width',
+  'connect.rail.left.split': 'Split between the left panels',
+  'connect.rail.right.split': 'Split between the right panels',
+  'connect.rail.handle.title': 'Drag, or use the arrow keys, to resize ({{label}}). Double-click to reset.',
 
   // Pane names, as they read in the picker and in each pane's header.
   'connect.pane.advisory.title': 'Conditions',

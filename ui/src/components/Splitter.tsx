@@ -80,7 +80,7 @@ function loadPct(storageKey: string): number | null {
 
 /** Effective zoom on `el`: `currentCSSZoom` where the engine provides it (Chromium
  *  126+), else the `--ui-zoom` var the app publishes on <html>; 1 when neither reads. */
-function elZoom(el: HTMLElement): number {
+export function elZoom(el: HTMLElement): number {
   const z = (el as HTMLElement & { currentCSSZoom?: number }).currentCSSZoom
   if (typeof z === 'number' && Number.isFinite(z) && z > 0) return z
   const raw = getComputedStyle(document.documentElement).getPropertyValue('--ui-zoom')

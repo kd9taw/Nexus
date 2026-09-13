@@ -10,7 +10,7 @@
 // The panes are an assignable wrap-the-globe grid (HamClock-style): every panel is a
 // reassignable pane with a Basic (one plain sentence) and Expert (full data) view; the
 // globe stays the untouched centerpiece. See components/connect/* + features/connectConfig.
-import { useState, useEffect, useMemo, lazy, Suspense } from 'react'
+import { useState, useEffect, useMemo, useRef, lazy, Suspense } from 'react'
 import type {
   GettingOut,
   MapSpot,
@@ -34,9 +34,13 @@ import { MapView, type MapIntent } from './MapView'
 const Globe3D = lazy(() => import('./Globe3D'))
 import { provLabel } from './connect/paneFormat'
 import { PaneFrame } from './connect/PaneFrame'
+import { paneById } from './connect/panes'
+import { RailSplitHandle, RailWidthHandle, useRailWidths } from './connect/RailHandles'
+import { PanelsMenu } from './PanelsMenu'
 import type { PaneContext } from './connect/paneContext'
-import { useConnectConfig, type SlotId } from '../features/connectConfig'
-import { surfaceGet, surfaceSet } from '../features/windowScope'
+import { SLOT_IDS, useConnectConfig, type SlotId } from '../features/connectConfig'
+import { CONNECT_PANELS, usePanelLayout } from '../features/panelState'
+import { surfaceGet, surfaceId, surfaceSet } from '../features/windowScope'
 import { loadIntentSetup, saveIntentSetup } from '../features/intentMapSettings'
 import { useEntityCentroids } from '../features/entityCentroids'
 import { t } from '../i18n'
@@ -88,6 +92,18 @@ const INTENTS: { id: MapIntent; label: string; title: string }[] = [
     },
   },
 ]
+
+/** Where each slot sits, in words — a ⊞ Panels entry names the pane AND where it comes back.
+ * Literal keys, resolved lazily at render (the INTENTS treatment). */
+const SLOT_WHERE: Record<SlotId, () => string> = {
+  left1: () => t('connect.slot.where.left1'),
+  left2: () => t('connect.slot.where.left2'),
+  right1: () => t('connect.slot.where.right1'),
+  right2: () => t('connect.slot.where.right2'),
+  bottom1: () => t('connect.slot.where.bottom1'),
+  bottom2: () => t('connect.slot.where.bottom2'),
+  bottom3: () => t('connect.slot.where.bottom3'),
+}
 
 /** Read a PER-SURFACE enum preference: a board's own preset/mode, not a station setting. */
 function persisted<T extends string>(key: string, allow: readonly T[], fallback: T): T {
@@ -194,7 +210,7 @@ export function ConnectView({
   // which holds the 2-D/3-D toggle — with nothing on screen able to bring it back.
   const [mapFull, setMapFull] = useState(false)
   // Basic/Expert + the per-slot pane assignment (persisted; basic-default, remember-last).
-  const { slots, assignPane } = useConnectConfig()
+  const { slots, assignPane, resetSlots, restoreSlots } = useConnectConfig()
   // Band focus (advisor/opening row click) — the map highlights that band's heat
   // + spots; click the same band again (or the clear chip) to release.
   const [focusBand, setFocusBand] = useState<string | null>(null)
@@ -422,21 +438,86 @@ export function ConnectView({
     onPoint: remote?undefined:onPoint,
     toggleFocusBand,
   }
-  const railFrame = (s: SlotId) => (
+  const chromeHidden = mapFull && !map3d
+
+  // CLOSE + RESIZE (operator-approved 2026-09-13). Visibility is per SLOT, in the shared
+  // panel record (features/panelState CONNECT_PANELS) — placement stays in the config above.
+  // Scoped by SURFACE: `?panel=connect` carries no instance token, so the default key would
+  // be the main window's own (and durable) record. The pop-out reads the main window's layout
+  // until it makes a change of its own.
+  const surface = useMemo(() => surfaceId(), [])
+  const panels = usePanelLayout(CONNECT_PANELS, surface, 'main')
+  // RESET LAYOUT IS THE OUT-OF-BOX STATE (operator 2026-09-13): default pane in every slot, every
+  // pane open, default widths and splits. The panel record's one-level Undo already covers the
+  // visibility + split half of a Reset; the slot placement lives in the config, so the placement
+  // Reset replaced is held here and put back by the SAME Undo press. It is dropped by the next
+  // change of any kind, so Undo only ever reverts the last change. Widths are not undo steps
+  // (operator ruling), so an Undo after Reset leaves them at their defaults.
+  const slotsBeforeReset = useRef<typeof slots | null>(null)
+  const change = <A extends unknown[]>(fn: (...a: A) => void) => (...a: A) => {
+    slotsBeforeReset.current = null
+    fn(...a)
+  }
+  const shown = (s: SlotId) => panels.stateOf(s) !== 'removed'
+  const leftSlots = (['left1', 'left2'] as const).filter(shown)
+  const rightSlots = (['right1', 'right2'] as const).filter(shown)
+  const stripSlots = (['bottom1', 'bottom2', 'bottom3'] as const).filter(shown)
+  // A rail renders only with a pane in it; the grid template follows what renders, so a
+  // closed rail hands its width to the map instead of leaving an empty track.
+  const present = {
+    left: !chromeHidden && leftSlots.length > 0,
+    right: !chromeHidden && rightSlots.length > 0,
+  }
+  const railsState = present.left ? (present.right ? 'both' : 'left') : present.right ? 'right' : 'none'
+  const gridRef = useRef<HTMLDivElement>(null)
+  const widths = useRailWidths(gridRef, present)
+  const gridStyle = {
+    ...(widths.applied.left != null ? { '--cn-rail-l': `${widths.applied.left}px` } : {}),
+    ...(widths.applied.right != null ? { '--cn-rail-r': `${widths.applied.right}px` } : {}),
+  } as React.CSSProperties
+
+  const frame = (s: SlotId, share?: number) => (
     <PaneFrame
       key={s}
       slotId={s}
       paneId={slots[s]}
       ctx={ctx}
-      onAssign={assignPane}
-      style={{ gridArea: s }}
+      onAssign={change(assignPane)}
+      share={share}
+      onHide={change(() => panels.setPanelState(s, 'removed'))}
     />
   )
-  const stripFrame = (s: SlotId) => (
-    <PaneFrame key={s} slotId={s} paneId={slots[s]} ctx={ctx} onAssign={assignPane} />
-  )
-
-  const chromeHidden = mapFull && !map3d
+  const rail = (side: 'left' | 'right', ids: readonly SlotId[]) => {
+    const [top, bottom] = ids
+    const split = ids.length === 2
+    const a = panels.shareOf(top)
+    const b = split ? panels.shareOf(bottom) : 1
+    const fraction = split ? a / (a + b) : 0.5
+    return (
+      <div className="connect-rail" data-side={side} style={{ '--connect-split': fraction } as React.CSSProperties}>
+        {frame(top, a)}
+        {split && frame(bottom, b)}
+        {split && (
+          <RailSplitHandle
+            label={side === 'left' ? t('connect.rail.left.split') : t('connect.rail.right.split')}
+            fraction={fraction}
+            onCommit={change((above: number, below: number) => {
+              const next: Partial<Record<SlotId, number>> = {}
+              next[top] = above
+              next[bottom] = below
+              panels.setShares(next)
+            })}
+          />
+        )}
+        <RailWidthHandle
+          side={side}
+          label={side === 'left' ? t('connect.rail.left.width') : t('connect.rail.right.width')}
+          api={widths}
+          gridRef={gridRef}
+        />
+      </div>
+    )
+  }
 
   return (
     <NavigationMapContext.Provider value={remote?{connect:remoteConnect.value,satellites:remoteSats.value?.mygrid===myGrid?remoteSats.value.view:null,track:remoteTrack?.track??null,ageMs:remoteConnect.ageMs}:null}>
@@ -469,6 +550,29 @@ export function ConnectView({
           >
             🌐 {map3d ? '3D' : '2D'}
           </button>
+          {/* The restore surface for a closed pane, and Reset layout. Always in the header, so
+              with every pane closed the way back is still one click away. */}
+          <PanelsMenu
+            items={SLOT_IDS.map((s) => ({
+              id: s,
+              label: t('connect.panels.item', { title: paneById(slots[s])?.title ?? '', where: SLOT_WHERE[s]() }),
+              state: panels.stateOf(s),
+            }))}
+            onToggle={change((id: string, show: boolean) => panels.setPanelState(id as SlotId, show ? 'docked' : 'removed'))}
+            onUndo={() => {
+              const before = slotsBeforeReset.current
+              slotsBeforeReset.current = null
+              panels.undo()
+              if (before) restoreSlots(before)
+            }}
+            canUndo={panels.canUndo}
+            onReset={() => {
+              slotsBeforeReset.current = slots
+              panels.reset()
+              resetSlots()
+              widths.resetAll()
+            }}
+          />
           {onPopOut && !remote && (
             <button
               type="button"
@@ -481,9 +585,10 @@ export function ConnectView({
           )}
         </div>
         )}
-        <div className="connect">
-          {!chromeHidden && railFrame('left1')}
-          {!chromeHidden && railFrame('left2')}
+        {/* Children keep FIXED positions (a closed rail or strip is a `false` hole, never a
+            shift), so opening or closing a rail can never remount the map beside it. */}
+        <div className="connect" ref={gridRef} data-rails={railsState} style={gridStyle}>
+          {present.left && rail('left', leftSlots)}
           <div className="connect-map">
             {map3d ? (
               <Suspense
@@ -523,18 +628,14 @@ export function ConnectView({
             />
             )}
           </div>
-          {!chromeHidden && railFrame('right1')}
-          {!chromeHidden && railFrame('right2')}
-          {/* UNMOUNTED, not hidden: the panes read everything from `ctx` (lifted here and
-              still polling), so there is no state to keep warm — and a display:none pane
-              would leave its ResizeObserver firing 0×0 into a canvas that has to be
-              re-stamped on re-show. Nothing to keep, nothing to re-stamp. */}
-          {!chromeHidden && (
-            <div className="connect-strip">
-              {stripFrame('bottom1')}
-              {stripFrame('bottom2')}
-              {stripFrame('bottom3')}
-            </div>
+          {present.right && rail('right', rightSlots)}
+          {/* UNMOUNTED, not hidden — for full screen AND for a closed pane: the panes read
+              everything from `ctx` (lifted here and still polling), so there is no state to
+              keep warm — and a display:none pane would leave its ResizeObserver firing 0×0
+              into a canvas that has to be re-stamped on re-show. Nothing to keep, nothing to
+              re-stamp. An empty strip is not rendered at all: it would be a dead row. */}
+          {!chromeHidden && stripSlots.length > 0 && (
+            <div className="connect-strip">{stripSlots.map((s) => frame(s))}</div>
           )}
         </div>
       </div>
