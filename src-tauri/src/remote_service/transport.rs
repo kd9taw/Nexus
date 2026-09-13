@@ -510,7 +510,10 @@ pub async fn supervise(
             attempts = 0;
         }
         attempts = attempts.saturating_add(1).min(6);
-        status.set("reconnecting", None);
+        // Carry the reason. `disabled` has always said why; `reconnecting` said nothing, so a
+        // station backing off because the service is refusing it (tryLater, serviceUnavailable)
+        // looked identical to a flaky network from the operator's chair.
+        status.set("reconnecting", result.err());
         // Bounded exponential backoff with OS randomness, so a service restart does
         // not make every shack reconnect on the same second.
         let mut jitter = [0; 2];
