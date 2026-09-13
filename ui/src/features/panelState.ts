@@ -229,6 +229,7 @@
 import { useCallback, useMemo, useState } from 'react'
 import { durableGet, durableSet } from './durableStore'
 import { windowInstance } from './windowScope'
+import { SLOT_IDS, type SlotId } from './connectConfig'
 
 export type PanelState = 'docked' | 'popped' | 'removed'
 
@@ -357,14 +358,24 @@ function migrateWaterfallDetached<P extends string>(
   return next
 }
 
+/**
+ * `inherit` names ANOTHER instance whose record this surface reads while it has none of its
+ * own — `surfaceGet`'s contract, for the panel record. A torn-off Connect opens on the main
+ * window's layout instead of first-run defaults; its first change writes its own key and the
+ * two diverge from there. Omitted ⇒ no inheritance, which is every cockpit's behaviour.
+ */
 export function loadPanelLayout<P extends string>(
   spec: PanelVocabulary<P>,
   instance?: string,
+  inherit?: string,
 ): PanelLayout<P> {
   const key = panelStorageKey(spec.view, instance)
   let layout = emptyPanelLayout<P>()
   try {
-    const raw = durableGet(key)
+    let raw = durableGet(key)
+    if (raw == null && inherit != null && inherit !== (instance ?? windowInstance())) {
+      raw = durableGet(panelStorageKey(spec.view, inherit))
+    }
     if (raw != null) layout = coercePanelLayout(spec, JSON.parse(raw))
   } catch {
     /* malformed — fall through (matches loadPlacement) */
@@ -458,12 +469,14 @@ export interface PanelLayoutApi<P extends string> {
 export function usePanelLayout<P extends string>(
   spec: PanelVocabulary<P>,
   instance?: string,
+  /** Read this instance's record while this surface has none of its own (loadPanelLayout). */
+  inherit?: string,
 ): PanelLayoutApi<P> {
   const key = useMemo(() => panelStorageKey(spec.view, instance), [spec.view, instance])
   // Current + previous in ONE state so the undo snapshot is taken by the same updater
   // that saves — two useStates could not do that atomically.
   const [hist, setHist] = useState<{ cur: PanelLayout<P>; prev: PanelLayout<P> | null }>(() => ({
-    cur: loadPanelLayout(spec, instance),
+    cur: loadPanelLayout(spec, instance, inherit),
     prev: null,
   }))
   const apply = useCallback(
@@ -776,6 +789,27 @@ export const JS8_PANELS: PanelVocabulary<Js8PanelId> = {
   panelIds: JS8_PANEL_IDS,
 }
 
+/** Connect's removable panes (close + resize, operator-approved 2026-09-13) — its seven
+ *  wrap-the-globe SLOTS, not its pane ids. Which pane sits in a slot is PLACEMENT and stays in
+ *  `nexus.connect.config` (features/connectConfig), exactly the split this module's header
+ *  describes: closing a slot keeps its pane, and ⊞ Panels brings the same pane back.
+ *
+ *  THE STOP LINE holds here by the emptiest route there is: Connect renders NO transmit
+ *  control, in a pane or out of one (its panes' ▶ Work QSYs and opens a cockpit; it keys
+ *  nothing), and the TopBar's TX cluster is outside the view, where no id reaches. There is no
+ *  stop control for a hide to cost. What IS swept is that a hide reaches only its own pane —
+ *  ConnectView.panes.test.tsx closes every slot, singly and all at once, and requires every
+ *  control outside the panes to still be on screen (declared in stop-line.test.tsx ELSEWHERE).
+ *  No hide here ends anything in flight, so no entry carries a note.
+ *
+ *  Connect is ALSO the one vocabulary mounted in a pop-out that shares the main window's
+ *  instance token (`?panel=connect` carries none), so ConnectView scopes the record by
+ *  SURFACE and inherits the main window's on first open — see loadPanelLayout's `inherit`. */
+export const CONNECT_PANELS: PanelVocabulary<SlotId> = {
+  view: 'connect',
+  panelIds: SLOT_IDS,
+}
+
 /**
  * EVERY vocabulary in the app, so the stop-line name backstop cannot silently miss one.
  * It missed the Operate cockpit for the whole life of the rule — the guard listed the four
@@ -796,6 +830,7 @@ export const ALL_PANEL_VOCABULARIES: readonly PanelVocabulary<string>[] = [
   RTTY_PANELS,
   PSK_PANELS,
   JS8_PANELS,
+  CONNECT_PANELS,
 ]
 
 /**

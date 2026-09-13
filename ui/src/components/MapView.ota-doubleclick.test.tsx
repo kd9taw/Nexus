@@ -115,6 +115,9 @@ let clientHeightDesc: PropertyDescriptor | undefined
 
 beforeEach(() => {
   localStorage.clear()
+  // The projection-center trick needs the GLOBE projection. Intent presets now open the flat World
+  // map, so state the premise instead of inheriting it: POTA's remembered projection is Globe.
+  localStorage.setItem('nexus.connect.intents', JSON.stringify({ pota: { kind: 'globe' } }))
   ;(globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = RO
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(fakeCtx())
   // jsdom lays nothing out — clientWidth/clientHeight are 0 unless stubbed, and MapView

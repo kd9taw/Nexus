@@ -114,6 +114,9 @@ let clientHeightDesc: PropertyDescriptor | undefined
 
 beforeEach(() => {
   localStorage.clear()
+  // The marker-at-centre fixture needs the GLOBE projection. Intent presets now open the flat World
+  // map, so state the premise instead of inheriting it: POTA's remembered projection is Globe.
+  localStorage.setItem('nexus.connect.intents', JSON.stringify({ pota: { kind: 'globe' } }))
   observers = []
   ;(globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = RecordingRO
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(fakeCtx())

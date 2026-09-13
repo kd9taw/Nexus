@@ -1408,17 +1408,24 @@ button.nb-chip:hover {
    over it as a translucent card (HamClock/Geochron model — everything around the
    world), instead of a co-equal side column. */
 /* Wrap-the-globe assignable pane grid (B1): the globe is the center cell; reassignable
-   panes frame it (2 left, 2 right, a 3-up bottom strip). The map keeps a definite size —
-   center column minmax(0,1fr) (never bare 1fr, or the 100%-width canvas runs away) over
-   TWO 1fr rows (definite height for .map-view{height:100%}); the min-*:0 chain stays. */
-.connect {
-  flex: 1;
-  min-height: 0;
-  display: grid;
-  gap: var(--space-3);
-  padding: var(--space-3);
-  grid-template-columns: var(--cn-rail, 300px) minmax(0, 1fr) var(--cn-rail, 300px);
-  /* Strip row: CONTENT-sized, with the 30%-of-effective-viewport ceiling on the PANES
+   panes frame it (a left rail, a right rail, a bottom strip). The map keeps a definite size —
+   center column minmax(0,1fr) (never bare 1fr, or the 100%-width canvas runs away) over ONE
+   minmax(0,1fr) row (definite height for .map-view{height:100%}); the min-*:0 chain stays.
+
+   CLOSE + RESIZE (2026-09-13). Every pane can be closed from its frame and restored from
+   ⊞ Panels, and each rail is drag/keyboard resizable, so this template may never assume what
+   is mounted — connect-layout.test.ts computes each of these against the rendered states:
+   · COLUMNS follow [data-rails] (both|left|right|none, stamped by ConnectView from the rails
+     it actually renders). A rail track with no rail in it is a dead band beside the map. The
+     state rules sit in :where() so they stay (0,1,0) — the xs stack (0,2,0) and map-full
+     (0,3,0) below must keep winning whatever the rails say.
+   · Each rail track reads its OWN width (--cn-rail-l / --cn-rail-r), written inline only once
+     the operator sizes that rail and clamped against this box on load, on every resize and on
+     every step (useRailWidths). Unsized, it falls back to the tier default --cn-rail, i.e. the
+     exact pre-feature template.
+   · ROWS: the map row is the only explicit one. The strip spans the grid in an IMPLICIT row
+     sized by grid-auto-rows, so a closed strip leaves no track and no gap. That row is
+     CONTENT-sized, with the 30%-of-effective-viewport ceiling on the PANES
      (`.connect-strip > .pane-frame` below), NOT on the track. Two dead spellings of a
      track cap shipped here — `minmax(0, X)` and then `minmax(auto, X)`: grid
      maximize-tracks (css-grid §11.6) grows ANY fixed-max track to its growth limit
@@ -1427,12 +1434,49 @@ button.nb-chip:hover {
      from the globe's 1fr rows on every tall window (review 2026-07-31, verified in
      Chrome: minmax(0,300px) and minmax(auto,300px) both render 300px). An `auto` track
      is exactly as tall as its tallest (max-height-capped) pane; a tall pane reassigned
-     into the strip scrolls inside its own .pane-body. */
-  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr) auto;
-  grid-template-areas:
-    'left1  center right1'
-    'left2  center right2'
-    'strip  strip  strip';
+     into the strip scrolls inside its own .pane-body.
+   · A rail is a flex column of its visible frames (`.connect-rail`), so a closed pane's
+     sibling takes the whole rail — two equal 1fr rows with a gap and a 1:1 flex column with
+     the same gap are the same rectangles, which is why the default geometry did not move. */
+.connect {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  grid-template-columns: var(--cn-rail-l, var(--cn-rail, 300px)) minmax(0, 1fr) var(--cn-rail-r, var(--cn-rail, 300px));
+  grid-template-rows: minmax(0, 1fr);
+  grid-auto-rows: auto;
+  grid-template-areas: 'left center right';
+}
+.connect:where([data-rails='left']) {
+  grid-template-columns: var(--cn-rail-l, var(--cn-rail, 300px)) minmax(0, 1fr);
+  grid-template-areas: 'left center';
+}
+.connect:where([data-rails='right']) {
+  grid-template-columns: minmax(0, 1fr) var(--cn-rail-r, var(--cn-rail, 300px));
+  grid-template-areas: 'center right';
+}
+.connect:where([data-rails='none']) {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas: 'center';
+}
+/* One rail: its visible frames split the height by share (the frame's inline
+   `flex: var(--connect-pane-flex, var(--connect-share) 1 0)`). Positioned only so its two
+   handles can sit in the gaps beside and inside it without taking a track or a flex slot. */
+.connect-rail {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+  min-height: 0;
+}
+.connect-rail:where([data-side='left']) {
+  grid-area: left;
+}
+.connect-rail:where([data-side='right']) {
+  grid-area: right;
 }
 .connect-map {
   grid-area: center;
@@ -1483,31 +1527,89 @@ button.nb-chip:hover {
   color: var(--accent);
   border-color: var(--accent);
 }
-/* 3-D layers panel — top-left overlay, matches the 2-D map's Layers aside. */
+/* ⭐ THE LAYERS PANEL — ONE PLACE ON BOTH MAP SURFACES: 2-D `.map-layers` (MapView) and 3-D
+   `.globe3d-layers` (Globe3D), both framed by MapLayersPanel.tsx. An overlay pinned top-left of the
+   map, mirroring the Conditions rail pinned right (`.map-insights`) and folding the same way.
+   WHY AN OVERLAY, not the 2-D map's old 200px in-flow column (the pane-grid contract):
+   1. The map is the centre cell of Connect's grid (`.connect-map`, overflow:hidden). At the
+      1024×768 floor that cell is ~460px wide and the in-flow column was pushed PAST its right edge,
+      where overflow:hidden clipped the whole panel off screen (headless Chrome: panel left 769px,
+      cell right 742px). An overlay is positioned inside the box it belongs to and cannot leave it.
+   2. Folding, unfolding, or peeking it in full screen never resizes the canvas — no 2-D
+      re-projection, no WebGL resize — so opening it for one checkbox costs nothing.
+   3. It is the ONE scroller in its corner: capped to the map's height, it scrolls its own rows
+      instead of being a hard-floored child under the cell's overflow:hidden.
+   z-index 4: under the hover card (5) and the selected-path chip (6). */
+.map-layers,
 .globe3d-layers {
   position: absolute;
   top: 8px;
   left: 8px;
-  z-index: 3;
+  z-index: 4;
   display: flex;
   flex-direction: column;
   gap: 2px;
+  max-height: calc(100% - 16px);
+  overflow-y: auto;
   padding: var(--space-2) 10px;
   background: color-mix(in srgb, var(--bg) 82%, transparent);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  font-size: 0.72rem;
-  /* Scroll the toggle list inside the globe cell instead of clipping the bottom rows against the
-     parent .connect-map (overflow:hidden) when the cell is short (pop-out / small window). */
-  max-height: calc(100% - 16px);
-  overflow-y: auto;
+  box-shadow: var(--elev-2);
 }
-.globe3d-layers-h {
+.globe3d-layers {
+  font-size: 0.72rem;
+}
+/* The head: the panel's name and its fold chevron (the Conditions rail's `.mi-head` shape). */
+.ml-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: 2px;
+}
+.ml-title {
+  font-size: var(--fs-label);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+}
+.ml-collapse {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.ml-collapse:hover {
+  color: var(--text);
+}
+/* FOLDED: the `.map-insights.collapsed` pill, on the left edge. A declared width, so the flare/PCA
+   chips beside it (below) know where it ends. */
+.map-layers.collapsed,
+.globe3d-layers.collapsed {
+  width: 2rem;
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-2) 0;
+  writing-mode: vertical-rl;
+  font-size: var(--fs-micro);
   font-weight: 700;
   color: var(--text-dim);
-  margin-bottom: 2px;
+  cursor: pointer;
+}
+.map-layers.collapsed:hover,
+.globe3d-layers.collapsed:hover {
+  color: var(--text);
+}
+.ml-pill-label {
+  letter-spacing: 0.04em;
 }
 .globe3d-layers label {
   display: flex;
@@ -1539,16 +1641,24 @@ button.nb-chip:hover {
 }
 .connect-map > .map-view {
   flex: 1;
+  /* The cell decides the map's width, never its toolbar's content (a flex item's auto min-width is
+     its min-content — the overflow that clipped the toolbar at 1024). map-toolbar.test.ts. */
+  min-width: 0;
 }
 /* The operatemap pop-out mounts a bare MapView with no .connect-map wrapper — same
    flex-fill rule, direct child of the detached window's own flex column instead. */
 .app.detached > .map-view {
   flex: 1;
 }
+/* The strip spans every column in the grid's IMPLICIT auto row (no named area — an area
+   would re-create the explicit row, and its gap, for a strip that is closed). Its panes are
+   AUTO columns, so however many are open split the width evenly: a fixed `repeat(3, 1fr)`
+   left a dead third beside two panes. */
 .connect-strip {
-  grid-area: strip;
+  grid-column: 1 / -1;
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
   gap: var(--space-3);
   min-width: 0;
 }
@@ -1598,6 +1708,37 @@ button.nb-chip:hover {
   border: 1px solid var(--border);
   border-radius: 5px;
   padding: 1px var(--space-1);
+}
+/* Connect's ✕ (close this slot) — no taller than the picker beside it, so adding it changes no
+   pane head's height. Measured, 2026-09-13: the cockpit frame's 24px icon button grew every
+   Connect head by 8px, and the strip row took that height straight out of the map. */
+/* The picker + ✕ cluster in a Connect pane head. It may SHRINK (min-width: 0) and the picker
+   gives up its width first, so the ✕ is never cut off by the frame's clip. Measured, 2026-09-13:
+   with neither shrinkable, the Conditions pane's long picker pushed its ✕ past the frame edge
+   at the 248px default rail, and at a 200px rail both controls of both left panes were gone. */
+.pane-acts {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.pane-acts > .pane-pick {
+  min-width: 0;
+}
+.pane-close {
+  flex: none;
+  font-size: var(--fs-micro);
+  line-height: 1;
+  color: var(--text-dim);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 1px var(--space-1);
+  cursor: pointer;
+}
+.pane-close:hover {
+  color: var(--text);
+  border-color: var(--accent);
 }
 .pane-body {
   flex: 1;
@@ -1732,14 +1873,11 @@ button.nb-chip:hover {
 }
 [data-viewport='xs'] .connect {
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: minmax(280px, calc(0.46 * var(--vh-eff, 100vh))) auto auto auto auto auto;
-  grid-template-areas:
-    'center'
-    'left1'
-    'left2'
-    'right1'
-    'right2'
-    'strip';
+  /* The globe row is the only explicit one here too: the rails and the strip auto-place into
+     implicit `auto` rows under it (grid-auto-rows on .connect), in DOM order — so a closed
+     rail or strip takes no row and leaves no gap in the stack. */
+  grid-template-rows: minmax(280px, calc(0.46 * var(--vh-eff, 100vh)));
+  grid-template-areas: 'center';
   /* THE STACK NEEDS ITS OWN SCROLLER. Nothing above it scrolls — the shell rule on
      .layout.single, .connect-shell and .connect itself all clip or declare no overflow,
      and every row is a .pane-frame that clips. So at xs, where the globe keeps a 280px
@@ -1749,7 +1887,67 @@ button.nb-chip:hover {
   overflow-y: auto;
 }
 [data-viewport='xs'] .connect-strip {
-  grid-template-columns: 1fr;
+  grid-auto-flow: row;
+}
+/* No 'left'/'right' area exists in the xs template — a named area would drop the rail into an
+   implicit track OUTSIDE the grid — so the rail auto-places under the map. Its frames are
+   content-height in a content-height stack (a basis-0 grower collapses there), which is what
+   the old per-pane `auto` rows gave them. */
+[data-viewport='xs'] .connect-rail {
+  grid-area: auto;
+  --connect-pane-flex: 0 0 auto;
+}
+
+/* THE RAIL HANDLES (components/connect/RailHandles.tsx). Out of flow by design: each sits in a
+   gap the grid already has — the column gap beside a rail, or the rail's own gap between its
+   two panes — so no handle can move a rectangle of the default layout. Focusable separators;
+   the focus ring is drawn inside the box so it is not clipped by a neighbour. */
+.connect-sep {
+  position: absolute;
+  z-index: 3;
+  touch-action: none;
+  border-radius: 4px;
+  background: transparent;
+  transition: background var(--transition);
+}
+.connect-sep:where([aria-orientation='vertical']) {
+  top: 0;
+  bottom: 0;
+  width: var(--space-3);
+  cursor: col-resize;
+}
+/* The left rail's handle is in the gap AFTER it, the right rail's in the gap BEFORE it. */
+.connect-sep:where([data-edge='end']) {
+  left: 100%;
+}
+.connect-sep:where([data-edge='start']) {
+  right: 100%;
+}
+/* The split seam: in the rail's gap between its two panes. The top pane is
+   (railHeight − gap) × split tall, so that is where the gap starts. */
+.connect-sep:where([aria-orientation='horizontal']) {
+  left: 0;
+  right: 0;
+  height: var(--space-3);
+  top: calc((100% - var(--space-3)) * var(--connect-split, 0.5));
+  cursor: row-resize;
+}
+.connect-sep:hover,
+.connect-sep:focus-visible {
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.connect-sep:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+/* Nothing to resize in a single stacked column. */
+[data-viewport='xs'] .connect-sep {
+  display: none;
+}
+/* The row-resize twin of body.resizing (a split drag): the cursor holds, text never selects. */
+body.resizing-row {
+  cursor: row-resize;
+  user-select: none;
 }
 /* FULL-SCREEN MAP — one cell, no frame. The header, the four rail panes and the bottom
    strip are UNMOUNTED by ConnectView, so this only has to collapse the grid they were laid
@@ -2505,7 +2703,14 @@ button.nb-chip:hover {
 .map-toolbar {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
+  /* ⭐ WRAPS. A control strip that cannot wrap has its min-content as the map's minimum width: at
+     the 1024×768 floor (a ~460px Connect cell) that pushed the map past the cell's right edge and
+     `.connect-map { overflow: hidden }` clipped Reset and Full screen out of reach; with the rails
+     dragged wider the cell reaches 280px. Wrapping keeps every control where it is, with its label
+     (any locale), and the strip simply grows a row — it is content-sized, and the canvas below is
+     the grower that absorbs the height (`.map-body { flex: 1; min-height: 0 }`). map-toolbar.test.ts. */
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-3);
   padding: var(--space-2) var(--space-3);
   border-bottom: 1px solid var(--border);
 }
@@ -2675,7 +2880,9 @@ button.nb-chip:hover {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: var(--elev-2);
-  z-index: 5;
+  /* Under the Layers panel (4): on a narrow map the two overlays meet, and the Layers rows and fold
+     chevron must stay on top — this rail's own chevron is on its far edge, clear of Layers. */
+  z-index: 3;
   scrollbar-width: thin;
   scrollbar-color: color-mix(in srgb, var(--text-dim) 55%, transparent) transparent;
 }
@@ -3094,19 +3301,18 @@ button.nb-chip:hover {
   height: 8px;
   border-radius: 4px;
 }
+/* 2-D Layers rows carry an opacity slider, so the open panel has a width to give them. Placement,
+   fold and scroll are the shared overlay rule beside `.globe3d-layers`. */
 .map-layers {
-  width: 200px;
-  flex: none;
-  border-left: 1px solid var(--border);
-  padding: var(--space-3);
-  overflow: auto;
+  width: min(200px, calc(100% - 16px));
 }
-.map-layers h3 {
-  font-size: var(--fs-label);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--text-dim);
-  margin: 0 0 var(--space-2);
+/* The flare/PCA chips share the map's top-left corner with the Layers panel (rendered before them
+   in MapView for this selector): they sit just right of it, open or folded, instead of under it. */
+.map-layers ~ .flare-chip {
+  left: calc(16px + min(200px, calc(100% - 16px)));
+}
+.map-layers.collapsed ~ .flare-chip {
+  left: calc(16px + 2rem);
 }
 .map-layer {
   margin-bottom: var(--space-3);
@@ -3133,26 +3339,6 @@ button.nb-chip:hover {
   color: var(--text);
 }
 
-/* FULL-SCREEN MAP — the Layers panel PEEKED over the map instead of beside it.
-   In flow it is a 200px column, so opening it to flip one checkbox would narrow the canvas,
-   re-fire the ResizeObserver and re-project the whole map, twice per peek. Out of flow the
-   map's geometry never moves. Opaque background because it sits over live pixels (the
-   sticky/pinned-surface rule); it keeps its own `overflow:auto` from the base rule, so it is
-   still the only scroller in this corner. `.map-body` is only made a containing block here —
-   every existing overlay (hover, path, legends, insight rail) hangs off `.map-canvas-wrap`,
-   which is already relative, so nothing else moves. */
-.map-view.map-full .map-body {
-  position: relative;
-}
-.map-view.map-full .map-layers {
-  position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 6;
-  background: var(--bg-elev);
-  box-shadow: var(--elev-2);
-}
 
 /* Logbook header action buttons (Import ADIF / Log QSO). */
 /* Export date range (#98) — compact from/to beside Export ADIF. Vars only, so both themes hold. */

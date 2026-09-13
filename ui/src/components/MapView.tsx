@@ -42,6 +42,7 @@ import type {
   WorkableCard,
 } from '../types'
 import { MapInsightRail } from './prop/MapInsightRail'
+import { MapLayersPanel } from './MapLayersPanel'
 import type { Theme } from '../useTheme'
 import { getAurora, getDeclination, getPca, getSatellites, getLog, getLogStats, getOtaMapSpots } from '../api'
 // CQ-zone boundaries (HB9HIL hamradio-zones-geojson, MIT — see NOTICE): bundled
@@ -59,6 +60,8 @@ import {
 import { decollideLabels } from '../features/mapLabels'
 import { SAT_ICON_RECTS, SAT_ICON_TILT_DEG } from '../features/satIcon'
 import { surfaceGet, surfaceHasOwn, surfaceSet } from '../features/windowScope'
+import { useStableByKey } from '../features/useStableByKey'
+import { loadIntentSetup, saveIntentSetup } from '../features/intentMapSettings'
 import {
   gridToLatLon,
   haversineKm,
@@ -120,12 +123,13 @@ interface Props {
   /** Connect intent preset — applied (soft) on change. Omitted = no preset. */
   intent?: MapIntent
   /** This surface exists SOLELY for its `intent` (a dedicated pop-out like the POTA map), so it
-   * must NOT inherit another surface's layer picks. A general map inherits the primary surface's
-   * stored layers on first open (the #199 carry-over via `surfaceGet`) — right when a torn-off
+   * must NOT inherit another surface's map setup. A general map inherits the primary surface's
+   * stored setup on first open (the #199 carry-over via `surfaceGet`) — right when a torn-off
    * Connect map should keep the operator's picks. But on a dedicated surface that inherited value
-   * is a DIFFERENT purpose's setup, and it silently suppressed this intent's own preset (e.g. the
-   * POTA map opening with Parks off). Set true to make the preset yield only to a pick made ON
-   * THIS surface. Default false keeps every existing (inheriting) call site unchanged. */
+   * is another surface's setup, and it once silently suppressed this intent's own preset (the
+   * POTA map opening with Parks off). Set true to make the preset yield only to a setup saved ON
+   * THIS surface (see features/intentMapSettings). Default false keeps every inheriting call
+   * site unchanged. */
   dedicatedIntent?: boolean
   /** The map's full-screen toggle changed (the toolbar button, or Escape leaving it). The map
    * hides its OWN chrome by itself; a host that frames it — Connect, with a header, four rail
@@ -224,41 +228,38 @@ const INTENT_PRESETS: Record<
   MapIntent,
   { kind: Projection; colorBy: 'need' | 'snr'; layers: Partial<Record<LayerKey, boolean>> }
 > = {
-  // Chase DX: spinnable globe, need-colored, openings + DXpeditions + rings on.
-  dx: { kind: 'globe', colorBy: 'need', layers: { dxped: false, rings: true, heat: true } },
-  // POTA/SOTA: globe, need-colored activators; de-emphasize rings.
-  // Was the flat 'world' projection on the theory that activators are mostly domestic so a
-  // world view shows more at once. Operator ruling 2026-07-26: POTA must behave like every
-  // other intent — Chase DX, Ragchew and 6m/VHF are all globes, and having one intent silently
-  // flip the map to flat reads as a rendering bug, not a preset. Only the projection changed;
-  // the rings/heat de-emphasis is still right for this intent.
-  pota: { kind: 'globe', colorBy: 'need', layers: { dxped: false, rings: false, heat: false, ota: true } },
-  // Ragchew: globe, who-can-I-hear (signal), calm — dxped off.
-  casual: { kind: 'globe', colorBy: 'snr', layers: { dxped: false, rings: true, heat: false } },
+  // ⭐ EVERY INTENT OPENS THE FLAT WORLD MAP (operator ruling 2026-09-13: "2D" is the flat map).
+  // The 2-D renderer's Globe projection is an orthographic sphere, and a first visit to an intent
+  // that landed on it read as "the 3D map is stuck on" (tester report). Globe and Beam stay one
+  // click away in the toolbar, and a projection the operator picks is remembered per intent. All
+  // four presets still agree, which is the 2026-07-26 ruling (one intent silently switching
+  // projection reads as a rendering bug, not a preset) — they now agree on World.
+  // Chase DX: need-colored, openings + DXpeditions + rings on.
+  dx: { kind: 'world', colorBy: 'need', layers: { dxped: false, rings: true, heat: true } },
+  // POTA/SOTA: need-colored activators; de-emphasize rings and heat.
+  pota: { kind: 'world', colorBy: 'need', layers: { dxped: false, rings: false, heat: false, ota: true } },
+  // Ragchew: who-can-I-hear (signal), calm — dxped off.
+  casual: { kind: 'world', colorBy: 'snr', layers: { dxped: false, rings: true, heat: false } },
   // 6m/VHF: heat ON — visualizing the Es/F2 opening footprint IS this intent.
-  vhf: { kind: 'globe', colorBy: 'snr', layers: { dxped: false, rings: true, heat: true, openings: true } },
+  vhf: { kind: 'world', colorBy: 'snr', layers: { dxped: false, rings: true, heat: true, openings: true } },
 }
 
-/** The operator's chosen projection is persisted (like the Connect intent) so a torn-off
- * window — and the next launch — restore the SAME globe/beam/world they were using, instead
- * of snapping back to the intent preset (the mount-time intent effect would otherwise reset
- * it). Still load-bearing now that every intent presets to a globe: the operator's own
- * Beam/World pick has to survive a detach and a relaunch. */
-// PER-SURFACE: the projection suits the WINDOW's aspect (a tall pop-out and a wide main
-// map want different ones). A brand-new surface still inherits the main window's pick —
-// that carry-over is the reason this key exists, and `surfaceGet` preserves it.
-const PROJECTION_KEY = 'nexus.connect.projection'
-function loadProjection(): Projection | null {
-  const v = surfaceGet(PROJECTION_KEY)
-  return v === 'globe' || v === 'aeqd' || v === 'world' ? v : null
+/** An intent's preset applied SOFTLY over a layer table: only the layers it names change, so the
+ *  operator's other picks carry into an intent they open for the first time. */
+function withIntentPreset(L: Record<LayerKey, Layer>, intent: MapIntent): Record<LayerKey, Layer> {
+  const p = INTENT_PRESETS[intent]
+  const next = { ...L }
+  for (const k of Object.keys(p.layers) as LayerKey[]) {
+    next[k] = { ...next[k], visible: p.layers[k]! }
+  }
+  return next
 }
 
-// The operator's layer picks (#199) — same per-surface scoping and carry-over as the
-// projection above, and for the same reason: which layers you run is a deliberate setup,
-// and it reset to defaults-plus-preset on every launch while the control beside it
-// persisted. The embedded sat/APRS maps never touch this key (they force their own sets,
-// exactly as the detail globe force-locks its projection).
-const LAYERS_KEY = 'nexus.connect.layers'
+// THE OPERATOR'S MAP SETUP — projection, layer picks (#199) and colour mode — is remembered PER
+// INTENT and PER SURFACE by features/intentMapSettings (with the 2-D/3-D choice ConnectView keeps
+// there too). It used to be one shared projection key and one shared layer key that every intent
+// switch overwrote with that intent's preset. The embedded sat/APRS maps never touch it: they
+// force their own layer sets, exactly as the detail globe force-locks its projection.
 
 /** Stored blob → a full layer table, or `null` for anything unusable. Everything accepted
  *  is CLAMPED against the current table: unknown keys dropped, missing keys defaulted,
@@ -272,6 +273,11 @@ export function layersFromStored(v: string | null): Record<LayerKey, Layer> | nu
   } catch {
     return null
   }
+  return layersFromValue(raw)
+}
+
+/** `layersFromStored` for an already-parsed value (the per-intent store holds the table as JSON). */
+function layersFromValue(raw: unknown): Record<LayerKey, Layer> | null {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null
   const blob = raw as Record<string, { visible?: unknown; opacity?: unknown }>
   const out = { ...DEFAULT_LAYERS }
@@ -624,7 +630,7 @@ function snrToken(snr: number): { v: string; r: number } {
 export function MapView({
   myGrid,
   theme,
-  stations,
+  stations: stationsProp,
   prop,
   selectedCall,
   onSelectCall,
@@ -652,6 +658,10 @@ export function MapView({
   const remoteConnect=remoteMap?.connect
   const remoteFeed=<T,>(feed:{value:T;ageMs:number;validForMs:number}|null|undefined):T|null=>
     feed&&feed.ageMs+(remoteMap?.ageMs??Infinity)<feed.validForMs?feed.value:null
+  // The roster, CONTENT-keyed. App sends a new array on every 300 ms snapshot whether or not
+  // anything was decoded; `placed`, `rxLines`, `selStation` and the draw effect all key on this,
+  // so identity-keyed they cleared and redrew the whole canvas ~3×/s for identical content.
+  const stations = useStableByKey(stationsProp, JSON.stringify(stationsProp))
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const wrapRef = useRef<HTMLDivElement>(null)
   // Flare effects overlay (the animated sun + rays) — a separate transparent
@@ -665,36 +675,46 @@ export function MapView({
         .map((s) => ({ lat: s.lat, lon: s.lon, muf: s.mufMhz as number })),
     [muf],
   )
-  // Restore the operator's persisted projection (so a detached window shows the same
-  // globe/beam/world); fall back to the intent preset, then the globe. The embedded
-  // detail globe force-locks 'globe' and ignores the persisted pick (it's a transient
-  // inset — reading/writing that key would fight the operator's real Connect-map view).
-  const [kind, setKind] = useState<Projection>(() =>
-    embedded ? 'globe' : loadProjection() ?? (intent ? INTENT_PRESETS[intent].kind : 'globe'),
+  // THE OPERATOR'S SETUP FOR THIS INTENT (features/intentMapSettings): what they left here, or —
+  // the first time this intent is used on this surface — its preset. The embedded detail/APRS maps
+  // force their own projection and layers and never read or write it (they are transient insets;
+  // touching it would fight the operator's real Connect map).
+  const [initialSetup] = useState(() =>
+    !embedded && intent ? loadIntentSetup(intent, dedicatedIntent) : null,
   )
-  const [colorBy, setColorBy] = useState<'need' | 'snr'>('need')
+  const [kind, setKind] = useState<Projection>(() =>
+    embedded ? 'globe' : initialSetup?.kind ?? (intent ? INTENT_PRESETS[intent].kind : 'world'),
+  )
+  const [colorBy, setColorBy] = useState<'need' | 'snr'>(
+    () => initialSetup?.colorBy ?? (intent ? INTENT_PRESETS[intent].colorBy : 'need'),
+  )
   const [pathMode, setPathMode] = useState<'sp' | 'lp'>('sp')
   const [layers, setLayers] = useState(() =>
     embedded
       ? embedded.aprs
         ? APRS_EMBED_LAYERS
         : EMBED_LAYERS
-      : (layersFromStored(surfaceGet(LAYERS_KEY)) ?? DEFAULT_LAYERS),
+      : (layersFromValue(initialSetup?.layers) ??
+        (intent ? withIntentPreset(DEFAULT_LAYERS, intent) : DEFAULT_LAYERS)),
   )
-  // Whether a persisted layer pick seeded the state above — the intent preset yields to it
-  // on first mount, exactly as it yields to the persisted projection. A DEDICATED surface
-  // (`dedicatedIntent`) counts only a pick made ON ITSELF: `surfaceGet` above still inherits the
-  // primary surface's layers so the map opens on something sensible, but an inherited value is
-  // another surface's setup, not a reason to suppress THIS surface's preset — see the prop doc.
-  const hadStoredLayers = useRef(
-    !embedded && (dedicatedIntent ? surfaceHasOwn(LAYERS_KEY) : surfaceGet(LAYERS_KEY) != null),
-  )
+  // SWITCHING INTENT restores that intent's setup — or applies its preset if it has never been used
+  // here. Done DURING RENDER (React's "adjust state when a prop changes" pattern), not in an effect:
+  // the persist effect below then never sees the new intent paired with the old intent's state, so
+  // it can never write one intent's picks into another's record.
+  const [setupIntent, setSetupIntent] = useState(intent)
+  if (!embedded && intent && intent !== setupIntent) {
+    setSetupIntent(intent)
+    const saved = loadIntentSetup(intent, dedicatedIntent)
+    setKind(saved?.kind ?? INTENT_PRESETS[intent].kind)
+    setColorBy(saved?.colorBy ?? INTENT_PRESETS[intent].colorBy)
+    setLayers((L) => layersFromValue(saved?.layers) ?? withIntentPreset(L, intent))
+  }
   // Full screen: everything but the map goes. The embedded detail globe has no chrome to
   // hide and no toolbar to hold the way back, so it is never full-screen.
   const [full, setFull] = useState(() => !embedded && loadFull())
   // The Layers panel, peeked while full-screen. Transient by design: full screen means the
   // panel is away, and re-hiding it on the way in/out is what makes ONE button the whole
-  // story. It comes back as an overlay (see `.map-view.map-full .map-layers`) so peeking at
+  // story. It comes back as the same overlay it always is (see `.map-layers`) so peeking at
   // a layer never re-flows the canvas — a 200 px shove would re-project and repaint the
   // whole map twice for a checkbox.
   const [layersPeek, setLayersPeek] = useState(false)
@@ -718,6 +738,12 @@ export function MapView({
   const heatCanvasRef = useRef<HTMLCanvasElement | null>(null)
   // Same reuse for the flare-absorption field's offscreen canvas.
   const flareCanvasRef = useRef<HTMLCanvasElement | null>(null)
+  // The cached base map (see "THE BASE MAP IS CACHED" in the draw effect) and the inputs it was
+  // drawn from.
+  const baseRef = useRef<{ canvas: HTMLCanvasElement | null; deps: readonly unknown[] }>({
+    canvas: null,
+    deps: [],
+  })
   // Opening-pulse tick: the main nowMs clock is a 60 s greyline tick, far too
   // coarse to animate the heat pulse (it froze the sine). Run a 1 s tick ONLY
   // while the heat layer is on AND an opening is actually detected — an idle map
@@ -893,52 +919,15 @@ export function MapView({
     }, aprsRedraw)
     return () => clearInterval(id)
   }, [aprsRedraw])
-  // Apply the Connect intent preset (soft) whenever it changes — sets projection,
-  // default color-by, and which optional layers are on. The user can still tweak
-  // any control afterwards; switching intent re-applies.
-  const intentFirstRun = useRef(true)
+  // Persist this intent's setup whenever any of it changes — a projection pick, a layer toggle or
+  // opacity nudge, the colour mode, a Reset, or a preset applied on first use — so the next visit,
+  // window and launch restore it. Writing on mount is what makes a preset a FIRST-use default: the
+  // intent has a record from then on. (On a `dedicatedIntent` surface that record is this surface's
+  // own, so its preset forces exactly once.) The embedded maps are exempt, as above.
   useEffect(() => {
-    if (!intent) return
-    const p = INTENT_PRESETS[intent]
-    // On the FIRST mount, honor the persisted projection (kind is seeded from it above) so a
-    // detached window keeps the operator's globe/beam/world. The preset only re-sets the
-    // projection when the operator actively SWITCHES intent afterward. colorBy/layers always
-    // follow the intent — they're derived identically in every window, so they carry over.
-    if (!intentFirstRun.current) setKind(p.kind)
-    // Same first-mount rule for the layers (#199): a persisted pick seeded the state, and
-    // the preset only re-applies when the operator actively SWITCHES intent afterward. "A pick"
-    // means a pick this surface should honour — for a `dedicatedIntent` surface only its OWN
-    // stored layers count (see `hadStoredLayers`), so the true first open of a dedicated pop-out
-    // takes its intent's preset instead of inheriting another surface's layers. The persist
-    // effect writes this surface's own key on mount, so that force applies exactly ONCE: a later
-    // toggle here is then a pick of its own and is honoured on reopen.
-    const skipLayers = intentFirstRun.current && hadStoredLayers.current
-    intentFirstRun.current = false
-    setColorBy(p.colorBy)
-    if (skipLayers) return
-    setLayers((L) => {
-      const next = { ...L }
-      for (const k of Object.keys(p.layers) as LayerKey[]) {
-        next[k] = { ...next[k], visible: p.layers[k]! }
-      }
-      return next
-    })
-  }, [intent])
-
-  // Persist the projection whenever it changes (operator's Globe/Beam/World pick, or a
-  // preset applied on intent switch) so the next window/launch restores it. The embedded
-  // detail globe is exempt — it force-locks 'globe' and must never clobber that pick.
-  useEffect(() => {
-    if (embedded) return
-    surfaceSet(PROJECTION_KEY, kind)
-  }, [kind, embedded])
-
-  // Persist the layer picks the same way (#199) — every toggle, opacity nudge, preset
-  // application and Reset writes through, so the next launch opens the map you left.
-  useEffect(() => {
-    if (embedded) return
-    surfaceSet(LAYERS_KEY, JSON.stringify(layers))
-  }, [layers, embedded])
+    if (embedded || !setupIntent) return
+    saveIntentSetup(setupIntent, { kind, layers, colorBy }, dedicatedIntent)
+  }, [kind, layers, colorBy, setupIntent, embedded, dedicatedIntent])
 
   // Tell the host, including on mount so a surface restored as full-screen opens with the
   // host's chrome already gone rather than flashing it away a frame later.
@@ -1383,215 +1372,246 @@ export function MapView({
     const path = geoPath(proj, ctx)
     const c = showQth ? project(proj, myQth ?? me) : null
 
-    // Globe space backdrop: a star field + an atmospheric halo, so the orthographic
-    // disc reads as a planet in space rather than a flat green coin. Read the disc
-    // geometry straight off the projection so everything aligns with the sphere path
-    // under any zoom/spin (orthographic: screen radius = scale, center = translate).
-    const isGlobe = kind === 'globe'
-    const [gcx, gcy] = proj.translate()
-    const gR = proj.scale()
-    if (isGlobe) {
-      for (const s of stars) {
-        ctx.globalAlpha = s.a
+    // ⭐ THE BASE MAP IS CACHED. Everything from the space backdrop to the coverage fill changes only
+    // with the VIEW (projection, pan/zoom/spin, size, device scale, QTH), the theme and those layers'
+    // own toggles — never with a decode, a spot, the 1 s pulse or a hover. Re-projecting every
+    // country outline, state border and graticule line for each of those redraws was most of the
+    // 2-D map's idle cost, so it is drawn once into an offscreen canvas of the same device size and
+    // blitted. Everything that follows (APRS onward) still draws live, in the same order as before.
+    // Cost: one extra backing store the size of the map canvas.
+    const drawBase = (ctx: CanvasRenderingContext2D, path: ReturnType<typeof geoPath>) => {
+      // Globe space backdrop: a star field + an atmospheric halo, so the orthographic
+      // disc reads as a planet in space rather than a flat green coin. Read the disc
+      // geometry straight off the projection so everything aligns with the sphere path
+      // under any zoom/spin (orthographic: screen radius = scale, center = translate).
+      const isGlobe = kind === 'globe'
+      const [gcx, gcy] = proj.translate()
+      const gR = proj.scale()
+      if (isGlobe) {
+        for (const s of stars) {
+          ctx.globalAlpha = s.a
+          ctx.beginPath()
+          ctx.arc(s.x * w, s.y * h, s.r, 0, Math.PI * 2)
+          ctx.fillStyle = '#cdd9ec'
+          ctx.fill()
+        }
+        ctx.globalAlpha = 1
+        // Atmosphere: a soft blue halo just outside the limb, drawn BEFORE the body so
+        // the sphere covers the inner half and only the outer glow shows.
+        const atmo = ctx.createRadialGradient(gcx, gcy, gR * 0.9, gcx, gcy, gR * 1.19)
+        atmo.addColorStop(0, 'rgba(104, 168, 226, 0)')
+        atmo.addColorStop(0.42, 'rgba(120, 182, 240, 0.32)')
+        atmo.addColorStop(0.6, MAP_ATMO) // brightest right at the limb
+        atmo.addColorStop(1, 'rgba(104, 168, 226, 0)')
         ctx.beginPath()
-        ctx.arc(s.x * w, s.y * h, s.r, 0, Math.PI * 2)
-        ctx.fillStyle = '#cdd9ec'
+        ctx.arc(gcx, gcy, gR * 1.19, 0, Math.PI * 2)
+        ctx.fillStyle = atmo
         ctx.fill()
       }
+
+      // Ocean / sphere body so the map has substance (and AEQD reads as a globe, not
+      // floating coastlines). On the globe a radial gradient (lit toward a top-left
+      // light source, deepening to a dark limb) gives the disc real spherical depth;
+      // AEQD/World keep the flat sea fill. A soft rim defines the disc edge.
       ctx.globalAlpha = 1
-      // Atmosphere: a soft blue halo just outside the limb, drawn BEFORE the body so
-      // the sphere covers the inner half and only the outer glow shows.
-      const atmo = ctx.createRadialGradient(gcx, gcy, gR * 0.9, gcx, gcy, gR * 1.19)
-      atmo.addColorStop(0, 'rgba(104, 168, 226, 0)')
-      atmo.addColorStop(0.42, 'rgba(120, 182, 240, 0.32)')
-      atmo.addColorStop(0.6, MAP_ATMO) // brightest right at the limb
-      atmo.addColorStop(1, 'rgba(104, 168, 226, 0)')
       ctx.beginPath()
-      ctx.arc(gcx, gcy, gR * 1.19, 0, Math.PI * 2)
-      ctx.fillStyle = atmo
-      ctx.fill()
-    }
-
-    // Ocean / sphere body so the map has substance (and AEQD reads as a globe, not
-    // floating coastlines). On the globe a radial gradient (lit toward a top-left
-    // light source, deepening to a dark limb) gives the disc real spherical depth;
-    // AEQD/World keep the flat sea fill. A soft rim defines the disc edge.
-    ctx.globalAlpha = 1
-    ctx.beginPath()
-    path({ type: 'Sphere' } as unknown as Parameters<typeof path>[0])
-    if (isGlobe) {
-      const sea = ctx.createRadialGradient(
-        gcx - gR * 0.38,
-        gcy - gR * 0.38,
-        gR * 0.05,
-        gcx,
-        gcy,
-        gR * 1.02,
-      )
-      sea.addColorStop(0, MAP_OCEAN_LIT)
-      sea.addColorStop(0.55, MAP_OCEAN)
-      sea.addColorStop(1, MAP_OCEAN_DEEP)
-      ctx.fillStyle = sea
-    } else {
-      ctx.fillStyle = MAP_OCEAN
-    }
-    ctx.fill()
-    ctx.strokeStyle = MAP_RIM
-    ctx.lineWidth = 1
-    ctx.stroke()
-
-    const useRelief = kind === 'world' && layers.relief.visible && reliefRef.current
-    if (useRelief) {
-      // Geochron-style shaded relief: a direct stretch-blit to the equirectangular
-      // bounds (lon/lat map linearly here, so no per-pixel reprojection). The
-      // greyline night shading draws on top → a true day/night terrain map. Only
-      // World; AEQD stays on filled vectors (a raster there needs slow inverse-proj).
-      const tl = project(proj, { lat: 90, lon: -180 })
-      const br = project(proj, { lat: -90, lon: 180 })
-      if (tl && br) {
-        ctx.drawImage(reliefRef.current!, tl[0], tl[1], br[0] - tl[0], br[1] - tl[1])
+      path({ type: 'Sphere' } as unknown as Parameters<typeof path>[0])
+      if (isGlobe) {
+        const sea = ctx.createRadialGradient(
+          gcx - gR * 0.38,
+          gcy - gR * 0.38,
+          gR * 0.05,
+          gcx,
+          gcy,
+          gR * 1.02,
+        )
+        sea.addColorStop(0, MAP_OCEAN_LIT)
+        sea.addColorStop(0.55, MAP_OCEAN)
+        sea.addColorStop(1, MAP_OCEAN_DEEP)
+        ctx.fillStyle = sea
+      } else {
+        ctx.fillStyle = MAP_OCEAN
       }
-      if (layers.coast.visible) {
-        // A faint coastline keeps borders crisp over the raster.
-        ctx.globalAlpha = layers.coast.opacity * 0.5
+      ctx.fill()
+      ctx.strokeStyle = MAP_RIM
+      ctx.lineWidth = 1
+      ctx.stroke()
+
+      const useRelief = kind === 'world' && layers.relief.visible && reliefRef.current
+      if (useRelief) {
+        // Geochron-style shaded relief: a direct stretch-blit to the equirectangular
+        // bounds (lon/lat map linearly here, so no per-pixel reprojection). The
+        // greyline night shading draws on top → a true day/night terrain map. Only
+        // World; AEQD stays on filled vectors (a raster there needs slow inverse-proj).
+        const tl = project(proj, { lat: 90, lon: -180 })
+        const br = project(proj, { lat: -90, lon: 180 })
+        if (tl && br) {
+          ctx.drawImage(reliefRef.current!, tl[0], tl[1], br[0] - tl[0], br[1] - tl[1])
+        }
+        if (layers.coast.visible) {
+          // A faint coastline keeps borders crisp over the raster.
+          ctx.globalAlpha = layers.coast.opacity * 0.5
+          ctx.beginPath()
+          path(basemap())
+          ctx.strokeStyle = MAP_COAST
+          ctx.lineWidth = 0.5
+          ctx.stroke()
+          ctx.globalAlpha = 1
+        }
+      } else {
+        // Filled-vector land (the AEQD beam map, or World with relief off).
         ctx.beginPath()
         path(basemap())
-        ctx.strokeStyle = MAP_COAST
+        ctx.fillStyle = isGlobe ? MAP_LAND_GLOBE : MAP_LAND
+        ctx.fill()
+        if (layers.coast.visible) {
+          ctx.globalAlpha = layers.coast.opacity
+          ctx.strokeStyle = MAP_COAST
+          ctx.lineWidth = 0.6
+          ctx.stroke()
+          ctx.globalAlpha = 1
+        }
+      }
+      // US state borders — a CORE operating layer: an op reads which STATE a spot or
+      // their own QTH sits in (WAS, state QSOs), not just the coastline. A single-line
+      // mesh (shared borders once), thin + quiet so it adds detail without burying spots.
+      if (layers.states.visible) {
+        ctx.globalAlpha = layers.states.opacity
+        ctx.beginPath()
+        path(usStateBorders())
+        ctx.strokeStyle = MAP_STATE
         ctx.lineWidth = 0.5
         ctx.stroke()
         ctx.globalAlpha = 1
       }
-    } else {
-      // Filled-vector land (the AEQD beam map, or World with relief off).
-      ctx.beginPath()
-      path(basemap())
-      ctx.fillStyle = isGlobe ? MAP_LAND_GLOBE : MAP_LAND
-      ctx.fill()
-      if (layers.coast.visible) {
-        ctx.globalAlpha = layers.coast.opacity
-        ctx.strokeStyle = MAP_COAST
-        ctx.lineWidth = 0.6
-        ctx.stroke()
-        ctx.globalAlpha = 1
+      // Globe limb darkening: deepen the sphere toward its edge (over ocean AND land)
+      // so the curvature reads as 3-D. Clipped to the disc; drawn under greyline/spots
+      // so stations stay bright.
+      if (isGlobe) {
+        const limb = ctx.createRadialGradient(gcx, gcy, gR * 0.6, gcx, gcy, gR)
+        limb.addColorStop(0, 'rgba(2, 6, 14, 0)')
+        limb.addColorStop(1, 'rgba(2, 6, 14, 0.5)')
+        ctx.save()
+        ctx.beginPath()
+        path({ type: 'Sphere' } as unknown as Parameters<typeof path>[0])
+        ctx.clip()
+        ctx.fillStyle = limb
+        ctx.fillRect(gcx - gR * 1.1, gcy - gR * 1.1, gR * 2.2, gR * 2.2)
+        ctx.restore()
       }
-    }
-    // US state borders — a CORE operating layer: an op reads which STATE a spot or
-    // their own QTH sits in (WAS, state QSOs), not just the coastline. A single-line
-    // mesh (shared borders once), thin + quiet so it adds detail without burying spots.
-    if (layers.states.visible) {
-      ctx.globalAlpha = layers.states.opacity
-      ctx.beginPath()
-      path(usStateBorders())
-      ctx.strokeStyle = MAP_STATE
-      ctx.lineWidth = 0.5
-      ctx.stroke()
-      ctx.globalAlpha = 1
-    }
-    // Globe limb darkening: deepen the sphere toward its edge (over ocean AND land)
-    // so the curvature reads as 3-D. Clipped to the disc; drawn under greyline/spots
-    // so stations stay bright.
-    if (isGlobe) {
-      const limb = ctx.createRadialGradient(gcx, gcy, gR * 0.6, gcx, gcy, gR)
-      limb.addColorStop(0, 'rgba(2, 6, 14, 0)')
-      limb.addColorStop(1, 'rgba(2, 6, 14, 0.5)')
-      ctx.save()
-      ctx.beginPath()
-      path({ type: 'Sphere' } as unknown as Parameters<typeof path>[0])
-      ctx.clip()
-      ctx.fillStyle = limb
-      ctx.fillRect(gcx - gR * 1.1, gcy - gR * 1.1, gR * 2.2, gR * 2.2)
-      ctx.restore()
-    }
-    if (layers.grid.visible) {
-      ctx.globalAlpha = layers.grid.opacity
-      ctx.beginPath()
-      path(graticule())
-      ctx.strokeStyle = cssVar('--border-soft')
-      ctx.lineWidth = 0.5
-      ctx.stroke()
-    }
-    // Maidenhead labels (default off): 2-char FIELD letters when a field spans
-    // enough pixels to read, densifying to 4-char squares only inside fields
-    // that are large on screen (zoomed in) — bounded work, nothing at low zoom.
-    if (layers.gridLabels.visible) {
-      ctx.globalAlpha = layers.gridLabels.opacity
-      ctx.fillStyle = cssVar('--text-faint')
-      ctx.textAlign = 'center'
-      ctx.textBaseline = 'middle'
-      for (let fi = 0; fi < 18; fi++) {
-        for (let fj = 0; fj < 18; fj++) {
-          const clon = -180 + fi * 20 + 10
-          const clat = -90 + fj * 10 + 5
-          const pc = project(proj, { lat: clat, lon: clon })
-          if (!pc || pc[0] < -40 || pc[0] > w + 40 || pc[1] < -40 || pc[1] > h + 40) continue
-          // Field width in px via a 2° probe at the field center.
-          const probe = project(proj, { lat: clat, lon: clon + 2 })
-          const sqW = probe ? Math.hypot(probe[0] - pc[0], probe[1] - pc[1]) : 0
-          const fieldW = sqW * 10
-          if (fieldW < 70) continue
-          const field = String.fromCharCode(65 + fi) + String.fromCharCode(65 + fj)
-          if (fieldW < 420) {
-            ctx.font = `600 ${Math.min(22, 10 + fieldW / 40)}px ${cssVar('--font-mono') || 'monospace'}`
-            ctx.fillText(field, pc[0], pc[1])
-          } else {
-            // Zoomed in: label the 10×10 squares of this field instead.
-            ctx.font = `500 11px ${cssVar('--font-mono') || 'monospace'}`
-            for (let di = 0; di < 10; di++) {
-              for (let dj = 0; dj < 10; dj++) {
-                const p = project(proj, {
-                  lat: -90 + fj * 10 + dj + 0.5,
-                  lon: -180 + fi * 20 + di * 2 + 1,
-                })
-                if (!p || p[0] < 0 || p[0] > w || p[1] < 0 || p[1] > h) continue
-                ctx.fillText(`${field}${di}${dj}`, p[0], p[1])
+      if (layers.grid.visible) {
+        ctx.globalAlpha = layers.grid.opacity
+        ctx.beginPath()
+        path(graticule())
+        ctx.strokeStyle = cssVar('--border-soft')
+        ctx.lineWidth = 0.5
+        ctx.stroke()
+      }
+      // Maidenhead labels (default off): 2-char FIELD letters when a field spans
+      // enough pixels to read, densifying to 4-char squares only inside fields
+      // that are large on screen (zoomed in) — bounded work, nothing at low zoom.
+      if (layers.gridLabels.visible) {
+        ctx.globalAlpha = layers.gridLabels.opacity
+        ctx.fillStyle = cssVar('--text-faint')
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'middle'
+        for (let fi = 0; fi < 18; fi++) {
+          for (let fj = 0; fj < 18; fj++) {
+            const clon = -180 + fi * 20 + 10
+            const clat = -90 + fj * 10 + 5
+            const pc = project(proj, { lat: clat, lon: clon })
+            if (!pc || pc[0] < -40 || pc[0] > w + 40 || pc[1] < -40 || pc[1] > h + 40) continue
+            // Field width in px via a 2° probe at the field center.
+            const probe = project(proj, { lat: clat, lon: clon + 2 })
+            const sqW = probe ? Math.hypot(probe[0] - pc[0], probe[1] - pc[1]) : 0
+            const fieldW = sqW * 10
+            if (fieldW < 70) continue
+            const field = String.fromCharCode(65 + fi) + String.fromCharCode(65 + fj)
+            if (fieldW < 420) {
+              ctx.font = `600 ${Math.min(22, 10 + fieldW / 40)}px ${cssVar('--font-mono') || 'monospace'}`
+              ctx.fillText(field, pc[0], pc[1])
+            } else {
+              // Zoomed in: label the 10×10 squares of this field instead.
+              ctx.font = `500 11px ${cssVar('--font-mono') || 'monospace'}`
+              for (let di = 0; di < 10; di++) {
+                for (let dj = 0; dj < 10; dj++) {
+                  const p = project(proj, {
+                    lat: -90 + fj * 10 + dj + 0.5,
+                    lon: -180 + fi * 20 + di * 2 + 1,
+                  })
+                  if (!p || p[0] < 0 || p[0] > w || p[1] < 0 || p[1] > h) continue
+                  ctx.fillText(`${field}${di}${dj}`, p[0], p[1])
+                }
               }
             }
           }
         }
+        ctx.globalAlpha = 1
       }
-      ctx.globalAlpha = 1
-    }
-    // CQ-zone boundaries (MIT, HB9HIL) — thin amber borders + zone numbers at
-    // each zone's label anchor. Only drawn once the lazy asset has loaded.
-    if (layers.cqzones.visible && cqzones) {
-      ctx.globalAlpha = layers.cqzones.opacity
-      ctx.strokeStyle = 'rgba(217, 164, 65, 0.75)'
-      ctx.lineWidth = 0.8
-      for (const f of cqzones) {
-        ctx.beginPath()
-        path(f.geometry)
-        ctx.stroke()
-      }
-      ctx.font = `700 12px ${cssVar('--font-mono') || 'monospace'}`
-      ctx.fillStyle = 'rgba(217, 164, 65, 0.9)'
-      ctx.textAlign = 'center'
-      ctx.textBaseline = 'middle'
-      for (const f of cqzones) {
-        const [lat, lon] = f.properties.cq_zone_name_loc
-        const p = project(proj, { lat, lon })
-        if (p) ctx.fillText(String(f.properties.cq_zone_number), p[0], p[1])
-      }
-      ctx.globalAlpha = 1
-    }
-    // Coverage: fill the operator's WORKED grid squares / CQ zones so award progress (VUCC / WAZ)
-    // reads at a glance. Behind the layer toggle + opacity; the data is lazy-loaded above.
-    if (layers.coverage.visible) {
-      ctx.globalAlpha = layers.coverage.opacity
-      ctx.fillStyle = 'rgba(78, 163, 255, 0.5)' // the "worked/confirm" blue from the map legend
-      if (coverageDim === 'grids' && coverageGridGeo) {
-        ctx.beginPath()
-        path(coverageGridGeo)
-        ctx.fill()
-      } else if (coverageDim === 'zones' && cqzones && workedZones) {
+      // CQ-zone boundaries (MIT, HB9HIL) — thin amber borders + zone numbers at
+      // each zone's label anchor. Only drawn once the lazy asset has loaded.
+      if (layers.cqzones.visible && cqzones) {
+        ctx.globalAlpha = layers.cqzones.opacity
+        ctx.strokeStyle = 'rgba(217, 164, 65, 0.75)'
+        ctx.lineWidth = 0.8
         for (const f of cqzones) {
-          if (!workedZones.has(f.properties.cq_zone_number)) continue
           ctx.beginPath()
           path(f.geometry)
-          ctx.fill()
+          ctx.stroke()
         }
+        ctx.font = `700 12px ${cssVar('--font-mono') || 'monospace'}`
+        ctx.fillStyle = 'rgba(217, 164, 65, 0.9)'
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'middle'
+        for (const f of cqzones) {
+          const [lat, lon] = f.properties.cq_zone_name_loc
+          const p = project(proj, { lat, lon })
+          if (p) ctx.fillText(String(f.properties.cq_zone_number), p[0], p[1])
+        }
+        ctx.globalAlpha = 1
       }
-      ctx.globalAlpha = 1
+      // Coverage: fill the operator's WORKED grid squares / CQ zones so award progress (VUCC / WAZ)
+      // reads at a glance. Behind the layer toggle + opacity; the data is lazy-loaded above.
+      if (layers.coverage.visible) {
+        ctx.globalAlpha = layers.coverage.opacity
+        ctx.fillStyle = 'rgba(78, 163, 255, 0.5)' // the "worked/confirm" blue from the map legend
+        if (coverageDim === 'grids' && coverageGridGeo) {
+          ctx.beginPath()
+          path(coverageGridGeo)
+          ctx.fill()
+        } else if (coverageDim === 'zones' && cqzones && workedZones) {
+          for (const f of cqzones) {
+            if (!workedZones.has(f.properties.cq_zone_number)) continue
+            ctx.beginPath()
+            path(f.geometry)
+            ctx.fill()
+          }
+        }
+        ctx.globalAlpha = 1
+      }
     }
+    const baseDeps = [kind, w, h, dpr, view, me, theme, reliefReady, stars, layers.relief, layers.coast, layers.states, layers.grid, layers.gridLabels, layers.cqzones, layers.coverage, cqzones, coverageDim, coverageGridGeo, workedZones]
+    const cache = baseRef.current
+    const base = cache.canvas ?? (cache.canvas = document.createElement('canvas'))
+    if (
+      base.width !== devW ||
+      base.height !== devH ||
+      baseDeps.length !== cache.deps.length ||
+      baseDeps.some((d, k) => d !== cache.deps[k])
+    ) {
+      if (base.width !== devW) base.width = devW
+      if (base.height !== devH) base.height = devH
+      const bctx = base.getContext('2d')
+      if (bctx) {
+        bctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+        bctx.clearRect(0, 0, w, h)
+        drawBase(bctx, geoPath(proj, bctx))
+        cache.deps = baseDeps
+      }
+    }
+    // Device pixels onto device pixels (the transform maps w×h layout px to devW×devH).
+    ctx.globalAlpha = 1
+    ctx.drawImage(base, 0, 0, w, h)
     // APRS stations: a dot per positioned station, the operator's selection
     // accented, plus a short course/speed vector for anything moving. Fed by the
     // APRS section rather than polled here, so the layer is inert on Connect
@@ -3199,6 +3219,80 @@ export function MapView({
           )}
           {!embedded && <MapLegend />}
           {layers.muf.visible && <MufLegend />}
+          {/* THE LAYERS PANEL — an overlay pinned top-left of the map: the same place and the same fold
+              as on the 3-D globe (MapLayersPanel; why an overlay, not a column: `.map-layers` in
+              styles.css). Gated on the embedded/standalone distinction only (the Expert gate went
+              2026-07-26). Full screen is the third state: the panel is away, and the toolbar's
+              Layers button peeks it back (see `layersPeek`). Rendered BEFORE the flare/PCA chips: they
+              sit beside it via a sibling selector (`.map-layers ~ .flare-chip`). */}
+          {!embedded && (!full || layersPeek) && (
+            <MapLayersPanel className="map-layers" title={t('map.layers.head')}>
+              {(Object.keys(layers) as LayerKey[]).map((k) => (
+                <div className="map-layer" key={k}>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={layers[k].visible}
+                      onChange={(e) => setLayers((L) => ({ ...L, [k]: { ...L[k], visible: e.target.checked } }))}
+                    />
+                    {layerLabel(k)}
+                  </label>
+                  {k === 'flare' && (
+                    // The layer is event-driven (nothing draws below an M1 flare), so
+                    // give the operator a way to SEE it on a quiet sun: a 60 s
+                    // simulated X2, map visuals only, chip labeled PREVIEW.
+                    <button
+                      type="button"
+                      className={`flare-preview${flarePreview ? ' active' : ''}`}
+                      onClick={() => setFlarePreview((p) => !p)}
+                      title={t('map.flare.preview.title')}
+                    >
+                      {flarePreview ? t('map.flare.preview.stop') : t('map.flare.preview.start')}
+                    </button>
+                  )}
+                  {k === 'sats' && layers.sats.visible && (
+                    // The ★/All chip, ON the surface it filters. The Passes pane
+                    // carries the same chip, but that pane may not be placed in the
+                    // layout at all — a persisted default-ON filter with no control
+                    // in sight would silently thin the sky. Also the road back after
+                    // a double-click unstar hides a bird in ★-only view.
+                    <button
+                      type="button"
+                      className={`sat-fav-toggle${satFav ? ' on' : ''}`}
+                      aria-label={t('map.sats.filter.aria')}
+                      aria-pressed={satFav}
+                      title={satFav ? t('map.sats.filter.on.title') : t('map.sats.filter.off.title')}
+                      onClick={() => setSatFavOnly(!satFav)}
+                    >
+                      {satFav ? '★' : t('map.sats.filter.all')}
+                    </button>
+                  )}
+                  {k === 'coverage' && (
+                    <select
+                      className="map-coverage-dim"
+                      value={coverageDim}
+                      onChange={(e) => setCoverageDim(e.target.value as 'grids' | 'zones')}
+                      title={t('map.coverage.dim.title')}
+                      aria-label={t('map.coverage.dim.aria')}
+                    >
+                      {/* The <option> VALUES are persisted tokens; only these labels are read. */}
+                      <option value="grids">{t('map.coverage.dim.grids')}</option>
+                      <option value="zones">{t('map.coverage.dim.zones')}</option>
+                    </select>
+                  )}
+                  <input
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    value={layers[k].opacity}
+                    onChange={(e) => setLayers((L) => ({ ...L, [k]: { ...L[k], opacity: Number(e.target.value) } }))}
+                    aria-label={t('map.layer.opacity.aria', { layer: layerLabel(k) })}
+                  />
+                </div>
+              ))}
+            </MapLayersPanel>
+          )}
           {flarePulsing && xrayEff != null && (
             <FlareChip
               xrayLong={xrayEff}
@@ -3221,80 +3315,6 @@ export function MapView({
             />
           )}
         </div>
-
-        {/* The layer panel used to be gated on Connect's Expert detail level too; that toggle
-            was removed 2026-07-26, so only the embedded/standalone distinction remains.
-            Full screen is the third state: the panel is away, and the toolbar's Layers
-            button brings it back over the map (never beside it — see `layersPeek`). */}
-        {!embedded && (!full || layersPeek) && (
-        <aside className="map-layers">
-          <h3>{t('map.layers.head')}</h3>
-          {(Object.keys(layers) as LayerKey[]).map((k) => (
-            <div className="map-layer" key={k}>
-              <label>
-                <input
-                  type="checkbox"
-                  checked={layers[k].visible}
-                  onChange={(e) => setLayers((L) => ({ ...L, [k]: { ...L[k], visible: e.target.checked } }))}
-                />
-                {layerLabel(k)}
-              </label>
-              {k === 'flare' && (
-                // The layer is event-driven (nothing draws below an M1 flare), so
-                // give the operator a way to SEE it on a quiet sun: a 60 s
-                // simulated X2, map visuals only, chip labeled PREVIEW.
-                <button
-                  type="button"
-                  className={`flare-preview${flarePreview ? ' active' : ''}`}
-                  onClick={() => setFlarePreview((p) => !p)}
-                  title={t('map.flare.preview.title')}
-                >
-                  {flarePreview ? t('map.flare.preview.stop') : t('map.flare.preview.start')}
-                </button>
-              )}
-              {k === 'sats' && layers.sats.visible && (
-                // The ★/All chip, ON the surface it filters. The Passes pane
-                // carries the same chip, but that pane may not be placed in the
-                // layout at all — a persisted default-ON filter with no control
-                // in sight would silently thin the sky. Also the road back after
-                // a double-click unstar hides a bird in ★-only view.
-                <button
-                  type="button"
-                  className={`sat-fav-toggle${satFav ? ' on' : ''}`}
-                  aria-label={t('map.sats.filter.aria')}
-                  aria-pressed={satFav}
-                  title={satFav ? t('map.sats.filter.on.title') : t('map.sats.filter.off.title')}
-                  onClick={() => setSatFavOnly(!satFav)}
-                >
-                  {satFav ? '★' : t('map.sats.filter.all')}
-                </button>
-              )}
-              {k === 'coverage' && (
-                <select
-                  className="map-coverage-dim"
-                  value={coverageDim}
-                  onChange={(e) => setCoverageDim(e.target.value as 'grids' | 'zones')}
-                  title={t('map.coverage.dim.title')}
-                  aria-label={t('map.coverage.dim.aria')}
-                >
-                  {/* The <option> VALUES are persisted tokens; only these labels are read. */}
-                  <option value="grids">{t('map.coverage.dim.grids')}</option>
-                  <option value="zones">{t('map.coverage.dim.zones')}</option>
-                </select>
-              )}
-              <input
-                type="range"
-                min={0}
-                max={1}
-                step={0.05}
-                value={layers[k].opacity}
-                onChange={(e) => setLayers((L) => ({ ...L, [k]: { ...L[k], opacity: Number(e.target.value) } }))}
-                aria-label={t('map.layer.opacity.aria', { layer: layerLabel(k) })}
-              />
-            </div>
-          ))}
-        </aside>
-        )}
       </div>
     </div>
   )

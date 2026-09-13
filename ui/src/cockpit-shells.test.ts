@@ -655,18 +655,32 @@ describe('Connect strip cap caps the PANES, not the grid track', () => {
   // `minmax(auto, …)` spelling was wrong). The working shape: the track is `auto`
   // (content-sized) and the ceiling lives on the strip's pane children as max-height,
   // which DOES bound a box — a tall pane scrolls inside `.pane-body`.
-  it('.connect grid-template-rows strip track is auto (no fixed max — it would always pay out)', () => {
-    let rows: string | null = null
-    let at = -1
-    for (const r of RULES) {
-      if (r.media !== null || r.selector !== '.connect') continue
-      const m = [...r.body.matchAll(/grid-template-rows\s*:\s*([^;]+)/g)]
-      if (m.length && r.order >= at) {
-        rows = m[m.length - 1][1].trim()
-        at = r.order
+  // Since 2026-09-13 (Connect close + resize) the strip rides an IMPLICIT row: the template
+  // declares the map row alone and `grid-auto-rows` sizes the strip's, so a closed strip leaves
+  // no track and no gap. The guard is the same claim one property over — the strip's track
+  // must be `auto`, never a fixed max — plus "exactly one explicit row", because a second
+  // explicit row is where a fixed max would come back.
+  it('.connect strip row is auto (no fixed max — it would always pay out)', () => {
+    const lastOn = (prop: string): string | null => {
+      let v: string | null = null
+      let at = -1
+      for (const r of RULES) {
+        if (r.media !== null || r.selector !== '.connect') continue
+        const m = [...r.body.matchAll(new RegExp(`(?:^|;|\\s)${prop}\\s*:\\s*([^;]+)`, 'g'))]
+        if (m.length && r.order >= at) {
+          v = m[m.length - 1][1].trim()
+          at = r.order
+        }
       }
+      return v
     }
+    const rows = lastOn('grid-template-rows')
+    const auto = lastOn('grid-auto-rows')
     expect(rows, '.connect: no grid-template-rows declared').not.toBeNull()
+    expect(
+      auto,
+      '.connect: the strip row is implicit, so grid-auto-rows IS its track — and it must be auto',
+    ).toBe('auto')
     // Paren-aware top-level track split (minmax(a, b) is one track).
     const tracks: string[] = []
     let depth = 0
@@ -680,12 +694,12 @@ describe('Connect strip cap caps the PANES, not the grid track', () => {
       } else cur += ch
     }
     if (cur) tracks.push(cur)
-    expect(tracks.length, `.connect rows are \`${rows}\``).toBe(3)
     expect(
-      tracks[2],
-      `.connect strip track is \`${tracks[2]}\` — a fixed max is maximized to its full value ` +
-        'before the fr rows expand (§11.6), so it is a floor, not a cap.',
-    ).toBe('auto')
+      tracks,
+      `.connect rows are \`${rows}\` — the map row alone is explicit. A second explicit row is ` +
+        'where a fixed max would return: it is maximized to its full value before the fr row ' +
+        'expands (§11.6), so it is a floor, not a cap.',
+    ).toEqual(['minmax(0, 1fr)'])
   })
 
   it('.connect-strip > .pane-frame carries the zoom-corrected max-height cap', () => {
@@ -722,7 +736,8 @@ const CONNECT_HOST: Array<Set<string>> = [
  *  PaneFrame (rails + bottom strip) and CockpitPaneFrame (region columns, and the bare
  *  shell children of the two region-less cockpits). */
 const PANE_HOSTS: Array<[string, Array<Set<string>>]> = [
-  ['Connect rail', CONNECT_HOST],
+  // Rail frames sit in a `.connect-rail` column since the close + resize work (2026-09-13).
+  ['Connect rail', [...CONNECT_HOST, new Set(['connect-rail'])]],
   ['Connect bottom strip', [...CONNECT_HOST, new Set(['connect-strip'])]],
   [
     'Phone pane region',

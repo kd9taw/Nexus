@@ -4,14 +4,14 @@
 //
 // #199 shipped per-surface layer persistence; the existing MapView.layers.test.ts covers only
 // the pure `layersFromStored` parser, not the component's mount-time interplay between the
-// restored layer state and the intent-preset effect. This file closes that gap: it drives the
-// real component so the guard that yields the preset to a restored pick (the `intentFirstRun` +
-// `hadStoredLayers` refs) is exercised on first mount AND on a true unmount/remount, and the
-// positive control confirms an *actual* intent switch still re-applies the preset.
+// restored layer state and the intent preset. This file closes that gap: it drives the real
+// component so the rule that yields the preset to a restored pick is exercised on first mount AND
+// on a true unmount/remount, and the positive control confirms an *actual* intent switch to an
+// intent never used before still applies that intent's preset.
 //
-// NOTE: #211 reported layers "not persisting" on 1.10.2. The hypothesised seam was the intent
-// effect clobbering restored state on (re)mount; these tests prove that seam is correct — the
-// clobber does not reproduce here. The remaining coverage this file adds is the regression guard.
+// The picks now live per intent (`features/intentMapSettings`, `nexus.connect.intents`). These
+// tests seed the OLD shared key on purpose: that is what an upgrading operator has on disk, and
+// the migration into the active intent is what keeps their pick.
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { render, cleanup, act } from '@testing-library/react'
 import { MapView, DEFAULT_LAYERS, type MapIntent } from './MapView'
@@ -35,7 +35,7 @@ class RO {
 }
 ;(globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = RO
 
-const LAYERS_KEY = 'nexus.connect.layers'
+const LEGACY_LAYERS_KEY = 'nexus.connect.layers'
 
 function props(intent: MapIntent) {
   return {
@@ -50,10 +50,10 @@ function props(intent: MapIntent) {
   }
 }
 
-/** The layer table the persist effect wrote back — the value the next launch would restore. */
-function stored() {
-  const v = localStorage.getItem(LAYERS_KEY)
-  return v ? JSON.parse(v) : null
+/** The layer table the persist effect wrote back for `intent` — what the next launch restores. */
+function stored(intent: MapIntent) {
+  const v = localStorage.getItem('nexus.connect.intents')
+  return v ? JSON.parse(v)[intent]?.layers : null
 }
 
 // A restored pick with OTA off; the 'pota' preset would turn OTA on, so OTA is the discriminator
@@ -84,15 +84,15 @@ describe('MapView layer persistence round-trip', () => {
   })
 
   it('first mount keeps the restored pick against the intent preset', async () => {
-    localStorage.setItem(LAYERS_KEY, RESTORED)
+    localStorage.setItem(LEGACY_LAYERS_KEY, RESTORED)
     await act(async () => {
       render(<MapView {...props('pota')} />)
     })
-    expect(stored().ota.visible).toBe(false)
+    expect(stored('pota').ota.visible).toBe(false)
   })
 
   it('a true unmount/remount still keeps the restored pick', async () => {
-    localStorage.setItem(LAYERS_KEY, RESTORED)
+    localStorage.setItem(LEGACY_LAYERS_KEY, RESTORED)
     let first: ReturnType<typeof render>
     await act(async () => {
       first = render(<MapView {...props('pota')} />)
@@ -101,19 +101,21 @@ describe('MapView layer persistence round-trip', () => {
     await act(async () => {
       render(<MapView {...props('pota')} />)
     })
-    expect(stored().ota.visible).toBe(false)
+    expect(stored('pota').ota.visible).toBe(false)
   })
 
-  it('POSITIVE CONTROL — an actual intent switch DOES re-apply the preset', async () => {
-    localStorage.setItem(LAYERS_KEY, RESTORED)
+  it('POSITIVE CONTROL — switching to an intent never used before DOES apply its preset', async () => {
+    localStorage.setItem(LEGACY_LAYERS_KEY, RESTORED)
     let v: ReturnType<typeof render>
     await act(async () => {
       v = render(<MapView {...props('casual')} />) // casual leaves OTA alone
     })
-    expect(stored().ota.visible).toBe(false)
+    expect(stored('casual').ota.visible).toBe(false)
     await act(async () => {
-      v.rerender(<MapView {...props('pota')} />) // switching TO pota turns OTA on
+      v.rerender(<MapView {...props('pota')} />) // first use of pota turns OTA on
     })
-    expect(stored().ota.visible).toBe(true)
+    expect(stored('pota').ota.visible).toBe(true)
+    // …and Ragchew's own record was not touched by the switch.
+    expect(stored('casual').ota.visible).toBe(false)
   })
 })

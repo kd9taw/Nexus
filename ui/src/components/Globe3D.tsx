@@ -19,6 +19,7 @@ import { useContext } from 'react'
 import { NavigationMapContext } from '../remote-web/useNavigation'
 import { heatPulse, sectorPulse } from '../features/pulse'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
+import { useStableByKey } from '../features/useStableByKey'
 import {
   filterSatsToChased,
   isSatChased,
@@ -51,6 +52,7 @@ import { spotTooltip } from '../propViz'
 import { txPaths, rxPaths } from '../features/mapPaths'
 import { t, type MessageKey } from '../i18n'
 import { MapInsightRail } from './prop/MapInsightRail'
+import { MapLayersPanel } from './MapLayersPanel'
 import { MapLegend, MufLegend } from './MapLegend'
 import type {
   PropagationSnapshot,
@@ -64,6 +66,9 @@ import type {
 } from '../types'
 
 const EARTH_KM = 6371 // for altKm → globe-radius altitude units
+
+/** How long the globe keeps drawing after the last change before its render loop pauses. */
+const IDLE_RENDER_MS = 1500
 
 /**
  * Opening-sector stacking radii, in globe-radius units.
@@ -474,13 +479,17 @@ export default function Globe3D({
   activeBand,
   muf,
   xrayLong,
-  stations,
+  stations: stationsProp,
   showStates = true,
 }: Props) {
   const remoteMap=useContext(NavigationMapContext)
   const remoteConnect=remoteMap?.connect
   const remoteFeed=<T,>(feed:{value:T;ageMs:number;validForMs:number}|null|undefined):T|null=>
     feed&&feed.ageMs+(remoteMap?.ageMs??Infinity)<feed.validForMs?feed.value:null
+  // The roster, CONTENT-keyed: App sends a new array on every 300 ms snapshot. The RX arcs, the
+  // decodes cloud and the render-on-demand wake below all read this, so an unchanged roster
+  // rebuilds nothing and wakes nothing.
+  const stations = useStableByKey(stationsProp, JSON.stringify(stationsProp ?? null))
   const spots = useMemo(() => prop?.spots ?? [], [prop])
   const wrapRef = useRef<HTMLDivElement>(null)
   const globeRef = useRef<GlobeMethods | undefined>(undefined)
@@ -493,6 +502,12 @@ export default function Globe3D({
   // Name-designation sprites, one per drawn bird — moved with their markers.
   const satLabelsRef = useRef<Record<string, THREE.Sprite>>({})
   const bloomRef = useRef<UnrealBloomPass | null>(null)
+  // Wake the paused render loop for a moment (see "RENDER ON CHANGE" below). A no-op until the
+  // globe is ready, so anything may call it at any time.
+  const kickRef = useRef<() => void>(() => {})
+  // Draw exactly ONE frame without waking the loop — for a change that is complete the moment it
+  // is written (a material opacity, a marker position, a rebuilt cloud). No-op while awake.
+  const frameRef = useRef<() => void>(() => {})
   const [size, setSize] = useState({ w: 0, h: 0 })
   // Spot hover tooltip (mirrors the 2-D map's .map-hover) — text + wrap-relative position.
   const [hover, setHover] = useState<{ x: number; y: number; text: string } | null>(null)
@@ -629,7 +644,14 @@ export default function Globe3D({
   // surfaces cannot drift. That also fixes an uncapped set here: this drew one arc per
   // heard-me spot with no ceiling, which on a good run is the spider's web the cap exists
   // to prevent.
-  const arcs = useMemo(() => {
+  //
+  // ⚠️ CONTENT-KEYED, NOT IDENTITY-KEYED. react-kapsule forwards `arcsData` whenever the array
+  // is a new reference, and three-globe then disposes and recreates EVERY arc — material
+  // included, which is a shader-program compile per arc. `stations` is a new array on every
+  // 300 ms snapshot, so this memo alone recompiled the arc shaders ~3×/s with nothing on screen
+  // changing (29324da8; 65–72% main thread measured in headless Chrome). `useStableByKey` hands
+  // globe.gl the previous array until an arc's endpoints or colour actually differ.
+  const arcsBuilt = useMemo(() => {
     if (!qth) return []
     const leg = (endLat: number, endLng: number, color: string) => ({
       startLat: qth.lat,
@@ -652,6 +674,7 @@ export default function Globe3D({
     }
     return out
   }, [spots, stations, selectedCall, qth, show.arcs, show.rxarcs])
+  const arcs = useStableByKey(arcsBuilt, JSON.stringify(arcsBuilt))
 
   // US state borders as globe paths (one path per border line-string).
   const statePaths = useMemo(() => {
@@ -667,9 +690,10 @@ export default function Globe3D({
   // prop) so it's ready before first paint. Lit by the subsolar light set up below.
   const globeMat = useMemo(() => {
     const loader = new THREE.TextureLoader()
-    const day = loader.load(earthUrl)
+    // A texture that finishes loading while the render loop is paused must still reach the screen.
+    const day = loader.load(earthUrl, () => frameRef.current())
     day.colorSpace = THREE.SRGBColorSpace
-    const night = loader.load(earthNightUrl)
+    const night = loader.load(earthNightUrl, () => frameRef.current())
     night.colorSpace = THREE.SRGBColorSpace
     return new THREE.MeshPhongMaterial({
       map: day,
@@ -765,11 +789,78 @@ export default function Globe3D({
   }, [ready, qth])
 
   // Drive idle auto-rotate from the operator's spin toggle.
+  const spinRef = useRef(spin)
   useEffect(() => {
+    spinRef.current = spin
     const g = globeRef.current
     if (!g || !ready) return
     ;(g.controls() as { autoRotate: boolean }).autoRotate = spin
+    kickRef.current() // on: keep drawing (see `sleep`); off: draw the settle, then sleep
   }, [ready, spin])
+
+  // ⭐ RENDER ON CHANGE, NOT EVERY FRAME. globe.gl runs requestAnimationFrame forever and renders
+  // the bloom composer on every tick: ~76 fps and 238 GL draws/s in headless Chrome with every
+  // layer OFF and nothing moving — the tester's "+20% CPU in 3D", on every version. The loop is now
+  // PAUSED once the scene has been still for IDLE_RENDER_MS, and resumed by anything that can change
+  // a pixel: the controls (drag, wheel zoom, the damping after release), spin, a data change, a
+  // resize, a texture arriving (the wake effect below lists the data).
+  //
+  // TRADEOFF, chosen as the least invasive option: the two decorative animations — the arcs'
+  // travelling dashes and the QTH ping ring — FREEZE while the globe is idle and play whenever it is
+  // awake. Keeping them moving means rendering continuously, which is the entire cost; a still frame
+  // of a dashed arc and a ring reads the same. Bloom and every layer stay exactly as they were: they
+  // only cost anything while a frame is actually being drawn.
+  //
+  // TWO WAYS TO DRAW. `kick` wakes the loop for IDLE_RENDER_MS, which has to outlast what animates
+  // on its own after a change: three-globe's 1 s data-transition tweens (arcs, HTML spots, paths),
+  // the 900 ms pass fly-to, and OrbitControls' damping after a release. `frame` draws ONE frame for
+  // a change that is complete once written — above all the 1 s breath of an open band, which would
+  // otherwise re-wake the loop every second and render continuously by another name.
+  useEffect(() => {
+    const g = globeRef.current
+    if (!g || !ready) return
+    const controls = g.controls() as unknown as THREE.EventDispatcher<Record<string, object>>
+    let timer: number | undefined
+    let interacting = false
+    const sleep = () => {
+      timer = undefined
+      if (!interacting && !spinRef.current) g.pauseAnimation()
+    }
+    const kick = () => {
+      g.resumeAnimation()
+      if (timer !== undefined) window.clearTimeout(timer)
+      timer = window.setTimeout(sleep, IDLE_RENDER_MS)
+    }
+    // A drag holds the loop awake for as long as the pointer is down, however slow it is.
+    const onStart = () => {
+      interacting = true
+      kick()
+    }
+    const onEnd = () => {
+      interacting = false
+      kick()
+    }
+    // globe.gl's resume draws a frame synchronously; pausing straight after cancels the next one.
+    const frame = () => {
+      if (timer !== undefined || interacting || spinRef.current) return
+      g.resumeAnimation()
+      g.pauseAnimation()
+    }
+    controls.addEventListener('start', onStart)
+    controls.addEventListener('change', kick)
+    controls.addEventListener('end', onEnd)
+    kickRef.current = kick
+    frameRef.current = frame
+    kick()
+    return () => {
+      controls.removeEventListener('start', onStart)
+      controls.removeEventListener('change', kick)
+      controls.removeEventListener('end', onEnd)
+      if (timer !== undefined) window.clearTimeout(timer)
+      kickRef.current = () => {}
+      frameRef.current = () => {}
+    }
+  }, [ready])
 
   // City-lights on/off from the layers panel (dim the emissive to 0 when off).
   useEffect(() => {
@@ -788,6 +879,7 @@ export default function Globe3D({
       const ss = subsolarPoint(Date.now())
       const p = g.getCoords(ss.lat, ss.lon, 2)
       sun.position.set(p.x, p.y, p.z)
+      frameRef.current()
     }, 60_000)
     return () => clearInterval(id)
   }, [ready])
@@ -1155,6 +1247,7 @@ export default function Globe3D({
           label.position.set(lc.x, lc.y, lc.z)
         }
       }
+      frameRef.current() // the birds moved — draw them there
     }, 1000)
     return () => clearInterval(id)
   }, [show.sats, sats])
@@ -1499,6 +1592,21 @@ export default function Globe3D({
     )
   }, [ready, qth, show.decodes, show.dxped, stations, prop])
 
+  // DRAW FOR A DATA CHANGE — every input that edits the scene, so the paused loop shows it. The
+  // roster and the arcs are content-keyed above, so a 300 ms snapshot that changed nothing is no
+  // change here. A new input that edits the scene belongs in one of these two lists.
+  //
+  // WAKE: data three-globe TWEENS in (arcs, HTML spots, paths and wedges; `show` flips layer data
+  // and the graticule), the pass fly-to, and a resize.
+  useEffect(() => {
+    kickRef.current()
+  }, [arcs, points, sectorPolys, statePaths, show, selectedCall, livePass, size.w, size.h])
+  // ONE FRAME: everything this component writes straight into the scene — the point clouds, the
+  // line overlays and labels, the satellite scene, and the 1 s breath.
+  useEffect(() => {
+    frameRef.current()
+  }, [stations, prop, muf, xrayLong, auroraPts, pca, sats, cqzones, workedGrids, nowMs, pulseTick, satFav, satChaseRev])
+
   // Pointer event → wrap LAYOUT coords (the .map-hover tooltip is positioned in the
   // same layout space the globe is sized in). The .app UI zoom makes visual px ≠ layout
   // px, so undo it via the rect ratio — same fix as the 2-D map's canvasXY. Reads the
@@ -1538,11 +1646,10 @@ export default function Globe3D({
       >
         {spin ? t('globe.spin.pause') : t('globe.spin.play')}
       </button>
-      {/* Layers panel, matching the 2-D map. Grows as Phase B adds layers. (Was gated on the
-          Expert detail level, removed 2026-07-26 — the layer list is now always available.) */}
+      {/* Layers panel — the same place and the same fold as the 2-D map's (MapLayersPanel). Grows
+          as Phase B adds layers. (Was gated on the Expert detail level, removed 2026-07-26.) */}
       {(
-        <div className="globe3d-layers">
-          <span className="globe3d-layers-h">{t('globe.layers.head')}</span>
+        <MapLayersPanel className="globe3d-layers" title={t('globe.layers.head')}>
           {LAYER_ROWS.map((row) => (
             <Fragment key={row.k}>
               <label>
@@ -1570,7 +1677,7 @@ export default function Globe3D({
               )}
             </Fragment>
           ))}
-        </div>
+        </MapLayersPanel>
       )}
       {satAllHidden > 0 && (
         // The 2-D map renders this same hint word for word — one key, deliberately.
