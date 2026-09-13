@@ -1143,6 +1143,108 @@ test('a second sign-in by the same verified person does not earn a second trial'
   await stranger.post('pair/claim', { code: second_enrollment.code })
 })
 
+// The one-trial-per-person check hashed the address after only trim + lower-case, so the security
+// review's proof got three active trials from one Gmail inbox: op@, op+nexus2@ and o.p@. Every one
+// of them passes the tenant's verification link, because every one of them is delivered there.
+const verifiedAs = async email => {
+  const who = app.client(await app.token(`auth0|${crypto.randomUUID()}`, { email, email_verified: true }))
+  const { value } = await who.post('session')
+  assert.equal(value.identityVerified, true, `control: ${email} really is a verified identity`)
+  return who
+}
+const spendTrial = async who => {
+  const desktop = app.client()
+  const { value: enrollment } = await desktop.post('enroll', { name: 'Shack' })
+  await who.post('pair/claim', { code: enrollment.code })
+  await who.post('pair/confirm', { id: enrollment.id })
+  const station = crypto.getRandomValues(new Uint8Array(32)).reduce((s, b) => s + b.toString(16).padStart(2, '0'), '')
+  const { value: approved } = await desktop.post('enroll/approve', { id: enrollment.id, proof: enrollment.proof, credential: station })
+  assert.equal(approved.entitlement.state, 'active')
+}
+const claimFresh = async (who, expected) => {
+  const { value: enrollment } = await app.client().post('enroll', { name: 'Another shack' })
+  return (await who.post('pair/claim', { code: enrollment.code }, expected)).value
+}
+const mailboxTag = () => crypto.randomUUID().replace(/-/g, '').slice(0, 12)
+
+test('plus-tags and Gmail dots reach one mailbox, so they share its one trial', async () => {
+  const tag = mailboxTag()
+  await spendTrial(await verifiedAs(`op${tag}@gmail.com`))
+  for (const alias of [`op${tag}+nexus2@gmail.com`, `o.p${tag}@gmail.com`, `OP${tag}@GoogleMail.com`, ` o.p.${tag}+x@googlemail.com `]) {
+    const refused = await claimFresh(await verifiedAs(alias), 403)
+    assert.equal(refused.error, 'trialActiveElsewhere', `${alias} is the same mailbox and must not start a trial`)
+  }
+  // A DIFFERENT Gmail mailbox is a different person.
+  await claimFresh(await verifiedAs(`op2${tag}@gmail.com`), 200)
+})
+
+test('only Gmail ignores dots; every provider ignores a plus-tag', async () => {
+  const tag = mailboxTag()
+  await spendTrial(await verifiedAs(`o.p${tag}@example.com`))
+  // Conservative: outside Gmail a dot is part of the mailbox name, so these are two people.
+  await claimFresh(await verifiedAs(`op${tag}@example.com`), 200)
+  for (const alias of [`o.p${tag}+nexus@example.com`, `O.P${tag}@EXAMPLE.com`]) {
+    const refused = await claimFresh(await verifiedAs(alias), 403)
+    assert.equal(refused.error, 'trialActiveElsewhere', `${alias} must not start a trial`)
+  }
+})
+
+// Live rows were written before normalisation existed, and a hash cannot be normalised after the
+// fact. These rows are planted with the exact pre-fix formula - sha256("email:" + trim + lower-case)
+// - and no mailbox column, which is precisely what production D1 holds for every account today.
+const oldHash = async address => [...new Uint8Array(await crypto.subtle.digest('SHA-256',
+  new TextEncoder().encode(`email:${address.trim().toLowerCase()}`)))].map(b => b.toString(16).padStart(2, '0')).join('')
+const planted = async address => {
+  const id = crypto.randomUUID(), ended = Date.now() - 1000
+  await app.db.prepare('INSERT INTO accounts(id,issuer,subject,email_hash) VALUES(?,?,?,?)')
+    .bind(id, 'https://identity.remote-test.invalid/', `auth0|${crypto.randomUUID()}`, await oldHash(address)).run()
+  await app.db.prepare("INSERT INTO trials(account_id,enabled,expires_at,started_at,source) VALUES(?,1,?,?,'trial')")
+    .bind(id, ended, ended - 14 * 24 * 60 * 60 * 1000).run()
+}
+
+// enroll/approve re-runs the sibling check for an account that did NOT sign in on that request, so
+// its own row can predate the mailbox column: mailbox_hash NULL, address hash only. The address
+// match must still refuse it, and the NULL it binds must not turn the refusal into a 503.
+test('an account with no mailbox hash of its own is still matched by its address hash at approve', async () => {
+  const address = `op${mailboxTag()}+2@gmail.com`
+  const claimant = await verifiedAs(address), desktop = app.client()
+  const { value: enrollment } = await desktop.post('enroll', { name: 'Shack' })
+  await claimant.post('pair/claim', { code: enrollment.code })
+  await claimant.post('pair/confirm', { id: enrollment.id })
+  const { value: session } = await claimant.post('session')
+  // Only now does the old trial exist, so claim and confirm above could not have seen it - approve
+  // is the gate under test. Then strip the claimant back to a pre-migration row.
+  await planted(address)
+  await app.db.prepare('UPDATE accounts SET mailbox_hash=NULL WHERE id=?').bind(session.accountId).run()
+  const nulled = await app.db.prepare('SELECT email_hash, mailbox_hash FROM accounts WHERE id=?').bind(session.accountId).first()
+  assert.ok(nulled.email_hash && nulled.mailbox_hash === null, 'control: the claimant really holds only an address hash')
+
+  const { value: refused } = await desktop.post('enroll/approve', { id: enrollment.id, proof: enrollment.proof, credential: credential() }, 403)
+  assert.equal(refused.error, 'trialEnded')
+  const clock = await app.db.prepare('SELECT COUNT(*) AS n FROM trials WHERE account_id=?').bind(session.accountId).first()
+  assert.equal(clock.n, 0, 'no second trial was written')
+})
+
+test('a trial recorded under the old address hash still counts against the same mailbox', async () => {
+  const tag = mailboxTag()
+
+  // An old trial under the plain address is found from an alias of it.
+  await planted(`op${tag}@gmail.com`)
+  const alias = await claimFresh(await verifiedAs(`o.p${tag}+again@gmail.com`), 403)
+  assert.equal(alias.error, 'trialEnded')
+
+  // An old trial recorded under a TAGGED spelling is still found from that same spelling. Hashing
+  // only the normalised form would have quietly released this one. Its own tag, not the first
+  // row's: sharing it would normalise onto the plain row above and pass for the wrong reason.
+  const other = mailboxTag()
+  await planted(`Op${other}+Nexus@GoogleMail.com`)
+  const same = await claimFresh(await verifiedAs(`op${other}+nexus@googlemail.com`), 403)
+  assert.equal(same.error, 'trialEnded')
+
+  // Control: an unrelated mailbox is untouched by either planted row.
+  await claimFresh(await verifiedAs(`someone${tag}@gmail.com`), 200)
+})
+
 // An UNVERIFIED address is a string the holder typed. Keying on it would swap "one sign-up per
 // trial" for "one typed address per trial" - no better - and would wrongly bind two strangers who
 // happened to type the same thing. So it is ignored, and such an account keeps the old behaviour.

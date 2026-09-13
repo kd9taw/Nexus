@@ -76,6 +76,31 @@ export function bearer(request: Request): string {
   requireValue(header.startsWith('Bearer ') && header.length <= 8192, 'signInRequired', 401)
   return header.slice(7)
 }
+/** The mailbox an address delivers to, which is what "one trial per person" actually has to key on.
+ *
+ *  THE RULE, and deliberately no more of it:
+ *  - trim, and lower-case the whole address;
+ *  - drop a `+tag` from the local part, for every domain;
+ *  - for gmail.com and googlemail.com only, remove dots from the local part, and treat
+ *    googlemail.com as gmail.com.
+ *
+ *  Plus-addressing is near universal (Gmail, Outlook, Proton, Fastmail, iCloud), and a provider
+ *  that treated `+` as an ordinary character would be merging mailboxes nobody could sign up for
+ *  twice in practice. Dots are different: they are significant at most providers, so ignoring them
+ *  anywhere but Gmail, where Google documents that they are, would bind two real strangers. No
+ *  other provider-specific rule is applied - each one is a guess about somebody else's mail server.
+ *  A local part that would be left empty (`+x@`, `...@gmail.com`) is kept as it was rather than
+ *  collapsed onto one shared key. */
+export function mailbox(address: string): string {
+  const email = address.trim().toLowerCase(), at = email.lastIndexOf('@')
+  if (at < 1) return email
+  let local = email.slice(0, at), domain = email.slice(at + 1)
+  if (local.indexOf('+') > 0) local = local.slice(0, local.indexOf('+'))
+  if (domain === 'googlemail.com') domain = 'gmail.com'
+  if (domain === 'gmail.com') local = local.replace(/\./g, '') || local
+  return `${local}@${domain}`
+}
+
 let jwks: { issuer: string; keys: ReturnType<typeof createRemoteJWKSet> } | undefined
 /** The namespace an Auth0 login Action must use to put the email claims on the access token.
  *  Hardcoded rather than configured because it has to match the Action byte for byte, and a second
@@ -117,15 +142,22 @@ export async function account(request: Request, env: RemoteEnv, now: number): Pr
       email = emailClaim.trim().toLowerCase()
     }
   } catch { throw new Refusal('signInRequired', 401) }
+  // Two hashes of one verified address. `email_hash` is the ADDRESS, trim + lower-case only, and
+  // keeps that exact meaning because every row written before normalisation holds it and a hash
+  // cannot be normalised afterwards. `mailbox_hash` is the MAILBOX - see mailbox() for the rule -
+  // and is what makes op@gmail.com, op+2@gmail.com and o.p@gmail.com one person. Both carry the
+  // same `email:` prefix, so for an address that is already normal the two are identical.
   const emailHash = email ? await digest(`email:${email}`) : null
-  await env.DB.prepare('INSERT OR IGNORE INTO accounts(id, issuer, subject, email_hash) VALUES(?,?,?,?)')
-    .bind(uuid(), env.AUTH0_ISSUER, subject, emailHash).run()
-  // Backfill only: an account created before this migration, or before its provider supplied a
-  // verified address, learns its hash on the next sign-in. Never overwrites a hash with null, so a
-  // provider that stops sending the claim cannot quietly unpick an account's identity.
+  const mailboxHash = email ? await digest(`email:${mailbox(email)}`) : null
+  await env.DB.prepare('INSERT OR IGNORE INTO accounts(id, issuer, subject, email_hash, mailbox_hash) VALUES(?,?,?,?,?)')
+    .bind(uuid(), env.AUTH0_ISSUER, subject, emailHash, mailboxHash).run()
+  // Backfill only: an account created before these columns, or before its provider supplied a
+  // verified address, learns its hashes on the next sign-in. Never overwrites a hash, and never
+  // with null, so a provider that stops sending the claim cannot quietly unpick an account's identity.
   if (emailHash) {
-    await env.DB.prepare('UPDATE accounts SET email_hash=? WHERE issuer=? AND subject=? AND email_hash IS NULL')
-      .bind(emailHash, env.AUTH0_ISSUER, subject).run()
+    await env.DB.prepare(`UPDATE accounts SET email_hash=COALESCE(email_hash, ?), mailbox_hash=COALESCE(mailbox_hash, ?)
+      WHERE issuer=? AND subject=? AND (email_hash IS NULL OR mailbox_hash IS NULL)`)
+      .bind(emailHash, mailboxHash, env.AUTH0_ISSUER, subject).run()
   }
   const row = await env.DB.prepare('SELECT id FROM accounts WHERE issuer=? AND subject=?')
     .bind(env.AUTH0_ISSUER, subject).first<{ id: string }>()
@@ -194,15 +226,23 @@ export function requireEligible(entitlement: Entitlement): void {
  *  An account with no verified address is not refused - it simply gets no extra protection, which
  *  is the old behaviour. The real ceiling on this is whether the tenant enforces verification at
  *  all; without that, a fresh unverified address is still a fresh trial. Documented in STAGING.md
- *  as an operator responsibility rather than pretended away here. */
+ *  as an operator responsibility rather than pretended away here.
+ *
+ *  "The same verified address" means the same MAILBOX (mailbox()), and it has to keep recognising
+ *  rows written before that rule existed, which hold only the address hash. So a sibling matches
+ *  when its mailbox hash is ours, OR its address hash is either our address hash (the very same
+ *  spelling) or our mailbox hash (it was recorded under the plain form of our mailbox). The one
+ *  pairing this cannot see is an old row recorded under a non-plain spelling, from a different
+ *  non-plain spelling (o.p@gmail.com then, op+2@gmail.com now) - until that account signs in again
+ *  and learns its mailbox hash. There is no address left to normalise, only its hash. */
 export async function requireUnspentIdentity(env: RemoteEnv, accountId: string, now: number): Promise<void> {
-  const self = await env.DB.prepare('SELECT email_hash FROM accounts WHERE id=?')
-    .bind(accountId).first<{ email_hash: string | null }>()
-  if (!self?.email_hash) return
+  const self = await env.DB.prepare('SELECT email_hash, mailbox_hash FROM accounts WHERE id=?')
+    .bind(accountId).first<{ email_hash: string | null; mailbox_hash: string | null }>()
+  if (!self?.email_hash && !self?.mailbox_hash) return
   const spent = await env.DB.prepare(`SELECT t.expires_at FROM trials t
     JOIN accounts a ON a.id = t.account_id
-    WHERE a.email_hash = ? AND a.id != ? LIMIT 1`)
-    .bind(self.email_hash, accountId).first<{ expires_at: number }>()
+    WHERE a.id != ? AND (a.mailbox_hash = ? OR a.email_hash IN (?, ?)) LIMIT 1`)
+    .bind(accountId, self.mailbox_hash, self.email_hash, self.mailbox_hash).first<{ expires_at: number }>()
   if (!spent) return
   // A sibling account is still RUNNING a trial: that is the same person with two sign-ins, not a
   // second entitlement, so point them at the one they already have rather than starting another.
