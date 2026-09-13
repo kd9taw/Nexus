@@ -7,7 +7,12 @@ const bad=():never=>{throw new Error('invalidConfiguration')}
 const revision=(v:unknown)=>typeof v==='string'&&/^[0-9a-f]{64}$/.test(v)
 export function parseConfiguration(raw:unknown,kind:'settings'|'programming'):SettingsConfiguration|ProgrammingConfiguration {
   if(kind==='settings'){
-    const v=object(raw,['settings','withheld','revision','platform'])
+    // Still CLOSED - an unexpected top-level key is refused - but `radioWithheld` is allowed when
+    // present. It is optional so a station older than it is not refused, and it must be LISTED when
+    // present because object() counts keys exactly: leaving it out refused every document a current
+    // station sends, while the fixtures (which never carried it) stayed green.
+    const v=object(raw,['settings','withheld','revision','platform',
+      ...(raw&&typeof raw==='object'&&Object.prototype.hasOwnProperty.call(raw,'radioWithheld')?['radioWithheld']:[])])
     // Tolerates a setting this browser has not heard of, so a station one release ahead is not
     // refused wholesale; every key we DO know must still be present and correctly typed.
     const values=openObject(v.settings,[...SETTINGS_KEYS])
@@ -26,18 +31,22 @@ export function parseConfiguration(raw:unknown,kind:'settings'|'programming'):Se
     // repo is caught at build time rather than by an operator.
     const declared=new Set((Array.isArray(v.withheld)?v.withheld:[bad()]).map(String))
     if(WITHHELD_SETTINGS_KEYS.some(k=>!declared.has(k)))bad()
+    // A station that declares a key withheld and then sends it is contradicting itself. Refuse by the
+    // STATION's own list, not only the keys this browser already knows - otherwise a credential newer
+    // than this browser, declared and leaked together, sails through openObject untouched.
+    if([...declared].some(k=>Object.prototype.hasOwnProperty.call(values,k)))bad()
     // OPTIONAL on purpose. A station older than this field cannot declare it, and refusing those
     // outright is the same outage this whole change exists to avoid - they also predate any
     // per-radio credential, so there is nothing for them to have leaked. When a station does
     // declare it, it must cover everything this browser holds secret. The content check below is
     // the defence either way, and it does not depend on the declaration at all.
-    if(v.radioWithheld!==undefined){
-      const declaredRadio=new Set((Array.isArray(v.radioWithheld)?v.radioWithheld:[bad()]).map(String))
-      if(WITHHELD_RADIO_KEYS.some(k=>!declaredRadio.has(k)))bad()
-    }
-    // The per-radio half of the credential proof, stated the same way as line 17.
+    const declaredRadio=new Set(v.radioWithheld===undefined?[]:(Array.isArray(v.radioWithheld)?v.radioWithheld:[bad()]).map(String))
+    if(v.radioWithheld!==undefined&&WITHHELD_RADIO_KEYS.some(k=>!declaredRadio.has(k)))bad()
+    // The per-radio half of the credential proof: every key this browser holds secret AND every key
+    // the station declared withheld.
+    const radioSecret=[...WITHHELD_RADIO_KEYS,...declaredRadio]
     for(const radio of values.radios as Record<string,unknown>[])
-      if(WITHHELD_RADIO_KEYS.some(k=>Object.prototype.hasOwnProperty.call(radio,k)))bad()
+      if(radioSecret.some(k=>Object.prototype.hasOwnProperty.call(radio,k)))bad()
     for(const [key,shape]of Object.entries(SETTINGS_SHAPES)){
       const value=values[key]
       if(value===null&&shape.startsWith('nullable-'))continue

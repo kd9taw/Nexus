@@ -47,8 +47,31 @@ it('refuses a per-radio credential even when the station declares it withheld', 
   expect(radios.length, 'positive control: there is a radio to leak from').toBeGreaterThan(0)
   radios[0].flexPassword = 'hunter2'
   leaked.radioWithheld = ['flexPassword']
-  // Declaring it does not make it safe to send. Today the closed per-radio shape is what refuses
-  // it; once flexPassword is a real withheld key the content check refuses it by name.
+  // Declaring it withheld and then sending it anyway is a station contradicting itself, and it is
+  // refused by name using the keys the STATION declared. This test once passed for the wrong reason:
+  // object() refused the extra top-level radioWithheld key before the per-radio check ever ran.
+  expect(() => parseConfiguration(leaked, 'settings')).toThrow()
+})
+
+// THE SHAPE A CURRENT STATION SENDS. The fixture predates radioWithheld, so every test above passed
+// while the browser refused every real settings document: object() counts keys exactly, and the field
+// was on the wire but not on the list. Only the native suite, reading a real Rust document, saw it.
+it('accepts the document a current station actually sends, and stays closed to anything else', async () => {
+  const current = structuredClone(settings) as Record<string, unknown>
+  current.radioWithheld = []
+  expect(() => parseConfiguration(current, 'settings')).not.toThrow()
+  // Positive control on "closed": one unexpected top-level key is still refused.
+  const intruder = structuredClone(current) as Record<string, unknown>
+  intruder.somethingUnexpected = true
+  expect(() => parseConfiguration(intruder, 'settings')).toThrow()
+})
+
+// The settings half of the same rule: a credential newer than this browser, declared withheld and sent
+// anyway, would otherwise pass straight through openObject, which tolerates keys it has not heard of.
+it('refuses a settings value the station itself declared withheld', async () => {
+  const leaked = structuredClone(settings) as Record<string, unknown>
+  ;(leaked.settings as Record<string, unknown>).futureSecret = 'hunter2'
+  leaked.withheld = [...(leaked.withheld as string[]), 'futureSecret']
   expect(() => parseConfiguration(leaked, 'settings')).toThrow()
 })
 
