@@ -660,7 +660,11 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
        stationBootId:state.stationBootId,leaseId:state.leaseId,expectedRevision:state.revision,
        commandWindowId:state.commandWindowId,clientSequence:state.nextSequence,
        context:state.controls.context,action:{...action,transmitEpoch:state.transmitEpoch}})
-     const ftState = async () => (await operation({type:'heartbeat',leaseId:state.leaseId})).response.value
+     const ftState = async () => {
+       const {response} = await operation({type:'heartbeat',leaseId:state.leaseId})
+       assert.ok(response.value, `the FT lease heartbeat was refused: ${JSON.stringify(response)}`)
+       return response.value
+     }
      for (const tier of ['FT8','FT4']) {
        assert.equal((await probe.send({type:'seedFt',tier})).txEnabled,false)
        let ft = await ftState()
