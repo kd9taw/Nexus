@@ -1,0 +1,363 @@
+/* The Remote site's outer screens, in hamradiotools.io's look: signed out, confirm your email,
+   the account and trial states, the station list, pairing, refusals, and the header and footer.
+
+   SCOPE — every selector in this file starts at `.remote-site`, a class only RemoteApp's own
+   account shell carries. The connected views (MonitorApp, BrowserApplication and the Nexus App
+   inside it) never have it, so nothing here can reach them. That matters because this sheet is
+   global once loaded, and the classes it restyles are shared: `.remote-button`, `.remote-actions`
+   and `.remote-section` also render in SessionStatus, the hosted logging controls and the native
+   Remote station panel, and `.rm-header`/`.rm-card`/`.rm-scroll` are the observer's own.
+
+   TOKENS — dark is hamradiotools.io's palette verbatim (the site is dark-only:
+   src/styles/global.css @theme). Light is derived for the same family, checked to WCAG AA:
+   the accent becomes an ink (#8a5a00) because the site's amber is 1.6:1 on white. The amber
+   FILL stays the site's in both themes, with dark text on it (12:1).
+
+   TYPE — the site bundles Inter and JetBrains Mono. The Worker's CSP has no font-src, so it falls
+   back to default-src 'none' and web fonts cannot load; the Nexus stacks stand in (system sans,
+   and a mono stack that uses JetBrains Mono wherever it is installed). Sizes are the site's
+   1.25 modular scale on a 16px base.
+
+   Responsive rules use the `data-viewport` vocabulary only, and no raw vh/vw. */
+
+.remote-site {
+  --rs-bg: #0a0e13;
+  --rs-surface: #0f1722;
+  --rs-surface-2: #121a25;
+  --rs-border: #22304a;
+  --rs-border-bright: #324768;
+  --rs-fg: #eaf0f7;
+  --rs-muted: #9fb0c6;
+  --rs-faint: #7d8fa8;
+  /* Text, links, focus and eyebrow ink. On dark it is the site's amber itself. */
+  --rs-ink: #ffc233;
+  --rs-fill: #ffc233;
+  --rs-fill-hover: #ffd166;
+  --rs-on-fill: #0a0e13;
+  --rs-signal: #3ddc8c;
+  --rs-teal: #4cc9f0;
+  /* Input outlines carry a component boundary (WCAG 1.4.11, 3:1); --rs-border-bright is 1.9:1. */
+  --rs-input-border: var(--rs-faint);
+  --rs-grid: rgba(61, 220, 140, 0.03);
+  --rs-radius-card: 0.75rem;
+  --rs-radius-control: 0.375rem;
+  --rs-measure: 68ch;
+  --rs-container: 56rem;
+  --rs-gutter: 1.25rem;
+}
+[data-theme='light'] .remote-site {
+  --rs-bg: #f6f8fb;
+  --rs-surface: #ffffff;
+  --rs-surface-2: #eef2f7;
+  --rs-border: #d3dbe6;
+  --rs-border-bright: #8a9bb2;
+  --rs-fg: #0a0e13;
+  --rs-muted: #3d4b5f;
+  --rs-faint: #55647a;
+  --rs-ink: #8a5a00;
+  --rs-fill: #ffc233;
+  --rs-fill-hover: #ffd166;
+  --rs-on-fill: #0a0e13;
+  --rs-signal: #1b7a4a;
+  --rs-teal: #0b6f93;
+  --rs-grid: rgba(27, 122, 74, 0.05);
+}
+
+.remote-monitor-app.remote-site {
+  color: var(--rs-fg);
+  background: var(--rs-bg);
+  font-family: var(--font-sans);
+}
+
+/* ── Header: the site's nav bar, with the wordmark treatment of `ham<amber>radio</amber>tools`. */
+.remote-site .rm-header {
+  min-height: 4rem;
+  /* Aligned with the content column below, so the wordmark sits over the page heading. */
+  padding: 0 max(var(--rs-gutter), calc((100% - var(--rs-container)) / 2 + var(--rs-gutter)));
+  background: var(--rs-bg);
+  border-bottom: 1px solid var(--rs-border);
+}
+.remote-site-wordmark {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.625rem;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  letter-spacing: -0.025em;
+  color: var(--rs-fg);
+}
+.remote-site-wordmark strong { font-weight: 600; }
+.remote-site-accent { color: var(--rs-ink); }
+.remote-site-mark {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  box-sizing: border-box;
+  color: var(--rs-ink);
+  border: 1px solid color-mix(in srgb, var(--rs-ink) 40%, transparent);
+  border-radius: var(--rs-radius-control);
+}
+
+/* ── Page body: one scroll owner (.rm-scroll), the signal-grid motif behind the top of it only,
+   and the footer pushed to the bottom when the content is short. */
+.remote-site .rm-scroll {
+  display: flex;
+  flex-direction: column;
+  background-color: var(--rs-bg);
+  background-image:
+    linear-gradient(to bottom, transparent 0, var(--rs-bg) 22rem),
+    linear-gradient(var(--rs-grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--rs-grid) 1px, transparent 1px);
+  background-size: auto, 44px 44px, 44px 44px;
+  background-position: center top;
+  background-attachment: local;
+}
+.remote-site .rm-content {
+  flex: 0 0 auto;
+  width: 100%;
+  max-width: var(--rs-container);
+  box-sizing: border-box;
+  margin: 0 auto;
+  padding: 3.5rem var(--rs-gutter) 2.5rem;
+  gap: 1.25rem;
+}
+.remote-site .remote-account { max-width: var(--rs-container); }
+
+.remote-site h1 {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 3.0625rem;
+  line-height: 1.1;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--rs-fg);
+}
+.remote-site .remote-account .remote-site-lead {
+  max-width: var(--rs-measure);
+  font-size: 1.25rem;
+  line-height: 1.55;
+  color: var(--rs-muted);
+}
+.remote-site .remote-account p { line-height: 1.65; }
+
+/* Links: the site's amber link, underlined so it never relies on colour alone. */
+.remote-site a {
+  color: var(--rs-ink);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-color: color-mix(in srgb, var(--rs-ink) 45%, transparent);
+  transition: text-decoration-color 0.15s ease, color 0.15s ease;
+}
+.remote-site a:hover { text-decoration-color: var(--rs-ink); }
+
+.remote-site code {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  color: var(--rs-ink);
+  background: var(--rs-surface-2);
+  border: 1px solid var(--rs-border);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+}
+
+/* Keyboard focus: the site's amber ring, on every focusable thing on these screens. */
+.remote-site :is(a, button, input, summary):focus-visible {
+  outline: 2px solid var(--rs-ink);
+  outline-offset: 2px;
+}
+
+/* ── Trial state: the site's status strip — mono, hairline above and below, a state dot. The
+   state is in the words; the dot only repeats it. */
+.remote-site .remote-site-status {
+  display: flex;
+  align-items: baseline;
+  gap: 0.625rem;
+  padding-block: 0.75rem;
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  color: var(--rs-fg);
+  border-block: 1px solid var(--rs-border);
+}
+.remote-site-status::before {
+  content: '';
+  flex: 0 0 auto;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--rs-teal);
+  transform: translateY(-0.05em);
+}
+.remote-site-status--active::before { background: var(--rs-signal); }
+.remote-site-status--stopped::before { background: var(--rs-ink); }
+
+/* Refusals and the attach warning: the site's callout, an amber bar on a surface. */
+.remote-site :is(.rm-warning, .remote-warning) {
+  margin: 0;
+  padding: 0.75rem 1rem;
+  color: var(--rs-fg);
+  background: var(--rs-surface);
+  border-left: 3px solid var(--rs-ink);
+  border-radius: 0 0.5rem 0.5rem 0;
+}
+
+/* ── Cards: the site's .card, without the lift (these are not links). */
+.remote-site .rm-card {
+  background: var(--rs-surface);
+  border: 1px solid var(--rs-border);
+  border-radius: var(--rs-radius-card);
+}
+.remote-site .remote-section { gap: 1rem; padding: 1.5rem; }
+.remote-site .rm-card.remote-site-card--action {
+  border-color: color-mix(in srgb, var(--rs-ink) 45%, var(--rs-border));
+  box-shadow: inset 0 2px 0 0 var(--rs-ink);
+}
+.remote-site .remote-section h2 {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 1.25rem;
+  line-height: 1.3;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  text-transform: none;
+  color: var(--rs-fg);
+  overflow-wrap: anywhere;
+}
+/* A station card's first row is its name and Rename: the name takes the room, Rename sits right. */
+.remote-site .remote-section .remote-actions { align-items: center; }
+.remote-site .remote-section .remote-actions > h2 { flex: 1 1 12rem; min-width: 0; }
+.remote-site [role='note'] { margin: 0; font-size: 0.8125rem; color: var(--rs-muted); }
+
+/* ── Forms. Labels are the site's mono micro-label; the field inside keeps normal text. */
+.remote-site .remote-section label {
+  gap: 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--rs-muted);
+}
+.remote-site .remote-section input {
+  min-height: 2.75rem;
+  padding: 0.5rem 0.75rem;
+  font-family: var(--font-sans);
+  font-size: 1rem;
+  letter-spacing: normal;
+  text-transform: none;
+  color: var(--rs-fg);
+  background: var(--rs-bg);
+  border: 1px solid var(--rs-input-border);
+  border-radius: var(--rs-radius-control);
+}
+.remote-site .remote-section input.remote-site-code-input {
+  font-family: var(--font-mono);
+  letter-spacing: 0.08em;
+}
+.remote-site .remote-section input:focus-visible { border-color: var(--rs-ink); }
+.remote-site .remote-section form > .remote-button { justify-self: start; }
+
+/* ── Buttons: the site's two — an amber fill for the one thing to do next, a bordered mono
+   button for everything else — plus the nav bar's quiet pill for Sign out and Rename. */
+.remote-site .remote-button {
+  min-height: 2.75rem;
+  padding: 0.625rem 1.25rem;
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--rs-fg);
+  background: transparent;
+  border: 1px solid var(--rs-border-bright);
+  border-radius: var(--rs-radius-control);
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+.remote-site .remote-button:hover:not(:disabled) { border-color: var(--rs-ink); }
+.remote-site .remote-button.remote-button--primary {
+  color: var(--rs-on-fill);
+  background: var(--rs-fill);
+  border-color: var(--rs-fill);
+}
+.remote-site .remote-button.remote-button--primary:hover:not(:disabled) {
+  background: var(--rs-fill-hover);
+  border-color: var(--rs-fill-hover);
+}
+.remote-site .remote-button.remote-button--quiet {
+  font-weight: 500;
+  color: var(--rs-muted);
+  border-color: var(--rs-border);
+}
+.remote-site .remote-button.remote-button--quiet:hover:not(:disabled) {
+  color: var(--rs-fg);
+  border-color: var(--rs-border-bright);
+}
+.remote-site .remote-button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ── Disclosures: a ▸ in the site's signal green that turns when open. */
+.remote-site details > summary {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 2.75rem;
+  width: fit-content;
+  list-style: none;
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  color: var(--rs-muted);
+  cursor: pointer;
+}
+.remote-site details > summary::-webkit-details-marker { display: none; }
+.remote-site details > summary::before {
+  content: '▸';
+  color: var(--rs-signal);
+  transition: transform 0.15s ease;
+}
+.remote-site details[open] > summary::before { transform: rotate(90deg); }
+.remote-site details > summary:hover { color: var(--rs-fg); }
+.remote-site details > p { margin: 0.25rem 0 0.75rem; }
+
+/* ── Footer: the site's hairline footer, mono and faint. */
+.remote-site-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem 1.5rem;
+  width: 100%;
+  max-width: var(--rs-container);
+  box-sizing: border-box;
+  margin: auto auto 0;
+  padding: 1.5rem var(--rs-gutter) 2rem;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--rs-faint);
+  border-top: 1px solid var(--rs-border);
+}
+.remote-site .remote-site-footer .remote-site-wordmark { color: var(--rs-faint); font-size: 0.75rem; }
+.remote-site .remote-site-footer a { color: var(--rs-muted); text-decoration-color: color-mix(in srgb, var(--rs-muted) 45%, transparent); }
+.remote-site .remote-site-footer a:hover { color: var(--rs-ink); text-decoration-color: var(--rs-ink); }
+
+/* ── Narrower windows. The site steps its page h1 down the same scale. */
+[data-viewport='sm'] .remote-site h1 { font-size: 2.4375rem; line-height: 1.15; }
+[data-viewport='xs'] .remote-site {
+  --rs-gutter: 1rem;
+}
+[data-viewport='xs'] .remote-site .rm-header { min-height: 3.5rem; }
+[data-viewport='xs'] .remote-site .rm-content { padding: 2rem var(--rs-gutter) 2rem; gap: 1rem; }
+[data-viewport='xs'] .remote-site h1 { font-size: 1.9375rem; line-height: 1.22; }
+[data-viewport='xs'] .remote-site .remote-account .remote-site-lead { font-size: 1rem; line-height: 1.65; }
+[data-viewport='xs'] .remote-site .remote-section { padding: 1.125rem; }
+[data-viewport='xs'] .remote-site .remote-section h2 { font-size: 1.125rem; }
+/* On a phone every action is a full-width row, so no label is squeezed into a narrow button. The
+   quiet Rename stays beside the station name. */
+[data-viewport='xs'] .remote-site .remote-actions > .remote-button:not(.remote-button--quiet),
+[data-viewport='xs'] .remote-site .remote-section form > .remote-button { flex: 1 1 100%; justify-self: stretch; }
+
+/* Motion: follow the OS preference, and Nexus's own forced reduce. */
+@media (prefers-reduced-motion: reduce) {
+  .remote-site *, .remote-site *::before { transition: none !important; }
+}
+[data-motion='reduce'] .remote-site *, [data-motion='reduce'] .remote-site *::before { transition: none !important; }
