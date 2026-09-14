@@ -147,7 +147,7 @@ fn disable_preempts_a_full_command_queue() {
     let (reply, _) = oneshot::channel();
     assert!(service
         .commands
-        .try_send((Action::Refresh {}, 0, reply))
+        .try_send((Action::Refresh {}, 0, 0, reply))
         .is_ok());
     assert!(matches!(
         runtime.block_on(service.action(Action::Disable {})),
@@ -183,7 +183,7 @@ fn memory_publication_obeys_enable_generation_and_disable_preemption() {
     let (reply, _) = oneshot::channel();
     service
         .commands
-        .try_send((Action::Refresh {}, 0, reply))
+        .try_send((Action::Refresh {}, 0, 0, reply))
         .unwrap();
     assert_eq!(
         runtime.block_on(service.action(Action::Disable {})).err(),
@@ -214,7 +214,7 @@ fn refused_enable_does_not_change_local_authority() {
     let (reply, _) = oneshot::channel();
     assert!(service
         .commands
-        .try_send((Action::Refresh {}, 0, reply))
+        .try_send((Action::Refresh {}, 0, 0, reply))
         .is_ok());
     assert!(matches!(
         runtime.block_on(service.action(Action::Enable {})),
@@ -906,8 +906,26 @@ async fn fake_cloud() -> FakeCloud {
                     }
                     request.extend_from_slice(&chunk[..n]);
                 }
-                let (status, body) = if head.contains("/native/devices ") {
+                let (status, body) = if head.contains("/enroll ") {
+                    let enrollment = json!({"id":STATION,"proof":"a".repeat(64),
+                        "code":"0123456789abcdef","expiresAt":now_ms() + 600000});
+                    ("200 OK", enrollment.to_string())
+                } else if head.contains("/enroll/check ") {
+                    (
+                        "200 OK",
+                        json!({"accountId":ACCOUNT,"approved":false}).to_string(),
+                    )
+                } else if head.contains("/enroll/approve ") {
+                    // The service approves the browser that confirmed the pairing along with it.
+                    let approved = json!({"stationId":STATION,"accountId":ACCOUNT,
+                        "device":{"id":BROWSER,"expiresAt":APPROVED_UNTIL}});
+                    ("200 OK", approved.to_string())
+                } else if head.contains("/native/devices ") {
                     ("200 OK", served.lock().unwrap().clone())
+                } else if head.contains("/native/approve-device ") {
+                    // The service writes a new approval, and with it the approval generation.
+                    *served.lock().unwrap() = device_list(1, APPROVED_UNTIL);
+                    ("200 OK", r#"{"ok":true}"#.to_string())
                 } else if head.contains("/native/revoke ") {
                     ("200 OK", r#"{"ok":true}"#.to_string())
                 } else {
@@ -1152,55 +1170,335 @@ async fn grants_are_not_restored_for_a_revoked_or_reapproved_browser() {
     }
 }
 
-/// THE KEY SAFETY TEST. FT8/FT4 transmit permission is granted at the shack and dies with the
-/// process. Station control survives a restart; transmit never does, not even for the browser
-/// that held it a moment before.
+// ---- One approval (operator decision 2026-09-13, late) --------------------------------------------
+//
+// Approving a browser grants it station control and logging, and FT8/FT4 transmit when the approval
+// ticks it. All three are remembered across a restart for as long as that approval stands. That
+// REPLACES "transmit grants never survive a restart"; what did not change is that nothing arms the
+// transmitter: the TX-enable latch starts off and keying still needs the browser's TX On (proven at
+// the authority in operations/transmit_tests.rs, `a_restored_transmit_grant_arms_nothing_...`).
+
+/// A browser the service lists as waiting for approval.
+fn pending_browser(cloud: &FakeCloud) {
+    *cloud.devices.lock().unwrap() = device_list(0, APPROVED_UNTIL - 1);
+}
+/// Approve the browser here, the one-approval way, with or without the transmit tick.
+async fn approve(service: &Service, transmit: bool) -> Status {
+    service
+        .action(Action::Device {
+            device_id: BROWSER.into(),
+            approve: true,
+            transmit,
+        })
+        .await
+        .unwrap()
+}
+fn transmitter_idle(engine: &crate::SharedEngine) -> bool {
+    let e = engine.lock().unwrap();
+    !e.tx_enabled() && !e.remote_ft_tx_owned()
+}
+
 #[tokio::test(flavor = "multi_thread")]
-async fn transmit_grant_never_survives_a_restart() {
+async fn approving_a_browser_grants_control_and_logging_and_transmit_only_when_ticked() {
+    for tick in [false, true] {
+        let cloud = fake_cloud().await;
+        let vault = paired_vault(&cloud.origin);
+        let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
+        let service = launch(&cloud, &vault, &engine);
+        eventually(&service, "the pairing loaded", |s| s.station_id.is_some()).await;
+        service.action(Action::Enable {}).await.unwrap();
+        pending_browser(&cloud);
+        let before = service.action(Action::Refresh {}).await.unwrap();
+        assert!(
+            before.station_permissions.is_empty() && before.logging_permissions.is_empty(),
+            "a browser waiting for approval holds nothing"
+        );
+        let status = approve(&service, tick).await;
+        assert!(on(&status), "approving a browser does not toggle Remote");
+        assert_eq!(status.station_permissions, [BROWSER], "tick={tick}");
+        assert_eq!(status.logging_permissions, [BROWSER], "tick={tick}");
+        let expected: &[&str] = if tick { &[BROWSER] } else { &[] };
+        assert_eq!(status.transmit_permissions, expected, "tick={tick}");
+        assert!(transmitter_idle(&engine), "a grant arms nothing");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_approval_given_while_remote_is_off_applies_at_turn_on_and_turn_off_still_wins() {
     let cloud = fake_cloud().await;
     let vault = paired_vault(&cloud.origin);
     let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
     let service = launch(&cloud, &vault, &engine);
-    on_with_grants(&service).await;
-    let before = service
-        .action(Action::TransmitPermission {
-            device_id: BROWSER.into(),
-            allow: true,
-        })
-        .await
-        .unwrap();
-    assert_eq!(
-        before.transmit_permissions,
-        [BROWSER],
-        "positive control: the grant existed before the restart"
+    eventually(&service, "the pairing loaded", |s| s.station_id.is_some()).await;
+    pending_browser(&cloud);
+    service.action(Action::Refresh {}).await.unwrap();
+    let off = approve(&service, true).await;
+    assert!(
+        !on(&off) && off.observation_generation.is_none(),
+        "approving a browser does not turn Remote on; only approving the pairing does"
     );
-    settle().await;
-    drop(service);
-
-    let service = launch(&cloud, &vault, &engine);
-    let status = eventually(&service, "station control restored", |s| {
+    assert!(
+        off.station_permissions.is_empty() && off.transmit_permissions.is_empty(),
+        "nothing is live while Remote is off"
+    );
+    service.action(Action::Enable {}).await.unwrap();
+    eventually(&service, "the approval took effect at Turn on", |s| {
         s.station_permissions == [BROWSER]
+            && s.logging_permissions == [BROWSER]
+            && s.transmit_permissions == [BROWSER]
     })
     .await;
+    assert!(transmitter_idle(&engine));
+
+    service.action(Action::Disable {}).await.unwrap();
+    service.action(Action::Enable {}).await.unwrap();
+    settle().await;
+    let status = service.action(Action::Refresh {}).await.unwrap();
+    assert!(on(&status), "positive control: Remote is back on");
     assert!(
-        status.transmit_permissions.is_empty(),
-        "transmit permission must start empty after a restart"
+        status.station_permissions.is_empty()
+            && status.logging_permissions.is_empty()
+            && status.transmit_permissions.is_empty(),
+        "Turn off Remote cleared the permissions, and turning on again does not restore them: {}",
+        serde_json::to_string(&status).unwrap()
     );
-    // And nothing in the vault could carry it: no persisted record mentions transmission.
-    for value in vault.values.lock().unwrap().values() {
+}
+
+/// Operator decision 2026-09-14: approving the first pairing turns Remote on, the same way Turn on
+/// Remote does, and the browser that did the pairing is approved with it. The TX-enable latch stays
+/// off, transmit is granted only if the approval ticked it, and a later Turn off is remembered.
+#[tokio::test(flavor = "multi_thread")]
+async fn approving_the_pairing_turns_remote_on_and_approves_the_browser_that_paired() {
+    for tick in [false, true] {
+        let cloud = fake_cloud().await;
+        let vault = MemoryVault::default();
+        let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
+        let service = launch(&cloud, &vault, &engine);
+        let begun = service
+            .action(Action::Begin {
+                name: "Test station".into(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(begun.phase, "pairing");
+        let asked = service.action(Action::Refresh {}).await.unwrap();
+        assert_eq!(asked.phase, "approval");
         assert!(
-            !value.to_ascii_lowercase().contains("transmit"),
-            "vault holds transmit state: {value}"
+            !on(&asked),
+            "positive control: Remote is off before the approval"
         );
+        let approved = service
+            .action(Action::Approve {
+                enrollment_id: STATION.into(),
+                account_id: ACCOUNT.into(),
+                transmit: tick,
+            })
+            .await
+            .unwrap();
+        assert!(
+            on(&approved),
+            "approving the pairing turns Remote on: {}",
+            approved.phase
+        );
+        let status = eventually(&service, "the pairing browser's grants", |s| {
+            s.station_permissions == [BROWSER] && s.logging_permissions == [BROWSER]
+        })
+        .await;
+        let expected: &[&str] = if tick { &[BROWSER] } else { &[] };
+        assert_eq!(status.transmit_permissions, expected, "tick={tick}");
+        assert!(transmitter_idle(&engine), "the TX-enable latch stays off");
+
+        service.action(Action::Disable {}).await.unwrap();
+        settle().await;
+        drop(service);
+        let service = launch(&cloud, &vault, &engine);
+        eventually(&service, "the pairing loaded", |s| s.station_id.is_some()).await;
+        settle().await;
+        let status = service.status().unwrap();
+        assert_eq!(status.phase, "disabled", "the later Turn off is remembered");
+        assert!(status.observation_generation.is_none());
+        assert!(transmitter_idle(&engine));
     }
-    assert!(
-        !engine.lock().unwrap().tx_enabled(),
-        "the TX-enable latch is still off"
-    );
-    // The browser can have its station control back, but asking for FT8/FT4 is refused until the
-    // operator grants it again here.
-    let authority = service.control.lock().unwrap().operations.clone();
-    assert_eq!(authority.local_status()["transmitDevices"], json!([]));
+}
+
+/// THE KEY SAFETY TEST for the reversed rule. FT8/FT4 transmit comes back after a restart only for
+/// a browser the service still lists as approved at the SAME approval, and only if the approval
+/// ticked it. In every case the TX-enable latch is still off after the restart and nothing is keyed.
+#[tokio::test(flavor = "multi_thread")]
+async fn transmit_grant_survives_a_restart_only_if_ticked_on_a_still_approved_browser() {
+    for (case, tick, after_restart, restored) in [
+        (
+            "positive control: ticked, approval unchanged",
+            true,
+            device_list(1, APPROVED_UNTIL),
+            true,
+        ),
+        ("not ticked", false, device_list(1, APPROVED_UNTIL), false),
+        ("revoked", true, device_list(0, APPROVED_UNTIL), false),
+        (
+            "re-approved (a new approval generation)",
+            true,
+            device_list(1, APPROVED_UNTIL + 1),
+            false,
+        ),
+        (
+            "gone from the station",
+            true,
+            json!({"devices":[]}).to_string(),
+            false,
+        ),
+    ] {
+        let cloud = fake_cloud().await;
+        let vault = paired_vault(&cloud.origin);
+        let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
+        let service = launch(&cloud, &vault, &engine);
+        eventually(&service, "the pairing loaded", |s| s.station_id.is_some()).await;
+        service.action(Action::Enable {}).await.unwrap();
+        pending_browser(&cloud);
+        service.action(Action::Refresh {}).await.unwrap();
+        let before = approve(&service, tick).await;
+        assert_eq!(
+            before.transmit_permissions.len(),
+            usize::from(tick),
+            "{case}: the grant as given before the restart"
+        );
+        settle().await;
+        drop(service);
+
+        *cloud.devices.lock().unwrap() = after_restart;
+        let service = launch(&cloud, &vault, &engine);
+        let still_approved = case.starts_with("positive") || case == "not ticked";
+        let status = if still_approved {
+            eventually(&service, "station control restored", |s| {
+                s.station_permissions == [BROWSER]
+            })
+            .await
+        } else {
+            eventually(&service, "Remote back on", on).await;
+            settle().await;
+            service.action(Action::Refresh {}).await.unwrap()
+        };
+        let expected: &[&str] = if restored { &[BROWSER] } else { &[] };
+        assert_eq!(
+            status.transmit_permissions,
+            expected,
+            "{case}: {}",
+            serde_json::to_string(&status).unwrap()
+        );
+        let authority = service.control.lock().unwrap().operations.clone();
+        assert_eq!(
+            authority.local_status()["transmitDevices"],
+            json!(expected),
+            "{case}"
+        );
+        assert!(
+            !engine.lock().unwrap().tx_enabled(),
+            "{case}: the TX-enable latch is off after every restart"
+        );
+        assert!(transmitter_idle(&engine), "{case}: nothing is keyed");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn revoking_transmit_or_control_or_taking_over_is_remembered_across_a_restart() {
+    for case in ["revoke transmit", "revoke station control", "take over"] {
+        let cloud = fake_cloud().await;
+        let vault = paired_vault(&cloud.origin);
+        let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
+        let service = launch(&cloud, &vault, &engine);
+        eventually(&service, "the pairing loaded", |s| s.station_id.is_some()).await;
+        service.action(Action::Enable {}).await.unwrap();
+        pending_browser(&cloud);
+        service.action(Action::Refresh {}).await.unwrap();
+        let granted = approve(&service, true).await;
+        assert_eq!(
+            granted.transmit_permissions,
+            [BROWSER],
+            "{case}: positive control"
+        );
+        let revoked = match case {
+            "revoke transmit" => Action::TransmitPermission {
+                device_id: BROWSER.into(),
+                allow: false,
+            },
+            "revoke station control" => Action::StationPermission {
+                device_id: BROWSER.into(),
+                allow: false,
+            },
+            _ => Action::TakeOverLogging {},
+        };
+        let now = service.action(revoked).await.unwrap();
+        assert!(
+            now.transmit_permissions.is_empty(),
+            "{case}: takes effect at once"
+        );
+        settle().await;
+        drop(service);
+
+        let service = launch(&cloud, &vault, &engine);
+        eventually(&service, "Remote back on", on).await;
+        settle().await;
+        let status = service.action(Action::Refresh {}).await.unwrap();
+        let (control, logging): (&[&str], &[&str]) = match case {
+            "revoke transmit" => (&[BROWSER], &[BROWSER]),
+            "revoke station control" => (&[], &[BROWSER]),
+            _ => (&[], &[]),
+        };
+        assert_eq!(status.station_permissions, control, "{case}");
+        assert_eq!(status.logging_permissions, logging, "{case}");
+        assert!(status.transmit_permissions.is_empty(), "{case}");
+        assert!(transmitter_idle(&engine), "{case}");
+    }
+}
+
+/// Downgrade safety. The pairing record is untouched; the remembered-state record written without
+/// a transmit grant is still readable by the 1.12.0 build (its `Grant` had no transmit field and
+/// denies unknown fields), and one holding a transmit grant reads as unreadable there, which
+/// leaves Remote off rather than handing that build a grant it has no rule for.
+#[test]
+fn a_record_without_a_transmit_grant_stays_readable_by_the_previous_build() {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    #[allow(dead_code)]
+    struct PreviousGrant {
+        device_id: String,
+        expires_at: u64,
+        logging: bool,
+        control: bool,
+    }
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    #[allow(dead_code)]
+    struct PreviousState {
+        binding: Binding,
+        enabled: bool,
+        grants: Vec<PreviousGrant>,
+    }
+    let state = |transmit| vault::State {
+        binding: Binding {
+            origin: REMOTE_ORIGIN.into(),
+            station_id: STATION.into(),
+            account_id: ACCOUNT.into(),
+        },
+        enabled: true,
+        grants: vec![vault::Grant {
+            device_id: BROWSER.into(),
+            expires_at: APPROVED_UNTIL,
+            logging: true,
+            control: true,
+            transmit,
+        }],
+    };
+    let without = serde_json::to_string(&state(false)).unwrap();
+    assert!(!without.contains("transmit"));
+    assert!(serde_json::from_str::<PreviousState>(&without).is_ok());
+    let with = serde_json::to_string(&state(true)).unwrap();
+    assert!(serde_json::from_str::<PreviousState>(&with).is_err());
+    // And this build reads a record the previous build wrote.
+    let previous = json!({"binding":{"origin":REMOTE_ORIGIN,"stationId":STATION,"accountId":ACCOUNT},
+        "enabled":true,"grants":[{"deviceId":BROWSER,"expiresAt":APPROVED_UNTIL,"logging":true,"control":true}]});
+    let read: vault::State = serde_json::from_value(previous).unwrap();
+    assert!(read == state(false));
 }
 
 #[tokio::test]
