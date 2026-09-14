@@ -103,18 +103,24 @@ describe('Cloudlog/Wavelog station profile id (#226)', () => {
     mockSettings('DG3ET')
     renderPanel()
     fireEvent.click(await screen.findByRole('tab', { name: 'Logging & Connectors' }))
-    // Positive control: the field is on screen with the value the reporter typed.
-    const field = await screen.findByDisplayValue('DG3ET', { selector: 'input[inputmode="numeric"]' })
-    expect(field).toBeTruthy()
+    // Positive control: the station profile id field (the one numeric input carrying the value)
+    // is on screen with what the reporter typed.
+    const field = (await screen.findAllByDisplayValue('DG3ET')).find(
+      (el) => el.getAttribute('inputmode') === 'numeric',
+    )
+    expect(field, 'the station profile id field holds DG3ET').toBeTruthy()
     const note = screen.getByText(NOTE)
-    expect(field.closest('.settings-field')?.contains(note), 'the note sits with the field').toBe(true)
+    expect(field!.closest('.settings-field')?.contains(note), 'the note sits with the field').toBe(true)
   })
 
   it('says nothing for a location number', async () => {
     mockSettings('3')
     renderPanel()
     fireEvent.click(await screen.findByRole('tab', { name: 'Logging & Connectors' }))
-    expect(await screen.findByDisplayValue('3', { selector: 'input[inputmode="numeric"]' })).toBeTruthy()
+    const field = (await screen.findAllByDisplayValue('3')).find(
+      (el) => el.getAttribute('inputmode') === 'numeric',
+    )
+    expect(field, 'control: the station profile id field holds 3').toBeTruthy()
     expect(screen.queryByText(NOTE)).toBeNull()
   })
 
