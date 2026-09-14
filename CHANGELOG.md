@@ -26,6 +26,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   off by default, so the pane keeps the WSJT-X order unless you turn it on. If you scroll down to
   read, new decodes arrive above without moving what you are reading; scroll back to the top to
   follow again. It applies when the pane is sorted by time.
+- **The CW screen has a His call field** (#286). It sits at the start of the send row and shows
+  the station you are working; a decoded call fills it in. Type over it to answer a station the
+  decoder missed or misread, then press Enter or a macro key: the `!` in your macros sends the
+  call in the box.
 
 ### Changed
 

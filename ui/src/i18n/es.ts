@@ -903,6 +903,8 @@ export const ES: PartialCatalog = {
   "crash.reload": "Recargar la ventana",
   "crash.title": "{{label}} ha dado un error",
   "cw.compose.placeholder": "Escribe CW para enviar… (Enter)",
+  "cw.hisCall.label": "Su indicativo",
+  "cw.hisCall.title": "La estación con la que estás. El ! de una macro envía este indicativo. Un indicativo decodificado lo rellena; escribe encima para responder a otra estación y pulsa Intro o una tecla de macro.",
   "cw.compose.send.label": "Enviar",
   "cw.copilot.empty": "Los indicativos decodificados salen aquí…",
   "cw.copilot.heard.label": "Oídos",

@@ -8022,6 +8022,8 @@ export const EN = {
   'cw.macro.myCall.label': 'My Call',
   'cw.macro.hisCall.label': 'His Call',
   'cw.compose.placeholder': 'Type CW to send… (Enter)',
+  'cw.hisCall.label': 'His call',
+  'cw.hisCall.title': 'The station you are working. The ! in a macro sends this call. A decoded call fills it in; type over it to answer someone else, then press Enter or a macro key.',
   'cw.compose.send.label': 'Send',
   'cw.send.txLocked': 'TX locked — this frequency is outside your license privileges',
   'cw.send.failed': 'CW send failed',

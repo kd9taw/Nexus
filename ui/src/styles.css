@@ -7225,6 +7225,25 @@ input.cw-pitch::-webkit-inner-spin-button {
 .cw-send-btn:disabled {
   opacity: 0.4;
 }
+/* #286: His Call, leading the send row — a callsign-wide field that never shrinks below a call. */
+.cw-hiscall {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: 0 0 auto;
+}
+.cw-hiscall-label {
+  font-size: var(--fs-label);
+  font-weight: 700;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.cw-hiscall-input {
+  width: 9em;
+  font-family: var(--font-mono);
+  font-weight: 700;
+  text-transform: uppercase;
+}
 
 /* ---- Shared cockpit log strip (CW + Phone): rich entry — autofill, prior-QSO, notes ---- */
 .log-entry {

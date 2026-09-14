@@ -4915,6 +4915,8 @@ export const JA: PartialCatalog = {
   "cw.macro.myCall.label": "自局コール",
   "cw.macro.hisCall.label": "相手コール",
   "cw.compose.placeholder": "送信するCWを入力… (Enter)",
+  "cw.hisCall.label": "相手のコール",
+  "cw.hisCall.title": "交信中の局です。マクロの ! はこのコールサインを送ります。デコードしたコールが入ります。別の局に応答するときは上書きし、Enter かマクロキーを押してください。",
   "cw.compose.send.label": "送信",
   "cw.send.txLocked": "TXロック中 — この周波数は免許の範囲外です",
   "cw.send.failed": "CW送信に失敗しました",

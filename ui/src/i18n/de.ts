@@ -4675,6 +4675,8 @@ export const DE: PartialCatalog = {
   "cw.macro.myCall.label": "Mein Rufz.",
   "cw.macro.hisCall.label": "Sein Rufz.",
   "cw.compose.placeholder": "CW zum Senden tippen… (Enter)",
+  "cw.hisCall.label": "Sein Rufzeichen",
+  "cw.hisCall.title": "Die Station, mit der du arbeitest. Das ! in einem Makro sendet dieses Rufzeichen. Ein dekodiertes Rufzeichen wird eingetragen; überschreibe es, um jemand anderem zu antworten, dann Enter oder eine Makrotaste drücken.",
   "cw.compose.send.label": "Senden",
   "cw.send.txLocked": "TX gesperrt — diese Frequenz liegt außerhalb Ihrer Lizenzrechte",
   "cw.send.failed": "CW-Senden fehlgeschlagen",
