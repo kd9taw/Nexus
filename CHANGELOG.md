@@ -25,6 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Re-docking the waterfall closes its pop-out window (#263).** Clicking re-dock put the waterfall
   back on the FT8/FT4 screen but left the torn-off window open, so you had two. The outside window
   now closes when you re-dock.
+- **Journey's Personal bests follows your Units setting (#244).** The longest-distance record was
+  always shown in miles. It now reads in kilometres or miles, like every other distance in Nexus.
+  Best miles-per-watt keeps its name and unit, since that is the award's own measure.
 
 ### Security
 

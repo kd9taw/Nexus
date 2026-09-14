@@ -207,6 +207,10 @@ pub struct PersonalBest {
     pub title: String,
     pub value: String,
     pub detail: Option<String>,
+    /// The raw distance, for a best that IS one (#244). `value` stays a miles string for any
+    /// reader that only knows it; the UI formats this through the operator's Units setting,
+    /// the app's rule of native units inside and conversion at the display edge.
+    pub distance_km: Option<f64>,
 }
 
 /// Gentle, opt-in, weekly consistency — never a decaying daily streak.
@@ -1155,6 +1159,7 @@ fn compute_bests(d: &[Derived], power_w: Option<f64>) -> Vec<PersonalBest> {
             title: "Longest distance".into(),
             value: format!("{:.0} mi", km / KM_PER_MI),
             detail: Some(detail_call(x)),
+            distance_km: Some(km),
         });
     }
 
@@ -1169,6 +1174,7 @@ fn compute_bests(d: &[Derived], power_w: Option<f64>) -> Vec<PersonalBest> {
             title: "Strongest signal".into(),
             value: format!("{:+} dB", x.q.rst_rcvd.unwrap()),
             detail: Some(detail_call(x)),
+            distance_km: None,
         });
     }
 
@@ -1186,6 +1192,7 @@ fn compute_bests(d: &[Derived], power_w: Option<f64>) -> Vec<PersonalBest> {
             title: "Most QSOs in a day".into(),
             value: format!("{n}"),
             detail: Some(fmt_day(*day)),
+            distance_km: None,
         });
     }
 
@@ -1201,6 +1208,8 @@ fn compute_bests(d: &[Derived], power_w: Option<f64>) -> Vec<PersonalBest> {
                 title: "Best miles-per-watt".into(),
                 value: format!("{mpw:.0} mi/W"),
                 detail: Some(detail_call(x)),
+                // A ratio, not a distance: miles-per-watt is the named award metric.
+                distance_km: None,
             });
         }
     }
@@ -1468,6 +1477,26 @@ mod tests {
             "8400 mi at 5 W clears 1000 MPW (got {})",
             mpw.current
         );
+    }
+
+    #[test]
+    fn longest_distance_best_carries_km_for_the_units_setting() {
+        // #244: the value was a hard-coded miles string, so the Journey card ignored the
+        // operator's Units setting. The best now carries the raw kilometres and the UI formats
+        // them (the app's rule: native units inside, convert at the display edge).
+        let q = JourneyQso {
+            grid: Some("RE66".into()), // ZL3 grid, ≈ 13,500 km from EN61
+            ..qso("ZL3ABC", Band::B20, ModeClass::Digital, 1)
+        };
+        let j = compute(&[q], "W9XYZ", Some("EN61"), None, false, 1000);
+        let longest = j.bests.iter().find(|b| b.id == "longest").unwrap();
+        let km = longest
+            .distance_km
+            .expect("the longest-distance best carries its distance in km");
+        assert!((12_500.0..14_500.0).contains(&km), "EN61 → RE66 in km, got {km}");
+        // Bests that are not a distance carry none.
+        let busiest = j.bests.iter().find(|b| b.id == "busiest-day").unwrap();
+        assert_eq!(busiest.distance_km, None);
     }
 
     #[test]
