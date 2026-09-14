@@ -307,7 +307,8 @@ export async function sendLogChange(client: OperationClient, change: LogChange):
   try {
     const outcome = await client.change(change)
     if (outcome.outcome === 'rejected')
-      pushToast(outcome.reason === 'contextChanged' ? t('remote.logChangeStale') : t('remote.logChangeFailed'), 'error', 6000)
+      pushToast(outcome.reason === 'contextChanged' ? t('remote.logChangeStale')
+        : outcome.reason === 'clusterUnavailable' ? t('remote.selfSpotNoCluster') : t('remote.logChangeFailed'), 'error', 6000)
     return outcome
   } catch (e) {
     const failure = e instanceof OperationFailure ? e : null

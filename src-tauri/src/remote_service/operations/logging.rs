@@ -172,6 +172,11 @@ impl Work {
 /// `controls.capabilities`, which older hosted pages filter; `actions` never changes.
 pub(super) const CAPABILITIES: [&str; 4] = ["logEdit", "qslMarks", "otaHunt", "otaActivation"];
 
+/// ⛔ Self-spot posts a PUBLIC DX cluster spot from the station's own call and cluster login. It is
+/// built and tested, but off: the station neither advertises nor accepts it until the operator
+/// signs it off and flips this one switch.
+pub(super) const SELF_SPOT: bool = false;
+
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Target {
@@ -218,6 +223,14 @@ pub enum Change {
         reference: String,
     },
     ClearActivation {},
+    /// A public spot of the station's own call, on its current dial, naming its activation. Carries
+    /// what the operator's confirm showed, so it is refused if either has moved since.
+    SelfSpot {
+        reference: String,
+        // `rename_all` above renames variants only, never the fields inside them.
+        #[serde(rename = "dialHz")]
+        dial_hz: u64,
+    },
 }
 
 impl Change {
@@ -230,7 +243,8 @@ impl Change {
             Self::Hunt { .. }
             | Self::ClearHunt {}
             | Self::Activation { .. }
-            | Self::ClearActivation {} => None,
+            | Self::ClearActivation {}
+            | Self::SelfSpot { .. } => None,
         }
     }
     /// An edit states when the contact happened; "station time" only means something for a new entry.
@@ -269,6 +283,13 @@ impl Change {
                         .bytes()
                         .all(|b| b.is_ascii_alphanumeric() || b == b'/' || b == b'-')
             }
+            Self::SelfSpot { reference, dial_hz } => {
+                (1..=250_000_000_000).contains(dial_hz)
+                    && (1..=32).contains(&reference.len())
+                    && reference
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'/' || b == b'-')
+            }
             Self::Delete { .. }
             | Self::QslCard { .. }
             | Self::ClearHunt {}
@@ -282,6 +303,8 @@ impl Change {
 pub(super) enum ChangeEvidence {
     FileSynced,
     StationState,
+    /// Queued for the station's connected DX cluster node(s), which send it.
+    SpotQueued,
 }
 
 #[derive(Clone, Copy, Serialize)]
@@ -289,6 +312,7 @@ pub(super) enum ChangeEvidence {
 pub(super) enum ChangeReason {
     ContextChanged,
     InvalidChange,
+    ClusterUnavailable,
     PersistenceUnconfirmed,
 }
 
@@ -375,6 +399,12 @@ pub(super) enum ChangeWork {
     },
     /// In-memory station context (a hunt), applied under the Engine lock. Nothing to sync.
     State,
+    /// A self-spot composed under the Engine lock, posted only after it is released.
+    Spot {
+        freq_mhz: f64,
+        call: String,
+        comment: String,
+    },
 }
 
 /// Apply under the Engine lock. Only the fields a remote edit carries change; everything else
@@ -409,6 +439,18 @@ pub(super) fn prepare_change(
         Change::ClearActivation {} => {
             engine.clear_activation();
             return Ok(ChangeWork::State);
+        }
+        Change::SelfSpot { reference, dial_hz } => {
+            let (program, active) = engine.activation().ok_or(ChangeReason::InvalidChange)?;
+            // What the operator confirmed must still be true: the same activation, the same dial.
+            if active != *reference || engine.settings().dial_hz() != *dial_hz {
+                return Err(ChangeReason::ContextChanged);
+            }
+            return Ok(ChangeWork::Spot {
+                freq_mhz: *dial_hz as f64 / 1e6,
+                call: engine.settings().mycall.clone(),
+                comment: format!("{program} {active}"),
+            });
         }
         _ => {}
     }
@@ -447,7 +489,8 @@ pub(super) fn prepare_change(
             | Change::Hunt { .. }
             | Change::ClearHunt {}
             | Change::Activation { .. }
-            | Change::ClearActivation {} => false,
+            | Change::ClearActivation {}
+            | Change::SelfSpot { .. } => false,
         };
         if !applied {
             return Err(ChangeReason::ContextChanged);
@@ -495,16 +538,40 @@ fn edited(record: &super::ManualRecord, stored: &QsoRecord) -> QsoRecord {
 
 impl ChangeWork {
     /// Runs with Engine unlocked. Never retries and never writes the log itself.
-    pub(super) fn finish(self) -> ChangeOutcome {
-        let Self::Rewrite {
-            path,
-            expected,
-            count,
-        } = self
-        else {
-            return ChangeOutcome::Applied {
-                evidence: ChangeEvidence::StationState,
-            };
+    /// `post` is used only by a self-spot, and only here, once per receipt.
+    pub(super) fn finish(
+        self,
+        post: impl FnOnce(f64, &str, &str) -> Result<(), String>,
+    ) -> ChangeOutcome {
+        let (path, expected, count) = match self {
+            Self::Rewrite {
+                path,
+                expected,
+                count,
+            } => (path, expected, count),
+            Self::State => {
+                return ChangeOutcome::Applied {
+                    evidence: ChangeEvidence::StationState,
+                }
+            }
+            Self::Spot {
+                freq_mhz,
+                call,
+                comment,
+            } => {
+                return match post(freq_mhz, &call, &comment) {
+                    Ok(()) => ChangeOutcome::Applied {
+                        evidence: ChangeEvidence::SpotQueued,
+                    },
+                    // `post_spot` names the cluster only when no node is connected.
+                    Err(e) if e.contains("cluster") => ChangeOutcome::Rejected {
+                        reason: ChangeReason::ClusterUnavailable,
+                    },
+                    Err(_) => ChangeOutcome::Rejected {
+                        reason: ChangeReason::InvalidChange,
+                    },
+                };
+            }
         };
         let proved = path
             .as_deref()

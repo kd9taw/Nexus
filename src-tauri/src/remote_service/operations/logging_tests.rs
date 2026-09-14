@@ -782,3 +782,142 @@ fn an_activation_the_station_cannot_normalize_is_refused_and_starts_nothing() {
     }
     assert!(f.engine.lock().unwrap().activation().is_none());
 }
+
+/// Record every spot the station would post, instead of reaching the shared cluster outbox.
+fn recorder(f: &mut Fixture) -> Arc<Mutex<Vec<(f64, String, String)>>> {
+    let posted = Arc::new(Mutex::new(Vec::new()));
+    let sink = posted.clone();
+    f.authority.self_spot = Some(Box::new(move |freq, call, comment| {
+        sink.lock()
+            .unwrap()
+            .push((freq, call.to_string(), comment.to_string()));
+        Ok(())
+    }));
+    posted
+}
+
+fn spot(f: &Fixture, reference: &str) -> Request {
+    let dial = f.engine.lock().unwrap().settings().dial_hz();
+    change(
+        f,
+        json!({"kind":"selfSpot","reference":reference,"dialHz":dial}),
+    )
+}
+
+#[test]
+fn self_spot_is_built_disabled_never_advertised_and_refused_before_anything_is_consumed() {
+    let f = Fixture::new();
+    acquire(&f);
+    f.engine
+        .lock()
+        .unwrap()
+        .set_activation("POTA", "US-0001")
+        .unwrap();
+    let state = control_state_version(&f, Instant::now(), 4);
+    assert!(!state["controls"]["capabilities"]
+        .as_array()
+        .unwrap()
+        .contains(&json!("selfSpot")));
+    let request = spot(&f, "US-0001");
+    assert_eq!(run(&f, &request), Err("stationUnsupported"));
+    // Positive control: the refusal consumed no sequence and no window, so the next write still lands.
+    let next = run(&f, &f.command(&state)).unwrap();
+    assert_eq!(next["outcome"], "applied");
+}
+
+#[test]
+fn an_enabled_self_spot_posts_the_station_call_dial_and_reference_exactly_once() {
+    let mut f = Fixture::new();
+    let posted = recorder(&mut f);
+    acquire(&f);
+    f.engine
+        .lock()
+        .unwrap()
+        .set_activation("POTA", "US-0001")
+        .unwrap();
+    assert!(
+        control_state_version(&f, Instant::now(), 4)["controls"]["capabilities"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("selfSpot"))
+    );
+    let (dial, tx) = {
+        let e = f.engine.lock().unwrap();
+        (e.settings().dial_hz(), e.tx_enabled())
+    };
+    let request = spot(&f, "US-0001");
+    let result = run(&f, &request).unwrap();
+    assert_eq!(
+        result,
+        json!({"operation":"logChange","operationId":request.id(),"outcome":"applied","evidence":"spotQueued"})
+    );
+    // A dropped reply is answered from the receipt: a public spot never posts twice.
+    assert_eq!(run(&f, &request).unwrap(), result);
+    let posted = posted.lock().unwrap().clone();
+    assert_eq!(
+        posted,
+        vec![(
+            dial as f64 / 1e6,
+            "W9XYZ".to_string(),
+            "POTA US-0001".to_string()
+        )]
+    );
+    let e = f.engine.lock().unwrap();
+    assert_eq!(e.settings().dial_hz(), dial);
+    assert_eq!(e.tx_enabled(), tx);
+}
+
+#[test]
+fn a_self_spot_whose_context_moved_or_has_no_activation_posts_nothing() {
+    let mut f = Fixture::new();
+    let posted = recorder(&mut f);
+    acquire(&f);
+    // No activation: nothing to spot.
+    let none = run(&f, &spot(&f, "US-0001")).unwrap();
+    assert_eq!(none["reason"], "invalidChange");
+    f.engine
+        .lock()
+        .unwrap()
+        .set_activation("POTA", "US-0001")
+        .unwrap();
+    // The confirm showed another reference, or a dial that has since moved.
+    let other = run(&f, &spot(&f, "US-0002")).unwrap();
+    assert_eq!(other["reason"], "contextChanged");
+    // A fresh request whose confirm showed a dial the station is no longer on.
+    let dial = f.engine.lock().unwrap().settings().dial_hz();
+    let elsewhere = change(
+        &f,
+        json!({"kind":"selfSpot","reference":"US-0001","dialHz":dial + 1000}),
+    );
+    let moved = run(&f, &elsewhere).unwrap();
+    assert_eq!(moved["outcome"], "rejected");
+    assert_eq!(moved["reason"], "contextChanged");
+    // A dial that moves after the page's state was read changes the station's command context, so
+    // the existing freshness rule refuses the request before the self-spot even runs.
+    let stale = spot(&f, "US-0001");
+    {
+        let mut e = f.engine.lock().unwrap();
+        let mut settings = e.settings().clone();
+        settings.dial_mhz += 0.001;
+        e.apply_settings(settings);
+    }
+    assert_eq!(run(&f, &stale), Err("staleContext"));
+    assert!(posted.lock().unwrap().is_empty());
+}
+
+#[test]
+fn a_self_spot_with_no_cluster_connected_is_refused_as_cluster_unavailable() {
+    let mut f = Fixture::new();
+    f.authority.self_spot = Some(Box::new(|_, _, _| {
+        Err("no DX cluster connected — set a cluster host in Settings".into())
+    }));
+    acquire(&f);
+    f.engine
+        .lock()
+        .unwrap()
+        .set_activation("POTA", "US-0001")
+        .unwrap();
+    let result = run(&f, &spot(&f, "US-0001")).unwrap();
+    assert_eq!(result["outcome"], "rejected");
+    assert_eq!(result["reason"], "clusterUnavailable");
+}

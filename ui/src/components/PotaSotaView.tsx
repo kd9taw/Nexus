@@ -150,6 +150,8 @@ export type OtaRemote = {
   clearHunt?: () => void
   startActivation?: (program: string, reference: string) => void
   stopActivation?: () => void
+  /** Public: the parent confirms on every click before anything is sent. */
+  selfSpot?: () => void
 }
 
 export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observation, remote }: Props) {
@@ -503,6 +505,9 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
               />
             </span>
             {/* Ends the ACTIVATION — the park stamp on what you log — never a transmission. */}
+            {observed && remote?.selfSpot && <button type="button" className="pota-hunt-clear" onClick={() => remote.selfSpot?.()}>
+              {t('remote.selfSpot')}
+            </button>}
             {(!observed || remote?.stopActivation) && <button type="button" className="pota-hunt-clear" onClick={() => void handleStopActivation()} title={t('ota.activation.stop.title')}>
               <X size={13} aria-hidden="true" /> {t('ota.activation.stop.label')}
             </button>}

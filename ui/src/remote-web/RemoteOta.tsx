@@ -2,6 +2,8 @@ import { useContext, useEffect, useState } from 'react'
 import { PotaSotaView, type OtaRemote, type OtaSpotClickArg } from '../components/PotaSotaView'
 import type { ObservedOta } from '../otaHunt'
 import { sendLogChange, useLogChange, useRemoteOperations } from './operations'
+import { confirmDialog } from '../confirm'
+import { pushToast } from '../toast'
 import type { AppSnapshot } from '../types'
 import { useStationData } from '../stationAccess'
 import { t } from '../i18n'
@@ -17,6 +19,7 @@ const EMPTY: ObservedOta = { feeds: [
 export function RemoteOta({ snap, onHunt }: { snap: AppSnapshot; onHunt?: (arg: OtaSpotClickArg) => void }) {
   const source = useContext(RemoteCollectionsContext), available = useStationData()
   const client = useRemoteOperations(), canHunt = useLogChange('otaHunt'), canActivate = useLogChange('otaActivation')
+  const canSelfSpot = useLogChange('selfSpot')
   const supported = source?.client.supports(OTA_COMMAND) ?? false
   const [capture, setCapture] = useState<{ value: ObservedOta; at: number } | null>(null)
   const [phase, setPhase] = useState<'loading' | 'ready' | 'unavailable'>('loading')
@@ -58,6 +61,17 @@ export function RemoteOta({ snap, onHunt }: { snap: AppSnapshot; onHunt?: (arg: 
       startActivation: (program: string, reference: string) =>
         void sendLogChange(client, { kind: 'activation', program: program as 'POTA' | 'SOTA', reference }).then(reread),
       stopActivation: () => void sendLogChange(client, { kind: 'clearActivation' }).then(reread),
+    } : {}),
+    ...(canSelfSpot && observed.activation.reference ? {
+      // A public post from the station's own call: ask on every click, never remember the answer,
+      // and send exactly the reference and dial the question showed.
+      selfSpot: () => void (async () => {
+        const reference = observed.activation.reference ?? '', dialHz = Math.round(snap.radio.dialMhz * 1e6)
+        if (!(await confirmDialog({ title: t('remote.selfSpotConfirm.title'), confirmLabel: t('remote.selfSpotConfirm.post'),
+          body: t('remote.selfSpotConfirm.body', { reference, freq: (dialHz / 1e6).toFixed(4) }) }))) return
+        const outcome = await sendLogChange(client, { kind: 'selfSpot', reference, dialHz })
+        if (outcome?.outcome === 'applied') pushToast(t('remote.selfSpotPosted'), 'success')
+      })(),
     } : {}),
   } : undefined
   return <div className="remote-insights-view remote-ota-view">

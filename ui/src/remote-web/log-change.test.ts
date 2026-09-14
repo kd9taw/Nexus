@@ -86,6 +86,23 @@ it('starts or ends your own activation with no row target', () => {
   expect(logChangeCapability({ kind: 'clearActivation' })).toBe('otaActivation')
 })
 
+it('self-spots only with the activation reference and dial the operator confirmed', () => {
+  const spot = { kind: 'selfSpot', reference: 'US-0001', dialHz: 14_285_000 }
+  expect(logChange(spot)).toEqual(spot)
+  for (const bad of [
+    { ...spot, dialHz: 0 }, { ...spot, dialHz: 14.285 }, { ...spot, dialHz: 250_000_000_001 }, { ...spot, reference: 'US 0001' },
+    { ...spot, call: 'W1AW' }, { ...spot, comment: 'QRV' }, { kind: 'selfSpot', reference: 'US-0001' }, { ...spot, target }
+  ])
+    expect(() => logChange(bad)).toThrow()
+  expect(logChangeCapability(spot as never)).toBe('selfSpot')
+  const operationId = id()
+  for (const value of [
+    { operation: 'logChange', operationId, outcome: 'applied', evidence: 'spotQueued' },
+    { operation: 'logChange', operationId, outcome: 'rejected', reason: 'clusterUnavailable' }
+  ])
+    expect(operationValue(value)).toEqual(value)
+})
+
 it('accepts only the bounded change outcomes a station reports', () => {
   const operationId = id()
   for (const value of [

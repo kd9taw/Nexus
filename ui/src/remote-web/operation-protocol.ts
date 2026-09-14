@@ -38,15 +38,18 @@ export type LogChange =
   /** Station context too: while it is on, the station stamps your reference on every contact it logs. */
   | { kind: 'activation'; program: 'POTA' | 'SOTA'; reference: string }
   | { kind: 'clearActivation' }
+  /** A public DX cluster spot of the station's own call. Carries the reference and dial the confirm
+   * showed, so the station refuses it if either has moved since. */
+  | { kind: 'selfSpot'; reference: string; dialHz: number }
 /** Station hints for log changes. They ride in `controls.capabilities`, which every hosted page
  * since operation v3 filters, so a newer station can offer them without breaking an older page. */
-export const LOG_CAPABILITIES = ['logEdit', 'qslMarks', 'otaHunt', 'otaActivation'] as const
+export const LOG_CAPABILITIES = ['logEdit', 'qslMarks', 'otaHunt', 'otaActivation', 'selfSpot'] as const
 export type LogCapability = (typeof LOG_CAPABILITIES)[number]
 export const logChangeCapability = (change: LogChange): LogCapability =>
   ({ edit: 'logEdit', delete: 'logEdit', qslSent: 'qslMarks', qslCard: 'qslMarks', hunt: 'otaHunt', clearHunt: 'otaHunt',
-    activation: 'otaActivation', clearActivation: 'otaActivation' } as const)[change.kind]
-const CHANGE_EVIDENCE = ['fileSynced', 'stationState'] as const
-const CHANGE_REFUSALS = ['contextChanged', 'invalidChange'] as const
+    activation: 'otaActivation', clearActivation: 'otaActivation', selfSpot: 'selfSpot' } as const)[change.kind]
+const CHANGE_EVIDENCE = ['fileSynced', 'stationState', 'spotQueued'] as const
+const CHANGE_REFUSALS = ['contextChanged', 'invalidChange', 'clusterUnavailable'] as const
 export type LogChangeOutcome = { operation: 'logChange'; operationId: string } & (
   | { outcome: 'applied'; evidence: (typeof CHANGE_EVIDENCE)[number] }
   | { outcome: 'rejected'; reason: (typeof CHANGE_REFUSALS)[number] }
@@ -210,7 +213,8 @@ export function logChange(raw: unknown): LogChange {
   const shapes: Record<string, string[]> = { edit: ['kind', 'target', 'record'], delete: ['kind', 'target'],
     qslSent: ['kind', 'target', 'via'], qslCard: ['kind', 'target', 'received'],
     hunt: ['kind', 'call', 'program', 'reference'], clearHunt: ['kind'],
-    activation: ['kind', 'program', 'reference'], clearActivation: ['kind'] }
+    activation: ['kind', 'program', 'reference'], clearActivation: ['kind'],
+    selfSpot: ['kind', 'reference', 'dialHz'] }
   if (typeof c.kind !== 'string' || !Object.prototype.hasOwnProperty.call(shapes, c.kind)) invalid()
   object(c, shapes[c.kind as string])
   // A row change names the exact row (its shape requires the target); a hunt names none.
@@ -225,6 +229,9 @@ export function logChange(raw: unknown): LogChange {
   // The wire grammar only; the station normalizes the reference for its program and may refuse it.
   if ((c.kind === 'hunt' || c.kind === 'activation') && ((c.program !== 'POTA' && c.program !== 'SOTA') ||
     typeof c.reference !== 'string' || !/^[A-Za-z0-9/-]{1,32}$/.test(c.reference)))
+    invalid()
+  if (c.kind === 'selfSpot' && (typeof c.reference !== 'string' || !/^[A-Za-z0-9/-]{1,32}$/.test(c.reference) ||
+    !integer(c.dialHz) || c.dialHz < 1 || c.dialHz > 250_000_000_000))
     invalid()
   // An edit states when the contact happened; "station time" only means something for a new entry.
   if (c.kind === 'edit' && manualRecord(c.record).whenUnix === null) invalid()

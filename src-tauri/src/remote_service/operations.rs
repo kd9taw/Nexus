@@ -303,8 +303,30 @@ pub struct Authority {
     transmit_revocations: Mutex<BTreeSet<String>>,
     #[cfg(test)]
     before_sync: Option<Box<dyn Fn() + Send + Sync>>,
+    /// Tests post self-spots here instead of the shared cluster outbox, and setting it enables the
+    /// otherwise disabled self-spot for that test alone.
+    #[cfg(test)]
+    self_spot: Option<SpotPoster>,
 }
+#[cfg(test)]
+type SpotPoster = Box<dyn Fn(f64, &str, &str) -> Result<(), String> + Send + Sync>;
 impl Authority {
+    /// Self-spot posts publicly from the station's own call and cluster login. It stays off until
+    /// the operator signs it off (`logging::SELF_SPOT`).
+    fn self_spot_enabled(&self) -> bool {
+        #[cfg(test)]
+        if self.self_spot.is_some() {
+            return true;
+        }
+        logging::SELF_SPOT
+    }
+    fn post_spot(&self, freq_mhz: f64, call: &str, comment: &str) -> Result<(), String> {
+        #[cfg(test)]
+        if let Some(post) = &self.self_spot {
+            return post(freq_mhz, call, comment);
+        }
+        crate::post_spot(freq_mhz, call.into(), comment.into())
+    }
     fn revoke_execution(&self) {
         self.hardware.revoke();
         self.transmit.revoke();
@@ -640,6 +662,9 @@ impl Authority {
                 if c.grants.contains(device) {
                     capabilities.push("qsoLogging");
                     capabilities.extend(logging::CAPABILITIES);
+                    if self.self_spot_enabled() {
+                        capabilities.push("selfSpot");
+                    }
                 }
                 value["txArmed"] = json!(owned && tx_owned);
                 if ft_available
@@ -888,6 +913,12 @@ impl Authority {
                     return Err("remoteBusy");
                 }
                 if let Request::LogChange { change, .. } = request {
+                    // Refused like an older station would, before the sequence advances.
+                    if matches!(**change, logging::Change::SelfSpot { .. })
+                        && !self.self_spot_enabled()
+                    {
+                        return Err("stationUnsupported");
+                    }
                     if !change.valid(super::now_ms() / 1000) {
                         return Err("invalidRecord");
                     }
@@ -902,7 +933,10 @@ impl Authority {
                         probe();
                     }
                     let outcome = match prepared {
-                        Ok(work) => work.finish(),
+                        // Engine is released; a spot is posted only now, and only once per receipt.
+                        Ok(work) => {
+                            work.finish(|freq, call, comment| self.post_spot(freq, call, comment))
+                        }
                         Err(reason) => logging::ChangeOutcome::Rejected { reason },
                     };
                     let value = logging::change_value(request.id(), &outcome);
