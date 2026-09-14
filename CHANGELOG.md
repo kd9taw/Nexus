@@ -5,6 +5,16 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+
+- **Encrypted connections refuse a malformed setup from the server.** Nexus's secure-connection
+  library (rustls) is updated to 0.23.45 for RUSTSEC-2026-0285: during setup, a server could send
+  messages in the clear that should have been encrypted, and Nexus would not hang up. The
+  connection was still verified end to end, so nothing could be read, changed or faked, but it now
+  refuses that setup, as the standard requires.
+
 ## [1.12.0] — 2026-09-14
 
 ### Added
