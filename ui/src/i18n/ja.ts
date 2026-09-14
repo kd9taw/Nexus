@@ -228,7 +228,7 @@ export const JA: PartialCatalog = {
   "remote.codeExpires": "このコードの有効期限は10分です。",
   "remote.approvePairing": "このアカウントとのペアリングを承認",
   "remote.cancelPairing": "ペアリングをキャンセル",
-  "remote.restartHint": "Remote は Nexus を再起動してもオンのままです。Nexus の終了時にオンだった場合は、自動的にオンに戻り再接続します。承認済みブラウザーには、FT8/FT4 の送信を含め、許可した内容がそのまま保持されます。再起動後は、ブラウザーで TX On を押すまで送信は常にオフです。",
+  "remote.restartHint": "Remote は Nexus を再起動してもオンのままです。Nexus の終了時にオンだった場合は、自動的にオンに戻り再接続します。承認済みブラウザーには、FT8/FT4 の送信を含め、許可した内容がそのまま保持されます。再起動後は、ブラウザーで TX On を押すまで送信は常にオフです。Remote をオフにしても接続が切れるだけで、再びオンにすると承認済みブラウザーの許可が元に戻ります。",
   "remote.disable": "Remote をオフにする",
   "remote.enable": "Remote をオンにする",
   "remote.autostartOffer": "このパソコンの再起動後に Remote を再開するには、Nexus も起動する必要があります。このパソコンにサインインしたときに Nexus を起動しますか？",

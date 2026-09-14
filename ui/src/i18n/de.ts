@@ -223,7 +223,7 @@ export const DE: PartialCatalog = {
   "remote.codeExpires": "Dieser Code läuft nach zehn Minuten ab.",
   "remote.approvePairing": "Diese Kontokopplung bestätigen",
   "remote.cancelPairing": "Kopplung abbrechen",
-  "remote.restartHint": "Remote bleibt bei einem Neustart von Nexus eingeschaltet: War es beim Beenden an, schaltet es sich wieder ein und verbindet sich neu. Freigegebene Browser behalten, was du erlaubt hast, auch FT8/FT4-Senden. Nach einem Neustart ist das Senden immer aus, bis der Browser TX On drückt.",
+  "remote.restartHint": "Remote bleibt bei einem Neustart von Nexus eingeschaltet: War es beim Beenden an, schaltet es sich wieder ein und verbindet sich neu. Freigegebene Browser behalten, was du erlaubt hast, auch FT8/FT4-Senden. Nach einem Neustart ist das Senden immer aus, bis der Browser TX On drückt. Remote ausschalten trennt nur die Verbindung: Beim Wiedereinschalten erhält jeder freigegebene Browser zurück, was er hatte.",
   "remote.disable": "Remote ausschalten",
   "remote.enable": "Remote einschalten",
   "remote.autostartOffer": "Remote kann nach einem Neustart dieses Computers nur zurückkommen, wenn auch Nexus startet. Nexus starten, wenn du dich an diesem Computer anmeldest?",

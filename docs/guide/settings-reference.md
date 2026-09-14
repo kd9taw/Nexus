@@ -107,8 +107,10 @@ permission back. Without any of these it can watch the station but not change it
   mode transmits remotely.
 
 No audio reaches the browser. **Revoke browser approval** removes one browser.
-**Turn off Remote** disconnects every browser and clears what they were allowed; turning
-Remote on again does not bring those permissions back. **Revoke station access**
+**Turn off Remote** only pauses: it disconnects every browser, and turning Remote on again
+gives each still-approved browser back what it had, with the TX switch off. **End remote
+control and clear permissions** and **Revoke browser approval** clear permissions for good.
+**Revoke station access**
 disconnects the station and removes its Remote pairing; pair again to reconnect.
 
 ---

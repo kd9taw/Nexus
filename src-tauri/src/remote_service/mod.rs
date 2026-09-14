@@ -107,9 +107,13 @@ enum Persist {
     Bound(Binding, Option<vault::State>),
     /// Remote was turned on and is connecting.
     Enabled,
-    /// Remote was turned off: Turn off Remote, Revoke station access, a cancelled pairing, or the
-    /// connection refusing itself. The permissions it cleared are remembered as cleared.
+    /// Remote went off for a reason that ends access: Revoke station access, a cancelled pairing,
+    /// or the connection refusing itself. The permissions it cleared are remembered as cleared.
     Off,
+    /// Turn off Remote. It only pauses (operator decision 2026-09-14): every browser is
+    /// disconnected and every live permission cleared, but the remembered grants stay, so Turn on
+    /// or a restart restores them for browsers still approved at the same approval.
+    Paused,
     /// A local decision cleared every browser permission (take over, revoke a browser).
     ClearGrants,
     /// One browser's grants changed. `approval` is the approval expiry the change was made against:
@@ -167,6 +171,7 @@ impl Remembered {
                 state.enabled = false;
                 state.grants.clear();
             }
+            Persist::Paused => state.enabled = false,
             Persist::ClearGrants => state.grants.clear(),
             Persist::Browser {
                 device_id,
@@ -527,8 +532,13 @@ impl Service {
             ) {
                 control.stop();
                 // Remembered here rather than in the controller: this stop is immediate even when
-                // the command queue is full, and what a restart remembers must match it.
-                control.remember(Persist::Off);
+                // the command queue is full, and what a restart remembers must match it. The stop
+                // clears every live permission either way; only Turn off keeps the remembered ones.
+                control.remember(if matches!(action, Action::Disable {}) {
+                    Persist::Paused
+                } else {
+                    Persist::Off
+                });
             }
             // A refused Enable must not leave enabled authority behind. Stop
             // actions remain immediate even when the command queue is full.

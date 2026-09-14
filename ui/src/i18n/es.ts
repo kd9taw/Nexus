@@ -238,7 +238,7 @@ export const ES: PartialCatalog = {
   "remote.codeExpires": "Este código caduca a los diez minutos.",
   "remote.approvePairing": "Aprobar esta vinculación de cuenta",
   "remote.cancelPairing": "Cancelar vinculación",
-  "remote.restartHint": "Remote sigue activado cuando Nexus se reinicia: si estaba activado al cerrar Nexus, vuelve a activarse y a conectarse solo. Los navegadores autorizados conservan lo que permitiste, incluida la transmisión FT8/FT4. Tras un reinicio, la transmisión siempre está desactivada hasta que el navegador pulsa TX On.",
+  "remote.restartHint": "Remote sigue activado cuando Nexus se reinicia: si estaba activado al cerrar Nexus, vuelve a activarse y a conectarse solo. Los navegadores autorizados conservan lo que permitiste, incluida la transmisión FT8/FT4. Tras un reinicio, la transmisión siempre está desactivada hasta que el navegador pulsa TX On. Desactivar Remote solo desconecta: al volver a activarlo, cada navegador autorizado recupera lo que tenía.",
   "remote.disable": "Desactivar Remote",
   "remote.enable": "Activar Remote",
   "remote.autostartOffer": "Remote solo puede volver después de reiniciar este ordenador si Nexus también se inicia. ¿Iniciar Nexus cuando inicies sesión en este ordenador?",

@@ -926,6 +926,10 @@ async fn fake_cloud() -> FakeCloud {
                     // The service writes a new approval, and with it the approval generation.
                     *served.lock().unwrap() = device_list(1, APPROVED_UNTIL);
                     ("200 OK", r#"{"ok":true}"#.to_string())
+                } else if head.contains("/native/revoke-device ") {
+                    // A revoked browser's expiry becomes "now", so the service stops listing it.
+                    *served.lock().unwrap() = json!({"devices":[]}).to_string();
+                    ("200 OK", r#"{"ok":true}"#.to_string())
                 } else if head.contains("/native/revoke ") {
                     ("200 OK", r#"{"ok":true}"#.to_string())
                 } else {
@@ -1224,7 +1228,7 @@ async fn approving_a_browser_grants_control_and_logging_and_transmit_only_when_t
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn an_approval_given_while_remote_is_off_applies_at_turn_on_and_turn_off_still_wins() {
+async fn an_approval_given_while_remote_is_off_applies_at_turn_on() {
     let cloud = fake_cloud().await;
     let vault = paired_vault(&cloud.origin);
     let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
@@ -1249,19 +1253,74 @@ async fn an_approval_given_while_remote_is_off_applies_at_turn_on_and_turn_off_s
     })
     .await;
     assert!(transmitter_idle(&engine));
+}
 
-    service.action(Action::Disable {}).await.unwrap();
-    service.action(Action::Enable {}).await.unwrap();
-    settle().await;
-    let status = service.action(Action::Refresh {}).await.unwrap();
-    assert!(on(&status), "positive control: Remote is back on");
-    assert!(
-        status.station_permissions.is_empty()
-            && status.logging_permissions.is_empty()
-            && status.transmit_permissions.is_empty(),
-        "Turn off Remote cleared the permissions, and turning on again does not restore them: {}",
-        serde_json::to_string(&status).unwrap()
-    );
+/// Operator decision 2026-09-14: Turn off Remote PAUSES. Turning it back on restores what each
+/// still-approved browser had (transmit only where granted). Revoking a browser, and End remote
+/// control (take over), still clear. The TX-enable latch is off at every step, and nothing keys.
+#[tokio::test(flavor = "multi_thread")]
+async fn turn_off_pauses_but_revoking_a_browser_or_ending_remote_control_clears() {
+    for case in [
+        "positive control: turn off, turn on",
+        "turn off, revoke the browser, turn on",
+        "end remote control, turn off, turn on",
+    ] {
+        let cloud = fake_cloud().await;
+        let vault = paired_vault(&cloud.origin);
+        let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
+        let service = launch(&cloud, &vault, &engine);
+        eventually(&service, "the pairing loaded", |s| s.station_id.is_some()).await;
+        service.action(Action::Enable {}).await.unwrap();
+        pending_browser(&cloud);
+        service.action(Action::Refresh {}).await.unwrap();
+        let granted = approve(&service, true).await;
+        assert_eq!(granted.transmit_permissions, [BROWSER], "{case}: granted");
+        assert!(transmitter_idle(&engine), "{case}");
+
+        if case.starts_with("end remote control") {
+            service.action(Action::TakeOverLogging {}).await.unwrap();
+        }
+        let off = service.action(Action::Disable {}).await.unwrap();
+        assert!(!on(&off), "{case}: Remote is off");
+        assert!(
+            off.station_permissions.is_empty() && off.transmit_permissions.is_empty(),
+            "{case}: nothing is live while Remote is off"
+        );
+        assert!(transmitter_idle(&engine), "{case}");
+        if case.contains("revoke the browser") {
+            service
+                .action(Action::Device {
+                    device_id: BROWSER.into(),
+                    approve: false,
+                    transmit: false,
+                })
+                .await
+                .unwrap();
+        }
+        service.action(Action::Enable {}).await.unwrap();
+
+        let status = if case.starts_with("positive") {
+            eventually(&service, "the paused grants came back", |s| {
+                s.station_permissions == [BROWSER]
+                    && s.logging_permissions == [BROWSER]
+                    && s.transmit_permissions == [BROWSER]
+            })
+            .await
+        } else {
+            settle().await;
+            let status = service.action(Action::Refresh {}).await.unwrap();
+            assert!(
+                status.station_permissions.is_empty()
+                    && status.logging_permissions.is_empty()
+                    && status.transmit_permissions.is_empty(),
+                "{case}: nothing comes back: {}",
+                serde_json::to_string(&status).unwrap()
+            );
+            status
+        };
+        assert!(on(&status), "{case}: Remote is back on");
+        assert!(transmitter_idle(&engine), "{case}: the latch is still off");
+    }
 }
 
 /// Operator decision 2026-09-14: approving the first pairing turns Remote on, the same way Turn on

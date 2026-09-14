@@ -164,6 +164,7 @@ it('tells the operator approved browsers keep their access across a restart and 
   await screen.findByRole('button', { name: 'Turn off Remote' })
   expect(screen.getByText(/stays on when Nexus restarts/).textContent).toMatch(/FT8\/FT4 transmit included/)
   expect(screen.getByText(/stays on when Nexus restarts/).textContent).toMatch(/always off after a restart until the browser presses TX On/)
+  expect(screen.getByText(/stays on when Nexus restarts/).textContent).toMatch(/Turn off Remote only disconnects/)
   // Beside the transmit permission itself, not only in the general hint.
   expect(screen.getByText(/FT8\/FT4 transmit also needs station controls/).textContent).toMatch(/stays allowed across restarts until you revoke it/)
   expect(screen.getByText(/Approving a browser gives it station controls/).textContent).toMatch(/To limit a browser, revoke them here/)

@@ -302,7 +302,7 @@ export const EN = {
   "remote.codeExpires": "This code expires after ten minutes.",
   "remote.approvePairing": "Approve this account pairing",
   "remote.cancelPairing": "Cancel pairing",
-  "remote.restartHint": "Remote stays on when Nexus restarts: if it was on when Nexus closed, it turns itself back on and reconnects. Approved browsers keep what you allowed, FT8/FT4 transmit included. Transmit is always off after a restart until the browser presses TX On.",
+  "remote.restartHint": "Remote stays on when Nexus restarts: if it was on when Nexus closed, it turns itself back on and reconnects. Approved browsers keep what you allowed, FT8/FT4 transmit included. Transmit is always off after a restart until the browser presses TX On. Turn off Remote only disconnects: turning it back on restores what each approved browser had.",
   "remote.disable": "Turn off Remote",
   "remote.enable": "Turn on Remote",
   "remote.autostartOffer": "Remote can only come back after this computer restarts if Nexus starts too. Start Nexus when you sign in to this computer?",

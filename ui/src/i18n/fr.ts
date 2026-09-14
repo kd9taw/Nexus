@@ -238,7 +238,7 @@ export const FR: PartialCatalog = {
   "remote.codeExpires": "Ce code expire après dix minutes.",
   "remote.approvePairing": "Approuver cette association au compte",
   "remote.cancelPairing": "Annuler l’association",
-  "remote.restartHint": "Remote reste activé quand Nexus redémarre : s’il était activé à la fermeture de Nexus, il se réactive et se reconnecte tout seul. Les navigateurs autorisés gardent ce que vous avez permis, émission FT8/FT4 comprise. Après un redémarrage, l’émission est toujours coupée jusqu’à ce que le navigateur appuie sur TX On.",
+  "remote.restartHint": "Remote reste activé quand Nexus redémarre : s’il était activé à la fermeture de Nexus, il se réactive et se reconnecte tout seul. Les navigateurs autorisés gardent ce que vous avez permis, émission FT8/FT4 comprise. Après un redémarrage, l’émission est toujours coupée jusqu’à ce que le navigateur appuie sur TX On. Désactiver Remote ne fait que déconnecter : en le réactivant, chaque navigateur autorisé retrouve ce qu’il avait.",
   "remote.disable": "Désactiver Remote",
   "remote.enable": "Activer Remote",
   "remote.autostartOffer": "Remote ne peut revenir après un redémarrage de cet ordinateur que si Nexus démarre aussi. Démarrer Nexus quand vous ouvrez une session sur cet ordinateur ?",
