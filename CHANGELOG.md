@@ -15,6 +15,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   connection was still verified end to end, so nothing could be read, changed or faked, but it now
   refuses that setup, as the standard requires.
 
+### Fixed
+
+- **Brief command-prompt windows no longer flash up on Windows.** A few seconds after Nexus
+  started, and again every ten minutes, three or four black command-prompt boxes could pop up and
+  vanish. That was Nexus checking your PC's clock settings (the Windows Time service, its
+  registry values, and whether another time program is running). It still checks them, just
+  without a window. Every other helper program Nexus starts, such as Hamlib's rigctld and TQSL,
+  now opens without a window by the same route, so a new one cannot bring the flashes back.
+
 ## [1.12.0] — 2026-09-14
 
 ### Added

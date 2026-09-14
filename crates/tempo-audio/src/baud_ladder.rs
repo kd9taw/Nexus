@@ -1228,15 +1228,10 @@ fn rigctl_read(
     commands: &[&str],
 ) -> Result<RigctlOutput, std::io::Error> {
     tempo_core::applog::info("proc", "run rigctl (baud probe)");
-    let mut cmd = std::process::Command::new(crate::rigctld_proc::resolve_rigctl());
+    // No console window on Windows.
+    let mut cmd = tempo_core::process::command(crate::rigctld_proc::resolve_rigctl());
     cmd.args(probe_args(port, baud, rig_model, keying, commands));
     cmd.stdin(std::process::Stdio::null());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
     match cmd.output() {
         // The exit status is not consulted: rigctl exits 0 when a command failed but the port
         // opened, and 2 both for a port it could not open AND for a backend whose `rig_open`
