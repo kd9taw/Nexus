@@ -49,9 +49,7 @@ fn queue(
         before,
         value,
         connection,
-        s.authority
-            .permit(Instant::now() + Duration::from_secs(5))
-            .unwrap(),
+        s.authority.permit(unexpired_deadline()).unwrap(),
     )
 }
 
@@ -223,9 +221,7 @@ fn remote_power_keeps_each_native_mode_ceiling_and_rechecks_a_lowered_limit() {
                 0.1,
                 1.0,
                 connection,
-                s.authority
-                    .permit(Instant::now() + Duration::from_secs(5))
-                    .unwrap(),
+                s.authority.permit(unexpired_deadline()).unwrap(),
             )
             .unwrap();
         let request = s.engine.take_remote_radio().unwrap();
@@ -242,9 +238,7 @@ fn remote_power_keeps_each_native_mode_ceiling_and_rechecks_a_lowered_limit() {
                 cap,
                 1.0,
                 connection,
-                s.authority
-                    .permit(Instant::now() + Duration::from_secs(5))
-                    .unwrap(),
+                s.authority.permit(unexpired_deadline()).unwrap(),
             )
             .unwrap();
         let request = s.engine.take_remote_radio().unwrap();

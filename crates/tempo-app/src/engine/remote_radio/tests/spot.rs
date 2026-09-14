@@ -21,9 +21,7 @@ fn queue(
         band,
         call,
         connection,
-        s.authority
-            .permit(Instant::now() + Duration::from_secs(5))
-            .unwrap(),
+        s.authority.permit(unexpired_deadline()).unwrap(),
     )
 }
 

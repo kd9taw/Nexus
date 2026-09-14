@@ -19,9 +19,7 @@ fn queue(s: &mut Station, expected: u32, hz: u32) -> Result<Completion, Reason> 
         expected,
         hz,
         connection,
-        s.authority
-            .permit(Instant::now() + Duration::from_secs(5))
-            .unwrap(),
+        s.authority.permit(unexpired_deadline()).unwrap(),
     )
 }
 
