@@ -20,6 +20,7 @@ import { RemoteObservationContext } from './amplifier-observation'
 import { initialState, startMonitor } from '../remote-monitor/session'
 import { APPLICATION_TIMEOUT_MS } from './application-protocol'
 import type { HostedConnection } from './client'
+import { useNeedAlerts } from './useNeedAlerts'
 import '../cockpit-panes.css'
 import './application.css'
 
@@ -97,7 +98,8 @@ export function BrowserApplication({ connection, disconnect }: { connection: Hos
   }, [client, phase])
   const stale = phase !== 'ready' || client.age('get_snapshot') >= APPLICATION_TIMEOUT_MS
   useEffect(() => { if (stale) tuning?.cancel() }, [stale, tuning])
-  const status = <SessionStatus client={connection.operations} stale={stale} disconnect={disconnect} display={display} />
+  const alerts = useNeedAlerts(collections, !stale && client.supports(QUERY_COMMAND), boot?.settings ?? null)
+  const status = <SessionStatus client={connection.operations} stale={stale} disconnect={disconnect} display={display} alerts={alerts} />
   if (!boot) return <div className="app remote-monitor-app remote-service-app">
     {status}
     <main className="rm-scroll"><div className="rm-content">
