@@ -162,10 +162,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   time you use an intent, and whatever you had set before this change is kept for the intent you
   were on.
 
-- **"2-D" shows a flat map.** Leaving the 3-D globe opened the 2-D map in its own Globe projection,
-  which looks almost the same, so the switch seemed to do nothing. 2-D now opens the World map; the
-  Globe projection is still there to pick. Layers sits top-left in both modes and folds away the same
-  way Conditions does.
+- **One map picker: Globe, 3D, Flat or Beam.** Connect had a 2D/3D switch and, inside 2D, its own
+  Globe/Beam/World buttons — so leaving the 3-D globe could land on a 2-D globe that looked the same,
+  and the switch seemed to do nothing. The four views now sit in one row in the same place whichever
+  is showing; Globe is where a new view starts, and each view remembers the one you picked. Layers
+  sits top-left on every map and folds away the same way Conditions does.
 
 - **The map costs far less CPU.** The 3-D globe drew every frame even with nothing moving; it now
   draws only when something changes, and wakes on drag, zoom, spin, new data or a resize (the arc

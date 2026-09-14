@@ -1,6 +1,5 @@
-**This is a beta.** It reaches you only if you turned on Settings ▸ App updates ▸ Receive beta
-(pre-release) updates — nobody is auto-updated onto it. If something is wrong, say so on GitHub and
-I'll fix it before 1.12.0 goes out properly.
+If you're coming from 1.10.3, this release also carries everything from the 1.11 betas — built-in
+JS8 among it. That's at the end.
 
 **Contests beyond Field Day.**
 
@@ -76,9 +75,9 @@ which rig.
   map bigger. Reset layout puts everything back the way it started.
 - **Each view keeps its own map.** Chase DX, POTA/SOTA and the others each remember their own
   projection, layers and 2-D or 3-D, so a trip to POTA/SOTA no longer resets your Chase DX map.
-- **2-D means a flat map.** Switching off the 3-D globe used to land on a 2-D globe that looked the
-  same, so the switch seemed to do nothing.
-- **Layers folds away** like Conditions, and sits in the same corner in 2-D and 3-D.
+- **One map picker: Globe, 3D, Flat or Beam.** The separate 2D/3D switch is gone — the four views
+  sit in one row, Globe is where a new view starts, and each view remembers the one you picked.
+- **Layers folds away** like Conditions, and sits in the same corner whichever map you're on.
 - **Far less CPU.** The 3-D globe used to redraw constantly even with nothing moving, and the 2-D
   map redrew every country outline every few hundred milliseconds. Both now sit near idle until
   something on them changes. If Connect made your laptop fan spin up, try it again.
@@ -121,5 +120,30 @@ which rig.
   audio is arriving at all.
 - On Xiegu radios, trust the radio's own SWR meter — Nexus reads it on an Icom scale, so a G90 at
   1.2:1 can show 6:1. The rig guide now says so.
+
+**New since 1.10.3 — first shipped in the 1.11 betas**
+
+- **JS8 is built in, and it's on.** Nexus decodes and transmits JS8 itself — no second program, no
+  rig sharing, no audio routing. Open it and it tunes the JS8 watering hole for your band and starts
+  decoding all four speeds at once; nothing transmits until you arm it. CQ and the heartbeat repeat
+  on their own with the countdown on the button, directed messages, relay and the inbox work as in
+  JS8Call, and the station list shows distance, heading and whether you've worked them. Fast and
+  Turbo have had the least air time — reports on those are welcome.
+- **The manual has pictures now** — all 22 chapters illustrated, and a stack of out-of-date claims
+  corrected along the way.
+- **Four things about your credentials, worth reading even if nothing looked wrong.** A rejected
+  QRZ Logbook or ClubLog upload could write your API key into `log.adi` (and from there into
+  exports); Nexus no longer does, and cleans it out of the log and its backups on upgrade.
+  `settings.json` is now owner-only. Upgrading no longer destroys a stored Cloudlog key when the
+  keychain isn't reachable. The QRZ callbook row only goes green when a lookup proves your
+  subscription.
+- The **FT-710 can draw its own band scope**; a **POTA activity map in FT mode** with an optional
+  alert for new activations; **Hound is one click** on the FT8 screen, with a warning when a
+  DXpedition runs SuperFox; a per-radio switch to **hold FM-D while receiving SSTV**.
+- Fixed: turning Hound off mid-QSO could strand the contact; the RTTY sequencer couldn't log Winter
+  Field Day; your log didn't record which callsign made each contact, so special-event uploads went
+  under the wrong call; the satellite catalogue served years-old orbits; CW and SSB park activations
+  were missing for digital-only stations; a pasted upload code with a stray space failed silently;
+  and upload rejections from Cloudlog, Wavelog and LoTW now say why.
 
 73 — KD9TAW
