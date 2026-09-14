@@ -59,6 +59,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and where to find it, a value that isn't a number gets a note right under the field, and Nexus
   no longer sends an upload with one. (#226)
 
+- **A Wavelog or Cloudlog upload that is refused is no longer retried over and over.** Every
+  Cloudlog/Wavelog error used to count as temporary, so a contact the server refused (a wrong
+  key, a callsign in the station profile id, a URL that isn't the API) was sent again and again
+  and failed the same way each time. Now only "couldn't reach it" and server errors are retried.
+  A refusal is logged once in the Connections log, naming the contact, what to fix in Settings,
+  and how to add that contact afterwards with Logbook ▸ Export ADIF. (#226)
+
 - **Units is on the Station tab, where you'd look for it.** The km/miles and °C/°F choice applies
   to the whole app but was filed under Settings ▸ Digital ▸ Station Housekeeping, beside FT8
   options. It now sits under Settings ▸ Station ▸ Operator & Radio, and typing units, miles, km,

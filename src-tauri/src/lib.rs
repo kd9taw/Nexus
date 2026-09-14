@@ -18025,6 +18025,33 @@ fn cloudlog_push_qso_impl(
     propagation::live::cloudlog::upload(&url, &key, &station_id, &adif)
 }
 
+/// #226: the connection-log line for a Cloudlog/Wavelog failure that retrying cannot fix, or
+/// `None` for one that can clear on its own (the instance unreachable, or in trouble with a
+/// 5xx) and is retried as before.
+///
+/// Written as an exhaustive match on purpose: a failure class added later does not compile
+/// until someone decides which side of that line it falls on. Nothing re-sends a single
+/// contact to Cloudlog/Wavelog from the app, so the way back is the ADIF export.
+fn cloudlog_refusal_line(
+    class: propagation::live::cloudlog::CloudlogFailure,
+    call: &str,
+) -> Option<String> {
+    use propagation::live::cloudlog::CloudlogFailure as F;
+    let why = match class {
+        F::Unreachable | F::ServerError => return None,
+        F::Credentials => "the instance refused the API key or the station profile id",
+        F::NotConfigured => "the Cloudlog/Wavelog settings cannot be used as they are",
+        F::NotAnApi => "the base URL does not answer as the Cloudlog/Wavelog API",
+        F::RecordRefused => "the instance refused to file the record",
+        F::Refused => "the instance refused the upload",
+    };
+    Some(format!(
+        "not retrying the QSO with {call}: {why}. Fix it in Settings ▸ Logging & Connectors ▸ \
+         Cloudlog / Wavelog. This contact is not sent again on its own — to add it afterwards, \
+         use Logbook ▸ Export ADIF and import the file into Wavelog or Cloudlog"
+    ))
+}
+
 /// Which connectors are enabled, for [`auto_push_one`] — bundled into one struct
 /// purely to keep that function's argument count down; each field is independent.
 struct ConnectorToggles {
@@ -18297,13 +18324,19 @@ fn auto_push_one(engine: &SharedEngine, dto: LoggedQso, on: ConnectorToggles, ow
                     "error",
                     format!("auto-forward {call} — {}", e.message),
                 );
-                // Cloudlog's error covers both a down instance and a reject; retry
-                // (bounded by MAX_UPLOAD_RETRIES) rather than silently drop.
+                // #226: only a failure that can clear on its own is retried. A refusal (a
+                // callsign where the location number goes, a bad key, a URL that is not the
+                // API) was retried up to the budget and failed the same way every time; it is
+                // said once, with the way back, and dropped.
+                let refusal = cloudlog_refusal_line(e.class, &call);
+                if let Some(line) = &refusal {
+                    conn_log("Cloudlog", "error", line.clone());
+                }
                 (
                     format!("Cloudlog ✗ {}", e.message),
                     false,
                     cloudlog_stamp(e.class),
-                    true,
+                    refusal.is_none(),
                 )
             }
         };
@@ -23817,6 +23850,43 @@ mod tests {
         );
         let (conts, entities) = super::spot_voice_origins("???", &[]);
         assert!(conts.is_empty() && entities.is_empty());
+    }
+
+    /// #226 (DG3ET): Wavelog refused every contact with HTTP 401 because the station profile id
+    /// was a callsign, and the sink marked every Cloudlog error transient, so each contact was
+    /// retried to the budget and failed the same way each time. Only a failure that can clear on
+    /// its own is retried; a refusal is logged once, naming the contact and the way back.
+    #[test]
+    fn a_cloudlog_refusal_is_not_retried_and_says_how_to_send_it_again() {
+        use propagation::live::cloudlog::CloudlogFailure as F;
+        for transient in [F::Unreachable, F::ServerError] {
+            assert_eq!(
+                super::cloudlog_refusal_line(transient, "DL1ABC"),
+                None,
+                "{transient:?} can clear on its own, so it is retried"
+            );
+        }
+        let refused = [
+            F::Credentials,
+            F::NotConfigured,
+            F::NotAnApi,
+            F::RecordRefused,
+            F::Refused,
+        ];
+        for class in refused {
+            let line = super::cloudlog_refusal_line(class, "DL1ABC")
+                .unwrap_or_else(|| panic!("{class:?} is retried, and it fails the same way"));
+            assert!(
+                line.contains("DL1ABC"),
+                "{class:?}: name the contact — {line}"
+            );
+            assert!(
+                line.contains("Export ADIF"),
+                "{class:?}: say how to send it again — {line}"
+            );
+        }
+        // Every class is decided one way or the other: a class added later must land here.
+        assert_eq!(F::ALL.len(), 2 + refused.len());
     }
 
     /// ⭐ **The country file the CONTEST SCORER actually gets** — the one assertion that
