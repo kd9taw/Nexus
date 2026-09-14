@@ -724,8 +724,9 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
    const {value:pageTicket}=await browser.post(`stations/${stationId}/ticket`);const pages=await browser.open(stationId,pageTicket.ticket);pages.ackObservations();await labeled(pages,'page session',v=>v.type==='session');pages.send({type:'applicationHello',version:3});await labeled(pages,'page capabilities',v=>v.type==='applicationCapabilities')
    const logRows=async()=>{const requestId=crypto.randomUUID();pages.send({type:'applicationQuery',requestId,collection:'log',cursor:null,search:'',unconfirmed:false,after:null});const page=await labeled(pages,'log page',v=>v.requestId===requestId);assert.equal(page.type,'applicationPage');pages.send({type:'applicationQueryAck',requestId});return page.rows}
    // The station shares a page-zero capture for a few seconds, so read until the page shows the change.
-   const rowFor=async(call,accept)=>{for(let i=0;i<40;i++){const row=(await logRows()).find(r=>r.call===call);if(row&&accept(row))return row;await delay(250)}throw new Error(`the log page never showed ${call} as expected`)}
-   const fresh=async()=>(await heartbeat()).response.value
+   // A real page heartbeats every second whatever it is showing; without that the 5 s lease lapses mid-poll.
+   const rowFor=async(call,accept)=>{for(let i=0;i<40;i++){const row=(await logRows()).find(r=>r.call===call);if(row&&accept(row))return row;await heartbeat();await delay(250)}throw new Error(`the log page never showed ${call} as expected`)}
+   const fresh=async()=>{const {response}=await heartbeat();assert.ok(response.value,`the logging lease heartbeat was refused: ${JSON.stringify(response)}`);return response.value}
    const write=build=>allowed(async()=>operation(build(await fresh())),async()=>operation(build(await fresh())))
    const changeRequest=(s,change)=>({type:'logChange',stationBootId:s.stationBootId,leaseId:s.leaseId,expectedRevision:s.revision,commandWindowId:s.commandWindowId,clientSequence:s.nextSequence,change})
    const second={...record,call:'K1ABC',comment:'Second contact',notes:null,whenUnix:record.whenUnix-60}
@@ -739,7 +740,10 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
    // Positive control: the pre-edit row is stale now, so a delete aimed at it changes nothing.
    const stale=await write(s=>changeRequest(s,{kind:'delete',target:target(before)}))
    assert.equal(stale.response.value.outcome,'rejected');assert.equal(stale.response.value.reason,'contextChanged');assert.deepEqual(await probe.send({type:'loggingEvidence'}),afterEdit)
-   const current=await rowFor('K1ABC',row=>row.comment==='Edited from the browser')
+   const edit=await rowFor('K1ABC',row=>row.comment==='Edited from the browser')
+   const carded=await write(s=>changeRequest(s,{kind:'qslCard',target:target(edit),received:true}))
+   assert.equal(carded.response.value.outcome,'applied',JSON.stringify(carded.response));assert.equal(carded.response.value.evidence,'fileSynced')
+   const current=await rowFor('K1ABC',row=>row.qslRcvd?.card===true)
    const removed=await write(s=>changeRequest(s,{kind:'delete',target:target(current)}))
    assert.equal(removed.response.value.outcome,'applied',JSON.stringify(removed.response))
    evidence=await probe.send({type:'loggingEvidence'});assert.equal(evidence.count,1);assert.match(evidence.adif,/W1AW/);assert.doesNotMatch(evidence.adif,/K1ABC/)
@@ -751,7 +755,7 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
   if(operationVersion>=2){
    assert.equal((await probe.send({type:'stationPermission',deviceId:device.deviceId,allow:true})).ok,true)
    const controls=(await allowed(()=>operation({type:'state'}))).response.value
-   assert.deepEqual(controls.controls.capabilities,operationVersion>=3?['decoder','amplifier','frequency','mode','tier','ampFollowBand','workspace','decoderSettings','receiverSettings','receiverGain','bandSelection','receiverFilter','receiverDsp','phoneMode','workSpot','radioLevels','radioSelection','fmTuning', 'fmReceiver',...(operationVersion===4?['qsoLogging','logEdit']:[])]:['decoder','amplifier'])
+   assert.deepEqual(controls.controls.capabilities,operationVersion>=3?['decoder','amplifier','frequency','mode','tier','ampFollowBand','workspace','decoderSettings','receiverSettings','receiverGain','bandSelection','receiverFilter','receiverDsp','phoneMode','workSpot','radioLevels','radioSelection','fmTuning', 'fmReceiver',...(operationVersion===4?['qsoLogging','logEdit','qslMarks']:[])]:['decoder','amplifier'])
    const clearRequest=s=>({type:'stationControl',stationBootId:s.stationBootId,leaseId:s.leaseId,expectedRevision:s.revision,commandWindowId:s.commandWindowId,clientSequence:s.nextSequence,context:s.controls.context,action:{action:'decoder.clear',receiver:'cw'}})
    const cleared=await allowed(()=>operation(clearRequest(controls)),async()=>operation(clearRequest((await heartbeat()).response.value)))
    assert.equal(cleared.response.value.outcome,'applied');assert.equal(cleared.response.value.evidence,'receiverState')

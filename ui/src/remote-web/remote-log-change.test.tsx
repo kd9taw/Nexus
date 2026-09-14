@@ -75,6 +75,18 @@ it('deletes a remote row only after an explicit confirm, by the key of that row'
   test.client.disconnected()
 })
 
+it('marks a paper card from the row menu, by row key, only when the station offers QSL marks', async () => {
+  const test = station(['logEdit', 'qslMarks'])
+  await screen.findByText('W1AW')
+  fireEvent.change(screen.getByRole('combobox', { name: t('logbook.row.qslSent.aria', { call: 'W1AW' }) }), { target: { value: 'R' } })
+  await waitFor(() => expect(test.changes()).toHaveLength(1))
+  const [request] = test.changes()
+  expect(request.change).toEqual({ kind: 'qslCard', target: await logTarget(qso('W1AW')), received: true })
+  await act(async () => test.reply({ operation: 'logChange', operationId: request.requestId, outcome: 'applied', evidence: 'fileSynced' }))
+  await waitFor(() => expect(test.source.page).toHaveBeenCalledTimes(2))
+  test.client.disconnected()
+})
+
 it('refreshes past a shared log page captured before its own change', async () => {
   const test = station(['logEdit'])
   await screen.findByText('W1AW')

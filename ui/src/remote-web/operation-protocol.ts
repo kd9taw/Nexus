@@ -29,12 +29,15 @@ export type LogTarget = { call: string; whenUnix: number; key: string }
 export type LogChange =
   | { kind: 'edit'; target: LogTarget; record: ManualRecord }
   | { kind: 'delete'; target: LogTarget }
+  /** `via` is the ADIF QSL_SENT_VIA letter; only `null` withdraws the mark. */
+  | { kind: 'qslSent'; target: LogTarget; via: 'B' | 'D' | 'E' | null }
+  | { kind: 'qslCard'; target: LogTarget; received: boolean }
 /** Station hints for log changes. They ride in `controls.capabilities`, which every hosted page
  * since operation v3 filters, so a newer station can offer them without breaking an older page. */
-export const LOG_CAPABILITIES = ['logEdit'] as const
+export const LOG_CAPABILITIES = ['logEdit', 'qslMarks'] as const
 export type LogCapability = (typeof LOG_CAPABILITIES)[number]
 export const logChangeCapability = (change: LogChange): LogCapability =>
-  ({ edit: 'logEdit', delete: 'logEdit' } as const)[change.kind]
+  ({ edit: 'logEdit', delete: 'logEdit', qslSent: 'qslMarks', qslCard: 'qslMarks' } as const)[change.kind]
 const CHANGE_EVIDENCE = ['fileSynced'] as const
 const CHANGE_REFUSALS = ['contextChanged'] as const
 export type LogChangeOutcome = { operation: 'logChange'; operationId: string } & (
@@ -197,7 +200,8 @@ export async function logTarget(row: { call: string; whenUnix: number }): Promis
 export function logChange(raw: unknown): LogChange {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) invalid()
   const c = raw as Record<string, unknown>
-  const shapes: Record<string, string[]> = { edit: ['kind', 'target', 'record'], delete: ['kind', 'target'] }
+  const shapes: Record<string, string[]> = { edit: ['kind', 'target', 'record'], delete: ['kind', 'target'],
+    qslSent: ['kind', 'target', 'via'], qslCard: ['kind', 'target', 'received'] }
   if (typeof c.kind !== 'string' || !Object.prototype.hasOwnProperty.call(shapes, c.kind)) invalid()
   object(c, shapes[c.kind as string])
   const t = object(c.target, ['call', 'whenUnix', 'key'])
@@ -206,6 +210,9 @@ export function logChange(raw: unknown): LogChange {
     invalid()
   // An edit states when the contact happened; "station time" only means something for a new entry.
   if (c.kind === 'edit' && manualRecord(c.record).whenUnix === null) invalid()
+  // The empty string is the QSL menu's placeholder, a non-choice: never read it as a withdrawal.
+  if (c.kind === 'qslSent' && !(c.via === null || c.via === 'B' || c.via === 'D' || c.via === 'E')) invalid()
+  if (c.kind === 'qslCard' && typeof c.received !== 'boolean') invalid()
   return raw as LogChange
 }
 function logChangeOutcome(v: Record<string, unknown>): LogChangeOutcome {

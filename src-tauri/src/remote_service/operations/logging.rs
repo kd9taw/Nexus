@@ -2,11 +2,11 @@
 //! Admission happens under the original controller window. Finishing an append
 //! cannot acquire TX authority, retry a write or clear a replacement contact.
 //!
-//! Log changes (edit, delete) follow the same rules. A row is found again by the key of the exact
-//! row the browser's log page showed, never by a position, so a row that changed at the station
-//! since that page is refused rather than overwritten. The engine's rewrite does not sync and
-//! reports a failed save only to stderr, so "applied" is claimed only after the log file itself
-//! has been re-read, shown to hold the change, and synced.
+//! Log changes (edit, delete, QSL marks) follow the same rules. A row is found again by the key
+//! of the exact row the browser's log page showed, never by a position, so a row that changed at
+//! the station since that page is refused rather than overwritten. The engine's rewrite does not
+//! sync and reports a failed save only to stderr, so "applied" is claimed only after the log file
+//! itself has been re-read, shown to hold the change, and synced.
 use super::station::Action;
 use ring::digest::{digest, SHA256};
 use serde::{Deserialize, Serialize};
@@ -21,7 +21,7 @@ use tempo_app::engine::{
     Engine, LogWriteOutcome,
 };
 use tempo_app::remote_control::{Evidence, Outcome, Reason};
-use tempo_core::logbook::{adif_record, QsoRecord};
+use tempo_core::logbook::{adif_record, QslVia, QsoRecord};
 
 pub(super) enum Work {
     Append(LogWriteOutcome),
@@ -170,7 +170,7 @@ impl Work {
 
 /// Station hints for log changes. Offered with the logging grant at operation v4, inside
 /// `controls.capabilities`, which older hosted pages filter; `actions` never changes.
-pub(super) const CAPABILITIES: [&str; 1] = ["logEdit"];
+pub(super) const CAPABILITIES: [&str; 2] = ["logEdit", "qslMarks"];
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -190,12 +190,28 @@ pub enum Change {
     Delete {
         target: Target,
     },
+    QslSent {
+        target: Target,
+        /// The ADIF QSL_SENT_VIA letter, or null to withdraw the mark. Only an explicit null
+        /// withdraws, exactly as the desktop's `mark_qsl_sent` command rules. serde fills a
+        /// MISSING `Option` field with None, which would read an omitted `via` as a withdrawal;
+        /// `deserialize_with` turns that fallback off, so a missing key is a parse error.
+        #[serde(deserialize_with = "Option::deserialize")]
+        via: Option<String>,
+    },
+    QslCard {
+        target: Target,
+        received: bool,
+    },
 }
 
 impl Change {
     fn target(&self) -> &Target {
         match self {
-            Self::Edit { target, .. } | Self::Delete { target } => target,
+            Self::Edit { target, .. }
+            | Self::Delete { target }
+            | Self::QslSent { target, .. }
+            | Self::QslCard { target, .. } => target,
         }
     }
     /// An edit states when the contact happened; "station time" only means something for a new entry.
@@ -207,7 +223,11 @@ impl Change {
             && key(&t.key, 64)
             && match self {
                 Self::Edit { record, .. } => record.when_unix.is_some() && record.valid(now_unix),
-                Self::Delete { .. } => true,
+                // Exactly the menu's letters. The empty placeholder is a non-choice, never a clear.
+                Self::QslSent { via, .. } => {
+                    via.as_deref().is_none_or(|v| ["B", "D", "E"].contains(&v))
+                }
+                Self::Delete { .. } | Self::QslCard { .. } => true,
             }
     }
 }
@@ -328,28 +348,35 @@ pub(super) fn prepare_change(
             .filter(|r| r.call == of.call && r.when_unix == of.when_unix && adif_record(r) == text)
             .count()
     };
-    let (expected, count) = match change {
-        Change::Edit { record, .. } => {
-            if !engine.update_qso(index, edited(record, &stored)) {
-                return Err(ChangeReason::ContextChanged);
-            }
-            let written = engine
-                .log_records()
-                .get(index)
-                .cloned()
-                .ok_or(ChangeReason::ContextChanged)?;
-            let text = adif_record(&written);
-            let count = copies(engine.log_records(), &written, &text);
-            (text, count)
+    let (expected, count) = if let Change::Delete { .. } = change {
+        let text = adif_record(&stored);
+        if !engine.delete_qso(index) {
+            return Err(ChangeReason::ContextChanged);
         }
-        Change::Delete { .. } => {
-            let text = adif_record(&stored);
-            if !engine.delete_qso(index) {
-                return Err(ChangeReason::ContextChanged);
+        let count = copies(engine.log_records(), &stored, &text);
+        (text, count)
+    } else {
+        // The row stays at `index`; prove the record the engine actually wrote there.
+        let applied = match change {
+            Change::Edit { record, .. } => engine.update_qso(index, edited(record, &stored)),
+            // `valid` admitted only B/D/E or null, so a letter always parses here.
+            Change::QslSent { via, .. } => {
+                engine.mark_qsl_sent(index, via.as_deref().and_then(QslVia::from_code))
             }
-            let count = copies(engine.log_records(), &stored, &text);
-            (text, count)
+            Change::QslCard { received, .. } => engine.mark_qsl_card(index, *received),
+            Change::Delete { .. } => false,
+        };
+        if !applied {
+            return Err(ChangeReason::ContextChanged);
         }
+        let written = engine
+            .log_records()
+            .get(index)
+            .cloned()
+            .ok_or(ChangeReason::ContextChanged)?;
+        let text = adif_record(&written);
+        let count = copies(engine.log_records(), &written, &text);
+        (text, count)
     };
     Ok(ChangeWork {
         path: engine.log_path().map(Path::to_path_buf),

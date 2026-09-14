@@ -53,7 +53,7 @@ fn pending_confirm_requires_logging_not_radio_or_transmit_permission() {
     let state = control_state_version(&f, Instant::now(), 4);
     assert_eq!(
         state["controls"]["capabilities"],
-        json!(["qsoLogging", "logEdit"])
+        json!(["qsoLogging", "logEdit", "qslMarks"])
     );
     assert!(state["transmitEpoch"].is_null());
     assert!(!f.engine.lock().unwrap().tx_enabled());
@@ -540,4 +540,103 @@ fn a_rewrite_that_did_not_reach_the_disk_is_unknown_never_applied() {
     assert_eq!(result["outcome"], "unknown");
     assert_eq!(result["reason"], "persistenceUnconfirmed");
     assert_eq!(adif(&f), bytes);
+}
+
+#[test]
+fn qsl_marks_are_found_by_key_synced_and_a_card_sent_is_never_a_confirmation() {
+    let f = Fixture::new();
+    seed(&f);
+    acquire(&f);
+    let card = change(
+        &f,
+        json!({"kind":"qslCard","target":target(&row(&f, "W1AW")),"received":true}),
+    );
+    let result = run(&f, &card).unwrap();
+    assert_eq!(
+        result,
+        json!({"operation":"logChange","operationId":card.id(),"outcome":"applied","evidence":"fileSynced"})
+    );
+    assert!(
+        f.engine
+            .lock()
+            .unwrap()
+            .log_records()
+            .iter()
+            .find(|r| r.call == "W1AW")
+            .unwrap()
+            .qsl_rcvd
+            .card
+    );
+    let bytes = adif(&f);
+    assert_eq!(run(&f, &card).unwrap(), result);
+    assert_eq!(adif(&f), bytes);
+    let sent = change(
+        &f,
+        json!({"kind":"qslSent","target":target(&row(&f, "K1ABC")),"via":"D"}),
+    );
+    assert_eq!(run(&f, &sent).unwrap()["outcome"], "applied");
+    {
+        let e = f.engine.lock().unwrap();
+        let k1abc = e.log_records().iter().find(|r| r.call == "K1ABC").unwrap();
+        assert!(k1abc.qsl_sent.sent);
+        assert!(!k1abc.confirmed && !k1abc.award_confirmed);
+        assert!(!e.tx_enabled());
+    }
+    // Only null withdraws. The row it was aimed at is stale afterwards and refused.
+    let marked = target(&row(&f, "K1ABC"));
+    let withdraw = change(&f, json!({"kind":"qslSent","target":marked,"via":null}));
+    assert_eq!(run(&f, &withdraw).unwrap()["outcome"], "applied");
+    assert!(
+        !f.engine
+            .lock()
+            .unwrap()
+            .log_records()
+            .iter()
+            .find(|r| r.call == "K1ABC")
+            .unwrap()
+            .qsl_sent
+            .sent
+    );
+    let bytes = adif(&f);
+    let refused = run(
+        &f,
+        &change(&f, json!({"kind":"qslSent","target":marked,"via":"B"})),
+    )
+    .unwrap();
+    assert_eq!(refused["outcome"], "rejected");
+    assert_eq!(refused["reason"], "contextChanged");
+    assert_eq!(adif(&f), bytes);
+}
+
+#[test]
+fn a_qsl_sent_mark_accepts_only_the_menu_codes() {
+    let f = Fixture::new();
+    seed(&f);
+    acquire(&f);
+    let bytes = adif(&f);
+    // The empty string is the menu's placeholder: a non-choice, never a withdrawal.
+    for via in ["", "X", "b", "bureau"] {
+        let request = change(
+            &f,
+            json!({"kind":"qslSent","target":target(&row(&f, "W1AW")),"via":via}),
+        );
+        assert_eq!(run(&f, &request), Err("invalidRecord"));
+    }
+    // A missing `via` is malformed, not a withdrawal: only an explicit null clears the mark.
+    let s = control_state_version(&f, Instant::now(), 4);
+    assert!(
+        serde_json::from_value::<Request>(json!({"type":"logChange","requestId":id(),
+        "stationBootId":s["stationBootId"],"leaseId":s["leaseId"],"expectedRevision":s["revision"],
+        "commandWindowId":s["commandWindowId"],"clientSequence":s["nextSequence"],
+        "change":{"kind":"qslSent","target":target(&row(&f, "W1AW"))}}))
+        .is_err()
+    );
+    assert_eq!(adif(&f), bytes);
+    assert!(!f
+        .engine
+        .lock()
+        .unwrap()
+        .log_records()
+        .iter()
+        .any(|r| r.qsl_sent.sent));
 }

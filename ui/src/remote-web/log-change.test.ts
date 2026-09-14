@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { OperationClient } from './operation-client'
 import { OperationRelay } from './operation-relay'
-import { logChange, logRowCanonical, logTarget, operationRequest, operationValue, type OperationState } from './operation-protocol'
+import { logChange, logChangeCapability, logRowCanonical, logTarget, operationRequest, operationValue, type OperationState } from './operation-protocol'
 
 const id = () => crypto.randomUUID()
 const target = { call: 'W1AW', whenUnix: 1788940800, key: 'a'.repeat(64) }
@@ -33,6 +33,23 @@ it('closes the log change grammar around a row key and a complete edit', () => {
     { kind: 'edit', target }
   ])
     expect(() => operationRequest(envelope(bad))).toThrow()
+})
+
+it('marks a QSL sent only as B, D, E or a withdrawal, and a card only as received or not', () => {
+  for (const change of [
+    { kind: 'qslSent', target, via: 'B' }, { kind: 'qslSent', target, via: 'E' }, { kind: 'qslSent', target, via: null },
+    { kind: 'qslCard', target, received: true }, { kind: 'qslCard', target, received: false }
+  ])
+    expect(logChange(change)).toEqual(change)
+  // The empty string is the menu's placeholder, never a withdrawal; only null withdraws.
+  for (const bad of [
+    { kind: 'qslSent', target, via: '' }, { kind: 'qslSent', target, via: 'b' }, { kind: 'qslSent', target, via: 'X' },
+    { kind: 'qslSent', target }, { kind: 'qslCard', target, received: 'yes' }, { kind: 'qslCard', target },
+    { kind: 'qslCard', target, received: true, via: 'B' }
+  ])
+    expect(() => logChange(bad)).toThrow()
+  expect(logChangeCapability({ kind: 'qslCard', target, received: true })).toBe('qslMarks')
+  expect(logChangeCapability({ kind: 'qslSent', target, via: null })).toBe('qslMarks')
 })
 
 it('accepts only the bounded change outcomes a station reports', () => {

@@ -272,6 +272,7 @@ export function Logbook({
   const operations = useRemoteOperations()
   const canEdit = useLogChange('logEdit')
   const canLog = useLogChange('log.manual')
+  const canQsl = useLogChange('qslMarks')
   const [log, setLog] = useState<LoggedQso[]>([])
   const [showForm, setShowForm] = useState(false)
   const [draft, setDraft] = useState<DraftQso>(() => ({
@@ -668,6 +669,15 @@ export function Logbook({
   // send entries vanish and nothing put them back. Same reversal the inbound card has had
   // since #152 — a declaration the operator made by hand, they can unmake by hand.
   const onMarkQslSent = async (q: LoggedQso, i: number, via: 'B' | 'D' | 'E' | null) => {
+    if (remoteLog) {
+      const at = performance.now()
+      const outcome = await remoteChange({ kind: 'qslSent', target: await logTarget(q), via })
+      if (outcome?.outcome === 'applied') {
+        pushToast(via ? t('logbook.qsl.marked', { call: q.call, via: qslViaLabel(via) ?? via }) : t('logbook.qsl.sentCleared', { call: q.call }), 'success')
+        remoteLog.refresh(at)
+      }
+      return
+    }
     const snap = await withErrorToast(() => markQslSent(i, via), t('logbook.qsl.markFailed'))
     if (snap) {
       // Two literal keys, not one interpolated one — same reason as onMarkQslCard below.
@@ -682,6 +692,15 @@ export function Logbook({
   }
 
   const onMarkQslCard = async (q: LoggedQso, i: number, received: boolean) => {
+    if (remoteLog) {
+      const at = performance.now()
+      const outcome = await remoteChange({ kind: 'qslCard', target: await logTarget(q), received })
+      if (outcome?.outcome === 'applied') {
+        pushToast(received ? t('logbook.qsl.cardMarked', { call: q.call }) : t('logbook.qsl.cardCleared', { call: q.call }), 'success')
+        remoteLog.refresh(at)
+      }
+      return
+    }
     const snap = await withErrorToast(
       () => markQslCard(i, received),
       t('logbook.qsl.markFailed'),
@@ -1696,7 +1715,7 @@ export function Logbook({
                       to record could never be recorded. `q.qslSent?.sent` now hides only the
                       three SEND entries — you still cannot send twice — while the inbound
                       entries stay reachable for the life of the contact. */}
-                  {(
+                </>}{(control || canQsl) && (
                     <select
                       className="log-rowbtn"
                       style={{ fontSize: '0.85em' }}
@@ -1741,8 +1760,7 @@ export function Logbook({
                         <option value="r">{t('logbook.row.qslRcvd.clear')}</option>
                       )}
                     </select>
-                  )}
-                </>}{(control || canEdit) && <>
+                  )}{(control || canEdit) && <>
                   <button
                     type="button"
                     className="log-rowbtn"
