@@ -9,7 +9,7 @@ import { RemoteWheelTuningContext } from './wheel-tuning-context'
 import { pushToast } from '../toast'
 import { RemoteCollections, RemoteCollectionsContext, RemoteHistoryContext } from './collections'
 import type { HistoryRow, RemoteHistory } from './collections'
-import { CONFIGURATION_COMMAND, NAVIGATION_COMMAND, SSTV_IMAGE_COMMAND, APRS_COMMAND, JS8_CONTEXT_COMMAND, FIELD_DAY_COMMAND, OTA_COMMAND, MEMORIES_COMMAND, DXPEDITIONS_COMMAND, INSIGHTS_COMMAND, QUERY_COMMAND } from './application-query-protocol'
+import { POUNCE_COMMAND, CONFIGURATION_COMMAND, NAVIGATION_COMMAND, SSTV_IMAGE_COMMAND, APRS_COMMAND, JS8_CONTEXT_COMMAND, FIELD_DAY_COMMAND, OTA_COMMAND, MEMORIES_COMMAND, DXPEDITIONS_COMMAND, INSIGHTS_COMMAND, QUERY_COMMAND } from './application-query-protocol'
 import type { AppSnapshot, BandChannel, Settings } from '../types'
 import { installApplicationTransport } from '../applicationTransport'
 import { ErrorBoundary } from '../components/ErrorBoundary'
@@ -21,6 +21,8 @@ import { initialState, startMonitor } from '../remote-monitor/session'
 import { APPLICATION_TIMEOUT_MS } from './application-protocol'
 import type { HostedConnection } from './client'
 import { useNeedAlerts } from './useNeedAlerts'
+import { useRareDxAlerts } from './useRareDxAlerts'
+import { usePotaAlerts } from './usePotaAlerts'
 import '../cockpit-panes.css'
 import './application.css'
 
@@ -99,7 +101,11 @@ export function BrowserApplication({ connection, disconnect }: { connection: Hos
   const stale = phase !== 'ready' || client.age('get_snapshot') >= APPLICATION_TIMEOUT_MS
   useEffect(() => { if (stale) tuning?.cancel() }, [stale, tuning])
   const alerts = useNeedAlerts(collections, !stale && client.supports(QUERY_COMMAND), boot?.settings ?? null)
-  const status = <SessionStatus client={connection.operations} stale={stale} disconnect={disconnect} display={display} alerts={alerts} />
+  // While the link is down nothing is offered or refused yet, so a connecting station is not called old.
+  const rareAlerts = useRareDxAlerts(collections, !stale, stale || client.supports(POUNCE_COMMAND))
+  const potaAlerts = usePotaAlerts(collections, !stale, stale || client.supports(OTA_COMMAND))
+  const status = <SessionStatus client={connection.operations} stale={stale} disconnect={disconnect} display={display}
+    alerts={alerts} rareAlerts={rareAlerts} potaAlerts={potaAlerts} />
   if (!boot) return <div className="app remote-monitor-app remote-service-app">
     {status}
     <main className="rm-scroll"><div className="rm-content">

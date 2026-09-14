@@ -65,6 +65,8 @@ const MIGRATED = [
   'remote-web/BrowserApplication.tsx',
   'remote-web/SessionStatus.tsx',
   'remote-web/useNeedAlerts.ts',
+  'remote-web/useRareDxAlerts.ts',
+  'remote-web/usePotaAlerts.ts',
   'remote-web/presentation.tsx',
   'remote-web/RemoteApp.tsx',
   'remote-native/RemoteStation.tsx',

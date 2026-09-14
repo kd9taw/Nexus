@@ -4,15 +4,17 @@ import { t } from '../i18n'
 import type { OperationClient } from './operation-client'
 import { LoggingAuthority } from './operations'
 import type { PresentationState } from './presentation'
-import type { NeedAlertsControl } from './useNeedAlerts'
+import type { AlertToggle, StationAlertControl } from './browser-alerts'
 
 // Presentation belongs to this browser. Expanding help cannot acquire, release
 // or replace station authority, and never remounts the underlying Nexus app.
-export function SessionStatus({ client, stale, disconnect, display, alerts }: {
-  client?: OperationClient | null; stale: boolean; disconnect: () => void; display?: PresentationState; alerts?: NeedAlertsControl
+export function SessionStatus({ client, stale, disconnect, display, alerts, rareAlerts, potaAlerts }: {
+  client?: OperationClient | null; stale: boolean; disconnect: () => void; display?: PresentationState; alerts?: AlertToggle
+  rareAlerts?: StationAlertControl; potaAlerts?: StationAlertControl
 }) {
   const [expanded, setExpanded] = useState(false)
   const id = useId()
+  const usable = !!alerts?.supported && !alerts.blocked
   return <div className="remote-application-status" role="region" aria-label={t('remote.browserWorkspace')}>
     <div className="remote-session-row">
       {/* Data loss is said in the label's own slot, never in a line of its own: this banner sits
@@ -37,12 +39,26 @@ export function SessionStatus({ client, stale, disconnect, display, alerts }: {
         display.change(display.presentation === 'quick' ? 'full' : 'quick')
         setExpanded(false)
       }}>{display.presentation === 'quick' ? t('remote.quick.full') : t('remote.quick.name')}</button>}
-      {/* Browser-local and notify-only. Lives in this folded panel so turning it on moves no cockpit. */}
+      {/* Browser-local and notify-only. Lives in this folded panel so turning it on moves no cockpit.
+          Notification permission is one per site, so a refusal is said once and hides every toggle. */}
       {alerts && <div className="remote-need-alerts">
         <p>{!alerts.supported ? t('remote.b3.needAlertsUnsupported') : alerts.blocked ? t('remote.b3.needAlertsBlocked') : t('remote.b3.needAlertsNote')}</p>
-        {alerts.supported && !alerts.blocked && <button type="button" className="remote-button" aria-pressed={alerts.enabled} onClick={alerts.toggle}>
+        {usable && <button type="button" className="remote-button" aria-pressed={alerts.enabled} onClick={alerts.toggle}>
           {alerts.enabled ? t('remote.b3.needAlertsOn') : t('remote.b3.needAlertsOff')}</button>}
+        {usable && rareAlerts && <StationAlert control={rareAlerts} off={t('remote.b3.rareAlertsOff')} on={t('remote.b3.rareAlertsOn')}
+          older={t('remote.b3.rareAlertsOlder')} quiet={t('remote.b3.rareAlertsStationOff')} />}
+        {usable && potaAlerts && <StationAlert control={potaAlerts} off={t('remote.b3.potaAlertsOff')} on={t('remote.b3.potaAlertsOn')}
+          older={t('remote.b3.potaAlertsOlder')} quiet={t('remote.b3.potaAlertsStale')} />}
       </div>}
     </div>
   </div>
+}
+
+/** One alert fed by a station read: its toggle, or why the station cannot feed it. */
+function StationAlert({ control, off, on, older, quiet }: { control: StationAlertControl; off: string; on: string; older: string; quiet: string }) {
+  if (!control.offered) return <p>{older}</p>
+  return <>
+    <button type="button" className="remote-button" aria-pressed={control.enabled} onClick={control.toggle}>{control.enabled ? on : off}</button>
+    {control.note && <p role="status">{quiet}</p>}
+  </>
 }
