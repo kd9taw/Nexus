@@ -654,3 +654,59 @@ it('refuses malformed, unchanged, unhinted and older-station split and clarifier
     old.h.client.disconnected()
   }
 })
+
+it.each(['FT8', 'FT4'] as const)('sends one %s digital Work intent and waits for the spot frequency, digital section and tier', async tier => {
+  const h = setup(storage(), ['workDigitalSpot'], 3)
+  let sampleAge = Infinity
+  const snapshot = { radio: { operatingMode: 'digital', dialMhz: 14.0765, txEnabled: false }, link: { tier } }
+  const getSnapshot = vi.fn(async () => snapshot)
+  const transport = controlTransport({ kind: 'remote', invoke: getSnapshot } as ApplicationTransport,
+    { age: () => sampleAge } as unknown as ApplicationClient, h.client)
+  const result = transport.invoke('work_spot', { mode: 'digital', freqMhz: 14.0765, band: '20m', call: 'JA2DEF/P', tier })
+  await Promise.resolve()
+  const request = h.sent[h.sent.length - 1].request
+  expect(request.action).toEqual({ action: 'radio.workDigitalSpot', tier, dialMhz: 14.0765, band: '20m', call: 'JA2DEF/P' })
+  h.reply({ operation: 'stationControl', operationId: request.requestId, outcome: 'applied', evidence: 'radioReadback' })
+  await h.advance(100)
+  expect(getSnapshot).not.toHaveBeenCalled()
+  sampleAge = 0
+  await h.advance(50)
+  expect(await result).toEqual(snapshot)
+  expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(1)
+  h.client.disconnected()
+})
+
+it.each(['tier', 'section', 'frequency', 'evidence'])('refuses a digital Work handoff after a mismatched %s without replaying it', async changed => {
+  const h = setup(storage(), ['workDigitalSpot'], 3)
+  const snapshot = { radio: { operatingMode: changed === 'section' ? 'cw' : 'digital', dialMhz: changed === 'frequency' ? 14.074 : 14.080 }, link: { tier: changed === 'tier' ? 'FT8' : 'FT4' } }
+  const transport = controlTransport({ kind: 'remote', invoke: vi.fn(async () => snapshot) } as ApplicationTransport,
+    { age: () => 0 } as unknown as ApplicationClient, h.client)
+  const result = transport.invoke('work_spot', { mode: 'digital', freqMhz: 14.080, band: '20m', call: 'JA2DEF', tier: 'FT4' }).catch(e => e)
+  await Promise.resolve()
+  const request = h.sent[h.sent.length - 1].request
+  h.reply({ operation: 'stationControl', operationId: request.requestId, outcome: 'applied', evidence: changed === 'evidence' ? 'stationState' : 'radioReadback' })
+  expect(await result).toMatchObject({ message: changed === 'evidence' ? 'operationUnknown' : 'readingUnavailable' })
+  await h.advance(1500)
+  expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(1)
+  h.client.disconnected()
+})
+
+it('refuses digital Work on older stations, without its own hint, or with any other native argument', async () => {
+  for (const [capabilities, version, message] of [[['workDigitalSpot'], 2, 'stationUnsupported'], [['workSpot'], 3, 'notController']] as [ControlCapability[], OperationVersion, string][]) {
+    const h = setup(storage(), capabilities, version)
+    const transport = controlTransport({ kind: 'remote', invoke: vi.fn() } as ApplicationTransport, { age: () => 0 } as unknown as ApplicationClient, h.client)
+    await expect(transport.invoke('work_spot', { mode: 'digital', freqMhz: 14.074, band: '20m', call: 'JA2DEF', tier: 'FT8' })).rejects.toThrow(message)
+    expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(0)
+    h.client.disconnected()
+  }
+  const h = setup(storage(), ['workDigitalSpot', 'workSpot'], 3)
+  const invoke = vi.fn(), transport = controlTransport({ kind: 'remote', invoke } as ApplicationTransport, {} as ApplicationClient, h.client)
+  const args = { mode: 'digital', freqMhz: 14.074, band: '20m', call: 'JA2DEF', tier: 'FT8' }
+  for (const bad of [{ ...args, mode: 'cw' }, { ...args, mode: 'phone' }, { ...args, mode: 'rtty' }, { ...args, tier: 'FT2' }, { ...args, tier: 'ft8' },
+    { ...args, tier: null }, { ...args, call: null }, { ...args, band: '21m' }, { ...args, splitUpKhz: 2 }, { ...args, txEnabled: true }]) {
+    await expect(transport.invoke('work_spot', bad)).rejects.toThrow()
+  }
+  expect(invoke).not.toHaveBeenCalled()
+  expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(0)
+  h.client.disconnected()
+})

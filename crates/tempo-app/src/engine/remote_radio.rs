@@ -47,6 +47,12 @@ enum Intent {
         mode: String,
         call: String,
     },
+    /// FT8/FT4 Work: `original` is the tier admission saw; a later local pick retires it.
+    DigitalSpot {
+        tier: Tier,
+        original: Tier,
+        call: String,
+    },
     FilterWidth {
         mode: OperatingMode,
         expected: u32,
@@ -741,6 +747,11 @@ impl Request {
                 return Err(Reason::ContextChanged);
             }
         }
+        if let Intent::DigitalSpot { original, .. } = &self.intent {
+            if engine.tier() != *original {
+                return Err(Reason::ContextChanged);
+            }
+        }
         engine.remote_radio_link(self.connection)
     }
 
@@ -867,6 +878,7 @@ impl Request {
         // check. Keep the original serialization mutex, with native poison recovery.
         let source = engine.source.clone();
         let mut source_slot = if matches!(&self.intent, Intent::Tier(_) | Intent::Workspace { .. })
+            || matches!(&self.intent, Intent::DigitalSpot { tier, original, .. } if tier != original)
         {
             let slot = match source.try_lock() {
                 Ok(slot) => slot,
@@ -923,6 +935,34 @@ impl Request {
             Intent::Spot { mode, call } => {
                 engine.work_spot_split_with_arming(
                     &mode,
+                    self.target_hz as f64 / 1e6,
+                    &self.band,
+                    None,
+                    false,
+                );
+                engine.note_work_call(Some(call));
+                if let Some(power) = power.filter(|_| self.power_limit.is_some()) {
+                    engine.rf_power = Some(power);
+                    engine.observe_rig_power(power);
+                }
+            }
+            Intent::DigitalSpot {
+                tier,
+                original,
+                call,
+            } => {
+                // The desktop's tiered Work order: the tier first, then the spot's exact dial, so
+                // the tier's default channel is a transient nothing outside this lock observes.
+                if tier != original {
+                    engine.set_tier_with_installer(tier, |engine, decoder| {
+                        engine.install_source_into(
+                            source_slot.as_mut().expect("digital spot decoder lock"),
+                            decoder,
+                        );
+                    });
+                }
+                engine.work_spot_split_with_arming(
+                    "digital",
                     self.target_hz as f64 / 1e6,
                     &self.band,
                     None,

@@ -141,8 +141,11 @@ export function controlTransport(reads: ApplicationTransport, client: Applicatio
             read = 'get_snapshot'
             break
           case 'work_spot':
-            if (!args || Object.keys(args).some(k => !['mode', 'freqMhz', 'band', 'call', 'tier'].includes(k)) || (args.tier !== null && args.tier !== undefined)) throw Error('applicationUnsupported')
-            action = stationAction({ action: 'radio.workSpot', mode: args.mode, dialMhz: args.freqMhz, band: args.band, call: args.call })
+            if (!args || Object.keys(args).some(k => !['mode', 'freqMhz', 'band', 'call', 'tier'].includes(k))) throw Error('applicationUnsupported')
+            if (args.tier === null || args.tier === undefined) action = stationAction({ action: 'radio.workSpot', mode: args.mode, dialMhz: args.freqMhz, band: args.band, call: args.call })
+            // FT8/FT4 carries its tier in its own action, never as a workSpot field an older desktop cannot parse.
+            else if (args.mode === 'digital') action = stationAction({ action: 'radio.workDigitalSpot', tier: args.tier, dialMhz: args.freqMhz, band: args.band, call: args.call })
+            else throw Error('applicationUnsupported')
             read = 'get_snapshot'
             break
           case 'get_licensed_band_plan': {
@@ -253,6 +256,7 @@ export function controlTransport(reads: ApplicationTransport, client: Applicatio
         if ((action.action === 'qso.confirm' || action.action === 'qso.discard') &&
           (result.outcome !== 'applied' || result.evidence !== (action.action === 'qso.confirm' ? 'fileSynced' : 'pendingDiscarded'))) throw Error('operationUnknown')
         if (action?.action === 'radio.workSpot' && result.outcome === 'applied' && result.evidence !== 'radioReadback') throw Error('operationUnknown')
+        if (action.action === 'radio.workDigitalSpot' && (result.outcome !== 'applied' || result.evidence !== 'radioReadback')) throw Error('operationUnknown')
         if (action.action === 'decoder.aiCw' && (result.outcome !== 'applied' || result.evidence !== 'settingsSaved')) throw Error('operationUnknown')
         if (action.action === 'decoder.redecode' && (result.outcome !== 'applied' || result.evidence !== 'receiverState')) throw Error('operationUnknown')
         if (isTuning(action) && (result.outcome !== 'applied' || result.evidence !== 'stationState')) throw Error('operationUnknown')
@@ -271,6 +275,10 @@ export function controlTransport(reads: ApplicationTransport, client: Applicatio
           if (action?.action === 'radio.workSpot') {
             const radio = (value as import('../types').AppSnapshot)?.radio
             if (!radio || Math.round(radio.dialMhz * 1e6) !== Math.round(action.dialMhz * 1e6) || radio.operatingMode?.toLowerCase() !== action.mode) throw Error('readingUnavailable')
+          }
+          if (action?.action === 'radio.workDigitalSpot') {
+            const snapshot = value as import('../types').AppSnapshot
+            if (!snapshot?.radio || Math.round(snapshot.radio.dialMhz * 1e6) !== Math.round(action.dialMhz * 1e6) || snapshot.radio.operatingMode?.toLowerCase() !== 'digital' || snapshot.link?.tier !== action.tier) throw Error('readingUnavailable')
           }
           if (action?.action === 'decoder.aiCw' && (value as import('../types').AppSnapshot)?.aiCw?.enabled !== action.on) throw Error('readingUnavailable')
           if (action && isTuning(action) && !tuningShown(action, (value as import('../types').AppSnapshot)?.radio)) throw Error('readingUnavailable')

@@ -37,6 +37,7 @@ export const JA: PartialCatalog = {
   "remote.controlBusy": "局が処理中だったため、何も変わっていません。もう一度お試しください。",
   // remote parity batch 1
   "remote.b1.outsidePrivileges": "変更していません。その送信周波数は免許の運用範囲外です。",
+  "remote.b1.workUnavailable": "このスポットはブラウザーからは交信に移れません。局側では何も変わっていません。",
   "remote.controlLocalHint": "ブラウザーを承認すると、局の操作（対応する受信機、無線機、アンプの操作）が許可されます。制限する場合は、ここで取り消してください。送信には別の許可が必要です。",
   "remote.transmitAllow": "FT8/FT4 の送信を許可",
   "remote.transmitRevoke": "送信許可を取り消す",

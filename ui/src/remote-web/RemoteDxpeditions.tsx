@@ -1,4 +1,4 @@
-import { useContext, useEffect, useMemo, useState } from 'react'
+import { useContext, useEffect, useMemo, useState, type ComponentProps } from 'react'
 import { DxpeditionsView } from '../components/DxpeditionsView'
 import { dxpedLink } from '../components/prop/dxpedLink'
 import type { CalendarEntry } from '../types'
@@ -12,7 +12,8 @@ function openPage(entry: CalendarEntry) {
   const link = dxpedLink(entry)
   if (link) window.open(link.url, '_blank', 'noopener,noreferrer')
 }
-export function RemoteDxpeditions() {
+/** `onWorkSpot` is App's station Work path, passed only while the station admits a browser Work. */
+export function RemoteDxpeditions({ onWorkSpot }: { onWorkSpot?: ComponentProps<typeof DxpeditionsView>['onWorkSpot'] } = {}) {
   const source = useContext(RemoteCollectionsContext), available = useStationData()
   const supported = source?.client.supports(DXPEDITIONS_COMMAND) ?? false
   const [capture, setCapture] = useState<{ value: Dxpeditions; at: number } | null>(null)
@@ -51,6 +52,6 @@ export function RemoteDxpeditions() {
       {value && <span>{!forecastsCurrent ? t('remote.dxpedNoWindows')
         : t('remote.dxpedWindowsAge', { minutes: Math.floor(((value.windowAgeMs ?? 0) + elapsed) / 60_000) })}</span>}
     </div>
-    {value && <DxpeditionsView snap={value} observation={observation} />}
+    {value && <DxpeditionsView snap={value} observation={observation} onWorkSpot={onWorkSpot} />}
   </div>
 }

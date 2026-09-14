@@ -39,6 +39,8 @@ interface Props {
   onSelect: (call: string) => void
   /** Work the spot — QSY to its freq/mode and open the matching cockpit. */
   onWork: (spot: SpotRow) => void
+  /** A browser Work for this row; the desktop leaves it unset and works every row. */
+  canWork?: (spot: SpotRow) => boolean
   onPopOut?: () => void
   /** The operator's own square — origin for the beam heading beside each entity. A
    * cluster/RBN spot carries no grid, so that heading is always the entity centre. */
@@ -69,7 +71,7 @@ function useSessionState<T>(key: string, init: T): [T, React.Dispatch<React.SetS
   return [v, setV]
 }
 
-export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, onPopOut, myGrid = '' }: Props) {
+export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, canWork, onPopOut, myGrid = '' }: Props) {
   const control = useStationControl()
   // Entity centres — the only geometry the firehose carries (a spot has no grid).
   const centroids = useEntityCentroids()
@@ -379,7 +381,8 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, on
           </div>
         ) : (
           rows.map((s) => {
-            const canQsy = control && knownBands.has(s.band)
+            const workable = control || !!canWork?.(s)
+            const canQsy = workable && knownBands.has(s.band)
             return (
               <div
                 key={`${s.call}|${s.freqMhz}|${s.spotter}`}
@@ -401,7 +404,7 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, on
                 }
                 onClick={() => {
                   onSelect(s.call)
-                  if (control) onWork(s)
+                  if (workable) onWork(s)
                 }}
               >
                 <span className="np-age">{ageLabel(s.ageSecs)}</span>

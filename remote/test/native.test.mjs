@@ -716,11 +716,23 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
   if(operationVersion>=2){
    assert.equal((await probe.send({type:'stationPermission',deviceId:device.deviceId,allow:true})).ok,true)
    const controls=(await allowed(()=>operation({type:'state'}))).response.value
-   assert.deepEqual(controls.controls.capabilities,operationVersion>=3?['decoder','amplifier','frequency','mode','tier','ampFollowBand','workspace','decoderSettings','receiverSettings','receiverGain','bandSelection','receiverFilter','receiverDsp','phoneMode','workSpot','radioLevels','radioSelection','fmTuning', 'fmReceiver','aiCw','redecode','splitTuning','ritTuning',...(operationVersion===4?['qsoLogging']:[])]:['decoder','amplifier'])
+   assert.deepEqual(controls.controls.capabilities,operationVersion>=3?['decoder','amplifier','frequency','mode','tier','ampFollowBand','workspace','decoderSettings','receiverSettings','receiverGain','bandSelection','receiverFilter','receiverDsp','phoneMode','workSpot','radioLevels','radioSelection','fmTuning', 'fmReceiver','aiCw','redecode','splitTuning','ritTuning','workDigitalSpot',...(operationVersion===4?['qsoLogging']:[])]:['decoder','amplifier'])
    const clearRequest=s=>({type:'stationControl',stationBootId:s.stationBootId,leaseId:s.leaseId,expectedRevision:s.revision,commandWindowId:s.commandWindowId,clientSequence:s.nextSequence,context:s.controls.context,action:{action:'decoder.clear',receiver:'cw'}})
    const cleared=await allowed(()=>operation(clearRequest(controls)),async()=>operation(clearRequest((await heartbeat()).response.value)))
    assert.equal(cleared.response.value.outcome,'applied');assert.equal(cleared.response.value.evidence,'receiverState')
    assert.deepEqual(await probe.send({type:'loggingEvidence'}),evidence)
+   if(operationVersion>=3){
+    // FT8/FT4 Work is its own v3 action. It must cross the real relay and native parser without
+    // dropping the socket or the lease. The band does not match the dial, so the station answers a
+    // closed rejection and leaves no pending receipt for the controls below (the probe has no radio
+    // owner to answer a readback).
+    const workRequest=s=>({type:'stationControl',stationBootId:s.stationBootId,leaseId:s.leaseId,expectedRevision:s.revision,commandWindowId:s.commandWindowId,clientSequence:s.nextSequence,context:s.controls.context,action:{action:'radio.workDigitalSpot',tier:'FT4',dialMhz:14.0815,band:'40m',call:'JA2DEF'}})
+    const worked=await allowed(async()=>operation(workRequest((await heartbeat()).response.value)),async()=>operation(workRequest((await heartbeat()).response.value)))
+    assert.equal(worked.response.value?.operation,'stationControl',JSON.stringify(worked.response))
+    assert.equal(worked.response.value.outcome,'rejected')
+    assert.equal((await heartbeat()).response.value.phase,'controlling')
+    assert.deepEqual(await probe.send({type:'loggingEvidence'}),evidence)
+   }
    if (operationVersion === 4) {
      assert.equal(controls.transmitEpoch, null)
      const grant = await probe.send({type:'transmitPermission',deviceId:device.deviceId,allow:true})

@@ -19,6 +19,7 @@ fn unexpired_deadline() -> Instant {
     Instant::now() + Duration::from_secs(24 * 60 * 60)
 }
 mod band_selection;
+mod digital_spot;
 mod dsp;
 mod filter;
 mod level;

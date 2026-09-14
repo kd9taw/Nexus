@@ -305,6 +305,15 @@ pub enum Action {
         band: String,
         call: String,
     },
+    /// FT8/FT4 Work names its tier in its own action: an older desktop parses workSpot exactly.
+    #[serde(rename = "radio.workDigitalSpot")]
+    WorkDigitalSpot {
+        tier: tempo_app::dto::Tier,
+        #[serde(rename = "dialMhz")]
+        dial_mhz: f64,
+        band: String,
+        call: String,
+    },
     #[serde(rename = "radio.tier")]
     Tier { tier: tempo_app::dto::Tier },
     #[serde(rename = "radio.workspace")]
@@ -422,6 +431,34 @@ pub fn execute(
             drop(buffer);
             return engine.queue_remote_spot(
                 mode,
+                *dial_mhz,
+                band,
+                call,
+                context.radio_connection.ok_or(Reason::ReadingUnavailable)?,
+                permit,
+            );
+        }
+        // FT8/FT4 Work: the same station-owned pile-up evidence as CW/Phone Work, then the tiered
+        // receive QSY. Refused while TX is armed; it never enables TX or calls the station.
+        #[cfg(feature = "radio")]
+        Action::WorkDigitalSpot {
+            tier,
+            dial_mhz,
+            band,
+            call,
+        } => {
+            let buffer = spots
+                .ok_or(Reason::ReadingUnavailable)?
+                .try_lock()
+                .map_err(|_| Reason::ReadingUnavailable)?;
+            if crate::work_spot_split_offset(&buffer, call, *dial_mhz, std::time::Instant::now())
+                .is_some()
+            {
+                return Err(Reason::UnsupportedAction);
+            }
+            drop(buffer);
+            return engine.queue_remote_digital_spot(
+                *tier,
                 *dial_mhz,
                 band,
                 call,
@@ -925,6 +962,7 @@ impl Action {
             | Self::PhoneMode { .. }
             | Self::Mode { .. }
             | Self::WorkSpot { .. }
+            | Self::WorkDigitalSpot { .. }
             | Self::Tier { .. }
             | Self::Workspace { .. }
             | Self::Js8Speed { .. }
@@ -976,6 +1014,7 @@ pub fn capabilities(version: u8) -> Vec<&'static str> {
                 "redecode",
                 "splitTuning",
                 "ritTuning",
+                "workDigitalSpot",
             ]
         }
     }

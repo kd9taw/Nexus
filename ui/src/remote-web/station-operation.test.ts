@@ -236,6 +236,27 @@ describe('split and clarifier requests', () => {
     expect(() => stationAction({ action: 'radio.vfo', expectedVfo: 'B', vfo: 'B' })).toThrow()
     expect(() => stationAction({ action: 'radio.swapVfo' })).toThrow()
   })
+  it('admits an FT8/FT4 Work intent only as its own action with an explicit tier', () => {
+    for (const tier of ['FT8', 'FT4']) {
+      const action = { action: 'radio.workDigitalSpot', tier, dialMhz: 14.074, band: '20m', call: 'JA2DEF/P' }
+      expect(stationAction(action)).toEqual(action)
+      expect(actionCapability(stationAction(action))).toBe('workDigitalSpot')
+      for (const bad of ['FT2', 'JS8', 'ft8', '', null, undefined]) expect(() => stationAction({ ...action, tier: bad })).toThrow()
+      for (const dialMhz of [NaN, Infinity, 0, -14.074, 250001, '14.074']) expect(() => stationAction({ ...action, dialMhz })).toThrow()
+      for (const band of ['21m', '', 'JA\nT 1', null]) expect(() => stationAction({ ...action, band })).toThrow()
+      for (const call of ['', 'JA 2DEF', 'A'.repeat(33), 'JA2DEF\nT 1', null]) expect(() => stationAction({ ...action, call })).toThrow()
+      for (const extra of ['mode', 'splitUpKhz', 'txEnabled', 'settings', 'command', 'radioId']) expect(() => stationAction({ ...action, [extra]: 1 })).toThrow()
+      for (const key of ['tier', 'dialMhz', 'band', 'call']) {
+        const missing: Record<string, unknown> = { ...action }
+        delete missing[key]
+        expect(() => stationAction(missing)).toThrow()
+      }
+    }
+    // The CW/Phone Work intent is unchanged: an older desktop parses it exactly, so it never names a tier.
+    expect(() => stationAction({ action: 'radio.workSpot', mode: 'digital', dialMhz: 14.074, band: '20m', call: 'JA2DEF' })).toThrow()
+    expect(() => stationAction({ action: 'radio.workSpot', mode: 'cw', dialMhz: 14.025, band: '20m', call: 'JA2DEF', tier: 'FT8' })).toThrow()
+    expect(actionCapability(stationAction({ action: 'radio.workSpot', mode: 'cw', dialMhz: 14.025, band: '20m', call: 'JA2DEF' }))).toBe('workSpot')
+  })
   it('accepts the privilege refusal only as a rejection reason', () => {
     const id = crypto.randomUUID()
     expect(controlOutcome({ operation: 'stationControl', operationId: id, outcome: 'rejected', reason: 'outsidePrivileges' }).outcome).toBe('rejected')

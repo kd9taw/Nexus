@@ -35,6 +35,9 @@ mod amp_follow;
 #[path = "decoder_settings_tests.rs"]
 mod decoder_settings;
 #[cfg(feature = "radio")]
+#[path = "digital_spot_tests.rs"]
+mod digital_spot;
+#[cfg(feature = "radio")]
 #[path = "rx_gain_tests.rs"]
 mod rx_gain;
 #[cfg(feature = "radio")]
@@ -392,7 +395,8 @@ fn tier_admission_requires_v3_and_keeps_one_native_receipt_through_readback() {
             "aiCw",
             "redecode",
             "splitTuning",
-            "ritTuning"
+            "ritTuning",
+            "workDigitalSpot"
         ])
     );
     let command = control_request(&state, json!({"action":"radio.tier","tier":"FT4"}));

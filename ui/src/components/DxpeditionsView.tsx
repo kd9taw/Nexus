@@ -159,7 +159,7 @@ export function DxpeditionsView({ snap, observation, onWorkSpot, onShowOnMap, on
                   chasing={!observation && chased.has(c.call.toUpperCase())}
                   onToggleChase={observation ? undefined : onToggleChase}
                   onWork={
-                    !observation && onWorkSpot
+                    onWorkSpot
                       ? (card) =>
                           onWorkSpot({
                             call: card.call,

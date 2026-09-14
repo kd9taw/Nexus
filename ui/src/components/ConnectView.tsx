@@ -427,7 +427,7 @@ export function ConnectView({
     alerts,
     muf,
     onSelectCall,
-    onWorkSpot: remote?undefined:onWorkSpot,
+    onWorkSpot,
     onPoint: remote?undefined:onPoint,
     toggleFocusBand,
   }
@@ -613,7 +613,7 @@ export function ConnectView({
               needByCall={needByCall}
               intent={intent}
               projection={shownPick === '3d' ? 'globe' : shownPick}
-              onWorkSpot={remote?undefined:onWorkSpot}
+              onWorkSpot={onWorkSpot}
               onSelectSat={onSelectSat}
               focusBand={focusBand}
               onFocusBand={toggleFocusBand}

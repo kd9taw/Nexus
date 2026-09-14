@@ -247,12 +247,14 @@ export type BrowserWorkspace = { snapshot: AppSnapshot; settings: Settings; band
 import { CollectionStatus, useRemoteCollection } from './remote-web/collections'
 import { RemoteInsights } from './remote-web/RemoteInsights'
 import { RemoteDxpeditions } from './remote-web/RemoteDxpeditions'
+import { remoteWorkable, spotNeed } from './remote-web/remote-work'
 import { RemoteFieldDay } from './remote-web/RemoteFieldDay'
 import { RemoteOta } from './remote-web/RemoteOta'
 import { RemoteMemories } from './remote-web/RemoteMemories'
 
 export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   const remoteWorkAllowed = useStationCapability('workSpot')
+  const remoteDigitalWorkAllowed = useStationCapability('workDigitalSpot')
   const display = useRemotePresentation()
   const quick = !!remote && display?.presentation === 'quick'
   const needsRead = useRemoteCollection('needs')
@@ -1838,16 +1840,19 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     }
   }, [])
 
-  const canRemoteWork = useCallback((alert: NeedAlert) => {
-    const target = workTarget(alert, bandPlan)
-    return remoteWorkAllowed && !!target &&
-      ((target.view === 'cw' && cwEnabled) || (target.view === 'phone' && phoneEnabled))
-  }, [remoteWorkAllowed, bandPlan, cwEnabled, phoneEnabled])
+  const canRemoteWork = useCallback((alert: NeedAlert) => remoteWorkable(alert, bandPlan,
+    { workSpot: remoteWorkAllowed, workDigitalSpot: remoteDigitalWorkAllowed, cwEnabled, phoneEnabled }),
+  [remoteWorkAllowed, remoteDigitalWorkAllowed, bandPlan, cwEnabled, phoneEnabled])
+  const canRemoteWorkSpot = useCallback((s: SpotRow) => canRemoteWork(spotNeed(s)), [canRemoteWork])
 
   // resolvable frequency at all falls back to a plain band QSY.
   const handleWorkNeeded = useCallback(
     (alert: NeedAlert) => {
-      if (remote && !canRemoteWork(alert)) return
+      if (remote && !canRemoteWork(alert)) {
+        // The map and DXpedition Work buttons reach here for every spot; say why nothing moved.
+        pushToast(t('remote.b1.workUnavailable'), 'info', 4000)
+        return
+      }
       // `target`, not `t` — `t` is the translator in this file.
       const target = workTarget(alert, bandPlan)
       if (!target) {
@@ -1884,7 +1889,8 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
         let tier: 'FT8' | 'FT4' | undefined
         if (opMode === 'digital') {
           const m = alert.mode?.toUpperCase()
-          if ((m === 'FT4' || m === 'FT8') && tierRef.current !== m) tier = m
+          // A browser always names the tier: its Work intent carries no implicit current tier.
+          if ((m === 'FT4' || m === 'FT8') && (remote || tierRef.current !== m)) tier = m
         }
         const s = await withErrorToast(
           () => workSpot(opMode, target.freqMhz, target.band, target.call, tier),
@@ -2017,20 +2023,9 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
 
   const handleWorkSpot = useCallback(
     (s: SpotRow) => {
-      handleWorkNeeded({
-        call: s.call,
-        entity: s.entity,
-        band: s.band,
-        zone: s.zone,
-        tags: [],
-        priority: 0,
-        headline: '',
-        // Forward the SPECIFIC digital submode (FT4/FT8) so handleWorkNeeded's tier-switch
-        // guard fires — else clicking an FT4 spot QSYs but leaves the decoder on FT8. The
-        // frequency-class `s.mode` ('Digital') never matched that guard, so it was dead.
-        mode: s.submode === 'FT4' || s.submode === 'FT8' ? s.submode : s.mode,
-        freqMhz: s.freqMhz,
-      })
+      // `spotNeed` forwards the SPECIFIC digital submode (FT4/FT8) so handleWorkNeeded's
+      // tier-switch guard fires — else clicking an FT4 spot QSYs but leaves the decoder on FT8.
+      handleWorkNeeded(spotNeed(s))
     },
     [handleWorkNeeded],
   )
@@ -2704,6 +2699,7 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
           myGrid={snap.mygrid}
           onSelect={handleSelect}
           onWork={handleWorkSpot}
+          canWork={remote ? canRemoteWorkSpot : undefined}
         />
       )
       break
@@ -2802,7 +2798,7 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
           selectedCall={activePeer}
           onSelectCall={handleMapSelect}
           needByCall={needByCall}
-          onWorkSpot={handleWorkMapSpot}
+          onWorkSpot={remote && !remoteWorkAllowed && !remoteDigitalWorkAllowed ? undefined : handleWorkMapSpot}
           needAlerts={visibleAlerts}
           // The amplifier rides the snapshot App already polls at 300 ms — no fourth poller,
           // no new command. Absent when none is configured, and the pane then renders nothing.
@@ -2828,7 +2824,7 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       )
       break
     case 'dxped':
-      workspace = remote ? <RemoteDxpeditions /> : (
+      workspace = remote ? <RemoteDxpeditions onWorkSpot={remoteWorkAllowed || remoteDigitalWorkAllowed ? handleWorkMapSpot : undefined} /> : (
         <main className="layout single">
           <DxpeditionsView
             snap={prop}

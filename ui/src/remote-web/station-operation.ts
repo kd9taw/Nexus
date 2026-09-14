@@ -33,6 +33,8 @@ export type StationAction =
   | { action: 'ft.txEnabled'; expectedTier: 'FT8' | 'FT4'; transmitEpoch: string; on: boolean }
   | { action: 'radio.level'; mode: 'digital' | 'phone' | 'cw' | 'rtty' | 'keyboard'; level: RadioLevel; expected: number; value: number }
   | { action: 'radio.workSpot'; mode: 'cw' | 'phone'; dialMhz: number; band: string; call: string }
+  // FT8/FT4 Work names its tier in its own action: an older desktop parses workSpot exactly.
+  | { action: 'radio.workDigitalSpot'; tier: 'FT8' | 'FT4'; dialMhz: number; band: string; call: string }
   | { action: 'radio.frequency'; dialMhz: number; band: string; sideband: 'USB' | 'LSB' | 'FM' | 'AM' }
   | { action: 'radio.band'; band: string; mode: 'cw' | 'phone' }
   | { action: 'radio.filterWidth'; mode: 'cw' | 'phone'; expectedHz: number; hz: number }
@@ -93,7 +95,7 @@ const ACTION_CAPABILITY: Record<StationAction['action'], ControlCapability> = {
   'radio.band': 'bandSelection', 'radio.mode': 'mode', 'radio.tier': 'tier', 'radio.workspace': 'workspace',
   'radio.filterWidth': 'receiverFilter',
   'radio.function': 'receiverDsp', 'radio.agc': 'receiverDsp',
-  'radio.phoneMode': 'phoneMode', 'radio.workSpot': 'workSpot',
+  'radio.phoneMode': 'phoneMode', 'radio.workSpot': 'workSpot', 'radio.workDigitalSpot': 'workDigitalSpot',
   'decoder.arm': 'decoder', 'decoder.clear': 'decoder', 'decoder.afcReset': 'decoder',
   'decoder.net': 'decoder', 'decoder.pskMode': 'decoder',
   'decoder.aiCw': 'aiCw', 'decoder.redecode': 'redecode',
@@ -207,6 +209,10 @@ export function stationAction(raw: unknown): StationAction {
     case 'radio.workSpot':
       object(a, ['action', 'mode', 'dialMhz', 'band', 'call'])
       if (!oneOf(a.mode, ['cw', 'phone']) || !finite(a.dialMhz) || a.dialMhz <= 0 || a.dialMhz > 250000 || !oneOf(a.band, BANDS) || typeof a.call !== 'string' || !/^[A-Za-z0-9/]{1,32}$/.test(a.call)) invalid()
+      break
+    case 'radio.workDigitalSpot':
+      object(a, ['action', 'tier', 'dialMhz', 'band', 'call'])
+      if (!oneOf(a.tier, ['FT8', 'FT4']) || !finite(a.dialMhz) || a.dialMhz <= 0 || a.dialMhz > 250000 || !oneOf(a.band, BANDS) || typeof a.call !== 'string' || !/^[A-Za-z0-9/]{1,32}$/.test(a.call)) invalid()
       break
     case 'radio.frequency':
       object(a, ['action', 'dialMhz', 'band', 'sideband'])
