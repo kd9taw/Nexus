@@ -1493,7 +1493,10 @@ mod tests {
         let km = longest
             .distance_km
             .expect("the longest-distance best carries its distance in km");
-        assert!((12_500.0..14_500.0).contains(&km), "EN61 → RE66 in km, got {km}");
+        assert!(
+            (12_500.0..14_500.0).contains(&km),
+            "EN61 → RE66 in km, got {km}"
+        );
         // Bests that are not a distance carry none.
         let busiest = j.bests.iter().find(|b| b.id == "busiest-day").unwrap();
         assert_eq!(busiest.distance_km, None);
