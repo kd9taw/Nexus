@@ -25,7 +25,7 @@ it('offers a working retry after configuration failure instead of a sign-in butt
   vi.mocked(BrowserClient.load).mockRejectedValueOnce(new Error('offline'))
   render(<RemoteApp />)
   fireEvent.click(await screen.findByRole('button', { name: 'Try again' }))
-  const signIn = await screen.findByRole('button', { name: 'Sign in or create an account' })
+  const signIn = await screen.findByRole('button', { name: 'Sign in' })
   fireEvent.click(signIn)
   await waitFor(() => expect(service.signIn).toHaveBeenCalledTimes(1))
   expect(document.querySelectorAll('main.rm-scroll')).toHaveLength(1)
@@ -82,7 +82,7 @@ it('keeps other refusals as a refusal, with sign-in and a way to switch accounts
   expect(screen.queryByRole('heading', { name: 'Confirm your email to finish' })).toBeNull()
   fireEvent.click(screen.getByRole('button', { name: 'Use a different account' }))
   await waitFor(() => expect(service.signOut).toHaveBeenCalledTimes(1))
-  fireEvent.click(screen.getByRole('button', { name: 'Sign in or create an account' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
   await waitFor(() => expect(service.signIn).toHaveBeenCalledTimes(1))
 })
 // New password sign-ups are verified with a six-digit code typed on Auth0's sign-up screen, so the
@@ -252,13 +252,34 @@ it('browser enrollment displays the local comparison code and does not imply app
   expect(service.post).toHaveBeenCalledWith(`stations/${stationId}/device`, { name: 'Test browser' })
 })
 
+// Before sign-in there is no station to list, so the page is the product's front door: its name, one
+// line about what it does, one way in and one way to join. "Your stations" is for once there are some.
+it('greets a signed-out visitor as Nexus Remote with one sign-in and one create-account button', async () => {
+  client(null)
+  const view = render(<RemoteApp />)
+  expect(await screen.findByRole('heading', { level: 1, name: 'Nexus Remote' })).toBeTruthy()
+  expect(screen.getByText('Operate your station from any browser you approve, while the radio stays at the shack.')).toBeTruthy()
+  expect(screen.queryByRole('heading', { name: 'Your stations' })).toBeNull()
+  // Exactly one of each: the old "Sign in or create an account" button also offered joining.
+  expect(screen.getAllByRole('button', { name: /sign in/i })).toHaveLength(1)
+  expect(screen.getAllByRole('button', { name: /create an account/i })).toHaveLength(1)
+  expect(screen.getByRole('button', { name: 'Sign in' })).toBeTruthy()
+  // The sign-up hint stays.
+  expect(screen.getByText(/six-digit code we email you/i)).toBeTruthy()
+  view.unmount()
+
+  client(account()); render(<RemoteApp />)
+  expect(await screen.findByRole('heading', { level: 1, name: 'Your stations' })).toBeTruthy()
+  expect(screen.queryByRole('heading', { name: 'Nexus Remote' })).toBeNull()
+})
+
 // A first-time operator should not have to find a sign-up link on somebody else's login form.
 it('offers creating an account as its own route, not a link to hunt for on the login form', async () => {
   const service = client(null)
   render(<RemoteApp />)
   fireEvent.click(await screen.findByRole('button', { name: 'Create an account' }))
   await waitFor(() => expect(service.signIn).toHaveBeenCalledWith(true))
-  fireEvent.click(screen.getByRole('button', { name: 'Sign in or create an account' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
   await waitFor(() => expect(service.signIn).toHaveBeenCalledTimes(2))
   expect(service.signIn).toHaveBeenLastCalledWith()
 })

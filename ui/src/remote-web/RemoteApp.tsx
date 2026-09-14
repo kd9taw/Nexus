@@ -151,9 +151,16 @@ export function RemoteApp() {
     <header className="rm-header"><Wordmark />
       {session && <button className="remote-button remote-button--quiet" disabled={busy} onClick={() => void act(async () => { await client?.signOut(); setSession(null) })}>{t('remote.signOut')}</button>}
     </header>
-    <main className="rm-scroll" aria-label={t('remote.stations')}><div className="rm-content remote-account">
-      <h1>{t('remote.stations')}</h1>
-      <p className="remote-site-lead">{t('remote.pilotIntro')}</p>
+    {/* Signed out, there is no station to list: the page names the product and says in one line what
+        it does. "Your stations" and the longer intro are for once there is an account. */}
+    <main className="rm-scroll" aria-label={session ? t('remote.stations') : `${BRAND} ${BRAND_SERVICE}`}><div className="rm-content remote-account">
+      {session ? <>
+        <h1>{t('remote.stations')}</h1>
+        <p className="remote-site-lead">{t('remote.pilotIntro')}</p>
+      </> : <>
+        <h1>{BRAND} {BRAND_SERVICE}</h1>
+        <p className="remote-site-lead">{t('remote.signedOutPitch')}</p>
+      </>}
       {error && <p className="rm-warning" role="alert">{refusal(error)}</p>}
       {!ready && <p role="status">{t('monitor.connecting')}</p>}
       {ready && !configured && <p role="status">{t('remote.notConfigured')}</p>}
