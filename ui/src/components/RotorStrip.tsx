@@ -14,6 +14,8 @@
 // azimuth in degrees and the true/magnetic marks are data, and the three annunciator plates
 // below are the instrument's own vocabulary.
 import { useEffect, useRef, useState, type CSSProperties } from 'react'
+import { useStationCapability, useStationControl } from '../stationAccess'
+import { controlFailureMessage } from '../remote-web/control-failure'
 import {
   getDeclination,
   getSatTrackStatus,
@@ -89,6 +91,9 @@ export function RotorStrip({ active = true, targetCall, onPointAt, onOpenSetting
   // FT cockpit).
   const [configured, setConfigured] = useState(false)
   const alive = useRef(true)
+  // A browser has no rotator reading and no satellite-track path: it only points and stops, and
+  // only while the station advertises the rotator.
+  const local = useStationControl(), remoteRotator = useStationCapability('rotator')
 
   useEffect(() => {
     if (!active) return
@@ -98,6 +103,11 @@ export function RotorStrip({ active = true, targetCall, onPointAt, onOpenSetting
         if (alive.current) setConfigured((st.rotatorModel ?? 0) > 0 || st.rotatorHost.trim() !== '')
       })
       .catch(() => {})
+    if (!local) {
+      return () => {
+        alive.current = false
+      }
+    }
     const load = () => {
       readRotator()
         .then((v) => alive.current && setAz(v))
@@ -118,7 +128,7 @@ export function RotorStrip({ active = true, targetCall, onPointAt, onOpenSetting
       alive.current = false
       window.clearInterval(id)
     }
-  }, [active])
+  }, [active, local])
 
   // Is Doppler driving a radio surface at all? Read from the DTO's `mode` —
   // the engine's own per-tick answer (a pass-only track drives nothing and
@@ -132,6 +142,50 @@ export function RotorStrip({ active = true, targetCall, onPointAt, onOpenSetting
   // and this chip claiming the dial for it contradicted the rail's own
   // "the dial stays yours" (round 3, defect 5).
   const dopplerOwnsDial = satTrack != null && dopplerInTrack && satTrack.dopplerDownlink
+
+  // THE BROWSER. No rotator at the station: nothing, as on the desktop. A rotator the browser may
+  // not steer: the plain unavailable plate. Otherwise the point-at slew and a Stop that stops the
+  // rotator only (the satellite loop is the station's), with an honest "—" for the heading.
+  if (!local) {
+    if (!configured) return null
+    if (!remoteRotator) {
+      return (
+        <span className="dim" role="status" aria-label={t('remote.rotatorUnavailable')} title={t('remote.rotatorUnavailable')}>
+          {t('rotor.strip.aria')} —
+        </span>
+      )
+    }
+    return (
+      <span role="group" aria-label={t('rotor.strip.aria')} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', color: 'inherit' }}>
+        <span style={{ fontSize: '0.65em', letterSpacing: '0.08em', opacity: 0.55, fontWeight: 600 }} aria-hidden>
+          {ROTOR_PLATE}
+        </span>
+        <span className="mono" style={{ fontSize: '0.9em', opacity: 0.6 }} title={t('remote.b1.rotatorNoHeading')}>
+          —
+        </span>
+        {targetCall && onPointAt && (
+          <button
+            type="button"
+            style={chipStyle}
+            onClick={() => onPointAt(targetCall)}
+            title={t('rotor.strip.pointAt.title', { call: targetCall })}
+          >
+            → {targetCall}
+          </button>
+        )}
+        <button
+          type="button"
+          style={chipStyle}
+          onClick={() => {
+            stopRotator().catch((e) => pushToast(controlFailureMessage(e), 'error'))
+          }}
+          title={t('rotor.strip.stop.title')}
+        >
+          ■
+        </button>
+      </span>
+    )
+  }
 
   // NO LIVE AZIMUTH. Two different stations land here — one with no rotator at
   // all (render nothing, most stations), one with a rotator configured that is

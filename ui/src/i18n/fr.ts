@@ -48,6 +48,8 @@ export const FR: PartialCatalog = {
   // remote parity batch 1
   "remote.b1.outsidePrivileges": "Rien n’a changé. Cette fréquence d’émission est hors des privilèges de votre licence.",
   "remote.b1.workUnavailable": "Ce spot ne peut pas être contacté depuis le navigateur. Rien n’a changé à la station.",
+  "remote.b1.rotatorNoHeading": "Le cap n’est pas encore affiché à distance.",
+  "remote.b1.rotatorPointing": "Orientation du rotor vers {{call}}.",
   "remote.controlLocalHint": "Autoriser un navigateur lui donne le contrôle de la station : les fonctions prises en charge du récepteur, de la radio et de l’amplificateur. Pour limiter un navigateur, révoquez-le ici. L’émission nécessite une autorisation distincte.",
   "remote.transmitAllow": "Autoriser l’émission FT8/FT4",
   "remote.transmitRevoke": "Révoquer l’autorisation d’émission",

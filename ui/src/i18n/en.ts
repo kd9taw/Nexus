@@ -117,6 +117,8 @@ export const EN = {
   // remote parity batch 1
   "remote.b1.outsidePrivileges": "Not changed. That transmit frequency is outside your license privileges.",
   "remote.b1.workUnavailable": "This spot can’t be worked from a browser. Nothing changed at the station.",
+  "remote.b1.rotatorNoHeading": "Heading isn’t shown remotely yet.",
+  "remote.b1.rotatorPointing": "Pointing the rotator at {{call}}.",
   "remote.controlLocalHint": "Approving a browser gives it station controls: supported receiver, radio and amplifier controls. To limit a browser, revoke them here. Transmitting needs its own permission.",
   "remote.transmitAllow": "Allow FT8/FT4 transmission",
   "remote.transmitRevoke": "Revoke transmission permission",

@@ -366,7 +366,7 @@ export function CwCockpit({
   const scopeClick = useRemoteScopeClick(snap)
   const levels = useRadioLevels(snap)
   const dspControl = useReceiverDsp(snap, 'cw')
-  const control = useStationControl(), receiverControl = useStationCapability('decoder'), aiCwControl = useStationCapability('aiCw')
+  const control = useStationControl(), receiverControl = useStationCapability('decoder'), aiCwControl = useStationCapability('aiCw'), rotatorControl = useStationCapability('rotator')
   const spotsRead = useRemoteCollection('spots')
   // Live S-meter (shared 100 ms poll, lock-free backend) — used to arrive via the 300 ms
   // snapshot on top of the backend's own sampling, which read as a laggy needle. smeterDb-only
@@ -1528,17 +1528,18 @@ export function CwCockpit({
             onManage={onOpenMemories}
           /> : <MemoryStripUnavailable />
         )}
-        {control ? <RotorStrip
+        {control || rotatorControl ? <RotorStrip
           onOpenSettings={onOpenSettings}
           targetCall={guide.workedCall}
           onPointAt={(call) =>
             pointRotatorAtCall(call)
-              .then((bearing) =>
-                pushToast(t('cw.rotator.pointed', { call, bearing: Math.round(bearing) }), 'info'),
+              .then((bearing: number | null | undefined) =>
+                // A browser gets no bearing back: the station resolves it.
+                pushToast(bearing == null ? t('remote.b1.rotatorPointing', { call }) : t('cw.rotator.pointed', { call, bearing: Math.round(bearing) }), 'info'),
               )
               .catch((e) =>
                 pushToast(
-                  t('cw.rotator.failed', { error: e instanceof Error ? e.message : String(e) }),
+                  control ? t('cw.rotator.failed', { error: e instanceof Error ? e.message : String(e) }) : controlFailureMessage(e),
                   'error',
                 ),
               )

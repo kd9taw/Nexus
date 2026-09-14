@@ -889,3 +889,84 @@ it('refuses an APRS tune on older stations, without its hint, or away from an AP
   expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(0)
   h.client.disconnected()
 })
+
+it('points the rotator by azimuth through a pending receipt and resolves on the station outcome, with no radio sample to wait for', async () => {
+  const h = setup(storage(), ['rotator'], 3)
+  const reads = vi.fn()
+  const transport = controlTransport({ kind: 'remote', invoke: reads } as ApplicationTransport,
+    { age: () => 0 } as unknown as ApplicationClient, h.client)
+  const result = transport.invoke('point_rotator', { azDeg: 123.44 })
+  await Promise.resolve()
+  const request = h.sent[h.sent.length - 1].request
+  // One decimal is what the station accepts; the page never sends more.
+  expect(request.action).toEqual({ action: 'rotator.point', azimuthDeg: 123.4 })
+  const receipt = { operation: 'stationControl', operationId: request.requestId }
+  h.reply({ ...receipt, outcome: 'pending' })
+  await Promise.resolve(); await Promise.resolve()
+  await h.advance(250)
+  h.reply({ ...h.state, revision: 2, nextSequence: 2 })
+  await h.advance(250)
+  expect(h.sent[h.sent.length - 1].request).toMatchObject({ type: 'result', operationId: request.requestId })
+  h.reply({ ...receipt, outcome: 'applied', evidence: 'stationState' })
+  expect(await result).toBeUndefined()
+  expect(reads).not.toHaveBeenCalled()
+  expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(1)
+  h.client.disconnected()
+})
+
+it.each([
+  ['point_rotator_at_call', { call: 'JA1ABC' }, { action: 'rotator.pointAtCall', call: 'JA1ABC' }],
+  ['stop_rotator', undefined, { action: 'rotator.stop' }],
+  ['stop_rotator', {}, { action: 'rotator.stop' }],
+  ['point_rotator', { azDeg: 359.97 }, { action: 'rotator.point', azimuthDeg: 0 }],
+] as const)('maps %s to one rotator action and resolves with no bearing', async (command, args, action) => {
+  const h = setup(storage(), ['rotator'], 3)
+  const transport = controlTransport({ kind: 'remote', invoke: vi.fn() } as ApplicationTransport, { age: () => 0 } as unknown as ApplicationClient, h.client)
+  const result = transport.invoke(command, args as Record<string, unknown> | undefined)
+  await Promise.resolve()
+  const request = h.sent[h.sent.length - 1].request
+  expect(request.action).toEqual(action)
+  h.reply({ operation: 'stationControl', operationId: request.requestId, outcome: 'applied', evidence: 'stationState' })
+  expect(await result).toBeUndefined()
+  h.client.disconnected()
+})
+
+it.each([
+  [{ outcome: 'unknown', reason: 'hardwareUnconfirmed' }, 'operationUnknown'],
+  [{ outcome: 'rejected', reason: 'hardwareUnavailable' }, 'hardwareUnavailable'],
+  [{ outcome: 'applied', evidence: 'radioReadback' }, 'operationUnknown'],
+] as const)('refuses a rotator outcome %o as %s without replaying it', async (outcome, message) => {
+  const h = setup(storage(), ['rotator'], 3)
+  const transport = controlTransport({ kind: 'remote', invoke: vi.fn() } as ApplicationTransport, { age: () => 0 } as unknown as ApplicationClient, h.client)
+  const result = transport.invoke('stop_rotator', undefined).catch(e => e)
+  await Promise.resolve()
+  const request = h.sent[h.sent.length - 1].request
+  h.reply({ operation: 'stationControl', operationId: request.requestId, ...outcome })
+  expect(await result).toMatchObject({ message })
+  await h.advance(1500)
+  expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(1)
+  h.client.disconnected()
+})
+
+it('sends no rotator command to an older station, without the hint, or with anything beside its fields, and leaves the heading read alone', async () => {
+  for (const [capabilities, version, message] of [[['rotator'], 2, 'stationUnsupported'], [['frequency', 'aprsTuning'], 3, 'notController']] as [ControlCapability[], OperationVersion, string][]) {
+    const h = setup(storage(), capabilities, version)
+    const transport = controlTransport({ kind: 'remote', invoke: vi.fn() } as ApplicationTransport, { age: () => 0 } as unknown as ApplicationClient, h.client)
+    await expect(transport.invoke('stop_rotator', undefined)).rejects.toThrow(message)
+    await expect(transport.invoke('point_rotator', { azDeg: 90 })).rejects.toThrow(message)
+    expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(0)
+    h.client.disconnected()
+  }
+  const h = setup(storage(), ['rotator'], 3)
+  const invoke = vi.fn(async () => null), transport = controlTransport({ kind: 'remote', invoke } as ApplicationTransport, { age: () => 0 } as unknown as ApplicationClient, h.client)
+  for (const [command, bad] of [['point_rotator', { azDeg: 90, elDeg: 10 }], ['point_rotator', { azDeg: '90' }], ['point_rotator', {}], ['point_rotator', undefined],
+    ['point_rotator_at_call', { call: 'ja1abc' }], ['point_rotator_at_call', { call: 'JA1ABC', azDeg: 1 }], ['stop_rotator', { now: true }]] as [string, Record<string, unknown> | undefined][]) {
+    await expect(transport.invoke(command, bad)).rejects.toThrow()
+  }
+  expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(0)
+  // The heading has no remote path: the read passes through untouched (and the reads refuse it).
+  expect(invoke).not.toHaveBeenCalled()
+  await transport.invoke('read_rotator')
+  expect(invoke).toHaveBeenCalledWith('read_rotator', undefined)
+  h.client.disconnected()
+})

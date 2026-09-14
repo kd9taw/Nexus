@@ -356,6 +356,7 @@ export function OperateCockpit({
   wheelSensitivity,
 }: Props) {
   const control = useStationControl()
+  const rotatorControl = useStationCapability('rotator')
   const messageControl = useStationCapability('ftMessages')
   const ftSettings = useStationCapability('ftSettings') && !!snap.remoteFtSettings && (tier === 'FT8' || tier === 'FT4')
   const ftRuntime = useStationCapability('ftRuntime') && !!snap.remoteFtRuntime && (tier === 'FT8' || tier === 'FT4')
@@ -1335,26 +1336,29 @@ export function OperateCockpit({
           nextSlotSec={nextSlotSec}
           specialOpBadge={specialOpBadge}
           rotor={
+            control || rotatorControl ? (
             <RotorStrip
               active={active}
               onOpenSettings={onOpenSettings}
               targetCall={selectedCall}
               onPointAt={(call) =>
                 pointRotatorAtCall(call)
-                  .then((bearing) =>
-                    pushToast(t('operate.rotor.pointed', { call, deg: Math.round(bearing) }), 'info'),
+                  .then((bearing: number | null | undefined) =>
+                    // A browser gets no bearing back: the station resolves it.
+                    pushToast(bearing == null ? t('remote.b1.rotatorPointing', { call }) : t('operate.rotor.pointed', { call, deg: Math.round(bearing) }), 'info'),
                   )
                   // `{{error}}` is the backend's own refusal, passed through as a value.
                   .catch((e) =>
                     pushToast(
-                      t('operate.rotor.failed', {
+                      control ? t('operate.rotor.failed', {
                         error: e instanceof Error ? e.message : String(e),
-                      }),
+                      }) : controlFailureMessage(e),
                       'error',
                     ),
                   )
               }
             />
+            ) : <span className="dim" role="status" aria-label={t('remote.rotatorUnavailable')} title={t('remote.rotatorUnavailable')}>{t('rotor.strip.aria')} —</span>
           }
           // Transmit meters (SWR / ALC / Po / COMP): the old PERMANENT body row is
           // gone (the operator's "eating up a whole line" complaint) — the same

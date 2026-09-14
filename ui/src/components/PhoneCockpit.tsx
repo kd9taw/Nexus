@@ -406,6 +406,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
   const quick = display?.presentation === 'quick'
   const details = !quick || display.radioDetails
   const frequencyControl = useStationCapability('frequency')
+  const rotatorControl = useStationCapability('rotator')
   const scopeClick = useRemoteScopeClick(snap)
   const levels = useRadioLevels(snap)
   const dspControl = useReceiverDsp(snap, 'phone')
@@ -1451,7 +1452,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
             onManage={onOpenMemories}
           /> : <MemoryStripUnavailable />
         )}
-        {control ? <RotorStrip onOpenSettings={onOpenSettings} /> : <span className="dim" role="status" aria-label={t('remote.rotatorUnavailable')} title={t('remote.rotatorUnavailable')}>{t('rotor.strip.aria')} —</span>}
+        {control || rotatorControl ? <RotorStrip onOpenSettings={onOpenSettings} /> : <span className="dim" role="status" aria-label={t('remote.rotatorUnavailable')} title={t('remote.rotatorUnavailable')}>{t('rotor.strip.aria')} —</span>}
         {/* Glyph only (density pass 2026-08-04, the same move the FT cockpit's header made):
             '● Record QSO' spent ~95px of a header region that WRAPS, and the word said what
             the glyph and the tooltip already say. The accessible name is explicit here rather

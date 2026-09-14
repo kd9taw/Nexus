@@ -159,6 +159,23 @@ export function controlTransport(reads: ApplicationTransport, client: Applicatio
             action = stationAction({ action: 'radio.aprsTune', dialMhz: args.dialMhz })
             read = 'get_snapshot'
             break
+          case 'point_rotator': {
+            // An operator gesture only: exactly the azimuth, to the tenth of a degree the station takes.
+            if (!args || Object.keys(args).length !== 1 || !('azDeg' in args)) throw Error('invalidOperation')
+            const az = typeof args.azDeg === 'number' && Number.isFinite(args.azDeg) ? (Math.round(args.azDeg * 10) / 10) % 360 : args.azDeg
+            // No rotator reading reaches the page, so nothing is read back: the station's outcome is the answer.
+            action = stationAction({ action: 'rotator.point', azimuthDeg: az })
+            break
+          }
+          case 'point_rotator_at_call':
+            // The bearing is resolved at the station; the page gets no bearing back.
+            if (!args || Object.keys(args).length !== 1 || !('call' in args)) throw Error('invalidOperation')
+            action = stationAction({ action: 'rotator.pointAtCall', call: args.call })
+            break
+          case 'stop_rotator':
+            if (args && Object.keys(args).length) throw Error('invalidOperation')
+            action = stationAction({ action: 'rotator.stop' })
+            break
           case 'work_spot':
             if (!args || Object.keys(args).some(k => !['mode', 'freqMhz', 'band', 'call', 'tier'].includes(k))) throw Error('applicationUnsupported')
             if (args.tier === null || args.tier === undefined) action = stationAction({ action: 'radio.workSpot', mode: args.mode, dialMhz: args.freqMhz, band: args.band, call: args.call })
@@ -278,6 +295,7 @@ export function controlTransport(reads: ApplicationTransport, client: Applicatio
         if (action.action === 'radio.workDigitalSpot' && (result.outcome !== 'applied' || result.evidence !== 'radioReadback')) throw Error('operationUnknown')
         if (action.action === 'radio.repeater' && (result.outcome !== 'applied' || result.evidence !== 'radioReadback')) throw Error('operationUnknown')
         if (action.action === 'radio.aprsTune' && (result.outcome !== 'applied' || result.evidence !== 'radioReadback')) throw Error('operationUnknown')
+        if (action.action.startsWith('rotator.') && (result.outcome !== 'applied' || result.evidence !== 'stationState')) throw Error('operationUnknown')
         if (action.action === 'radio.memoryRecall' && (result.outcome !== 'applied' || result.evidence !== 'radioReadback')) throw Error('operationUnknown')
         if (action.action === 'decoder.aiCw' && (result.outcome !== 'applied' || result.evidence !== 'settingsSaved')) throw Error('operationUnknown')
         if (action.action === 'decoder.redecode' && (result.outcome !== 'applied' || result.evidence !== 'receiverState')) throw Error('operationUnknown')

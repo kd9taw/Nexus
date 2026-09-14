@@ -39,6 +39,10 @@ export type StationAction =
   | { action: 'radio.repeater'; outputMhz: number; shift: 'simplex' | 'plus' | 'minus'; offsetHz: number; toneHz: number }
   // The APRS channel pick: one of the regional 2 m APRS channels, FM simplex at the station.
   | { action: 'radio.aprsTune'; dialMhz: number }
+  // The rotator, by operator gesture only: an azimuth, a callsign's entity, or stop.
+  | { action: 'rotator.point'; azimuthDeg: number }
+  | { action: 'rotator.pointAtCall'; call: string }
+  | { action: 'rotator.stop' }
   // A station memory: its section and exact dial, plus its own sideband (Phone) or its FM machine.
   | { action: 'radio.memoryRecall'; section: 'cw' | 'phone' | 'digital'; dialMhz: number; band: string; sideband: 'USB' | 'LSB' | null
       fm?: { shift: 'simplex' | 'plus' | 'minus'; offsetHz: number; toneHz: number } }
@@ -105,6 +109,7 @@ const ACTION_CAPABILITY: Record<StationAction['action'], ControlCapability> = {
   'radio.phoneMode': 'phoneMode', 'radio.workSpot': 'workSpot', 'radio.workDigitalSpot': 'workDigitalSpot',
   'radio.repeater': 'repeaterTuning',
   'radio.aprsTune': 'aprsTuning',
+  'rotator.point': 'rotator', 'rotator.pointAtCall': 'rotator', 'rotator.stop': 'rotator',
   'radio.memoryRecall': 'memoryRecall',
   'decoder.arm': 'decoder', 'decoder.clear': 'decoder', 'decoder.afcReset': 'decoder',
   'decoder.net': 'decoder', 'decoder.pskMode': 'decoder',
@@ -331,6 +336,18 @@ export function stationAction(raw: unknown): StationAction {
       object(a, ['action', 'dialMhz'])
       // Only a regional APRS channel: this is the APRS pick, never a general 2 m tune.
       if (!finite(a.dialMhz) || !APRS_CHANNELS_HZ.includes(Math.round((a.dialMhz as number) * 1e6))) invalid()
+      break
+    case 'rotator.point':
+      object(a, ['action', 'azimuthDeg'])
+      // An azimuth the rotctld line carries exactly: 0 ≤ az < 360, to a tenth of a degree.
+      if (!finite(a.azimuthDeg) || a.azimuthDeg < 0 || a.azimuthDeg >= 360 || Math.abs(a.azimuthDeg * 10 - Math.round(a.azimuthDeg * 10)) > 1e-6) invalid()
+      break
+    case 'rotator.pointAtCall':
+      object(a, ['action', 'call'])
+      if (typeof a.call !== 'string' || !/^[A-Z0-9/]{3,32}$/.test(a.call)) invalid()
+      break
+    case 'rotator.stop':
+      object(a, ['action'])
       break
     case 'radio.split':
       // null is simplex. Both values are always named: a missing one is not simplex by omission.

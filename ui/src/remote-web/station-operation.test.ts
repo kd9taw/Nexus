@@ -292,6 +292,25 @@ describe('split and clarifier requests', () => {
     for (const extra of ['band', 'mode', 'shift', 'txEnabled', 'settings', 'radioId']) expect(() => stationAction({ ...action, [extra]: 1 })).toThrow()
     expect(() => stationAction({ action: 'radio.aprsTune' })).toThrow()
   })
+  it('points the rotator only by azimuth or callsign, stops it bare, and nothing else, under its own hint', () => {
+    for (const azimuthDeg of [0, 90, 123.4, 359.9]) {
+      const action = { action: 'rotator.point', azimuthDeg }
+      expect(stationAction(action)).toEqual(action)
+      expect(actionCapability(stationAction(action))).toBe('rotator')
+    }
+    for (const azimuthDeg of [360, 400, -1, 12.34, NaN, Infinity, -Infinity, '90', null, undefined]) expect(() => stationAction({ action: 'rotator.point', azimuthDeg })).toThrow()
+    for (const extra of ['elevationDeg', 'host', 'port', 'command', 'txEnabled', 'radioId']) expect(() => stationAction({ action: 'rotator.point', azimuthDeg: 90, [extra]: 1 })).toThrow()
+    for (const call of ['JA1ABC', '3Y0J/MM', 'K1A']) {
+      const action = { action: 'rotator.pointAtCall', call }
+      expect(stationAction(action)).toEqual(action)
+      expect(actionCapability(stationAction(action))).toBe('rotator')
+    }
+    for (const call of ['ja1abc', 'W1', 'A'.repeat(33), 'W1AW\nS', 'W1AW S', '', null, 7]) expect(() => stationAction({ action: 'rotator.pointAtCall', call })).toThrow()
+    expect(() => stationAction({ action: 'rotator.pointAtCall', call: 'JA1ABC', azimuthDeg: 90 })).toThrow()
+    expect(stationAction({ action: 'rotator.stop' })).toEqual({ action: 'rotator.stop' })
+    expect(actionCapability(stationAction({ action: 'rotator.stop' }))).toBe('rotator')
+    for (const extra of ['reason', 'command', 'azimuthDeg', 'satTrack']) expect(() => stationAction({ action: 'rotator.stop', [extra]: 1 })).toThrow()
+  })
   it('admits an FT8/FT4 Work intent only as its own action with an explicit tier', () => {
     for (const tier of ['FT8', 'FT4']) {
       const action = { action: 'radio.workDigitalSpot', tier, dialMhz: 14.074, band: '20m', call: 'JA2DEF/P' }

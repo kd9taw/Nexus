@@ -258,6 +258,7 @@ import { RemoteMemories } from './remote-web/RemoteMemories'
 export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   const remoteWorkAllowed = useStationCapability('workSpot')
   const remoteDigitalWorkAllowed = useStationCapability('workDigitalSpot')
+  const remoteRotatorAllowed = useStationCapability('rotator')
   const remoteRecallAllowed = useStationCapability('memoryRecall')
   const display = useRemotePresentation()
   const quick = !!remote && display?.presentation === 'quick'
@@ -1864,12 +1865,13 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // Point the antenna rotator at a needed call (great-circle bearing from your grid).
   const handlePointAntenna = useCallback(async (call: string) => {
     try {
-      const bearing = await pointRotatorAtCall(call)
-      pushToast(t('shell.rotator.pointed', { bearing: Math.round(bearing), call }), 'success', 3000)
+      // A browser gets no bearing back: the station resolves it.
+      const bearing: number | null | undefined = await pointRotatorAtCall(call)
+      pushToast(bearing == null ? t('remote.b1.rotatorPointing', { call }) : t('shell.rotator.pointed', { bearing: Math.round(bearing), call }), 'success', 3000)
     } catch (e) {
-      pushToast(typeof e === 'string' ? e : t('shell.rotator.failed', { call }), 'error', 4000)
+      pushToast(remote ? controlFailureMessage(e) : typeof e === 'string' ? e : t('shell.rotator.failed', { call }), 'error', 4000)
     }
-  }, [])
+  }, [!!remote])
 
   const canRemoteWork = useCallback((alert: NeedAlert) => remoteWorkable(alert, bandPlan,
     { workSpot: remoteWorkAllowed, workDigitalSpot: remoteDigitalWorkAllowed, cwEnabled, phoneEnabled }),
@@ -2703,7 +2705,7 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
           onWork={handleWorkNeeded}
           canWork={remote ? canRemoteWork : undefined}
           onPoint={
-              !remote && ((settings?.rotatorModel ?? 0) > 0 || settings?.rotatorHost?.trim())
+              (!remote || remoteRotatorAllowed) && ((settings?.rotatorModel ?? 0) > 0 || settings?.rotatorHost?.trim())
                 ? handlePointAntenna
                 : undefined
             }
@@ -2838,7 +2840,7 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
           // bundled rotctld) OR by the advanced external host — host-only was
           // the pre-rotctld gate and silently disabled point-at for model users.
           onPoint={
-            (settings?.rotatorModel ?? 0) > 0 || settings?.rotatorHost?.trim()
+            (!remote || remoteRotatorAllowed) && ((settings?.rotatorModel ?? 0) > 0 || settings?.rotatorHost?.trim())
               ? handlePointAntenna
               : undefined
           }

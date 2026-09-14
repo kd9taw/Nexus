@@ -367,6 +367,18 @@ pub enum Action {
         #[serde(rename = "dialMhz")]
         dial_mhz: f64,
     },
+    /// Point the rotator at an absolute azimuth: an operator gesture only.
+    #[serde(rename = "rotator.point")]
+    RotatorPoint {
+        #[serde(rename = "azimuthDeg")]
+        azimuth_deg: f64,
+    },
+    /// Point the rotator at a callsign's entity, bearing resolved at the station.
+    #[serde(rename = "rotator.pointAtCall")]
+    RotatorPointAtCall { call: String },
+    /// Stop the rotator.
+    #[serde(rename = "rotator.stop")]
+    RotatorStop {},
     /// A memory recall: the section, the memory's exact dial, its own sideband (Phone only) or
     /// its FM machine. Never a Settings form, a call or a tier.
     #[serde(rename = "radio.memoryRecall")]
@@ -411,6 +423,17 @@ pub enum Action {
         expected_follow: bool,
         follow: bool,
     },
+}
+
+#[cfg(feature = "radio")]
+#[path = "rotator.rs"]
+pub(super) mod rotator;
+
+/// Whether the desktop's satellite loop is steering the mast right now. An unreadable marker
+/// answers yes, so a remote point never fights a track it could not see.
+#[cfg(feature = "radio")]
+fn satellite_track_live() -> bool {
+    crate::SAT_TRACK.lock().map(|g| g.is_some()).unwrap_or(true)
 }
 
 pub fn execute(
@@ -593,6 +616,37 @@ pub fn execute(
                 context.radio_connection.ok_or(Reason::ReadingUnavailable)?,
                 permit,
             );
+        }
+        // The rotator: resolved from station Settings here, written by its own worker thread so
+        // this lock is never held across rotctld. It never arms or keys anything.
+        #[cfg(feature = "radio")]
+        Action::RotatorPoint { azimuth_deg } => {
+            if !rotator::valid_azimuth(*azimuth_deg) {
+                return Err(Reason::InvalidAction);
+            }
+            return rotator::queue(
+                engine.settings(),
+                rotator::Command::Point(*azimuth_deg),
+                permit,
+                satellite_track_live(),
+            );
+        }
+        #[cfg(feature = "radio")]
+        Action::RotatorPointAtCall { call } => {
+            if !rotator::valid_call(call) {
+                return Err(Reason::InvalidAction);
+            }
+            let bearing = rotator::bearing_to_call(engine.settings(), call)?;
+            return rotator::queue(
+                engine.settings(),
+                rotator::Command::Point(bearing),
+                permit,
+                satellite_track_live(),
+            );
+        }
+        #[cfg(feature = "radio")]
+        Action::RotatorStop {} => {
+            return rotator::queue(engine.settings(), rotator::Command::Stop, permit, false);
         }
         #[cfg(feature = "radio")]
         Action::RxGain {
@@ -1093,6 +1147,9 @@ impl Action {
             | Self::WorkDigitalSpot { .. }
             | Self::Repeater { .. }
             | Self::AprsTune { .. }
+            | Self::RotatorPoint { .. }
+            | Self::RotatorPointAtCall { .. }
+            | Self::RotatorStop { .. }
             | Self::MemoryRecall { .. }
             | Self::Tier { .. }
             | Self::Workspace { .. }
@@ -1149,6 +1206,7 @@ pub fn capabilities(version: u8) -> Vec<&'static str> {
                 "repeaterTuning",
                 "memoryRecall",
                 "aprsTuning",
+                "rotator",
             ]
         }
     }
