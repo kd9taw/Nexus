@@ -1569,7 +1569,9 @@ export function Logbook({
                     title={t('logbook.row.pushQrz.title', { call: q.call })}
                     aria-label={t('logbook.row.pushQrz.aria', { call: q.call })}
                   >
-                    ↥
+                    {/* #270: this was a bare ↥, and an operator looking for "Upload to QRZ"
+                        reported the button as gone. Named like its CL / HL / WRL siblings. */}
+                    {QRZ_LABEL}
                   </button>
                   <button
                     type="button"

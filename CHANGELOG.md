@@ -22,6 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is unchanged, so JTAlert, GridTracker and loggers already working carry on as before. Field Day
   contacts still send only the "QSO logged" message. (#267)
 
+- **The Logbook's push-to-QRZ button says QRZ.** Each row's QRZ upload button was a bare ↥ arrow,
+  easy to take for something else, so it looked as if uploading a single contact to QRZ had gone.
+  It now reads QRZ, like the CL, HL and WRL buttons beside it; hovering still says what it does,
+  and screen readers still hear "Push <call> to QRZ". (#270)
+
 ### Security
 
 - **Encrypted connections refuse a malformed setup from the server.** Nexus's secure-connection
