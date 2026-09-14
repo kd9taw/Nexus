@@ -2542,12 +2542,12 @@ export const EN = {
   'hideCountries.other.head': 'Other country…',
   // #229. The continent CODE follows each name in the picker as a token: "Europe (EU)".
   'hideCountries.continents.head': 'Hide whole continents',
-  'hideCountries.continent.NA': 'North America',
-  'hideCountries.continent.SA': 'South America',
-  'hideCountries.continent.EU': 'Europe',
-  'hideCountries.continent.AF': 'Africa',
-  'hideCountries.continent.AS': 'Asia',
-  'hideCountries.continent.OC': 'Oceania',
+  'hideCountries.continent.na': 'North America',
+  'hideCountries.continent.sa': 'South America',
+  'hideCountries.continent.eu': 'Europe',
+  'hideCountries.continent.af': 'Africa',
+  'hideCountries.continent.as': 'Asia',
+  'hideCountries.continent.oc': 'Oceania',
   'hideCountries.hiddenContinents': {
     one: '{{count}} continent hidden',
     other: '{{count}} continents hidden',

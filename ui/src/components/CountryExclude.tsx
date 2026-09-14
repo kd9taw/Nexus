@@ -23,17 +23,17 @@ import { t } from '../i18n'
 function continentName(code: string): string {
   switch (code) {
     case 'NA':
-      return t('hideCountries.continent.NA')
+      return t('hideCountries.continent.na')
     case 'SA':
-      return t('hideCountries.continent.SA')
+      return t('hideCountries.continent.sa')
     case 'EU':
-      return t('hideCountries.continent.EU')
+      return t('hideCountries.continent.eu')
     case 'AF':
-      return t('hideCountries.continent.AF')
+      return t('hideCountries.continent.af')
     case 'AS':
-      return t('hideCountries.continent.AS')
+      return t('hideCountries.continent.as')
     case 'OC':
-      return t('hideCountries.continent.OC')
+      return t('hideCountries.continent.oc')
     default:
       return code
   }
