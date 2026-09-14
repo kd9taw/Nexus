@@ -3,7 +3,7 @@
 import { appendFile } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { pathToFileURL } from 'node:url'
-import { STAGING, databaseId, revision, identityFromEnv, stagingConfig, requireValue, requestJson, requestBytes } from './staging-common.mjs'
+import { databaseId, deployable, revision, identityFromEnv, secretSupplied, secretVariable, stagingConfig, requireValue, requestJson, requestBytes, target } from './staging-common.mjs'
 import { trialGrant } from './grant-trial.mjs'
 
 // The two fixed assets, plus one or more D1 migrations matched by PATTERN - deliberately not a
@@ -54,7 +54,17 @@ export async function workerDigest(response, additional = {}) {
   return createHash('sha256').update(bytes).digest('hex')
 }
 
-export function cloudflare(env = process.env, fetcher = fetch) {
+// Names a Worker's required secrets, from a configuration's `secrets.required`.
+function requiredSecrets(config) {
+  const required = config?.secrets?.required ?? []
+  requireValue(Array.isArray(required) && required.every(name => typeof name === 'string' && /^[A-Z][A-Z0-9_]*$/.test(name)),
+    'Declared required secrets must be plain upper-case names')
+  return required
+}
+
+export function cloudflare(env = process.env, fetcher = fetch, row = target(env)) {
+  // Before any credential check or request: a placeholder environment reaches no provider at all.
+  const TARGET = deployable(row)
   requireValue(/^[0-9a-f]{32}$/.test(env.CLOUDFLARE_ACCOUNT_ID ?? ''), 'CLOUDFLARE_ACCOUNT_ID is missing or invalid')
   requireValue(typeof env.CLOUDFLARE_API_TOKEN === 'string' && env.CLOUDFLARE_API_TOKEN.length > 0
     && !/\s/.test(env.CLOUDFLARE_API_TOKEN), 'CLOUDFLARE_API_TOKEN is missing or invalid')
@@ -71,9 +81,9 @@ export function cloudflare(env = process.env, fetcher = fetch) {
   async function databases() {
     const matches = []
     for (let page = 1; page <= 100; page++) {
-      const response = await api(`/d1/database?name=${STAGING.name}&per_page=100&page=${page}`, 'D1 inventory')
+      const response = await api(`/d1/database?name=${TARGET.database}&per_page=100&page=${page}`, 'D1 inventory')
       requireValue(Array.isArray(response.result), 'D1 inventory returned an unexpected shape')
-      matches.push(...response.result.filter(row => row.name === STAGING.name))
+      matches.push(...response.result.filter(row => row.name === TARGET.database))
       if (response.result.length < 100) {
         requireValue(matches.length <= 1, 'Ambiguous staging database; inspect the account before continuing')
         return matches[0] ? databaseId(matches[0].uuid) : null
@@ -86,36 +96,66 @@ export function cloudflare(env = process.env, fetcher = fetch) {
     const workers = await api('/workers/scripts', 'Worker inventory')
     requireValue(Array.isArray(workers.result) && workers.result.every(row => typeof row.id === 'string'),
       'Worker inventory returned an unexpected shape')
-    const named = workers.result.filter(row => row.id === STAGING.name)
+    const named = workers.result.filter(row => row.id === TARGET.name)
     requireValue(named.length <= 1, 'Ambiguous staging Worker; review it before replacement')
-    const domains = await api(`/workers/domains?hostname=${new URL(STAGING.origin).hostname}`, 'Worker domain inventory')
+    const domains = await api(`/workers/domains?hostname=${new URL(TARGET.origin).hostname}`, 'Worker domain inventory')
     requireValue(Array.isArray(domains.result), 'Worker domain inventory returned an unexpected shape')
-    const matches = domains.result.filter(row => row.hostname === new URL(STAGING.origin).hostname)
-    requireValue(matches.length <= 1 && matches.every(row => row.service === STAGING.name),
+    const matches = domains.result.filter(row => row.hostname === new URL(TARGET.origin).hostname)
+    requireValue(matches.length <= 1 && matches.every(row => row.service === TARGET.name),
       'The staging hostname is assigned to another service; no takeover is allowed')
-    return { worker: named[0], result: { service: STAGING.name, databaseId: id, workerExists: named.length === 1, domainAttached: matches.length === 1,
+    return { worker: named[0], result: { service: TARGET.name, databaseId: id, workerExists: named.length === 1, domainAttached: matches.length === 1,
       readAccess: 'D1 and Workers', writeAccess: 'not established by read-only inspection' } }
   }
   async function inspect() {
     const { worker, result } = await inventory()
-    requireValue(!worker || worker.tags?.includes(STAGING.tag),
+    requireValue(!worker || worker.tags?.includes(TARGET.tag),
       'The staging Worker name belongs to an unrecognized deployment; review it before replacement')
     return result
   }
+  // Every precondition a deploy can check WITHOUT writing, run before migrate and before upload.
+  // Both staging runs on 2026-09-13 failed the wrong way round: 34789356296 applied migrations and
+  // then stopped at upload on a missing ADMIN_SUBJECT, leaving new schema under old code, and
+  // 34792345723 uploaded and only then failed the secret check, with the Worker already live.
+  //
+  // Required secrets must be SUPPLIED by the GitHub environment, because the upload applies them
+  // every time. That is checked first and locally, so a missing one stops the run before any request.
+  // What the live Worker holds now is reported, not required: the upload replaces it, and a first
+  // deploy has no Worker at all. The post-upload check still demands `secret_text` afterwards.
+  // A binding's VALUE is never read into the report: a secret stored as a plain var carries its text
+  // in the settings response, so only a type label is kept, and only if it has the shape of one.
+  async function preflight(required, artifactDatabase) {
+    required = requiredSecrets({ secrets: { required } })
+    const missing = required.filter(name => !secretSupplied(env, name))
+    requireValue(missing.length === 0, `${missing.map(secretVariable).join(', ')} not set in this GitHub environment; `
+      + 'every deploy applies required Worker secrets from it, so nothing was migrated or uploaded')
+    const current = await inspect()
+    requireValue(current.databaseId, 'The staging database is absent; run provision first')
+    if (artifactDatabase !== undefined) requireValue(databaseId(artifactDatabase) === current.databaseId,
+      'The artifact database does not match the staging account inventory')
+    const liveSecretTypes = {}
+    if (required.length > 0 && current.workerExists) {
+      const settings = (await api(`/workers/scripts/${TARGET.name}/settings`, 'Worker configuration read')).result
+      requireValue(Array.isArray(settings?.bindings), 'Worker configuration returned an unexpected shape')
+      for (const name of required) {
+        const found = settings.bindings.filter(binding => binding?.name === name)
+        liveSecretTypes[name] = found.length === 0 ? 'absent' : found.length > 1 ? 'duplicated'
+          : typeof found[0].type === 'string' && /^[a-z_]{1,32}$/.test(found[0].type) ? found[0].type : 'unrecognized'
+      }
+    } else for (const name of required) liveSecretTypes[name] = 'no Worker yet'
+    return { ...current, secretsSupplied: required, liveSecretTypes }
+  }
   async function confirmUpload(config, expectedHash, additional = {}) {
-    requireValue(config.name === STAGING.name && /^[0-9a-f]{64}$/.test(expectedHash), 'A staging artifact and Worker SHA-256 are required')
+    requireValue(config.name === TARGET.name && /^[0-9a-f]{64}$/.test(expectedHash), 'A staging artifact and Worker SHA-256 are required')
     revision(config.vars?.REMOTE_BUILD_REVISION)
     const { worker, result } = await inventory()
     requireValue(worker && result.databaseId === config.d1_databases[0].database_id, 'The uploaded Worker and artifact database must exist in the staging account')
-    const settings = (await api(`/workers/scripts/${STAGING.name}/settings`, 'Worker configuration read')).result
+    const settings = (await api(`/workers/scripts/${TARGET.name}/settings`, 'Worker configuration read')).result
     // vars + DB/ASSETS/STATIONS + every secret the config declares required. The count stays
     // EXACT: an unexpected binding is still refused, which is what staging.test.mjs's
     // 'extra-binding' fault asserts. What changed is that a DECLARED secret is now expected
     // rather than treated as an intruder - without this, setting ADMIN_SUBJECT made a successful
     // deploy fail its own verification, after the Worker was already live.
-    const required = config.secrets?.required ?? []
-    requireValue(Array.isArray(required) && required.every(name => typeof name === 'string' && /^[A-Z][A-Z0-9_]*$/.test(name)),
-      'Declared required secrets must be plain upper-case names')
+    const required = requiredSecrets(config)
     requireValue(Array.isArray(settings?.bindings) && settings.bindings.length === Object.keys(config.vars).length + 3 + required.length,
       'Uploaded Worker binding inventory differs from the artifact')
     const bindings = new Map(settings.bindings.map(binding => [binding.name, binding]))
@@ -129,18 +169,18 @@ export function cloudflare(env = process.env, fetcher = fetch) {
     requireValue(bindings.get('DB')?.type === 'd1' && bindings.get('DB').id === result.databaseId
       && bindings.get('ASSETS')?.type === 'assets' && bindings.get('STATIONS')?.type === 'durable_object_namespace'
       && bindings.get('STATIONS').class_name === 'StationRoom'
-      && (!bindings.get('STATIONS').script_name || bindings.get('STATIONS').script_name === STAGING.name),
+      && (!bindings.get('STATIONS').script_name || bindings.get('STATIONS').script_name === TARGET.name),
     'Uploaded Worker service bindings differ from the artifact')
     // Observability is non-versioned. Read its dedicated endpoint; the combined
     // version settings response can omit it. Wrangler normalizes absent settings
     // to disabled, but explicit log/trace overrides must also remain disabled.
-    const script = (await api(`/workers/scripts/${STAGING.name}/script-settings`, 'Worker script configuration read')).result
+    const script = (await api(`/workers/scripts/${TARGET.name}/script-settings`, 'Worker script configuration read')).result
     requireValue(script && typeof script === 'object' && !Array.isArray(script), 'Worker script settings have an unexpected shape')
     const obs = script.observability
     const runtime = { dateMatches: settings.compatibility_date === config.compatibility_date,
       observabilityDisabled: (obs == null || typeof obs === 'object' && !Array.isArray(obs))
         && [obs?.enabled, obs?.logs?.enabled, obs?.traces?.enabled].every(value => value === undefined || value === false) }
-    const content = await requestBytes(`${base}/workers/scripts/${STAGING.name}/content/v2`, {
+    const content = await requestBytes(`${base}/workers/scripts/${TARGET.name}/content/v2`, {
       headers: { authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}` },
     }, fetcher, 'Worker content read')
     let digest
@@ -155,15 +195,15 @@ export function cloudflare(env = process.env, fetcher = fetch) {
     const { worker } = await confirmUpload(config, expectedHash, additional)
     requireValue(worker.tags == null || Array.isArray(worker.tags) && worker.tags.every(tag => typeof tag === 'string'),
       'Worker tags have an unexpected shape')
-    if (!worker.tags?.includes(STAGING.tag)) await api(`/workers/scripts/${STAGING.name}/script-settings`,
-      'Staging Worker ownership tag', { tags: [...(worker.tags ?? []), STAGING.tag] }, 'PATCH')
+    if (!worker.tags?.includes(TARGET.tag)) await api(`/workers/scripts/${TARGET.name}/script-settings`,
+      'Staging Worker ownership tag', { tags: [...(worker.tags ?? []), TARGET.tag] }, 'PATCH')
     return inspect()
   }
   async function attachDomain() {
     const current = await inspect()
     requireValue(current.workerExists, 'The staging Worker must exist before domain attachment')
     if (!current.domainAttached) await api('/workers/domains', 'Staging custom domain attachment', {
-      hostname: new URL(STAGING.origin).hostname, service: STAGING.name, zone_name: STAGING.zone,
+      hostname: new URL(TARGET.origin).hostname, service: TARGET.name, zone_name: TARGET.zone,
     }, 'PUT')
     const confirmed = await inspect()
     requireValue(confirmed.domainAttached, 'Cloudflare did not confirm the staging custom domain')
@@ -173,7 +213,7 @@ export function cloudflare(env = process.env, fetcher = fetch) {
     // Explicit administrator operation: exact receipt bytes and every public
     // binding must agree before a previously untagged Worker can be recognized.
     await markUpload(config, expectedHash, recoveryModules(additional))
-    return { service: STAGING.name, ownership: 'verified artifact and tag', revision: config.vars.REMOTE_BUILD_REVISION }
+    return { service: TARGET.name, ownership: 'verified artifact and tag', revision: config.vars.REMOTE_BUILD_REVISION }
   }
   async function provision() {
     const current = await inspect()
@@ -181,9 +221,9 @@ export function cloudflare(env = process.env, fetcher = fetch) {
     // No automatic retry of an ambiguous write. A rerun inventories first and
     // reuses an exact-name database if the earlier request actually succeeded.
     const created = await api('/d1/database', 'Staging D1 creation', {
-      name: STAGING.name, primary_location_hint: 'enam', read_replication: { mode: 'disabled' },
+      name: TARGET.database, primary_location_hint: 'enam', read_replication: { mode: 'disabled' },
     })
-    requireValue(created.result?.name === STAGING.name, 'Cloudflare did not confirm the requested database name')
+    requireValue(created.result?.name === TARGET.database, 'Cloudflare did not confirm the requested database name')
     const id = databaseId(created.result.uuid)
     requireValue(await databases() === id, 'The created staging database was not confirmed by inventory')
     return { ...current, databaseId: id, created: true }
@@ -214,18 +254,24 @@ export function cloudflare(env = process.env, fetcher = fetch) {
     const now = Date.now()
     requireValue(row && row.enabled === 1 && Number.isSafeInteger(row.expires_at) && row.expires_at > now,
       'The grant did not leave the trial active')
-    return { service: STAGING.name, trial: 'active', source: row.source, daysLeft: Math.round((row.expires_at - now) / 86400000) }
+    return { service: TARGET.name, trial: 'active', source: row.source, daysLeft: Math.round((row.expires_at - now) / 86400000) }
   }
-  return { inspect, provision, confirmUpload, markUpload, attachDomain, recover, grantTrial }
+  return { inspect, preflight, provision, confirmUpload, markUpload, attachDomain, recover, grantTrial }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
     const mode = process.argv[2]
-    requireValue(process.argv.length === 3 && ['inspect', 'provision', 'resolve', 'recover', 'grant-trial'].includes(mode), 'Use inspect, provision, resolve, recover or grant-trial')
+    requireValue(process.argv.length === 3 && ['inspect', 'preflight', 'provision', 'resolve', 'recover', 'grant-trial'].includes(mode), 'Use inspect, preflight, provision, resolve, recover or grant-trial')
     const api = cloudflare()
     let result
-    if (mode === 'recover') {
+    if (mode === 'preflight') {
+      // Before the gates and before any write: the secrets the checked-in template requires. The
+      // artifact's database is compared again, at migrate and at upload, once an artifact exists.
+      const { readFile } = await import('node:fs/promises')
+      const template = JSON.parse(await readFile(new URL('../wrangler.jsonc', import.meta.url), 'utf8'))
+      result = await api.preflight(template.secrets?.required ?? [])
+    } else if (mode === 'recover') {
       const { readFile } = await import('node:fs/promises')
       const { verifyPublicSource } = await import('./staging-artifact.mjs')
       const sha = revision(process.env.REMOTE_RECOVERY_REVISION)
