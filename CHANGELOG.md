@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A QRZ or eQSL upload that runs out of retries now says so.** After 20 failed tries Nexus used
+  to drop the contact from its upload queue without a word, so a QSO that never reached QRZ or
+  eQSL only showed up missing months later. The Connections log now names the contact (call, band,
+  mode, date and time) and says how to send it again: the QRZ button on its Logbook row, or Push to
+  eQSL under Awards ▸ Confirmations. (#290)
+
 ### Security
 
 - **Encrypted connections refuse a malformed setup from the server.** Nexus's secure-connection

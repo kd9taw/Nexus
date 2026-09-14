@@ -14133,6 +14133,54 @@ fn cap_hrdlog_retries(failed: u8, retries_so_far: u8) -> u8 {
     }
 }
 
+/// The QSO a give-up line names, borrowed from the record the worker is holding.
+struct GivenUpQso<'a> {
+    call: &'a str,
+    band: &'a str,
+    mode: &'a str,
+    when_unix: u64,
+}
+
+/// #290: one connection-log line per QRZ / eQSL leg that this failure takes past the shared
+/// retry budget, naming the QSO and how to push it again.
+///
+/// `retries` is the attempt count the worker is about to re-queue with. The queue drops a
+/// record once that reaches [`MAX_UPLOAD_RETRIES`](tempo_app::engine::MAX_UPLOAD_RETRIES)
+/// (`StationCore::requeue_upload_at`) and says nothing, so this line is the only way an
+/// operator learns a contact never reached the service. The HRDLog leg has its own shorter
+/// budget and its own line; ClubLog has a catch-up sweep, so neither is repeated here.
+fn upload_give_up_lines(failed: u8, retries: u8, qso: &GivenUpQso) -> Vec<(&'static str, String)> {
+    use tempo_app::engine::{upload_legs as legs, MAX_UPLOAD_RETRIES};
+    if retries < MAX_UPLOAD_RETRIES {
+        return Vec::new();
+    }
+    let (y, mo, d, h, mi, _) = tempo_core::logbook::datetime_utc(qso.when_unix);
+    let what = format!(
+        "{} ({} {}, {y:04}-{mo:02}-{d:02} {h:02}:{mi:02}Z)",
+        qso.call, qso.band, qso.mode
+    );
+    let mut lines = Vec::new();
+    if failed & legs::QRZ != 0 {
+        lines.push((
+            "QRZ Logbook",
+            format!(
+                "gave up on the QSO with {what} after {MAX_UPLOAD_RETRIES} retries — push it \
+                 again from the Logbook with the QRZ button on its row"
+            ),
+        ));
+    }
+    if failed & legs::EQSL != 0 {
+        lines.push((
+            "eQSL",
+            format!(
+                "gave up on the QSO with {what} after {MAX_UPLOAD_RETRIES} retries — push it \
+                 again from Awards ▸ Confirmations with Push to eQSL on its row"
+            ),
+        ));
+    }
+    lines
+}
+
 /// Session-level kill-switch for ClubLog auto-push: set on a 403 (bad creds) so we
 /// stop re-POSTing every QSO (ClubLog IP-blocks repeated auth failures); reset when
 /// the operator changes a ClubLog credential.
@@ -21679,6 +21727,17 @@ pub fn run() {
                 // re-pushing the legs that already succeeded (no double-upload).
                 if failed != 0 {
                     let attempts = p.attempts.saturating_add(1);
+                    // #290: at the budget the re-queue below drops the record without a
+                    // word — say so here, while the contact is still in hand.
+                    let given_up = GivenUpQso {
+                        call: &rec.call,
+                        band: &rec.band,
+                        mode: &rec.mode,
+                        when_unix: rec.when_unix,
+                    };
+                    for (service, line) in upload_give_up_lines(failed, attempts, &given_up) {
+                        conn_log(service, "error", line);
+                    }
                     let due = now_unix + tempo_app::engine::upload_backoff_secs(attempts);
                     let mut eng = push_engine.lock().unwrap_or_else(|e| e.into_inner());
                     // `p.origin` CARRIED, not re-derived: a catch-up record that blips on
@@ -23457,6 +23516,58 @@ mod tests {
             super::HRDLOG_APP_NAME,
             format!("Nexus/{}", env!("CARGO_PKG_VERSION"))
         );
+    }
+
+    /// #290 (F4MQS): a QRZ or eQSL upload that ran out of retries used to fall off the queue
+    /// with no word to the operator. The give-up must name the contact and the way back,
+    /// exactly as the HRDLog leg's line does.
+    #[test]
+    fn qrz_and_eqsl_give_ups_name_the_qso_and_how_to_push_it_again() {
+        use tempo_app::engine::{upload_legs as legs, MAX_UPLOAD_RETRIES};
+        let qso = super::GivenUpQso {
+            call: "F4MQS/P",
+            band: "20m",
+            mode: "FT8",
+            // 2026-09-14 12:34:56 UTC
+            when_unix: 1_789_389_296,
+        };
+        let failed = legs::QRZ | legs::EQSL | legs::CLUBLOG;
+
+        // Budget not yet spent: the record goes back on the queue, nothing to announce.
+        assert!(super::upload_give_up_lines(failed, MAX_UPLOAD_RETRIES - 1, &qso).is_empty());
+
+        let lines = super::upload_give_up_lines(failed, MAX_UPLOAD_RETRIES, &qso);
+        let services: Vec<&str> = lines.iter().map(|(s, _)| *s).collect();
+        assert_eq!(
+            services,
+            ["QRZ Logbook", "eQSL"],
+            "one line per given-up QRZ/eQSL leg, and ClubLog keeps its own catch-up path"
+        );
+        for (service, line) in &lines {
+            assert!(
+                line.contains("F4MQS/P")
+                    && line.contains("20m FT8")
+                    && line.contains("2026-09-14 12:34Z"),
+                "{service}: the line must name the QSO — {line}"
+            );
+            assert!(
+                line.contains(&MAX_UPLOAD_RETRIES.to_string()),
+                "{service}: {line}"
+            );
+        }
+        assert!(
+            lines[0].1.contains("Logbook"),
+            "QRZ's way back: {}",
+            lines[0].1
+        );
+        assert!(
+            lines[1].1.contains("Awards"),
+            "eQSL's way back: {}",
+            lines[1].1
+        );
+
+        // A failure that owes neither leg says nothing, even at the limit.
+        assert!(super::upload_give_up_lines(legs::CLUBLOG, MAX_UPLOAD_RETRIES, &qso).is_empty());
     }
 
     /// ⭐ **The country file the CONTEST SCORER actually gets** — the one assertion that
