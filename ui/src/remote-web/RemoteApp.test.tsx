@@ -38,8 +38,11 @@ it('shows "confirm your email to finish" after an unconfirmed-email deny, with c
   const service = client(null, 'emailUnverified')
   render(<RemoteApp />)
   expect(await screen.findByRole('heading', { name: 'Confirm your email to finish' })).toBeTruthy()
-  expect(screen.getByText(/confirmation link to the email address you signed up with/i)).toBeTruthy()
+  // Both ways Auth0 can confirm an address are named: the code typed on its sign-up screen, and a link.
+  expect(screen.getByText(/six-digit code we emailed you on the sign-up screen, or if you received a link, click it/i)).toBeTruthy()
   expect(screen.getByText(/spam or junk folder/i)).toBeTruthy()
+  // The expiry no longer claims a link is the only thing that was sent.
+  expect(screen.getByText(/code works for fifteen minutes, and a link for five days/i)).toBeTruthy()
   // Not a refusal, and not the connection wall.
   expect(screen.queryByRole('alert')).toBeNull()
   expect(screen.queryByText(/refused|check the connection/i)).toBeNull()
@@ -82,17 +85,19 @@ it('keeps other refusals as a refusal, with sign-in and a way to switch accounts
   fireEvent.click(screen.getByRole('button', { name: 'Sign in or create an account' }))
   await waitFor(() => expect(service.signIn).toHaveBeenCalledTimes(1))
 })
-// After signing up, Auth0 shows its own "verified" page and never sends the operator back here, so
-// the way back has to be said before they leave.
-it('tells a signed-out visitor to confirm their email and come back, and drops the hint once signed in', async () => {
+// New password sign-ups are verified with a six-digit code typed on Auth0's sign-up screen, so the
+// hint says what that screen will ask for before the operator leaves for it.
+it('tells a signed-out visitor about the emailed sign-up code, and drops the hint once signed in', async () => {
   client(null)
   const view = render(<RemoteApp />)
   await screen.findByRole('button', { name: 'Create an account' })
-  expect(screen.getByText(/check your email.*confirmation link.*come back to this page and sign in/i)).toBeTruthy()
+  expect(screen.getByText(/create an account.*six-digit code we email you.*signed in/i)).toBeTruthy()
+  // The old flow's instruction must be gone, not merely joined by the new one.
+  expect(screen.queryByText(/confirmation link/i)).toBeNull()
   view.unmount()
   client(account()); render(<RemoteApp />)
   await screen.findByRole('button', { name: 'Sign out' })
-  expect(screen.queryByText(/confirmation link/i)).toBeNull()
+  expect(screen.queryByText(/six-digit code/i)).toBeNull()
 })
 it('a signed-in account with no trial yet can start pairing, and is told the clock has not started', async () => {
   client(account(false)); render(<RemoteApp />)
