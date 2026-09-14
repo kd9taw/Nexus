@@ -5,8 +5,9 @@
 //!
 //! - `VisDetected` starts an in-flight image (mode label + lines total pushed
 //!   to the engine as [`SstvProgress`]);
-//! - `LineDecoded` fills a local partial-image buffer and refreshes a cheap
-//!   ~160 px-wide RGB preview on the engine;
+//! - `LinePreview` (provisional rows while the picture arrives, #130) and `LineDecoded` (the
+//!   corrected rows) fill a local partial-image buffer and refresh a cheap ~160 px-wide RGB
+//!   preview on the engine;
 //! - `ImageComplete` writes `<UTC stamp>_<mode>.bmp` into the operator-browsable
 //!   gallery dir, appends the metadata record to the engine's session gallery
 //!   (stamping the current dial frequency), and re-persists `gallery.json`.
@@ -214,6 +215,23 @@ fn run(engine: Arc<Mutex<Engine>>, gallery_dir: PathBuf) {
                     eprintln!("sstv-rx: unknown VIS code {code} — burst ignored");
                 }
                 SstvEvent::LineDecoded {
+                    line_index, pixels, ..
+                } => {
+                    if let Some(img) = inflight.as_mut() {
+                        let w = img.width as usize;
+                        let row = line_index as usize;
+                        if row < img.height as usize && pixels.len() == w {
+                            img.pixels[row * w..(row + 1) * w].copy_from_slice(&pixels);
+                        }
+                        img.lines_done = img.lines_done.max(line_index + 1);
+                        progress_dirty = true;
+                    }
+                }
+                // #130: a provisional row, demodulated at nominal timing while the picture is
+                // still arriving. It paints the SAME in-flight buffer the preview is built from;
+                // the corrected `LineDecoded` rows overwrite every one of them at the end, and the
+                // saved image comes from `ImageComplete`, never from this buffer.
+                SstvEvent::LinePreview {
                     line_index, pixels, ..
                 } => {
                     if let Some(img) = inflight.as_mut() {

@@ -31,6 +31,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   decoder missed or misread, then press Enter or a macro key: the `!` in your macros sends the
   call in the box.
 
+- **SSTV pictures paint while they arrive, and the gallery has a Reveal button** (#130). A
+  received picture used to stay black until the last line (about two minutes for Scottie 1) and
+  then appear all at once. Now each line shows as its audio comes in. If the sending station's
+  timing is slightly off, the picture may lean a little while it arrives; it straightens when the
+  picture completes, and the saved picture is the corrected one. The Gallery pane also has a Reveal
+  button that opens the folder the pictures are saved in (Pictures/Nexus SSTV).
+
 ### Changed (60 m)
 
 - **The 60 m FT8 band button follows your country** (#175). If your callsign is a US one, 60 m

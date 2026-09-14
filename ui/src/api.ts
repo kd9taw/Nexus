@@ -1293,6 +1293,11 @@ export async function revealRecordings(): Promise<void> {
   await invoke('reveal_recordings')
 }
 
+/** Open the SSTV gallery folder (Pictures/Nexus SSTV) in the OS file manager — #130. */
+export async function revealSstvGallery(): Promise<void> {
+  await invoke('reveal_sstv_gallery')
+}
+
 /** Delete one received SSTV image — the file AND its gallery entry, in one action so the two
  * cannot drift. Irreversible: the caller confirms first. */
 export async function sstvDeleteImage(path: string): Promise<void> {

@@ -2659,6 +2659,21 @@ fn reveal_recordings(app: tauri::AppHandle) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// Open the SSTV gallery folder (`Pictures/Nexus SSTV`) — #130. The diagnostic log, ALL.TXT and
+/// the recordings each had a Reveal; the one folder an SSTV operator most needs to find did not.
+/// Created first, like `reveal_recordings`, so a station that has received nothing yet still
+/// lands in the folder pictures will go to instead of getting a silent no-op.
+#[tauri::command]
+fn reveal_sstv_gallery(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let dir = sstv_gallery_dir();
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("Could not create {}: {e}", dir.display()))?;
+    app.opener()
+        .open_path(dir.to_string_lossy().to_string(), None::<&str>)
+        .map_err(|e| e.to_string())
+}
+
 /// Write one per-QSO RX recording, naming the FULL path in any error.
 ///
 /// ⚠️ Both steps used to be `let _ =` — the directory create AND the WAV write — so a full disk, a
@@ -22423,6 +22438,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             recordings_location,
             sstv_delete_image,
             reveal_recordings,
+            reveal_sstv_gallery,
             reveal_all_txt,
             open_qrz_page,
             open_dxped_page,

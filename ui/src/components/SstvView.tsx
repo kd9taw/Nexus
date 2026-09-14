@@ -59,6 +59,7 @@ import {
   setOperatingMode,
   setRfPower,
   setTune,
+  revealSstvGallery,
   sstvArm,
   sstvAutoArm,
   sstvDeleteImage,
@@ -2044,7 +2045,24 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
       )}
 
       {shown('gallery') && (
-        <CockpitPaneFrame title={t('sstv.panel.gallery')} paneId="gallery">
+        <CockpitPaneFrame
+          title={t('sstv.panel.gallery')}
+          paneId="gallery"
+          // #130: open the folder the pictures are saved in. Local only — a Remote browser has no
+          // file manager on the station's computer to open.
+          actions={
+            !remote ? (
+              <button
+                type="button"
+                className="cockpit-popout sstv-gallery-reveal"
+                title={t('sstv.gallery.reveal.title')}
+                onClick={() => void withErrorToast(() => revealSstvGallery(), t('sstv.gallery.reveal.failed'))}
+              >
+                {t('sstv.gallery.reveal.label')}
+              </button>
+            ) : undefined
+          }
+        >
           <div className="sstv-gallery-grid">
             {gallery.length === 0 ? (
               <div className="sstv-gallery-empty">{remote && !sstv ? (pollError ? t('remote.collectionUnavailable') : t('remote.collectionLoading')) : t('sstv.gallery.empty')}</div>

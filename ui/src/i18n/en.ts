@@ -7821,6 +7821,9 @@ export const EN = {
   // `{{mode}}` is an SSTV mode name and `{{when}}` a UTC stamp; both arrive formatted.
   'sstv.gallery.empty':
     'Received images collect here — auto-saved with callsign (FSK ID), mode, frequency, and time.',
+  'sstv.gallery.reveal.label': 'Reveal',
+  'sstv.gallery.reveal.title': 'Open the folder the received pictures are saved in (Pictures/Nexus SSTV)',
+  'sstv.gallery.reveal.failed': 'Could not open the SSTV gallery folder',
   'sstv.gallery.thumb.alt': '{{mode}} image received {{when}}',
   'sstv.gallery.delete.aria': 'Delete the {{mode}} image received {{when}}',
   'sstv.gallery.delete.title': 'Delete this image',
