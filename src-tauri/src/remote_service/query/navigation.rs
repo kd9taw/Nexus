@@ -832,6 +832,7 @@ mod tests {
             propagation: Arc::new(Mutex::new(Some((Instant::now(), prop, context)))),
             memories: Default::default(),
             parks: Default::default(),
+            pounces: Default::default(),
             sstv: Default::default(),
             navigation: Default::default(),
         };

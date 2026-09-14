@@ -287,6 +287,12 @@ pub async fn connected(
         "x-nexus-application-lookups-version",
         "1".parse().map_err(|_| "invalidResponse")?,
     );
+    // The rare-DX alerts the station's Pounce detector raised. A v15 service ignores this
+    // header and keeps the exact v15 contract.
+    request.headers_mut().insert(
+        "x-nexus-application-alerts-version",
+        "1".parse().map_err(|_| "invalidResponse")?,
+    );
     request.headers_mut().insert(
         "x-nexus-operation-version",
         "2".parse().map_err(|_| "invalidResponse")?,

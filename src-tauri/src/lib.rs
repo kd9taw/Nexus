@@ -20449,6 +20449,8 @@ struct BuildDeps {
     /// The pounce detector's receiver — the one thing here that cannot be cloned. Shared as a
     /// take-once cell; see where it is claimed in the setup hook.
     pounce_rx: Arc<Mutex<Option<std::sync::mpsc::Receiver<pouncer::SpotHint>>>>,
+    /// The alerts the pounce detector raised, for the Remote browser's rare-DX alert read.
+    pounces: pouncer::SharedRecent,
 }
 
 /// Where Tauri puts the WebView2 user-data folder on Windows — and, when it is corrupt, the
@@ -22267,6 +22269,7 @@ pub fn run() {
         // gets the receiver, and a retry whose predecessor already consumed it skips the
         // detector rather than failing the launch over an alerting nicety.
         pounce_rx: Arc::new(Mutex::new(Some(pounce_rx))),
+        pounces: Default::default(),
     };
 
     let app = match build_app(deps.clone()) {
@@ -22323,6 +22326,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             region_paths: d.region_paths.clone(),
             ota: d.ota_spots.clone(),
             parks: d.parks.clone(),
+            pounces: d.pounces.clone(),
             health: d.health.clone(),
             propagation: d.prop_cache.clone(),
             memories: Default::default(),
@@ -22798,10 +22802,11 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
                 if let Some(rx) = claimed {
                     let eng = app.state::<SharedEngine>().inner().clone();
                     let emit_handle = app.handle().clone();
+                    let recent = d.pounces.clone();
                     std::thread::Builder::new()
                         .name("nexus-pounce".into())
                         .spawn(move || {
-                            pouncer::run(eng, rx, move |p| {
+                            pouncer::run(eng, rx, recent, move |p| {
                                 let _ = emit_handle.emit("pounce", &p);
                             });
                         })

@@ -16,6 +16,7 @@
 //! seconds stale can at worst produce one late alert for a station just worked — and the gate's
 //! own cooldown already covers that.
 
+use std::collections::VecDeque;
 use std::sync::mpsc::{Receiver, SyncSender};
 use std::sync::{Arc, Mutex};
 
@@ -43,6 +44,22 @@ const NEEDS_REFRESH_SECS: i64 = 60;
 /// spot is strictly better than blocking the feed thread that reads the cluster socket. A dropped
 /// spot costs at most one alert, and the rare ones get re-spotted within seconds anyway.
 const QUEUE_DEPTH: usize = 512;
+/// How many raised alerts are kept for Remote browsers, newest last. A browser polls this list
+/// and notifies for entries it has not seen, so it only has to outlast one poll; it is bounded so
+/// a long session cannot grow it.
+pub const RECENT: usize = 64;
+
+/// The alerts the detector raised, oldest first — exactly what it passed to `on_fire`. Read by the
+/// Remote `pounce` query; nothing reads it back into the decision.
+pub type SharedRecent = Arc<Mutex<VecDeque<Pounce>>>;
+
+fn remember(recent: &SharedRecent, alert: &Pounce) {
+    let mut alerts = recent.lock().unwrap_or_else(|e| e.into_inner());
+    while alerts.len() >= RECENT {
+        alerts.pop_front();
+    }
+    alerts.push_back(alert.clone());
+}
 
 /// One inbound spot, as much as the detector needs to score it.
 pub struct SpotHint {
@@ -100,8 +117,14 @@ fn threshold_of(engine: &Arc<Mutex<Engine>>) -> PounceThreshold {
 }
 
 /// Run the detector. `on_fire` is called for each alert that clears the gate — the caller wires
-/// that to the UI (a Tauri event). Blocks; spawn it.
-pub fn run(engine: Arc<Mutex<Engine>>, rx: Receiver<SpotHint>, mut on_fire: impl FnMut(Pounce)) {
+/// that to the UI (a Tauri event). The same alert is first appended to `recent`, so a Remote
+/// browser reads exactly what the desktop was told. Blocks; spawn it.
+pub fn run(
+    engine: Arc<Mutex<Engine>>,
+    rx: Receiver<SpotHint>,
+    recent: SharedRecent,
+    mut on_fire: impl FnMut(Pounce),
+) {
     let mut gate = PounceGate::new();
     let mut needs: Option<(propagation::LogNeeds, Vec<String>)> = None;
     let mut needs_at: i64 = 0;
@@ -136,6 +159,7 @@ pub fn run(engine: Arc<Mutex<Engine>>, rx: Receiver<SpotHint>, mut on_fire: impl
             continue;
         };
         if let Some(p) = gate.admit(&alert, threshold, hint.spotted_unix, now) {
+            remember(&recent, &p);
             on_fire(p);
         }
         if now.saturating_sub(last_prune) > 300 {
@@ -178,6 +202,30 @@ mod tests {
             to_scoring(SettingThreshold::default()),
             PounceThreshold::Off
         );
+    }
+
+    /// The Remote list keeps the newest `RECENT` alerts in the order they were raised.
+    #[test]
+    fn the_remote_list_keeps_the_newest_alerts_in_order() {
+        let recent: SharedRecent = Default::default();
+        for i in 0..(RECENT + 5) {
+            remember(
+                &recent,
+                &Pounce {
+                    call: format!("K{i}ABC"),
+                    band: "20m".into(),
+                    mode: "CW".into(),
+                    freq_mhz: None,
+                    tags: Vec::new(),
+                    entity: String::new(),
+                    at_unix: i as i64,
+                },
+            );
+        }
+        let alerts = recent.lock().unwrap();
+        assert_eq!(alerts.len(), RECENT);
+        assert_eq!(alerts.front().unwrap().call, "K5ABC");
+        assert_eq!(alerts.back().unwrap().at_unix, (RECENT + 4) as i64);
     }
 
     /// A full queue must DROP rather than block: the producer is the thread reading the cluster
