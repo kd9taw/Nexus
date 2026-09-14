@@ -24,7 +24,7 @@ import {
   type DecodeFilter,
   type DecodeSort,
 } from '../decodeHistory'
-import { loadDecodeFilter, loadDecodeHideB4, loadDecodeHideBlocked, loadDecodeHideConfirmed, saveDecodeFilter, saveDecodeHideB4, saveDecodeHideBlocked, saveDecodeHideConfirmed } from '../operateFilters'
+import { DECODE_HIDE_B4_EVENT, loadDecodeFilter, loadDecodeHideB4, loadDecodeHideBlocked, loadDecodeHideConfirmed, saveDecodeFilter, saveDecodeHideB4, saveDecodeHideBlocked, saveDecodeHideConfirmed } from '../operateFilters'
 import { isHiddenByCountry, useCountryExclude } from '../features/countryExclude'
 import { isCallHidden, useHideCalls } from '../features/hideCalls'
 import { CountryExcludePicker, CountryHiddenChip } from './CountryExclude'
@@ -278,6 +278,29 @@ export function OperateDecodes({
     saveDecodeHideB4(on)
     setHideB4(on)
   }
+  // #268: follow a −B4 flip made in the OTHER mounted pane, live. Without this the Rx
+  // Frequency pane kept whatever it read at mount, and only a restart let go of it.
+  useEffect(() => {
+    const onChange = (e: Event) => setHideB4((e as CustomEvent<boolean>).detail === true)
+    window.addEventListener(DECODE_HIDE_B4_EVENT, onChange)
+    return () => window.removeEventListener(DECODE_HIDE_B4_EVENT, onChange)
+  }, [])
+  const hideB4Chip = (
+    <button
+      type="button"
+      className={`od-chip od-b4${hideB4 ? ' active' : ''}`}
+      aria-pressed={hideB4}
+      disabled={filter === 'b4'}
+      onClick={() => pickHideB4(!hideB4)}
+      title={
+        filter === 'b4'
+          ? t('operate.decodes.hideB4.title.idle')
+          : t('operate.decodes.hideB4.title')
+      }
+    >
+      −{DECODE_TOKENS.b4}
+    </button>
+  )
   // "Hide blocked" — same modifier shape. Off (default): blocked calls keep their dimmed
   // look; on: gone from the pane. The auto-responder never answers them either way — that
   // guarantee is engine-side and does not depend on a display toggle.
@@ -483,7 +506,17 @@ export function OperateDecodes({
       <div className="od-head">
         <h2>{title}</h2>
         {compact ? (
-          eraseBtn
+          // #268: a pane that LOCKS its filter (Rx Frequency) still applies −B4, so it carries
+          // its own chip — a filter with no control on screen is what hid a worked station's
+          // RR73 there. The Tempo rail's compact Band Activity (no lock) stays chip-less.
+          lockedFilter ? (
+            <div className="od-controls">
+              {hideB4Chip}
+              {eraseBtn}
+            </div>
+          ) : (
+            eraseBtn
+          )
         ) : (
           <div className="od-controls">
             <div className="od-filters" role="group" aria-label={t('operate.decodes.filters.aria')}>
@@ -520,20 +553,7 @@ export function OperateDecodes({
             >
               {t('operate.decodes.hideConfirmed.label')}
             </button>
-            <button
-              type="button"
-              className={`od-chip od-b4${hideB4 ? ' active' : ''}`}
-              aria-pressed={hideB4}
-              disabled={filter === 'b4'}
-              onClick={() => pickHideB4(!hideB4)}
-              title={
-                filter === 'b4'
-                  ? t('operate.decodes.hideB4.title.idle')
-                  : t('operate.decodes.hideB4.title')
-              }
-            >
-              −{DECODE_TOKENS.b4}
-            </button>
+            {hideB4Chip}
             <CountryExcludePicker keys={countries.keys} onToggle={countries.toggle} paused={countries.paused} onPauseChange={countries.setPaused} entities={countries.entities} onToggleEntity={countries.toggleEntity} />
             <HideCallsPicker />
             <label className="od-sort">

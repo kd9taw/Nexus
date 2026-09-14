@@ -48,8 +48,19 @@ export function loadDecodeHideB4(): boolean {
   return surfaceGet(DECODE_HIDE_B4_KEY) === '1'
 }
 
+/** Same-window change signal for −B4, carrying the new value in `detail` (#268). Band Activity
+ *  and the Rx Frequency pane are two mounted copies of one component, and each used to read the
+ *  stored value only at mount — so turning −B4 off in one never reached the other until a
+ *  restart. The value rides in the event rather than being re-read, so a blocked store (where
+ *  the write is lost) still flips every pane together. A `storage` event would not do: it only
+ *  reaches OTHER windows. */
+export const DECODE_HIDE_B4_EVENT = 'nexus-decodes-hideb4-changed'
+
 export function saveDecodeHideB4(on: boolean): void {
   surfaceSet(DECODE_HIDE_B4_KEY, on ? '1' : '0')
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent<boolean>(DECODE_HIDE_B4_EVENT, { detail: on }))
+  }
 }
 
 /** Band Activity's "hide blocked calls" modifier — same shape as hide-B4. Off = blocked
