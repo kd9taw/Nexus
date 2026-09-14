@@ -14,6 +14,7 @@ mod js8;
 pub(super) mod memories;
 pub(crate) mod navigation;
 mod ota;
+mod parks;
 mod recall;
 
 /// The same bounded public projection used by the Settings document. Neither
@@ -55,6 +56,7 @@ pub enum Collection {
     Path,
     Satellites,
     Satellite,
+    Parks,
 }
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -83,6 +85,8 @@ impl Request {
                 navigation::valid_search(self.collection, &self.search) && !self.unconfirmed
             } else if self.collection == Collection::SstvImage {
                 super::sstv::identifier(&self.search) && !self.unconfirmed
+            } else if self.collection == Collection::Parks {
+                parks::valid_search(&self.search) && !self.unconfirmed
             } else {
                 self.collection == Collection::Log || (self.search.is_empty() && !self.unconfirmed)
             })
@@ -98,6 +102,7 @@ impl Request {
                     | Collection::Ota
                     | Collection::FieldDay
                     | Collection::Js8Context
+                    | Collection::Parks
             ) || self.cursor.is_none())
             && self
                 .cursor
@@ -451,6 +456,12 @@ impl Publisher {
                 return sources.navigation.read(request, engine, sources);
             }
             Collection::Aprs => return super::aprs::capture(engine),
+            Collection::Parks => {
+                return parks::read(
+                    &sources.ok_or("applicationUnavailable")?.parks,
+                    &request.search,
+                );
+            }
             Collection::SstvImage => {
                 return super::sstv::capture(
                     &self.sstv_images,

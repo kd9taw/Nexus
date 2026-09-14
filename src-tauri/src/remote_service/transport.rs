@@ -281,6 +281,12 @@ pub async fn connected(
         "x-nexus-application-navigation-version",
         "1".parse().map_err(|_| "invalidResponse")?,
     );
+    // Park directory search and confirmation diagnostics. A v14 service ignores
+    // this header and keeps the exact v14 contract.
+    request.headers_mut().insert(
+        "x-nexus-application-lookups-version",
+        "1".parse().map_err(|_| "invalidResponse")?,
+    );
     request.headers_mut().insert(
         "x-nexus-operation-version",
         "2".parse().map_err(|_| "invalidResponse")?,
