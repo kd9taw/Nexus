@@ -6383,6 +6383,10 @@ export const EN = {
   'settings.workspace.density.dense': 'Compact',
   'settings.workspace.density.hint':
     'How tightly rows and controls pack. Compact fits more on screen.',
+  'settings.workspace.localClock.label': 'Local time beside UTC',
+  'settings.workspace.localClock.on': 'On',
+  'settings.workspace.localClock.off': 'Off',
+  'settings.workspace.localClock.hint': 'Show this computer\'s local time next to the UTC clock in the top bar. Logs, spots and FT slots always use UTC.',
   'settings.workspace.panes.label': 'Pane sizes',
   'settings.workspace.panes.reset': 'Reset pane sizes',
   'settings.workspace.panes.hint': 'Restore the default left/right pane widths.',
@@ -8943,6 +8947,8 @@ export const EN = {
   'topbar.slotClock.title': 'Time to next slot',
   'topbar.slotClock.label': 'next slot',
   'topbar.utc.title': 'UTC time',
+  'topbar.localClock.label': 'Local',
+  'topbar.localClock.title': 'Local time on this computer',
   // The clock chip. `{{offset}}` is the signed clock error and `{{age}}` the
   // measurement age (`N min`), both formatted invariantly by the bar;
   // `{{servers}}` is a plain count. The ✓ and ✗ are glyphs, not words.

@@ -217,6 +217,10 @@ interface Props {
   onScaleCapChange: (c: Scale) => void
   density: Density
   onDensityChange: (d: Density) => void
+  /** #253: the optional local-time clock beside UTC (UI-only, per machine — `useLocalClock`).
+   *  Optional so hosts/tests that do not wire it render Workspace unchanged, without the field. */
+  localClock?: boolean
+  onLocalClockChange?: (on: boolean) => void
   onResetLayout: () => void
   /** Modular-features API (toggles + profiles). */
   features: FeaturesApi
@@ -906,6 +910,8 @@ export function SettingsPanel({
   onScaleCapChange,
   density,
   onDensityChange,
+  localClock = false,
+  onLocalClockChange,
   onResetLayout,
   features,
   onRerunWizard,
@@ -3321,6 +3327,37 @@ export function SettingsPanel({
                 </div>
                 <span className="settings-hint">{t('settings.workspace.density.hint')}</span>
               </div>
+
+              {/* #253: an optional second clock in the top bar showing this computer's local
+                  time. Per machine and off by default; UTC stays the station clock. */}
+              {onLocalClockChange && (
+                <div className="settings-field">
+                  <span className="settings-label">{t('settings.workspace.localClock.label')}</span>
+                  <div
+                    className="theme-switcher"
+                    role="group"
+                    aria-label={t('settings.workspace.localClock.label')}
+                  >
+                    <button disabled={remote}
+                      type="button"
+                      className={`theme-chip${!localClock ? ' active' : ''}`}
+                      aria-pressed={!localClock}
+                      onClick={() => onLocalClockChange(false)}
+                    >
+                      {t('settings.workspace.localClock.off')}
+                    </button>
+                    <button disabled={remote}
+                      type="button"
+                      className={`theme-chip${localClock ? ' active' : ''}`}
+                      aria-pressed={localClock}
+                      onClick={() => onLocalClockChange(true)}
+                    >
+                      {t('settings.workspace.localClock.on')}
+                    </button>
+                  </div>
+                  <span className="settings-hint">{t('settings.workspace.localClock.hint')}</span>
+                </div>
+              )}
 
               <div className="settings-field">
                 <span className="settings-label">{t('settings.workspace.panes.label')}</span>

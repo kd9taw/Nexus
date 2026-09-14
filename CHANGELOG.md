@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   light). It works from the keyboard and reads out each band and its condition to a screen reader.
   In the Remote browser page the menu works the same way; the dots stay grey there, because the
   browser does not receive propagation data yet.
+- **Optional local-time clock beside UTC** (#253). Settings ▸ Appearance ▸ Workspace ▸ "Local time
+  beside UTC" adds a second clock in the top bar showing this computer's local time. It is off by
+  default and remembered per computer. Logs, spots and FT slots still use UTC.
 
 ### Changed
 

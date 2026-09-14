@@ -1810,6 +1810,9 @@ UI-only preferences (applied live, not via Save) and the section toggles.
   percentage instead. The waterfall stays sharp either way.
 - **Density** — Comfortable or Compact. "How tightly rows and controls pack.
   Compact fits more on screen."
+- **Local time beside UTC** — Off or On. On adds a second clock to the top bar
+  showing this computer's local time, next to the UTC clock. It is remembered per
+  computer. Logs, spots and FT slots always use UTC.
 - **Pane sizes** — **Reset pane sizes** restores the default pane widths. Pane
   layout itself is set in the cockpits: drag the dividers between panes to resize
   (double-click a divider to reset), and use the ⊞ menu to show or hide panes.

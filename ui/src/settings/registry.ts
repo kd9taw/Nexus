@@ -513,7 +513,7 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     label: 'Workspace',
     tab: 'appearance',
     keywords: ['theme', 'dark', 'light', 'ui scale', 'text size', 'font size', 'zoom',
-      'density', 'compact', 'pane', 'layout'],
+      'density', 'compact', 'pane', 'layout', 'clock', 'local time', 'time zone', 'utc'],
   },
   {
     // The read-only LAN page. Filed under Appearance because it is a way of LOOKING at

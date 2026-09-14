@@ -117,6 +117,9 @@ interface Props {
    *  operator chip on screen BEFORE anyone has been set, because that is the station where
    *  seats get swapped. Off ⇒ the chip behaves exactly as it always has. */
   fdActive?: boolean
+  /** #253: show this computer's local time beside the UTC clock (Settings ▸ Workspace, a
+   *  per-machine choice from `useLocalClock`). Off/absent ⇒ UTC alone, exactly as before. */
+  showLocalClock?: boolean
 }
 
 // The robust tier is TempoDeep — a non-coherent, fading-resilient 15 s mode that
@@ -282,19 +285,26 @@ function ClockChip({ radio }: { radio: RadioStatus }) {
   )
 }
 
-/** Live UTC clock (HH:MM:SS), ticking once a second. */
-function UtcClock() {
+/** Live clock (HH:MM:SS), ticking once a second. UTC by default; `local` shows this computer's
+ *  local time instead (#253, the optional second clock) with the same look, so the two read as a
+ *  pair and UTC keeps its place. */
+function UtcClock({ local = false }: { local?: boolean }) {
   const [now, setNow] = useState(() => new Date())
   useEffect(() => {
     const id = window.setInterval(() => setNow(new Date()), 1000)
     return () => window.clearInterval(id)
   }, [])
   const p = (n: number) => String(n).padStart(2, '0')
-  const hhmmss = `${p(now.getUTCHours())}:${p(now.getUTCMinutes())}:${p(now.getUTCSeconds())}`
+  const hhmmss = local
+    ? `${p(now.getHours())}:${p(now.getMinutes())}:${p(now.getSeconds())}`
+    : `${p(now.getUTCHours())}:${p(now.getUTCMinutes())}:${p(now.getUTCSeconds())}`
   return (
-    <div className="utc-clock" title={t('topbar.utc.title')}>
+    <div
+      className={`utc-clock${local ? ' local-clock' : ''}`}
+      title={local ? t('topbar.localClock.title') : t('topbar.utc.title')}
+    >
       <span className="utc-time">{hhmmss}</span>
-      <span className="utc-label">{UTC}</span>
+      <span className="utc-label">{local ? t('topbar.localClock.label') : UTC}</span>
     </div>
   )
 }
@@ -329,6 +339,7 @@ export function TopBar({
   hideTxControls,
   hideFrequencyControl,
   hideDigitalChrome,
+  showLocalClock = false,
 }: Props) {
   const control = useStationControl()
   const ftSettings = useStationCapability('ftSettings')
@@ -569,6 +580,7 @@ export function TopBar({
           </div>
         )}
         <UtcClock />
+        {showLocalClock && <UtcClock local />}
         {!hideDigitalChrome && (
           <>
             <ClockChip radio={radio} />

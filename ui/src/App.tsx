@@ -66,6 +66,7 @@ import { useScale } from './useScale'
 import { useDpiScaleSeed } from './useDpiSeed'
 import { useViewport } from './useViewport'
 import { useDensity } from './useDensity'
+import { useLocalClock } from './useLocalClock'
 import { useMotion } from './useMotion'
 import { useBandEdgeTones } from './useBandEdgeTones'
 import { useAchievements } from './useAchievements'
@@ -273,6 +274,8 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   useViewport(scale)
   // Density (row heights / padding). Comfortable ↔ Compact toggle lives in Settings.
   const [density, setDensity] = useDensity()
+  // #253: optional local-time clock beside UTC in the top bar (per machine, off by default).
+  const [localClock, setLocalClock] = useLocalClock()
   useMotion()
   // Modular features (toggles + profiles). Drives nav, view-gating, and the
   // gamification/achievements layer.
@@ -2760,6 +2763,8 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
             onScaleCapChange={setScaleCap}
             density={density}
             onDensityChange={setDensity}
+            localClock={localClock}
+            onLocalClockChange={setLocalClock}
             onResetLayout={resetWidths}
             features={features}
             onRerunWizard={() => setShowWizard(true)}
@@ -3086,6 +3091,7 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
         operatorRoster={opRoster}
         onSetOperator={handleSetOperator}
         fdActive={settings?.fdActive ?? false}
+        showLocalClock={localClock}
       />
 
       <UpdateBanner update={selfUpdate} />
