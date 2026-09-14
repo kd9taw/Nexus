@@ -271,6 +271,7 @@ export function Logbook({
   // Remote: the station offers edit/delete as a capability; each change is found again by row key.
   const operations = useRemoteOperations()
   const canEdit = useLogChange('logEdit')
+  const canLog = useLogChange('log.manual')
   const [log, setLog] = useState<LoggedQso[]>([])
   const [showForm, setShowForm] = useState(false)
   const [draft, setDraft] = useState<DraftQso>(() => ({
@@ -837,29 +838,46 @@ export function Logbook({
     const parkTheirRef = draft.parkTheirRef.trim().toUpperCase() || null
     const parkMyRef = draft.parkMyRef.trim().toUpperCase() || null
     if (remoteLog) {
-      // The station carries every field this form does not send (confirmations, uploads, power,
-      // your own park), and finds the row by the key of the row this edit started from.
-      if (!existing) return
+      // An edit: the station carries every field this form does not send (confirmations, uploads,
+      // power, your own park) and finds the row by the key of the row the edit started from.
+      // A new entry: the station's own manual log, at station time unless a time is typed.
       let record: ManualRecord
       try {
         record = manualRecord({
-          call, grid: draft.grid.trim() || null, country: existing.country ?? null,
+          call, grid: draft.grid.trim() || null, country: existing?.country ?? null,
           state: draft.state.trim().toUpperCase() || null, band: draft.band.trim(), freqMhz: freq, mode: draft.mode.trim(),
           rstSent: parseReport(draft.rstSent), rstRcvd: parseReport(draft.rstRcvd), name: draft.name.trim() || null,
           qth: draft.qth.trim() || null, comment: draft.comment.trim() || null, notes: draft.notes.trim() || null,
-          whenUnix: parseUtcLocal(draft.whenUtc) ?? existing.whenUnix, confirmed: false, awardConfirmed: false,
-          ...(parkTheirRef ? { ota: { theirProgram: existing.ota?.theirProgram === 'SOTA' ? 'SOTA' : 'POTA', theirRef: parkTheirRef } } : {}),
+          whenUnix: parseUtcLocal(draft.whenUtc) ?? existing?.whenUnix ?? null, confirmed: false, awardConfirmed: false,
+          ...(parkTheirRef ? { ota: { theirProgram: existing?.ota?.theirProgram === 'SOTA' ? 'SOTA' : 'POTA', theirRef: parkTheirRef } } : {}),
         })
       } catch {
         setErr(t('remote.logEntryInvalid'))
         return
       }
       const at = performance.now()
-      const outcome = await remoteChange({ kind: 'edit', target: await logTarget(existing), record })
-      if (outcome?.outcome === 'applied') {
-        pushToast(t('logbook.form.updated', { call: record.call }), 'success')
-        cancelForm()
-        remoteLog.refresh(at)
+      if (existing) {
+        const outcome = await remoteChange({ kind: 'edit', target: await logTarget(existing), record })
+        if (outcome?.outcome === 'applied') {
+          pushToast(t('logbook.form.updated', { call: record.call }), 'success')
+          cancelForm()
+          remoteLog.refresh(at)
+        }
+        return
+      }
+      if (!operations) return
+      try {
+        // An unknown outcome keeps the draft and holds further writes (RemoteLogCheck).
+        const outcome = await operations.log(record)
+        if (outcome.outcome === 'applied') {
+          pushToast(t('remote.loggingSaved'), 'success')
+          setShowForm(false)
+          setDraft((prev) => ({ ...prev, call: '', grid: '', rstSent: '', rstRcvd: '', name: '', qth: '', comment: '', notes: '', whenUtc: '', state: '', txPower: '', parkTheirRef: '' }))
+          remoteLog.refresh(at)
+        } else if (outcome.outcome === 'rejected') pushToast(t('remote.loggingRefused'), 'error', 6000)
+      } catch (e) {
+        const failure = e instanceof OperationFailure ? e : null
+        pushToast(failure?.busy ? t('remote.loggingBusy') : failure && !failure.sent ? t('remote.loggingNotSent') : t('remote.loggingRefused'), 'error', 6000)
       }
       return
     }
@@ -961,6 +979,11 @@ export function Logbook({
           <span className="count-badge">{remoteLog?.total ?? log.length}</span>
           <span className="log-sub">{control ? t('logbook.subtitle') : t('remote.collectionObserver')}</span>
         </div>
+        {!control && remoteLog && (canLog || showForm) && (
+          <button type="button" className="export-btn remote-log-open" onClick={() => (showForm ? cancelForm() : setShowForm(true))}>
+            {showForm ? t('logbook.form.close') : t('logbook.form.open')}
+          </button>
+        )}
         {control && <div className="log-actions">
           <input
             ref={fileRef}

@@ -289,14 +289,16 @@ export function useRemoteOperations() {
 }
 const idleSubscribe = () => () => {}
 const idleView = () => null
-/** Whether a log change may be sent now: logging control is current and the station offers this
- * change. A write still waiting for its result blocks every other one (see RemoteLogCheck). */
-export function useLogChange(capability: LogCapability): boolean {
+/** Whether a log write may be sent now: logging control is current and the station offers it (a
+ * manual entry as an action, a change as a v4 capability). A write still waiting for its result
+ * blocks every other one (see RemoteLogCheck). */
+export function useLogChange(capability: LogCapability | 'log.manual'): boolean {
   const client = useContext(RemoteOperationsContext), available = useStationData()
   const view = useSyncExternalStore(client?.subscribe ?? idleSubscribe, client?.getSnapshot ?? idleView)
-  return !!(client && client.operationVersion >= 4 && available && view?.connected && view.fresh &&
-    view.requestReady !== false && !view.unresolved && !view.controlPending &&
-    view.state?.phase === 'controlling' && view.state.controls?.capabilities.includes(capability))
+  const manual = capability === 'log.manual'
+  return !!(client && (manual || client.operationVersion >= 4) && available && view?.connected && view.fresh &&
+    view.requestReady !== false && !view.unresolved && !view.controlPending && view.state?.phase === 'controlling' &&
+    (manual ? view.state.actions.includes('log.manual') : view.state.controls?.capabilities.includes(capability)))
 }
 /** A log write whose outcome never arrived. Nothing else may change the log until the operator
  * checks the station's receipt, or says they checked the log at the station. */
