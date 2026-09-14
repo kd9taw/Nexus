@@ -4,6 +4,12 @@ import { object, finite, integer, text } from './display-validation'
 import { controlContext, controlOutcome, stationAction, CONTROL_CAPABILITIES, type ControlCapability, type ControlContext, type ControlOutcome, type StationAction } from './station-operation'
 export const OPERATION_REQUEST_BYTES = 6144
 export const OPERATION_RESPONSE_BYTES = 4096
+/** A chunk of the one activation file this browser asked for is the only operation reply allowed
+ * past OPERATION_RESPONSE_BYTES: 32 KiB of file as base64 plus its envelope. */
+export const OPERATION_EXPORT_RESPONSE_BYTES = 48 * 1024
+export const ACTIVATION_EXPORT_MAX_BYTES = 1024 * 1024
+export const ACTIVATION_EXPORT_CHUNK_BYTES = 32 * 1024
+export const ACTIVATION_EXPORT_LISTED = 128
 export type ManualRecord = {
   call: string
   grid: string | null
@@ -43,7 +49,7 @@ export type LogChange =
   | { kind: 'selfSpot'; reference: string; dialHz: number }
 /** Station hints for log changes. They ride in `controls.capabilities`, which every hosted page
  * since operation v3 filters, so a newer station can offer them without breaking an older page. */
-export const LOG_CAPABILITIES = ['logEdit', 'qslMarks', 'otaHunt', 'otaActivation', 'selfSpot'] as const
+export const LOG_CAPABILITIES = ['logEdit', 'qslMarks', 'otaHunt', 'otaActivation', 'selfSpot', 'activationExport'] as const
 export type LogCapability = (typeof LOG_CAPABILITIES)[number]
 export const logChangeCapability = (change: LogChange): LogCapability =>
   ({ edit: 'logEdit', delete: 'logEdit', qslSent: 'qslMarks', qslCard: 'qslMarks', hunt: 'otaHunt', clearHunt: 'otaHunt',
@@ -91,6 +97,24 @@ export type OperationRequest =
       clientSequence: number
       change: LogChange
     }
+  /** A read under this browser's logging lease: the list of activations (no selection), or one chunk
+   * of one activation file. It spends no command sequence and changes nothing at the station. */
+  | {
+      type: 'activationExport'
+      requestId: string
+      stationBootId: string
+      leaseId: string
+      selection: ActivationSelection | null
+      index: number
+    }
+/** One activation, named the way the desktop's per-activation export names it: your park or summit,
+ * the UTC day and the callsign you signed. A range, a search or the whole log cannot be expressed. */
+export type ActivationSelection = { reference: string; dayStartUnix: number; callsign: string | null }
+export type ActivationEntry = ActivationSelection & { program: string | null; date: string; qsos: number }
+export type ActivationExportValue = { operation: 'activationExport' } & (
+  | { activations: ActivationEntry[] }
+  | { file: { byteLength: number; sha256: string; chunks: number }; index: number; base64: string }
+  | { refused: 'notFound' | 'tooLarge' })
 export type OperationState = {
   stationBootId: string
   allowed: boolean
@@ -113,7 +137,7 @@ export type OperationOutcome =
       operationId: string
     }
 export type StopOutcome = { stop: 'accepted' }
-export type OperationValue = OperationState | OperationOutcome | ControlOutcome | StopOutcome | LogChangeOutcome
+export type OperationValue = OperationState | OperationOutcome | ControlOutcome | StopOutcome | LogChangeOutcome | ActivationExportValue
 export const transmitEpoch = (v: unknown): v is string => typeof v === 'string' && /^[0-9a-f]{16}$/.test(v)
 export type OperationResponse =
   | { type: 'operationResponse'; requestId: string; value: OperationValue }
@@ -240,6 +264,43 @@ export function logChange(raw: unknown): LogChange {
   if (c.kind === 'qslCard' && typeof c.received !== 'boolean') invalid()
   return raw as LogChange
 }
+const EXPORT_REFERENCE = /^[A-Z0-9/-]{1,32}$/
+const EXPORT_CALLSIGN = /^[A-Z0-9/]{3,32}$/
+/** The wire grammar for one activation. The station still refuses a selection its log does not list. */
+export function activationSelection(raw: unknown): ActivationSelection {
+  const s = object(raw, ['reference', 'dayStartUnix', 'callsign'])
+  if (typeof s.reference !== 'string' || !EXPORT_REFERENCE.test(s.reference) || !integer(s.dayStartUnix) ||
+    s.dayStartUnix > 253402214400 || s.dayStartUnix % 86400 !== 0 ||
+    !(s.callsign === null || (typeof s.callsign === 'string' && EXPORT_CALLSIGN.test(s.callsign))))
+    invalid()
+  return raw as ActivationSelection
+}
+function activationExportValue(v: Record<string, unknown>): ActivationExportValue {
+  if ('activations' in v) {
+    object(v, ['operation', 'activations'])
+    if (!Array.isArray(v.activations) || v.activations.length > ACTIVATION_EXPORT_LISTED) invalid()
+    for (const raw of v.activations as unknown[]) {
+      const a = object(raw, ['program', 'reference', 'dayStartUnix', 'date', 'callsign', 'qsos'])
+      activationSelection({ reference: a.reference, dayStartUnix: a.dayStartUnix, callsign: a.callsign })
+      if (!(a.program === null || text(a.program, 16)) || typeof a.date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(a.date) ||
+        !integer(a.qsos))
+        invalid()
+    }
+  } else if ('refused' in v) {
+    object(v, ['operation', 'refused'])
+    if (v.refused !== 'notFound' && v.refused !== 'tooLarge') invalid()
+  } else {
+    object(v, ['operation', 'file', 'index', 'base64'])
+    const f = object(v.file, ['byteLength', 'sha256', 'chunks'])
+    if (!integer(f.byteLength) || f.byteLength < 1 || f.byteLength > ACTIVATION_EXPORT_MAX_BYTES ||
+      typeof f.sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(f.sha256) ||
+      f.chunks !== Math.ceil(f.byteLength / ACTIVATION_EXPORT_CHUNK_BYTES) || !integer(v.index) || v.index >= Number(f.chunks) ||
+      typeof v.base64 !== 'string' || v.base64.length % 4 !== 0 ||
+      v.base64.length > Math.ceil(ACTIVATION_EXPORT_CHUNK_BYTES / 3) * 4 || !/^[A-Za-z0-9+/]*={0,2}$/.test(v.base64))
+      invalid()
+  }
+  return v as ActivationExportValue
+}
 function logChangeOutcome(v: Record<string, unknown>): LogChangeOutcome {
   object(v, ['operation', 'operationId', 'outcome', v.outcome === 'applied' ? 'evidence' : 'reason'])
   if (v.operation !== 'logChange' || !operationId(v.operationId) ||
@@ -261,6 +322,7 @@ export function operationRequest(raw: unknown): OperationRequest {
     result: ['operationId'],
     stationControl: ['stationBootId', 'leaseId', 'expectedRevision', 'commandWindowId', 'clientSequence', 'context', 'action'],
     logChange: ['stationBootId', 'leaseId', 'expectedRevision', 'commandWindowId', 'clientSequence', 'change'],
+    activationExport: ['stationBootId', 'leaseId', 'selection', 'index'],
     logManual: [
       'stationBootId',
       'leaseId',
@@ -276,6 +338,13 @@ export function operationRequest(raw: unknown): OperationRequest {
   for (const key of ['stationBootId', 'leaseId', 'operationId', 'commandWindowId'])
     if (key in r && !operationId(r[key])) invalid()
   if (r.type === 'stopTransmit' && !transmitEpoch(r.transmitEpoch)) invalid()
+  // One activation by park, UTC day and callsign, or none for the list, which has a single chunk.
+  if (r.type === 'activationExport') {
+    if (r.selection !== null) activationSelection(r.selection)
+    if (!integer(r.index) || r.index >= ACTIVATION_EXPORT_MAX_BYTES / ACTIVATION_EXPORT_CHUNK_BYTES ||
+      (r.selection === null && r.index !== 0))
+      invalid()
+  }
   if (r.type === 'logManual' || r.type === 'stationControl' || r.type === 'logChange') {
     if (
       !integer(r.expectedRevision) ||
@@ -299,7 +368,8 @@ export function operationValue(raw: unknown): OperationValue {
     if (v.stop !== 'accepted') invalid()
     return raw as StopOutcome
   }
-  if ('operation' in v) return v.operation === 'logChange' ? logChangeOutcome(v) : controlOutcome(v)
+  if ('operation' in v)
+    return v.operation === 'logChange' ? logChangeOutcome(v) : v.operation === 'activationExport' ? activationExportValue(v) : controlOutcome(v)
   if ('outcome' in v) {
     object(
       v,

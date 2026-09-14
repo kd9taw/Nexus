@@ -170,7 +170,14 @@ impl Work {
 
 /// Station hints for log changes. Offered with the logging grant at operation v4, inside
 /// `controls.capabilities`, which older hosted pages filter; `actions` never changes.
-pub(super) const CAPABILITIES: [&str; 4] = ["logEdit", "qslMarks", "otaHunt", "otaActivation"];
+/// `activationExport` is the one-activation ADIF read (see `export.rs`), under the same grant.
+pub(super) const CAPABILITIES: [&str; 5] = [
+    "logEdit",
+    "qslMarks",
+    "otaHunt",
+    "otaActivation",
+    "activationExport",
+];
 
 /// ⛔ Self-spot posts a PUBLIC DX cluster spot from the station's own call and cluster login. It is
 /// built and tested, but off: the station neither advertises nor accepts it until the operator

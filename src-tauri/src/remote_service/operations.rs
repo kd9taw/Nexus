@@ -18,6 +18,7 @@ use std::sync::{
 use std::time::{Duration, Instant};
 use tempo_app::remote_control::{transmit::TransmitAuthority, Completion, Outcome, Revocation};
 
+mod export;
 mod logging;
 mod station;
 mod transmit_stop;
@@ -116,6 +117,20 @@ pub enum Request {
         client_sequence: u64,
         change: Box<logging::Change>,
     },
+    /// Read one POTA/SOTA activation file, or the list of activations, under the logging grant and
+    /// this browser's current lease. Operation v4. It spends no sequence and writes nothing.
+    ActivationExport {
+        #[serde(rename = "requestId")]
+        request_id: String,
+        #[serde(rename = "stationBootId")]
+        station_boot_id: String,
+        #[serde(rename = "leaseId")]
+        lease_id: String,
+        /// Null asks for the list. Required: serde would fill a missing `Option` with None.
+        #[serde(deserialize_with = "Option::deserialize")]
+        selection: Option<export::Selection>,
+        index: u32,
+    },
 }
 impl Request {
     pub fn id(&self) -> &str {
@@ -128,7 +143,8 @@ impl Request {
             | Self::Result { request_id, .. }
             | Self::LogManual { request_id, .. }
             | Self::StationControl { request_id, .. }
-            | Self::LogChange { request_id, .. } => request_id,
+            | Self::LogChange { request_id, .. }
+            | Self::ActivationExport { request_id, .. } => request_id,
         }
     }
 }
@@ -714,7 +730,7 @@ impl Authority {
         }
         if !matches!(version, 1..=4)
             || matches!(request, Request::StationControl { action, .. } if version < action.minimum_version())
-            || matches!(request, Request::LogChange { .. } if version < 4)
+            || matches!(request, Request::LogChange { .. } | Request::ActivationExport { .. } if version < 4)
         {
             return Err("stationUnsupported");
         }
@@ -748,6 +764,24 @@ impl Authority {
         match request {
             Request::StopTransmit { .. } => unreachable!("handled before ordinary operations"),
             Request::State { .. } => self.state(&mut c, session, device, now, control),
+            Request::ActivationExport {
+                station_boot_id,
+                lease_id,
+                selection,
+                index,
+                ..
+            } => {
+                // A read under the logging grant (checked above) and this browser's own lease. It
+                // spends no sequence or command window and writes nothing.
+                if c.boot.as_deref() != Some(station_boot_id.as_str()) {
+                    return Err("staleStation");
+                }
+                let l = c.lease.as_ref().ok_or("leaseExpired")?;
+                if l.id != *lease_id || l.session != session || l.device != device {
+                    return Err("notController");
+                }
+                export::respond(&engine, selection.as_ref(), *index)
+            }
             Request::Acquire {
                 station_boot_id, ..
             } => {
@@ -1119,7 +1153,9 @@ fn permitted(c: &Core, version: u8, device: &str, request: &Request) -> bool {
         Request::Acquire { .. } | Request::Result { .. } => {
             c.grants.contains(device) || version >= 2 && c.control_grants.contains(device)
         }
-        Request::LogManual { .. } | Request::LogChange { .. } => c.grants.contains(device),
+        Request::LogManual { .. }
+        | Request::LogChange { .. }
+        | Request::ActivationExport { .. } => c.grants.contains(device),
         Request::StationControl { action, .. } => {
             if action.is_logging() {
                 c.grants.contains(device)

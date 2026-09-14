@@ -86,6 +86,11 @@ export const JA: PartialCatalog = {
   "remote.loggingSaving": "局側で QSO を保存中…",
   "remote.loggingSaved": "QSO を局のログファイルに保存しました。外部へのアップロードは局の既存のキューを使用します。",
   "remote.loggingUnknown": "QSO はすでに記録されている可能性があります。この内容を保持し、再試行する前に結果を確認してください。",
+  // remote adif+settings
+  "remote.activationExportDone": "{{name}} をこのブラウザーのダウンロードに保存しました。",
+  "remote.activationExportTooLarge": "このアクティベーションはここでダウンロードするには大きすぎます。局の Nexus でエクスポートしてください。",
+  "remote.activationExportMissing": "このアクティベーションは局のログにもうありません。ログを更新してもう一度お試しください。",
+  "remote.activationExportFailed": "アクティベーションファイルが完全に届かなかったため、何も保存されませんでした。もう一度お試しください。",
   // remote parity batch 2
   "remote.logChangeUnknown": "局がすでにこの変更を行っている可能性があります。ログを再度変更する前に結果を確認してください。",
   "remote.logChangeCheck": "結果を確認",

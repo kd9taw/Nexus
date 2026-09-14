@@ -259,6 +259,7 @@ import { useRemoteLog } from '../remote-web/useRemoteLog'
 import { RemoteLogCheck, sendLogChange, useLogChange, useRemoteOperations } from '../remote-web/operations'
 import { OperationFailure } from '../remote-web/operation-client'
 import { logTarget, manualRecord, type LogChange, type ManualRecord } from '../remote-web/operation-protocol'
+import { useRemoteActivations } from '../remote-web/useRemoteActivations'
 
 export function Logbook({
   defaultBand,
@@ -356,6 +357,8 @@ export function Logbook({
   // chaser's "who do I still need a card/LoTW from" view).
   const [needsConfirmOnly, setNeedsConfirmOnly] = useState(false)
   const remoteLog = useRemoteLog(deferredSearch, needsConfirmOnly)
+  // Remote: one activation's ADIF, built at the station by the same export, when the station offers it.
+  const remoteActivations = useRemoteActivations(remoteLog ? operations : null, remoteLog?.total ?? 0)
   useEffect(() => { if (remoteLog) setLog(remoteLog.rows) }, [remoteLog?.rows])
   // Purge-the-whole-log confirmation modal. `purgeText` must equal PURGE_WORD to
   // arm the danger button — a deliberate, typed gate for an irreversible wipe.
@@ -991,6 +994,57 @@ export function Logbook({
           <button type="button" className="export-btn remote-log-open" onClick={() => (showForm ? cancelForm() : setShowForm(true))}>
             {showForm ? t('logbook.form.close') : t('logbook.form.open')}
           </button>
+        )}
+        {/* Remote: the same one-activation file, built at the station by the same export and saved by
+            this browser. Only the activation picker; no date range, no whole-log export. */}
+        {!control && remoteActivations.available && remoteActivations.activations.length > 0 && (
+          <div className="log-actions remote-activation-export">
+            <label className="log-export-range" title={t('logbook.export.activation.title')}>
+              <span>{t('logbook.export.activation.label')}</span>
+              <select
+                className="settings-input log-export-activation"
+                value={activationKey}
+                onChange={(e) => setActivationKey(e.target.value)}
+              >
+                <option value="">{t('logbook.export.activation.none')}</option>
+                {remoteActivations.activations.map((a) => (
+                  <option key={activationKeyOf(a)} value={activationKeyOf(a)}>
+                    {t('logbook.export.activation.option', {
+                      activation: [a.callsign, a.reference, a.date].filter(Boolean).join(' · '),
+                      count: a.qsos,
+                    }) +
+                      (a.qsos < POTA_MIN_QSOS ? t('logbook.export.activation.short', { min: POTA_MIN_QSOS }) : '')}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              type="button"
+              className="export-btn"
+              disabled={!activationKey || remoteActivations.downloading}
+              onClick={() => {
+                const a = remoteActivations.activations.find((x) => activationKeyOf(x) === activationKey)
+                if (!a) return
+                void remoteActivations.download(a, activationFilename(a)).then((result) => {
+                  if (!result) return
+                  if ('saved' in result) pushToast(t('remote.activationExportDone', { name: result.saved }), 'success')
+                  else
+                    pushToast(
+                      result.failed === 'tooLarge'
+                        ? t('remote.activationExportTooLarge')
+                        : result.failed === 'notFound'
+                          ? t('remote.activationExportMissing')
+                          : t('remote.activationExportFailed'),
+                      'error',
+                      6000,
+                    )
+                })
+              }}
+              title={t('logbook.export.activation.buttonTitle')}
+            >
+              {t('logbook.export.activation.button')}
+            </button>
+          </div>
         )}
         {control && <div className="log-actions">
           <input

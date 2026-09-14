@@ -1,3 +1,5 @@
+#[path = "export_tests.rs"]
+mod export;
 #[cfg(feature = "radio")]
 #[path = "level_tests.rs"]
 mod level;

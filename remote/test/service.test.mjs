@@ -908,6 +908,38 @@ test('a log change crosses the real relay only at v4, survives hibernation, and 
   live.browser.close(); live.station.close()
 })
 
+test('an activation export crosses the real relay only at v4, as a read, and a whole chunk reaches the page', async () => {
+  const read = () => ({ type: 'activationExport', requestId: crypto.randomUUID(), stationBootId: crypto.randomUUID(), leaseId: crypto.randomUUID(),
+    selection: { reference: 'US-1234', dayStartUnix: 1788912000, callsign: 'W9XYZ' }, index: 0 })
+  // A station that predates operation v4 cannot parse one: the relay refuses before its wire.
+  const old = await app.paired(), legacy = await admitted(old, 1, { 'x-nexus-operation-version': '2', 'x-nexus-operation-max-version': '3' })
+  legacy.browser.send({ type: 'operationRequest', operationVersion: 4, request: read() })
+  assert.equal((await legacy.browser.take(type('operationResponse'))).error, 'stationUnsupported')
+  await assert.rejects(legacy.station.take(type('operationRequest'), 100), /timeout/)
+  assert.equal(legacy.station.closed, false)
+  legacy.browser.close(); legacy.station.close()
+  const pair = await app.paired(), live = await admitted(pair, 1, {
+    'x-nexus-operation-version': '2', 'x-nexus-operation-max-version': '3', 'x-nexus-operation-ft-version': '1'
+  })
+  const request = read()
+  live.browser.send({ type: 'operationRequest', operationVersion: 4, request })
+  const routed = await live.station.take(type('operationRequest'))
+  assert.deepEqual(routed.request, request)
+  assert.equal(routed.operationVersion, 4)
+  // A read, not a write: a log change may still be sent beside it.
+  const change = { type: 'logChange', requestId: crypto.randomUUID(), stationBootId: crypto.randomUUID(), leaseId: crypto.randomUUID(),
+    expectedRevision: 1, commandWindowId: crypto.randomUUID(), clientSequence: 1, change: { kind: 'clearHunt' } }
+  live.browser.send({ type: 'operationRequest', operationVersion: 4, request: change })
+  assert.equal((await live.station.take(type('operationRequest'))).request.type, 'logChange')
+  // A full 32 KiB chunk is far past the ordinary operation reply, and the relay carries it whole.
+  const value = { operation: 'activationExport', file: { byteLength: 40000, sha256: 'a'.repeat(64), chunks: 2 }, index: 0,
+    base64: Buffer.alloc(32 * 1024, 65).toString('base64') }
+  live.station.send({ type: 'operationResponse', sessionId: routed.sessionId, requestId: request.requestId, value })
+  assert.deepEqual((await live.browser.take(type('operationResponse'))).value, value)
+  assert.equal(live.station.closed, false)
+  live.browser.close(); live.station.close()
+})
+
 // A claim is durable on the enrollment row, but until it reached the wire the browser could only
 // remember "waiting for approval" in component state, so a reload lost it and re-entering the same
 // code was refused - the claim UPDATE requires account_id IS NULL. The operator concluded pairing

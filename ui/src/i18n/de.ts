@@ -81,6 +81,11 @@ export const DE: PartialCatalog = {
   "remote.loggingSaving": "QSO wird an der Station gespeichert…",
   "remote.loggingSaved": "QSO in der Logdatei der Station gespeichert. Externe Übertragungen nutzen die bestehenden Warteschlangen der Station.",
   "remote.loggingUnknown": "Das QSO könnte bereits protokolliert sein. Diesen Eintrag behalten und das Ergebnis vor einem erneuten Versuch prüfen.",
+  // remote adif+settings
+  "remote.activationExportDone": "{{name}} wurde in den Downloads dieses Browsers gespeichert.",
+  "remote.activationExportTooLarge": "Diese Aktivierung ist zu groß für den Download hier. Exportieren Sie sie mit Nexus an der Station.",
+  "remote.activationExportMissing": "Diese Aktivierung ist nicht mehr im Log der Station. Log aktualisieren und erneut versuchen.",
+  "remote.activationExportFailed": "Die Aktivierungsdatei kam nicht vollständig an, daher wurde nichts gespeichert. Erneut versuchen.",
   // remote parity batch 2
   "remote.logChangeUnknown": "Die Station hat diese Änderung möglicherweise schon ausgeführt. Das Ergebnis prüfen, bevor du das Log erneut änderst.",
   "remote.logChangeCheck": "Ergebnis prüfen",

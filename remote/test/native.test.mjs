@@ -755,6 +755,22 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
    const context=(s,change)=>({type:'logChange',stationBootId:s.stationBootId,leaseId:s.leaseId,expectedRevision:s.revision,commandWindowId:s.commandWindowId,clientSequence:s.nextSequence,change})
    const activated=await write(s=>context(s,{kind:'activation',program:'POTA',reference:'US-0001'}))
    assert.deepEqual(activated.response.value,{operation:'logChange',operationId:activated.request.requestId,outcome:'applied',evidence:'stationState'})
+   // One activation's ADIF, read back in chunks through the relay: the station's own file, digest checked,
+   // holding the activation's contact and none of the rest of the log.
+   const activeContact={...record,call:'K3ACT',comment:'Activation contact',notes:null,whenUnix:record.whenUnix-120}
+   assert.equal((await write(s=>({...logRequest(s),record:activeContact}))).response.value.outcome,'applied')
+   assert.ok((await fresh()).controls.capabilities.includes('activationExport'))
+   const readExport=async(selection,index)=>{const s=await fresh();const {response}=await allowed(()=>operation({type:'activationExport',stationBootId:s.stationBootId,leaseId:s.leaseId,selection,index}));assert.ok(response.value,JSON.stringify(response));return response.value}
+   const listed=await readExport(null,0),mine=listed.activations.find(a=>a.reference==='US-0001');assert.ok(mine,JSON.stringify(listed))
+   const selection={reference:mine.reference,dayStartUnix:mine.dayStartUnix,callsign:mine.callsign}
+   const firstChunk=await readExport(selection,0),parts=[Buffer.from(firstChunk.base64,'base64')]
+   for(let i=1;i<firstChunk.file.chunks;i++)parts.push(Buffer.from((await readExport(selection,i)).base64,'base64'))
+   const exported=Buffer.concat(parts);assert.equal(exported.length,firstChunk.file.byteLength);assert.equal(createHash('sha256').update(exported).digest('hex'),firstChunk.file.sha256)
+   assert.match(exported.toString(),/K3ACT/);assert.doesNotMatch(exported.toString(),/W1AW/)
+   // Leave the log as the rest of this run expects it: remove the activation contact by its row key.
+   const activeRow=await rowFor('K3ACT',()=>true)
+   assert.equal((await write(s=>changeRequest(s,{kind:'delete',target:target(activeRow)}))).response.value.outcome,'applied')
+   evidence=await probe.send({type:'loggingEvidence'});assert.doesNotMatch(evidence.adif,/K3ACT/);assert.equal(evidence.txEnabled,false)
    const ended=await write(s=>context(s,{kind:'clearActivation'}))
    assert.equal(ended.response.value.evidence,'stationState',JSON.stringify(ended.response));assert.deepEqual(await probe.send({type:'loggingEvidence'}),evidence)
    // Closing the page socket ends the lease, as any departure does. Wait for that, then take it again.
@@ -765,7 +781,7 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
   if(operationVersion>=2){
    assert.equal((await probe.send({type:'stationPermission',deviceId:device.deviceId,allow:true})).ok,true)
    const controls=(await allowed(()=>operation({type:'state'}))).response.value
-   assert.deepEqual(controls.controls.capabilities,operationVersion>=3?['decoder','amplifier','frequency','mode','tier','ampFollowBand','workspace','decoderSettings','receiverSettings','receiverGain','bandSelection','receiverFilter','receiverDsp','phoneMode','workSpot','radioLevels','radioSelection','fmTuning', 'fmReceiver',...(operationVersion===4?['qsoLogging','logEdit','qslMarks','otaHunt','otaActivation']:[])]:['decoder','amplifier'])
+   assert.deepEqual(controls.controls.capabilities,operationVersion>=3?['decoder','amplifier','frequency','mode','tier','ampFollowBand','workspace','decoderSettings','receiverSettings','receiverGain','bandSelection','receiverFilter','receiverDsp','phoneMode','workSpot','radioLevels','radioSelection','fmTuning', 'fmReceiver',...(operationVersion===4?['qsoLogging','logEdit','qslMarks','otaHunt','otaActivation','activationExport']:[])]:['decoder','amplifier'])
    const clearRequest=s=>({type:'stationControl',stationBootId:s.stationBootId,leaseId:s.leaseId,expectedRevision:s.revision,commandWindowId:s.commandWindowId,clientSequence:s.nextSequence,context:s.controls.context,action:{action:'decoder.clear',receiver:'cw'}})
    const cleared=await allowed(()=>operation(clearRequest(controls)),async()=>operation(clearRequest((await heartbeat()).response.value)))
    assert.equal(cleared.response.value.outcome,'applied');assert.equal(cleared.response.value.evidence,'receiverState')

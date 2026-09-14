@@ -96,6 +96,11 @@ export const FR: PartialCatalog = {
   "remote.loggingSaving": "Enregistrement du QSO à la station…",
   "remote.loggingSaved": "QSO enregistré dans le fichier du carnet de la station. Les envois externes utilisent les files existantes de la station.",
   "remote.loggingUnknown": "Le QSO est peut-être déjà enregistré. Conservez cette saisie et vérifiez son résultat avant de réessayer.",
+  // remote adif+settings
+  "remote.activationExportDone": "{{name}} a été enregistré dans les téléchargements de ce navigateur.",
+  "remote.activationExportTooLarge": "Cette activation est trop volumineuse pour être téléchargée ici. Exportez-la avec Nexus à la station.",
+  "remote.activationExportMissing": "Cette activation n’est plus dans le journal de la station. Actualisez le journal et réessayez.",
+  "remote.activationExportFailed": "Le fichier d’activation n’est pas arrivé intact, rien n’a donc été enregistré. Réessayez.",
   // remote parity batch 2
   "remote.logChangeUnknown": "La station a peut-être déjà effectué cette modification. Vérifiez son résultat avant de modifier à nouveau le carnet.",
   "remote.logChangeCheck": "Vérifier le résultat",
