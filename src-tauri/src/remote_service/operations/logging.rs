@@ -172,10 +172,10 @@ impl Work {
 /// `controls.capabilities`, which older hosted pages filter; `actions` never changes.
 pub(super) const CAPABILITIES: [&str; 4] = ["logEdit", "qslMarks", "otaHunt", "otaActivation"];
 
-/// ⛔ Self-spot posts a PUBLIC DX cluster spot from the station's own call and cluster login. It is
-/// built and tested, but off: the station neither advertises nor accepts it until the operator
-/// signs it off and flips this one switch.
-pub(super) const SELF_SPOT: bool = false;
+/// ⛔ Self-spot posts a PUBLIC DX cluster spot from the station's own call and cluster login. On
+/// since the operator signed it off (2026-09-14), behind a confirm on every click. Setting this to
+/// false makes the station neither advertise nor accept it again.
+pub(super) const SELF_SPOT: bool = true;
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

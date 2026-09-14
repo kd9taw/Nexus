@@ -58,7 +58,8 @@ fn pending_confirm_requires_logging_not_radio_or_transmit_permission() {
             "logEdit",
             "qslMarks",
             "otaHunt",
-            "otaActivation"
+            "otaActivation",
+            "selfSpot"
         ])
     );
     assert!(state["transmitEpoch"].is_null());
@@ -783,7 +784,8 @@ fn an_activation_the_station_cannot_normalize_is_refused_and_starts_nothing() {
     assert!(f.engine.lock().unwrap().activation().is_none());
 }
 
-/// Record every spot the station would post, instead of reaching the shared cluster outbox.
+/// Record every spot the station would post. Without one a test's self-spot is refused: the test
+/// build has no path to the shared cluster outbox.
 fn recorder(f: &mut Fixture) -> Arc<Mutex<Vec<(f64, String, String)>>> {
     let posted = Arc::new(Mutex::new(Vec::new()));
     let sink = posted.clone();
@@ -805,28 +807,35 @@ fn spot(f: &Fixture, reference: &str) -> Request {
 }
 
 #[test]
-fn self_spot_is_built_disabled_never_advertised_and_refused_before_anything_is_consumed() {
-    let f = Fixture::new();
+fn self_spot_is_on_and_its_switch_still_refuses_before_anything_is_consumed() {
+    assert!(super::super::logging::SELF_SPOT);
+    let mut f = Fixture::new();
     acquire(&f);
     f.engine
         .lock()
         .unwrap()
         .set_activation("POTA", "US-0001")
         .unwrap();
+    let offered = |f: &Fixture| {
+        control_state_version(f, Instant::now(), 4)["controls"]["capabilities"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("selfSpot"))
+    };
+    assert!(offered(&f));
+    // Positive control: with the switch off, the station neither offers nor accepts it again.
+    f.authority.self_spot_off = true;
+    assert!(!offered(&f));
     let state = control_state_version(&f, Instant::now(), 4);
-    assert!(!state["controls"]["capabilities"]
-        .as_array()
-        .unwrap()
-        .contains(&json!("selfSpot")));
     let request = spot(&f, "US-0001");
     assert_eq!(run(&f, &request), Err("stationUnsupported"));
-    // Positive control: the refusal consumed no sequence and no window, so the next write still lands.
+    // The refusal consumed no sequence and no window, so the next write still lands.
     let next = run(&f, &f.command(&state)).unwrap();
     assert_eq!(next["outcome"], "applied");
 }
 
 #[test]
-fn an_enabled_self_spot_posts_the_station_call_dial_and_reference_exactly_once() {
+fn a_self_spot_posts_the_station_call_dial_and_reference_exactly_once() {
     let mut f = Fixture::new();
     let posted = recorder(&mut f);
     acquire(&f);
@@ -920,4 +929,59 @@ fn a_self_spot_with_no_cluster_connected_is_refused_as_cluster_unavailable() {
     let result = run(&f, &spot(&f, "US-0001")).unwrap();
     assert_eq!(result["outcome"], "rejected");
     assert_eq!(result["reason"], "clusterUnavailable");
+}
+
+#[test]
+fn a_self_spot_needs_logging_permission_and_current_control() {
+    let mut f = Fixture::new();
+    let posted = recorder(&mut f);
+    f.engine
+        .lock()
+        .unwrap()
+        .set_activation("POTA", "US-0001")
+        .unwrap();
+    // Station control is not the logging grant: not offered, and refused.
+    let state = acquire_controls_version(&f, Instant::now(), 4);
+    assert!(!state["controls"]["capabilities"]
+        .as_array()
+        .unwrap()
+        .contains(&json!("selfSpot")));
+    assert_eq!(
+        run(&f, &spot(&f, "US-0001")),
+        Err("localPermissionRequired")
+    );
+    f.authority.permit(DEVICE, true).unwrap();
+    // A session that does not hold the control lease is refused.
+    let request = spot(&f, "US-0001");
+    assert_eq!(
+        f.authority.handle_version(
+            (f.connection, 4),
+            OTHER,
+            DEVICE,
+            &request,
+            &f.engine,
+            Instant::now()
+        ),
+        Err("notController")
+    );
+    assert!(posted.lock().unwrap().is_empty());
+    // Positive control: the same request from the controller is accepted, and posts once.
+    assert_eq!(run(&f, &request).unwrap()["outcome"], "applied");
+    assert_eq!(posted.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn a_test_build_with_no_poster_refuses_a_self_spot_instead_of_posting_it() {
+    let f = Fixture::new();
+    acquire(&f);
+    f.engine
+        .lock()
+        .unwrap()
+        .set_activation("POTA", "US-0001")
+        .unwrap();
+    let result = run(&f, &spot(&f, "US-0001")).unwrap();
+    // `invalidChange`, not `clusterUnavailable`: no cluster is connected in a test, so reaching the
+    // real `crate::post_spot` would answer `clusterUnavailable` instead.
+    assert_eq!(result["outcome"], "rejected");
+    assert_eq!(result["reason"], "invalidChange");
 }
