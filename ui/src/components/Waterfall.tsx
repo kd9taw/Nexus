@@ -23,6 +23,7 @@ import {
   resolveColormap,
   RowFetchLatch,
   WATERFALL_ZOOMS,
+  overlayTextScale,
   WF_FLOOR_PCT,
   coerceZoomSpan,
   zoomWindow,
@@ -476,7 +477,11 @@ export function Waterfall({
     // Bottom freq-axis strip (CSS px) — thinner when the waterfall is a short
     // horizontal strip (top layout) so it doesn't eat the limited height.
     // (Defined BEFORE resize(): the history-rebuild path inside resize uses it.)
-    const axisHFor = (h: number) => (h < 160 ? 14 : 18)
+    // #215: every piece of overlay text (and the strip that holds the digits) follows the UI
+    // scale. Refreshed in resize() from the canvas box — see `overlayTextScale` for why the
+    // transform alone does not carry the zoom on Chromium.
+    let textScale = 1
+    const axisHFor = (h: number) => Math.round((h < 160 ? 14 : 18) * textScale)
 
     const resize = (entry?: ResizeObserverEntry) => {
       const rect = canvas.getBoundingClientRect()
@@ -489,6 +494,7 @@ export function Waterfall({
       }
       cssW = Math.max(1, rect.width)
       cssH = Math.max(1, rect.height)
+      textScale = overlayTextScale(rect.width, canvas.offsetWidth)
       const { dW, dH } = measure(entry)
       // Keep the draw scale fresh even when the pixel size is unchanged.
       scaleX = dW / cssW
@@ -774,7 +780,7 @@ export function Waterfall({
       octx.fillStyle = axisBg
       octx.fillRect(0, wfH, W, AXIS_H)
       octx.fillStyle = axisColor
-      octx.font = '10px system-ui, sans-serif'
+      octx.font = `${10 * textScale}px system-ui, sans-serif`
       octx.textBaseline = 'middle'
       const vlo = viewLoRef.current
       const vhi = viewHiRef.current
@@ -785,7 +791,7 @@ export function Waterfall({
       for (let f = first; f <= vhi; f += labelStep) {
         const x = freqToX(f, W, vlo, vhi)
         octx.fillRect(x, wfH, 1, 4)
-        octx.fillText(`${f}`, Math.min(W - 26, x + 2), wfH + AXIS_H / 2)
+        octx.fillText(`${f}`, Math.min(W - 26 * textScale, x + 2), wfH + AXIS_H / 2)
       }
 
       // (No per-decode callsign labels on the waterfall — WSJT-X keeps the
@@ -797,7 +803,7 @@ export function Waterfall({
       if (pausedRef.current) {
         const h = historyRef.current
         const off = offsetRef.current
-        octx.font = '600 10px system-ui, sans-serif'
+        octx.font = `600 ${10 * textScale}px system-ui, sans-serif`
         octx.fillStyle = 'rgba(255,200,80,0.95)'
         // The chip is a STATE MESSAGE and comes from the catalog; the age beside it (and the
         // time tape below, and the axis) are measurements drawn as tick labels.
@@ -805,8 +811,8 @@ export function Waterfall({
         const backLabel = newest ? ageLabel(Date.now() - newest.tsMs) : t('waterfall.paused.now')
         octx.fillText(
           off > 0 ? t('waterfall.paused.back', { age: backLabel }) : t('waterfall.paused'),
-          6,
-          20,
+          6 * textScale,
+          20 * textScale,
         )
         // Time tape: 4 evenly spaced age labels down the right edge. Each label's age is
         // read off the SAME mapping renderInto paints with — newest end at the bottom by
@@ -815,7 +821,7 @@ export function Waterfall({
         // which was upside down against the picture in the only direction that existed: it
         // labelled the top (oldest) rows as the most recent. Mirrored, not merely flipped.
         octx.fillStyle = axisColor
-        octx.font = '9px system-ui, sans-serif'
+        octx.font = `${9 * textScale}px system-ui, sans-serif`
         const devRows = Math.max(1, Math.round(wfH * scaleY))
         for (let i = 1; i <= 4; i++) {
           const yCss = (wfH * i) / 5
@@ -823,7 +829,7 @@ export function Waterfall({
           const age = off + (newestAtTopRef.current ? yDev : devRows - 1 - yDev)
           const fr = h.frameAt(age)
           if (!fr) continue
-          octx.fillText(`−${ageLabel(Date.now() - fr.tsMs)}`, W - 34, yCss)
+          octx.fillText(`−${ageLabel(Date.now() - fr.tsMs)}`, W - 34 * textScale, yCss)
         }
       }
 
@@ -831,13 +837,13 @@ export function Waterfall({
       // supplied; the FT8 path (cursors undefined) keeps the existing draw.
       const cursors = cursorsRef.current
       if (cursors) {
-        octx.font = '600 10px system-ui, sans-serif'
+        octx.font = `600 ${10 * textScale}px system-ui, sans-serif`
         for (const c of cursors) {
           if (c.hz < vlo || c.hz > vhi) continue // scrolled outside a zoom window
           const cx = freqToX(c.hz, W, vlo, vhi)
           octx.fillStyle = c.color
           octx.fillRect(cx - 1, 0, 2, wfH)
-          octx.fillText(c.label, Math.min(W - 14, cx + 3), 9)
+          octx.fillText(c.label, Math.min(W - 14 * textScale, cx + 3), 9 * textScale)
         }
       } else {
         // --- TX marker (red) then RX marker (green), drawn last so they're on top ---
@@ -849,8 +855,8 @@ export function Waterfall({
           octx.fillStyle = txRef.current ? 'rgba(255,70,70,0.95)' : 'rgba(255,90,90,0.7)'
           octx.fillRect(txx - 1, 0, 2, wfH)
           octx.fillStyle = '#ff5a5a'
-          octx.font = '600 10px system-ui, sans-serif'
-          octx.fillText('TX', Math.min(W - 18, txx + 3), 9)
+          octx.font = `600 ${10 * textScale}px system-ui, sans-serif`
+          octx.fillText('TX', Math.min(W - 18 * textScale, txx + 3), 9 * textScale)
         }
 
         const rxOff = rxOffRef.current
@@ -859,8 +865,8 @@ export function Waterfall({
           octx.fillStyle = 'rgba(60,220,140,0.9)'
           octx.fillRect(rxx - 1, 0, 2, wfH)
           octx.fillStyle = '#3ddc8c'
-          octx.font = '600 10px system-ui, sans-serif'
-          octx.fillText('RX', Math.min(W - 18, rxx + 3), wfH - 6)
+          octx.font = `600 ${10 * textScale}px system-ui, sans-serif`
+          octx.fillText('RX', Math.min(W - 18 * textScale, rxx + 3), wfH - 6 * textScale)
         }
       }
     }

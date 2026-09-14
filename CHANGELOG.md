@@ -42,6 +42,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Long logbook comments can be read in full (#162).** The Comment column still shows one line, but
   clicking a comment now opens it to its full length in that row, and clicking again folds it back.
   The columns stay where they are.
+- **Waterfall frequency numbers grow with the UI scale (#215).** On Windows the numbers along the
+  bottom of the waterfall, and the RX/TX labels, stayed tiny at any UI scale. They now grow with
+  Settings ▸ Appearance ▸ Workspace ▸ UI scale, so 110 % or 125 % makes them easier to read.
 
 ### Security
 
