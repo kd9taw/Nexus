@@ -14,10 +14,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   you turned it off, or revoked the station's access, it stays off. A locked credential store still
   leaves it off.
 
-  Each browser's station-control and remote-logging permissions come back with it, but only for a
-  browser that is still approved exactly as it was: revoke a browser, or approve it again, and it
-  starts with nothing. **Permission to transmit FT8/FT4 never survives a restart.** Grant it again
-  at the shack each time; the TX switch is still off at every launch, as it always has been.
+  Each browser's permissions come back with it, but only for a browser that is still approved
+  exactly as it was: revoke a browser, or approve it again, and it starts with nothing. That
+  includes FT8/FT4 transmit where you ticked it on the approval, so it is remembered until you
+  revoke it. **Transmit still starts off:** the TX switch is off at every launch, as it always has
+  been, and a remembered permission sends nothing until the browser presses TX On. Turn off Remote
+  only disconnects: every browser drops at once, and turning Remote back on restores what each
+  still-approved browser had. Revoking a browser, revoking the station's access, and "End remote
+  control and clear permissions" still clear them.
 
 - **Start Nexus when you sign in to this computer.** A new switch under Settings ▸ Appearance ▸
   Start at sign-in, off by default. It is what lets Remote come back after the computer itself
@@ -139,19 +143,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   if it goes down nothing at the station changes.
 
   It runs on a test server that may be reset, and approving a station starts a 14-day trial, one per
-  account. Remote has to be switched on at the shack after every restart of Nexus, and pairing always
-  finishes at the radio, so nobody can pair a station they are not standing at. A station can be
+  account. Pairing always finishes at the radio, so nobody can pair a station they are not standing
+  at, and it takes one approval there: approving the pairing turns Remote on and approves the
+  browser you paired from. A station can be
   renamed from the browser, and a browser or a whole station can be revoked from either end.
 
-- **Operating from the browser, with permission you grant at the shack.** Three switches, all off
-  again after every restart. **Allow station controls** covers tuning (a typed frequency, the dial
-  digits, the scope wheel, a click on a signal), band picks and "Use this mode", the Phone screen's
-  AUTO/USB/LSB/FM/AM with repeater shift and tone, NB, NR, notch, AGC, filter width, RF power and mic
-  gain, decode depth, RX offset, JS8 speeds and the MSK144 period, arming the RTTY, PSK, SSTV and
-  APRS decoders, the amplifier's Operate/Standby, band steps and band-following, and which radio is
-  active. **Allow remote logging** lets the browser's Log QSO form write to your logbook; Field Day
-  contacts still log at the shack. **Allow FT8/FT4 transmission** is the third. One browser holds
-  control at a time, a control only shows as done once the radio has confirmed it, and a command
+- **Operating from the browser, with permission you grant at the shack.** Approving a browser gives
+  it station controls and remote logging, and FT8/FT4 transmission too when you tick "Also allow
+  FT8/FT4 transmit" on that approval; the switches under each browser then take one permission away
+  or give it back. **Station controls** cover tuning (a typed frequency, the dial digits, the scope
+  wheel, a click on a signal), band picks and "Use this mode", the Phone screen's AUTO/USB/LSB/FM/AM
+  with repeater shift and tone, NB, NR, notch, AGC, filter width, RF power and mic gain, decode
+  depth, RX offset, JS8 speeds and the MSK144 period, arming the RTTY, PSK, SSTV and APRS decoders,
+  the amplifier's Operate/Standby, band steps and band-following, and which radio is active.
+  **Remote logging** lets the browser's Log QSO form write to your logbook; Field Day contacts still
+  log at the shack. One browser holds control at a time, a control only shows as done once the radio has confirmed it, and a command
   whose outcome is uncertain is never repeated on its own.
 
 - **FT8 and FT4 transmit from the browser.** With station control and the transmission permission,

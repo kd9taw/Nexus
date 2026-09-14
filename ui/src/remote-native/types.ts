@@ -13,9 +13,9 @@ export type RemoteStationStatus = {
 export type RemoteStationAction =
   | { type: 'begin'; name: string }
   | { type: 'refresh' | 'cancel' | 'enable' | 'disable' | 'forget' }
-  | { type: 'approve'; enrollmentId: string; accountId: string }
+  | { type: 'approve'; enrollmentId: string; accountId: string; transmit?: boolean }
   | { type: 'loggingPermission'; deviceId: string; allow: boolean }
   | { type: 'stationPermission'; deviceId: string; allow: boolean }
   | { type: 'transmitPermission'; deviceId: string; allow: boolean }
   | { type: 'takeOverLogging' }
-  | { type: 'device'; deviceId: string; approve: boolean }
+  | { type: 'device'; deviceId: string; approve: boolean; transmit?: boolean }

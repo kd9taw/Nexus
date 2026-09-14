@@ -73,6 +73,9 @@ pub enum Action {
         enrollment_id: String,
         #[serde(rename = "accountId")]
         account_id: String,
+        /// "Also allow FT8/FT4 transmit" for the browser that did the pairing.
+        #[serde(default)]
+        transmit: bool,
     },
     Enable {},
     Disable {},
@@ -81,39 +84,146 @@ pub enum Action {
         #[serde(rename = "deviceId")]
         device_id: String,
         approve: bool,
+        /// "Also allow FT8/FT4 transmit" on this approval. Ignored when revoking.
+        #[serde(default)]
+        transmit: bool,
     },
 }
 type Reply = oneshot::Sender<Result<(), &'static str>>;
 /// The most browsers a restart remembers grants for. The service lists at most eight per station,
 /// and the record has to fit the smallest OS credential blob (Windows).
 const MAX_REMEMBERED: usize = 8;
-/// A decision a restart must remember (operator decision 2026-09-13: Remote remembers being on,
-/// and station-control and logging grants survive a restart; FT8/FT4 transmit grants never do).
+/// A decision a restart must remember. Operator decisions 2026-09-13: Remote remembers being on;
+/// approving a browser grants it station control and logging, plus FT8/FT4 transmit when the
+/// approval ticks it, and each is kept for as long as that approval stands, until revoked.
 ///
-/// Every message is sent under the `Control` lock at the moment of the decision, so the vault
-/// writer sees decisions in the order they were made. The write itself happens on the writer's
-/// own thread, never under a lock and never on the path that revokes transmission, because an OS
-/// credential store can block (a locked keychain can prompt).
+/// Every decision is applied to `Control::remembered` under the `Control` lock at the moment it is
+/// made, so the record always holds the operator's decisions in the order they were made, and Turn
+/// on reads exactly what has been decided. Writing it happens on the vault writer's own thread,
+/// never under a lock and never on the path that revokes transmission, because an OS credential
+/// store can block (a locked keychain can prompt).
 enum Persist {
     /// The controller loaded or created this pairing; later decisions apply to it.
     Bound(Binding, Option<vault::State>),
     /// Remote was turned on and is connecting.
     Enabled,
-    /// Remote was turned off: Turn off Remote, Revoke station access, a cancelled pairing, or the
-    /// connection refusing itself. The permissions it cleared are remembered as cleared.
+    /// Remote went off for a reason that ends access: Revoke station access, a cancelled pairing,
+    /// or the connection refusing itself. The permissions it cleared are remembered as cleared.
     Off,
-    /// A local decision cleared every browser permission (take over, revoke a browser, turn on).
+    /// Turn off Remote. It only pauses (operator decision 2026-09-14): every browser is
+    /// disconnected and every live permission cleared, but the remembered grants stay, so Turn on
+    /// or a restart restores them for browsers still approved at the same approval.
+    Paused,
+    /// A local decision cleared every browser permission (take over, revoke a browser).
     ClearGrants,
-    /// The station-control and logging grants a change left in force, and the approval expiry of
-    /// the one browser just granted (from the list the operator was looking at). No transmit.
-    Grants {
-        grants: operations::DurableGrants,
-        approval: Option<(String, u64)>,
+    /// One browser's grants changed. `approval` is the approval expiry the change was made against:
+    /// a grant is only ever created against a known approval, and a grant against a newer approval
+    /// starts that browser afresh. A `None` field is left as it was.
+    Browser {
+        device_id: String,
+        approval: Option<u64>,
+        logging: Option<bool>,
+        control: Option<bool>,
+        transmit: Option<bool>,
     },
-    /// Grants put back after a restart, exactly as restored.
-    Restored(Vec<vault::Grant>),
+    /// The approvals the service lists right now. A grant remembered against any other approval
+    /// (a browser revoked, re-approved, expired or gone) is forgotten.
+    Approvals(Vec<(String, u64)>),
     /// The pairing was removed.
     Removed,
+}
+/// What the vault must hold next. Each write is the whole record, so only the latest matters.
+enum Write {
+    Save(vault::State),
+    Remove,
+}
+/// The record for the current pairing, kept in step with every decision.
+#[derive(Default)]
+struct Remembered {
+    binding: Option<Binding>,
+    state: Option<vault::State>,
+}
+impl Remembered {
+    /// Apply one decision. Returns the write it calls for, or `None` when nothing changed.
+    fn apply(&mut self, decision: Persist) -> Option<Write> {
+        match decision {
+            Persist::Bound(bound, state) => {
+                self.state = state.filter(|s| s.binding == bound);
+                self.binding = Some(bound);
+                return None;
+            }
+            Persist::Removed => {
+                self.binding = None;
+                self.state = None;
+                return Some(Write::Remove);
+            }
+            _ => {}
+        }
+        let bound = self.binding.clone()?;
+        let mut state = self.state.clone().unwrap_or(vault::State {
+            binding: bound,
+            enabled: false,
+            grants: Vec::new(),
+        });
+        match decision {
+            Persist::Enabled => state.enabled = true,
+            Persist::Off => {
+                state.enabled = false;
+                state.grants.clear();
+            }
+            Persist::Paused => state.enabled = false,
+            Persist::ClearGrants => state.grants.clear(),
+            Persist::Browser {
+                device_id,
+                approval,
+                logging,
+                control,
+                transmit,
+            } => {
+                let at = state.grants.iter().position(|g| g.device_id == device_id);
+                let mut grant = match (at.map(|i| state.grants[i].clone()), approval) {
+                    (Some(grant), Some(expires_at)) if grant.expires_at == expires_at => grant,
+                    (_, Some(expires_at)) => vault::Grant {
+                        device_id,
+                        expires_at,
+                        logging: false,
+                        control: false,
+                        transmit: false,
+                    },
+                    (Some(grant), None) => grant,
+                    // Nothing remembered for this browser, and no approval to bind a grant to.
+                    (None, None) => return None,
+                };
+                grant.logging = logging.unwrap_or(grant.logging);
+                grant.control = control.unwrap_or(grant.control);
+                // FT8/FT4 transmit is only ever held alongside station control.
+                grant.transmit = transmit.unwrap_or(grant.transmit) && grant.control;
+                let keep = grant.logging || grant.control;
+                match at {
+                    Some(i) if keep => state.grants[i] = grant,
+                    Some(i) => {
+                        state.grants.remove(i);
+                    }
+                    None if keep && state.grants.len() < MAX_REMEMBERED => state.grants.push(grant),
+                    None => {}
+                }
+            }
+            Persist::Approvals(approvals) => state.grants.retain(|g| {
+                approvals
+                    .iter()
+                    .any(|(id, at)| *id == g.device_id && *at == g.expires_at)
+            }),
+            Persist::Bound(..) | Persist::Removed => return None,
+        }
+        if self.state.as_ref() == Some(&state) {
+            return None;
+        }
+        self.state = Some(state.clone());
+        Some(Write::Save(state))
+    }
+    fn grants(&self) -> &[vault::Grant] {
+        self.state.as_ref().map_or(&[], |s| s.grants.as_slice())
+    }
 }
 #[derive(Default)]
 struct Control {
@@ -122,7 +232,8 @@ struct Control {
     enabled: bool,
     cancel: Option<watch::Sender<bool>>,
     generation: u64,
-    vault_writer: Option<mpsc::UnboundedSender<Persist>>,
+    vault_writer: Option<mpsc::UnboundedSender<Write>>,
+    remembered: Remembered,
 }
 impl Control {
     fn stop(&mut self) {
@@ -138,14 +249,19 @@ impl Control {
     }
     /// Hand a decision to the vault writer. Never called from `stop`: `stop` also runs when Nexus
     /// exits, and an exit must not be remembered as the operator turning Remote off.
-    fn remember(&self, decision: Persist) {
-        if let Some(writer) = &self.vault_writer {
-            let _ = writer.send(decision);
+    fn remember(&mut self, decision: Persist) {
+        if let Some(write) = self.remembered.apply(decision) {
+            if let Some(writer) = &self.vault_writer {
+                let _ = writer.send(write);
+            }
         }
     }
 }
+/// A command, the Remote generation it was issued under, the authority epoch at that moment (so a
+/// local decision made after it wins), and where to reply.
+type Command = (Action, u64, u64, Reply);
 pub struct Service {
-    commands: mpsc::Sender<(Action, u64, Reply)>,
+    commands: mpsc::Sender<Command>,
     status: Arc<Mutex<Status>>,
     control: Arc<Mutex<Control>>,
 }
@@ -350,7 +466,7 @@ impl Service {
                 // Keep admission and grant under the same local control lock
                 // as Disable/Take over. A prior status snapshot must not install
                 // a new grant after that local authority has been stopped.
-                let control = self.control.lock().map_err(|_| "serviceUnavailable")?;
+                let mut control = self.control.lock().map_err(|_| "serviceUnavailable")?;
                 // The approval being granted against. Its expiry is what a restart checks before
                 // giving the grant back, so a revoked or re-approved browser gets nothing.
                 let mut approval = None;
@@ -364,28 +480,38 @@ impl Service {
                     else {
                         return Err("accessDenied");
                     };
-                    approval = Some((device.id.clone(), device.expires_at));
+                    approval = Some(device.expires_at);
                 }
-                let operations = &control.operations;
-                match &action {
+                // These are the restrict switches: each allows or revokes one permission for one
+                // browser, live first, and the record follows only what took effect. Revoking
+                // station control revokes transmit with it.
+                let operations = control.operations.clone();
+                let (logging, station, transmit) = match &action {
                     Action::StationPermission { .. } => {
-                        let grants = operations.permit_station(device_id, *allow)?;
-                        control.remember(Persist::Grants { grants, approval });
+                        operations.permit_station(device_id, *allow)?;
+                        (None, Some(*allow), (!*allow).then_some(false))
                     }
-                    // ⛔ Never remembered. FT8/FT4 transmit permission dies with the process.
                     Action::TransmitPermission { .. } => {
-                        operations.permit_transmit(device_id, *allow)?
+                        operations.permit_transmit(device_id, *allow)?;
+                        (None, None, Some(*allow))
                     }
                     _ => {
-                        let grants = operations.permit(device_id, *allow)?;
-                        control.remember(Persist::Grants { grants, approval });
+                        operations.permit(device_id, *allow)?;
+                        (Some(*allow), None, None)
                     }
-                }
+                };
+                control.remember(Persist::Browser {
+                    device_id: device_id.clone(),
+                    approval,
+                    logging,
+                    control: station,
+                    transmit,
+                });
                 drop(control);
                 return self.status();
             }
             Action::TakeOverLogging {} => {
-                let control = self.control.lock().map_err(|_| "serviceUnavailable")?;
+                let mut control = self.control.lock().map_err(|_| "serviceUnavailable")?;
                 control.operations.invalidate();
                 control.remember(Persist::ClearGrants);
                 drop(control);
@@ -406,8 +532,13 @@ impl Service {
             ) {
                 control.stop();
                 // Remembered here rather than in the controller: this stop is immediate even when
-                // the command queue is full, and what a restart remembers must match it.
-                control.remember(Persist::Off);
+                // the command queue is full, and what a restart remembers must match it. The stop
+                // clears every live permission either way; only Turn off keeps the remembered ones.
+                control.remember(if matches!(action, Action::Disable {}) {
+                    Persist::Paused
+                } else {
+                    Persist::Off
+                });
             }
             // A refused Enable must not leave enabled authority behind. Stop
             // actions remain immediate even when the command queue is full.
@@ -415,11 +546,17 @@ impl Service {
             if matches!(action, Action::Enable {}) {
                 control.stop();
                 control.enabled = true;
-                // Turning on clears every permission in memory. "On" itself is remembered by the
+                // Turning on starts a fresh authority: every permission in memory is cleared. The
+                // grants remembered for still-approved browsers come back once the service lists
+                // them (see `Controller::apply_restore`). "On" itself is remembered by the
                 // controller, once the connection has actually started.
-                control.remember(Persist::ClearGrants);
             }
-            permit.send((action, control.generation, reply));
+            permit.send((
+                action,
+                control.generation,
+                control.operations.epoch(),
+                reply,
+            ));
         }
         response.await.map_err(|_| "serviceUnavailable")??;
         self.status()
@@ -452,17 +589,16 @@ struct Controller {
     feeds: transport::Feeds,
     restore: Option<Restore>,
 }
-/// Grants remembered from before a restart, waiting for the service's browser list.
+/// Remote came on with grants remembered; they wait for the service's browser list.
 struct Restore {
-    /// The authority epoch when the restart turned Remote back on. Any local decision since then
-    /// (Turn off, take over, revoking a browser) moves it, and that decision wins.
+    /// The authority epoch when Remote came on. Any local decision since then (Turn off, take over,
+    /// revoking a browser) moves it, and that decision wins.
     epoch: u64,
-    grants: Vec<vault::Grant>,
     at: tokio::time::Instant,
     attempts: u32,
 }
 impl Controller {
-    async fn run(mut self, mut receiver: mpsc::Receiver<(Action, u64, Reply)>) {
+    async fn run(mut self, mut receiver: mpsc::Receiver<Command>) {
         match self.vault.binding() {
             Ok(Some(binding))
                 if binding.origin == self.client.origin()
@@ -479,8 +615,8 @@ impl Controller {
             let retry = self.restore.as_ref().map(|r| r.at);
             tokio::select! {
                 next = receiver.recv() => {
-                    let Some((action, generation, reply)) = next else { break };
-                    let result = self.handle(action, generation).await;
+                    let Some((action, generation, epoch, reply)) = next else { break };
+                    let result = self.handle(action, generation, epoch).await;
                     if let Err(error) = result {
                         if let Ok(mut status) = self.status.lock() {
                             status.error = Some(error);
@@ -502,8 +638,9 @@ impl Controller {
     }
     /// Remote remembers being on. If it was on when Nexus last exited, turn it on again exactly as
     /// Turn on Remote does: a fresh local authority (every in-memory permission cleared, transmit
-    /// included) and a fresh generation. A locked or unreadable store, a record written for another
-    /// pairing, or a record that says off all leave it off.
+    /// included), a fresh generation, and the remembered grants restored for still-approved
+    /// browsers. A locked or unreadable store, a record written for another pairing, or a record
+    /// that says off all leave it off.
     async fn resume(&mut self, binding: Binding) {
         let remembered = match self.vault.state() {
             Ok(state) => state.filter(|s| {
@@ -512,7 +649,7 @@ impl Controller {
                     && s.grants.iter().all(|g| identifier(&g.device_id))
             }),
             Err(error) => {
-                if let Ok(control) = self.control.lock() {
+                if let Ok(mut control) = self.control.lock() {
                     control.remember(Persist::Bound(binding, None));
                 }
                 self.reflect("disabled");
@@ -526,33 +663,24 @@ impl Controller {
             let Ok(mut control) = self.control.lock() else {
                 return;
             };
-            control.remember(Persist::Bound(binding, remembered.clone()));
-            if remembered.as_ref().is_some_and(|s| s.enabled) {
+            let enabled = remembered.as_ref().is_some_and(|s| s.enabled);
+            control.remember(Persist::Bound(binding, remembered));
+            if enabled {
                 control.stop();
                 control.enabled = true;
-                Some((control.generation, control.operations.epoch()))
+                Some(control.generation)
             } else {
                 None
             }
         };
         self.reflect("disabled");
-        let Some((generation, epoch)) = resumed else {
+        let Some(generation) = resumed else {
             return;
         };
-        if let Err(error) = self.handle(Action::Enable {}, generation).await {
+        if let Err(error) = self.enable(generation) {
             if let Ok(mut status) = self.status.lock() {
                 status.error = Some(error);
             }
-            return;
-        }
-        let grants = remembered.map(|s| s.grants).unwrap_or_default();
-        if !grants.is_empty() {
-            self.restore = Some(Restore {
-                epoch,
-                grants,
-                at: tokio::time::Instant::now(),
-                attempts: 0,
-            });
         }
     }
     /// Nobody opens Settings after an unattended restart, so the station fetches its own browser
@@ -584,47 +712,52 @@ impl Controller {
         }
     }
     /// Put back remembered grants for each browser the service still lists as approved at the SAME
-    /// approval (its expiry is the approval generation), under the epoch the restart captured.
-    /// Transmit permission is not among them and cannot be.
+    /// approval (its expiry is the approval generation), under the epoch captured when Remote came
+    /// on. The grants are read from the record now, under the lock, so a revocation made while the
+    /// list was on its way is honoured. FT8/FT4 transmit comes back only where it was granted, only
+    /// with station control, and arms nothing.
     fn apply_restore(&mut self, devices: &[Device]) {
         let Some(restore) = self.restore.take() else {
             return;
         };
         let now = now_ms();
-        let kept: Vec<vault::Grant> = restore
-            .grants
+        let approvals: Vec<(String, u64)> = devices
             .iter()
-            .filter(|g| {
-                devices.iter().any(|d| {
-                    d.id == g.device_id
-                        && d.approved == 1
-                        && d.expires_at == g.expires_at
-                        && d.expires_at > now
-                })
-            })
-            .cloned()
+            .filter(|d| d.approved == 1 && d.expires_at > now)
+            .map(|d| (d.id.clone(), d.expires_at))
             .collect();
-        let grants = operations::DurableGrants {
-            logging: kept
-                .iter()
-                .filter(|g| g.logging)
-                .map(|g| g.device_id.clone())
-                .collect(),
-            control: kept
-                .iter()
-                .filter(|g| g.control)
-                .map(|g| g.device_id.clone())
-                .collect(),
-        };
-        let Ok(control) = self.control.lock() else {
+        let Ok(mut control) = self.control.lock() else {
             return;
         };
         if !control.enabled || control.operations.epoch() != restore.epoch {
             return;
         }
-        match control.operations.restore(restore.epoch, &grants) {
-            // Remember what was actually put back: browsers no longer approved are forgotten.
-            Ok(true) => control.remember(Persist::Restored(kept)),
+        let kept: Vec<vault::Grant> = control
+            .remembered
+            .grants()
+            .iter()
+            .filter(|g| {
+                approvals
+                    .iter()
+                    .any(|(id, at)| *id == g.device_id && *at == g.expires_at)
+            })
+            .cloned()
+            .collect();
+        let ids = |held: fn(&vault::Grant) -> bool| {
+            kept.iter()
+                .filter(|g| held(g))
+                .map(|g| g.device_id.clone())
+                .collect()
+        };
+        let grants = operations::DurableGrants {
+            logging: ids(|g| g.logging),
+            control: ids(|g| g.control),
+            transmit: ids(|g| g.control && g.transmit),
+        };
+        let operations = control.operations.clone();
+        match operations.restore(restore.epoch, &grants) {
+            // Browsers no longer approved at the same approval are forgotten.
+            Ok(true) => control.remember(Persist::Approvals(approvals)),
             Ok(false) => {}
             Err(_) => {
                 drop(control);
@@ -683,7 +816,97 @@ impl Controller {
         }
         Ok((binding, token))
     }
-    async fn handle(&mut self, action: Action, generation: u64) -> Result<(), &'static str> {
+    /// ONE APPROVAL (operator decision 2026-09-13): approving a browser grants it station control
+    /// and logging, and FT8/FT4 transmit when the approval ticked it. With Remote on they take
+    /// effect at once; with Remote off they wait in the record for Turn on. A local decision made
+    /// after the approval was asked for (Turn off or on, take over, revoking a browser) wins, and
+    /// nothing is granted. ⛔ Granting transmit arms nothing: the browser still has to press TX On.
+    fn grant_approved(
+        &self,
+        devices: &[Device],
+        device_id: String,
+        transmit: bool,
+        (generation, epoch): (u64, u64),
+    ) -> Result<(), &'static str> {
+        let expires_at = devices
+            .iter()
+            .find(|d| d.id == device_id && d.approved == 1 && d.expires_at > now_ms())
+            .map(|d| d.expires_at)
+            .ok_or("invalidResponse")?;
+        let mut control = self.control.lock().map_err(|_| "serviceUnavailable")?;
+        if control.generation != generation || control.operations.epoch() != epoch {
+            return Ok(());
+        }
+        if control.enabled {
+            let operations = control.operations.clone();
+            operations.permit(&device_id, true)?;
+            operations.permit_station(&device_id, true)?;
+            // A fresh approval without the tick holds no transmit, even if an earlier one did.
+            operations.permit_transmit(&device_id, transmit)?;
+        }
+        control.remember(Persist::Browser {
+            device_id,
+            approval: Some(expires_at),
+            logging: Some(true),
+            control: Some(true),
+            transmit: Some(transmit),
+        });
+        Ok(())
+    }
+    /// Connect under `generation`, which the caller has already made enabled with a fresh
+    /// authority (Turn on Remote, a launch that remembers being on, or approving the pairing).
+    fn enable(&mut self, generation: u64) -> Result<(), &'static str> {
+        let bound = self.bound();
+        let mut control = self.control.lock().map_err(|_| "serviceUnavailable")?;
+        if !control.enabled || control.generation != generation {
+            return Ok(());
+        }
+        let (binding, token) = match bound {
+            Ok(value) => value,
+            Err(error) => {
+                control.stop();
+                return Err(error);
+            }
+        };
+        if let Some(cancel) = control.cancel.take() {
+            let _ = cancel.send(true);
+        }
+        let (cancel, receiver) = watch::channel(false);
+        control.cancel = Some(cancel);
+        phase(&self.status, "connecting", None);
+        tokio::spawn(transport::supervise(
+            self.client.clone(),
+            binding,
+            token,
+            receiver,
+            self.engine.clone(),
+            self.feeds.clone(),
+            SessionStatus {
+                status: self.status.clone(),
+                control: self.control.clone(),
+                generation,
+            },
+        ));
+        // Remote is on and connecting: the next launch turns it back on.
+        control.remember(Persist::Enabled);
+        // Remembered grants come back once the service confirms each browser is still approved at
+        // the same approval. The epoch is read here, under the lock: a later take over, revocation
+        // or Turn off moves it, and that decision wins.
+        if !control.remembered.grants().is_empty() {
+            self.restore = Some(Restore {
+                epoch: control.operations.epoch(),
+                at: tokio::time::Instant::now(),
+                attempts: 0,
+            });
+        }
+        Ok(())
+    }
+    async fn handle(
+        &mut self,
+        action: Action,
+        generation: u64,
+        epoch: u64,
+    ) -> Result<(), &'static str> {
         match action {
             Action::LoggingPermission { .. }
             | Action::StationPermission { .. }
@@ -793,6 +1016,7 @@ impl Controller {
             Action::Approve {
                 enrollment_id,
                 account_id,
+                transmit,
             } => {
                 let pending = self.pending.as_mut().ok_or("pairingExpired")?;
                 if pending.id != enrollment_id
@@ -834,49 +1058,50 @@ impl Controller {
                     return Err("invalidResponse");
                 }
                 self.vault.save(&binding, &token)?;
-                if let Ok(control) = self.control.lock() {
+                // One approval: the service approved the browser that confirmed this pairing along
+                // with the station. It gets what any approved browser gets, waiting in the record
+                // for Turn on. A service that reports no browser pairs exactly as it used to.
+                let paired = value
+                    .get("device")
+                    .and_then(|d| {
+                        Some((
+                            d.get("id")?.as_str()?.to_string(),
+                            d.get("expiresAt")?.as_u64()?,
+                        ))
+                    })
+                    .filter(|(id, at)| identifier(id) && *at > now_ms());
+                if let Ok(mut control) = self.control.lock() {
                     // A new pairing starts with nothing remembered: off, and no grants.
                     control.remember(Persist::Bound(binding.clone(), None));
+                    if let Some((device_id, expires_at)) = paired {
+                        control.remember(Persist::Browser {
+                            device_id,
+                            approval: Some(expires_at),
+                            logging: Some(true),
+                            control: Some(true),
+                            transmit: Some(transmit),
+                        });
+                    }
                 }
                 self.binding = Some(binding);
                 self.pending = None;
                 self.reflect("disabled");
-            }
-            Action::Enable {} => {
-                let bound = self.bound();
-                let mut control = self.control.lock().map_err(|_| "serviceUnavailable")?;
-                if !control.enabled || control.generation != generation {
-                    return Ok(());
-                }
-                let (binding, token) = match bound {
-                    Ok(value) => value,
-                    Err(error) => {
+                // Approving the pairing also turns Remote on (operator decision 2026-09-14), exactly
+                // as Turn on Remote does: a fresh authority, and the TX-enable latch untouched. A
+                // Turn off or Cancel made while the approval was on its way moved the generation,
+                // and wins.
+                let turned_on = self.control.lock().ok().and_then(|mut control| {
+                    (control.generation == generation).then(|| {
                         control.stop();
-                        return Err(error);
-                    }
-                };
-                if let Some(cancel) = control.cancel.take() {
-                    let _ = cancel.send(true);
+                        control.enabled = true;
+                        control.generation
+                    })
+                });
+                if let Some(generation) = turned_on {
+                    self.enable(generation)?;
                 }
-                let (cancel, receiver) = watch::channel(false);
-                control.cancel = Some(cancel);
-                phase(&self.status, "connecting", None);
-                tokio::spawn(transport::supervise(
-                    self.client.clone(),
-                    binding,
-                    token,
-                    receiver,
-                    self.engine.clone(),
-                    self.feeds.clone(),
-                    SessionStatus {
-                        status: self.status.clone(),
-                        control: self.control.clone(),
-                        generation,
-                    },
-                ));
-                // Remote is on and connecting: the next launch turns it back on.
-                control.remember(Persist::Enabled);
             }
+            Action::Enable {} => self.enable(generation)?,
             Action::Disable {} => {
                 self.reflect(if self.binding.is_some() {
                     "disabled"
@@ -890,14 +1115,18 @@ impl Controller {
                     .post(&station_path(&binding, "revoke"), Some(&token), empty())
                     .await?;
                 self.vault.remove(&binding)?;
-                if let Ok(control) = self.control.lock() {
+                if let Ok(mut control) = self.control.lock() {
                     control.remember(Persist::Removed);
                 }
                 self.binding = None;
                 self.pending = None;
                 self.reflect("unpaired");
             }
-            Action::Device { device_id, approve } => {
+            Action::Device {
+                device_id,
+                approve,
+                transmit,
+            } => {
                 if !identifier(&device_id) {
                     return Err("invalidRequest");
                 }
@@ -919,90 +1148,40 @@ impl Controller {
                 if let Ok(mut status) = self.status.lock() {
                     status.devices.clear();
                 }
+                if approve {
+                    // The list names the approval the service just wrote; the grant binds to it.
+                    let devices = self.devices().await?;
+                    let granted =
+                        self.grant_approved(&devices, device_id, transmit, (generation, epoch));
+                    if let Ok(mut status) = self.status.lock() {
+                        status.devices = devices;
+                    }
+                    granted?;
+                }
             }
         }
         Ok(())
     }
 }
 
-/// The vault writer. Applies each remembered decision to the record for the current pairing, in
-/// the order the decisions were made, and writes only when the record changed. A failed write is
-/// followed by deleting the record: a record that could not be updated must not survive to be
-/// restored, and no record at all means Remote stays off at the next launch.
-fn write_remembered(vault: Arc<dyn Vault>, mut decisions: mpsc::UnboundedReceiver<Persist>) {
-    let mut binding: Option<Binding> = None;
-    let mut saved: Option<vault::State> = None;
-    while let Some(decision) = decisions.blocking_recv() {
-        let decision = match decision {
-            Persist::Bound(bound, state) => {
-                saved = state.filter(|s| s.binding == bound);
-                binding = Some(bound);
-                continue;
+/// The vault writer. Each write is the whole record for the current pairing, produced in the order
+/// the decisions were made, so a backlog collapses to its latest. A failed save is followed by
+/// deleting the record: a record that could not be updated must not survive to be restored, and no
+/// record at all means Remote stays off at the next launch.
+fn write_remembered(vault: Arc<dyn Vault>, mut writes: mpsc::UnboundedReceiver<Write>) {
+    while let Some(mut write) = writes.blocking_recv() {
+        while let Ok(next) = writes.try_recv() {
+            write = next;
+        }
+        match write {
+            Write::Save(state) => {
+                if vault.save_state(&state).is_err() {
+                    let _ = vault.remove_state();
+                }
             }
-            Persist::Removed => {
-                binding = None;
-                saved = None;
+            Write::Remove => {
                 let _ = vault.remove_state();
-                continue;
             }
-            decision => decision,
-        };
-        let Some(bound) = binding.clone() else {
-            continue;
-        };
-        let mut state = saved.clone().unwrap_or(vault::State {
-            binding: bound,
-            enabled: false,
-            grants: Vec::new(),
-        });
-        match decision {
-            Persist::Enabled => state.enabled = true,
-            Persist::Off => {
-                state.enabled = false;
-                state.grants.clear();
-            }
-            Persist::ClearGrants => state.grants.clear(),
-            Persist::Grants { grants, approval } => {
-                let ids: std::collections::BTreeSet<&String> =
-                    grants.logging.iter().chain(&grants.control).collect();
-                let next: Vec<vault::Grant> = ids
-                    .into_iter()
-                    .filter_map(|id| {
-                        // The browser just granted takes the approval the operator granted
-                        // against; every other browser keeps the approval its grant was given at.
-                        let expires_at = approval
-                            .as_ref()
-                            .filter(|(device, _)| device == id)
-                            .map(|(_, at)| *at)
-                            .or_else(|| {
-                                state
-                                    .grants
-                                    .iter()
-                                    .find(|g| &g.device_id == id)
-                                    .map(|g| g.expires_at)
-                            })?;
-                        Some(vault::Grant {
-                            device_id: id.clone(),
-                            expires_at,
-                            logging: grants.logging.contains(id),
-                            control: grants.control.contains(id),
-                        })
-                    })
-                    .take(MAX_REMEMBERED)
-                    .collect();
-                state.grants = next;
-            }
-            Persist::Restored(grants) => state.grants = grants,
-            Persist::Bound(..) | Persist::Removed => continue,
-        }
-        if saved.as_ref() == Some(&state) {
-            continue;
-        }
-        if vault.save_state(&state).is_ok() {
-            saved = Some(state);
-        } else {
-            let _ = vault.remove_state();
-            saved = None;
         }
     }
 }

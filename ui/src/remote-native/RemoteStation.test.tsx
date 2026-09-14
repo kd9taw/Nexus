@@ -33,8 +33,8 @@ it('renders local pairing and device approval through only the isolated Remote c
   await screen.findByRole('button', { name: 'Turn off Remote' })
   fireEvent.click(screen.getByRole('button', { name: 'Turn off Remote' }))
   await screen.findByRole('button', { name: 'Turn on Remote' })
-  expect(actions).toContainEqual({ type: 'approve', accountId, enrollmentId: pairingId })
-  expect(actions).toContainEqual({ type: 'device', deviceId, approve: true })
+  expect(actions).toContainEqual({ type: 'approve', accountId, enrollmentId: pairingId, transmit: false })
+  expect(actions).toContainEqual({ type: 'device', deviceId, approve: true, transmit: false })
   expect(actions).toContainEqual({ type: 'disable' })
   expect([...document.querySelectorAll('button')].every(button => button.type === 'button')).toBe(true)
 })
@@ -104,9 +104,52 @@ it('keeps transmit revocation available during a pending refresh and discards it
  expect(screen.getByRole('button',{name:'Allow FT8/FT4 transmission'})).toBeTruthy()
 })
 
-// Remote remembers being on (operator decision 2026-09-13). The shack has to say so, and has to say
-// that FT8/FT4 transmit permission is the one thing a restart does not bring back.
-it('tells the operator Remote stays on across a restart and transmit permission does not', async () => {
+// One approval (operator decisions 2026-09-13 and 2026-09-14): approving the pairing turns Remote on
+// and approves the browser that paired; approving any browser grants station controls and logging,
+// and FT8/FT4 transmit only when its box is ticked.
+it('approves the pairing and each browser in one step, with the transmit tick on the approval', async () => {
+  const accountId = crypto.randomUUID(), pairingId = crypto.randomUUID(), first = crypto.randomUUID(), second = crypto.randomUUID()
+  let status: RemoteStationStatus = { phase: 'approval', origin: 'https://remote-staging.hamradiotools.io',
+    stationId: null, accountId, pairingId, pairingCode: crypto.randomUUID().replace(/-/g,'').slice(0,16),
+    expiresAt: Date.now()+600000, devices: [], error: null }
+  const actions: RemoteStationAction[] = []
+  const invoke = async (command: string, input: unknown) => {
+    if (command === 'get_remote_station_status') return status
+    if (command === 'get_settings') return { launchAtLogin: false, remoteAutostartOfferAnswered: false }
+    if (command !== 'remote_station_action') throw new Error('unexpectedCommand')
+    const action = (input as { action: RemoteStationAction }).action
+    actions.push(action)
+    if (action.type === 'approve') status = { ...status, stationId: pairingId, pairingCode: null, pairingId: null, phase: 'connecting',
+      devices: [first, second].map(id => ({ id, name: 'Test browser', approved: 0, expiresAt: Date.now()+600000 })) }
+    if (action.type === 'device') status = { ...status, devices: status.devices.map(d => d.id === action.deviceId ? { ...d, approved: 1 } : d) }
+    return status
+  }
+  window.__TAURI_INTERNALS__ = { invoke: invoke as NonNullable<Window['__TAURI_INTERNALS__']>['invoke'] }
+  render(<RemoteStation />)
+  fireEvent.click(await screen.findByRole('checkbox', { name: 'Also allow FT8/FT4 transmit' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Approve this account pairing' }))
+  await screen.findByText(second.slice(-6))
+  expect(actions).toEqual([{ type: 'approve', accountId, enrollmentId: pairingId, transmit: true }])
+  // The approval turned Remote on, which is when start at sign-in is offered.
+  await screen.findByRole('button', { name: 'Start Nexus when I sign in' })
+  // One Approve per browser, each with its own transmit tick, off unless ticked.
+  const ticks = screen.getAllByRole('checkbox', { name: 'Also allow FT8/FT4 transmit' })
+  expect(ticks).toHaveLength(2)
+  fireEvent.click(ticks[1])
+  fireEvent.click(screen.getAllByRole('button', { name: 'Approve browser' })[1])
+  await waitFor(() => expect(screen.getAllByRole('button', { name: 'Approve browser' })).toHaveLength(1))
+  fireEvent.click(screen.getByRole('button', { name: 'Approve browser' }))
+  await waitFor(() => expect(screen.queryByRole('button', { name: 'Approve browser' })).toBeNull())
+  expect(actions.slice(1)).toEqual([
+    { type: 'device', deviceId: second, approve: true, transmit: true },
+    { type: 'device', deviceId: first, approve: true, transmit: false },
+  ])
+  expect(screen.getAllByRole('button', { name: 'Revoke browser approval' })).toHaveLength(2)
+})
+
+// Remote remembers being on, and approved browsers keep what the operator allowed, transmit included.
+// A restart still never arms the transmitter, and the shack has to say both.
+it('tells the operator approved browsers keep their access across a restart and transmit stays off until TX On', async () => {
   const deviceId = crypto.randomUUID()
   const status: RemoteStationStatus = { phase: 'connected', origin: 'https://remote-staging.hamradiotools.io',
     stationId: crypto.randomUUID(), accountId: crypto.randomUUID(), pairingId: null, pairingCode: null, expiresAt: null,
@@ -119,12 +162,13 @@ it('tells the operator Remote stays on across a restart and transmit permission 
   window.__TAURI_INTERNALS__ = { invoke: invoke as NonNullable<Window['__TAURI_INTERNALS__']>['invoke'] }
   render(<RemoteStation />)
   await screen.findByRole('button', { name: 'Turn off Remote' })
-  expect(screen.getByText(/stays on when Nexus restarts/)).toBeTruthy()
-  expect(screen.getByText(/transmit permission is not kept/)).toBeTruthy()
+  expect(screen.getByText(/stays on when Nexus restarts/).textContent).toMatch(/FT8\/FT4 transmit included/)
+  expect(screen.getByText(/stays on when Nexus restarts/).textContent).toMatch(/always off after a restart until the browser presses TX On/)
+  expect(screen.getByText(/stays on when Nexus restarts/).textContent).toMatch(/Turn off Remote only disconnects/)
   // Beside the transmit permission itself, not only in the general hint.
-  expect(screen.getByText(/FT8\/FT4 transmission requires station control/).textContent).toMatch(/resets whenever Nexus restarts/)
-  expect(screen.getByText(/Allow station controls for each browser/).textContent).toMatch(/kept when Nexus restarts/)
-  expect(screen.queryByText(/turns off whenever Nexus restarts/)).toBeNull()
+  expect(screen.getByText(/FT8\/FT4 transmit also needs station controls/).textContent).toMatch(/stays allowed across restarts until you revoke it/)
+  expect(screen.getByText(/Approving a browser gives it station controls/).textContent).toMatch(/To limit a browser, revoke them here/)
+  expect(screen.queryByText(/turns off whenever Nexus restarts|not kept|grant it again after every restart|resets whenever/)).toBeNull()
 })
 
 function offerHarness(options: { failLaunchAtLogin?: boolean } = {}) {

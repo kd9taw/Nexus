@@ -407,6 +407,116 @@ fn ft_run(f: &Fixture, request: &Request) -> Result<Value, &'static str> {
     )
 }
 
+/// One approval (operator decision 2026-09-13): a transmit grant can now come back when Remote comes
+/// on after a restart. Coming back arms nothing. Transmit without station control is not restored at
+/// all. With it, the browser is offered FT operating, but the TX-enable latch stays off, taking the
+/// lease and heartbeating arm nothing, and only the browser's own TX On does.
+#[test]
+fn a_restored_transmit_grant_arms_nothing_until_the_browser_presses_tx_on() {
+    use tempo_app::dto::Tier;
+    for tier in [Tier::Ft8, Tier::Ft4] {
+        let f = Fixture::new();
+        {
+            let mut e = f.engine.lock().unwrap();
+            e.set_tier(tier);
+            e.configure_remote_settings_store(f.dir.join("settings.json"));
+            e.set_tx_enabled(false);
+            e.take_immediate_retune();
+            e.take_slot_tx_abort();
+            let radio = e.remote_open_radio().unwrap();
+            let read = e.remote_radio_read(&radio, Instant::now());
+            let hz = (e.settings().dial_mhz * 1e6).round() as u64;
+            e.remote_observe_cat(read.as_ref(), Some(true));
+            e.remote_observe_dial(read.as_ref(), Some(hz));
+            e.remote_observe_mode(read.as_ref(), Some("PKTUSB"));
+            e.remote_observe_ptt(read.as_ref(), Some(false));
+        }
+        let epoch = f.authority.epoch();
+        let transmit_only = DurableGrants {
+            transmit: vec![DEVICE.into()],
+            ..Default::default()
+        };
+        assert_eq!(f.authority.restore(epoch, &transmit_only), Ok(true));
+        assert_eq!(
+            f.authority.local_status()["transmitDevices"],
+            json!([]),
+            "never restored without station control"
+        );
+        let grants = DurableGrants {
+            control: vec![DEVICE.into()],
+            transmit: vec![DEVICE.into()],
+            ..Default::default()
+        };
+        assert_eq!(f.authority.restore(epoch, &grants), Ok(true));
+        assert_eq!(
+            f.authority.local_status()["transmitDevices"],
+            json!([DEVICE])
+        );
+        assert!(
+            !f.engine.lock().unwrap().tx_enabled(),
+            "restoring leaves the latch off"
+        );
+
+        let now = Instant::now();
+        let boot = control_state_version(&f, now, 4)["stationBootId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let owner = f
+            .authority
+            .handle_version(
+                (f.connection, 4),
+                SESSION,
+                DEVICE,
+                &Request::Acquire {
+                    request_id: id(),
+                    station_boot_id: boot,
+                },
+                &f.engine,
+                now,
+            )
+            .unwrap();
+        f.authority
+            .handle_version(
+                (f.connection, 4),
+                SESSION,
+                DEVICE,
+                &Request::Heartbeat {
+                    request_id: id(),
+                    lease_id: owner["leaseId"].as_str().unwrap().into(),
+                },
+                &f.engine,
+                now,
+            )
+            .unwrap();
+        let state = control_state_version(&f, now, 4);
+        assert!(
+            state["controls"]["capabilities"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("ftOperate")),
+            "positive control: the restored grant is real"
+        );
+        assert_eq!(state["txArmed"], false);
+        {
+            let e = f.engine.lock().unwrap();
+            assert!(
+                !e.tx_enabled() && !e.remote_ft_tx_owned(),
+                "a lease and a heartbeat arm nothing"
+            );
+        }
+        let tx_on = ft_command(
+            &state,
+            json!({"action":"ft.txEnabled","expectedTier":tier,"transmitEpoch":state["transmitEpoch"],"on":true}),
+        );
+        assert_eq!(ft_run(&f, &tx_on).unwrap()["outcome"], "applied");
+        assert!(
+            f.engine.lock().unwrap().tx_enabled(),
+            "positive control: the browser's TX On is what arms it"
+        );
+    }
+}
+
 #[test]
 fn transmit_message_choice_uses_the_original_exchange_and_native_target() {
     use tempo_app::engine::remote_transmit::FtExchangeContext;

@@ -70,8 +70,10 @@ station reports back, and your log, settings and radio never leave this computer
 **Pairing.** Give the station a **Station name** and start **Pair a station**. In the
 browser, sign in, enter the code and choose **Attach this station**. Back here,
 compare the account ID on both screens and choose **Approve this account pairing** —
-that starts the account's 14-day trial. Each browser then requests its own approval;
-compare its name and code before **Approve browser**.
+that starts the account's 14-day trial, turns Remote on, and approves the browser you
+paired from. Tick **Also allow FT8/FT4 transmit** first if that browser should be able to
+transmit. Any other browser requests its own approval; compare its name and code before
+**Approve browser**, which has the same transmit tick.
 
 **Turn on Remote** opens an outbound encrypted connection. No port
 forwarding is required. Pairing stays in the operating system's credential store, and
@@ -85,11 +87,12 @@ first time you turn Remote on, Nexus offers to start when you sign in to this co
 that is the **Start at sign-in** setting under Appearance, and it stays off unless you
 say yes.
 
-**What a browser may do** is granted per browser, here at the station. Without any of
-these it can watch the station but not change it. Station controls and remote logging
-are kept when Nexus restarts, for as long as that browser stays approved: a browser
-whose approval was revoked, or given again, starts with neither. Permission to transmit
-FT8/FT4 is never kept — grant it again after every restart.
+**What a browser may do** is decided here at the station. Approving a browser gives it
+station controls and remote logging, and FT8/FT4 transmit too when the approval's transmit
+box is ticked. All of it is kept when Nexus restarts, until you revoke it, for as long as
+that browser stays approved: a browser whose approval was revoked, or given again, starts
+with nothing kept. The switches under each approved browser limit it, or give a
+permission back. Without any of these it can watch the station but not change it.
 
 - **Allow station controls** — tuning, band and mode changes, receiver filters and
   DSP, RF power and mic gain, decoder settings, the amplifier, and which radio is
@@ -98,12 +101,16 @@ FT8/FT4 is never kept — grant it again after every restart.
   Day contacts still log at the station.
 - **Allow FT8/FT4 transmission** — calling CQ, answering and sending FT8/FT4 messages.
   It also needs station controls, and it goes through the normal TX switch and TX
-  watchdog. If the browser goes away the station stops transmitting within five
-  seconds, and **Revoke transmission permission** stops it at once. No other mode
-  transmits remotely.
+  watchdog. Allowing it arms nothing: whenever Nexus starts, the TX switch is off until
+  the browser presses TX On. If the browser goes away the station stops transmitting
+  within five seconds, and **Revoke transmission permission** stops it at once. No other
+  mode transmits remotely.
 
 No audio reaches the browser. **Revoke browser approval** removes one browser.
-**Turn off Remote** disconnects every browser. **Revoke station access**
+**Turn off Remote** only pauses: it disconnects every browser, and turning Remote on again
+gives each still-approved browser back what it had, with the TX switch off. **End remote
+control and clear permissions** and **Revoke browser approval** clear permissions for good.
+**Revoke station access**
 disconnects the station and removes its Remote pairing; pair again to reconnect.
 
 ---

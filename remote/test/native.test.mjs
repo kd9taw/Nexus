@@ -99,6 +99,54 @@ for (const tier of ['FT8', 'FT4']) for (const prompt of [false, true]) test(`act
   }
 })
 
+// One approval through workerd (operator decisions 2026-09-13 and 2026-09-14): approving the pairing
+// turns Remote on and grants the browser that confirmed it station control, logging and, when ticked,
+// FT8/FT4 transmit. All three come back after a restart with the TX-enable latch still off, and a
+// later Turn off Remote is remembered.
+test('actual native one approval: pairing turns Remote on, grants the pairing browser, keeps transmit across a restart with TX off', { timeout: 60000 }, async () => {
+  assert.ok(process.env.NEXUS_REMOTE_TEST_BINARY)
+  const app = await runtime(), probe = await nativeProbe(process.env.NEXUS_REMOTE_TEST_BINARY, app.origin)
+  try {
+    await probe.ready()
+    const browser = await app.owner(), begin = await probe.send({ type: 'begin', name: 'One approval bench' })
+    const stationId = begin.status.pairingId
+    await browser.post('pair/claim', { code: begin.status.pairingCode })
+    const { response } = await browser.post('pair/confirm', { id: stationId })
+    browser.setCookie(response.headers.get('set-cookie'))
+    await probe.send({ type: 'refresh' })
+    const paired = await probe.send({ type: 'approve', enrollmentId: stationId, accountId: browser.accountId, transmit: true })
+    assert.equal(paired.ok, true, paired.error)
+    assert.ok(['connecting', 'connected', 'reconnecting'].includes(paired.status.phase), paired.status.phase)
+    const { value: device } = await browser.post(`stations/${stationId}/device`, { name: 'Not asked for' })
+    assert.equal(device.approved, true, 'the pairing browser was approved with the station')
+    const granted = async label => {
+      for (let i = 0; i < 100; i++) {
+        const { status } = await probe.send({ type: 'status' })
+        if ([status.stationPermissions, status.loggingPermissions, status.transmitPermissions].every(p => p?.includes(device.deviceId))) return status
+        await delay(100)
+      }
+      assert.fail(`${label}: the pairing browser's grants never appeared`)
+    }
+    await granted('after the approval')
+    assert.equal((await probe.send({ type: 'ftEvidence' })).txEnabled, false)
+    await delay(300)
+    await probe.send({ type: 'restart' })
+    await granted('after a restart')
+    const evidence = await probe.send({ type: 'ftEvidence' })
+    assert.equal(evidence.txEnabled, false, 'the TX-enable latch is off after the restart')
+    assert.equal(evidence.owned, false)
+    assert.equal((await probe.send({ type: 'disable' })).ok, true)
+    await delay(300)
+    await probe.send({ type: 'restart' })
+    let status
+    for (let i = 0; i < 50 && !status?.stationId; i++) { status = (await probe.send({ type: 'status' })).status; if (!status.stationId) await delay(100) }
+    assert.equal(status.phase, 'disabled', 'Turn off Remote is remembered')
+    assert.deepEqual(status.transmitPermissions, [])
+  } finally {
+    try { await probe.stop() } finally { await app.mf.dispose() }
+  }
+})
+
 async function nativeProbe(binary, origin) {
   const profile=await mkdtemp(join(tmpdir(),'nexus-native-profile-'))
   const child = spawn(binary, ['--ignored', '--exact', 'remote_service::tests::cloud_runtime_probe', '--nocapture'], { stdio: ['pipe', 'pipe', 'pipe'], env:{...process.env,XDG_CONFIG_HOME:profile,APPDATA:profile,NEXUS_DATA_DIR:join(profile,'shared'),NEXUS_PROFILE:''} })
@@ -171,12 +219,15 @@ test('actual native controller pairs, stores authority, publishes real DTOs, dis
     assert.equal((await app.db.prepare('SELECT COUNT(*) AS count FROM stations WHERE id=?').bind(stationId).first()).count, 0)
     await probe.send({ type: 'vaultFailure', enabled: false })
     const paired = await probe.send(approve)
-    assert.equal(paired.ok, true); assert.equal(paired.status.phase, 'disabled')
+    // Approving the pairing turns Remote on (operator decision 2026-09-14).
+    assert.equal(paired.ok, true); assert.ok(['connecting', 'connected', 'reconnecting'].includes(paired.status.phase), paired.status.phase)
+    // This client never kept the confirm cookie, so it registers as a second, unapproved browser
+    // beside the approved pairing browser. The list is ordered by id, so find it by id.
     const { value: request, response } = await browser.post(`stations/${stationId}/device`, { name: 'Native probe browser' })
     browser.setCookie(response.headers.get('set-cookie'))
     await browser.post(`stations/${stationId}/ticket`, {}, 403)
     const requests = await probe.send({ type: 'refresh' })
-    assert.equal(requests.status.devices[0].id, request.deviceId)
+    assert.equal(requests.status.devices.find(d => d.id === request.deviceId)?.approved, 0)
     assert.equal((await probe.send({ type: 'device', deviceId: request.deviceId, approve: true })).ok, true)
     assert.equal((await probe.send({ type: 'enable' })).ok, true)
     const namespace = await app.mf.getDurableObjectNamespace('STATIONS')
@@ -618,8 +669,10 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
  let socket
  try{
   await probe.ready();const browser=await app.owner();const begin=await probe.send({type:'begin',name:'Logging synthetic bench'}),stationId=begin.status.pairingId
-  await browser.post('pair/claim',{code:begin.status.pairingCode});await browser.post('pair/confirm',{id:begin.status.pairingId});await probe.send({type:'refresh'});assert.equal((await probe.send({type:'approve',enrollmentId:stationId,accountId:browser.accountId})).ok,true)
-  const {value:device,response}=await browser.post(`stations/${stationId}/device`,{name:'Logging browser'});browser.setCookie(response.headers.get('set-cookie'));await probe.send({type:'refresh'});await probe.send({type:'device',deviceId:device.deviceId,approve:true});await probe.send({type:'enable'})
+  // One approval (operator decisions 2026-09-13/14): this browser confirms the pairing, so approving
+  // the pairing approves it and turns Remote on. Enable again for a fresh authority, as before.
+  await browser.post('pair/claim',{code:begin.status.pairingCode});const confirmed=await browser.post('pair/confirm',{id:begin.status.pairingId});browser.setCookie(confirmed.response.headers.get('set-cookie'));await probe.send({type:'refresh'});assert.equal((await probe.send({type:'approve',enrollmentId:stationId,accountId:browser.accountId})).ok,true)
+  const {value:device}=await browser.post(`stations/${stationId}/device`,{name:'Logging browser'});assert.equal(device.approved,true,'the pairing browser is approved with the station');await probe.send({type:'refresh'});await probe.send({type:'enable'})
   const roomNamespace=await app.mf.getDurableObjectNamespace('STATIONS'),room=roomNamespace.get(roomNamespace.idFromName(stationId));for(let i=0;i<30&&!(await roomStatus(room)).online;i++)await delay(100);assert.equal((await roomStatus(room)).online,true)
   assert.deepEqual(await probe.send({type:'seedLogging'}),{count:0,adif:'',txEnabled:false})
   const ticket=(await browser.post(`stations/${stationId}/ticket`)).value;socket=await browser.open(stationId,ticket.ticket);socket.ackObservations();await socket.take(v=>v.type==='session')
@@ -628,7 +681,13 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
     try{return {request,response:await socket.take(v=>v.type==='operationResponse'&&v.requestId===request.requestId)}}
     catch(error){throw new Error(`operation ${request.type}/${request.action?.action??''} v${operationVersion} timed out; socket closed=${socket.closed} code=${socket.closeCode} reason=${socket.closeReason}`,{cause:error})}}
 
-  let state=(await operation({type:'state'})).response.value;assert.equal(state.phase,'localPermissionRequired');assert.equal((await operation({type:'acquire',stationBootId:state.stationBootId})).response.error,'localPermissionRequired')
+  // The approval granted station control and logging; Turn on restores them once the service lists
+  // the browser. Then RESTRICT the browser with the switches at the shack: that is what must still
+  // refuse it a lease, exactly as a browser without permission always was.
+  for(let i=0;i<50;i++){const {status}=await probe.send({type:'status'});if(status.loggingPermissions?.includes(device.deviceId)&&status.stationPermissions?.includes(device.deviceId))break;await delay(100)}
+  let state=(await operation({type:'state'})).response.value;assert.equal(state.phase,'available','the approval allowed this browser')
+  for(const type of ['loggingPermission','stationPermission']){const restricted=await probe.send({type,deviceId:device.deviceId,allow:false});assert.equal(restricted.ok,true,restricted.error)}
+  state=(await operation({type:'state'})).response.value;assert.equal(state.phase,'localPermissionRequired');assert.equal((await operation({type:'acquire',stationBootId:state.stationBootId})).response.error,'localPermissionRequired')
   await probe.send({type:'refresh'});const permission=await probe.send({type:'loggingPermission',deviceId:device.deviceId,allow:true});assert.equal(permission.ok,true,permission.error);assert.deepEqual(permission.status.loggingPermissions,[device.deviceId])
   state=(await operation({type:'acquire',stationBootId:state.stationBootId})).response.value;assert.equal(state.phase,'controlling');assert.equal(state.txArmed,false)
   const record={call:'W1AW',grid:'FN31',country:null,state:null,band:'20m',freqMhz:14.25,mode:'SSB',rstSent:'59',rstRcvd:'57',name:'Joe',qth:'Newington',comment:'Cloud/native append test',notes:'Do not duplicate',whenUnix:Math.floor(Date.now()/1000),confirmed:false,awardConfirmed:false}
@@ -769,10 +828,11 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
   assert.equal((await probe.send({type:'takeOverLogging'})).ok,true);const refused=await operation({...logged.request,requestId:crypto.randomUUID(),expectedRevision:current.revision,commandWindowId:current.commandWindowId,clientSequence:current.nextSequence,record:{...record,call:'K2ABC'}});assert.equal(refused.response.error,'localPermissionRequired');assert.deepEqual(await probe.send({type:'loggingEvidence'}),evidence)
   await probe.send({type:'loggingPermission',deviceId:device.deviceId,allow:true});assert.equal((await operation({type:'result',operationId:logged.request.requestId})).response.value.outcome,'applied')
   socket.close();socket=null
-  // Remote remembers being on (operator decision 2026-09-13). Restarting the actual native controller
-  // turns Remote back on and gives remote logging (and, for v4, station control) back to a browser the
-  // actual service still lists at the same approval. FT8/FT4 transmit permission never comes back, and
-  // no lease survives the restart.
+  // Remote remembers being on (operator decision 2026-09-13), and since the one-approval decision the
+  // same day, FT8/FT4 transmit is remembered too. Restarting the actual native controller turns Remote
+  // back on and gives remote logging, station control (v4) and FT8/FT4 transmit (v4, where it was
+  // granted) back to a browser the actual service still lists at the same approval. No lease survives
+  // the restart, the TX-enable latch is off, and a restored grant arms nothing on a fresh lease.
   if(operationVersion===4){
    assert.equal((await probe.send({type:'stationPermission',deviceId:device.deviceId,allow:true})).ok,true)
    const held=await probe.send({type:'transmitPermission',deviceId:device.deviceId,allow:true})
@@ -781,7 +841,21 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
   await delay(200)
   let restarted=await probe.send({type:'restart'});assert.notEqual(restarted.status.phase,'disabled');assert.ok(restarted.status.observationGeneration)
   for(let i=0;i<50&&!restarted.status.loggingPermissions.includes(device.deviceId);i++){await delay(100);restarted=await probe.send({type:'status'})}
-  assert.deepEqual(restarted.status.loggingPermissions,[device.deviceId]);assert.deepEqual(restarted.status.transmitPermissions,[]);assert.equal(restarted.status.loggingController,null)
-  if(operationVersion===4)assert.deepEqual(restarted.status.stationPermissions,[device.deviceId])
+  assert.deepEqual(restarted.status.loggingPermissions,[device.deviceId]);assert.equal(restarted.status.loggingController,null)
+  assert.deepEqual(restarted.status.transmitPermissions,operationVersion===4?[device.deviceId]:[],'transmit comes back only where it was granted')
+  const idle=await probe.send({type:'ftEvidence'});assert.equal(idle.txEnabled,false,'the TX-enable latch is off after the restart');assert.equal(idle.owned,false)
+  if(operationVersion===4){
+   assert.deepEqual(restarted.status.stationPermissions,[device.deviceId])
+   for(let i=0;i<50&&restarted.status.phase!=='connected';i++){await delay(100);restarted=await probe.send({type:'status'})}
+   for(let i=0;i<30&&!(await roomStatus(room)).online;i++)await delay(100)
+   const again=(await browser.post(`stations/${stationId}/ticket`)).value;socket=await browser.open(stationId,again.ticket);socket.ackObservations();await socket.take(v=>v.type==='session')
+   assert.equal((await probe.send({type:'seedFt',tier:'FT8'})).txEnabled,false)
+   const fresh=(await operation({type:'state'})).response.value
+   const leased=(await operation({type:'acquire',stationBootId:fresh.stationBootId})).response.value;assert.equal(leased.phase,'controlling')
+   const beat=(await operation({type:'heartbeat',leaseId:leased.leaseId})).response.value
+   assert.ok(beat.controls.capabilities.includes('ftOperate'),'positive control: the restored transmit grant is real')
+   assert.match(beat.transmitEpoch,/^[0-9a-f]{16}$/);assert.equal(beat.txArmed,false,'a restored grant and a fresh lease arm nothing')
+   const armed=await probe.send({type:'ftEvidence'});assert.equal(armed.txEnabled,false);assert.equal(armed.owned,false)
+  }
  }finally{socket?.close();try{await probe.stop()}finally{await app.mf.dispose()}}
 })

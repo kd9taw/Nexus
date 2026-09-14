@@ -11,6 +11,9 @@ export function RemoteStation() {
   const [busy, setBusy] = useState(false)
   const [offer, setOffer] = useState(false)
   const [offerFailed, setOfferFailed] = useState(false)
+  // "Also allow FT8/FT4 transmit" on the pairing approval and on each browser's approval. Off unless ticked.
+  const [pairingTransmit, setPairingTransmit] = useState(false)
+  const [browserTransmit, setBrowserTransmit] = useState<Record<string, boolean>>({})
   const pending = useRef(false), mounted = useRef(true), requestEpoch = useRef(0)
   useEffect(() => {
     mounted.current = true
@@ -36,13 +39,15 @@ export function RemoteStation() {
     try {
       const next = await remoteStationAction(action)
       if (mounted.current && epoch === requestEpoch.current) setStatus(next)
-      if (action.type === 'enable') void offerStartAtSignIn()
+      // Approving the pairing turns Remote on too, so it is the same moment to offer.
+      if (action.type === 'enable' || (action.type === 'approve' && ['connected', 'connecting', 'reconnecting'].includes(next.phase))) void offerStartAtSignIn()
     }
     catch (error) { if (mounted.current && epoch === requestEpoch.current) setError(typeof error === 'string' ? error : 'serviceUnavailable') }
     finally { if (epoch === requestEpoch.current) { pending.current = false; if (mounted.current) setBusy(false) } }
   }
   // Remote comes back after a restart only if Nexus itself starts. So when the operator turns Remote
-  // on, and Nexus is not set to start at sign-in, offer it: once, only on that click (never on a
+  // on (or approves the pairing, which turns it on), and Nexus is not set to start at sign-in, offer
+  // it: once, only on that click (never on a
   // launch that turned Remote back on by itself), never switched on without a click, and never
   // asked again once answered either way.
   async function offerStartAtSignIn() {
@@ -87,9 +92,11 @@ export function RemoteStation() {
       <p>{t('remote.pairingCode')} <code>{status.pairingCode.match(/.{1,4}/g)?.join(' ')}</code></p>
       <p>{t('remote.codeExpires')}</p>
       {status.accountId && <p>{t('remote.accountMatch')} <code>{status.accountId}</code></p>}
+      {phase === 'approval' && status.accountId && status.pairingId && <label>
+        <input type="checkbox" checked={pairingTransmit} onChange={event => setPairingTransmit(event.target.checked)} />{t('remote.approveTransmit')}</label>}
       <div className="remote-actions">
         {phase === 'approval' && status.accountId && status.pairingId && <button type="button" className="remote-button" disabled={busy}
-          onClick={() => void act({ type: 'approve', accountId: status.accountId!, enrollmentId: status.pairingId! })}>{t('remote.approvePairing')}</button>}
+          onClick={() => void act({ type: 'approve', accountId: status.accountId!, enrollmentId: status.pairingId!, transmit: pairingTransmit })}>{t('remote.approvePairing')}</button>}
         <button type="button" className="remote-button" disabled={busy} onClick={() => void act({ type: 'cancel' })}>{t('remote.cancelPairing')}</button>
       </div>
     </>}
@@ -115,8 +122,16 @@ export function RemoteStation() {
       {status.devices.length === 0 && <p>{t('remote.noBrowsers')}</p>}
       {status.devices.map(device => <div key={device.id}>
         <p>{device.name} <code>{device.id.slice(-6)}</code></p>
-        <button type="button" className="remote-button" disabled={busy} onClick={() => void act({ type: 'device', deviceId: device.id, approve: device.approved !== 1 })}>
-          {device.approved === 1 ? t('remote.revokeBrowser') : t('remote.approveBrowser')}</button>
+        {/* One approval: approving grants station controls and logging, plus transmit if ticked.
+            The switches below then only restrict (or give back) what an approved browser holds. */}
+        {device.approved === 1
+          ? <button type="button" className="remote-button" disabled={busy} onClick={() => void act({ type: 'device', deviceId: device.id, approve: false })}>{t('remote.revokeBrowser')}</button>
+          : <>
+              <label><input type="checkbox" checked={browserTransmit[device.id] ?? false}
+                onChange={event => { const checked = event.target.checked; setBrowserTransmit(current => ({ ...current, [device.id]: checked })) }} />{t('remote.approveTransmit')}</label>
+              <button type="button" className="remote-button" disabled={busy}
+                onClick={() => void act({ type: 'device', deviceId: device.id, approve: true, transmit: browserTransmit[device.id] ?? false })}>{t('remote.approveBrowser')}</button>
+            </>}
         {device.approved===1&&status.loggingPermissions&&<button type="button" className="remote-button" disabled={busy||!connected} onClick={()=>void act({type:'loggingPermission',deviceId:device.id,allow:!status.loggingPermissions!.includes(device.id)})}>{status.loggingPermissions.includes(device.id)?t('remote.loggingRevoke'):t('remote.loggingAllow')}</button>}
         {device.approved===1&&status.stationPermissions&&<button type="button" className="remote-button" disabled={busy||!connected} onClick={()=>void act({type:'stationPermission',deviceId:device.id,allow:!status.stationPermissions!.includes(device.id)})}>{status.stationPermissions.includes(device.id)?t('remote.controlRevoke'):t('remote.controlAllow')}</button>}
         {device.approved===1&&status.transmitPermissions&&<button type="button" className="remote-button"

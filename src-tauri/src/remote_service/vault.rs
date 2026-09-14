@@ -2,14 +2,17 @@
 //! no connector settings, logbook passwords or fallback files are accessed.
 //!
 //! A second entry remembers what a restart must restore: whether Remote was on, and each approved
-//! browser's station-control and remote-logging grants. It is a SEPARATE entry, not a new field on
-//! the pairing record, because that record is `deny_unknown_fields`: an older Nexus reading a
-//! pairing that had grown a field would lose its pairing, and then could not even revoke it. An
-//! older build never looks at this entry. It is bound to the pairing it was written for, so an
-//! orphan left behind by a failed delete is ignored by any other pairing.
+//! browser's station-control, remote-logging and FT8/FT4 transmit grants. It is a SEPARATE entry,
+//! not a new field on the pairing record, because that record is `deny_unknown_fields`: an older
+//! Nexus reading a pairing that had grown a field would lose its pairing, and then could not even
+//! revoke it. It is bound to the pairing it was written for, so an orphan left behind by a failed
+//! delete is ignored by any other pairing.
 //!
-//! FT8/FT4 transmit permission has no field here and never will: it is boot-scoped and granted only
-//! at the shack. Nothing written here can put it back.
+//! FT8/FT4 transmit is remembered (operator decision 2026-09-13, late: a checkbox on the approval,
+//! kept until revoked). It is written only when granted, so a record without it stays readable by
+//! the 1.12.0 build, whose `Grant` has no such field; a record that holds it reads as unreadable
+//! there, which leaves Remote off. A remembered grant arms nothing: the TX-enable latch still starts
+//! off, and the browser still has to press TX On.
 use serde::{Deserialize, Serialize};
 
 const SERVICE: &str = "org.hamradiotools.nexus.remote";
@@ -31,8 +34,8 @@ struct Record {
     confirmed: bool,
 }
 
-/// One approved browser's grants as they stood when the operator gave them. No transmit field.
-#[derive(Clone, PartialEq, Serialize, Deserialize)]
+/// One approved browser's grants as they stood when the operator gave them.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Grant {
     pub device_id: String,
@@ -43,6 +46,12 @@ pub struct Grant {
     pub expires_at: u64,
     pub logging: bool,
     pub control: bool,
+    /// FT8/FT4 transmit. Only ever true alongside `control`. Omitted when false; see the module note.
+    #[serde(default, skip_serializing_if = "not")]
+    pub transmit: bool,
+}
+fn not(value: &bool) -> bool {
+    !*value
 }
 /// What a restart restores, for exactly one pairing.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]

@@ -1,7 +1,8 @@
 //! Station-owned authority for manual logging and typed station controls.
-//! Cloud admission routes an approved browser; only a local, boot-scoped grant
-//! permits a lease. FT8/FT4 CQ and TX On/Off require a separate local transmit
-//! grant; Stop has independent admission. Deferred hardware
+//! Cloud admission routes an approved browser; only a local grant (given at the
+//! shack, or restored for a still-approved browser) permits a lease. FT8/FT4 CQ
+//! and TX On/Off require a separate local transmit grant, and no grant arms TX;
+//! Stop has independent admission. Deferred hardware
 //! writes carry a revocable permit and a separate completion receipt.
 //! A log append already begun cannot be rolled back on disconnect. Its bounded
 //! receipt remains queryable by the same device while locally permitted.
@@ -263,20 +264,13 @@ impl Default for Core {
         }
     }
 }
-/// The grants a restart may carry, read from `Core` under its lock: station control and remote
-/// logging, per browser. There is no transmit field; see `Authority::restore`.
+/// Grants remembered from before a restart or a Turn on, per browser: remote logging, station
+/// control and FT8/FT4 transmit. See `Authority::restore`.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct DurableGrants {
     pub logging: Vec<String>,
     pub control: Vec<String>,
-}
-impl DurableGrants {
-    fn of(c: &Core) -> Self {
-        Self {
-            logging: c.grants.iter().cloned().collect(),
-            control: c.control_grants.iter().cloned().collect(),
-        }
-    }
+    pub transmit: Vec<String>,
 }
 #[derive(Default)]
 pub struct Authority {
@@ -405,15 +399,17 @@ impl Authority {
     pub fn epoch(&self) -> u64 {
         self.epoch.load(Ordering::SeqCst)
     }
-    /// Put back station-control and logging grants remembered from before a restart.
+    /// Put back grants remembered for still-approved browsers when Remote comes on (at launch, or
+    /// Turn on Remote).
     ///
-    /// `epoch` is the epoch captured when the restart turned Remote back on. If it has moved, a
-    /// local decision has been made since and its answer stands: nothing is restored. The grants
-    /// land in a fresh revision with no command window and no lease, so nothing issued before the
-    /// restore can be used with them.
+    /// `epoch` is the epoch captured when Remote came on. If it has moved, a local decision has been
+    /// made since and its answer stands: nothing is restored. The grants land in a fresh revision
+    /// with no command window and no lease, so nothing issued before the restore can be used with
+    /// them.
     ///
-    /// ⛔ There is no transmit parameter, and that is the point: FT8/FT4 transmit permission is
-    /// boot-scoped and only ever granted by `permit_transmit` at the shack.
+    /// FT8/FT4 transmit is restored only for a browser that also holds station control, exactly as
+    /// `permit_transmit` requires. ⛔ Restoring it arms nothing: the TX-enable latch is untouched,
+    /// the lease is dropped, and keying still needs the browser's own TX On under a fresh lease.
     pub fn restore(&self, epoch: u64, grants: &DurableGrants) -> Result<bool, &'static str> {
         let mut c = self.core.try_lock().map_err(|_| "remoteBusy")?;
         self.reconcile(&mut c, Instant::now())?;
@@ -430,6 +426,11 @@ impl Authority {
                 c.control_grants.insert(device.clone());
             }
         }
+        for device in &grants.transmit {
+            if c.control_grants.contains(device) {
+                c.transmit_grants.insert(device.clone());
+            }
+        }
         if c.lease.take().is_some() {
             self.revoke_execution();
         }
@@ -438,9 +439,7 @@ impl Authority {
         self.sync_stop_owner(&c);
         Ok(true)
     }
-    /// Returns the station-control and logging grants the change leaves, read under the same lock,
-    /// so the caller can remember exactly what is now in force.
-    pub fn permit(&self, device: &str, allow: bool) -> Result<DurableGrants, &'static str> {
+    pub fn permit(&self, device: &str, allow: bool) -> Result<(), &'static str> {
         if !identifier(device) {
             return Err("invalidRequest");
         }
@@ -461,9 +460,9 @@ impl Authority {
             }
         }
         self.sync_stop_owner(&c);
-        Ok(DurableGrants::of(&c))
+        Ok(())
     }
-    pub fn permit_station(&self, device: &str, allow: bool) -> Result<DurableGrants, &'static str> {
+    pub fn permit_station(&self, device: &str, allow: bool) -> Result<(), &'static str> {
         if !identifier(device) {
             return Err("invalidRequest");
         }
@@ -485,9 +484,9 @@ impl Authority {
             }
         }
         self.sync_stop_owner(&c);
-        Ok(DurableGrants::of(&c))
+        Ok(())
     }
-    /// Local permission is boot-scoped and never implied by a receiver grant.
+    /// Local permission, never implied by a receiver grant, and it arms nothing.
     /// Removing it revokes the current TX permit without waiting for Engine.
     pub fn permit_transmit(&self, device: &str, allow: bool) -> Result<(), &'static str> {
         if !identifier(device) {
