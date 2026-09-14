@@ -30,6 +30,12 @@ type Listener = (toasts: Toast[]) => void
 
 const DEFAULT_TTL_MS = 4000
 
+/** D#19: an error toast stays at least this long (or until dismissed). At the 4 s default a
+ * failure was gone before an operator looking at the rig got back to the screen, and several
+ * call sites asked for less than that. A call site may ask for LONGER; `0` still means sticky.
+ * Info and success toasts keep whatever ttl they are given. */
+export const ERROR_MIN_TTL_MS = 12_000
+
 let nextId = 1
 let toasts: Toast[] = []
 const listeners = new Set<Listener>()
@@ -56,7 +62,8 @@ export function pushToast(
   toasts = [...toasts, { id, kind, message, ...opts }]
   emit()
   if (ttlMs > 0) {
-    window.setTimeout(() => dismissToast(id), ttlMs)
+    const ttl = kind === 'error' ? Math.max(ttlMs, ERROR_MIN_TTL_MS) : ttlMs
+    window.setTimeout(() => dismissToast(id), ttl)
   }
   return id
 }

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Error messages stay on screen long enough to read (D#19).** An error pop-up used to vanish
+  after four seconds, or less, often before you looked back from the rig. Errors now stay at least
+  twelve seconds, or until you close them. Ordinary notices are unchanged.
+
 ### Security
 
 - **Encrypted connections refuse a malformed setup from the server.** Nexus's secure-connection
