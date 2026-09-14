@@ -42,14 +42,20 @@ export class ApplicationStreamClient {
     const now = performance.now(), elapsed = now - this.credit.at
     const updates = streamUpdates(message.updates, this.credit.id, this.version)
     // Validate the complete frame before any consumer can see a partial commit.
+    // A frame at or past the freshness window (a slow link or a stalled page) is not a protocol
+    // error: commit it with its true age, so the next delta still applies and age() reports it
+    // stale, but never hand it to a waiting reader as current. The stream carries on.
+    let late = false
     const next = updates.map(update => {
       if (update.type === 'applicationError') return { update, value: null }
       const age = elapsed + update.ageMs
-      if (age < 0 || age >= APPLICATION_TIMEOUT_MS) throw new Error('expiredApplicationResult')
+      if (age < 0) throw new Error('expiredApplicationResult')
+      if (age >= APPLICATION_TIMEOUT_MS) late = true
       return { update, value: { ...applyApplicationReply(this.values.get(update.command) ?? null, update), at: now - age } }
     })
     for (const { update, value } of next) {
       const waiting = this.waiting.get(update.command)
+      if (value && late) { this.values.set(update.command, value); continue }
       this.waiting.delete(update.command)
       if (value) { this.values.set(update.command, value); waiting?.resolve(value.value) }
       else { this.values.delete(update.command); waiting?.reject(new Error(update.type === 'applicationError' ? update.error : 'applicationUnavailable')) }

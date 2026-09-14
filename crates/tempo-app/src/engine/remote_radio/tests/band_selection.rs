@@ -14,9 +14,7 @@ fn queue(s: &mut Station, band: &str, mode: &str) -> Result<Completion, Reason> 
         band,
         mode,
         connection,
-        s.authority
-            .permit(Instant::now() + Duration::from_secs(5))
-            .unwrap(),
+        s.authority.permit(unexpired_deadline()).unwrap(),
     )
 }
 

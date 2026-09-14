@@ -73,9 +73,7 @@ fn queue_with_authority(s: &Station, id: u32, authority: &Revocation) -> Complet
     e.queue_remote_radio_selection(
         id,
         generation,
-        authority
-            .permit(Instant::now() + Duration::from_secs(5))
-            .unwrap(),
+        authority.permit(unexpired_deadline()).unwrap(),
     )
     .unwrap()
 }
@@ -975,9 +973,7 @@ fn routed_spot_commits_exact_contact_context_only_after_confirmed_incoming_tunin
                             "40m",
                             "N2SPOT/P",
                             connection,
-                            s.authority
-                                .permit(Instant::now() + Duration::from_secs(5))
-                                .unwrap(),
+                            s.authority.permit(unexpired_deadline()).unwrap(),
                         )
                         .unwrap()
                 };
@@ -1277,9 +1273,7 @@ fn routed_workspace_enters_js8_only_after_confirmed_channel_handoff() {
                 e.queue_remote_workspace(
                     tempo_app::engine::remote_radio::Workspace::Js8,
                     generation,
-                    s.authority
-                        .permit(Instant::now() + Duration::from_secs(5))
-                        .unwrap(),
+                    s.authority.permit(unexpired_deadline()).unwrap(),
                 )
                 .unwrap()
             };
@@ -1498,9 +1492,7 @@ fn workspace_return_retains_the_original_connection_and_confirms_before_native_c
                 .queue_remote_workspace(
                     Workspace::Ft,
                     generation,
-                    authority
-                        .permit(Instant::now() + Duration::from_secs(5))
-                        .unwrap(),
+                    authority.permit(unexpired_deadline()).unwrap(),
                 )
                 .unwrap();
             (original, receipt)
@@ -1657,4 +1649,61 @@ fn workspace_return_retains_the_original_connection_and_confirms_before_native_c
         assert!(!engine_lock(&s.engine).tx_enabled());
         assert!(s.backend.played.is_empty());
     }
+}
+
+#[test]
+fn a_selection_whose_command_window_ends_mid_handoff_is_never_adopted() {
+    // The positive control for `unexpired_deadline`: the same worker, warm
+    // connection and handoff, but the incoming radio answers its dial write
+    // only after the command window is over.
+    let _station = selection_test_lock();
+    let outgoing = retuning_peer(14_074_000, "PKTUSB", |_, _| None);
+    let window = Arc::new(Mutex::new(None::<Instant>));
+    let answer_after = window.clone();
+    let incoming = retuning_peer(7_100_000, "LSB", move |line, _| {
+        if line.starts_with("F ") {
+            let until = answer_after.lock().unwrap().expect("queued window");
+            while Instant::now() <= until {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+        None
+    });
+    let mut s = station(&outgoing);
+    let pool = Arc::new(MonitorConnections::new(vec![connection(&s, &incoming)]));
+    let receipt = {
+        let mut e = engine_lock(&s.engine);
+        let generation = e
+            .remote_monitor_observation()
+            .radio
+            .readings
+            .cat
+            .unwrap()
+            .connection_generation;
+        let permit = s
+            .authority
+            .permit(Instant::now() + Duration::from_millis(300))
+            .unwrap();
+        *window.lock().unwrap() = Some(permit.deadline());
+        e.queue_remote_radio_selection(1, generation, permit)
+            .unwrap()
+    };
+    apply(&mut s, &pool, |_| panic!("warm radio must be reused"));
+    // Refused before any write, or uncertain after one: never applied.
+    assert!(
+        matches!(
+            receipt.outcome(),
+            Outcome::Rejected {
+                reason: Reason::AuthorityExpired
+            } | Outcome::Unknown {
+                reason: Reason::HardwareUnconfirmed
+            }
+        ),
+        "{:?}",
+        receipt.outcome()
+    );
+    assert_eq!(engine_lock(&s.engine).settings().active_radio, 0);
+    assert_eq!(s.state.remote_radio_id, Some(0));
+    assert!(!s.path.exists());
+    assert_eq!(pool.lock().unwrap()[0].id, 1);
 }

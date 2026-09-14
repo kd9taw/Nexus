@@ -2,7 +2,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { ApplicationClient } from './application-client'
 import { ApplicationStreamClient } from './application-stream-client'
 import { ApplicationRelay } from './application-relay'
-import { APPLICATION_COMMANDS, applicationReply } from './application-protocol'
+import { APPLICATION_COMMANDS, APPLICATION_TIMEOUT_MS, applicationReply } from './application-protocol'
 import { STREAM_TOPICS, streamUpdates } from './application-stream-protocol'
 import type { StreamTopic } from './application-stream-protocol'
 
@@ -141,8 +141,18 @@ it('includes the browser credit round trip in freshness and falls back to the ol
   const pending = client.invoke('get_snapshot').catch(e => e.message)
   await vi.advanceTimersByTimeAsync(2000)
   const requestId = sent[1].requestId as string
-  expect(() => client.receive({ type: 'applicationFrame', requestId, updates: [{ ...sample(requestId), ageMs: 1100 }] })).toThrow('expiredApplicationResult')
-  client.disconnected(); expect(await pending).toBe('applicationUnavailable')
+  // Older than the freshness window: committed as stale so the next delta still applies, never
+  // handed to the waiting reader, and not a protocol error. The stream continues.
+  client.receive({ type: 'applicationFrame', requestId, updates: [{ ...sample(requestId), ageMs: 1100 }] })
+  expect(client.age('get_snapshot')).toBeGreaterThanOrEqual(APPLICATION_TIMEOUT_MS)
+  expect(sent[sent.length - 1]).toMatchObject({ type: 'applicationFrameAck', requestId })
+  let settled = false; void pending.then(() => { settled = true })
+  await vi.advanceTimersByTimeAsync(0); expect(settled).toBe(false)
+  const next = sent[sent.length - 1].nextRequestId as string
+  client.receive({ type: 'applicationFrame', requestId: next, updates: [sample(next, 'get_snapshot', 2, 1)] })
+  expect(await pending).toHaveProperty('mycall', 'TEST')
+  expect(client.age('get_snapshot')).toBeLessThan(APPLICATION_TIMEOUT_MS)
+  client.disconnected()
   client.open(); client.receive({ type: 'applicationCapabilities', version: 1, commands: APPLICATION_COMMANDS })
   expect(client.supports('get_snapshot')).toBe(true)
   expect(client.supports('get_cw_state')).toBe(false)

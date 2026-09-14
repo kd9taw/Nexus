@@ -6,6 +6,18 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 static NEXT: AtomicUsize = AtomicUsize::new(0);
+
+/// Browser authority for cases about native policy, not the command window.
+/// A permit ending 5 s after `queue` let any process stall between queue and
+/// commit (swap, CPU starvation; one failure measured 6.65 s) expire it inside
+/// the product's own commit, as `AuthorityExpired` before a write attempt or
+/// `Unknown` after one. That product answer is correct, so the harness must not
+/// ask the question: expiry is asserted where it is the subject, by
+/// `receive_tuning::a_dial_whose_command_window_ends_before_commit_is_refused_not_applied`
+/// and by `remote_control`'s own permit tests.
+fn unexpired_deadline() -> Instant {
+    Instant::now() + Duration::from_secs(24 * 60 * 60)
+}
 mod band_selection;
 mod dsp;
 mod filter;
@@ -74,9 +86,7 @@ impl Station {
             "40m",
             "USB",
             connection,
-            self.authority
-                .permit(Instant::now() + Duration::from_secs(5))
-                .unwrap(),
+            self.authority.permit(unexpired_deadline()).unwrap(),
         )
     }
     fn queue_mode(&mut self, mode: &str, follow_frequency: bool) -> Result<Completion, Reason> {
@@ -92,9 +102,7 @@ impl Station {
             mode,
             follow_frequency,
             connection,
-            self.authority
-                .permit(Instant::now() + Duration::from_secs(5))
-                .unwrap(),
+            self.authority.permit(unexpired_deadline()).unwrap(),
         )
     }
     fn queue_tier(&mut self, tier: Tier) -> Result<Completion, Reason> {
@@ -109,9 +117,7 @@ impl Station {
         self.engine.queue_remote_tier(
             tier,
             connection,
-            self.authority
-                .permit(Instant::now() + Duration::from_secs(5))
-                .unwrap(),
+            self.authority.permit(unexpired_deadline()).unwrap(),
         )
     }
 
@@ -127,9 +133,7 @@ impl Station {
         self.engine.queue_remote_workspace(
             workspace,
             connection,
-            self.authority
-                .permit(Instant::now() + Duration::from_secs(5))
-                .unwrap(),
+            self.authority.permit(unexpired_deadline()).unwrap(),
         )
     }
 }
@@ -647,9 +651,7 @@ fn a_tier_cannot_mislabel_a_custom_dial_or_borrow_a_retired_cat_connection() {
     let result = s.engine.queue_remote_tier(
         Tier::Ft8,
         stale,
-        s.authority
-            .permit(Instant::now() + Duration::from_secs(5))
-            .unwrap(),
+        s.authority.permit(unexpired_deadline()).unwrap(),
     );
     assert!(
         matches!(result, Err(Reason::ContextChanged)),
@@ -1079,9 +1081,7 @@ fn the_station_rejects_invalid_frequency_payloads_without_queuing_or_saving() {
                 band,
                 sideband,
                 connection,
-                s.authority
-                    .permit(Instant::now() + Duration::from_secs(5))
-                    .unwrap()
+                s.authority.permit(unexpired_deadline()).unwrap()
             ),
             Err(Reason::InvalidAction)
         ));

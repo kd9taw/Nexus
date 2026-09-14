@@ -50,9 +50,7 @@ fn queue_dial(s: &mut Station, dial: f64, band: &str) -> Result<Completion, Reas
         band,
         "USB",
         connection,
-        s.authority
-            .permit(Instant::now() + Duration::from_secs(5))
-            .unwrap(),
+        s.authority.permit(unexpired_deadline()).unwrap(),
     )
 }
 
@@ -154,6 +152,53 @@ fn off_band_receive_refuses_an_expired_idle_sample_then_accepts_a_fresh_gesture(
     s.sample(request.target_hz, &request.target_mode);
     assert!(request.commit(&mut s.engine));
     assert!(matches!(receipt.outcome(), Outcome::Applied { .. }));
+    assert!(!s.engine.tx_enabled());
+}
+
+#[test]
+fn a_dial_whose_command_window_ends_before_commit_is_refused_not_applied() {
+    // The positive control for `unexpired_deadline`: the same queue and commit
+    // path, with a command window that is already over when commit runs.
+    let mut s = Station::new(OperatingMode::Phone);
+    let original = serde_json::to_value(s.engine.settings()).unwrap();
+    let connection = s
+        .engine
+        .remote_monitor_observation()
+        .radio
+        .readings
+        .cat
+        .unwrap()
+        .connection_generation;
+    let (receipt, deadline) = loop {
+        let permit = s
+            .authority
+            .permit(Instant::now() + Duration::from_millis(50))
+            .unwrap();
+        let deadline = permit.deadline();
+        match s
+            .engine
+            .queue_remote_frequency(7.074, "40m", "USB", connection, permit)
+        {
+            Ok(receipt) => break (receipt, deadline),
+            // A stall before queue already ended this window; nothing is queued.
+            Err(Reason::AuthorityExpired) => assert!(s.engine.take_remote_radio().is_none()),
+            Err(other) => panic!("queue refused: {other:?}"),
+        }
+    };
+    let request = s.engine.take_remote_radio().unwrap();
+    while Instant::now() <= deadline {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    s.sample(request.target_hz, &request.target_mode);
+    assert!(!request.commit(&mut s.engine));
+    assert_eq!(
+        receipt.outcome(),
+        Outcome::Rejected {
+            reason: Reason::AuthorityExpired
+        }
+    );
+    assert_eq!(serde_json::to_value(s.engine.settings()).unwrap(), original);
+    assert!(!s.path.exists());
     assert!(!s.engine.tx_enabled());
 }
 

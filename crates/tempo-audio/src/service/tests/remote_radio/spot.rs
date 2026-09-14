@@ -16,9 +16,7 @@ fn queue(s: &mut Station, mode: &str, dial: f64) -> Completion {
             "40m",
             "N2SPOT/P",
             connection,
-            s.authority
-                .permit(Instant::now() + Duration::from_secs(5))
-                .unwrap(),
+            s.authority.permit(unexpired_deadline()).unwrap(),
         )
         .unwrap()
 }

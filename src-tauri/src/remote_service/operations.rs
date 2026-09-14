@@ -681,6 +681,12 @@ impl Authority {
         }
         let mut c = self.core.try_lock().map_err(|_| "remoteBusy")?;
         self.reconcile(&mut c, now)?;
+        // A permission refusal never depends on Engine contention: a device that
+        // lost its local permission is told so even while Engine is busy. Each
+        // request arm below repeats its own check, so nothing more is allowed.
+        if !permitted(&c, version, device, request) {
+            return Err("localPermissionRequired");
+        }
         // Capture context and execute under the same engine lock. There is no
         // queue whose work could migrate into a later radio/profile context.
         let shared_engine = engine;
@@ -1006,6 +1012,25 @@ impl Authority {
                 Ok(value)
             }
         }
+    }
+}
+
+/// The local grant a request needs, read before Engine is locked. Stop and the
+/// lease-only requests need none here; their arms keep their own rules.
+fn permitted(c: &Core, version: u8, device: &str, request: &Request) -> bool {
+    match request {
+        Request::Acquire { .. } | Request::Result { .. } => {
+            c.grants.contains(device) || version >= 2 && c.control_grants.contains(device)
+        }
+        Request::LogManual { .. } => c.grants.contains(device),
+        Request::StationControl { action, .. } => {
+            if action.is_logging() {
+                c.grants.contains(device)
+            } else {
+                c.control_grants.contains(device)
+            }
+        }
+        _ => true,
     }
 }
 

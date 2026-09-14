@@ -51,9 +51,7 @@ fn remote_dsp_uses_the_actual_owner_and_does_not_reconcile_back_to_old_native_ch
                 before,
                 after,
                 connection,
-                s.authority
-                    .permit(Instant::now() + Duration::from_secs(5))
-                    .unwrap(),
+                s.authority.permit(unexpired_deadline()).unwrap(),
             )
             .unwrap()
         };
@@ -139,9 +137,7 @@ fn remote_dsp_unknown_write_never_enters_the_native_retry_path() {
                 before,
                 after,
                 connection,
-                s.authority
-                    .permit(Instant::now() + Duration::from_secs(5))
-                    .unwrap(),
+                s.authority.permit(unexpired_deadline()).unwrap(),
             )
             .unwrap()
         };

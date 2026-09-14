@@ -53,9 +53,7 @@ fn queue(s: &mut Station, before: Option<&str>, mode: Option<&str>) -> Result<Co
         before,
         mode,
         connection,
-        s.authority
-            .permit(Instant::now() + Duration::from_secs(5))
-            .unwrap(),
+        s.authority.permit(unexpired_deadline()).unwrap(),
     )
 }
 

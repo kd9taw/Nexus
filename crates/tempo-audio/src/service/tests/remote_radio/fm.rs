@@ -82,9 +82,7 @@ fn remote_fm_picker_configures_once_and_preserves_raw_native_choices() {
                 None,
                 Some("FM"),
                 connection,
-                s.authority
-                    .permit(Instant::now() + Duration::from_secs(5))
-                    .unwrap(),
+                s.authority.permit(unexpired_deadline()).unwrap(),
             )
             .unwrap()
         };
@@ -234,9 +232,7 @@ fn remote_fm_partial_cross_band_failure_cannot_replay_after_later_dial_polling()
                         None,
                         Some("USB"),
                         connection,
-                        s.authority
-                            .permit(Instant::now() + Duration::from_secs(5))
-                            .unwrap(),
+                        s.authority.permit(unexpired_deadline()).unwrap(),
                     )
                     .unwrap(),
                 )
