@@ -21,6 +21,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Optional local-time clock beside UTC** (#253). Settings ▸ Appearance ▸ Workspace ▸ "Local time
   beside UTC" adds a second clock in the top bar showing this computer's local time. It is off by
   default and remembered per computer. Logs, spots and FT slots still use UTC.
+- **Band Activity can show the newest decodes at the top** (#276). A new "Newest on top" chip in
+  the Band Activity pane draws the newest period first and keeps the pane following the top. It is
+  off by default, so the pane keeps the WSJT-X order unless you turn it on. If you scroll down to
+  read, new decodes arrive above without moving what you are reading; scroll back to the top to
+  follow again. It applies when the pane is sorted by time.
 
 ### Changed
 

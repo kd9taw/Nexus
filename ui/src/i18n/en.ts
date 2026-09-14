@@ -7187,6 +7187,9 @@ export const EN = {
     'Hide stations you have already worked (B4) from whichever filter is active — CQ-only minus B4, and friends',
   'operate.decodes.hideB4.title.idle':
     'The B4 chip shows worked stations — the hide switch is idle there',
+  'operate.decodes.newestTop.label': 'Newest on top',
+  'operate.decodes.newestTop.title': 'Draw the newest decodes at the top and follow them there. Off is the WSJT-X order, with the newest at the bottom.',
+  'operate.decodes.newestTop.title.idle': 'Newest on top works in Time order',
 
   // The sort picker. Its `value`s are stored tokens; `SNR` and `DT` are column tokens and
   // stay in the code, so only these two labels are words.

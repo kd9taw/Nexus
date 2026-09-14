@@ -11,6 +11,15 @@
 // Wiring: put `ref` and `onScroll` on the scroll container; `pinned` can drive
 // a "▲ reviewing" hint; call `repin()` on an operator-initiated wipe
 // (Erase/Clear) or a scope change (band/tier) so an emptied pane follows again.
+//
+// THE TOP EDGE (#276, Band Activity "newest on top"): `usePinnedScroll('top')` is the same
+// discipline mirrored — pinned follows scrollTop 0, and scrolling DOWN past the slop is reading.
+// A top-growing feed needs one thing the bottom mode does not: new rows land ABOVE the reader,
+// so a view left alone slides the row being read down the screen. While reading, the hook
+// therefore holds the first visible row still, found by its `data-pin-key` attribute (put one on
+// each row). It anchors on the ROW, never on the height change: the pane's render window trims
+// the oldest rows off the bottom in the same render, so at the cap the height delta is zero while
+// the row being read still moved. The bottom mode is untouched.
 
 import { useCallback, useLayoutEffect, useRef, useState } from 'react'
 
@@ -29,6 +38,45 @@ export interface PinnedScroll<T extends HTMLElement> {
   repin: () => void
 }
 
+/** Which edge the newest content grows at. */
+export type PinEdge = 'bottom' | 'top'
+
+/** Instant jump to the top — the top-edge twin of `snapToBottom`, same `instant` reason. */
+function snapToTop(el: HTMLElement) {
+  if (typeof el.scrollTo === 'function') {
+    el.scrollTo({ top: 0, behavior: 'instant' })
+  } else {
+    el.scrollTop = 0
+  }
+}
+
+interface Anchor {
+  key: string
+  /** The row's top, relative to the container's top edge, when it was captured. */
+  offset: number
+}
+
+/** The first row whose bottom is inside the viewport, and where it sits. Rects, not offsetTop,
+ *  so the answer does not depend on which ancestor is the offsetParent. */
+function captureAnchor(el: HTMLElement): Anchor | null {
+  const top = el.getBoundingClientRect().top
+  for (const row of Array.from(el.querySelectorAll<HTMLElement>('[data-pin-key]'))) {
+    const r = row.getBoundingClientRect()
+    if (r.bottom > top) return { key: row.getAttribute('data-pin-key') ?? '', offset: r.top - top }
+  }
+  return null
+}
+
+/** Put the anchored row back where the reader left it, if it is still in the feed. */
+function restoreAnchor(el: HTMLElement, anchor: Anchor) {
+  for (const row of Array.from(el.querySelectorAll<HTMLElement>('[data-pin-key]'))) {
+    if (row.getAttribute('data-pin-key') !== anchor.key) continue
+    const moved = row.getBoundingClientRect().top - el.getBoundingClientRect().top - anchor.offset
+    if (moved !== 0) el.scrollTop += moved
+    return
+  }
+}
+
 /** Instant jump to the bottom. scrollTo({ behavior: 'instant' }) overrides any
  * CSS `scroll-behavior: smooth` on the container (.message-scroll carries one):
  * a smooth pin animates, and a wheel gesture cancels the animation mid-flight —
@@ -42,8 +90,11 @@ function snapToBottom(el: HTMLElement) {
   }
 }
 
-export function usePinnedScroll<T extends HTMLElement>(): PinnedScroll<T> {
+export function usePinnedScroll<T extends HTMLElement>(edge: PinEdge = 'bottom'): PinnedScroll<T> {
   const ref = useRef<T>(null)
+  // Top edge only: the row the operator was reading, re-found after each render.
+  const anchorRef = useRef<Anchor | null>(null)
+  const edgeRef = useRef<PinEdge>(edge)
   // pinnedRef is the live value the layout effect reads; the mirrored state
   // drives the caller's "reviewing" hint.
   const pinnedRef = useRef(true)
@@ -61,15 +112,35 @@ export function usePinnedScroll<T extends HTMLElement>(): PinnedScroll<T> {
   // mid-list after a view switch" bug.
   useLayoutEffect(() => {
     const el = ref.current
-    if (el && pinnedRef.current) snapToBottom(el)
+    if (edgeRef.current !== edge) {
+      // The feed flipped direction: an anchor measured in the other order means nothing.
+      edgeRef.current = edge
+      anchorRef.current = null
+    }
+    if (!el) return
+    if (edge === 'bottom') {
+      if (pinnedRef.current) snapToBottom(el)
+      return
+    }
+    if (pinnedRef.current) {
+      snapToTop(el)
+      return
+    }
+    if (anchorRef.current) restoreAnchor(el, anchorRef.current)
+    anchorRef.current = captureAnchor(el)
   })
 
   const onScroll = () => {
     const el = ref.current
     if (!el) return
-    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight <= PIN_SLOP_PX
-    pinnedRef.current = atBottom
-    if (atBottom !== pinned) setPinned(atBottom)
+    const atEdge =
+      edge === 'top'
+        ? el.scrollTop <= PIN_SLOP_PX
+        : el.scrollHeight - el.scrollTop - el.clientHeight <= PIN_SLOP_PX
+    pinnedRef.current = atEdge
+    // Reading from a top-edge feed: remember which row is under the reader's eyes.
+    if (edge === 'top') anchorRef.current = atEdge ? null : captureAnchor(el)
+    if (atEdge !== pinned) setPinned(atEdge)
   }
 
   // Stable identity so callers can use it inside effects without dep churn.
