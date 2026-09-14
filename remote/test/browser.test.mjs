@@ -1656,15 +1656,17 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
           const p={remounts:{header:0,select:0,readout:0},disabled:0,toggled:new Set(),selectDisabled:0,optionsRemoved:0,staleToggles:0,fades:0,lapses:0,openSupported:true,openFrames:0,openLost:0,frames:0,stop:false,refs:{},last:{}}
           for(const [k,s] of Object.entries(targets))p.refs[k]=q(s)
           const name=e=>e.tagName.toLowerCase()+(e.className&&typeof e.className==='string'?'.'+e.className.trim().split(/\\s+/).slice(0,2).join('.'):'')+(e.textContent?'['+e.textContent.trim().slice(0,16)+']':'')
-          p.mo=new MutationObserver(rs=>{for(const r of rs){if(r.type==='attributes'){if(r.attributeName==='disabled'&&r.target.closest(${JSON.stringify(root)})){p.disabled++;p.toggled.add(name(r.target));if(r.target===p.refs.select)p.selectDisabled++}else if(r.attributeName==='data-remote-stale')p.staleToggles++}else if(p.refs.select&&(r.target===p.refs.select||p.refs.select.contains(r.target)))p.optionsRemoved+=[...r.removedNodes].filter(n=>n.nodeType===1).length}})
+          p.mo=new MutationObserver(rs=>{for(const r of rs){if(r.type==='attributes'){if(r.attributeName==='disabled'&&r.target.closest(${JSON.stringify(root)})){p.disabled++;p.toggled.add(name(r.target));if(r.target===p.refs.select)p.selectDisabled++}else if(r.attributeName==='data-remote-stale')p.staleToggles++}else p.optionsRemoved+=[...r.removedNodes].filter(n=>n.nodeType===1&&(n.matches?.('[role="menuitemradio"]')||n.querySelector?.('[role="menuitemradio"]'))).length}})
           p.mo.observe(document.body,{subtree:true,childList:true,attributes:true,attributeFilter:['disabled','data-remote-stale']})
-          const open=e=>{try{return !!e&&e.matches(':open')}catch{p.openSupported=false;return false}}
+          // The band dropdown is a portalled Nexus menu (BandMenu.tsx), not a <select>: it is open
+          // exactly while its menu is in the document, and its rows live outside the cockpit root.
+          const open=()=>!!q('[role="menu"]')
           const frame=()=>{if(p.stop)return;p.frames++
             for(const [k,s] of Object.entries(targets)){const e=q(s);if(e!==p.refs[k]){p.remounts[k]++;p.refs[k]=e}}
             const fade=[...(q('.app')?.children??[])].map(c=>getComputedStyle(c).opacity).join()+'/'+(p.refs.select?getComputedStyle(p.refs.select).opacity:'')
             if(p.last.fade!==undefined&&p.last.fade!==fade)p.fades++;p.last.fade=fade
             const fresh=!!ops?.getSnapshot().fresh;if(p.last.fresh&&!fresh)p.lapses++;p.last.fresh=fresh
-            const o=open(p.refs.select);if(o)p.openFrames++;if(p.last.open&&!o)p.openLost++;p.last.open=o
+            const o=open();if(o)p.openFrames++;if(p.last.open&&!o)p.openLost++;p.last.open=o
             requestAnimationFrame(frame)}
           frame();window.__steady=p;return !!ops})()`
         const steadyRead=`(()=>{const p=window.__steady;p.stop=true;p.mo.disconnect();const {mo,refs,last,stop,toggled,...out}=p;return {...out,toggled:[...toggled].slice(0,16)}})()`
@@ -1681,14 +1683,17 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         await click(button('FT'));await settledLayout();await sleep(1500)
         const ftIdle=await steady('ft-idle','.operate-cockpit','.operate-cockpit .freq-channel')
         Object.assign(radio,{operatingMode:'phone',dialMhz:7.255,band:'40m'});applicationRevision++
-        const phoneSelect='.phone-cockpit .band-picker-select'
+        const phoneSelect='.phone-cockpit .band-picker-trigger'
         await click(button('Phone'));await settledLayout()
-        await until(`!!document.querySelector('${phoneSelect}')&&!document.querySelector('${phoneSelect}').disabled&&document.querySelector('${phoneSelect}').options.length>1`)
+        await until(`!!document.querySelector('${phoneSelect}')&&!document.querySelector('${phoneSelect}').disabled`)
         await sleep(1500)
         const phoneIdle=await steady('phone-idle','.phone-cockpit',phoneSelect)
         // Hold the band dropdown open for 10 s, then type "20" and Enter: the 20m band, from an open
         // popup or (should it have closed) a closed select alike.
         await click(`document.querySelector('${phoneSelect}')`)
+        // The station's licensed bands really are in the open menu — the options.length>1 this
+        // replaces (a menu's rows exist only while it is open).
+        await until(`document.querySelectorAll('[role="menuitemradio"]').length>1`)
         const held=await steady('phone-held-open','.phone-cockpit',phoneSelect)
         const before=stationRequests.length
         for(const [key,code,vk] of [['2','Digit2',50],['0','Digit0',48],['Enter','Enter',13]])for(const type of ['keyDown','keyUp'])
@@ -1697,18 +1702,26 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         await sleep(2000)
         const picked=stationRequests.slice(before).map(r=>r.action)
         console.log('STEADY_PROBE phone-pick',JSON.stringify(picked))
-        // Positive controls, on the same select: a forced disable and a forced (then reversed) replacement
-        // must be counted, and the forced disable must close a dropdown held open.
+        // Positive controls, on the same trigger: a forced disable and a forced (then reversed)
+        // replacement must be counted, and Escape must close a dropdown held open.
+        // The pick closed the menu; wait for it to leave before clicking the trigger it covers.
+        const openMenus=async()=>await evaluate(`[...document.querySelectorAll('[role="menu"]')].map(m=>(m.className||'')+'|'+m.textContent.slice(0,60))`)
+        for(let i=0;i<60&&(await openMenus()).length;i++)await sleep(100)
+        console.log('STEADY_PROBE menus-after-pick',JSON.stringify(await openMenus()))
         await click(`document.querySelector('${phoneSelect}')`)
         await evaluate(steadyProbe('.phone-cockpit',phoneSelect));await frames(10)
         await evaluate(`(()=>{document.querySelector('${phoneSelect}').disabled=true;return true})()`);await frames(3)
         await evaluate(`(()=>{const e=document.querySelector('${phoneSelect}');e.disabled=false;const c=e.cloneNode(true);e.replaceWith(c);window.__steadyOriginal=e;return true})()`);await frames(3)
         await evaluate(`(()=>{document.querySelector('${phoneSelect}').replaceWith(window.__steadyOriginal);return true})()`);await frames(3)
+        // …and the open-detection control: Escape really closes the menu, so `openLost` counts.
+        for(const type of ['keyDown','keyUp'])
+          await browser.call('Input.dispatchKeyEvent',{type,key:'Escape',code:'Escape',windowsVirtualKeyCode:27},session)
+        await frames(10)
         const control=await evaluate(steadyRead);console.log('STEADY_PROBE positive-control',JSON.stringify(control))
         heartbeatReplyDelayMs=0;heartbeatReplyJitterMs=0
         Object.assign(radio,prior);applicationRevision++
         assert.ok(control.selectDisabled>=1&&control.remounts.select>=2,'positive control: the probe counts a forced disable and a forced remount')
-        if(control.openSupported)assert.ok(control.openLost>=1,'positive control: a forced disable closes the held dropdown and the probe sees it')
+        if(control.openSupported)assert.ok(control.openLost>=1,'positive control: Escape closes the held dropdown and the probe sees it')
         assert.ok(ftIdle.lapses+phoneIdle.lapses+held.lapses>0,'positive control: control really lapsed during the probes')
         still(ftIdle,'FT idle');still(phoneIdle,'Phone idle');still(held,'Phone dropdown held open')
         if(held.openSupported){assert.ok(held.openFrames>0,'the dropdown was open');assert.equal(held.openLost,0,'the held dropdown stays open')}
@@ -1837,7 +1850,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         await until(`!document.querySelector('${selector}')`)
         assert.equal(applicationData.get_snapshot.radio.txEnabled,false)
         if(['cw','phone'].includes(mode)){
-          const picker=root+' .band-picker-select'
+          const picker=root+' .band-picker-trigger'
           for(const [width,height,zoom]of [[390,844,1],[1280,800,1],[390,844,1.75],[1280,800,1.75]])for(const theme of ['dark','light']){
             await browser.call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false},session)
             await evaluate(`document.documentElement.style.setProperty('--ui-zoom','${zoom}');document.documentElement.dataset.theme='${theme}';window.dispatchEvent(new Event('resize'))`);await settledLayout()
@@ -1850,11 +1863,13 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
             await freshLoggingWindow();await until(`!document.querySelector('${picker}').disabled`)
             const count=stationRequests.length
             await click(`document.querySelector('${picker}')`)
-            for(const key of ['Home',...(band==='20m'?['ArrowDown']:[]),'Enter']){
-              const code={Home:36,ArrowDown:40,Enter:13}[key]
-              await browser.call('Input.dispatchKeyEvent',{type:'keyDown',key,code:key,windowsVirtualKeyCode:code},session)
-              await browser.call('Input.dispatchKeyEvent',{type:'keyUp',key,code:key,windowsVirtualKeyCode:code},session)
-            }
+            await until(`document.querySelectorAll('[role="menuitemradio"]').length>1`)
+            // Keyboard-only, and BY NAME: the menu's rows carry the band, so typing it picks it
+            // whatever order they are in. (The old <select> walked Home/ArrowDown by POSITION,
+            // which silently meant "whichever band is second" — a different band per station.)
+            for(const [key,code,vk] of [[band[0],`Digit${band[0]}`,band.charCodeAt(0)],['0','Digit0',48],['Enter','Enter',13]])
+              for(const type of ['keyDown','keyUp'])
+                await browser.call('Input.dispatchKeyEvent',{type,key,code,windowsVirtualKeyCode:vk,...(type==='keyDown'&&key!=='Enter'?{text:key}:{})},session)
             for(let i=0;i<100&&stationRequests.length===count;i++)await sleep(100)
             assert.equal(stationRequests.length,count+1,`one ${mode} band gesture`)
             assert.deepEqual(stationRequests.at(-1).action,{action:'radio.band',band,mode})
