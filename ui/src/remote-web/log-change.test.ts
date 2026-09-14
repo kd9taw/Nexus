@@ -72,6 +72,20 @@ it('hunts a POTA or SOTA activator with no row target, and reports station state
     expect(operationValue(value)).toEqual(value)
 })
 
+it('starts or ends your own activation with no row target', () => {
+  const start = { kind: 'activation', program: 'POTA', reference: 'US-0005' }
+  for (const change of [start, { ...start, program: 'SOTA', reference: 'W7A/MN-001' }, { kind: 'clearActivation' }])
+    expect(logChange(change)).toEqual(change)
+  for (const bad of [
+    { ...start, program: 'WWFF' }, { ...start, reference: 'US 0005' }, { ...start, reference: '' }, { ...start, target },
+    { ...start, call: 'W1AW' }, { kind: 'activation', reference: 'US-0005' }, { kind: 'clearActivation', target },
+    { kind: 'clearActivation', reference: 'US-0005' }
+  ])
+    expect(() => logChange(bad)).toThrow()
+  expect(logChangeCapability({ kind: 'activation', program: 'POTA', reference: 'US-0005' })).toBe('otaActivation')
+  expect(logChangeCapability({ kind: 'clearActivation' })).toBe('otaActivation')
+})
+
 it('accepts only the bounded change outcomes a station reports', () => {
   const operationId = id()
   for (const value of [

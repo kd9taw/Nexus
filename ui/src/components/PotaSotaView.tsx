@@ -145,7 +145,12 @@ interface Props {
   remote?: OtaRemote
 }
 
-export type OtaRemote = { hunt?: (arg: OtaSpotClickArg) => void; clearHunt?: () => void }
+export type OtaRemote = {
+  hunt?: (arg: OtaSpotClickArg) => void
+  clearHunt?: () => void
+  startActivation?: (program: string, reference: string) => void
+  stopActivation?: () => void
+}
 
 export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observation, remote }: Props) {
   const observed = observation !== undefined
@@ -298,9 +303,12 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
   const activating = act != null && act.reference != null
 
   const handleStartActivation = async () => {
-    if (observed) return
     const ref = actRef.trim().toUpperCase()
     if (!ref) return
+    if (observed) {
+      remote?.startActivation?.(actProg, ref)
+      return
+    }
     const a = await withErrorToast(
       () => setActivation(actProg, ref),
       t('ota.activation.startFailed'),
@@ -315,7 +323,10 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
     }
   }
   const handleStopActivation = async () => {
-    if (observed) return
+    if (observed) {
+      remote?.stopActivation?.()
+      return
+    }
     const a = await withErrorToast(() => clearActivation(), t('ota.activation.stopFailed'))
     if (a) {
       setAct(a)
@@ -477,7 +488,7 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
       )}
 
       {/* My activation — while active, every QSO I log is stamped with MY park (my_ref). */}
-      {(!observed || activating) && <div className={`pota-activation${activating ? ' active' : ''}`}>
+      {(!observed || activating || remote?.startActivation) && <div className={`pota-activation${activating ? ' active' : ''}`}>
         {activating ? (
           <>
             <span className="pota-act-text">
@@ -492,7 +503,7 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
               />
             </span>
             {/* Ends the ACTIVATION — the park stamp on what you log — never a transmission. */}
-            {!observed && <button type="button" className="pota-hunt-clear" onClick={() => void handleStopActivation()} title={t('ota.activation.stop.title')}>
+            {(!observed || remote?.stopActivation) && <button type="button" className="pota-hunt-clear" onClick={() => void handleStopActivation()} title={t('ota.activation.stop.title')}>
               <X size={13} aria-hidden="true" /> {t('ota.activation.stop.label')}
             </button>}
           </>

@@ -170,7 +170,7 @@ impl Work {
 
 /// Station hints for log changes. Offered with the logging grant at operation v4, inside
 /// `controls.capabilities`, which older hosted pages filter; `actions` never changes.
-pub(super) const CAPABILITIES: [&str; 3] = ["logEdit", "qslMarks", "otaHunt"];
+pub(super) const CAPABILITIES: [&str; 4] = ["logEdit", "qslMarks", "otaHunt", "otaActivation"];
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -211,6 +211,13 @@ pub enum Change {
         reference: String,
     },
     ClearHunt {},
+    /// Station context too: while an activation is on, the engine's funnel stamps your reference
+    /// on every contact it logs.
+    Activation {
+        program: String,
+        reference: String,
+    },
+    ClearActivation {},
 }
 
 impl Change {
@@ -220,7 +227,10 @@ impl Change {
             | Self::Delete { target }
             | Self::QslSent { target, .. }
             | Self::QslCard { target, .. } => Some(target),
-            Self::Hunt { .. } | Self::ClearHunt {} => None,
+            Self::Hunt { .. }
+            | Self::ClearHunt {}
+            | Self::Activation { .. }
+            | Self::ClearActivation {} => None,
         }
     }
     /// An edit states when the contact happened; "station time" only means something for a new entry.
@@ -252,7 +262,17 @@ impl Change {
                         .bytes()
                         .all(|b| b.is_ascii_alphanumeric() || b == b'/' || b == b'-')
             }
-            Self::Delete { .. } | Self::QslCard { .. } | Self::ClearHunt {} => true,
+            Self::Activation { program, reference } => {
+                ["POTA", "SOTA"].contains(&program.as_str())
+                    && (1..=32).contains(&reference.len())
+                    && reference
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'/' || b == b'-')
+            }
+            Self::Delete { .. }
+            | Self::QslCard { .. }
+            | Self::ClearHunt {}
+            | Self::ClearActivation {} => true,
         }
     }
 }
@@ -380,6 +400,16 @@ pub(super) fn prepare_change(
             engine.clear_hunt_target();
             return Ok(ChangeWork::State);
         }
+        Change::Activation { program, reference } => {
+            return engine
+                .set_activation(program, reference)
+                .map(|_| ChangeWork::State)
+                .map_err(|_| ChangeReason::InvalidChange)
+        }
+        Change::ClearActivation {} => {
+            engine.clear_activation();
+            return Ok(ChangeWork::State);
+        }
         _ => {}
     }
     // Fold in another instance's appends first, so the index found below cannot shift under it.
@@ -413,7 +443,11 @@ pub(super) fn prepare_change(
                 engine.mark_qsl_sent(index, via.as_deref().and_then(QslVia::from_code))
             }
             Change::QslCard { received, .. } => engine.mark_qsl_card(index, *received),
-            Change::Delete { .. } | Change::Hunt { .. } | Change::ClearHunt {} => false,
+            Change::Delete { .. }
+            | Change::Hunt { .. }
+            | Change::ClearHunt {}
+            | Change::Activation { .. }
+            | Change::ClearActivation {} => false,
         };
         if !applied {
             return Err(ChangeReason::ContextChanged);

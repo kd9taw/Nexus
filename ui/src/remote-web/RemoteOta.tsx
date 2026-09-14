@@ -16,7 +16,7 @@ const EMPTY: ObservedOta = { feeds: [
 
 export function RemoteOta({ snap, onHunt }: { snap: AppSnapshot; onHunt?: (arg: OtaSpotClickArg) => void }) {
   const source = useContext(RemoteCollectionsContext), available = useStationData()
-  const client = useRemoteOperations(), canHunt = useLogChange('otaHunt')
+  const client = useRemoteOperations(), canHunt = useLogChange('otaHunt'), canActivate = useLogChange('otaActivation')
   const supported = source?.client.supports(OTA_COMMAND) ?? false
   const [capture, setCapture] = useState<{ value: ObservedOta; at: number } | null>(null)
   const [phase, setPhase] = useState<'loading' | 'ready' | 'unavailable'>('loading')
@@ -46,11 +46,19 @@ export function RemoteOta({ snap, onHunt }: { snap: AppSnapshot; onHunt?: (arg: 
   }) } : EMPTY
   // A hunt is a station change under the logging grant. Only once the station has tagged it does the
   // spot go on to App's own tune path, which keeps its own permission; a refused hunt never tunes.
-  const remote: OtaRemote | undefined = client && canHunt ? {
-    hunt: arg => void sendLogChange(client, { kind: 'hunt', call: arg.call, program: arg.program as 'POTA' | 'SOTA', reference: arg.reference })
-      .then(outcome => { if (outcome?.outcome === 'applied') { setRefresh(n => n + 1); onHunt?.(arg) } }),
-    clearHunt: () => void sendLogChange(client, { kind: 'clearHunt' })
-      .then(outcome => { if (outcome?.outcome === 'applied') setRefresh(n => n + 1) }),
+  // Each action is present only while the station offers it; your activation is station context too.
+  const reread = (outcome: { outcome: string } | null) => { if (outcome?.outcome === 'applied') setRefresh(n => n + 1) }
+  const remote: OtaRemote | undefined = client ? {
+    ...(canHunt ? {
+      hunt: (arg: OtaSpotClickArg) => void sendLogChange(client, { kind: 'hunt', call: arg.call, program: arg.program as 'POTA' | 'SOTA', reference: arg.reference })
+        .then(outcome => { if (outcome?.outcome === 'applied') { setRefresh(n => n + 1); onHunt?.(arg) } }),
+      clearHunt: () => void sendLogChange(client, { kind: 'clearHunt' }).then(reread),
+    } : {}),
+    ...(canActivate ? {
+      startActivation: (program: string, reference: string) =>
+        void sendLogChange(client, { kind: 'activation', program: program as 'POTA' | 'SOTA', reference }).then(reread),
+      stopActivation: () => void sendLogChange(client, { kind: 'clearActivation' }).then(reread),
+    } : {}),
   } : undefined
   return <div className="remote-insights-view remote-ota-view">
     <div className="remote-insights-status" role="status">

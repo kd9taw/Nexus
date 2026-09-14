@@ -53,7 +53,13 @@ fn pending_confirm_requires_logging_not_radio_or_transmit_permission() {
     let state = control_state_version(&f, Instant::now(), 4);
     assert_eq!(
         state["controls"]["capabilities"],
-        json!(["qsoLogging", "logEdit", "qslMarks", "otaHunt"])
+        json!([
+            "qsoLogging",
+            "logEdit",
+            "qslMarks",
+            "otaHunt",
+            "otaActivation"
+        ])
     );
     assert!(state["transmitEpoch"].is_null());
     assert!(!f.engine.lock().unwrap().tx_enabled());
@@ -711,4 +717,68 @@ fn a_hunt_the_station_cannot_normalize_is_refused_and_leaves_no_pend() {
         assert_eq!(run(&f, &change(&f, bad)), Err("invalidRecord"));
     }
     assert!(f.engine.lock().unwrap().hunt_target().is_none());
+}
+
+#[test]
+fn a_remote_activation_stamps_your_reference_on_logged_contacts_and_never_keys_or_tunes() {
+    let f = Fixture::new();
+    acquire(&f);
+    let dial = f.engine.lock().unwrap().settings().dial_hz();
+    let start = change(
+        &f,
+        json!({"kind":"activation","program":"POTA","reference":"US-0001"}),
+    );
+    let result = run(&f, &start).unwrap();
+    assert_eq!(
+        result,
+        json!({"operation":"logChange","operationId":start.id(),"outcome":"applied","evidence":"stationState"})
+    );
+    assert_eq!(run(&f, &start).unwrap(), result);
+    assert_eq!(
+        f.engine.lock().unwrap().activation(),
+        Some(("POTA".into(), "US-0001".into()))
+    );
+    // The station's own funnel stamps your park on a contact logged from this browser.
+    let logged = run(
+        &f,
+        &f.command(&control_state_version(&f, Instant::now(), 4)),
+    )
+    .unwrap();
+    assert_eq!(logged["outcome"], "applied");
+    {
+        let e = f.engine.lock().unwrap();
+        let contact = e.log_records().iter().find(|r| r.call == "W1AW").unwrap();
+        assert_eq!(contact.ota.my_ref.as_deref(), Some("US-0001"));
+        assert_eq!(contact.ota.my_program.as_deref(), Some("POTA"));
+        assert!(!e.tx_enabled());
+        assert_eq!(e.settings().dial_hz(), dial);
+    }
+    let end = change(&f, json!({"kind":"clearActivation"}));
+    assert_eq!(run(&f, &end).unwrap()["evidence"], "stationState");
+    assert!(f.engine.lock().unwrap().activation().is_none());
+}
+
+#[test]
+fn an_activation_the_station_cannot_normalize_is_refused_and_starts_nothing() {
+    let f = Fixture::new();
+    acquire(&f);
+    // A summit reference under POTA passes the wire grammar; the station's own normalizer refuses it.
+    let result = run(
+        &f,
+        &change(
+            &f,
+            json!({"kind":"activation","program":"POTA","reference":"W7A/MN-001"}),
+        ),
+    )
+    .unwrap();
+    assert_eq!(result["outcome"], "rejected");
+    assert_eq!(result["reason"], "invalidChange");
+    assert!(f.engine.lock().unwrap().activation().is_none());
+    for bad in [
+        json!({"kind":"activation","program":"WWFF","reference":"US-0001"}),
+        json!({"kind":"activation","program":"POTA","reference":"US 0001"}),
+    ] {
+        assert_eq!(run(&f, &change(&f, bad)), Err("invalidRecord"));
+    }
+    assert!(f.engine.lock().unwrap().activation().is_none());
 }

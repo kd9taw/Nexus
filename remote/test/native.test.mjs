@@ -751,6 +751,12 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
    const hunted=await write(s=>({type:'logChange',stationBootId:s.stationBootId,leaseId:s.leaseId,expectedRevision:s.revision,commandWindowId:s.commandWindowId,clientSequence:s.nextSequence,change:{kind:'hunt',call:'K2ABC',program:'POTA',reference:'US-0004'}}))
    assert.deepEqual(hunted.response.value,{operation:'logChange',operationId:hunted.request.requestId,outcome:'applied',evidence:'stationState'})
    assert.deepEqual(await probe.send({type:'loggingEvidence'}),evidence);assert.equal(evidence.txEnabled,false)
+   // Your activation is station context too. End it again so nothing logged later in this run is stamped.
+   const context=(s,change)=>({type:'logChange',stationBootId:s.stationBootId,leaseId:s.leaseId,expectedRevision:s.revision,commandWindowId:s.commandWindowId,clientSequence:s.nextSequence,change})
+   const activated=await write(s=>context(s,{kind:'activation',program:'POTA',reference:'US-0001'}))
+   assert.deepEqual(activated.response.value,{operation:'logChange',operationId:activated.request.requestId,outcome:'applied',evidence:'stationState'})
+   const ended=await write(s=>context(s,{kind:'clearActivation'}))
+   assert.equal(ended.response.value.evidence,'stationState',JSON.stringify(ended.response));assert.deepEqual(await probe.send({type:'loggingEvidence'}),evidence)
    // Closing the page socket ends the lease, as any departure does. Wait for that, then take it again.
    pages.close()
    for(let i=0;i<50&&(await allowed(()=>operation({type:'state'}))).response.value?.phase==='controlling';i++)await delay(100)
@@ -759,7 +765,7 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
   if(operationVersion>=2){
    assert.equal((await probe.send({type:'stationPermission',deviceId:device.deviceId,allow:true})).ok,true)
    const controls=(await allowed(()=>operation({type:'state'}))).response.value
-   assert.deepEqual(controls.controls.capabilities,operationVersion>=3?['decoder','amplifier','frequency','mode','tier','ampFollowBand','workspace','decoderSettings','receiverSettings','receiverGain','bandSelection','receiverFilter','receiverDsp','phoneMode','workSpot','radioLevels','radioSelection','fmTuning', 'fmReceiver',...(operationVersion===4?['qsoLogging','logEdit','qslMarks','otaHunt']:[])]:['decoder','amplifier'])
+   assert.deepEqual(controls.controls.capabilities,operationVersion>=3?['decoder','amplifier','frequency','mode','tier','ampFollowBand','workspace','decoderSettings','receiverSettings','receiverGain','bandSelection','receiverFilter','receiverDsp','phoneMode','workSpot','radioLevels','radioSelection','fmTuning', 'fmReceiver',...(operationVersion===4?['qsoLogging','logEdit','qslMarks','otaHunt','otaActivation']:[])]:['decoder','amplifier'])
    const clearRequest=s=>({type:'stationControl',stationBootId:s.stationBootId,leaseId:s.leaseId,expectedRevision:s.revision,commandWindowId:s.commandWindowId,clientSequence:s.nextSequence,context:s.controls.context,action:{action:'decoder.clear',receiver:'cw'}})
    const cleared=await allowed(()=>operation(clearRequest(controls)),async()=>operation(clearRequest((await heartbeat()).response.value)))
    assert.equal(cleared.response.value.outcome,'applied');assert.equal(cleared.response.value.evidence,'receiverState')
