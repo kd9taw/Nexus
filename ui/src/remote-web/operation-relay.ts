@@ -72,13 +72,13 @@ export class OperationRelay {
       const browserVersion = versioned ? parseOperationVersion(wire.operationVersion) : 1
       if (!browserVersion || versioned && browserVersion === 1) throw Error()
       const request = operationRequest(wire.request)
-      if (request.type === 'stationControl' && !versioned) throw Error()
+      if ((request.type === 'stationControl' || request.type === 'logChange') && !versioned) throw Error()
       const p = {
         requestId: request.requestId,
         sessionId,
         deviceId: browser.deviceId,
         at: now,
-        mutation: request.type === 'logManual' || request.type === 'stationControl' || request.type === 'stopTransmit',
+        mutation: request.type === 'logManual' || request.type === 'stationControl' || request.type === 'stopTransmit' || request.type === 'logChange',
         ...(request.type === 'stopTransmit' ? { stop: true as const } : {})
       }
       if (!this.station?.supported) {
@@ -87,7 +87,8 @@ export class OperationRelay {
       }
       const stationVersion = parseOperationVersion(this.station.operationVersion) ?? 1
       const version = Math.min(browserVersion, stationVersion) as OperationVersion
-      if ((request.type === 'stationControl' && version < controlVersion(request.action)) || (request.type === 'stopTransmit' && version < 4)) {
+      // A station older than v4 cannot parse a log change at all: refusing here keeps it off that wire.
+      if ((request.type === 'stationControl' && version < controlVersion(request.action)) || ((request.type === 'stopTransmit' || request.type === 'logChange') && version < 4)) {
         this.error(p, 'stationUnsupported')
         return
       }

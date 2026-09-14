@@ -86,6 +86,12 @@ export const JA: PartialCatalog = {
   "remote.loggingSaving": "局側で QSO を保存中…",
   "remote.loggingSaved": "QSO を局のログファイルに保存しました。外部へのアップロードは局の既存のキューを使用します。",
   "remote.loggingUnknown": "QSO はすでに記録されている可能性があります。この内容を保持し、再試行する前に結果を確認してください。",
+  // remote parity batch 2
+  "remote.logChangeUnknown": "局がすでにこの変更を行っている可能性があります。ログを再度変更する前に結果を確認してください。",
+  "remote.logChangeCheck": "結果を確認",
+  "remote.logChangeStale": "ログの読み込み後に、この交信は局側で変更されました。ログを更新してから再試行してください。",
+  "remote.logChangeFailed": "局からこの変更の確認を受信できませんでした。ログ記入の制御を確認してから再試行してください。",
+  "remote.logEntryInvalid": "コールサイン、バンド、モード、周波数、時刻を確認してから再試行してください。",
   "remote.loggingRefused": "局からこの記入の確認を受信できませんでした。ログ記入の制御と局の現在のモードを確認してから再試行してください。",
   "remote.loggingNotSent": "送信されていません。局には何も届いていないため、このQSOは記録されていません。もう一度お試しください。",
   "remote.loggingBusy": "局が処理中だったため、このQSOは記録されていません。もう一度お試しください。",

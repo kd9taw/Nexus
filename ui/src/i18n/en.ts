@@ -168,6 +168,12 @@ export const EN = {
   "remote.loggingSaving": "Saving QSO at the station…",
   "remote.loggingSaved": "QSO saved to the station log file. External uploads use the station’s existing queues.",
   "remote.loggingUnknown": "The QSO may already be logged. Keep this entry and check its result before trying again.",
+  // remote parity batch 2
+  "remote.logChangeUnknown": "The station may already have made this change. Check its result before changing the log again.",
+  "remote.logChangeCheck": "Check the result",
+  "remote.logChangeStale": "This contact changed at the station after the log was loaded. Refresh the log and try again.",
+  "remote.logChangeFailed": "The station did not confirm this change. Check logging control, then try again.",
+  "remote.logEntryInvalid": "Check the call, band, mode, frequency and time, then try again.",
   "remote.loggingRefused": "The station did not confirm this entry. Check logging control and the station’s current mode, then try again.",
   "remote.loggingNotSent": "Not sent. Nothing reached the station, so this QSO was not logged. Try again.",
   "remote.loggingBusy": "The station was busy, so this QSO was not logged. Try again.",

@@ -99,6 +99,23 @@ pub enum Request {
         context: station::Context,
         action: Box<station::Action>,
     },
+    /// Edit or delete a logged contact. Operation v4, the logging grant, and the manual log's own
+    /// lease, window, sequence and receipt rules.
+    LogChange {
+        #[serde(rename = "requestId")]
+        request_id: String,
+        #[serde(rename = "stationBootId")]
+        station_boot_id: String,
+        #[serde(rename = "leaseId")]
+        lease_id: String,
+        #[serde(rename = "expectedRevision")]
+        expected_revision: u64,
+        #[serde(rename = "commandWindowId")]
+        command_window_id: String,
+        #[serde(rename = "clientSequence")]
+        client_sequence: u64,
+        change: Box<logging::Change>,
+    },
 }
 impl Request {
     pub fn id(&self) -> &str {
@@ -110,7 +127,8 @@ impl Request {
             | Self::StopTransmit { request_id, .. }
             | Self::Result { request_id, .. }
             | Self::LogManual { request_id, .. }
-            | Self::StationControl { request_id, .. } => request_id,
+            | Self::StationControl { request_id, .. }
+            | Self::LogChange { request_id, .. } => request_id,
         }
     }
 }
@@ -621,6 +639,7 @@ impl Authority {
             if version >= 4 {
                 if c.grants.contains(device) {
                     capabilities.push("qsoLogging");
+                    capabilities.extend(logging::CAPABILITIES);
                 }
                 value["txArmed"] = json!(owned && tx_owned);
                 if ft_available
@@ -670,6 +689,7 @@ impl Authority {
         }
         if !matches!(version, 1..=4)
             || matches!(request, Request::StationControl { action, .. } if version < action.minimum_version())
+            || matches!(request, Request::LogChange { .. } if version < 4)
         {
             return Err("stationUnsupported");
         }
@@ -795,6 +815,14 @@ impl Authority {
                 command_window_id,
                 client_sequence,
                 ..
+            }
+            | Request::LogChange {
+                station_boot_id,
+                lease_id,
+                expected_revision,
+                command_window_id,
+                client_sequence,
+                ..
             } => {
                 let is_control = matches!(request, Request::StationControl { action, .. } if !action.is_logging());
                 if !(if is_control {
@@ -858,6 +886,41 @@ impl Authority {
                         .is_some_and(|r| r.outcome() == Outcome::Pending)
                 }) {
                     return Err("remoteBusy");
+                }
+                if let Request::LogChange { change, .. } = request {
+                    if !change.valid(super::now_ms() / 1000) {
+                        return Err("invalidRecord");
+                    }
+                    // The commit boundary, as for a manual entry: a rewrite begun here cannot be
+                    // rolled back by a disconnect, and its receipt answers any replay.
+                    self.advance(&mut c)?;
+                    c.lease.as_mut().ok_or("leaseExpired")?.sequence = *client_sequence;
+                    let prepared = logging::prepare_change(&mut engine, change);
+                    drop(engine);
+                    #[cfg(test)]
+                    if let Some(probe) = &self.before_sync {
+                        probe();
+                    }
+                    let outcome = match prepared {
+                        Ok(work) => work.finish(),
+                        Err(reason) => logging::ChangeOutcome::Rejected { reason },
+                    };
+                    let value = logging::change_value(request.id(), &outcome);
+                    c.receipts.push_back(Receipt {
+                        id: request.id().into(),
+                        session: session.into(),
+                        device: device.into(),
+                        fingerprint,
+                        at: current,
+                        value: value.clone(),
+                        control: None,
+                        result_version: 4,
+                    });
+                    while c.receipts.len() > 1024 {
+                        c.receipts.pop_front();
+                    }
+                    c.windows.clear();
+                    return Ok(value);
                 }
                 if let Request::StationControl {
                     action, context, ..
@@ -1022,7 +1085,7 @@ fn permitted(c: &Core, version: u8, device: &str, request: &Request) -> bool {
         Request::Acquire { .. } | Request::Result { .. } => {
             c.grants.contains(device) || version >= 2 && c.control_grants.contains(device)
         }
-        Request::LogManual { .. } => c.grants.contains(device),
+        Request::LogManual { .. } | Request::LogChange { .. } => c.grants.contains(device),
         Request::StationControl { action, .. } => {
             if action.is_logging() {
                 c.grants.contains(device)

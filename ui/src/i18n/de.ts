@@ -81,6 +81,12 @@ export const DE: PartialCatalog = {
   "remote.loggingSaving": "QSO wird an der Station gespeichert…",
   "remote.loggingSaved": "QSO in der Logdatei der Station gespeichert. Externe Übertragungen nutzen die bestehenden Warteschlangen der Station.",
   "remote.loggingUnknown": "Das QSO könnte bereits protokolliert sein. Diesen Eintrag behalten und das Ergebnis vor einem erneuten Versuch prüfen.",
+  // remote parity batch 2
+  "remote.logChangeUnknown": "Die Station hat diese Änderung möglicherweise schon ausgeführt. Das Ergebnis prüfen, bevor du das Log erneut änderst.",
+  "remote.logChangeCheck": "Ergebnis prüfen",
+  "remote.logChangeStale": "Dieser Kontakt wurde an der Station geändert, nachdem das Log geladen wurde. Log aktualisieren und erneut versuchen.",
+  "remote.logChangeFailed": "Die Station hat diese Änderung nicht bestätigt. Protokollierungssteuerung prüfen, dann erneut versuchen.",
+  "remote.logEntryInvalid": "Rufzeichen, Band, Betriebsart, Frequenz und Zeit prüfen, dann erneut versuchen.",
   "remote.loggingRefused": "Die Station hat diesen Eintrag nicht bestätigt. Protokollierungssteuerung und aktuelle Betriebsart der Station prüfen, dann erneut versuchen.",
   "remote.loggingNotSent": "Nicht gesendet. Nichts hat die Station erreicht, dieses QSO wurde also nicht geloggt. Versuchen Sie es erneut.",
   "remote.loggingBusy": "Die Station war beschäftigt, dieses QSO wurde also nicht geloggt. Versuchen Sie es erneut.",

@@ -1,7 +1,18 @@
 //! QSO actions use the logging grant, shared native policy and durable receipts.
 //! Admission happens under the original controller window. Finishing an append
 //! cannot acquire TX authority, retry a write or clear a replacement contact.
+//!
+//! Log changes (edit, delete) follow the same rules. A row is found again by the key of the exact
+//! row the browser's log page showed, never by a position, so a row that changed at the station
+//! since that page is refused rather than overwritten. The engine's rewrite does not sync and
+//! reports a failed save only to stderr, so "applied" is claimed only after the log file itself
+//! has been re-read, shown to hold the change, and synced.
 use super::station::Action;
+use ring::digest::{digest, SHA256};
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use std::fmt::Write as _;
+use std::path::{Path, PathBuf};
 use tempo_app::engine::{
     remote_logging::{
         CurrentQsoLogOutcome, JournalSync, LogFailure, PendingJournalWrite, PendingLogConfirmation,
@@ -10,6 +21,7 @@ use tempo_app::engine::{
     Engine, LogWriteOutcome,
 };
 use tempo_app::remote_control::{Evidence, Outcome, Reason};
+use tempo_core::logbook::{adif_record, QsoRecord};
 
 pub(super) enum Work {
     Append(LogWriteOutcome),
@@ -154,4 +166,260 @@ impl Work {
             Err(reason) => Outcome::Unknown { reason },
         }
     }
+}
+
+/// Station hints for log changes. Offered with the logging grant at operation v4, inside
+/// `controls.capabilities`, which older hosted pages filter; `actions` never changes.
+pub(super) const CAPABILITIES: [&str; 1] = ["logEdit"];
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Target {
+    call: String,
+    when_unix: u64,
+    key: String,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+pub enum Change {
+    Edit {
+        target: Target,
+        record: Box<super::ManualRecord>,
+    },
+    Delete {
+        target: Target,
+    },
+}
+
+impl Change {
+    fn target(&self) -> &Target {
+        match self {
+            Self::Edit { target, .. } | Self::Delete { target } => target,
+        }
+    }
+    /// An edit states when the contact happened; "station time" only means something for a new entry.
+    pub(super) fn valid(&self, now_unix: u64) -> bool {
+        let t = self.target();
+        !t.call.is_empty()
+            && t.call.len() <= 32
+            && t.when_unix <= 253_402_300_799
+            && key(&t.key, 64)
+            && match self {
+                Self::Edit { record, .. } => record.when_unix.is_some() && record.valid(now_unix),
+                Self::Delete { .. } => true,
+            }
+    }
+}
+
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) enum ChangeEvidence {
+    FileSynced,
+}
+
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) enum ChangeReason {
+    ContextChanged,
+    PersistenceUnconfirmed,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(tag = "outcome", rename_all = "camelCase")]
+pub(super) enum ChangeOutcome {
+    Applied { evidence: ChangeEvidence },
+    Rejected { reason: ChangeReason },
+    Unknown { reason: ChangeReason },
+}
+
+pub(super) fn change_value(id: &str, outcome: &ChangeOutcome) -> Value {
+    let mut value = serde_json::to_value(outcome)
+        .unwrap_or_else(|_| json!({"outcome":"unknown","reason":"persistenceUnconfirmed"}));
+    value["operation"] = json!("logChange");
+    value["operationId"] = json!(id);
+    value
+}
+
+/// The bytes a row key is the SHA-256 of. Mirrors `logRowCanonical` in
+/// ui/src/remote-web/operation-protocol.ts; one vector in both test suites holds them together.
+/// Numbers are compared in millionths, so a float and the same integer agree on both sides.
+pub(super) fn row_canonical(value: &Value) -> String {
+    fn walk(value: &Value, out: &mut String) {
+        match value {
+            Value::Null => out.push('z'),
+            Value::Bool(b) => out.push(if *b { 't' } else { 'f' }),
+            Value::Number(n) => {
+                let x = n.as_f64().unwrap_or(0.0);
+                let micro = (x.abs() * 1e6).round();
+                let sign = if x < 0.0 && micro != 0.0 { "-" } else { "" };
+                let _ = write!(out, "n{sign}{micro:.0};");
+            }
+            Value::String(s) => {
+                let _ = write!(out, "s{}:{s}", s.len());
+            }
+            Value::Array(items) => {
+                let _ = write!(out, "a{}[", items.len());
+                items.iter().for_each(|item| walk(item, out));
+                out.push(']');
+            }
+            Value::Object(map) => {
+                let mut keys: Vec<&String> = map.keys().collect();
+                keys.sort();
+                let _ = write!(out, "o{}{{", keys.len());
+                for k in keys {
+                    let _ = write!(out, "s{}:{k}", k.len());
+                    walk(&map[k], out);
+                }
+                out.push('}');
+            }
+        }
+    }
+    let mut out = String::new();
+    walk(value, &mut out);
+    out
+}
+
+pub(super) fn value_key(row: &Value) -> String {
+    digest(&SHA256, row_canonical(row).as_bytes())
+        .as_ref()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// The key of a stored record, built as the log page builds its row (query.rs `Collection::Log`:
+/// the DTO plus the resolved entity). If that row shape changes, keys stop matching and every
+/// change is refused as stale — safe, and caught by the page-row test.
+pub(super) fn row_key(record: &QsoRecord) -> String {
+    let mut q = tempo_app::dto::LoggedQso::from(record.clone());
+    q.entity = propagation::dxcc::resolve(&q.call).map(|i| i.entity.to_string());
+    serde_json::to_value(q)
+        .map(|v| value_key(&v))
+        .unwrap_or_default()
+}
+
+/// A proven rewrite: the file must hold exactly `count` copies of `expected` afterwards.
+pub(super) struct ChangeWork {
+    path: Option<PathBuf>,
+    expected: String,
+    count: usize,
+}
+
+/// Apply under the Engine lock. Only the fields a remote edit carries change; everything else
+/// (confirmations, uploads, park refs, the split leg) is carried from the stored record, and the
+/// engine's own edit policy still applies on top (a callsign fix clears upload stamps).
+pub(super) fn prepare_change(
+    engine: &mut Engine,
+    change: &Change,
+) -> Result<ChangeWork, ChangeReason> {
+    // Fold in another instance's appends first, so the index found below cannot shift under it.
+    engine.sync_shared_log_if_changed();
+    let t = change.target();
+    let index = engine
+        .log_records()
+        .iter()
+        .position(|r| r.call == t.call && r.when_unix == t.when_unix && row_key(r) == t.key)
+        .ok_or(ChangeReason::ContextChanged)?;
+    let stored = engine.log_records()[index].clone();
+    let copies = |records: &[QsoRecord], of: &QsoRecord, text: &str| {
+        records
+            .iter()
+            .filter(|r| r.call == of.call && r.when_unix == of.when_unix && adif_record(r) == text)
+            .count()
+    };
+    let (expected, count) = match change {
+        Change::Edit { record, .. } => {
+            if !engine.update_qso(index, edited(record, &stored)) {
+                return Err(ChangeReason::ContextChanged);
+            }
+            let written = engine
+                .log_records()
+                .get(index)
+                .cloned()
+                .ok_or(ChangeReason::ContextChanged)?;
+            let text = adif_record(&written);
+            let count = copies(engine.log_records(), &written, &text);
+            (text, count)
+        }
+        Change::Delete { .. } => {
+            let text = adif_record(&stored);
+            if !engine.delete_qso(index) {
+                return Err(ChangeReason::ContextChanged);
+            }
+            let count = copies(engine.log_records(), &stored, &text);
+            (text, count)
+        }
+    };
+    Ok(ChangeWork {
+        path: engine.log_path().map(Path::to_path_buf),
+        expected,
+        count,
+    })
+}
+
+fn edited(record: &super::ManualRecord, stored: &QsoRecord) -> QsoRecord {
+    let mut next = stored.clone();
+    next.call = record.call.clone();
+    next.grid = record.grid.clone();
+    next.state = record.state.clone();
+    next.band = record.band.clone();
+    next.freq_mhz = record.freq_mhz;
+    next.mode = record.mode.clone();
+    next.rst_sent = record.rst_sent.clone();
+    next.rst_rcvd = record.rst_rcvd.clone();
+    next.name = record.name.clone();
+    next.qth = record.qth.clone();
+    next.comment = record.comment.clone();
+    next.notes = record.notes.clone();
+    if let Some(at) = record.when_unix.filter(|at| *at != stored.when_unix) {
+        next.when_unix = at;
+        next.time_known = true; // the operator stated the time
+    }
+    if let Some(ota) = &record.ota {
+        next.ota.their_program = Some(ota.their_program.clone());
+        next.ota.their_ref = Some(ota.their_ref.clone());
+    }
+    next
+}
+
+impl ChangeWork {
+    /// Runs with Engine unlocked. Never retries and never writes the log itself.
+    pub(super) fn finish(self) -> ChangeOutcome {
+        let proved = self
+            .path
+            .as_deref()
+            .is_some_and(|path| on_disk(path, &self.expected, self.count).unwrap_or(false));
+        if proved {
+            ChangeOutcome::Applied {
+                evidence: ChangeEvidence::FileSynced,
+            }
+        } else {
+            ChangeOutcome::Unknown {
+                reason: ChangeReason::PersistenceUnconfirmed,
+            }
+        }
+    }
+}
+
+/// Read the file the log path names now, check it holds the change, then sync it and (on Unix) its
+/// directory, so the rename that published it survives a crash. A write handle: Windows flushes
+/// only through one. Anything short of that is unknown, never applied.
+fn on_disk(path: &Path, expected: &str, count: usize) -> std::io::Result<bool> {
+    use std::io::Read;
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)?;
+    let mut text = String::new();
+    file.read_to_string(&mut text)?;
+    if text.matches(expected).count() != count {
+        return Ok(false);
+    }
+    file.sync_all()?;
+    #[cfg(unix)]
+    if let Some(dir) = path.parent() {
+        std::fs::File::open(dir)?.sync_all()?;
+    }
+    Ok(true)
 }

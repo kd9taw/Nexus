@@ -711,12 +711,47 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
   const heartbeat=()=>allowed(()=>operation({type:'heartbeat',leaseId:state.leaseId}))
   const logRequest=s=>({type:'logManual',stationBootId:s.stationBootId,leaseId:s.leaseId,expectedRevision:s.revision,commandWindowId:s.commandWindowId,clientSequence:s.nextSequence,record})
   const logged=await allowed(()=>operation(logRequest(state)),async()=>operation(logRequest((await heartbeat()).response.value)));assert.equal(logged.response.value.outcome,'applied');assert.equal(logged.response.value.evidence,'fileSynced')
-  const evidence=await probe.send({type:'loggingEvidence'});assert.equal(evidence.count,1);assert.match(evidence.adif,/W1AW/);assert.match(evidence.adif,/Do not duplicate/);assert.equal(evidence.txEnabled,false)
+  let evidence=await probe.send({type:'loggingEvidence'});assert.equal(evidence.count,1);assert.match(evidence.adif,/W1AW/);assert.match(evidence.adif,/Do not duplicate/);assert.equal(evidence.txEnabled,false)
   await delay(270);socket.send(envelope(logged.request));const replay=await socket.take(v=>v.type==='operationResponse'&&v.requestId===logged.request.requestId);assert.deepEqual(replay,logged.response);assert.deepEqual(await probe.send({type:'loggingEvidence'}),evidence)
+  if(operationVersion===4){
+   // Edit and delete a contact through the real relay and native authority, found by the key of the
+   // row the station's own log page serves. The logging grant alone allows it; nothing keys.
+   const {createHash}=await import('node:crypto')
+   const labeled=(peer,label,predicate)=>peer.take(predicate).catch(error=>{throw new Error(`${label} timed out; closed=${peer.closed} code=${peer.closeCode} reason=${peer.closeReason}`,{cause:error})})
+   const canon=v=>v===null?'z':typeof v==='boolean'?(v?'t':'f'):typeof v==='number'?`n${v<0&&Math.round(Math.abs(v)*1e6)!==0?'-':''}${BigInt(Math.round(Math.abs(v)*1e6))};`:typeof v==='string'?`s${Buffer.byteLength(v)}:${v}`:Array.isArray(v)?`a${v.length}[${v.map(canon).join('')}]`:`o${Object.keys(v).length}{${Object.keys(v).sort().map(k=>canon(k)+canon(v[k])).join('')}}`
+   const target=row=>({call:row.call,whenUnix:row.whenUnix,key:createHash('sha256').update(canon(row),'utf8').digest('hex')})
+   // One page socket for the whole block: any browser leaving ends the shared logging lease.
+   const {value:pageTicket}=await browser.post(`stations/${stationId}/ticket`);const pages=await browser.open(stationId,pageTicket.ticket);pages.ackObservations();await labeled(pages,'page session',v=>v.type==='session');pages.send({type:'applicationHello',version:3});await labeled(pages,'page capabilities',v=>v.type==='applicationCapabilities')
+   const logRows=async()=>{const requestId=crypto.randomUUID();pages.send({type:'applicationQuery',requestId,collection:'log',cursor:null,search:'',unconfirmed:false,after:null});const page=await labeled(pages,'log page',v=>v.requestId===requestId);assert.equal(page.type,'applicationPage');pages.send({type:'applicationQueryAck',requestId});return page.rows}
+   // The station shares a page-zero capture for a few seconds, so read until the page shows the change.
+   const rowFor=async(call,accept)=>{for(let i=0;i<40;i++){const row=(await logRows()).find(r=>r.call===call);if(row&&accept(row))return row;await delay(250)}throw new Error(`the log page never showed ${call} as expected`)}
+   const fresh=async()=>(await heartbeat()).response.value
+   const write=build=>allowed(async()=>operation(build(await fresh())),async()=>operation(build(await fresh())))
+   const changeRequest=(s,change)=>({type:'logChange',stationBootId:s.stationBootId,leaseId:s.leaseId,expectedRevision:s.revision,commandWindowId:s.commandWindowId,clientSequence:s.nextSequence,change})
+   const second={...record,call:'K1ABC',comment:'Second contact',notes:null,whenUnix:record.whenUnix-60}
+   assert.equal((await write(s=>({...logRequest(s),record:second}))).response.value.outcome,'applied')
+   const capable=await fresh();assert.ok(capable.controls.capabilities.includes('logEdit'));assert.deepEqual(capable.actions,['log.manual'])
+   const before=await rowFor('K1ABC',()=>true)
+   const edited=await write(s=>changeRequest(s,{kind:'edit',target:target(before),record:{...second,comment:'Edited from the browser'}}))
+   assert.deepEqual(edited.response.value,{operation:'logChange',operationId:edited.request.requestId,outcome:'applied',evidence:'fileSynced'})
+   const afterEdit=await probe.send({type:'loggingEvidence'});assert.equal(afterEdit.count,2);assert.match(afterEdit.adif,/Edited from the browser/);assert.equal(afterEdit.txEnabled,false)
+   await delay(270);socket.send(envelope(edited.request));assert.deepEqual(await labeled(socket,'edit replay',v=>v.type==='operationResponse'&&v.requestId===edited.request.requestId),edited.response);assert.deepEqual(await probe.send({type:'loggingEvidence'}),afterEdit)
+   // Positive control: the pre-edit row is stale now, so a delete aimed at it changes nothing.
+   const stale=await write(s=>changeRequest(s,{kind:'delete',target:target(before)}))
+   assert.equal(stale.response.value.outcome,'rejected');assert.equal(stale.response.value.reason,'contextChanged');assert.deepEqual(await probe.send({type:'loggingEvidence'}),afterEdit)
+   const current=await rowFor('K1ABC',row=>row.comment==='Edited from the browser')
+   const removed=await write(s=>changeRequest(s,{kind:'delete',target:target(current)}))
+   assert.equal(removed.response.value.outcome,'applied',JSON.stringify(removed.response))
+   evidence=await probe.send({type:'loggingEvidence'});assert.equal(evidence.count,1);assert.match(evidence.adif,/W1AW/);assert.doesNotMatch(evidence.adif,/K1ABC/)
+   // Closing the page socket ends the lease, as any departure does. Wait for that, then take it again.
+   pages.close()
+   for(let i=0;i<50&&(await allowed(()=>operation({type:'state'}))).response.value?.phase==='controlling';i++)await delay(100)
+   state=(await allowed(()=>operation({type:'acquire',stationBootId:state.stationBootId}))).response.value;assert.equal(state.phase,'controlling')
+  }
   if(operationVersion>=2){
    assert.equal((await probe.send({type:'stationPermission',deviceId:device.deviceId,allow:true})).ok,true)
    const controls=(await allowed(()=>operation({type:'state'}))).response.value
-   assert.deepEqual(controls.controls.capabilities,operationVersion>=3?['decoder','amplifier','frequency','mode','tier','ampFollowBand','workspace','decoderSettings','receiverSettings','receiverGain','bandSelection','receiverFilter','receiverDsp','phoneMode','workSpot','radioLevels','radioSelection','fmTuning', 'fmReceiver',...(operationVersion===4?['qsoLogging']:[])]:['decoder','amplifier'])
+   assert.deepEqual(controls.controls.capabilities,operationVersion>=3?['decoder','amplifier','frequency','mode','tier','ampFollowBand','workspace','decoderSettings','receiverSettings','receiverGain','bandSelection','receiverFilter','receiverDsp','phoneMode','workSpot','radioLevels','radioSelection','fmTuning', 'fmReceiver',...(operationVersion===4?['qsoLogging','logEdit']:[])]:['decoder','amplifier'])
    const clearRequest=s=>({type:'stationControl',stationBootId:s.stationBootId,leaseId:s.leaseId,expectedRevision:s.revision,commandWindowId:s.commandWindowId,clientSequence:s.nextSequence,context:s.controls.context,action:{action:'decoder.clear',receiver:'cw'}})
    const cleared=await allowed(()=>operation(clearRequest(controls)),async()=>operation(clearRequest((await heartbeat()).response.value)))
    assert.equal(cleared.response.value.outcome,'applied');assert.equal(cleared.response.value.evidence,'receiverState')

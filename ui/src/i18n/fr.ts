@@ -96,6 +96,12 @@ export const FR: PartialCatalog = {
   "remote.loggingSaving": "Enregistrement du QSO à la station…",
   "remote.loggingSaved": "QSO enregistré dans le fichier du carnet de la station. Les envois externes utilisent les files existantes de la station.",
   "remote.loggingUnknown": "Le QSO est peut-être déjà enregistré. Conservez cette saisie et vérifiez son résultat avant de réessayer.",
+  // remote parity batch 2
+  "remote.logChangeUnknown": "La station a peut-être déjà effectué cette modification. Vérifiez son résultat avant de modifier à nouveau le carnet.",
+  "remote.logChangeCheck": "Vérifier le résultat",
+  "remote.logChangeStale": "Ce contact a été modifié à la station après le chargement du carnet. Actualisez le carnet et réessayez.",
+  "remote.logChangeFailed": "La station n’a pas confirmé cette modification. Vérifiez le contrôle de saisie, puis réessayez.",
+  "remote.logEntryInvalid": "Vérifiez l’indicatif, la bande, le mode, la fréquence et l’heure, puis réessayez.",
   "remote.loggingRefused": "La station n’a pas confirmé cette saisie. Vérifiez le contrôle de saisie et le mode actuel de la station avant de réessayer.",
   "remote.loggingNotSent": "Non envoyé. Rien n’a atteint la station, donc ce QSO n’a pas été enregistré. Réessayez.",
   "remote.loggingBusy": "La station était occupée, donc ce QSO n’a pas été enregistré. Réessayez.",

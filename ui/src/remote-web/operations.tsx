@@ -5,7 +5,7 @@ import { t } from '../i18n'
 import { useStationData, RemoteOperationsContext } from '../stationAccess'
 export { RemoteOperationsContext } from '../stationAccess'
 import type { LoggedQso } from '../types'
-import { manualRecord, type ManualRecord } from './operation-protocol'
+import { manualRecord, type LogCapability, type ManualRecord } from './operation-protocol'
 import { OperationFailure, type OperationClient } from './operation-client'
 import { ObserverRecallEntry, RemoteRecall, type RemoteRecallEntryProps } from './RemoteRecall'
 // Radio units are invariant protocol tokens, never translated or locale-formatted.
@@ -286,4 +286,32 @@ export function RemoteLogEntry({
 }
 export function useRemoteOperations() {
   return useContext(RemoteOperationsContext)
+}
+const idleSubscribe = () => () => {}
+const idleView = () => null
+/** Whether a log change may be sent now: logging control is current and the station offers this
+ * change. A write still waiting for its result blocks every other one (see RemoteLogCheck). */
+export function useLogChange(capability: LogCapability): boolean {
+  const client = useContext(RemoteOperationsContext), available = useStationData()
+  const view = useSyncExternalStore(client?.subscribe ?? idleSubscribe, client?.getSnapshot ?? idleView)
+  return !!(client && client.operationVersion >= 4 && available && view?.connected && view.fresh &&
+    view.requestReady !== false && !view.unresolved && !view.controlPending &&
+    view.state?.phase === 'controlling' && view.state.controls?.capabilities.includes(capability))
+}
+/** A log write whose outcome never arrived. Nothing else may change the log until the operator
+ * checks the station's receipt, or says they checked the log at the station. */
+export function RemoteLogCheck({ client }: { client: OperationClient }) {
+  const view = useSyncExternalStore(client.subscribe, client.getSnapshot)
+  if (!client.enabled || !view.unresolved || view.submitting) return null
+  return (
+    <div className="remote-log-entry remote-log-check">
+      <p role="alert">{view.pendingDraft ? t('remote.loggingUnknown') : t('remote.logChangeUnknown')}</p>
+      <div className="remote-actions">
+        <button type="button" className="remote-button" disabled={view.busy || !view.connected || view.requestReady === false}
+          onClick={() => void client.resolve().catch(() => {})}>{t('remote.logChangeCheck')}</button>
+        <button type="button" className="remote-button" disabled={view.busy}
+          onClick={() => void client.acknowledgeAfterCheckingLog().catch(() => {})}>{t('remote.loggingCheckedLog')}</button>
+      </div>
+    </div>
+  )
 }

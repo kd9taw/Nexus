@@ -51,7 +51,10 @@ fn pending_confirm_requires_logging_not_radio_or_transmit_permission() {
     let f = Fixture::new();
     let key = hold(&f);
     let state = control_state_version(&f, Instant::now(), 4);
-    assert_eq!(state["controls"]["capabilities"], json!(["qsoLogging"]));
+    assert_eq!(
+        state["controls"]["capabilities"],
+        json!(["qsoLogging", "logEdit"])
+    );
     assert!(state["transmitEpoch"].is_null());
     assert!(!f.engine.lock().unwrap().tx_enabled());
     let request = control_request(&state, confirm(&key));
@@ -267,4 +270,274 @@ fn current_log_checks_native_eligibility_and_contact_incarnation() {
         assert!(f.engine.lock().unwrap().log_records().is_empty());
         assert!(!f.engine.lock().unwrap().tx_enabled());
     }
+}
+
+// ---- Log changes: a row is found again by its key, never by a position -------------------------
+
+const SEED: &str = "<CALL:4>W1AW<BAND:3>20m<MODE:3>FT8<FREQ:6>14.074<QSO_DATE:8>20260909<TIME_ON:6>010000<NAME:4>Joe <EOR>\n\
+<CALL:5>K1ABC<BAND:3>40m<MODE:2>CW<FREQ:5>7.030<QSO_DATE:8>20260909<TIME_ON:6>020000<EOR>\n";
+
+fn seed(f: &Fixture) {
+    f.engine.lock().unwrap().import_adif(SEED);
+    assert_eq!(f.engine.lock().unwrap().log_records().len(), 2);
+}
+
+/// The rows exactly as the browser's log page receives them.
+fn page_rows(f: &Fixture) -> Vec<Value> {
+    let request: super::super::super::query::Request =
+        serde_json::from_value(json!({"requestId":id(),
+        "collection":"log","cursor":null,"search":"","unconfirmed":false,"after":null}))
+        .unwrap();
+    let page: Value = serde_json::from_str(
+        &super::super::super::query::Publisher::default()
+            .read(&request, &f.engine, None, Instant::now())
+            .unwrap(),
+    )
+    .unwrap();
+    page["rows"].as_array().unwrap().clone()
+}
+
+fn row(f: &Fixture, call: &str) -> Value {
+    page_rows(f)
+        .into_iter()
+        .find(|r| r["call"] == call)
+        .unwrap()
+}
+
+fn target(row: &Value) -> Value {
+    json!({"call":row["call"],"whenUnix":row["whenUnix"],"key":super::super::logging::value_key(row)})
+}
+
+fn change(f: &Fixture, change: Value) -> Request {
+    let s = control_state_version(f, Instant::now(), 4);
+    serde_json::from_value(json!({"type":"logChange","requestId":id(),"stationBootId":s["stationBootId"],
+        "leaseId":s["leaseId"],"expectedRevision":s["revision"],"commandWindowId":s["commandWindowId"],
+        "clientSequence":s["nextSequence"],"change":change}))
+    .unwrap()
+}
+
+fn edit(row: &Value) -> Value {
+    json!({"kind":"edit","target":target(row),"record":{"call":"W1AW","grid":"FN42","country":null,"state":null,
+        "band":"40m","freqMhz":7.074,"mode":"FT8","rstSent":"-05","rstRcvd":"-07","name":"Hiram","qth":null,
+        "comment":"fixed band","notes":null,"whenUnix":row["whenUnix"],"confirmed":false,"awardConfirmed":false}})
+}
+
+fn adif(f: &Fixture) -> Vec<u8> {
+    std::fs::read(f.dir.join("contacts.adi")).unwrap()
+}
+
+#[test]
+fn the_row_key_matches_the_browser_vector_and_the_log_page_row() {
+    // The same vector as ui/src/remote-web/log-change.test.ts: both implementations must build
+    // these bytes, or every remote edit would be refused as stale.
+    let vector: Value = serde_json::from_str(r#"{"call":"W1AW","freqMhz":14.074,"txPower":-0.5,"whenUnix":1788940800,"name":"José 日本","qth":"a\"b}","grid":null,"confirmed":false,"ota":{"theirRef":"US-0001","iota":null},"credit":["DXCC",7],"big":12345678901234567}"#).unwrap();
+    assert_eq!(
+        super::super::logging::row_canonical(&vector),
+        "o11{s3:bign12345678901234567741440;s4:calls4:W1AWs9:confirmedfs6:credita2[s4:DXCCn7000000;]s7:freqMhzn14074000;s4:gridzs4:names12:José 日本s3:otao2{s4:iotazs8:theirRefs7:US-0001}s3:qths4:a\"b}s7:txPowern-500000;s8:whenUnixn1788940800000000;}"
+    );
+    assert_eq!(
+        super::super::logging::value_key(&vector),
+        "d33eff984a6c2d66e74a3a7fcb19d04b318508cd7cc6dcfcdb77d80ea6121fb3"
+    );
+    let f = Fixture::new();
+    seed(&f);
+    // The page read needs Engine, so take the stored keys first and release it.
+    let stored: Vec<(String, String)> = f
+        .engine
+        .lock()
+        .unwrap()
+        .log_records()
+        .iter()
+        .map(|r| (r.call.clone(), super::super::logging::row_key(r)))
+        .collect();
+    let page = page_rows(&f);
+    assert_eq!(page.len(), stored.len());
+    for (call, key) in stored {
+        let row = page.iter().find(|r| r["call"] == call.as_str()).unwrap();
+        assert_eq!(key, super::super::logging::value_key(row));
+    }
+}
+
+#[test]
+fn an_edit_is_found_by_its_key_synced_and_replayed_without_a_second_write() {
+    let f = Fixture::new();
+    seed(&f);
+    {
+        let mut e = f.engine.lock().unwrap();
+        let index = e
+            .log_records()
+            .iter()
+            .position(|r| r.call == "W1AW")
+            .unwrap();
+        assert!(e.mark_qsl_card(index, true));
+    }
+    acquire(&f);
+    let state = control_state_version(&f, Instant::now(), 4);
+    assert_eq!(state["actions"], json!(["log.manual"]));
+    let before = row(&f, "W1AW");
+    let request = change(&f, edit(&before));
+    let result = run(&f, &request).unwrap();
+    assert_eq!(
+        result,
+        json!({"operation":"logChange","operationId":request.id(),"outcome":"applied","evidence":"fileSynced"})
+    );
+    let bytes = adif(&f);
+    {
+        let e = f.engine.lock().unwrap();
+        let edited = e.log_records().iter().find(|r| r.call == "W1AW").unwrap();
+        assert_eq!(
+            (edited.band.as_str(), edited.grid.as_deref()),
+            ("40m", Some("FN42"))
+        );
+        assert_eq!(edited.name.as_deref(), Some("Hiram"));
+        assert!(
+            edited.qsl_rcvd.card,
+            "an ordinary edit keeps the paper card"
+        );
+        assert_eq!(e.log_records().len(), 2);
+        assert!(!e.tx_enabled());
+    }
+    assert!(String::from_utf8_lossy(&bytes).contains("FN42"));
+    // A dropped reply is answered from the receipt: no second write, no second change.
+    assert_eq!(run(&f, &request).unwrap(), result);
+    assert_eq!(
+        run(
+            &f,
+            &Request::Result {
+                request_id: id(),
+                operation_id: request.id().into()
+            }
+        )
+        .unwrap(),
+        result
+    );
+    assert_eq!(adif(&f), bytes);
+    assert_ne!(target(&row(&f, "W1AW"))["key"], target(&before)["key"]);
+}
+
+#[test]
+fn a_change_against_a_row_that_changed_at_the_station_is_refused_and_writes_nothing() {
+    let f = Fixture::new();
+    seed(&f);
+    acquire(&f);
+    let stale = row(&f, "W1AW");
+    {
+        let mut e = f.engine.lock().unwrap();
+        let index = e
+            .log_records()
+            .iter()
+            .position(|r| r.call == "W1AW")
+            .unwrap();
+        let mut local = e.log_records()[index].clone();
+        local.comment = Some("changed at the shack".into());
+        assert!(e.update_qso(index, local));
+    }
+    let bytes = adif(&f);
+    for kind in [
+        edit(&stale),
+        json!({"kind":"delete","target":target(&stale)}),
+    ] {
+        let result = run(&f, &change(&f, kind)).unwrap();
+        assert_eq!(result["outcome"], "rejected");
+        assert_eq!(result["reason"], "contextChanged");
+        assert_eq!(adif(&f), bytes);
+        assert_eq!(f.engine.lock().unwrap().log_records().len(), 2);
+    }
+    // Positive control: the same delete from a current page applies.
+    let fresh = row(&f, "W1AW");
+    let result = run(
+        &f,
+        &change(&f, json!({"kind":"delete","target":target(&fresh)})),
+    )
+    .unwrap();
+    assert_eq!(result["outcome"], "applied");
+    assert_eq!(f.engine.lock().unwrap().log_records().len(), 1);
+}
+
+#[test]
+fn a_delete_is_idempotent_across_a_dropped_response_and_never_reaches_a_later_contact() {
+    let f = Fixture::new();
+    seed(&f);
+    acquire(&f);
+    let delete = change(
+        &f,
+        json!({"kind":"delete","target":target(&row(&f, "W1AW"))}),
+    );
+    let result = run(&f, &delete).unwrap();
+    assert_eq!(result["evidence"], "fileSynced");
+    let remaining: Vec<_> = f
+        .engine
+        .lock()
+        .unwrap()
+        .log_records()
+        .iter()
+        .map(|r| r.call.clone())
+        .collect();
+    assert_eq!(remaining, ["K1ABC"]);
+    assert!(!String::from_utf8_lossy(&adif(&f)).contains("W1AW"));
+    // The same contact logged again later is a new row; replaying the old delete cannot touch it.
+    f.engine.lock().unwrap().import_adif(SEED);
+    let bytes = adif(&f);
+    assert_eq!(run(&f, &delete).unwrap(), result);
+    assert_eq!(f.engine.lock().unwrap().log_records().len(), 2);
+    assert_eq!(adif(&f), bytes);
+}
+
+#[test]
+fn log_changes_need_logging_permission_and_operation_v4() {
+    let f = Fixture::new();
+    seed(&f);
+    let stale_free = row(&f, "W1AW");
+    let state = acquire_controls_version(&f, Instant::now(), 4);
+    let capabilities = state["controls"]["capabilities"].as_array().unwrap();
+    assert!(!capabilities.contains(&json!("logEdit")));
+    let delete = json!({"kind":"delete","target":target(&stale_free)});
+    assert_eq!(
+        run(&f, &change(&f, delete.clone())),
+        Err("localPermissionRequired")
+    );
+    f.authority.permit(DEVICE, true).unwrap();
+    let request = change(&f, delete);
+    for version in [1, 2, 3] {
+        assert!(
+            !control_state_version(&f, Instant::now(), version)["controls"]["capabilities"]
+                .as_array()
+                .is_some_and(|c| c.contains(&json!("logEdit")))
+        );
+        assert_eq!(
+            f.authority.handle_version(
+                (f.connection, version),
+                SESSION,
+                DEVICE,
+                &request,
+                &f.engine,
+                Instant::now()
+            ),
+            Err("stationUnsupported")
+        );
+    }
+    assert_eq!(f.engine.lock().unwrap().log_records().len(), 2);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_rewrite_that_did_not_reach_the_disk_is_unknown_never_applied() {
+    use std::os::unix::fs::PermissionsExt;
+    let f = Fixture::new();
+    seed(&f);
+    acquire(&f);
+    let request = change(&f, edit(&row(&f, "W1AW")));
+    let bytes = adif(&f);
+    // The rewrite writes a temporary file beside the log; a read-only directory fails it.
+    std::fs::set_permissions(&f.dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let probe = std::fs::write(f.dir.join("probe"), b"x").is_err();
+    let result = run(&f, &request);
+    std::fs::set_permissions(&f.dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+    if !probe {
+        return; // running as a user the directory mode cannot stop; nothing to prove here
+    }
+    let result = result.unwrap();
+    assert_eq!(result["outcome"], "unknown");
+    assert_eq!(result["reason"], "persistenceUnconfirmed");
+    assert_eq!(adif(&f), bytes);
 }
