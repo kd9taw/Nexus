@@ -27,6 +27,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   It now reads QRZ, like the CL, HL and WRL buttons beside it; hovering still says what it does,
   and screen readers still hear "Push <call> to QRZ". (#270)
 
+- **The portable-callsign warning now appears when you upload, and eQSL has one too.** Nexus
+  warned that a QRZ logbook belongs to one exact callsign only when you pressed Test Connection,
+  so an operator set up at home who went portable months later was never told why his /P uploads
+  failed. Now the first QRZ upload under a callsign that doesn't match the logbook writes the
+  warning to the Connections log. For a portable call Nexus asks QRZ once per session which
+  callsign the logbook belongs to; an ordinary call costs no extra request. eQSL uploads check the
+  callsign against your eQSL username the same way. Each warning appears once per session, not
+  once per contact. (#291)
+
 ### Security
 
 - **Encrypted connections refuse a malformed setup from the server.** Nexus's secure-connection

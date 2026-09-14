@@ -15625,6 +15625,10 @@ fn entered_credential(raw: &str) -> &str {
 fn set_qrz_logbook_key(key: String, state: State<'_, SharedEngine>) -> Result<(), String> {
     let key = entered_credential(&key); // #224
     let entry = qrz_logbook_keychain()?;
+    // #291: a different key can unlock a different book, so the owner learned for the old one
+    // (and whether this session already asked) no longer applies.
+    *QRZ_BOOK_OWNER.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    QRZ_BOOK_OWNER_ASKED.store(false, std::sync::atomic::Ordering::Relaxed);
     if key.is_empty() {
         clear_keychain_entry(&entry)?;
         conn_log(
@@ -17000,6 +17004,93 @@ fn qrz_book_mismatch_warning(mycall: &str, owner: &str) -> String {
     }
 }
 
+/// #291: eQSL's side of the portable-callsign warning. eQSL files an upload under the
+/// account's callsign, and the account is its username — so compare that to the call the
+/// contact goes up under, the way [`qrz_book_mismatch_warning`] compares QRZ's book owner.
+/// Empty when they match, when either is blank, or when the username is a login name rather
+/// than a callsign (it then says nothing about which call the account holds).
+///
+/// Worded "may": whether eQSL refuses a suffixed call outright or files it unmatched was not
+/// measured against eQSL here, and a warning must not claim more than is known.
+fn eqsl_account_mismatch_warning(station_call: &str, username: &str) -> String {
+    let my = station_call.trim().to_ascii_uppercase();
+    let acct = username.trim().to_ascii_uppercase();
+    if my.is_empty() || acct.is_empty() || my == acct || !tempo_core::message::is_callsign(&acct) {
+        return String::new();
+    }
+    let same_base = tempo_core::message::base_call(&my) == tempo_core::message::base_call(&acct);
+    if same_base {
+        format!(
+            " ⚠ Your eQSL account is {acct}, but you are uploading as {my}. eQSL files contacts \
+             under the account's own callsign, so {my} contacts may be refused or never match — \
+             if they are, {my} needs its own eQSL account."
+        )
+    } else {
+        format!(
+            " ⚠ Your eQSL account is {acct}, but your station callsign is {my}. eQSL may refuse \
+             these uploads — check the eQSL username in Settings."
+        )
+    }
+}
+
+/// #291: the upload-time account warnings already said this session, keyed by service,
+/// station call and account, so an operator is told once per mismatch rather than once per
+/// contact.
+static UPLOAD_ACCOUNT_WARNED: std::sync::Mutex<std::collections::BTreeSet<String>> =
+    std::sync::Mutex::new(std::collections::BTreeSet::new());
+
+/// #291: the QRZ logbook's owner call, learned from a STATUS round trip — by Test Connection,
+/// or once per session at upload time (see [`qrz_upload_account_warning_from`]). Cleared when
+/// the Logbook API key is saved or cleared, since a new key can unlock a different book.
+static QRZ_BOOK_OWNER: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+/// Whether this session already asked QRZ for the owner at upload time, so a STATUS that fails
+/// (QRZ down) is not repeated for every contact. Cleared with [`QRZ_BOOK_OWNER`].
+static QRZ_BOOK_OWNER_ASKED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// #291: QRZ's upload-time account warning — the Test button's owner check, run when a
+/// contact actually goes up. Returns `(warning, owner_to_cache)`: the warning is `Some` the
+/// first time this session a mismatch is seen; `owner_to_cache` is `Some` only when
+/// `fetch_owner` ran and answered, for the caller to store in [`QRZ_BOOK_OWNER`].
+///
+/// `fetch_owner` is a STATUS round trip, so it runs only when the owner is not known yet, the
+/// station call is stroked (the portable case the warning exists for — an ordinary call pays
+/// no extra network call), and this session has not already asked.
+fn qrz_upload_account_warning_from(
+    station_call: &str,
+    cached_owner: Option<String>,
+    already_asked: bool,
+    fetch_owner: impl FnOnce() -> Option<String>,
+    seen: &mut std::collections::BTreeSet<String>,
+) -> (Option<String>, Option<String>) {
+    let (owner, fetched) = match cached_owner {
+        Some(owner) => (owner, None),
+        None if !already_asked && station_call.contains('/') => match fetch_owner() {
+            Some(owner) => (owner.clone(), Some(owner)),
+            None => return (None, None),
+        },
+        None => return (None, None),
+    };
+    let warning = qrz_book_mismatch_warning(station_call, &owner);
+    let say = !warning.is_empty()
+        && first_upload_account_warning(seen, "QRZ Logbook", station_call, &owner);
+    (say.then_some(warning), fetched)
+}
+
+/// True the first time this (service, station call, account) mismatch is seen in `seen`.
+fn first_upload_account_warning(
+    seen: &mut std::collections::BTreeSet<String>,
+    service: &str,
+    station_call: &str,
+    account: &str,
+) -> bool {
+    seen.insert(format!(
+        "{service}\u{1f}{}\u{1f}{}",
+        station_call.trim().to_ascii_uppercase(),
+        account.trim().to_ascii_uppercase()
+    ))
+}
+
 async fn qrz_test_connection_impl(mycall: &str) -> Result<String, String> {
     let key = qrz_logbook_keychain()?
         .get_password()
@@ -17012,6 +17103,11 @@ async fn qrz_test_connection_impl(mycall: &str) -> Result<String, String> {
     let st = tempo_core::qrz::parse_status_response(&resp);
     if st.ok {
         let owner_raw = st.owner.clone().unwrap_or_default();
+        // #291: the upload path reuses this owner instead of spending its own STATUS call.
+        if !owner_raw.trim().is_empty() {
+            *QRZ_BOOK_OWNER.lock().unwrap_or_else(|e| e.into_inner()) =
+                Some(owner_raw.trim().to_string());
+        }
         let owner = st.owner.unwrap_or_else(|| "your account".into());
         let book = st.book.map(|b| format!(" ({b})")).unwrap_or_default();
         let warn = qrz_book_mismatch_warning(mycall, &owner_raw);
@@ -17033,6 +17129,69 @@ fn qrz_push_qso_impl(
     let key = qrz_logbook_keychain()?
         .get_password()
         .map_err(|_| "No QRZ Logbook API key stored — set it in Settings.".to_string())?;
+    // #291: the Test button's owner check, run where a portable call is actually rejected —
+    // on the upload. The call the contact goes up under is its STATION_CALLSIGN, else today's.
+    let station_call = record
+        .station_callsign
+        .as_deref()
+        .map(str::trim)
+        .filter(|c| !c.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| engine_lock(engine).settings().mycall.trim().to_string());
+    {
+        let cached = QRZ_BOOK_OWNER
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let asked = QRZ_BOOK_OWNER_ASKED.load(std::sync::atomic::Ordering::Relaxed);
+        // A snapshot, so the warned-set lock is never held across the STATUS round trip; the
+        // real set is consulted again below before anything is said.
+        let mut snapshot = UPLOAD_ACCOUNT_WARNED
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let (warning, fetched) = qrz_upload_account_warning_from(
+            &station_call,
+            cached,
+            asked,
+            || {
+                QRZ_BOOK_OWNER_ASKED.store(true, std::sync::atomic::Ordering::Relaxed);
+                // The same STATUS request Test Connection sends. Only the owner is kept; the
+                // response is never logged (it is QRZ's, and the request carried the key).
+                let body = tempo_core::qrz::build_status_body(&key);
+                let resp =
+                    propagation::live::qrz::post_form(tempo_core::qrz::QRZ_LOGBOOK_URL, body)
+                        .ok()?;
+                let st = tempo_core::qrz::parse_status_response(&resp);
+                st.owner
+                    .filter(|_| st.ok)
+                    .map(|o| o.trim().to_string())
+                    .filter(|o| !o.is_empty())
+            },
+            &mut snapshot,
+        );
+        if let Some(owner) = fetched {
+            *QRZ_BOOK_OWNER.lock().unwrap_or_else(|e| e.into_inner()) = Some(owner);
+        }
+        if let Some(warning) = warning {
+            let owner = QRZ_BOOK_OWNER
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone()
+                .unwrap_or_default();
+            let first = first_upload_account_warning(
+                &mut UPLOAD_ACCOUNT_WARNED
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()),
+                "QRZ Logbook",
+                &station_call,
+                &owner,
+            );
+            if first {
+                conn_log("QRZ Logbook", "error", warning.trim().to_string());
+            }
+        }
+    }
     let rec: tempo_core::logbook::QsoRecord = record.into();
     let adif = tempo_core::logbook::adif_record(&rec);
     let body = tempo_core::qrz::build_insert_body(&key, &adif, false);
@@ -17585,6 +17744,30 @@ fn eqsl_push_qso_impl(record: LoggedQso, engine: &SharedEngine) -> Result<Upload
     let password = eqsl_keychain()?
         .get_password()
         .map_err(|_| "No eQSL password stored — set it in Settings.".to_string())?;
+    // #291: eQSL had no portable-callsign warning at all. The account is the username; the
+    // call the contact goes up under is its STATION_CALLSIGN, else today's. Said once a session.
+    {
+        let station_call = record
+            .station_callsign
+            .as_deref()
+            .map(str::trim)
+            .filter(|c| !c.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| engine_lock(engine).settings().mycall.trim().to_string());
+        let warning = eqsl_account_mismatch_warning(&station_call, &user);
+        if !warning.is_empty()
+            && first_upload_account_warning(
+                &mut UPLOAD_ACCOUNT_WARNED
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()),
+                "eQSL",
+                &station_call,
+                &user,
+            )
+        {
+            conn_log("eQSL", "error", warning.trim().to_string());
+        }
+    }
     let rec: tempo_core::logbook::QsoRecord = record.into();
     let adif = tempo_core::logbook::adif_record(&rec);
 
@@ -25278,6 +25461,98 @@ mod tests {
             w2.contains("W9XYZ") && w2.contains("K1ABC") && !w2.contains("separate"),
             "{w2}"
         );
+    }
+
+    /// #291 (F4MQS): the portable warning ran only on QRZ's Test button, and eQSL had none.
+    /// eQSL's account is its username; the check must speak only when that username is a
+    /// callsign that differs from the one the contact is being uploaded under, and each
+    /// mismatch is said once per session, not once per contact.
+    #[test]
+    fn eqsl_account_mismatch_warns_a_portable_operator_and_says_it_once() {
+        use super::{eqsl_account_mismatch_warning as warn, first_upload_account_warning as first};
+        let p = warn("F4MQS/P", "F4MQS");
+        assert!(
+            p.contains("F4MQS/P") && p.contains("F4MQS") && p.contains("eQSL"),
+            "{p}"
+        );
+        assert_eq!(warn("F4MQS", "f4mqs"), "", "the same call, any case");
+        assert_eq!(warn("F4MQS/P", ""), "", "no username");
+        assert_eq!(warn("", "F4MQS"), "", "no station call");
+        // A login that is not a callsign says nothing about which call the account holds.
+        assert_eq!(warn("F4MQS/P", "yannick"), "");
+        let other = warn("K1ABC", "W9XYZ");
+        assert!(
+            other.contains("K1ABC") && other.contains("W9XYZ"),
+            "{other}"
+        );
+
+        let mut seen = std::collections::BTreeSet::new();
+        assert!(first(&mut seen, "eQSL", "F4MQS/P", "F4MQS"));
+        assert!(
+            !first(&mut seen, "eQSL", "F4MQS/P", "F4MQS"),
+            "said once per session"
+        );
+        assert!(
+            first(&mut seen, "QRZ Logbook", "F4MQS/P", "F4MQS"),
+            "per service"
+        );
+        assert!(
+            first(&mut seen, "eQSL", "F4MQS/M", "F4MQS"),
+            "a different station call is a different mismatch"
+        );
+    }
+
+    /// #291: QRZ's book owner is only known from a STATUS round trip. At upload time that
+    /// costs a network call, so it is spent only for a stroked (portable) call, at most once a
+    /// session, and never when the owner is already known.
+    #[test]
+    fn qrz_upload_warning_asks_qrz_only_for_a_portable_call_and_only_once() {
+        use super::qrz_upload_account_warning_from as warn;
+        let mut seen = std::collections::BTreeSet::new();
+
+        // An ordinary call with no known owner: nothing to compare, and no STATUS call.
+        let r = warn(
+            "F4MQS",
+            None,
+            false,
+            || panic!("no STATUS round trip for an unstroked call"),
+            &mut seen,
+        );
+        assert_eq!(r, (None, None));
+
+        // Portable, owner not known: ask once, hand the owner back to cache, and warn.
+        let (w, owner) = warn("F4MQS/P", None, false, || Some("F4MQS".into()), &mut seen);
+        assert!(
+            w.as_deref()
+                .is_some_and(|w| w.contains("F4MQS/P") && w.contains("REJECTED")),
+            "{w:?}"
+        );
+        assert_eq!(owner.as_deref(), Some("F4MQS"));
+
+        // Asked already this session and it came back empty (QRZ down): never ask again.
+        let r = warn(
+            "F4MQS/P",
+            None,
+            true,
+            || panic!("asked QRZ twice in one session"),
+            &mut seen,
+        );
+        assert_eq!(r, (None, None));
+
+        // Owner known: compare without asking, and a mismatch already said stays quiet.
+        let r = warn(
+            "F4MQS/P",
+            Some("F4MQS".into()),
+            true,
+            || panic!("the owner was already known"),
+            &mut seen,
+        );
+        assert_eq!(r, (None, None), "said once per session");
+        let (w, _) = warn("F4MQS/M", Some("F4MQS".into()), true, || None, &mut seen);
+        assert!(w.is_some(), "a new station call is a new mismatch");
+        // A book that matches the station call: silent.
+        let (w, _) = warn("F4MQS/P", Some("F4MQS/P".into()), true, || None, &mut seen);
+        assert_eq!(w, None);
     }
 
     #[test]
