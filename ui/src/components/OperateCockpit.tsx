@@ -1639,6 +1639,9 @@ function OperateRecall({
   const [book, setBook] = useState<QrzLookup | null>(null)
   const [entity, setEntity] = useState<string | null>(null)
 
+  // Re-read on a call change AND on `loggedTick` (#282): the sequencer logs in the background
+  // with the SAME station still on the card, so a call-only trigger left "New DXCC!" standing
+  // over a contact that was already in the log until the operator clicked someone else.
   useEffect(() => {
     let stale = false
     void getLog()
@@ -1649,7 +1652,7 @@ function OperateRecall({
     return () => {
       stale = true
     }
-  }, [cu])
+  }, [cu, snap.loggedTick])
 
   // The award identity comes from cty.dat via the CALL — never the callbook's country
   // string, which spells entities differently enough ("Germany" vs "Fed. Rep. of Germany")

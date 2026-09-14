@@ -121,9 +121,10 @@ vi.mock('./OperateDecodes', async (importOriginal) => {
   return { ...real, OperateDecodes: () => <div data-testid="od-pane" /> }
 })
 
-function makeSnap(dxcall: string | null = null): AppSnapshot {
+function makeSnap(dxcall: string | null = null, loggedTick = 0): AppSnapshot {
   return {
     mycall: 'KD9TAW',
+    loggedTick,
     mygrid: MY_GRID,
     // The station is on screen because we decoded it, and the frame carried a square.
     stations: [
@@ -191,10 +192,20 @@ function renderCockpit(
   layoutMode: 'classic' | 'roster' = 'classic',
   dxcall: string | null = null,
 ) {
+  return render(cockpit(selectedCall, layoutMode, dxcall))
+}
+
+/** The cockpit element — separate from `render` so a test can RE-render it with a new snapshot. */
+function cockpit(
+  selectedCall: string | null,
+  layoutMode: 'classic' | 'roster' = 'classic',
+  dxcall: string | null = null,
+  loggedTick = 0,
+) {
   const noop = () => {}
-  return render(
+  return (
     <OperateCockpit
-      snap={makeSnap(dxcall)}
+      snap={makeSnap(dxcall, loggedTick)}
       theme="dark"
       tier="FT8"
       onTierChange={noop}
@@ -220,7 +231,7 @@ function renderCockpit(
       onLayoutMode={noop}
       panels={panelsApi()}
       active={false}
-    />,
+    />
   )
 }
 
@@ -388,5 +399,39 @@ describe('the FT cockpit shows the callsign card for the selected station (#168)
     cleanup()
     renderCockpit('K9XYZ')
     await waitFor(() => expect(getLog.mock.calls.length).toBeGreaterThan(first))
+  })
+
+  it('re-reads the logbook when a QSO is logged with the SAME station still on the card (#282)', async () => {
+    // The field report: the sequencer logged TL8GD and the card went on saying "New DXCC!"
+    // from before the contact until the operator clicked someone else. The card only re-read
+    // on a CALL change — and after an auto-log the call does not change. `loggedTick` is the
+    // snapshot's "a QSO was just logged, by any path" counter.
+    const { rerender } = renderCockpit('W1ABC')
+    const c = await card()
+    expect(c.querySelector('.recall-badge.need')?.textContent).toContain('New band-slot')
+
+    const justLogged = {
+      ...priorQsos[0],
+      band: '20m',
+      freqMhz: 14.074,
+      notes: undefined,
+      whenUnix: Date.UTC(2026, 8, 14) / 1000,
+    } as unknown as LoggedQso
+    getLog.mockImplementation(async () => [justLogged, ...priorQsos])
+    try {
+      rerender(cockpit('W1ABC', 'classic', null, 1))
+      await waitFor(() =>
+        expect(
+          within(document.querySelector('.recall-log-list') as HTMLElement).getAllByRole('listitem'),
+          'the card never picked up the contact that was just logged',
+        ).toHaveLength(3),
+      )
+      expect(
+        document.querySelector('.recall-badge.need'),
+        'still flagging the slot the operator just worked',
+      ).toBeNull()
+    } finally {
+      getLog.mockImplementation(async () => priorQsos)
+    }
   })
 })

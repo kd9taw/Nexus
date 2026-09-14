@@ -19,6 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   −B4 chip, and turning −B4 on or off in either Band Activity or Rx Frequency changes both panes at
   once. Before, the Rx Frequency pane picked up −B4 when it opened and kept hiding a worked
   station's RR73 until Nexus was restarted.
+- **The callsign card updates when the contact is logged (#282).** On the FT8/FT4 screen the card kept
+  showing "New DXCC!" (or a new band or mode) for a station you had just worked, until you picked a
+  different station. It now re-reads your log the moment the QSO is logged and shows it as worked.
 
 ### Security
 
