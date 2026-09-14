@@ -2483,7 +2483,7 @@ export const DE: PartialCatalog = {
   "map.empty.detail": "Die Beam-Karte wird auf Ihren Maidenhead-Locator zentriert — in den Einstellungen setzen, dann werden alle Richtungen und Entfernungsringe vom eigenen QTH aus gemessen.",
   "map.projection.aria": "Kartenansicht",
   "map.projection.globe.label": "Globus",
-  "map.projection.globe.title": "3-D-Globus — ziehen zum Drehen, Mausrad zum Zoomen",
+  "map.projection.globe.title": "2-D-Globus — ziehen zum Drehen, Mausrad zum Zoomen",
   "map.projection.beam.label": "Beam",
   "map.projection.beam.title": "Beam-Karte — wahre Richtungen + Entfernungsringe vom QTH",
   "map.projection.world.label": "Flach",

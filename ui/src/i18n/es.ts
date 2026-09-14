@@ -1999,7 +1999,7 @@ export const ES: PartialCatalog = {
   "map.projection.beam.label": "Rumbos",
   "map.projection.beam.title": "Mapa de rumbos — rumbos reales + anillos de distancia desde tu QTH",
   "map.projection.globe.label": "Globo",
-  "map.projection.globe.title": "Globo 3D — arrastra para girar, rueda para el zoom",
+  "map.projection.globe.title": "Globo 2D — arrastra para girar, rueda para el zoom",
   "map.projection.webgl.title": "Globo 3D WebGL — mejor en PC potentes",
   "map.projection.world.label": "Plano",
   "map.projection.world.title": "Mapa mundial plano con relieve sombreado",

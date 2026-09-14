@@ -1128,7 +1128,7 @@ export const JA: PartialCatalog = {
   "map.empty.detail": "ビームマップは自局のグリッドロケーターを中心に表示します。設定でグリッドを設定すると、すべての方位と距離リングが自局のQTHから測られます。",
   "map.projection.aria": "マップ表示",
   "map.projection.globe.label": "地球儀",
-  "map.projection.globe.title": "3D地球儀 — ドラッグで回転、ホイールでズーム",
+  "map.projection.globe.title": "2D地球儀 — ドラッグで回転、ホイールでズーム",
   "map.projection.beam.label": "ビーム",
   "map.projection.beam.title": "ビームマップ — 自局QTHからの真方位と距離リング",
   "map.projection.world.label": "平面",

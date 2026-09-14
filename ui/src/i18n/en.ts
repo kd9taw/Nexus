@@ -1742,7 +1742,7 @@ export const EN = {
 
   'map.projection.aria': 'Map view',
   'map.projection.globe.label': 'Globe',
-  'map.projection.globe.title': '3-D globe — drag to spin, wheel to zoom',
+  'map.projection.globe.title': '2-D globe — drag to spin, wheel to zoom',
   'map.projection.beam.label': 'Beam',
   'map.projection.beam.title': 'Beam map — true headings + range rings from your QTH',
   'map.projection.world.label': 'Flat',

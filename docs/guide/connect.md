@@ -18,12 +18,17 @@ labelled "modelled"; the UI never dresses an estimate as a measurement.
 
 ### The map
 
-The map renders in three projections:
+One **map picker** at the top of the map chooses the view:
 
-- a **3-D shaded globe**,
-- an **azimuthal-equidistant beam map** (true great-circle headings from your
-  QTH),
-- and a **flat world view**.
+- **Globe** — a 2-D globe you can spin and zoom (where a new view starts),
+- **3D** — the shaded WebGL globe (greyed out on a PC whose graphics can't run
+  it),
+- **Flat** — the world map with shaded relief,
+- **Beam** — an azimuthal-equidistant beam map with true great-circle headings
+  from your QTH.
+
+Each intent preset remembers its own pick. **Layers** sits in the top-left
+corner of every view and folds away to a pill, the same way Conditions does.
 
 The **Layers** menu toggles what's drawn on top:
 
@@ -65,6 +70,17 @@ plain-language version of a pane is what you see while it is waiting on data,
 offline, or has nothing to report, not a density setting. (There was a
 **Basic / Expert** switch that chose between the two by hand; it was removed on
 2026-07-26 and there is no such control now.)
+
+You don't have to keep all seven. Each pane has a **✕** on its header to close it,
+and the **Panels** menu in the Connect header lists what's closed so you can bring
+it back, with **Undo** and **Reset layout**. When a pane closes, its neighbour
+takes the space; close both panes on a side and the map takes the width. Drag the
+edge of a side column to make it wider or narrower (200–720 px; the map never goes
+below 280 px), or drag between its two panes. Both handles also work from the
+keyboard, and a double-click puts the default back. What you close and how wide
+you make things is remembered per window, and a saved width is trimmed to fit a
+smaller screen. **Reset layout** returns Connect to exactly how it first opened,
+including which pane sits in each slot.
 
 The panes you can assign:
 

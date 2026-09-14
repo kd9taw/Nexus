@@ -1999,7 +1999,7 @@ export const FR: PartialCatalog = {
   "map.projection.beam.label": "Azimutale",
   "map.projection.beam.title": "Carte azimutale — caps vrais et cercles de distance depuis votre QTH",
   "map.projection.globe.label": "Globe",
-  "map.projection.globe.title": "Globe 3D — glisser pour tourner, molette pour zoomer",
+  "map.projection.globe.title": "Globe 2D — glisser pour tourner, molette pour zoomer",
   "map.projection.webgl.title": "Globe 3D WebGL — idéal sur les PC puissants",
   "map.projection.world.label": "Plate",
   "map.projection.world.title": "Planisphère avec relief ombré",
