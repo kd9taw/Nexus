@@ -4756,6 +4756,12 @@ select optgroup {
   background: color-mix(in srgb, currentColor 12%, transparent);
   box-shadow: inset 0 -0.12em 0 var(--focus-ring);
 }
+/* Digits drawn while tuning is not available right now (a Remote authority re-read): no tuning
+   cursor, no hover tint. Paint-only, like the rules above. */
+.readout-val[data-digit-tune='off'] .readout-digit {
+  cursor: inherit;
+  background: none;
+}
 .readout-unit {
   font-size: 11px;
   color: var(--text-faint);

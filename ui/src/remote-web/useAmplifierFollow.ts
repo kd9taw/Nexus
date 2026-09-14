@@ -24,7 +24,9 @@ export function useAmplifierFollow(doc: SettingsConfiguration | null, radioId: n
   const currentDraft = draft && same(draft) ? draft : null
   const configured = !!doc && documentRadio === radioId && ['spe', 'kpa'].includes(String(doc.settings.ampModel).trim().toLowerCase()) &&
     typeof doc.settings.ampPort === 'string' && doc.settings.ampPort.trim() !== ''
-  const supported = (client?.operationVersion ?? 0) >= 3 && !!view?.state?.controls?.capabilities.includes('ampFollowBand')
+  // Drawn from the retained state too, so a command's re-read disables this row instead of removing it.
+  const shown = view?.state ?? view?.retainedState
+  const supported = (client?.operationVersion ?? 0) >= 3 && !!shown?.controls?.capabilities.includes('ampFollowBand')
   const canEdit = allowed && configured && !saving && !confirmed
   const canEnable = observation.context !== null && observation.idle && view?.state?.txArmed === false
   const canSave = !!(canEdit && currentDraft && (!currentDraft.follow || canEnable))

@@ -27,9 +27,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Remote says "Not sent" when a command never reached the station.** On a slow link the browser
   refuses to send a command against a station reading that is out of date, rather than sending it
-  late. It used to report that as "not confirmed", as if it might have taken effect. It now says
-  nothing reached the station, so nothing changed there, and to try again; "not confirmed" is kept
-  for a command that was sent and never answered. Stop TX is never held back this way.
+  late, and says so: nothing reached the station, so nothing changed there, and to try again. "Not
+  confirmed" means a command was sent and never answered. Stop TX is never held back this way.
+
+- **Late station readings fade the Remote screen instead of blanking it.** When the station's
+  readings arrive a little late, the browser's workspace stays on screen, faded, and can't be
+  clicked until readings are current again; the banner says "Station data unavailable" next to the
+  control status. Stop TX stays at full strength and clickable. Nothing can be sent from faded
+  readings; every command still refuses data that isn't current. The banner keeps the same size
+  throughout: after a station command the "Release station control" button and the result buttons
+  stay in place, greyed out while the station is re-checked, the result line keeps its space, and
+  the status says "Station control active" for as long as the station reported the control lease as
+  valid. The frequency digits stay drawn between heartbeats and only tune once control is confirmed
+  again.
 
 - **Export one POTA activation, not a date range.** The Logbook's export area now lists your
   activations — park, UTC date and contact count — and exports exactly that one. Previously the only

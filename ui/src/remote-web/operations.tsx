@@ -10,11 +10,23 @@ import { OperationFailure, type OperationClient } from './operation-client'
 import { ObserverRecallEntry, RemoteRecall, type RemoteRecallEntryProps } from './RemoteRecall'
 // Radio units are invariant protocol tokens, never translated or locale-formatted.
 const FREQUENCY_UNIT = 'MHz'
-export function LoggingAuthority({ client }: { client: OperationClient }) {
+/** The authority line of the session banner. That banner sits above every cockpit, so an element it
+ * adds or removes moves every control below it: operators saw exactly that as flicker. Its shape
+ * therefore depends only on the session, never on the moment. A command outcome's re-read shows
+ * the last station state with its button disabled, the gap between heartbeats keeps the label while
+ * the station-reported lease runs, and the result row is reserved with its check buttons mounted.
+ * What is actionable is unchanged: every button still gates on `state`, `fresh` and `busy`. */
+export function LoggingAuthority({ client, unavailable }: { client: OperationClient; unavailable?: boolean }) {
   const view = useSyncExternalStore(client.subscribe, client.getSnapshot)
+  const sawControls = useRef(false)
   if (!client.enabled) return null
-  const phase = view.state?.phase
-  const station = !!view.state?.controls || !!view.controlPending || !!view.controlResult || !!view.controlError
+  const shown = view.state ?? view.retainedState ?? null
+  const phase = shown?.phase
+  if (shown?.controls || view.controlPending || view.controlResult || view.controlError) sawControls.current = true
+  const station = sawControls.current
+  // A command outcome's re-read keeps its own wording ("Updating…", then unavailable if it lapses):
+  // with no current state the label reports that, and only the drawn button uses the retained one.
+  // The steady label applies to the ordinary gap between heartbeats, where a state is held.
   const label = !view.connected
     ? station ? t('remote.controlOffline') : t('remote.loggingOffline')
     : !view.state && view.supported
@@ -23,7 +35,7 @@ export function LoggingAuthority({ client }: { client: OperationClient }) {
       : view.error === 'stationUnsupported'
         ? t('remote.loggingUnsupported')
         : phase === 'controlling'
-          ? view.fresh
+          ? view.fresh || (view.leaseHeld && !view.error)
             ? station ? t('remote.controlActive') : t('remote.loggingActive')
             : t('remote.loggingStatusUnavailable')
           : phase === 'occupied'
@@ -31,9 +43,27 @@ export function LoggingAuthority({ client }: { client: OperationClient }) {
             : phase === 'available'
               ? station ? t('remote.controlAvailable') : t('remote.loggingAvailable')
               : station ? t('remote.controlRequired') : t('remote.loggingPermissionRequired')
+  const failure = view.controlError && !view.controlPending ? view.controlError : null
+  const outcome = failure ? (failure.sent ? t('remote.controlRequestFailed') : t('remote.controlNotSent'))
+    : !(view.controlPending || view.controlResult || view.controlError) ? ''
+    : view.controlResult?.outcome === 'applied' ? view.controlResult.evidence === 'settingsSaved' ? t('remote.controlSettingsSaved') : t('remote.controlApplied')
+    : view.controlResult?.outcome === 'rejected' ? t('remote.controlRefused')
+    : (view.controlSending || view.controlResult?.outcome === 'pending') && view.connected ? t('remote.controlPending') : t('remote.controlUnknown')
+  // The check buttons are for a command that needs checking: one still pending with no request in
+  // flight for it. While its own request is in flight both were disabled anyway (busy), and showing
+  // them then made every ordinary command pop two buttons in and out.
+  // Reserved, not removed: a hidden check button keeps its box, so the row is the same size whether
+  // or not a command awaits checking. Hidden also means disabled, out of the tab order and unnamed.
+  // On a phone that box is too dear (the banner is capped at 40% of the height and a reserved pair
+  // pushed the Quick contact form under its nav), so xs/sm drop the reservation in CSS.
+  const checking = !!view.controlPending && !view.controlSending
+  const reserved = checking ? {} : { 'data-reserved': true, 'aria-hidden': true, tabIndex: -1 }
   return (
-    <div className="remote-logging-authority">
-      <span role="status">{label}</span>
+    <div className="remote-logging-authority" data-station-state={view.state ? 'current' : shown ? 'retained' : undefined}>
+      <span className="remote-session-label">
+        {unavailable !== undefined && <span role="alert" className="remote-session-unavailable">{unavailable ? t('remote.applicationUnavailable') + ' ' : null}</span>}
+        <span role="status">{label}</span>
+      </span>
       {phase === 'available' && (
         <button
           type="button"
@@ -48,21 +78,16 @@ export function LoggingAuthority({ client }: { client: OperationClient }) {
         <button
           type="button"
           className="remote-button"
-          disabled={view.busy}
+          disabled={view.busy || !view.state}
           onClick={() => void client.release()}
         >
           {station ? t('remote.controlRelease') : t('remote.loggingRelease')}
         </button>
       )}
-      {(view.controlPending || view.controlResult || view.controlError) && <div className="remote-control-result">
-        {view.controlError && !view.controlPending ? <span role="alert" data-control-failure={view.controlError.sent ? 'unconfirmed' : 'notSent'}>{view.controlError.sent ? t('remote.controlRequestFailed') : t('remote.controlNotSent')}</span> :
-        <span role="status">{view.controlResult?.outcome === 'applied' ? view.controlResult.evidence === 'settingsSaved' ? t('remote.controlSettingsSaved') : t('remote.controlApplied')
-          : view.controlResult?.outcome === 'rejected' ? t('remote.controlRefused')
-          : (view.controlSending || view.controlResult?.outcome === 'pending') && view.connected ? t('remote.controlPending') : t('remote.controlUnknown')}</span>}
-        {view.controlPending && <>
-          <button type="button" className="remote-button" disabled={view.busy || !view.connected || view.requestReady === false} onClick={() => void client.refreshControl().catch(() => {})}>{t('remote.controlCheckResult')}</button>
-          <button type="button" className="remote-button" disabled={view.busy || view.controlResult?.outcome === 'pending'} onClick={() => void client.acknowledgeControl().catch(() => {})}>{t('remote.controlCheckedStation')}</button>
-        </>}
+      {station && <div className="remote-control-result" data-idle={outcome ? undefined : true}>
+        <span role={failure ? 'alert' : outcome ? 'status' : undefined} data-control-failure={failure ? failure.sent ? 'unconfirmed' : 'notSent' : undefined}>{outcome}</span>
+        <button type="button" className="remote-button" {...reserved} disabled={!checking || view.busy || !view.connected || view.requestReady === false} onClick={() => void client.refreshControl().catch(() => {})}>{t('remote.controlCheckResult')}</button>
+        <button type="button" className="remote-button" {...reserved} disabled={!checking || view.busy || view.controlResult?.outcome === 'pending'} onClick={() => void client.acknowledgeControl().catch(() => {})}>{t('remote.controlCheckedStation')}</button>
       </div>}
     </div>
   )

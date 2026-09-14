@@ -116,12 +116,16 @@ export function FrequencyReadout({
   const control = useStationControl(), frequencyControl = useStationCapability('frequency')
   disabled = disabled || !(control || (remoteFrequency && frequencyControl))
   const wheel = useRemoteWheelTuning()
+  // Remote authority is re-read every second and lapses briefly between replies. The digit spans stay
+  // drawn through that gap; only tuning waits for it. Unmounting them made the hit regions (and the
+  // hover under a resting pointer) blink with every late heartbeat.
+  const digitsShown = digitTune && (control || remoteFrequency)
   digitTune = digitTune && (control || (remoteFrequency && wheel.allowed))
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
   const canEdit = editable && !disabled
   const text = formatDialMhz(dialMhz)
-  const digits = digitTune ? dialDigits(text) : null
+  const digits = digitsShown ? dialDigits(text) : null
   // The digit the KEYBOARD spins (the wheel takes the one under the pointer instead). null until
   // the operator asks for one, so a mouse user never sees a selection they did not make.
   const [selDecade, setSelDecade] = useState<number | null>(null)
@@ -161,7 +165,8 @@ export function FrequencyReadout({
   // would be both a violation and nine tab stops ahead of Stop TX in every cockpit header
   // (PanelsMenu.tsx:139 records what that costs). Left/Right pick the digit, Up/Down spin it.
   const decades = digits?.flatMap((d) => (d.decade == null ? [] : [d.decade])) ?? [] // high→low
-  const canTuneDigits = canEdit && digits != null && onTuneHz != null && decades.length > 0
+  // `digitTune` (authority now), not `digits` (drawn): digits stay drawn through an authority gap.
+  const canTuneDigits = canEdit && digitTune && digits != null && onTuneHz != null && decades.length > 0
   const stepDigit = (key: string) => {
     if (!canTuneDigits) return
     const hi = decades[0]
@@ -246,7 +251,7 @@ export function FrequencyReadout({
         }
       }}
     >
-      <span className="readout-val">
+      <span className="readout-val" data-digit-tune={digits ? (canTuneDigits ? 'on' : 'off') : undefined}>
         {/* One `.map()` inside ONE JSX expression: no whitespace text nodes between the digits,
             which is the only way span-splitting could open a visible gap. The '.' stays a bare
             string child — smaller DOM, and it is deliberately not a hit region. */}

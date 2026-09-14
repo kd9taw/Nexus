@@ -20,11 +20,25 @@
 .remote-session-toggle { display: flex; align-items: center; justify-content: center; gap: .5em; flex: 0 0 auto; }
 .remote-session-toggle svg { flex: 0 0 auto; }
 .remote-session-info { padding-top: .5em; min-width: 0; }
-.remote-session-info p, .remote-session-unavailable { margin: .5em 0; overflow-wrap: anywhere; }
+.remote-session-info p { margin: .5em 0; overflow-wrap: anywhere; }
+/* The banner's geometry must not depend on the moment (see LoggingAuthority). A fixed basis, not
+   the label's text width, decides whether the authority button shares the label's line, so a
+   label that changes wording never pushes that button onto a line of its own. */
+.remote-session-label { flex: 1 1 10em; min-width: 0; overflow-wrap: anywhere; }
 .remote-session-info[hidden] { display: none; }
 [data-viewport='xs'] .remote-session-toggle { width: 48px; padding-inline: 0; }
 [data-viewport='xs'] .remote-session-toggle > span { display: none; }
-.remote-control-result { display: flex; flex: 1 1 100%; flex-wrap: wrap; gap: .5em; min-width: 0; }
+/* Reserved for the whole control session: one button tall even when empty, and its check buttons
+   keep their boxes while hidden, so a command starting or settling never resizes the banner. */
+.remote-control-result { display: flex; flex: 1 1 100%; flex-wrap: wrap; align-items: center; gap: .5em; min-width: 0; min-height: 48px; }
+.remote-control-result > span { flex: 1 1 10em; min-width: 0; overflow-wrap: anywhere; }
+.remote-control-result > [data-reserved] { visibility: hidden; }
+/* Phones and narrow windows cannot afford the reservation: the banner is capped at 40% of the
+   height, and a reserved pair of check buttons wrapped onto lines of their own pushed the Quick
+   contact form under its nav at 390 px x1.75. There the row appears with the first outcome (and
+   then stays for the session) and the check buttons take space only while a check is needed. */
+:is([data-viewport='xs'], [data-viewport='sm']) .remote-control-result[data-idle],
+:is([data-viewport='xs'], [data-viewport='sm']) .remote-control-result > [data-reserved] { display: none; }
 .remote-view-unavailable { padding: 1em; overflow: auto; }
 .remote-insights-view {
   display: flex;
@@ -135,14 +149,31 @@
 /* Retire stale readings and station controls. Quick destinations contain only
    browser navigation, so the operator can still leave a view or return to Full. */
 .app[data-remote-stale="true"] > :not(.remote-application-status, .remote-quick-nav) {
-  visibility: hidden;
   pointer-events: none;
+  user-select: none;
+}
+/* Retired IN PLACE, faded, not blanked. `visibility: hidden` here painted the whole workspace in the
+   page background, so every sample that arrived a moment past its freshness limit flashed the
+   operator's screen black and back. The workspace stays laid out, faded and unclickable, and the
+   banner's label says why. Fading changes only what is seen: every station command still refuses
+   stale data where it is built (StationDataContext, the operation client's fresh-state gates).
+   Opacity cannot be undone by a descendant, so the fade stops at the live Stop's ancestors and
+   fades their other children: Stop itself keeps full strength, exactly as before. */
+@supports selector(:has(*)) {
+  .app[data-remote-stale="true"] > :not(.remote-application-status, .remote-quick-nav, :has([data-remote-stop="true"])),
+  .app[data-remote-stale="true"] :has([data-remote-stop="true"]) > :not([data-remote-stop="true"], :has([data-remote-stop="true"])) {
+    opacity: .35;
+  }
+}
+/* A browser without :has() keeps the previous presentation rather than showing stale readings unfaded. */
+@supports not selector(:has(*)) {
+  .app[data-remote-stale="true"] > :not(.remote-application-status, .remote-quick-nav) { visibility: hidden; }
+  .app[data-remote-stale="true"] [data-remote-stop="true"] { visibility: visible; }
 }
 
 /* Stop derives authority from the live controller, independently of readings.
    An enabled stop must remain visible and clickable inside the retired workspace. */
 .app[data-remote-stale="true"] [data-remote-stop="true"] {
-  visibility: visible;
   pointer-events: auto;
 }
 

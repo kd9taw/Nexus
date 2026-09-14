@@ -44,6 +44,16 @@ export type OperationView = {
   stopAvailable?: boolean
   stopError?: string | null
   requestReady?: boolean
+  /** DISPLAY ONLY. The last state the station sent, kept while a command outcome's re-read is
+   * pending so the banner and panels stay mounted (shown disabled) instead of unmounting until the
+   * next heartbeat. Cleared whenever authority ends or becomes unknown: disconnect, an error reply,
+   * a timed-out or unsendable request, release. No command gate reads it; they read `state` and
+   * `fresh`, which a command outcome still clears exactly as before. */
+  retainedState?: OperationState | null
+  /** DISPLAY ONLY. The station reported this browser's lease as running until at least now,
+   * measured from the request's start. Lets the authority label stay steady through the short gap
+   * between heartbeats; commands still require `fresh`. */
+  leaseHeld?: boolean
 }
 type CapturedControl = { state: OperationState; until: number }
 type Pending = {
@@ -72,7 +82,9 @@ export class OperationClient {
     controlPending: null,
     controlSending: false,
     controlResult: null,
-    controlError: null
+    controlError: null,
+    retainedState: null,
+    leaseHeld: false
   }
   private pending: Pending | null = null
   private pendingStop: Pending | null = null
@@ -83,6 +95,7 @@ export class OperationClient {
   private heartbeatLeaseId: string | null = null
   private timer: ReturnType<typeof setInterval> | undefined
   private stateUntil = 0
+  private leaseUntil = 0
   private controlRefreshUntil = 0
   private polledAt = 0
   private finished: OperationOutcome | null = null
@@ -136,7 +149,9 @@ export class OperationClient {
       stopSending: !!this.pendingStop,
       stopAvailable: this.operationVersion >= 4 && !!this.stopTarget && (value.connected ?? this.view.connected),
       ...((value.error || value.connected === false || value.state) ? { controlRefreshing: false } : {}),
-      ...(value.unresolved === null ? { pendingDraft: null } : {})
+      ...(value.unresolved === null ? { pendingDraft: null } : {}),
+      ...(value.state ? { retainedState: value.state } : {}),
+      leaseHeld: this.now() < this.leaseUntil
     }
     for (const f of this.listeners) f()
   }
@@ -167,13 +182,15 @@ export class OperationClient {
       )
     }
     this.stateUntil = 0
-    this.update({ state: null, fresh: false, connected: false, busy: false, submitting: false })
+    this.leaseUntil = 0
+    this.update({ state: null, retainedState: null, fresh: false, connected: false, busy: false, submitting: false })
   }
   private tick() {
     const now = this.now(),
       fresh = !!this.view.state && now < this.stateUntil
     if (this.view.controlRefreshing && now >= this.controlRefreshUntil) this.update({ controlRefreshing: false })
     if (fresh !== this.view.fresh) this.update({ fresh })
+    if ((now < this.leaseUntil) !== this.view.leaseHeld) this.update({})
     if ((this.view.connected && this.requestCount() < OPERATION_RATE_LIMIT) !== this.view.requestReady) this.update({})
     if (
       !this.view.connected ||
@@ -237,12 +254,14 @@ export class OperationClient {
           if (this.pending !== p) return
           this.pending = null
           this.heartbeatLeaseId = null
+          this.leaseUntil = 0
           this.finishBudget(request.requestId)
           const mutation = request.type === 'logManual' || request.type === 'stationControl'
           this.update({
             busy: false,
             submitting: false,
             state: null,
+            retainedState: null,
             fresh: false,
             error: mutation ? 'operationUnknown' : 'stationUnavailable',
             ...(request.type === 'logManual' ? { unresolved: request.requestId } : {})
@@ -272,11 +291,13 @@ export class OperationClient {
         clearTimeout(p.timer)
         this.pending = null
         this.heartbeatLeaseId = null
+        this.leaseUntil = 0
         this.finishBudget(request.requestId)
         this.update({
           busy: false,
           submitting: false,
           state: null,
+          retainedState: null,
           fresh: false,
           error: 'stationUnavailable',
           ...(request.type === 'logManual' ? { unresolved: null } : {})
@@ -354,6 +375,7 @@ export class OperationClient {
     this.finishBudget(p.request.requestId)
     if ('error' in r) {
       this.heartbeatLeaseId = null
+      this.leaseUntil = 0
       const unknown = p.request.type === 'logManual' && r.error === 'operationUnknown'
       if (p.request.type === 'stationControl' && r.error !== 'operationUnknown') {
         try { this.controlStorage?.write(null); this.update({ controlPending: null }) } catch {}
@@ -362,6 +384,7 @@ export class OperationClient {
         busy: false,
         submitting: false,
         state: null,
+        retainedState: null,
         fresh: false,
         error: r.error,
         ...(p.request.type === 'logManual'
@@ -377,6 +400,7 @@ export class OperationClient {
       this.stopTarget = this.operationVersion >= 4 && r.value.phase === 'controlling' && r.value.leaseId && r.value.transmitEpoch
         ? { stationBootId: r.value.stationBootId, leaseId: r.value.leaseId, transmitEpoch: r.value.transmitEpoch } : null
       this.stateUntil = p.started + Math.min(1200, r.value.leaseRemainingMs ?? 1200)
+      this.leaseUntil = r.value.phase === 'controlling' && r.value.leaseRemainingMs != null ? p.started + r.value.leaseRemainingMs : 0
       this.update({
         supported: true,
         busy: false,
@@ -434,7 +458,8 @@ export class OperationClient {
   async release() {
     const leaseId = this.heartbeatLeaseId
     this.heartbeatLeaseId = null
-    this.update({ state: null, fresh: false })
+    this.leaseUntil = 0
+    this.update({ state: null, retainedState: null, fresh: false })
     if (!leaseId) return
     try {
       await this.request({ type: 'release', requestId: crypto.randomUUID(), leaseId })

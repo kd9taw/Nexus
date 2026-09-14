@@ -138,13 +138,30 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
     const button=name=>`[...document.querySelectorAll('button')].find(e=>e.textContent===${JSON.stringify(name)})`
     // A logManual or stationControl reply clears the client's station state in the same update
     // that shows its outcome (operation-client.ts receive(): state:null beside controlResult or
-    // resolved), and only the next heartbeat reply restores it. Until then the Release/Take button
-    // is unmounted and the sticky session banner has a different height, so every control below
-    // it moves when that reply lands. Traced under contention: banner 116.6 px (pending) -> 61.6
-    // ("Updating station controls", outcome shown) -> 84.6 (state re-read, Release back), nav +23 px;
-    // the next tab click was measured at 61.6, dispatched 12 ms after the re-read, and landed in
-    // the rail's gap. The outcome text is the first half of the round trip; wait for both halves.
-    const stationStateRead=`!!document.querySelector('.remote-logging-authority > button')`
+    // resolved), and only the next heartbeat reply restores it. Until then every station control is
+    // disabled. That round trip also used to move the page: Release unmounted and the sticky banner
+    // changed height (traced 116.6 -> 61.6 -> 84.6 px, nav +23 px; a tab click measured before the
+    // re-read landed in the rail's gap). The banner now keeps its shape and draws the retained state,
+    // and the layout probe below asserts it stays still. The wait remains for the controls to be
+    // enabled again: `data-station-state` is 'current' only once the client holds a re-read state.
+    // The outcome text is the first half of the round trip; wait for both halves.
+    const stationStateRead=`document.querySelector('.remote-logging-authority')?.dataset.stationState==='current'`
+    // Stale readings are retired in place (faded, unclickable), never blanked: a blanked workspace
+    // was the black flash. Opacity is not inherited, so multiply it up the ancestor chain.
+    const retiredReadings=selector=>`(()=>{const e=document.querySelector(${JSON.stringify(selector)});let opacity=1;for(let p=e;p;p=p.parentElement)opacity*=Number(getComputedStyle(p).opacity);return {opacity,pointer:getComputedStyle(e).pointerEvents,visibility:getComputedStyle(e).visibility}})()`
+    const isRetired=r=>r.visibility==='visible'&&r.pointer==='none'&&r.opacity<=.5
+    // Layout probe for the 2026-09-13 flicker report. Samples, on every animation frame, the session
+    // banner's height and the layout offsets (offsetTop) of the TopBar and shell below it; records
+    // every element inserted into or removed from the banner and every removal of a tuning digit
+    // anywhere; and notes the authority label texts, the stale flag and frames where the shell was
+    // blanked. offsetTop, not a viewport rect: click() scrolls its target into view, and a scroll
+    // moved the TopBar's rect 114 px with the banner perfectly still (a false shift).
+    const layoutProbeStart=`(()=>{const s=document.querySelector('.remote-application-status'),p={samples:[],removed:[],added:[],digitRemovals:0,labels:new Set(),stale:new Set(),stop:false};const doc=e=>e?e.offsetTop:null;p.mo=new MutationObserver(rs=>{for(const r of rs){const inBanner=s.contains(r.target);for(const n of r.removedNodes)if(n.nodeType===1){if(inBanner)p.removed.push(n.outerHTML.slice(0,90));if(n.matches('.readout-digit')||n.querySelector('.readout-digit'))p.digitRemovals++}for(const n of r.addedNodes)if(n.nodeType===1&&inBanner)p.added.push(n.outerHTML.slice(0,90))}});p.mo.observe(document.body,{childList:true,subtree:true});const frame=()=>{if(p.stop)return;const shell=document.querySelector('.shell'),app=document.querySelector('.app');p.samples.push({banner:s.getBoundingClientRect().height,topbar:doc(document.querySelector('.topbar')),shell:doc(shell),hidden:!!shell&&getComputedStyle(shell).visibility==='hidden'});p.labels.add(document.querySelector('.remote-logging-authority [role=status]')?.textContent??'');p.stale.add(app?.dataset.remoteStale??'');requestAnimationFrame(frame)};frame();window.__layoutProbe=p;return true})()`
+    const assertStill=(probe,what)=>{
+      assert.ok(probe.frames>0,`${what}: the layout probe recorded no frames`)
+      assert.ok(probe.bannerRange<=1&&probe.topbarRange<=1&&probe.bannerRemoved===0&&probe.bannerAdded===0,`${what}: the session banner must not move the page: ${JSON.stringify(probe)}`)
+    }
+    const layoutProbeRead=`(()=>{const p=window.__layoutProbe;p.stop=true;p.mo.disconnect();const range=k=>{const v=p.samples.map(s=>s[k]).filter(x=>x!==null);return v.length?Math.max(...v)-Math.min(...v):0};return {frames:p.samples.length,bannerRange:range('banner'),topbarRange:range('topbar'),shellRange:range('shell'),bannerHeights:[...new Set(p.samples.map(s=>Math.round(s.banner*10)/10))],bannerRemoved:p.removed.length,bannerAdded:p.added.length,removedSample:p.removed.slice(0,6),digitRemovals:p.digitRemovals,labels:[...p.labels],stale:[...p.stale],hiddenFrames:p.samples.filter(s=>s.hidden).length}})()`
     async function click(expression, clickCount = 1) {
       let point
       try {
@@ -280,7 +297,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       heardCount:2, presence:'heard', worked:true, workedBand:false, country:'United States', tier:'FT8', freqHz:1500 }]
     // This actor supplies synthetic native outcomes to the compiled UI. The
     // separate real-native/workerd test proves the ADIF append and durability.
-    let loggingLeaseUntil=0
+    let loggingLeaseUntil=0, heartbeatReplyDelayMs=0
     let loggingAllowed=false,loggingLease=null,loggingRevision=1,loggingSequence=0,loseLogReply=false
     let qsoPrompt=true
     const qsoRecord={call:'W1AW',grid:'FN31',country:null,state:null,band:'20m',freqMhz:14.0755,mode:'FT8',rstSent:'-10',rstRcvd:'-12',name:null,qth:null,comment:null,notes:null,whenUnix:1700000000,confirmed:false,awardConfirmed:false}
@@ -537,6 +554,8 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
           if(loseSpotReply&&a.action==='radio.workSpot')continue
         }else if(r.type==='result'){value=loggingReceipts.get(r.operationId);if(!value)error='resultExpired';else if(loseSpotReply&&value.operation==='stationControl'){value={operation:'stationControl',operationId:r.operationId,outcome:'unknown',reason:'hardwareUnconfirmed'};unknownResults++}}
         else value={stationBootId:loggingBoot,allowed:loggingAllowed||stationControls,phase:loggingLease?'controlling':loggingAllowed||stationControls?'available':'localPermissionRequired',leaseId:loggingLease,revision:loggingRevision,commandWindowId:loggingLease?loggingWindow:null,nextSequence:loggingLease?loggingSequence+1:null,leaseRemainingMs:loggingLease?Math.max(0,Math.floor(loggingLeaseUntil-performance.now())):null,actions:loggingAllowed?['log.manual']:[],txArmed:!!ftOperating&&!!loggingLease&&transmitAllowed&&applicationData.get_snapshot.radio.txEnabled,...(ftOperating?{transmitEpoch:transmitAllowed?transmitEpoch:null}:{}),...(stationControls?{controls:{context:controlContext(),capabilities:request.operationVersion>=3?['decoder','amplifier','frequency','mode','tier','ampFollowBand','workspace','decoderSettings','receiverSettings','receiverGain','bandSelection','receiverFilter','receiverDsp','phoneMode','fmTuning','fmReceiver','radioLevels',...(transmitAllowed?['ftOperate','ftCall','ftExchange','ftMessages','ftSettings','ftRuntime']:[]),...(ftOperating&&loggingAllowed?['qsoLogging']:[]),...(workSpot?['workSpot']:[]),...(radioSelection?['radioSelection']:[])]:['decoder','amplifier']}}:{})}
+        // A slow link answers heartbeats late; the station's own reply content is unchanged.
+        if(r.type==='heartbeat'&&heartbeatReplyDelayMs)await sleep(heartbeatReplyDelayMs)
         source.send({type:'operationResponse',sessionId:request.sessionId,requestId:r.requestId,...(error?{error}:{value})});continue
       }
       if (request.type === 'applicationQuery') {
@@ -1328,6 +1347,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       await until(`document.querySelector('.${quickMode}-cockpit .remote-log-entry')?.textContent.includes('QSO saved to the station log file')&&${stationStateRead}`)
       assert.equal(loggedRequests.length,1);assert.equal(await evaluate(`document.querySelector('${call}').value`),'')
       await click(`document.querySelector('${call}')`);await browser.call('Input.insertText',{text:'N3QSO'},session)
+      await evaluate(layoutProbeStart)
       applicationAvailable=false
       // The recovery below asserts the lease did NOT survive the loss, and only the station's own
       // 5 s TTL can expire it. Nothing here makes the outage outlast that: CI recovered in 2.6 s
@@ -1337,7 +1357,10 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       loggingLeaseUntil=0
       await until(`document.querySelector('.app').dataset.remoteStale==='true'`)
       assert.equal(await evaluate(`document.querySelector('${call}')===window.__quickNodes.call&&document.querySelector('${call}').value==='N3QSO'&&document.querySelector('.${quickMode}-cockpit .le-log-btn').disabled&&document.querySelector('.${quickMode}-cockpit .amp-op').disabled`),true)
-      assert.equal(await evaluate(`getComputedStyle(document.querySelector('.shell')).visibility`),'hidden','stale station readings remain hidden while passive navigation stays available')
+      {const retired=await evaluate(retiredReadings('.shell'));assert.ok(isRetired(retired),'stale station readings are retired in place while passive navigation stays available: '+JSON.stringify(retired))}
+      await settledLayout()
+      // The outage also expires the lease here, so Release legitimately becomes Take: count blanked frames only.
+      {const probe=await evaluate(layoutProbeRead);console.log('LAYOUT_PROBE stale-entry',JSON.stringify(probe));assert.equal(probe.hiddenFrames,0,'station data loss never blanks the workspace: '+JSON.stringify(probe))}
       await chooseView(quickMode==='cw'?'Phone':'CW',quickMode==='cw'?'phone':'cw')
       await chooseView(quickMode==='cw'?'CW':'Phone',quickMode)
       assert.equal(await evaluate(`document.querySelector('${call}').value`),'N3QSO')
@@ -1575,13 +1598,23 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       await until(`document.querySelector('.remote-logging-authority')?.textContent.includes('Station control active')`)
       await browser.call('Emulation.setDeviceMetricsOverride',{width:1280,height:800,deviceScaleFactor:1,mobile:false},session)
       await evaluate(`document.documentElement.style.setProperty('--ui-zoom','1');window.dispatchEvent(new Event('resize'))`)
+      // Idle under a slow link: heartbeat replies 400 ms late, so the 1.2 s command window lapses
+      // between replies while the 5 s lease does not.
+      await settledLayout();heartbeatReplyDelayMs=400
+      await evaluate(layoutProbeStart);await sleep(6000)
+      {const probe=await evaluate(layoutProbeRead);console.log('LAYOUT_PROBE idle-slow-heartbeat',JSON.stringify(probe))
+        assertStill(probe,'slow heartbeat');assert.equal(probe.digitRemovals,0,'tuning digits stay drawn between heartbeats')
+        assert.ok(!probe.labels.includes('Logging control status unavailable'),'a held lease keeps the authority label steady: '+JSON.stringify(probe.labels))}
+      heartbeatReplyDelayMs=0
       const gesture=async(selector,expected)=>{
         await until(`!!document.querySelector(${JSON.stringify(selector)})&&!document.querySelector(${JSON.stringify(selector)}).disabled`)
-        const before=stationRequests.length;await freshLoggingWindow();await click(`document.querySelector(${JSON.stringify(selector)})`)
+        const before=stationRequests.length;await freshLoggingWindow();await evaluate(layoutProbeStart);await click(`document.querySelector(${JSON.stringify(selector)})`)
         for(let i=0;i<100&&stationRequests.length===before;i++)await sleep(100)
         assert.equal(stationRequests.length,before+1,`one gesture must send one ${expected} action`)
         assert.equal(stationRequests.at(-1).action.action,expected)
         await until(`document.querySelector('.remote-control-result')?.textContent.includes('${['amplifier.followBand','decoder.js8Speed','decoder.msk144Period','decoder.depth','receiver.rxOffset','receiver.rxGain'].includes(expected)?'saved':'confirmed'}')&&${stationStateRead}`)
+        await settledLayout()
+        {const probe=await evaluate(layoutProbeRead);console.log('LAYOUT_PROBE command',expected,JSON.stringify(probe));assertStill(probe,expected)}
       }
       for(const [tab,root,selector,receiver] of [
         ['RTTY','.rtty-cockpit','.cw-decode-head .rtty-arm','rtty'],
@@ -1820,11 +1853,10 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
             for(const target of targets)for(const [width,height,zoom]of [[390,844,1],[1280,800,1],[390,844,1.75],[1280,800,1.75]])for(const theme of ['dark','light']){
               await browser.call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false},session)
               await evaluate(`document.documentElement.style.setProperty('--ui-zoom','${zoom}');document.documentElement.dataset.theme='${theme}';window.dispatchEvent(new Event('resize'))`);await settledLayout()
-              // Digit hit regions exist only while frequency control is fresh (FrequencyReadout digitTune
-              // <- useRemoteWheelTuning().allowed <- a fresh station state), and a heartbeat reply later than
-              // that 1.2 s window unmounts them until the next reply. Across the three CDP round trips this
-              // took (presence, scroll, measure) such a gap could remove the node after its presence was
-              // proven. Measure a node that is mounted when measured; the predicate is unchanged.
+              // Digit spans now stay drawn through a late heartbeat; only tuning waits for fresh control
+              // (`.readout-val[data-digit-tune="on"]`, asserted before each gesture below). The other
+              // targets can still remount across the three CDP round trips this takes (presence, scroll,
+              // measure), so measure a node that is mounted when measured; the predicate is unchanged.
               const shape=await evaluate(mountedMeasure(target,`e=>{const r=e.getBoundingClientRect(),hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);return{rect:r.toJSON(),hit:hit?.outerHTML.slice(0,250),good:r.width>0&&r.height>0&&e.contains(hit)&&document.documentElement.scrollWidth<=innerWidth+1&&document.documentElement.scrollHeight<=innerHeight+1}}`))
               assert.ok(shape,`Tuning target must mount: ${mode} ${target} ${width} ${zoom} ${theme}`)
               if(!shape.good&&artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'wheel-layout-failure.png'),Buffer.from(shot.data,'base64'));await writeFile(join(artifacts,'wheel-layout-failure.json'),JSON.stringify({mode,target,width,height,zoom,theme,shape},null,2))}
@@ -1846,7 +1878,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
                 if(Number.isFinite(current.snapshotAge)&&current.snapshotAge<600)ready=current
               }
               assert.ok(ready,'positive tuning needs a fresh displayed radio sample')
-              assert.equal(await evaluate(`(()=>{const e=document.querySelector('${target}'),r=e?.getBoundingClientRect();return !!e&&!e.disabled&&!!r&&r.width>0&&r.height>0&&e.contains(document.elementFromPoint(r.left+r.width/2,r.top+r.height/2))})()`),true,'the actual tuning gesture must hit its visible control')
+              assert.equal(await evaluate(`(()=>{const e=document.querySelector('${target}'),r=e?.getBoundingClientRect();return !!e&&!e.disabled&&(!e.classList.contains('readout-digit')||e.closest('.readout-val')?.dataset.digitTune==='on')&&!!r&&r.width>0&&r.height>0&&e.contains(document.elementFromPoint(r.left+r.width/2,r.top+r.height/2))})()`),true,'the actual tuning gesture must hit its visible, currently tunable control')
               if(kind==='keyboard'){
                 await evaluate(`document.querySelector('${root} .readout[role="button"]').focus()`)
                 await browser.call('Input.dispatchKeyEvent',{type:'keyDown',key:'ArrowUp',code:'ArrowUp',windowsVirtualKeyCode:38},session)
@@ -2938,7 +2970,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
     await until(`document.querySelector('.bubble-text')?.textContent==='BAND MESSAGE'`)
     applicationAvailable=false
     await until(`document.querySelector('.app')?.dataset.remoteStale==='true'`)
-    assert.equal(await evaluate(`getComputedStyle(document.querySelector('.message-scroll')).visibility`),'hidden')
+    {const retired=await evaluate(retiredReadings('.message-scroll'));assert.ok(isRetired(retired),'stale Tempo messages are retired in place: '+JSON.stringify(retired))}
     applicationAvailable=true;applicationRevision++
     station.close();station=await pair.native.open(pair.stationId,undefined,101,stationHeaders)
     await until(`document.querySelector('.app')?.dataset.remoteStale!=='true' && document.querySelector('.bubble-text')?.textContent==='BAND MESSAGE'`)
@@ -2965,7 +2997,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
     else if (applicationVersion < 6) await click(button('FT'))
     applicationAvailable=false
     await until(`document.querySelector('.app')?.dataset.remoteStale==='true'`)
-    assert.equal(await evaluate(`getComputedStyle(document.querySelector('.operate-host')).visibility`),'hidden','stale operating values must be hidden')
+    {const retired=await evaluate(retiredReadings('.operate-host'));assert.ok(isRetired(retired),'stale operating values must be retired in place: '+JSON.stringify(retired))}
     if (applicationVersion === 6) assert.equal(await evaluate(`!!document.querySelector('.stats-summary')`), false, 'lost station data removes the summary')
     if (applicationVersion === 8) assert.equal(await evaluate(`!!document.querySelector('.remote-memory-bank:not([hidden])')`),false,'lost station data removes saved memories')
     if (applicationVersion === 7) assert.equal(await evaluate(`!!document.querySelector('.dxped-view')`), false, 'lost station data removes the DX board')
