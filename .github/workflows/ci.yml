@@ -417,11 +417,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      # libssl-dev: propagation's `live` feature links OpenSSL on Linux for the HRDLog.net
+      # transport (native-tls), and openssl-sys's build script needs the headers + pkg-config file.
       - name: Install libtempo build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            gfortran libfftw3-dev libboost-dev cmake ninja-build pkg-config
+            gfortran libfftw3-dev libboost-dev cmake ninja-build pkg-config libssl-dev
 
       - name: Set up Rust 1.91 toolchain
         uses: dtolnay/rust-toolchain@1.91.0
@@ -516,6 +518,20 @@ jobs:
               sys.exit(1)
           print("lockfiles agree on all alignable shared dependencies")
           PY
+
+      # reqwest must stay rustls-only in BOTH lockfiles. HRDLog.net's upload is the one
+      # connection that needs the operating system's TLS stack, and it gets it through the
+      # native-tls crate DIRECTLY (crates/propagation/src/live/hrdlog.rs), locked to one host.
+      # reqwest's own native-tls feature would instead move every reqwest client in the app
+      # onto that stack, silently, because cargo unifies features. The script header has the
+      # measurement. cargo tree needs a toolchain, which cargo-deny's container does not give.
+      - name: Set up Rust 1.93.1 toolchain (pinned — for cargo tree in the next step)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.93.1
+
+      - name: reqwest has no native-tls backend (workspace + src-tauri lockfiles)
+        run: bash scripts/check-reqwest-rustls-only.sh
 
   # Job 5 — Windows cross-compile. The desktop shell (src-tauri) is outside the
   # workspace and needs a WebView/MinGW toolchain the Linux test job lacks, so
@@ -755,6 +771,11 @@ jobs:
           arch=$(dpkg-deb -f "$deb" Architecture)
           echo "package: $(dpkg-deb -f "$deb" Package) / $ver / $arch"
           [ "$arch" = "arm64" ] || { echo "expected arm64, got $arch"; exit 1; }
+          # HRDLog.net uploads link OpenSSL 3 (native-tls), a load-time dependency of the whole
+          # binary, so the package must declare it. `libssl3` is a real package on Bookworm and a
+          # Provides of libssl3t64 on Trixie, so the one name resolves on both bases.
+          dpkg-deb -f "$deb" Depends | grep -qw libssl3 \
+            || { echo "Depends lacks libssl3: $(dpkg-deb -f "$deb" Depends)"; exit 1; }
           # Prove the payload is really ARM — an x86 binary with an arm64 filename
           # installs cleanly and then fails to exec on the Pi.
           dpkg-deb -x "$deb" /tmp/debcheck
