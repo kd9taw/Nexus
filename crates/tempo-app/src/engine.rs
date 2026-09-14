@@ -6824,6 +6824,8 @@ impl Engine {
         // `rig_mode_effective`, so it can never drag FM down to HF.
         if mode.eq_ignore_ascii_case("fm") {
             self.fm_channel = true;
+            // The station's own hold, whatever channel a browser marked before.
+            self.remote_fm_hold = None;
         }
     }
 
@@ -14199,6 +14201,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // machine's channel, and the dial it displaces is the operator's and banks here.
         self.machinery_tune(output_mhz, band, "FM");
         self.fm_channel = true;
+        // A channel this verb sets is the station's own, even on the identical machine a browser
+        // tuned earlier; only a committed remote repeater tune re-marks it (see `remote_fm_hold`).
+        self.remote_fm_hold = None;
         self.immediate_retune = true;
         Ok(())
     }

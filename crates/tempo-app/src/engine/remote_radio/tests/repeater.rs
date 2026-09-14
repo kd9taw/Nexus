@@ -291,3 +291,71 @@ fn a_hold_the_browser_set_does_not_strand_it_but_a_local_hold_still_refuses() {
     ));
     assert!(local.engine.take_remote_radio().is_none());
 }
+
+#[test]
+fn a_local_tune_to_the_same_channel_takes_the_hold_back_from_the_browser() {
+    // The browser's mark matches on dial and FM configuration, so a desktop tune that lands on
+    // the IDENTICAL channel would still match it unless the local verb retires the mark.
+    for local_verb in ["repeater", "sstv"] {
+        let mut s = station(OperatingMode::Phone, 145.5, "2m");
+        let (output, hz, shift, offset, tone) = if local_verb == "repeater" {
+            (146.94, 146_940_000, "minus", 600_000, 100.0)
+        } else {
+            (145.8, 145_800_000, "simplex", 0, 0.0)
+        };
+        queue(&mut s, output, shift, offset, tone).unwrap();
+        let request = s.engine.take_remote_radio().unwrap();
+        request.permission().begin_write(Instant::now()).unwrap();
+        s.sample(hz, "FM");
+        let power = request.power_limit();
+        // The worker reports back the configuration the transaction wrote.
+        let written = request
+            .repeater()
+            .map(|(shift, offset, tone)| (shift.to_owned(), offset, tone))
+            .unwrap();
+        assert!(request.commit_tuning_readback(
+            &mut s.engine,
+            power,
+            Some((written.0.as_str(), written.1, written.2))
+        ));
+        let connection = link(&s);
+        // Positive control: the browser's own hold admits its retune.
+        s.engine
+            .queue_remote_frequency(
+                146.52,
+                "2m",
+                "FM",
+                connection,
+                s.authority.permit(unexpired_deadline()).unwrap(),
+            )
+            .unwrap();
+        s.engine.take_remote_radio().unwrap();
+
+        if local_verb == "repeater" {
+            s.engine.repeater_tune(output, shift, offset, tone).unwrap();
+        } else {
+            s.engine.sstv_tune(output, "2m", "FM");
+        }
+        // The desktop's own Phone entry arms the latch (local manual-mode arming). Lower it here so
+        // the hold is the ONLY thing left that could refuse the browser: an armed latch refuses
+        // every remote retune on its own and would make this assertion pass for the wrong reason.
+        s.engine.set_tx_enabled(false);
+        s.engine.take_immediate_retune();
+        s.sample(hz, "FM");
+        let connection = link(&s);
+        assert!(
+            matches!(
+                s.engine.queue_remote_frequency(
+                    146.52,
+                    "2m",
+                    "FM",
+                    connection,
+                    s.authority.permit(unexpired_deadline()).unwrap()
+                ),
+                Err(Reason::StationBusy)
+            ),
+            "a {local_verb} tune at the station owns the hold again"
+        );
+        assert!(s.engine.take_remote_radio().is_none());
+    }
+}
