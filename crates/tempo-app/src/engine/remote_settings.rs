@@ -125,7 +125,11 @@ impl Engine {
                 if self.tier() != tier || self.rx_offset_hz() != expected {
                     return Err(Reason::ContextChanged);
                 }
-                next.rx_offset_hz = hz;
+                // Save exactly what `set_rx_offset` will apply below (#101): on WSPR the marker
+                // is clamped to the 200 Hz sub-band, and a raw write here would persist a
+                // preference the native engine never holds.
+                let (lo, hi) = Self::tx_offset_bounds(tier);
+                next.rx_offset_hz = hz.clamp(lo, hi);
             }
             DecoderSetting::Js8Speed { expected, speed } => {
                 if modes::Js8Speed::from_index(expected).is_none()
