@@ -39,6 +39,20 @@ async function refusalCode(response: Response): Promise<string> {
     return typeof body?.error === 'string' && body.error ? body.error : 'remoteUnavailable'
   } catch { return 'remoteUnavailable' }
 }
+/** Why the account service turned away the sign-in this page was just redirected back from.
+ *  `emailUnverified` is a sign-up that worked but whose address is not confirmed yet - the page
+ *  shows "confirm your email to finish" rather than a refusal. `signInRefused` is any other deny. */
+export type SignInRefusal = 'emailUnverified' | 'signInRefused'
+// The post-login Action is the tenant's only deny, and it denies an unconfirmed address. Auth0
+// passes its reason through as `error_description`, which is not guaranteed to arrive - and
+// spa-js repeats the error code when it is missing - so no usable description means that case.
+// `email_unverified` is the stable token the Action can deny with, so rewording its text cannot
+// change what the page shows. A description that is plainly about something else stays a refusal.
+function refusalKind(description: unknown): SignInRefusal {
+  const text = typeof description === 'string' ? description.trim() : ''
+  if (!text || text === 'access_denied' || text === 'email_unverified') return 'emailUnverified'
+  return /verif/i.test(text) && /e-?mail/i.test(text) ? 'emailUnverified' : 'signInRefused'
+}
 async function boundedJson<T>(path: string, options: RequestInit): Promise<T> {
   const controller = new AbortController()
   const cancel = () => controller.abort()
@@ -54,7 +68,8 @@ async function boundedJson<T>(path: string, options: RequestInit): Promise<T> {
   finally { clearTimeout(timer); options.signal?.removeEventListener('abort', cancel) }
 }
 export class BrowserClient {
-  constructor(private readonly auth: Auth0Client, readonly applicationVersion = 1, readonly operationVersion = 0) {}
+  constructor(private readonly auth: Auth0Client, readonly applicationVersion = 1, readonly operationVersion = 0,
+    readonly signInRefusal: SignInRefusal | null = null) {}
   static async load(): Promise<BrowserClient | null> {
     const config = await boundedJson<{ issuer: string; audience: string; clientId: string; ready: boolean; applicationVersion?: number; operationVersion?: number; operationMaxVersion?: number; operationFtVersion?: number }>(
       '/api/remote/config', { cache: 'no-store', credentials: 'omit' })
@@ -65,22 +80,23 @@ export class BrowserClient {
       cacheLocation: 'memory', useRefreshTokens: false, httpTimeoutInSeconds: 10,
       authorizationParams: { audience: config.audience, redirect_uri: window.location.origin, scope: 'openid profile email' } })
     const query = new URLSearchParams(window.location.search)
+    let signInRefusal: SignInRefusal | null = null
     if (query.has('code') || query.has('error')) {
-      // `access_denied` is the account service refusing the sign-in itself - today that is the
-      // login Action turning away an address nobody has confirmed. Named here, because unnamed it
-      // reached the page as "check the connection", which sent a new ham looking for a network
-      // fault instead of their inbox. Matched on the protocol's error code, never on the Action's
-      // wording, so rewording the Action cannot silently undo this.
+      // `access_denied` is the account service refusing the sign-in itself. It is RETURNED with a
+      // working client, never thrown: a throw left the page with no client, so the sign-in buttons
+      // vanished and a new ham was stranded behind "Try again". Auth0 keeps its session through a
+      // deny, so the page needs that client to sign in again or sign out of the refused account.
       try { await auth.handleRedirectCallback() }
       catch (cause) {
-        if ((cause as { error?: unknown })?.error === 'access_denied') throw new RemoteError(401, 'signInRefused')
-        throw cause
+        const failure = cause as { error?: unknown; error_description?: unknown } | null
+        if (failure?.error !== 'access_denied') throw cause
+        signInRefusal = refusalKind(failure.error_description)
       }
       finally { window.history.replaceState({}, '', '/') }
     } else {
       try { await auth.checkSession() } catch { /* interactive login stays available */ }
     }
-    return new BrowserClient(auth, APPLICATION_VERSIONS.find(version=>version===config.applicationVersion)??1, advertisedOperationVersion(config.operationVersion, config.operationMaxVersion, config.operationFtVersion))
+    return new BrowserClient(auth, APPLICATION_VERSIONS.find(version=>version===config.applicationVersion)??1, advertisedOperationVersion(config.operationVersion, config.operationMaxVersion, config.operationFtVersion), signInRefusal)
   }
   authenticated(): Promise<boolean> { return this.auth.isAuthenticated() }
   // `createAccount` sends Auth0 straight to its sign-up screen. Without it a first-time operator

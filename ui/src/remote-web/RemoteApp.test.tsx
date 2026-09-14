@@ -14,9 +14,9 @@ function account(entitled = true): AccountSession {
       state: entitled ? 'active' : 'none', startedAt: entitled ? now : null,
       source: entitled ? 'trial' : null } }
 }
-function client(value: AccountSession | null) {
+function client(value: AccountSession | null, signInRefusal: BrowserClient['signInRefusal'] = null) {
   const post = vi.fn(async (_path: string, _body?: object): Promise<unknown> => value)
-  const service = { post, authenticated: async () => !!value, signIn: vi.fn(async () => {}), signOut: vi.fn(async () => {}) }
+  const service = { post, authenticated: async () => !!value, signIn: vi.fn(async (_createAccount?: boolean) => {}), signOut: vi.fn(async () => {}), signInRefusal }
   vi.spyOn(BrowserClient, 'load').mockResolvedValue(service as unknown as BrowserClient)
   return service
 }
@@ -31,18 +31,55 @@ it('offers a working retry after configuration failure instead of a sign-in butt
   expect(document.querySelectorAll('main.rm-scroll')).toHaveLength(1)
   expect(document.querySelectorAll('.remote-monitor-app')).toHaveLength(1)
 })
-// A fresh password sign-up is turned away until its address is confirmed. The page used to show
-// its generic "check the connection" wall for that, so a new ham went looking for a network fault
-// instead of opening the email that was already waiting for them.
-it('tells a new account to confirm its email when the sign-in is refused, and keeps the way back in', async () => {
-  const service = client(null)
-  vi.mocked(BrowserClient.load).mockRejectedValueOnce(new RemoteError(401, 'signInRefused'))
+// A fresh password sign-up is turned away until its address is confirmed. That is a sign-up that
+// worked, and it used to be shown as a refusal with a lone "Try again" and no way to sign in or
+// switch accounts - and signing in again bounced straight back, because Auth0 keeps its session.
+it('shows "confirm your email to finish" after an unconfirmed-email deny, with continue and switch-account', async () => {
+  const service = client(null, 'emailUnverified')
+  render(<RemoteApp />)
+  expect(await screen.findByRole('heading', { name: 'Confirm your email to finish' })).toBeTruthy()
+  expect(screen.getByText(/confirmation link to the email address you signed up with/i)).toBeTruthy()
+  expect(screen.getByText(/spam or junk folder/i)).toBeTruthy()
+  // Not a refusal, and not the connection wall.
+  expect(screen.queryByRole('alert')).toBeNull()
+  expect(screen.queryByText(/refused|check the connection/i)).toBeNull()
+  expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull()
+  const continueButton = screen.getByRole('button', { name: 'I’ve confirmed my email — continue' })
+  const switchButton = screen.getByRole('button', { name: 'Use a different account' })
+  // Control: nothing happens until the operator presses something.
+  expect(service.signIn).not.toHaveBeenCalled()
+  expect(service.signOut).not.toHaveBeenCalled()
+
+  fireEvent.click(continueButton)
+  // A plain login: the live Auth0 session completes it. Never the sign-up screen, and never a sign-out.
+  await waitFor(() => expect(service.signIn).toHaveBeenCalledTimes(1))
+  expect(service.signIn).toHaveBeenCalledWith()
+  expect(service.signOut).not.toHaveBeenCalled()
+
+  fireEvent.click(switchButton)
+  await waitFor(() => expect(service.signOut).toHaveBeenCalledTimes(1))
+  expect(service.signIn).toHaveBeenCalledTimes(1)
+})
+// Control for the state above: an ordinary signed-out visit must not be told to confirm anything.
+it('does not show the confirm-email state to a visitor who was not refused', async () => {
+  client(null)
+  render(<RemoteApp />)
+  await screen.findByRole('button', { name: 'Create an account' })
+  expect(screen.queryByRole('heading', { name: 'Confirm your email to finish' })).toBeNull()
+  expect(screen.queryByRole('button', { name: 'Use a different account' })).toBeNull()
+})
+// Any other deny keeps the refusal sentence, but no longer strands the operator: sign-in stays
+// available, and so does leaving the Auth0 session that keeps being refused.
+it('keeps other refusals as a refusal, with sign-in and a way to switch accounts', async () => {
+  const service = client(null, 'signInRefused')
   render(<RemoteApp />)
   const alert = await screen.findByRole('alert')
-  expect(alert.textContent).toMatch(/confirm your email/i)
+  expect(alert.textContent).toMatch(/sign-in was refused/i)
   expect(alert.textContent).not.toMatch(/check the connection/i)
-  fireEvent.click(await screen.findByRole('button', { name: 'Try again' }))
-  fireEvent.click(await screen.findByRole('button', { name: 'Sign in or create an account' }))
+  expect(screen.queryByRole('heading', { name: 'Confirm your email to finish' })).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: 'Use a different account' }))
+  await waitFor(() => expect(service.signOut).toHaveBeenCalledTimes(1))
+  fireEvent.click(screen.getByRole('button', { name: 'Sign in or create an account' }))
   await waitFor(() => expect(service.signIn).toHaveBeenCalledTimes(1))
 })
 // After signing up, Auth0 shows its own "verified" page and never sends the operator back here, so
@@ -148,6 +185,50 @@ it('asks before attaching a claimed station, and says where a code must have com
   expect(service.post).not.toHaveBeenCalledWith('pair/confirm', expect.anything())
   fireEvent.click(screen.getByRole('button', { name: /attach this station/i }))
   await waitFor(() => expect(service.post).toHaveBeenCalledWith('pair/confirm', { id }))
+})
+// Someone who signed up once with a password and once with Google holds two Remote accounts on one
+// mailbox, and the second is refused `trialActiveElsewhere`. "Attach this station" used to swallow
+// every refusal (no message at all), and the unmapped codes read as "check the connection".
+it('names the refusals the pairing flow really meets, on both claim and attach', async () => {
+  const session = account(false), id = crypto.randomUUID()
+  session.pending = { id, name: 'Shack', expiresAt: session.serverNow + 9 * 60000, confirmed: false }
+  const service = client(session)
+  let refusal = new RemoteError(403, 'trialActiveElsewhere')
+  service.post.mockImplementation(async path => { if (path === 'pair/confirm') throw refusal; return session })
+  const view = render(<RemoteApp />)
+  fireEvent.click(await screen.findByRole('button', { name: /attach this station/i }))
+  let alert = await screen.findByRole('alert')
+  expect(alert.textContent).toMatch(/already has a Remote trial running under a different sign-in/i)
+  expect(alert.textContent).not.toMatch(/check the connection/i)
+  view.unmount()
+
+  refusal = new RemoteError(429, 'tryLater')
+  render(<RemoteApp />)
+  fireEvent.click(await screen.findByRole('button', { name: /attach this station/i }))
+  alert = await screen.findByRole('alert')
+  expect(alert.textContent).toMatch(/too many tries/i)
+  expect(alert.textContent).not.toMatch(/check the connection/i)
+  cleanup()
+
+  // The claim form reaches the same names.
+  const fresh = account(false), claiming = client(fresh)
+  claiming.post.mockImplementation(async path => { if (path === 'pair/claim') throw new RemoteError(429, 'tryLater'); return fresh })
+  render(<RemoteApp />)
+  const input = await screen.findByLabelText('Pairing code')
+  fireEvent.change(input, { target: { value: '0123456789abcdef' } })
+  fireEvent.submit(input.closest('form')!)
+  expect((await screen.findByRole('alert')).textContent).toMatch(/too many tries/i)
+  cleanup()
+
+  // Control: a code with no name still reaches the generic sentence, so the assertions above are
+  // reading the alert the refusal produced, not a banner that would say anything.
+  const unnamed = account(false)
+  unnamed.pending = { id, name: 'Shack', expiresAt: unnamed.serverNow + 9 * 60000, confirmed: false }
+  const other = client(unnamed)
+  other.post.mockImplementation(async path => { if (path === 'pair/confirm') throw new RemoteError(400, 'invalidRequest'); return unnamed })
+  render(<RemoteApp />)
+  fireEvent.click(await screen.findByRole('button', { name: /attach this station/i }))
+  expect((await screen.findByRole('alert')).textContent).toMatch(/check the connection/i)
 })
 it('browser enrollment displays the local comparison code and does not imply approval', async () => {
   const session = account(), stationId = crypto.randomUUID(), deviceId = crypto.randomUUID()

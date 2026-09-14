@@ -40,6 +40,9 @@ export function RemoteApp() {
     void BrowserClient.load().then(async value => {
       if (!active) return
       setClient(value); setConfigured(value !== null)
+      // A deny that is not the unconfirmed-email case keeps its refusal sentence; that one gets
+      // its own state below instead of a banner.
+      if (value?.signInRefusal === 'signInRefused') setError('signInRefused')
       if (value && await value.authenticated()) {
         const account = await value.post<AccountSession>('session')
         if (active) setSession(account)
@@ -120,7 +123,16 @@ export function RemoteApp() {
     : code === 'signInRequired' ? t('remote.signInAgain')
     : code === 'signInRefused' ? t('remote.signInRefused')
     : code === 'stationUnavailable' ? t('remote.stationOffline')
+    // One mailbox, two sign-ins (a password once, Google once): the second account is refused a
+    // trial the first one is already running.
+    : code === 'trialActiveElsewhere' ? t('remote.trialActiveElsewhere')
+    // Rate limits on the browser's routes reset within a minute (account) or ten (claim, attach).
+    : code === 'tryLater' ? t('remote.tryLater')
     : t('remote.requestFailed')
+  // A sign-up that worked but whose address is not confirmed yet. Auth0 keeps its session through
+  // the deny, so "continue" is one plain login and "use a different account" has to sign out of it.
+  const confirmEmail = ready && client?.signInRefusal === 'emailUnverified' && !session
+  const switchAccount = <button className="remote-button" disabled={busy} onClick={() => void act(async () => { await client?.signOut() })}>{t('remote.useDifferentAccount')}</button>
   return <div className="app remote-monitor-app remote-service-app">
     <AccountViewport />
     <header className="rm-header"><strong>{BRAND}</strong>
@@ -133,11 +145,23 @@ export function RemoteApp() {
       {!ready && <p role="status">{t('monitor.connecting')}</p>}
       {ready && !configured && <p role="status">{t('remote.notConfigured')}</p>}
       {ready && error !== null && !client && <button className="remote-button" onClick={() => setLoadAttempt(value => value + 1)}>{t('shell.crash.retry')}</button>}
-      {ready && client && !session && <><div className="remote-actions">
+      {confirmEmail && client && <section className="rm-card remote-section">
+        <h2>{t('remote.confirmEmailTitle')}</h2>
+        {/* The address is not named: a denied sign-in carries no token, so the page never has it. */}
+        <p>{t('remote.confirmEmailBody')}</p>
+        <p>{t('remote.confirmEmailSpam')}</p>
+        <div className="remote-actions">
+          <button className="remote-button" disabled={busy} onClick={() => void act(async () => { await client.signIn() })}>{t('remote.confirmEmailContinue')}</button>
+          {switchAccount}
+        </div>
+      </section>}
+      {ready && client && !session && !confirmEmail && <><div className="remote-actions">
         <button className="remote-button" disabled={busy} onClick={() => void act(async () => { await client.signIn() })}>{t('remote.signIn')}</button>
         {/* A first-time operator should not have to find a sign-up link on somebody else's login
             form. This is the same flow, opened on the create-account screen instead. */}
         <button className="remote-button" disabled={busy} onClick={() => void act(async () => { await client.signIn(true) })}>{t('remote.createAccount')}</button>
+        {/* Signing in again would only be refused again from the same Auth0 session. */}
+        {client.signInRefusal === 'signInRefused' && switchAccount}
       </div>
         {/* After confirming the email, Auth0 shows its own "verified" page and does not send the
             operator back here, so the way back is said before they leave. */}
@@ -226,9 +250,11 @@ export function RemoteApp() {
             : <>
                 <p role="status">{t('remote.confirmAttachPrompt', { station: session.pending.name })}</p>
                 <p className="remote-warning">{t('remote.confirmAttachWarning')}</p>
-                <button type="button" onClick={() => void (async () => {
+                {/* Through act(), like every other service call here: outside it a refused attach
+                    showed nothing at all and the rejection went unhandled. */}
+                <button type="button" className="remote-button" disabled={busy} onClick={() => void act(async () => {
                   await client?.post('pair/confirm', { id: session.pending!.id }); await refresh()
-                })()}>{t('remote.confirmAttach')}</button>
+                })}>{t('remote.confirmAttach')}</button>
               </>}
           <p>{t('remote.accountMatch')} <code>{session.accountId}</code></p>
         </section>}
