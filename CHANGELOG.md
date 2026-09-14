@@ -430,7 +430,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   anything already queued. It is never remembered across launches: the app can never come back
   calling CQ.
 
-- **The FT-710 can draw its own band scope.** The radio has a real spectrum display inside it and
+- **The FT-710 can draw its own band scope — in source builds only.** It is not in the 1.12.0
+  installers: the scope needs FTDI's closed-source LibFT4222, so it is built only with the
+  `yaesu-wf` build option, which release builds leave off. The radio has a real spectrum display inside it and
   an internal USB bridge that will hand it over; until now Nexus could only show the sound card's
   4 kHz slice. Turn it on per radio in Settings ▸ Radio (it appears only for an FT-710), and the
   Phone and CW cockpits gain span and position controls that drive the radio itself rather than

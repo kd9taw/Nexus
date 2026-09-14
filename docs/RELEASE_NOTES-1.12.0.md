@@ -298,12 +298,6 @@ If a score or an export looks wrong for a contest you know well, that's exactly 
   flags CW against CW-R as a mismatch. FlexRadio SmartSDR, PowerSDR and Thetis have no reverse CW,
   so turning it on there leaves that warning showing. The soundcard keyer is unchanged. Thanks to
   the operator who spotted it on an IC-7300.
-- **The FT-710 can draw its own band scope.** It's a per-radio switch in Settings ▸ Radio that only
-  appears for an FT-710. The Phone and CW screens then get span and position controls that drive
-  the radio's own scope. It needs **SCU-LAN10 enabled in the radio's EX menu** and **FTDI's
-  LibFT4222**. Nexus can't bundle LibFT4222 (it's closed source), so it links the download and
-  tells you which of the two is missing. In FIX position, Nexus works out the scope's start from
-  the band edge, so check it against the rig's own scale.
 - **Xiegu radios: trust the radio's own SWR meter.** Nexus reads the meter on an Icom scale, and a
   G90 showing 1.2:1 on its front panel can read 6:1 in Nexus. The Xiegu rig guide says so now. A
   proper calibration needs bench measurements first.
