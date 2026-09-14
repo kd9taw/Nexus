@@ -45,8 +45,10 @@ const TX_OFF = '■ TX off'
  * unique per mode and are injected through slots (`modeIndicator`, `bandControl`, `frequencyExtras`,
  * and `children` for the rest) — never forced to look identical, only positioned consistently.
  *
- * Layout regions (left→right, wrapping): identity · frequency(+extras+band) · mode-extras(elastic)
- * · actions(power·TX/RX·Tune·Stop·CAT, pinned right). Every region wraps + has min-width:0 so
+ * Layout regions (left→right, wrapping): identity · frequency(+extras+band+Tune/ATU) ·
+ * mode-extras(elastic) · actions(power·TX/RX·Stop·CAT, pinned right). Tune sits directly after
+ * the band control (#287) so it is in one place in every cockpit, not wherever the actions
+ * cluster happens to end. Every region wraps + has min-width:0 so
  * nothing clips off-screen at a non-maximized width or 110–125% UI zoom.
  */
 export interface CockpitHeaderPower {
@@ -291,6 +293,54 @@ export function CockpitHeader({
         </div>
         {frequencyExtras && <div className="ch-freq-extras">{frequencyExtras}</div>}
         <div className="ch-band">{bandControl}</div>
+        {/* #287 — TUNE HAS ONE FIXED PLACE: directly after the band control, in every cockpit that
+            uses this header. It used to sit at the end of the right-pinned actions cluster and
+            slide sideways with whatever each mode put in front of it (depth chips, ⊞ Panels, the
+            power slider, the TX pill, the amplifier strip). A band change is when you tune, so it
+            lives beside the band picker, as WSJT-X has it. Still outside every ⊞-removable pane —
+            this header is not a pane — so the stop line is unchanged; only its position moved. */}
+        {(onTune || (onAtuTune && radio.atu != null)) && (
+          <div className="ch-tune">
+            {/* ⚠️ DEFERRED (i18n): Tune keys a carrier and is on the Phone, CW, Operate, RTTY and
+                PSK stop-line censuses; `stop-line.test.tsx` finds it by accessible name. */}
+            {onTune && (
+              <button
+                type="button"
+                className={`cockpit-tune${radio.tuning ? ' keyed' : ''}`}
+                aria-pressed={radio.tuning}
+                onClick={() => onTune(!radio.tuning)}
+                disabled={!control || (!radio.txAllowed)}
+                title="Key a steady carrier to tune an ATU/amp (auto-stops on the tune watchdog). Click again to stop."
+              >
+                {radio.tuning ? 'TUNING…' : 'Tune'}
+              </button>
+            )}
+
+            {/* The RADIO's own ATU, beside the carrier Tune it is so often confused with. Shown ONLY
+                when the rig reports a tuner (`radio.atu` non-null) — an ATU button on a radio with no
+                ATU is worse than no button. Disabled on the licence lockout exactly like Tune; every
+                other refusal (TX off, transmitter busy) comes back from the backend WITH ITS REASON
+                and is shown, because a control that keys the transmitter must never fail silently.
+
+                ⚠️ DEFERRED (i18n): it keys the rig's own tuning carrier, exactly as SetupHealth's
+                Prove TX does. */}
+            {onAtuTune && radio.atu != null && (
+              <button
+                type="button"
+                className="cockpit-tune"
+                onClick={onAtuTune}
+                disabled={!control || (!radio.txAllowed)}
+                title={
+                  radio.atu
+                    ? "Run the radio's built-in antenna tuner (it transmits its own carrier for a second or two). The tuner is switched in."
+                    : "Run the radio's built-in antenna tuner (it transmits its own carrier for a second or two). The tuner is currently bypassed."
+                }
+              >
+                ATU
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       {children != null && <div className="ch-mode-extras">{children}</div>}
@@ -392,45 +442,6 @@ export function CockpitHeader({
               {txPill}
             </span>
           ))}
-
-        {/* ⚠️ DEFERRED (i18n): Tune keys a carrier and is on the Phone, CW, Operate, RTTY and
-            PSK stop-line censuses; `stop-line.test.tsx` finds it by accessible name. */}
-        {onTune && (
-          <button
-            type="button"
-            className={`cockpit-tune${radio.tuning ? ' keyed' : ''}`}
-            aria-pressed={radio.tuning}
-            onClick={() => onTune(!radio.tuning)}
-            disabled={!control || (!radio.txAllowed)}
-            title="Key a steady carrier to tune an ATU/amp (auto-stops on the tune watchdog). Click again to stop."
-          >
-            {radio.tuning ? 'TUNING…' : 'Tune'}
-          </button>
-        )}
-
-        {/* The RADIO's own ATU, beside the carrier Tune it is so often confused with. Shown ONLY
-            when the rig reports a tuner (`radio.atu` non-null) — an ATU button on a radio with no
-            ATU is worse than no button. Disabled on the licence lockout exactly like Tune; every
-            other refusal (TX off, transmitter busy) comes back from the backend WITH ITS REASON
-            and is shown, because a control that keys the transmitter must never fail silently.
-
-            ⚠️ DEFERRED (i18n): it keys the rig's own tuning carrier, exactly as SetupHealth's
-            Prove TX does. */}
-        {onAtuTune && radio.atu != null && (
-          <button
-            type="button"
-            className="cockpit-tune"
-            onClick={onAtuTune}
-            disabled={!control || (!radio.txAllowed)}
-            title={
-              radio.atu
-                ? "Run the radio's built-in antenna tuner (it transmits its own carrier for a second or two). The tuner is switched in."
-                : "Run the radio's built-in antenna tuner (it transmits its own carrier for a second or two). The tuner is currently bypassed."
-            }
-          >
-            ATU
-          </button>
-        )}
 
         {/* ⚠️ DEFERRED (i18n): THE stop control of six cockpits. Its label is the accessible
             name every stop-line sweep looks for (/^stop tx$/i).

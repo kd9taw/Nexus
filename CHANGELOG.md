@@ -19,6 +19,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   In the Remote browser page the menu works the same way; the dots stay grey there, because the
   browser does not receive propagation data yet.
 
+### Changed
+
+- **Tune is always right next to the band picker** (#287). In Phone, CW, RTTY, PSK, SSTV and JS8,
+  the Tune button (and the ATU button, on radios that have one) now sits directly after the band
+  dropdown. It used to be at the far right of the header and moved depending on what else each
+  mode showed there. Stop TX and the CAT indicator stay where they were.
+
 ### Security
 
 - **Encrypted connections refuse a malformed setup from the server.** Nexus's secure-connection
