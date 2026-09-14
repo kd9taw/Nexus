@@ -1,6 +1,11 @@
 //! Stop admission stays independent of Engine, file writes and ordinary commands.
 //! The mirror is updated only under Core; its own lock never contains I/O or
 //! acquires Core/Engine. Atomic permit generation checks reject delayed Stops.
+//!
+//! STOP ANYTHING (operator decision 2026-09-14). Any browser holding station control may stop, with
+//! or without FT8/FT4 transmit permission (that permission is needed only to START), and an admitted
+//! Stop stops every transmission at the station, however it started (`stop_station`). A browser
+//! without station control is refused and changes nothing.
 use super::*;
 
 pub(super) struct Owner {
@@ -27,10 +32,11 @@ impl Authority {
             }
             pending.insert(device.to_owned());
         }
-        let mut owner = self.stop_owner.lock().map_err(|_| "authorityUnavailable")?;
+        let owner = self.stop_owner.lock().map_err(|_| "authorityUnavailable")?;
         if owner.as_ref().is_some_and(|o| o.device == device) {
+            // Ends this browser's own transmission at once. Its Stop stays: stopping needs only
+            // station control, and revoking transmit permission leaves that in place.
             self.transmit.revoke();
-            *owner = None;
         }
         // reconcile removes the queued grant before any subsequent command.
         // Neither lock above acquires Core/Engine or performs external I/O.
@@ -41,9 +47,8 @@ impl Authority {
         let owner = c
             .lease
             .as_ref()
-            .filter(|l| {
-                c.control_grants.contains(&l.device) && c.transmit_grants.contains(&l.device)
-            })
+            // Station control, not transmit permission: stopping is always the safe direction.
+            .filter(|l| c.control_grants.contains(&l.device))
             .and_then(|l| {
                 c.boot.as_ref().map(|boot| Owner {
                     boot: boot.clone(),
@@ -117,8 +122,54 @@ impl Authority {
         if !self.transmit.revoke_generation(generation) {
             return Err("staleContext");
         }
-        // This accepts revocation, not a claim that RF has stopped. The native
-        // radio loop performs the already-tested halt/flush/unkey sequence.
+        // This accepts the Stop, not a claim that RF has stopped: `stop_station` raises the
+        // engine's stop, and the native radio loop performs the already-tested flush/unkey.
         Ok(())
+    }
+}
+
+/// Stop anything (operator decision 2026-09-14): what an admitted browser Stop does at the station.
+///
+/// It runs every stop verb the desktop's own stop controls run, under one Engine lock:
+///   · Operate and JS8 Stop TX, and the Phone and SSTV header Stop TX → `halt_tx`
+///   · CW Stop TX (and Esc) → `stop_cw` + `halt_tx`
+///   · RTTY Stop TX → `rtty_stop` + `halt_tx`; PSK Stop TX → `psk_stop` + `halt_tx`
+///   · SSTV's send-bar Stop → `sstv_stop`; the Phone voice keyer's ■ Stop → `stop_voice`
+///
+/// The station does not know which cockpit the browser is showing, so it runs the union, `halt_tx`
+/// last as every combined local stop does. Each verb only clears queues and raises one-shot aborts
+/// the radio loop turns into a flush and an unkey; none arms, keys or re-enables anything, and
+/// `halt_tx` leaves the TX-enable latch off exactly as a local Stop TX does. The shack's own Stop
+/// controls are untouched.
+///
+/// The acceptance never waits for Engine. When Engine is held (a radio-loop tick, another command),
+/// the stop runs on its own thread as soon as Engine is free: the same wait a Stop TX press at the
+/// shack has. A poisoned Engine is still stopped.
+pub(super) fn stop_station(engine: &crate::SharedEngine) {
+    fn stop(e: &mut tempo_app::engine::Engine) {
+        tempo_core::applog::info(
+            "tx",
+            "remote Stop TX: stopping every transmission at the station",
+        );
+        e.stop_cw();
+        e.rtty_stop();
+        e.psk_stop();
+        e.sstv_stop();
+        e.stop_voice();
+        e.halt_tx();
+    }
+    match engine.try_lock() {
+        Ok(mut e) => stop(&mut e),
+        Err(std::sync::TryLockError::Poisoned(poisoned)) => stop(&mut poisoned.into_inner()),
+        Err(std::sync::TryLockError::WouldBlock) => {
+            let engine = engine.clone();
+            std::thread::spawn(move || {
+                stop(
+                    &mut engine
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner()),
+                )
+            });
+        }
     }
 }

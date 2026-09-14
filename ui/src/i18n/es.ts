@@ -45,7 +45,7 @@ export const ES: PartialCatalog = {
   "remote.controlRequestFailed": "El comando no se confirmó. Comprueba el permiso de control de estación y las lecturas actuales.",
   "remote.controlNotSent": "No enviado. Nada llegó a la estación, así que allí no cambió nada. Inténtalo de nuevo.",
   "remote.controlBusy": "La estación estaba ocupada y no cambió nada. Inténtalo de nuevo.",
-  "remote.controlLocalHint": "Al autorizar un navegador, recibe el control de la estación: las funciones compatibles del receptor, la radio y el amplificador. Para limitar un navegador, revócalo aquí. Transmitir requiere un permiso independiente.",
+  "remote.controlLocalHint": "Al autorizar un navegador, recibe el control de la estación: las funciones compatibles del receptor, la radio y el amplificador, y Stop TX, que detiene cualquier transmisión de la estación. Para limitar un navegador, revócalo aquí. Iniciar una transmisión requiere un permiso independiente.",
   "remote.transmitAllow": "Permitir transmisión FT8/FT4",
   "remote.transmitRevoke": "Revocar permiso de transmisión",
   "remote.transmitLocalHint": "La transmisión FT8/FT4 también requiere el control de la estación. Una vez permitida, se mantiene tras los reinicios hasta que la revoques aquí, y revocarla detiene al instante la transmisión de ese navegador. Nada se transmite hasta que el navegador pulsa TX On.",

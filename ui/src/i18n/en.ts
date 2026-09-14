@@ -114,7 +114,7 @@ export const EN = {
   "remote.controlRequestFailed": "The command was not confirmed. Check station control permission and the current readings.",
   "remote.controlNotSent": "Not sent. Nothing reached the station, so nothing changed there. Try again.",
   "remote.controlBusy": "The station was busy and nothing changed. Try again.",
-  "remote.controlLocalHint": "Approving a browser gives it station controls: supported receiver, radio and amplifier controls. To limit a browser, revoke them here. Transmitting needs its own permission.",
+  "remote.controlLocalHint": "Approving a browser gives it station controls: supported receiver, radio and amplifier controls, and Stop TX, which stops any transmission at the station. To limit a browser, revoke them here. Starting a transmission needs its own permission.",
   "remote.transmitAllow": "Allow FT8/FT4 transmission",
   "remote.transmitRevoke": "Revoke transmission permission",
   "remote.transmitLocalHint": "FT8/FT4 transmit also needs station controls. Once allowed, it stays allowed across restarts until you revoke it here, and revoking it stops that browser’s transmission at once. Nothing transmits until the browser presses TX On.",

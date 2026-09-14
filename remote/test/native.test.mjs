@@ -722,7 +722,33 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
    assert.equal(cleared.response.value.outcome,'applied');assert.equal(cleared.response.value.evidence,'receiverState')
    assert.deepEqual(await probe.send({type:'loggingEvidence'}),evidence)
    if (operationVersion === 4) {
-     assert.equal(controls.transmitEpoch, null)
+     // Stop anything (operator decision 2026-09-14): station control alone holds the stop token, and a
+     // browser's Stop unkeys a transmission started at the shack. Key locally through the probe (the
+     // engine's own local verbs), stop through the actual cloud/native path, read the engine back.
+     assert.match(controls.transmitEpoch, /^[0-9a-f]{16}$/, 'station control alone holds the stop token')
+     // The relay admits at most two Stops per session in its 1 s window (operation-relay, unchanged);
+     // an operator does not press Stop three times a second, so each round waits the window out.
+     const stopWindow = () => delay(1100)
+     const stopLocal = async (kind, label) => {
+       await stopWindow()
+       const keyed = await probe.send({type:'keyLocal',kind})
+       assert.equal(keyed.keyed, true, `positive control: the local ${kind} transmission is live (${label})`)
+       // A heartbeat, not a plain state read: this harness does not heartbeat on its own, and the waits
+       // above outlast the 5 s lease otherwise (the browser client heartbeats every second).
+       const current = (await heartbeat()).response.value
+       assert.equal(current?.phase, 'controlling', `positive control: the lease is held (${label})`)
+       assert.match(current.transmitEpoch, /^[0-9a-f]{16}$/, `station control holds the stop token (${label})`)
+       const stopped = await operation({type:'stopTransmit',stationBootId:current.stationBootId,leaseId:current.leaseId,transmitEpoch:current.transmitEpoch})
+       assert.deepEqual(stopped.response.value,{stop:'accepted'},`${kind} ${label}: ${JSON.stringify(stopped.response)}`)
+       let after
+       for(let i=0;i<40;i++){after=await probe.send({type:'keyEvidence'});if(!after.keyed)break;await delay(50)}
+       assert.deepEqual(after,{keyed:false,manualPtt:false,tuning:false,txEnabled:false},`${kind} ${label}: unkeyed at the station`)
+     }
+     for (const kind of ['ptt','tune','cw']) await stopLocal(kind,'station control only')
+     // The owner's Stop and its replay below are two more Stops: give them a window of their own, and
+     // renew the lease the wait would otherwise outlast.
+     await stopWindow()
+     await heartbeat()
      const grant = await probe.send({type:'transmitPermission',deviceId:device.deviceId,allow:true})
      assert.equal(grant.ok,true,grant.error)
      assert.deepEqual(grant.status.transmitPermissions,[device.deviceId])
@@ -734,6 +760,7 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
      const after = (await allowed(()=>operation({type:'state'}))).response.value
      assert.notEqual(after.transmitEpoch,owner.transmitEpoch)
      assert.equal(after.phase,'controlling')
+     await stopLocal('ptt','with transmit permission')
      assert.deepEqual(await probe.send({type:'loggingEvidence'}),evidence)
      const command = (state, action) => operation({type:'stationControl',
        stationBootId:state.stationBootId,leaseId:state.leaseId,expectedRevision:state.revision,

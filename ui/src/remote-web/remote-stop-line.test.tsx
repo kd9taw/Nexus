@@ -17,7 +17,7 @@
 //     the same spy has already recorded the client's opening state read before any click;
 //   · with stale readings, stale control and a station command still pending (the busy banner),
 //     Stop is enabled and its request leaves at once, with no wait for control to be current;
-//   · a browser without station control (or with control but no transmit grant) gets the existing
+//   · a browser without station control (none at all, or a logging-only lease) gets the existing
 //     refusal: Stop is disabled and a direct halt is refused `localPermissionRequired` with nothing
 //     sent — the negative control for the click assertions above.
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest'
@@ -84,7 +84,10 @@ beforeAll(() => {
 beforeEach(() => { localStorage.clear(); vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null) })
 afterEach(() => { cleanup(); uninstall?.(); uninstall = undefined; clients.splice(0).forEach(c => c.disconnected()); vi.useRealTimers(); vi.restoreAllMocks() })
 
-type Authority = 'control' | 'noControl' | 'noTransmitGrant'
+// 'loggingOnly': a lease held for logging alone; the station publishes no stop token for it. A browser
+// with station control but no transmit permission holds the token (stop anything, 2026-09-14), so the
+// station, not this file, decides that case; it is 'control' here.
+type Authority = 'control' | 'noControl' | 'loggingOnly'
 /** A browser session wired exactly as BrowserApplication wires it: a real operation client behind the
  * real hosted control transport, installed under the application API the cockpits call. */
 function session(authority: Authority, capabilities: string[] = []) {
@@ -181,7 +184,7 @@ it.each(CASES.map(c => [c.cockpit, c] as const))('%s: with stale readings, stale
   expect(h.commands()).toHaveLength(1)
 })
 
-it.each(['noControl', 'noTransmitGrant'] as const)('a browser %s gets the existing refusal: Stop is disabled and a halt sends nothing', async authority => {
+it.each(['noControl', 'loggingOnly'] as const)('a browser %s gets the existing refusal: Stop is disabled and a halt sends nothing', async authority => {
   for (const c of CASES) {
     const h = session(authority)
     remote(h.client, c.element(panelsWith([])))

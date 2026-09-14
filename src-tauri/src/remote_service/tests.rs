@@ -477,6 +477,31 @@ fn cloud_runtime_probe() {
             std::io::stdout().flush().unwrap();
             continue;
         }
+        if value["type"] == "keyLocal" || value["type"] == "keyEvidence" {
+            let mut e = engine.lock().unwrap();
+            if value["type"] == "keyLocal" {
+                // Stop anything: start a transmission the way the shack does, through the local
+                // verbs, so a browser's Stop is shown to reach it.
+                match value["kind"].as_str().unwrap() {
+                    "ptt" => {
+                        e.set_tx_enabled(true);
+                        e.set_ptt(true);
+                    }
+                    "tune" => e.set_tune(true),
+                    "cw" => e.send_cw("CQ TEST"),
+                    other => panic!("unknown local transmission {other}"),
+                }
+                println!("REMOTE_TEST:{}", json!({"keyed":e.tx_owner().is_some()}));
+            } else {
+                println!(
+                    "REMOTE_TEST:{}",
+                    json!({"keyed":e.tx_owner().is_some(),"manualPtt":e.manual_ptt(),
+                    "tuning":e.tuning(),"txEnabled":e.tx_enabled()})
+                );
+            }
+            std::io::stdout().flush().unwrap();
+            continue;
+        }
         if value["type"] == "seedFt" || value["type"] == "ftEvidence" {
             let mut e = engine.lock().unwrap();
             if value["type"] == "seedFt" {

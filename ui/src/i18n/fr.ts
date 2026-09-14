@@ -45,7 +45,7 @@ export const FR: PartialCatalog = {
   "remote.controlRequestFailed": "La commande n’a pas été confirmée. Vérifiez l’autorisation de contrôle de la station et les mesures actuelles.",
   "remote.controlNotSent": "Non envoyé. Rien n’a atteint la station, donc rien n’y a changé. Réessayez.",
   "remote.controlBusy": "La station était occupée et rien n’a changé. Réessayez.",
-  "remote.controlLocalHint": "Autoriser un navigateur lui donne le contrôle de la station : les fonctions prises en charge du récepteur, de la radio et de l’amplificateur. Pour limiter un navigateur, révoquez-le ici. L’émission nécessite une autorisation distincte.",
+  "remote.controlLocalHint": "Autoriser un navigateur lui donne le contrôle de la station : les fonctions prises en charge du récepteur, de la radio et de l’amplificateur, ainsi que Stop TX, qui arrête toute émission de la station. Pour limiter un navigateur, révoquez-le ici. Lancer une émission nécessite une autorisation distincte.",
   "remote.transmitAllow": "Autoriser l’émission FT8/FT4",
   "remote.transmitRevoke": "Révoquer l’autorisation d’émission",
   "remote.transmitLocalHint": "L’émission FT8/FT4 nécessite aussi le contrôle de la station. Une fois autorisée, elle le reste après les redémarrages jusqu’à ce que vous la révoquiez ici, et sa révocation arrête aussitôt l’émission de ce navigateur. Rien n’est émis tant que le navigateur n’a pas appuyé sur TX On.",

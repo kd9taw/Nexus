@@ -218,17 +218,251 @@ fn transmit_stop_rejects_a_replay_after_a_new_remote_arm() {
     assert!(f.engine.lock().unwrap().poll_remote_transmit(now));
 }
 
-#[test]
-fn transmit_stop_cannot_stop_a_new_local_transmission() {
-    let (f, now, state) = armed();
-    let request = stop_request(&f, &state);
-    let mut e = f.engine.lock().unwrap();
-    e.set_tx_enabled(true);
+// ── Stop anything (operator decision 2026-09-14) ────────────────────────────────────────────────
+// A browser holding station control stops ANY transmission at the station, however it started: a
+// keyed mic, a tune carrier, the CW keyer, the voice keyer, RTTY, PSK, SSTV or FT. The station runs
+// every local stop verb (`transmit_stop::stop_station`). Transmit permission is needed only to START;
+// a browser without station control is refused and changes nothing. This replaces
+// `transmit_stop_cannot_stop_a_new_local_transmission`, which pinned the opposite rule.
+
+const LOCAL_TRANSMISSIONS: [&str; 8] = ["ptt", "tune", "cw", "voice", "rtty", "psk", "sstv", "ft"];
+
+/// A controlling v4 browser, with or without FT8/FT4 transmit permission, and nothing keyed.
+fn controlling(transmit: bool) -> (Fixture, Instant, Value) {
+    let f = Fixture::new();
+    {
+        let mut e = f.engine.lock().unwrap();
+        e.configure_remote_settings_store(f.dir.join("settings.json"));
+        e.set_tx_enabled(false);
+        e.take_immediate_retune();
+        e.take_slot_tx_abort();
+    }
+    let now = Instant::now();
+    acquire_controls_version(&f, now, 4);
+    if transmit {
+        f.authority.permit_transmit(DEVICE, true).unwrap();
+    }
+    let state = control_state_version(&f, now, 4);
+    assert_eq!(state["phase"], "controlling");
+    (f, now, state)
+}
+
+/// Start a transmission the way the shack does, through the local verbs, never a remote permit.
+fn key_locally(e: &mut tempo_app::engine::Engine, kind: &str) {
+    match kind {
+        "ptt" => {
+            e.set_tx_enabled(true);
+            e.set_ptt(true);
+            assert!(e.manual_ptt(), "{kind}");
+        }
+        "tune" => {
+            e.set_tune(true);
+            assert!(e.tuning(), "{kind}");
+        }
+        "cw" => e.send_cw("CQ TEST"),
+        "voice" => {
+            e.set_tx_enabled(true);
+            e.send_voice(vec![0.1; 1200]);
+        }
+        "rtty" => {
+            e.set_operating_mode("rtty", false);
+            e.set_tx_enabled(true);
+            e.rtty_send_text("CQ TEST").unwrap();
+        }
+        "psk" => {
+            e.set_operating_mode("keyboard", false);
+            e.set_tx_enabled(true);
+            e.psk_send_text("CQ TEST").unwrap();
+        }
+        "sstv" => {
+            e.set_operating_mode("phone", false);
+            e.set_tx_enabled(true);
+            e.sstv_send(vec![0.1; 1200], "Robot 36".into()).unwrap();
+        }
+        // The FT sequencer armed at the shack (TX On); a slot over in flight is cut by the
+        // one-shot slot abort, which every stop verb raises.
+        "ft" => e.set_tx_enabled(true),
+        _ => unreachable!(),
+    }
+    // Positive control: the local transmission really holds the transmitter (or, for FT, is armed).
+    assert!(
+        e.tx_owner().is_some() || (kind == "ft" && e.tx_enabled()),
+        "{kind}: the local transmission must be live before the stop"
+    );
+    e.take_slot_tx_abort();
+}
+
+fn assert_stopped(e: &mut tempo_app::engine::Engine, kind: &str) {
+    assert!(
+        e.tx_owner().is_none(),
+        "{kind}: nothing still owns the transmitter"
+    );
+    assert!(!e.manual_ptt(), "{kind}: the mic key is released");
+    assert!(!e.tuning(), "{kind}: the tune carrier is down");
+    // Exactly as the local Stop TX leaves it: disarmed, never re-armed.
+    assert!(!e.tx_enabled(), "{kind}: the TX-enable latch is off");
+    assert!(e.take_slot_tx_abort(), "{kind}: an over in flight is cut");
+    match kind {
+        "cw" => assert!(e.take_cw_abort(), "{kind}: the keyer is aborted"),
+        "voice" => assert!(e.take_voice_abort(), "{kind}: playback is flushed"),
+        "rtty" => assert!(e.take_rtty_abort(), "{kind}: the over is aborted"),
+        "psk" => assert!(e.take_psk_abort(), "{kind}: the over is aborted"),
+        "sstv" => assert!(e.take_sstv_abort(), "{kind}: the image is aborted"),
+        _ => {}
+    }
+}
+
+fn stop_v4(
+    f: &Fixture,
+    device: &str,
+    request: &Request,
+    now: Instant,
+) -> Result<Value, &'static str> {
     f.authority
-        .stop_transmit(f.connection, SESSION, DEVICE, &request, now)
-        .unwrap();
-    assert!(!e.poll_remote_transmit(now));
-    assert!(e.tx_enabled());
+        .handle_version((f.connection, 4), SESSION, device, request, &f.engine, now)
+}
+
+#[test]
+fn a_controlling_browser_stops_any_local_transmission_with_or_without_transmit_permission() {
+    for transmit in [false, true] {
+        for kind in LOCAL_TRANSMISSIONS {
+            let (f, now, state) = controlling(transmit);
+            assert!(
+                state["transmitEpoch"].is_string(),
+                "station control alone holds the stop token (transmit={transmit})"
+            );
+            key_locally(&mut f.engine.lock().unwrap(), kind);
+            assert_eq!(
+                stop_v4(&f, DEVICE, &stop_request(&f, &state), now),
+                Ok(json!({"stop":"accepted"})),
+                "{kind} transmit={transmit}"
+            );
+            assert_stopped(&mut f.engine.lock().unwrap(), kind);
+        }
+    }
+}
+
+#[test]
+fn a_browser_without_station_control_is_refused_and_stops_nothing() {
+    for scene in ["noLease", "loggingOnly", "controlRevoked", "otherDevice"] {
+        let f = Fixture::new();
+        let now = Instant::now();
+        let state = match scene {
+            "noLease" => {
+                f.authority.permit_station(DEVICE, true).unwrap();
+                control_state_version(&f, now, 4)
+            }
+            "loggingOnly" => {
+                f.authority.permit(DEVICE, true).unwrap();
+                let boot = control_state_version(&f, now, 4)["stationBootId"].clone();
+                f.authority
+                    .handle_version(
+                        (f.connection, 4),
+                        SESSION,
+                        DEVICE,
+                        &Request::Acquire {
+                            request_id: id(),
+                            station_boot_id: boot.as_str().unwrap().into(),
+                        },
+                        &f.engine,
+                        now,
+                    )
+                    .unwrap()
+            }
+            "controlRevoked" => {
+                acquire_controls_version(&f, now, 4);
+                let state = control_state_version(&f, now, 4);
+                f.authority.permit_station(DEVICE, false).unwrap();
+                state
+            }
+            "otherDevice" => {
+                acquire_controls_version(&f, now, 4);
+                control_state_version(&f, now, 4)
+            }
+            _ => unreachable!(),
+        };
+        if scene == "loggingOnly" {
+            assert_eq!(
+                state["phase"], "controlling",
+                "positive control: a logging lease is held"
+            );
+            assert!(
+                state["transmitEpoch"].is_null(),
+                "logging alone holds no stop token"
+            );
+        }
+        key_locally(&mut f.engine.lock().unwrap(), "ptt");
+        let request = Request::StopTransmit {
+            request_id: id(),
+            station_boot_id: state["stationBootId"].as_str().unwrap().into(),
+            lease_id: state["leaseId"].as_str().map_or_else(id, Into::into),
+            transmit_epoch: format!("{:016x}", f.authority.transmit.generation()),
+        };
+        let (device, expected) = match scene {
+            "otherDevice" => (OTHER, "notController"),
+            _ => (DEVICE, "localPermissionRequired"),
+        };
+        assert_eq!(stop_v4(&f, device, &request, now), Err(expected), "{scene}");
+        {
+            let e = f.engine.lock().unwrap();
+            assert!(e.manual_ptt(), "{scene}: the local key is untouched");
+            assert!(e.tx_enabled(), "{scene}: the latch is untouched");
+        }
+        if scene == "otherDevice" {
+            // Positive control: the same keyed station IS stopped by the controlling browser.
+            assert_eq!(
+                stop_v4(&f, DEVICE, &request, now),
+                Ok(json!({"stop":"accepted"}))
+            );
+            assert_stopped(&mut f.engine.lock().unwrap(), "ptt");
+        }
+    }
+}
+
+#[test]
+fn a_replayed_stop_transmit_has_no_further_effect() {
+    let (f, now, state) = controlling(false);
+    key_locally(&mut f.engine.lock().unwrap(), "ptt");
+    let request = stop_request(&f, &state);
+    assert_eq!(
+        stop_v4(&f, DEVICE, &request, now),
+        Ok(json!({"stop":"accepted"}))
+    );
+    assert_stopped(&mut f.engine.lock().unwrap(), "ptt");
+    // The shack keys up again; the same Stop delivered twice (a duplicated or delayed frame) is
+    // refused and leaves the new transmission alone. It retires only the token it displayed.
+    key_locally(&mut f.engine.lock().unwrap(), "ptt");
+    assert_eq!(stop_v4(&f, DEVICE, &request, now), Err("staleContext"));
+    assert!(f.engine.lock().unwrap().manual_ptt());
+    // Positive control: a Stop against the current token does stop it.
+    assert_eq!(
+        stop_v4(&f, DEVICE, &stop_request(&f, &state), now),
+        Ok(json!({"stop":"accepted"}))
+    );
+    assert_stopped(&mut f.engine.lock().unwrap(), "ptt");
+}
+
+#[test]
+fn a_stop_is_accepted_at_once_while_the_engine_is_busy_and_stops_as_soon_as_it_is_free() {
+    let (f, now, state) = controlling(false);
+    key_locally(&mut f.engine.lock().unwrap(), "ptt");
+    let busy = f.engine.lock().unwrap();
+    assert_eq!(
+        stop_v4(&f, DEVICE, &stop_request(&f, &state), now),
+        Ok(json!({"stop":"accepted"}))
+    );
+    assert!(
+        busy.manual_ptt(),
+        "the acceptance did not wait for the engine"
+    );
+    drop(busy);
+    for _ in 0..200 {
+        if !f.engine.lock().unwrap().manual_ptt() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_stopped(&mut f.engine.lock().unwrap(), "ptt");
 }
 
 #[test]
@@ -277,8 +511,10 @@ fn transmit_stop_requires_the_exact_granted_live_lease_and_new_protocol() {
                 }
                 "staleStation"
             }
+            // Station control is what Stop needs (transmit permission only starts): revoking it
+            // refuses the Stop.
             "grant" => {
-                f.authority.permit_transmit(DEVICE, false).unwrap();
+                f.authority.permit_station(DEVICE, false).unwrap();
                 "localPermissionRequired"
             }
             "expiry" => {
@@ -349,19 +585,27 @@ fn transmit_stop_token_is_only_returned_to_the_granted_v4_owner() {
         )
         .unwrap();
     assert!(value["transmitEpoch"].is_null());
+    // Revoking FT8/FT4 transmit keeps the stop token: station control alone may stop.
     f.authority.permit_transmit(DEVICE, false).unwrap();
-    let value = f
-        .authority
-        .handle_version(
-            (f.connection, 4),
-            SESSION,
-            DEVICE,
-            &Request::State { request_id: id() },
-            &f.engine,
-            now,
-        )
-        .unwrap();
-    assert!(value["transmitEpoch"].is_null());
+    let state = |f: &Fixture| {
+        f.authority
+            .handle_version(
+                (f.connection, 4),
+                SESSION,
+                DEVICE,
+                &Request::State { request_id: id() },
+                &f.engine,
+                now,
+            )
+            .unwrap()
+    };
+    assert_eq!(
+        state(&f)["transmitEpoch"],
+        format!("{:016x}", f.authority.transmit.generation())
+    );
+    // Revoking station control ends the lease, and the token with it.
+    f.authority.permit_station(DEVICE, false).unwrap();
+    assert!(state(&f)["transmitEpoch"].is_null());
 }
 
 fn ready_ft(tier: tempo_app::dto::Tier) -> (Fixture, Instant, Value) {
@@ -625,12 +869,13 @@ fn transmit_browser_cq_tx_off_and_stop_preserve_native_ft_behavior() {
         assert!(!f.engine.lock().unwrap().tx_enabled());
         let stop = stop_request(&f, &state);
         assert_eq!(ft_run(&f, &stop).unwrap(), json!({"stop":"accepted"}));
-        assert!(f
-            .engine
-            .lock()
-            .unwrap()
-            .poll_remote_transmit(Instant::now()));
-        assert!(f.engine.lock().unwrap().take_slot_tx_abort());
+        // Stop anything (2026-09-14): the station halts at once rather than leaving the halt to
+        // the radio loop's permit poll, so the poll finds nothing left to stop.
+        let mut e = f.engine.lock().unwrap();
+        assert!(!e.remote_ft_tx_owned());
+        assert!(!e.poll_remote_transmit(Instant::now()));
+        assert!(!e.tx_enabled());
+        assert!(e.take_slot_tx_abort());
     }
 }
 
@@ -703,7 +948,8 @@ fn transmit_local_revocation_does_not_wait_for_a_pending_durable_write() {
     assert!(f.engine.lock().unwrap().poll_remote_transmit(now));
     drop(core);
     let state = control_state_version(&f, Instant::now(), 4);
-    assert!(state["transmitEpoch"].is_null());
+    // The stop token stays (station control alone may stop); starting FT does not.
+    assert!(state["transmitEpoch"].is_string());
     assert!(!state["controls"]["capabilities"]
         .as_array()
         .unwrap()

@@ -441,10 +441,10 @@ export function CockpitHeader({
             useStationStopControl (connected + a station-issued stop token), so stale readings, a
             pending command or the busy banner never disable it. The cockpit's own handler is
             local-only: its extra verbs (stop_cw, rtty_stop, psk_stop) have no remote route. One
-            click, one request. What the station does with it is unchanged and is Operate's too:
-            it retires this browser's transmit permit, and a transmission that permit owns is
-            halted through Engine::halt_tx. It does not reach a transmission started at the
-            station itself. */}
+            click, one request. The station stops ANY transmission for it, however it started
+            (operator decision 2026-09-14): it runs every local stop verb (stop_cw, rtty_stop,
+            psk_stop, sstv_stop, stop_voice, then halt_tx), for any browser holding station
+            control, with or without transmit permission. */}
         {onStopTx && (
           <button disabled={!(control || remoteStop)} type="button" className="cockpit-stoptx"
             data-remote-stop={(!control && remoteStop) || undefined}

@@ -606,7 +606,9 @@ impl Authority {
             .as_ref()
             .is_some_and(|(version, _, _, _)| *version >= 4)
         {
-            value["transmitEpoch"] = if owned && c.transmit_grants.contains(device) {
+            // The stop token goes to any controlling browser (stop anything, 2026-09-14). It starts
+            // nothing: every FT action also checks the transmit grant and its own capability.
+            value["transmitEpoch"] = if owned && c.control_grants.contains(device) {
                 json!(format!("{:016x}", self.transmit.generation()))
             } else {
                 Value::Null
@@ -666,6 +668,7 @@ impl Authority {
                 return Err("stationUnsupported");
             }
             self.stop_transmit(connection, session, device, request, now)?;
+            transmit_stop::stop_station(engine);
             return Ok(json!({"stop":"accepted"}));
         }
         if !matches!(version, 1..=4)

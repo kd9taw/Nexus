@@ -30,7 +30,7 @@ export const DE: PartialCatalog = {
   "remote.controlRequestFailed": "Der Befehl wurde nicht bestätigt. Prüfen Sie die Berechtigung zur Stationssteuerung und die aktuellen Messwerte.",
   "remote.controlNotSent": "Nicht gesendet. Nichts hat die Station erreicht, dort hat sich also nichts geändert. Versuchen Sie es erneut.",
   "remote.controlBusy": "Die Station war beschäftigt, es hat sich nichts geändert. Versuchen Sie es erneut.",
-  "remote.controlLocalHint": "Wenn du einen Browser freigibst, erhält er die Stationssteuerung: unterstützte Empfänger-, Funkgeräte- und Verstärkerfunktionen. Um einen Browser einzuschränken, entziehe sie ihm hier. Senden erfordert eine eigene Berechtigung.",
+  "remote.controlLocalHint": "Wenn du einen Browser freigibst, erhält er die Stationssteuerung: unterstützte Empfänger-, Funkgeräte- und Verstärkerfunktionen sowie Stop TX, das jede Aussendung der Station beendet. Um einen Browser einzuschränken, entziehe sie ihm hier. Eine Aussendung zu starten erfordert eine eigene Berechtigung.",
   "remote.transmitAllow": "FT8/FT4-Senden erlauben",
   "remote.transmitRevoke": "Sendeberechtigung entziehen",
   "remote.transmitLocalHint": "FT8/FT4-Senden braucht zusätzlich die Stationssteuerung. Einmal erlaubt, bleibt es auch über Neustarts erlaubt, bis du es hier entziehst; ein Entzug stoppt die Aussendung dieses Browsers sofort. Gesendet wird erst, wenn der Browser TX On drückt.",
