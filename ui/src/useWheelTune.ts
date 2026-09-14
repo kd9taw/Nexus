@@ -93,7 +93,7 @@ export function useWheelTune(
   // The listener attaches once; a ref keeps it reading the latest props each event.
   const owner = useRef<object>({})
   const stateRef = useRef<WheelTuneOpts & { remote: WheelTuning | null; owner: object; context: ControlContext | null }>({ ...opts, remote: null, owner: owner.current, context: null })
-  stateRef.current = { ...opts, owner: owner.current, enabled: opts.enabled && (control || (!!opts.remoteFrequency && remote.allowed)),
+  stateRef.current = { ...opts, owner: owner.current, enabled: opts.enabled && (control || (!!opts.remoteFrequency && remote.input)),
     remote: !control && opts.remoteFrequency ? remote.controller : null, context: observation.context }
   const targetHzRef = useRef<number | null>(null) // optimistic dial while a burst is in flight
   const accumRef = useRef(0) // sub-step scroll accumulator (pixel-equivalents)

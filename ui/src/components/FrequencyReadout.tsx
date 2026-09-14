@@ -114,13 +114,16 @@ export function FrequencyReadout({
   remoteFrequency = false,
 }: Props) {
   const control = useStationControl(), frequencyControl = useStationCapability('frequency')
+  const blocked = disabled
   disabled = disabled || !(control || (remoteFrequency && frequencyControl))
   const wheel = useRemoteWheelTuning()
   // Remote authority is re-read every second and lapses briefly between replies. The digit spans stay
   // drawn through that gap; only tuning waits for it. Unmounting them made the hit regions (and the
   // hover under a resting pointer) blink with every late heartbeat.
   const digitsShown = digitTune && (control || remoteFrequency)
-  digitTune = digitTune && (control || (remoteFrequency && wheel.allowed))
+  // Digit steps (wheel and keyboard) outlive that gap too: they join the shared wheel burst, which is
+  // sent once control is current again or refused as not sent. Typed entry still needs current control.
+  digitTune = digitTune && (control || (remoteFrequency && wheel.input))
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
   const canEdit = editable && !disabled
@@ -166,7 +169,7 @@ export function FrequencyReadout({
   // (PanelsMenu.tsx:139 records what that costs). Left/Right pick the digit, Up/Down spin it.
   const decades = digits?.flatMap((d) => (d.decade == null ? [] : [d.decade])) ?? [] // high→low
   // `digitTune` (authority now), not `digits` (drawn): digits stay drawn through an authority gap.
-  const canTuneDigits = canEdit && digitTune && digits != null && onTuneHz != null && decades.length > 0
+  const canTuneDigits = editable && !blocked && digitTune && digits != null && onTuneHz != null && decades.length > 0
   const stepDigit = (key: string) => {
     if (!canTuneDigits) return
     const hi = decades[0]
@@ -227,8 +230,10 @@ export function FrequencyReadout({
             ? t('freq.readout.title.editable')
             : t('freq.readout.dial.label'))
       }
-      role={canEdit ? 'button' : undefined}
-      tabIndex={canEdit ? 0 : undefined}
+      // Still a focus stop while only digit tuning is live (a brief Remote control lapse), so a
+      // keyboard burst in progress keeps its focus.
+      role={canEdit || canTuneDigits ? 'button' : undefined}
+      tabIndex={canEdit || canTuneDigits ? 0 : undefined}
       onClick={startEdit}
       onKeyDown={(e) => {
         if (canTuneDigits && ARROW_KEYS.includes(e.key)) {

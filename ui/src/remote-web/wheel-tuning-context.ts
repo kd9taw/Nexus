@@ -7,6 +7,9 @@ const idleSubscribe = () => () => {}
 const idleSnapshot = () => false
 export function useRemoteWheelTuning() {
   const controller = useContext(RemoteWheelTuningContext), capability = useStationCapability('frequency')
+  // `input`: wheel and digit steps outlive a brief control lapse; WheelTuning sends their burst only
+  // once control is current again. `allowed` (a scope press) still needs current control.
+  const held = useStationCapability('frequency', true)
   const pending = useSyncExternalStore(controller?.subscribe ?? idleSubscribe, controller?.getPending ?? idleSnapshot)
-  return { controller, allowed: !!(controller && capability && !pending) }
+  return { controller, allowed: !!(controller && capability && !pending), input: !!(controller && held && !pending) }
 }
