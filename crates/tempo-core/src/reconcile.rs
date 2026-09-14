@@ -523,6 +523,8 @@ mod tests {
             prop_mode: None,
             sat_name: None,
             operator: None,
+            my_grid: None,
+            my_rig: None,
             station_callsign: None,
             extra: Vec::new(),
             contest: None,

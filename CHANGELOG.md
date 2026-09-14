@@ -30,6 +30,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the hidden-count chip now counts continents (and countries picked by name, which it
   missed before). (#229)
 
+- **More in the Logbook: your own grid and rig on each contact, QSL status in the edit form, and
+  a wide table.** Each contact can now carry your own grid square and the rig you used, and both
+  go out in ADIF (MY_GRIDSQUARE, MY_RIG) and come back on import. The rig fills itself from the
+  active radio when a contact is logged; your grid is yours to enter, for the contacts made away
+  from home. Editing a contact now also lets you mark a QSL card sent (bureau, direct or
+  electronic) and a card received. A new "More columns" button above the log shows your grid,
+  rig, name, QTH, state, power and operator in a wider table that scrolls sideways; it is off
+  until you turn it on, so the log looks the same as before. (#239)
+
 ### Fixed
 
 - **A QRZ or eQSL upload that runs out of retries now says so.** After 20 failed tries Nexus used

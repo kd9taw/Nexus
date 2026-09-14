@@ -203,6 +203,15 @@ pub struct QsoRecord {
     /// logged it (multi-op and club logs depend on the distinction).
     pub operator: Option<String>,
     pub station_callsign: Option<String>,
+    /// ADIF `MY_GRIDSQUARE` — the operator's OWN grid square for this contact (#239). Modelled so
+    /// the log can show and edit it; it arrives from an import or the edit form. Deliberately NOT
+    /// stamped from the live setting at log time: in named-location mode the LoTW batch sends
+    /// each record's own fields to TQSL (`-a compliant`), so stamping every contact would change
+    /// what TQSL is asked to sign — an operator decision, not a side effect of showing a column.
+    pub my_grid: Option<String>,
+    /// ADIF `MY_RIG` — the station's radio for this contact (#239), stamped from the active radio
+    /// profile at log time when the record does not already carry one.
+    pub my_rig: Option<String>,
     /// Every ADIF field this parser does NOT model, preserved verbatim
     /// (uppercased name, untouched value) and re-emitted on write — BY
     /// CONSTRUCTION (the parser CONSUMES what it models; the remainder lands
@@ -870,6 +879,13 @@ impl Logbook {
                 }
                 if rec.station_callsign.is_none() {
                     rec.station_callsign = old.station_callsign.clone();
+                }
+                // #239: same rule — an edit that leaves them empty keeps what the record had.
+                if rec.my_grid.is_none() {
+                    rec.my_grid = old.my_grid.clone();
+                }
+                if rec.my_rig.is_none() {
+                    rec.my_rig = old.my_rig.clone();
                 }
                 if rec.extra.is_empty() {
                     rec.extra = old.extra.clone();
@@ -2246,6 +2262,12 @@ pub fn adif_record(r: &QsoRecord) -> String {
     if let Some(sc) = &r.station_callsign {
         out.push_str(&field("STATION_CALLSIGN", sc));
     }
+    if let Some(g) = &r.my_grid {
+        out.push_str(&field("MY_GRIDSQUARE", g));
+    }
+    if let Some(rig) = &r.my_rig {
+        out.push_str(&field("MY_RIG", rig));
+    }
     // Emit each confirming channel FAITHFULLY (the old two-bool collapse
     // rewrote paper cards as LOTW_QSL_RCVD on every save). Legacy in-memory
     // records (bools set, per-source empty) keep the old best-guess emission
@@ -2477,11 +2499,12 @@ pub fn adif_record_with_station(r: &QsoRecord, station_call: &str, my_grid: &str
     if !call.is_empty() && r.station_callsign.is_none() {
         extra.push_str(&field("STATION_CALLSIGN", call));
     }
-    // Same duplicate-field guard for MY_GRIDSQUARE: it is not a modelled field,
-    // so an imported record's own copy rides in `extra` and is already emitted
-    // by adif_record — appending a second, conflicting one hands TQSL undefined
-    // territory on the award-signing path.
-    if !grid.is_empty() && !r.extra.iter().any(|(k, _)| k == "MY_GRIDSQUARE") {
+    // Same duplicate-field guard for MY_GRIDSQUARE: a record carrying its own (#239 modelled
+    // it; an import used to park it in `extra`) has it emitted by adif_record already —
+    // appending a second, conflicting one hands TQSL undefined territory on the
+    // award-signing path. The `extra` check stays for a record built before the field existed.
+    if !grid.is_empty() && r.my_grid.is_none() && !r.extra.iter().any(|(k, _)| k == "MY_GRIDSQUARE")
+    {
         extra.push_str(&field("MY_GRIDSQUARE", grid));
     }
     if extra.is_empty() {
@@ -3402,6 +3425,15 @@ fn record_from(mut f: std::collections::HashMap<String, String>) -> Option<QsoRe
             .remove("STATION_CALLSIGN")
             .map(|s| s.trim().to_ascii_uppercase())
             .filter(|s| !s.is_empty()),
+        // #239: consumed like the two above, so `extra` never carries a modelled tag.
+        my_grid: f
+            .remove("MY_GRIDSQUARE")
+            .map(|s| s.trim().to_ascii_uppercase())
+            .filter(|s| !s.is_empty()),
+        my_rig: f
+            .remove("MY_RIG")
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()),
         // ⭐ The contest block is CONSUMED, exactly as OPERATOR and STATION_CALLSIGN
         // above are — `remove` before the `drain` that fills `extra`. Three things
         // follow, and the third is why this is not cosmetic: the write direction and
@@ -3653,6 +3685,8 @@ mod tests {
             prop_mode: None,
             sat_name: None,
             operator: None,
+            my_grid: None,
+            my_rig: None,
             station_callsign: None,
             extra: Vec::new(),
             contest: None,
@@ -4334,6 +4368,78 @@ mod tests {
         assert!(!adif_record(plain).contains("APP_NEXUS"));
     }
 
+    /// #239: the operator's own location and rig are per-contact facts a DX/awards log keeps
+    /// (ADIF `MY_GRIDSQUARE`, `MY_RIG`). They were not modelled — an import parked them in
+    /// `extra`, where no form could show or edit them. Modelled, a parser CONSUMES them, so
+    /// `extra` never carries a tag this build models (its own doc comment's claim).
+    #[test]
+    fn my_gridsquare_and_my_rig_are_modelled_not_parked_in_extra() {
+        let r = &parse_adif(
+            "<CALL:4>W1AW<BAND:3>20m<MODE:3>FT8<MY_GRIDSQUARE:6>en52xa<MY_RIG:6>IC-705<EOR>",
+        )[0];
+        let parked: Vec<&str> = r.extra.iter().map(|(k, _)| k.as_str()).collect();
+        assert!(
+            !parked.contains(&"MY_GRIDSQUARE") && !parked.contains(&"MY_RIG"),
+            "a modelled field must not ride in extra: {parked:?}"
+        );
+    }
+
+    /// #239: the edit form sends the record back; an edit that leaves the two new fields empty must
+    /// not strip what the record carried — the rule TIME_OFF, FREQ_RX and the park refs follow.
+    #[test]
+    fn an_edit_that_leaves_my_grid_and_rig_empty_keeps_them() {
+        let mut lb = Logbook::new();
+        let mut r = rec("W1AW", "20m", 1_700_000_000);
+        r.my_grid = Some("EN52XA".into());
+        r.my_rig = Some("IC-705".into());
+        lb.add(r);
+
+        let mut edited = lb.records()[0].clone();
+        edited.name = Some("Hiram".into());
+        edited.my_grid = None;
+        edited.my_rig = None;
+        assert!(lb.update_record(0, edited));
+        let r = &lb.records()[0];
+        assert_eq!(r.name.as_deref(), Some("Hiram"), "the edit landed");
+        assert_eq!(r.my_grid.as_deref(), Some("EN52XA"));
+        assert_eq!(r.my_rig.as_deref(), Some("IC-705"));
+
+        // An edit that sets a new value takes it.
+        let mut changed = lb.records()[0].clone();
+        changed.my_rig = Some("FT-991A".into());
+        assert!(lb.update_record(0, changed));
+        assert_eq!(lb.records()[0].my_rig.as_deref(), Some("FT-991A"));
+    }
+
+    /// #239: both fields survive the record's own round trip, each written once, and an ordinary
+    /// contact that carries neither gets no empty tag.
+    #[test]
+    fn my_gridsquare_and_my_rig_round_trip_through_adif() {
+        let first = &parse_adif(
+            "<CALL:4>W1AW<BAND:3>20m<MODE:3>FT8<MY_GRIDSQUARE:6>en52xa<MY_RIG:6>IC-705<EOR>",
+        )[0];
+        assert_eq!(first.my_grid.as_deref(), Some("EN52XA"));
+        assert_eq!(first.my_rig.as_deref(), Some("IC-705"));
+        let out = adif_record(first);
+        assert_eq!(out.matches("MY_GRIDSQUARE").count(), 1, "{out}");
+        assert!(out.contains("<MY_GRIDSQUARE:6>EN52XA"), "{out}");
+        assert_eq!(out.matches("MY_RIG").count(), 1, "{out}");
+        assert!(out.contains("<MY_RIG:6>IC-705"), "{out}");
+        let again = &parse_adif(&out)[0];
+        assert_eq!(again, first, "the record survives its own round trip");
+
+        let plain = &parse_adif("<CALL:4>W1AW<BAND:3>20m<MODE:3>FT8<EOR>")[0];
+        let out = adif_record(plain);
+        assert!(
+            !out.contains("MY_GRIDSQUARE") && !out.contains("MY_RIG"),
+            "no empty tag on a contact that carries neither: {out}"
+        );
+        // The LoTW ADIF-location path adds the live grid only when the record has none of its own.
+        let signed = adif_record_with_station(first, "KD9TAW", "FN31");
+        assert_eq!(signed.matches("MY_GRIDSQUARE").count(), 1, "{signed}");
+        assert!(signed.contains("<MY_GRIDSQUARE:6>EN52XA"), "{signed}");
+    }
+
     /// The cost ruling, pinned: the contest block costs ONE POINTER on a record that
     /// does not carry one. If this number moves, somebody inlined the fields — which
     /// is ≈184 bytes on every record in a lifetime log, against 8.
@@ -4353,7 +4459,10 @@ mod tests {
 
     /// `size_of::<QsoRecord>()` as of this batch. A deliberate change updates it in
     /// one place, with the diff saying so; an accidental one is a red test.
-    const QSO_RECORD_SIZE: usize = 768;
+    ///
+    /// 768 → 816 (#239): `my_grid` and `my_rig`, two `Option<String>` at 24 bytes each — modelled
+    /// ADIF fields the log shows and edits, not a contest block inlined.
+    const QSO_RECORD_SIZE: usize = 816;
 
     #[test]
     fn tempodeep_gets_its_own_submode_not_tempofasts() {
@@ -7398,6 +7507,8 @@ mod operator_split_tests {
             prop_mode: None,
             sat_name: None,
             operator: operator.map(|o| o.to_string()),
+            my_grid: None,
+            my_rig: None,
             station_callsign: None,
             extra: Vec::new(),
             contest: None,
@@ -7520,6 +7631,8 @@ mod qsl_card_tests {
             prop_mode: None,
             sat_name: None,
             operator: None,
+            my_grid: None,
+            my_rig: None,
             station_callsign: None,
             extra: Vec::new(),
             contest: None,
@@ -7648,6 +7761,8 @@ mod activation_split_tests {
             prop_mode: None,
             sat_name: None,
             operator: None,
+            my_grid: None,
+            my_rig: None,
             station_callsign: call_used.map(|c| c.to_string()),
             extra: Vec::new(),
             contest: None,

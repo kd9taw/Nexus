@@ -12561,6 +12561,30 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 [data-viewport='xs'] .logbook-row .log-rowbtn {
   opacity: 1;
 }
+/* #239 "More columns": the wide log. `.log-scroll` stays the ONE scroll owner and only gains
+   the horizontal axis in this mode; the sticky search + header ride inside it, so header and
+   rows scroll sideways together. 19 tracks = the 12 above with seven inserted before Notes
+   (my grid, rig, name, QTH, state, power, operator). The floor is on the scroller's CONTENT,
+   so nothing is clipped — it scrolls. Off, none of this applies and the compact table and its
+   narrow-viewport column rules are exactly as they were; on, every column shows at any width,
+   because the point of the mode is to see them all. */
+.logbook-table.wide .log-scroll {
+  overflow-x: auto;
+}
+.logbook-table.wide .log-sticky,
+.logbook-table.wide .log-rows {
+  min-width: 118rem;
+}
+.logbook-table.wide .logbook-row {
+  grid-template-columns:
+    1fr 1.3fr 0.7fr 1fr 0.7fr 0.6fr 0.6fr 1.6fr 0.9fr 0.7fr
+    0.8fr 1.1fr 1fr 1fr 0.5fr 0.6fr 0.8fr
+    1.4fr minmax(160px, 0.8fr);
+}
+[data-viewport='sm'] .logbook-table.wide .logbook-row .log-cell,
+[data-viewport='xs'] .logbook-table.wide .logbook-row .log-cell {
+  display: block;
+}
 
 /* scrollbars */
 ::-webkit-scrollbar {

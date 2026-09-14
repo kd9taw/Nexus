@@ -38,6 +38,11 @@ beside the search box filters to contacts without an award-eligible (LoTW/paper)
 confirmation — a QSL you've *requested* but not received still counts as
 unconfirmed and stays in that list.
 
+**More columns**, beside it, widens the table to show your own grid and rig for
+each contact, plus the name, QTH, state, power and operator the compact table
+leaves out. The wider table scrolls sideways. It stays off until you turn it on,
+and Nexus remembers your choice on this computer.
+
 <!-- TODO: capture screenshot — the QSL column tooltip explaining L / C / E eligibility -->
 
 ## Core workflows
@@ -49,6 +54,13 @@ were actually running**: log a contact from the [Phone cockpit](phone.md) and th
 draft says SSB, from [CW](cw.md) it says CW — no more accidental "FT8" voice
 contacts. Edit any field inline; the store round-trips to ADIF, so an export
 re-imports without loss.
+
+The form also takes **My grid** and **Rig**, your side of the contact (ADIF
+MY_GRIDSQUARE and MY_RIG). Rig fills itself from the active radio when a contact
+is logged. My grid does not fill itself: enter it for contacts made away from
+home. When you edit an existing contact, the form adds **QSL sent** (not sent,
+bureau, direct or electronic) and **Card received**, the same marks as the row's
+QSL menu. LoTW and eQSL confirmations still come only from those services.
 
 ![The manual QSO form, empty: CALL with a QRZ button beside it, then GRID, BAND, FREQ (MHz), MODE, RST SENT, RST RCVD, DATE + TIME (UTC), STATE and TX POWER (W) across the top row; PARK (WORKED), PARK (MINE), NAME, QTH and COMMENT on the second; a NOTES box below them and a Log button at the bottom right.](../img/manual/logbook-entry-form.webp)
 

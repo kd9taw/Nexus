@@ -1815,6 +1815,12 @@ pub struct LoggedQso {
     pub operator: Option<String>,
     #[serde(default)]
     pub station_callsign: Option<String>,
+    /// #239: the operator's own grid (ADIF `MY_GRIDSQUARE`) and rig (`MY_RIG`) for this contact.
+    /// On the DTO so the Logbook shows and edits them, and a held prompt-to-log record keeps them.
+    #[serde(default)]
+    pub my_grid: Option<String>,
+    #[serde(default)]
+    pub my_rig: Option<String>,
     #[serde(default)]
     pub extra: Vec<(String, String)>,
 }
@@ -1928,6 +1934,8 @@ impl From<tempo_core::logbook::QsoRecord> for LoggedQso {
             sat_name: r.sat_name,
             operator: r.operator,
             station_callsign: r.station_callsign,
+            my_grid: r.my_grid,
+            my_rig: r.my_rig,
             extra: r.extra,
         }
     }
@@ -2029,6 +2037,8 @@ impl From<LoggedQso> for tempo_core::logbook::QsoRecord {
             sat_name: q.sat_name,
             operator: q.operator,
             station_callsign: q.station_callsign,
+            my_grid: q.my_grid,
+            my_rig: q.my_rig,
             extra: q.extra,
             contest: None,
         }

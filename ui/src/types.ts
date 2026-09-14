@@ -1826,6 +1826,10 @@ export interface LoggedQso {
   satName?: string | null
   operator?: string | null
   stationCallsign?: string | null
+  /** #239: the operator's own grid square for this contact (ADIF MY_GRIDSQUARE). */
+  myGrid?: string | null
+  /** #239: the radio used for this contact (ADIF MY_RIG). */
+  myRig?: string | null
   extra?: [string, string][]
 }
 

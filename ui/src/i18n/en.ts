@@ -1004,6 +1004,28 @@ export const EN = {
   'logbook.column.time': 'Time (UTC)',
   'logbook.column.park': 'Park',
   'logbook.column.actions': 'Edit / delete',
+  // #239 More columns + the edit form's own-side and QSL fields. `(W)` is the unit symbol and
+  // MY_GRIDSQUARE / MY_RIG are ADIF field names — tokens inside the sentence.
+  'logbook.columns.more.label': 'More columns',
+  'logbook.columns.more.title':
+    'Show your grid, rig, name, QTH, state, power and operator in a wider table you can scroll sideways',
+  'logbook.column.myGrid': 'My grid',
+  'logbook.column.myRig': 'Rig',
+  'logbook.column.name': 'Name',
+  'logbook.column.qth': 'QTH',
+  'logbook.column.state': 'State',
+  'logbook.column.power': 'Power (W)',
+  'logbook.column.operator': 'Operator',
+  'logbook.field.myGrid.label': 'My grid',
+  'logbook.field.myGrid.title':
+    'Your own grid square for this contact (ADIF MY_GRIDSQUARE) — where you were, if not at home',
+  'logbook.field.myRig.label': 'Rig',
+  'logbook.field.myRig.title':
+    'The radio used for this contact (ADIF MY_RIG). Filled from the active radio when a contact is logged.',
+  'logbook.field.qslSent.label': 'QSL sent',
+  'logbook.field.qslSent.none': 'Not sent',
+  'logbook.field.qslSent.sent': 'Sent',
+  'logbook.field.qslCard.label': 'Card received',
   'logbook.empty': 'No logged contacts yet.',
   'logbook.emptySearch': 'No contacts match “{{query}}”.',
 

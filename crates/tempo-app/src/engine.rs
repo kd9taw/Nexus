@@ -9709,6 +9709,17 @@ impl Engine {
         if rec.station_callsign.is_none() {
             rec.station_callsign = self.station_callsign_now();
         }
+        // #239: WHICH RIG MADE IT — the active radio's model, stamped at this funnel on the same
+        // terms as STATION_CALLSIGN: a record arriving with its own rig keeps it, and a station
+        // with no rig configured stamps nothing rather than the words. "No rig" is spelled
+        // "None / VOX" by `Settings::default` (and "None" elsewhere), so the test is the prefix.
+        // The operator's OWN GRID is deliberately not stamped here — see `QsoRecord::my_grid`.
+        if rec.my_rig.is_none() {
+            let rig = self.settings.rig_model_name.trim();
+            if !rig.is_empty() && !rig.to_ascii_lowercase().starts_with("none") {
+                rec.my_rig = Some(rig.to_string());
+            }
+        }
         // Resolve the DXCC entity (country) if the record doesn't already carry one
         // — so manually-logged contacts get a country too, not just auto-QSOs.
         if rec.country.is_none() {
@@ -9845,7 +9856,13 @@ impl Engine {
             } else {
                 tag("STATION_CALLSIGN", &self.settings.mycall)
             },
-            tag("MY_GRIDSQUARE", &self.settings.mygrid),
+            // #239: a record carrying its own grid has it in `adif` already; a second, live copy
+            // would hand HRD two conflicting MY_GRIDSQUARE fields for one contact.
+            if rec.my_grid.is_some() {
+                String::new()
+            } else {
+                tag("MY_GRIDSQUARE", &self.settings.mygrid)
+            },
         );
         if let Some(pos) = adif.find("<EOR>") {
             adif.insert_str(pos, &station);
@@ -15659,6 +15676,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
             // Stamped at CONTACT time, not left for the funnel: with `prompt_to_log` on, this
             // record waits in `pending_log` (and on disk) until the operator confirms, so a
             // later read would be the call in force at the click, not at the contact.
+            my_grid: None,
+            my_rig: None,
             station_callsign: self.station_callsign_now(),
             extra: Vec::new(),
             contest: None,
@@ -19694,6 +19713,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
             operator: None,
             // Same reason as the RTTY builder: `prompt_to_log` can park this record for as long
             // as the operator takes to confirm, so the call is captured now.
+            my_grid: None,
+            my_rig: None,
             station_callsign: self.station_callsign_now(),
             extra: Vec::new(),
             contest: None,
@@ -28810,6 +28831,58 @@ mod tests {
         );
     }
 
+    /// #239: a logged contact carries the rig that made it — the active radio, stamped at the log
+    /// funnel like STATION_CALLSIGN — and never an own-grid invented from the setting: that one is
+    /// left for the operator (the LoTW batch hands each record's own fields to TQSL).
+    #[test]
+    fn a_logged_contact_carries_the_rig_but_not_an_invented_grid() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.rig_model_name = "Icom IC-705".into();
+        let rec = e.qso_record("W9XYZ".into(), None, None);
+        e.log_qso(rec);
+        let log = e.get_log();
+        assert_eq!(log.len(), 1);
+        assert_eq!(log[0].my_rig.as_deref(), Some("Icom IC-705"));
+        assert_eq!(
+            log[0].my_grid, None,
+            "own grid is never stamped from the setting"
+        );
+
+        // A record that arrives with its own rig keeps it.
+        let mut own = e.qso_record("K9AAA".into(), None, None);
+        own.my_rig = Some("FT-991A".into());
+        e.log_qso(own);
+        // No rig configured stamps nothing rather than the words. The real default is
+        // "None / VOX" (Settings::default), not a bare "None".
+        e.settings.rig_model_name = "None / VOX".into();
+        let bare = e.qso_record("N0CALL".into(), None, None);
+        e.log_qso(bare);
+        let log = e.get_log();
+        let rig = |call: &str| {
+            log.iter()
+                .find(|r| r.call == call)
+                .and_then(|r| r.my_rig.clone())
+        };
+        assert_eq!(rig("K9AAA").as_deref(), Some("FT-991A"));
+        assert_eq!(rig("N0CALL"), None);
+    }
+
+    /// #239: a record that carries its own grid hands HRD that one, once — not the record's plus
+    /// a second, conflicting copy from the live setting (the STATION_CALLSIGN guard's twin).
+    #[test]
+    fn the_hrd_datagram_uses_the_records_own_grid_not_a_second_one() {
+        let e = Engine::new("K2DEF", "FN31", 0);
+        let mut rec = e.qso_record("W9XYZ".into(), None, None);
+        rec.my_grid = Some("EN52XA".into());
+        let d = e.hrd_datagram(&rec);
+        assert_eq!(d.matches("MY_GRIDSQUARE").count(), 1, "{d}");
+        assert!(d.contains("<MY_GRIDSQUARE:6>EN52XA"), "{d}");
+        // Control: a record without its own still gets the live setting, as before.
+        let plain = e.qso_record("W9XYZ".into(), None, None);
+        let d = e.hrd_datagram(&plain);
+        assert!(d.contains("<MY_GRIDSQUARE:4>FN31"), "{d}");
+    }
+
     /// #293 (mi0ayr): the log strip fills NAME from its own callbook lookup, but the FT
     /// sequencer's record builder hard-coded `name: None`, so every auto-logged FT8/FT4 contact
     /// reached the Logbook, ADIF and the uploads nameless even when the callsign card had
@@ -30162,6 +30235,8 @@ mod tests {
             prop_mode: None,
             sat_name: None,
             operator: None,
+            my_grid: None,
+            my_rig: None,
             station_callsign: None,
             extra: Vec::new(),
             contest: None,
@@ -31135,6 +31210,8 @@ mod tests {
             prop_mode: None,
             sat_name: None,
             operator: None,
+            my_grid: None,
+            my_rig: None,
             station_callsign: None,
             extra: Vec::new(),
             contest: None,
@@ -32725,6 +32802,8 @@ mod tests {
             prop_mode: None,
             sat_name: None,
             operator: None,
+            my_grid: None,
+            my_rig: None,
             station_callsign: None,
             extra: Vec::new(),
             contest: None,
