@@ -8270,7 +8270,10 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   align-items: center;
   gap: var(--space-2);
   min-width: 0;
-  max-width: 100%;
+  /* NO max-width here: the surface class (.freq-channel caps a channel label at 150px) owns it.
+     A `max-width: 100%` in this later rule outranked that cap at equal specificity and let an
+     Operate/RTTY channel trigger grow to 215-268px, pushing Tune off the header at 110% zoom
+     (measured in the headless-Chrome harness). */
   white-space: nowrap;
 }
 .band-menu-trigger:disabled {
@@ -13256,7 +13259,12 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   min-height: 44px;
 }
 .ch-freq {
-  flex: 0 0 auto;
+  /* Shrinkable (0 1 auto) since Tune moved into this cluster (#287): with the band control AND
+     Tune/ATU here, the cluster's max-content outgrows a 1024-wide header at 110-125% zoom, and a
+     non-shrinking flex item overflows instead of wrapping — measured, Tune off-screen. Allowed to
+     shrink, its own flex-wrap below drops Tune/ATU to a second line of the cluster. The readout
+     keeps its min-content width, so the number itself never compresses. */
+  flex: 0 1 auto;
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -13306,6 +13314,15 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   align-items: center;
   gap: var(--space-3);
   flex-wrap: wrap;
+}
+/* The band control + Tune as one unit: it wraps as a whole, so Tune stays beside the band
+   control on whichever line the pair lands (#287, measured at 1024x768 110-125%). */
+.ch-bandtune {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
 }
 /* #287: Tune (and the rig's ATU beside it) directly after the band control — one fixed place in
    every cockpit header. A rigid group so the two never split across a wrap. */

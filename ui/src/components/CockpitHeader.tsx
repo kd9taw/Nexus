@@ -292,6 +292,11 @@ export function CockpitHeader({
           />
         </div>
         {frequencyExtras && <div className="ch-freq-extras">{frequencyExtras}</div>}
+        {/* The band control and Tune are ONE wrapping unit (.ch-bandtune): when this cluster wraps
+            at 110-125% zoom they move to the next line together, so Tune never separates from
+            the band control (measured in the layout harness — wrapped individually, Tune landed
+            at the far left of the next line). */}
+        <div className="ch-bandtune">
         <div className="ch-band">{bandControl}</div>
         {/* #287 — TUNE HAS ONE FIXED PLACE: directly after the band control, in every cockpit that
             uses this header. It used to sit at the end of the right-pinned actions cluster and
@@ -341,6 +346,7 @@ export function CockpitHeader({
             )}
           </div>
         )}
+        </div>
       </div>
 
       {children != null && <div className="ch-mode-extras">{children}</div>}
