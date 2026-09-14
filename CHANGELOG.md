@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **You can hide the Logbook globe (D#278).** Settings ▸ Appearance ▸ Workspace has a new Logbook
+  globe switch. Turn it off and the Logbook table starts at the top of the screen. It is on by
+  default.
+
 ### Fixed
 
 - **On a first launch the Needed window waits for the setup wizard (#240).** The Needed board used to

@@ -1810,6 +1810,9 @@ UI-only preferences (applied live, not via Save) and the section toggles.
   percentage instead. The waterfall stays sharp either way.
 - **Density** — Comfortable or Compact. "How tightly rows and controls pack.
   Compact fits more on screen."
+- **Logbook globe** — shows the 3-D globe above the Logbook table (on by
+  default). Turn it off and the table starts at the top. Computers whose
+  graphics cannot draw the globe never show it, whatever this says.
 - **Pane sizes** — **Reset pane sizes** restores the default pane widths. Pane
   layout itself is set in the cockpits: drag the dividers between panes to resize
   (double-click a divider to reset), and use the ⊞ menu to show or hide panes.

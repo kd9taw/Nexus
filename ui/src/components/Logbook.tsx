@@ -11,6 +11,7 @@ import { T } from '../i18n/T'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import type { LoggedActivation, LoggedQso } from '../types'
 import { gpuCapableForGlobe } from '../gpu'
+import { useLogbookGlobe } from '../features/logbookGlobe'
 import { SpotDialog } from './SpotDialog'
 
 // The 3-D QSO globe band. Lazy so three.js/react-globe.gl only download when the
@@ -765,7 +766,10 @@ export function Logbook({
   // 3-D globe band, gated on a real GPU (software renderers would make the whole
   // Logbook crawl — those machines just get the plain table). Probed once per mount.
   const [globeOk] = useState(gpuCapableForGlobe)
-  const globeShown = control && globeOk && log.length > 0
+  // D#278: the operator's own switch (Settings ▸ Appearance ▸ Workspace). Off = no band at all,
+  // and the table starts at the top.
+  const [globeWanted] = useLogbookGlobe()
+  const globeShown = control && globeOk && globeWanted && log.length > 0
 
   // #162: rows whose Comment is opened to its full length, keyed like the row itself. The column
   // clips to one line; clicking the comment wraps it in place (the virtualizer measures the
