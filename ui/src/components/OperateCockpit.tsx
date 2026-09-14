@@ -41,7 +41,7 @@ import {
   stdMessageList,
   toggleIgnored,
 } from '../txMessages'
-import { atuTune, openPanelWindow, getSettings, notifyErase, setSettings, setMsk144Period, type FdRulesetDto } from '../api'
+import { atuTune, closePanelWindow, openPanelWindow, getSettings, notifyErase, setSettings, setMsk144Period, type FdRulesetDto } from '../api'
 import { FdAdvisories } from './FdAdvisories'
 import { pointRotatorAtCall, redecode, startCq, startQsoRecording, stopQsoRecording } from '../api'
 import { setDecodeDepth } from '../api'
@@ -606,7 +606,14 @@ export function OperateCockpit({
     setPanelState('waterfall', 'popped')
     void openPanelWindow('waterfall')
   }
-  const redockWaterfall = () => setPanelState('waterfall', 'docked')
+  // #263: re-dock also closes the torn-off window. It used to flip the state only, so the
+  // strip came back in the cockpit while the pop-out stayed up beside it — two waterfalls.
+  // The pop-out's own unmount then clears the detached flag; the storage listener above sees
+  // a waterfall that is already docked and does nothing.
+  const redockWaterfall = () => {
+    setPanelState('waterfall', 'docked')
+    void closePanelWindow('waterfall').catch(() => {})
+  }
 
   // RPT = the DX's current heard SNR (case-insensitive), −10 when unheard.
   const dxSnr = snrForCall(snap.stations, dxCall)

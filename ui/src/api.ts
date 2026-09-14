@@ -836,6 +836,12 @@ export async function openPanelWindow(panel: string): Promise<void> {
   await invoke('open_panel_window', { panel })
 }
 
+/** Close a panel's torn-off window if it is open (#263 — re-dock must not leave a second copy
+ *  up). A no-op when that window is not open. */
+export async function closePanelWindow(panel: string): Promise<void> {
+  await invoke('close_panel_window', { panel })
+}
+
 /** Snap the current band-map pop-out window to the left/right screen edge as a full-height
  *  vertical strip (or 'none' to un-dock). The dock + geometry persist across launches. */
 export async function dockBandmapWindow(side: 'left' | 'right' | 'none'): Promise<void> {

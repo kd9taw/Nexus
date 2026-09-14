@@ -22,6 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The callsign card updates when the contact is logged (#282).** On the FT8/FT4 screen the card kept
   showing "New DXCC!" (or a new band or mode) for a station you had just worked, until you picked a
   different station. It now re-reads your log the moment the QSO is logged and shows it as worked.
+- **Re-docking the waterfall closes its pop-out window (#263).** Clicking re-dock put the waterfall
+  back on the FT8/FT4 screen but left the torn-off window open, so you had two. The outside window
+  now closes when you re-dock.
 
 ### Security
 

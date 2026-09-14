@@ -19,6 +19,7 @@ vi.mock('../api', () => {
     getSettings: vi.fn(() => Promise.resolve({})),
     setSettings: vi.fn(nothing),
     openPanelWindow: vi.fn(nothing),
+    closePanelWindow: vi.fn(nothing),
     notifyErase: vi.fn(nothing),
     pointRotatorAtCall: vi.fn(nothing),
     redecode: vi.fn(nothing),
@@ -164,6 +165,18 @@ describe('OperateCockpit — waterfall removal', () => {
     expect(container.querySelector('.cockpit-waterfall')).toBeNull()
     expect(screen.queryByRole('separator', { name: 'waterfall height' })).toBeNull()
     expect(container.querySelector('.wf-redock')).not.toBeNull()
+  })
+
+  it('re-dock also CLOSES the torn-off waterfall window — exactly one waterfall afterwards (#263)', async () => {
+    // Re-dock put the strip back in the cockpit but never told the pop-out window to close,
+    // so the operator had two waterfalls until they closed the outside one by hand.
+    const api = await import('../api')
+    const close = api.closePanelWindow as unknown as ReturnType<typeof vi.fn>
+    close.mockClear()
+    const { container, panels } = renderCockpit({ waterfall: 'popped' })
+    fireEvent.click(container.querySelector('.wf-redock')!)
+    expect(panels.setPanelState).toHaveBeenCalledWith('waterfall', 'docked')
+    expect(close, 're-dock left the torn-off window open').toHaveBeenCalledWith('waterfall')
   })
 })
 
