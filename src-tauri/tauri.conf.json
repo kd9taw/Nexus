@@ -68,6 +68,7 @@
       "resources/deepcw/*": "resources/deepcw/",
       "resources/tles/*": "resources/tles/",
       "../licenses/remote/*": "resources/remote/",
+      "../licenses/openssl/*": "resources/openssl/",
       "../COPYING": "COPYING",
       "../NOTICE": "NOTICE"
     },
@@ -93,7 +94,7 @@
     },
     "linux": {
       "deb": {
-        "depends": ["libhamlib-utils", "libgfortran5", "libfftw3-single3"]
+        "depends": ["libhamlib-utils", "libgfortran5", "libfftw3-single3", "libssl3"]
       }
     },
     "macOS": {

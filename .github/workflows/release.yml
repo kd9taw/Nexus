@@ -151,6 +151,10 @@ jobs:
             [ -s "/tmp/dc/usr/lib/Nexus/resources/hamlib/$f" ] \
               || { echo "$f missing from the .deb"; exit 1; }
           done
+          # OPENSSL: HRDLog.net uploads link libssl.so.3 (native-tls), a load-time dependency of
+          # the whole binary, so the .deb must declare it or apt installs an app that cannot start.
+          dpkg-deb -f "$deb" Depends | grep -qw libssl3 \
+            || { echo "the .deb does not depend on libssl3: $(dpkg-deb -f "$deb" Depends)"; exit 1; }
           # …and the same inside the AppImage, which is the package that was actually broken.
           "$app" --appimage-extract >/dev/null
           hl=squashfs-root/usr/lib/Nexus/resources/hamlib
@@ -228,6 +232,18 @@ jobs:
           [ -e "$appdir/squashfs-root/usr/lib/libwebkit2gtk-4.1.so.0" ] \
             || { echo "AppDir looks wrong: libwebkit2gtk is missing too — the check is broken, not the bundle"; exit 1; }
           echo "AppImage: libwayland-client.so.0 absent, webkit present — ok"
+          # OPENSSL MUST BE BUNDLED, WITH ITS LICENCE. The binary links libssl.so.3 and
+          # libcrypto.so.3 for HRDLog.net uploads (native-tls), so an AppImage without them does
+          # not start at all on a host with no OpenSSL 3. linuxdeploy copies them because they are
+          # not on AppImage's excludelist — asserted here rather than trusted. Shipping them
+          # redistributes OpenSSL, so its Apache-2.0 text has to be in the same file (§4a).
+          for l in libssl.so.3 libcrypto.so.3; do
+            [ -s "$appdir/squashfs-root/usr/lib/$l" ] \
+              || { echo "$l missing from the AppImage — it would not start without a host OpenSSL 3"; exit 1; }
+          done
+          [ -s "$appdir/squashfs-root/usr/lib/Nexus/resources/openssl/LICENSE.txt" ] \
+            || { echo "OpenSSL's licence text is missing from the AppImage"; exit 1; }
+          echo "AppImage: libssl.so.3, libcrypto.so.3 and OpenSSL's licence present — ok"
           mkdir -p out && cp "$app" out/
           # NAME THE PC PACKAGE FOR THE MACHINE IT INSTALLS ON, not just its architecture
           # (operator ask, 1.0.0). Tauri emits Nexus_<ver>_amd64.deb; the Pi jobs emit

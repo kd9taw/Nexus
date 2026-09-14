@@ -98,6 +98,18 @@ pub fn build_upload_body(q: &HrdLogQuery) -> String {
     )
 }
 
+/// Remove the upload code from text HRDLog sent back (an `<error>` message) before it reaches a
+/// toast or the connection log. HRDLog has not been seen echoing the code, but the reply is text
+/// the server chooses and the code is the one secret in the request, so both forms the request
+/// carried — raw and percent-encoded — are replaced.
+pub fn scrub_code(text: &str, code: &str) -> String {
+    if code.is_empty() {
+        return text.to_string();
+    }
+    text.replace(code, "<redacted>")
+        .replace(&pct(code), "<redacted>")
+}
+
 /// Extract the text between the first `<tag>` and its `</tag>` (case-insensitive
 /// tag match), or `None`. Minimal substring scan — HRDLog's reply is a tiny fixed
 /// XML, so this avoids pulling an XML parser into the pure core.
@@ -174,6 +186,19 @@ mod tests {
         let dbg = format!("{:?}", q());
         assert!(dbg.contains("<redacted>"));
         assert!(!dbg.contains("secret code&1"));
+    }
+
+    #[test]
+    fn scrub_code_removes_the_raw_and_encoded_code() {
+        let msg = "Invalid token secret code&1 (sent as secret%20code%261)";
+        assert_eq!(
+            scrub_code(msg, "secret code&1"),
+            "Invalid token <redacted> (sent as <redacted>)"
+        );
+        // Control: a message without the code passes through untouched, and an empty code
+        // (nothing stored) cannot turn every gap into a redaction marker.
+        assert_eq!(scrub_code("Unknown user", "secret code&1"), "Unknown user");
+        assert_eq!(scrub_code("Unknown user", ""), "Unknown user");
     }
 
     #[test]

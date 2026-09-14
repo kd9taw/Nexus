@@ -30,6 +30,13 @@
 //! interception a network fault. Only kinds positively identified as TLS take the new message;
 //! everything else keeps the old network wording, so an unrecognised failure can never gain a
 //! wrong diagnosis.
+//!
+//! **HRDLog.net does not come through here any more.** Its server shares no cipher suite with
+//! rustls and resets the TCP connection at the ClientHello; that reset reaches this module as an
+//! `Other`-kind io error, the same kind a rejected certificate carries, so it was blamed on
+//! antivirus. HRDLog now has its own transport over the OS TLS stack, with wording decided by what
+//! its socket saw (`live/hrdlog.rs`). Every connector that still uses this module keeps the
+//! messages below.
 
 /// Did the TLS layer reject the peer, rather than the network fail to reach it?
 ///

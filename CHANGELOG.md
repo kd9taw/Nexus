@@ -5,6 +5,24 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **HRDLog.net uploads work.** Every upload to HRDLog.net has failed, on every computer, since the
+  connector shipped (#224). HRDLog's server only offers encryption settings that Nexus's built-in
+  secure-connection library does not support, so it hung up before anything was sent. Nexus now uses
+  your operating system's own secure connection for HRDLog.net, and only for HRDLog.net; every other
+  service is unchanged. The certificate is still checked, TLS 1.2 or newer is required, and your
+  upload code stays in the system keychain and never appears in an error or the connection log.
+
+  If that connection is dropped while it is being set up, Nexus now says so, instead of blaming your
+  antivirus or a proxy. A failed HRDLog upload is retried twice, as HRDLog asks of logging programs,
+  instead of up to twenty times. Uploads also tell HRDLog which version of Nexus sent them.
+
+  On Linux, Nexus now needs OpenSSL 3 (`libssl3`). The .deb packages install it for you, and the
+  AppImage carries its own copy.
+
 ## [1.12.0] — 2026-09-13
 
 ### Added
