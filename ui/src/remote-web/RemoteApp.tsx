@@ -1,5 +1,4 @@
 import { lazy, Suspense, useEffect, useState } from 'react'
-import { RadioTower } from 'lucide-react'
 import { t } from '../i18n'
 import { useViewport } from '../useViewport'
 import { MonitorApp } from '../remote-monitor/MonitorApp'
@@ -8,13 +7,17 @@ import type { AccountSession } from './client'
 import '../remote-monitor/monitor.css'
 import './remote.css'
 import './remote-site.css'
+// The Nexus mark, bundled by vite. Small enough to inline as a data: URI, which the Worker's
+// img-src ('self' data: blob:) already allows; as a file it would be 'self'.
+import nexusMark from './nexus-mark.svg'
 
 // The product name is an invariant token, split only so the service half can take the accent
 // colour, the way hamradiotools.io writes ham<amber>radio</amber>tools.
 const BRAND = 'Nexus'
 const BRAND_SERVICE = 'Remote'
+// The mark is decorative: the words beside it already name the product.
 const Wordmark = () => <span className="remote-site-wordmark">
-  <span className="remote-site-mark" aria-hidden="true"><RadioTower size={16} strokeWidth={1.8} /></span>
+  <img className="remote-site-mark" src={nexusMark} alt="" width={28} height={28} />
   <strong>{BRAND} <span className="remote-site-accent">{BRAND_SERVICE}</span></strong>
 </span>
 // The only route back to the operator from inside the app. An account whose trial has ended or

@@ -89,17 +89,13 @@
 }
 .remote-site-wordmark strong { font-weight: 600; }
 .remote-site-accent { color: var(--rs-ink); }
+/* The Nexus mark (nexus-mark.svg), the same drawing hamradiotools.io uses. It carries its own
+   colours, so it needs no badge behind it. */
 .remote-site-mark {
-  display: inline-flex;
+  display: block;
   flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
   width: 1.75rem;
   height: 1.75rem;
-  box-sizing: border-box;
-  color: var(--rs-ink);
-  border: 1px solid color-mix(in srgb, var(--rs-ink) 40%, transparent);
-  border-radius: var(--rs-radius-control);
 }
 
 /* ── Page body: one scroll owner (.rm-scroll), the signal-grid motif behind the top of it only,
