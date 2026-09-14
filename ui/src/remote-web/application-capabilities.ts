@@ -1,6 +1,6 @@
 import { APPLICATION_COMMANDS } from './application-protocol'
 import { streamVocabulary } from './application-stream-protocol'
-import { PARKS_COMMAND, CONFIGURATION_COMMAND, NAVIGATION_COMMAND, SSTV_IMAGE_COMMAND, APRS_COMMAND, JS8_CONTEXT_COMMAND, FIELD_DAY_COMMAND, OTA_COMMAND, MEMORIES_COMMAND, DXPEDITIONS_COMMAND, INSIGHTS_COMMAND, QUERY_COMMAND, RECALL_COMMAND } from './application-query-protocol'
+import { PARKS_COMMAND, CONFIRMATIONS_COMMAND, CONFIGURATION_COMMAND, NAVIGATION_COMMAND, SSTV_IMAGE_COMMAND, APRS_COMMAND, JS8_CONTEXT_COMMAND, FIELD_DAY_COMMAND, OTA_COMMAND, MEMORIES_COMMAND, DXPEDITIONS_COMMAND, INSIGHTS_COMMAND, QUERY_COMMAND, RECALL_COMMAND } from './application-query-protocol'
 
 export const APPLICATION_VERSIONS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] as const
 /** Instrument grammar changes only when a new live topic is negotiated. */
@@ -22,6 +22,6 @@ export function applicationCommands(version: number): readonly string[] {
   if (version === 12) return [...applicationCommands(11), 'get_sstv_state', 'get_remote_aprs_state', SSTV_IMAGE_COMMAND, APRS_COMMAND]
   if (version === 13) return [...applicationCommands(12), 'get_remote_satellite_state', NAVIGATION_COMMAND]
   if (version === 14) return [...applicationCommands(13), CONFIGURATION_COMMAND]
-  if (version === 15) return [...applicationCommands(14), PARKS_COMMAND]
+  if (version === 15) return [...applicationCommands(14), PARKS_COMMAND, CONFIRMATIONS_COMMAND]
   return []
 }

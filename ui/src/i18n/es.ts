@@ -116,6 +116,7 @@ export const ES: PartialCatalog = {
   "remote.b3.needAlertsNote": "Los avisos solo aparecen en este navegador. Nunca sintonizan la radio ni trabajan una estación.",
   "remote.b3.needAlertsBlocked": "Las notificaciones están bloqueadas para este sitio. Permítelas en la configuración del navegador para recibir avisos.",
   "remote.b3.needAlertsUnsupported": "Este navegador no puede mostrar notificaciones.",
+  "remote.b3.awardsObserver": "Journey y las cargas aún no están disponibles en remoto. Los diagnósticos de confirmación vienen de la estación.",
   "remote.settingsLegend": "Acceso remoto",
   "remote.stations": "Tus estaciones",
   "remote.pilotIntro": "Opera tu estación desde un navegador aprobado. El PC de la caseta conserva el equipo y manda: lo que pulsas y escribes aquí va a la estación, y esta página muestra lo que la estación informa.",

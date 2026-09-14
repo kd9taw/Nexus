@@ -106,6 +106,7 @@ export const JA: PartialCatalog = {
   "remote.b3.needAlertsNote": "通知はこのブラウザーにだけ表示されます。無線機の周波数を変えたり、交信したりすることはありません。",
   "remote.b3.needAlertsBlocked": "このサイトの通知はブロックされています。通知を受け取るには、ブラウザーの設定で許可してください。",
   "remote.b3.needAlertsUnsupported": "このブラウザーは通知を表示できません。",
+  "remote.b3.awardsObserver": "Journeyとアップロードは、まだリモートでは利用できません。交信確認の診断は局から読み込みます。",
   "remote.settingsLegend": "リモートアクセス",
   "remote.stations": "自分の局",
   "remote.pilotIntro": "承認されたブラウザーから自局を運用します。無線機はシャックの PC が保持して主導権を持ちます。ここでのクリックや入力は局に送られ、このページには局からの報告が表示されます。",

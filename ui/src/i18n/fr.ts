@@ -116,6 +116,7 @@ export const FR: PartialCatalog = {
   "remote.b3.needAlertsNote": "Les alertes s'affichent seulement dans ce navigateur. Elles ne règlent jamais la radio et ne contactent aucune station.",
   "remote.b3.needAlertsBlocked": "Les notifications sont bloquées pour ce site. Autorisez-les dans les réglages du navigateur pour recevoir les alertes.",
   "remote.b3.needAlertsUnsupported": "Ce navigateur ne peut pas afficher de notifications.",
+  "remote.b3.awardsObserver": "Journey et les envois ne sont pas encore disponibles à distance. Les diagnostics de confirmation viennent de la station.",
   "remote.settingsLegend": "Accès à distance",
   "remote.stations": "Vos stations",
   "remote.pilotIntro": "Exploitez votre station depuis un navigateur approuvé. Le PC du shack garde la radio et reste maître : ce que vous cliquez et saisissez ici part vers la station, et cette page affiche ce que la station renvoie.",

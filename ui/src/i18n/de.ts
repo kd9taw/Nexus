@@ -101,6 +101,7 @@ export const DE: PartialCatalog = {
   "remote.b3.needAlertsNote": "Hinweise erscheinen nur in diesem Browser. Sie stimmen nie das Funkgerät ab und arbeiten keine Station.",
   "remote.b3.needAlertsBlocked": "Benachrichtigungen sind für diese Seite blockiert. Erlaube sie in den Browsereinstellungen, um Hinweise zu erhalten.",
   "remote.b3.needAlertsUnsupported": "Dieser Browser kann keine Benachrichtigungen anzeigen.",
+  "remote.b3.awardsObserver": "Journey und Uploads sind per Fernzugriff noch nicht verfügbar. Die Bestätigungsdiagnosen kommen von der Station.",
   "remote.settingsLegend": "Fernzugriff",
   "remote.stations": "Deine Stationen",
   "remote.pilotIntro": "Bediene deine Station in einem freigegebenen Browser. Der Shack-PC behält das Funkgerät und bleibt maßgeblich: Was du hier klickst und eingibst, geht an die Station, und diese Seite zeigt, was die Station zurückmeldet.",

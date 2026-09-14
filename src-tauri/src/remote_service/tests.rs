@@ -721,6 +721,24 @@ fn cloud_runtime_probe() {
             std::io::stdout().flush().unwrap();
             continue;
         }
+        // Test-only desktop truth for the hosted Awards diagnostics: the report the
+        // desktop get_confirmation_diagnostics command returns for the seeded log.
+        if value["type"] == "confirmationDiagnostics" {
+            let e = engine.lock().unwrap();
+            let report = tempo_app::dto::DiagnosticsReportDto::from(
+                e.confirmation_diagnostics(crate::now_unix(), |call| {
+                    propagation::dxcc::resolve(call).map(|i| i.entity.to_string())
+                }),
+            );
+            let log_count = e.get_log().len();
+            drop(e);
+            println!(
+                "REMOTE_TEST:{}",
+                json!({ "report": report, "logCount": log_count })
+            );
+            std::io::stdout().flush().unwrap();
+            continue;
+        }
         // Test-only input to the in-memory engine. The production controller has
         // no import action; the response supplies desktop truth for parity checks.
         if value["type"] == "seedRecallLog" {

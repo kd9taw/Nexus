@@ -182,6 +182,7 @@ function RowAction({
   onPush,
   canPush,
   onOpenSettings,
+  observed = false,
 }: {
   d: QsoDiagnosis
   busyKey: string | null
@@ -191,12 +192,20 @@ function RowAction({
   canPush: boolean
   /** Open Settings at a section id. Absent ⇒ the re-login row stays a guidance chip. */
   onOpenSettings?: (target: string) => void
+  /** A station report read from a browser: every action is guidance, never a button. */
+  observed?: boolean
 }) {
   const a = d.reasons[0]?.action
   if (!a) return null
   const key = `row-${d.index}`
   // Only LoTW has an in-app one-click (re)upload (via TQSL) — show the live button.
   if (isLotwUpload(a)) {
+    if (observed)
+      return (
+        <span className="conf-act">
+          {a.kind === 'reUpload' ? t('awards.conf.reupload') : t('awards.conf.uploadToLotw')}
+        </span>
+      )
     return (
       <button
         className="conf-btn"
@@ -273,16 +282,20 @@ export function AwardsView({
   showGamification = true,
   onOpenSettings,
   observation,
+  diagnostics,
 }: {
   showGamification?: boolean
   /** A complete station-owned summary; observation never starts upload/diagnostic reads. */
   observation?: AwardSummary
+  /** The station's confirmation diagnostics for an observed summary, shown read only. */
+  diagnostics?: DiagnosticsReport
   /** Open Settings at a section id (see settings/registry.ts). */
   onOpenSettings?: (target: string) => void
 }) {
   const [nativeAwards, setAw] = useState<AwardSummary | null>(null)
   const aw = observation ?? nativeAwards
   const [diag, setDiag] = useState<DiagnosticsReport | null>(null)
+  const shownDiag = observation ? (diagnostics ?? null) : diag
   // The log itself, so a diagnosis row (indexed oldest-first, same order as
   // get_log) can hand its QsoRecord to the per-QSO QRZ/ClubLog/eQSL push.
   const [log, setLog] = useState<LoggedQso[] | null>(null)
@@ -882,15 +895,15 @@ export function AwardsView({
         </div>
       </div>
 
-      {!observation && diag && (diag.diagnoses.length > 0 || diag.pendingLag > 0 || diag.waitingOnPartner > 0) && (
+      {shownDiag && (shownDiag.diagnoses.length > 0 || shownDiag.pendingLag > 0 || shownDiag.waitingOnPartner > 0) && (
         <div className="aw-panel conf-panel">
           <h3>
             <CheckCircle2 size={14} aria-hidden="true" /> {t('awards.conf.head')}
           </h3>
-          {(diag.oneAway ?? []).length > 0 && (
+          {(shownDiag.oneAway ?? []).length > 0 && (
             <div className="conf-oneaway">
               <span className="conf-oneaway-label">{t('awards.conf.oneAway.label')}</span>
-              {diag.oneAway.slice(0, 8).map((o) => (
+              {shownDiag.oneAway.slice(0, 8).map((o) => (
                 <span
                   key={o.entity}
                   className={`conf-oneaway-chip${o.newEntity ? ' conf-oneaway-new' : ''}`}
@@ -911,9 +924,9 @@ export function AwardsView({
                   {o.entity} <span className="conf-oneaway-bands">{o.bands.join(' ')}</span>
                 </span>
               ))}
-              {diag.oneAway.length > 8 && (
+              {shownDiag.oneAway.length > 8 && (
                 <span className="conf-muted">
-                  {t('awards.conf.oneAway.more', { count: diag.oneAway.length - 8 })}
+                  {t('awards.conf.oneAway.more', { count: shownDiag.oneAway.length - 8 })}
                 </span>
               )}
             </div>
@@ -925,14 +938,14 @@ export function AwardsView({
             // but require every member so a QRZ/ClubLog or re-auth record can never be
             // shipped through the LoTW upload button.
             const actionByIndex = new Map(
-              diag.diagnoses.map((d) => [d.index, d.reasons[0]?.action]),
+              shownDiag.diagnoses.map((d) => [d.index, d.reasons[0]?.action]),
             )
             const bucketUploadable = (indices: number[]) =>
               indices.length > 0 && indices.every((i) => isLotwUpload(actionByIndex.get(i)))
             return (
-              diag.buckets.length > 0 && (
+              shownDiag.buckets.length > 0 && (
                 <div className="conf-buckets">
-                  {diag.buckets.map((b, i) => {
+                  {shownDiag.buckets.map((b, i) => {
                     const key = `bucket-${i}`
                     return (
                       <div className="conf-bucket" key={i}>
@@ -957,9 +970,9 @@ export function AwardsView({
               )
             )
           })()}
-          {diag.diagnoses.length > 0 && (
+          {shownDiag.diagnoses.length > 0 && (
             <ul className="conf-list">
-              {diag.diagnoses.slice(0, 50).map((d) => {
+              {shownDiag.diagnoses.slice(0, 50).map((d) => {
                 const r = d.reasons[0]
                 return (
                   <li className="conf-row" key={d.index}>
@@ -973,8 +986,9 @@ export function AwardsView({
                       busyKey={busyKey}
                       onUpload={upload}
                       onPush={push}
-                      canPush={log !== null}
-                      onOpenSettings={onOpenSettings}
+                      canPush={!observation && log !== null}
+                      onOpenSettings={observation ? undefined : onOpenSettings}
+                      observed={!!observation}
                     />
                   </li>
                 )
@@ -982,14 +996,14 @@ export function AwardsView({
             </ul>
           )}
           {uploadMsg && <p className="conf-msg">{uploadMsg}</p>}
-          {diag.waitingOnPartner > 0 && (
+          {shownDiag.waitingOnPartner > 0 && (
             <p className="conf-muted">
-              {t('awards.conf.waitingOnPartner', { count: diag.waitingOnPartner })}
+              {t('awards.conf.waitingOnPartner', { count: shownDiag.waitingOnPartner })}
             </p>
           )}
-          {diag.pendingLag > 0 && (
+          {shownDiag.pendingLag > 0 && (
             <p className="conf-muted">
-              {t('awards.conf.pendingLag', { count: diag.pendingLag })}
+              {t('awards.conf.pendingLag', { count: shownDiag.pendingLag })}
             </p>
           )}
         </div>

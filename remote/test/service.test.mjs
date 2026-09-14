@@ -68,6 +68,7 @@ test('station lookups require all extensions, preserve v14 refusal and survive h
     const capabilities = await live.browser.take(type('applicationCapabilities'))
     assert.equal(capabilities.version, expected)
     assert.equal(capabilities.commands.includes('get_remote_parks'), expected === 15)
+    assert.equal(capabilities.commands.includes('get_remote_confirmations'), expected === 15)
     const requestId = crypto.randomUUID()
     live.browser.send({ type: 'applicationQuery', requestId, collection: 'parks', cursor: null, search: 'US-0001', unconfirmed: false, after: null })
     if (expected === 15) {

@@ -50,6 +50,31 @@ it('preserves the native award and statistics read paths', async () => {
   expect(getLog).toHaveBeenCalledTimes(2)
 })
 
+it('renders station diagnostics beside an observed summary with every action as guidance, not a button', async () => {
+  const report: DiagnosticsReport = {
+    diagnoses: [
+      { index: 0, award: 'DXCC/WAS', status: 'needsAction', reasons: [{ code: 'r3', confidence: 'confident', explanation: 'K1ABC is confirmed on a non-award source only.', action: { kind: 'uploadToLotw' } }] },
+      { index: 1, award: 'DXCC/WAS', status: 'needsAction', reasons: [{ code: 'r1', confidence: 'confident', explanation: 'Never pushed to QRZ.', action: { kind: 'uploadToQrz' } }] },
+      { index: 2, award: 'DXCC/WAS', status: 'needsAction', reasons: [{ code: 'r9', confidence: 'likely', explanation: 'ClubLog sign-in expired.', action: { kind: 'reauthenticate', source: 'ClubLog' } }] },
+    ],
+    buckets: [{ kind: 'Upload to LoTW', count: 12, qsoIndices: [] }], oneAway: [{ entity: 'Japan', bands: ['20m'], newEntity: true }], waitingOnPartner: 0, pendingLag: 3 }
+  const onOpenSettings = vi.fn()
+  const view = render(<AwardsJourney showGamification={false} observation={fixture.awards} diagnostics={report} onOpenSettings={onOpenSettings} />)
+  await screen.findByText('K1ABC is confirmed on a non-award source only.')
+  expect(view.container.querySelectorAll('.conf-row')).toHaveLength(3)
+  expect(view.container.querySelector('.conf-panel button')).toBeNull()
+  expect([...view.container.querySelectorAll('.conf-act')].map(e => e.textContent)).toHaveLength(3)
+  expect(screen.getByText('12')).toBeTruthy()
+  expect(getConfirmationDiagnostics).not.toHaveBeenCalled()
+  expect(getLog).not.toHaveBeenCalled()
+  expect(uploadLotwReport).not.toHaveBeenCalled()
+  // Control: the same report on the desktop path renders the live LoTW and sign-in buttons.
+  view.unmount()
+  vi.mocked(getConfirmationDiagnostics).mockResolvedValueOnce(report)
+  const desktop = render(<AwardsJourney showGamification={false} onOpenSettings={onOpenSettings} />)
+  await waitFor(() => expect(desktop.container.querySelectorAll('.conf-panel button').length).toBeGreaterThanOrEqual(2))
+})
+
 it('retains the native confirmation upload action and never renders it for observation', async () => {
   const report = { diagnoses: [{ index: 0, award: 'DXCC', status: 'actionable', reasons: [{ code: 'R1', confidence: 'high', explanation: 'Upload needed', action: { kind: 'uploadToLotw' } }] }],
     buckets: [{ kind: 'uploadToLotw', count: 1, qsoIndices: [0] }], oneAway: [], waitingOnPartner: 0, pendingLag: 0 }

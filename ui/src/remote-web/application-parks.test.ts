@@ -19,7 +19,7 @@ const page = (rows: unknown[], source: unknown = { parkCount: rows.length, exact
 
 it('adds exactly the station lookups to v15 while preserving every older grammar', () => {
   expect(APPLICATION_VERSIONS[APPLICATION_VERSIONS.length - 1]).toBe(15)
-  expect(applicationCommands(15)).toEqual([...applicationCommands(14), 'get_remote_parks'])
+  expect(applicationCommands(15)).toEqual([...applicationCommands(14), 'get_remote_parks', 'get_remote_confirmations'])
   expect(applicationStreamVersion(15)).toBe(13)
   expect(applicationQueryVersion(15)).toBe(15)
   for (let v = 1; v < 15; v++) expect(applicationCommands(v)).not.toContain(command)

@@ -272,6 +272,7 @@ export const EN = {
   "remote.b3.needAlertsNote": "Alerts show in this browser only. They never tune the radio or work a station.",
   "remote.b3.needAlertsBlocked": "Notifications are blocked for this site. Allow them in your browser settings to get new-need alerts.",
   "remote.b3.needAlertsUnsupported": "This browser can't show notifications.",
+  "remote.b3.awardsObserver": "Journey and uploads are not available remotely yet. Confirmation diagnostics come from the station.",
   "remote.collectionLoading": "Loading station data…",
   "remote.collectionUnavailable": "Station data unavailable. Refresh or reconnect.",
   "remote.collectionCapped": "Showing {{count}} of {{total}} station results.",

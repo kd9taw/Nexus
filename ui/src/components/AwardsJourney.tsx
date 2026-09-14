@@ -6,7 +6,7 @@ import { AwardsView } from './AwardsView'
 import { JourneyView } from './JourneyView'
 import { t } from '../i18n'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
-import type { AwardSummary } from '../types'
+import type { AwardSummary, DiagnosticsReport } from '../types'
 
 /** PER-SURFACE: which tab this window is parked on is "where I am", not "what I like". */
 const TAB_KEY = 'nexus.awardsTab'
@@ -24,9 +24,12 @@ export function AwardsJourney({
   showGamification,
   onOpenSettings,
   observation,
+  diagnostics,
 }: {
   showGamification: boolean
   observation?: AwardSummary
+  /** The station's confirmation diagnostics beside an observed summary (read only). */
+  diagnostics?: DiagnosticsReport
   /** Open Settings at a section id — passed straight through to the official tracker, whose
    * "fix this login" rows are the one place here that points into Settings. */
   onOpenSettings?: (target: string) => void
@@ -44,7 +47,7 @@ export function AwardsJourney({
     return (
       <main className="awards-journey">
         <div className="aj-scroll">
-          <AwardsView showGamification={false} onOpenSettings={onOpenSettings} observation={observation} />
+          <AwardsView showGamification={false} onOpenSettings={onOpenSettings} observation={observation} diagnostics={diagnostics} />
         </div>
       </main>
     )
@@ -78,7 +81,7 @@ export function AwardsJourney({
         {tab === 'journey' ? (
           <JourneyView />
         ) : (
-          <AwardsView showGamification onOpenSettings={onOpenSettings} observation={observation} />
+          <AwardsView showGamification onOpenSettings={onOpenSettings} observation={observation} diagnostics={diagnostics} />
         )}
       </div>
     </main>
