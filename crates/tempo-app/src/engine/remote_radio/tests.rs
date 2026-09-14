@@ -28,6 +28,7 @@ mod memory;
 mod phone_mode;
 mod receive_tuning;
 mod repeater;
+mod scope;
 mod split;
 mod spot;
 struct Station {

@@ -108,6 +108,31 @@ fn present<'de, D: serde::Deserializer<'de>>(value: D) -> Result<Option<f64>, D:
     Option::<f64>::deserialize(value)
 }
 
+/// Which native panadapter setting a `radio.scope` request carries.
+#[derive(Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ScopeSetting {
+    Span,
+    Ref,
+    Position,
+    PanSpan,
+    PanRef,
+}
+
+/// The FT-710 scope position, by name; the station resolves the rig's display family.
+#[derive(Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ScopePlace {
+    Center,
+    Cursor,
+    Fix,
+}
+
+/// A named `refDbm: null` (auto) stays distinct from an absent field.
+fn named<'de, D: serde::Deserializer<'de>>(value: D) -> Result<Option<Option<i32>>, D::Error> {
+    Option::<i32>::deserialize(value).map(Some)
+}
+
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(tag = "action", deny_unknown_fields)]
 pub enum Action {
@@ -379,6 +404,20 @@ pub enum Action {
     /// Stop the rotator.
     #[serde(rename = "rotator.stop")]
     RotatorStop {},
+    /// The native panadapter's span, reference or position: one setting and exactly its own field.
+    /// The station decides which scope family is live; a browser's view of the feed is never used.
+    #[serde(rename = "radio.scope")]
+    Scope {
+        setting: ScopeSetting,
+        #[serde(default)]
+        hz: Option<u32>,
+        #[serde(default, rename = "tenthsDb")]
+        tenths_db: Option<i32>,
+        #[serde(default)]
+        position: Option<ScopePlace>,
+        #[serde(default, rename = "refDbm", deserialize_with = "named")]
+        ref_dbm: Option<Option<i32>>,
+    },
     /// A memory recall: the section, the memory's exact dial, its own sideband (Phone only) or
     /// its FM machine. Never a Settings form, a call or a tier.
     #[serde(rename = "radio.memoryRecall")]
@@ -815,6 +854,53 @@ pub fn execute(
             )?;
             return Ok(station_state());
         }
+        // Receive-display one-shots with the local scope verbs, only for the family this station
+        // runs and never while the transmitter is owned or a tune carrier is up.
+        #[cfg(feature = "radio")]
+        Action::Scope {
+            setting,
+            hz,
+            tenths_db,
+            position,
+            ref_dbm,
+        } => {
+            use tempo_app::engine::remote_radio::RemoteScope;
+            let scope = match (setting, hz, tenths_db, position, ref_dbm) {
+                (ScopeSetting::Span, Some(hz), None, None, None) => RemoteScope::Span(*hz),
+                (ScopeSetting::Ref, None, Some(tenths), None, None) => RemoteScope::Ref(*tenths),
+                (ScopeSetting::Position, None, None, Some(place), None) => {
+                    use tempo_audio::yaesu_wf::{mode_code_for, ScopePosition};
+                    // The desktop command's own resolution: keep the display family the rig
+                    // reports, falling back to W/F NORMAL before anything has been read.
+                    let current = engine
+                        .snapshot()
+                        .radio
+                        .scope_mode_code
+                        .unwrap_or(u32::from(b'4')) as u8;
+                    RemoteScope::Position(mode_code_for(
+                        match place {
+                            ScopePlace::Center => ScopePosition::Center,
+                            ScopePlace::Cursor => ScopePosition::Cursor,
+                            ScopePlace::Fix => ScopePosition::Fix,
+                        },
+                        current,
+                    ))
+                }
+                (ScopeSetting::PanSpan, Some(hz), None, None, None) => RemoteScope::PanSpan(*hz),
+                (ScopeSetting::PanRef, None, None, None, Some(reference)) => {
+                    RemoteScope::PanRef(*reference)
+                }
+                _ => return Err(Reason::InvalidAction),
+            };
+            let family = scope_family(engine.settings());
+            engine.queue_remote_scope(
+                scope,
+                family,
+                context.radio_connection.ok_or(Reason::ReadingUnavailable)?,
+                &permit,
+            )?;
+            return Ok(station_state());
+        }
         Action::ReceiverArm { receiver, on } => match receiver {
             Receiver::Rtty => engine.set_rtty_armed(*on),
             Receiver::Psk => engine.set_psk_armed(*on),
@@ -1107,6 +1193,26 @@ pub fn execute(
 
 /// The station accepted the change into its own state; a later sample shows it.
 #[cfg(feature = "radio")]
+/// The native panadapter this station's configuration runs: the same rig-model and opt-in test the
+/// radio loop starts its scope worker from. What a browser drew is never evidence of the family.
+#[cfg(feature = "radio")]
+fn scope_family(
+    settings: &tempo_app::settings::Settings,
+) -> tempo_app::engine::remote_radio::ScopeFamily {
+    use tempo_app::engine::remote_radio::ScopeFamily;
+    use tempo_audio::rigmodels::{native_spectrum_kind, SpectrumKind};
+    let conn = if tempo_app::settings::rig_conn_is_network(&settings.rig_conn, &settings.rig_addr) {
+        "network"
+    } else {
+        "serial"
+    };
+    match native_spectrum_kind(settings.rig_model, conn) {
+        Some(SpectrumKind::IcomCiv { .. }) => ScopeFamily::IcomCiv,
+        Some(SpectrumKind::FlexVita) if settings.flex_native_pan => ScopeFamily::Flex,
+        _ => ScopeFamily::None,
+    }
+}
+
 fn station_state() -> Completion {
     let result = Completion::default();
     result.finish(Outcome::Applied {
@@ -1165,7 +1271,8 @@ impl Action {
             | Self::Split { .. }
             | Self::Rit { .. }
             | Self::Xit { .. }
-            | Self::Vfo { .. } => 3,
+            | Self::Vfo { .. }
+            | Self::Scope { .. } => 3,
             _ => 2,
         }
     }
@@ -1207,6 +1314,7 @@ pub fn capabilities(version: u8) -> Vec<&'static str> {
                 "memoryRecall",
                 "aprsTuning",
                 "rotator",
+                "rigScope",
             ]
         }
     }

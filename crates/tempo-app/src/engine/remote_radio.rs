@@ -18,6 +18,8 @@ mod aprs;
 mod phone_mode;
 mod recall;
 mod repeater;
+mod scope;
+pub use scope::{RemoteScope, ScopeFamily, ICOM_SCOPE_SPANS_HZ, YAESU_SCOPE_HALF_SPANS_HZ};
 mod split;
 mod spot;
 mod workspace;

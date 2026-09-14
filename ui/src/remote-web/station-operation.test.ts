@@ -337,4 +337,35 @@ describe('split and clarifier requests', () => {
     expect(controlOutcome({ operation: 'stationControl', operationId: id, outcome: 'rejected', reason: 'outsidePrivileges' }).outcome).toBe('rejected')
     expect(() => controlOutcome({ operation: 'stationControl', operationId: id, outcome: 'applied', evidence: 'outsidePrivileges' })).toThrow()
   })
+  it('adjusts the rig scope only by a closed setting carrying its own field, under its own hint', () => {
+    const accepted = [
+      // Every Icom CI-V chip (± half-width) and every FT-710 rung (its half-width), nothing between.
+      ...[500, 1_000, 2_500, 5_000, 10_000, 25_000, 50_000, 100_000, 250_000, 500_000].map(hz => ({ action: 'radio.scope', setting: 'span', hz })),
+      ...[-200, -35, 0, 200].map(tenthsDb => ({ action: 'radio.scope', setting: 'ref', tenthsDb })),
+      ...['center', 'cursor', 'fix'].map(position => ({ action: 'radio.scope', setting: 'position', position })),
+      ...[5_000, 50_000, 2_000_000, 14_000_000].map(hz => ({ action: 'radio.scope', setting: 'panSpan', hz })),
+      ...[-160, -80, 20, null].map(refDbm => ({ action: 'radio.scope', setting: 'panRef', refDbm })),
+    ]
+    for (const action of accepted) {
+      expect(stationAction(action)).toEqual(action)
+      expect(actionCapability(stationAction(action))).toBe('rigScope')
+    }
+    for (const hz of [0, 1, 750, 2_400, 1_000_000, 2_500.5, -2_500, NaN, Infinity, '2500', null, undefined]) expect(() => stationAction({ action: 'radio.scope', setting: 'span', hz })).toThrow()
+    for (const tenthsDb of [-201, 201, 0.5, NaN, '0', null, undefined]) expect(() => stationAction({ action: 'radio.scope', setting: 'ref', tenthsDb })).toThrow()
+    for (const position of ['CENTER', 'middle', 'fixed', '', null, 1, undefined]) expect(() => stationAction({ action: 'radio.scope', setting: 'position', position })).toThrow()
+    for (const hz of [4_999, 14_000_001, 50_000.5, NaN, '50000', null, undefined]) expect(() => stationAction({ action: 'radio.scope', setting: 'panSpan', hz })).toThrow()
+    for (const refDbm of [-161, 21, -80.5, NaN, '-80', undefined]) expect(() => stationAction({ action: 'radio.scope', setting: 'panRef', refDbm })).toThrow()
+    // Each setting carries exactly its own field: no neighbour's, no Icom center/fixed, no command.
+    for (const bad of [
+      { action: 'radio.scope', setting: 'span', hz: 2_500, tenthsDb: 0 },
+      { action: 'radio.scope', setting: 'ref', tenthsDb: 0, hz: 2_500 },
+      { action: 'radio.scope', setting: 'position', position: 'fix', code: 65 },
+      { action: 'radio.scope', setting: 'panSpan', hz: 50_000, refDbm: null },
+      { action: 'radio.scope', setting: 'panRef' },
+      { action: 'radio.scope', setting: 'span' },
+      { action: 'radio.scope', setting: 'fixed', fixed: true },
+      { action: 'radio.scope', hz: 2_500 },
+      ...['command', 'txEnabled', 'radioId', 'family'].map(extra => ({ action: 'radio.scope', setting: 'span', hz: 2_500, [extra]: 1 })),
+    ]) expect(() => stationAction(bad)).toThrow()
+  })
 })

@@ -150,3 +150,11 @@ it('sends split, XIT, VFO and RIT at v3, without a version bump', () => {
   expect(controlVersion({ action: 'radio.vfo', expectedVfo: 'A', vfo: 'B' })).toBe(3)
   expect(controlVersion({ action: 'radio.rit', expectedHz: 0, hz: 10 })).toBe(3)
 })
+
+it('sends rig scope settings at v3, without a version bump', () => {
+  expect(controlVersion({ action: 'radio.scope', setting: 'span', hz: 25_000 })).toBe(3)
+  expect(controlVersion({ action: 'radio.scope', setting: 'ref', tenthsDb: -35 })).toBe(3)
+  expect(controlVersion({ action: 'radio.scope', setting: 'position', position: 'fix' })).toBe(3)
+  expect(controlVersion({ action: 'radio.scope', setting: 'panSpan', hz: 200_000 })).toBe(3)
+  expect(controlVersion({ action: 'radio.scope', setting: 'panRef', refDbm: null })).toBe(3)
+})

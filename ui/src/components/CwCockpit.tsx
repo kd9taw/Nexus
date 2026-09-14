@@ -70,6 +70,7 @@ import {
 import { bandLabelForMhz, sidebandForQsy } from '../band'
 import { pushToast, withErrorToast } from '../toast'
 import { controlFailureMessage } from '../remote-web/control-failure'
+import { latestOnly } from '../remote-web/latest-only'
 import { SplitControl } from './SplitControl'
 import { RotorStrip } from './RotorStrip'
 import { useWheelTune } from '../useWheelTune'
@@ -367,6 +368,13 @@ export function CwCockpit({
   const levels = useRadioLevels(snap)
   const dspControl = useReceiverDsp(snap, 'cw')
   const control = useStationControl(), receiverControl = useStationCapability('decoder'), aiCwControl = useStationCapability('aiCw'), rotatorControl = useStationCapability('rotator')
+  // A browser moves the rig scope with the station's rigScope hint; the station judges the family.
+  const rigScope = useStationCapability('rigScope')
+  const scopeControl = control || rigScope
+  const scopeFailed = (error: unknown): void => { pushToast(controlFailureMessage(error), 'error') }
+  // One remote reference change at a time: a drag sends its newest value, never every step.
+  const [sendScopeRef] = useState(() => latestOnly((tenths: number) => setScopeRef(tenths), scopeFailed))
+  const [sendFlexRef] = useState(() => latestOnly((dbm: number) => setFlexPanRef(dbm), scopeFailed))
   const spotsRead = useRemoteCollection('spots')
   // Live S-meter (shared 100 ms poll, lock-free backend) — used to arrive via the 300 ms
   // snapshot on top of the backend's own sampling, which read as a laggy needle. smeterDb-only
@@ -547,8 +555,9 @@ export function CwCockpit({
       : `· ${t('cw.scope.audio.sub')}`
   const [flexRefDbm, setFlexRefDbm] = useState(-80)
   const changeFlexRef = (dbm: number) => {
-    if (!control) return
+    if (!scopeControl) return
     setFlexRefDbm(dbm)
+    if (!control) return sendFlexRef(dbm)
     void setFlexPanRef(dbm)
       .then((s) => onSnap?.(s))
       .catch(() => {})
@@ -556,9 +565,10 @@ export function CwCockpit({
   const [rfSpan, setRfSpan] = useState<(typeof RF_SPANS)[number]>(RF_SPANS[0])
   const [scopeRefTenths, setScopeRefTenths] = useState(0)
   const changeScopeRef = (tenths: number) => {
-    if (!control) return
+    if (!scopeControl) return
     setScopeRefTenths(tenths)
-    void setScopeRef(tenths)
+    if (control) void setScopeRef(tenths)
+    else sendScopeRef(tenths)
   }
   // Live single-signal CW decode of the receive audio at the marker pitch — poll the
   // engine ~1.4 Hz (the decode reads a multi-second ring, so faster adds no detail).
@@ -1116,12 +1126,12 @@ export function CwCockpit({
             </span>
             <div className="ph-span">
               {RIG_SPANS.map((sp) => (
-                <button disabled={!control}
+                <button disabled={!scopeControl}
                   key={sp.label}
                   type="button"
                   className="theme-chip"
                   title={t('cw.rigScope.span.title', { span: sp.label })}
-                  onClick={() => void setScopeSpan(sp.hz).then((s) => onSnap?.(s)).catch(() => {})}
+                  onClick={() => void setScopeSpan(sp.hz).then((s) => onSnap?.(s)).catch(control ? () => {} : scopeFailed)}
                 >
                   {sp.label}
                 </button>
@@ -1129,18 +1139,18 @@ export function CwCockpit({
             </div>
             <label className="ph-rigscope-ref" title={t('cw.rigScope.ref.title')}>
               <span>{t('cw.scope.ref.label')}</span>
-              <input disabled={!control}
+              <input disabled={!scopeControl}
                 type="range"
                 min={-200}
                 max={200}
                 step={5}
                 value={scopeRefTenths}
-                style={{ visibility: control ? undefined : 'hidden' }}
+                style={{ visibility: scopeControl ? undefined : 'hidden' }}
                 onChange={(e) => changeScopeRef(Number(e.target.value))}
                 aria-label={t('cw.rigScope.ref.aria')}
               />
               <span className="ph-power-val">
-                {control ? (scopeRefTenths / 10).toFixed(1) : '—'} {DB}
+                {scopeControl ? (scopeRefTenths / 10).toFixed(1) : '—'} {DB}
               </span>
             </label>
           </div>
@@ -1154,12 +1164,12 @@ export function CwCockpit({
             </span>
             <div className="ph-span">
               {FLEX_SPANS.map((sp) => (
-                <button disabled={!control}
+                <button disabled={!scopeControl}
                   key={sp.label}
                   type="button"
                   className="theme-chip"
                   title={t('cw.flexPan.span.title', { span: sp.label })}
-                  onClick={() => void setFlexPanSpan(sp.hz).then((s) => onSnap?.(s)).catch(() => {})}
+                  onClick={() => void setFlexPanSpan(sp.hz).then((s) => onSnap?.(s)).catch(control ? () => {} : scopeFailed)}
                 >
                   {sp.label}
                 </button>
@@ -1167,18 +1177,18 @@ export function CwCockpit({
             </div>
             <label className="ph-rigscope-ref" title={t('cw.flexPan.ref.title')}>
               <span>{t('cw.scope.ref.label')}</span>
-              <input disabled={!control}
+              <input disabled={!scopeControl}
                 type="range"
                 min={-140}
                 max={-20}
                 step={5}
                 value={flexRefDbm}
-                style={{ visibility: control ? undefined : 'hidden' }}
+                style={{ visibility: scopeControl ? undefined : 'hidden' }}
                 onChange={(e) => changeFlexRef(Number(e.target.value))}
                 aria-label={t('cw.flexPan.ref.aria')}
               />
               <span className="ph-power-val">
-                {control ? flexRefDbm : '—'} {DBM}
+                {scopeControl ? flexRefDbm : '—'} {DBM}
               </span>
             </label>
           </div>
@@ -1647,14 +1657,14 @@ export function CwCockpit({
           // rig has ten span rungs and three positions, and a chip row that long crowds the scope it
           // is supposed to serve.
           <div className="ph-span" role="group" aria-label={t('phone.scope.yaesu.aria')}>
-            <select disabled={!control}
+            <select disabled={!scopeControl}
               className="theme-chip"
               aria-label={t('phone.scope.yaesu.span.aria')}
               title={t('phone.scope.yaesu.span.title')}
               value={yaesuSpanLabel}
               onChange={(e) => {
                 const sp = YAESU_SPANS.find((x) => x.label === e.target.value)
-                if (sp) void setScopeSpan(sp.halfHz).then((s) => onSnap?.(s)).catch((e) => pushToast(String(e), 'error'))
+                if (sp) void setScopeSpan(sp.halfHz).then((s) => onSnap?.(s)).catch((e) => (control ? pushToast(String(e), 'error') : scopeFailed(e)))
               }}
             >
               {YAESU_SPANS.map((sp) => (
@@ -1664,14 +1674,14 @@ export function CwCockpit({
                 </option>
               ))}
             </select>
-            <select disabled={!control}
+            <select disabled={!scopeControl}
               className="theme-chip"
               aria-label={t('phone.scope.yaesu.pos.aria')}
               title={t('phone.scope.yaesu.pos.title')}
               value={yaesuPosition}
               onChange={(e) => {
                 const pos = e.target.value as 'center' | 'cursor' | 'fix'
-                void setYaesuScopeMode(pos).then((s) => onSnap?.(s)).catch((e) => pushToast(String(e), 'error'))
+                void setYaesuScopeMode(pos).then((s) => onSnap?.(s)).catch((e) => (control ? pushToast(String(e), 'error') : scopeFailed(e)))
               }}
             >
               <option value="center">{t('phone.scope.yaesu.pos.center')}</option>

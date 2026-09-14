@@ -20,6 +20,13 @@ function tuningShown(action: TuningAction, radio: import('../types').RadioStatus
   }
 }
 
+/** Which FT-710 position a scope MODE code names: CENTER, CURSOR or FIX in any display family. */
+function scopePosition(code: number | null | undefined): 'center' | 'cursor' | 'fix' | null {
+  const c = typeof code === 'number' ? String.fromCharCode(code) : ''
+  if (c.length !== 1) return null
+  return '034'.includes(c) ? 'center' : '167'.includes(c) ? 'cursor' : '29A'.includes(c) ? 'fix' : null
+}
+
 /** Adapt only the reviewed local gestures. The station receives typed intents,
  * never an invoke name; every other command remains behind the read allowlist. */
 export function controlTransport(reads: ApplicationTransport, client: ApplicationClient, operations: OperationClient): ApplicationTransport {
@@ -176,6 +183,16 @@ export function controlTransport(reads: ApplicationTransport, client: Applicatio
             if (args && Object.keys(args).length) throw Error('invalidOperation')
             action = stationAction({ action: 'rotator.stop' })
             break
+          case 'set_scope_span': case 'set_scope_ref': case 'set_yaesu_scope_mode': case 'set_flex_pan_span': case 'set_flex_pan_ref': {
+            const key = command === 'set_scope_ref' ? 'tenthsDb' : command === 'set_yaesu_scope_mode' ? 'position' : command === 'set_flex_pan_ref' ? 'refDbm' : 'hz'
+            if (!args || Object.keys(args).length !== 1 || !(key in args)) throw Error('invalidOperation')
+            const setting = command === 'set_scope_span' ? 'span' : command === 'set_scope_ref' ? 'ref'
+              : command === 'set_yaesu_scope_mode' ? 'position' : command === 'set_flex_pan_span' ? 'panSpan' : 'panRef'
+            // The page names only the operator's setting; the station decides which scope family is live.
+            action = stationAction({ action: 'radio.scope', setting, [key]: args[key] })
+            read = 'get_snapshot'
+            break
+          }
           case 'work_spot':
             if (!args || Object.keys(args).some(k => !['mode', 'freqMhz', 'band', 'call', 'tier'].includes(k))) throw Error('applicationUnsupported')
             if (args.tier === null || args.tier === undefined) action = stationAction({ action: 'radio.workSpot', mode: args.mode, dialMhz: args.freqMhz, band: args.band, call: args.call })
@@ -296,6 +313,7 @@ export function controlTransport(reads: ApplicationTransport, client: Applicatio
         if (action.action === 'radio.repeater' && (result.outcome !== 'applied' || result.evidence !== 'radioReadback')) throw Error('operationUnknown')
         if (action.action === 'radio.aprsTune' && (result.outcome !== 'applied' || result.evidence !== 'radioReadback')) throw Error('operationUnknown')
         if (action.action.startsWith('rotator.') && (result.outcome !== 'applied' || result.evidence !== 'stationState')) throw Error('operationUnknown')
+        if (action.action === 'radio.scope' && (result.outcome !== 'applied' || result.evidence !== 'stationState')) throw Error('operationUnknown')
         if (action.action === 'radio.memoryRecall' && (result.outcome !== 'applied' || result.evidence !== 'radioReadback')) throw Error('operationUnknown')
         if (action.action === 'decoder.aiCw' && (result.outcome !== 'applied' || result.evidence !== 'settingsSaved')) throw Error('operationUnknown')
         if (action.action === 'decoder.redecode' && (result.outcome !== 'applied' || result.evidence !== 'receiverState')) throw Error('operationUnknown')
@@ -326,6 +344,10 @@ export function controlTransport(reads: ApplicationTransport, client: Applicatio
           }
           if (action?.action === 'radio.repeater' &&Math.round(((value as import('../types').AppSnapshot)?.radio?.dialMhz ?? NaN) * 1e6) !== Math.round(action.outputMhz * 1e6)) throw Error('readingUnavailable')
           if (action?.action === 'radio.aprsTune' && Math.round(((value as import('../types').AppSnapshot)?.radio?.dialMhz ?? NaN) * 1e6) !== Math.round(action.dialMhz * 1e6)) throw Error('readingUnavailable')
+          // Only the FT-710 position has a station reading. A span or reference level has none, so
+          // the later sample is returned as it stands rather than checked against a field that does not exist.
+          if (action?.action === 'radio.scope' && action.setting === 'position' &&
+            scopePosition((value as import('../types').AppSnapshot)?.radio?.scopeModeCode) !== action.position) throw Error('readingUnavailable')
           if (action?.action === 'decoder.aiCw' &&(value as import('../types').AppSnapshot)?.aiCw?.enabled !== action.on) throw Error('readingUnavailable')
           if (action && isTuning(action) && !tuningShown(action, (value as import('../types').AppSnapshot)?.radio)) throw Error('readingUnavailable')
           if (action?.action === 'radio.select') {

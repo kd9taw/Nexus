@@ -43,6 +43,13 @@ export type StationAction =
   | { action: 'rotator.point'; azimuthDeg: number }
   | { action: 'rotator.pointAtCall'; call: string }
   | { action: 'rotator.stop' }
+  // The native panadapter: one closed setting and exactly its own field. The station judges which
+  // scope family is live, never this page.
+  | { action: 'radio.scope'; setting: 'span'; hz: number }
+  | { action: 'radio.scope'; setting: 'ref'; tenthsDb: number }
+  | { action: 'radio.scope'; setting: 'position'; position: 'center' | 'cursor' | 'fix' }
+  | { action: 'radio.scope'; setting: 'panSpan'; hz: number }
+  | { action: 'radio.scope'; setting: 'panRef'; refDbm: number | null }
   // A station memory: its section and exact dial, plus its own sideband (Phone) or its FM machine.
   | { action: 'radio.memoryRecall'; section: 'cw' | 'phone' | 'digital'; dialMhz: number; band: string; sideband: 'USB' | 'LSB' | null
       fm?: { shift: 'simplex' | 'plus' | 'minus'; offsetHz: number; toneHz: number } }
@@ -110,6 +117,7 @@ const ACTION_CAPABILITY: Record<StationAction['action'], ControlCapability> = {
   'radio.repeater': 'repeaterTuning',
   'radio.aprsTune': 'aprsTuning',
   'rotator.point': 'rotator', 'rotator.pointAtCall': 'rotator', 'rotator.stop': 'rotator',
+  'radio.scope': 'rigScope',
   'radio.memoryRecall': 'memoryRecall',
   'decoder.arm': 'decoder', 'decoder.clear': 'decoder', 'decoder.afcReset': 'decoder',
   'decoder.net': 'decoder', 'decoder.pskMode': 'decoder',
@@ -159,6 +167,10 @@ function exchangeContext(raw: unknown): void {
         (q.txNow !== null && (typeof q.txNow !== 'string' || q.txNow.length > 128 || /[^ -~]/.test(q.txNow)))) invalid()
 }
 
+/** Every rig-scope span the cockpits offer: the Icom CI-V chips (± half-width) and the FT-710
+ * rungs (half of the full span), nothing between. The station checks the live family's own ladder. */
+const SCOPE_SPANS_HZ = [500, 1_000, 2_500, 5_000, 10_000, 25_000, 50_000, 100_000, 250_000, 500_000]
+const SCOPE_FIELD: Record<string, string> = { span: 'hz', ref: 'tenthsDb', position: 'position', panSpan: 'hz', panRef: 'refDbm' }
 export function stationAction(raw: unknown): StationAction {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) invalid()
   const a = raw as Record<string, unknown>
@@ -337,6 +349,18 @@ export function stationAction(raw: unknown): StationAction {
       // Only a regional APRS channel: this is the APRS pick, never a general 2 m tune.
       if (!finite(a.dialMhz) || !APRS_CHANNELS_HZ.includes(Math.round((a.dialMhz as number) * 1e6))) invalid()
       break
+    case 'radio.scope': {
+      const field = typeof a.setting === 'string' && Object.prototype.hasOwnProperty.call(SCOPE_FIELD, a.setting) ? SCOPE_FIELD[a.setting] : null
+      if (!field) invalid()
+      object(a, ['action', 'setting', field as string])
+      const whole = (v: unknown, lo: number, hi: number) => Number.isSafeInteger(v) && (v as number) >= lo && (v as number) <= hi
+      if (a.setting === 'span' ? !Number.isSafeInteger(a.hz) || !SCOPE_SPANS_HZ.includes(a.hz as number)
+        : a.setting === 'ref' ? !whole(a.tenthsDb, -200, 200)
+        : a.setting === 'position' ? !oneOf(a.position, ['center', 'cursor', 'fix'])
+        : a.setting === 'panSpan' ? !whole(a.hz, 5_000, 14_000_000)
+        : a.refDbm !== null && !whole(a.refDbm, -160, 20)) invalid()
+      break
+    }
     case 'rotator.point':
       object(a, ['action', 'azimuthDeg'])
       // An azimuth the rotctld line carries exactly: 0 ≤ az < 360, to a tenth of a degree.

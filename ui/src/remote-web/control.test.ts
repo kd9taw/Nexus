@@ -970,3 +970,74 @@ it('sends no rotator command to an older station, without the hint, or with anyt
   expect(invoke).toHaveBeenCalledWith('read_rotator', undefined)
   h.client.disconnected()
 })
+
+const SCOPE_SETTINGS = [
+  ['set_scope_span', { hz: 25_000 }, { setting: 'span', hz: 25_000 }],
+  ['set_scope_ref', { tenthsDb: -35 }, { setting: 'ref', tenthsDb: -35 }],
+  ['set_flex_pan_span', { hz: 200_000 }, { setting: 'panSpan', hz: 200_000 }],
+  ['set_flex_pan_ref', { refDbm: -80 }, { setting: 'panRef', refDbm: -80 }],
+  ['set_flex_pan_ref', { refDbm: null }, { setting: 'panRef', refDbm: null }],
+  // 0x41 'A' = W/F FIX (NORMAL): the later sample must show a FIX position.
+  ['set_yaesu_scope_mode', { position: 'fix' }, { setting: 'position', position: 'fix' }],
+] as const
+
+it.each(SCOPE_SETTINGS)('maps %s to one rig scope setting and returns a later station sample', async (command, args, setting) => {
+  const h = setup(storage(), ['rigScope'], 3)
+  let sampleAge = Infinity
+  const snapshot = { radio: { dialMhz: 14.2, scopeModeCode: 0x41 } }
+  const getSnapshot = vi.fn(async () => snapshot)
+  const transport = controlTransport({ kind: 'remote', invoke: getSnapshot } as ApplicationTransport,
+    { age: () => sampleAge } as unknown as ApplicationClient, h.client)
+  const result = transport.invoke(command, args)
+  await Promise.resolve()
+  const request = h.sent[h.sent.length - 1].request
+  expect(request.action).toEqual({ action: 'radio.scope', ...setting })
+  h.reply({ operation: 'stationControl', operationId: request.requestId, outcome: 'applied', evidence: 'stationState' })
+  await h.advance(100)
+  expect(getSnapshot).not.toHaveBeenCalled()
+  sampleAge = 0
+  await h.advance(50)
+  expect(await result).toEqual(snapshot)
+  expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(1)
+  h.client.disconnected()
+})
+
+it.each(['position', 'evidence'])('refuses a rig scope change after a mismatched %s without sending it again', async changed => {
+  const h = setup(storage(), ['rigScope'], 3)
+  // 0x34 '4' = W/F CENTER (NORMAL): not the FIX the operator asked for.
+  const snapshot = { radio: { dialMhz: 14.2, scopeModeCode: changed === 'position' ? 0x34 : 0x41 } }
+  const transport = controlTransport({ kind: 'remote', invoke: vi.fn(async () => snapshot) } as ApplicationTransport,
+    { age: () => 0 } as unknown as ApplicationClient, h.client)
+  const result = transport.invoke('set_yaesu_scope_mode', { position: 'fix' })
+  const settled = result.catch(error => error)
+  await Promise.resolve()
+  const request = h.sent[h.sent.length - 1].request
+  h.reply({ operation: 'stationControl', operationId: request.requestId, outcome: 'applied', evidence: changed === 'evidence' ? 'radioReadback' : 'stationState' })
+  await h.advance(100)
+  expect(((await settled) as Error).message).toBe(changed === 'position' ? 'readingUnavailable' : 'operationUnknown')
+  expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(1)
+  h.client.disconnected()
+})
+
+it('refuses a rig scope change on older stations, without its hint, or with unreviewed arguments, and leaves Icom center/fixed alone', async () => {
+  for (const [capabilities, version, message] of [[['rigScope'], 2, 'stationUnsupported'], [['frequency', 'receiverDsp'], 3, 'notController']] as [ControlCapability[], OperationVersion, string][]) {
+    const h = setup(storage(), capabilities, version)
+    const transport = controlTransport({ kind: 'remote', invoke: vi.fn(async () => ({ radio: {} })) } as ApplicationTransport, { age: () => 0 } as unknown as ApplicationClient, h.client)
+    for (const [command, args] of SCOPE_SETTINGS) await expect(transport.invoke(command, args)).rejects.toThrow(message)
+    expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(0)
+    h.client.disconnected()
+  }
+  const h = setup(storage(), ['rigScope'], 3)
+  const invoke = vi.fn(async () => null), transport = controlTransport({ kind: 'remote', invoke } as ApplicationTransport, { age: () => 0 } as unknown as ApplicationClient, h.client)
+  for (const [command, bad] of [['set_scope_span', { hz: 2_400 }], ['set_scope_span', { hz: 25_000, band: '20m' }], ['set_scope_span', {}], ['set_scope_span', undefined],
+    ['set_scope_ref', { tenthsDb: '0' }], ['set_yaesu_scope_mode', { position: 'middle' }], ['set_flex_pan_span', { hz: 1 }],
+    ['set_flex_pan_ref', {}], ['set_flex_pan_ref', { refDbm: -80, auto: true }]] as [string, Record<string, unknown> | undefined][]) {
+    await expect(transport.invoke(command, bad)).rejects.toThrow()
+  }
+  expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(0)
+  // Icom center/fixed has no desktop control and no remote action: it passes to the read allowlist.
+  expect(invoke).not.toHaveBeenCalled()
+  await transport.invoke('set_scope_fixed', { fixed: true })
+  expect(invoke).toHaveBeenCalledWith('set_scope_fixed', { fixed: true })
+  h.client.disconnected()
+})
