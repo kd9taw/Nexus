@@ -27,6 +27,12 @@ export class OperationFailure extends Error {
 export type ControlFailure = { code: string; sent: boolean; busy: boolean }
 /** Only a reply that came back from the station can say it was busy. */
 const stationWasBusy = (code: string, sent: boolean) => sent && code === 'stationBusy'
+/** How long a gesture committed during a brief control lapse waits for control to be current again
+ * before it is refused as not sent. The client heartbeats once a second on a 250 ms tick and a reply
+ * is current for 1200 ms from its request, so a lapse ends when the next reply lands: at most 50 ms
+ * after the window closes plus that reply's round trip. 1500 ms allows a round trip of about 1.4 s;
+ * a longer silence is not a brief lapse. The freshness window and heartbeat are unchanged. */
+export const CONTROL_RESUME_MS = 1500
 export type OperationView = {
   supported: boolean
   state: OperationState | null
@@ -443,6 +449,26 @@ export class OperationClient {
     try {
       await this.request({ type: 'release', requestId: crypto.randomUUID(), leaseId })
     } catch {}
+  }
+  /** A gesture committed during a brief control lapse is sent only once control is current again.
+   * Resolves at once while current. Otherwise waits, at most CONTROL_RESUME_MS, for a later state
+   * reply to make it current, and refuses as not sent (nothing left the browser) if control is still
+   * stale then, or the lease or connection ends first. The command path still requires fresh state. */
+  awaitCurrent(maxMs = CONTROL_RESUME_MS): Promise<void> {
+    const current = () => this.view.connected && this.view.fresh && this.view.state?.phase === 'controlling'
+    const held = () => this.view.connected && this.view.state?.phase === 'controlling'
+    if (current()) return Promise.resolve()
+    if (!held()) return Promise.reject(new OperationFailure('notController', false))
+    return new Promise((resolve, reject) => {
+      const finish = () => {
+        clearTimeout(timer)
+        unsubscribe()
+        if (current()) resolve()
+        else reject(new OperationFailure('notController', false))
+      }
+      const timer = setTimeout(finish, maxMs)
+      const unsubscribe = this.subscribe(() => { if (current() || !held()) finish() })
+    })
   }
   private waitForHeartbeat(until: number): Promise<void> {
     if (!this.pending) return Promise.resolve()

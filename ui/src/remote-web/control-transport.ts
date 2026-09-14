@@ -24,7 +24,12 @@ export function controlTransport(reads: ApplicationTransport, client: Applicatio
           case 'set_rx_offset': case 'set_skip_tx1': {
             const field = command === 'set_rx_offset' ? 'hz' : 'enabled', keys = [field, 'expectedTier', 'expected']
             if (!args || Object.keys(args).length !== keys.length || Object.keys(args).some(k => !keys.includes(k))) throw Error('invalidOperation')
-            const gesture = structuredClone(args), state = operations.getSnapshot().state
+            const gesture = structuredClone(args)
+            // A typed or dragged FT value can be committed during a brief control lapse: keep the
+            // gesture as displayed, wait for control to be current again (refused as not sent if it
+            // stays stale), then capture the station state it is sent with.
+            await operations.awaitCurrent()
+            const state = operations.getSnapshot().state
             if (!state?.transmitEpoch) throw Error('localPermissionRequired')
             captured = operations.prepareControl()
             action = stationAction({ action: 'ft.runtime', expectedTier: gesture.expectedTier, expected: gesture.expected, transmitEpoch: state.transmitEpoch,
@@ -36,7 +41,12 @@ export function controlTransport(reads: ApplicationTransport, client: Applicatio
             const field = command === 'set_tx_offset' || command === 'set_ft_both_offsets' ? 'hz' : command === 'set_hold_tx_freq' ? 'on' : command === 'set_tx_even' ? 'even' : 'auto'
             const keys = [field, 'expectedTier', 'expected']
             if (!args || Object.keys(args).length !== keys.length || Object.keys(args).some(k => !keys.includes(k))) throw Error('invalidOperation')
-            const gesture = structuredClone(args), state = operations.getSnapshot().state
+            const gesture = structuredClone(args)
+            // A typed or dragged FT value can be committed during a brief control lapse: keep the
+            // gesture as displayed, wait for control to be current again (refused as not sent if it
+            // stays stale), then capture the station state it is sent with.
+            await operations.awaitCurrent()
+            const state = operations.getSnapshot().state
             if (!state?.transmitEpoch) throw Error('localPermissionRequired')
             captured = operations.prepareControl()
             const kind = command === 'set_tx_offset' ? 'txOffset' : command === 'set_ft_both_offsets' ? 'bothOffsets' : command === 'set_hold_tx_freq' ? 'hold' : command === 'set_tx_even' ? 'even' : 'auto'

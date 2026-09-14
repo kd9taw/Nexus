@@ -14,13 +14,16 @@ export const RemoteOperationsContext = createContext<OperationClient | null>(nul
 const idleSubscribe = () => () => {}
 const idleSnapshot = () => null
 /** A permission for an explicit gesture. Never enables native-only TX controls
- * or the effects which automatically arm receivers on local view entry. */
-export function useStationCapability(capability: ControlCapability): boolean {
+ * or the effects which automatically arm receivers on local view entry.
+ * `lapse` keeps the permission through a brief freshness lapse while the latest station
+ * state still shows this browser controlling. It exists only so a drag or a typed value in
+ * progress is not cancelled; the send itself still waits for current control. */
+export function useStationCapability(capability: ControlCapability, lapse = false): boolean {
   const local = useStationControl(), available = useStationData()
   const client = useContext(RemoteOperationsContext)
   const view = useSyncExternalStore(client?.subscribe ?? idleSubscribe, client?.getSnapshot ?? idleSnapshot)
   const expanded = ['frequency', 'mode', 'tier', 'workspace', 'ampFollowBand', 'decoderSettings', 'receiverSettings', 'receiverGain', 'bandSelection', 'receiverFilter', 'receiverDsp', 'phoneMode', 'workSpot', 'radioLevels', 'radioSelection', 'fmTuning', 'fmReceiver'].includes(capability)
-  return local || !!(available && (!['ftRuntime', 'ftSettings', 'qsoLogging', 'ftOperate', 'ftCall', 'ftExchange', 'ftMessages'].includes(capability) || (client?.operationVersion ?? 0) >= 4) && (!expanded || (client?.operationVersion ?? 0) >= 3) && view?.fresh && view.connected && view.requestReady !== false && !view.unresolved && !view.controlPending &&
+  return local || !!(available && (!['ftRuntime', 'ftSettings', 'qsoLogging', 'ftOperate', 'ftCall', 'ftExchange', 'ftMessages'].includes(capability) || (client?.operationVersion ?? 0) >= 4) && (!expanded || (client?.operationVersion ?? 0) >= 3) && (lapse || view?.fresh) && view?.connected && view.requestReady !== false && !view.unresolved && !view.controlPending &&
     view.state?.phase === 'controlling' && (!['frequency', 'mode', 'tier', 'workspace', 'decoderSettings', 'receiverSettings', 'receiverGain', 'bandSelection', 'receiverFilter', 'receiverDsp', 'phoneMode', 'workSpot', 'radioLevels', 'radioSelection', 'fmTuning', 'fmReceiver'].includes(capability) || !view.state.txArmed) && view.state.controls?.capabilities.includes(capability))
 }
 

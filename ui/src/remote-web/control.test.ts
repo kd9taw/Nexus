@@ -452,3 +452,47 @@ it('passes a rejected stationBusy outcome on as busy data', async () => {
   expect(await result).toMatchObject({ message: 'stationBusy', sent: true, busy: true })
   h.client.disconnected()
 })
+
+it('sends a typed FT offset only once control is current again, and refuses it as not sent if control stays stale', async () => {
+  const transmitEpoch = '000000000000002a'
+  const expected = { key: '1'.padStart(32, '0'), txOffsetHz: 1500, rxOffsetHz: 1500, holdTxFreq: false, txEven: true, txCycleAuto: true }
+  const lapsed = async () => {
+    const h = setup(storage(), ['ftSettings'], 4)
+    await h.advance(1000)
+    const first = h.sent[h.sent.length - 1].request
+    expect(first.type).toBe('heartbeat')
+    h.client.receive({ type: 'operationResponse', requestId: first.requestId, value: { ...h.state, transmitEpoch } })
+    // The next heartbeat goes unanswered: past its 1200 ms window control is stale, the lease still held.
+    await h.advance(1000)
+    expect(h.sent[h.sent.length - 1].request.type).toBe('heartbeat')
+    await h.advance(250)
+    expect(h.client.getSnapshot()).toMatchObject({ fresh: false, state: { phase: 'controlling' } })
+    const reads = { kind: 'remote', invoke: vi.fn(async () => ({})) } as unknown as ApplicationTransport
+    return { h, transport: controlTransport(reads, { age: () => 0 } as unknown as ApplicationClient, h.client) }
+  }
+  const heartbeats = (h: ReturnType<typeof setup>) => h.sent.filter(w => w.request.type === 'heartbeat')
+  const commands = (h: ReturnType<typeof setup>) => h.sent.filter(w => w.request.type === 'stationControl')
+  {
+    const { h, transport } = await lapsed()
+    void transport.invoke('set_tx_offset', { hz: 1800, expectedTier: 'FT8', expected }).catch(() => {})
+    await h.advance(100)
+    // Positive control for the spy: it recorded both real heartbeats. No station command while stale.
+    expect(heartbeats(h)).toHaveLength(2)
+    expect(commands(h)).toHaveLength(0)
+    const pending = heartbeats(h)[1].request
+    h.client.receive({ type: 'operationResponse', requestId: pending.requestId, value: { ...h.state, transmitEpoch } })
+    await h.advance(10)
+    expect(commands(h)).toHaveLength(1)
+    expect(commands(h)[0].request.action).toMatchObject({ action: 'ft.setting', change: { kind: 'txOffset', hz: 1800 } })
+    h.client.disconnected()
+  }
+  {
+    const { h, transport } = await lapsed()
+    const typed = transport.invoke('set_tx_offset', { hz: 1800, expectedTier: 'FT8', expected }).catch(e => e)
+    await h.advance(1600)
+    expect(await typed).toMatchObject({ message: 'notController', sent: false, busy: false })
+    expect(heartbeats(h)).toHaveLength(2)
+    expect(commands(h)).toHaveLength(0)
+    h.client.disconnected()
+  }
+})

@@ -291,7 +291,9 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   const { commitLeft, commitRight, resetWidths } = usePaneWidths(scale)
   const layoutRef = useRef<HTMLElement>(null)
   const [snap, setSnap] = useState<AppSnapshot | null>(remote?.snapshot ?? null)
-  const ftRuntimeControl = useStationCapability('ftRuntime')
+  // Routes a typed or clicked RX offset; kept through a brief control lapse so a commit made then
+  // still takes the FT runtime path (the transport sends it only once control is current).
+  const ftRuntimeControl = useStationCapability('ftRuntime', true)
   const receiverSettings = useReceiverSettings(snap, snap?.link.tier)
   const receiverSettingsRef = useRef(receiverSettings)
   receiverSettingsRef.current = receiverSettings

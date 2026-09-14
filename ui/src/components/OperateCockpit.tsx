@@ -359,6 +359,9 @@ export function OperateCockpit({
   const messageControl = useStationCapability('ftMessages')
   const ftSettings = useStationCapability('ftSettings') && !!snap.remoteFtSettings && (tier === 'FT8' || tier === 'FT4')
   const ftRuntime = useStationCapability('ftRuntime') && !!snap.remoteFtRuntime && (tier === 'FT8' || tier === 'FT4')
+  // A typed offset outlives a brief control lapse; the transport sends it only once control is current.
+  const ftSettingsDraft = useStationCapability('ftSettings', true) && !!snap.remoteFtSettings && (tier === 'FT8' || tier === 'FT4')
+  const ftRuntimeDraft = useStationCapability('ftRuntime', true) && !!snap.remoteFtRuntime && (tier === 'FT8' || tier === 'FT4')
   const cqControl = useStationCapability('ftOperate')
   const tierControl = useStationTierControl(snap.radio)
   const decoderSettings = useDecoderSettings(snap, 'MSK144')
@@ -1115,9 +1118,9 @@ export function OperateCockpit({
               (clamped to the 200–4000 Hz passband) — WSJT-X's Rx/Tx Hz spinners. */}
           <div className="cockpit-offsets" role="group" aria-label={t('operate.header.offsets.aria')}>
             <DfField key={control ? 'rx' : `rx-${snap.activeRadioId}-${tier}-${snap.remoteFtRuntime?.settings.key}`} label={DF_RX} hz={snap.radio.rxOffsetHz}
-              remoteReceive={ftRuntime || receiverSettings.rxAllowed}
-              onCommit={(hz) => control || ftRuntime ? onTune(hz, 'rx') : receiverSettings.tuneRx(hz)} />
-            <DfField key={control ? 'tx' : `tx-${snap.remoteFtSettings?.key}`} label={DF_TX} hz={snap.radio.txOffsetHz} remoteReceive={ftSettings} onCommit={(hz) => onTune(hz, 'tx')} />
+              remoteReceive={ftRuntimeDraft || receiverSettings.rxAllowed}
+              onCommit={(hz) => control || ftRuntimeDraft ? onTune(hz, 'rx') : receiverSettings.tuneRx(hz)} />
+            <DfField key={control ? 'tx' : `tx-${snap.remoteFtSettings?.key}`} label={DF_TX} hz={snap.radio.txOffsetHz} remoteReceive={ftSettingsDraft} onCommit={(hz) => onTune(hz, 'tx')} />
           </div>
           {/* Decode button — re-run the decoder over the last period's audio (F6). */}
           <button disabled={!control}
