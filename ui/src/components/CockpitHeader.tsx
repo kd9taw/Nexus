@@ -1,6 +1,8 @@
 import { QuickRadioDetails, useRemotePresentation } from '../remote-web/presentation'
 import { useRadioLevels } from '../remote-web/useRadioLevels'
-import { useStationControl } from '../stationAccess'
+import { useStationControl, useStationStopControl } from '../stationAccess'
+import { haltTx } from '../api'
+import { withErrorToast } from '../toast'
 import { ModeEntry, type OperatingSection, type OperatingWorkspace } from '../remote-web/ModeEntry'
 // ⚠️ THIS FILE IS **PARTIAL** ON THE i18n LIST (i18n/hardcoded-strings.test.ts), and what is
 // deferred is the whole reason this batch exists: THE TX-ENABLE LATCH, TUNE, ATU AND STOP TX
@@ -168,6 +170,8 @@ export function CockpitHeader({
   catStatus,
 }: CockpitHeaderProps) {
   const control = useStationControl()
+  // Stop's own authority, never ordinary control freshness — see the Stop TX button below.
+  const remoteStop = useStationStopControl()
   const levels = useRadioLevels(snap)
   const remotePower = power?.unit === '%' && levels.can('power')
   const powerInput = levels.input('power'), powerDraft = levels.draft('power')
@@ -429,9 +433,23 @@ export function CockpitHeader({
         )}
 
         {/* ⚠️ DEFERRED (i18n): THE stop control of six cockpits. Its label is the accessible
-            name every stop-line sweep looks for (/^stop tx$/i). */}
+            name every stop-line sweep looks for (/^stop tx$/i).
+
+            REMOTE (operator decision 2026-09-14): in the browser this is the station's one remote
+            stop, the same path Operate's FtStopControl uses — halt_tx → the hosted control
+            transport → the operation client's `stopTransmit`. Its authority is
+            useStationStopControl (connected + a station-issued stop token), so stale readings, a
+            pending command or the busy banner never disable it. The cockpit's own handler is
+            local-only: its extra verbs (stop_cw, rtty_stop, psk_stop) have no remote route. One
+            click, one request. What the station does with it is unchanged and is Operate's too:
+            it retires this browser's transmit permit, and a transmission that permit owns is
+            halted through Engine::halt_tx. It does not reach a transmission started at the
+            station itself. */}
         {onStopTx && (
-          <button disabled={!control} type="button" className="cockpit-stoptx" onClick={onStopTx} title="Stop TX (Esc)">
+          <button disabled={!(control || remoteStop)} type="button" className="cockpit-stoptx"
+            data-remote-stop={(!control && remoteStop) || undefined}
+            onClick={control ? onStopTx : () => void withErrorToast(() => haltTx(), t('shell.halt.failed')).then(s => { if (s) onSnap?.(s) })}
+            title="Stop TX (Esc)">
             Stop TX
           </button>
         )}
