@@ -17,6 +17,8 @@ mod receiver_filter;
 #[cfg(feature = "radio")]
 #[path = "selection_tests.rs"]
 mod selection;
+#[path = "settings_tests.rs"]
+mod settings;
 #[cfg(feature = "radio")]
 #[path = "spot_tests.rs"]
 mod spot;

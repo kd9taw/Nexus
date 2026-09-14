@@ -2,7 +2,7 @@ import {expect,it} from 'vitest'
 import settings from './__fixtures__/configuration-settings.json'
 import programming from './__fixtures__/configuration-programming.json'
 import {parseConfiguration,settingsForm,type SettingsConfiguration} from './configuration'
-import {SETTINGS_KEYS,STATION_LOCAL_SETTINGS_KEYS,WITHHELD_RADIO_KEYS,WITHHELD_SETTINGS_KEYS} from './configuration-schema'
+import {SETTINGS_KEYS,STATION_LOCAL_SETTINGS_KEYS,WITHHELD_RADIO_KEYS,WITHHELD_SETTINGS_KEYS,WRITABLE_CONTROL_SETTINGS_KEYS,WRITABLE_LOGGING_SETTINGS_KEYS} from './configuration-schema'
 it('accepts the native serialized station choices and excludes account fields instead of supplying defaults',()=>{
   const parsed=parseConfiguration(structuredClone(settings),'settings') as SettingsConfiguration
   expect(parsed.settings.mycall).toBe('W1AW');expect(parsed.settings.mygrid).toBe('FN31RX09')
@@ -144,6 +144,17 @@ it('keeps the browser settings schema identical to the native projection it must
   expect(radioKeys.length, 'positive control: RADIO_KEYS really read').toBeGreaterThan(30)
   expect(radioKeys.filter(key => radioWithheld.includes(key)),
     'a withheld per-radio key must never also be exposed').toEqual([])
+
+  // The settings a browser may CHANGE: the same on both sides, and every other exposed setting
+  // explicitly denied by the station. The station's own coverage test holds the denial list too.
+  const writableControl = named(CONFIG, 'WRITABLE_CONTROL_KEYS'), writableLogging = named(CONFIG, 'WRITABLE_LOGGING_KEYS')
+  const denied = named(CONFIG, 'WRITE_DENIED_KEYS')
+  expect(writableControl.length, 'positive control: WRITABLE_CONTROL_KEYS really read').toBeGreaterThan(20)
+  expect(denied.length, 'positive control: WRITE_DENIED_KEYS really read').toBeGreaterThan(200)
+  expect([...WRITABLE_CONTROL_SETTINGS_KEYS].sort()).toEqual([...writableControl].sort())
+  expect([...WRITABLE_LOGGING_SETTINGS_KEYS].sort()).toEqual([...writableLogging].sort())
+  expect(SETTINGS_KEYS.filter(key => ![...writableControl, ...writableLogging, ...denied].includes(key)),
+    'an exposed setting nobody classified as writable or denied').toEqual([])
 })
 
 // Relaxing the exact key count is what lets a station one release ahead be understood at all.

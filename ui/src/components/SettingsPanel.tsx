@@ -3,6 +3,7 @@ import { useNavigation } from '../remote-web/useNavigation'
 import { settingsForm, type SettingsConfiguration } from '../remote-web/configuration'
 import { useAmplifierFollow } from '../remote-web/useAmplifierFollow'
 import { useReceiverGain } from '../remote-web/useReceiverGain'
+import { useRemotePreferences } from '../remote-web/useRemotePreferences'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { RemoteStation } from '../remote-native/RemoteStation'
 import { SAT_VFO_MAPS } from '../features/satVfo'
@@ -917,6 +918,10 @@ export function SettingsPanel({
   const canSelectRadio = useStationCapability('radioSelection')
   const remoteFollow = useAmplifierFollow(configuration.value, activeRadioId, configuration.refresh)
   const remoteGain = useReceiverGain(configuration.value, activeRadioId, radio, configuration.refresh)
+  // Remote: the operating preferences the station lets this browser change. Every other field stays
+  // read-only (`disabled={remote}`); these follow the station's offer instead.
+  const remotePrefs = useRemotePreferences(configuration.value, configuration.refresh)
+  const locked = (key: FieldKey) => remote && !remotePrefs.canEdit(key)
   // Restore-from-backup (#28 item 4). A hidden file input, the same shape the Logbook's ADIF
   // import uses — Tauri has no native picker wired here and this needs none.
   const backupFileRef = useRef<HTMLInputElement | null>(null)
@@ -990,7 +995,8 @@ export function SettingsPanel({
   useEffect(()=>{
     if(!remote)return
     const next=configuration.value?settingsForm(configuration.value):null
-    setForm(next);dirtyRef.current=false;savedRef.current=next;setStatus('idle')
+    // A refreshed document keeps unsaved preference edits unless the station changed that setting.
+    setForm(remotePrefs.rebase(form,next,configuration.value));dirtyRef.current=false;savedRef.current=next;setStatus('idle')
   },[remote,configuration.value])
   // The blocklist editor's text — its OWN write path (apiSetBlockedCalls, the narrow
   // verb), never the form save: the engine deliberately ignores blockedCalls in a
@@ -2794,7 +2800,7 @@ export function SettingsPanel({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if(remote){await remoteFollow.save();return}
+    if(remote){await remoteFollow.save();await remotePrefs.save(form);return}
     if (!form) return
     if (!form.mycall.trim()) {
       // Don't dead-end on another tab: route the operator to where the fix is instead of a
@@ -3077,7 +3083,8 @@ export function SettingsPanel({
           ))}
         </div>
         <div className="settings-scroll">
-          {remote && <p className="settings-note" role="status">{remoteFollow.supported || remoteGain.supported ? t('remote.configurationControls') : t('remote.configurationObserver')}</p>}
+          {remote && <p className="settings-note" role="status">{remoteFollow.supported || remoteGain.supported || remotePrefs.supported ? t('remote.configurationControls') : t('remote.configurationObserver')}</p>}
+          {remote && remotePrefs.supported && <p className="settings-note">{t('remote.settingsEditable')}</p>}
           {remote && (tab==='logging'||tab==='configurations') && <p className="settings-note">{t('remote.configurationLocal')}</p>}
           {/* ---- Workspace (UI-only prefs, applied live like the theme) ---- */}
           {tab === 'configurations' && !remote && (
@@ -6246,7 +6253,7 @@ export function SettingsPanel({
                 <div className="settings-field">
                   <label className="settings-toggle">
                     <span className="settings-label">{t('settings.digital.autoLog.label')}</span>
-                    <button disabled={remote}
+                    <button disabled={locked('autoLog')}
                       type="button"
                       role="switch"
                       aria-checked={form.autoLog}
@@ -6262,7 +6269,7 @@ export function SettingsPanel({
                 <div className="settings-field">
                   <label className="settings-toggle">
                     <span className="settings-label">{t('settings.digital.promptToLog.label')}</span>
-                    <button disabled={remote}
+                    <button disabled={locked('promptToLog')}
                       type="button"
                       role="switch"
                       aria-checked={!!form.promptToLog}
@@ -6280,7 +6287,7 @@ export function SettingsPanel({
                     <span className="settings-label">
                       {t('settings.digital.reportsToComments.label')}
                     </span>
-                    <button disabled={remote}
+                    <button disabled={locked('logReportsToComments')}
                       type="button"
                       role="switch"
                       aria-checked={!!form.logReportsToComments}
@@ -6312,7 +6319,7 @@ export function SettingsPanel({
                 <div className="settings-field">
                   <label className="settings-toggle">
                     <span className="settings-label">{t('settings.digital.clearDxAfterLog.label')}</span>
-                    <button disabled={remote}
+                    <button disabled={locked('clearDxAfterLog')}
                       type="button"
                       role="switch"
                       aria-checked={!!form.clearDxAfterLog}
@@ -6340,7 +6347,7 @@ export function SettingsPanel({
                     aria-label={t('settings.digital.decodeDepth.label')}
                   >
                     {([1, 2, 3] as const).map((d) => (
-                      <button disabled={remote}
+                      <button disabled={locked('decodeDepth')}
                         key={d}
                         type="button"
                         className={`theme-chip${(form.decodeDepth ?? 3) === d ? ' active' : ''}`}
@@ -6366,7 +6373,7 @@ export function SettingsPanel({
                   <div className="settings-input-row">
                     <label className="settings-inline-label">
                       <span>{t('settings.digital.passband.low')}</span>
-                      <input disabled={remote}
+                      <input disabled={locked('decodeFLowHz')}
                         id="decode-flow"
                         className="settings-input"
                         type="number"
@@ -6400,7 +6407,7 @@ export function SettingsPanel({
                     </label>
                     <label className="settings-inline-label">
                       <span>{t('settings.digital.passband.high')}</span>
-                      <input disabled={remote}
+                      <input disabled={locked('decodeFHighHz')}
                         id="decode-fhigh"
                         className="settings-input"
                         type="number"
@@ -6439,7 +6446,7 @@ export function SettingsPanel({
                 <div className="settings-field">
                   <label className="settings-toggle">
                     <span className="settings-label">{t('settings.digital.apDecode.label')}</span>
-                    <button disabled={remote}
+                    <button disabled={locked('apDecode')}
                       type="button"
                       role="switch"
                       aria-checked={form.apDecode !== false}
@@ -6455,7 +6462,7 @@ export function SettingsPanel({
                 <div className="settings-field">
                   <label className="settings-toggle">
                     <span className="settings-label">{t('settings.digital.apCqOnly.label')}</span>
-                    <button disabled={remote}
+                    <button disabled={locked('apCqOnly')}
                       type="button"
                       role="switch"
                       aria-checked={!!form.apCqOnly}
@@ -6471,7 +6478,7 @@ export function SettingsPanel({
                 <div className="settings-field">
                   <label className="settings-toggle">
                     <span className="settings-label">{t('settings.digital.singleDecode.label')}</span>
-                    <button disabled={remote}
+                    <button disabled={locked('singleDecode')}
                       type="button"
                       role="switch"
                       aria-checked={!!form.singleDecode}
@@ -6531,7 +6538,7 @@ export function SettingsPanel({
                     <span className="settings-label">
                       {t('settings.digital.journeyStreak.label')}
                     </span>
-                    <button disabled={remote}
+                    <button disabled={locked('journeyStreakEnabled')}
                       type="button"
                       role="switch"
                       aria-checked={!!form.journeyStreakEnabled}
@@ -6629,7 +6636,7 @@ export function SettingsPanel({
                   <label className="settings-label" htmlFor="units">
                     {t('settings.digital.units.label')}
                   </label>
-                  <select disabled={remote}
+                  <select disabled={locked('units')}
                     id="units"
                     className="settings-input"
                     value={form.units ?? 'auto'}
@@ -6864,7 +6871,7 @@ export function SettingsPanel({
             <div className="settings-grid">
               <label className="settings-field">
                 <span className="settings-label">{t('settings.quickReply.chat.label')}</span>
-                <input disabled={remote}
+                <input disabled={locked('macros')}
                   className="settings-input"
                   type="text"
                   value={form.macros.chat.join(', ')}
@@ -6876,7 +6883,7 @@ export function SettingsPanel({
               </label>
               <label className="settings-field">
                 <span className="settings-label">{MACRO_SET_QSO}</span>
-                <input disabled={remote}
+                <input disabled={locked('macros')}
                   className="settings-input"
                   type="text"
                   value={form.macros.qso.join(', ')}
@@ -6888,7 +6895,7 @@ export function SettingsPanel({
               </label>
               <label className="settings-field">
                 <span className="settings-label">{t('settings.quickReply.band.label')}</span>
-                <input disabled={remote}
+                <input disabled={locked('macros')}
                   className="settings-input"
                   type="text"
                   value={form.macros.band.join(', ')}
@@ -7192,7 +7199,7 @@ export function SettingsPanel({
                           {m.key}
                         </span>
                         <span className="cw-macro-role">{CW_MACRO_ROLES[m.key] ?? ''}</span>
-                        <input disabled={remote}
+                        <input disabled={locked('macros')}
                           className="settings-input cw-macro-label"
                           type="text"
                           value={m.label}
@@ -7201,7 +7208,7 @@ export function SettingsPanel({
                           autoComplete="off"
                           spellCheck={false}
                         />
-                        <input disabled={remote}
+                        <input disabled={locked('macros')}
                           className="settings-input cw-macro-text"
                           type="text"
                           value={m.text}
@@ -7240,7 +7247,7 @@ export function SettingsPanel({
             <div className="settings-field">
               <label className="settings-toggle">
                 <span className="settings-label">{t('settings.rtty.rxAutoArm.label')}</span>
-                <button disabled={remote}
+                <button disabled={locked('rttyRxAutoArm')}
                   type="button"
                   role="switch"
                   // ⚠️ `!== false`, not `!!` — the default is ON, so an absent key reads as on.
@@ -7359,7 +7366,7 @@ export function SettingsPanel({
             <div className="settings-field">
               <label className="settings-toggle">
                 <span className="settings-label">{t('settings.psk.rxAutoArm.label')}</span>
-                <button disabled={remote}
+                <button disabled={locked('pskRxAutoArm')}
                   type="button"
                   role="switch"
                   // ⚠️ `!== false`, not `!!` — the default is ON, so an absent key reads as on.
@@ -7573,7 +7580,7 @@ export function SettingsPanel({
               <div className="settings-field">
                 <label className="settings-toggle">
                   <span className="settings-label">{t('settings.sstv.rxAutoArm.label')}</span>
-                  <button disabled={remote}
+                  <button disabled={locked('sstvRxAutoArm')}
                     type="button"
                     role="switch"
                     // ⚠️ `!== false`, not `!!` — the default is ON, so an absent key reads as on.
@@ -8262,7 +8269,7 @@ export function SettingsPanel({
               <div className="settings-field">
                 <label className="settings-toggle">
                   <span className="settings-label">{t('settings.alerts.confirmTier.label')}</span>
-                  <button disabled={remote}
+                  <button disabled={locked('alertConfirmTier')}
                     type="button"
                     role="switch"
                     aria-checked={form.alertConfirmTier !== false}
@@ -8464,7 +8471,7 @@ export function SettingsPanel({
               <div className="settings-grid">
                 <label className="settings-field">
                   <span className="settings-label">{t('settings.b4.matchMode.label')}</span>
-                  <button disabled={remote}
+                  <button disabled={locked('b4MatchMode')}
                     type="button"
                     role="switch"
                     aria-checked={form.b4MatchMode ?? false}
@@ -8898,7 +8905,7 @@ export function SettingsPanel({
                   <span className="settings-label">
                     {t('settings.integrations.propEngine.label')}
                   </span>
-                  <select disabled={remote}
+                  <select disabled={locked('propEngine')}
                     className="settings-input"
                     value={form.propEngine || 'heuristic'}
                     onChange={(e) => update('propEngine', e.target.value)}
@@ -10408,6 +10415,7 @@ export function SettingsPanel({
                       type="button"
                       className={`theme-chip${(form.contestCategoryOperator || 'SINGLE-OP') === c ? ' active' : ''}`}
                       aria-pressed={(form.contestCategoryOperator || 'SINGLE-OP') === c}
+                      disabled={locked('contestCategoryOperator')}
                       onClick={() => update('contestCategoryOperator', c)}
                     >
                       {c}
@@ -10454,6 +10462,7 @@ export function SettingsPanel({
                         type="button"
                         className={`theme-chip${(form[field] || '') === c ? ' active' : ''}`}
                         aria-pressed={(form[field] || '') === c}
+                        disabled={locked(field)}
                         onClick={() => update(field, c)}
                       >
                         {c || t('settings.contestPick.entryAxes.unset')}
@@ -10487,7 +10496,7 @@ export function SettingsPanel({
                 <label className="settings-field">
                   <span className="settings-label">{t('settings.contestStation.county.label')}</span>
                   <input
-                    disabled={remote}
+                    disabled={locked('contestQthCounty')}
                     className="settings-input mono"
                     type="text"
                     value={form.contestQthCounty ?? ''}
@@ -10502,7 +10511,7 @@ export function SettingsPanel({
                 <label className="settings-field">
                   <span className="settings-label">{t('settings.contestStation.state.label')}</span>
                   <input
-                    disabled={remote}
+                    disabled={locked('contestQthState')}
                     className="settings-input mono"
                     type="text"
                     value={form.contestQthState ?? ''}
@@ -10520,7 +10529,7 @@ export function SettingsPanel({
                 <label className="settings-field">
                   <span className="settings-label">{t('settings.contestStation.check.label')}</span>
                   <input
-                    disabled={remote}
+                    disabled={locked('contestCheck')}
                     className="settings-input mono"
                     type="text"
                     inputMode="numeric"
@@ -10537,7 +10546,7 @@ export function SettingsPanel({
                 <label className="settings-field">
                   <span className="settings-label">{t('settings.contestStation.cqZone.label')}</span>
                   <input
-                    disabled={remote}
+                    disabled={locked('contestCqZone')}
                     className="settings-input mono"
                     type="number"
                     min={0}
@@ -10553,7 +10562,7 @@ export function SettingsPanel({
                 <label className="settings-field">
                   <span className="settings-label">{t('settings.contestStation.ituZone.label')}</span>
                   <input
-                    disabled={remote}
+                    disabled={locked('contestItuZone')}
                     className="settings-input mono"
                     type="number"
                     min={0}
@@ -10569,7 +10578,7 @@ export function SettingsPanel({
                 <label className="settings-field">
                   <span className="settings-label">{t('settings.contestStation.power.label')}</span>
                   <input
-                    disabled={remote}
+                    disabled={locked('contestPower')}
                     className="settings-input mono"
                     type="text"
                     value={form.contestPower ?? ''}
@@ -11093,6 +11102,19 @@ export function SettingsPanel({
             : remoteFollow.error === 'persistenceFailed' ? t('remote.followSaveFailed') : ['unconfirmed', 'hardwareUnconfirmed'].includes(remoteFollow.error) ? t('remote.followUnconfirmed') : t('remote.followRefused')}</span>}
           {remote && remoteFollow.confirming && <span className="settings-ok" role="status">{t('remote.followSavedRefreshing')}</span>}
           {remote && remoteFollow.saved && <span className="settings-ok" role="status">{t('settings.panel.saved')}</span>}
+          {remote && remotePrefs.result && (
+            <span className={remotePrefs.result === 'saved' ? 'settings-ok' : 'settings-error'} role={remotePrefs.result === 'saved' ? 'status' : 'alert'}>
+              {remotePrefs.result === 'saved' ? t('settings.panel.saved')
+                : remotePrefs.result === 'contextChanged' ? t('remote.settingsChanged')
+                  : remotePrefs.result === 'tooLarge' ? t('remote.settingsTooLarge')
+                    : remotePrefs.result === 'unconfirmed' ? t('remote.settingsUnconfirmed')
+                      : remotePrefs.result === 'notSent' ? t('remote.controlNotSent') : t('remote.settingsRefused')}
+            </span>
+          )}
+          {remote && remotePrefs.result === 'unconfirmed' && <>
+            <button type="button" className="settings-refresh" onClick={remotePrefs.check}>{t('remote.logChangeCheck')}</button>
+            <button type="button" className="settings-refresh" onClick={remotePrefs.acknowledge}>{t('remote.settingsCheckedStation')}</button>
+          </>}
           {/* Warnings from the last save. They did NOT block it -- the save went through -- so
               they are stated once and left visible rather than interrupting. An operator whose
               setup is unusual but correct must be able to read them and carry on. */}
@@ -11112,9 +11134,9 @@ export function SettingsPanel({
             className="settings-save"
             // Not disabled on an empty callsign — clicking routes to the Station tab with a clear
             // message (handleSubmit), rather than a greyed button that gives no reason or fix.
-            disabled={remote ? !remoteFollow.canSave : status === 'saving'}
+            disabled={remote ? !(remoteFollow.canSave || remotePrefs.canSave(form)) : status === 'saving'}
           >
-            {(remote ? remoteFollow.saving : status === 'saving') ? t('settings.panel.saving') : t('settings.panel.save')}
+            {(remote ? remoteFollow.saving || remotePrefs.saving : status === 'saving') ? t('settings.panel.saving') : t('settings.panel.save')}
           </button>
         </div>
       </form>

@@ -2,6 +2,7 @@
 // authenticated relay can route a request; it cannot issue a native grant.
 import { object, finite, integer, text } from './display-validation'
 import { controlContext, controlOutcome, stationAction, CONTROL_CAPABILITIES, type ControlCapability, type ControlContext, type ControlOutcome, type StationAction } from './station-operation'
+import { SETTINGS_SHAPES, WRITABLE_CONTROL_SETTINGS_KEYS, WRITABLE_LOGGING_SETTINGS_KEYS } from './configuration-schema'
 export const OPERATION_REQUEST_BYTES = 6144
 export const OPERATION_RESPONSE_BYTES = 4096
 /** A chunk of the one activation file this browser asked for is the only operation reply allowed
@@ -47,14 +48,27 @@ export type LogChange =
   /** A public DX cluster spot of the station's own call. Carries the reference and dial the confirm
    * showed, so the station refuses it if either has moved since. */
   | { kind: 'selfSpot'; reference: string; dialHz: number }
+  /** Operating preferences from the station's allow-list, against the Settings document revision the
+   * page showed. Station control writes station preferences and the logging grant writes logging
+   * ones; a change carrying both needs both. */
+  | { kind: 'settings'; revision: string; values: Record<string, unknown> }
 /** Station hints for log changes. They ride in `controls.capabilities`, which every hosted page
  * since operation v3 filters, so a newer station can offer them without breaking an older page. */
-export const LOG_CAPABILITIES = ['logEdit', 'qslMarks', 'otaHunt', 'otaActivation', 'selfSpot', 'activationExport'] as const
+export const LOG_CAPABILITIES = ['logEdit', 'qslMarks', 'otaHunt', 'otaActivation', 'selfSpot', 'activationExport',
+  'settingsControl', 'settingsLogging'] as const
 export type LogCapability = (typeof LOG_CAPABILITIES)[number]
+const loggingPreference = (key: string) => (WRITABLE_LOGGING_SETTINGS_KEYS as readonly string[]).includes(key)
 export const logChangeCapability = (change: LogChange): LogCapability =>
-  ({ edit: 'logEdit', delete: 'logEdit', qslSent: 'qslMarks', qslCard: 'qslMarks', hunt: 'otaHunt', clearHunt: 'otaHunt',
-    activation: 'otaActivation', clearActivation: 'otaActivation', selfSpot: 'selfSpot' } as const)[change.kind]
-const CHANGE_EVIDENCE = ['fileSynced', 'stationState', 'spotQueued'] as const
+  change.kind === 'settings'
+    ? Object.keys(change.values).every(loggingPreference) ? 'settingsLogging' : 'settingsControl'
+    : ({ edit: 'logEdit', delete: 'logEdit', qslSent: 'qslMarks', qslCard: 'qslMarks', hunt: 'otaHunt', clearHunt: 'otaHunt',
+      activation: 'otaActivation', clearActivation: 'otaActivation', selfSpot: 'selfSpot' } as const)[change.kind]
+/** Every hint a change needs. Only a settings change carrying both kinds of preference needs two. */
+export const logChangeCapabilities = (change: LogChange): LogCapability[] =>
+  change.kind !== 'settings' ? [logChangeCapability(change)]
+    : [...(Object.keys(change.values).some(loggingPreference) ? ['settingsLogging' as const] : []),
+      ...(Object.keys(change.values).some(k => !loggingPreference(k)) ? ['settingsControl' as const] : [])]
+const CHANGE_EVIDENCE = ['fileSynced', 'stationState', 'spotQueued', 'settingsSaved'] as const
 const CHANGE_REFUSALS = ['contextChanged', 'invalidChange', 'clusterUnavailable'] as const
 export type LogChangeOutcome = { operation: 'logChange'; operationId: string } & (
   | { outcome: 'applied'; evidence: (typeof CHANGE_EVIDENCE)[number] }
@@ -238,7 +252,7 @@ export function logChange(raw: unknown): LogChange {
     qslSent: ['kind', 'target', 'via'], qslCard: ['kind', 'target', 'received'],
     hunt: ['kind', 'call', 'program', 'reference'], clearHunt: ['kind'],
     activation: ['kind', 'program', 'reference'], clearActivation: ['kind'],
-    selfSpot: ['kind', 'reference', 'dialHz'] }
+    selfSpot: ['kind', 'reference', 'dialHz'], settings: ['kind', 'revision', 'values'] }
   if (typeof c.kind !== 'string' || !Object.prototype.hasOwnProperty.call(shapes, c.kind)) invalid()
   object(c, shapes[c.kind as string])
   // A row change names the exact row (its shape requires the target); a hunt names none.
@@ -262,6 +276,22 @@ export function logChange(raw: unknown): LogChange {
   // The empty string is the QSL menu's placeholder, a non-choice: never read it as a withdrawal.
   if (c.kind === 'qslSent' && !(c.via === null || c.via === 'B' || c.via === 'D' || c.via === 'E')) invalid()
   if (c.kind === 'qslCard' && typeof c.received !== 'boolean') invalid()
+  // Only settings on the allow-list, each in the type the Settings document declares. The station
+  // decides again: it denies any other key and refuses a value the setting cannot hold.
+  if (c.kind === 'settings') {
+    if (typeof c.revision !== 'string' || !/^[0-9a-f]{64}$/.test(c.revision) || !c.values || typeof c.values !== 'object' ||
+      Array.isArray(c.values) || Object.getPrototypeOf(c.values) !== Object.prototype)
+      invalid()
+    const values = c.values as Record<string, unknown>, keys = Object.keys(values)
+    if (keys.length < 1 || keys.length > 32) invalid()
+    for (const key of keys) {
+      if (![...WRITABLE_CONTROL_SETTINGS_KEYS, ...WRITABLE_LOGGING_SETTINGS_KEYS].includes(key as never)) invalid()
+      const shape: string = SETTINGS_SHAPES[key as keyof typeof SETTINGS_SHAPES], value = values[key]
+      if (shape === 'number' ? !finite(value) : shape === 'string' ? !text(value, 256) : shape === 'boolean' ? typeof value !== 'boolean'
+        : shape !== 'object' || !value || typeof value !== 'object' || Array.isArray(value))
+        invalid()
+    }
+  }
   return raw as LogChange
 }
 const EXPORT_REFERENCE = /^[A-Z0-9/-]{1,32}$/

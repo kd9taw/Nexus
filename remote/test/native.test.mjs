@@ -771,6 +771,21 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
    const activeRow=await rowFor('K3ACT',()=>true)
    assert.equal((await write(s=>changeRequest(s,{kind:'delete',target:target(activeRow)}))).response.value.outcome,'applied')
    evidence=await probe.send({type:'loggingEvidence'});assert.doesNotMatch(evidence.adif,/K3ACT/);assert.equal(evidence.txEnabled,false)
+   // A logging preference under the logging grant: confirmed by the station and saved to its settings file. The TX
+   // latch and the dial do not move, the revision it was made against is stale afterwards, and a station preference
+   // needs station control, which this browser does not hold here. Put the preference back for the rest of the run.
+   const shownPrefs=await probe.send({type:'settingsEvidence'})
+   const pref=await write(s=>changeRequest(s,{kind:'settings',revision:shownPrefs.revision,values:{autoLog:!shownPrefs.autoLog}}))
+   assert.deepEqual(pref.response.value,{operation:'logChange',operationId:pref.request.requestId,outcome:'applied',evidence:'settingsSaved'})
+   const savedPrefs=await probe.send({type:'settingsEvidence'})
+   assert.equal(savedPrefs.autoLog,!shownPrefs.autoLog);assert.equal(savedPrefs.savedAutoLog,!shownPrefs.autoLog)
+   assert.equal(savedPrefs.txEnabled,false);assert.equal(savedPrefs.dialHz,shownPrefs.dialHz)
+   const stalePref=await write(s=>changeRequest(s,{kind:'settings',revision:shownPrefs.revision,values:{autoLog:shownPrefs.autoLog}}))
+   assert.equal(stalePref.response.value.outcome,'rejected');assert.equal(stalePref.response.value.reason,'contextChanged')
+   const noControl=await allowed(async()=>operation(changeRequest(await fresh(),{kind:'settings',revision:savedPrefs.revision,values:{contestCheck:'73'}})))
+   assert.equal(noControl.response.error,'localPermissionRequired')
+   const restored=await write(s=>changeRequest(s,{kind:'settings',revision:savedPrefs.revision,values:{autoLog:shownPrefs.autoLog}}))
+   assert.equal(restored.response.value.evidence,'settingsSaved',JSON.stringify(restored.response));assert.equal((await probe.send({type:'settingsEvidence'})).autoLog,shownPrefs.autoLog)
    const ended=await write(s=>context(s,{kind:'clearActivation'}))
    assert.equal(ended.response.value.evidence,'stationState',JSON.stringify(ended.response));assert.deepEqual(await probe.send({type:'loggingEvidence'}),evidence)
    // Closing the page socket ends the lease, as any departure does. Wait for that, then take it again.
@@ -781,12 +796,20 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
   if(operationVersion>=2){
    assert.equal((await probe.send({type:'stationPermission',deviceId:device.deviceId,allow:true})).ok,true)
    const controls=(await allowed(()=>operation({type:'state'}))).response.value
-   assert.deepEqual(controls.controls.capabilities,operationVersion>=3?['decoder','amplifier','frequency','mode','tier','ampFollowBand','workspace','decoderSettings','receiverSettings','receiverGain','bandSelection','receiverFilter','receiverDsp','phoneMode','workSpot','radioLevels','radioSelection','fmTuning', 'fmReceiver',...(operationVersion===4?['qsoLogging','logEdit','qslMarks','otaHunt','otaActivation','activationExport']:[])]:['decoder','amplifier'])
+   assert.deepEqual(controls.controls.capabilities,operationVersion>=3?['decoder','amplifier','frequency','mode','tier','ampFollowBand','workspace','decoderSettings','receiverSettings','receiverGain','bandSelection','receiverFilter','receiverDsp','phoneMode','workSpot','radioLevels','radioSelection','fmTuning', 'fmReceiver',...(operationVersion===4?['qsoLogging','logEdit','qslMarks','otaHunt','otaActivation','activationExport','settingsLogging','settingsControl']:[])]:['decoder','amplifier'])
    const clearRequest=s=>({type:'stationControl',stationBootId:s.stationBootId,leaseId:s.leaseId,expectedRevision:s.revision,commandWindowId:s.commandWindowId,clientSequence:s.nextSequence,context:s.controls.context,action:{action:'decoder.clear',receiver:'cw'}})
    const cleared=await allowed(()=>operation(clearRequest(controls)),async()=>operation(clearRequest((await heartbeat()).response.value)))
    assert.equal(cleared.response.value.outcome,'applied');assert.equal(cleared.response.value.evidence,'receiverState')
    assert.deepEqual(await probe.send({type:'loggingEvidence'}),evidence)
    if (operationVersion === 4) {
+     // A station preference under station control: confirmed, saved, and the TX latch and dial untouched.
+     const shownStation=await probe.send({type:'settingsEvidence'})
+     const stationPref=s=>({type:'logChange',stationBootId:s.stationBootId,leaseId:s.leaseId,expectedRevision:s.revision,commandWindowId:s.commandWindowId,clientSequence:s.nextSequence,change:{kind:'settings',revision:shownStation.revision,values:{contestCheck:'73'}}})
+     const savedStation=await allowed(async()=>operation(stationPref((await heartbeat()).response.value)))
+     assert.deepEqual(savedStation.response.value,{operation:'logChange',operationId:savedStation.request.requestId,outcome:'applied',evidence:'settingsSaved'})
+     const afterStation=await probe.send({type:'settingsEvidence'})
+     assert.equal(afterStation.contestCheck,'73');assert.equal(afterStation.savedContestCheck,'73')
+     assert.equal(afterStation.txEnabled,false);assert.equal(afterStation.dialHz,shownStation.dialHz)
      assert.equal(controls.transmitEpoch, null)
      const grant = await probe.send({type:'transmitPermission',deviceId:device.deviceId,allow:true})
      assert.equal(grant.ok,true,grant.error)

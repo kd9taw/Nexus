@@ -940,6 +940,28 @@ test('an activation export crosses the real relay only at v4, as a read, and a w
   live.browser.close(); live.station.close()
 })
 
+test('a settings change crosses the real relay at v4, and a page naming a setting off the list is closed before the station sees it', async () => {
+  const change = values => ({ type: 'logChange', requestId: crypto.randomUUID(), stationBootId: crypto.randomUUID(), leaseId: crypto.randomUUID(),
+    expectedRevision: 1, commandWindowId: crypto.randomUUID(), clientSequence: 1, change: { kind: 'settings', revision: 'a'.repeat(64), values } })
+  const pair = await app.paired(), live = await admitted(pair, 1, {
+    'x-nexus-operation-version': '2', 'x-nexus-operation-max-version': '3', 'x-nexus-operation-ft-version': '1'
+  })
+  const request = change({ contestCheck: '73', autoLog: true })
+  live.browser.send({ type: 'operationRequest', operationVersion: 4, request })
+  const routed = await live.station.take(type('operationRequest'))
+  assert.deepEqual(routed.request, request)
+  const value = { operation: 'logChange', operationId: request.requestId, outcome: 'applied', evidence: 'settingsSaved' }
+  live.station.send({ type: 'operationResponse', sessionId: routed.sessionId, requestId: request.requestId, value })
+  assert.deepEqual((await live.browser.take(type('operationResponse'))).value, value)
+  // Positive control on the allow-list: a rig port never reaches the station, and the page that sent it is closed.
+  live.browser.send({ type: 'operationRequest', operationVersion: 4, request: change({ rigPort: 'COM3' }) })
+  await assert.rejects(live.station.take(type('operationRequest'), 200), /timeout/)
+  for (let i = 0; i < 50 && !live.browser.closed; i++) await new Promise(resolve => setTimeout(resolve, 20))
+  assert.equal(live.browser.closed, true)
+  assert.equal(live.station.closed, false)
+  live.station.close()
+})
+
 // A claim is durable on the enrollment row, but until it reached the wire the browser could only
 // remember "waiting for approval" in component state, so a reload lost it and re-entering the same
 // code was refused - the claim UPDATE requires account_id IS NULL. The operator concluded pairing

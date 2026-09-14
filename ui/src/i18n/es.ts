@@ -101,6 +101,12 @@ export const ES: PartialCatalog = {
   "remote.activationExportTooLarge": "Esta activación es demasiado grande para descargarla aquí. Expórtala con Nexus en la estación.",
   "remote.activationExportMissing": "Esta activación ya no está en el registro de la estación. Actualiza el registro e inténtalo de nuevo.",
   "remote.activationExportFailed": "El archivo de la activación no llegó completo, así que no se guardó nada. Inténtalo de nuevo.",
+  "remote.settingsEditable": "Las preferencias de operación que puedes cambiar desde aquí están habilitadas. La identidad de la estación, la licencia, el equipo, el audio, la red, las cuentas y las subidas siguen en solo lectura y solo se cambian en la estación.",
+  "remote.settingsChanged": "Estos ajustes cambiaron en la estación después de que esta página los cargara. Se han vuelto a cargar; haz tu cambio de nuevo.",
+  "remote.settingsRefused": "La estación no aceptó este cambio. No se guardó nada.",
+  "remote.settingsUnconfirmed": "La estación no ha confirmado que se guardara. Revisa los ajustes en la estación antes de volver a cambiarlos.",
+  "remote.settingsTooLarge": "Este cambio es demasiado grande para enviarlo desde el navegador. Cambia menos macros a la vez o haz el cambio en la estación.",
+  "remote.settingsCheckedStation": "He revisado los ajustes en la estación: terminar esta comprobación",
   // remote parity batch 2
   "remote.logChangeUnknown": "Es posible que la estación ya haya hecho este cambio. Comprueba el resultado antes de volver a cambiar el registro.",
   "remote.logChangeCheck": "Comprobar el resultado",

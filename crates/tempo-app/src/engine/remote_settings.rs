@@ -243,4 +243,41 @@ impl Engine {
             .amp_follow_band = follow;
         Ok(())
     }
+
+    /// Save operating preferences a Remote browser changed, then publish exactly those fields.
+    ///
+    /// `allowed` is the station's allow-list; the caller has checked the lease, the grant and the
+    /// Settings revision. The changes are applied to a copy of the current settings through serde,
+    /// and the copy must serialize back to exactly the request: a value serde would coerce, clamp or
+    /// default is refused, and so is anything that would move another field. Like the other remote
+    /// preference saves, this never runs the broad form-apply path, so it cannot tune, key, rebuild
+    /// the radio or touch the TX-enable latch. A failed save publishes nothing.
+    pub fn save_remote_preferences(
+        &mut self,
+        values: &serde_json::Map<String, serde_json::Value>,
+        allowed: &[&str],
+    ) -> Result<(), Reason> {
+        if values.is_empty() || values.keys().any(|key| !allowed.contains(&key.as_str())) {
+            return Err(Reason::InvalidAction);
+        }
+        let path = self
+            .remote_settings_path
+            .clone()
+            .ok_or(Reason::UnsupportedAction)?;
+        let mut expected =
+            serde_json::to_value(&self.settings).map_err(|_| Reason::InvalidAction)?;
+        let fields = expected.as_object_mut().ok_or(Reason::InvalidAction)?;
+        for (key, value) in values {
+            // Only a field the settings already carry: a key serde would ignore is not a change.
+            *fields.get_mut(key).ok_or(Reason::InvalidAction)? = value.clone();
+        }
+        let next: crate::settings::Settings =
+            serde_json::from_value(expected.clone()).map_err(|_| Reason::InvalidAction)?;
+        if serde_json::to_value(&next).map_err(|_| Reason::InvalidAction)? != expected {
+            return Err(Reason::InvalidAction);
+        }
+        next.save(&path).map_err(|_| Reason::PersistenceFailed)?;
+        self.settings = next;
+        Ok(())
+    }
 }

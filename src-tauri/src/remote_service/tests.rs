@@ -403,6 +403,26 @@ fn cloud_runtime_probe() {
             std::io::stdout().flush().unwrap();
             continue;
         }
+        if value["type"] == "settingsEvidence" {
+            // What a browser's preference change did: the live value, the saved file, the revision
+            // the Settings document shows, and the TX-enable latch and dial it must not move.
+            let e = engine.lock().unwrap();
+            let path = std::path::Path::new(config["configurationRoot"].as_str().unwrap())
+                .join("settings.json");
+            let saved: serde_json::Value = std::fs::read(path)
+                .ok()
+                .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+                .unwrap_or(serde_json::Value::Null);
+            println!(
+                "REMOTE_TEST:{}",
+                json!({"revision":super::query::settings_revision(e.settings()).unwrap(),
+                "autoLog":e.settings().auto_log,"contestCheck":e.settings().contest_check,
+                "savedAutoLog":saved["autoLog"],"savedContestCheck":saved["contestCheck"],
+                "txEnabled":e.tx_enabled(),"dialHz":e.settings().dial_hz()})
+            );
+            std::io::stdout().flush().unwrap();
+            continue;
+        }
         if value["type"] == "seedLogging" || value["type"] == "loggingEvidence" {
             let path = std::path::Path::new(config["configurationRoot"].as_str().unwrap())
                 .join("remote-manual.adi");

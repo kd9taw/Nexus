@@ -91,6 +91,12 @@ export const JA: PartialCatalog = {
   "remote.activationExportTooLarge": "このアクティベーションはここでダウンロードするには大きすぎます。局の Nexus でエクスポートしてください。",
   "remote.activationExportMissing": "このアクティベーションは局のログにもうありません。ログを更新してもう一度お試しください。",
   "remote.activationExportFailed": "アクティベーションファイルが完全に届かなかったため、何も保存されませんでした。もう一度お試しください。",
+  "remote.settingsEditable": "ここから変更できる運用設定は有効になっています。局の識別情報、免許、無線機、オーディオ、ネットワーク、アカウント、アップロードの設定は読み取り専用で、局でのみ変更できます。",
+  "remote.settingsChanged": "このページが読み込んだ後に局で設定が変更されました。再読み込みしたので、もう一度変更してください。",
+  "remote.settingsRefused": "局はこの変更を受け付けませんでした。何も保存されていません。",
+  "remote.settingsUnconfirmed": "局は保存を確認していません。もう一度変更する前に局で設定を確認してください。",
+  "remote.settingsTooLarge": "この変更はブラウザーから送るには大きすぎます。一度に変更するマクロを減らすか、局で変更してください。",
+  "remote.settingsCheckedStation": "局で設定を確認しました — この確認を終了する",
   // remote parity batch 2
   "remote.logChangeUnknown": "局がすでにこの変更を行っている可能性があります。ログを再度変更する前に結果を確認してください。",
   "remote.logChangeCheck": "結果を確認",

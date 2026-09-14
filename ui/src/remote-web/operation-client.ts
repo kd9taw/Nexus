@@ -8,7 +8,7 @@ import {
   OPERATION_RESPONSE_BYTES,
   activationSelection,
   logChange,
-  logChangeCapability,
+  logChangeCapabilities,
   manualRecord,
   operationId,
   operationRequest,
@@ -601,7 +601,7 @@ export class OperationClient {
     try {
       const intent = structuredClone(logChange(change))
       if (this.operationVersion < 4) throw Error('stationUnsupported')
-      const r = await this.submitWrite(s => !!s.controls?.capabilities.includes(logChangeCapability(intent)),
+      const r = await this.submitWrite(s => logChangeCapabilities(intent).every(c => !!s.controls?.capabilities.includes(c)),
         (base, requestId) => ({ type: 'logChange', requestId, ...base, change: intent }), undefined, attempt)
       if (!('operation' in r) || r.operation !== 'logChange') throw Error('invalidRequest')
       return r

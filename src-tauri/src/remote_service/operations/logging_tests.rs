@@ -59,7 +59,8 @@ fn pending_confirm_requires_logging_not_radio_or_transmit_permission() {
             "qslMarks",
             "otaHunt",
             "otaActivation",
-            "activationExport"
+            "activationExport",
+            "settingsLogging"
         ])
     );
     assert!(state["transmitEpoch"].is_null());

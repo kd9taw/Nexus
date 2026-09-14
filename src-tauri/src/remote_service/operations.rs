@@ -20,6 +20,7 @@ use tempo_app::remote_control::{transmit::TransmitAuthority, Completion, Outcome
 
 mod export;
 mod logging;
+mod settings;
 mod station;
 mod transmit_stop;
 
@@ -682,6 +683,10 @@ impl Authority {
                         capabilities.push("selfSpot");
                     }
                 }
+                // Station preferences are changed under station control (see `settings.rs`).
+                if c.control_grants.contains(device) {
+                    capabilities.push("settingsControl");
+                }
                 value["txArmed"] = json!(owned && tx_owned);
                 if ft_available
                     && c.control_grants.contains(device)
@@ -883,12 +888,8 @@ impl Authority {
                 client_sequence,
                 ..
             } => {
-                let is_control = matches!(request, Request::StationControl { action, .. } if !action.is_logging());
-                if !(if is_control {
-                    c.control_grants.contains(device)
-                } else {
-                    c.grants.contains(device)
-                }) {
+                // The same local grant `permitted` checked above, read again under this lock.
+                if !permitted(&c, version, device, request) {
                     return Err("localPermissionRequired");
                 }
                 let bytes = serde_json::to_vec(request).map_err(|_| "invalidRequest")?;
@@ -1153,9 +1154,13 @@ fn permitted(c: &Core, version: u8, device: &str, request: &Request) -> bool {
         Request::Acquire { .. } | Request::Result { .. } => {
             c.grants.contains(device) || version >= 2 && c.control_grants.contains(device)
         }
-        Request::LogManual { .. }
-        | Request::LogChange { .. }
-        | Request::ActivationExport { .. } => c.grants.contains(device),
+        Request::LogManual { .. } | Request::ActivationExport { .. } => c.grants.contains(device),
+        // A log change needs the logging grant; a preference change needs what its keys need.
+        Request::LogChange { change, .. } => {
+            let (logging, control) = change.grants();
+            (!logging || c.grants.contains(device))
+                && (!control || c.control_grants.contains(device))
+        }
         Request::StationControl { action, .. } => {
             if action.is_logging() {
                 c.grants.contains(device)
