@@ -86,12 +86,29 @@ export function RemoteApp() {
     finally { setBusy(false) }
   }
   async function refresh() { if (client) setSession(await client.post<AccountSession>('session')) }
+  function open(stationId: string, application: boolean) {
+    const next = new HostedConnection(client!, stationId, application)
+    // A refused ticket is final: the trial ended mid-session, the station or this browser was
+    // revoked, or the sign-in expired. The workspace used to stay up saying "Station data
+    // unavailable… check that Nexus is running", which blamed the shack. Go back to the account
+    // page instead, where the trial line and the station list show what actually changed.
+    next.onRefused = cause => {
+      next.stop()
+      setConnection(current => current === next ? null : current)
+      setError(cause.code === 'signInRequired' ? 'signInRequired' : 'sessionEnded')
+      void refresh().catch(() => {})
+    }
+    setWorkspace(application); setConnection(next); next.start()
+  }
+  const leave = () => { connection?.stop(); setConnection(null) }
+  const signOutOfSession = () => { connection?.stop(); setConnection(null); setSession(null); void client?.signOut() }
   if (connection && workspace) return <Suspense fallback={<p role="status">{t('monitor.connecting')}</p>}>
-    <BrowserApplication connection={connection} disconnect={() => { connection.stop(); setConnection(null) }} />
+    <BrowserApplication connection={connection} disconnect={leave} signOut={signOutOfSession} />
   </Suspense>
-  if (connection) return <MonitorApp source={connection.source} navigation={
-    <button className="remote-button" onClick={() => { connection.stop(); setConnection(null) }}>{t('remote.disconnect')}</button>
-  } />
+  if (connection) return <MonitorApp source={connection.source} navigation={<>
+    <button className="remote-button" onClick={leave}>{t('remote.disconnect')}</button>
+    <button className="remote-button" onClick={signOutOfSession}>{t('remote.signOut')}</button>
+  </>} />
   // The service decides this and says so; the browser must not re-derive it from enabled plus
   // expiresAt against its own clock, because a laptop with the wrong time would then disagree
   // with the service about whether the trial is live.
@@ -140,6 +157,8 @@ export function RemoteApp() {
     : code === 'trialActiveElsewhere' ? t('remote.trialActiveElsewhere')
     // Rate limits on the browser's routes reset within a minute (account) or ten (claim, attach).
     : code === 'tryLater' ? t('remote.tryLater')
+    // Set by the page, not the service: an open session whose next ticket was refused.
+    : code === 'sessionEnded' ? t('remote.sessionEnded')
     : t('remote.requestFailed')
   // A sign-up that worked but whose address is not confirmed yet. Auth0 keeps its session through
   // the deny, so "continue" is one plain login and "use a different account" has to sign out of it.
@@ -226,12 +245,8 @@ export function RemoteApp() {
                   onClick={() => setRenaming({ id: station.id, name: station.name })}>{t('remote.renameStation')}</button>
               </div>}
           {station.device?.approved === 1 ? <div className="remote-actions">
-            <button className="remote-button remote-button--primary" disabled={busy || !entitled} onClick={() => {
-              const next = new HostedConnection(client!, station.id, true); setWorkspace(true); setConnection(next); next.start()
-            }}>{t('remote.openNexus')}</button>
-            <button className="remote-button" disabled={busy || !entitled} onClick={() => {
-              const next = new HostedConnection(client!, station.id); setWorkspace(false); setConnection(next); next.start()
-            }}>{t('remote.observe')}</button>
+            <button className="remote-button remote-button--primary" disabled={busy || !entitled} onClick={() => open(station.id, true)}>{t('remote.openNexus')}</button>
+            <button className="remote-button" disabled={busy || !entitled} onClick={() => open(station.id, false)}>{t('remote.observe')}</button>
             <button className="remote-button" disabled={busy} onClick={() => void act(async () => {
               await client?.post(`stations/${station.id}/forget-device`); await refresh()
             })}>{t('remote.forgetBrowser')}</button>
@@ -240,6 +255,8 @@ export function RemoteApp() {
           }}>
             <label>{t('remote.browserName')}<input value={deviceName} maxLength={48} required onChange={event => setDeviceName(event.target.value)} /></label>
             <button className="remote-button remote-button--primary" disabled={busy || !entitled || !deviceName.trim()}>{t('remote.requestApproval')}</button>
+            {/* With a second station, a browser approved for the first looks like it should already work here. */}
+            {session.stations.length > 1 && <p>{t('remote.browserPerStation')}</p>}
             {/* The reason sits WITH the control it disables. The trial line at the top of the page
                 already said why, but on a phone that line is off-screen by the time an operator
                 reaches this form - and a greyed button with nothing beside it reads as broken. */}
@@ -251,6 +268,9 @@ export function RemoteApp() {
             <button className="remote-button" disabled={busy} onClick={() => void act(async () => { await client?.post(`stations/${station.id}/revoke`); await refresh() })}>{t('remote.revokeStation')}</button>
           </details>
         </section>)}
+        {/* Signing out does not remove a browser's approval (it is per station and account), so on a
+            shared computer the real way out is the remove button - say so where it is. */}
+        {session.stations.some(station => station.device?.approved === 1) && <p>{t('remote.sharedComputerHint')}</p>}
         {/* Waiting for the shack, as its own card rather than a line under a form that is not
             being shown. The server remembers this now, so a reload no longer drops the operator
             back to an empty pairing form - which used to look like the claim had failed, and led
@@ -290,6 +310,8 @@ export function RemoteApp() {
           {pairingCodeMalformed && <p role="status">{t('remote.pairingCodeMalformed')}</p>}
           </form>
         </section>}
+        {/* At the limit the pairing card used to vanish with no word about why. */}
+        {canPair && !session.pending && session.stations.length >= 2 && <p role="status">{t('remote.stationLimitReached')}</p>}
       </>}
     </div>
     <footer className="remote-site-footer"><Wordmark /><a href="/remote-licenses.txt">{t('remote.licenses')}</a></footer>

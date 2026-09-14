@@ -7,8 +7,8 @@ import type { PresentationState } from './presentation'
 
 // Presentation belongs to this browser. Expanding help cannot acquire, release
 // or replace station authority, and never remounts the underlying Nexus app.
-export function SessionStatus({ client, stale, disconnect, display }: {
-  client?: OperationClient | null; stale: boolean; disconnect: () => void; display?: PresentationState
+export function SessionStatus({ client, stale, disconnect, signOut, display }: {
+  client?: OperationClient | null; stale: boolean; disconnect: () => void; signOut?: () => void; display?: PresentationState
 }) {
   const [expanded, setExpanded] = useState(false)
   const id = useId()
@@ -28,6 +28,8 @@ export function SessionStatus({ client, stale, disconnect, display }: {
       <p>{(client?.operationVersion ?? 0) >= 4 ? t('remote.ftControlPreview') : (client?.operationVersion ?? 0) >= 2 ? t('remote.controlPreview')
         : client?.enabled ? t('remote.applicationLoggingPreview') : t('remote.applicationObserver')}</p>
       <button type="button" className="remote-button" onClick={disconnect}>{t('remote.disconnect')}</button>
+      {/* Signing out used to mean disconnecting first and finding the button on the stations page. */}
+      {signOut && <button type="button" className="remote-button" onClick={signOut}>{t('remote.signOut')}</button>}
       {display && <button type="button" className="remote-button" onClick={() => {
         display.change(display.presentation === 'quick' ? 'full' : 'quick')
         setExpanded(false)
