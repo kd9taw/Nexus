@@ -18,6 +18,42 @@ const type = name => value => value?.type === name
 const applicationSample = (requestId, command = 'get_snapshot') => ({ type: 'applicationResult', requestId, command,
   revision: 1, baseRevision: null, ageMs: 0, data: { mycall: 'N0CALL' }, removed: [] })
 
+// DESIGN ONLY. The staging overlap changes pairing and station admission on a live service, which
+// waits for the operator's approval; skipped until then. REMOTE_RUN_PENDING_DESIGN=1 runs it, and
+// today it fails. Stages: `announce` refuses nothing and tells the browser where Remote went;
+// `pairing-closed` refuses new pairings; `closed` refuses stations. Old desktops cannot read the
+// code, so the statuses are chosen for them: 410 on HTTP, 403 on the socket (a 1.12.0 desktop turns
+// Remote off on a 403 instead of reconnecting to a closed service forever).
+const pendingDesign = reason => process.env.REMOTE_RUN_PENDING_DESIGN === '1' ? {} : { skip: reason }
+test('a retired service announces where Remote moved, then refuses new pairings, then stations, by name',
+  pendingDesign('pending operator approval of the Remote two-environment cutover design (staging overlap refusals)'), async () => {
+    const movedTo = 'https://remote.hamradiotools.io'
+    const stage = async (name, check) => {
+      const service = await runtime({ bindings: { REMOTE_MOVED_TO: movedTo, REMOTE_MOVE_STAGE: name } })
+      try { await check(service) } finally { await service.mf.dispose() }
+    }
+    const config = async service => (await service.mf.dispatchFetch(`${service.origin}/api/remote/config`)).json()
+    const refusal = async response => ({ status: response.status, error: (await response.json()).error })
+    await stage('announce', async service => {
+      assert.equal((await config(service)).movedTo, movedTo)
+      // Positive control for the refusals below: announcing refuses nothing.
+      const pair = await service.paired()
+      const station = await pair.native.open(pair.stationId)
+      station.close()
+    })
+    await stage('pairing-closed', async service => {
+      assert.equal((await config(service)).movedTo, movedTo)
+      const response = await service.mf.dispatchFetch(`${service.origin}/api/remote/enroll`, {
+        method: 'POST', headers: { 'content-type': 'application/json', 'cf-connecting-ip': '198.51.100.200' }, body: '{"name":"Station"}' })
+      assert.deepEqual(await refusal(response), { status: 410, error: 'serviceMoved' })
+    })
+    await stage('closed', async service => {
+      const response = await service.mf.dispatchFetch(`${service.origin}/api/remote/stations/${crypto.randomUUID()}/connect`, {
+        headers: { upgrade: 'websocket', authorization: `Bearer ${'a'.repeat(64)}` } })
+      assert.deepEqual(await refusal(response), { status: 403, error: 'serviceMoved' })
+    })
+  })
+
 test('full-log insights require the complete extension advertisement and survive room hibernation', async () => {
   const headers = { 'x-nexus-application-stream-version': '2', 'x-nexus-application-query-version': '1',
     'x-nexus-application-recall-version': '1', 'x-nexus-application-keyboard-version': '1', 'x-nexus-application-insights-version': '1' }

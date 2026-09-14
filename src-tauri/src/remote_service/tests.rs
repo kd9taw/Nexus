@@ -1256,3 +1256,171 @@ async fn local_transmit_grant_requires_approved_enabled_station_control_and_clea
         .is_empty());
     assert!(_receiver.is_empty());
 }
+
+/// A pairing saved under an origin this build does not know is never used, never turned on and never
+/// deleted. The retired-origin migration must NOT widen this: only the one origin a release retires
+/// may ever be treated as moved, and a record for anything else is left for the build that owns it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_pairing_saved_under_an_unknown_origin_is_never_used_or_removed() {
+    let cloud = fake_cloud().await;
+    let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
+    // Positive control: the same record under this build's own origin loads, so an "unpaired" below
+    // is the origin check refusing and not a harness that cannot load a pairing at all.
+    let own = paired_vault(&cloud.origin);
+    let service = launch(&cloud, &own, &engine);
+    eventually(&service, "the matching pairing loaded", |s| {
+        s.station_id.is_some()
+    })
+    .await;
+    drop(service);
+
+    let vault = paired_vault("https://remote.example.invalid");
+    let binding = vault.binding().unwrap().unwrap();
+    vault
+        .save_state(&vault::State {
+            binding: binding.clone(),
+            enabled: true,
+            grants: Vec::new(),
+        })
+        .unwrap();
+    let service = launch(&cloud, &vault, &engine);
+    settle().await;
+    let status = service.status().unwrap();
+    assert!(!on(&status), "a foreign pairing never turns Remote on");
+    assert_eq!(status.phase, "unpaired");
+    assert_eq!(status.station_id, None);
+    assert!(
+        vault.binding().unwrap() == Some(binding.clone()),
+        "the record is left untouched"
+    );
+    assert!(vault
+        .state()
+        .unwrap()
+        .is_some_and(|state| state.binding == binding && state.enabled));
+}
+
+// DESIGN ONLY. Both tests below encode behaviour that changes pairing and credential handling, which
+// waits for the operator's approval; they are ignored until then and fail today. Run them with
+// `cargo test --manifest-path src-tauri/Cargo.toml --lib --features radio remote_service -- --ignored`.
+const RETIRED_STAGING_ORIGIN: &str = "https://remote-staging.hamradiotools.io";
+
+/// Every 1.12.0 desktop holds a pairing under the staging origin. A build pointed at production must
+/// name that as a move (not "unlock your credential store", which is false), must not turn Remote on
+/// from it, must keep the record so going back to the previous release still works during the
+/// overlap, and must let the operator clear it locally, since the retired service cannot be asked to.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "credential gate: pending operator approval of the Remote two-environment cutover design (retired-origin pairing)"]
+async fn a_pairing_under_the_retired_origin_is_named_as_moved_and_can_be_cleared_locally() {
+    let cloud = fake_cloud().await;
+    let vault = paired_vault(RETIRED_STAGING_ORIGIN);
+    let old = vault.binding().unwrap().unwrap();
+    vault
+        .save_state(&vault::State {
+            binding: old.clone(),
+            enabled: true,
+            grants: Vec::new(),
+        })
+        .unwrap();
+    let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
+    let service = launch(&cloud, &vault, &engine);
+    settle().await;
+    let status = service.status().unwrap();
+    assert!(!on(&status), "a moved pairing never turns Remote on");
+    assert_eq!(
+        status.phase, "unpaired",
+        "the station can pair with the new service straight away"
+    );
+    assert_eq!(
+        status.error,
+        Some("pairingMoved"),
+        "nothing is wrong with the credential store"
+    );
+    assert!(
+        vault.binding().unwrap() == Some(old),
+        "nothing is deleted at start-up"
+    );
+
+    let forgotten = service
+        .action(Action::Forget {})
+        .await
+        .expect("forgetting a moved pairing is local and needs no service");
+    assert_eq!(forgotten.error, None);
+    settle().await;
+    assert!(vault.binding().unwrap().is_none());
+    assert!(vault.state().unwrap().is_none());
+}
+
+/// A service that has closed must be able to say so by name, on HTTP and on the station socket. Today
+/// the HTTP refusal reads as `pairingExpired` and every socket refusal as `accessDenied`, and both
+/// render as "check the connection".
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "credential gate: pending operator approval of the Remote two-environment cutover design (serviceMoved refusal)"]
+async fn a_closed_service_is_named_on_http_and_on_the_station_socket() {
+    let gone = refusing_cloud("410 Gone", r#"{"error":"serviceMoved"}"#).await;
+    let client = Client::new(&gone).unwrap();
+    assert_eq!(
+        client
+            .post("enroll", None, json!({ "name": "Station" }))
+            .await
+            .err(),
+        Some("serviceMoved")
+    );
+
+    let refused = FakeCloud {
+        origin: refusing_cloud("403 Forbidden", r#"{"error":"serviceMoved"}"#).await,
+        devices: Arc::new(Mutex::new(String::new())),
+    };
+    let vault = paired_vault(&refused.origin);
+    let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
+    let service = launch(&refused, &vault, &engine);
+    eventually(&service, "the pairing loaded", |s| s.station_id.is_some()).await;
+    service.action(Action::Enable {}).await.unwrap();
+    let status = eventually(&service, "the socket refusal was reported", |s| {
+        s.phase == "disabled" && s.error.is_some()
+    })
+    .await;
+    assert_eq!(status.error, Some("serviceMoved"));
+}
+
+/// Answers every request, HTTP or WebSocket upgrade, with one fixed status and JSON body.
+async fn refusing_cloud(status: &'static str, body: &'static str) -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        while let Ok((mut socket, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let mut request = Vec::new();
+                let mut chunk = [0u8; 4096];
+                let head_end = loop {
+                    match socket.read(&mut chunk).await {
+                        Ok(0) | Err(_) => return,
+                        Ok(n) => request.extend_from_slice(&chunk[..n]),
+                    }
+                    if let Some(at) = request.windows(4).position(|w| w == b"\r\n\r\n") {
+                        break at + 4;
+                    }
+                };
+                let length = String::from_utf8_lossy(&request[..head_end])
+                    .to_ascii_lowercase()
+                    .lines()
+                    .find_map(|l| l.strip_prefix("content-length:").map(str::to_owned))
+                    .and_then(|v| v.trim().parse::<usize>().ok())
+                    .unwrap_or(0);
+                while request.len() < head_end + length {
+                    match socket.read(&mut chunk).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => request.extend_from_slice(&chunk[..n]),
+                    }
+                }
+                let response = format!(
+                    "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = socket.write_all(response.as_bytes()).await;
+                let _ = socket.shutdown().await;
+            });
+        }
+    });
+    origin
+}
