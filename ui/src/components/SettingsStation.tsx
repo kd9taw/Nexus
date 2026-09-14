@@ -148,6 +148,26 @@ export function SettingsStation({ readOnly=false, form, error, bandPlan, onUpdat
           </select>
           <span className="settings-hint">{t('settings.station.licenseClass.hint')}</span>
         </label>
+        {/* #248: km or miles, °C or °F, for the whole app. It sat under Digital ▸ Station
+            Housekeeping, where nobody looking for miles would look. The option VALUES are
+            persisted tokens; only the labels are prose. A separate <label htmlFor> keeps the
+            select's accessible name exactly "Units" (a wrapping label would fold the hint in). */}
+        <div className="settings-field">
+          <label className="settings-label" htmlFor="units">
+            {t('settings.digital.units.label')}
+          </label>
+          <select
+            id="units"
+            className="settings-input"
+            value={form.units ?? 'auto'}
+            onChange={(e) => onUpdate('units', e.target.value)}
+          >
+            <option value="auto">{t('settings.digital.units.auto')}</option>
+            <option value="metric">{t('settings.digital.units.metric')}</option>
+            <option value="imperial">{t('settings.digital.units.imperial')}</option>
+          </select>
+          <span className="settings-hint">{t('settings.digital.units.hint')}</span>
+        </div>
       </div>
       <div className="settings-freq">
         <span className="settings-label">{t('settings.station.frequency.label')}</span>

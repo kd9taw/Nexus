@@ -51,6 +51,10 @@ Your operator identity, license privileges, and default frequency.
   dropdown. Open = no limits (outside the US)." This is a software transmit guard
   in every Nexus TX path, checked against the Part 97 sub-band table — Nexus
   refuses to key the rig outside your segment.
+- **Units** — Automatic (from your system), Metric (km, °C) or Imperial (mi, °F).
+  Covers distances, temperature and wind speed across the whole app. Automatic
+  follows your operating system's region, and a change applies everywhere the
+  moment you make it. (It used to sit under Digital ▸ Station Housekeeping.)
 - **Band & Frequency** — "Pick a band-plan channel, or type a dial frequency in
   MHz."
 
@@ -850,9 +854,9 @@ All Decoder settings drive the *native* decoder. On a WSJT-X UDP source
   miles-per-watt & QRP feats." It also feeds the P.533 link budget. Leave blank
   if unknown. This is what you actually run, for the record — it commands
   nothing; the rig's power lives on the cockpit **Pwr** slider.
-- **Units** — Automatic (from your system), Metric (km, °C) or Imperial (mi, °F).
-  Covers distances, temperature and wind speed. Automatic follows your operating
-  system's region. It applies everywhere in the app the moment you change it.
+
+Units used to be the last field in this row; it is now on the Station tab under
+[Operator & Radio](#operator--radio).
 
 ![The Station housekeeping row: Journey — track a weekly streak off, Beacon — announce presence (CQ) off, IR-HARQ — combine retransmissions on, and Clock check (NTP) on.](../img/manual/settings-station-housekeeping.webp)
 
@@ -860,9 +864,9 @@ All Decoder settings drive the *native* decoder. On a WSJT-X UDP source
 
 ![Two fields: Station power (W) reading 1000, and Units set to "Automatic (from your system)".](../img/manual/settings-station-power-units.webp)
 
-*The same row's right half in Nexus 1.10.3. 1000 W is one station's figure,
-recorded so the Journey miles-per-watt maths is right — not a setting that
-changes the rig.*
+*The same row's right half in Nexus 1.10.3, before Units moved to the Station
+tab. 1000 W is one station's figure, recorded so the Journey miles-per-watt
+maths is right — not a setting that changes the rig.*
 
 ### JT65 — classic EME
 

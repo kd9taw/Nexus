@@ -99,8 +99,11 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     label: 'Operator & Radio',
     tab: 'station',
     neededInHourOne: true,
+    // Units (#248) lives here because it is app-wide: distances, temperature and wind speed.
     keywords: ['callsign', 'call sign', 'grid', 'maidenhead', 'locator', 'license', 'licence',
-      'class', 'extra', 'general', 'technician', 'operator name', 'state', 'my call'],
+      'class', 'extra', 'general', 'technician', 'operator name', 'state', 'my call',
+      'units', 'miles', 'km', 'kilometres', 'kilometers', 'imperial', 'metric', 'distance',
+      'temperature', 'fahrenheit', 'celsius', 'wind speed'],
   },
 
   {

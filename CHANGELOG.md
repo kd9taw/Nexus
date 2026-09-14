@@ -36,6 +36,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   callsign against your eQSL username the same way. Each warning appears once per session, not
   once per contact. (#291)
 
+- **Units is on the Station tab, where you'd look for it.** The km/miles and °C/°F choice applies
+  to the whole app but was filed under Settings ▸ Digital ▸ Station Housekeeping, beside FT8
+  options. It now sits under Settings ▸ Station ▸ Operator & Radio, and typing units, miles, km,
+  imperial, metric or temperature into the settings search goes straight to it. Your existing
+  choice carries over. (#248)
+
 ### Security
 
 - **Encrypted connections refuse a malformed setup from the server.** Nexus's secure-connection

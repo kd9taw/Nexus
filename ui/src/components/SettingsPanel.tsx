@@ -6624,23 +6624,7 @@ export function SettingsPanel({
                   />
                   <span className="settings-hint">{t('settings.digital.stationPower.hint')}</span>
                 </div>
-
-                <div className="settings-field">
-                  <label className="settings-label" htmlFor="units">
-                    {t('settings.digital.units.label')}
-                  </label>
-                  <select disabled={remote}
-                    id="units"
-                    className="settings-input"
-                    value={form.units ?? 'auto'}
-                    onChange={(e) => update('units', e.target.value)}
-                  >
-                    <option value="auto">{t('settings.digital.units.auto')}</option>
-                    <option value="metric">{t('settings.digital.units.metric')}</option>
-                    <option value="imperial">{t('settings.digital.units.imperial')}</option>
-                  </select>
-                  <span className="settings-hint">{t('settings.digital.units.hint')}</span>
-                </div>
+                {/* Units moved to Station ▸ Operator & Radio (#248) — it is app-wide. */}
               </div>
             </div>
           </fieldset>
