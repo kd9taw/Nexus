@@ -166,6 +166,17 @@ pub enum Action {
     ReceiverNet { receiver: KeyboardReceiver, hz: f32 },
     #[serde(rename = "decoder.pskMode")]
     PskMode { mode: String, reverse: bool },
+    #[serde(rename = "decoder.aiCw")]
+    AiCw {
+        #[serde(rename = "expectedOn")]
+        expected_on: bool,
+        on: bool,
+    },
+    #[serde(rename = "decoder.redecode")]
+    Redecode {
+        #[serde(rename = "expectedTier")]
+        expected_tier: tempo_app::dto::Tier,
+    },
     #[serde(rename = "decoder.js8Speed")]
     Js8Speed {
         #[serde(rename = "expectedSpeed")]
@@ -488,6 +499,22 @@ pub fn execute(
             });
             return Ok(result);
         }
+        #[cfg(feature = "radio")]
+        Action::AiCw { expected_on, on } => {
+            engine.save_remote_ai_cw(*expected_on, *on, &permit)?;
+            // The AI decoder is an assistance source: journal it exactly as the local switch does.
+            // Unit tests never write the operator's real config directory.
+            #[cfg(not(test))]
+            crate::journal_assistance(engine.settings(), "AI CW decoder toggled", false);
+            let result = Completion::default();
+            result.finish(Outcome::Applied {
+                evidence: Evidence::SettingsSaved,
+            });
+            return Ok(result);
+        }
+        // Receive-only: re-runs the decoder over retained audio, refused while TX is enabled.
+        #[cfg(feature = "radio")]
+        Action::Redecode { expected_tier } => engine.remote_redecode(*expected_tier)?,
         Action::ReceiverArm { receiver, on } => match receiver {
             Receiver::Rtty => engine.set_rtty_armed(*on),
             Receiver::Psk => engine.set_psk_armed(*on),
@@ -815,7 +842,9 @@ impl Action {
             | Self::RxOffset { .. }
             | Self::RxGain { .. }
             | Self::Radio { .. }
-            | Self::AmpFollowBand { .. } => 3,
+            | Self::AmpFollowBand { .. }
+            | Self::AiCw { .. }
+            | Self::Redecode { .. } => 3,
             _ => 2,
         }
     }
@@ -847,6 +876,9 @@ pub fn capabilities(version: u8) -> Vec<&'static str> {
                 "radioSelection",
                 "fmTuning",
                 "fmReceiver",
+                // Remote parity batch 1: each hint ships with its action.
+                "aiCw",
+                "redecode",
             ]
         }
     }

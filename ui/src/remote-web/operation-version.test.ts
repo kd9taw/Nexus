@@ -27,6 +27,8 @@ it('preserves the original advertisement while explicitly negotiating expanded o
   expect(controlVersion({ action: 'radio.band', band: '40m', mode: 'phone' })).toBe(3)
   expect(controlVersion({ action: 'radio.tier', tier: 'FT4' })).toBe(3)
   expect(controlVersion({ action: 'radio.workspace', workspace: 'js8' })).toBe(3)
+  expect(controlVersion({ action: 'decoder.aiCw', expectedOn: false, on: true })).toBe(3)
+  expect(controlVersion({ action: 'decoder.redecode', expectedTier: 'FT8' })).toBe(3)
   expect(controlVersion({ action: 'decoder.clear', receiver: 'cw' })).toBe(2)
 })
 

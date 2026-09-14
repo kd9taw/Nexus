@@ -243,4 +243,55 @@ impl Engine {
             .amp_follow_band = follow;
         Ok(())
     }
+
+    /// The CW cockpit's AI decoder switch from Remote. The same persisted choice as the local
+    /// switch; it needs no radio link because it neither tunes nor keys anything.
+    pub fn save_remote_ai_cw(
+        &mut self,
+        expected: bool,
+        on: bool,
+        permit: &Permit,
+    ) -> Result<(), Reason> {
+        if expected == on {
+            return Err(Reason::InvalidAction);
+        }
+        if self.settings.ai_cw_enabled != expected {
+            return Err(Reason::ContextChanged);
+        }
+        let path = self
+            .remote_settings_path
+            .as_ref()
+            .ok_or(Reason::UnsupportedAction)?;
+        let mut next = self.settings.clone();
+        next.ai_cw_enabled = on;
+        if !permit.valid(Instant::now()) {
+            return Err(Reason::AuthorityExpired);
+        }
+        // Publish only after the atomic save succeeds, through the native verb.
+        next.save(path).map_err(|_| Reason::PersistenceFailed)?;
+        self.set_ai_cw_enabled(on);
+        Ok(())
+    }
+
+    /// WSJT-X Decode from Remote: the native redecode of the retained period, receive-only.
+    /// Refused while transmit is enabled or owned, so a browser gesture can never feed the FT
+    /// sequencer's next over.
+    pub fn remote_redecode(&mut self, expected_tier: Tier) -> Result<(), Reason> {
+        if !matches!(expected_tier, Tier::Ft8 | Tier::Ft4) {
+            return Err(Reason::InvalidAction);
+        }
+        if self.source_kind != SourceKind::Native
+            || self.settings.operating_mode != OperatingMode::Digital
+        {
+            return Err(Reason::UnsupportedAction);
+        }
+        if self.tier() != expected_tier {
+            return Err(Reason::ContextChanged);
+        }
+        if self.tx_enabled() || self.tx_owner().is_some() {
+            return Err(Reason::StationBusy);
+        }
+        self.redecode();
+        Ok(())
+    }
 }

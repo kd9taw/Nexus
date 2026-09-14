@@ -178,6 +178,22 @@ export function controlTransport(reads: ApplicationTransport, client: Applicatio
             action = stationAction({ action: 'decoder.pskMode', ...args, mode: typeof args?.mode === 'string' ? args.mode.toUpperCase() : args?.mode })
             read = 'get_psk_state'
             break
+          case 'set_ai_cw': {
+            if (!args || Object.keys(args).length !== 1 || typeof args.on !== 'boolean') throw Error('invalidOperation')
+            // Bind the choice to the switch position the station last reported.
+            const snapshot = await reads.invoke<import('../types').AppSnapshot>('get_snapshot')
+            if (typeof snapshot?.aiCw?.enabled !== 'boolean') throw Error('readingUnavailable')
+            action = stationAction({ action: 'decoder.aiCw', expectedOn: snapshot.aiCw.enabled, on: args.on })
+            read = 'get_snapshot'
+            break
+          }
+          case 'redecode': {
+            if (args && Object.keys(args).length) throw Error('invalidOperation')
+            const snapshot = await reads.invoke<import('../types').AppSnapshot>('get_snapshot')
+            action = stationAction({ action: 'decoder.redecode', expectedTier: snapshot?.link?.tier })
+            read = 'get_snapshot'
+            break
+          }
         }
         if (action?.action === 'radio.select') {
           const context = operations.getSnapshot().state?.controls?.context
@@ -207,6 +223,8 @@ export function controlTransport(reads: ApplicationTransport, client: Applicatio
         if ((action.action === 'qso.confirm' || action.action === 'qso.discard') &&
           (result.outcome !== 'applied' || result.evidence !== (action.action === 'qso.confirm' ? 'fileSynced' : 'pendingDiscarded'))) throw Error('operationUnknown')
         if (action?.action === 'radio.workSpot' && result.outcome === 'applied' && result.evidence !== 'radioReadback') throw Error('operationUnknown')
+        if (action.action === 'decoder.aiCw' && (result.outcome !== 'applied' || result.evidence !== 'settingsSaved')) throw Error('operationUnknown')
+        if (action.action === 'decoder.redecode' && (result.outcome !== 'applied' || result.evidence !== 'receiverState')) throw Error('operationUnknown')
         if (action?.action === 'radio.select' && result.outcome === 'applied' && result.evidence !== 'radioReadback' && !(displayed?.radioId === action.radioId && result.evidence === 'stationState')) throw Error('operationUnknown')
       }
       if (!read) return undefined as T
@@ -223,6 +241,7 @@ export function controlTransport(reads: ApplicationTransport, client: Applicatio
             const radio = (value as import('../types').AppSnapshot)?.radio
             if (!radio || Math.round(radio.dialMhz * 1e6) !== Math.round(action.dialMhz * 1e6) || radio.operatingMode?.toLowerCase() !== action.mode) throw Error('readingUnavailable')
           }
+          if (action?.action === 'decoder.aiCw' && (value as import('../types').AppSnapshot)?.aiCw?.enabled !== action.on) throw Error('readingUnavailable')
           if (action?.action === 'radio.select') {
             const snapshot = value as import('../types').AppSnapshot
             const settings = await reads.invoke<import('../types').Settings>('get_settings')

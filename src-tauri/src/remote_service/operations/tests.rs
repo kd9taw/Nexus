@@ -23,6 +23,9 @@ mod transmit;
 use super::*;
 use std::sync::Arc;
 #[cfg(feature = "radio")]
+#[path = "ai_cw_tests.rs"]
+mod ai_cw;
+#[cfg(feature = "radio")]
 #[path = "amp_follow_tests.rs"]
 mod amp_follow;
 #[cfg(feature = "radio")]
@@ -382,7 +385,9 @@ fn tier_admission_requires_v3_and_keeps_one_native_receipt_through_readback() {
             "radioLevels",
             "radioSelection",
             "fmTuning",
-            "fmReceiver"
+            "fmReceiver",
+            "aiCw",
+            "redecode"
         ])
     );
     let command = control_request(&state, json!({"action":"radio.tier","tier":"FT4"}));

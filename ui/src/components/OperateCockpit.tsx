@@ -363,6 +363,7 @@ export function OperateCockpit({
   const ftSettingsDraft = useStationCapability('ftSettings', true) && !!snap.remoteFtSettings && (tier === 'FT8' || tier === 'FT4')
   const ftRuntimeDraft = useStationCapability('ftRuntime', true) && !!snap.remoteFtRuntime && (tier === 'FT8' || tier === 'FT4')
   const cqControl = useStationCapability('ftOperate')
+  const redecodeControl = useStationCapability('redecode') && (tier === 'FT8' || tier === 'FT4')
   const tierControl = useStationTierControl(snap.radio)
   const decoderSettings = useDecoderSettings(snap, 'MSK144')
   const receiverSettings = useReceiverSettings(snap, tier)
@@ -747,7 +748,13 @@ export function OperateCockpit({
 
   /** Re-decode the last period (WSJT-X Decode / F6). */
   const handleRedecode = () => {
-    redecode().then((s) => onSnap?.(s)).catch(() => {})
+    if (control) {
+      redecode().then((s) => onSnap?.(s)).catch(() => {})
+      return
+    }
+    // Remote: the button and F6 share this one gate.
+    if (!redecodeControl) return
+    redecode().then((s) => onSnap?.(s)).catch((error) => pushToast(controlFailureMessage(error), 'error'))
   }
 
   /** Single-click SELECT from a decode: populate DX Call/Grid only — no RF
@@ -1123,7 +1130,7 @@ export function OperateCockpit({
             <DfField key={control ? 'tx' : `tx-${snap.remoteFtSettings?.key}`} label={DF_TX} hz={snap.radio.txOffsetHz} remoteReceive={ftSettingsDraft} onCommit={(hz) => onTune(hz, 'tx')} />
           </div>
           {/* Decode button — re-run the decoder over the last period's audio (F6). */}
-          <button disabled={!control}
+          <button disabled={!control && !redecodeControl}
             type="button"
             className="cockpit-decode-btn"
             onClick={handleRedecode}

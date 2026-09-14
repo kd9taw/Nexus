@@ -182,4 +182,22 @@ describe('closed station operating requests', () => {
     expect(() => controlOutcome({ ...base, outcome: 'applied', evidence: 'queueAccepted' })).toThrow()
     expect(() => controlOutcome({ ...base, outcome: 'applied', evidence: 'rfOff' })).toThrow()
   })
+  it('admits a changed AI-CW choice and an FT redecode, each under its own capability', () => {
+    for (const expectedOn of [false, true]) {
+      const action = { action: 'decoder.aiCw', expectedOn, on: !expectedOn }
+      expect(stationAction(action)).toEqual(action)
+      expect(actionCapability(stationAction(action))).toBe('aiCw')
+      expect(() => stationAction({ ...action, on: expectedOn })).toThrow('invalidOperation')
+      for (const value of [0, 1, 'true', null, undefined]) for (const field of ['expectedOn', 'on']) expect(() => stationAction({ ...action, [field]: value })).toThrow()
+      for (const extra of ['settings', 'command', 'txEnabled', 'radioId', 'model']) expect(() => stationAction({ ...action, [extra]: true })).toThrow()
+    }
+    for (const expectedTier of ['FT8', 'FT4']) {
+      const action = { action: 'decoder.redecode', expectedTier }
+      expect(stationAction(action)).toEqual(action)
+      expect(actionCapability(stationAction(action))).toBe('redecode')
+      for (const extra of ['depth', 'command', 'txEnabled', 'slot']) expect(() => stationAction({ ...action, [extra]: 1 })).toThrow()
+    }
+    for (const expectedTier of ['MSK144', 'JS8', 'ft8', '', null, undefined]) expect(() => stationAction({ action: 'decoder.redecode', expectedTier })).toThrow()
+    expect(() => stationAction({ action: 'decoder.redecode' })).toThrow()
+  })
 })

@@ -496,3 +496,99 @@ it('sends a typed FT offset only once control is current again, and refuses it a
     h.client.disconnected()
   }
 })
+
+// Remote parity batch 1: the AI-CW switch and the FT Decode button.
+function decoderGesture(capabilities: ControlCapability[], version: OperationVersion, snapshot: any) {
+  const h = setup(storage(), capabilities, version)
+  const sample = { age: Infinity, value: snapshot }
+  const invoke = vi.fn(async () => sample.value)
+  const transport = controlTransport({ kind: 'remote', invoke } as unknown as ApplicationTransport,
+    { age: () => sample.age } as unknown as ApplicationClient, h.client)
+  const commands = () => h.sent.filter(w => w.request.type === 'stationControl')
+  return { h, sample, invoke, transport, commands }
+}
+
+it('sends one AI-CW choice bound to the displayed state and returns only a later sample showing it', async () => {
+  const g = decoderGesture(['aiCw'], 3, { aiCw: { enabled: false, status: '', text: '' }, link: { tier: 'FT8' } })
+  const result = g.transport.invoke('set_ai_cw', { on: true })
+  await g.h.advance(0)
+  expect(g.commands()).toHaveLength(1)
+  const request = g.commands()[0].request
+  expect(request.action).toEqual({ action: 'decoder.aiCw', expectedOn: false, on: true })
+  g.h.reply({ operation: 'stationControl', operationId: request.requestId, outcome: 'applied', evidence: 'settingsSaved' })
+  await g.h.advance(100)
+  expect(g.invoke).toHaveBeenCalledTimes(1)
+  g.sample.value = { aiCw: { enabled: true, status: '', text: '' }, link: { tier: 'FT8' } }
+  g.sample.age = 0
+  await g.h.advance(50)
+  expect(await result).toEqual(g.sample.value)
+  expect(g.commands()).toHaveLength(1)
+  g.h.client.disconnected()
+})
+
+it.each(['readback', 'evidence'])('refuses an AI-CW choice after a mismatched %s without sending it again', async changed => {
+  const g = decoderGesture(['aiCw'], 3, { aiCw: { enabled: false, status: '', text: '' } })
+  g.sample.age = 0
+  const result = g.transport.invoke('set_ai_cw', { on: true }).catch(e => e)
+  await g.h.advance(0)
+  const request = g.commands()[0].request
+  g.h.reply({ operation: 'stationControl', operationId: request.requestId, outcome: 'applied', evidence: changed === 'evidence' ? 'receiverState' : 'settingsSaved' })
+  expect(await result).toMatchObject({ message: changed === 'evidence' ? 'operationUnknown' : 'readingUnavailable' })
+  await g.h.advance(1500)
+  expect(g.commands()).toHaveLength(1)
+  g.h.client.disconnected()
+})
+
+it('refuses malformed, unchanged, unhinted and older-station AI-CW choices before anything is sent', async () => {
+  const shown = { aiCw: { enabled: false, status: '', text: '' } }
+  const g = decoderGesture(['aiCw'], 3, shown)
+  for (const bad of [{}, { on: 'yes' }, { on: true, extra: 1 }, { on: false }, undefined])
+    await expect(g.transport.invoke('set_ai_cw', bad as Record<string, unknown>)).rejects.toMatchObject({ sent: false })
+  expect(g.commands()).toHaveLength(0)
+  g.h.client.disconnected()
+  for (const [capabilities, version, message] of [[['decoder'], 3, 'notController'], [['aiCw'], 2, 'stationUnsupported']] as [ControlCapability[], OperationVersion, string][]) {
+    const old = decoderGesture(capabilities, version, shown)
+    await expect(old.transport.invoke('set_ai_cw', { on: true })).rejects.toMatchObject({ message })
+    expect(old.commands()).toHaveLength(0)
+    old.h.client.disconnected()
+  }
+})
+
+it('sends one FT redecode for the displayed tier and returns a later station sample', async () => {
+  const g = decoderGesture(['redecode'], 3, { link: { tier: 'FT4' } })
+  const result = g.transport.invoke('redecode', {})
+  await g.h.advance(0)
+  const request = g.commands()[0].request
+  expect(request.action).toEqual({ action: 'decoder.redecode', expectedTier: 'FT4' })
+  g.h.reply({ operation: 'stationControl', operationId: request.requestId, outcome: 'applied', evidence: 'receiverState' })
+  await g.h.advance(100)
+  expect(g.invoke).toHaveBeenCalledTimes(1)
+  g.sample.age = 0
+  await g.h.advance(50)
+  expect(await result).toEqual(g.sample.value)
+  g.h.client.disconnected()
+  const wrong = decoderGesture(['redecode'], 3, { link: { tier: 'FT8' } })
+  wrong.sample.age = 0
+  const refused = wrong.transport.invoke('redecode', {}).catch(e => e)
+  await wrong.h.advance(0)
+  const sent = wrong.commands()[0].request
+  wrong.h.reply({ operation: 'stationControl', operationId: sent.requestId, outcome: 'applied', evidence: 'settingsSaved' })
+  expect(await refused).toMatchObject({ message: 'operationUnknown' })
+  wrong.h.client.disconnected()
+})
+
+it('refuses a redecode with arguments, off FT8/FT4, without its hint or on an older station', async () => {
+  const g = decoderGesture(['redecode'], 3, { link: { tier: 'FT8' } })
+  await expect(g.transport.invoke('redecode', { depth: 3 })).rejects.toMatchObject({ sent: false })
+  g.h.client.disconnected()
+  const msk = decoderGesture(['redecode'], 3, { link: { tier: 'MSK144' } })
+  await expect(msk.transport.invoke('redecode', {})).rejects.toMatchObject({ message: 'invalidOperation', sent: false })
+  expect(msk.commands()).toHaveLength(0)
+  msk.h.client.disconnected()
+  for (const [capabilities, version, message] of [[['decoder', 'receiverSettings'], 3, 'notController'], [['redecode'], 2, 'stationUnsupported']] as [ControlCapability[], OperationVersion, string][]) {
+    const old = decoderGesture(capabilities, version, { link: { tier: 'FT8' } })
+    await expect(old.transport.invoke('redecode', {})).rejects.toMatchObject({ message })
+    expect(old.commands()).toHaveLength(0)
+    old.h.client.disconnected()
+  }
+})

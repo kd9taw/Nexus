@@ -49,6 +49,8 @@ export type StationAction =
   | { action: 'decoder.afcReset'; receiver: 'rtty' | 'psk' }
   | { action: 'decoder.net'; receiver: 'rtty' | 'psk'; hz: number }
   | { action: 'decoder.pskMode'; mode: 'PSK31' | 'QPSK31'; reverse: boolean }
+  | { action: 'decoder.aiCw'; expectedOn: boolean; on: boolean }
+  | { action: 'decoder.redecode'; expectedTier: 'FT8' | 'FT4' }
   | { action: 'decoder.js8Speed'; expectedSpeed: number; speed: number }
   | { action: 'decoder.msk144Period'; expectedPeriodSecs: number; periodSecs: number }
   | { action: 'decoder.depth'; expectedTier: string; expectedDepth: number; depth: number }
@@ -90,6 +92,7 @@ const ACTION_CAPABILITY: Record<StationAction['action'], ControlCapability> = {
   'radio.phoneMode': 'phoneMode', 'radio.workSpot': 'workSpot',
   'decoder.arm': 'decoder', 'decoder.clear': 'decoder', 'decoder.afcReset': 'decoder',
   'decoder.net': 'decoder', 'decoder.pskMode': 'decoder',
+  'decoder.aiCw': 'aiCw', 'decoder.redecode': 'redecode',
   'decoder.js8Speed': 'decoderSettings', 'decoder.msk144Period': 'decoderSettings',
   'decoder.depth': 'receiverSettings', 'receiver.rxOffset': 'receiverSettings',
   'receiver.rxGain': 'receiverGain',
@@ -268,6 +271,14 @@ export function stationAction(raw: unknown): StationAction {
     case 'decoder.pskMode':
       object(a, ['action', 'mode', 'reverse'])
       if (!oneOf(a.mode, ['PSK31', 'QPSK31']) || typeof a.reverse !== 'boolean') invalid()
+      break
+    case 'decoder.aiCw':
+      object(a, ['action', 'expectedOn', 'on'])
+      if (typeof a.expectedOn !== 'boolean' || typeof a.on !== 'boolean' || a.expectedOn === a.on) invalid()
+      break
+    case 'decoder.redecode':
+      object(a, ['action', 'expectedTier'])
+      if (!oneOf(a.expectedTier, ['FT8', 'FT4'])) invalid()
       break
     case 'decoder.js8Speed':
       object(a, ['action', 'expectedSpeed', 'speed'])
