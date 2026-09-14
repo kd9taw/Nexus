@@ -843,6 +843,49 @@ fn manual_logging_disconnect_takeover_and_reconnect_cannot_restore_a_lease() {
     }
 }
 #[test]
+fn a_revoked_device_gets_local_permission_required_even_while_the_engine_is_busy() {
+    for revoke in ["takeover", "deny"] {
+        let f = Fixture::new();
+        let now = Instant::now();
+        let state = f.acquire(now);
+        let command = f.command(&state);
+        let acquire = Request::Acquire {
+            request_id: id(),
+            station_boot_id: state["stationBootId"].as_str().unwrap().into(),
+        };
+        // Positive control: the same busy Engine refuses an allowed device as busy.
+        {
+            let _busy = f.engine.lock().unwrap();
+            assert_eq!(f.run(&command, now), Err("stationBusy"));
+        }
+        match revoke {
+            "takeover" => f.authority.invalidate(),
+            _ => {
+                f.authority.permit(DEVICE, false).unwrap();
+            }
+        }
+        // A refusal for permission never depends on Engine contention.
+        let busy = f.engine.lock().unwrap();
+        assert_eq!(
+            f.run(&command, now),
+            Err("localPermissionRequired"),
+            "{revoke}"
+        );
+        assert_eq!(
+            f.run(&acquire, now),
+            Err("localPermissionRequired"),
+            "{revoke}"
+        );
+        drop(busy);
+        assert_eq!(
+            f.run(&command, now),
+            Err("localPermissionRequired"),
+            "{revoke}"
+        );
+        assert!(f.engine.lock().unwrap().log_records().is_empty());
+    }
+}
+#[test]
 fn manual_logging_refuses_busy_engine_instead_of_queueing_and_counter_wrap() {
     let f = Fixture::new();
     let now = Instant::now();
