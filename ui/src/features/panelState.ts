@@ -572,6 +572,9 @@ export const OPERATE_PANEL_IDS = [
   'txmsgs',
   'stations',
   'txmeters',
+  // #204 (KR4FQG): the callsign card, a panel of its own. It neither starts nor stops a
+  // transmission — it shows who a station is — so it is hideable under THE STOP LINE with no note.
+  'recall',
 ] as const
 export type OperatePanelId = (typeof OPERATE_PANEL_IDS)[number]
 

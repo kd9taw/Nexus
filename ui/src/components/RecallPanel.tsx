@@ -58,6 +58,10 @@ interface Props {
   /** A bounded station result may carry a complete count and an older latest note. */
   latestNote?: string | null
   historyNotice?: ReactNode
+  /** #204: who this station is calling (the addressee of its last frame), when known. */
+  calling?: string | null
+  /** #204: open that station's card. Both this and `calling` are needed for the button. */
+  onShowCall?: (call: string) => void
 }
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
@@ -102,7 +106,7 @@ function initials(call: string): string {
  *   - The list stays a BOUNDED internal scroller (.recall-log-list, fixed em ceiling): the pane
  *     body is the card's real scroller, and a nested full-length list fights it.
  */
-export function RecallPanel({ call, band, name, qth, grid, lat, lon, country, image, myGrid, hist, newEntity, newBandSlot, newModeSlot, hasLookup = true, bounded = false, onOpenLog, latestNote, historyNotice }: Props) {
+export function RecallPanel({ call, band, name, qth, grid, lat, lon, country, image, myGrid, hist, newEntity, newBandSlot, newModeSlot, hasLookup = true, bounded = false, onOpenLog, latestNote, historyNotice, calling, onShowCall }: Props) {
   const units = useUnits()
   const c = call.trim()
   const cu = c.toUpperCase()
@@ -230,6 +234,17 @@ export function RecallPanel({ call, band, name, qth, grid, lat, lon, country, im
             <div className="recall-geo mono" title={geoTitle}>
               {geo}
             </div>
+          )}
+          {/* #204: the station this one is calling — one click to that station's card. */}
+          {calling && onShowCall && calling.trim().toUpperCase() !== cu && (
+            <button
+              type="button"
+              className="recall-calling mono"
+              title={t('recall.calling.title', { call: calling.trim().toUpperCase() })}
+              onClick={() => onShowCall(calling.trim().toUpperCase())}
+            >
+              {t('recall.calling.label', { call: calling.trim().toUpperCase() })}
+            </button>
           )}
         </div>
         <div className="recall-badges">

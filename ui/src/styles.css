@@ -7825,6 +7825,21 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   color: var(--text-dim);
   letter-spacing: 0.02em;
 }
+/* #204: "Calling K9XYZ" — the station this one is calling, one click to its card. */
+.recall-calling {
+  display: block;
+  margin-top: 2px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font-size: var(--fs-micro);
+  text-align: left;
+  cursor: pointer;
+}
+.recall-calling:hover {
+  text-decoration: underline;
+}
 .recall-badges {
   flex: none;
   display: flex;

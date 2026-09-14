@@ -4251,6 +4251,8 @@ export const EN = {
     'your {{grid}} square (set a 6-character grid in Settings to sharpen it)',
   'recall.geo.approx.theirs': 'their {{grid}} square',
   'recall.geo.approx.both': '{{mine}} and {{theirs}}',
+  'recall.calling.label': 'Calling {{call}}',
+  'recall.calling.title': "Show {{call}}'s card — the station this one is calling",
   'recall.dupe.label': 'Dupe {{band}}',
   'recall.dupe.title':
     'Already worked on {{band}} — logging now would be a dupe. Counts any mode on the band unless Settings’ “match mode too” is on.',
@@ -7113,6 +7115,7 @@ export const EN = {
   'operate.panel.txmsgs': 'Tx Messages',
   'operate.panel.stations': 'Stations',
   'operate.panel.txmeters': 'TX Meters',
+  'operate.panel.recall': 'Callsign card',
 
   // The rotor's two answers. `{{call}}` is a callsign, `{{deg}}` a bearing and `{{error}}`
   // the backend's own refusal — all three pass through verbatim.

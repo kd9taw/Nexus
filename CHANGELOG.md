@@ -39,6 +39,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rig, name, QTH, state, power and operator in a wider table that scrolls sideways; it is off
   until you turn it on, so the log looks the same as before. (#239)
 
+- **The callsign card is a panel of its own in Operate.** It has its own entry under ⊞ Panels, so
+  you can hide it or keep it, and hiding the Stations list no longer takes the card with it.
+  Pressing S&P clears the card, as F4 does. And when the card is about a station that is calling
+  someone else, it shows "Calling" and that call: click it to see the called station's card. (#204)
+
 ### Fixed
 
 - **A QRZ or eQSL upload that runs out of retries now says so.** After 20 failed tries Nexus used
