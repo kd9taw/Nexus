@@ -8,11 +8,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
-import { STAGING, stagingConfig, verifyIdentity, requestBytes, requestJson } from '../scripts/staging-common.mjs'
+import { STAGING, TARGETS, deployable, identity, stagingConfig, target, verifyIdentity, requestBytes, requestJson } from '../scripts/staging-common.mjs'
 import { cloudflare, workerDigest } from '../scripts/cloudflare-staging.mjs'
-import { createArtifact, verifyArtifact, verifyLive, verifyPublicSource } from '../scripts/staging-artifact.mjs'
+import { createArtifact, verifyArtifact, verifyLive, verifyLiveSettled, verifyPublicSource } from '../scripts/staging-artifact.mjs'
 import { runtime } from './runtime.mjs'
-import { uploadArtifact, compareSchema } from '../scripts/deploy-staging.mjs'
+import { uploadArtifact, compareSchema, redactedDiagnostic, settleUpload, withSecretsFile } from '../scripts/deploy-staging.mjs'
 import { trialGrant } from '../scripts/grant-trial.mjs'
 
 const root = fileURLToPath(new URL('../../', import.meta.url))
@@ -79,8 +79,8 @@ test('staging configuration requires exact service/database scope and public Aut
   assert.throws(() => stagingConfig({ ...template, name: 'hamradiotools' }, ids), /dedicated staging/)
 })
 
-function provider({ database = null, domains = [], workers = [], denied = false, ambiguous = false, loseWrite = false, grantChanges = 1 } = {}) {
-  const env = { CLOUDFLARE_ACCOUNT_ID: randomBytes(16).toString('hex'), CLOUDFLARE_API_TOKEN: randomBytes(32).toString('hex') }
+function provider({ database = null, domains = [], workers = [], denied = false, ambiguous = false, loseWrite = false, grantChanges = 1, extraEnv = {} } = {}) {
+  const env = { CLOUDFLARE_ACCOUNT_ID: randomBytes(16).toString('hex'), CLOUDFLARE_API_TOKEN: randomBytes(32).toString('hex'), ...extraEnv }
   const calls = [], queries = [], privateText = randomBytes(20).toString('hex')
   let current = database
   const fetcher = async (input, options) => {
@@ -199,10 +199,10 @@ test('denied/ambiguous reads and hostname collisions refuse writes without loggi
   assert.equal(p.calls.filter(call => call.method === 'POST').length, 1, 'an ambiguous write is not automatically repeated')
 })
 
-function uploadedProvider({ fault, denied = false, legacy = false, observabilityAbsent = false } = {}) {
-  const env = { CLOUDFLARE_ACCOUNT_ID: randomBytes(16).toString('hex'), CLOUDFLARE_API_TOKEN: randomBytes(32).toString('hex') }
+function uploadedProvider({ fault, denied = false, legacy = false, observabilityAbsent = false, tagged = false, secrets = {}, secretText = 'synthetic|someone' } = {}) {
+  const env = { CLOUDFLARE_ACCOUNT_ID: randomBytes(16).toString('hex'), CLOUDFLARE_API_TOKEN: randomBytes(32).toString('hex'), ...secrets }
   const writes = [], privateText = randomBytes(20).toString('hex')
-  let tags = null, attached = false
+  let tags = tagged ? [STAGING.tag] : null, attached = false
   const config = stagingConfig(template, ids)
   const settings = { compatibility_date: config.compatibility_date, observability: { enabled: false }, bindings: [
     ...Object.entries(config.vars).map(([name, text]) => ({ name, type: 'plain_text', text })),
@@ -214,7 +214,7 @@ function uploadedProvider({ fault, denied = false, legacy = false, observability
   ] }
   if (fault === 'secret-as-var') {
     const row = settings.bindings.find(binding => binding.name === 'ADMIN_SUBJECT')
-    row.type = 'plain_text'; row.text = 'synthetic|someone'
+    row.type = 'plain_text'; row.text = secretText
   }
   if (fault === 'secret-missing') settings.bindings = settings.bindings.filter(b => b.name !== 'ADMIN_SUBJECT')
   if (fault === 'identity') settings.bindings.find(row => row.name === 'AUTH0_ISSUER').text = 'https://other.auth0.com/'
@@ -261,8 +261,214 @@ function uploadedProvider({ fault, denied = false, legacy = false, observability
     } else assert.fail('Unexpected provider request')
     return Response.json({ success: true, result })
   }
-  return { api: cloudflare(env, fetcher), config, writes, privateText, additional }
+  return { api: cloudflare(env, fetcher), config, writes, privateText, additional, env, fetcher }
 }
+
+// Both staging runs on 2026-09-13 learned about ADMIN_SUBJECT only AFTER writing: 34789356296 applied
+// migrations and then failed at upload, 34792345723 uploaded and then failed its secret check with
+// the Worker live. Every deploy now applies the secret from its GitHub environment, and the preflight
+// refuses a run whose environment does not supply it, before any request and before any write.
+const subject = 'google-oauth2|104857600000000000042'
+test('the deploy preflight requires every Worker secret from the environment, and refuses a foreign database or unowned Worker, before any write', async () => {
+  const required = template.secrets?.required
+  assert.deepEqual(required, ['ADMIN_SUBJECT'], 'positive control: the template declares the secret this guards')
+
+  // Not firing: the environment supplies it, as the value or, for steps that must not hold it, as
+  // presence only. The live Worker's current binding is reported, never required: the upload replaces it.
+  for (const [secrets, fault, live] of [
+    [{ REMOTE_ADMIN_SUBJECT: subject }, undefined, 'secret_text'],
+    [{ REMOTE_ADMIN_SUBJECT_PRESENT: 'true' }, undefined, 'secret_text'],
+    [{ REMOTE_ADMIN_SUBJECT: subject }, 'secret-missing', 'absent'],
+    [{ REMOTE_ADMIN_SUBJECT: subject }, 'secret-as-var', 'plain_text'],
+  ]) {
+    const p = uploadedProvider({ tagged: true, fault, secrets })
+    const result = await p.api.preflight(required, ids.databaseId)
+    assert.deepEqual(result.liveSecretTypes, { ADMIN_SUBJECT: live })
+    assert.deepEqual(result.secretsSupplied, ['ADMIN_SUBJECT'])
+    const reported = JSON.stringify(result)
+    assert.ok(!reported.includes(subject) && !reported.includes('synthetic|someone'), 'no secret value is ever reported')
+    assert.equal(p.writes.length, 0)
+  }
+  // A first deploy has no Worker to hold anything, and may proceed: the upload brings the secret.
+  const fresh = provider({ database: ids.databaseId, extraEnv: { REMOTE_ADMIN_SUBJECT_PRESENT: 'true' } })
+  assert.deepEqual((await fresh.api.preflight(required, ids.databaseId)).liveSecretTypes, { ADMIN_SUBJECT: 'no Worker yet' })
+  assert.ok(fresh.calls.every(call => call.method === 'GET'))
+
+  // Firing: not supplied, in each shape an unset or mangled GitHub secret takes. Refused before any request.
+  for (const secrets of [{}, { REMOTE_ADMIN_SUBJECT: '' }, { REMOTE_ADMIN_SUBJECT: `${subject} ` }, { REMOTE_ADMIN_SUBJECT: 'short' },
+    { REMOTE_ADMIN_SUBJECT_PRESENT: 'false' }, { REMOTE_ADMIN_SUBJECT_PRESENT: 'TRUE' }]) {
+    const p = provider({ database: ids.databaseId, extraEnv: secrets })
+    await assert.rejects(p.api.preflight(required, ids.databaseId), error => {
+      assert.match(error.message, /^REMOTE_ADMIN_SUBJECT not set in this GitHub environment; .*nothing was migrated or uploaded$/)
+      assert.ok(!error.message.includes(subject))
+      return true
+    })
+    assert.equal(p.calls.length, 0, JSON.stringify(Object.keys(secrets)))
+  }
+  // Firing: the other preconditions, with the secret supplied.
+  const supplied = { REMOTE_ADMIN_SUBJECT: subject }
+  for (const [options, database, expected] of [
+    [{ tagged: true, secrets: supplied }, randomUUID(), /artifact database does not match/],
+    [{ tagged: false, secrets: supplied }, ids.databaseId, /unrecognized deployment/],
+  ]) {
+    const p = uploadedProvider(options)
+    await assert.rejects(p.api.preflight(required, database), expected)
+    assert.equal(p.writes.length, 0)
+  }
+  await assert.rejects(provider({ extraEnv: supplied }).api.preflight(required), /database is absent/)
+})
+
+test('migrate and deploy each run the preflight themselves, so neither writes without the secret the upload applies', async () => {
+  for (const mode of ['migrate', 'deploy']) {
+    const p = uploadedProvider({ tagged: true })
+    // Refused before Wrangler starts: past the preflight this would spawn Wrangler, which fails differently.
+    await assert.rejects(uploadArtifact(scratch, mode, { ...p.env, PATH: process.env.PATH, GITHUB_SHA: ids.revision }, p.fetcher),
+      /REMOTE_ADMIN_SUBJECT not set in this GitHub environment/)
+    assert.equal(p.writes.length, 0, mode)
+  }
+})
+
+test('the upload hands wrangler its secrets in a private file removed afterwards, and never prints a value', async () => {
+  const env = { REMOTE_ADMIN_SUBJECT: subject }
+  let path
+  const result = await withSecretsFile(env, ['ADMIN_SUBJECT'], async file => {
+    path = file
+    assert.equal((await stat(file)).mode & 0o777, 0o600)
+    assert.ok(!file.startsWith(root), 'never inside the repository')
+    assert.deepEqual(JSON.parse(await readFile(file, 'utf8')), { ADMIN_SUBJECT: subject })
+    return 'uploaded'
+  })
+  assert.equal(result, 'uploaded')
+  await assert.rejects(stat(path), { code: 'ENOENT' }, 'removed once the upload returns')
+  await assert.rejects(withSecretsFile(env, ['ADMIN_SUBJECT'], async file => { path = file; throw new Error('upload failed') }), /upload failed/)
+  await assert.rejects(stat(path), { code: 'ENOENT' }, 'removed when the upload throws too')
+  // Refused by variable name, before any file exists or any upload runs.
+  for (const value of [undefined, '', ' ', 'short', `${subject}\n`, ` ${subject}`]) {
+    await assert.rejects(withSecretsFile({ REMOTE_ADMIN_SUBJECT: value }, ['ADMIN_SUBJECT'], async () => assert.fail('no upload without the secret')),
+      error => error.message === 'REMOTE_ADMIN_SUBJECT is not set in this GitHub environment as a usable secret')
+  }
+  assert.equal(await withSecretsFile({}, [], async file => file), null, 'nothing required: no file and no flag')
+
+  // Redacted from Wrangler's diagnostics like the token. Positive control: the subject has no run long
+  // enough for the token-shaped pattern, so only the REMOTE_* pass can remove it.
+  assert.ok(redactedDiagnostic(`upload failed for ${subject}`, {}).includes(subject), 'positive control: the pattern alone misses it')
+  assert.ok(!redactedDiagnostic(`upload failed for ${subject}`, env).includes(subject))
+  assert.ok(redactedDiagnostic('workers_dev_subdomain_not_configured', { ...env, REMOTE_ADMIN_SUBJECT_PRESENT: 'true' })
+    .includes('workers_dev_subdomain_not_configured'), 'error slugs stay readable')
+})
+
+test('a secret the upload applied must read back encrypted; one that arrived as plain text fails, and its value is never logged', async () => {
+  const logs = [], live = () => verifyLive(artifact, served)
+  const good = uploadedProvider()
+  const report = await settleUpload(good.api, good.config, artifact.manifest, live, line => logs.push(line))
+  assert.equal(report.uploadCheck.passed, true, 'positive control: ADMIN_SUBJECT read back as secret_text')
+  const bad = uploadedProvider({ fault: 'secret-as-var', secretText: subject })
+  await assert.rejects(settleUpload(bad.api, bad.config, artifact.manifest, live, line => logs.push(line)), error => {
+    assert.match(error.message, /A declared secret is missing or was uploaded as plain text/)
+    assert.ok(!error.message.includes(subject))
+    return true
+  })
+  assert.equal(logs.length, 2)
+  assert.ok(logs.every(line => !line.includes(subject)))
+})
+
+test('a failed post-upload check still runs the live verification, and the deploy reports both', async () => {
+  const live = () => verifyLive(artifact, served)
+  const stale = () => verifyLive(artifact, async (input, options) => new URL(input).pathname.endsWith('/config')
+    ? Response.json({ ...await (await served(input, options)).json(), revision: 'stale' })
+    : served(input, options))
+
+  // Not firing: both pass, and only then is the Worker tagged and its domain attached.
+  const good = uploadedProvider(), logs = []
+  const report = await settleUpload(good.api, good.config, artifact.manifest, live, line => logs.push(line))
+  assert.equal(report.uploadCheck.passed, true)
+  assert.equal(report.liveVerification.passed, true)
+  assert.equal(report.liveVerification.revision, ids.revision)
+  assert.deepEqual(good.writes.map(write => write.method), ['PATCH', 'PUT'])
+  assert.equal(logs.length, 1)
+  assert.deepEqual(JSON.parse(logs[0]).uploadCheck, { passed: true })
+
+  // THE CASE THIS EXISTS FOR (run 34792345723): the Worker is live, its upload check fails, and the
+  // live verification must run anyway and be reported beside the failure.
+  const bad = uploadedProvider({ fault: 'secret-as-var' })
+  let verifications = 0
+  await assert.rejects(settleUpload(bad.api, bad.config, artifact.manifest, () => { verifications++; return live() }, () => {}), error => {
+    assert.match(error.message, /post-upload check failed \(A declared secret is missing or was uploaded as plain text\); live verification passed/)
+    assert.ok(!error.message.includes('synthetic|someone'))
+    return true
+  })
+  assert.equal(verifications, 1)
+  assert.equal(bad.writes.length, 0, 'an upload that failed its check is neither tagged nor given the domain')
+
+  // The upload check passes and the live Worker is not the artifact: still a failed deploy, named.
+  const drift = uploadedProvider()
+  await assert.rejects(settleUpload(drift.api, drift.config, artifact.manifest, stale, () => {}),
+    /post-upload check passed; live verification failed \(The live Worker does not match/)
+
+  // Both fail: both named.
+  const both = uploadedProvider({ fault: 'secret-missing' })
+  await assert.rejects(settleUpload(both.api, both.config, artifact.manifest, stale, () => {}),
+    /post-upload check failed \(.+\); live verification failed \(/)
+})
+
+test('the live check is retried while an upload propagates, and its last failure is the one reported', async () => {
+  let first = true
+  const propagating = async (input, options) => {
+    if (first && new URL(input).pathname.endsWith('/config')) { first = false; return Response.json({ ready: false }) }
+    return served(input, options)
+  }
+  const logs = []
+  const result = await verifyLiveSettled(artifact, propagating, STAGING, { attempts: 3, wait: 0, log: line => logs.push(line) })
+  assert.equal(result.revision, ids.revision)
+  assert.deepEqual(logs, ['The complete staging artifact is not verified yet (attempt 1/3).'])
+  let reads = 0
+  await assert.rejects(verifyLiveSettled(artifact, async () => { reads++; return Response.json({ ready: false }) }, STAGING,
+    { attempts: 2, wait: 0, log: () => {} }), /does not match the selected source/)
+  assert.equal(reads, 2)
+})
+
+test("the environment table: staging resolves to today's exact names, and production is a placeholder nothing can deploy", async () => {
+  // Byte for byte the names every staging run used before the two-environment tooling.
+  assert.deepEqual({ name: STAGING.name, database: STAGING.database, origin: STAGING.origin, zone: STAGING.zone,
+    audience: STAGING.audience, tag: STAGING.tag }, {
+    name: 'nexus-remote-staging', database: 'nexus-remote-staging', origin: 'https://remote-staging.hamradiotools.io',
+    zone: 'hamradiotools.io', audience: 'https://remote-staging.hamradiotools.io/api', tag: 'nexus-remote-observation-staging' })
+  assert.equal(target({}), STAGING, 'unset means staging, as every existing run meant')
+  assert.equal(target({ REMOTE_TARGET: 'staging' }), STAGING)
+  for (const value of ['', 'prod', 'Production', 'toString', '__proto__']) {
+    assert.throws(() => target({ REMOTE_TARGET: value }), /staging or production/, value)
+  }
+  const config = stagingConfig(template, ids)
+  assert.equal(config.name, 'nexus-remote-staging')
+  assert.equal(config.d1_databases[0].database_name, 'nexus-remote-staging')
+  assert.equal(config.vars.PUBLIC_REMOTE_ORIGIN, 'https://remote-staging.hamradiotools.io')
+  assert.equal(config.vars.AUTH0_AUDIENCE, 'https://remote-staging.hamradiotools.io/api')
+  assert.deepEqual(config.routes, [{ pattern: 'remote-staging.hamradiotools.io', custom_domain: true }])
+  assert.equal(deployable(STAGING), STAGING)
+
+  // Production resolves, so it can be read and reviewed, and is refused everywhere a script could act.
+  const production = target({ REMOTE_TARGET: 'production' })
+  assert.equal(production, TARGETS.production)
+  assert.ok(production.placeholder)
+  const productionIds = { ...ids, issuer: production.issuer.exact, audience: production.audience }
+  assert.throws(() => stagingConfig(template, productionIds, production), /placeholder/)
+  let sent = 0
+  assert.throws(() => cloudflare({ CLOUDFLARE_ACCOUNT_ID: 'a'.repeat(32), CLOUDFLARE_API_TOKEN: 'synthetic' },
+    async () => { sent++; return Response.json({}) }, production), /placeholder/)
+  await assert.rejects(createArtifact(scratch, productionIds, production), /placeholder/)
+  await verifyArtifact(scratch, ids.revision)
+  assert.throws(() => deployable({ ...production, placeholder: undefined }), /Unknown Remote deployment target/,
+    'a copy with its placeholder deleted is not the table')
+  assert.equal(sent, 0)
+
+  // The issuer rules: production pins one exact sign-in domain; staging keeps the tenant's own domain.
+  assert.equal(identity(productionIds, production).issuer, 'https://login.hamradiotools.io/')
+  assert.throws(() => identity({ ...productionIds, issuer: ids.issuer }, production), /issuer must be exactly/)
+  assert.throws(() => identity({ ...ids, issuer: production.issuer.exact }), /Auth0 tenant HTTPS domain/)
+  assert.throws(() => identity({ ...ids, audience: production.audience }), /staging API audience/)
+  assert.equal(identity(ids).issuer, ids.issuer)
+})
+
 
 test('an untagged upload is recovered only from exact artifact bytes and bindings, without replacing code', async () => {
   const p = uploadedProvider()
@@ -393,6 +599,8 @@ test('the configuration CLI refuses overwrites and produces a private file from 
   assert.match(second.stderr, /already exists/)
 })
 
+// The dry-run passes the deploy's exact --secrets-file flag and file shape, holding synthetic values, so
+// this also proves the pinned Wrangler accepts them offline: a malformed secrets file exits 1.
 test('the actual pinned Wrangler emits only the verified Worker module without credentials or changing artifact bytes', async () => {
   await uploadArtifact(scratch, 'dry-run', { PATH: process.env.PATH, GITHUB_SHA: ids.revision })
   await verifyArtifact(scratch, ids.revision)

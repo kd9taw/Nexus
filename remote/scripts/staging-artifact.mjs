@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto'
 import { join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { setTimeout as delay } from 'node:timers/promises'
-import { STAGING, revision, stagingConfig, identityFromEnv, verifyIdentity, requireValue, requestJson, requestBytes } from './staging-common.mjs'
+import { revision, stagingConfig, identityFromEnv, verifyIdentity, requireValue, requestJson, requestBytes, target } from './staging-common.mjs'
 
 const repository = fileURLToPath(new URL('../../', import.meta.url))
 const hash = bytes => createHash('sha256').update(bytes).digest('hex')
@@ -22,8 +22,8 @@ async function files(directory, prefix = '') {
   return result.sort()
 }
 
-function bundledConfig(template, values) {
-  const config = stagingConfig(template, values)
+function bundledConfig(template, values, row) {
+  const config = stagingConfig(template, values, row)
   delete config.$schema
   config.main = './worker.js'
   config.no_bundle = true
@@ -32,10 +32,10 @@ function bundledConfig(template, values) {
   return config
 }
 
-export async function createArtifact(root, values) {
+export async function createArtifact(root, values, row = target()) {
   const sha = revision(values.revision), destination = artifactDirectory(root)
   const template = JSON.parse(await readFile(join(root, 'remote/wrangler.jsonc'), 'utf8'))
-  const config = bundledConfig(template, values)
+  const config = bundledConfig(template, values, row)
   // Refuse overwrite: otherwise an old, unlisted asset can ride a new deploy.
   await mkdir(destination)
   await mkdir(join(destination, 'assets'))
@@ -59,18 +59,18 @@ export async function createArtifact(root, values) {
   await writeFile(join(destination, 'wrangler.jsonc'), JSON.stringify(config, null, 2) + '\n', { flag: 'wx', mode: 0o600 })
   const entries = {}
   for (const name of await files(destination)) entries[name] = hash(await readFile(join(destination, name)))
-  const manifest = { format: 1, revision: sha, source: sourceUrl(sha), origin: STAGING.origin, files: entries }
+  const manifest = { format: 1, revision: sha, source: sourceUrl(sha), origin: row.origin, files: entries }
   await writeFile(join(destination, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n', { flag: 'wx', mode: 0o600 })
-  await verifyArtifact(root, sha)
+  await verifyArtifact(root, sha, row)
   return manifest
 }
 
-export async function verifyArtifact(root, expectedRevision) {
+export async function verifyArtifact(root, expectedRevision, row = target()) {
   const directory = artifactDirectory(root)
   requireValue((await lstat(directory)).isDirectory(), 'The artifact must be a real directory')
   const manifest = JSON.parse(await readFile(join(directory, 'manifest.json'), 'utf8'))
   requireValue(manifest.format === 1 && manifest.revision === revision(expectedRevision)
-    && manifest.source === sourceUrl(expectedRevision) && manifest.origin === STAGING.origin
+    && manifest.source === sourceUrl(expectedRevision) && manifest.origin === row.origin
     && manifest.files && typeof manifest.files === 'object' && !Array.isArray(manifest.files), 'Artifact receipt does not match the selected source')
   const actual = (await files(directory)).filter(name => name !== 'manifest.json')
   requireValue(JSON.stringify(actual) === JSON.stringify(Object.keys(manifest.files).sort()), 'Artifact file inventory changed')
@@ -78,7 +78,7 @@ export async function verifyArtifact(root, expectedRevision) {
   const config = JSON.parse(await readFile(join(directory, 'wrangler.jsonc'), 'utf8'))
   const template = JSON.parse(await readFile(join(root, 'remote/wrangler.jsonc'), 'utf8'))
   const expected = bundledConfig(template, { issuer: config.vars?.AUTH0_ISSUER, clientId: config.vars?.AUTH0_CLIENT_ID,
-    audience: config.vars?.AUTH0_AUDIENCE, databaseId: config.d1_databases?.[0]?.database_id, revision: expectedRevision })
+    audience: config.vars?.AUTH0_AUDIENCE, databaseId: config.d1_databases?.[0]?.database_id, revision: expectedRevision }, row)
   requireValue(JSON.stringify(config) === JSON.stringify(expected), 'Artifact configuration exceeds the staging scope')
   requireValue(actual.includes('worker.js') && actual.includes('assets/index.html') && actual.includes('assets/remote-licenses.txt'), 'Artifact is incomplete')
   return { manifest, config }
@@ -92,8 +92,8 @@ export async function verifyPublicSource(sha, fetcher = fetch) {
   return sourceUrl(sha)
 }
 
-export async function verifyLive({ manifest, config }, fetcher = fetch) {
-  const origin = STAGING.origin, options = { headers: { 'cache-control': 'no-cache' } }
+export async function verifyLive({ manifest, config }, fetcher = fetch, row = target()) {
+  const origin = row.origin, options = { headers: { 'cache-control': 'no-cache' } }
   const active = await requestJson(`${origin}/api/remote/config`, options, fetcher, 'Deployed Worker identity')
   requireValue(active.ready === true && active.revision === manifest.revision
     && active.issuer === config.vars.AUTH0_ISSUER && active.clientId === config.vars.AUTH0_CLIENT_ID
@@ -123,6 +123,19 @@ export async function verifyLive({ manifest, config }, fetcher = fetch) {
   return { revision: manifest.revision, source: manifest.source, assetsChecked: count, admission: 'anonymous and foreign Origin refused' }
 }
 
+// A fresh upload takes a few seconds to reach every edge, so the live check is retried before it is
+// believed. Shared by the verify step and by the upload's own post-upload report.
+export async function verifyLiveSettled(artifact, fetcher = fetch, row = target(), { attempts = 6, wait = 5000, log = console.log } = {}) {
+  for (let attempt = 1; ; attempt++) {
+    try { return await verifyLive(artifact, fetcher, row) }
+    catch (error) {
+      if (attempt >= attempts) throw error
+      log(`The complete staging artifact is not verified yet (attempt ${attempt}/${attempts}).`)
+      await delay(wait)
+    }
+  }
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
     const mode = process.argv[2]
@@ -135,14 +148,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     } else {
       const artifact = await verifyArtifact(repository, process.env.GITHUB_SHA)
       if (mode === 'check') console.log('Artifact scope, source and hashes passed')
-      else for (let attempt = 1; attempt <= 6; attempt++) {
-        try { console.log(JSON.stringify(await verifyLive(artifact))); break }
-        catch (error) {
-          if (attempt === 6) throw error
-          console.log(`The complete staging artifact is not verified yet (attempt ${attempt}/6).`)
-          await delay(5000)
-        }
-      }
+      else console.log(JSON.stringify(await verifyLiveSettled(artifact)))
     }
   } catch (error) { console.error(error.code === 'EEXIST' ? 'The staging artifact already exists; use a fresh build directory.' : error.message); process.exitCode = 1 }
 }
