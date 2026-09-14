@@ -3328,7 +3328,7 @@ export function SettingsPanel({
               <label className="settings-field">
                 <span className="settings-label">{t('settings.workspace.logbookGlobe.label')}</span>
                 <span className="settings-input-row">
-                  <input
+                  <input disabled={remote}
                     type="checkbox"
                     checked={logbookGlobe}
                     onChange={(e) => setLogbookGlobe(e.target.checked)}
