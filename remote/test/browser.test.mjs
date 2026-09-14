@@ -30,12 +30,19 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
   try {
     browser=await chrome()
     if(artifacts){await mkdir(artifacts,{recursive:true});await writeFile(join(artifacts,'chrome-version.json'),JSON.stringify(await browser.call('Browser.getVersion'),null,2)+'\n')}
-    const pair=await app.paired(), subject=JSON.parse(Buffer.from(pair.browser.jwt.split('.')[1],'base64url')).sub
+    // One approval (operator decision 2026-09-13): the browser that confirms a pairing is approved
+    // with the station. So Chrome must be that browser: the account claims the code, Chrome confirms
+    // it below, and only then does the shack approve. app.paired() confirms from a Node client,
+    // which would leave Chrome an ordinary second browser and never exercise the pairing path.
+    const owner=await app.owner(), shack=app.client(), subject=JSON.parse(Buffer.from(owner.jwt.split('.')[1],'base64url')).sub
+    const {value:enrollment}=await shack.post('enroll',{name:'Synthetic test station'})
+    await owner.post('pair/claim',{code:enrollment.code})
+    const stationCredential=randomBytes(32).toString('hex')
+    const pair={browser:owner,native:app.client(null,'',stationCredential),stationId:enrollment.id}
     const shell = await fetch(app.origin,{signal:AbortSignal.timeout(3000)})
     assert.equal(shell.status,200)
     assert.match(await shell.text(), /Nexus Remote/)
     const stationHeaders = { 'x-nexus-application-version': '1',...(ftOperating?{'x-nexus-operation-ft-version':'1'}:{}),...(operating?{'x-nexus-operation-version':'2','x-nexus-operation-max-version':'3'}:{}), ...(applicationVersion >= 2 ? { 'x-nexus-application-stream-version': '2' } : {}), ...(applicationVersion >= 3 ? { 'x-nexus-application-query-version': '1' } : {}), ...(applicationVersion >= 4 ? { 'x-nexus-application-recall-version': '1' } : {}), ...(applicationVersion >= 5 ? { 'x-nexus-application-keyboard-version': '1' } : {}), ...(applicationVersion >= 6 ? { 'x-nexus-application-insights-version': '1' } : {}), ...(applicationVersion >= 7 ? { 'x-nexus-application-dxpeditions-version': '1' } : {}), ...(applicationVersion >= 8 ? { 'x-nexus-application-memories-version': '1' } : {}), ...(applicationVersion >= 9 ? { 'x-nexus-application-ota-version': '1' } : {}), ...(applicationVersion >= 10 ? { 'x-nexus-application-field-day-version': '1' } : {}), ...(applicationVersion >= 11 ? { 'x-nexus-application-js8-version': '1' } : {}), ...(applicationVersion >= 12 ? {'x-nexus-application-station-modes-version':'1'} : {}), ...(applicationVersion >= 13 ? {'x-nexus-application-navigation-version':'1'} : {}), ...(applicationVersion >= 14 ? {'x-nexus-application-configuration-version':'1'} : {}) }
-    station=await pair.native.open(pair.stationId, undefined, 101, stationHeaders)
     let code=null, oauth=null, exchanges=0, providerFailure=false, exceptions=0, acknowledgements=0, unexpectedMessages=0
     const applicationTraffic = { reads: 0, acks: 0, subscriptions: 0, batches: 0, bytes: 0, byCommand: {}, maxResponseBytes: 0 }
     browser.on('Runtime.exceptionThrown', event=>{exceptions++; console.error(event.exceptionDetails?.exception?.description ?? 'Browser runtime exception')})
@@ -67,6 +74,9 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
     const session=(await browser.call('Target.attachToTarget',{targetId:target,flatten:true})).sessionId
     for(const method of ['Page.enable','Runtime.enable','Network.enable'])await browser.call(method,{},session)
     const operationWire=[]
+    // Declared before until(), whose operating diagnostic reads it: any wait that timed out before
+    // the logging actor's declarations threw a ReferenceError and hid which wait had failed.
+    const loggedRequests=[]
     let receiverRead=null
     browser.on('Network.webSocketFrameReceived',event=>{try{const v=JSON.parse(event.response.payloadData);if(v.type==='observation')receiverRead={at:performance.now(),radio:v.frame?.station?.radio};if(v.type==='operationResponse')operationWire.push({at:performance.now(),direction:'in',requestId:v.requestId,error:v.error,phase:v.value?.phase,outcome:v.value?.outcome,evidence:v.value?.evidence,reason:v.value?.reason})}catch{}})
     browser.on('Network.webSocketFrameSent', event => {
@@ -179,7 +189,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         }
         assert.ok(point,'control must become enabled before the single mouse gesture')
       }
-      catch(error){console.log('Application session diagnostic',JSON.stringify(await sessionDiagnostic()),{...applicationTraffic,nativeSnapshotAge:performance.now()-(sentAt.get('get_snapshot')??0),stationClosed:station.closed});console.log('Click diagnostic',expression,await evaluate(`(()=>{const e=${expression},r=e?.getBoundingClientRect();return {stale:document.querySelector('.app')?.dataset.remoteStale,status:document.querySelector('.remote-application-status')?.textContent,rect:r?.toJSON(),hit:r?document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)?.outerHTML.slice(0,600):null}})()`));if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-click-failure.png'),Buffer.from(shot.data,'base64'))}throw error}
+      catch(error){console.log('Application session diagnostic',JSON.stringify(await sessionDiagnostic()),{...applicationTraffic,nativeSnapshotAge:performance.now()-(sentAt.get('get_snapshot')??0),stationClosed:station?.closed});console.log('Click diagnostic',expression,await evaluate(`(()=>{const e=${expression},r=e?.getBoundingClientRect();return {stale:document.querySelector('.app')?.dataset.remoteStale,status:document.querySelector('.remote-application-status')?.textContent,rect:r?.toJSON(),hit:r?document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)?.outerHTML.slice(0,600):null}})()`));if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-click-failure.png'),Buffer.from(shot.data,'base64'))}throw error}
       await browser.call('Input.dispatchMouseEvent',{type:'mousePressed',...point,button:'left',clickCount},session)
       await browser.call('Input.dispatchMouseEvent',{type:'mouseReleased',...point,button:'left',clickCount},session)
       await sleep(50)
@@ -193,18 +203,36 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       results.push({width,height,zoom,theme,keyboard,shape})
     }
     await browser.call('Page.navigate',{url:app.origin},session)
-    await until(`!!${button('Sign in or create an account')}`)
+    // Signed out, the page offers "Sign in" and "Create an account" (the site restyle); both open the
+    // same SDK flow, so the PKCE exchange below is unchanged.
+    await until(`!!${button('Sign in')}&&!!${button('Create an account')}`)
     await geometry(390,844)
     await browser.call('Fetch.enable',{patterns:[{urlPattern:'https://identity.remote-test.invalid/*'}]},session)
-    await click(button('Sign in or create an account'))
+    await click(button('Sign in'))
     await until(`document.body.textContent.includes(${JSON.stringify(pair.browser.accountId)})`)
     assert.equal(exchanges,1,'the actual SDK must exchange a PKCE authorization code')
-    await until(`!!document.querySelector('input')`)
-    await click(`document.querySelector('input')`)
+    // The pairing browser: Chrome confirms the claimed station, then the shack approves the pairing.
+    await click(button('Attach this station'))
+    await until(`document.body.textContent.includes('waiting for approval in Nexus at the shack')`)
+    assert.equal((await app.db.prepare('SELECT COUNT(*) AS count FROM devices WHERE station_id=?').bind(pair.stationId).first()).count,0,'nothing is approved before the shack approves')
+    await shack.post('enroll/approve',{id:enrollment.id,proof:enrollment.proof,credential:stationCredential})
+    station=await pair.native.open(pair.stationId, undefined, 101, stationHeaders)
+    // One approval: the confirming browser can observe with no request and no approve-device call.
+    await until(`!!${button('Observe station')}`)
+    assert.equal(await evaluate(`!!${button('Request local approval')}||document.body.textContent.includes('Approve this browser')`),false,'the pairing browser is never asked to request a separate approval')
+    const pairedDevices=(await app.db.prepare('SELECT id,approved FROM devices WHERE station_id=?').bind(pair.stationId).all()).results
+    assert.equal(pairedDevices.length,1);assert.equal(pairedDevices[0].approved,1,'approving the pairing approved the browser that confirmed it')
+    // Any OTHER browser still needs its own approval at the shack. Removing this browser's approval
+    // makes Chrome one: the request form comes back and nothing opens until the station approves.
+    await click(button('Remove this browser’s approval'))
+    // The pairing-code form also has an input once a station is listed, so name the request form's own.
+    const browserName=`${button('Request local approval')}?.form?.querySelector('input')`
+    await until(`!!${browserName}`)
+    await click(browserName)
     await browser.call('Input.insertText',{text:'Synthetic browser'},session)
     await click(button('Request local approval'))
     await until(`document.body.textContent.includes('Approve this browser') || document.body.textContent.includes('Waiting for approval') || !document.querySelector('input')`)
-    const device=await app.db.prepare('SELECT id FROM devices WHERE station_id=?').bind(pair.stationId).first()
+    const device=await app.db.prepare('SELECT id FROM devices WHERE station_id=? AND id<>? AND approved=0').bind(pair.stationId,pairedDevices[0].id).first()
     assert.ok(device,'the browser must enroll through its own HTTP-only cookie')
     // Deterministically exercise a frame that arrives after the former sleep.
     await evaluate('window.__frameDelay=120')
@@ -310,7 +338,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
     const stationRequests=[]
     let lastDxTier='FT8',lastMsgTier='TempoFast'
     if(operating)applicationData.get_snapshot.mode='qso'
-    const loggingBoot=crypto.randomUUID(),loggingWindow=crypto.randomUUID(),loggedRequests=[],loggingReceipts=new Map()
+    const loggingBoot=crypto.randomUUID(),loggingWindow=crypto.randomUUID(),loggingReceipts=new Map()
     const querySnapshots = new Map()
     let applicationRevision = 1, applicationAvailable = true
     const unavailableTopics = new Set()
@@ -1450,8 +1478,10 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         // separate grant, because telling a v4 operator transmission is simply unavailable is false.
         // This entry negotiates v4, so it asserts the v4 wording - previously it still expected the
         // v2 sentence and nothing covered the v4 one at all.
-        assert.equal(await evaluate(`document.querySelector('.remote-session-info')?.textContent.includes('require local permission')`),true)
-        assert.equal(await evaluate(`document.querySelector('.remote-session-info')?.textContent.includes('FT8/FT4 transmission also needs separate transmit permission')`),true)
+        // One approval (2026-09-13) reworded it again: approval gives station controls and logging,
+        // and FT8/FT4 transmit still needs its own tick. It must still say transmit is separate.
+        assert.equal(await evaluate(`document.querySelector('.remote-session-info')?.textContent.includes('Approving this browser in Nexus at the station gives it station controls and logging')`),true)
+        assert.equal(await evaluate(`document.querySelector('.remote-session-info')?.textContent.includes('FT8/FT4 transmit is a separate tick on that approval')`),true)
         await click(info);await until(`document.querySelector('.remote-session-toggle')?.getAttribute('aria-expanded')==='false'`)
         assert.equal(loggingLease,lease,'presentation cannot release or replace authority')
         assert.equal(await evaluate(`document.querySelector('.app')===window.__sessionApp`),true,'session details must preserve the Nexus component tree')
@@ -1589,7 +1619,8 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         }
       }
       loggingAllowed=false;loggingLease=null;loggingRevision++
-      await until(`document.querySelector('.remote-logging-authority')?.textContent.includes('Allow remote logging')`)
+      // The station withdrew logging: the label says so (reworded by one approval, same phase).
+      await until(`document.querySelector('.remote-logging-authority')?.textContent.includes('Remote logging is off for this browser')`)
       assert.equal(await evaluate(`document.querySelector('.psk-cockpit .le-log-btn').disabled`),true)
       // A separate local grant enables existing receiver/amp buttons, while
       // the manual log and all TX senders remain unavailable without their grant.
