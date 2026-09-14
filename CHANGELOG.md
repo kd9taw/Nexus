@@ -145,8 +145,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   It runs on a test server that may be reset, and approving a station starts a 14-day trial, one per
   account. Pairing always finishes at the radio, so nobody can pair a station they are not standing
   at, and it takes one approval there: approving the pairing turns Remote on and approves the
-  browser you paired from. A station can be
-  renamed from the browser, and a browser or a whole station can be revoked from either end.
+  browser you paired from. A station can be renamed from the browser, and a browser or a whole
+  station can be revoked from either end.
 
 - **Operating from the browser, with permission you grant at the shack.** Approving a browser gives
   it station controls and remote logging, and FT8/FT4 transmission too when you tick "Also allow
@@ -157,8 +157,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   depth, RX offset, JS8 speeds and the MSK144 period, arming the RTTY, PSK, SSTV and APRS decoders,
   the amplifier's Operate/Standby, band steps and band-following, and which radio is active.
   **Remote logging** lets the browser's Log QSO form write to your logbook; Field Day contacts still
-  log at the shack. One browser holds control at a time, a control only shows as done once the radio has confirmed it, and a command
-  whose outcome is uncertain is never repeated on its own.
+  log at the shack. One browser holds control at a time, a control only shows as done once the
+  radio has confirmed it, and a command whose outcome is uncertain is never repeated on its own.
 
 - **FT8 and FT4 transmit from the browser.** With station control and the transmission permission,
   the browser can call CQ, answer from a decode or the roster, step through Tx1–Tx6, resend, send
