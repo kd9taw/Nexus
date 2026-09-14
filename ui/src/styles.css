@@ -8221,7 +8221,7 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 }
 /* The band is a primary operating control, so it looks like one: bigger, bolder,
    band-colored (the color + border come from an inline style keyed on the band). */
-.band-picker-select {
+.band-picker-trigger {
   padding: 5px 10px;
   font-size: 15px;
   font-weight: 800;
@@ -8235,12 +8235,87 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   cursor: pointer;
   transition: box-shadow 0.12s ease, filter 0.12s ease;
 }
-.band-picker-select:hover {
+.band-picker-trigger:hover {
   filter: brightness(1.15);
 }
-.band-picker-select:focus-visible {
+.band-picker-trigger:focus-visible {
   outline: 2px solid currentColor;
   outline-offset: 1px;
+}
+/* ── THE BAND MENU (BandMenu.tsx) — the band dropdown as a Nexus menu, not the system select.
+   The trigger keeps the look of the select it replaced (its surface class — .band-picker-trigger
+   or .freq-channel — carries font, border and the band colour); this adds the arrow the select's
+   own rule used to draw, and lays the value out on one line. */
+.band-menu-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  max-width: 100%;
+  white-space: nowrap;
+}
+.band-menu-trigger:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+.band-menu-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.band-menu-caret {
+  flex: 0 0 auto;
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid var(--text-dim);
+}
+/* The open list: bounded by the space Radix measured, scrolls inside itself. */
+.band-menu {
+  max-height: var(--radix-dropdown-menu-content-available-height);
+  overflow-y: auto;
+}
+.band-menu-group {
+  padding: var(--space-1) var(--space-2) 0;
+  font-size: var(--fs-label);
+  font-weight: 700;
+  color: var(--text-dim);
+}
+.band-menu-item {
+  justify-content: space-between;
+  gap: var(--space-4);
+  font-family: var(--font-mono);
+  font-weight: 700;
+}
+.band-menu-item[data-state='checked'] {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.band-menu-cond {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-family: var(--font-sans);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.band-menu-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+/* Unknown or stale condition data: a HOLLOW neutral dot and a neutral word — never a colour
+   that could be read as open. */
+.band-menu-item[data-condition='unknown'] .band-menu-dot {
+  background: transparent;
+  border: 1.5px solid var(--text-faint);
+}
+.band-menu-item[data-condition='unknown'] .band-menu-cond {
+  color: var(--text-faint);
+}
+.band-menu-item[data-highlighted] .band-menu-cond {
+  color: inherit;
 }
 .tx-lock {
   padding: 2px var(--space-2);

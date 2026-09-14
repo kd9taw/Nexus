@@ -659,6 +659,10 @@ export const FR: PartialCatalog = {
   "bandMap.track.title.tunable": "{{band}} — haut en haut, bas en bas (MHz). Cliquer pour se régler ici ; molette pour régler.",
   "bandPicker.select.title": "Bande — votre dernière fréquence sur cette bande dans ce mode pendant cette session, sinon le début de votre segment autorisé",
   "bandPicker.txLock.label": "🔒 TX verrouillé",
+  "bandPicker.menu.aria": "Bande : {{band}}",
+  "freq.channel.menu.aria": "Canal préréglé : {{channel}}",
+  "bandMenu.condition.unknown": "Pas de données",
+  "bandMenu.condition.unknown.title": "Aucune donnée récente sur les conditions de cette bande",
   'bandPicker.txLock.splitTitle':
     'TX verrouillé — votre fréquence d\u2019émission en split, {{tx}} MHz, est en dehors des privilèges de votre licence. La réception sur {{rx}} MHz ne pose aucun problème.',
   "bandPicker.txLock.title": "Cette fréquence/ce mode est hors de vos privilèges de licence — l'émission est bloquée. Choisissez une bande ci-dessus, ou changez votre classe de licence dans les Réglages.",

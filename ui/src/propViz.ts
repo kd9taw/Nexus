@@ -15,6 +15,7 @@ import { STATUS, type StatusMeta } from './statusMeta'
 import type {
   ActivityTier,
   BandModeled,
+  BandReport,
   GridRarity,
   Insight,
   InsightLevel,
@@ -286,6 +287,14 @@ export function dualStateLabel(
   const m: BandModeled = modeled ?? 'Open'
   if (m === 'Closed') return { word: 'Closed', sub: '' }
   return { word: m, sub: t('prop.state.sub.noneHeard') }
+}
+
+/** One band's condition cell — the word, its sub-note and its colour — exactly as the Band
+ *  conditions strip draws it. The band dropdown (`bandConditions.ts`) draws from this same
+ *  function so the two surfaces cannot disagree about a band. */
+export function bandConditionCell(b: BandReport): { word: string; sub: string; color: string } {
+  const ds = dualStateLabel(b.modeled, b.tier)
+  return { ...ds, color: b.modeled ? modeledVar(b.modeled) : tierVar(b.tier) }
 }
 
 /** The map hover-tooltip line for a live cluster/RBN/PSKR spot — who/where/what

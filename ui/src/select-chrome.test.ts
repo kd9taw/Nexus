@@ -219,7 +219,9 @@ describe('the closed <select> box is owned by one rule', () => {
     // matcher would silently examine almost nothing and every assertion would pass.
     expect(SELECT_CLASSES.size).toBeGreaterThan(10)
     expect(SELECT_CLASSES.has('settings-input')).toBe(true)
-    expect(SELECT_CLASSES.has('band-picker-select')).toBe(true)
+    // `band-picker-select` was the control here until the cockpit band dropdowns became a Nexus
+    // menu (BandMenu.tsx); `freq-channel` is still a real select in the Settings full variant.
+    expect(SELECT_CLASSES.has('freq-channel')).toBe(true)
   })
 
   it('declares appearance:none and an arrow, and marks the chrome important', () => {

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The band dropdown shows how each band is doing.** In every cockpit (Phone, CW, Operate, RTTY,
+  PSK, SSTV, JS8 and Tempo) and the top bar, the band list now shows a coloured dot and a word
+  beside each band: Open, Marginal or Closed. It uses the same data as the Band conditions strip
+  on the map. If there is no recent data for a band, it shows a grey outline and "No data", never
+  green. The dropdown is now a Nexus menu rather than the system list, so it looks the same on
+  Windows, macOS and Linux (including the dark theme on Linux, where the system list was drawn
+  light). It works from the keyboard and reads out each band and its condition to a screen reader.
+  In the Remote browser page the menu works the same way; the dots stay grey there, because the
+  browser does not receive propagation data yet.
+
 ### Security
 
 - **Encrypted connections refuse a malformed setup from the server.** Nexus's secure-connection

@@ -4234,6 +4234,10 @@ export const EN = {
   'bandPicker.select.title':
     'Band — your last frequency on this band in this mode this session, else the start of your licensed segment',
   'bandPicker.txLock.label': '🔒 TX locked',
+  'bandPicker.menu.aria': 'Band: {{band}}',
+  'freq.channel.menu.aria': 'Band channel preset: {{channel}}',
+  'bandMenu.condition.unknown': 'No data',
+  'bandMenu.condition.unknown.title': 'No current band-condition data for this band',
   'bandPicker.txLock.splitTitle':
     'TX locked — your split transmit frequency, {{tx}} MHz, is outside your license privileges. Receiving on {{rx}} MHz is fine.',
   'bandPicker.txLock.title':

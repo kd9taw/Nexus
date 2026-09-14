@@ -3,7 +3,7 @@
 // activity tier riding as a filled/hollow dot. So a green cell with a hollow dot reads
 // "open per model, just no spots heard" — never a dead band.
 import type { BandReport } from '../../types'
-import { modeledVar, tierVar, dualStateLabel } from '../../propViz'
+import { bandConditionCell } from '../../propViz'
 import { t } from '../../i18n'
 
 // Fixed band order (low→high) so the strip reads like a rig's band stack, not the
@@ -31,8 +31,8 @@ export function BandConditionStrip({
   return (
     <div className="band-cond" role="list" aria-label={t('prop.bandConditions.aria')}>
       {rows.map((b) => {
-        const ds = dualStateLabel(b.modeled, b.tier)
-        const color = b.modeled ? modeledVar(b.modeled) : tierVar(b.tier)
+        // The band dropdown draws the same cell (bandConditions.ts), so the two never disagree.
+        const { color, ...ds } = bandConditionCell(b)
         const observed =
           b.tier === 'Active' ? 'active' : b.tier === 'Moderate' ? 'some' : 'quiet'
         return (

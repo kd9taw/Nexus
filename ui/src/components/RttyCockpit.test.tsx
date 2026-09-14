@@ -6,6 +6,9 @@ import * as api from '../api'
 import * as toast from '../toast'
 import type { AppSnapshot, RttyState } from '../types'
 
+// Radix Popper (the header's band menu) observes its elements with a ResizeObserver jsdom lacks.
+globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver
+
 vi.mock('../api', () => ({
   getRttyState: vi.fn(),
   rttyArm: vi.fn(),
@@ -131,9 +134,10 @@ describe('RttyCockpit RX wiring', () => {
     const onSetFrequency = vi.fn()
     render(<RttyCockpit snap={snap} onSetFrequency={onSetFrequency} />)
     expect(getLicensedBandPlan).toHaveBeenCalledWith('rtty')
-    const select = (await screen.findByLabelText('Band channel preset')) as HTMLSelectElement
-    await waitFor(() => expect(select.querySelectorAll('option').length).toBeGreaterThan(1))
-    fireEvent.change(select, { target: { value: '20m' } })
+    // The band dropdown is a Nexus menu (BandMenu.tsx): open it from the keyboard, pick the item.
+    const trigger = await screen.findByRole('button', { name: /^Band channel preset/ })
+    fireEvent.keyDown(trigger, { key: 'Enter' })
+    fireEvent.click(await screen.findByRole('menuitemradio', { name: /^20 m · RTTY/ }))
     // Lands on the watering hole with the channel's own sideband (RTTY = LSB).
     expect(onSetFrequency).toHaveBeenCalledWith(14.083, '20m', 'LSB')
   })

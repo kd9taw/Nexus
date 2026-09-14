@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { StationDataContext, useStationCapability } from './stationAccess'
+import { publishBandConditions } from './bandConditions'
 import { QuickNavigation, useRemotePresentation } from './remote-web/presentation'
 import type { AppSnapshot, BandChannel, LoggedQso, ModeRequest, Settings, SourceKind, Tier } from './types'
 import { rigModeTransition, type RigMode } from './rigModeForView'
@@ -658,6 +659,8 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
         .then((p) => {
           if (!live) return
           setProp(p)
+          // The band dropdowns' opening dots read this same snapshot (bandConditions.ts).
+          publishBandConditions(p)
           // Solar-flare heads-up (edge-triggered; flareAlert.ts owns the dedup).
           processFlare(effectiveXray(xrayFastRef.current, p.spaceWx.xrayLong))
           // Geomagnetic storm heads-up, same edge-triggered shape over the MEASURED

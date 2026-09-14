@@ -16,6 +16,7 @@
 // that would fill the board, and the board component never renders in that state.
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react'
 import { t } from './i18n'
+import { publishBandConditions } from './bandConditions'
 import { confirmDialog, ConfirmHost } from './confirm'
 import type {
   AppSnapshot,
@@ -258,7 +259,15 @@ function DetachedPanelBody({ panel }: { panel: string }) {
   // Propagation + needs + band plan + settings: this window polls the shared engine.
   useEffect(() => {
     let live = true
-    const loadProp = () => getPropagation().then((p) => live && setProp(p)).catch(() => {})
+    const loadProp = () =>
+      getPropagation()
+        .then((p) => {
+          if (!live) return
+          setProp(p)
+          // A pop-out is its own JS context: publish so its band dropdown shows conditions too.
+          publishBandConditions(p)
+        })
+        .catch(() => {})
     const loadNeeds = () => getNeedAlerts().then((a) => live && setNeedAlerts(a)).catch(() => {})
     // Settings aren't in the snapshot, so poll them too — otherwise a preferRrr / QSO-macro
     // change in the main window never reaches the detached cockpit.

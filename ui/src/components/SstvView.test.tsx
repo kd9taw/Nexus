@@ -9,6 +9,8 @@ import type { AppSnapshot, SstvHealth, SstvState } from '../types'
 // and a working canvas 2D context — jsdom provides neither. These tests are about
 // the SSTV panel, so the waterfall is stubbed rather than propped up.
 vi.mock('./Waterfall', () => ({ Waterfall: () => null }))
+// Radix Popper (the header's band menu) observes its elements with a ResizeObserver jsdom lacks.
+globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver
 
 vi.mock('../api', () => ({
   getSstvState: vi.fn(),
@@ -233,9 +235,10 @@ describe('SstvView RX wiring', () => {
     const onSetFrequency = vi.fn()
     render(<SstvView snap={snap} onSetFrequency={onSetFrequency} />)
     expect(getLicensedBandPlan).toHaveBeenCalledWith('sstv')
-    const select = (await screen.findByLabelText('Band channel preset')) as HTMLSelectElement
-    await waitFor(() => expect(select.querySelectorAll('option').length).toBeGreaterThan(1))
-    fireEvent.change(select, { target: { value: '2m' } })
+    // The band dropdown is a Nexus menu (BandMenu.tsx): open it from the keyboard, pick the item.
+    const trigger = await screen.findByRole('button', { name: /^Band channel preset/ })
+    fireEvent.keyDown(trigger, { key: 'Enter' })
+    fireEvent.click(await screen.findByRole('menuitemradio', { name: /^2 m · ISS downlink/ }))
     expect(onSetFrequency).toHaveBeenCalledWith(145.8, '2m', 'FM')
   })
 
@@ -390,7 +393,7 @@ describe('SstvView TX panel', () => {
     // button on 20 m would latch (the toggle reads back `radio.sideband`, which the pick
     // writes) while the radio stayed in USB — a control that looks like it worked and did not.
     render(<SstvView snap={snap} onSetFrequency={vi.fn()} />)
-    await waitFor(() => expect(screen.getByLabelText('Band channel preset')).toBeTruthy())
+    await waitFor(() => expect(screen.getByRole('button', { name: /^Band channel preset/ })).toBeTruthy())
     expect(screen.queryByRole('group', { name: 'Phone mode' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'FM' })).toBeNull()
   })
