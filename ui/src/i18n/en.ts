@@ -8633,6 +8633,7 @@ export const EN = {
   // Drawn on the canvas, but a STATE MESSAGE rather than a tick label. `{{age}}` is how far
   // back the scrollback stands, formatted by `ageLabel`.
   'waterfall.paused': '⏸ PAUSED',
+  'waterfall.tx.held': 'TRANSMITTING — display held',
   'waterfall.paused.back': '⏸ PAUSED · −{{age}}',
   'waterfall.paused.now': 'now',
 

@@ -5274,6 +5274,7 @@ export const JA: PartialCatalog = {
   "waterfall.canvas.title": "クリックでRXを設定(WSJT-X方式)・Shift+クリックでTX・{{mod}}+クリックで両方",
   "waterfall.legend.title": "色 = 信号強度(現在の最強信号に対するdB)",
   "waterfall.paused": "⏸ 一時停止",
+  "waterfall.tx.held": "送信中 — 表示を保持",
   "waterfall.paused.back": "⏸ 一時停止・−{{age}}",
   "waterfall.paused.now": "現在",
   "scope.window.balanced.title": "分解能:バランス — 2048ポイント窓、171 ms。デフォルト。25 WPMの短点はこの窓より短いため、CWのキーイングは連続した帯に見えます。クリックでシャープ側へ。",

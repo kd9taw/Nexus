@@ -48,6 +48,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bottom of the waterfall, and the RX/TX labels, stayed tiny at any UI scale. They now grow with
   Settings ▸ Appearance ▸ Workspace ▸ UI scale, so 110 % or 125 % makes them easier to read.
 
+- **The RTTY, PSK, SSTV and JS8 waterfalls say when the picture is held (#230).** While you
+  transmit, Nexus keeps showing the last real picture of the band instead of the muted receiver the
+  radio hands back — but on these screens a held picture looked like a waterfall that had died. A
+  "TRANSMITTING — display held" badge now sits on the waterfall while you key and clears when you
+  stop. Nothing about transmitting changes, and your own signal is still not drawn.
+
 ### Security
 
 - **Encrypted connections refuse a malformed setup from the server.** Nexus's secure-connection

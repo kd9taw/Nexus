@@ -5550,6 +5550,7 @@ export const FR: PartialCatalog = {
   "waterfall.pause.resume.title": "Reprendre la cascade en direct (l'historique a continué de s'accumuler pendant la pause)",
   "waterfall.pause.title": "Mettre la cascade en pause — puis remonter l'historique à la molette",
   "waterfall.paused": "⏸ EN PAUSE",
+  "waterfall.tx.held": "ÉMISSION — affichage figé",
   "waterfall.paused.back": "⏸ EN PAUSE · −{{age}}",
   "waterfall.paused.now": "maintenant",
   "waterfall.popOut.title": "Détacher la cascade dans sa propre fenêtre (libère cet espace ; glissez-la sur un autre écran)",

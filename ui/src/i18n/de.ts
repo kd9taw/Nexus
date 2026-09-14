@@ -5287,6 +5287,7 @@ export const DE: PartialCatalog = {
   "waterfall.canvas.title": "Klick setzt RX (WSJT-X) · Shift+Klick setzt TX · {{mod}}+Klick setzt beides",
   "waterfall.legend.title": "Farbe = Signalstärke (dB relativ zum aktuell stärksten Signal)",
   "waterfall.paused": "⏸ PAUSIERT",
+  "waterfall.tx.held": "SENDEN — Anzeige angehalten",
   "waterfall.paused.back": "⏸ PAUSIERT · −{{age}}",
   "waterfall.paused.now": "jetzt",
   "toast.action.default": "Arbeiten",

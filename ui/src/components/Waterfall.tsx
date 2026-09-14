@@ -160,6 +160,17 @@ interface Props {
    * its 200 Hz sub-band: every WSPR decoder searches only that, so the rest of the passband is
    * audio no WSPR signal can occupy. Unset = the operator's zoom, exactly as before. */
   fixedWindow?: { lo: number; hi: number }
+  /** We are keying on THIS surface (#230). The receive picture is held while we transmit — the
+   * backend drops the rows captured from the rig's muted receiver and readers repeat the last
+   * real one — and on a surface that paints no dark band (`txBlanks` off: RTTY, PSK, SSTV, JS8)
+   * a held picture is indistinguishable from a dead waterfall, which is what W9GTY reported.
+   * This draws a label saying the display is held. It never feeds TX audio to the waterfall.
+   *
+   * ⚠️ NOT `transmitting`: that prop is the SLOT-TX indicator (`Engine::set_transmitting` is
+   * called only from the slot/beacon paths and JS8), so it is false through an RTTY, PSK or
+   * SSTV over — the three surfaces this label exists for. Each cockpit passes its own keyed
+   * state. */
+  keyed?: boolean
 }
 
 // Default FT8/digital view window (Hz) — the FT8 signals live here, now spanning the full 4 kHz
@@ -193,6 +204,7 @@ export function Waterfall({
   paletteScope,
   txBlanks = false,
   fixedWindow,
+  keyed = false,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   // Separate transparent overlay for the axis + Rx/Tx markers, so they are NEVER baked into
@@ -1140,6 +1152,14 @@ export function Waterfall({
         />
         {/* Axis + Rx/Tx markers layer — transparent, cleared each frame, never scrolled. */}
         <canvas ref={overlayRef} className="waterfall-overlay" aria-hidden="true" />
+        {/* #230: the held picture says it is held. Only where no dark band is painted — an FT
+            surface already reads as "that was us transmitting". A live region, so a screen
+            reader hears it when the over starts rather than only on inspection. */}
+        {keyed && !txBlanks && (
+          <div className="wf-tx-held" role="status">
+            {t('waterfall.tx.held')}
+          </div>
+        )}
         <div
           className="wf-legend"
           aria-hidden="true"

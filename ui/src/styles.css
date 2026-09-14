@@ -11617,6 +11617,28 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   cursor: pointer;
   accent-color: var(--accent, #4ea1ff);
 }
+/* #230: "the waterfall goes out of focus and does not show the transmitted signal" (W9GTY).
+   While we key, the backend drops the rows captured from the rig's muted receiver and readers
+   repeat the last real picture — deliberate, and on RTTY/PSK/SSTV/JS8 (no dark band) it looks
+   exactly like a dead waterfall. This badge says the picture is held. Display only: the
+   waterfall is never fed our own transmit audio. Click-through, like the toasts. */
+.wf-tx-held {
+  position: absolute;
+  top: var(--space-2);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2;
+  pointer-events: none;
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--alert-critical);
+  color: var(--accent-ink);
+  font-size: var(--fs-micro);
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  box-shadow: var(--elev-2);
+}
 .wf-stage {
   position: relative;
   flex: 1;

@@ -5550,6 +5550,7 @@ export const ES: PartialCatalog = {
   "waterfall.pause.resume.title": "Reanudar la cascada en vivo (el historial siguió acumulándose durante la pausa)",
   "waterfall.pause.title": "Pausar la cascada — luego recorre el historial con la rueda del ratón",
   "waterfall.paused": "⏸ EN PAUSA",
+  "waterfall.tx.held": "TRANSMITIENDO — pantalla congelada",
   "waterfall.paused.back": "⏸ EN PAUSA · −{{age}}",
   "waterfall.paused.now": "ahora",
   "waterfall.popOut.title": "Saca la cascada a su propia ventana (libera este espacio; arrástrala a otro monitor)",
