@@ -15,10 +15,14 @@ const idleSubscribe = () => () => {}
 const idleSnapshot = () => null
 /** A permission for an explicit gesture. Never enables native-only TX controls
  * or the effects which automatically arm receivers on local view entry.
- * `lapse` keeps the permission through a brief freshness lapse while the latest station
- * state still shows this browser controlling. It exists only so a drag or a typed value in
- * progress is not cancelled; the send itself still waits for current control. */
-export function useStationCapability(capability: ControlCapability, lapse = false): boolean {
+ * A brief control lapse (a heartbeat reply landing after the 1.2 s freshness window, most seconds on a
+ * real WAN) keeps the permission while the latest station state still shows this browser controlling,
+ * so a control does not disable under the operator and an open dropdown is not closed (operator
+ * decision 2026-09-14). The send never borrows it: OperationClient waits for current control, at most
+ * CONTROL_RESUME_MS, and otherwise refuses as not sent; a transmit action is refused at once; stale
+ * readings (StationDataContext) still refuse here. Pass `lapse = false` where the gesture must begin
+ * on current control (a scope press captures its command window at pointer-down). */
+export function useStationCapability(capability: ControlCapability, lapse = true): boolean {
   const local = useStationControl(), available = useStationData()
   const client = useContext(RemoteOperationsContext)
   const view = useSyncExternalStore(client?.subscribe ?? idleSubscribe, client?.getSnapshot ?? idleSnapshot)

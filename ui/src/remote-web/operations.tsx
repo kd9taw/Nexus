@@ -168,8 +168,10 @@ export function RemoteLogEntry({
       setError(null)
     }
   }, [view.resolved, view.dismissed])
+  // Not `view.fresh`: a brief control lapse keeps Log usable, and OperationClient.log waits for
+  // current control before sending (or refuses as not sent).
   const canSubmit =
-    available && view.fresh && view.requestReady !== false && view.state?.phase === 'controlling' && view.state.actions.includes('log.manual') && !view.unresolved && !view.controlPending
+    available && view.requestReady !== false && view.state?.phase === 'controlling' && view.state.actions.includes('log.manual') && !view.unresolved && !view.controlPending
   async function submit(record: LoggedQso, time: 'station' | 'explicit') {
     setError(null)
     setLogged(false)

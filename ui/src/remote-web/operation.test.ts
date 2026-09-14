@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest'
-import { OperationClient } from './operation-client'
+import { CONTROL_RESUME_MS, OperationClient } from './operation-client'
 import { OperationRelay } from './operation-relay'
 import { manualRecord, operationRequest, operationValue } from './operation-protocol'
 import type { OperationState } from './operation-protocol'
@@ -164,7 +164,12 @@ it('expires the browser command window and makes a timed-out write uncertain', a
   await a
   advance(1300)
   await vi.advanceTimersByTimeAsync(250)
-  await expect(c.log(record())).rejects.toThrow('notController')
+  // A lapsed command window with the lease still held: the log waits for current control (at most
+  // CONTROL_RESUME_MS), and when none comes it is refused unsent.
+  const stale = c.log(record()).catch((e) => e)
+  await vi.advanceTimersByTimeAsync(CONTROL_RESUME_MS)
+  expect(await stale).toMatchObject({ message: 'notController', sent: false })
+  expect(sent.some((m) => m.request.type === 'logManual')).toBe(false)
   // A new explicit station state makes a later action available, not a retry.
   reply(state(true))
   const action = c.log(record()).catch((e) => e.message)

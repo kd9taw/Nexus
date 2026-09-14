@@ -94,9 +94,9 @@ describe('FrequencyReadout', () => {
     expect(container.querySelector('input')).toBeNull()
   })
 
-  it('allows an approved remote dial gesture and cancels an edit when authority disappears', () => {
+  it('allows an approved remote dial gesture, keeps an edit through a brief control lapse, and cancels it when authority disappears', () => {
     const onCommit = vi.fn()
-    let view = { fresh: true, connected: true, state: { phase: 'controlling', controls: { capabilities: ['frequency'] } } }
+    let view: { fresh: boolean; connected: boolean; state: unknown } = { fresh: true, connected: true, state: { phase: 'controlling', controls: { capabilities: ['frequency'] } } }
     const client = { operationVersion: 3, subscribe: () => () => {}, getSnapshot: () => view } as unknown as OperationClient
     const display = () => <StationControlContext.Provider value={false}><RemoteOperationsContext.Provider value={client}>
       <FrequencyReadout dialMhz={14.074} editable remoteFrequency onCommit={onCommit} />
@@ -106,11 +106,21 @@ describe('FrequencyReadout', () => {
     fireEvent.change(container.querySelector('input')!, { target: { value: '7.074' } })
     fireEvent.keyDown(container.querySelector('input')!, { key: 'Enter' })
     expect(onCommit).toHaveBeenCalledExactlyOnceWith(7.074)
+    // A brief control lapse (a late heartbeat reply; the station still shows this browser controlling)
+    // keeps the edit, and Enter commits it. The send waits for current control (OperationClient).
     fireEvent.click(screen.getByRole('button'))
     fireEvent.change(container.querySelector('input')!, { target: { value: '14.2' } })
     view = { ...view, fresh: false }; rerender(display())
     fireEvent.keyDown(container.querySelector('input')!, { key: 'Enter' })
-    expect(onCommit).toHaveBeenCalledTimes(1)
+    expect(onCommit).toHaveBeenCalledTimes(2)
+    expect(onCommit).toHaveBeenLastCalledWith(14.2)
+    // Authority gone (no controlling state): the edit is cancelled and nothing is committed.
+    view = { ...view, fresh: true }; rerender(display())
+    fireEvent.click(screen.getByRole('button'))
+    fireEvent.change(container.querySelector('input')!, { target: { value: '21.2' } })
+    view = { ...view, state: null }; rerender(display())
+    fireEvent.keyDown(container.querySelector('input')!, { key: 'Enter' })
+    expect(onCommit).toHaveBeenCalledTimes(2)
     expect(screen.queryByRole('button')).toBeNull()
   })
 

@@ -118,13 +118,19 @@ it('sends Stop while a heartbeat is in flight and the shown state is stale, wher
   now += 300
   await vi.advanceTimersByTimeAsync(250)
   expect(c.getSnapshot().fresh).toBe(false)
-  // The same moment refuses an ordinary control before sending it...
-  expect(await c.control({ action: 'decoder.clear', receiver: 'cw' }).catch(e => e)).toMatchObject({ sent: false })
+  // The same moment holds an ordinary control: it waits for current control and sends nothing meanwhile...
+  const control = c.control({ action: 'decoder.clear', receiver: 'cw' }).catch(e => e)
+  await vi.advanceTimersByTimeAsync(0)
   expect(sent.some(w => w.request.type === 'stationControl')).toBe(false)
-  // ...while Stop leaves immediately: it checks no freshness window and waits for no heartbeat.
+  // ...while Stop leaves immediately, even with that control still waiting: it checks no freshness
+  // window and waits for no heartbeat.
   const stopping = c.stopTransmit()
   expect(sent[sent.length - 1].request.type).toBe('stopTransmit')
   c.receive({ type: 'operationResponse', requestId: sent[sent.length - 1].request.requestId, value: { stop: 'accepted' } })
   await expect(stopping).resolves.toEqual({ stop: 'accepted' })
+  // Control never became current: the control is refused unsent, and nothing reached the station.
+  await vi.advanceTimersByTimeAsync(1500)
+  expect(await control).toMatchObject({ message: 'notController', sent: false })
+  expect(sent.some(w => w.request.type === 'stationControl')).toBe(false)
   c.disconnected()
 })

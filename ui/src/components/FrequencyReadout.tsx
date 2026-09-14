@@ -122,7 +122,8 @@ export function FrequencyReadout({
   // hover under a resting pointer) blink with every late heartbeat.
   const digitsShown = digitTune && (control || remoteFrequency)
   // Digit steps (wheel and keyboard) outlive that gap too: they join the shared wheel burst, which is
-  // sent once control is current again or refused as not sent. Typed entry still needs current control.
+  // sent once control is current again or refused as not sent. So does typed entry (`frequencyControl`
+  // keeps through a lapse): its commit's command waits for current control in OperationClient.
   digitTune = digitTune && (control || (remoteFrequency && wheel.input))
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')

@@ -475,6 +475,11 @@ export class OperationClient {
       await this.request({ type: 'release', requestId: crypto.randomUUID(), leaseId })
     } catch {}
   }
+  /** Control held (connected, the latest state shows this browser controlling) but past its freshness
+   * window: the brief lapse a command may wait out. Anything else keeps its own refusal. */
+  private lapsed(): boolean {
+    return !this.view.fresh && this.view.connected && this.view.state?.phase === 'controlling'
+  }
   /** A gesture committed during a brief control lapse is sent only once control is current again.
    * Resolves at once while current. Otherwise waits, at most CONTROL_RESUME_MS, for a later state
    * reply to make it current, and refuses as not sent (nothing left the browser) if control is still
@@ -542,7 +547,10 @@ export class OperationClient {
   async log(record: ManualRecord, onSubmitted?: (id: string) => void): Promise<OperationOutcome> {
     const attempt = { sent: false }
     try {
-      return await this.submitLog(record, onSubmitted, attempt)
+      // The lapse rule of controlFrom: the entry as submitted, sent once control is current again.
+      const entry = structuredClone(record)
+      if (this.lapsed()) await this.awaitCurrent()
+      return await this.submitLog(entry, onSubmitted, attempt)
     } catch (error) {
       const code = error instanceof Error ? error.message : 'stationUnavailable'
       throw new OperationFailure(code, attempt.sent, stationWasBusy(code, attempt.sent))
@@ -637,7 +645,14 @@ export class OperationClient {
   private async controlFrom(action: StationAction, displayed?: ControlContext, captured?: CapturedControl): Promise<ControlOutcome> {
     const attempt = { sent: false }
     this.update({ controlError: null })
-    try { return await this.executeControl(action, displayed, captured, attempt) }
+    try {
+      // A command made during a brief control lapse waits for current control and is sent once, or is
+      // refused as not sent (operator decision 2026-09-14); executeControl still requires fresh state.
+      // Never a captured gesture (it keeps the window it was prepared with) and never a transmit action
+      // (it carries a transmit epoch): those are refused at once, exactly as before.
+      if (!captured && !('transmitEpoch' in action) && this.lapsed()) await this.awaitCurrent()
+      return await this.executeControl(action, displayed, captured, attempt)
+    }
     catch (error) {
       const code = error instanceof Error ? error.message : 'stationUnavailable'
       const busy = stationWasBusy(code, attempt.sent)

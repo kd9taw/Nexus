@@ -15,6 +15,8 @@ import { installApplicationTransport } from '../applicationTransport'
 import { ErrorBoundary } from '../components/ErrorBoundary'
 import { t } from '../i18n'
 import { controlFailureMessage } from './control-failure'
+import { useStaleDisplay } from './useStaleDisplay'
+import { shareStructure } from './stable-share'
 import { StationControlContext, StationDataContext } from '../stationAccess'
 import { RemoteObservationContext } from './amplifier-observation'
 import { initialState, startMonitor } from '../remote-monitor/session'
@@ -27,7 +29,7 @@ type Bootstrap = { snapshot: AppSnapshot; settings: Settings; bandPlan: BandChan
 export function BrowserApplication({ connection, disconnect }: { connection: HostedConnection; disconnect: () => void }) {
   const [presentation, setPresentation] = useState<RemotePresentation>('full')
   const [radioDetails, setRadioDetails] = useState(false)
-  const display = { presentation, change: setPresentation, radioDetails, setRadioDetails }
+  const display = useMemo(() => ({ presentation, change: setPresentation, radioDetails, setRadioDetails }), [presentation, radioDetails])
   const client = connection.application
   const collections = useMemo(() => new RemoteCollections(client), [client])
   const tuning = useMemo(() => connection.operations ? new WheelTuning(connection.operations, client,
@@ -84,8 +86,9 @@ export function BrowserApplication({ connection, disconnect }: { connection: Hos
           client.invoke<AppSnapshot>('get_snapshot'), client.invoke<Settings>('get_settings'), client.invoke<BandChannel[]>('get_band_plan'),
         ])
         if (live) {
-          setBoot({ snapshot, settings, bandPlan, cwPhone: client.supports('get_cw_state') && client.supports('get_scope_snapshot'),
-            keyboard: client.supports('get_rtty_state') && client.supports('get_psk_state'), collections: client.supports(QUERY_COMMAND), insights: client.supports(INSIGHTS_COMMAND), dxpeditions: client.supports(DXPEDITIONS_COMMAND), memories: client.supports(MEMORIES_COMMAND), ota: client.supports(OTA_COMMAND), fieldDay: client.supports(FIELD_DAY_COMMAND), js8: client.supports('get_js8_state') && client.supports(JS8_CONTEXT_COMMAND), configuration: client.supports(CONFIGURATION_COMMAND), navigation: client.supports(NAVIGATION_COMMAND) && client.supports('get_remote_satellite_state'), stationModes: client.supports('get_sstv_state') && client.supports(SSTV_IMAGE_COMMAND) && client.supports('get_remote_aprs_state') && client.supports(APRS_COMMAND) })
+          // Merged into the previous boot: unchanged parts (settings, band plan) keep their identity.
+          setBoot(previous => shareStructure(previous, { snapshot, settings, bandPlan, cwPhone: client.supports('get_cw_state') && client.supports('get_scope_snapshot'),
+            keyboard: client.supports('get_rtty_state') && client.supports('get_psk_state'), collections: client.supports(QUERY_COMMAND), insights: client.supports(INSIGHTS_COMMAND), dxpeditions: client.supports(DXPEDITIONS_COMMAND), memories: client.supports(MEMORIES_COMMAND), ota: client.supports(OTA_COMMAND), fieldDay: client.supports(FIELD_DAY_COMMAND), js8: client.supports('get_js8_state') && client.supports(JS8_CONTEXT_COMMAND), configuration: client.supports(CONFIGURATION_COMMAND), navigation: client.supports(NAVIGATION_COMMAND) && client.supports('get_remote_satellite_state'), stationModes: client.supports('get_sstv_state') && client.supports(SSTV_IMAGE_COMMAND) && client.supports('get_remote_aprs_state') && client.supports(APRS_COMMAND) }))
           setError(false); timer = setTimeout(() => void load(), 2000)
         }
       } catch {
@@ -97,7 +100,15 @@ export function BrowserApplication({ connection, disconnect }: { connection: Hos
   }, [client, phase])
   const stale = phase !== 'ready' || client.age('get_snapshot') >= APPLICATION_TIMEOUT_MS
   useEffect(() => { if (stale) tuning?.cancel() }, [stale, tuning])
-  const status = <SessionStatus client={connection.operations} stale={stale} disconnect={disconnect} display={display} />
+  // Readings older than APPLICATION_TIMEOUT_MS still refuse at once (StationDataContext, wheel tuning).
+  // Only the DISPLAY waits: the fade and the unavailable wording follow five seconds of continuous loss
+  // and clear on recovery, so a brief gap shows nothing (operator decision 2026-09-14).
+  const staleShown = useStaleDisplay(stale)
+  // Stable props: the 500 ms tick re-renders this component to re-read the sample age, and a fresh
+  // `remote` object every tick re-rendered the whole workspace with it.
+  const status = useMemo(() => <SessionStatus client={connection.operations} stale={staleShown} disconnect={disconnect} display={display} />,
+    [connection.operations, staleShown, disconnect, display])
+  const remote = useMemo(() => boot && { ...boot, status, stale, staleShown }, [boot, status, stale, staleShown])
   if (!boot) return <div className="app remote-monitor-app remote-service-app">
     {status}
     <main className="rm-scroll"><div className="rm-content">
@@ -114,7 +125,7 @@ export function BrowserApplication({ connection, disconnect }: { connection: Hos
           <RemoteHistoryContext.Provider value={boot.collections ? history : null}>
             <RemoteOperationsContext.Provider value={connection.operations??null}>
               <RemoteObservationContext.Provider value={observation}><RemoteWheelTuningContext.Provider value={stale ? null : tuning}>
-                <App remote={{ ...boot, status, stale }} />
+                <App remote={remote!} />
               </RemoteWheelTuningContext.Provider></RemoteObservationContext.Provider>
             </RemoteOperationsContext.Provider>
           </RemoteHistoryContext.Provider>

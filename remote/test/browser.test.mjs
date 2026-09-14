@@ -325,7 +325,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       heardCount:2, presence:'heard', worked:true, workedBand:false, country:'United States', tier:'FT8', freqHz:1500 }]
     // This actor supplies synthetic native outcomes to the compiled UI. The
     // separate real-native/workerd test proves the ADIF append and durability.
-    let loggingLeaseUntil=0, heartbeatReplyDelayMs=0
+    let loggingLeaseUntil=0, heartbeatReplyDelayMs=0, heartbeatReplyJitterMs=0
     let loggingAllowed=false,loggingLease=null,loggingRevision=1,loggingSequence=0,loseLogReply=false
     let qsoPrompt=true
     const qsoRecord={call:'W1AW',grid:'FN31',country:null,state:null,band:'20m',freqMhz:14.0755,mode:'FT8',rstSent:'-10',rstRcvd:'-12',name:null,qth:null,comment:null,notes:null,whenUnix:1700000000,confirmed:false,awardConfirmed:false}
@@ -583,7 +583,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         }else if(r.type==='result'){value=loggingReceipts.get(r.operationId);if(!value)error='resultExpired';else if(loseSpotReply&&value.operation==='stationControl'){value={operation:'stationControl',operationId:r.operationId,outcome:'unknown',reason:'hardwareUnconfirmed'};unknownResults++}}
         else value={stationBootId:loggingBoot,allowed:loggingAllowed||stationControls,phase:loggingLease?'controlling':loggingAllowed||stationControls?'available':'localPermissionRequired',leaseId:loggingLease,revision:loggingRevision,commandWindowId:loggingLease?loggingWindow:null,nextSequence:loggingLease?loggingSequence+1:null,leaseRemainingMs:loggingLease?Math.max(0,Math.floor(loggingLeaseUntil-performance.now())):null,actions:loggingAllowed?['log.manual']:[],txArmed:!!ftOperating&&!!loggingLease&&transmitAllowed&&applicationData.get_snapshot.radio.txEnabled,...(ftOperating?{transmitEpoch:transmitAllowed?transmitEpoch:null}:{}),...(stationControls?{controls:{context:controlContext(),capabilities:request.operationVersion>=3?['decoder','amplifier','frequency','mode','tier','ampFollowBand','workspace','decoderSettings','receiverSettings','receiverGain','bandSelection','receiverFilter','receiverDsp','phoneMode','fmTuning','fmReceiver','radioLevels',...(transmitAllowed?['ftOperate','ftCall','ftExchange','ftMessages','ftSettings','ftRuntime']:[]),...(ftOperating&&loggingAllowed?['qsoLogging']:[]),...(workSpot?['workSpot']:[]),...(radioSelection?['radioSelection']:[])]:['decoder','amplifier']}}:{})}
         // A slow link answers heartbeats late; the station's own reply content is unchanged.
-        if(r.type==='heartbeat'&&heartbeatReplyDelayMs)await sleep(heartbeatReplyDelayMs)
+        if(r.type==='heartbeat'&&(heartbeatReplyDelayMs||heartbeatReplyJitterMs))await sleep(heartbeatReplyDelayMs+Math.random()*heartbeatReplyJitterMs)
         source.send({type:'operationResponse',sessionId:request.sessionId,requestId:r.requestId,...(error?{error}:{value})});continue
       }
       if (request.type === 'applicationQuery') {
@@ -1645,6 +1645,76 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         assertStill(probe,'slow heartbeat');assert.equal(probe.digitRemovals,0,'tuning digits stay drawn between heartbeats')
         assert.ok(!probe.labels.includes('Logging control status unavailable'),'a held lease keeps the authority label steady: '+JSON.stringify(probe.labels))}
       heartbeatReplyDelayMs=0
+      // STEADY VIEW (operator decision 2026-09-14). A realistic WAN: heartbeat replies 150-300 ms late,
+      // with jitter, so the 1.2 s control window lapses for a moment in most seconds while the 5 s lease
+      // holds. Idle for 10 s, nothing in the cockpit may remount, toggle `disabled`, drop an option or
+      // fade; a band dropdown held open for 10 s stays open, and the band picked from it is sent once.
+      // Every probe logs its numbers (STEADY_PROBE) before any assertion, so a red run still reports them.
+      {
+        const steadyProbe=(root,select)=>`(()=>{const q=s=>document.querySelector(s),targets={header:${JSON.stringify(root+' .cockpit-header')},select:${JSON.stringify(select)},readout:${JSON.stringify(root+' .ch-readout .readout')}}
+          let fiber=q('.app');fiber=fiber?.[Object.keys(fiber).find(k=>k.startsWith('__reactFiber$'))];let ops;while(fiber){ops=fiber.memoizedProps?.connection?.operations;if(ops)break;fiber=fiber.return}
+          const p={remounts:{header:0,select:0,readout:0},disabled:0,toggled:new Set(),selectDisabled:0,optionsRemoved:0,staleToggles:0,fades:0,lapses:0,openSupported:true,openFrames:0,openLost:0,frames:0,stop:false,refs:{},last:{}}
+          for(const [k,s] of Object.entries(targets))p.refs[k]=q(s)
+          const name=e=>e.tagName.toLowerCase()+(e.className&&typeof e.className==='string'?'.'+e.className.trim().split(/\\s+/).slice(0,2).join('.'):'')+(e.textContent?'['+e.textContent.trim().slice(0,16)+']':'')
+          p.mo=new MutationObserver(rs=>{for(const r of rs){if(r.type==='attributes'){if(r.attributeName==='disabled'&&r.target.closest(${JSON.stringify(root)})){p.disabled++;p.toggled.add(name(r.target));if(r.target===p.refs.select)p.selectDisabled++}else if(r.attributeName==='data-remote-stale')p.staleToggles++}else if(p.refs.select&&(r.target===p.refs.select||p.refs.select.contains(r.target)))p.optionsRemoved+=[...r.removedNodes].filter(n=>n.nodeType===1).length}})
+          p.mo.observe(document.body,{subtree:true,childList:true,attributes:true,attributeFilter:['disabled','data-remote-stale']})
+          const open=e=>{try{return !!e&&e.matches(':open')}catch{p.openSupported=false;return false}}
+          const frame=()=>{if(p.stop)return;p.frames++
+            for(const [k,s] of Object.entries(targets)){const e=q(s);if(e!==p.refs[k]){p.remounts[k]++;p.refs[k]=e}}
+            const fade=[...(q('.app')?.children??[])].map(c=>getComputedStyle(c).opacity).join()+'/'+(p.refs.select?getComputedStyle(p.refs.select).opacity:'')
+            if(p.last.fade!==undefined&&p.last.fade!==fade)p.fades++;p.last.fade=fade
+            const fresh=!!ops?.getSnapshot().fresh;if(p.last.fresh&&!fresh)p.lapses++;p.last.fresh=fresh
+            const o=open(p.refs.select);if(o)p.openFrames++;if(p.last.open&&!o)p.openLost++;p.last.open=o
+            requestAnimationFrame(frame)}
+          frame();window.__steady=p;return !!ops})()`
+        const steadyRead=`(()=>{const p=window.__steady;p.stop=true;p.mo.disconnect();const {mo,refs,last,stop,toggled,...out}=p;return {...out,toggled:[...toggled].slice(0,16)}})()`
+        const frames=n=>evaluate(`new Promise(r=>{let i=0;const f=()=>++i>=${n}?r(true):requestAnimationFrame(f);requestAnimationFrame(f)})`)
+        const steady=async(label,root,select,ms=10000)=>{assert.equal(await evaluate(steadyProbe(root,select)),true,'the steady probe must find the operation client');await sleep(ms);const out=await evaluate(steadyRead);console.log('STEADY_PROBE',label,JSON.stringify(out));return out}
+        const still=(probe,what)=>{
+          assert.deepEqual(probe.remounts,{header:0,select:0,readout:0},`${what}: nothing remounts`)
+          assert.equal(probe.disabled,0,`${what}: no control toggles disabled: ${JSON.stringify(probe.toggled)}`)
+          assert.equal(probe.optionsRemoved,0,`${what}: the dropdown keeps its options`)
+          assert.equal(probe.staleToggles,0,`${what}: no stale display during brief lapses`);assert.equal(probe.fades,0,`${what}: nothing fades`)
+        }
+        heartbeatReplyDelayMs=150;heartbeatReplyJitterMs=150
+        const radio=applicationData.get_snapshot.radio,prior={operatingMode:radio.operatingMode,dialMhz:radio.dialMhz,band:radio.band}
+        await click(button('FT'));await settledLayout();await sleep(1500)
+        const ftIdle=await steady('ft-idle','.operate-cockpit','.operate-cockpit .freq-channel')
+        Object.assign(radio,{operatingMode:'phone',dialMhz:7.255,band:'40m'});applicationRevision++
+        const phoneSelect='.phone-cockpit .band-picker-select'
+        await click(button('Phone'));await settledLayout()
+        await until(`!!document.querySelector('${phoneSelect}')&&!document.querySelector('${phoneSelect}').disabled&&document.querySelector('${phoneSelect}').options.length>1`)
+        await sleep(1500)
+        const phoneIdle=await steady('phone-idle','.phone-cockpit',phoneSelect)
+        // Hold the band dropdown open for 10 s, then type "20" and Enter: the 20m band, from an open
+        // popup or (should it have closed) a closed select alike.
+        await click(`document.querySelector('${phoneSelect}')`)
+        const held=await steady('phone-held-open','.phone-cockpit',phoneSelect)
+        const before=stationRequests.length
+        for(const [key,code,vk] of [['2','Digit2',50],['0','Digit0',48],['Enter','Enter',13]])for(const type of ['keyDown','keyUp'])
+          await browser.call('Input.dispatchKeyEvent',{type,key,code,windowsVirtualKeyCode:vk,...(type==='keyDown'&&key!=='Enter'?{text:key}:{})},session)
+        for(let i=0;i<60&&stationRequests.length===before;i++)await sleep(100)
+        await sleep(2000)
+        const picked=stationRequests.slice(before).map(r=>r.action)
+        console.log('STEADY_PROBE phone-pick',JSON.stringify(picked))
+        // Positive controls, on the same select: a forced disable and a forced (then reversed) replacement
+        // must be counted, and the forced disable must close a dropdown held open.
+        await click(`document.querySelector('${phoneSelect}')`)
+        await evaluate(steadyProbe('.phone-cockpit',phoneSelect));await frames(10)
+        await evaluate(`(()=>{document.querySelector('${phoneSelect}').disabled=true;return true})()`);await frames(3)
+        await evaluate(`(()=>{const e=document.querySelector('${phoneSelect}');e.disabled=false;const c=e.cloneNode(true);e.replaceWith(c);window.__steadyOriginal=e;return true})()`);await frames(3)
+        await evaluate(`(()=>{document.querySelector('${phoneSelect}').replaceWith(window.__steadyOriginal);return true})()`);await frames(3)
+        const control=await evaluate(steadyRead);console.log('STEADY_PROBE positive-control',JSON.stringify(control))
+        heartbeatReplyDelayMs=0;heartbeatReplyJitterMs=0
+        Object.assign(radio,prior);applicationRevision++
+        assert.ok(control.selectDisabled>=1&&control.remounts.select>=2,'positive control: the probe counts a forced disable and a forced remount')
+        if(control.openSupported)assert.ok(control.openLost>=1,'positive control: a forced disable closes the held dropdown and the probe sees it')
+        assert.ok(ftIdle.lapses+phoneIdle.lapses+held.lapses>0,'positive control: control really lapsed during the probes')
+        still(ftIdle,'FT idle');still(phoneIdle,'Phone idle');still(held,'Phone dropdown held open')
+        if(held.openSupported){assert.ok(held.openFrames>0,'the dropdown was open');assert.equal(held.openLost,0,'the held dropdown stays open')}
+        assert.deepEqual(picked,[{action:'radio.band',band:'20m',mode:'phone'}],'the picked band is sent exactly once')
+        await until(`document.querySelector('.remote-control-result')?.textContent.includes('confirmed')&&${stationStateRead}`)
+      }
       const gesture=async(selector,expected)=>{
         await until(`!!document.querySelector(${JSON.stringify(selector)})&&!document.querySelector(${JSON.stringify(selector)}).disabled`)
         const before=stationRequests.length;await freshLoggingWindow();await evaluate(layoutProbeStart);await click(`document.querySelector(${JSON.stringify(selector)})`)
@@ -2274,9 +2344,10 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       stationControls=false;loggingLease=null
       await until(`document.querySelector('.cw-cockpit .amp-op').disabled`)
       assert.equal(controlGeometry+modeGeometry+bandGeometry+wheelGeometry+filterGeometry+dspGeometry+phoneModeGeometry+tierGeometry+followGeometry+decoderGeometry+receiverGeometry+gainGeometry+levelGeometry+16,656)
-      assert.equal(loggedRequests.length,5);assert.equal(stationRequests.length,126);assert.equal(unexpectedMessages,0);assert.equal(exceptions,0)
+      // 127: the steady-view scenario's band pick (one radio.band, asserted sent exactly once) joined the 126.
+      assert.equal(loggedRequests.length,5);assert.equal(stationRequests.length,127);assert.equal(unexpectedMessages,0);assert.equal(exceptions,0)
       if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-manual-logging.png'),Buffer.from(shot.data,'base64'));await writeFile(join(artifacts,'operation-results.json'),JSON.stringify({count:loggedRequests.length,stationActions:stationRequests.map(r=>r.action),controlGeometry,modeGeometry,bandGeometry,wheelGeometry,filterGeometry,dspGeometry,phoneModeGeometry,tierGeometry,followGeometry,decoderGeometry,receiverGeometry,gainGeometry,levelGeometry,modes:loggedRequests.map(r=>r.record.mode),lostResultResolved:true,wholePageReloadResolved:true,crossTabLockRefusal:true,geometry:16,exceptions,unexpectedMessages},null,2))}
-      console.log('Compiled browser: five logging forms, 126 station gestures, saved receiver choices, native band recall, shared wheel/digit tuning, Phone mode and FM receiver controls, separate grants, recovery and 656 geometry cases passed');return
+      console.log('Compiled browser: five logging forms, 127 station gestures, saved receiver choices, native band recall, shared wheel/digit tuning, Phone mode and FM receiver controls, separate grants, recovery and 656 geometry cases passed');return
     }
     const startReads=applicationTraffic.reads, startBytes=applicationTraffic.bytes, started=performance.now()
     for(const [width,height] of [[1024,768],[1280,800],[1366,768],[1200,1390],[3440,1440]])for(const zoom of [1,1.75])for(const theme of ['dark','light']) {

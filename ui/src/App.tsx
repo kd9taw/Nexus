@@ -243,7 +243,7 @@ const OPERATE_TIERS: Tier[] = [
   'WSPR',
 ]
 
-export type BrowserWorkspace = { snapshot: AppSnapshot; settings: Settings; bandPlan: BandChannel[]; status: ReactNode; stale?: boolean; cwPhone?: boolean; keyboard?: boolean; collections?: boolean; insights?: boolean; dxpeditions?: boolean; memories?: boolean; ota?: boolean; fieldDay?: boolean; js8?: boolean; stationModes?: boolean; navigation?: boolean; configuration?: boolean }
+export type BrowserWorkspace = { snapshot: AppSnapshot; settings: Settings; bandPlan: BandChannel[]; status: ReactNode; stale?: boolean; /** The stale DISPLAY, after hysteresis; defaults to `stale`. */ staleShown?: boolean; cwPhone?: boolean; keyboard?: boolean; collections?: boolean; insights?: boolean; dxpeditions?: boolean; memories?: boolean; ota?: boolean; fieldDay?: boolean; js8?: boolean; stationModes?: boolean; navigation?: boolean; configuration?: boolean }
 import { CollectionStatus, useRemoteCollection } from './remote-web/collections'
 import { RemoteInsights } from './remote-web/RemoteInsights'
 import { RemoteDxpeditions } from './remote-web/RemoteDxpeditions'
@@ -3011,7 +3011,7 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   }
 
   return (
-    <div className={`app${remote ? ' remote-workspace' : ''}${quick ? ' remote-quick-workspace' : ''}`} data-remote-presentation={remote ? display?.presentation ?? 'full' : undefined} data-remote-view={remote ? effectiveView : undefined} data-remote-stale={remote?.stale || undefined}>
+    <div className={`app${remote ? ' remote-workspace' : ''}${quick ? ' remote-quick-workspace' : ''}`} data-remote-presentation={remote ? display?.presentation ?? 'full' : undefined} data-remote-view={remote ? effectiveView : undefined} data-remote-stale={(remote?.staleShown ?? remote?.stale) || undefined}>
       {remote?.status}
       {remote?.collections && (effectiveView === 'needed' || effectiveView === 'spots') && <div className="remote-application-status"><CollectionStatus name={effectiveView === 'needed' ? 'needs' : 'spots'} /></div>}
       <TopBar

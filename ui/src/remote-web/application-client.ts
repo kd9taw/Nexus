@@ -13,6 +13,7 @@ import { parseJs8Sample } from './js8'
 import { parseSstvSample } from './sstv'
 import { parseAprsLive } from './aprs'
 import { parseSatelliteLive } from './navigation'
+import { shareStructure } from './stable-share'
 import { ApplicationQueryClient } from './application-query-client'
 import { CONFIGURATION_COMMAND, configurationCollection, NAVIGATION_COMMAND, navigationCollection, SSTV_IMAGE_COMMAND, APRS_COMMAND, JS8_CONTEXT_COMMAND, FIELD_DAY_COMMAND, OTA_COMMAND, MEMORIES_COMMAND, DXPEDITIONS_COMMAND, INSIGHTS_COMMAND, QUERY_COMMAND, RECALL_COMMAND, insightCollection } from './application-query-protocol'
 
@@ -31,6 +32,8 @@ export class ApplicationClient implements ApplicationTransport {
   private version = 0
   private stream: ApplicationStreamClient
   private query: ApplicationQueryClient
+  /** The last sample handed to readers, per command: the base that keeps unchanged parts' identity. */
+  private delivered = new Map<string, unknown>()
   constructor(private readonly send: (message: string) => void, private readonly close: () => void, private readonly serviceVersion = 1) {
     this.stream = new ApplicationStreamClient(send, () => { this.disconnected(); close() })
     this.query = new ApplicationQueryClient(send, () => { this.disconnected(); close() })
@@ -51,7 +54,7 @@ export class ApplicationClient implements ApplicationTransport {
   }
   disconnected(): void {
     this.stream.disconnected(); this.query.disconnected(); this.version = 0
-    this.values.clear()
+    this.values.clear(); this.delivered.clear()
     const pending = this.current
     this.current = null
     if (pending) { clearTimeout(pending.timer); pending.reject(new Error('applicationUnavailable')) }
@@ -107,20 +110,28 @@ export class ApplicationClient implements ApplicationTransport {
       if (command === 'get_sstv_state') return this.stream.invoke<unknown>(command).then(value => parseSstvSample(value, this.stream.age(command)) as T)
       if (command === 'get_remote_aprs_state') return this.stream.invoke<unknown>(command).then(value => parseAprsLive(value, this.stream.age(command)) as T)
       if (command === 'get_js8_state') return this.stream.invoke<unknown>(command).then(value => parseJs8Sample(value, this.stream.age(command)) as T)
-      return this.stream.invoke<T>(command)
+      return this.stream.invoke<T>(command).then(value => this.shared(command, value))
     }
     if (!applicationCommand(command) || (args && Object.keys(args).length)) return Promise.reject(new Error('applicationUnsupported'))
     if (this.phase !== 'ready') return Promise.reject(new Error(this.phase === 'updateRequired' ? 'stationUpdateRequired' : 'applicationUnavailable'))
     const previous = this.values.get(command)
-    if (previous && performance.now() - previous.at < interval[command]) return Promise.resolve(structuredClone(previous.value) as T)
+    if (previous && performance.now() - previous.at < interval[command]) return Promise.resolve(this.shared(command, structuredClone(previous.value) as T))
     const waiting = this.jobs.get(command)
-    if (waiting) return waiting.then(value => structuredClone(value) as T)
+    if (waiting) return waiting.then(value => this.shared(command, structuredClone(value) as T))
     const promise = new Promise<unknown>((resolve, reject) => { this.queue.push({ command, resolve, reject }) })
     this.jobs.set(command, promise)
     void promise.then(() => { if (this.jobs.get(command) === promise) this.jobs.delete(command) },
       () => { if (this.jobs.get(command) === promise) this.jobs.delete(command) })
     this.pump()
-    return promise.then(value => structuredClone(value) as T)
+    return promise.then(value => this.shared(command, structuredClone(value) as T))
+  }
+  /** Steady cached view (operator decision 2026-09-14): a reader gets the station's latest sample with
+   * every unchanged part keeping the identity it had, so React re-renders only what changed and an
+   * unchanged sample renders nothing. Samples are read-only to their readers. */
+  private shared<T>(command: string, value: T): T {
+    const next = shareStructure(this.delivered.get(command), value)
+    this.delivered.set(command, next)
+    return next
   }
   receive(message: Record<string, unknown>): void {
     if (message.type === 'applicationCapabilities') {
