@@ -14,7 +14,7 @@ impl Engine {
         connection: u64,
         permit: Permit,
     ) -> Result<Completion, Reason> {
-        self.remote_radio_idle()?;
+        self.remote_radio_retune_idle()?;
         let operating_mode = match mode {
             "cw" => OperatingMode::Cw,
             "phone" => OperatingMode::Phone,
@@ -115,7 +115,7 @@ impl Engine {
         connection: u64,
         permit: Permit,
     ) -> Result<Completion, Reason> {
-        self.remote_radio_idle()?;
+        self.remote_radio_retune_idle()?;
         if !matches!(tier, Tier::Ft8 | Tier::Ft4)
             || !dial_mhz.is_finite()
             || !(0.0..=250000.0).contains(&dial_mhz)

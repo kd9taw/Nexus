@@ -25,6 +25,7 @@ mod filter;
 mod level;
 mod phone_mode;
 mod receive_tuning;
+mod repeater;
 mod split;
 mod spot;
 struct Station {

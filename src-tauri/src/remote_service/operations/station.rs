@@ -55,6 +55,15 @@ pub enum TextReceiver {
     Psk,
 }
 
+/// A repeater's shift: a closed set, so an unknown word never degrades to simplex.
+#[derive(Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RepeaterShift {
+    Simplex,
+    Plus,
+    Minus,
+}
+
 #[derive(Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum KeyboardReceiver {
@@ -314,6 +323,18 @@ pub enum Action {
         band: String,
         call: String,
     },
+    /// An FM repeater (the Program Tune): the machine only. The offset is the magnitude the rig
+    /// keys, 0 = the band convention; the station judges the input it keys against the licence.
+    #[serde(rename = "radio.repeater")]
+    Repeater {
+        #[serde(rename = "outputMhz")]
+        output_mhz: f64,
+        shift: RepeaterShift,
+        #[serde(rename = "offsetHz")]
+        offset_hz: u32,
+        #[serde(rename = "toneHz")]
+        tone_hz: f32,
+    },
     #[serde(rename = "radio.tier")]
     Tier { tier: tempo_app::dto::Tier },
     #[serde(rename = "radio.workspace")]
@@ -462,6 +483,28 @@ pub fn execute(
                 *dial_mhz,
                 band,
                 call,
+                context.radio_connection.ok_or(Reason::ReadingUnavailable)?,
+                permit,
+            );
+        }
+        // The Program Tune through the readback transaction. Refused while TX is armed and when
+        // the input the offset keys is outside the licence; it never arms or keys.
+        #[cfg(feature = "radio")]
+        Action::Repeater {
+            output_mhz,
+            shift,
+            offset_hz,
+            tone_hz,
+        } => {
+            return engine.queue_remote_repeater(
+                *output_mhz,
+                match shift {
+                    RepeaterShift::Simplex => "simplex",
+                    RepeaterShift::Plus => "plus",
+                    RepeaterShift::Minus => "minus",
+                },
+                i64::from(*offset_hz),
+                *tone_hz,
                 context.radio_connection.ok_or(Reason::ReadingUnavailable)?,
                 permit,
             );
@@ -963,6 +1006,7 @@ impl Action {
             | Self::Mode { .. }
             | Self::WorkSpot { .. }
             | Self::WorkDigitalSpot { .. }
+            | Self::Repeater { .. }
             | Self::Tier { .. }
             | Self::Workspace { .. }
             | Self::Js8Speed { .. }
@@ -1015,6 +1059,7 @@ pub fn capabilities(version: u8) -> Vec<&'static str> {
                 "splitTuning",
                 "ritTuning",
                 "workDigitalSpot",
+                "repeaterTuning",
             ]
         }
     }

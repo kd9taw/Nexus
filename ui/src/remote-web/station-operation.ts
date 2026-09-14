@@ -35,6 +35,8 @@ export type StationAction =
   | { action: 'radio.workSpot'; mode: 'cw' | 'phone'; dialMhz: number; band: string; call: string }
   // FT8/FT4 Work names its tier in its own action: an older desktop parses workSpot exactly.
   | { action: 'radio.workDigitalSpot'; tier: 'FT8' | 'FT4'; dialMhz: number; band: string; call: string }
+  // An FM repeater: the output, the shift and offset the rig keys (0 = band convention) and the tone.
+  | { action: 'radio.repeater'; outputMhz: number; shift: 'simplex' | 'plus' | 'minus'; offsetHz: number; toneHz: number }
   | { action: 'radio.frequency'; dialMhz: number; band: string; sideband: 'USB' | 'LSB' | 'FM' | 'AM' }
   | { action: 'radio.band'; band: string; mode: 'cw' | 'phone' }
   | { action: 'radio.filterWidth'; mode: 'cw' | 'phone'; expectedHz: number; hz: number }
@@ -96,6 +98,7 @@ const ACTION_CAPABILITY: Record<StationAction['action'], ControlCapability> = {
   'radio.filterWidth': 'receiverFilter',
   'radio.function': 'receiverDsp', 'radio.agc': 'receiverDsp',
   'radio.phoneMode': 'phoneMode', 'radio.workSpot': 'workSpot', 'radio.workDigitalSpot': 'workDigitalSpot',
+  'radio.repeater': 'repeaterTuning',
   'decoder.arm': 'decoder', 'decoder.clear': 'decoder', 'decoder.afcReset': 'decoder',
   'decoder.net': 'decoder', 'decoder.pskMode': 'decoder',
   'decoder.aiCw': 'aiCw', 'decoder.redecode': 'redecode',
@@ -292,6 +295,15 @@ export function stationAction(raw: unknown): StationAction {
       object(a, ['action', 'expectedTier'])
       if (!oneOf(a.expectedTier, ['FT8', 'FT4'])) invalid()
       break
+    case 'radio.repeater': {
+      object(a, ['action', 'outputMhz', 'shift', 'offsetHz', 'toneHz'])
+      // FM voice starts at 29 MHz; a tone is 0 (none) or the CTCSS range to a tenth of a hertz.
+      const tone = a.toneHz as number
+      if (!finite(a.outputMhz) || a.outputMhz < 29 || a.outputMhz > 250000 || !oneOf(a.shift, ['simplex', 'plus', 'minus']) ||
+        !Number.isSafeInteger(a.offsetHz) || (a.offsetHz as number) < 0 || (a.offsetHz as number) > 20000000 ||
+        !finite(a.toneHz) || (tone !== 0 && (tone < 60 || tone > 260 || Math.abs(Math.round(tone * 10) - tone * 10) > 1e-6))) invalid()
+      break
+    }
     case 'radio.split':
       // null is simplex. Both values are always named: a missing one is not simplex by omission.
       object(a, ['action', 'expectedTxMhz', 'txMhz'])

@@ -236,6 +236,24 @@ describe('split and clarifier requests', () => {
     expect(() => stationAction({ action: 'radio.vfo', expectedVfo: 'B', vfo: 'B' })).toThrow()
     expect(() => stationAction({ action: 'radio.swapVfo' })).toThrow()
   })
+  it('admits a repeater tune only as the machine: output, shift, offset and tone', () => {
+    const action = { action: 'radio.repeater', outputMhz: 146.94, shift: 'minus', offsetHz: 600000, toneHz: 100 }
+    expect(stationAction(action)).toEqual(action)
+    expect(actionCapability(stationAction(action))).toBe('repeaterTuning')
+    for (const shift of ['simplex', 'plus', 'minus']) expect(stationAction({ ...action, shift })).toEqual({ ...action, shift })
+    for (const toneHz of [0, 67, 88.5, 254.1]) expect(stationAction({ ...action, toneHz })).toEqual({ ...action, toneHz })
+    for (const offsetHz of [0, 20000000]) expect(stationAction({ ...action, offsetHz })).toEqual({ ...action, offsetHz })
+    for (const shift of ['up', 'split', 'PLUS', '', null]) expect(() => stationAction({ ...action, shift })).toThrow()
+    for (const offsetHz of [-1, 1.5, 20000001, NaN, '600000', null]) expect(() => stationAction({ ...action, offsetHz })).toThrow()
+    for (const toneHz of [59.9, 260.1, 88.55, NaN, -1, '100', null]) expect(() => stationAction({ ...action, toneHz })).toThrow()
+    for (const outputMhz of [NaN, Infinity, 0, 28.99, 250001, '146.94', null]) expect(() => stationAction({ ...action, outputMhz })).toThrow()
+    for (const extra of ['txEnabled', 'settings', 'command', 'band', 'radioId']) expect(() => stationAction({ ...action, [extra]: 1 })).toThrow()
+    for (const key of ['outputMhz', 'shift', 'offsetHz', 'toneHz']) {
+      const missing: Record<string, unknown> = { ...action }
+      delete missing[key]
+      expect(() => stationAction(missing)).toThrow()
+    }
+  })
   it('admits an FT8/FT4 Work intent only as its own action with an explicit tier', () => {
     for (const tier of ['FT8', 'FT4']) {
       const action = { action: 'radio.workDigitalSpot', tier, dialMhz: 14.074, band: '20m', call: 'JA2DEF/P' }

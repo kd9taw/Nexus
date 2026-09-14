@@ -15,6 +15,7 @@ mod filter;
 mod level;
 pub use level::RadioLevel;
 mod phone_mode;
+mod repeater;
 mod split;
 mod spot;
 mod workspace;
@@ -53,6 +54,15 @@ enum Intent {
         original: Tier,
         call: String,
     },
+    /// An FM repeater tune: the machine the browser asked for (`offset_override` as the desktop
+    /// verb takes it, `offset` as the rig will key it) and the input that offset transmits on.
+    Repeater {
+        shift: String,
+        offset_override: i64,
+        offset: i64,
+        tone: f32,
+        input_mhz: f64,
+    },
     FilterWidth {
         mode: OperatingMode,
         expected: u32,
@@ -76,6 +86,21 @@ enum Intent {
         mode: String,
         follow_frequency: bool,
     },
+}
+
+impl Intent {
+    /// Browser retunes whose own QSY ends a channel hold that a remote repeater tune set.
+    fn crosses_remote_fm_hold(&self) -> bool {
+        matches!(
+            self,
+            Intent::Frequency
+                | Intent::Spot { .. }
+                | Intent::DigitalSpot { .. }
+                | Intent::Band { .. }
+                | Intent::Mode { .. }
+                | Intent::Repeater { .. }
+        )
+    }
 }
 
 struct Target {
@@ -114,15 +139,30 @@ impl Engine {
     }
 
     pub(super) fn remote_radio_idle(&self) -> Result<(), Reason> {
+        self.remote_radio_idle_with(false)
+    }
+
+    /// A browser retune (frequency, band, mode, Work, repeater): the same checks, except that the
+    /// FM channel hold a committed remote repeater tune set does not strand that browser. Its QSY
+    /// ends the hold exactly as the desktop's own does. Every other hold still refuses.
+    pub(super) fn remote_radio_retune_idle(&self) -> Result<(), Reason> {
+        self.remote_radio_idle_with(true)
+    }
+
+    fn remote_radio_idle_with(&self, retune: bool) -> Result<(), Reason> {
         if self.tx_enabled() || self.tx_owner().is_some() || self.sstv_in_flight() {
             return Err(Reason::StationBusy);
         }
-        self.remote_radio_context_idle()
+        self.remote_radio_context_check(retune)
     }
 
     /// Shared context checks. An owned FT operation may keep its own slot
     /// transmission, but still cannot borrow another pending radio transition.
     pub(super) fn remote_radio_context_idle(&self) -> Result<(), Reason> {
+        self.remote_radio_context_check(false)
+    }
+
+    fn remote_radio_context_check(&self, retune: bool) -> Result<(), Reason> {
         if self.remote_settings_path.is_none() {
             return Err(Reason::UnsupportedAction);
         }
@@ -131,8 +171,13 @@ impl Engine {
         if self.sat_dial_owner.is_some()
             || self.sat_mode.is_some()
             || self.aprs_fm
-            || self.fm_channel
-            || self.machinery_park.is_some()
+            || (self.fm_channel && !(retune && self.remote_fm_hold_matches()))
+            // The same remote tune parked its band (machinery provenance). An operator retune ends
+            // that park exactly as the desktop's own QSY does; any other park still refuses.
+            || (self.machinery_park.is_some()
+                && !(retune
+                    && self.remote_fm_hold_matches()
+                    && self.machinery_park.as_deref() == Some(self.settings.band.as_str())))
             || self.split_tx_mhz.is_some()
             || self.split_dirty
             || self.observed_split.is_some_and(|s| s.0)
@@ -170,7 +215,7 @@ impl Engine {
         connection: u64,
         permit: Permit,
     ) -> Result<Completion, Reason> {
-        self.remote_radio_idle()?;
+        self.remote_radio_retune_idle()?;
         if !dial_mhz.is_finite()
             || !(0.0..=250000.0).contains(&dial_mhz)
             || crate::bandplan::band_for_dial(dial_mhz).unwrap_or("") != band
@@ -220,7 +265,7 @@ impl Engine {
         connection: u64,
         permit: Permit,
     ) -> Result<Completion, Reason> {
-        self.remote_radio_idle()?;
+        self.remote_radio_retune_idle()?;
         let om = match mode {
             "cw" => OperatingMode::Cw,
             "phone" => OperatingMode::Phone,
@@ -266,7 +311,7 @@ impl Engine {
         connection: u64,
         permit: Permit,
     ) -> Result<Completion, Reason> {
-        self.remote_radio_idle()?;
+        self.remote_radio_retune_idle()?;
         if !matches!(mode, "digital" | "phone" | "cw" | "rtty" | "keyboard") {
             return Err(Reason::InvalidAction);
         }
@@ -469,7 +514,11 @@ impl Engine {
         connection: u64,
         permit: Permit,
     ) -> Result<Completion, Reason> {
-        self.remote_radio_idle()?;
+        if target.intent.crosses_remote_fm_hold() {
+            self.remote_radio_retune_idle()?;
+        } else {
+            self.remote_radio_idle()?;
+        }
         if self
             .remote_radio_command
             .as_ref()
@@ -512,13 +561,16 @@ impl Engine {
         }
         // Receiver adjustments preserve the current FM configuration. Only a
         // tuning transaction may carry repeater writes and adopt its cache.
-        let repeater = if matches!(
-            target.intent,
-            Intent::Level { .. } | Intent::FilterWidth { .. } | Intent::ReceiverDsp { .. }
-        ) {
-            None
-        } else {
-            self.remote_target_repeater(target.hz, &target.mode)
+        let repeater = match &target.intent {
+            Intent::Level { .. } | Intent::FilterWidth { .. } | Intent::ReceiverDsp { .. } => None,
+            // A repeater tune carries the machine it asked for, not the saved configuration.
+            Intent::Repeater {
+                shift,
+                offset,
+                tone,
+                ..
+            } => Some((shift.clone(), *offset, *tone)),
+            _ => self.remote_target_repeater(target.hz, &target.mode),
         };
         let o = self.remote_monitor_observation();
         let cat = o.radio.readings.cat.ok_or(Reason::ReadingUnavailable)?;
@@ -679,7 +731,11 @@ impl Request {
 
     pub fn validate(&self, engine: &Engine) -> Result<(), Reason> {
         self.permission.check(Instant::now())?;
-        engine.remote_radio_idle()?;
+        if self.intent.crosses_remote_fm_hold() {
+            engine.remote_radio_retune_idle()?;
+        } else {
+            engine.remote_radio_idle()?;
+        }
         let mode_matches = if let Intent::PhoneMode {
             expected_override,
             override_mode,
@@ -726,6 +782,7 @@ impl Request {
             || engine.settings.dial_hz() != self.expected_hz
             || !mode_matches
             || (self.retuning()
+                && !matches!(self.intent, Intent::Repeater { .. })
                 && engine.remote_target_repeater(self.target_hz, &self.target_mode)
                     != self.repeater)
             || (self.power_limit.is_some() && engine.rf_power != self.expected_power)
@@ -750,6 +807,23 @@ impl Request {
         if let Intent::DigitalSpot { original, .. } = &self.intent {
             if engine.tier() != *original {
                 return Err(Reason::ContextChanged);
+            }
+        }
+        if let Intent::Repeater { input_mhz, .. } = &self.intent {
+            // Everything admission judged is re-judged at the write and at commit: the radio a
+            // hand-off would pick, the rig's coverage, and the licence at the machine's input.
+            let output = self.target_hz as f64 / 1e6;
+            if engine.rig_covers_mhz(output) == Some(false)
+                || (!engine.settings.radio_pegged
+                    && engine
+                        .settings
+                        .route_radio(&self.band, crate::settings::RouteMode::Fm)
+                        .is_some_and(|id| id != engine.settings.active_radio))
+            {
+                return Err(Reason::ContextChanged);
+            }
+            if !engine.emission_allowed(OperatingMode::Phone, *input_mhz, "FM") {
+                return Err(Reason::OutsidePrivileges);
             }
         }
         engine.remote_radio_link(self.connection)
@@ -973,6 +1047,23 @@ impl Request {
                     engine.rf_power = Some(power);
                     engine.observe_rig_power(power);
                 }
+            }
+            Intent::Repeater {
+                shift,
+                offset_override,
+                tone,
+                ..
+            } => {
+                // Validated above; the desktop verb re-checks its own gates before any change.
+                if engine
+                    .repeater_tune(self.target_hz as f64 / 1e6, &shift, offset_override, tone)
+                    .is_err()
+                {
+                    self.completion.refuse(Reason::HardwareUnconfirmed);
+                    return false;
+                }
+                engine.remote_fm_hold =
+                    Some((engine.settings.dial_hz(), engine.fm_repeater_config()));
             }
             Intent::Band { mode } => engine.pick_band(&self.band, Some(&mode)),
             Intent::Workspace {

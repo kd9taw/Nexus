@@ -1,5 +1,7 @@
 import { useNavigation } from '../remote-web/useNavigation'
 import type { ProgrammingConfiguration } from '../remote-web/configuration'
+import { controlFailureMessage } from '../remote-web/control-failure'
+import { useStationCapability } from '../stationAccess'
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every operator-visible
 // string comes from the catalog. What does NOT, and this screen is dense with it: every repeater
 // callsign, output frequency, offset, CTCSS tone and DTCS code, the band chips, the mode badges
@@ -147,6 +149,8 @@ interface Props {
 export function RadioProgView({ myGrid, catOk = false }: Props) {
   const configuration=useNavigation<ProgrammingConfiguration>('programming')
   const remote=configuration.remote
+  // A browser may Tune (never edit) while the station advertises the repeater transaction.
+  const repeaterControl=useStationCapability('repeaterTuning')
   if(remote)myGrid=configuration.value?.mygrid??''
   // ── query state ──
   const [originKind, setOriginKind] = useState<'station' | 'grid' | 'city'>('station')
@@ -478,7 +482,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
    * FM (so 2 m repeater work reaches the FM radio even when the operator came
    * from a digital section) and lands the shift/offset/tone with the QSY. */
   const tuneTo = (c: ProgChannel) => {
-    if(remote)return
+    if(remote&&!repeaterControl)return
     const { shift, offsetHz, toneHz } = rigRepeaterParams(c)
     void repeaterTune(c.rxMhz, shift, offsetHz, toneHz)
       .then(() => {
@@ -499,7 +503,8 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
           4000,
         )
       })
-      .catch((e) => pushToast(String(e), 'error'))
+      // A browser's refusal carries data, not operator text: name it plainly.
+      .catch((e) => pushToast(remote ? controlFailureMessage(e) : String(e), 'error'))
   }
 
   /** ★ one machine straight into the favorites list — the whole point of the
@@ -928,7 +933,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
                       </button>
                     )}
                     {catOk && programmable && (
-                      <button disabled={remote}
+                      <button disabled={remote && !repeaterControl}
                         type="button"
                         className="pota-hunt-btn rp-tune"
                         onClick={() => tuneTo(c)}
@@ -1035,6 +1040,19 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
                   <span className="rp-chan-off mono">{offsetLabel(r.channel)}</span>
                   <span className="rp-chan-tone mono">{toneLabel(r.channel)}</span>
                   <span className="rp-chan-btns">
+                    {/* A browser cannot search RepeaterBook (the key stays at the shack), so the
+                        station's own list is where it tunes an FM machine from. */}
+                    {remote && catOk && (r.channel.mode === 'fm' || r.channel.mode === 'nfm') && (
+                      <button
+                        type="button"
+                        className="rp-tune"
+                        disabled={!repeaterControl}
+                        onClick={() => tuneTo(r.channel)}
+                        title={t('program.row.tune.title')}
+                      >
+                        {t('program.row.tune.label')}
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => move(i, -1)}

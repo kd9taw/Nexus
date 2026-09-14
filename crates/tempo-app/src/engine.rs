@@ -2936,6 +2936,10 @@ pub struct Engine {
     /// read time on the dial still being at/above 29 MHz — the same threshold `Settings::rig_mode`
     /// applies to Phone-FM, so a knob-QSY down to HF can never leave FM forced.
     fm_channel: bool,
+    /// The FM channel a committed REMOTE repeater tune established: its dial and FM tuple. A
+    /// browser's later retune may end that hold (as the desktop's own QSY does); a hold set at the
+    /// station, or one whose dial or tuple has since changed, still refuses remote work.
+    pub(crate) remote_fm_hold: Option<(u64, (String, i64, f32))>,
     /// What the HELD transponder needs the rig to be in (session-only, never
     /// persisted). Set by [`Engine::sat_tune_nominal`] on the leg it actually
     /// writes; makes `rig_mode_effective` command that mode and `route_mode`
@@ -4536,6 +4540,7 @@ impl Engine {
             aprs_msg_seq: 0,
             aprs_fm: false,
             fm_channel: false,
+            remote_fm_hold: None,
             sat_mode: None,
             sstv_armed: false,
             sstv_auto_arm_declined: false,
