@@ -34,23 +34,35 @@ for (const tier of ['FT8', 'FT4']) for (const prompt of [false, true]) test(`act
     }
     const ticket = (await browser.post(`stations/${stationId}/ticket`)).value
     socket = await browser.open(stationId, ticket.ticket); socket.ackObservations(); await socket.take(v => v.type === 'session')
-    const operation = async args => {
+    const send = async args => {
       await delay(270)
       const request = { requestId: crypto.randomUUID(), ...args }
       socket.send({ type: 'operationRequest', operationVersion: 4, request })
-      const response = await socket.take(v => v.type === 'operationResponse' && v.requestId === request.requestId)
-      assert.equal(response.error, undefined, JSON.stringify(response))
-      return { request, value: response.value }
+      return { request, response: await socket.take(v => v.type === 'operationResponse' && v.requestId === request.requestId) }
     }
+    // stationBusy means the native Engine was held and the request was refused before anything
+    // changed, so an operator clicks again: retry once (each attempt re-reads its state). Any other
+    // refusal, or a second stationBusy, still fails the case.
+    const settle = async attempt => {
+      let sent = await attempt()
+      if (sent.response.error === 'stationBusy') {
+        console.log('stationBusy, retrying once:', sent.request.type, sent.request.action?.action ?? '')
+        await delay(300)
+        sent = await attempt()
+      }
+      assert.equal(sent.response.error, undefined, JSON.stringify(sent.response))
+      return { request: sent.request, value: sent.response.value }
+    }
+    const operation = args => settle(() => send(args))
     const initial = (await operation({ type: 'state' })).value
     const owner = (await operation({ type: 'acquire', stationBootId: initial.stationBootId })).value
-    const action = async a => {
+    const action = a => settle(async () => {
       const state = (await operation({ type: 'heartbeat', leaseId: owner.leaseId })).value
       assert.equal(state.phase, 'controlling')
-      return operation({ type: 'stationControl', stationBootId: state.stationBootId, leaseId: state.leaseId,
+      return send({ type: 'stationControl', stationBootId: state.stationBootId, leaseId: state.leaseId,
         expectedRevision: state.revision, commandWindowId: state.commandWindowId, clientSequence: state.nextSequence,
         context: state.controls.context, action: a.action.startsWith('ft.') ? { ...a, transmitEpoch: state.transmitEpoch } : a })
-    }
+    })
     let count = 0
     {
       await probe.send({ type: 'seedFtQso', tier, prompt })
@@ -680,25 +692,33 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
   const operation=async args=>{await delay(270);const request={requestId:crypto.randomUUID(),...args};socket.send(envelope(request));
     try{return {request,response:await socket.take(v=>v.type==='operationResponse'&&v.requestId===request.requestId)}}
     catch(error){throw new Error(`operation ${request.type}/${request.action?.action??''} v${operationVersion} timed out; socket closed=${socket.closed} code=${socket.closeCode} reason=${socket.closeReason}`,{cause:error})}}
+  // stationBusy means the native Engine was held and the request was refused before anything changed, so an
+  // operator clicks again. A request the device is allowed to make retries once; `again` re-reads state first
+  // when the request carries a command window. Any other refusal, or a second stationBusy, stands. Refusals
+  // this case expects (localPermissionRequired, staleContext) are never wrapped.
+  const allowed=async(first,again=first)=>{let sent=await first();if(sent.response.error==='stationBusy'){console.log('stationBusy, retrying once:',sent.request.type,sent.request.action?.action??'');await delay(300);sent=await again()}return sent}
 
   // The approval granted station control and logging; Turn on restores them once the service lists
   // the browser. Then RESTRICT the browser with the switches at the shack: that is what must still
   // refuse it a lease, exactly as a browser without permission always was.
   for(let i=0;i<50;i++){const {status}=await probe.send({type:'status'});if(status.loggingPermissions?.includes(device.deviceId)&&status.stationPermissions?.includes(device.deviceId))break;await delay(100)}
-  let state=(await operation({type:'state'})).response.value;assert.equal(state.phase,'available','the approval allowed this browser')
+  let state=(await allowed(()=>operation({type:'state'}))).response.value;assert.equal(state.phase,'available','the approval allowed this browser')
   for(const type of ['loggingPermission','stationPermission']){const restricted=await probe.send({type,deviceId:device.deviceId,allow:false});assert.equal(restricted.ok,true,restricted.error)}
-  state=(await operation({type:'state'})).response.value;assert.equal(state.phase,'localPermissionRequired');assert.equal((await operation({type:'acquire',stationBootId:state.stationBootId})).response.error,'localPermissionRequired')
+  state=(await allowed(()=>operation({type:'state'}))).response.value;assert.equal(state.phase,'localPermissionRequired');assert.equal((await operation({type:'acquire',stationBootId:state.stationBootId})).response.error,'localPermissionRequired')
   await probe.send({type:'refresh'});const permission=await probe.send({type:'loggingPermission',deviceId:device.deviceId,allow:true});assert.equal(permission.ok,true,permission.error);assert.deepEqual(permission.status.loggingPermissions,[device.deviceId])
-  state=(await operation({type:'acquire',stationBootId:state.stationBootId})).response.value;assert.equal(state.phase,'controlling');assert.equal(state.txArmed,false)
+  state=(await allowed(()=>operation({type:'acquire',stationBootId:state.stationBootId}))).response.value;assert.equal(state.phase,'controlling');assert.equal(state.txArmed,false)
   const record={call:'W1AW',grid:'FN31',country:null,state:null,band:'20m',freqMhz:14.25,mode:'SSB',rstSent:'59',rstRcvd:'57',name:'Joe',qth:'Newington',comment:'Cloud/native append test',notes:'Do not duplicate',whenUnix:Math.floor(Date.now()/1000),confirmed:false,awardConfirmed:false}
-  const logged=await operation({type:'logManual',stationBootId:state.stationBootId,leaseId:state.leaseId,expectedRevision:state.revision,commandWindowId:state.commandWindowId,clientSequence:state.nextSequence,record});assert.equal(logged.response.value.outcome,'applied');assert.equal(logged.response.value.evidence,'fileSynced')
+  const heartbeat=()=>allowed(()=>operation({type:'heartbeat',leaseId:state.leaseId}))
+  const logRequest=s=>({type:'logManual',stationBootId:s.stationBootId,leaseId:s.leaseId,expectedRevision:s.revision,commandWindowId:s.commandWindowId,clientSequence:s.nextSequence,record})
+  const logged=await allowed(()=>operation(logRequest(state)),async()=>operation(logRequest((await heartbeat()).response.value)));assert.equal(logged.response.value.outcome,'applied');assert.equal(logged.response.value.evidence,'fileSynced')
   const evidence=await probe.send({type:'loggingEvidence'});assert.equal(evidence.count,1);assert.match(evidence.adif,/W1AW/);assert.match(evidence.adif,/Do not duplicate/);assert.equal(evidence.txEnabled,false)
   await delay(270);socket.send(envelope(logged.request));const replay=await socket.take(v=>v.type==='operationResponse'&&v.requestId===logged.request.requestId);assert.deepEqual(replay,logged.response);assert.deepEqual(await probe.send({type:'loggingEvidence'}),evidence)
   if(operationVersion>=2){
    assert.equal((await probe.send({type:'stationPermission',deviceId:device.deviceId,allow:true})).ok,true)
-   const controls=(await operation({type:'state'})).response.value
+   const controls=(await allowed(()=>operation({type:'state'}))).response.value
    assert.deepEqual(controls.controls.capabilities,operationVersion>=3?['decoder','amplifier','frequency','mode','tier','ampFollowBand','workspace','decoderSettings','receiverSettings','receiverGain','bandSelection','receiverFilter','receiverDsp','phoneMode','workSpot','radioLevels','radioSelection','fmTuning', 'fmReceiver',...(operationVersion===4?['qsoLogging']:[])]:['decoder','amplifier'])
-   const cleared=await operation({type:'stationControl',stationBootId:controls.stationBootId,leaseId:controls.leaseId,expectedRevision:controls.revision,commandWindowId:controls.commandWindowId,clientSequence:controls.nextSequence,context:controls.controls.context,action:{action:'decoder.clear',receiver:'cw'}})
+   const clearRequest=s=>({type:'stationControl',stationBootId:s.stationBootId,leaseId:s.leaseId,expectedRevision:s.revision,commandWindowId:s.commandWindowId,clientSequence:s.nextSequence,context:s.controls.context,action:{action:'decoder.clear',receiver:'cw'}})
+   const cleared=await allowed(()=>operation(clearRequest(controls)),async()=>operation(clearRequest((await heartbeat()).response.value)))
    assert.equal(cleared.response.value.outcome,'applied');assert.equal(cleared.response.value.evidence,'receiverState')
    assert.deepEqual(await probe.send({type:'loggingEvidence'}),evidence)
    if (operationVersion === 4) {
@@ -706,21 +726,22 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
      const grant = await probe.send({type:'transmitPermission',deviceId:device.deviceId,allow:true})
      assert.equal(grant.ok,true,grant.error)
      assert.deepEqual(grant.status.transmitPermissions,[device.deviceId])
-     const owner = (await operation({type:'state'})).response.value
+     const owner = (await allowed(()=>operation({type:'state'}))).response.value
      assert.match(owner.transmitEpoch,/^[0-9a-f]{16}$/)
      const stop = {type:'stopTransmit',stationBootId:owner.stationBootId,leaseId:owner.leaseId,transmitEpoch:owner.transmitEpoch}
      assert.deepEqual((await operation(stop)).response.value,{stop:'accepted'})
      assert.equal((await operation(stop)).response.error,'staleContext')
-     const after = (await operation({type:'state'})).response.value
+     const after = (await allowed(()=>operation({type:'state'}))).response.value
      assert.notEqual(after.transmitEpoch,owner.transmitEpoch)
      assert.equal(after.phase,'controlling')
      assert.deepEqual(await probe.send({type:'loggingEvidence'}),evidence)
-     const action = async (state, action) => operation({type:'stationControl',
+     const command = (state, action) => operation({type:'stationControl',
        stationBootId:state.stationBootId,leaseId:state.leaseId,expectedRevision:state.revision,
        commandWindowId:state.commandWindowId,clientSequence:state.nextSequence,
        context:state.controls.context,action:{...action,transmitEpoch:state.transmitEpoch}})
+     const action = (state, change) => allowed(() => command(state, change), async () => command(await ftState(), change))
      const ftState = async () => {
-       const {response} = await operation({type:'heartbeat',leaseId:state.leaseId})
+       const {response} = await heartbeat()
        assert.ok(response.value, `the FT lease heartbeat was refused: ${JSON.stringify(response)}`)
        return response.value
      }
@@ -824,9 +845,9 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
      }
    }
   }else assert.equal(Object.hasOwn(state,'controls'),false)
-  const current=(await operation({type:'heartbeat',leaseId:state.leaseId})).response.value;assert.equal(current.phase,'controlling')
+  const current=(await heartbeat()).response.value;assert.equal(current.phase,'controlling')
   assert.equal((await probe.send({type:'takeOverLogging'})).ok,true);const refused=await operation({...logged.request,requestId:crypto.randomUUID(),expectedRevision:current.revision,commandWindowId:current.commandWindowId,clientSequence:current.nextSequence,record:{...record,call:'K2ABC'}});assert.equal(refused.response.error,'localPermissionRequired');assert.deepEqual(await probe.send({type:'loggingEvidence'}),evidence)
-  await probe.send({type:'loggingPermission',deviceId:device.deviceId,allow:true});assert.equal((await operation({type:'result',operationId:logged.request.requestId})).response.value.outcome,'applied')
+  await probe.send({type:'loggingPermission',deviceId:device.deviceId,allow:true});assert.equal((await allowed(()=>operation({type:'result',operationId:logged.request.requestId}))).response.value.outcome,'applied')
   socket.close();socket=null
   // Remote remembers being on (operator decision 2026-09-13), and since the one-approval decision the
   // same day, FT8/FT4 transmit is remembered too. Restarting the actual native controller turns Remote
@@ -850,9 +871,9 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
    for(let i=0;i<30&&!(await roomStatus(room)).online;i++)await delay(100)
    const again=(await browser.post(`stations/${stationId}/ticket`)).value;socket=await browser.open(stationId,again.ticket);socket.ackObservations();await socket.take(v=>v.type==='session')
    assert.equal((await probe.send({type:'seedFt',tier:'FT8'})).txEnabled,false)
-   const fresh=(await operation({type:'state'})).response.value
-   const leased=(await operation({type:'acquire',stationBootId:fresh.stationBootId})).response.value;assert.equal(leased.phase,'controlling')
-   const beat=(await operation({type:'heartbeat',leaseId:leased.leaseId})).response.value
+   const fresh=(await allowed(()=>operation({type:'state'}))).response.value
+   const leased=(await allowed(()=>operation({type:'acquire',stationBootId:fresh.stationBootId}))).response.value;assert.equal(leased.phase,'controlling')
+   const beat=(await allowed(()=>operation({type:'heartbeat',leaseId:leased.leaseId}))).response.value
    assert.ok(beat.controls.capabilities.includes('ftOperate'),'positive control: the restored transmit grant is real')
    assert.match(beat.transmitEpoch,/^[0-9a-f]{16}$/);assert.equal(beat.txArmed,false,'a restored grant and a fresh lease arm nothing')
    const armed=await probe.send({type:'ftEvidence'});assert.equal(armed.txEnabled,false);assert.equal(armed.owned,false)

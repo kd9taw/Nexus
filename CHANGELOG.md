@@ -53,6 +53,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   valid. The frequency digits stay drawn between heartbeats and only tune once control is confirmed
   again.
 
+- **Remote: dragging a level slider or typing an FT offset no longer gets cancelled when the link is
+  slow for a moment.** The value is sent once station control is current again, or you're told it
+  wasn't sent.
+
+- **Remote: when the station is busy and refuses a command, Nexus says "The station was busy and
+  nothing changed. Try again."**
+
 - **Export one POTA activation, not a date range.** The Logbook's export area now lists your
   activations — park, UTC date and contact count — and exports exactly that one. Previously the only
   filter was a date range, so an activation shared a day with any ordinary contacts you made and they

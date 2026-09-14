@@ -3,6 +3,7 @@ import { pushToast } from '../toast'
 import { setRfPower, setMicGain, setNrLevel, setCompLevel, setNotchFreq } from '../api'
 import type { AppSnapshot } from '../types'
 import { RemoteOperationsContext, useStationCapability, useStationControl } from '../stationAccess'
+import { controlFailureMessage } from './control-failure'
 import { useRemoteStation } from './amplifier-observation'
 import type { ControlContext, RadioLevel, StationAction } from './station-operation'
 
@@ -15,8 +16,10 @@ const adjustmentKeys = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown
 /** Keep the existing native controls. Remote displays station samples and never
  * treats the submitted value or its receipt as a replacement hardware reading. */
 export function useRadioLevels(snap: AppSnapshot) {
-  const local = useStationControl(), capability = useStationCapability('radioLevels')
-  const fmCapable = useStationCapability('fmReceiver')
+  // A drag outlives a brief control lapse (a slow heartbeat round trip); send() still waits for
+  // current control, and nothing is sent while it is stale.
+  const local = useStationControl(), capability = useStationCapability('radioLevels', true)
+  const fmCapable = useStationCapability('fmReceiver', true)
   const operations = useContext(RemoteOperationsContext), { context } = useRemoteStation(snap.activeRadioId)
   const state = operations?.getSnapshot().state, current = state?.controls?.context, radio = snap.radio
   const mode = radio.operatingMode
@@ -57,6 +60,7 @@ export function useRadioLevels(snap: AppSnapshot) {
       }
     }
     if (!can(level) || !operations || !context || !Number.isFinite(value)) throw Error('notController')
+    await operations.awaitCurrent()
     const action: StationAction = { action: 'radio.level', mode: mode as 'digital' | 'phone' | 'cw' | 'rtty' | 'keyboard',
       level, expected: radio[fields[level]]!, value }
     const result = await operations.control(action, context)
@@ -80,7 +84,7 @@ export function useRadioLevels(snap: AppSnapshot) {
     setDraft(null)
     if (!same(d) || d.value === d.expected) return
     try { await send(level, d.value) }
-    catch (error) { pushToast(String(error), 'error') }
+    catch (error) { pushToast(controlFailureMessage(error), 'error') }
   }
   const input = (level: RadioLevel) => ({
     onPointerDown: () => begin(level),

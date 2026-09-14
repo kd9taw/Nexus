@@ -34,6 +34,7 @@ export const JA: PartialCatalog = {
   "remote.loggingTakeOver": "リモートログ記入を終了して許可を解除",
   "remote.controlRequestFailed": "コマンドの実行を確認できませんでした。局の操作許可と現在の測定値を確認してください。",
   "remote.controlNotSent": "送信されていません。局には何も届いていないため、局側では何も変わっていません。もう一度お試しください。",
+  "remote.controlBusy": "局が処理中だったため、何も変わっていません。もう一度お試しください。",
   "remote.controlLocalHint": "ブラウザーを承認すると、局の操作（対応する受信機、無線機、アンプの操作）が許可されます。制限する場合は、ここで取り消してください。送信には別の許可が必要です。",
   "remote.transmitAllow": "FT8/FT4 の送信を許可",
   "remote.transmitRevoke": "送信許可を取り消す",
@@ -87,6 +88,7 @@ export const JA: PartialCatalog = {
   "remote.loggingUnknown": "QSO はすでに記録されている可能性があります。この内容を保持し、再試行する前に結果を確認してください。",
   "remote.loggingRefused": "局からこの記入の確認を受信できませんでした。ログ記入の制御と局の現在のモードを確認してから再試行してください。",
   "remote.loggingNotSent": "送信されていません。局には何も届いていないため、このQSOは記録されていません。もう一度お試しください。",
+  "remote.loggingBusy": "局が処理中だったため、このQSOは記録されていません。もう一度お試しください。",
   "remote.loggingCheckResult": "送信した QSO の結果を確認",
   "remote.loggingCheckedLog": "局のログを確認しました — この確認を終了",
   // Hosted Remote observation and local station approval.
