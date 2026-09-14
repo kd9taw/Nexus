@@ -3,6 +3,8 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { BrowserClient, HostedConnection, RemoteError } from './client'
 import type { Auth0Client } from '@auth0/auth0-spa-js'
 import fixtures from '../remote-monitor/fixtures.v2.json'
+import { POLL_MS } from '../remote-monitor/protocol'
+import { startMonitor } from '../remote-monitor/session'
 
 class Socket {
   static OPEN = 1
@@ -14,7 +16,8 @@ class Socket {
   onerror: (() => void) | null = null
   constructor(readonly url: URL, readonly protocols: string[]) { sockets.push(this) }
   send(value: string) { this.sent.push(value) }
-  close() { this.readyState = 2 }
+  closeReason: string | undefined
+  close(_code?: number, reason?: string) { this.readyState = 2; this.closeReason = reason }
   receive(value: unknown) { this.onmessage?.({ data: JSON.stringify(value) }) }
   end() { this.readyState = 3; this.onclose?.() }
 }
@@ -87,9 +90,10 @@ it.each([
       expect(current.station.radio.readings.dial!.ageMs).toBe(fixtures.spe.station.radio.readings.dial.ageMs + transportMs)
       expect(socket.sent.map(value => JSON.parse(value))).toEqual([{ type: 'ack', epoch: fixtures.spe.epoch, sequence: 1 }])
     } else {
+      // Stale, never shown as current; still acknowledged so the relay keeps delivering.
       await expect(remote.source.read(new AbortController().signal)).rejects.toThrow('remoteUnavailable')
-      expect(socket.sent).toHaveLength(0)
-      expect(socket.readyState).toBe(2)
+      expect(socket.sent.map(value => JSON.parse(value))).toEqual([{ type: 'ack', epoch: fixtures.spe.epoch, sequence: 1 }])
+      expect(socket.readyState).toBe(1)
     }
   } finally { remote.stop() }
 })
@@ -100,13 +104,15 @@ it('refuses fixture data and delayed transport rather than displaying it as nati
   await expect(remote.source.read(new AbortController().signal)).resolves.toBeTruthy()
   socket.receive(publication(2, 'fixture'))
   expect(socket.readyState).toBe(2)
+  expect(socket.closeReason).toBe('invalidObservation')
   await expect(remote.source.read(new AbortController().signal)).rejects.toThrow()
   remote.stop()
   const next = await connection()
   await vi.advanceTimersByTimeAsync(3001)
   next.socket.receive(publication())
-  expect(next.socket.readyState).toBe(2)
-  expect(next.socket.sent).toHaveLength(0)
+  await expect(next.remote.source.read(new AbortController().signal)).rejects.toThrow()
+  expect(next.socket.readyState).toBe(1)
+  expect(next.socket.sent.map(value => JSON.parse(value).type)).toEqual(['ack'])
   next.remote.stop()
 })
 
@@ -223,4 +229,90 @@ it('shares the bounded operation envelope with ACKs without expanding old observ
   else await expect(remote.source.read(new AbortController().signal)).rejects.toThrow()
   remote.stop()
  }
+})
+
+const lastOf = <T,>(items: T[]): T => items[items.length - 1]
+const controllingState = () => ({ stationBootId: crypto.randomUUID(), allowed: true, phase: 'controlling', leaseId: crypto.randomUUID(), revision: 1,
+  commandWindowId: crypto.randomUUID(), nextSequence: 1, leaseRemainingMs: 5000, actions: [], txArmed: false, transmitEpoch: '000000000000002a' })
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const operationRequests = (socket: Socket): any[] => socket.sent.map(value => JSON.parse(value)).filter(m => m.type === 'operationRequest').map(m => m.request)
+async function controlled() {
+  const { remote, socket } = await connection(true, 4)
+  socket.receive({ type: 'session', sessionId: crypto.randomUUID() })
+  // The operation client polls once a second from its first tick.
+  await vi.advanceTimersByTimeAsync(1000)
+  const opened = lastOf(operationRequests(socket))
+  expect(opened?.type).toBe('state')
+  const state = controllingState()
+  socket.receive({ type: 'operationResponse', requestId: opened.requestId, value: state })
+  expect(remote.operations.getSnapshot().state?.phase).toBe('controlling')
+  const answered = new Set<string>([opened.requestId])
+  // Reply to every outstanding heartbeat with the same controlling state.
+  const answer = () => {
+    for (const request of operationRequests(socket)) if (request.type === 'heartbeat' && !answered.has(request.requestId)) {
+      answered.add(request.requestId)
+      socket.receive({ type: 'operationResponse', requestId: request.requestId, value: state })
+    }
+  }
+  return { remote, socket, state, answer }
+}
+
+it('shows a late observation as stale but keeps the session, the control lease and Stop', async () => {
+  const { remote, socket, state, answer } = await controlled()
+  const statuses: string[] = []
+  const stopMonitor = startMonitor(remote.source, next => statuses.push(next.status))
+  try {
+    // Positive control: an observation sent now is current.
+    socket.receive(publication(1, 'native', 1000 + performance.now()))
+    await vi.advanceTimersByTimeAsync(POLL_MS)
+    expect(lastOf(statuses)).toBe('current')
+    answer()
+    // Processed 3001 ms after it was sent: a stalled page or a slow link.
+    socket.receive(publication(2, 'native', 1000 + performance.now() - 3001))
+    expect(socket.readyState).toBe(1)
+    expect(socket.closeReason).toBeUndefined()
+    // Acknowledged (the relay holds one unacknowledged frame) but never shown as current.
+    expect(JSON.parse(lastOf(socket.sent))).toEqual({ type: 'ack', epoch: fixtures.spe.epoch, sequence: 2 })
+    await expect(remote.source.read(new AbortController().signal)).rejects.toThrow('remoteUnavailable')
+    const before = operationRequests(socket).length
+    await vi.advanceTimersByTimeAsync(1250)
+    // The display is stale, so gestures bound to the displayed station refuse.
+    expect(lastOf(statuses)).toBe('unavailable')
+    // The session and its lease continue: the next poll renews that same lease.
+    expect(remote.operations.getSnapshot().connected).toBe(true)
+    expect(operationRequests(socket).slice(before)).toContainEqual(expect.objectContaining({ type: 'heartbeat', leaseId: state.leaseId }))
+    const stopped = remote.operations.stopTransmit()
+    const stop = lastOf(operationRequests(socket))
+    expect(stop).toMatchObject({ type: 'stopTransmit', stationBootId: state.stationBootId, leaseId: state.leaseId, transmitEpoch: state.transmitEpoch })
+    socket.receive({ type: 'operationResponse', requestId: stop.requestId, value: { stop: 'accepted' } })
+    await expect(stopped).resolves.toEqual({ stop: 'accepted' })
+    // A following on-time observation is current again.
+    socket.receive(publication(3, 'native', 1000 + performance.now()))
+    await vi.advanceTimersByTimeAsync(POLL_MS)
+    expect(lastOf(statuses)).toBe('current')
+  } finally { stopMonitor(); remote.stop() }
+})
+
+it('still ends station control when the socket really closes, and Stop cannot reuse the old owner token', async () => {
+  const { remote, socket } = await controlled()
+  socket.end()
+  expect(remote.operations.getSnapshot()).toMatchObject({ connected: false, state: null })
+  const count = operationRequests(socket).length
+  await expect(remote.operations.stopTransmit()).rejects.toThrow()
+  expect(operationRequests(socket)).toHaveLength(count)
+  remote.stop()
+})
+
+it.each([
+  ['a fixture observation', { type: 'observation', sentAtMs: 1000, frame: { ...fixtures.spe, source: 'fixture', sequence: 1 } }, 'invalidObservation'],
+  ['an invalid operation response', { type: 'operationResponse', requestId: '00000000-0000-4000-8000-000000000001', value: { stop: 'stopped' } }, 'invalidOperation'],
+  ['an application frame nobody requested', { type: 'applicationFrame', requestId: '00000000-0000-4000-8000-000000000001', updates: [] }, 'invalidApplication'],
+  ['an unknown message', { type: 'surprise' }, 'invalidMessage'],
+])('closes with a named reason on a protocol error: %s', async (_name, message, reason) => {
+  const { remote, socket } = await controlled()
+  socket.receive(message)
+  expect(socket.readyState).toBe(2)
+  expect(socket.closeReason).toBe(reason)
+  expect(remote.operations.getSnapshot().connected).toBe(false)
+  remote.stop()
 })

@@ -194,12 +194,15 @@ export class HostedConnection {
       this.socket = socket
       socket.onmessage = event => {
         if (this.disposed || this.socket !== socket) return
+        // A protocol error closes the socket, named for the kind of message that broke it. Lateness
+        // is not one: late data is shown stale and the session, with its lease, carries on.
+        let reason = 'invalidMessage'
         try {
           if (typeof event.data !== 'string' || new TextEncoder().encode(event.data).length > (this.applicationMode ? APPLICATION_MAX_BYTES : MAX_FRAME_BYTES + 256)) throw new RemoteError(403)
           const message = JSON.parse(event.data) as Record<string, unknown>
-          if(this.applicationMode&&message.type==='operationResponse'){if(new TextEncoder().encode(event.data).length>OPERATION_RESPONSE_BYTES)throw new RemoteError(403);this.operations.receive(message);return}
+          if(this.applicationMode&&message.type==='operationResponse'){reason='invalidOperation';if(new TextEncoder().encode(event.data).length>OPERATION_RESPONSE_BYTES)throw new RemoteError(403);this.operations.receive(message);return}
           if (this.applicationMode && typeof message.type === 'string' && message.type.startsWith('application')) {
-            this.application.receive(message); return
+            reason = 'invalidApplication'; this.application.receive(message); return
           }
           if (new TextEncoder().encode(event.data).length > MAX_FRAME_BYTES + 256) throw new RemoteError(403)
           if (message.type === 'session' && Object.keys(message).length === 2 && typeof message.sessionId === 'string' && /^[0-9a-f-]{36}$/.test(message.sessionId)) {
@@ -221,24 +224,28 @@ export class HostedConnection {
             // HTTP request start is a conservative clock anchor. This includes
             // delivery delay without trusting the phone's wall clock.
             const transit = received - this.anchor.start - (Number(message.sentAtMs) - this.anchor.server)
-            if (transit >= STALE_MS) throw new RemoteError(503)
+            reason = 'invalidObservation'
             const parsed=parseFrame(message.frame,'native')
             // A wall-clock correction can invalidate the HTTP-to-monotonic
             // mapping without invalidating this socket's application replies.
             // Hide observation until authenticated renewal establishes a new
             // anchor. ACK only the structurally validated receipt, never data
             // shown as current. No clock tolerance weakens the freshness gate.
-            if(transit<0){this.latest=null;if(this.sessionId)void this.renew(socket,true);else socket.close(1000,'clockUnavailable')}
+            // Delivered at or past the freshness limit (a slow link or a stalled page): hide it, which
+            // the stale display handles, and still ACK the valid receipt so the relay keeps delivering.
+            if(transit>=STALE_MS)this.latest=null
+            else if(transit<0){this.latest=null;if(this.sessionId)void this.renew(socket,true);else socket.close(1000,'clockUnavailable')}
             else {this.latest={frame:ageFrame(parsed,transit),at:received};this.attempt=0;this.clockFailures=0}
             const frame=parsed
             const ack = JSON.stringify({ type: 'ack', epoch: frame.epoch, sequence: frame.sequence })
             // The full workspace shares this socket with its bounded reads and
             // subscriptions. An observation ACK must use that same queue budget.
             // Include the pending write; neither mode may grow its queue freely.
+            reason = 'acknowledgementBacklog'
             if (socket.bufferedAmount + new TextEncoder().encode(ack).length > (this.applicationMode ? (this.operations.enabled?OPERATION_REQUEST_BYTES:2048) : 512)) throw new RemoteError(503)
             socket.send(ack)
           } else throw new RemoteError(403)
-        } catch { this.latest = null; this.application.disconnected(); this.operations.disconnected(); socket.close(1000, 'invalidObservation') }
+        } catch { this.latest = null; this.application.disconnected(); this.operations.disconnected(); socket.close(1000, reason) }
       }
       socket.onclose = () => { if (this.socket === socket) { this.socket = null; this.retry() } }
       socket.onerror = () => { this.latest = null; this.application.disconnected(); this.operations.disconnected() }
