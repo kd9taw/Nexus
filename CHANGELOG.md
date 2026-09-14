@@ -43,7 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   confirmed" means a command was sent and never answered. Stop TX is never held back this way.
 
 - **Late station readings fade the Remote screen instead of blanking it.** When the station's
-  readings arrive a little late, the browser's workspace stays on screen, faded, and can't be
+  readings stop arriving for about five seconds, the browser's workspace stays on screen, faded, and can't be
   clicked until readings are current again; the banner says "Station data unavailable" next to the
   control status. Stop TX stays at full strength and clickable. Nothing can be sent from faded
   readings; every command still refuses data that isn't current. The banner keeps the same size
@@ -59,6 +59,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Remote: when the station is busy and refuses a command, Nexus says "The station was busy and
   nothing changed. Try again."**
+
+- **Remote pilot: Stop TX stops anything, from every cockpit, and a slow link no longer flickers.**
+  - Stop TX in the browser now stops any transmission at the station, however it started — a keyed
+    mic, the tune carrier, the CW or voice keyer, RTTY, PSK, SSTV or FT8/FT4 — and it is there in
+    every cockpit, not only Operate. It needs station control, not transmit permission, it is never
+    greyed out by a slow link, and it is sent at once. It leaves TX off, exactly as pressing Stop TX
+    at the shack does, and your own Stop TX at the shack works as it always has.
+  - On a slow connection the workspace holds still: controls stay usable through brief delays, and
+    an open dropdown stays open. A change made during a delay is sent once the connection catches
+    up, or you're told it wasn't sent. FT8/FT4 TX, CQ and Log clicks are never held back: during a
+    delay they say "Not sent" at once.
+  - "Station data unavailable" and the faded screen appear only after about 5 seconds without
+    station data, and clear as soon as data returns.
+  - Scroll-wheel, arrow-key and digit tuning no longer drop steps on a slow connection: a burst of
+    steps is sent as one tune once the connection catches up, or refused as a whole.
 
 - **Export one POTA activation, not a date range.** The Logbook's export area now lists your
   activations — park, UTC date and contact count — and exports exactly that one. Previously the only
