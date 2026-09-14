@@ -56,9 +56,30 @@ it('closes the logging grammar around plain QSO fields and no arbitrary action',
     { txArmed: true },
     { leaseRemainingMs: 5001 },
     { phase: 'available' },
-    { actions: ['tx'] }
+    { actions: 'log.manual' },
+    { actions: ['log.manual', 'log.manual'] },
+    { actions: ['TX; key'] },
+    { actions: [7] },
+    { actions: Array.from({ length: 33 }, (_, i) => `log.future${i}`) }
   ])
     expect(() => operationValue({ ...s, ...change })).toThrow()
+  // A bounded action a newer station names is a hint for a newer page: it is dropped, never
+  // granted, and never refuses the state (that refusal broke control for every older page).
+  expect((operationValue({ ...s, actions: ['tx'] }) as OperationState).actions).toEqual([])
+})
+it('tolerates a future station action type without widening what this page may send', () => {
+  const s = state(true)
+  const future = operationValue({ ...s, actions: ['log.manual', 'log.edit', 'otaHunt'] }) as OperationState
+  expect(future.actions).toEqual(['log.manual'])
+  expect(operationValue({ ...s, actions: ['log.edit'] })).toEqual({ ...s, actions: [] })
+  // Positive control: a refused browser still may not be offered any action, known or not.
+  expect(() => operationValue({ ...state(false), allowed: false, phase: 'localPermissionRequired', actions: ['log.edit'] })).toThrow()
+  const { station, browser, sessionId, relay } = relaySetup()
+  const requestId = id()
+  relay.receiveBrowser(sessionId, { type: 'operationRequest', request: { type: 'state', requestId } }, 101)
+  relay.receiveStation({ type: 'operationResponse', sessionId, requestId, value: { ...s, actions: ['log.manual', 'log.edit'] } })
+  expect(station.close).not.toHaveBeenCalled()
+  expect(JSON.parse(browser.send.mock.lastCall![0]).value.actions).toEqual(['log.manual'])
 })
 function setup() {
   vi.useFakeTimers()

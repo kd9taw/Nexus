@@ -239,8 +239,9 @@ export function operationValue(raw: unknown): OperationValue {
     v.revision < 0 ||
     typeof v.txArmed !== 'boolean' ||
     !Array.isArray(v.actions) ||
-    v.actions.length > 1 ||
-    v.actions.some((a) => a !== 'log.manual')
+    v.actions.length > 32 ||
+    new Set(v.actions).size !== v.actions.length ||
+    v.actions.some((a) => typeof a !== 'string' || !/^[a-z][a-zA-Z0-9]{0,31}(\.[a-z][a-zA-Z0-9]{0,31})?$/.test(a))
   )
     invalid()
   const owned = v.phase === 'controlling'
@@ -260,13 +261,17 @@ export function operationValue(raw: unknown): OperationValue {
   )
     invalid()
   if (!v.allowed && (v.actions as unknown[]).length) invalid()
+  // A bounded action a newer station names is a hint for a newer page, exactly like an unknown
+  // capability: drop it. Refusing the whole state for it broke control for every older page the
+  // moment a station learned a second action.
+  const actions = (v.actions as string[]).filter((a): a is 'log.manual' => a === 'log.manual')
   if ('controls' in v) {
     const controls = v.controls as { context: ControlContext; capabilities: string[] }
     // An unknown bounded capability is only a hint for a newer UI. Ignore it;
     // never widen the closed action grammar or reject existing capabilities.
-    return { ...v, controls: { ...controls, capabilities: controls.capabilities.filter(c => CONTROL_CAPABILITIES.includes(c as ControlCapability)) } } as OperationState
+    return { ...v, actions, controls: { ...controls, capabilities: controls.capabilities.filter(c => CONTROL_CAPABILITIES.includes(c as ControlCapability)) } } as OperationState
   }
-  return raw as OperationState
+  return { ...v, actions } as OperationState
 }
 export const OPERATION_ERRORS = [
   'invalidRequest',
