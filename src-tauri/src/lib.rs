@@ -36,6 +36,9 @@ mod pouncer;
 mod profile_sync;
 mod remote_monitor;
 mod remote_service;
+/// "Spot me": the operator's own activation to pota.app and the DX cluster, for the desktop and
+/// the Remote page alike.
+mod self_spot;
 /// Pins `assetProtocol.scope` to where SSTV images are actually written — they are one fact in
 /// two files, and when they drifted every gallery preview silently went blank.
 #[cfg(test)]
@@ -5064,6 +5067,37 @@ fn post_spot(freq_mhz: f64, call: String, comment: String) -> Result<(), String>
         .map_err(|_| "spot queue unavailable".to_string())?
         .push_back(line);
     Ok(())
+}
+
+/// "Spot me": the operator's own activation, posted to pota.app AND the DX cluster, once per
+/// press, each result reported. `reference` and `dial_hz` are only what the confirm showed: the
+/// call, park, dial and mode posted are read from the station, and a park or dial that has moved
+/// since is refused (`"contextChanged"`) with nothing posted. Policy in [`self_spot`]. Blocking
+/// HTTP, so it runs on the blocking pool, never on an async worker.
+#[tauri::command]
+async fn self_spot_activation(
+    state: State<'_, SharedEngine>,
+    reference: String,
+    dial_hz: u64,
+) -> Result<self_spot::Report, String> {
+    let engine = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        // The Engine lock is released before anything is posted.
+        let ctx = self_spot::Context::confirmed(
+            &engine
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+            &reference,
+            dial_hz,
+        )
+        .map_err(|refusal| match refusal {
+            self_spot::Refusal::NoActivation => "noActivation".to_string(),
+            self_spot::Refusal::Moved => "contextChanged".to_string(),
+        })?;
+        Ok(self_spot::send(&ctx))
+    })
+    .await
+    .map_err(|e| format!("self-spot task failed: {e}"))?
 }
 
 /// Upcoming amateur-radio contests from the WA7BNM calendar RSS feed. Off the
@@ -22710,6 +22744,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             get_satellites,
             get_contests,
             post_spot,
+            self_spot_activation,
             get_lotw_users_status,
             fetch_lotw_users,
             get_fcc_states_status,

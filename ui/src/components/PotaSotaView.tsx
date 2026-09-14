@@ -19,8 +19,10 @@ import {
   downloadParks,
   importParksCsv,
   importHuntedParksCsv,
+  selfSpot,
 } from '../api'
 import { pushToast, withErrorToast } from '../toast'
+import { announceSelfSpot, confirmSelfSpot } from '../selfSpot'
 import { bandFromKhz, spotModeClass, type ObservedOta } from '../otaHunt'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
 import { t } from '../i18n'
@@ -336,6 +338,23 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
       pushToast(t('ota.activation.ended'), 'info', 2000)
     }
   }
+  // "Spot me" — pota.app and the DX cluster, only on this press. Sends the park and dial the
+  // confirm showed; the backend refuses if either has moved.
+  const handleSelfSpot = async () => {
+    if (observed) {
+      remote?.selfSpot?.()
+      return
+    }
+    const reference = act?.reference
+    if (!reference) return
+    const dialHz = Math.round(snap.radio.dialMhz * 1e6)
+    if (!(await confirmSelfSpot(reference, dialHz))) return
+    try {
+      announceSelfSpot(await selfSpot(reference, dialHz))
+    } catch (e) {
+      pushToast(e === 'contextChanged' ? t('ota.selfSpot.moved') : t('ota.selfSpot.failed'), 'error', 6000)
+    }
+  }
 
   // Local park directory — download once / import a CSV, then search it offline in the log form.
   const [nativeParkN, setParkN] = useState(0)
@@ -505,8 +524,8 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
               />
             </span>
             {/* Ends the ACTIVATION — the park stamp on what you log — never a transmission. */}
-            {observed && remote?.selfSpot && <button type="button" className="pota-hunt-clear" onClick={() => remote.selfSpot?.()}>
-              {t('remote.selfSpot')}
+            {(!observed || remote?.selfSpot) && <button type="button" className="pota-hunt-clear" onClick={() => void handleSelfSpot()}>
+              {t('ota.selfSpot.button')}
             </button>}
             {(!observed || remote?.stopActivation) && <button type="button" className="pota-hunt-clear" onClick={() => void handleStopActivation()} title={t('ota.activation.stop.title')}>
               <X size={13} aria-hidden="true" /> {t('ota.activation.stop.label')}

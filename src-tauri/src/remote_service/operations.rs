@@ -303,18 +303,32 @@ pub struct Authority {
     transmit_revocations: Mutex<BTreeSet<String>>,
     #[cfg(test)]
     before_sync: Option<Box<dyn Fn() + Send + Sync>>,
-    /// Tests post self-spots here. A test build has no path to the shared cluster outbox at all.
+    /// Tests post self-spots here, one poster per target. A test build has no path to pota.app or
+    /// the shared cluster outbox at all.
     #[cfg(test)]
-    self_spot: Option<SpotPoster>,
+    spot_pota: Option<PotaPoster>,
+    #[cfg(test)]
+    spot_cluster: Option<ClusterPoster>,
+    /// A test's own self-spot session (login latch, repeat limit), never the process's.
+    #[cfg(test)]
+    spot_gate: crate::self_spot::Gate,
     /// Tests turn self-spot off here, to prove `logging::SELF_SPOT` still refuses when false.
     #[cfg(test)]
     self_spot_off: bool,
 }
 #[cfg(test)]
-type SpotPoster = Box<dyn Fn(f64, &str, &str) -> Result<(), String> + Send + Sync>;
+type PotaPoster = Box<
+    dyn Fn(
+            &propagation::live::pota::SpotPost,
+        ) -> Result<propagation::live::pota::SpotAnswer, String>
+        + Send
+        + Sync,
+>;
+#[cfg(test)]
+type ClusterPoster = Box<dyn Fn(f64, &str, &str) -> Result<(), String> + Send + Sync>;
 impl Authority {
-    /// Self-spot posts publicly from the station's own call and cluster login, so it has its own
-    /// switch (`logging::SELF_SPOT`).
+    /// Self-spot posts publicly from the station's own call, to pota.app and its cluster login, so
+    /// it has its own switch (`logging::SELF_SPOT`).
     fn self_spot_enabled(&self) -> bool {
         #[cfg(test)]
         if self.self_spot_off {
@@ -323,17 +337,29 @@ impl Authority {
         logging::SELF_SPOT
     }
     #[cfg(not(test))]
-    fn post_spot(&self, freq_mhz: f64, call: &str, comment: &str) -> Result<(), String> {
-        crate::post_spot(freq_mhz, call.into(), comment.into())
+    fn self_spot(&self, context: &crate::self_spot::Context) -> crate::self_spot::Report {
+        crate::self_spot::send(context)
     }
-    /// The test build, unit tests and the native harness alike, never reaches `crate::post_spot`:
-    /// with no poster installed a self-spot is refused (as `invalidChange`), never posted.
+    /// The test build, unit tests and the native harness alike, reaches neither network target:
+    /// a target with no poster installed is refused (it reads `failed`), never posted.
     #[cfg(test)]
-    fn post_spot(&self, freq_mhz: f64, call: &str, comment: &str) -> Result<(), String> {
-        match &self.self_spot {
-            Some(post) => post(freq_mhz, call, comment),
-            None => Err("test build: no spot poster installed".into()),
-        }
+    fn self_spot(&self, context: &crate::self_spot::Context) -> crate::self_spot::Report {
+        const NONE: &str = "test build: no spot poster installed";
+        crate::self_spot::send_with(
+            &self.spot_gate,
+            Instant::now(),
+            context,
+            |spot| {
+                self.spot_pota
+                    .as_ref()
+                    .map_or(Err(NONE.into()), |post| post(spot))
+            },
+            |freq, call, comment| {
+                self.spot_cluster
+                    .as_ref()
+                    .map_or(Err(NONE.into()), |post| post(freq, call, comment))
+            },
+        )
     }
     fn revoke_execution(&self) {
         self.hardware.revoke();
@@ -942,10 +968,8 @@ impl Authority {
                     }
                     let outcome = match prepared {
                         // Engine is released; a spot is posted only now, and only once per receipt.
-                        Ok(work) => {
-                            work.finish(|freq, call, comment| self.post_spot(freq, call, comment))
-                        }
-                        Err(reason) => logging::ChangeOutcome::Rejected { reason },
+                        Ok(work) => work.finish(|context| self.self_spot(context)),
+                        Err(reason) => logging::ChangeOutcome::Rejected { reason, spot: None },
                     };
                     let value = logging::change_value(request.id(), &outcome);
                     c.receipts.push_back(Receipt {

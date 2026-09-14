@@ -121,8 +121,8 @@ fn post(url: &str, app_version: &str, body: &str) -> Result<String, Failure> {
 }
 
 /// `Nexus/<version> (+project URL)`. Only version characters survive, because this lands in a
-/// header line and a CR/LF would end the header block early.
-fn user_agent(app_version: &str) -> String {
+/// header line and a CR/LF would end the header block early. Also the pota.app spot post's.
+pub(crate) fn user_agent(app_version: &str) -> String {
     let version: String = app_version
         .chars()
         .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '+'))

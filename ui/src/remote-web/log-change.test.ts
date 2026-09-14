@@ -96,11 +96,19 @@ it('self-spots only with the activation reference and dial the operator confirme
     expect(() => logChange(bad)).toThrow()
   expect(logChangeCapability(spot as never)).toBe('selfSpot')
   const operationId = id()
+  // The receipt names what each target did, so one failure never hides the other.
+  const posted = { operation: 'logChange', operationId, outcome: 'applied', evidence: 'spotPosted', spot: { pota: 'posted', cluster: 'queued' } }
+  const refused = { operation: 'logChange', operationId, outcome: 'rejected', reason: 'spotNotPosted', spot: { pota: 'loginRequired', cluster: 'unavailable' } }
+  for (const value of [posted, refused]) expect(operationValue(value)).toEqual(value)
   for (const value of [
+    { ...posted, spot: undefined }, { operation: 'logChange', operationId, outcome: 'applied', evidence: 'spotPosted' },
+    { ...posted, spot: { pota: 'posted' } }, { ...posted, spot: { pota: 'posted', cluster: 'queued', extra: 1 } },
+    { ...posted, spot: { pota: 'maybe', cluster: 'queued' } }, { ...refused, spot: { pota: 'failed', cluster: 'sent' } },
+    { ...posted, evidence: 'fileSynced' }, { ...refused, reason: 'contextChanged' },
     { operation: 'logChange', operationId, outcome: 'applied', evidence: 'spotQueued' },
     { operation: 'logChange', operationId, outcome: 'rejected', reason: 'clusterUnavailable' }
   ])
-    expect(operationValue(value)).toEqual(value)
+    expect(() => operationValue(value)).toThrow()
 })
 
 it('accepts only the bounded change outcomes a station reports', () => {
