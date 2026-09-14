@@ -12,7 +12,7 @@ import { STAGING, TARGETS, deployable, identity, stagingConfig, target, verifyId
 import { cloudflare, workerDigest } from '../scripts/cloudflare-staging.mjs'
 import { createArtifact, verifyArtifact, verifyLive, verifyLiveSettled, verifyPublicSource } from '../scripts/staging-artifact.mjs'
 import { runtime } from './runtime.mjs'
-import { uploadArtifact, compareSchema, redactedDiagnostic, settleUpload, withSecretsFile } from '../scripts/deploy-staging.mjs'
+import { uploadArtifact, compareSchema, redactedDiagnostic, runWrangler, schemaQuery, settleUpload, withSecretsFile, wranglerLogLevel } from '../scripts/deploy-staging.mjs'
 import { trialGrant } from '../scripts/grant-trial.mjs'
 
 const root = fileURLToPath(new URL('../../', import.meta.url))
@@ -62,6 +62,61 @@ test('the schema check compares what the database reports against what the artif
   assert.throws(() => compareSchema('wrangler exploded', ['0001_a.sql']), /readable JSON/)
   assert.throws(() => compareSchema('[{"results":[{"nombre":"x"}]}]', ['0001_a.sql']),
     /reports no applied migrations/)
+
+  // A bracketed line AFTER the JSON used to make every candidate unparseable, because each one was
+  // cut at the last `]` in the buffer. Text on both sides is tolerated; agreement is still exact.
+  const warned = `${wrangler(['0001_a.sql', '0002_b.sql'])}\n▲ [WARNING] a later notice [with brackets]\n`
+  assert.deepEqual(compareSchema(warned, ['0001_a.sql', '0002_b.sql']), { applied: 2, shipped: 2 })
+  assert.throws(() => compareSchema(warned, ['0001_a.sql', '0002_b.sql', '0003_c.sql']), /missing migrations: 0003_c\.sql/)
+  // Only an array of D1 result sets is an answer: not a JSON array that merely contains one as text.
+  assert.throws(() => compareSchema(JSON.stringify([JSON.stringify([{ results: [{ name: '0001_a.sql' }] }])]), ['0001_a.sql']), /readable JSON/)
+
+  // The failure names what came back - tonight it said nothing at all - redacted, and never a secret.
+  const token = randomBytes(32).toString('hex')
+  assert.throws(() => compareSchema('', ['0001_a.sql'], { stderr: '', env: {} }),
+    error => error.message === 'The schema query did not return readable JSON (stdout 0 bytes; stderr 0 bytes)')
+  assert.throws(() => compareSchema(`Authentication failed\n  for ${token}`, ['0001_a.sql'], { stderr: 'boom', env: { CLOUDFLARE_API_TOKEN: token } }), error => {
+    assert.match(error.message, /\(stdout \d+ bytes "Authentication failed for \[redacted\]"; stderr 4 bytes "boom"\)$/)
+    assert.ok(!error.message.includes(token))
+    return true
+  })
+})
+
+// Staging run 34797528705 - the FIRST run ever to reach verify-schema - failed "did not return readable
+// JSON". Nothing was malformed: Wrangler ran with WRANGLER_LOG=error, and it prints `d1 execute --json`
+// through its level-filtered logger, so the query succeeded and printed nothing. The parser tests
+// above only ever saw synthetic text; this runs the pinned Wrangler against a local D1 built from the
+// artifact's own migrations, with the exact query and log level the deploy uses.
+test('verify-schema parses the real Wrangler output at the log level the deploy uses, and still refuses a database that is behind', async () => {
+  const state = await mkdtemp(join(tmpdir(), 'nexus-schema-test-')), env = { PATH: process.env.PATH }
+  const config = join(scratch, 'remote/staging-artifact/wrangler.jsonc'), local = ['--local', '--config', config, '--persist-to', state]
+  const wrangler = (argv, logLevel = 'error') => runWrangler(argv, { cwd: state, env, logLevel })
+  const query = () => wrangler([...schemaQuery(STAGING.database, config, '--local'), '--persist-to', state], wranglerLogLevel('verify-schema'))
+  const shipped = Object.keys(artifact.manifest.files).filter(name => name.startsWith('migrations/')).map(name => name.slice('migrations/'.length)).sort()
+  try {
+    const applied = await wrangler(['d1', 'migrations', 'apply', STAGING.database, ...local])
+    assert.equal(applied.code, 0, redactedDiagnostic(applied.output, env))
+
+    // Tonight, reproduced: same query, WRANGLER_LOG=error - exit 0, and no output on either stream.
+    const tonight = await wrangler([...schemaQuery(STAGING.database, config, '--local'), '--persist-to', state], 'error')
+    assert.deepEqual({ code: tonight.code, stdout: tonight.stdout, stderr: tonight.stderr }, { code: 0, stdout: '', stderr: '' })
+    assert.throws(() => compareSchema(tonight.stdout, shipped, { stderr: tonight.stderr, env }), /readable JSON \(stdout 0 bytes; stderr 0 bytes\)/)
+
+    // The deploy's level for this mode prints the result, and the schema verifies.
+    const fixed = await query()
+    assert.equal(fixed.code, 0, redactedDiagnostic(fixed.output, env))
+    assert.deepEqual(compareSchema(fixed.stdout, shipped, { stderr: fixed.stderr, env }), { applied: shipped.length, shipped: shipped.length })
+    assert.ok(shipped.length >= 5, 'positive control: every shipped migration, 0005 included, was compared')
+
+    // Positive control on the same real database: take the newest migration out of its ledger and the
+    // check must refuse, naming it. A parser that returned "agreement" for anything would pass above.
+    const newest = shipped.at(-1)
+    const removed = await wrangler(['d1', 'execute', STAGING.database, ...local, '--command', `DELETE FROM d1_migrations WHERE name = '${newest}'`])
+    assert.equal(removed.code, 0, redactedDiagnostic(removed.output, env))
+    const behind = await query()
+    assert.equal(behind.code, 0)
+    assert.throws(() => compareSchema(behind.stdout, shipped, { stderr: behind.stderr, env }), new RegExp(`missing migrations: ${newest.replace('.', '\\.')}$`))
+  } finally { await rm(state, { recursive: true, force: true }) }
 })
 
 test('staging configuration requires exact service/database scope and public Auth0 tenant values', () => {

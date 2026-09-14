@@ -44,25 +44,79 @@ export function redactedDiagnostic(text, env = process.env) {
  *  output would turn "the schema never landed" into a green step - which is exactly the failure
  *  this check exists to catch, so both sides are floored above zero before they are compared.
  */
-export function compareSchema(output, shipped) {
-  // stdout and stderr are captured together and wrangler prefixes its lines with `[info]` and
-  // friends, so the first `[` in the buffer is usually NOT the start of the JSON. Try every
-  // candidate rather than guessing one; the first that parses to an array of result sets is it.
+export function compareSchema(output, shipped, { stderr = '', env = process.env } = {}) {
+  // `output` is Wrangler's STDOUT only. The JSON may still have text before or after it, so each `[`
+  // is tried as the start of one balanced, string-aware bracket run, and the first run that parses as
+  // an array of D1 result sets is the answer. The old parser ended every candidate at the LAST `]` in
+  // the buffer, so any bracketed line after the JSON made every candidate unparseable.
+  const resultSets = value => Array.isArray(value) && value.length > 0
+    && value.every(part => part && typeof part === 'object' && Array.isArray(part.results))
   let applied
-  const end = output.lastIndexOf(']') + 1
-  for (let at = output.indexOf('['); at !== -1 && at < end; at = output.indexOf('[', at + 1)) {
+  for (let at = output.indexOf('['), tries = 0; at !== -1 && tries < 200 && applied === undefined; at = output.indexOf('[', at + 1), tries++) {
+    const end = balancedEnd(output, at)
+    if (end === -1) continue
     let parsed
     try { parsed = JSON.parse(output.slice(at, end)) } catch { continue }
-    if (!Array.isArray(parsed)) continue
-    applied = parsed.flatMap(part => part?.results ?? []).map(row => row?.name).filter(Boolean)
-    break
+    if (resultSets(parsed)) applied = parsed.flatMap(part => part.results).map(row => row?.name).filter(Boolean)
   }
-  requireValue(applied !== undefined, 'The schema query did not return readable JSON')
+  // Name what came back, so the next failure is diagnosed from its own log line. Redacted like every
+  // other Wrangler diagnostic; both streams are bounded to a short excerpt.
+  const describe = (label, text) => `${label} ${Buffer.byteLength(text)} bytes${text.trim()
+    ? ` ${JSON.stringify(redactedDiagnostic(text.replace(/\s+/g, ' ').trim(), env).slice(0, 200))}` : ''}`
+  requireValue(applied !== undefined, `The schema query did not return readable JSON (${describe('stdout', output)}; ${describe('stderr', stderr)})`)
   requireValue(shipped.length > 0, 'The artifact carries no migrations to verify against')
   requireValue(applied.length > 0, 'The live database reports no applied migrations')
   const missing = shipped.filter(name => !applied.includes(name))
   requireValue(missing.length === 0, `The live database is missing migrations: ${missing.join(', ')}`)
   return { applied: applied.length, shipped: shipped.length }
+}
+
+// Index just past the bracket matching the one at `at`, honouring JSON strings and escapes; -1 if unclosed.
+function balancedEnd(text, at) {
+  let depth = 0, string = false
+  for (let i = at; i < text.length; i++) {
+    const c = text[i]
+    if (string) { if (c === '\\') i++; else if (c === '"') string = false; continue }
+    if (c === '"') string = true
+    else if (c === '[' || c === '{') depth++
+    else if ((c === ']' || c === '}') && --depth === 0) return i + 1
+  }
+  return -1
+}
+
+/** Wrangler's log level for each mode.
+ *
+ *  `error` keeps account metadata out of the public log for the commands whose output is only ever
+ *  a failure diagnostic. It CANNOT be used where the output is the result: Wrangler prints
+ *  `d1 execute --json` through the same level-filtered logger, so under WRANGLER_LOG=error the query
+ *  ran, exited 0 and printed nothing at all. That is staging run 34797528705 - the first run ever to
+ *  reach verify-schema - failing "did not return readable JSON" on an empty buffer.
+ */
+export const wranglerLogLevel = mode => mode === 'verify-schema' ? 'log' : 'error'
+
+/** The read-only query verify-schema runs. `location` is `--remote` in the deploy, `--local` in tests. */
+export const schemaQuery = (database, configPath, location = '--remote') =>
+  ['d1', 'execute', database, location, '--config', configPath, '--json', '--command', 'SELECT name FROM d1_migrations ORDER BY id']
+
+/** Run the pinned Wrangler with stdout and stderr kept APART (a result is parsed from stdout only),
+ *  each bounded, plus both in arrival order for a failure diagnostic. No REMOTE_* value is inherited:
+ *  Worker secrets reach Wrangler only through --secrets-file. */
+export async function runWrangler(argv, { cwd, env, logLevel }) {
+  requireValue(['error', 'log'].includes(logLevel), 'Unexpected Wrangler log level')
+  const inherited = Object.fromEntries(Object.entries(env).filter(([name]) => !name.startsWith('REMOTE_')))
+  const child = spawn(process.execPath, [join(repository, 'remote/node_modules/wrangler/bin/wrangler.js'), ...argv], {
+    cwd, stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...inherited, CI: 'true', WRANGLER_SEND_METRICS: 'false', WRANGLER_LOG: logLevel, WRANGLER_LOG_PATH: cwd },
+  })
+  const limit = 65536, streams = { stdout: [], stderr: [], output: [] }, sizes = { stdout: 0, stderr: 0, output: 0 }
+  const keep = (name, bytes) => {
+    if (sizes[name] < limit) { streams[name].push(bytes.subarray(0, limit - sizes[name])); sizes[name] += bytes.length }
+  }
+  child.stdout.on('data', bytes => { keep('stdout', bytes); keep('output', bytes) })
+  child.stderr.on('data', bytes => { keep('stderr', bytes); keep('output', bytes) })
+  const code = await new Promise((resolve, reject) => { child.once('error', () => reject(new Error('Wrangler could not start'))); child.once('close', resolve) })
+  const text = name => Buffer.concat(streams[name]).toString('utf8')
+  return { code, stdout: text('stdout'), stderr: text('stderr'), output: text('output') }
 }
 
 /** Hand wrangler the Worker's required secrets as a private file for `--secrets-file`, then remove it.
@@ -147,31 +201,16 @@ export async function uploadArtifact(root, mode, env = process.env, fetcher = fe
     const args = mode === 'migrate'
       ? ['d1', 'migrations', 'apply', row.database, '--remote', '--config', configPath]
       : mode === 'verify-schema'
-        ? ['d1', 'execute', row.database, '--remote', '--config', configPath, '--json',
-          '--command', 'SELECT name FROM d1_migrations ORDER BY id']
+        ? schemaQuery(row.database, configPath)
         : ['deploy', '--no-bundle', '--config', configPath, ...(mode === 'dry-run' ? ['--dry-run', '--outdir', join(directory, 'output')] : [])]
-    const run = async argv => {
-      // Wrangler needs no REMOTE_* value; the secrets reach it only through the file.
-      const inherited = Object.fromEntries(Object.entries(env).filter(([name]) => !name.startsWith('REMOTE_')))
-      const child = spawn(process.execPath, [join(repository, 'remote/node_modules/wrangler/bin/wrangler.js'), ...argv], {
-        cwd: directory, stdio: ['ignore', 'pipe', 'pipe'],
-        env: { ...inherited, CI: 'true', WRANGLER_SEND_METRICS: 'false', WRANGLER_LOG: 'error', WRANGLER_LOG_PATH: directory },
-      })
-      const diagnostics = []
-      let diagnosticSize = 0
-      for (const stream of [child.stdout, child.stderr]) stream.on('data', bytes => {
-        if (diagnosticSize < 65536) { diagnostics.push(bytes.subarray(0, 65536 - diagnosticSize)); diagnosticSize += bytes.length }
-      })
-      const code = await new Promise((resolve, reject) => { child.once('error', () => reject(new Error('Wrangler could not start'))); child.once('close', resolve) })
-      return { code, output: Buffer.concat(diagnostics).toString('utf8') }
-    }
+    const run = argv => runWrangler(argv, { cwd: directory, env, logLevel: wranglerLogLevel(mode) })
     // deploy applies the real secrets from the environment on every upload. dry-run hands the pinned
     // Wrangler the same flag and file shape holding SYNTHETIC values, so the exact deploy arguments are
     // validated offline without the dry-run step ever holding a real secret.
     const required = config.secrets?.required ?? []
     const secretsEnv = mode === 'deploy' ? env : mode === 'dry-run'
       ? Object.fromEntries(required.map(name => [secretVariable(name), 'dry-run-synthetic-value'])) : null
-    const { code, output } = secretsEnv
+    const { code, output, stdout, stderr } = secretsEnv
       ? await withSecretsFile(secretsEnv, required, path => run(path ? [...args, '--secrets-file', path] : args))
       : await run(args)
     const codes = [...new Set([...output.matchAll(/\[code: (\d{4,6})\]/g)].map(match => match[1]))].slice(0, 4)
@@ -188,7 +227,7 @@ export async function uploadArtifact(root, mode, env = process.env, fetcher = fe
       // the schema had landed - and a schema that did not land is not a loud failure, it is
       // endpoints refusing with `serviceUnavailable` once somebody tries to use them.
       const shipped = (await readdir(join(artifact, 'migrations'))).filter(name => name.endsWith('.sql')).sort()
-      const result = compareSchema(output, shipped)
+      const result = compareSchema(stdout, shipped, { stderr, env })
       console.log(`Schema verified: ${result.applied} migration(s) applied, all ${result.shipped} from the artifact present`)
       return { mode, ...result }
     }
