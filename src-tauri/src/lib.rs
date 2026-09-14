@@ -13400,6 +13400,13 @@ struct SpotRow {
     /// is `hf_admit_spotters`'s own fail-open posture: an empty panel is a worse answer than
     /// an unfiltered one.
     spotter_local: bool,
+    /// #174: the continent code of every voice for this spot — the spotter first, then each
+    /// corroborator — de-duplicated, from `propagation::needalert::spotter_origin`, the very
+    /// resolver behind `spotter_local`. A voice that doesn't resolve adds nothing. Lets the panel
+    /// offer "spotted from Europe only"; like `spotter_local`, a flag for the UI, not a filter.
+    spotter_conts: Vec<String>,
+    /// #174: the DXCC entity of every voice, same order and rules — "spotted from France only".
+    spotter_entities: Vec<String>,
     /// Set when this spot is a ONE-WAY transmission — an NCDXF/IARU beacon slot or a W1AW
     /// bulletin — and therefore not workable. The row is still shown (an audible beacon is
     /// real propagation evidence); the UI badges it and never paints a need colour on it.
@@ -13414,6 +13421,25 @@ struct SpotRow {
 #[tauri::command(async)]
 fn get_all_spots(spots: State<'_, SharedSpots>, state: State<'_, SharedEngine>) -> Vec<SpotRow> {
     read_all_spots(&spots, &state, false).unwrap_or_default()
+}
+
+/// #174: where the voices for one spot are — `(continent codes, DXCC entities)` of the spotter
+/// and then each corroborator, each list de-duplicated in first-seen order. A voice that does
+/// not resolve adds nothing. Uses `spotter_origin`, the resolver behind `spotter_local`, so the
+/// two answers about one spot can never disagree.
+fn spot_voice_origins(spotter: &str, corroborators: &[String]) -> (Vec<String>, Vec<String>) {
+    let mut conts: Vec<String> = Vec::new();
+    let mut entities: Vec<String> = Vec::new();
+    let voices = std::iter::once(spotter).chain(corroborators.iter().map(String::as_str));
+    for (cont, entity) in voices.filter_map(propagation::needalert::spotter_origin) {
+        if !conts.iter().any(|c| c == cont) {
+            conts.push(cont.to_string());
+        }
+        if !entities.iter().any(|e| e == entity) {
+            entities.push(entity.to_string());
+        }
+    }
+    (conts, entities)
 }
 
 fn read_all_spots(
@@ -13520,6 +13546,8 @@ fn read_all_spots(
                     _ => OperatingMode::Digital,
                 },
             );
+            let (spotter_conts, spotter_entities) =
+                spot_voice_origins(&cs.spotter, &cs.corroborators);
             SpotRow {
                 call: cs.dx_call.clone(),
                 entity,
@@ -13544,6 +13572,8 @@ fn read_all_spots(
                     voices.extend(cs.corroborators.iter().map(String::as_str));
                     propagation::hf_admit_spotters(&voices, &my_call).is_some()
                 },
+                spotter_conts,
+                spotter_entities,
                 beacon: propagation::beacons::classify(&cs.dx_call, freq),
             }
         })
@@ -23772,6 +23802,21 @@ mod tests {
 
         // A failure that owes neither leg says nothing, even at the limit.
         assert!(super::upload_give_up_lines(legs::CLUBLOG, MAX_UPLOAD_RETRIES, &qso).is_empty());
+    }
+
+    /// #174: a spot's voices become de-duplicated continents and countries, spotter first, and
+    /// a voice that cannot be placed adds nothing rather than a blank.
+    #[test]
+    fn a_spots_voices_resolve_to_deduplicated_continents_and_countries() {
+        let corroborators = ["F5ABC", "DK1ABC-#", "???", "W3LPL-#"].map(str::to_string);
+        let (conts, entities) = super::spot_voice_origins("DL8LAS", &corroborators);
+        assert_eq!(conts, ["EU", "NA"]);
+        assert_eq!(
+            entities,
+            ["Fed. Rep. of Germany", "France", "United States"]
+        );
+        let (conts, entities) = super::spot_voice_origins("???", &[]);
+        assert!(conts.is_empty() && entities.is_empty());
     }
 
     /// ⭐ **The country file the CONTEST SCORER actually gets** — the one assertion that

@@ -2348,6 +2348,12 @@ export const EN = {
   'spots.filters.aria': 'Filter spots',
   'spots.filters.modes.aria': 'Modes shown',
   'spots.filters.states.aria': 'US states shown',
+  // #174. `{{continent}}` is a continent CODE (EU, NA…) and `{{country}}` a DXCC entity name —
+  // both tokens inside the sentence.
+  'spots.filters.spotterConts.aria': 'Spotted from',
+  'spots.filters.spotterEntities.aria': 'Spotter countries',
+  'spots.filter.spotterCont.title': 'Show only spots someone in {{continent}} reported',
+  'spots.filter.spotterEntity.title': 'Show only spots someone in {{country}} reported',
   'spots.filter.toggle.title': 'Filter spots by band, mode, state, or privileges',
   'spots.filter.toggle.active': 'Filtered',
   'spots.filter.toggle.idle': 'Filter',

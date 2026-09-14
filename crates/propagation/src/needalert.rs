@@ -844,9 +844,17 @@ pub fn hf_admit_spotters<'a>(spotters: &[&'a str], my_call: &str) -> Option<Vec<
 /// resolve, which the gate treats as "cannot prove locality" (fail closed), the
 /// same posture the VHF gate takes for a skimmer with no known grid.
 fn spotter_continent(call: &str) -> Option<&'static str> {
+    spotter_origin(call).map(|(cont, _)| cont)
+}
+
+/// Where a spotter is: `(continent, DXCC entity)`, resolved exactly as the locality gate
+/// resolves it — [`spotter_continent`] is this function's first half — so the Spots panel's
+/// "spotted from" filter (#174) and the locality gate can never place a skimmer differently.
+/// `None` for a call that doesn't resolve, or whose entity carries no continent.
+pub fn spotter_origin(call: &str) -> Option<(&'static str, &'static str)> {
     dxcc::resolve(&skimmer_base(call))
-        .map(|i| i.cont)
-        .filter(|c| !c.is_empty())
+        .filter(|i| !i.cont.is_empty())
+        .map(|i| (i.cont, i.entity))
 }
 
 /// On VHF the TRANSMITTER must also be FAR — beyond groundwave/local-tropo range —
@@ -1301,6 +1309,30 @@ mod tests {
     /// was spotted 26 times between 15:45Z and 18:18Z, every one of them from EU or
     /// AS, while ~50 North-American skimmers were demonstrably listening on that
     /// band in the same windows and not one copied it.
+    /// #174 (yannick, "spotted from Europe only, or from France only"): the Spots panel's
+    /// spotted-from filter needs each voice's continent AND country, resolved exactly the way
+    /// the locality gate resolves a spotter — RBN `-#` suffix stripped first — so the two
+    /// filters can never disagree about where a skimmer is.
+    #[test]
+    fn a_spotter_origin_is_its_continent_and_entity_after_the_rbn_suffix() {
+        assert_eq!(spotter_origin("W3LPL-#"), Some(("NA", "United States")));
+        assert_eq!(
+            spotter_origin("dl8las"),
+            Some(("EU", "Fed. Rep. of Germany"))
+        );
+        assert_eq!(spotter_origin("JA1ABC"), Some(("AS", "Japan")));
+        // The same continent the locality gate uses, by construction.
+        for call in ["W3LPL-#", "DL8LAS", "JA1ABC", "VK2ABC"] {
+            assert_eq!(
+                spotter_origin(call).map(|(cont, _)| cont),
+                spotter_continent(call),
+                "{call}"
+            );
+        }
+        assert_eq!(spotter_origin(""), None);
+        assert_eq!(spotter_origin("???"), None);
+    }
+
     #[test]
     fn hf_spot_needs_a_spotter_on_the_operators_continent() {
         // Heard only from the far side of the planet → not evidence for EN52.

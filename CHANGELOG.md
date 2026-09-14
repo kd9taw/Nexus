@@ -17,6 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on the logged contact, its ADIF and its uploads. It never looks a station up just to log it; if
   nothing was looked up, the name stays blank as before. (#293)
 
+- **Filter spots by where they were spotted from.** The Spots panel's filters now include the
+  continents and the countries of the stations reporting each spot, so you can keep "spotted
+  from Europe" or "spotted from France" only. A spot stays if any station that reported it
+  matches, and the chips only offer places present in the current feed. "Heard on my continent"
+  is unchanged and still on by default. (#174)
+
 ### Fixed
 
 - **A QRZ or eQSL upload that runs out of retries now says so.** After 20 failed tries Nexus used
