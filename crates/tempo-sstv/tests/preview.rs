@@ -63,10 +63,10 @@ fn run(mode: SstvMode) {
     // The radio loop's shape: 100 ms at a time.
     let chunk = WORKING_SAMPLE_RATE_HZ as usize / 10;
     let half = audio.len() / 2;
-    let mut d = SstvDecoder::new(WORKING_SAMPLE_RATE_HZ).expect("decoder");
+    let mut streaming = SstvDecoder::new(WORKING_SAMPLE_RATE_HZ).expect("decoder");
     let mut early = Vec::new();
-    for c in audio[..half].chunks(chunk) {
-        early.extend(d.process(c));
+    for part in audio[..half].chunks(chunk) {
+        early.extend(streaming.process(part));
     }
 
     let previews: Vec<(u32, usize)> = early
@@ -107,39 +107,38 @@ fn run(mode: SstvMode) {
     }
 
     let mut late = Vec::new();
-    for c in audio[half..].chunks(chunk) {
-        late.extend(d.process(c));
+    for part in audio[half..].chunks(chunk) {
+        late.extend(streaming.process(part));
     }
 
     // What the operator SAW before the corrected picture replaced it: every preview row, in the
     // order it arrived, compared with the corrected picture. A preview that paints garbage is
     // worse than a black canvas, so its likeness is measured, not assumed.
-    let w = spec.line_pixels as usize;
-    let mut seen = vec![[0u8; 3]; w * spec.image_lines as usize];
+    let width = spec.line_pixels as usize;
+    let mut seen = vec![[0u8; 3]; width * spec.image_lines as usize];
     let mut painted = vec![false; spec.image_lines as usize];
-    for e in early.iter().chain(late.iter()) {
+    for event in early.iter().chain(late.iter()) {
         if let SstvEvent::LinePreview {
             line_index, pixels, ..
-        } = e
+        } = event
         {
-            let r = *line_index as usize;
-            seen[r * w..(r + 1) * w].copy_from_slice(pixels);
-            painted[r] = true;
+            let row = *line_index as usize;
+            seen[row * width..(row + 1) * width].copy_from_slice(pixels);
+            painted[row] = true;
         }
     }
-    let (mut sum, mut n) = (0_u64, 0_u64);
-    for (r, _) in painted.iter().enumerate().filter(|(_, p)| **p) {
-        for x in 0..w {
-            for ch in 0..3 {
-                let a = i32::from(seen[r * w + x][ch]);
-                let b = i32::from(reference.pixels[r * w + x][ch]);
-                sum += u64::from((a - b).unsigned_abs());
-                n += 1;
+    let (mut sum, mut samples) = (0_u64, 0_u64);
+    for (row, _) in painted.iter().enumerate().filter(|(_, done)| **done) {
+        let span = row * width..(row + 1) * width;
+        for (got, want) in seen[span.clone()].iter().zip(&reference.pixels[span]) {
+            for (g, w) in got.iter().zip(want) {
+                sum += u64::from(g.abs_diff(*w));
+                samples += 1;
             }
         }
     }
-    let rows = painted.iter().filter(|p| **p).count();
-    let mean = sum as f64 / n.max(1) as f64;
+    let rows = painted.iter().filter(|done| **done).count();
+    let mean = sum as f64 / samples.max(1) as f64;
     // Bounds MEASURED on this clean loopback (2026-09-14): Robot 36 6.14 over 239/240 rows,
     // Scottie 1 3.53 over 255/256, PD120 6.35 over 494/496 — against the < 5.0 the corrected
     // decode meets in tx_loopback.rs. Twice the worst, so a preview that drifts into noise (a
