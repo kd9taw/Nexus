@@ -45,6 +45,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { NeedTag } from '../types'
+import { getDxccEntityContinents } from '../api'
 
 /** One excludable country. `key` is the persisted identity; `entity` is the matching one. */
 export interface ExcludableCountry {
@@ -223,6 +224,65 @@ export interface CountryExcludeState {
   paused: boolean
   /** Pause/resume the exclusion without losing the ticked set. */
   setPaused: (paused: boolean) => void
+  /** Whole continents ticked (#229): cty.dat continent codes. */
+  continents: ReadonlySet<string>
+  /** Tick or untick one whole continent. */
+  toggleContinent: (code: string) => void
+}
+
+/** Whole continents hidden (#229, pa0kgb: hide-by-country does not scale to a continent). Stored
+ *  as cty.dat continent CODES in a SEPARATE key, like the arbitrary entities, so the curated-key
+ *  flow and its cty.dat pin tests are untouched. */
+export const COUNTRY_EXCLUDE_CONTINENTS_KEY = 'nexus.decodes.countryExclude.continents'
+
+/** cty.dat's six continent codes, in picker order — the only values honoured from storage. A code
+ *  this list does not know has no checkbox, so honouring it would hide rows with nothing on
+ *  screen to account for them. */
+export const CONTINENT_CODES: readonly string[] = ['NA', 'SA', 'EU', 'AF', 'AS', 'OC']
+
+function loadExcludedContinents(): ReadonlySet<string> {
+  try {
+    const raw = window.localStorage.getItem(COUNTRY_EXCLUDE_CONTINENTS_KEY)
+    if (!raw) return new Set()
+    const parsed: unknown = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return new Set()
+    return new Set(
+      parsed.filter((k): k is string => typeof k === 'string' && CONTINENT_CODES.includes(k)),
+    )
+  } catch {
+    return new Set()
+  }
+}
+
+function saveExcludedContinents(codes: Iterable<string>): void {
+  const set = new Set(codes)
+  const ordered = CONTINENT_CODES.filter((c) => set.has(c))
+  try {
+    window.localStorage.setItem(COUNTRY_EXCLUDE_CONTINENTS_KEY, JSON.stringify(ordered))
+  } catch {
+    /* full/unavailable — applies this session via the event */
+  }
+  window.dispatchEvent(new Event(COUNTRY_EXCLUDE_EVENT))
+}
+
+/**
+ * The entity → continent table a continent tick expands through (#229). A decode row carries
+ * its entity NAME (`country`), never a continent, and the UI has no cty.dat, so the table comes
+ * from the backend — the same cty.dat `resolve` put that name on the row from. Fetched once,
+ * and only once a continent is actually ticked. A failed fetch yields an empty table: a
+ * continent tick then hides NOTHING, the direction every ambiguity here resolves toward.
+ */
+let continentTable: Promise<ReadonlyMap<string, string>> | null = null
+function entityContinents(): Promise<ReadonlyMap<string, string>> {
+  if (!continentTable) {
+    continentTable = getDxccEntityContinents()
+      .then((rows) => new Map(rows) as ReadonlyMap<string, string>)
+      .catch(() => {
+        continentTable = null // let a later tick try again
+        return new Map<string, string>()
+      })
+  }
+  return continentTable
 }
 
 /**
@@ -284,18 +344,35 @@ export function useCountryExclude(): CountryExcludeState {
   const [keys, setKeys] = useState<ReadonlySet<string>>(loadCountryExclude)
   const [entities, setEntitiesState] = useState<ReadonlySet<string>>(loadExcludedEntityNames)
   const [paused, setPausedState] = useState<boolean>(loadCountryExcludePaused)
+  const [continents, setContinentsState] = useState<ReadonlySet<string>>(loadExcludedContinents)
+  // `null` until a continent is ticked and the table arrives; an empty answer stays `null`, so a
+  // later tick asks again rather than hiding nothing forever.
+  const [table, setTable] = useState<ReadonlyMap<string, string> | null>(null)
+
+  useEffect(() => {
+    if (continents.size === 0 || table) return
+    let live = true
+    void entityContinents().then((m) => {
+      if (live && m.size > 0) setTable(m)
+    })
+    return () => {
+      live = false
+    }
+  }, [continents, table])
 
   useEffect(() => {
     const reread = () => {
       setKeys(loadCountryExclude())
       setEntitiesState(loadExcludedEntityNames())
       setPausedState(loadCountryExcludePaused())
+      setContinentsState(loadExcludedContinents())
     }
     const onStorage = (e: StorageEvent) => {
       if (
         e.key === COUNTRY_EXCLUDE_KEY ||
         e.key === COUNTRY_EXCLUDE_PAUSED_KEY ||
-        e.key === COUNTRY_EXCLUDE_ENTITIES_KEY
+        e.key === COUNTRY_EXCLUDE_ENTITIES_KEY ||
+        e.key === COUNTRY_EXCLUDE_CONTINENTS_KEY
       )
         reread()
     }
@@ -321,19 +398,42 @@ export function useCountryExclude(): CountryExcludeState {
     saveExcludedEntityNames(next)
   }, [])
 
+  const toggleContinent = useCallback((code: string) => {
+    // From STORAGE, like `toggle`, so two panes ticking in one tick cannot drop each other.
+    const next = new Set(loadExcludedContinents())
+    if (!next.delete(code)) next.add(code)
+    saveExcludedContinents(next)
+  }, [])
+
   const clear = useCallback(() => {
     saveCountryExclude([])
     saveExcludedEntityNames([])
+    saveExcludedContinents([])
   }, [])
   const setPaused = useCallback((p: boolean) => saveCountryExcludePaused(p), [])
 
   // Paused → hide NOTHING while keeping the ticks (they resume on unpause). Otherwise the
-  // resolved set is the curated keys' entities PLUS the arbitrarily-picked entity names.
+  // resolved set is the curated keys' entities PLUS the arbitrarily-picked entity names PLUS
+  // every entity on a ticked continent (once the table has arrived — until then, nothing more).
   const hidden = useMemo(() => {
     if (paused) return new Set<string>()
     const out = new Set(excludedEntities(keys))
     for (const e of entities) out.add(e)
+    if (continents.size > 0 && table) {
+      for (const [entity, cont] of table) if (continents.has(cont)) out.add(entity)
+    }
     return out
-  }, [keys, entities, paused])
-  return { keys, entities, hidden, toggle, toggleEntity, clear, paused, setPaused }
+  }, [keys, entities, continents, table, paused])
+  return {
+    keys,
+    entities,
+    continents,
+    hidden,
+    toggle,
+    toggleEntity,
+    toggleContinent,
+    clear,
+    paused,
+    setPaused,
+  }
 }

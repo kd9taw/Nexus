@@ -13052,6 +13052,17 @@ fn dxcc_entity_names() -> Vec<String> {
         .collect()
 }
 
+/// Every cty.dat entity name with its continent code, `(entity, "EU")` — for band activity's
+/// hide-by-continent (#229). A decode row carries the entity NAME `resolve` gave it, never a
+/// continent, and the UI has no cty.dat, so a continent tick expands through this table.
+#[tauri::command]
+fn dxcc_entity_continents() -> Vec<(String, String)> {
+    propagation::dxcc::entity_continents()
+        .into_iter()
+        .map(|(name, cont)| (name.to_string(), cont.to_string()))
+        .collect()
+}
+
 /// Edit logbook entry `index` (oldest-first, as returned by `get_log`) — a
 /// correction. Confirmation/credit/upload state is preserved by the engine.
 /// Returns the refreshed snapshot.
@@ -22850,6 +22861,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             set_license_class,
             get_licensed_band_plan,
             dxcc_entity_names,
+            dxcc_entity_continents,
             dxcc_entity_locations,
             set_frequency,
             sstv_tune,

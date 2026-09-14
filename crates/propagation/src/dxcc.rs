@@ -560,6 +560,23 @@ pub fn entity_locations() -> Vec<(&'static str, f64, f64)> {
 /// decode panes' "hide any entity" picker (F4MQS), which opens the curated-18 country
 /// exclude to the full table. The names are exactly the `country`/`entity` strings a
 /// decode row carries (cty.dat's own names), so a picked name matches directly.
+/// Every cty.dat entity name with its continent code — the table band activity's "hide by
+/// continent" filter (#229) maps a decode row's `country` through. Covers every name [`resolve`]
+/// can return (the WAE/CQ-only entities too, like [`entity_locations`]), de-duplicated by name
+/// with the first occurrence winning, and sorted so the wire order is stable. An entity whose
+/// row carries no continent is left out rather than given a guessed one.
+pub fn entity_continents() -> Vec<(&'static str, &'static str)> {
+    let mut out: Vec<(&'static str, &'static str)> = Vec::new();
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for e in &resolver().entities {
+        if seen.insert(e.name.as_str()) && !e.cont.is_empty() {
+            out.push((e.name.as_str(), e.cont.as_str()));
+        }
+    }
+    out.sort_unstable_by_key(|(name, _)| *name);
+    out
+}
+
 pub fn dxcc_entity_names() -> Vec<&'static str> {
     let mut names: Vec<&'static str> = resolver()
         .entities
@@ -588,6 +605,37 @@ mod tests {
         assert!(names.windows(2).all(|w| w[0] <= w[1]), "sorted");
         assert!(names.contains(&"United States"));
         assert!(names.contains(&"Fiji"));
+    }
+
+    /// #229 (pa0kgb): band activity's hide-by-continent maps a decode row's `country` — the
+    /// entity name `resolve` puts on it — to a continent through this table. So it must answer
+    /// for EVERY name `resolve` can return (the WAE/CQ-only entities included, as
+    /// `entity_locations` does) and with the very continent `resolve` reports.
+    #[test]
+    fn entity_continents_answer_for_every_resolvable_entity_with_resolves_own_continent() {
+        let table: HashMap<&str, &str> = entity_continents().into_iter().collect();
+        assert_eq!(
+            table.len(),
+            entity_locations().len(),
+            "one row per cty.dat entity name"
+        );
+        for call in [
+            "W1AW", "DL1ABC", "JA1ABC", "VK2ABC", "PY2ABC", "ZS6ABC", "IT9ABC",
+        ] {
+            let info = resolve(call).expect(call);
+            assert_eq!(
+                table.get(info.entity).copied(),
+                Some(info.cont),
+                "{call} → {}",
+                info.entity
+            );
+        }
+        assert!(
+            table
+                .values()
+                .all(|c| ["AF", "AS", "EU", "NA", "OC", "SA"].contains(c)),
+            "every continent is one of cty.dat's six codes"
+        );
     }
 
     #[test]

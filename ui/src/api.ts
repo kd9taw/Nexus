@@ -1645,6 +1645,12 @@ export async function getDxccEntityNames(): Promise<string[]> {
   return invoke<string[]>('dxcc_entity_names')
 }
 
+/** Every cty.dat entity name with its continent code (`[entity, 'EU']`), for band activity's
+ *  hide-by-continent (#229) — a decode row carries the entity name, never the continent. */
+export async function getDxccEntityContinents(): Promise<[string, string][]> {
+  return invoke<[string, string][]>('dxcc_entity_continents')
+}
+
 /** Every entity's cty.dat representative location as `[name, lat, lon]` — the azimuth
  *  fallback for a station that never sent a grid. Keyed by the same `country`/`entity`
  *  string a decode/spot row carries. WAE/CQ-only entities are included: `resolve()`

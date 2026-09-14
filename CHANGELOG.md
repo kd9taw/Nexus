@@ -23,6 +23,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   matches, and the chips only offer places present in the current feed. "Heard on my continent"
   is unchanged and still on by default. (#174)
 
+- **Hide whole continents from FT8/FT4 Band Activity.** The Countries picker in Band Activity now
+  has a "Hide whole continents" submenu beside its 18 quick picks, so "only Europe and Asia" no
+  longer means ticking country after country. It works like the country ticks: stations calling
+  you, the one you're working and new entities or band slots still show, Pause keeps your ticks,
+  and the hidden-count chip now counts continents (and countries picked by name, which it
+  missed before). (#229)
+
 ### Fixed
 
 - **A QRZ or eQSL upload that runs out of retries now says so.** After 20 failed tries Nexus used

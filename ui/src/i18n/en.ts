@@ -2518,6 +2518,18 @@ export const EN = {
   'hideCountries.head': 'Hide these countries',
   'hideCountries.pause': 'Pause (keep my ticks, show everything)',
   'hideCountries.other.head': 'Other country…',
+  // #229. The continent CODE follows each name in the picker as a token: "Europe (EU)".
+  'hideCountries.continents.head': 'Hide whole continents',
+  'hideCountries.continent.NA': 'North America',
+  'hideCountries.continent.SA': 'South America',
+  'hideCountries.continent.EU': 'Europe',
+  'hideCountries.continent.AF': 'Africa',
+  'hideCountries.continent.AS': 'Asia',
+  'hideCountries.continent.OC': 'Oceania',
+  'hideCountries.hiddenContinents': {
+    one: '{{count}} continent hidden',
+    other: '{{count}} continents hidden',
+  },
   'hideCountries.search.placeholder': 'search all entities…',
   'hideCountries.note':
     'A view filter only — decoding, logging and alerts are untouched. Stations calling you, the one you are working, and new entities or band slots still show.',
