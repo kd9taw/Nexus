@@ -13,6 +13,8 @@ const BRAND = 'Nexus Remote'
 // reads as "this product is finished with me" rather than "ask and it can be extended". During a
 // closed beta every trial is granted by hand anyway, so asking is the actual mechanism.
 const BETA_CHANNEL = 'https://discord.gg/mCCBaRKj3'
+// Browser approval lifetime: warn this long before the end that using this browser cannot move.
+const APPROVAL_WARNING_MS = 7 * 86400000
 // The service names what it refused. Anything that is not a refusal - a dropped connection, a
 // parse failure - has no name worth showing, so it falls back to the generic message.
 const reason = (cause: unknown) => cause instanceof RemoteError ? cause.code : 'remoteUnavailable'
@@ -181,7 +183,15 @@ export function RemoteApp() {
                 <button type="button" className="remote-button" disabled={busy}
                   onClick={() => setRenaming({ id: station.id, name: station.name })}>{t('remote.renameStation')}</button>
               </div>}
-          {station.device?.approved === 1 ? <div className="remote-actions">
+          {station.device?.approved === 1 ? <>
+            {/* How long this browser stays approved, off the service's clock. The warning is for the
+                end that using it cannot move: before that, opening the station keeps it approved. */}
+            {station.device.expires_at !== undefined && <p>{station.device.renewsUntil
+              ? t('remote.thisBrowserRenewsUntil', { until: utcDate(station.device.expires_at), limit: utcDate(station.device.renewsUntil) })
+              : t('remote.thisBrowserApprovedUntil', { until: utcDate(station.device.expires_at) })}</p>}
+            {station.device.expires_at !== undefined && (station.device.renewsUntil ?? station.device.expires_at) - session.serverNow <= APPROVAL_WARNING_MS &&
+              <p className="rm-warning">{t('remote.thisBrowserApprovalEnding', { until: utcDate(station.device.renewsUntil ?? station.device.expires_at) })}</p>}
+            <div className="remote-actions">
             <button className="remote-button" disabled={busy || !entitled} onClick={() => {
               const next = new HostedConnection(client!, station.id, true); setWorkspace(true); setConnection(next); next.start()
             }}>{t('remote.openNexus')}</button>
@@ -191,7 +201,7 @@ export function RemoteApp() {
             <button className="remote-button" disabled={busy} onClick={() => void act(async () => {
               await client?.post(`stations/${station.id}/forget-device`); await refresh()
             })}>{t('remote.forgetBrowser')}</button>
-          </div> : station.device ? <p role="status">{t('remote.awaitDevice')} <code>{station.device.id.slice(-6)}</code></p> : <form onSubmit={event => {
+          </div></> : station.device ? <p role="status">{t('remote.awaitDevice')} <code>{station.device.id.slice(-6)}</code></p> : <form onSubmit={event => {
             event.preventDefault(); void act(async () => { await client?.post(`stations/${station.id}/device`, { name: deviceName }); await refresh() })
           }}>
             <label>{t('remote.browserName')}<input value={deviceName} maxLength={48} required onChange={event => setDeviceName(event.target.value)} /></label>

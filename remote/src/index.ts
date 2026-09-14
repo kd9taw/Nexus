@@ -1,8 +1,8 @@
 // Same-origin browser API and outbound station admission. No radio command router.
-import { account, access, body, browserOrigin, caller, cookie, device, digest, id, label,
-  native, proof, rate, Refusal, requireAdmin, requireEligible, requireTrial, requireUnspentIdentity, requireValue, secret, station,
+import { account, access, APPROVAL_LIMIT_MS, APPROVAL_MS, body, browserOrigin, caller, cookie, device, deviceCookie, digest, id, label,
+  lifetime, native, proof, rate, Refusal, renewsUntil, requireAdmin, requireEligible, requireTrial, requireUnspentIdentity, requireValue, secret, station,
   trial, TRIAL_MS, uuid } from './authority'
-import type { RemoteEnv, StationRow } from './authority'
+import type { DeviceRow, RemoteEnv, StationRow } from './authority'
 import { observerDeadline } from '../../ui/src/remote-monitor/relay'
 import { advertisedOperationVersion } from '../../ui/src/remote-web/operation-version'
 export { StationRoom } from './room'
@@ -173,12 +173,14 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
       // Bound to the station row carrying THIS credential, like the trial below, and skipped when a
       // device already holds the digest, so a retried approve adds nothing. The name is a label the
       // shack shows beside the browser code; the browser never asked to be named.
-      env.DB.prepare(`INSERT INTO devices(id,station_id,account_id,name,credential_hash,approved,expires_at)
-        SELECT ?,e.id,e.account_id,'Paired browser',e.device_hash,1,? FROM enrollments e
+      // The approval time is recorded only for a Nexus that binds its grants to the generation, so only
+      // its approvals ever renew (authority.ts, `lifetime`).
+      env.DB.prepare(`INSERT INTO devices(id,station_id,account_id,name,credential_hash,approved,approved_at,expires_at)
+        SELECT ?,e.id,e.account_id,'Paired browser',e.device_hash,1,?,? FROM enrollments e
         WHERE e.id=? AND e.proof_hash=? AND e.device_hash IS NOT NULL
         AND EXISTS(SELECT 1 FROM stations WHERE id=? AND credential_hash=?)
         AND NOT EXISTS(SELECT 1 FROM devices d WHERE d.station_id=e.id AND d.credential_hash=e.device_hash)`)
-        .bind(uuid(), now + 2592000000, stationId, hash, stationId, credentialHash),
+        .bind(uuid(), lifetime(request) ? now : null, now + APPROVAL_MS, stationId, hash, stationId, credentialHash),
       env.DB.prepare(`INSERT INTO trials(account_id, enabled, expires_at, started_at, source)
         SELECT ?,1,?,?,'trial' WHERE EXISTS(SELECT 1 FROM stations WHERE id=? AND credential_hash=?)
         ON CONFLICT(account_id) DO NOTHING`)
@@ -195,10 +197,11 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
     // The approved pairing browser, so the shack can give it station control and logging without
     // waiting for a browser list. Additive: the shack reads stationId and accountId by name and has
     // always ignored anything else here. `null` when the confirm came from a browser of an older era.
-    const paired = await env.DB.prepare(`SELECT d.id, d.expires_at AS expiresAt FROM devices d
+    // `generation` is additive here too: the shack reads `device.id` and `device.expiresAt` by name.
+    const paired = await env.DB.prepare(`SELECT d.id, d.expires_at AS expiresAt, d.generation FROM devices d
       JOIN enrollments e ON d.station_id=e.id AND d.credential_hash=e.device_hash
       WHERE e.id=? AND e.proof_hash=? AND d.approved=1 AND d.expires_at>?`)
-      .bind(stationId, hash, now).first<{ id: string; expiresAt: number }>()
+      .bind(stationId, hash, now).first<{ id: string; expiresAt: number; generation: number }>()
     return json({ stationId, accountId: pending.account_id, entitlement: started, device: paired ?? null })
   }
 
@@ -208,8 +211,14 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
     await rate(env, `native:${row.id}`, now, 60)
     if (verb === 'devices') {
       await body(request, [])
-      const devices = await env.DB.prepare('SELECT id,name,approved,expires_at AS expiresAt FROM devices WHERE station_id=? AND expires_at>? ORDER BY id LIMIT 8')
-        .bind(row.id, now).all()
+      // The generation and the renewal limit go ONLY to a Nexus that asks. 1.12.0 parses this list with
+      // deny_unknown_fields, so a field added for everyone would fail every refresh it makes.
+      const devices = lifetime(request)
+        ? await env.DB.prepare(`SELECT id,name,approved,expires_at AS expiresAt,generation,
+            CASE WHEN approved=1 AND approved_at IS NOT NULL THEN approved_at+? END AS renewsUntil
+            FROM devices WHERE station_id=? AND expires_at>? ORDER BY id LIMIT 8`).bind(APPROVAL_LIMIT_MS, row.id, now).all()
+        : await env.DB.prepare('SELECT id,name,approved,expires_at AS expiresAt FROM devices WHERE station_id=? AND expires_at>? ORDER BY id LIMIT 8')
+          .bind(row.id, now).all()
       return json({ devices: devices.results })
     }
     if (verb === 'approve-device' || verb === 'revoke-device') {
@@ -218,9 +227,11 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
         .bind(deviceId, row.id, now).first()
       requireValue(found, 'deviceUnavailable', 404)
       const approve = verb === 'approve-device'
+      // Every approval, including approving again, is a new generation and a new thirty days; with the
+      // lifetime header it also restarts the ninety-day limit. Revoking ends it now and clears the time.
       await env.DB.batch([
-        env.DB.prepare('UPDATE devices SET approved=?,generation=generation+1,expires_at=? WHERE id=? AND station_id=?')
-          .bind(approve ? 1 : 0, approve ? now + 2592000000 : now, deviceId, row.id),
+        env.DB.prepare('UPDATE devices SET approved=?,generation=generation+1,expires_at=?,approved_at=? WHERE id=? AND station_id=?')
+          .bind(approve ? 1 : 0, approve ? now + APPROVAL_MS : now, approve && lifetime(request) ? now : null, deviceId, row.id),
         env.DB.prepare('UPDATE stations SET policy_version=policy_version+1 WHERE id=?').bind(row.id),
       ])
       await sync(env, await station(env, row.id), now)
@@ -278,8 +289,13 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
     await body(request, [])
     const rows = await env.DB.prepare('SELECT id,name,enabled FROM stations WHERE account_id=? AND enabled=1 ORDER BY id LIMIT 2')
       .bind(identity.accountId).all<{ id: string; name: string; enabled: number }>()
-    const stations = await Promise.all(rows.results.map(async row => ({ id: row.id, name: row.name,
-      device: await device(request, env, row.id, identity.accountId, now) })))
+    // The browser's own fields as they have always been, plus the end that use cannot move so the page
+    // can warn before it. The approval time itself stays in the Worker.
+    const stations = await Promise.all(rows.results.map(async row => {
+      const current = await device(request, env, row.id, identity.accountId, now)
+      return { id: row.id, name: row.name, device: current && { id: current.id, name: current.name, generation: current.generation,
+        approved: current.approved, expires_at: current.expires_at, renewsUntil: renewsUntil(current) } }
+    }))
     // A claim is durable on the enrollment row, but nothing put it on the wire, so the browser
     // could only remember "waiting for approval" in component state. A reload lost it, the
     // operator saw the pairing form again, re-typed the code and was refused - the claim UPDATE
@@ -387,7 +403,8 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
       const response = await room(env, row.id, 'renew', { access: policy,
         sessionId: id(input.sessionId), identity: browser, entitlement })
       requireValue(response.ok, 'sessionNotApproved')
-      return json({ ok: true, serverNow: now })
+      // Renewed only once the live session this browser holds has been confirmed.
+      return json({ ok: true, serverNow: now }, 200, await renewApproval(request, env, row.id, current, now))
     }
     await rate(env, `ticket:${row.id}:${current.id}`, now, 12)
     const ticket = secret()
@@ -396,7 +413,7 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
       env.DB.prepare('INSERT INTO tickets(digest,station_id,account_id,device_id,device_generation,identity_until,expires_at) VALUES(?,?,?,?,?,?,?)')
         .bind(await digest(ticket), row.id, identity.accountId, current.id, current.generation, browser.expiresAt, now + 15000),
     ])
-    return json({ ticket, serverNow: now })
+    return json({ ticket, serverNow: now }, 200, await renewApproval(request, env, row.id, current, now))
   }
   throw new Refusal('notFound', 404)
 }
@@ -407,6 +424,30 @@ async function revokeStation(env: RemoteEnv, stationId: string, now: number): Pr
     env.DB.prepare('DELETE FROM tickets WHERE station_id=?').bind(stationId),
   ])
   await sync(env, await station(env, stationId), now)
+}
+
+// Browser approval lifetime (operator decision 2026-09-14). Reached only from `ticket` and `renew`, after
+// the request has been admitted: the account's token, THIS browser's own credential, an approved and
+// unexpired device, a live trial, and for `renew` the live session. So a page load, another browser of
+// the same account, or a browser still waiting for approval renews nothing.
+//
+// It moves the expiry and nothing else. Not the generation, which live sessions and the shack's
+// remembered grants are bound to; not `approved`; never a permission. The write is conditional on the
+// row still being exactly the approval that was authorised, so a revoke or approval racing it wins.
+// An approval with no approval time was given by a Nexus that binds its grants to the expiry, and
+// never renews. Returns the response headers: the browser's credential, re-issued unchanged with the
+// approval's new lifetime, or nothing.
+const RENEWAL_STEP_MS = 3600000
+async function renewApproval(request: Request, env: RemoteEnv, stationId: string, current: DeviceRow, now: number): Promise<HeadersInit | undefined> {
+  if (current.approved !== 1 || current.approved_at === null) return undefined
+  const limit = current.approved_at + APPROVAL_LIMIT_MS, until = Math.min(now + APPROVAL_MS, limit)
+  // At most one write an hour per browser, except the final step, which lands exactly on the limit.
+  if (until <= current.expires_at || (until < limit && until - current.expires_at < RENEWAL_STEP_MS)) return undefined
+  const renewed = await env.DB.prepare(`UPDATE devices SET expires_at=? WHERE id=? AND station_id=? AND approved=1
+    AND generation=? AND approved_at=? AND expires_at=? AND expires_at>? RETURNING id`)
+    .bind(until, current.id, stationId, current.generation, current.approved_at, current.expires_at, now).first()
+  const credential = deviceCookie(request, stationId)
+  return renewed && credential ? { 'set-cookie': cookie(stationId, credential, Math.floor((until - now) / 1000)) } : undefined
 }
 
 export default {

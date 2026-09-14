@@ -166,6 +166,32 @@ it('browser enrollment displays the local comparison code and does not imply app
   expect(service.post).toHaveBeenCalledWith(`stations/${stationId}/device`, { name: 'Test browser' })
 })
 
+// Browser approval lifetime (operator decision 2026-09-14): the browser says how long it stays
+// approved, and warns in the last seven days before the end that using it cannot move.
+it('shows how long this browser stays approved, and warns in its last seven days', async () => {
+  const day = 86400000, date = (ms: number) => new Date(ms).toISOString().slice(0, 10)
+  const cases: [string, number, number | null, number | null][] = [
+    ['renews on use', 30, 60, null],
+    ['at its ninety-day end', 5, 5, 5],
+    ['approved by an older Nexus', 6, null, 6],
+    ['idle, but use would carry it on', 3, 80, null],
+  ]
+  for (const [label, expires, cap, warn] of cases) {
+    const session = account()
+    session.stations.push({ id: crypto.randomUUID(), name: 'Shack', device: { id: crypto.randomUUID(), name: 'Laptop', approved: 1,
+      expires_at: session.serverNow + expires * day, renewsUntil: cap === null ? null : session.serverNow + cap * day } })
+    client(session)
+    render(<RemoteApp />)
+    await screen.findByRole('button', { name: 'Open Nexus' })
+    const text = document.body.textContent ?? ''
+    expect(text, label).toContain(`This browser is approved until ${date(session.serverNow + expires * day)} UTC`)
+    if (cap !== null) expect(text, label).toContain(`up to ${date(session.serverNow + cap * day)} UTC`)
+    if (warn === null) expect(text, label).not.toContain('approval ends')
+    else expect(text, label).toContain(`This browser’s approval ends ${date(session.serverNow + warn * day)} UTC`)
+    cleanup(); vi.restoreAllMocks()
+  }
+})
+
 // A first-time operator should not have to find a sign-up link on somebody else's login form.
 it('offers creating an account as its own route, not a link to hunt for on the login form', async () => {
   const service = client(null)

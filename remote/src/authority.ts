@@ -350,11 +350,27 @@ export function deviceCookie(request: Request, stationId: string): string | null
 export function cookie(stationId: string, value: string, maxAge = 2592000): string {
   return `${cookieName(stationId)}=${value}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${maxAge}`
 }
-export type DeviceRow = { id: string; name: string; generation: number; approved: number; expires_at: number }
+/** Browser approval lifetime (operator decision 2026-09-14). An approval lasts thirty days from the
+ *  last time that browser was admitted to its station, and never more than ninety days from the moment
+ *  the shack approved it. Only approving again at the shack starts a new ninety days. */
+export const APPROVAL_MS = 30 * 24 * 60 * 60 * 1000
+export const APPROVAL_LIMIT_MS = 90 * 24 * 60 * 60 * 1000
+/** Sent by a Nexus that binds its remembered grants to the approval GENERATION. Only that Nexus is
+ *  shown the generation and the renewal limit, and only approvals it gives record an approval time
+ *  and so ever renew: 1.12.0 binds restored grants to the expiry (a renewal would silently drop them)
+ *  and parses the device list with deny_unknown_fields (an added field fails every refresh). */
+export function lifetime(request: Request): boolean {
+  return request.headers.get('x-nexus-device-lifetime') === '1'
+}
+/** The end that use cannot move, or null for an approval that never renews. */
+export function renewsUntil(row: Pick<DeviceRow, 'approved' | 'approved_at'>): number | null {
+  return row.approved === 1 && row.approved_at !== null ? row.approved_at + APPROVAL_LIMIT_MS : null
+}
+export type DeviceRow = { id: string; name: string; generation: number; approved: number; approved_at: number | null; expires_at: number }
 export async function device(request: Request, env: RemoteEnv, stationId: string, owner: string, now: number): Promise<DeviceRow | null> {
   const credential = deviceCookie(request, stationId)
   if (!credential) return null
-  return env.DB.prepare(`SELECT id,name,generation,approved,expires_at FROM devices
+  return env.DB.prepare(`SELECT id,name,generation,approved,approved_at,expires_at FROM devices
     WHERE station_id=? AND account_id=? AND credential_hash=? AND expires_at>?`)
     .bind(stationId, owner, await digest(credential), now).first<DeviceRow>()
 }

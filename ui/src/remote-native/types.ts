@@ -2,7 +2,8 @@ export type RemoteStationStatus = {
   phase: 'unpaired' | 'pairing' | 'approval' | 'disabled' | 'connecting' | 'connected' | 'reconnecting'
   origin: string; stationId: string | null; accountId: string | null
   pairingId: string | null; pairingCode: string | null; expiresAt: number | null
-  devices: { id: string; name: string; approved: number; expiresAt: number }[]
+  /** `renewsUntil` is the end that use cannot move; null (or absent) for an approval that never renews. */
+  devices: { id: string; name: string; approved: number; expiresAt: number; generation?: number | null; renewsUntil?: number | null }[]
   loggingPermissions?: string[]
   stationPermissions?: string[]
   transmitPermissions?: string[]

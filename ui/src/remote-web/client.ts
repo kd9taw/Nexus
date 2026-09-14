@@ -18,7 +18,10 @@ export type AccountSession = {
   /** The service's clock. Dates are derived from this, never the browser's own, so a laptop
    *  with the wrong time still shows the right number of days remaining. */
   serverNow: number
-  stations: { id: string; name: string; device: { id: string; name: string; approved: number } | null }[]
+  /** `expires_at` is when this browser's approval ends unless it is used again; `renewsUntil` is the end
+   *  that use cannot move, or null for an approval that never renews. */
+  stations: { id: string; name: string; device: { id: string; name: string; approved: number
+    generation?: number; expires_at?: number; renewsUntil?: number | null } | null }[]
   /** A code this account has claimed that the shack has not approved yet, or null. Durable on the
    *  server, so the waiting-for-approval state survives a reload instead of living in component
    *  state that a refresh throws away. Never carries the pairing credentials. */

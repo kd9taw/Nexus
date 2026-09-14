@@ -866,6 +866,15 @@ fn device_list(approved: u8, expires_at: u64) -> String {
     json!({"devices":[{"id":BROWSER,"name":"Test browser","approved":approved,"expiresAt":expires_at}]})
         .to_string()
 }
+const DAY_MS: u64 = 86_400_000;
+/// A browser as a service with the approval-lifetime batch lists it to a Nexus that asks for it: the
+/// approval generation, and the end that use cannot move. The fake strips both for a Nexus that does
+/// not send the lifetime header, exactly as the service does.
+fn device_list_at(approved: u8, expires_at: u64, generation: u64) -> String {
+    json!({"devices":[{"id":BROWSER,"name":"Test browser","approved":approved,"expiresAt":expires_at,
+        "generation":generation,"renewsUntil":(approved == 1).then_some(expires_at + 60 * DAY_MS)}]})
+    .to_string()
+}
 async fn fake_cloud() -> FakeCloud {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -906,6 +915,7 @@ async fn fake_cloud() -> FakeCloud {
                     }
                     request.extend_from_slice(&chunk[..n]);
                 }
+                let lifetime = head.contains("\r\nx-nexus-device-lifetime: 1\r\n");
                 let (status, body) = if head.contains("/enroll ") {
                     let enrollment = json!({"id":STATION,"proof":"a".repeat(64),
                         "code":"0123456789abcdef","expiresAt":now_ms() + 600000});
@@ -917,14 +927,32 @@ async fn fake_cloud() -> FakeCloud {
                     )
                 } else if head.contains("/enroll/approve ") {
                     // The service approves the browser that confirmed the pairing along with it.
-                    let approved = json!({"stationId":STATION,"accountId":ACCOUNT,
-                        "device":{"id":BROWSER,"expiresAt":APPROVED_UNTIL}});
+                    let device = if lifetime {
+                        json!({"id":BROWSER,"expiresAt":APPROVED_UNTIL,"generation":2})
+                    } else {
+                        json!({"id":BROWSER,"expiresAt":APPROVED_UNTIL})
+                    };
+                    let approved = json!({"stationId":STATION,"accountId":ACCOUNT,"device":device});
                     ("200 OK", approved.to_string())
                 } else if head.contains("/native/devices ") {
-                    ("200 OK", served.lock().unwrap().clone())
+                    let mut listed: serde_json::Value =
+                        serde_json::from_str(&served.lock().unwrap()).unwrap();
+                    if !lifetime {
+                        // What the service sends a Nexus that did not ask: the 1.12.0 shape.
+                        for device in listed["devices"].as_array_mut().unwrap() {
+                            let device = device.as_object_mut().unwrap();
+                            device.remove("generation");
+                            device.remove("renewsUntil");
+                        }
+                    }
+                    ("200 OK", listed.to_string())
                 } else if head.contains("/native/approve-device ") {
                     // The service writes a new approval, and with it the approval generation.
-                    *served.lock().unwrap() = device_list(1, APPROVED_UNTIL);
+                    *served.lock().unwrap() = if lifetime {
+                        device_list_at(1, APPROVED_UNTIL, 2)
+                    } else {
+                        device_list(1, APPROVED_UNTIL)
+                    };
                     ("200 OK", r#"{"ok":true}"#.to_string())
                 } else if head.contains("/native/revoke-device ") {
                     // A revoked browser's expiry becomes "now", so the service stops listing it.
@@ -1510,6 +1538,245 @@ async fn revoking_transmit_or_control_or_taking_over_is_remembered_across_a_rest
     }
 }
 
+// ---- Browser approval lifetime (operator decision 2026-09-14) -------------------------------------
+//
+// The service renews a browser's approval on use, capped at ninety days since the shack approved it.
+// A renewal moves the approval's EXPIRY and never its GENERATION, so everything a restart restores is
+// bound to the generation. Renewal restores and grants nothing, and the TX-enable latch is untouched.
+
+#[tokio::test(flavor = "multi_thread")]
+async fn restored_grants_follow_the_approval_generation_not_its_expiry() {
+    let renewed = APPROVED_UNTIL + 10 * DAY_MS;
+    for (case, after_restart, restored) in [
+        (
+            "positive control: unchanged",
+            device_list_at(1, APPROVED_UNTIL, 2),
+            true,
+        ),
+        (
+            "renewed on use: a later expiry, the same generation",
+            device_list_at(1, renewed, 2),
+            true,
+        ),
+        (
+            "re-approved: a new generation at the same expiry",
+            device_list_at(1, APPROVED_UNTIL, 3),
+            false,
+        ),
+        (
+            "re-approved: a new generation and a new expiry",
+            device_list_at(1, renewed, 3),
+            false,
+        ),
+        ("revoked", device_list_at(0, APPROVED_UNTIL, 3), false),
+    ] {
+        let cloud = fake_cloud().await;
+        let vault = paired_vault(&cloud.origin);
+        let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
+        let service = launch(&cloud, &vault, &engine);
+        eventually(&service, "the pairing loaded", |s| s.station_id.is_some()).await;
+        service.action(Action::Enable {}).await.unwrap();
+        pending_browser(&cloud);
+        service.action(Action::Refresh {}).await.unwrap();
+        let granted = approve(&service, true).await;
+        assert_eq!(
+            granted.transmit_permissions,
+            [BROWSER],
+            "{case}: positive control"
+        );
+        settle().await;
+        drop(service);
+
+        *cloud.devices.lock().unwrap() = after_restart;
+        let service = launch(&cloud, &vault, &engine);
+        let status = if restored {
+            eventually(&service, case, |s| {
+                s.station_permissions == [BROWSER]
+                    && s.logging_permissions == [BROWSER]
+                    && s.transmit_permissions == [BROWSER]
+            })
+            .await
+        } else {
+            eventually(&service, "Remote back on", on).await;
+            settle().await;
+            let status = service.action(Action::Refresh {}).await.unwrap();
+            assert!(
+                status.station_permissions.is_empty()
+                    && status.logging_permissions.is_empty()
+                    && status.transmit_permissions.is_empty(),
+                "{case}: nothing comes back: {}",
+                serde_json::to_string(&status).unwrap()
+            );
+            status
+        };
+        assert!(on(&status), "{case}");
+        assert!(
+            transmitter_idle(&engine),
+            "{case}: the TX-enable latch is off and nothing is keyed"
+        );
+    }
+}
+
+/// A permission changed after the service renewed an approval is a change to THAT approval, so the
+/// browser keeps the rest of what it was given.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_permission_change_after_a_renewal_keeps_the_rest_of_that_approval() {
+    let cloud = fake_cloud().await;
+    let vault = paired_vault(&cloud.origin);
+    let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
+    let service = launch(&cloud, &vault, &engine);
+    eventually(&service, "the pairing loaded", |s| s.station_id.is_some()).await;
+    service.action(Action::Enable {}).await.unwrap();
+    pending_browser(&cloud);
+    service.action(Action::Refresh {}).await.unwrap();
+    approve(&service, true).await;
+    *cloud.devices.lock().unwrap() = device_list_at(1, APPROVED_UNTIL + 10 * DAY_MS, 2);
+    service.action(Action::Refresh {}).await.unwrap();
+    for allow in [false, true] {
+        service
+            .action(Action::StationPermission {
+                device_id: BROWSER.into(),
+                allow,
+            })
+            .await
+            .unwrap();
+    }
+    let now = service.status().unwrap();
+    assert_eq!(now.station_permissions, [BROWSER]);
+    assert_eq!(now.logging_permissions, [BROWSER]);
+    assert!(
+        now.transmit_permissions.is_empty(),
+        "revoking station control took transmit with it"
+    );
+    settle().await;
+    drop(service);
+
+    let service = launch(&cloud, &vault, &engine);
+    let status = eventually(&service, "the renewed approval's grants", |s| {
+        s.station_permissions == [BROWSER] && s.logging_permissions == [BROWSER]
+    })
+    .await;
+    assert!(status.transmit_permissions.is_empty());
+    assert!(transmitter_idle(&engine));
+}
+
+/// A record 1.12.0 wrote holds no generation. This build still reads it, restores it for a browser
+/// the service lists at the same expiry, and binds it to the generation the service reports, so a
+/// later renewal keeps it. The service never renews an approval an older Nexus gave, so for such a
+/// record a listed expiry that moved means a new approval, and that browser gets nothing back.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_record_written_by_1_12_0_still_restores_and_is_rebound_to_the_generation() {
+    for (case, listed, restored) in [
+        (
+            "the same approval",
+            device_list_at(1, APPROVED_UNTIL, 2),
+            true,
+        ),
+        (
+            "a different approval",
+            device_list_at(1, APPROVED_UNTIL + DAY_MS, 2),
+            false,
+        ),
+    ] {
+        let cloud = fake_cloud().await;
+        let vault = paired_vault(&cloud.origin);
+        let previous = json!({"binding":{"origin":cloud.origin,"stationId":STATION,"accountId":ACCOUNT},
+            "enabled":true,"grants":[{"deviceId":BROWSER,"expiresAt":APPROVED_UNTIL,"logging":true,"control":true}]});
+        vault
+            .values
+            .lock()
+            .unwrap()
+            .insert("state".into(), previous.to_string());
+        *cloud.devices.lock().unwrap() = listed;
+        let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
+        let service = launch(&cloud, &vault, &engine);
+        if !restored {
+            eventually(&service, "Remote back on", on).await;
+            settle().await;
+            let status = service.action(Action::Refresh {}).await.unwrap();
+            assert!(
+                status.station_permissions.is_empty() && status.logging_permissions.is_empty(),
+                "{case}: {}",
+                serde_json::to_string(&status).unwrap()
+            );
+            assert!(transmitter_idle(&engine), "{case}");
+            continue;
+        }
+        eventually(&service, case, |s| {
+            s.station_permissions == [BROWSER] && s.logging_permissions == [BROWSER]
+        })
+        .await;
+        settle().await;
+        let record: serde_json::Value =
+            serde_json::from_str(&vault.values.lock().unwrap()["state"]).unwrap();
+        assert_eq!(
+            record["grants"][0]["generation"],
+            json!(2),
+            "{case}: rebound to the approval generation: {record}"
+        );
+        drop(service);
+
+        *cloud.devices.lock().unwrap() = device_list_at(1, APPROVED_UNTIL + 10 * DAY_MS, 2);
+        let service = launch(&cloud, &vault, &engine);
+        let status = eventually(&service, "restored after a renewal", |s| {
+            s.station_permissions == [BROWSER] && s.logging_permissions == [BROWSER]
+        })
+        .await;
+        assert!(status.transmit_permissions.is_empty(), "{case}");
+        assert!(transmitter_idle(&engine), "{case}");
+    }
+}
+
+/// Downgrade safety, as behaviour. An older build reads a record carrying a field it does not know
+/// (1.12.0 and the generation, say) through the same `state()` path as this one, which treats it as
+/// unreadable. That leaves Remote OFF, restores nothing, and nothing can transmit. Shown with a field
+/// THIS build does not know, beside a positive control that the same record, readable, restores.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unreadable_remembered_record_leaves_remote_off_with_nothing_restored() {
+    for unreadable in [false, true] {
+        let cloud = fake_cloud().await;
+        let vault = paired_vault(&cloud.origin);
+        let mut grant = json!({"deviceId":BROWSER,"expiresAt":APPROVED_UNTIL,"generation":2,
+            "logging":true,"control":true,"transmit":true});
+        if unreadable {
+            grant["fromANewerBuild"] = json!(1);
+        }
+        let record = json!({"binding":{"origin":cloud.origin,"stationId":STATION,"accountId":ACCOUNT},
+            "enabled":true,"grants":[grant]});
+        vault
+            .values
+            .lock()
+            .unwrap()
+            .insert("state".into(), record.to_string());
+        *cloud.devices.lock().unwrap() = device_list_at(1, APPROVED_UNTIL, 2);
+        let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
+        let service = launch(&cloud, &vault, &engine);
+        if !unreadable {
+            eventually(
+                &service,
+                "positive control: a readable record restores",
+                |s| s.transmit_permissions == [BROWSER],
+            )
+            .await;
+            assert!(transmitter_idle(&engine));
+            continue;
+        }
+        eventually(&service, "the pairing loaded", |s| s.station_id.is_some()).await;
+        settle().await;
+        let status = service.action(Action::Refresh {}).await.unwrap();
+        assert_eq!(status.phase, "disabled", "Remote stays off");
+        assert!(status.observation_generation.is_none());
+        assert!(
+            status.station_permissions.is_empty()
+                && status.logging_permissions.is_empty()
+                && status.transmit_permissions.is_empty(),
+            "nothing restored: {}",
+            serde_json::to_string(&status).unwrap()
+        );
+        assert!(transmitter_idle(&engine), "nothing can transmit");
+    }
+}
+
 /// Downgrade safety. The pairing record is untouched; the remembered-state record written without
 /// a transmit grant is still readable by the 1.12.0 build (its `Grant` had no transmit field and
 /// denies unknown fields), and one holding a transmit grant reads as unreadable there, which
@@ -1533,7 +1800,7 @@ fn a_record_without_a_transmit_grant_stays_readable_by_the_previous_build() {
         enabled: bool,
         grants: Vec<PreviousGrant>,
     }
-    let state = |transmit| vault::State {
+    let state = |transmit, generation| vault::State {
         binding: Binding {
             origin: REMOTE_ORIGIN.into(),
             station_id: STATION.into(),
@@ -1543,21 +1810,30 @@ fn a_record_without_a_transmit_grant_stays_readable_by_the_previous_build() {
         grants: vec![vault::Grant {
             device_id: BROWSER.into(),
             expires_at: APPROVED_UNTIL,
+            generation,
             logging: true,
             control: true,
             transmit,
         }],
     };
-    let without = serde_json::to_string(&state(false)).unwrap();
-    assert!(!without.contains("transmit"));
+    let without = serde_json::to_string(&state(false, None)).unwrap();
+    assert!(!without.contains("transmit") && !without.contains("generation"));
     assert!(serde_json::from_str::<PreviousState>(&without).is_ok());
-    let with = serde_json::to_string(&state(true)).unwrap();
+    let with = serde_json::to_string(&state(true, None)).unwrap();
     assert!(serde_json::from_str::<PreviousState>(&with).is_err());
+    // A grant bound to an approval generation (a service with the approval lifetime) is unreadable
+    // there too, which that build answers with Remote off and nothing restored; see
+    // an_unreadable_remembered_record_leaves_remote_off_with_nothing_restored.
+    let bound = serde_json::to_string(&state(false, Some(2))).unwrap();
+    assert!(bound.contains("\"generation\":2"));
+    assert!(serde_json::from_str::<PreviousState>(&bound).is_err());
+    let read: vault::State = serde_json::from_str(&bound).unwrap();
+    assert!(read == state(false, Some(2)));
     // And this build reads a record the previous build wrote.
     let previous = json!({"binding":{"origin":REMOTE_ORIGIN,"stationId":STATION,"accountId":ACCOUNT},
         "enabled":true,"grants":[{"deviceId":BROWSER,"expiresAt":APPROVED_UNTIL,"logging":true,"control":true}]});
     let read: vault::State = serde_json::from_value(previous).unwrap();
-    assert!(read == state(false));
+    assert!(read == state(false, None));
 }
 
 #[tokio::test]
@@ -1581,6 +1857,8 @@ async fn local_transmit_grant_requires_approved_enabled_station_control_and_clea
         name: "Test browser".into(),
         approved: 1,
         expires_at: u64::MAX,
+        generation: None,
+        renews_until: None,
     });
     assert!(matches!(
         service.action(grant()).await,
