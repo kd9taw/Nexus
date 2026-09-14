@@ -15,14 +15,18 @@ import {
   type OperationValue
 } from './operation-protocol'
 /** A station command or manual log that failed. `sent` records whether its request actually left
- * this browser: false means nothing reached the station, so nothing there changed. The view says
- * "not sent" only then; a request that left and got no confirmation stays "not confirmed". */
+ * this browser: false means nothing reached the station, so nothing there changed. `busy` records
+ * that the station answered stationBusy, which it does before changing anything (its Engine was
+ * held). The view says "not sent" or "busy" only then; a request that left and got no confirmation
+ * stays "not confirmed". */
 export class OperationFailure extends Error {
-  constructor(message: string, readonly sent: boolean) {
+  constructor(message: string, readonly sent: boolean, readonly busy = false) {
     super(message)
   }
 }
-export type ControlFailure = { code: string; sent: boolean }
+export type ControlFailure = { code: string; sent: boolean; busy: boolean }
+/** Only a reply that came back from the station can say it was busy. */
+const stationWasBusy = (code: string, sent: boolean) => sent && code === 'stationBusy'
 export type OperationView = {
   supported: boolean
   state: OperationState | null
@@ -489,7 +493,8 @@ export class OperationClient {
     try {
       return await this.submitLog(record, onSubmitted, attempt)
     } catch (error) {
-      throw new OperationFailure(error instanceof Error ? error.message : 'stationUnavailable', attempt.sent)
+      const code = error instanceof Error ? error.message : 'stationUnavailable'
+      throw new OperationFailure(code, attempt.sent, stationWasBusy(code, attempt.sent))
     }
   }
   private async submitLog(record: ManualRecord, onSubmitted: ((id: string) => void) | undefined, attempt: { sent: boolean }): Promise<OperationOutcome> {
@@ -584,8 +589,9 @@ export class OperationClient {
     try { return await this.executeControl(action, displayed, captured, attempt) }
     catch (error) {
       const code = error instanceof Error ? error.message : 'stationUnavailable'
-      this.update({ controlError: { code, sent: attempt.sent } })
-      throw new OperationFailure(code, attempt.sent)
+      const busy = stationWasBusy(code, attempt.sent)
+      this.update({ controlError: { code, sent: attempt.sent, busy } })
+      throw new OperationFailure(code, attempt.sent, busy)
     }
   }
   private async executeControl(action: StationAction, displayed: ControlContext | undefined, captured: CapturedControl | undefined, attempt: { sent: boolean }): Promise<ControlOutcome> {

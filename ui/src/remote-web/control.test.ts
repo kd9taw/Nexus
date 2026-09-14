@@ -388,7 +388,7 @@ it('records whether a failed control left the browser, and sends nothing for one
   expect(request).toHaveLength(1)
   answered.client.receive({ type: 'operationResponse', requestId: request[0].request.requestId, error: 'staleContext' })
   expect(await refused).toMatchObject({ message: 'staleContext', sent: true })
-  expect(answered.client.getSnapshot().controlError).toEqual({ code: 'staleContext', sent: true })
+  expect(answered.client.getSnapshot().controlError).toEqual({ code: 'staleContext', sent: true, busy: false })
   answered.client.disconnected()
 
   // A heartbeat in flight outlives the click's freshness window: refused before anything is sent.
@@ -399,7 +399,7 @@ it('records whether a failed control left the browser, and sends nothing for one
   await h.advance(250)
   expect(await dropped).toMatchObject({ message: 'windowExpired', sent: false })
   expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(0)
-  expect(h.client.getSnapshot().controlError).toEqual({ code: 'windowExpired', sent: false })
+  expect(h.client.getSnapshot().controlError).toEqual({ code: 'windowExpired', sent: false, busy: false })
   h.client.disconnected()
 })
 
@@ -414,5 +414,41 @@ it('marks a Log QSO gesture refused before sending as not sent', async () => {
   await h.advance(250)
   expect(await dropped).toMatchObject({ message: 'windowExpired', sent: false })
   expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(0)
+  h.client.disconnected()
+})
+
+it('carries a stationBusy refusal as busy data, and keeps a sent command with no answer unconfirmed', async () => {
+  // The station refused before anything changed: its own failure kind, not "not confirmed".
+  const h = setup()
+  const busy = h.client.control(action).catch(e => e)
+  await Promise.resolve(); await Promise.resolve()
+  const request = h.sent.filter(w => w.request.type === 'stationControl')
+  expect(request).toHaveLength(1)
+  h.client.receive({ type: 'operationResponse', requestId: request[0].request.requestId, error: 'stationBusy' })
+  expect(await busy).toMatchObject({ message: 'stationBusy', sent: true, busy: true })
+  expect(h.client.getSnapshot().controlError).toEqual({ code: 'stationBusy', sent: true, busy: true })
+  h.client.disconnected()
+
+  // Sent and never answered: still "not confirmed", never busy.
+  const lost = setup()
+  const unanswered = lost.client.control(action).catch(e => e)
+  await Promise.resolve(); await Promise.resolve()
+  expect(lost.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(1)
+  await lost.advance(7500)
+  expect(await unanswered).toMatchObject({ message: 'operationUnknown', sent: true, busy: false })
+  expect(lost.client.getSnapshot().controlError).toEqual({ code: 'operationUnknown', sent: true, busy: false })
+  lost.client.disconnected()
+})
+
+it('passes a rejected stationBusy outcome on as busy data', async () => {
+  const h = setup(storage(), ['frequency'])
+  const reads = { kind: 'remote', invoke: vi.fn() } as unknown as ApplicationTransport
+  const transport = controlTransport(reads, { age: () => Infinity } as unknown as ApplicationClient, h.client)
+  const result = transport.invoke('set_frequency', { dialMhz: 7.074, band: '40m', mode: 'USB' }).catch(e => e)
+  await Promise.resolve()
+  const request = h.sent[h.sent.length - 1].request
+  expect(request.type).toBe('stationControl')
+  h.reply({ operation: 'stationControl', operationId: request.requestId, outcome: 'rejected', reason: 'stationBusy' })
+  expect(await result).toMatchObject({ message: 'stationBusy', sent: true, busy: true })
   h.client.disconnected()
 })

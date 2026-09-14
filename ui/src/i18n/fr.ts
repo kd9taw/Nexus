@@ -44,6 +44,7 @@ export const FR: PartialCatalog = {
   "remote.loggingTakeOver": "Arrêter la saisie distante et supprimer les autorisations",
   "remote.controlRequestFailed": "La commande n’a pas été confirmée. Vérifiez l’autorisation de contrôle de la station et les mesures actuelles.",
   "remote.controlNotSent": "Non envoyé. Rien n’a atteint la station, donc rien n’y a changé. Réessayez.",
+  "remote.controlBusy": "La station était occupée et rien n’a changé. Réessayez.",
   "remote.controlLocalHint": "Autorisez le contrôle de la station pour chaque navigateur. Cette autorisation couvre les fonctions prises en charge du récepteur, de la radio et de l’amplificateur, et elle est conservée au redémarrage de Nexus tant que ce navigateur reste autorisé. L’émission nécessite une autorisation distincte.",
   "remote.transmitAllow": "Autoriser l’émission FT8/FT4",
   "remote.transmitRevoke": "Révoquer l’autorisation d’émission",
@@ -97,6 +98,7 @@ export const FR: PartialCatalog = {
   "remote.loggingUnknown": "Le QSO est peut-être déjà enregistré. Conservez cette saisie et vérifiez son résultat avant de réessayer.",
   "remote.loggingRefused": "La station n’a pas confirmé cette saisie. Vérifiez le contrôle de saisie et le mode actuel de la station avant de réessayer.",
   "remote.loggingNotSent": "Non envoyé. Rien n’a atteint la station, donc ce QSO n’a pas été enregistré. Réessayez.",
+  "remote.loggingBusy": "La station était occupée, donc ce QSO n’a pas été enregistré. Réessayez.",
   "remote.loggingCheckResult": "Vérifier le résultat du QSO soumis",
   "remote.loggingCheckedLog": "Carnet de la station vérifié — terminer cette vérification",
   // Hosted Remote observation and local station approval.

@@ -55,9 +55,9 @@ export function LoggingAuthority({ client }: { client: OperationClient }) {
         </button>
       )}
       {(view.controlPending || view.controlResult || view.controlError) && <div className="remote-control-result">
-        {view.controlError && !view.controlPending ? <span role="alert" data-control-failure={view.controlError.sent ? 'unconfirmed' : 'notSent'}>{view.controlError.sent ? t('remote.controlRequestFailed') : t('remote.controlNotSent')}</span> :
+        {view.controlError && !view.controlPending ? <span role="alert" data-control-failure={view.controlError.busy ? 'busy' : view.controlError.sent ? 'unconfirmed' : 'notSent'}>{view.controlError.busy ? t('remote.controlBusy') : view.controlError.sent ? t('remote.controlRequestFailed') : t('remote.controlNotSent')}</span> :
         <span role="status">{view.controlResult?.outcome === 'applied' ? view.controlResult.evidence === 'settingsSaved' ? t('remote.controlSettingsSaved') : t('remote.controlApplied')
-          : view.controlResult?.outcome === 'rejected' ? t('remote.controlRefused')
+          : view.controlResult?.outcome === 'rejected' ? view.controlResult.reason === 'stationBusy' ? t('remote.controlBusy') : t('remote.controlRefused')
           : (view.controlSending || view.controlResult?.outcome === 'pending') && view.connected ? t('remote.controlPending') : t('remote.controlUnknown')}</span>}
         {view.controlPending && <>
           <button type="button" className="remote-button" disabled={view.busy || !view.connected || view.requestReady === false} onClick={() => void client.refreshControl().catch(() => {})}>{t('remote.controlCheckResult')}</button>
@@ -120,7 +120,8 @@ export function RemoteLogEntry({
     [resetKey, setResetKey] = useState(0),
     [logged, setLogged] = useState(false),
     // Whether the failed entry's request left this browser; only an unsent one says "not sent".
-    [errorSent, setErrorSent] = useState(true)
+    [errorSent, setErrorSent] = useState(true),
+    [errorBusy, setErrorBusy] = useState(false)
   const submitted = useRef<string | null>(null)
   useEffect(() => {
     const result = view.resolved,
@@ -130,6 +131,7 @@ export function RemoteLogEntry({
       submitted.current = null
       setError(result.outcome === 'rejected' ? 'rejected' : null)
       setErrorSent(true)
+      setErrorBusy(false)
       if (result.outcome === 'applied') {
         setResetKey((k) => k + 1)
         setLogged(true)
@@ -162,6 +164,7 @@ export function RemoteLogEntry({
     } catch (e) {
       setError(e instanceof Error ? e.message : 'unconfirmed')
       setErrorSent(!(e instanceof OperationFailure) || e.sent)
+      setErrorBusy(e instanceof OperationFailure && e.busy)
       throw e
     }
   }
@@ -173,9 +176,11 @@ export function RemoteLogEntry({
       if (result.outcome === 'applied') setLogged(true)
       else setError(result.outcome === 'rejected' ? 'rejected' : 'unconfirmed')
       setErrorSent(true)
+      setErrorBusy(false)
     } catch {
       setError('unconfirmed')
       setErrorSent(true)
+      setErrorBusy(false)
     }
   }
   if (!view.supported && !view.unresolved)
@@ -194,7 +199,7 @@ export function RemoteLogEntry({
       {view.submitting && <p role="status">{t('remote.loggingSaving')}</p>}
       {!view.submitting && (error || view.unresolved) && (
         <p role="alert">
-          {view.unresolved ? t('remote.loggingUnknown') : errorSent ? t('remote.loggingRefused') : t('remote.loggingNotSent')}
+          {view.unresolved ? t('remote.loggingUnknown') : errorBusy ? t('remote.loggingBusy') : errorSent ? t('remote.loggingRefused') : t('remote.loggingNotSent')}
         </p>
       )}
       {view.unresolved && !view.submitting && view.pendingDraft && (
@@ -221,6 +226,7 @@ export function RemoteLogEntry({
                 .catch(() => {
                   setError('unconfirmed')
                   setErrorSent(true)
+                  setErrorBusy(false)
                 })
             }}
           >

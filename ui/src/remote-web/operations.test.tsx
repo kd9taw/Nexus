@@ -247,6 +247,8 @@ it.each(['applied', 'rejected', 'unknown'] as const)(
 const NOT_SENT = 'Not sent. Nothing reached the station, so nothing changed there. Try again.'
 const NOT_CONFIRMED = 'The command was not confirmed. Check station control permission and the current readings.'
 const LOG_NOT_SENT = 'Not sent. Nothing reached the station, so this QSO was not logged. Try again.'
+const BUSY = 'The station was busy and nothing changed. Try again.'
+const LOG_BUSY = 'The station was busy, so this QSO was not logged. Try again.'
 const LOG_REFUSED = 'The station did not confirm this entry. Check logging control and the station’s current mode, then try again.'
 const memory = () => {
   const values = new Map<string, string>()
@@ -320,6 +322,55 @@ it.each([true, false])('says whether a failed manual QSO reached the station (re
     }
     await waitFor(() => expect(screen.getByRole('alert').textContent).toBe(sendsRequest ? LOG_REFUSED : LOG_NOT_SENT))
     expect(sent.filter((w) => w.request.type === 'logManual')).toHaveLength(sendsRequest ? 1 : 0)
+  } finally {
+    client.disconnected()
+  }
+})
+
+it.each(['error reply', 'rejected outcome'] as const)('says the station was busy for a stationBusy %s, not "not confirmed"', async (form) => {
+  vi.useFakeTimers()
+  const sent: Record<string, any>[] = [], data = memory()
+  const client = new OperationClient((s) => sent.push(JSON.parse(s)), true, () => 1000, undefined, 2,
+    pendingControlStorage(() => data, 'station', async (_key, run) => run()))
+  client.open()
+  client.receive({ type: 'operationResponse', requestId: sent[0].request.requestId,
+    value: controlling({ controls: { context: { radioId: 1, radioConnection: 1, ampConnection: 1, ampReadSequence: 1 }, capabilities: ['amplifier'] } }) })
+  const amp = { action: 'amplifier.operate', expectedOperate: false, operate: true } as const
+  try {
+    const attempt = client.control(amp).catch(() => {})
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    const request = sent.filter((w) => w.request.type === 'stationControl')
+    expect(request).toHaveLength(1)
+    client.receive(form === 'error reply'
+      ? { type: 'operationResponse', requestId: request[0].request.requestId, error: 'stationBusy' }
+      : { type: 'operationResponse', requestId: request[0].request.requestId, value: { operation: 'stationControl', operationId: request[0].request.requestId, outcome: 'rejected', reason: 'stationBusy' } })
+    await attempt
+    render(<LoggingAuthority client={client} />)
+    // The banner keeps its own logging status beside the command result; read the result itself.
+    const result = document.querySelector<HTMLElement>('.remote-control-result')!
+    const shown = within(result).getByRole(form === 'error reply' ? 'alert' : 'status')
+    expect(shown.textContent).toBe(BUSY)
+    if (form === 'error reply') expect(shown.getAttribute('data-control-failure')).toBe('busy')
+  } finally {
+    client.disconnected()
+  }
+})
+
+it('says the station was busy when it refused a manual QSO with stationBusy', async () => {
+  vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+  const sent: Record<string, any>[] = []
+  const client = new OperationClient((s) => sent.push(JSON.parse(s)), true, () => 1000, { read: () => null, write: () => {}, exclusive: async (run) => run() })
+  client.open()
+  client.receive({ type: 'operationResponse', requestId: sent[0].request.requestId, value: controlling({ actions: ['log.manual'] }) })
+  try {
+    render(<RemoteLogEntry client={client} snap={snap} mode="CW" />)
+    fireEvent.change(screen.getByPlaceholderText('Call'), { target: { value: 'W1AW' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Log' }))
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    const request = sent.filter((w) => w.request.type === 'logManual')
+    expect(request).toHaveLength(1)
+    await act(async () => client.receive({ type: 'operationResponse', requestId: request[0].request.requestId, error: 'stationBusy' }))
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toBe(LOG_BUSY))
   } finally {
     client.disconnected()
   }

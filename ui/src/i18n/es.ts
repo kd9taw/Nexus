@@ -44,6 +44,7 @@ export const ES: PartialCatalog = {
   "remote.loggingTakeOver": "Finalizar el registro remoto y borrar los permisos",
   "remote.controlRequestFailed": "El comando no se confirmó. Comprueba el permiso de control de estación y las lecturas actuales.",
   "remote.controlNotSent": "No enviado. Nada llegó a la estación, así que allí no cambió nada. Inténtalo de nuevo.",
+  "remote.controlBusy": "La estación estaba ocupada y no cambió nada. Inténtalo de nuevo.",
   "remote.controlLocalHint": "Permite el control de la estación para cada navegador. Este permiso incluye las funciones compatibles del receptor, la radio y el amplificador, y se conserva al reiniciar Nexus mientras ese navegador siga autorizado. Transmitir requiere un permiso independiente.",
   "remote.transmitAllow": "Permitir transmisión FT8/FT4",
   "remote.transmitRevoke": "Revocar permiso de transmisión",
@@ -97,6 +98,7 @@ export const ES: PartialCatalog = {
   "remote.loggingUnknown": "Es posible que el QSO ya esté registrado. Conserva esta entrada y comprueba el resultado antes de volver a intentarlo.",
   "remote.loggingRefused": "La estación no confirmó esta entrada. Comprueba el control del registro y el modo actual de la estación antes de volver a intentarlo.",
   "remote.loggingNotSent": "No enviado. Nada llegó a la estación, así que este QSO no se registró. Inténtalo de nuevo.",
+  "remote.loggingBusy": "La estación estaba ocupada, así que este QSO no se registró. Inténtalo de nuevo.",
   "remote.loggingCheckResult": "Comprobar el resultado del QSO enviado",
   "remote.loggingCheckedLog": "He comprobado el libro de guardia — finalizar esta comprobación",
   // Hosted Remote observation and local station approval.

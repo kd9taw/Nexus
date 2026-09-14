@@ -185,6 +185,7 @@ export function controlTransport(reads: ApplicationTransport, client: Applicatio
       if (action) {
         const result = await (captured ? captured(action) : operations.control(action, displayed))
         if (action.action === 'qso.logCurrent' && result.outcome === 'rejected' && ['noEligibleContact', 'alreadyPresent'].includes(result.reason)) qsoResult = 'none'
+        else if (result.outcome === 'rejected' && result.reason === 'stationBusy') throw new OperationFailure(result.reason, true, true)
         else if (result.outcome !== 'applied') throw Error(result.outcome === 'rejected' ? result.reason : 'operationUnknown')
         if (action.action === 'ft.runtime' && (result.outcome !== 'applied' || result.evidence !== (action.change.kind === 'rxOffset' ? 'settingsSaved' : 'stationState'))) throw Error('operationUnknown')
         if (action.action === 'ft.setting' && (result.outcome !== 'applied' || result.evidence !== (action.change.kind === 'auto' ? 'stationState' : 'settingsSaved'))) throw Error('operationUnknown')
