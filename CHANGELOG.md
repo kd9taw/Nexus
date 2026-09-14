@@ -15,6 +15,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mode, date and time) and says how to send it again: the QRZ button on its Logbook row, or Push to
   eQSL under Awards ▸ Confirmations. (#290)
 
+- **Log4OM set to read WSJT-X's ADIF message now gets Nexus contacts.** Nexus sent the "QSO
+  logged" message over WSJT-X UDP but never the separate ADIF message WSJT-X sends right after
+  it, so a logger listening only for the ADIF one showed the callsign during the QSO and never
+  received the contact. Nexus now sends both, in WSJT-X's order; the "QSO logged" message itself
+  is unchanged, so JTAlert, GridTracker and loggers already working carry on as before. Field Day
+  contacts still send only the "QSO logged" message. (#267)
+
 ### Security
 
 - **Encrypted connections refuse a malformed setup from the server.** Nexus's secure-connection
