@@ -210,6 +210,10 @@
 }
 
 .ui-toast-viewport {
+  /* The column itself is a 340 px fixed box over the cockpit: it must not eat clicks meant for
+     what is underneath, or the toast body's click-through (below) buys nothing. Each toast's own
+     buttons turn pointer events back on. */
+  pointer-events: none;
   position: fixed;
   bottom: var(--space-4);
   right: var(--space-4);
@@ -234,7 +238,15 @@
 .app:has(.update-banner) .ui-toast-viewport {
   bottom: calc(var(--space-4) + 72px);
 }
+/* CLICK-THROUGH (D#19). An error toast stays 12 s, and for those 12 s it sits over whatever is
+   beneath it — on a 390 px screen that is a control the operator cannot reach (the Remote
+   browser hit-test caught a decoder control behind "Could not set offset"). The toast BODY
+   therefore takes no pointer events, so a click lands on the control and `elementFromPoint`
+   answers the control; everything interactive inside it turns them back on below. This is what
+   replaces swipe-to-dismiss (Radix swipes the body), so the × close button is now the only
+   pointer dismissal and must always render. */
 .ui-toast {
+  pointer-events: none;
   display: flex;
   align-items: flex-start;
   gap: var(--space-2);
@@ -260,6 +272,8 @@
   flex: 1;
 }
 .ui-toast-close {
+  /* The body is click-through (see .ui-toast); its controls are not. */
+  pointer-events: auto;
   background: none;
   border: none;
   color: var(--text-dim);
@@ -273,6 +287,7 @@
 }
 /* One-click action on an alert toast (e.g. "Work →" / "Answer →" the station it's about). */
 .ui-toast-action {
+  pointer-events: auto;
   flex-shrink: 0;
   align-self: center;
   background: var(--accent);

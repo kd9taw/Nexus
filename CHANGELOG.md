@@ -20,7 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   once the wizard is finished or skipped. Later launches are unchanged.
 - **Error messages stay on screen long enough to read (D#19).** An error pop-up used to vanish
   after four seconds, or less, often before you looked back from the rig. Errors now stay at least
-  twelve seconds, or until you close them. Ordinary notices are unchanged.
+  twelve seconds, or until you close them. Ordinary notices are unchanged. Because they stay
+  longer, notices no longer swallow clicks: click straight through one to the control underneath,
+  and close it with its own × (swiping a notice away is gone — the × replaces it).
 - **The Rx Frequency pane lets go of −B4 without a restart (#268, #235).** The pane now has its own
   −B4 chip, and turning −B4 on or off in either Band Activity or Rx Frequency changes both panes at
   once. Before, the Rx Frequency pane picked up −B4 when it opened and kept hiding a worked
