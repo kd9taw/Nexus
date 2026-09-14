@@ -53,10 +53,7 @@ fn remote_levels_actual_owner_adopts_each_setting_and_never_replays_unconfirmed_
                     before,
                     target,
                     connection,
-                    station
-                        .authority
-                        .permit(Instant::now() + Duration::from_secs(5))
-                        .unwrap(),
+                    station.authority.permit(unexpired_deadline()).unwrap(),
                 )
                 .unwrap()
             };

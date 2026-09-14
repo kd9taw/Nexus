@@ -31,9 +31,7 @@ fn remote_filter_uses_the_actual_radio_owner_without_replaying_or_overriding_a_f
             2400,
             2300,
             connection,
-            s.authority
-                .permit(Instant::now() + Duration::from_secs(5))
-                .unwrap(),
+            s.authority.permit(unexpired_deadline()).unwrap(),
         )
         .unwrap()
     };

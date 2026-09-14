@@ -39,10 +39,7 @@ impl Adjustment {
             .cat
             .unwrap()
             .connection_generation;
-        let permit = s
-            .authority
-            .permit(Instant::now() + Duration::from_secs(5))
-            .unwrap();
+        let permit = s.authority.permit(unexpired_deadline()).unwrap();
         match self {
             Self::Level(level) => {
                 let before = if level == RadioLevel::NotchFrequency {

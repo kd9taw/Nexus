@@ -35,9 +35,7 @@ fn remote_phone_mode_owner_changes_the_actual_mode_then_restores_the_exact_dial_
                 None,
                 Some(mode),
                 connection,
-                s.authority
-                    .permit(Instant::now() + Duration::from_secs(5))
-                    .unwrap(),
+                s.authority.permit(unexpired_deadline()).unwrap(),
             )
             .unwrap()
         };
@@ -130,9 +128,7 @@ fn remote_phone_am_owner_confirms_the_native_power_cap_without_raising_or_replay
                 None,
                 Some("AM"),
                 connection,
-                s.authority
-                    .permit(Instant::now() + Duration::from_secs(5))
-                    .unwrap(),
+                s.authority.permit(unexpired_deadline()).unwrap(),
             )
             .unwrap()
         };
@@ -205,9 +201,7 @@ fn remote_phone_mode_owner_never_retries_an_unconfirmed_change() {
             None,
             Some("LSB"),
             connection,
-            s.authority
-                .permit(Instant::now() + Duration::from_secs(5))
-                .unwrap(),
+            s.authority.permit(unexpired_deadline()).unwrap(),
         )
         .unwrap()
     };

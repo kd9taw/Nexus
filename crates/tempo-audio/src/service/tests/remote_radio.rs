@@ -16,6 +16,17 @@ mod selection;
 mod spot;
 
 static NEXT: AtomicUsize = AtomicUsize::new(0);
+
+/// Browser authority for worker cases about CAT and native policy, not the
+/// command window. A permit ending 5 s after queue let a process stall between
+/// queue and commit expire it after the worker had already written, so a fully
+/// confirmed handoff finished as `Unknown` (the product's correct answer for a
+/// lapsed window). Expiry is asserted where it is the subject: by
+/// `selection::a_selection_whose_command_window_ends_mid_handoff_is_never_adopted`
+/// and by the Rig and `remote_control` permit tests.
+fn unexpired_deadline() -> Instant {
+    Instant::now() + Duration::from_secs(24 * 60 * 60)
+}
 struct Station {
     engine: Arc<Mutex<Engine>>,
     state: RadioLoop,
@@ -87,9 +98,7 @@ impl Station {
             band,
             "USB",
             connection,
-            self.authority
-                .permit(Instant::now() + Duration::from_secs(5))
-                .unwrap(),
+            self.authority.permit(unexpired_deadline()).unwrap(),
         )
         .unwrap()
     }
@@ -106,9 +115,7 @@ impl Station {
             mode,
             follow,
             connection,
-            self.authority
-                .permit(Instant::now() + Duration::from_secs(5))
-                .unwrap(),
+            self.authority.permit(unexpired_deadline()).unwrap(),
         )
         .unwrap()
     }
@@ -124,9 +131,7 @@ impl Station {
         e.queue_remote_tier(
             tier,
             connection,
-            self.authority
-                .permit(Instant::now() + Duration::from_secs(5))
-                .unwrap(),
+            self.authority.permit(unexpired_deadline()).unwrap(),
         )
         .unwrap()
     }
@@ -185,9 +190,7 @@ fn saved_remote_rx_gain_reaches_the_existing_audio_owner_once_without_tx_or_a_re
             expected,
             2.5,
             connection,
-            &s.authority
-                .permit(Instant::now() + Duration::from_secs(5))
-                .unwrap(),
+            &s.authority.permit(unexpired_deadline()).unwrap(),
         )
         .unwrap();
     }
@@ -635,9 +638,7 @@ fn band_selection_uses_the_actual_radio_owner_and_never_replays_the_native_pick(
                     band,
                     mode,
                     connection,
-                    s.authority
-                        .permit(Instant::now() + Duration::from_secs(5))
-                        .unwrap(),
+                    s.authority.permit(unexpired_deadline()).unwrap(),
                 )
                 .unwrap()
             };
@@ -701,13 +702,8 @@ fn remote_ft_authority_loss_flushes_the_owned_over_but_not_a_native_rearm() {
             let mut e = engine_lock(&s.engine);
             e.take_immediate_retune();
             if remote {
-                e.start_remote_ft_cq(
-                    authority
-                        .permit(Instant::now() + Duration::from_secs(5))
-                        .unwrap(),
-                    None,
-                )
-                .unwrap();
+                e.start_remote_ft_cq(authority.permit(unexpired_deadline()).unwrap(), None)
+                    .unwrap();
             } else {
                 e.start_cq(None).unwrap();
             }
@@ -788,13 +784,8 @@ fn remote_ft_immediate_over_rechecks_authority_around_key_up() {
             let mut e = engine_lock(&s.engine);
             e.set_tx_even(true);
             e.take_immediate_retune();
-            e.start_remote_ft_cq(
-                authority
-                    .permit(Instant::now() + Duration::from_secs(5))
-                    .unwrap(),
-                None,
-            )
-            .unwrap();
+            e.start_remote_ft_cq(authority.permit(unexpired_deadline()).unwrap(), None)
+                .unwrap();
             e.take_immediate_retune();
             e.take_slot_tx_abort();
             s.state.cur_tier = e.tier();
@@ -854,9 +845,7 @@ fn remote_ft_tx_off_finishes_the_owned_over_and_stop_cuts_it() {
             settings.mygrid = "EN52".into();
         });
         let authority = TransmitAuthority::default();
-        let permit = authority
-            .permit(Instant::now() + Duration::from_secs(5))
-            .unwrap();
+        let permit = authority.permit(unexpired_deadline()).unwrap();
         {
             let mut e = engine_lock(&s.engine);
             e.take_immediate_retune();
