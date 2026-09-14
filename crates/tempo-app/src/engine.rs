@@ -1669,6 +1669,10 @@ pub fn upload_backoff_secs(attempts: u8) -> i64 {
 /// worker tick / 2 s), so a permanently-down service eventually stops retrying.
 pub const MAX_UPLOAD_RETRIES: u8 = 20;
 
+/// How many callbook names a session remembers for the log (#293) — a busy FT8 hour
+/// looks up a few dozen stations; the oldest answer is dropped first.
+const CALLBOOK_NAMES_CAP: usize = 64;
+
 /// Seconds between two CATCH-UP uploads (see [`UploadOrigin::CatchUp`]). Live contacts
 /// are never subject to this.
 ///
@@ -2527,6 +2531,12 @@ pub struct Engine {
     cw_peer_call: String,
     cw_peer_name: String,
     cw_peer_state: String,
+    /// #293: names from callbook lookups already answered this session, `(CALL, name)`, newest
+    /// last, bounded by [`CALLBOOK_NAMES_CAP`]. Filled by the shell when a lookup resolves (the
+    /// engine has no callbook of its own), read by [`Self::qso_record`] so a sequencer-logged
+    /// contact carries the NAME the operator already saw on the callsign card — never a new
+    /// network call from the logging path.
+    callbook_names: VecDeque<(String, String)>,
     /// One-shot: the operator hit Abort — the radio loop calls `rig.stop_morse` and
     /// clears the queue, then resets this.
     cw_abort: bool,
@@ -4423,6 +4433,7 @@ impl Engine {
             cw_peer_call: String::new(),
             cw_peer_name: String::new(),
             cw_peer_state: String::new(),
+            callbook_names: VecDeque::new(),
             cw_abort: false,
             manual_ptt: false,
             rf_power: None,
@@ -7466,6 +7477,34 @@ impl Engine {
         self.cw_peer_call = call.trim().to_string();
         self.cw_peer_name = name.trim().to_string();
         self.cw_peer_state = state.trim().to_string();
+    }
+
+    /// #293: remember the name a callbook lookup returned for `call`, replacing any earlier
+    /// answer for the same call. A blank call or name is ignored — an empty answer must not
+    /// wipe a name already known. Bounded: the oldest answer goes first.
+    pub fn note_callbook_name(&mut self, call: &str, name: &str) {
+        let call = tempo_core::message::unhash_call(call.trim()).to_ascii_uppercase();
+        let name = name.trim();
+        if call.is_empty() || name.is_empty() {
+            return;
+        }
+        self.callbook_names.retain(|(c, _)| *c != call);
+        if self.callbook_names.len() >= CALLBOOK_NAMES_CAP {
+            self.callbook_names.pop_front();
+        }
+        self.callbook_names.push_back((call, name.to_string()));
+    }
+
+    /// #293: the name a lookup answered for exactly this call this session, if any. Exact call,
+    /// not base call: `W1AW/P`'s callbook answer belongs to that call's record, and a name
+    /// guessed across calls would be written into a permanent log.
+    fn callbook_name_for(&self, call: &str) -> Option<String> {
+        let call = tempo_core::message::unhash_call(call.trim()).to_ascii_uppercase();
+        self.callbook_names
+            .iter()
+            .rev()
+            .find(|(c, _)| *c == call)
+            .map(|(_, name)| name.clone())
     }
 
     /// Expand a CW macro WITHOUT queuing it — the cockpit's reply preview.
@@ -19603,6 +19642,10 @@ Pick the one you operate from on the Contesting tab in Settings.",
         } else {
             None
         };
+        // #293: the name a callbook lookup already returned for this call this session, if any —
+        // the callsign card's own lookup. Never a lookup from here. Taken before the literal
+        // moves `dxcall` into the record.
+        let callbook_name = self.callbook_name_for(&dxcall);
         QsoRecord {
             call: dxcall,
             grid,
@@ -19622,7 +19665,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
             // type 5 datagram loggers log from (the blank RST_SENT/RST_RCVD in Log4OM).
             rst_sent: self.qso_report_sent.map(tempo_core::message::fmt_report),
             rst_rcvd: rx_report.map(tempo_core::message::fmt_report),
-            name: None,
+            name: callbook_name,
             qth: None,
             // WSJT-X's "dB reports to comments" (opt-in): the COMMENT carries
             // "<mode>  Sent: <rpt>  Rcvd: <rpt>" in WSJT-X's own byte format, built
@@ -28765,6 +28808,30 @@ mod tests {
             "an auto-logged QSO must carry the worked station's state — without it \
              worked_states can never learn it and NewState re-fires forever"
         );
+    }
+
+    /// #293 (mi0ayr): the log strip fills NAME from its own callbook lookup, but the FT
+    /// sequencer's record builder hard-coded `name: None`, so every auto-logged FT8/FT4 contact
+    /// reached the Logbook, ADIF and the uploads nameless even when the callsign card had
+    /// just shown the name. The name must come from a lookup already answered this session.
+    #[test]
+    fn an_auto_logged_qso_carries_the_name_from_this_sessions_callbook_lookup() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_tier(Tier::TempoFast);
+        // The card looked the station up while it was calling; a lookup of someone else is
+        // there to prove the name is matched to the call, not simply the latest one.
+        e.note_callbook_name("w9xyz", " Dave ");
+        e.note_callbook_name("K9AAA", "Someone Else");
+
+        e.call_station("W9XYZ");
+        e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ -10", -7)], 1);
+        e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ RR73", -7)], 3);
+
+        let log = e.get_log();
+        assert_eq!(log.len(), 1, "completed QSO auto-logs exactly one record");
+        assert_eq!(log[0].name.as_deref(), Some("Dave"));
+        // No lookup for this call: no name — never a borrowed one.
+        assert_eq!(e.qso_record("N0CALL".into(), None, None).name, None);
     }
 
     /// Sibling of the NewState defect, same class: a QSO that logs with a BLANK grid can never

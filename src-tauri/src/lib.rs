@@ -16740,6 +16740,25 @@ fn callbook_candidates(call: &str) -> Vec<String> {
     }
 }
 
+/// #293: the name a resolved lookup gives the log — the same rule the log strip applies
+/// (`LogEntry.tsx`): the QRZ nickname when the station set one, else the full name. `None`
+/// rather than a blank, so an empty answer never stamps an empty NAME.
+fn callbook_log_name(dto: &tempo_app::dto::QrzLookupDto) -> Option<&str> {
+    fn usable(s: &Option<String>) -> Option<&str> {
+        s.as_deref().map(str::trim).filter(|s| !s.is_empty())
+    }
+    usable(&dto.nickname).or_else(|| usable(&dto.name))
+}
+
+/// #293: hand a resolved lookup's name to the engine, so a contact the FT sequencer logs with
+/// this call carries it (`Engine::note_callbook_name`). The lookup already happened — the
+/// callsign card or the log strip asked for it — so the logging path never makes one.
+fn note_lookup_name(engine: &SharedEngine, call: &str, dto: &tempo_app::dto::QrzLookupDto) {
+    if let Some(name) = callbook_log_name(dto) {
+        engine_lock(engine).note_callbook_name(call, name);
+    }
+}
+
 /// Look up a callsign, enriching with name / grid / QTH / state. QRZ is tried first
 /// (its paid tier carries grid/state); when QRZ is **unconfigured** (no username or
 /// no stored password) or has **no match**, the lookup falls through to the FREE
@@ -16810,6 +16829,7 @@ async fn qrz_lookup(
                     _ => {}
                 }
                 if let QrzOutcome::Found(dto, _) = attempt.map_err(|f| f.message.into_string())? {
+                    note_lookup_name(&state, &call, &dto);
                     return Ok(*dto);
                 }
             }
@@ -16826,6 +16846,7 @@ async fn qrz_lookup(
                     &password,
                     hamqth_session.inner(),
                 )? {
+                    note_lookup_name(&state, &call, &dto);
                     return Ok(dto);
                 }
                 // HamQTH was queried and answered — a genuine miss for THIS candidate. Only the
@@ -25553,6 +25574,40 @@ mod tests {
         // A book that matches the station call: silent.
         let (w, _) = warn("F4MQS/P", Some("F4MQS/P".into()), true, || None, &mut seen);
         assert_eq!(w, None);
+    }
+
+    /// #293: the name a lookup hands the log is the one the log strip fills — the QRZ nickname
+    /// when the station set one (what they answer to on the air), else the full name, and
+    /// nothing at all rather than a blank.
+    #[test]
+    fn the_logged_name_is_the_one_the_log_strip_would_fill() {
+        let dto = |name: Option<&str>, nickname: Option<&str>| tempo_app::dto::QrzLookupDto {
+            call: "W9XYZ".into(),
+            name: name.map(str::to_string),
+            nickname: nickname.map(str::to_string),
+            qth: None,
+            grid: None,
+            state: None,
+            country: None,
+            dxcc: None,
+            cq_zone: None,
+            itu_zone: None,
+            image: None,
+            lat: None,
+            lon: None,
+        };
+        let d = dto(Some("David Smith"), Some("Dave"));
+        assert_eq!(super::callbook_log_name(&d), Some("Dave"));
+        let d = dto(Some("David Smith"), None);
+        assert_eq!(super::callbook_log_name(&d), Some("David Smith"));
+        let d = dto(Some("David Smith"), Some("  "));
+        assert_eq!(
+            super::callbook_log_name(&d),
+            Some("David Smith"),
+            "a blank nickname"
+        );
+        let d = dto(Some(" "), None);
+        assert_eq!(super::callbook_log_name(&d), None);
     }
 
     #[test]

@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **FT8 and FT4 contacts the sequencer logs now carry the other operator's name.** The log strip
+  in Phone, CW and the manual log form already filled Name from the callbook, but a contact the
+  FT sequencer logged for you went into the Logbook with no name, even when the callsign card had
+  just shown it. Nexus now keeps the name from any QRZ or HamQTH lookup it already did this
+  session (the card's own, or the log strip's), QRZ nickname first like the log strip, and puts it
+  on the logged contact, its ADIF and its uploads. It never looks a station up just to log it; if
+  nothing was looked up, the name stays blank as before. (#293)
+
 ### Fixed
 
 - **A QRZ or eQSL upload that runs out of retries now says so.** After 20 failed tries Nexus used
