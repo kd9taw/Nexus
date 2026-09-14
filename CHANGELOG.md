@@ -31,6 +31,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   decoder missed or misread, then press Enter or a macro key: the `!` in your macros sends the
   call in the box.
 
+### Changed (60 m)
+
+- **The 60 m FT8 band button follows your country** (#175). If your callsign is a US one, 60 m
+  still goes to 5.3715 MHz, the US channel. Any other callsign now goes to 5.357 MHz, in the
+  worldwide 60 m segment most countries share. A portable call counts where you are operating
+  (DL/W1AW is Germany, W1AW/VE3 is Canada). Your own Settings ▸ Frequencies override still wins,
+  and the standard table there now shows both dials. 60 m rules differ country to country, so
+  check your own band plan and power limit.
+
 ### Changed
 
 - **Tune is always right next to the band picker** (#287). In Phone, CW, RTTY, PSK, SSTV and JS8,

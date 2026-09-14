@@ -546,6 +546,10 @@ const ROT_POST_PASS: { value: string; labelKey: MessageKey }[] = [
 /** One operator override of the working-frequency table. */
 type WorkingFrequency = NonNullable<Settings['workingFrequencies']>[number]
 
+/** The worldwide 60 m FT8 dial (#175) — `bandplan::SIXTY_M_FT8_WORLDWIDE_MHZ` on the Rust side, which
+ *  the band button tunes for a non-US callsign. Shown beside the US row below. */
+const SIXTY_M_FT8_WORLDWIDE_MHZ = 5.357
+
 /** The stock WSJT-X working-frequency table, shown read-only for reference.
  * An override replaces the matching band+mode row; no overrides = stock. */
 const STOCK_WORKING_FREQUENCIES: WorkingFrequency[] = [
@@ -8057,6 +8061,16 @@ export function SettingsPanel({
                           <span className="freq-override-tag">
                             {t('settings.workingFrequencies.stock.overrideTag')}
                           </span>
+                        </span>
+                      ) : r.band === '60m' && r.mode === 'FT8' ? (
+                        // #175: the 60 m button follows the licence country — the US channel for a
+                        // US callsign, the worldwide WRC-15 dial for everyone else. Say both, rather
+                        // than copy the engine's callsign rule into the UI where it could drift.
+                        <span className="freq-cell mono">
+                          {t('settings.workingFrequencies.stock.sixtyMetres', {
+                            us: r.mhz.toFixed(6),
+                            world: SIXTY_M_FT8_WORLDWIDE_MHZ.toFixed(6),
+                          })}
                         </span>
                       ) : (
                         <span className="freq-cell mono">{r.mhz.toFixed(6)}</span>

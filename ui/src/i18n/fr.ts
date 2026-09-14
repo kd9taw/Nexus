@@ -4941,6 +4941,7 @@ export const FR: PartialCatalog = {
   "settings.workingFrequencies.stock.label": "Table standard (lecture seule)",
   "settings.workingFrequencies.stock.mode": "Mode",
   "settings.workingFrequencies.stock.overrideTag": "surcharge",
+  "settings.workingFrequencies.stock.sixtyMetres": "{{us}} (États-Unis) · {{world}} (hors États-Unis, d'après votre indicatif)",
   "settings.workingFrequencies.stock.overrideTitle": "Votre surcharge — d'origine {{mhz}} MHz",
   "settings.workspace.density.aria": "Densité d'information",
   "settings.workspace.density.dense": "Compact",

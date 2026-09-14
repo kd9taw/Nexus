@@ -5884,6 +5884,7 @@ export const EN = {
   'settings.workingFrequencies.stock.dial': 'Dial (MHz)',
   'settings.workingFrequencies.stock.overrideTitle': 'Your override — stock is {{mhz}} MHz',
   'settings.workingFrequencies.stock.overrideTag': 'override',
+  'settings.workingFrequencies.stock.sixtyMetres': '{{us}} (US) · {{world}} (outside the US, chosen from your callsign)',
   'settings.workingFrequencies.stock.hint':
     'WSJT-X stock dial frequencies. A row with an active override shows your value (highlighted) instead of the stock one.',
   'settings.workingFrequencies.overrides.label': 'Your overrides',

@@ -3632,6 +3632,7 @@ export const JA: PartialCatalog = {
   "settings.workingFrequencies.stock.dial": "ダイヤル（MHz）",
   "settings.workingFrequencies.stock.overrideTitle": "自局のオーバーライド — 標準は{{mhz}} MHz",
   "settings.workingFrequencies.stock.overrideTag": "オーバーライド",
+  "settings.workingFrequencies.stock.sixtyMetres": "{{us}}（米国）· {{world}}（米国外。コールサインから判定）",
   "settings.workingFrequencies.stock.hint": "WSJT-X標準のダイヤル周波数です。オーバーライドが有効な行は、標準値の代わりに自局の値がハイライト表示されます。",
   "settings.workingFrequencies.overrides.label": "自局のオーバーライド",
   "settings.workingFrequencies.overrides.none": "なし — 標準テーブルが有効です。",

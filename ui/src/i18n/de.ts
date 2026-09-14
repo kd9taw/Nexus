@@ -3936,6 +3936,7 @@ export const DE: PartialCatalog = {
   "settings.workingFrequencies.stock.dial": "Dial (MHz)",
   "settings.workingFrequencies.stock.overrideTitle": "Ihre Überschreibung — Standard ist {{mhz}} MHz",
   "settings.workingFrequencies.stock.overrideTag": "überschrieben",
+  "settings.workingFrequencies.stock.sixtyMetres": "{{us}} (USA) · {{world}} (außerhalb der USA, nach deinem Rufzeichen)",
   "settings.workingFrequencies.stock.hint": "Die Standard-Dial-Frequenzen von WSJT-X. Eine Zeile mit aktiver Überschreibung zeigt hervorgehoben Ihren Wert statt des Standardwerts.",
   "settings.workingFrequencies.overrides.label": "Ihre Überschreibungen",
   "settings.workingFrequencies.overrides.none": "Keine — es gilt die Standardtabelle.",

@@ -4941,6 +4941,7 @@ export const ES: PartialCatalog = {
   "settings.workingFrequencies.stock.label": "Tabla estándar (solo lectura)",
   "settings.workingFrequencies.stock.mode": "Modo",
   "settings.workingFrequencies.stock.overrideTag": "sustitución",
+  "settings.workingFrequencies.stock.sixtyMetres": "{{us}} (EE. UU.) · {{world}} (fuera de EE. UU., según tu indicativo)",
   "settings.workingFrequencies.stock.overrideTitle": "Tu sustitución — la estándar es {{mhz}} MHz",
   "settings.workspace.density.aria": "Densidad de información",
   "settings.workspace.density.dense": "Compacta",
