@@ -1696,8 +1696,11 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         await until(`document.querySelectorAll('[role="menuitemradio"]').length>1`)
         const held=await steady('phone-held-open','.phone-cockpit',phoneSelect)
         const before=stationRequests.length
-        for(const [key,code,vk] of [['2','Digit2',50],['0','Digit0',48],['Enter','Enter',13]])for(const type of ['keyDown','keyUp'])
-          await browser.call('Input.dispatchKeyEvent',{type,key,code,windowsVirtualKeyCode:vk,...(type==='keyDown'&&key!=='Enter'?{text:key}:{})},session)
+        // Pick 20m from the menu that has been open for 10 s — by NAME, the operator's own gesture.
+        // (Keystrokes into a menu that has been idle for 10 s depend on focus still being inside it;
+        // the keyboard path itself is pinned in the unit tests.)
+        const row=band=>`[...document.querySelectorAll('[role="menuitemradio"]')].find(e=>e.textContent.trim().startsWith(${JSON.stringify(band)}))`
+        await click(row('20m'))
         for(let i=0;i<60&&stationRequests.length===before;i++)await sleep(100)
         await sleep(2000)
         const picked=stationRequests.slice(before).map(r=>r.action)
@@ -1864,12 +1867,10 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
             const count=stationRequests.length
             await click(`document.querySelector('${picker}')`)
             await until(`document.querySelectorAll('[role="menuitemradio"]').length>1`)
-            // Keyboard-only, and BY NAME: the menu's rows carry the band, so typing it picks it
-            // whatever order they are in. (The old <select> walked Home/ArrowDown by POSITION,
-            // which silently meant "whichever band is second" — a different band per station.)
-            for(const [key,code,vk] of [[band[0],`Digit${band[0]}`,band.charCodeAt(0)],['0','Digit0',48],['Enter','Enter',13]])
-              for(const type of ['keyDown','keyUp'])
-                await browser.call('Input.dispatchKeyEvent',{type,key,code,windowsVirtualKeyCode:vk,...(type==='keyDown'&&key!=='Enter'?{text:key}:{})},session)
+            // BY NAME: the menu's rows carry the band. (The old <select> walked Home/ArrowDown by
+            // POSITION, which silently meant "whichever band is second" — a different band per
+            // station, and it picked 40m where this asserts 20m once the rows were reordered.)
+            await click(`[...document.querySelectorAll('[role="menuitemradio"]')].find(e=>e.textContent.trim().startsWith(${JSON.stringify(band)}))`)
             for(let i=0;i<100&&stationRequests.length===count;i++)await sleep(100)
             assert.equal(stationRequests.length,count+1,`one ${mode} band gesture`)
             assert.deepEqual(stationRequests.at(-1).action,{action:'radio.band',band,mode})
