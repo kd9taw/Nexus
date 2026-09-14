@@ -91,6 +91,9 @@ ring = "0.17"
 tokio-tungstenite = { version = "=0.30.0", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 # Update-check fetch of SourceForge best_release.json. Matches the propagation crate's exact
 # reqwest spec (rustls-tls, NOT native-tls) so the MinGW cross-build never pulls in openssl.
+# reqwest's native-tls feature would also move EVERY reqwest client onto the OS TLS stack; the
+# one connection that needs that stack (HRDLog.net) uses the native-tls crate directly, and
+# scripts/check-reqwest-rustls-only.sh fails CI if reqwest ever gains the feature.
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "json"] }
 # The application/domain logic. Built by the M3 UI task (#2). This shell only
 # locks its AppState behind a Mutex and forwards commands to it.

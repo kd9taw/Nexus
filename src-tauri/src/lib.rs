@@ -14114,9 +14114,24 @@ const WRL_KEYCHAIN_USER: &str = "wrl-key";
 const CLOUDLOG_KEYCHAIN_USER: &str = "cloudlog-key";
 const WINLINK_KEYCHAIN_USER: &str = "winlink-password";
 
-/// Client name Nexus sends to HRDLog.net's `NewEntry.aspx` as `App` (aids their
-/// support / usage stats). Non-secret.
-const HRDLOG_APP_NAME: &str = "Nexus";
+/// Client name and version Nexus sends to HRDLog.net's `NewEntry.aspx` as `App` (aids their
+/// support / usage stats, and tells them which build sent a record). Non-secret.
+const HRDLOG_APP_NAME: &str = concat!("Nexus/", env!("CARGO_PKG_VERSION"));
+
+/// Retries an HRDLog leg gets after its first attempt. HRDLog's developer spec asks a client to
+/// try a busy server "another couple of times", so this leg stops there rather than riding the
+/// shared `MAX_UPLOAD_RETRIES`.
+const HRDLOG_MAX_RETRIES: u8 = 2;
+
+/// Drop the HRDLog leg from a transient-failure mask once the record has already had
+/// [`HRDLOG_MAX_RETRIES`] retries. Every other leg is left alone.
+fn cap_hrdlog_retries(failed: u8, retries_so_far: u8) -> u8 {
+    if retries_so_far >= HRDLOG_MAX_RETRIES {
+        failed & !tempo_app::engine::upload_legs::HRDLOG
+    } else {
+        failed
+    }
+}
 
 /// Session-level kill-switch for ClubLog auto-push: set on a 403 (bad creds) so we
 /// stop re-POSTing every QSO (ClubLog IP-blocks repeated auth failures); reset when
@@ -17337,15 +17352,24 @@ fn hrdlog_push_qso_impl(
     let resp = {
         let query = tempo_core::hrdlog::HrdLogQuery {
             callsign,
-            code,
+            code: code.clone(),
             app: HRDLOG_APP_NAME.to_string(),
             adif,
         };
         let body = tempo_core::hrdlog::build_upload_body(&query);
-        propagation::live::hrdlog::post_form(tempo_core::hrdlog::HRDLOG_NEWENTRY_URL, body)?
+        propagation::live::hrdlog::post_form(
+            tempo_core::hrdlog::HRDLOG_NEWENTRY_URL,
+            env!("CARGO_PKG_VERSION"),
+            body,
+        )?
     }; // `query` + `body` (both hold the code) dropped here
 
-    Ok(tempo_core::hrdlog::classify_response(&resp).into())
+    // HRDLog's `<error>` text goes on to a toast and the connection log: scrub the code from it.
+    let mut push = tempo_core::hrdlog::classify_response(&resp);
+    push.message = push
+        .message
+        .map(|m| tempo_core::hrdlog::scrub_code(&m, &code));
+    Ok(push.into())
 }
 
 /// Push one logged QSO to ClubLog (realtime). Resolves the 4 credentials (email +
@@ -21637,6 +21661,19 @@ pub fn run() {
                     },
                     p.legs,
                 );
+                let capped = cap_hrdlog_retries(failed, p.attempts);
+                if capped != failed {
+                    conn_log(
+                        "HRDLog.net",
+                        "error",
+                        format!(
+                            "gave up on the QSO with {} after {HRDLOG_MAX_RETRIES} retries — \
+                             push it again from the Logbook",
+                            rec.call
+                        ),
+                    );
+                }
+                let failed = capped;
                 // Transient failures (network down / service busy) → re-queue ONLY
                 // the legs that failed so the next tick retries them, without
                 // re-pushing the legs that already succeeded (no double-upload).
@@ -23403,6 +23440,24 @@ fn winlink_disconnect() -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_hrdlog_leg_gets_a_couple_of_retries_and_no_other_leg_is_touched() {
+        use tempo_app::engine::upload_legs as legs;
+        let both = legs::HRDLOG | legs::QRZ;
+        // First attempt and the first retry failed: HRDLog is still owed another go.
+        assert_eq!(super::cap_hrdlog_retries(both, 0), both);
+        assert_eq!(super::cap_hrdlog_retries(both, 1), both);
+        // Two retries spent: HRDLog is dropped, QRZ keeps its shared retry budget.
+        assert_eq!(super::cap_hrdlog_retries(both, 2), legs::QRZ);
+        assert_eq!(super::cap_hrdlog_retries(legs::QRZ, 19), legs::QRZ);
+        assert_eq!(super::cap_hrdlog_retries(legs::HRDLOG, 2), 0);
+        assert_eq!(super::HRDLOG_MAX_RETRIES, 2);
+        // The App field names the build, so HRDLog can tell which Nexus sent a record.
+        assert_eq!(
+            super::HRDLOG_APP_NAME,
+            format!("Nexus/{}", env!("CARGO_PKG_VERSION"))
+        );
+    }
 
     /// ⭐ **The country file the CONTEST SCORER actually gets** — the one assertion that
     /// cannot be made in `tempo-core`, because the crate that owns `cty.dat` depends on it.

@@ -163,6 +163,8 @@ HRDLog.net realtime push sends one QSO to the `NewEntry.aspx` robot endpoint aft
 
 Responses are classified into the same Accepted / Duplicate / AuthFail / Rejected outcomes and written to the shared connection event log. Unlike the other connectors, HRDLog does not stamp a per-QSO ADIF upload-state field, so its push state is not carried in the exported ADIF.
 
+HRDLog's server offers no encryption settings that Nexus's built-in TLS library supports, so this one connection uses the operating system's TLS stack instead: SChannel on Windows, Security.framework on macOS, OpenSSL on Linux. It is locked to HRDLog's upload address, requires TLS 1.2 or newer, and checks the certificate. `App` is sent as `Nexus/<version>`. A failed automatic upload is retried twice, as HRDLog's developer notes ask; after that, push the contact again from the Logbook.
+
 Auto-push to HRDLog on log is controlled by `hrdlog_upload` (default: **off**).
 
 ## World Radio League Integration

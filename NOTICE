@@ -478,6 +478,25 @@ License: **Boost Software License 1.0** (SPDX: `BSL-1.0`). Only the
 **header-only** `<boost/crc.hpp>` is used, by `libtempo`'s `crc14.cpp`. No
 compiled Boost library is linked.
 
+### OpenSSL (Linux only — HRDLog.net uploads)
+License: **Apache License 2.0** (OpenSSL 3.x, © The OpenSSL Project Authors).
+<https://www.openssl.org/>
+
+HRDLog.net's upload server offers no TLS cipher suite that Nexus's own TLS
+library (rustls) supports, so that one connection — and only that one — uses the
+operating system's TLS stack, through the `native-tls` crate (see *Rust
+dependencies*). On Linux that stack is OpenSSL: the Nexus binary links
+`libssl.so.3` and `libcrypto.so.3`.
+
+- **.deb (PC and both Raspberry Pi bases):** OpenSSL is not shipped. The package
+  declares `Depends: libssl3`, and the distribution's own copy is used.
+- **AppImage:** the build host's `libssl.so.3` and `libcrypto.so.3` are
+  **bundled inside the AppImage**, so Nexus redistributes OpenSSL there. OpenSSL's
+  Apache-2.0 license text (`licenses/openssl/LICENSE.txt`, taken from the OpenSSL
+  source distribution) travels in every installer as `resources/openssl/LICENSE.txt`.
+- **Windows and macOS:** no OpenSSL. The same connection uses SChannel (Windows)
+  or Security.framework (macOS), operating-system components Nexus does not ship.
+
 ---
 
 ## Rig-control protocol interoperability (no vendor code bundled)
@@ -648,6 +667,16 @@ principal third-party components, not a substitute for that gate:
   primitive, never for integrity or secrecy) — MIT OR Apache-2.0. Brings the RustCrypto
   digest subtree (digest, block-buffer, crypto-common, generic-array, typenum) newly
   into the tree; all MIT or MIT/Apache-2.0, all already on deny.toml's allow-list.
+- **native-tls** (the HRDLog.net upload connection only — `crates/propagation/src/live/hrdlog.rs`;
+  every other HTTPS client stays on reqwest + rustls, and CI fails if reqwest ever gains
+  native-tls) — MIT OR Apache-2.0. Its platform backends arrive with it: on Linux **openssl** —
+  Apache-2.0, **openssl-sys** — MIT, **openssl-macros**, **foreign-types** and
+  **foreign-types-shared** — MIT/Apache-2.0, **openssl-probe** — MIT OR Apache-2.0, and
+  **vcpkg** (openssl-sys's build script; used only on MSVC targets) — MIT/Apache-2.0; on
+  Windows **schannel** — MIT; on macOS **security-framework** and **security-framework-sys** —
+  MIT OR Apache-2.0. **httparse** (reads that connection's HTTP response; already in the tree
+  via hyper) — MIT OR Apache-2.0. All already on deny.toml's allow-list. The OpenSSL library
+  itself is covered under *Linked native libraries*.
 
 `crates/tempo-net` (the WSJT-X-compatible UDP API and PSK Reporter spotting) is otherwise
 pure `std` Rust: **socket2** is its only third-party crate, and only because `std` exposes no
@@ -744,6 +773,10 @@ The bundled and linked components combine into the GPLv3 whole:
   redistribution under GPLv3.
 - MPL-2.0 (serialport) is GPL-compatible; its source-disclosure obligations
   apply per-file to that component.
+- Apache-2.0 (OpenSSL 3, linked on Linux and bundled in the AppImage) is
+  compatible with GPLv3, though not with GPLv2; Nexus is GPL-3.0-only, so it
+  combines into the GPLv3 whole. OpenSSL 3 no longer carries the old
+  OpenSSL/SSLeay license that conflicted with the GPL.
 - Remote's MIT dependencies combine under GPLv3. The webpki-roots certificate
   data retains CDLA-Permissive-2.0, whose text accompanies that data. Remote
   does not change Nexus's GPL-3.0-only license or the existing DeepCW obligations.
