@@ -136,3 +136,10 @@ it('keeps FT CQ and Call authority out of older browser state projections', () =
     else expect(projected.controls.capabilities).toEqual(version === 4 ? ['decoder', 'ftOperate', 'ftCall', 'qsoLogging'] : ['decoder'])
   }
 })
+
+it('sends split, XIT, VFO and RIT at v3, without a version bump', () => {
+  expect(controlVersion({ action: 'radio.split', expectedTxMhz: null, txMhz: 14.032 })).toBe(3)
+  expect(controlVersion({ action: 'radio.xit', expectedHz: 0, hz: 10 })).toBe(3)
+  expect(controlVersion({ action: 'radio.vfo', expectedVfo: 'A', vfo: 'B' })).toBe(3)
+  expect(controlVersion({ action: 'radio.rit', expectedHz: 0, hz: 10 })).toBe(3)
+})

@@ -15,6 +15,7 @@ mod filter;
 mod level;
 pub use level::RadioLevel;
 mod phone_mode;
+mod split;
 mod spot;
 mod workspace;
 pub use dsp::{AgcSpeed, ReceiverDsp, ReceiverFunction};

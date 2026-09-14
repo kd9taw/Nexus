@@ -9,6 +9,8 @@ import type { OperationVersion } from './operation-version'
 import { controlTransport } from './control-transport'
 import type { ApplicationClient } from './application-client'
 import type { ApplicationTransport } from '../applicationTransport'
+import { controlFailureMessage } from './control-failure'
+import { t } from '../i18n'
 
 afterEach(() => vi.useRealTimers())
 const action = { action: 'amplifier.operate', expectedOperate: false, operate: true } as const
@@ -588,6 +590,66 @@ it('refuses a redecode with arguments, off FT8/FT4, without its hint or on an ol
   for (const [capabilities, version, message] of [[['decoder', 'receiverSettings'], 3, 'notController'], [['redecode'], 2, 'stationUnsupported']] as [ControlCapability[], OperationVersion, string][]) {
     const old = decoderGesture(capabilities, version, { link: { tier: 'FT8' } })
     await expect(old.transport.invoke('redecode', {})).rejects.toMatchObject({ message })
+    expect(old.commands()).toHaveLength(0)
+    old.h.client.disconnected()
+  }
+})
+
+// Remote parity batch 1: split, XIT, VFO and RIT. Each is bound to the value the page displayed,
+// needs the station's stationState answer, and returns only a later sample showing the change.
+const splitSnapshot = (radio: Record<string, unknown> = {}) => ({ radio: { splitTxMhz: null, ritHz: 0, xitHz: 0, activeVfo: 'A', ...radio } })
+it.each([
+  ['set_split', { txMhz: 14.032 }, { action: 'radio.split', expectedTxMhz: null, txMhz: 14.032 }, 'splitTuning', { splitTxMhz: 14.032 }],
+  ['set_split', { txMhz: null }, { action: 'radio.split', expectedTxMhz: 14.032, txMhz: null }, 'splitTuning', { splitTxMhz: null }],
+  ['set_xit', { hz: -4000 }, { action: 'radio.xit', expectedHz: 0, hz: -4000 }, 'splitTuning', { xitHz: -4000 }],
+  ['set_vfo', { vfo: 'B' }, { action: 'radio.vfo', expectedVfo: 'A', vfo: 'B' }, 'splitTuning', { activeVfo: 'B' }],
+  ['set_rit', { hz: 10 }, { action: 'radio.rit', expectedHz: 0, hz: 10 }, 'ritTuning', { ritHz: 10 }]
+] as const)('%s %j sends one bound intent and returns a later sample showing it', async (command, args, action, capability, after) => {
+  const before = command === 'set_split' && args.txMhz === null ? splitSnapshot({ splitTxMhz: 14.032 }) : splitSnapshot()
+  const g = decoderGesture([capability], 3, before)
+  const result = g.transport.invoke(command, { ...args })
+  await g.h.advance(0)
+  expect(g.commands()).toHaveLength(1)
+  const request = g.commands()[0].request
+  expect(request.action).toEqual(action)
+  g.h.reply({ operation: 'stationControl', operationId: request.requestId, outcome: 'applied', evidence: 'stationState' })
+  await g.h.advance(100)
+  expect(g.invoke).toHaveBeenCalledTimes(1)
+  g.sample.value = splitSnapshot(after)
+  g.sample.age = 0
+  await g.h.advance(50)
+  expect(await result).toEqual(g.sample.value)
+  expect(g.commands()).toHaveLength(1)
+  g.h.client.disconnected()
+})
+
+it.each(['readback', 'evidence', 'privileges'])('refuses a split after a mismatched %s without sending it again', async changed => {
+  const g = decoderGesture(['splitTuning'], 3, splitSnapshot())
+  g.sample.age = 0
+  const result = g.transport.invoke('set_split', { txMhz: 14.020 }).catch(e => e)
+  await g.h.advance(0)
+  const request = g.commands()[0].request
+  g.h.reply(changed === 'privileges'
+    ? { operation: 'stationControl', operationId: request.requestId, outcome: 'rejected', reason: 'outsidePrivileges' }
+    : { operation: 'stationControl', operationId: request.requestId, outcome: 'applied', evidence: changed === 'evidence' ? 'radioReadback' : 'stationState' })
+  const error = await result
+  expect(error).toMatchObject({ message: changed === 'evidence' ? 'operationUnknown' : changed === 'privileges' ? 'outsidePrivileges' : 'readingUnavailable' })
+  if (changed === 'privileges') expect(controlFailureMessage(error)).toBe(t('remote.b1.outsidePrivileges'))
+  await g.h.advance(1500)
+  expect(g.commands()).toHaveLength(1)
+  g.h.client.disconnected()
+})
+
+it('refuses malformed, unchanged, unhinted and older-station split and clarifier requests before sending', async () => {
+  const g = decoderGesture(['splitTuning', 'ritTuning'], 3, splitSnapshot())
+  for (const [command, bad] of [['set_split', {}], ['set_split', { txMhz: '14.032' }], ['set_split', { txMhz: 14.032, extra: 1 }], ['set_split', { txMhz: null }],
+    ['set_rit', { hz: 0 }], ['set_rit', { hz: 10.5 }], ['set_xit', { hz: 10000 }], ['set_vfo', { vfo: 'A' }], ['set_vfo', { vfo: 'C' }], ['swap_vfo', undefined]] as const)
+    await expect(g.transport.invoke(command, bad as Record<string, unknown> | undefined)).rejects.toMatchObject({ sent: false })
+  expect(g.commands()).toHaveLength(0)
+  g.h.client.disconnected()
+  for (const [capabilities, version, message] of [[['ritTuning'], 3, 'notController'], [['splitTuning'], 2, 'stationUnsupported']] as [ControlCapability[], OperationVersion, string][]) {
+    const old = decoderGesture(capabilities, version, splitSnapshot())
+    await expect(old.transport.invoke('set_split', { txMhz: 14.032 })).rejects.toMatchObject({ message })
     expect(old.commands()).toHaveLength(0)
     old.h.client.disconnected()
   }

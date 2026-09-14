@@ -201,3 +201,44 @@ describe('closed station operating requests', () => {
     expect(() => stationAction({ action: 'decoder.redecode' })).toThrow()
   })
 })
+
+// Remote parity batch 1: split, XIT and VFO move the transmit frequency and share one hint; RIT
+// is receive-only and has its own. Each carries the value the page displayed.
+describe('split and clarifier requests', () => {
+  it('admits bounded, changed split, XIT, VFO and RIT choices under their own hints', () => {
+    const accepted: [Record<string, unknown>, string][] = [
+      [{ action: 'radio.split', expectedTxMhz: null, txMhz: 14.032 }, 'splitTuning'],
+      [{ action: 'radio.split', expectedTxMhz: 14.032, txMhz: null }, 'splitTuning'],
+      [{ action: 'radio.split', expectedTxMhz: 14.032, txMhz: 14.033 }, 'splitTuning'],
+      [{ action: 'radio.xit', expectedHz: 0, hz: -4000 }, 'splitTuning'],
+      [{ action: 'radio.vfo', expectedVfo: 'A', vfo: 'B' }, 'splitTuning'],
+      [{ action: 'radio.rit', expectedHz: 10, hz: 0 }, 'ritTuning']
+    ]
+    for (const [action, capability] of accepted) {
+      expect(stationAction(action)).toEqual(action)
+      expect(actionCapability(stationAction(action))).toBe(capability)
+      for (const extra of ['settings', 'command', 'txEnabled', 'radioId', 'dialMhz']) expect(() => stationAction({ ...action, [extra]: 1 })).toThrow()
+      for (const key of Object.keys(action).filter(k => k !== 'action')) {
+        const missing = { ...action }
+        delete missing[key]
+        expect(() => stationAction(missing)).toThrow()
+      }
+    }
+    for (const txMhz of [NaN, Infinity, 0, -14.032, 250001, '14.032', undefined]) expect(() => stationAction({ action: 'radio.split', expectedTxMhz: null, txMhz })).toThrow()
+    expect(() => stationAction({ action: 'radio.split', expectedTxMhz: null, txMhz: null })).toThrow()
+    expect(() => stationAction({ action: 'radio.split', expectedTxMhz: 14.032, txMhz: 14.032 })).toThrow()
+    for (const name of ['radio.xit', 'radio.rit']) {
+      for (const hz of [10000, -10000, 10.5, NaN, '10', null]) expect(() => stationAction({ action: name, expectedHz: 0, hz })).toThrow()
+      expect(() => stationAction({ action: name, expectedHz: 20, hz: 20 })).toThrow()
+      expect(() => stationAction({ action: name, expectedHz: 10000, hz: 0 })).toThrow()
+    }
+    for (const vfo of ['C', 'a', 'VFOB', '', null]) expect(() => stationAction({ action: 'radio.vfo', expectedVfo: 'A', vfo })).toThrow()
+    expect(() => stationAction({ action: 'radio.vfo', expectedVfo: 'B', vfo: 'B' })).toThrow()
+    expect(() => stationAction({ action: 'radio.swapVfo' })).toThrow()
+  })
+  it('accepts the privilege refusal only as a rejection reason', () => {
+    const id = crypto.randomUUID()
+    expect(controlOutcome({ operation: 'stationControl', operationId: id, outcome: 'rejected', reason: 'outsidePrivileges' }).outcome).toBe('rejected')
+    expect(() => controlOutcome({ operation: 'stationControl', operationId: id, outcome: 'applied', evidence: 'outsidePrivileges' })).toThrow()
+  })
+})

@@ -62,6 +62,17 @@ pub enum KeyboardReceiver {
     Psk,
 }
 
+#[derive(Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+pub enum Vfo {
+    A,
+    B,
+}
+
+/// A split request always names both values; an absent one is invalid, never simplex by omission.
+fn present<'de, D: serde::Deserializer<'de>>(value: D) -> Result<Option<f64>, D::Error> {
+    Option::<f64>::deserialize(value)
+}
+
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(tag = "action", deny_unknown_fields)]
 pub enum Action {
@@ -176,6 +187,31 @@ pub enum Action {
     Redecode {
         #[serde(rename = "expectedTier")]
         expected_tier: tempo_app::dto::Tier,
+    },
+    #[serde(rename = "radio.split")]
+    Split {
+        #[serde(rename = "expectedTxMhz", deserialize_with = "present")]
+        expected_tx_mhz: Option<f64>,
+        #[serde(rename = "txMhz", deserialize_with = "present")]
+        tx_mhz: Option<f64>,
+    },
+    #[serde(rename = "radio.rit")]
+    Rit {
+        #[serde(rename = "expectedHz")]
+        expected_hz: i32,
+        hz: i32,
+    },
+    #[serde(rename = "radio.xit")]
+    Xit {
+        #[serde(rename = "expectedHz")]
+        expected_hz: i32,
+        hz: i32,
+    },
+    #[serde(rename = "radio.vfo")]
+    Vfo {
+        #[serde(rename = "expectedVfo")]
+        expected_vfo: Vfo,
+        vfo: Vfo,
     },
     #[serde(rename = "decoder.js8Speed")]
     Js8Speed {
@@ -515,6 +551,51 @@ pub fn execute(
         // Receive-only: re-runs the decoder over retained audio, refused while TX is enabled.
         #[cfg(feature = "radio")]
         Action::Redecode { expected_tier } => engine.remote_redecode(*expected_tier)?,
+        // Split, RIT, XIT and VFO use the local one-shot verbs the radio loop writes next pass.
+        // The engine refuses a transmit-frequency change while TX is armed or outside the licence.
+        #[cfg(feature = "radio")]
+        Action::Split {
+            expected_tx_mhz,
+            tx_mhz,
+        } => {
+            engine.queue_remote_split(
+                *expected_tx_mhz,
+                *tx_mhz,
+                context.radio_connection.ok_or(Reason::ReadingUnavailable)?,
+                &permit,
+            )?;
+            return Ok(station_state());
+        }
+        #[cfg(feature = "radio")]
+        Action::Rit { expected_hz, hz } => {
+            engine.queue_remote_rit(
+                *expected_hz,
+                *hz,
+                context.radio_connection.ok_or(Reason::ReadingUnavailable)?,
+                &permit,
+            )?;
+            return Ok(station_state());
+        }
+        #[cfg(feature = "radio")]
+        Action::Xit { expected_hz, hz } => {
+            engine.queue_remote_xit(
+                *expected_hz,
+                *hz,
+                context.radio_connection.ok_or(Reason::ReadingUnavailable)?,
+                &permit,
+            )?;
+            return Ok(station_state());
+        }
+        #[cfg(feature = "radio")]
+        Action::Vfo { expected_vfo, vfo } => {
+            engine.queue_remote_vfo(
+                *expected_vfo == Vfo::B,
+                *vfo == Vfo::B,
+                context.radio_connection.ok_or(Reason::ReadingUnavailable)?,
+                &permit,
+            )?;
+            return Ok(station_state());
+        }
         Action::ReceiverArm { receiver, on } => match receiver {
             Receiver::Rtty => engine.set_rtty_armed(*on),
             Receiver::Psk => engine.set_psk_armed(*on),
@@ -805,6 +886,16 @@ pub fn execute(
     Ok(result)
 }
 
+/// The station accepted the change into its own state; a later sample shows it.
+#[cfg(feature = "radio")]
+fn station_state() -> Completion {
+    let result = Completion::default();
+    result.finish(Outcome::Applied {
+        evidence: Evidence::StationState,
+    });
+    result
+}
+
 impl Action {
     pub fn is_logging(&self) -> bool {
         matches!(
@@ -844,7 +935,11 @@ impl Action {
             | Self::Radio { .. }
             | Self::AmpFollowBand { .. }
             | Self::AiCw { .. }
-            | Self::Redecode { .. } => 3,
+            | Self::Redecode { .. }
+            | Self::Split { .. }
+            | Self::Rit { .. }
+            | Self::Xit { .. }
+            | Self::Vfo { .. } => 3,
             _ => 2,
         }
     }
@@ -879,6 +974,8 @@ pub fn capabilities(version: u8) -> Vec<&'static str> {
                 // Remote parity batch 1: each hint ships with its action.
                 "aiCw",
                 "redecode",
+                "splitTuning",
+                "ritTuning",
             ]
         }
     }

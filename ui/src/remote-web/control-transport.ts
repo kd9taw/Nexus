@@ -6,6 +6,20 @@ import { APPLICATION_TIMEOUT_MS } from './application-protocol'
 import type { ApplicationCommand } from './application-protocol'
 import { readBandChoices } from './band-choices'
 
+type TuningAction = Extract<StationAction, { action: 'radio.split' | 'radio.xit' | 'radio.vfo' | 'radio.rit' }>
+const isTuning = (action: StationAction): action is TuningAction => ['radio.split', 'radio.xit', 'radio.vfo', 'radio.rit'].includes(action.action)
+/** The station applies these as one-shots its radio loop writes; a later sample must show the value. */
+function tuningShown(action: TuningAction, radio: import('../types').RadioStatus | undefined): boolean {
+  if (!radio) return false
+  switch (action.action) {
+    case 'radio.split': return action.txMhz === null ? radio.splitTxMhz == null
+      : radio.splitTxMhz != null && Math.abs(Math.round(radio.splitTxMhz * 1e6) - Math.round(action.txMhz * 1e6)) <= 1
+    case 'radio.vfo': return (radio.activeVfo === 'B' ? 'B' : 'A') === action.vfo
+    case 'radio.rit': return radio.ritHz === action.hz
+    case 'radio.xit': return radio.xitHz === action.hz
+  }
+}
+
 /** Adapt only the reviewed local gestures. The station receives typed intents,
  * never an invoke name; every other command remains behind the read allowlist. */
 export function controlTransport(reads: ApplicationTransport, client: ApplicationClient, operations: OperationClient): ApplicationTransport {
@@ -194,6 +208,22 @@ export function controlTransport(reads: ApplicationTransport, client: Applicatio
             read = 'get_snapshot'
             break
           }
+          case 'set_split': case 'set_rit': case 'set_xit': case 'set_vfo': {
+            const key = command === 'set_split' ? 'txMhz' : command === 'set_vfo' ? 'vfo' : 'hz'
+            if (!args || Object.keys(args).length !== 1 || !(key in args)) throw Error('invalidOperation')
+            // Bind the change to the value the station last reported, in whole Hz for a split.
+            const radio = (await reads.invoke<import('../types').AppSnapshot>('get_snapshot'))?.radio
+            if (!radio) throw Error('readingUnavailable')
+            const whole = (mhz: unknown) => typeof mhz === 'number' ? Math.round(mhz * 1e6) / 1e6 : mhz
+            action = stationAction(command === 'set_split' ? { action: 'radio.split', expectedTxMhz: radio.splitTxMhz == null ? null : whole(radio.splitTxMhz), txMhz: args.txMhz === null ? null : whole(args.txMhz) }
+              : command === 'set_vfo' ? { action: 'radio.vfo', expectedVfo: radio.activeVfo === 'B' ? 'B' : 'A', vfo: args.vfo }
+              : { action: command === 'set_rit' ? 'radio.rit' : 'radio.xit', expectedHz: (command === 'set_rit' ? radio.ritHz : radio.xitHz) ?? 0, hz: args.hz })
+            read = 'get_snapshot'
+            break
+          }
+          // The desktop has no swap button; a browser may not reach one either.
+          case 'swap_vfo':
+            throw Error('applicationUnsupported')
         }
         if (action?.action === 'radio.select') {
           const context = operations.getSnapshot().state?.controls?.context
@@ -225,6 +255,7 @@ export function controlTransport(reads: ApplicationTransport, client: Applicatio
         if (action?.action === 'radio.workSpot' && result.outcome === 'applied' && result.evidence !== 'radioReadback') throw Error('operationUnknown')
         if (action.action === 'decoder.aiCw' && (result.outcome !== 'applied' || result.evidence !== 'settingsSaved')) throw Error('operationUnknown')
         if (action.action === 'decoder.redecode' && (result.outcome !== 'applied' || result.evidence !== 'receiverState')) throw Error('operationUnknown')
+        if (isTuning(action) && (result.outcome !== 'applied' || result.evidence !== 'stationState')) throw Error('operationUnknown')
         if (action?.action === 'radio.select' && result.outcome === 'applied' && result.evidence !== 'radioReadback' && !(displayed?.radioId === action.radioId && result.evidence === 'stationState')) throw Error('operationUnknown')
       }
       if (!read) return undefined as T
@@ -242,6 +273,7 @@ export function controlTransport(reads: ApplicationTransport, client: Applicatio
             if (!radio || Math.round(radio.dialMhz * 1e6) !== Math.round(action.dialMhz * 1e6) || radio.operatingMode?.toLowerCase() !== action.mode) throw Error('readingUnavailable')
           }
           if (action?.action === 'decoder.aiCw' && (value as import('../types').AppSnapshot)?.aiCw?.enabled !== action.on) throw Error('readingUnavailable')
+          if (action && isTuning(action) && !tuningShown(action, (value as import('../types').AppSnapshot)?.radio)) throw Error('readingUnavailable')
           if (action?.action === 'radio.select') {
             const snapshot = value as import('../types').AppSnapshot
             const settings = await reads.invoke<import('../types').Settings>('get_settings')

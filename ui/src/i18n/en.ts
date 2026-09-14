@@ -114,6 +114,8 @@ export const EN = {
   "remote.controlRequestFailed": "The command was not confirmed. Check station control permission and the current readings.",
   "remote.controlNotSent": "Not sent. Nothing reached the station, so nothing changed there. Try again.",
   "remote.controlBusy": "The station was busy and nothing changed. Try again.",
+  // remote parity batch 1
+  "remote.b1.outsidePrivileges": "Not changed. That transmit frequency is outside your license privileges.",
   "remote.controlLocalHint": "Approving a browser gives it station controls: supported receiver, radio and amplifier controls. To limit a browser, revoke them here. Transmitting needs its own permission.",
   "remote.transmitAllow": "Allow FT8/FT4 transmission",
   "remote.transmitRevoke": "Revoke transmission permission",

@@ -51,6 +51,10 @@ export type StationAction =
   | { action: 'decoder.pskMode'; mode: 'PSK31' | 'QPSK31'; reverse: boolean }
   | { action: 'decoder.aiCw'; expectedOn: boolean; on: boolean }
   | { action: 'decoder.redecode'; expectedTier: 'FT8' | 'FT4' }
+  | { action: 'radio.split'; expectedTxMhz: number | null; txMhz: number | null }
+  | { action: 'radio.xit'; expectedHz: number; hz: number }
+  | { action: 'radio.vfo'; expectedVfo: 'A' | 'B'; vfo: 'A' | 'B' }
+  | { action: 'radio.rit'; expectedHz: number; hz: number }
   | { action: 'decoder.js8Speed'; expectedSpeed: number; speed: number }
   | { action: 'decoder.msk144Period'; expectedPeriodSecs: number; periodSecs: number }
   | { action: 'decoder.depth'; expectedTier: string; expectedDepth: number; depth: number }
@@ -93,6 +97,8 @@ const ACTION_CAPABILITY: Record<StationAction['action'], ControlCapability> = {
   'decoder.arm': 'decoder', 'decoder.clear': 'decoder', 'decoder.afcReset': 'decoder',
   'decoder.net': 'decoder', 'decoder.pskMode': 'decoder',
   'decoder.aiCw': 'aiCw', 'decoder.redecode': 'redecode',
+  // Split, XIT and VFO decide where the transmitter goes; RIT only moves the receiver.
+  'radio.split': 'splitTuning', 'radio.xit': 'splitTuning', 'radio.vfo': 'splitTuning', 'radio.rit': 'ritTuning',
   'decoder.js8Speed': 'decoderSettings', 'decoder.msk144Period': 'decoderSettings',
   'decoder.depth': 'receiverSettings', 'receiver.rxOffset': 'receiverSettings',
   'receiver.rxGain': 'receiverGain',
@@ -280,6 +286,21 @@ export function stationAction(raw: unknown): StationAction {
       object(a, ['action', 'expectedTier'])
       if (!oneOf(a.expectedTier, ['FT8', 'FT4'])) invalid()
       break
+    case 'radio.split':
+      // null is simplex. Both values are always named: a missing one is not simplex by omission.
+      object(a, ['action', 'expectedTxMhz', 'txMhz'])
+      for (const v of [a.expectedTxMhz, a.txMhz]) if (v !== null && (!finite(v) || v <= 0 || v > 250000)) invalid()
+      if (a.expectedTxMhz === a.txMhz) invalid()
+      break
+    case 'radio.xit': case 'radio.rit':
+      object(a, ['action', 'expectedHz', 'hz'])
+      // Offsets are signed: the shared `integer` helper is non-negative by design.
+      if (!Number.isSafeInteger(a.expectedHz) || !Number.isSafeInteger(a.hz) || (a.expectedHz as number) < -9999 || (a.expectedHz as number) > 9999 || (a.hz as number) < -9999 || (a.hz as number) > 9999 || a.expectedHz === a.hz) invalid()
+      break
+    case 'radio.vfo':
+      object(a, ['action', 'expectedVfo', 'vfo'])
+      if (!oneOf(a.expectedVfo, ['A', 'B']) || !oneOf(a.vfo, ['A', 'B']) || a.expectedVfo === a.vfo) invalid()
+      break
     case 'decoder.js8Speed':
       object(a, ['action', 'expectedSpeed', 'speed'])
       if (!integer(a.expectedSpeed) || !integer(a.speed) || a.expectedSpeed < 0 || a.expectedSpeed > 3 || a.speed < 0 || a.speed > 3 || a.expectedSpeed === a.speed) invalid()
@@ -327,7 +348,9 @@ export type ControlOutcome = { operation: 'stationControl'; operationId: string 
   | { outcome: 'applied'; evidence: 'receiverState' | 'radioReadback' | 'amplifierReadback' | 'stationState' | 'settingsSaved' | 'fileSynced' | 'pendingConfirmationSynced' | 'pendingDiscarded' }
   | { outcome: 'rejected' | 'unknown'; reason: string }
 )
-const REASONS = ['authorityExpired', 'contextChanged', 'readingUnavailable', 'stationBusy', 'hardwareUnavailable', 'hardwareUnconfirmed', 'unsupportedAction', 'invalidAction', 'persistenceFailed', 'noEligibleContact', 'alreadyPresent', 'pendingConfirmationRequired']
+const REASONS = ['authorityExpired', 'contextChanged', 'readingUnavailable', 'stationBusy', 'hardwareUnavailable', 'hardwareUnconfirmed', 'unsupportedAction', 'invalidAction', 'persistenceFailed', 'noEligibleContact', 'alreadyPresent', 'pendingConfirmationRequired',
+  // Only batch-1 transmit-frequency actions emit this, so a page that predates it never receives it.
+  'outsidePrivileges']
 export function controlOutcome(raw: unknown): ControlOutcome {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) invalid()
   const v = raw as Record<string, unknown>

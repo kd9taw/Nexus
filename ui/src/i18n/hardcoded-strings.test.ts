@@ -66,6 +66,7 @@ const MIGRATED = [
   'remote-web/SessionStatus.tsx',
   'remote-web/presentation.tsx',
   'remote-web/RemoteApp.tsx',
+  'remote-web/control-failure.ts',
   'remote-native/RemoteStation.tsx',
   'remote-monitor/MonitorApp.tsx',
   'remote-monitor/preview.tsx',

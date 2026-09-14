@@ -147,6 +147,8 @@ pub enum Reason {
     NoEligibleContact,
     AlreadyPresent,
     PendingConfirmationRequired,
+    /// The requested transmit frequency is outside the operator's licence privileges.
+    OutsidePrivileges,
 }
 
 /// A bounded receipt shared with the worker, not a second command queue.

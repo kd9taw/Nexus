@@ -45,6 +45,8 @@ export const FR: PartialCatalog = {
   "remote.controlRequestFailed": "La commande n’a pas été confirmée. Vérifiez l’autorisation de contrôle de la station et les mesures actuelles.",
   "remote.controlNotSent": "Non envoyé. Rien n’a atteint la station, donc rien n’y a changé. Réessayez.",
   "remote.controlBusy": "La station était occupée et rien n’a changé. Réessayez.",
+  // remote parity batch 1
+  "remote.b1.outsidePrivileges": "Rien n’a changé. Cette fréquence d’émission est hors des privilèges de votre licence.",
   "remote.controlLocalHint": "Autoriser un navigateur lui donne le contrôle de la station : les fonctions prises en charge du récepteur, de la radio et de l’amplificateur. Pour limiter un navigateur, révoquez-le ici. L’émission nécessite une autorisation distincte.",
   "remote.transmitAllow": "Autoriser l’émission FT8/FT4",
   "remote.transmitRevoke": "Révoquer l’autorisation d’émission",
