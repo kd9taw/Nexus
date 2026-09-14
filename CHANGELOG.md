@@ -29,6 +29,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   only if you say yes. If your computer will not let Nexus start at sign-in, Nexus says so and the
   switch stays off. Starting at sign-in is an ordinary start: Nexus listens, and transmit stays off.
 
+- **Signing up for Remote is one pass, and the site looks like hamradiotools.io.** A new account
+  enters the six-digit code emailed during sign-up and lands signed in — no "sign-in refused" page.
+  If a sign-in is ever held for an unconfirmed email, the site says "Confirm your email to finish"
+  with a Continue button and a way to use a different account, and refusals that used to say "check
+  the connection" now say what happened: that email already has a trial under another sign-in, or
+  too many tries in a short time. The Remote sign-in, station list and pairing screens take the
+  hamradiotools.io colours, type and Nexus mark; the Nexus screens inside Remote are unchanged.
+
 - **Remote says "Not sent" when a command never reached the station.** On a slow link the browser
   refuses to send a command against a station reading that is out of date, rather than sending it
   late, and says so: nothing reached the station, so nothing changed there, and to try again. "Not
