@@ -155,6 +155,10 @@ interface Props {
    * that. Those surfaces keep the pre-1.5 behavior of painting the rows they are served, which
    * under the backend's transmit hold is the last real picture of the band. */
   txBlanks?: boolean
+  /** Pin the view to this audio window (Hz) and withdraw the zoom picker (#101). WSPR passes
+   * its 200 Hz sub-band: every WSPR decoder searches only that, so the rest of the passband is
+   * audio no WSPR signal can occupy. Unset = the operator's zoom, exactly as before. */
+  fixedWindow?: { lo: number; hi: number }
 }
 
 // Default FT8/digital view window (Hz) — the FT8 signals live here, now spanning the full 4 kHz
@@ -187,6 +191,7 @@ export function Waterfall({
   rowMs = 120,
   paletteScope,
   txBlanks = false,
+  fixedWindow,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   // Separate transparent overlay for the axis + Rx/Tx markers, so they are NEVER baked into
@@ -224,11 +229,17 @@ export function Waterfall({
   // inside it and pages only when it leaves — which keeps #115's guarantee that the window can
   // never be stale. The ref is the previous window; nothing else reads it.
   const prevViewRef = useRef<{ lo: number; hi: number } | null>(null)
+  // A fixed window (#101) wins outright and leaves `prevViewRef` alone, so leaving WSPR hands
+  // the operator's own zoom window back where they left it. Primitives in the deps: a caller
+  // passing a fresh object literal each render must not force a cold rebuild every poll.
+  const fixedLo = fixedWindow?.lo
+  const fixedHi = fixedWindow?.hi
   const view = useMemo(() => {
+    if (fixedLo != null && fixedHi != null) return { lo: fixedLo, hi: fixedHi }
     const next = zoomWindow(prevViewRef.current, rxOffsetHz, zoomSpan)
     prevViewRef.current = next
     return next
-  }, [rxOffsetHz, zoomSpan])
+  }, [rxOffsetHz, zoomSpan, fixedLo, fixedHi])
   // refs so the animation loop always reads current props without re-subscribing
   const txRef = useRef(transmitting)
   const txBlanksRef = useRef(txBlanks)
@@ -930,26 +941,30 @@ export function Waterfall({
         {/* MOD_LABEL: advertising "Ctrl" on a Mac names the OS right-click gesture — ⌘ there. */}
         <span className="wf-hint">{hint ?? t('waterfall.hint', { mod: MOD_LABEL })}</span>
         <PalettePicker scope={paletteScope} />
-        <select
-          className="wf-palette wf-zoom"
-          value={zoomSpan}
-          aria-label={t('waterfall.zoom.aria')}
-          title={t('waterfall.zoom.title')}
-          onChange={(e) => {
-            // The SPAN is the only thing the operator picks; the window follows from it and
-            // the RX marker (see the `view` memo). The repaint is the rebuild layout-effect's
-            // job — this handler deliberately touches neither the view refs nor the canvas.
-            const span = Number(e.target.value)
-            setZoomSpan(span)
-            surfaceSet(ZOOM_KEY, String(span))
-          }}
-        >
-          {WATERFALL_ZOOMS.map((z) => (
-            <option key={z.value} value={z.value}>
-              {z.label}
-            </option>
-          ))}
-        </select>
+        {/* Withdrawn under a fixed window (#101): a picker whose every choice does nothing is
+            worse than none. The persisted span is untouched and returns with the picker. */}
+        {!fixedWindow && (
+          <select
+            className="wf-palette wf-zoom"
+            value={zoomSpan}
+            aria-label={t('waterfall.zoom.aria')}
+            title={t('waterfall.zoom.title')}
+            onChange={(e) => {
+              // The SPAN is the only thing the operator picks; the window follows from it and
+              // the RX marker (see the `view` memo). The repaint is the rebuild layout-effect's
+              // job — this handler deliberately touches neither the view refs nor the canvas.
+              const span = Number(e.target.value)
+              setZoomSpan(span)
+              surfaceSet(ZOOM_KEY, String(span))
+            }}
+          >
+            {WATERFALL_ZOOMS.map((z) => (
+              <option key={z.value} value={z.value}>
+                {z.label}
+              </option>
+            ))}
+          </select>
+        )}
         <label className="wf-knob" title={t('waterfall.gain.title')}>
           <span>G</span>
           <input

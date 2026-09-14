@@ -17,6 +17,7 @@
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react'
 import { t } from './i18n'
 import { confirmDialog, ConfirmHost } from './confirm'
+import { WSPR_WATERFALL_WINDOW } from './waterfall'
 import type {
   AppSnapshot,
   BandChannel,
@@ -431,6 +432,8 @@ function DetachedPanelBody({ panel }: { panel: string }) {
           }}
           active
           paletteScope={FT_PALETTE_SCOPE}
+          // #101: the torn-off copy shows WSPR's sub-band too, like the docked one.
+          fixedWindow={snap?.link.tier === 'WSPR' ? WSPR_WATERFALL_WINDOW : undefined}
           txBlanks // the torn-off FT waterfall — same surface, same 13 s over.
         />
       </DetachedShell>

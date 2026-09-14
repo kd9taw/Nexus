@@ -42,6 +42,7 @@ import {
   toggleIgnored,
 } from '../txMessages'
 import { atuTune, closePanelWindow, openPanelWindow, getSettings, notifyErase, setSettings, setMsk144Period, type FdRulesetDto } from '../api'
+import { WSPR_WATERFALL_WINDOW } from '../waterfall'
 import { FdAdvisories } from './FdAdvisories'
 import { pointRotatorAtCall, redecode, startCq, startQsoRecording, stopQsoRecording } from '../api'
 import { setDecodeDepth } from '../api'
@@ -1265,6 +1266,7 @@ export function OperateCockpit({
               ) : (
                 <Waterfall
                   onPopOut={popOutWaterfall}
+                  fixedWindow={tier === 'WSPR' ? WSPR_WATERFALL_WINDOW : undefined}
                   transmitting={snap.radio.transmitting}
                   rxOffsetHz={snap.radio.rxOffsetHz}
                   txOffsetHz={snap.radio.txOffsetHz}

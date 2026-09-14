@@ -1192,6 +1192,11 @@ export const WATERFALL_ZOOMS: { value: number; label: string }[] = [
   { value: 600, label: '600 Hz' },
 ]
 
+/** WSPR's 200 Hz sub-band (#101): the window every WSPR decoder searches, and the engine's own
+ *  `tx_offset_bounds` for the tier, which clamps both markers to it. A waterfall on the WSPR
+ *  tier passes this as `fixedWindow`, docked or torn off. */
+export const WSPR_WATERFALL_WINDOW = { lo: 1400, hi: 1600 }
+
 /** Coerce a persisted zoom span to the picker's own vocabulary. The `<select>` above is
  * the only legitimate writer, so any other finite number (stale format, foreign surface,
  * hand-edited store) falls back to Std (0) rather than rendering a span no option

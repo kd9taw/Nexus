@@ -28,6 +28,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Journey's Personal bests follows your Units setting (#244).** The longest-distance record was
   always shown in miles. It now reads in kilometres or miles, like every other distance in Nexus.
   Best miles-per-watt keeps its name and unit, since that is the award's own measure.
+- **On WSPR the waterfall and the RX marker stay in the WSPR sub-band (#101).** WSPR signals only
+  live in the 200 Hz around 1500 Hz, but the waterfall still showed the whole passband and the green
+  RX marker could be dragged anywhere in it. While WSPR is selected the waterfall now shows just
+  1400–1600 Hz (the zoom picker steps aside, and your zoom comes back when you leave WSPR), and the
+  RX marker stays inside that window, as the transmit marker already did.
 
 ### Security
 

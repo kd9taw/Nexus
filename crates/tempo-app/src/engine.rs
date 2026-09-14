@@ -11121,10 +11121,17 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // value and merely has its range narrowed.
         //
         // ⚠️ NEEDS BENCH: FT-mode TX change, operator approved, not verifiable on this box.
-        // RX is untouched — the WSPR decoder searches the whole sub-band, so the green
-        // marker carries no transmit consequence.
+        //
+        // The RX marker is re-parked the same way (#101) — display only: the WSPR decoder
+        // searches the whole sub-band, so the green marker carries no transmit consequence,
+        // but one carried in at 2500 Hz pointed at nothing WSPR can decode. Clamped in place
+        // rather than through `set_rx_offset`, which also revokes remote actuation — a tier
+        // change must not pick up that side effect.
         if tier == Tier::Wspr {
             self.set_tx_offset(self.tx_offset_hz);
+            let (lo, hi) = Self::tx_offset_bounds(tier);
+            self.rx_offset_hz = self.rx_offset_hz.clamp(lo, hi);
+            self.settings.rx_offset_hz = self.rx_offset_hz;
         }
         // Point the native signal source at the selected mode (FT1/FT8/FT4). DX1
         // decodes via its own robust path in `ingest`, so the source is left as-is.
@@ -16184,7 +16191,11 @@ Pick the one you operate from on the Contesting tab in Settings.",
     pub fn set_rx_offset(&mut self, hz: f32) {
         self.remote_ft_settings_epoch = self.remote_ft_settings_epoch.saturating_add(1);
         self.remote_actuation.revoke();
-        self.rx_offset_hz = hz.clamp(200.0, 4000.0);
+        // Per-tier, the same bounds as TX (#101): on WSPR the marker stays inside the 200 Hz
+        // sub-band every WSPR decoder searches, instead of pointing at audio no WSPR signal
+        // can occupy. Every other tier keeps the whole 200–4000 Hz span.
+        let (lo, hi) = Self::tx_offset_bounds(self.app.tier());
+        self.rx_offset_hz = hz.clamp(lo, hi);
         self.settings.rx_offset_hz = self.rx_offset_hz;
     }
     /// Hold the TX offset fixed when the RX offset changes (WSJT-X "Hold Tx Freq").
@@ -26299,6 +26310,40 @@ mod tests {
         assert_eq!(snap.radio.rx_offset_hz, 200.0);
         assert_eq!(snap.radio.tx_offset_hz, 4000.0);
         assert!(snap.radio.hold_tx_freq);
+    }
+
+    #[test]
+    fn wspr_rx_marker_is_bounded_to_the_wspr_sub_band() {
+        // #101: the TX offset was narrowed to WSPR's 200 Hz sub-band, the RX marker was not —
+        // it could sit anywhere in 200–4000 Hz, pointing at audio no WSPR decoder searches.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Wspr);
+        e.set_rx_offset(300.0);
+        assert_eq!(e.rx_offset_hz(), 1400.0, "below the sub-band clamps up");
+        e.set_rx_offset(3800.0);
+        assert_eq!(e.rx_offset_hz(), 1600.0, "above the sub-band clamps down");
+        e.set_rx_offset(1450.0);
+        assert_eq!(e.rx_offset_hz(), 1450.0, "inside it is left alone");
+
+        // Entering WSPR re-parks an RX marker carried in from another tier.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Ft8);
+        e.set_rx_offset(2500.0);
+        assert_eq!(e.rx_offset_hz(), 2500.0, "FT8 keeps the full passband");
+        e.set_tier(Tier::Wspr);
+        assert!(
+            (1400.0..=1600.0).contains(&e.rx_offset_hz()),
+            "entering WSPR parks the RX marker inside the sub-band, got {}",
+            e.rx_offset_hz()
+        );
+
+        // Control: every other tier, FST4W included, still reaches the whole span.
+        for tier in [Tier::Ft8, Tier::Ft4, Tier::Fst4w] {
+            let mut e = Engine::new("KD9TAW", "EN52", 0);
+            e.set_tier(tier);
+            e.set_rx_offset(250.0);
+            assert_eq!(e.rx_offset_hz(), 250.0, "{tier:?} must keep the full span");
+        }
     }
 
     /// Operator report (2026-08-23): "if I set hold tx in ft, it should survive a nexus restart".
