@@ -61,7 +61,8 @@ import { decollideLabels } from '../features/mapLabels'
 import { SAT_ICON_RECTS, SAT_ICON_TILT_DEG } from '../features/satIcon'
 import { surfaceGet, surfaceHasOwn, surfaceSet } from '../features/windowScope'
 import { useStableByKey } from '../features/useStableByKey'
-import { loadIntentSetup, saveIntentSetup } from '../features/intentMapSettings'
+import { loadIntentSetup, saveIntentSetup, type MapChoice } from '../features/intentMapSettings'
+import { MapPicker, FLAT_MAP_CHOICES } from './MapPicker'
 import {
   gridToLatLon,
   haversineKm,
@@ -137,6 +138,11 @@ interface Props {
    * on mount with the restored value, so a surface reopens the way it was left. Omitted = the
    * map still goes full-screen, just inside whatever the host already gave it. */
   onFullChange?: (full: boolean) => void
+  /** The projection, CONTROLLED by a host that owns the map picker (Connect: one picker above the
+   *  2-D map and the 3-D globe alike). Given, the map draws exactly this, shows no picker of its
+   *  own and never stores a pick — the host does. Omitted, the map owns its projection and puts the
+   *  picker (without 3D) in its own toolbar — the dedicated POTA map pop-out. */
+  projection?: Projection
   /** Double-click-to-work a live spot / DXpedition marker: the app's atomic
    * work path (rig → band+mode+freq, cockpit opens). Omitted = gesture off.
    * `program`/`reference` carry a park identity (POTA/SOTA) when the spot is one, so the
@@ -228,20 +234,24 @@ const INTENT_PRESETS: Record<
   MapIntent,
   { kind: Projection; colorBy: 'need' | 'snr'; layers: Partial<Record<LayerKey, boolean>> }
 > = {
-  // ⭐ EVERY INTENT OPENS THE FLAT WORLD MAP (operator ruling 2026-09-13: "2D" is the flat map).
-  // The 2-D renderer's Globe projection is an orthographic sphere, and a first visit to an intent
-  // that landed on it read as "the 3D map is stuck on" (tester report). Globe and Beam stay one
-  // click away in the toolbar, and a projection the operator picks is remembered per intent. All
-  // four presets still agree, which is the 2026-07-26 ruling (one intent silently switching
-  // projection reads as a rendering bug, not a preset) — they now agree on World.
+  // ⭐ EVERY INTENT OPENS ON THE GLOBE (operator decision 2026-09-13, late: Globe is the map
+  // picker's default). A projection — or 3D — the operator picks is remembered per intent
+  // (features/intentMapSettings). All four presets agree, which is the 2026-07-26 ruling: one intent
+  // silently switching projection reads as a rendering bug, not a preset.
   // Chase DX: need-colored, openings + DXpeditions + rings on.
-  dx: { kind: 'world', colorBy: 'need', layers: { dxped: false, rings: true, heat: true } },
+  dx: { kind: 'globe', colorBy: 'need', layers: { dxped: false, rings: true, heat: true } },
   // POTA/SOTA: need-colored activators; de-emphasize rings and heat.
-  pota: { kind: 'world', colorBy: 'need', layers: { dxped: false, rings: false, heat: false, ota: true } },
+  pota: { kind: 'globe', colorBy: 'need', layers: { dxped: false, rings: false, heat: false, ota: true } },
   // Ragchew: who-can-I-hear (signal), calm — dxped off.
-  casual: { kind: 'world', colorBy: 'snr', layers: { dxped: false, rings: true, heat: false } },
+  casual: { kind: 'globe', colorBy: 'snr', layers: { dxped: false, rings: true, heat: false } },
   // 6m/VHF: heat ON — visualizing the Es/F2 opening footprint IS this intent.
-  vhf: { kind: 'world', colorBy: 'snr', layers: { dxped: false, rings: true, heat: true, openings: true } },
+  vhf: { kind: 'globe', colorBy: 'snr', layers: { dxped: false, rings: true, heat: true, openings: true } },
+}
+
+/** A stored map pick as a 2-D projection — `null` for 3D or nothing stored. A 2-D-only map (the POTA
+ *  pop-out) opens its preset projection instead of the WebGL globe it cannot draw. */
+function flatPick(map: MapChoice | undefined): Projection | null {
+  return map && map !== '3d' ? map : null
 }
 
 /** An intent's preset applied SOFTLY over a layer table: only the layers it names change, so the
@@ -638,6 +648,7 @@ export function MapView({
   intent,
   dedicatedIntent = false,
   onFullChange,
+  projection,
   onWorkSpot,
   onSelectSat,
   aprs,
@@ -682,9 +693,10 @@ export function MapView({
   const [initialSetup] = useState(() =>
     !embedded && intent ? loadIntentSetup(intent, dedicatedIntent) : null,
   )
-  const [kind, setKind] = useState<Projection>(() =>
-    embedded ? 'globe' : initialSetup?.kind ?? (intent ? INTENT_PRESETS[intent].kind : 'world'),
+  const [ownKind, setKind] = useState<Projection>(() =>
+    embedded ? 'globe' : flatPick(initialSetup?.map) ?? (intent ? INTENT_PRESETS[intent].kind : 'globe'),
   )
+  const kind = embedded ? 'globe' : (projection ?? ownKind)
   const [colorBy, setColorBy] = useState<'need' | 'snr'>(
     () => initialSetup?.colorBy ?? (intent ? INTENT_PRESETS[intent].colorBy : 'need'),
   )
@@ -705,7 +717,7 @@ export function MapView({
   if (!embedded && intent && intent !== setupIntent) {
     setSetupIntent(intent)
     const saved = loadIntentSetup(intent, dedicatedIntent)
-    setKind(saved?.kind ?? INTENT_PRESETS[intent].kind)
+    setKind(flatPick(saved?.map) ?? INTENT_PRESETS[intent].kind)
     setColorBy(saved?.colorBy ?? INTENT_PRESETS[intent].colorBy)
     setLayers((L) => layersFromValue(saved?.layers) ?? withIntentPreset(L, intent))
   }
@@ -926,8 +938,13 @@ export function MapView({
   // own, so its preset forces exactly once.) The embedded maps are exempt, as above.
   useEffect(() => {
     if (embedded || !setupIntent) return
-    saveIntentSetup(setupIntent, { kind, layers, colorBy }, dedicatedIntent)
-  }, [kind, layers, colorBy, setupIntent, embedded, dedicatedIntent])
+    // A host-controlled projection is the host's to store (see the `projection` prop).
+    saveIntentSetup(
+      setupIntent,
+      projection === undefined ? { map: kind, layers, colorBy } : { layers, colorBy },
+      dedicatedIntent,
+    )
+  }, [kind, layers, colorBy, setupIntent, embedded, dedicatedIntent, projection])
 
   // Tell the host, including on mount so a surface restored as full-screen opens with the
   // host's chrome already gone rather than flashing it away a frame later.
@@ -3040,20 +3057,18 @@ export function MapView({
   const prov = prop ? prop.source : 'loading'
 
   return (
-    <div className={`map-view${full ? ' map-full' : ''}`}>
+    <div className={`map-view${full ? ' map-full' : ''}`} data-projection={kind}>
       {!embedded && (
       <div className="map-toolbar">
-        <div className="map-proj" role="group" aria-label={t('map.projection.aria')}>
-          <button className={kind === 'globe' ? 'active' : ''} onClick={() => setKind('globe')} title={t('map.projection.globe.title')}>
-            {t('map.projection.globe.label')}
-          </button>
-          <button className={kind === 'aeqd' ? 'active' : ''} onClick={() => setKind('aeqd')} title={t('map.projection.beam.title')}>
-            {t('map.projection.beam.label')}
-          </button>
-          <button className={kind === 'world' ? 'active' : ''} onClick={() => setKind('world')} title={t('map.projection.world.title')}>
-            {t('map.projection.world.label')}
-          </button>
-        </div>
+        {projection === undefined && (
+          <MapPicker
+            choices={FLAT_MAP_CHOICES}
+            value={kind}
+            onPick={(c) => {
+              if (c !== '3d') setKind(c)
+            }}
+          />
+        )}
         <div className="map-proj" role="group" aria-label={t('map.zoom.aria')}>
           <button onClick={() => setView((v) => ({ ...v, zoom: Math.min(10, v.zoom * 1.3) }))} title={t('map.zoom.in')} aria-label={t('map.zoom.in')}>
             +

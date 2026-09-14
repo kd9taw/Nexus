@@ -1481,11 +1481,42 @@ button.nb-chip:hover {
 .connect-map {
   grid-area: center;
   display: flex;
+  /* A column: the map picker's bar on top, then whichever renderer is mounted filling the rest. */
+  flex-direction: column;
   min-width: 0;
   min-height: 0;
   /* Clip the 3-D globe's WebGL canvas to the center cell so it can never paint over
      the side rails / bottom strip (react-globe.gl briefly wants the whole window). */
   overflow: hidden;
+}
+/* THE MAP PICKER'S BAR (ConnectView): one content-sized strip at the top of the map cell, above the
+   2-D map and the 3-D globe alike, so the picker sits in the same place whatever renders. Padding
+   and border match `.map-toolbar`, which it sits directly on top of in 2-D; it wraps for the same
+   reason that one does (map-toolbar.test.ts) — the cell can be 280px wide. */
+.connect-map-bar {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border);
+}
+/* The picker's segments wrap rather than clip in a locale whose four labels outgrow the bar. */
+.map-picker {
+  flex-wrap: wrap;
+  max-width: 100%;
+}
+/* 3D on a machine that cannot draw it: still focusable (aria-disabled), visibly unavailable. */
+.map-proj button[aria-disabled='true'] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+/* The lazy 3-D chunk's placeholder fills what is left under the bar, not the whole cell. */
+.connect-map > .globe3d-loading {
+  flex: 1;
+  height: auto;
+  min-height: 0;
 }
 /* The 3-D globe fills the center cell exactly, like the 2-D .map-view does. */
 .globe3d-wrap {
@@ -14409,25 +14440,6 @@ button.cq-skiptx1.on {
   min-height: 24px;
 }
 /* The 2D/3D map-mode toggle — groups to the right next to Pop-out. */
-.connect-3d-toggle {
-  margin-left: auto;
-  font-size: 0.75rem;
-  font-weight: 700;
-  padding: 3px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-elev-2);
-  color: var(--text);
-  cursor: pointer;
-  white-space: nowrap;
-}
-.connect-3d-toggle:hover {
-  border-color: var(--accent);
-}
-.connect-3d-toggle.active {
-  border-color: var(--accent);
-  color: var(--accent);
-}
 /* 3D globe lazy-load placeholder (three.js chunk loading). */
 .globe3d-loading {
   display: flex;

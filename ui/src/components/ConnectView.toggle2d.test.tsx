@@ -1,20 +1,19 @@
 // @vitest-environment jsdom
 //
-// "2D" MEANS THE FLAT MAP (operator ruling, 2026-09-13).
+// LEAVING 3D SHOWS EXACTLY THE MAP THE OPERATOR PICKED.
 //
 // Tester report: "after running 3D, switching back to 2D shows '2D' at the top but the 3D image
 // stays on screen". The WebGL globe DID unmount — the 2-D renderer came up in its orthographic
-// Globe projection, a sphere, so "2D" still looked like a globe. Ruling: choosing 2D opens the flat
-// World projection; Globe stays available as a choice inside 2D.
+// Globe projection, a sphere, under a label that said "2D". The first fix forced the flat World
+// map on every 3D → 2D toggle. The operator's later ruling (2026-09-13, late) removed the toggle
+// instead: one picker — Globe · 3D · Flat · Beam — so there is no "2D" whose meaning has to be
+// guessed, and the "3D → 2D lands on World" rule is gone with it. Leaving 3D means choosing one of
+// the other three, and that choice is exactly what renders.
 //
-// THE RULE when it meets per-intent settings: the 3D → 2D toggle is an explicit request for the
-// flat map, so it lands on World even for an intent that remembers Globe (and that becomes what the
-// intent remembers). Every OTHER way into the 2-D map — an intent switch, a relaunch — restores the
-// projection the operator left, Globe included.
-//
-// Globe3D is stubbed ONLY to observe mount/unmount (jsdom has no WebGL); MapView is real.
+// Globe3D is stubbed ONLY to observe mount/unmount (jsdom has no WebGL) and the GPU probe answers
+// "capable"; the ConnectView and MapView are real. The projection is read off the real map.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { cleanup, render, fireEvent, screen, act } from '@testing-library/react'
+import { cleanup, render, fireEvent, screen, act, within } from '@testing-library/react'
 
 vi.mock('../api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../api')>()),
@@ -34,6 +33,7 @@ vi.mock('../api', async (importOriginal) => ({
   getOtaMapSpots: vi.fn(async () => []),
 }))
 vi.mock('./Globe3D', () => ({ default: () => <div data-testid="globe3d-stub" /> }))
+vi.mock('../gpu', () => ({ gpuCapableForGlobe: () => true }))
 import { ConnectView } from './ConnectView'
 
 class RO {
@@ -55,12 +55,9 @@ const props = {
   amp: null,
 }
 
-const projection = () =>
-  Array.from(document.querySelectorAll('.map-toolbar .map-proj button.active'))
-    .map((b) => b.textContent)
-    .filter((t) => t === 'Globe' || t === 'Beam' || t === 'World')
-const toggle = () => fireEvent.click(screen.getByRole('button', { name: /[23]D/ }))
-const click = (name: string) => fireEvent.click(screen.getByRole('button', { name }))
+const choose = (name: string) =>
+  fireEvent.click(within(screen.getByRole('group', { name: 'Map view' })).getByRole('button', { name }))
+const projection = () => document.querySelector('.map-view')?.getAttribute('data-projection') ?? null
 
 async function mount() {
   await act(async () => {
@@ -68,47 +65,49 @@ async function mount() {
   })
 }
 
-describe('3D → 2D toggle', () => {
+describe('leaving the 3D globe', () => {
   beforeEach(() => localStorage.clear())
   afterEach(() => cleanup())
 
-  it('unmounts the WebGL globe and opens the flat World map', async () => {
-    localStorage.setItem('nexus.connect.map3d', '1')
+  it('unmounts the WebGL globe and shows the 2-D map in the projection picked', async () => {
+    localStorage.setItem('nexus.connect.intents', JSON.stringify({ dx: { map: '3d' } }))
     await mount()
-    expect(await screen.findByTestId('globe3d-stub')).toBeTruthy()
-    toggle()
-    expect(screen.queryByTestId('globe3d-stub')).toBeNull()
-    expect(document.querySelector('.map-view')).not.toBeNull()
-    expect(screen.getByRole('button', { name: /2D/ })).toBeTruthy()
-    expect(projection()).toEqual(['World'])
-  })
-
-  it('lands on World even for an intent that remembers the Globe projection', async () => {
-    localStorage.setItem('nexus.connect.map3d', '0')
-    await mount()
-    click('Globe') // Globe stays a choice inside 2D…
-    expect(projection(), 'CONTROL: Chase DX really is on Globe').toEqual(['Globe'])
-    toggle() // → 3D
-    expect(await screen.findByTestId('globe3d-stub'), 'CONTROL: the 3-D globe mounted').toBeTruthy()
-    toggle() // → 2D: an explicit request for the flat map
-    expect(projection()).toEqual(['World'])
-  })
-
-  it('an intent switch inside 2D still restores Globe — only the toggle forces flat', async () => {
-    localStorage.setItem('nexus.connect.map3d', '0')
-    await mount()
-    click('Globe')
-    click('POTA/SOTA')
-    click('Chase DX')
-    expect(projection()).toEqual(['Globe'])
-  })
-
-  it('a first-time 2-D map opens flat for every intent preset', async () => {
-    localStorage.setItem('nexus.connect.map3d', '0')
-    await mount()
-    for (const name of ['Chase DX', 'POTA/SOTA', 'Ragchew', '6m/VHF']) {
-      click(name)
-      expect(projection(), name).toEqual(['World'])
+    expect(await screen.findByTestId('globe3d-stub'), 'CONTROL: it opened on 3D').toBeTruthy()
+    for (const [name, kind] of [
+      ['Flat', 'world'],
+      ['3D', null],
+      ['Beam', 'aeqd'],
+      ['3D', null],
+      ['Globe', 'globe'],
+    ] as const) {
+      choose(name)
+      if (kind === null) {
+        expect(await screen.findByTestId('globe3d-stub'), name).toBeTruthy()
+        expect(document.querySelector('.map-view'), name).toBeNull()
+      } else {
+        expect(screen.queryByTestId('globe3d-stub'), `${name}: the WebGL globe stayed on screen`).toBeNull()
+        expect(projection(), name).toBe(kind)
+      }
     }
+  })
+
+  it('3D → Globe lands on Globe — the old "always World" rule is gone', async () => {
+    await mount()
+    choose('3D')
+    expect(await screen.findByTestId('globe3d-stub')).toBeTruthy()
+    choose('Globe')
+    expect(screen.queryByTestId('globe3d-stub')).toBeNull()
+    expect(projection()).toBe('globe')
+  })
+
+  it('an intent switch restores that intent’s projection, never a forced flat map', async () => {
+    await mount()
+    choose('Beam') // Chase DX on Beam
+    fireEvent.click(screen.getByRole('button', { name: 'POTA/SOTA' }))
+    choose('3D')
+    expect(await screen.findByTestId('globe3d-stub')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Chase DX' }))
+    expect(screen.queryByTestId('globe3d-stub')).toBeNull()
+    expect(projection()).toBe('aeqd')
   })
 })

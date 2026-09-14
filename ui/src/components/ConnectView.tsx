@@ -41,7 +41,8 @@ import type { PaneContext } from './connect/paneContext'
 import { SLOT_IDS, useConnectConfig, type SlotId } from '../features/connectConfig'
 import { CONNECT_PANELS, usePanelLayout } from '../features/panelState'
 import { surfaceGet, surfaceId, surfaceSet } from '../features/windowScope'
-import { loadIntentSetup, saveIntentSetup } from '../features/intentMapSettings'
+import { loadIntentSetup, saveIntentSetup, type MapChoice } from '../features/intentMapSettings'
+import { MapPicker, ALL_MAP_CHOICES } from './MapPicker'
 import { useEntityCentroids } from '../features/entityCentroids'
 import { t } from '../i18n'
 import { NavigationMapContext, useNavigation, useSatelliteLive } from '../remote-web/useNavigation'
@@ -168,37 +169,29 @@ export function ConnectView({
     persisted('nexus.connect.intent', ['dx', 'pota', 'casual', 'vhf'] as const, 'dx'),
   )
   const pickIntent = (id: MapIntent) => {
-    // PER-INTENT 2-D/3-D (features/intentMapSettings): the intent being left keeps the renderer it
-    // was on, and the next one comes back on its own. The map keeps the rest of each intent's setup.
-    saveIntentSetup(intent, { map3d })
-    const next = loadIntentSetup(id)?.map3d
-    if (next != null) setMap3d(next)
+    // PER-INTENT MAP PICK (features/intentMapSettings): every pick is stored as it is made, so the
+    // intent being left already has its own; the next one comes back on its pick, or on Globe.
+    setMapPick(loadIntentSetup(id)?.map ?? 'globe')
     setIntent(id)
     surfaceSet('nexus.connect.intent', id)
   }
-  // 2-D (universal) vs the 3-D WebGL globe. The operator's explicit choice is persisted and
-  // always wins; on FIRST run (no saved choice) we default to 3-D only if this machine's GPU
-  // can actually handle it (gpuCapableForGlobe) — capable PCs get the good globe out of the
-  // box, low-end/software renderers stay on the everywhere-compatible 2-D map.
-  // PER-SURFACE: 2-D/3-D is per-window rendering AND per-window GPU cost — the good globe
-  // on the showpiece screen, the cheap map on the working board. And PER-INTENT: it is part of
-  // each intent's remembered map setup (the old shared `nexus.connect.map3d` migrates into the
-  // intent active on first load).
-  const [map3d, setMap3d] = useState<boolean>(() => {
-    const saved = loadIntentSetup(intent)?.map3d
-    if (saved != null) return saved
-    return gpuCapableForGlobe()
-  })
-  // "2D" IS THE FLAT MAP (operator ruling 2026-09-13). Leaving 3-D is an explicit request for the
-  // flat map, so it lands on World even when this intent last used the 2-D Globe projection — a
-  // sphere under a "2D" label is what read as "3D stuck on". Every other way into the 2-D map (an
-  // intent switch, a relaunch) restores the projection the operator left.
-  const toggleMap3d = () =>
-    setMap3d((v) => {
-      const nv = !v
-      saveIntentSetup(intent, nv ? { map3d: true } : { map3d: false, kind: 'world' })
-      return nv
-    })
+  // THE MAP PICK — Globe (the 2-D orthographic globe, the default) · 3D (the WebGL globe) · Flat ·
+  // Beam: ONE picker for what used to be a 2D/3D header toggle plus the 2-D map's own projection
+  // buttons (operator decision 2026-09-13, late). PER-SURFACE and PER-INTENT: stored in the intent's
+  // record, where the old shared projection and 3-D flag migrate on first load.
+  //
+  // 3D needs a GPU that can carry the textured, bloomed globe (gpuCapableForGlobe). Without one the
+  // choice stays in the row, unavailable and saying why, and a 3D pick stored on this surface shows
+  // Globe instead of a globe this machine cannot draw — without discarding the stored pick.
+  const [gpuOk] = useState(gpuCapableForGlobe)
+  const [mapPick, setMapPick] = useState<MapChoice>(() => loadIntentSetup(intent)?.map ?? 'globe')
+  const map3d = mapPick === '3d' && gpuOk
+  const shownPick: MapChoice = mapPick === '3d' && !gpuOk ? 'globe' : mapPick
+  const chooseMap = (choice: MapChoice) => {
+    if (choice === '3d' && !gpuOk) return
+    setMapPick(choice)
+    saveIntentSetup(intent, { map: choice })
+  }
   // FULL-SCREEN MAP (operator request): the map fills the window and everything framing it
   // goes — this header, the four rail panes, the bottom strip, and the map's own Layers
   // panel. MapView owns the state (it owns the button, the Escape key and the per-surface
@@ -206,8 +199,8 @@ export function ConnectView({
   // on mount so a surface reopens the way it was left.
   //
   // `&& !map3d` is a structural guard, not a nicety: the button lives in MapView, so a
-  // full-screen flag left standing while the 3-D globe is mounted would hide the header —
-  // which holds the 2-D/3-D toggle — with nothing on screen able to bring it back.
+  // full-screen flag left standing while the 3-D globe is mounted would hide the header and the
+  // panes with nothing on screen able to bring them back.
   const [mapFull, setMapFull] = useState(false)
   // Basic/Expert + the per-slot pane assignment (persisted; basic-default, remember-last).
   const { slots, assignPane, resetSlots, restoreSlots } = useConnectConfig()
@@ -542,14 +535,6 @@ export function ConnectView({
               </button>
             ))}
           </div>
-          <button
-            type="button"
-            className={`connect-3d-toggle${map3d ? ' active' : ''}`}
-            onClick={toggleMap3d}
-            title={map3d ? t('connect.map3d.title.on') : t('connect.map3d.title.off')}
-          >
-            🌐 {map3d ? '3D' : '2D'}
-          </button>
           {/* The restore surface for a closed pane, and Reset layout. Always in the header, so
               with every pane closed the way back is still one click away. */}
           <PanelsMenu
@@ -590,6 +575,16 @@ export function ConnectView({
         <div className="connect" ref={gridRef} data-rails={railsState} style={gridStyle}>
           {present.left && rail('left', leftSlots)}
           <div className="connect-map">
+            {/* THE MAP PICKER, once, above whichever renderer is mounted: the same node in every
+                choice, so it can never vanish with the 2-D map when 3D mounts (MapPicker). */}
+            <div className="connect-map-bar">
+              <MapPicker
+                choices={ALL_MAP_CHOICES}
+                value={shownPick}
+                onPick={chooseMap}
+                threeDUnavailable={!gpuOk}
+              />
+            </div>
             {map3d ? (
               <Suspense
                 fallback={<div className="globe3d-loading">{t('connect.globe3d.loading')}</div>}
@@ -617,6 +612,7 @@ export function ConnectView({
               onSelectCall={onSelectCall}
               needByCall={needByCall}
               intent={intent}
+              projection={shownPick === '3d' ? 'globe' : shownPick}
               onWorkSpot={remote?undefined:onWorkSpot}
               onSelectSat={onSelectSat}
               focusBand={focusBand}

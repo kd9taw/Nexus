@@ -1,5 +1,5 @@
 // PER-INTENT MAP SETUP — each Connect intent (Chase DX, POTA/SOTA, Ragchew, 6m/VHF) keeps its own
-// projection, layer picks, colour mode and 2-D/3-D choice.
+// map pick (Globe · 3D · Flat · Beam — the one picker), layer picks and colour mode.
 //
 // Before this, the map held ONE projection and ONE layer table (`nexus.connect.projection`,
 // `nexus.connect.layers`) and the colour mode was not stored at all. Switching intent wrote that
@@ -8,9 +8,16 @@
 // FIRST-USE default only: the first time an intent is opened on a surface its preset applies, and
 // every later visit restores what the operator left there.
 //
-// ONE per-surface key holding every intent's record, not a key per intent: MapView (projection,
-// layers, colour) and ConnectView (2-D/3-D) write different halves of the same record, so each
-// write is read-merge-write and neither can clobber the other's half.
+// ONE per-surface key holding every intent's record, not a key per intent: MapView (layers, colour)
+// and ConnectView (the map pick) write different halves of the same record, so each write is
+// read-merge-write and neither can clobber the other's half.
+//
+// ## The map pick
+//
+// Records written before the picker held a projection (`kind`) and a separate 2-D/3-D flag
+// (`map3d`). They collapse into the one `map` choice on read: `map3d: true` → 3D, otherwise the
+// stored kind, and anything unrecognised → Globe. A record is rewritten in the new shape the next
+// time anything in it is saved.
 //
 // ## Surface inheritance (see features/windowScope.ts and `MapView`'s `dedicatedIntent`)
 //
@@ -24,7 +31,8 @@
 //
 // The first read on a surface that has no record migrates the old shared values into the intent
 // that is active at that moment, so nobody loses their setup on upgrade. The other intents then
-// get their presets on first use. The legacy keys are read, never written again.
+// get their presets on first use. The legacy keys are read, never written again. The legacy 3-D flag
+// wins over the legacy projection, exactly as `map3d: true` does inside a record.
 import type { MapIntent } from '../components/MapView'
 import type { Projection } from '../mapGeo'
 import { surfaceGet, surfaceHasOwn, surfaceSet } from './windowScope'
@@ -35,19 +43,23 @@ const LEGACY_PROJECTION_KEY = 'nexus.connect.projection'
 const LEGACY_LAYERS_KEY = 'nexus.connect.layers'
 const LEGACY_MAP3D_KEY = 'nexus.connect.map3d'
 
+/** The picker's four choices: the 2-D orthographic globe, the WebGL globe, the flat world map and
+ *  the azimuthal beam map. The three 2-D ones are the 2-D map's own projection ids. */
+export type MapChoice = Projection | '3d'
+
 /** One intent's remembered map. Every field optional: absent = never set on this surface. */
 export interface IntentMapSetup {
-  kind?: Projection
+  map?: MapChoice
   /** The 2-D layer table as stored — MapView clamps it against the current table on load. */
   layers?: unknown
   colorBy?: 'need' | 'snr'
-  map3d?: boolean
 }
 
 type Store = Partial<Record<MapIntent, IntentMapSetup>>
 
 const INTENTS: readonly MapIntent[] = ['dx', 'pota', 'casual', 'vhf']
 const isProjection = (v: unknown): v is Projection => v === 'globe' || v === 'aeqd' || v === 'world'
+const isChoice = (v: unknown): v is MapChoice => v === '3d' || isProjection(v)
 
 /** Parse one intent's record, keeping only well-formed fields (a store from another build is
  *  exactly the input this will meet). */
@@ -55,10 +67,11 @@ function cleanSetup(raw: unknown): IntentMapSetup | undefined {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined
   const r = raw as Record<string, unknown>
   const out: IntentMapSetup = {}
-  if (isProjection(r.kind)) out.kind = r.kind
+  if (r.map !== undefined) out.map = isChoice(r.map) ? r.map : 'globe'
+  else if (r.map3d === true) out.map = '3d'
+  else if (r.kind !== undefined) out.map = isProjection(r.kind) ? r.kind : 'globe'
   if (typeof r.layers === 'object' && r.layers !== null && !Array.isArray(r.layers)) out.layers = r.layers
   if (r.colorBy === 'need' || r.colorBy === 'snr') out.colorBy = r.colorBy
-  if (typeof r.map3d === 'boolean') out.map3d = r.map3d
   return out
 }
 
@@ -89,7 +102,7 @@ function legacySetup(dedicated: boolean): IntentMapSetup | null {
   const out: IntentMapSetup = {}
   const kind =
     dedicated && !surfaceHasOwn(LEGACY_PROJECTION_KEY) ? null : surfaceGet(LEGACY_PROJECTION_KEY)
-  if (isProjection(kind)) out.kind = kind
+  if (isProjection(kind)) out.map = kind
   const layers = dedicated && !surfaceHasOwn(LEGACY_LAYERS_KEY) ? null : surfaceGet(LEGACY_LAYERS_KEY)
   if (layers) {
     try {
@@ -100,7 +113,7 @@ function legacySetup(dedicated: boolean): IntentMapSetup | null {
     }
   }
   const map3d = dedicated && !surfaceHasOwn(LEGACY_MAP3D_KEY) ? null : surfaceGet(LEGACY_MAP3D_KEY)
-  if (map3d === '1' || map3d === '0') out.map3d = map3d === '1'
+  if (map3d === '1') out.map = '3d'
   return Object.keys(out).length > 0 ? out : null
 }
 

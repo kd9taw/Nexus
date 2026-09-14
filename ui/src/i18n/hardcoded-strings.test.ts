@@ -120,6 +120,7 @@ const MIGRATED = [
   // as a value, never translated, and moves in phase 3.
   'components/MapView.tsx',
   'components/MapLayersPanel.tsx',
+  'components/MapPicker.tsx',
   'components/MapLegend.tsx',
   'components/Globe3D.tsx',
   'components/QsoGlobe.tsx',

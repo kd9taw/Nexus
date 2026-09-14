@@ -1740,13 +1740,14 @@ export const EN = {
   'map.empty.detail':
     'The Beam Map centers on your Maidenhead grid — set it in Settings, then every heading and range ring is measured from your QTH.',
 
-  'map.projection.aria': 'Projection',
+  'map.projection.aria': 'Map view',
   'map.projection.globe.label': 'Globe',
   'map.projection.globe.title': '3-D globe — drag to spin, wheel to zoom',
   'map.projection.beam.label': 'Beam',
   'map.projection.beam.title': 'Beam map — true headings + range rings from your QTH',
-  'map.projection.world.label': 'World',
+  'map.projection.world.label': 'Flat',
   'map.projection.world.title': 'Flat world map with shaded relief',
+  'map.projection.webgl.title': 'WebGL 3D globe — best on higher-end PCs',
 
   'map.zoom.aria': 'Zoom',
   'map.zoom.in': 'Zoom in',
@@ -1912,7 +1913,7 @@ export const EN = {
   // The 3-D Connect globe (components/Globe3D.tsx). Its own layer vocabulary — shorter than
   // the 2-D map's and NOT the same list, so the two must not share keys.
   'globe.unsupported':
-    "This machine's graphics can't run the 3-D globe. Switch back to the 2-D map (🌐 button) — it works everywhere.",
+    "This machine's graphics can't run the 3-D globe. Pick Globe, Flat or Beam — they work everywhere.",
   'globe.spin.stop.title': 'Stop the globe spinning',
   'globe.spin.start.title': 'Spin the globe',
   'globe.spin.pause': '⏸ Spin',
@@ -6435,9 +6436,6 @@ export const EN = {
   'connect.intent.casual.label': 'Ragchew',
   'connect.intent.casual.title': 'Who can I hear — signal-colored, calm',
   'connect.intent.vhf.title': 'Openings front-and-center (Es / F2 / aurora)',
-  'connect.map3d.title.on':
-    'Using the 3D WebGL globe — click for the 2D map (works on any PC)',
-  'connect.map3d.title.off': 'Switch to the 3D WebGL globe (best on higher-end PCs)',
   'connect.globe3d.loading': 'Loading 3D globe…',
   'connect.popOut.label': '⧉ Pop out',
   'connect.popOut.title': 'Open Connect in its own window (for a second monitor)',
