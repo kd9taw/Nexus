@@ -527,9 +527,13 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // operator's persisted choice (the board previously force-opened EVERY start
   // with no opt-out; closing it each session was a standing annoyance). The
   // toggle lives on the Needed panel header; default stays auto-open.
+  // #240: NOT while the first-run setup wizard is up. The board is its own OS window and
+  // landed on top of the wizard on a fresh install, so a new operator could not reach it.
+  // Waiting (rather than skipping) keeps the pop-out: it opens once the wizard is finished
+  // or dismissed. Later launches never show the wizard, so they are unchanged.
   const neededPoppedRef = useRef(false)
   useEffect(() => {
-    if (remote || neededPoppedRef.current || !snap) return
+    if (remote || neededPoppedRef.current || !snap || showWizard) return
     if (features.enabled.needed === false) return
     neededPoppedRef.current = true
     try {
@@ -538,7 +542,7 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       /* storage blocked — keep the default behavior */
     }
     void openPanelWindow('needed').catch(() => {})
-  }, [snap, features.enabled])
+  }, [snap, features.enabled, showWizard])
 
   const handleWorkspace = useCallback((w: 'dx' | 'msg') => {
     setArea(w)

@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **On a first launch the Needed window waits for the setup wizard (#240).** The Needed board used to
+  open in its own window as soon as Nexus had data, landing on top of the setup wizard. It now opens
+  once the wizard is finished or skipped. Later launches are unchanged.
 - **Error messages stay on screen long enough to read (D#19).** An error pop-up used to vanish
   after four seconds, or less, often before you looked back from the rig. Errors now stay at least
   twelve seconds, or until you close them. Ordinary notices are unchanged.
