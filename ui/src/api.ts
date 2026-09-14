@@ -2153,6 +2153,18 @@ export async function repeaterTune(
   return invoke<AppSnapshot>('repeater_tune', { outputMhz, shift, offsetHz, toneHz })
 }
 
+/** Recall a station memory from the hosted page (Remote only; the control transport maps it to
+ * the closed recall intent). The installed desktop recalls through Settings + `workSpot`. */
+export async function remoteRecallMemory(args: {
+  section: 'cw' | 'phone' | 'digital'
+  dialMhz: number
+  band: string
+  sideband: 'USB' | 'LSB' | null
+  fm: { shift: 'simplex' | 'plus' | 'minus'; offsetHz: number; toneHz: number } | null
+}): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('remote_recall_memory', args)
+}
+
 /** Arm/disarm the RTTY RX decoder (session-only; RX decode, never TX). */
 export async function rttyArm(on: boolean): Promise<RttyState> {
   return invoke<RttyState>('rtty_arm', { on })

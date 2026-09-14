@@ -37,6 +37,9 @@ export type StationAction =
   | { action: 'radio.workDigitalSpot'; tier: 'FT8' | 'FT4'; dialMhz: number; band: string; call: string }
   // An FM repeater: the output, the shift and offset the rig keys (0 = band convention) and the tone.
   | { action: 'radio.repeater'; outputMhz: number; shift: 'simplex' | 'plus' | 'minus'; offsetHz: number; toneHz: number }
+  // A station memory: its section and exact dial, plus its own sideband (Phone) or its FM machine.
+  | { action: 'radio.memoryRecall'; section: 'cw' | 'phone' | 'digital'; dialMhz: number; band: string; sideband: 'USB' | 'LSB' | null
+      fm?: { shift: 'simplex' | 'plus' | 'minus'; offsetHz: number; toneHz: number } }
   | { action: 'radio.frequency'; dialMhz: number; band: string; sideband: 'USB' | 'LSB' | 'FM' | 'AM' }
   | { action: 'radio.band'; band: string; mode: 'cw' | 'phone' }
   | { action: 'radio.filterWidth'; mode: 'cw' | 'phone'; expectedHz: number; hz: number }
@@ -99,6 +102,7 @@ const ACTION_CAPABILITY: Record<StationAction['action'], ControlCapability> = {
   'radio.function': 'receiverDsp', 'radio.agc': 'receiverDsp',
   'radio.phoneMode': 'phoneMode', 'radio.workSpot': 'workSpot', 'radio.workDigitalSpot': 'workDigitalSpot',
   'radio.repeater': 'repeaterTuning',
+  'radio.memoryRecall': 'memoryRecall',
   'decoder.arm': 'decoder', 'decoder.clear': 'decoder', 'decoder.afcReset': 'decoder',
   'decoder.net': 'decoder', 'decoder.pskMode': 'decoder',
   'decoder.aiCw': 'aiCw', 'decoder.redecode': 'redecode',
@@ -120,6 +124,11 @@ function object(raw: unknown, keys: string[]): Record<string, unknown> {
   try { return displayObject(raw, keys) } catch { return invalid() }
 }
 const oneOf = (v: unknown, choices: readonly string[]) => typeof v === 'string' && choices.includes(v)
+/** An FM machine: a closed shift, a whole offset (0 = band convention) and a tone that is 0 (none)
+ * or in the CTCSS range to a tenth of a hertz. */
+const repeaterMachine = (shift: unknown, offsetHz: unknown, toneHz: unknown) =>
+  oneOf(shift, ['simplex', 'plus', 'minus']) && Number.isSafeInteger(offsetHz) && (offsetHz as number) >= 0 && (offsetHz as number) <= 20000000 &&
+  finite(toneHz) && (toneHz === 0 || (toneHz >= 60 && toneHz <= 260 && Math.abs(Math.round(toneHz * 10) - toneHz * 10) <= 1e-6))
 
 export function controlContext(raw: unknown): ControlContext {
   const c = object(raw, ['radioId', 'radioConnection', 'ampConnection', 'ampReadSequence'])
@@ -295,13 +304,21 @@ export function stationAction(raw: unknown): StationAction {
       object(a, ['action', 'expectedTier'])
       if (!oneOf(a.expectedTier, ['FT8', 'FT4'])) invalid()
       break
+    case 'radio.memoryRecall': {
+      object(a, ['action', 'section', 'dialMhz', 'band', 'sideband', ...('fm' in a ? ['fm'] : [])])
+      // Only a Phone memory names a sideband; an FM machine is Phone voice at or above 29 MHz.
+      if (!oneOf(a.section, ['cw', 'phone', 'digital']) || !finite(a.dialMhz) || a.dialMhz <= 0 || a.dialMhz > 250000 || !oneOf(a.band, BANDS) ||
+        (a.sideband !== null && (a.section !== 'phone' || !oneOf(a.sideband, ['USB', 'LSB'])))) invalid()
+      if ('fm' in a) {
+        const machine = object(a.fm, ['shift', 'offsetHz', 'toneHz'])
+        if (a.section !== 'phone' || a.sideband !== null || (a.dialMhz as number) < 29 || !repeaterMachine(machine.shift, machine.offsetHz, machine.toneHz)) invalid()
+      }
+      break
+    }
     case 'radio.repeater': {
       object(a, ['action', 'outputMhz', 'shift', 'offsetHz', 'toneHz'])
-      // FM voice starts at 29 MHz; a tone is 0 (none) or the CTCSS range to a tenth of a hertz.
-      const tone = a.toneHz as number
-      if (!finite(a.outputMhz) || a.outputMhz < 29 || a.outputMhz > 250000 || !oneOf(a.shift, ['simplex', 'plus', 'minus']) ||
-        !Number.isSafeInteger(a.offsetHz) || (a.offsetHz as number) < 0 || (a.offsetHz as number) > 20000000 ||
-        !finite(a.toneHz) || (tone !== 0 && (tone < 60 || tone > 260 || Math.abs(Math.round(tone * 10) - tone * 10) > 1e-6))) invalid()
+      // FM voice starts at 29 MHz.
+      if (!finite(a.outputMhz) || a.outputMhz < 29 || a.outputMhz > 250000 || !repeaterMachine(a.shift, a.offsetHz, a.toneHz)) invalid()
       break
     }
     case 'radio.split':

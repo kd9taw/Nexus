@@ -236,6 +236,30 @@ describe('split and clarifier requests', () => {
     expect(() => stationAction({ action: 'radio.vfo', expectedVfo: 'B', vfo: 'B' })).toThrow()
     expect(() => stationAction({ action: 'radio.swapVfo' })).toThrow()
   })
+  it('admits a memory recall as a section, exact dial and the memory’s own sideband or FM machine', () => {
+    const cw = { action: 'radio.memoryRecall', section: 'cw', dialMhz: 14.06, band: '20m', sideband: null }
+    const ssb = { action: 'radio.memoryRecall', section: 'phone', dialMhz: 7.2, band: '40m', sideband: 'LSB' }
+    const fm = { action: 'radio.memoryRecall', section: 'phone', dialMhz: 146.94, band: '2m', sideband: null, fm: { shift: 'minus', offsetHz: 600000, toneHz: 103.5 } }
+    for (const action of [cw, ssb, fm, { ...cw, section: 'digital', dialMhz: 14.074 }, { ...ssb, sideband: null }]) {
+      expect(stationAction(action)).toEqual(action)
+      expect(actionCapability(stationAction(action))).toBe('memoryRecall')
+    }
+    for (const section of ['rtty', 'operate', 'CW', '', null]) expect(() => stationAction({ ...cw, section })).toThrow()
+    expect(() => stationAction({ ...cw, sideband: 'USB' })).toThrow()
+    expect(() => stationAction({ ...cw, section: 'digital', sideband: 'LSB' })).toThrow()
+    for (const sideband of ['usb', 'FM', 'AM', '']) expect(() => stationAction({ ...ssb, sideband })).toThrow()
+    expect(() => stationAction({ ...fm, sideband: 'USB' })).toThrow()
+    expect(() => stationAction({ ...fm, section: 'cw' })).toThrow()
+    expect(() => stationAction({ ...fm, dialMhz: 28.5, band: '10m' })).toThrow()
+    for (const bad of [{ shift: 'up', offsetHz: 600000, toneHz: 0 }, { shift: 'minus', offsetHz: -1, toneHz: 0 }, { shift: 'minus', offsetHz: 600000, toneHz: 88.55 },
+      { shift: 'minus', offsetHz: 600000, toneHz: 0, txEnabled: true }, { shift: 'minus', offsetHz: 600000 }, null]) expect(() => stationAction({ ...fm, fm: bad })).toThrow()
+    for (const dialMhz of [NaN, 0, 250001, '7.2']) expect(() => stationAction({ ...cw, dialMhz })).toThrow()
+    for (const band of ['21m', '', null]) expect(() => stationAction({ ...cw, band })).toThrow()
+    for (const extra of ['call', 'tier', 'txEnabled', 'settings', 'radioId']) expect(() => stationAction({ ...cw, [extra]: 1 })).toThrow()
+    const missing: Record<string, unknown> = { ...cw }
+    delete missing.sideband
+    expect(() => stationAction(missing)).toThrow()
+  })
   it('admits a repeater tune only as the machine: output, shift, offset and tone', () => {
     const action = { action: 'radio.repeater', outputMhz: 146.94, shift: 'minus', offsetHz: 600000, toneHz: 100 }
     expect(stationAction(action)).toEqual(action)

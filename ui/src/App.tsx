@@ -120,6 +120,7 @@ import {
   setSidebandOverride,
   testCat,
   setOperatingMode,
+  remoteRecallMemory,
   workSpot,
   setHuntTarget,
   setLicenseClass,
@@ -248,6 +249,8 @@ import { CollectionStatus, useRemoteCollection } from './remote-web/collections'
 import { RemoteInsights } from './remote-web/RemoteInsights'
 import { RemoteDxpeditions } from './remote-web/RemoteDxpeditions'
 import { remoteWorkable, spotNeed } from './remote-web/remote-work'
+import { remoteRecallArgs } from './remote-web/remote-recall'
+import { controlFailureMessage } from './remote-web/control-failure'
 import { RemoteFieldDay } from './remote-web/RemoteFieldDay'
 import { RemoteOta } from './remote-web/RemoteOta'
 import { RemoteMemories } from './remote-web/RemoteMemories'
@@ -255,6 +258,7 @@ import { RemoteMemories } from './remote-web/RemoteMemories'
 export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   const remoteWorkAllowed = useStationCapability('workSpot')
   const remoteDigitalWorkAllowed = useStationCapability('workDigitalSpot')
+  const remoteRecallAllowed = useStationCapability('memoryRecall')
   const display = useRemotePresentation()
   const quick = !!remote && display?.presentation === 'quick'
   const needsRead = useRemoteCollection('needs')
@@ -1687,7 +1691,29 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // retunes (same behavior as the Needed board's work-click).
   const recallMemory = useCallback(
     (m: Memory) => {
-      if (remote) return
+      if (remote) {
+        // A browser recall: the station applies the memory (section, exact dial, phone mode, FM
+        // machine, sideband) as one transaction. No Settings write and no browser bank write here,
+        // and the station never arms transmit for it.
+        const request = remoteRecallAllowed ? remoteRecallArgs(m) : null
+        if (!request) return
+        const target = request.view
+        if ((target === 'cw' && !cwEnabled) || (target === 'phone' && !phoneEnabled)) {
+          pushToast(t('shell.recall.sectionOff', { section: target === 'cw' ? 'CW' : 'Phone' }), 'info', 4000)
+          return
+        }
+        void remoteRecallMemory(request.args)
+          .then((s) => {
+            if (s) setSnap(s)
+            const opMode = request.args.section
+            lastOpModeRef.current = opMode
+            lastHomedModeRef.current = opMode // recalled to an EXACT dial — do not re-home
+            setView(target)
+            pushToast(t('shell.recall.done', { name: m.name, freq: request.args.dialMhz.toFixed(3), mode: m.mode }), 'success', 2500)
+          })
+          .catch((e) => pushToast(controlFailureMessage(e), 'error', 4000))
+        return
+      }
       const plan = planRecall(m)
       const target = plan.view
       const opMode: 'digital' | 'phone' | 'cw' = target === 'operate' ? 'digital' : target
@@ -1767,7 +1793,7 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
         }
       })()
     },
-    [cwEnabled, phoneEnabled, !!remote],
+    [cwEnabled, phoneEnabled, !!remote, remoteRecallAllowed],
   )
 
   // Global quick-recall hotkeys: Ctrl+1..9 (or ⌘+1..9 — the native chord on macOS, where
@@ -2854,7 +2880,7 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     case 'memories':
       // A manager view — never touches the rig on entry; only an explicit
       // Tune (recallMemory) retunes + switches cockpit.
-      workspace = remote ? <RemoteMemories myGrid={settings?.mygrid ?? ''} /> : (
+      workspace = remote ? <RemoteMemories myGrid={settings?.mygrid ?? ''} onRecall={recallMemory} /> : (
         <main className="layout single">
           <MemoriesView
             onPopOut={() => void openPanelWindow('memories')}

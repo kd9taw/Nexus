@@ -38,6 +38,9 @@ mod decoder_settings;
 #[path = "digital_spot_tests.rs"]
 mod digital_spot;
 #[cfg(feature = "radio")]
+#[path = "memory_tests.rs"]
+mod memory;
+#[cfg(feature = "radio")]
 #[path = "repeater_tests.rs"]
 mod repeater;
 #[cfg(feature = "radio")]
@@ -400,7 +403,8 @@ fn tier_admission_requires_v3_and_keeps_one_native_receipt_through_readback() {
             "splitTuning",
             "ritTuning",
             "workDigitalSpot",
-            "repeaterTuning"
+            "repeaterTuning",
+            "memoryRecall"
         ])
     );
     let command = control_request(&state, json!({"action":"radio.tier","tier":"FT4"}));

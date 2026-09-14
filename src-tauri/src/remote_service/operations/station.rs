@@ -55,6 +55,32 @@ pub enum TextReceiver {
     Psk,
 }
 
+/// The section a recalled memory lands in.
+#[derive(Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RecallSection {
+    Cw,
+    Phone,
+    Digital,
+}
+
+/// A Phone memory's own sideband.
+#[derive(Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum RecallSideband {
+    Usb,
+    Lsb,
+}
+
+/// An FM memory's machine: shift, offset (0 = band convention) and tone.
+#[derive(Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RecallFm {
+    shift: RepeaterShift,
+    offset_hz: u32,
+    tone_hz: f32,
+}
+
 /// A repeater's shift: a closed set, so an unknown word never degrades to simplex.
 #[derive(Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -335,6 +361,17 @@ pub enum Action {
         #[serde(rename = "toneHz")]
         tone_hz: f32,
     },
+    /// A memory recall: the section, the memory's exact dial, its own sideband (Phone only) or
+    /// its FM machine. Never a Settings form, a call or a tier.
+    #[serde(rename = "radio.memoryRecall")]
+    MemoryRecall {
+        section: RecallSection,
+        #[serde(rename = "dialMhz")]
+        dial_mhz: f64,
+        band: String,
+        sideband: Option<RecallSideband>,
+        fm: Option<RecallFm>,
+    },
     #[serde(rename = "radio.tier")]
     Tier { tier: tempo_app::dto::Tier },
     #[serde(rename = "radio.workspace")]
@@ -483,6 +520,38 @@ pub fn execute(
                 *dial_mhz,
                 band,
                 call,
+                context.radio_connection.ok_or(Reason::ReadingUnavailable)?,
+                permit,
+            );
+        }
+        // A memory recall through the readback transaction. Refused while TX is armed, when an FM
+        // machine's input is outside the licence, and when another radio owns the band.
+        #[cfg(feature = "radio")]
+        Action::MemoryRecall {
+            section,
+            dial_mhz,
+            band,
+            sideband,
+            fm,
+        } => {
+            let shift = |shift: RepeaterShift| match shift {
+                RepeaterShift::Simplex => "simplex",
+                RepeaterShift::Plus => "plus",
+                RepeaterShift::Minus => "minus",
+            };
+            return engine.queue_remote_memory_recall(
+                match section {
+                    RecallSection::Cw => "cw",
+                    RecallSection::Phone => "phone",
+                    RecallSection::Digital => "digital",
+                },
+                *dial_mhz,
+                band,
+                sideband.map(|s| match s {
+                    RecallSideband::Usb => "USB",
+                    RecallSideband::Lsb => "LSB",
+                }),
+                fm.map(|f| (shift(f.shift), i64::from(f.offset_hz), f.tone_hz)),
                 context.radio_connection.ok_or(Reason::ReadingUnavailable)?,
                 permit,
             );
@@ -1007,6 +1076,7 @@ impl Action {
             | Self::WorkSpot { .. }
             | Self::WorkDigitalSpot { .. }
             | Self::Repeater { .. }
+            | Self::MemoryRecall { .. }
             | Self::Tier { .. }
             | Self::Workspace { .. }
             | Self::Js8Speed { .. }
@@ -1060,6 +1130,7 @@ pub fn capabilities(version: u8) -> Vec<&'static str> {
                 "ritTuning",
                 "workDigitalSpot",
                 "repeaterTuning",
+                "memoryRecall",
             ]
         }
     }

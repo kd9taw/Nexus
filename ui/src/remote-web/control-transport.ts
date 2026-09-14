@@ -140,6 +140,13 @@ export function controlTransport(reads: ApplicationTransport, client: Applicatio
             action = stationAction({ action: 'radio.select', radioId: args.id })
             read = 'get_snapshot'
             break
+          case 'remote_recall_memory':
+            // A station memory as the closed recall intent: never a Settings form, a call or a tier.
+            if (!args || Object.keys(args).length !== 5 || Object.keys(args).some(k => !['section', 'dialMhz', 'band', 'sideband', 'fm'].includes(k))) throw Error('invalidOperation')
+            action = stationAction({ action: 'radio.memoryRecall', section: args.section, dialMhz: args.dialMhz, band: args.band, sideband: args.sideband,
+              ...(args.fm === null ? {} : { fm: args.fm }) })
+            read = 'get_snapshot'
+            break
           case 'repeater_tune':
             // The Program Tune: exactly the machine, no settings or radio arguments beside it.
             if (!args || Object.keys(args).length !== 4 || Object.keys(args).some(k => !['outputMhz', 'shift', 'offsetHz', 'toneHz'].includes(k))) throw Error('invalidOperation')
@@ -264,6 +271,7 @@ export function controlTransport(reads: ApplicationTransport, client: Applicatio
         if (action?.action === 'radio.workSpot' && result.outcome === 'applied' && result.evidence !== 'radioReadback') throw Error('operationUnknown')
         if (action.action === 'radio.workDigitalSpot' && (result.outcome !== 'applied' || result.evidence !== 'radioReadback')) throw Error('operationUnknown')
         if (action.action === 'radio.repeater' && (result.outcome !== 'applied' || result.evidence !== 'radioReadback')) throw Error('operationUnknown')
+        if (action.action === 'radio.memoryRecall' && (result.outcome !== 'applied' || result.evidence !== 'radioReadback')) throw Error('operationUnknown')
         if (action.action === 'decoder.aiCw' && (result.outcome !== 'applied' || result.evidence !== 'settingsSaved')) throw Error('operationUnknown')
         if (action.action === 'decoder.redecode' && (result.outcome !== 'applied' || result.evidence !== 'receiverState')) throw Error('operationUnknown')
         if (isTuning(action) && (result.outcome !== 'applied' || result.evidence !== 'stationState')) throw Error('operationUnknown')
@@ -287,7 +295,11 @@ export function controlTransport(reads: ApplicationTransport, client: Applicatio
             const snapshot = value as import('../types').AppSnapshot
             if (!snapshot?.radio || Math.round(snapshot.radio.dialMhz * 1e6) !== Math.round(action.dialMhz * 1e6) || snapshot.radio.operatingMode?.toLowerCase() !== 'digital' || snapshot.link?.tier !== action.tier) throw Error('readingUnavailable')
           }
-          if (action?.action === 'radio.repeater' && Math.round(((value as import('../types').AppSnapshot)?.radio?.dialMhz ?? NaN) * 1e6) !== Math.round(action.outputMhz * 1e6)) throw Error('readingUnavailable')
+          if (action?.action === 'radio.memoryRecall') {
+            const radio = (value as import('../types').AppSnapshot)?.radio
+            if (!radio || Math.round(radio.dialMhz * 1e6) !== Math.round(action.dialMhz * 1e6) || radio.operatingMode?.toLowerCase() !== action.section) throw Error('readingUnavailable')
+          }
+          if (action?.action === 'radio.repeater' &&Math.round(((value as import('../types').AppSnapshot)?.radio?.dialMhz ?? NaN) * 1e6) !== Math.round(action.outputMhz * 1e6)) throw Error('readingUnavailable')
           if (action?.action === 'decoder.aiCw' &&(value as import('../types').AppSnapshot)?.aiCw?.enabled !== action.on) throw Error('readingUnavailable')
           if (action && isTuning(action) && !tuningShown(action, (value as import('../types').AppSnapshot)?.radio)) throw Error('readingUnavailable')
           if (action?.action === 'radio.select') {

@@ -141,6 +141,7 @@ it('sends split, XIT, VFO and RIT at v3, without a version bump', () => {
   expect(controlVersion({ action: 'radio.split', expectedTxMhz: null, txMhz: 14.032 })).toBe(3)
   expect(controlVersion({ action: 'radio.workDigitalSpot', tier: 'FT4', dialMhz: 14.080, band: '20m', call: 'JA2DEF' })).toBe(3)
   expect(controlVersion({ action: 'radio.repeater', outputMhz: 146.94, shift: 'minus', offsetHz: 600000, toneHz: 0 })).toBe(3)
+  expect(controlVersion({ action: 'radio.memoryRecall', section: 'cw', dialMhz: 14.06, band: '20m', sideband: null })).toBe(3)
   expect(controlVersion({ action: 'radio.xit', expectedHz: 0, hz: 10 })).toBe(3)
   expect(controlVersion({ action: 'radio.vfo', expectedVfo: 'A', vfo: 'B' })).toBe(3)
   expect(controlVersion({ action: 'radio.rit', expectedHz: 0, hz: 10 })).toBe(3)

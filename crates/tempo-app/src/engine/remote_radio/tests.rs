@@ -23,6 +23,7 @@ mod digital_spot;
 mod dsp;
 mod filter;
 mod level;
+mod memory;
 mod phone_mode;
 mod receive_tuning;
 mod repeater;

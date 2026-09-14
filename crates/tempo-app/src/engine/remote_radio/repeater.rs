@@ -10,10 +10,10 @@ use super::*;
 
 /// The widest shift the grammar admits (23 cm machines use 12 MHz; 20 MHz leaves headroom for
 /// odd cross-band splits without admitting nonsense).
-const MAX_OFFSET_HZ: i64 = 20_000_000;
+pub(super) const MAX_OFFSET_HZ: i64 = 20_000_000;
 
 /// A CTCSS tone: 0 = none, otherwise the standard range, to a tenth of a hertz.
-fn valid_tone(tone: f32) -> bool {
+pub(super) fn valid_tone(tone: f32) -> bool {
     tone == 0.0
         || (tone.is_finite()
             && (60.0..=260.0).contains(&tone)

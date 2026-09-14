@@ -1,5 +1,5 @@
 import { useContext, useEffect, useState } from 'react'
-import { emptyBank } from '../features/memories'
+import { emptyBank, type Memory } from '../features/memories'
 import { MemoriesView } from '../components/MemoriesView'
 import { useStationData } from '../stationAccess'
 import { t } from '../i18n'
@@ -10,7 +10,9 @@ import { MEMORY_BANK_TTL_MS } from '../remote-native/memoryBank'
 
 const EMPTY_BANK = emptyBank()
 
-export function RemoteMemories({ myGrid }: { myGrid: string }) {
+/** `onRecall` recalls a station memory at the station; MemoriesView offers it only while the
+ * station advertises memoryRecall. The bank itself stays read-only. */
+export function RemoteMemories({ myGrid, onRecall }: { myGrid: string; onRecall?: (m: Memory) => void }) {
   const source = useContext(RemoteCollectionsContext), available = useStationData()
   const supported = source?.client.supports(MEMORIES_COMMAND) ?? false
   const [capture, setCapture] = useState<{ value: RemoteMemoryBank; at: number } | null>(null)
@@ -46,7 +48,7 @@ export function RemoteMemories({ myGrid }: { myGrid: string }) {
     </div>
     {/* Keep view choices while clearing all station values during refresh/loss. */}
     <div className="remote-memory-bank" hidden={!value}>
-      <MemoriesView observation={value?.bank ?? EMPTY_BANK} dialMhz={0} dialMode="" myGrid={myGrid} />
+      <MemoriesView observation={value?.bank ?? EMPTY_BANK} dialMhz={0} dialMode="" myGrid={myGrid} onRecall={onRecall} />
     </div>
   </div>
 }

@@ -15,6 +15,7 @@ mod filter;
 mod level;
 pub use level::RadioLevel;
 mod phone_mode;
+mod recall;
 mod repeater;
 mod split;
 mod spot;
@@ -63,6 +64,17 @@ enum Intent {
         tone: f32,
         input_mhz: f64,
     },
+    /// A memory recall: the section, the Settings patch the desktop recall writes (phone mode and
+    /// an FM machine as `(shift, offset override, tone)`), the memory's own sideband, the FM tuple
+    /// the rig will key and, for an FM machine, the input that tuple transmits on.
+    Recall {
+        section: String,
+        phone_mode: Option<String>,
+        fm: Option<(String, i64, f32)>,
+        sideband: Option<String>,
+        repeater: Option<(String, i64, f32)>,
+        input_mhz: Option<f64>,
+    },
     FilterWidth {
         mode: OperatingMode,
         expected: u32,
@@ -99,6 +111,7 @@ impl Intent {
                 | Intent::Band { .. }
                 | Intent::Mode { .. }
                 | Intent::Repeater { .. }
+                | Intent::Recall { .. }
         )
     }
 }
@@ -570,6 +583,8 @@ impl Engine {
                 tone,
                 ..
             } => Some((shift.clone(), *offset, *tone)),
+            // A recall carries the machine its memory names, projected before any Settings patch.
+            Intent::Recall { repeater, .. } => repeater.clone(),
             _ => self.remote_target_repeater(target.hz, &target.mode),
         };
         let o = self.remote_monitor_observation();
@@ -782,7 +797,7 @@ impl Request {
             || engine.settings.dial_hz() != self.expected_hz
             || !mode_matches
             || (self.retuning()
-                && !matches!(self.intent, Intent::Repeater { .. })
+                && !matches!(self.intent, Intent::Repeater { .. } | Intent::Recall { .. })
                 && engine.remote_target_repeater(self.target_hz, &self.target_mode)
                     != self.repeater)
             || (self.power_limit.is_some() && engine.rf_power != self.expected_power)
@@ -807,6 +822,16 @@ impl Request {
         if let Intent::DigitalSpot { original, .. } = &self.intent {
             if engine.tier() != *original {
                 return Err(Reason::ContextChanged);
+            }
+        }
+        if let Intent::Recall {
+            input_mhz: Some(input_mhz),
+            ..
+        } = &self.intent
+        {
+            // An FM memory's input is re-judged at the write and at commit, as a repeater tune is.
+            if !engine.emission_allowed(OperatingMode::Phone, *input_mhz, "FM") {
+                return Err(Reason::OutsidePrivileges);
             }
         }
         if let Intent::Repeater { input_mhz, .. } = &self.intent {
@@ -1064,6 +1089,39 @@ impl Request {
                 }
                 engine.remote_fm_hold =
                     Some((engine.settings.dial_hz(), engine.fm_repeater_config()));
+            }
+            Intent::Recall {
+                section,
+                phone_mode,
+                fm,
+                sideband,
+                ..
+            } => {
+                // The desktop recall's order: its Settings patch, the atomic Work verb (no call,
+                // no tier, and here no arming), then the memory's exact sideband.
+                if let Some(phone_mode) = phone_mode {
+                    engine.settings.phone_mode = phone_mode;
+                }
+                if let Some((shift, offset, tone)) = fm {
+                    engine.settings.rptr_shift = shift;
+                    engine.settings.rptr_offset_override_hz = offset;
+                    engine.settings.ctcss_tone_hz = tone;
+                }
+                engine.work_spot_split_with_arming(
+                    &section,
+                    self.target_hz as f64 / 1e6,
+                    &self.band,
+                    None,
+                    false,
+                );
+                engine.note_work_call(None);
+                if let Some(sideband) = sideband {
+                    engine.request_sideband_override(Some(&sideband));
+                }
+                if let Some(power) = power.filter(|_| self.power_limit.is_some()) {
+                    engine.rf_power = Some(power);
+                    engine.observe_rig_power(power);
+                }
             }
             Intent::Band { mode } => engine.pick_band(&self.band, Some(&mode)),
             Intent::Workspace {
