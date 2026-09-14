@@ -10,3 +10,16 @@ export function clampWheelTarget(hz: number, fromHz: number, committedHz: number
   if (edge == null || (fromHz === edge && fromHz === committedHz)) return { hz, hitEdge: false }
   return { hz: edge, hitEdge: true }
 }
+
+/** #273 — move `steps` whole steps of `stepHz` from `fromHz`, the FIRST one landing on the step
+ * grid, the way a rig's VFO rounds on its first click. From 14.110.250 at 1 kHz: +1 → 14.111.000,
+ * −1 → 14.110.000, +10 → 14.120.000 (rounded, then nine more). A dial already on the grid moves
+ * exactly `steps × stepHz`. Integer Hz in, integer Hz out. */
+export function stepFrom(fromHz: number, steps: number, stepHz: number): number {
+  if (steps === 0 || !(stepHz > 0)) return fromHz
+  const off = ((fromHz % stepHz) + stepHz) % stepHz
+  if (off === 0) return fromHz + steps * stepHz
+  const dir = Math.sign(steps)
+  const first = dir > 0 ? fromHz - off + stepHz : fromHz - off
+  return first + (steps - dir) * stepHz
+}

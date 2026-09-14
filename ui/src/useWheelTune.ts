@@ -3,7 +3,7 @@ import type { RefObject } from 'react'
 import type { AppSnapshot } from './types'
 import { setFrequency } from './api'
 import { bandLabelForMhz } from './band'
-import { clampWheelTarget } from './wheelTuningPolicy'
+import { clampWheelTarget, stepFrom } from './wheelTuningPolicy'
 import { useStationControl } from './stationAccess'
 import { useRemoteWheelTuning } from './remote-web/wheel-tuning-context'
 import type { WheelTuning } from './remote-web/wheel-tuning'
@@ -292,7 +292,11 @@ export function useWheelTune(
         return
       }
       const from = targetHzRef.current ?? 0
-      const { hz, hitEdge } = clampToBand(from + -steps * eff, from)
+      // #273: a notch at the SELECTED step rounds to that step first (14.110.250 → 14.111.000 at
+      // 1 kHz), then moves whole steps. A digit notch (the resolver chose a decade other than the
+      // selected step) keeps the dial's tail — hovering the 10 kHz digit moves exactly 10 kHz.
+      const to = step === stepHz ? stepFrom(from, -steps * (e.shiftKey ? 10 : 1), step) : from + -steps * eff
+      const { hz, hitEdge } = clampToBand(to, from)
       targetHzRef.current = hz
       reportEdge(hz, from, hitEdge)
       if (timerRef.current == null) timerRef.current = window.setTimeout(flush, FLUSH_MS)

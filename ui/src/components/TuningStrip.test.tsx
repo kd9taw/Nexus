@@ -100,6 +100,39 @@ describe('the ◄/► nudges', () => {
   })
 })
 
+// #273: the first ◄/► from a dial between steps rounds to the step; after that, whole steps.
+describe('#273 the nudges round to the step first', () => {
+  const at = (dialMhz: number) => render(<TuningStrip snap={snapWith({ dialMhz, band: '17m' })} step={1000} />)
+  const last = () => mockSetFreq.mock.calls[mockSetFreq.mock.calls.length - 1]
+
+  it('► from 18.110.250 at 1 kHz lands on 18.111.000', () => {
+    at(18.11025)
+    fireEvent.click(screen.getByRole('button', { name: 'Tune up 1000 Hz' }))
+    expect(last()[0]).toBeCloseTo(18.111, 6)
+    expect(last()[1]).toBe('17m')
+  })
+
+  it('◄ from 18.110.250 lands on 18.110.000', () => {
+    at(18.11025)
+    fireEvent.click(screen.getByRole('button', { name: 'Tune down 1000 Hz' }))
+    expect(last()[0]).toBeCloseTo(18.11, 6)
+  })
+
+  it('►► and ◄◄ round first, then take the other nine steps', () => {
+    at(18.11025)
+    fireEvent.click(screen.getByRole('button', { name: 'Tune up 10000 Hz' }))
+    expect(last()[0]).toBeCloseTo(18.12, 6)
+    fireEvent.click(screen.getByRole('button', { name: 'Tune down 10000 Hz' }))
+    expect(last()[0]).toBeCloseTo(18.101, 6)
+  })
+
+  it('POSITIVE CONTROL — an on-grid dial moves exactly one step', () => {
+    at(18.111)
+    fireEvent.click(screen.getByRole('button', { name: 'Tune up 1000 Hz' }))
+    expect(last()[0]).toBeCloseTo(18.112, 6)
+  })
+})
+
 describe('the read-out’s TX-blocked paint', () => {
   it('an off-band dial the operator MAY transmit on is not painted TX-red', () => {
     // 9.6 MHz names no band, and the strip used to read that as "transmit blocked". The band
