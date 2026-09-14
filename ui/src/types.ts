@@ -525,6 +525,10 @@ export interface SatDetail {
   transmitters: SatTransmitter[]
   /** When the SatNOGS snapshot was fetched (unix secs); null = never. */
   dataFetchedAt: number | null
+  /** The snapshot was fetched FOR this bird. false = not fetched yet, so empty
+   * `transmitters` means "not known", never "none listed". Absent = a station
+   * that predates the field (read as covered). */
+  transmittersCovered?: boolean
   /** Age (days) of THIS bird's element set — the >14 d arm-confirm's input.
    * Absent when the bird has no elements; never >30 (that case is refused
    * wholesale — the command errors naming the age). */

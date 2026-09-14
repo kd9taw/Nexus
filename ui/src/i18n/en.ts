@@ -3461,10 +3461,10 @@ export const EN = {
   'sat.doppler.none.off':
     'Doppler is off — nothing is being tuned (Settings ▸ Radio ▸ Satellite Doppler).',
   'sat.doppler.none.pickConfirm':
-    'No transponder selected — pick one below; once your mapping is confirmed for this radio, Doppler tunes your uplink and the dial stays yours.',
+    'No transponder selected — pick one beside this; once your mapping is confirmed for this radio, Doppler tunes your uplink and the dial stays yours.',
   'sat.doppler.none.pickUplink':
-    'No transponder selected — pick one below and Doppler tunes your uplink; the dial stays yours.',
-  'sat.doppler.none.pick': 'No transponder selected — pick one below to put the dial under Doppler.',
+    'No transponder selected — pick one beside this and Doppler tunes your uplink; the dial stays yours.',
+  'sat.doppler.none.pick': 'No transponder selected — pick one beside this to put the dial under Doppler.',
   'sat.doppler.none.unconfirmed':
     'Your uplink-only mapping is not confirmed for this radio — nothing is being tuned.',
   'sat.doppler.none.beforeAos':
@@ -3735,6 +3735,7 @@ export const EN = {
   'sat.credit.noBird': 'Open a bird to choose which transponder Doppler puts the dial on.',
   'sat.credit.noData': 'no transponder data yet — fetched from SatNOGS DB when online',
   'sat.credit.noTransmitters': 'no transmitters listed for this bird (SatNOGS DB)',
+  'sat.credit.fetching': 'transmitters for this bird not fetched yet — fetching from SatNOGS DB when online',
 
   // The pass line that stands in for the dome when there is no pass in the detail's window.
   'sat.passline.beyond': 'next pass over you rises {{time}} ({{countdown}})',

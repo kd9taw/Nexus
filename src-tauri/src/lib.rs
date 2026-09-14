@@ -6336,20 +6336,96 @@ struct SatnogsSnapshot {
 }
 
 static SATNOGS: Mutex<Option<SatnogsSnapshot>> = Mutex::new(None);
-static SATNOGS_FETCHING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-/// Last refresh ATTEMPT (unix) — failed fetches back off 30 min instead of
-/// being re-tripped every 30 s by the alarm tick (SatNOGS asks bulk consumers
-/// to be gentle; a dead network must not turn into a full-catalog hammer).
-static SATNOGS_LAST_TRY: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+static SATNOGS_FETCH: Mutex<SatnogsFetchState> = Mutex::new(SatnogsFetchState {
+    running: false,
+    last_try: 0,
+    asked: std::collections::BTreeSet::new(),
+    queued: std::collections::BTreeSet::new(),
+});
+
+/// Refresh bookkeeping behind one lock, so "a fetch is running" and "what is
+/// queued behind it" can never disagree.
+#[derive(Default)]
+struct SatnogsFetchState {
+    running: bool,
+    /// Last refresh ATTEMPT (unix) — failed fetches back off 30 min instead of
+    /// being re-tripped every 30 s by the alarm tick (SatNOGS asks bulk consumers
+    /// to be gentle; a dead network must not turn into a full-catalog hammer).
+    last_try: i64,
+    /// Uncovered birds already handed to a fetch (or queued for one). A bird the
+    /// operator just opened skips the backoff ONCE (#269: it read "no transmitters
+    /// listed" for 30 min); after that — say the fetch failed offline — it waits
+    /// the backoff out like everything else.
+    asked: std::collections::BTreeSet<u32>,
+    /// New birds asked for while a fetch runs; fetched straight after it.
+    queued: std::collections::BTreeSet<u32>,
+}
+
+impl SatnogsFetchState {
+    const RETRY_BACKOFF_SECS: i64 = 1800;
+
+    /// A caller wants `norads`. Returns the set to fetch NOW (and marks a fetch
+    /// running), or `None` when nothing should start.
+    fn request(
+        &mut self,
+        covered: &std::collections::HashSet<u32>,
+        norads: &[u32],
+        time_fresh: bool,
+        now: i64,
+    ) -> Option<Vec<u32>> {
+        let fresh = time_fresh && norads.iter().all(|n| covered.contains(n));
+        if fresh || norads.is_empty() {
+            return None;
+        }
+        let new: Vec<u32> = norads
+            .iter()
+            .copied()
+            .filter(|n| !covered.contains(n) && !self.asked.contains(n))
+            .collect();
+        if new.is_empty() && now - self.last_try < Self::RETRY_BACKOFF_SECS {
+            return None;
+        }
+        self.asked
+            .extend(norads.iter().filter(|n| !covered.contains(n)));
+        if self.running {
+            self.queued.extend(new);
+            return None;
+        }
+        self.running = true;
+        self.last_try = now;
+        let mut want: Vec<u32> = covered.iter().chain(norads).copied().collect();
+        want.sort_unstable();
+        want.dedup();
+        Some(want)
+    }
+
+    /// The running fetch of `fetched` ended (`ok` = stored). Returns the next set
+    /// to fetch, or `None` and the fetch is no longer running.
+    fn finished(&mut self, ok: bool, fetched: &[u32], now: i64) -> Option<Vec<u32>> {
+        let extra: Vec<u32> = std::mem::take(&mut self.queued)
+            .into_iter()
+            .filter(|n| !fetched.contains(n))
+            .collect();
+        // After a failure the queue waits out the backoff with it — no second
+        // request straight into a dead network.
+        if !ok || extra.is_empty() {
+            self.running = false;
+            return None;
+        }
+        self.last_try = now;
+        let mut want: Vec<u32> = fetched.iter().copied().chain(extra).collect();
+        want.sort_unstable();
+        want.dedup();
+        Some(want)
+    }
+}
 
 /// Best-available SatNOGS data NOW (memory → disk), kicking a background
 /// refresh when the snapshot is older than a week. Returns `None` when we have
 /// never fetched — callers show "no data yet", never invented statuses. A stale
 /// snapshot is still served (with its honest fetch stamp) while the refresh runs.
 fn satnogs_snapshot(norads: Vec<u32>) -> Option<SatnogsSnapshot> {
-    use std::sync::atomic::Ordering;
     const TTL_SECS: i64 = 7 * 24 * 3600;
-    const RETRY_BACKOFF_SECS: i64 = 1800;
     let mem = SATNOGS.lock().ok().and_then(|g| g.clone());
     let snap = mem.or_else(|| {
         let disk: Option<SatnogsSnapshot> = std::fs::read_to_string(satnogs_path())
@@ -6370,26 +6446,21 @@ fn satnogs_snapshot(norads: Vec<u32>) -> Option<SatnogsSnapshot> {
         .as_ref()
         .map(|sn| sn.norads.iter().copied().collect())
         .unwrap_or_default();
-    let fresh = snap
+    let time_fresh = snap
         .as_ref()
-        .is_some_and(|sn| now - sn.fetched_at < TTL_SECS)
-        && norads.iter().all(|n| covered.contains(n));
-    let backoff_ok = now - SATNOGS_LAST_TRY.load(Ordering::SeqCst) >= RETRY_BACKOFF_SECS;
-    if !fresh && !norads.is_empty() && backoff_ok && !SATNOGS_FETCHING.swap(true, Ordering::SeqCst)
-    {
-        SATNOGS_LAST_TRY.store(now, Ordering::SeqCst);
-        let mut want: Vec<u32> = covered
-            .union(&norads.iter().copied().collect())
-            .copied()
-            .collect();
-        want.sort_unstable();
-        tauri::async_runtime::spawn_blocking(move || {
+        .is_some_and(|sn| now - sn.fetched_at < TTL_SECS);
+    let kick = SATNOGS_FETCH
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .request(&covered, &norads, time_fresh, now);
+    if let Some(mut want) = kick {
+        tauri::async_runtime::spawn_blocking(move || loop {
             let statuses = propagation::live::satnogs::fetch_satellites(&want);
             let transmitters = propagation::live::satnogs::fetch_transmitters(&want);
-            if let (Ok(statuses), Ok(transmitters)) = (statuses, transmitters) {
+            let ok = if let (Ok(statuses), Ok(transmitters)) = (statuses, transmitters) {
                 let sn = SatnogsSnapshot {
                     fetched_at: now_unix(),
-                    norads: want,
+                    norads: want.clone(),
                     statuses,
                     transmitters,
                 };
@@ -6399,8 +6470,18 @@ fn satnogs_snapshot(norads: Vec<u32>) -> Option<SatnogsSnapshot> {
                 if let Ok(mut g) = SATNOGS.lock() {
                     *g = Some(sn);
                 }
-            } // a failed fetch keeps whatever we had — retried after the backoff
-            SATNOGS_FETCHING.store(false, Ordering::SeqCst);
+                true
+            } else {
+                false // a failed fetch keeps whatever we had — retried after the backoff
+            };
+            let next = SATNOGS_FETCH
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .finished(ok, &want, now_unix());
+            match next {
+                Some(w) => want = w,
+                None => break,
+            }
         });
     }
     snap
@@ -6828,6 +6909,9 @@ struct SatDetailDto {
     status: Option<String>,
     transmitters: Vec<propagation::live::satnogs::Transmitter>,
     data_fetched_at: Option<i64>,
+    /// The snapshot was fetched FOR this bird. False = not fetched yet, so an
+    /// empty `transmitters` is "not known", never "none listed" (#269).
+    transmitters_covered: bool,
     /// Age (days) of THIS bird's element set — the >14 d arm-confirm's input.
     /// Absent when the bird has no elements (nothing to age). Never >30 d:
     /// that case is refused wholesale (`Err`) before a DTO exists.
@@ -6901,6 +6985,8 @@ async fn satellite_detail_from_inputs(
                 })
             })
             .unwrap_or_default();
+        let transmitters_covered =
+            norad.is_some_and(|n| snap.as_ref().is_some_and(|sn| sn.norads.contains(&n)));
         let (pass, pass_track) = match (tle, obs) {
             (Some(t), Some(o)) => {
                 // 6 h backscan: a mid-pass MEO bird keeps its true AOS (see
@@ -6941,6 +7027,7 @@ async fn satellite_detail_from_inputs(
             status,
             transmitters,
             data_fetched_at: snap.map(|sn| sn.fetched_at),
+            transmitters_covered,
             element_age_days,
             pass,
             pass_track,
@@ -25193,9 +25280,9 @@ mod tests {
         tle_absorb_foreign, tle_act_gate, tle_extend_aliases, tle_merge_imports,
         tle_merged_elements, tle_record_aliases, tle_seed, tle_seed_floor, tle_seed_path,
         tle_set_currency, view_passes, write_json_atomic, write_qso_wav_in, AssistanceEvent,
-        AssistanceSourceState, SatBird, SatTrackDto, SatTrackLoss, SatTrackRun, SharedEngine,
-        TleFlightGuard, TleSnapshot, SAT_TRACK, SAT_TRACK_GEN, TLE_ACT_STALE_DAYS, TLE_FETCHING,
-        TLE_STALE_LINE_DAYS,
+        AssistanceSourceState, SatBird, SatTrackDto, SatTrackLoss, SatTrackRun, SatnogsFetchState,
+        SharedEngine, TleFlightGuard, TleSnapshot, SAT_TRACK, SAT_TRACK_GEN, TLE_ACT_STALE_DAYS,
+        TLE_FETCHING, TLE_STALE_LINE_DAYS,
     };
 
     /// A scratch file path unique to this test process (std-only — no tempfile
@@ -27277,6 +27364,78 @@ mod tests {
             err.contains("40 days old") && err.contains(ISS_NAME),
             "{err}"
         );
+    }
+
+    // --- SatNOGS refresh gating (#269) -----------------------------------------
+
+    /// Opening the Satellites section fetched the favourites a minute ago; then the
+    /// operator opens CO-57 (27848), which that fetch never asked about. The 30 min
+    /// backoff is for failed/repeat fetches — it must not leave a new bird reading
+    /// "no transmitters listed" for half an hour.
+    #[test]
+    fn a_new_bird_is_fetched_despite_a_recent_attempt() {
+        let now = 1_760_000_000;
+        let covered: std::collections::HashSet<u32> = [25544].into();
+        let mut st = SatnogsFetchState {
+            last_try: now - 60,
+            ..Default::default()
+        };
+        assert_eq!(
+            st.request(&covered, &[27848], true, now),
+            Some(vec![25544, 27848]),
+            "an uncovered bird fetches now, growing the snapshot"
+        );
+        // Positive control: a covered bird inside the backoff starts nothing.
+        let mut st = SatnogsFetchState {
+            last_try: now - 60,
+            ..Default::default()
+        };
+        assert_eq!(st.request(&covered, &[25544], true, now), None);
+        assert_eq!(
+            st.request(&covered, &[25544], false, now),
+            None,
+            "stale: backoff holds"
+        );
+    }
+
+    /// A new bird asked for while a fetch runs is QUEUED and fetched right after
+    /// it — asked again (the 60 s detail poll) it neither re-queues nor fetches.
+    #[test]
+    fn a_new_bird_during_a_fetch_runs_right_after_it_once() {
+        let now = 1_760_000_000;
+        let covered: std::collections::HashSet<u32> = [25544].into();
+        let mut st = SatnogsFetchState::default();
+        let first = st.request(&covered, &[25544, 43017], false, now).unwrap();
+        assert_eq!(
+            st.request(&covered, &[27848], true, now + 5),
+            None,
+            "queued, not concurrent"
+        );
+        assert_eq!(
+            st.request(&covered, &[27848], true, now + 65),
+            None,
+            "already queued"
+        );
+        assert_eq!(
+            st.finished(true, &first, now + 70),
+            Some(vec![25544, 27848, 43017]),
+            "the queued bird fetches straight after"
+        );
+        assert_eq!(st.finished(true, &[25544, 27848, 43017], now + 80), None);
+        assert!(!st.running);
+    }
+
+    /// Gentleness survives: a new bird's fetch that FAILED (offline) does not
+    /// re-trip on every poll — the bird now waits out the backoff like any other.
+    #[test]
+    fn a_failed_new_bird_fetch_waits_out_the_backoff() {
+        let now = 1_760_000_000;
+        let covered = std::collections::HashSet::new();
+        let mut st = SatnogsFetchState::default();
+        let want = st.request(&covered, &[27848], false, now).unwrap();
+        assert_eq!(st.finished(false, &want, now + 10), None);
+        assert_eq!(st.request(&covered, &[27848], false, now + 70), None);
+        assert!(st.request(&covered, &[27848], false, now + 1800).is_some());
     }
 
     // --- the SET-WIDE readout (field report 2026-08-01) -----------------------

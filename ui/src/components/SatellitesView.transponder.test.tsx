@@ -157,6 +157,28 @@ describe('picking a transponder', () => {
   })
 })
 
+describe('a bird with no transmitters on screen (#269)', () => {
+  it('says "not fetched yet" while the SatNOGS cache has never covered the bird', async () => {
+    // CO-57 opened after the favourites fetch: the snapshot has a fetch time but was never asked
+    // about this bird. "None listed" there is false — SatNOGS lists plenty for it.
+    api.getSatDetail.mockImplementation(() =>
+      Promise.resolve({ ...detail(), transmitters: [], transmittersCovered: false }),
+    )
+    render(<SatellitesView focusSat="RS-44" />)
+    expect(await screen.findByText(/not fetched yet/)).toBeTruthy()
+    expect(screen.queryByText(/no transmitters listed/)).toBeNull()
+  })
+
+  it('says "none listed" only once the cache covers the bird and it has none', async () => {
+    api.getSatDetail.mockImplementation(() =>
+      Promise.resolve({ ...detail(), transmitters: [], transmittersCovered: true }),
+    )
+    render(<SatellitesView focusSat="RS-44" />)
+    expect(await screen.findByText(/no transmitters listed for this bird/)).toBeTruthy()
+    expect(screen.queryByText(/not fetched yet/)).toBeNull()
+  })
+})
+
 describe('what the row tells the operator', () => {
   it('marks the inverting transponder, and only that one', async () => {
     render(<SatellitesView focusSat="RS-44" />)

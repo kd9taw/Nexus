@@ -880,7 +880,7 @@ describe('round 3: the consent verb and the mapping-in-force offer', () => {
     expect(state).toMatch(/once your mapping is confirmed/i)
     // The Doppler readout's no-hold line must not make the promise either.
     const readout = document.querySelector('.sat-doppler.none')?.textContent ?? ''
-    expect(readout).not.toMatch(/pick one below and Doppler tunes your uplink/)
+    expect(readout).not.toMatch(/pick one beside this and Doppler tunes your uplink/)
     expect(readout).toMatch(/once your mapping is confirmed/i)
   })
 })

@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A satellite you just opened no longer claims it has no transmitters.** Open a bird the
+  Satellites section had not looked up yet (CO-57, say) and its transponder list read "no
+  transmitters listed for this bird" for up to half an hour, because the SatNOGS lookup for it
+  waited out the pause after the favourites lookup that had just run. Nexus now looks a newly
+  opened bird up straight away, and until the answer arrives it says the transmitters are not
+  fetched yet. "No transmitters listed" now only shows for a bird SatNOGS really lists nothing for.
+  The Doppler line also told you to pick a transponder "below" when the list is beside it. (#269)
+
 ### Security
 
 - **Encrypted connections refuse a malformed setup from the server.** Nexus's secure-connection

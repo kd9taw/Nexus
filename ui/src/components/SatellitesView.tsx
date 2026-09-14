@@ -3855,6 +3855,8 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook }: Prop
                     ? t('sat.credit.noBird')
                     : detail.dataFetchedAt == null
                     ? t('sat.credit.noData')
+                    : detail.norad != null && detail.transmittersCovered === false
+                    ? t('sat.credit.fetching')
                     : t('sat.credit.noTransmitters')}
                 </div>
               )}
