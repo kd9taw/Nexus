@@ -513,6 +513,38 @@ test('account claim needs local proof approval; device cookies and station bound
   assert.equal(rows.credential_hash === wrongProof, false, 'only a digest is stored')
 })
 
+// One approval (operator decision 2026-09-13): approving the pairing at the shack also approves the
+// browser that confirmed it. It must be THAT browser (its own cookie), exactly once, and nobody else.
+test('approving a pairing approves the browser that confirmed it, once, and no other browser', async () => {
+  const browser = await app.owner(), desktop = app.client()
+  const { value: enrollment } = await desktop.post('enroll', { name: 'One approval' })
+  await browser.post('pair/claim', { code: enrollment.code })
+  const { response: confirmed } = await browser.post('pair/confirm', { id: enrollment.id })
+  const setCookie = confirmed.headers.get('set-cookie')
+  assert.ok(setCookie.includes('HttpOnly') && setCookie.includes('Secure') && setCookie.includes('SameSite=Strict'))
+  browser.setCookie(setCookie)
+  const path = `stations/${enrollment.id}`
+  assert.equal((await app.db.prepare('SELECT COUNT(*) AS count FROM devices WHERE station_id=?').bind(enrollment.id).first()).count, 0,
+    'nothing is created before the shack approves')
+  const credential = crypto.getRandomValues(new Uint8Array(32)).reduce((s, b) => s + b.toString(16).padStart(2, '0'), '')
+  const approve = { id: enrollment.id, proof: enrollment.proof, credential }
+  const { value: approved } = await desktop.post('enroll/approve', approve)
+  assert.match(approved.device.id, /^[0-9a-f-]{36}$/)
+  assert.ok(approved.device.expiresAt > Date.now())
+  // A retried approve (its response lost) adds no second device and reports the same one.
+  const { value: again } = await desktop.post('enroll/approve', approve)
+  assert.deepEqual(again.device, approved.device)
+  const native = app.client(null, '', credential)
+  const { value: listed } = await native.post(`${path}/native/devices`, {})
+  assert.deepEqual(listed.devices, [{ id: approved.device.id, name: 'Paired browser', approved: 1, expiresAt: approved.device.expiresAt }])
+  // The confirming browser already holds an approved device and can open the station.
+  const { value: device } = await browser.post(`${path}/device`, { name: 'Not asked for' })
+  assert.deepEqual(device, { deviceId: approved.device.id, approved: true })
+  await browser.post(`${path}/ticket`)
+  // The same account signed in elsewhere, without that cookie, is not approved by it.
+  await app.client(browser.jwt).post(`${path}/ticket`, {}, 403)
+})
+
 test('one-use tickets, real observation sockets, ACK backpressure and hibernation restoration', async () => {
   const pair = await app.paired(), live = await admitted(pair)
   await pair.browser.open(pair.stationId, live.ticket.ticket, 401)

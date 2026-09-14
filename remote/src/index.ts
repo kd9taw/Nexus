@@ -169,6 +169,16 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
       env.DB.prepare(`UPDATE enrollments SET approved=1 WHERE id=? AND proof_hash=?
         AND EXISTS(SELECT 1 FROM stations WHERE id=? AND credential_hash=?)`)
         .bind(stationId, hash, stationId, credentialHash),
+      // The browser that confirmed this pairing is approved with it (one approval at the shack).
+      // Bound to the station row carrying THIS credential, like the trial below, and skipped when a
+      // device already holds the digest, so a retried approve adds nothing. The name is a label the
+      // shack shows beside the browser code; the browser never asked to be named.
+      env.DB.prepare(`INSERT INTO devices(id,station_id,account_id,name,credential_hash,approved,expires_at)
+        SELECT ?,e.id,e.account_id,'Paired browser',e.device_hash,1,? FROM enrollments e
+        WHERE e.id=? AND e.proof_hash=? AND e.device_hash IS NOT NULL
+        AND EXISTS(SELECT 1 FROM stations WHERE id=? AND credential_hash=?)
+        AND NOT EXISTS(SELECT 1 FROM devices d WHERE d.station_id=e.id AND d.credential_hash=e.device_hash)`)
+        .bind(uuid(), now + 2592000000, stationId, hash, stationId, credentialHash),
       env.DB.prepare(`INSERT INTO trials(account_id, enabled, expires_at, started_at, source)
         SELECT ?,1,?,?,'trial' WHERE EXISTS(SELECT 1 FROM stations WHERE id=? AND credential_hash=?)
         ON CONFLICT(account_id) DO NOTHING`)
@@ -182,7 +192,14 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
     requireValue(accepted, 'stationLimit', 409)
     const started = await trial(env, pending.account_id, now)
     requireValue(started.state === 'active', 'serviceUnavailable', 503)
-    return json({ stationId, accountId: pending.account_id, entitlement: started })
+    // The approved pairing browser, so the shack can give it station control and logging without
+    // waiting for a browser list. Additive: the shack reads stationId and accountId by name and has
+    // always ignored anything else here. `null` when the confirm came from a browser of an older era.
+    const paired = await env.DB.prepare(`SELECT d.id, d.expires_at AS expiresAt FROM devices d
+      JOIN enrollments e ON d.station_id=e.id AND d.credential_hash=e.device_hash
+      WHERE e.id=? AND e.proof_hash=? AND d.approved=1 AND d.expires_at>?`)
+      .bind(stationId, hash, now).first<{ id: string; expiresAt: number }>()
+    return json({ stationId, accountId: pending.account_id, entitlement: started, device: paired ?? null })
   }
 
   if (match?.[2].startsWith('native/')) {
@@ -302,11 +319,18 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
     // Scoped to this account's own unapproved claim. An id alone is not authority: another account
     // holding the same id confirms nothing, and a claim already approved is past the point this
     // gate protects.
-    const row = await env.DB.prepare(`UPDATE enrollments SET confirmed=1
+    //
+    // ONE APPROVAL (operator decision 2026-09-13): the browser that confirms is the browser that
+    // did the pairing, and approving at the shack approves it too. It cannot have a device row yet
+    // (a device references a station, which does not exist until approval), so it gets its device
+    // credential now, as the same cookie `device` sets, and the enrollment keeps only the digest.
+    // Confirming again from another browser moves that approval to the other browser.
+    const credential = secret()
+    const row = await env.DB.prepare(`UPDATE enrollments SET confirmed=1, device_hash=?
       WHERE id=? AND account_id=? AND approved=0 AND expires_at>? RETURNING id,name`)
-      .bind(input.id, identity.accountId, now).first()
+      .bind(await digest(credential), input.id, identity.accountId, now).first<{ id: string; name: string }>()
     requireValue(row, 'invalidPairingCode', 400)
-    return json({ station: row, accountId: identity.accountId })
+    return json({ station: row, accountId: identity.accountId }, 200, { 'set-cookie': cookie(row.id, credential) })
   }
   requireValue(match, 'notFound', 404)
   const row = await station(env, match[1]), verb = match[2]
