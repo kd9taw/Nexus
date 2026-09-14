@@ -14,7 +14,12 @@ export function SessionStatus({ client, stale, disconnect, display }: {
   const id = useId()
   return <div className="remote-application-status" role="region" aria-label={t('remote.browserWorkspace')}>
     <div className="remote-session-row">
-      {client?.enabled ? <LoggingAuthority client={client} /> : <span role="status">{t('monitor.observer')}</span>}
+      {/* Data loss is said in the label's own slot, never in a line of its own: this banner sits
+          above every cockpit, and a line that appeared with each late sample moved all of them. */}
+      {client?.enabled ? <LoggingAuthority client={client} unavailable={stale} /> : <span className="remote-session-label">
+        <span role="alert" className="remote-session-unavailable">{stale ? t('remote.applicationUnavailable') + ' ' : null}</span>
+        <span role="status">{t('monitor.observer')}</span>
+      </span>}
       <button type="button" className="remote-button remote-session-toggle"
         aria-label={t('remote.settingsLegend')} title={t('remote.settingsLegend')}
         aria-expanded={expanded} aria-controls={id} onClick={() => setExpanded(value => !value)}>
@@ -22,7 +27,6 @@ export function SessionStatus({ client, stale, disconnect, display }: {
         <span>{t('remote.settingsLegend')}</span>
       </button>
     </div>
-    {stale && <p className="remote-session-unavailable" role="alert">{t('remote.applicationUnavailable')}</p>}
     <div className="remote-session-info" id={id} hidden={!expanded}>
       <strong>{t('remote.browserWorkspace')}</strong>
       <p>{(client?.operationVersion ?? 0) >= 4 ? t('remote.ftControlPreview') : (client?.operationVersion ?? 0) >= 2 ? t('remote.controlPreview')

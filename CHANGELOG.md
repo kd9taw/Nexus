@@ -5,6 +5,26 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **The Remote browser no longer flickers.** Two separate things caused it.
+  - **The screen flashed black and back.** When the station's readings arrived a little late, the
+    browser used to blank the whole workspace until the next reading. Now the workspace stays on
+    screen, faded, and can't be clicked until readings are current again. The banner says "Station
+    data unavailable" next to the control status. Stop TX stays at full strength and clickable,
+    same as before. Nothing can be sent from faded readings; every command still refuses data that
+    isn't current.
+  - **The banner jumped, and everything below it moved.** After each station command, the "Release
+    station control" button and the result buttons disappeared until the station answered again.
+    Between heartbeats on a slow link, the status also kept switching to "Logging control status
+    unavailable". The banner now keeps the same size: buttons stay in place and are greyed out
+    while the station is re-checked, the result line keeps its space, and the status says "Station
+    control active" for as long as the station reported the control lease as valid. The frequency
+    digits also stay drawn between heartbeats; they only tune once control is confirmed again. What
+    is sent to the station, and when, is unchanged.
+
 ## [1.12.0] — 2026-09-13
 
 ### Added

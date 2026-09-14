@@ -26,7 +26,11 @@ export function useReceiverGain(doc: SettingsConfiguration | null, radioId: numb
   const [confirmed, setConfirmed] = useState<Draft | null>(null)
   const refreshRef = useRef(refresh)
   refreshRef.current = refresh
-  const supported = (client?.operationVersion ?? 0) >= 3 && !!view?.state?.controls?.capabilities.includes('receiverGain')
+  // Whether the station offers the control decides if it is drawn; `allowed` decides if it acts. The
+  // retained state keeps the slider drawn (disabled) through a command's re-read instead of
+  // unmounting the panel until the next heartbeat.
+  const shown = view?.state ?? view?.retainedState
+  const supported = (client?.operationVersion ?? 0) >= 3 && !!shown?.controls?.capabilities.includes('receiverGain')
   const canEdit = !!(allowed && client && doc && expected !== null && documentRadio === radioId &&
     radio?.source === 'native' && radio.catOk === true && !radio.txEnabled && !radio.transmitting &&
     !radio.rigKeyed && !radio.tuning && !radio.txBusyReason && observation.context &&
