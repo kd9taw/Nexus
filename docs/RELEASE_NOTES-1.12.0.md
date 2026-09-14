@@ -1,6 +1,7 @@
 Nexus 1.12.0 takes contesting past Field Day: Sweepstakes, CQ WW, CQ WPX, ARRL VHF and four state
 QSO parties. JS8 is now built in. Long overs no longer go silent partway and leave the rig keyed.
-And Connect lets you close the panes you don't use, and runs far lighter on the CPU.
+Connect lets you close the panes you don't use, and runs far lighter on the CPU. And HRDLog.net
+uploads work for the first time.
 
 The 1.11 releases only ever went out as betas. If you're coming from 1.10.3, everything below is
 new to you, including JS8, the credential fixes and the illustrated manual.
@@ -226,6 +227,15 @@ If a score or an export looks wrong for a contest you know well, that's exactly 
 
 ## Logbook and uploads
 
+- **HRDLog.net uploads work.** They never had, on any computer. HRDLog's server only offers
+  encryption that Nexus's built-in secure-connection library can't use, so the connection was
+  dropped before anything was sent. Nexus now uses your operating system's own secure connection
+  for HRDLog.net, and only for HRDLog.net. Every other service is unchanged. The certificate is
+  still checked, and your upload code stays in the system keychain, out of every error and the
+  connection log. If that connection drops while it's being set up, Nexus now says so, instead of
+  blaming your antivirus or a proxy. A failed upload is retried twice, as HRDLog asks of logging
+  programs, instead of up to twenty times. On Linux, Nexus now needs OpenSSL 3 (`libssl3`): the
+  .deb installs it for you, and the AppImage carries its own copy.
 - **Export one POTA activation.** The Logbook's export area lists your activations, each with park,
   UTC date and contact count, and exports exactly the one you pick. Ordinary contacts from the same
   day no longer end up in the file. It's named the way POTA asks, like `KD9TAW@US-1234-20260909.adi`.
