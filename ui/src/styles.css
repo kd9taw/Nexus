@@ -12446,13 +12446,44 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   grid-template-columns: 1fr 1.3fr 0.7fr 1fr 0.7fr 0.6fr 0.6fr 1.6fr 0.9fr 0.7fr 1.4fr minmax(160px, 0.8fr);
 }
 .log-note {
+  /* Flex so the comment toggle (#162) can ellipsize beside the 📝 flag: a <button> is an atomic
+     inline box, which text-overflow on the cell cannot clip with an ellipsis. */
+  display: flex;
+  align-items: center;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--text-dim);
 }
 .log-note-flag {
+  flex: none;
   margin-right: var(--space-1);
+}
+.log-note-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+/* #162: an opened comment wraps to its full length inside its row. Only the row grows; the
+   column template is untouched. */
+.log-note.expanded {
+  align-items: flex-start;
+  white-space: normal;
+}
+.log-note.expanded .log-note-text {
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 .log-country {
   overflow: hidden;

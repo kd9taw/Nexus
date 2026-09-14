@@ -33,6 +33,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   RX marker could be dragged anywhere in it. While WSPR is selected the waterfall now shows just
   1400–1600 Hz (the zoom picker steps aside, and your zoom comes back when you leave WSPR), and the
   RX marker stays inside that window, as the transmit marker already did.
+- **Long logbook comments can be read in full (#162).** The Comment column still shows one line, but
+  clicking a comment now opens it to its full length in that row, and clicking again folds it back.
+  The columns stay where they are.
 
 ### Security
 
