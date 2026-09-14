@@ -37,6 +37,8 @@ export type StationAction =
   | { action: 'radio.workDigitalSpot'; tier: 'FT8' | 'FT4'; dialMhz: number; band: string; call: string }
   // An FM repeater: the output, the shift and offset the rig keys (0 = band convention) and the tone.
   | { action: 'radio.repeater'; outputMhz: number; shift: 'simplex' | 'plus' | 'minus'; offsetHz: number; toneHz: number }
+  // The APRS channel pick: one of the regional 2 m APRS channels, FM simplex at the station.
+  | { action: 'radio.aprsTune'; dialMhz: number }
   // A station memory: its section and exact dial, plus its own sideband (Phone) or its FM machine.
   | { action: 'radio.memoryRecall'; section: 'cw' | 'phone' | 'digital'; dialMhz: number; band: string; sideband: 'USB' | 'LSB' | null
       fm?: { shift: 'simplex' | 'plus' | 'minus'; offsetHz: number; toneHz: number } }
@@ -102,6 +104,7 @@ const ACTION_CAPABILITY: Record<StationAction['action'], ControlCapability> = {
   'radio.function': 'receiverDsp', 'radio.agc': 'receiverDsp',
   'radio.phoneMode': 'phoneMode', 'radio.workSpot': 'workSpot', 'radio.workDigitalSpot': 'workDigitalSpot',
   'radio.repeater': 'repeaterTuning',
+  'radio.aprsTune': 'aprsTuning',
   'radio.memoryRecall': 'memoryRecall',
   'decoder.arm': 'decoder', 'decoder.clear': 'decoder', 'decoder.afcReset': 'decoder',
   'decoder.net': 'decoder', 'decoder.pskMode': 'decoder',
@@ -119,6 +122,9 @@ export const CONTROL_TIERS = [
   'TempoFast', 'TempoDeep'
 ] as const
 const BANDS = ['2190m', '630m', '160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m', '4m', '2m', '1.25m', '70cm', '33cm', '23cm', '13cm', '9cm', '6cm', '3cm', '1.25cm', '6mm', '4mm', '2.5mm', '2mm', '1mm']
+// The regional 2 m APRS channels in Hz, channel for channel the cockpit picker's list (aprsBeacon.ts).
+// Literal here: this grammar is compiled into the relay, which must not pull in the grid code.
+const APRS_CHANNELS_HZ = [144390000, 144800000, 145175000, 144575000, 144660000, 144930000, 145570000]
 const invalid = (): never => { throw Error('invalidOperation') }
 function object(raw: unknown, keys: string[]): Record<string, unknown> {
   try { return displayObject(raw, keys) } catch { return invalid() }
@@ -321,6 +327,11 @@ export function stationAction(raw: unknown): StationAction {
       if (!finite(a.outputMhz) || a.outputMhz < 29 || a.outputMhz > 250000 || !repeaterMachine(a.shift, a.offsetHz, a.toneHz)) invalid()
       break
     }
+    case 'radio.aprsTune':
+      object(a, ['action', 'dialMhz'])
+      // Only a regional APRS channel: this is the APRS pick, never a general 2 m tune.
+      if (!finite(a.dialMhz) || !APRS_CHANNELS_HZ.includes(Math.round((a.dialMhz as number) * 1e6))) invalid()
+      break
     case 'radio.split':
       // null is simplex. Both values are always named: a missing one is not simplex by omission.
       object(a, ['action', 'expectedTxMhz', 'txMhz'])

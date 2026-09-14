@@ -835,3 +835,57 @@ it('refuses digital Work on older stations, without its own hint, or with any ot
   expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(0)
   h.client.disconnected()
 })
+
+it('sends one APRS tune to the regional channel and waits for a later sample on that dial', async () => {
+  const h = setup(storage(), ['aprsTuning'], 3)
+  let sampleAge = Infinity
+  const snapshot = { radio: { operatingMode: 'digital', dialMhz: 144.8, txEnabled: false } }
+  const getSnapshot = vi.fn(async () => snapshot)
+  const transport = controlTransport({ kind: 'remote', invoke: getSnapshot } as ApplicationTransport,
+    { age: () => sampleAge } as unknown as ApplicationClient, h.client)
+  const result = transport.invoke('aprs_tune', { dialMhz: 144.8 })
+  await Promise.resolve()
+  const request = h.sent[h.sent.length - 1].request
+  expect(request.action).toEqual({ action: 'radio.aprsTune', dialMhz: 144.8 })
+  h.reply({ operation: 'stationControl', operationId: request.requestId, outcome: 'applied', evidence: 'radioReadback' })
+  await h.advance(100)
+  expect(getSnapshot).not.toHaveBeenCalled()
+  sampleAge = 0
+  await h.advance(50)
+  expect(await result).toEqual(snapshot)
+  expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(1)
+  h.client.disconnected()
+})
+
+it.each(['frequency', 'evidence'])('refuses an APRS tune handoff after a mismatched %s without replaying it', async changed => {
+  const h = setup(storage(), ['aprsTuning'], 3)
+  const snapshot = { radio: { operatingMode: 'digital', dialMhz: changed === 'frequency' ? 146.52 : 144.39 } }
+  const transport = controlTransport({ kind: 'remote', invoke: vi.fn(async () => snapshot) } as ApplicationTransport,
+    { age: () => 0 } as unknown as ApplicationClient, h.client)
+  const result = transport.invoke('aprs_tune', { dialMhz: 144.39 }).catch(e => e)
+  await Promise.resolve()
+  const request = h.sent[h.sent.length - 1].request
+  h.reply({ operation: 'stationControl', operationId: request.requestId, outcome: 'applied', evidence: changed === 'evidence' ? 'stationState' : 'radioReadback' })
+  expect(await result).toMatchObject({ message: changed === 'evidence' ? 'operationUnknown' : 'readingUnavailable' })
+  await h.advance(1500)
+  expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(1)
+  h.client.disconnected()
+})
+
+it('refuses an APRS tune on older stations, without its hint, or away from an APRS channel', async () => {
+  for (const [capabilities, version, message] of [[['aprsTuning'], 2, 'stationUnsupported'], [['frequency', 'repeaterTuning'], 3, 'notController']] as [ControlCapability[], OperationVersion, string][]) {
+    const h = setup(storage(), capabilities, version)
+    const transport = controlTransport({ kind: 'remote', invoke: vi.fn() } as ApplicationTransport, { age: () => 0 } as unknown as ApplicationClient, h.client)
+    await expect(transport.invoke('aprs_tune', { dialMhz: 144.39 })).rejects.toThrow(message)
+    expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(0)
+    h.client.disconnected()
+  }
+  const h = setup(storage(), ['aprsTuning'], 3)
+  const invoke = vi.fn(), transport = controlTransport({ kind: 'remote', invoke } as ApplicationTransport, { age: () => 0 } as unknown as ApplicationClient, h.client)
+  for (const bad of [{ dialMhz: 146.52 }, { dialMhz: '144.39' }, { dialMhz: 144.39, band: '2m' }, {}, undefined]) {
+    await expect(transport.invoke('aprs_tune', bad)).rejects.toThrow()
+  }
+  expect(invoke).not.toHaveBeenCalled()
+  expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(0)
+  h.client.disconnected()
+})

@@ -153,6 +153,12 @@ export function controlTransport(reads: ApplicationTransport, client: Applicatio
             action = stationAction({ action: 'radio.repeater', outputMhz: args.outputMhz, shift: args.shift, offsetHz: args.offsetHz, toneHz: args.toneHz })
             read = 'get_snapshot'
             break
+          case 'aprs_tune':
+            // The APRS channel pick: exactly the channel, nothing beside it.
+            if (!args || Object.keys(args).length !== 1 || !('dialMhz' in args)) throw Error('invalidOperation')
+            action = stationAction({ action: 'radio.aprsTune', dialMhz: args.dialMhz })
+            read = 'get_snapshot'
+            break
           case 'work_spot':
             if (!args || Object.keys(args).some(k => !['mode', 'freqMhz', 'band', 'call', 'tier'].includes(k))) throw Error('applicationUnsupported')
             if (args.tier === null || args.tier === undefined) action = stationAction({ action: 'radio.workSpot', mode: args.mode, dialMhz: args.freqMhz, band: args.band, call: args.call })
@@ -271,6 +277,7 @@ export function controlTransport(reads: ApplicationTransport, client: Applicatio
         if (action?.action === 'radio.workSpot' && result.outcome === 'applied' && result.evidence !== 'radioReadback') throw Error('operationUnknown')
         if (action.action === 'radio.workDigitalSpot' && (result.outcome !== 'applied' || result.evidence !== 'radioReadback')) throw Error('operationUnknown')
         if (action.action === 'radio.repeater' && (result.outcome !== 'applied' || result.evidence !== 'radioReadback')) throw Error('operationUnknown')
+        if (action.action === 'radio.aprsTune' && (result.outcome !== 'applied' || result.evidence !== 'radioReadback')) throw Error('operationUnknown')
         if (action.action === 'radio.memoryRecall' && (result.outcome !== 'applied' || result.evidence !== 'radioReadback')) throw Error('operationUnknown')
         if (action.action === 'decoder.aiCw' && (result.outcome !== 'applied' || result.evidence !== 'settingsSaved')) throw Error('operationUnknown')
         if (action.action === 'decoder.redecode' && (result.outcome !== 'applied' || result.evidence !== 'receiverState')) throw Error('operationUnknown')
@@ -300,6 +307,7 @@ export function controlTransport(reads: ApplicationTransport, client: Applicatio
             if (!radio || Math.round(radio.dialMhz * 1e6) !== Math.round(action.dialMhz * 1e6) || radio.operatingMode?.toLowerCase() !== action.section) throw Error('readingUnavailable')
           }
           if (action?.action === 'radio.repeater' &&Math.round(((value as import('../types').AppSnapshot)?.radio?.dialMhz ?? NaN) * 1e6) !== Math.round(action.outputMhz * 1e6)) throw Error('readingUnavailable')
+          if (action?.action === 'radio.aprsTune' && Math.round(((value as import('../types').AppSnapshot)?.radio?.dialMhz ?? NaN) * 1e6) !== Math.round(action.dialMhz * 1e6)) throw Error('readingUnavailable')
           if (action?.action === 'decoder.aiCw' &&(value as import('../types').AppSnapshot)?.aiCw?.enabled !== action.on) throw Error('readingUnavailable')
           if (action && isTuning(action) && !tuningShown(action, (value as import('../types').AppSnapshot)?.radio)) throw Error('readingUnavailable')
           if (action?.action === 'radio.select') {

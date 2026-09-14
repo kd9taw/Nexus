@@ -2940,6 +2940,9 @@ pub struct Engine {
     /// browser's later retune may end that hold (as the desktop's own QSY does); a hold set at the
     /// station, or one whose dial or tuple has since changed, still refuses remote work.
     pub(crate) remote_fm_hold: Option<(u64, (String, i64, f32))>,
+    /// The APRS channel a committed REMOTE APRS tune established (its dial). Cleared by every
+    /// desktop `aprs_tune`, so an APRS context set at the station never matches it.
+    pub(crate) remote_aprs_hold: Option<u64>,
     /// What the HELD transponder needs the rig to be in (session-only, never
     /// persisted). Set by [`Engine::sat_tune_nominal`] on the leg it actually
     /// writes; makes `rig_mode_effective` command that mode and `route_mode`
@@ -4541,6 +4544,7 @@ impl Engine {
             aprs_fm: false,
             fm_channel: false,
             remote_fm_hold: None,
+            remote_aprs_hold: None,
             sat_mode: None,
             sstv_armed: false,
             sstv_auto_arm_declined: false,
@@ -14122,6 +14126,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // QSY would route on the class of the section being LEFT — sending an APRS tune to the FT8
         // radio when the operator happened to come from Operate.
         self.route_intent = Some(crate::settings::RouteMode::Fm);
+        // An APRS context this verb sets is the station's own; only a committed remote APRS tune
+        // re-marks it as the browser's (see `remote_aprs_hold`).
+        self.remote_aprs_hold = None;
         // The tune does the radio hand-off + dial + band and clears aprs_fm; re-arm FM after so
         // the loop commands FM (via rig_mode_effective) with simplex plumbing (via fm_repeater_config).
         // MACHINERY provenance: 144.390 is the APRS network's frequency, never "the operator's

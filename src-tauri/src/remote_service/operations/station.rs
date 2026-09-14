@@ -361,6 +361,12 @@ pub enum Action {
         #[serde(rename = "toneHz")]
         tone_hz: f32,
     },
+    /// An APRS tune (the APRS cockpit's channel pick): one of the regional 2 m APRS channels only.
+    #[serde(rename = "radio.aprsTune")]
+    AprsTune {
+        #[serde(rename = "dialMhz")]
+        dial_mhz: f64,
+    },
     /// A memory recall: the section, the memory's exact dial, its own sideband (Phone only) or
     /// its FM machine. Never a Settings form, a call or a tier.
     #[serde(rename = "radio.memoryRecall")]
@@ -574,6 +580,16 @@ pub fn execute(
                 },
                 i64::from(*offset_hz),
                 *tone_hz,
+                context.radio_connection.ok_or(Reason::ReadingUnavailable)?,
+                permit,
+            );
+        }
+        // The APRS channel pick through the readback transaction: a regional APRS channel only,
+        // refused while TX is armed; it never arms, keys or queues an APRS transmission.
+        #[cfg(feature = "radio")]
+        Action::AprsTune { dial_mhz } => {
+            return engine.queue_remote_aprs_tune(
+                *dial_mhz,
                 context.radio_connection.ok_or(Reason::ReadingUnavailable)?,
                 permit,
             );
@@ -1076,6 +1092,7 @@ impl Action {
             | Self::WorkSpot { .. }
             | Self::WorkDigitalSpot { .. }
             | Self::Repeater { .. }
+            | Self::AprsTune { .. }
             | Self::MemoryRecall { .. }
             | Self::Tier { .. }
             | Self::Workspace { .. }
@@ -1131,6 +1148,7 @@ pub fn capabilities(version: u8) -> Vec<&'static str> {
                 "workDigitalSpot",
                 "repeaterTuning",
                 "memoryRecall",
+                "aprsTuning",
             ]
         }
     }

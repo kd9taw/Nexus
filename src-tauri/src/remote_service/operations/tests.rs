@@ -32,6 +32,9 @@ mod ai_cw;
 #[path = "amp_follow_tests.rs"]
 mod amp_follow;
 #[cfg(feature = "radio")]
+#[path = "aprs_tune_tests.rs"]
+mod aprs_tune;
+#[cfg(feature = "radio")]
 #[path = "decoder_settings_tests.rs"]
 mod decoder_settings;
 #[cfg(feature = "radio")]
@@ -404,7 +407,8 @@ fn tier_admission_requires_v3_and_keeps_one_native_receipt_through_readback() {
             "ritTuning",
             "workDigitalSpot",
             "repeaterTuning",
-            "memoryRecall"
+            "memoryRecall",
+            "aprsTuning"
         ])
     );
     let command = control_request(&state, json!({"action":"radio.tier","tier":"FT4"}));

@@ -1529,10 +1529,15 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // must be put in FM explicitly — otherwise it keeps the prior section's DATA/USB mode and the
   // 2 m packet never demodulates. Clearing the mode override is handled backend-side on the next QSY.
   const handleAprsTune = useCallback((dialMhz: number) => {
+    // A browser's refusal carries data, not operator text: name it plainly.
+    if (remote) {
+      void aprsTune(dialMhz).then((s) => { if (s) setSnap(s) }).catch((e) => pushToast(controlFailureMessage(e), 'error', 4000))
+      return
+    }
     void withErrorToast(() => aprsTune(dialMhz), t('shell.aprs.tune.failed')).then((s) => {
       if (s) setSnap(s)
     })
-  }, [])
+  }, [!!remote])
 
   const handleSetTxEnabled = useCallback((enabled: boolean) => {
     void withErrorToast(

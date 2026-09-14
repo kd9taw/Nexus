@@ -18,6 +18,7 @@ static NEXT: AtomicUsize = AtomicUsize::new(0);
 fn unexpired_deadline() -> Instant {
     Instant::now() + Duration::from_secs(24 * 60 * 60)
 }
+mod aprs;
 mod band_selection;
 mod digital_spot;
 mod dsp;

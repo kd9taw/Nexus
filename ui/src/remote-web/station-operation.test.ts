@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { actionCapability, controlContext, controlOutcome, stationAction } from './station-operation'
+import { APRS_FREQS } from '../aprsBeacon'
 
 describe('closed station operating requests', () => {
   it('accepts bounded native levels with exact prior readings and their own capability', () => {
@@ -277,6 +278,19 @@ describe('split and clarifier requests', () => {
       delete missing[key]
       expect(() => stationAction(missing)).toThrow()
     }
+  })
+  it('admits an APRS tune only to one of the regional APRS channels, and nothing beside it', () => {
+    for (const dialMhz of [144.39, 144.8, 145.175, 144.575, 144.66, 144.93, 145.57]) {
+      const action = { action: 'radio.aprsTune', dialMhz }
+      expect(stationAction(action)).toEqual(action)
+      expect(actionCapability(stationAction(action))).toBe('aprsTuning')
+    }
+    // The grammar's list is the cockpit's picker list, channel for channel.
+    for (const [dialMhz] of APRS_FREQS) expect(stationAction({ action: 'radio.aprsTune', dialMhz })).toEqual({ action: 'radio.aprsTune', dialMhz })
+    const action = { action: 'radio.aprsTune', dialMhz: 144.39 }
+    for (const dialMhz of [144.391, 146.52, 14.105, 0, NaN, Infinity, '144.39', null]) expect(() => stationAction({ ...action, dialMhz })).toThrow()
+    for (const extra of ['band', 'mode', 'shift', 'txEnabled', 'settings', 'radioId']) expect(() => stationAction({ ...action, [extra]: 1 })).toThrow()
+    expect(() => stationAction({ action: 'radio.aprsTune' })).toThrow()
   })
   it('admits an FT8/FT4 Work intent only as its own action with an explicit tier', () => {
     for (const tier of ['FT8', 'FT4']) {
