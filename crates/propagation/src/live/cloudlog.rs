@@ -405,6 +405,19 @@ pub fn upload(
             "Cloudlog station profile id is empty — set it in Settings",
         ));
     }
+    // #226: `station_profile_id` is the NUMERIC id of a station location owned by the key's user
+    // (Wavelog `Api.php` qso() → `Stations::check_station_against_user`). A callsign here is
+    // answered with HTTP 401 on every contact, so it is refused before anything is sent, and the
+    // trimmed id is what goes out.
+    let station_id = station_id.trim();
+    if !station_id.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(CloudlogError::new(
+            CloudlogFailure::NotConfigured,
+            "Cloudlog/Wavelog station profile id must be the station location number (Station \
+             Locations — the number at the end of that location's Edit link), not a callsign. \
+             Nothing was sent — fix it in Settings",
+        ));
+    }
     let url = api_url(base_url);
     let body = build_body(key, station_id, adif);
     let client = reqwest::blocking::Client::builder()
@@ -568,6 +581,38 @@ mod tests {
             CloudlogFailure::NotConfigured,
             "so is an empty station profile id"
         );
+    }
+
+    /// #226 (DG3ET): Wavelog's `station_profile_id` is the NUMBER of a station location owned
+    /// by the key's user (Wavelog `Api.php` qso() → `Stations::check_station_against_user`). The
+    /// reporter typed his callsign, Wavelog answered 401 "station id does not belong to the API
+    /// key owner", and Nexus sent it — and kept sending it. A value that cannot be a location
+    /// number is refused here, before anything leaves the machine, and says what is wanted.
+    #[test]
+    fn a_station_profile_id_that_is_not_a_number_is_refused_before_sending() {
+        for id in ["DG3ET", "3a", "home", "-3", "3.0"] {
+            let e = upload("https://log.example.invalid", KEY, id, "<eor>").unwrap_err();
+            assert_eq!(
+                e.class,
+                CloudlogFailure::NotConfigured,
+                "{id:?} must be refused as a Settings problem, not sent: {}",
+                e.message
+            );
+            assert!(
+                e.message.contains("location number"),
+                "{id:?}: say what is wanted — {}",
+                e.message
+            );
+            assert!(
+                !e.message.contains(KEY),
+                "API key in the message: {}",
+                e.message
+            );
+        }
+        // Control: a numeric id (spaces trimmed, as Settings stores it) is NOT refused for its
+        // shape — it goes on to the network, which for this unresolvable host is Unreachable.
+        let e = upload("https://log.example.invalid", KEY, " 3 ", "<eor>").unwrap_err();
+        assert_eq!(e.class, CloudlogFailure::Unreachable, "{}", e.message);
     }
 
     #[test]

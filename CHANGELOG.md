@@ -52,6 +52,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   callsign against your eQSL username the same way. Each warning appears once per session, not
   once per contact. (#291)
 
+- **Wavelog and Cloudlog: the station profile id is explained, and a callsign there is caught.**
+  Wavelog wants the station location's number, the one at the end of that location's Edit link
+  under Station Locations; one operator typed his callsign and Wavelog refused every contact
+  with "station id does not belong to the API key owner". The hint now says what the number is
+  and where to find it, a value that isn't a number gets a note right under the field, and Nexus
+  no longer sends an upload with one. (#226)
+
 - **Units is on the Station tab, where you'd look for it.** The km/miles and °C/°F choice applies
   to the whole app but was filed under Settings ▸ Digital ▸ Station Housekeeping, beside FT8
   options. It now sits under Settings ▸ Station ▸ Operator & Radio, and typing units, miles, km,

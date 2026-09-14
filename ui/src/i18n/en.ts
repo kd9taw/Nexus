@@ -6335,8 +6335,12 @@ export const EN = {
   'settings.confirmations.cloudlog.url.hint':
     'Your Cloudlog/Wavelog site root. Leave blank to disable.',
   'settings.confirmations.cloudlog.stationId.label': 'Station profile id',
+  // #226. `…/station/edit/3` is a URL fragment, and Wavelog/Cloudlog/Station Locations are the
+  // product's own names — tokens inside the sentence.
   'settings.confirmations.cloudlog.stationId.hint':
-    'The station-location profile to log against (Cloudlog ▸ Station Locations).',
+    "Your station location number — in Wavelog or Cloudlog ▸ Station Locations, it is the number at the end of that location's Edit link (…/station/edit/3 means 3). Not your callsign.",
+  'settings.confirmations.cloudlog.stationId.notNumber':
+    'That looks like a callsign — Wavelog and Cloudlog want the station location number.',
   'settings.confirmations.cloudlog.apiKey.label': 'API key',
   'settings.confirmations.cloudlog.apiKey.placeholder': 'your instance API key',
   'settings.confirmations.cloudlog.apiKey.forget.title':

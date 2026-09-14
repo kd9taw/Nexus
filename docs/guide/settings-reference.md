@@ -1628,8 +1628,11 @@ Auto-forward each logged QSO to your self-hosted Cloudlog or Wavelog logbook ove
 HTTP.
 
 - **Base URL** — your site root. "Leave blank to disable."
-- **Station profile id** — "The station-location profile to log against (Cloudlog
-  ▸ Station Locations)."
+- **Station profile id** — "Your station location number — in Wavelog or Cloudlog
+  ▸ Station Locations, it is the number at the end of that location's Edit link
+  (…/station/edit/3 means 3). Not your callsign." A value that isn't a number is
+  flagged under the field and never sent: Wavelog answers a callsign here with
+  HTTP 401, "station id does not belong to the API key owner".
 - **API key** — "Cloudlog ▸ Account ▸ API Keys — a key with read/write." A
   per-instance token for your own server.
 - **Auto-forward QSOs** — push every logged QSO to the instance above as it's

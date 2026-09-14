@@ -10233,6 +10233,14 @@ export function SettingsPanel({
                   <span className="settings-hint">
                     {t('settings.confirmations.cloudlog.stationId.hint')}
                   </span>
+                  {/* #226: Wavelog wants the location NUMBER. A callsign here is answered with
+                      HTTP 401 on every contact, and the upload refuses to send it. */}
+                  {(form.cloudlogStationId ?? '').trim() !== '' &&
+                    !/^\d+$/.test((form.cloudlogStationId ?? '').trim()) && (
+                      <span className="settings-note" role="note">
+                        {t('settings.confirmations.cloudlog.stationId.notNumber')}
+                      </span>
+                    )}
                 </label>
 
                 <label className="settings-field">
