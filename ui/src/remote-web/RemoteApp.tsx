@@ -6,8 +6,20 @@ import { BrowserClient, HostedConnection, RemoteError } from './client'
 import type { AccountSession } from './client'
 import '../remote-monitor/monitor.css'
 import './remote.css'
+import './remote-site.css'
+// The Nexus mark, bundled by vite. Small enough to inline as a data: URI, which the Worker's
+// img-src ('self' data: blob:) already allows; as a file it would be 'self'.
+import nexusMark from './nexus-mark.svg'
 
-const BRAND = 'Nexus Remote'
+// The product name is an invariant token, split only so the service half can take the accent
+// colour, the way hamradiotools.io writes ham<amber>radio</amber>tools.
+const BRAND = 'Nexus'
+const BRAND_SERVICE = 'Remote'
+// The mark is decorative: the words beside it already name the product.
+const Wordmark = () => <span className="remote-site-wordmark">
+  <img className="remote-site-mark" src={nexusMark} alt="" width={28} height={28} />
+  <strong>{BRAND} <span className="remote-site-accent">{BRAND_SERVICE}</span></strong>
+</span>
 // The only route back to the operator from inside the app. An account whose trial has ended or
 // been switched off could previously read an accurate sentence and then had nowhere to go, which
 // reads as "this product is finished with me" rather than "ask and it can be extended". During a
@@ -40,6 +52,9 @@ export function RemoteApp() {
     void BrowserClient.load().then(async value => {
       if (!active) return
       setClient(value); setConfigured(value !== null)
+      // A deny that is not the unconfirmed-email case keeps its refusal sentence; that one gets
+      // its own state below instead of a banner.
+      if (value?.signInRefusal === 'signInRefused') setError('signInRefused')
       if (value && await value.authenticated()) {
         const account = await value.post<AccountSession>('session')
         if (active) setSession(account)
@@ -120,24 +135,53 @@ export function RemoteApp() {
     : code === 'signInRequired' ? t('remote.signInAgain')
     : code === 'signInRefused' ? t('remote.signInRefused')
     : code === 'stationUnavailable' ? t('remote.stationOffline')
+    // One mailbox, two sign-ins (a password once, Google once): the second account is refused a
+    // trial the first one is already running.
+    : code === 'trialActiveElsewhere' ? t('remote.trialActiveElsewhere')
+    // Rate limits on the browser's routes reset within a minute (account) or ten (claim, attach).
+    : code === 'tryLater' ? t('remote.tryLater')
     : t('remote.requestFailed')
-  return <div className="app remote-monitor-app remote-service-app">
+  // A sign-up that worked but whose address is not confirmed yet. Auth0 keeps its session through
+  // the deny, so "continue" is one plain login and "use a different account" has to sign out of it.
+  const confirmEmail = ready && client?.signInRefusal === 'emailUnverified' && !session
+  const switchAccount = <button className="remote-button" disabled={busy} onClick={() => void act(async () => { await client?.signOut() })}>{t('remote.useDifferentAccount')}</button>
+  // `remote-site` scopes the hamradiotools.io look (remote-site.css) to these account screens only.
+  return <div className="app remote-monitor-app remote-service-app remote-site">
     <AccountViewport />
-    <header className="rm-header"><strong>{BRAND}</strong>
-      {session && <button className="remote-button" disabled={busy} onClick={() => void act(async () => { await client?.signOut(); setSession(null) })}>{t('remote.signOut')}</button>}
+    <header className="rm-header"><Wordmark />
+      {session && <button className="remote-button remote-button--quiet" disabled={busy} onClick={() => void act(async () => { await client?.signOut(); setSession(null) })}>{t('remote.signOut')}</button>}
     </header>
-    <main className="rm-scroll" aria-label={t('remote.stations')}><div className="rm-content remote-account">
-      <h1>{t('remote.stations')}</h1>
-      <p>{t('remote.pilotIntro')}</p>
+    {/* Signed out, there is no station to list: the page names the product and says in one line what
+        it does. "Your stations" and the longer intro are for once there is an account. */}
+    <main className="rm-scroll" aria-label={session ? t('remote.stations') : `${BRAND} ${BRAND_SERVICE}`}><div className="rm-content remote-account">
+      {session ? <>
+        <h1>{t('remote.stations')}</h1>
+        <p className="remote-site-lead">{t('remote.pilotIntro')}</p>
+      </> : <>
+        <h1>{BRAND} {BRAND_SERVICE}</h1>
+        <p className="remote-site-lead">{t('remote.signedOutPitch')}</p>
+      </>}
       {error && <p className="rm-warning" role="alert">{refusal(error)}</p>}
       {!ready && <p role="status">{t('monitor.connecting')}</p>}
       {ready && !configured && <p role="status">{t('remote.notConfigured')}</p>}
-      {ready && error !== null && !client && <button className="remote-button" onClick={() => setLoadAttempt(value => value + 1)}>{t('shell.crash.retry')}</button>}
-      {ready && client && !session && <><div className="remote-actions">
-        <button className="remote-button" disabled={busy} onClick={() => void act(async () => { await client.signIn() })}>{t('remote.signIn')}</button>
+      {ready && error !== null && !client && <button className="remote-button remote-button--primary" onClick={() => setLoadAttempt(value => value + 1)}>{t('shell.crash.retry')}</button>}
+      {confirmEmail && client && <section className="rm-card remote-section remote-site-card--action">
+        <h2>{t('remote.confirmEmailTitle')}</h2>
+        {/* The address is not named: a denied sign-in carries no token, so the page never has it. */}
+        <p>{t('remote.confirmEmailBody')}</p>
+        <p>{t('remote.confirmEmailSpam')}</p>
+        <div className="remote-actions">
+          <button className="remote-button remote-button--primary" disabled={busy} onClick={() => void act(async () => { await client.signIn() })}>{t('remote.confirmEmailContinue')}</button>
+          {switchAccount}
+        </div>
+      </section>}
+      {ready && client && !session && !confirmEmail && <><div className="remote-actions">
+        <button className="remote-button remote-button--primary" disabled={busy} onClick={() => void act(async () => { await client.signIn() })}>{t('remote.signIn')}</button>
         {/* A first-time operator should not have to find a sign-up link on somebody else's login
             form. This is the same flow, opened on the create-account screen instead. */}
         <button className="remote-button" disabled={busy} onClick={() => void act(async () => { await client.signIn(true) })}>{t('remote.createAccount')}</button>
+        {/* Signing in again would only be refused again from the same Auth0 session. */}
+        {client.signInRefusal === 'signInRefused' && switchAccount}
       </div>
         {/* After confirming the email, Auth0 shows its own "verified" page and does not send the
             operator back here, so the way back is said before they leave. */}
@@ -151,15 +195,15 @@ export function RemoteApp() {
           ? <p>{t('remote.accountMatch')} <code>{session.accountId}</code></p>
           : <details><summary>{t('remote.supportDetails')}</summary>
               <p>{t('remote.accountMatch')} <code>{session.accountId}</code></p></details>}
-        {trial?.state === 'none' && <p role="status">{t('remote.trialNotStarted')}</p>}
+        {trial?.state === 'none' && <p className="remote-site-status" role="status">{t('remote.trialNotStarted')}</p>}
         {/* The pilot branch must survive: an absent start stays absent and is NEVER computed as
             expiresAt minus fourteen days. Migration 0002 deliberately did not backfill, because an
             invented start cannot afterwards be told from a real one. */}
-        {trial?.state === 'active' && <p role="status">{trial.startedAt === null
+        {trial?.state === 'active' && <p className="remote-site-status remote-site-status--active" role="status">{trial.startedAt === null
           ? t('remote.trialUnknownStart', { until: utcDate(trial.expiresAt) })
           : t('remote.trialRunning', { days: daysLeft, from: utcDate(trial.startedAt), until: utcDate(trial.expiresAt) })}</p>}
-        {trial?.state === 'ended' && <p role="status">{t('remote.trialEnded', { until: utcDate(trial.expiresAt) })}</p>}
-        {trial?.state === 'disabled' && <p role="status">{t('remote.trialDisabled')}</p>}
+        {trial?.state === 'ended' && <p className="remote-site-status remote-site-status--stopped" role="status">{t('remote.trialEnded', { until: utcDate(trial.expiresAt) })}</p>}
+        {trial?.state === 'disabled' && <p className="remote-site-status remote-site-status--stopped" role="status">{t('remote.trialDisabled')}</p>}
         {(trial?.state === 'ended' || trial?.state === 'disabled') &&
           <p><a href={BETA_CHANNEL} target="_blank" rel="noopener noreferrer">{t('remote.askAboutAccess')}</a></p>}
         {session.stations.map(station => <section className="rm-card remote-section" key={station.id}>
@@ -172,17 +216,17 @@ export function RemoteApp() {
                 <label>{t('remote.stationName')}<input autoFocus value={renaming.name} maxLength={48}
                   onChange={event => setRenaming({ id: station.id, name: event.target.value })} /></label>
                 <div className="remote-actions">
-                  <button className="remote-button" disabled={busy || !renaming.name.trim()}>{t('remote.saveName')}</button>
+                  <button className="remote-button remote-button--primary" disabled={busy || !renaming.name.trim()}>{t('remote.saveName')}</button>
                   <button type="button" className="remote-button" disabled={busy} onClick={() => setRenaming(null)}>{t('remote.cancelRename')}</button>
                 </div>
               </form>
             : <div className="remote-actions">
                 <h2>{station.name}</h2>
-                <button type="button" className="remote-button" disabled={busy}
+                <button type="button" className="remote-button remote-button--quiet" disabled={busy}
                   onClick={() => setRenaming({ id: station.id, name: station.name })}>{t('remote.renameStation')}</button>
               </div>}
           {station.device?.approved === 1 ? <div className="remote-actions">
-            <button className="remote-button" disabled={busy || !entitled} onClick={() => {
+            <button className="remote-button remote-button--primary" disabled={busy || !entitled} onClick={() => {
               const next = new HostedConnection(client!, station.id, true); setWorkspace(true); setConnection(next); next.start()
             }}>{t('remote.openNexus')}</button>
             <button className="remote-button" disabled={busy || !entitled} onClick={() => {
@@ -195,7 +239,7 @@ export function RemoteApp() {
             event.preventDefault(); void act(async () => { await client?.post(`stations/${station.id}/device`, { name: deviceName }); await refresh() })
           }}>
             <label>{t('remote.browserName')}<input value={deviceName} maxLength={48} required onChange={event => setDeviceName(event.target.value)} /></label>
-            <button className="remote-button" disabled={busy || !entitled || !deviceName.trim()}>{t('remote.requestApproval')}</button>
+            <button className="remote-button remote-button--primary" disabled={busy || !entitled || !deviceName.trim()}>{t('remote.requestApproval')}</button>
             {/* The reason sits WITH the control it disables. The trial line at the top of the page
                 already said why, but on a phone that line is off-screen by the time an operator
                 reaches this form - and a greyed button with nothing beside it reads as broken. */}
@@ -211,7 +255,7 @@ export function RemoteApp() {
             being shown. The server remembers this now, so a reload no longer drops the operator
             back to an empty pairing form - which used to look like the claim had failed, and led
             to re-typing a code that is then refused because the claim already consumed it. */}
-        {session.pending && <section className="rm-card remote-section">
+        {session.pending && <section className="rm-card remote-section remote-site-card--action">
           <h2>{t('remote.pairStation')}</h2>
           {/* A code can be typed because the operator's own Nexus printed it, or because somebody
               sent it to them. The service cannot tell those apart, and the name on the station is
@@ -226,26 +270,29 @@ export function RemoteApp() {
             : <>
                 <p role="status">{t('remote.confirmAttachPrompt', { station: session.pending.name })}</p>
                 <p className="remote-warning">{t('remote.confirmAttachWarning')}</p>
-                <button type="button" onClick={() => void (async () => {
+                {/* Through act(), like every other service call here: outside it a refused attach
+                    showed nothing at all and the rejection went unhandled. */}
+                <button type="button" className="remote-button remote-button--primary" disabled={busy} onClick={() => void act(async () => {
                   await client?.post('pair/confirm', { id: session.pending!.id }); await refresh()
-                })()}>{t('remote.confirmAttach')}</button>
+                })}>{t('remote.confirmAttach')}</button>
               </>}
           <p>{t('remote.accountMatch')} <code>{session.accountId}</code></p>
         </section>}
-        {canPair && !session.pending && session.stations.length < 2 && <section className="rm-card remote-section">
+        {canPair && !session.pending && session.stations.length < 2 && <section className="rm-card remote-section remote-site-card--action">
           <h2>{t('remote.pairStation')}</h2><p>{t('remote.enterCodeHint')}</p>
           {/* Guarded on the SUBMIT, not only the button: Enter in the field submits a form whose
               button is disabled, which would spend a rate-limited attempt on a typo anyway. */}
           <form onSubmit={event => { event.preventDefault(); if (!pairingCodeReady) return; void act(async () => {
             await client?.post('pair/claim', { code: pairingCode }); setCode(''); await refresh()
           }) }}>
-            <label>{t('remote.pairingCode')}<input autoComplete="off" spellCheck={false} value={code} maxLength={24} required onChange={event => setCode(event.target.value)} /></label>
-            <button className="remote-button" disabled={busy || !pairingCodeReady}>{t('remote.claimStation')}</button>
+            <label>{t('remote.pairingCode')}<input className="remote-site-code-input" autoComplete="off" spellCheck={false} value={code} maxLength={24} required onChange={event => setCode(event.target.value)} /></label>
+            <button className="remote-button remote-button--primary" disabled={busy || !pairingCodeReady}>{t('remote.claimStation')}</button>
           {pairingCodeMalformed && <p role="status">{t('remote.pairingCodeMalformed')}</p>}
           </form>
         </section>}
       </>}
-      <a href="/remote-licenses.txt">{t('remote.licenses')}</a>
-    </div></main>
+    </div>
+    <footer className="remote-site-footer"><Wordmark /><a href="/remote-licenses.txt">{t('remote.licenses')}</a></footer>
+    </main>
   </div>
 }

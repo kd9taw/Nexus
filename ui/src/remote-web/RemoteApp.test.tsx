@@ -14,9 +14,9 @@ function account(entitled = true): AccountSession {
       state: entitled ? 'active' : 'none', startedAt: entitled ? now : null,
       source: entitled ? 'trial' : null } }
 }
-function client(value: AccountSession | null) {
+function client(value: AccountSession | null, signInRefusal: BrowserClient['signInRefusal'] = null) {
   const post = vi.fn(async (_path: string, _body?: object): Promise<unknown> => value)
-  const service = { post, authenticated: async () => !!value, signIn: vi.fn(async () => {}), signOut: vi.fn(async () => {}) }
+  const service = { post, authenticated: async () => !!value, signIn: vi.fn(async (_createAccount?: boolean) => {}), signOut: vi.fn(async () => {}), signInRefusal }
   vi.spyOn(BrowserClient, 'load').mockResolvedValue(service as unknown as BrowserClient)
   return service
 }
@@ -25,37 +25,79 @@ it('offers a working retry after configuration failure instead of a sign-in butt
   vi.mocked(BrowserClient.load).mockRejectedValueOnce(new Error('offline'))
   render(<RemoteApp />)
   fireEvent.click(await screen.findByRole('button', { name: 'Try again' }))
-  const signIn = await screen.findByRole('button', { name: 'Sign in or create an account' })
+  const signIn = await screen.findByRole('button', { name: 'Sign in' })
   fireEvent.click(signIn)
   await waitFor(() => expect(service.signIn).toHaveBeenCalledTimes(1))
   expect(document.querySelectorAll('main.rm-scroll')).toHaveLength(1)
   expect(document.querySelectorAll('.remote-monitor-app')).toHaveLength(1)
 })
-// A fresh password sign-up is turned away until its address is confirmed. The page used to show
-// its generic "check the connection" wall for that, so a new ham went looking for a network fault
-// instead of opening the email that was already waiting for them.
-it('tells a new account to confirm its email when the sign-in is refused, and keeps the way back in', async () => {
-  const service = client(null)
-  vi.mocked(BrowserClient.load).mockRejectedValueOnce(new RemoteError(401, 'signInRefused'))
+// A fresh password sign-up is turned away until its address is confirmed. That is a sign-up that
+// worked, and it used to be shown as a refusal with a lone "Try again" and no way to sign in or
+// switch accounts - and signing in again bounced straight back, because Auth0 keeps its session.
+it('shows "confirm your email to finish" after an unconfirmed-email deny, with continue and switch-account', async () => {
+  const service = client(null, 'emailUnverified')
+  render(<RemoteApp />)
+  expect(await screen.findByRole('heading', { name: 'Confirm your email to finish' })).toBeTruthy()
+  // Both ways Auth0 can confirm an address are named: the code typed on its sign-up screen, and a link.
+  expect(screen.getByText(/six-digit code we emailed you on the sign-up screen, or if you received a link, click it/i)).toBeTruthy()
+  expect(screen.getByText(/spam or junk folder/i)).toBeTruthy()
+  // The expiry no longer claims a link is the only thing that was sent.
+  expect(screen.getByText(/code works for fifteen minutes, and a link for five days/i)).toBeTruthy()
+  // Not a refusal, and not the connection wall.
+  expect(screen.queryByRole('alert')).toBeNull()
+  expect(screen.queryByText(/refused|check the connection/i)).toBeNull()
+  expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull()
+  const continueButton = screen.getByRole('button', { name: 'I’ve confirmed my email — continue' })
+  const switchButton = screen.getByRole('button', { name: 'Use a different account' })
+  // Control: nothing happens until the operator presses something.
+  expect(service.signIn).not.toHaveBeenCalled()
+  expect(service.signOut).not.toHaveBeenCalled()
+
+  fireEvent.click(continueButton)
+  // A plain login: the live Auth0 session completes it. Never the sign-up screen, and never a sign-out.
+  await waitFor(() => expect(service.signIn).toHaveBeenCalledTimes(1))
+  expect(service.signIn).toHaveBeenCalledWith()
+  expect(service.signOut).not.toHaveBeenCalled()
+
+  fireEvent.click(switchButton)
+  await waitFor(() => expect(service.signOut).toHaveBeenCalledTimes(1))
+  expect(service.signIn).toHaveBeenCalledTimes(1)
+})
+// Control for the state above: an ordinary signed-out visit must not be told to confirm anything.
+it('does not show the confirm-email state to a visitor who was not refused', async () => {
+  client(null)
+  render(<RemoteApp />)
+  await screen.findByRole('button', { name: 'Create an account' })
+  expect(screen.queryByRole('heading', { name: 'Confirm your email to finish' })).toBeNull()
+  expect(screen.queryByRole('button', { name: 'Use a different account' })).toBeNull()
+})
+// Any other deny keeps the refusal sentence, but no longer strands the operator: sign-in stays
+// available, and so does leaving the Auth0 session that keeps being refused.
+it('keeps other refusals as a refusal, with sign-in and a way to switch accounts', async () => {
+  const service = client(null, 'signInRefused')
   render(<RemoteApp />)
   const alert = await screen.findByRole('alert')
-  expect(alert.textContent).toMatch(/confirm your email/i)
+  expect(alert.textContent).toMatch(/sign-in was refused/i)
   expect(alert.textContent).not.toMatch(/check the connection/i)
-  fireEvent.click(await screen.findByRole('button', { name: 'Try again' }))
-  fireEvent.click(await screen.findByRole('button', { name: 'Sign in or create an account' }))
+  expect(screen.queryByRole('heading', { name: 'Confirm your email to finish' })).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: 'Use a different account' }))
+  await waitFor(() => expect(service.signOut).toHaveBeenCalledTimes(1))
+  fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
   await waitFor(() => expect(service.signIn).toHaveBeenCalledTimes(1))
 })
-// After signing up, Auth0 shows its own "verified" page and never sends the operator back here, so
-// the way back has to be said before they leave.
-it('tells a signed-out visitor to confirm their email and come back, and drops the hint once signed in', async () => {
+// New password sign-ups are verified with a six-digit code typed on Auth0's sign-up screen, so the
+// hint says what that screen will ask for before the operator leaves for it.
+it('tells a signed-out visitor about the emailed sign-up code, and drops the hint once signed in', async () => {
   client(null)
   const view = render(<RemoteApp />)
   await screen.findByRole('button', { name: 'Create an account' })
-  expect(screen.getByText(/check your email.*confirmation link.*come back to this page and sign in/i)).toBeTruthy()
+  expect(screen.getByText(/create an account.*six-digit code we email you.*signed in/i)).toBeTruthy()
+  // The old flow's instruction must be gone, not merely joined by the new one.
+  expect(screen.queryByText(/confirmation link/i)).toBeNull()
   view.unmount()
   client(account()); render(<RemoteApp />)
   await screen.findByRole('button', { name: 'Sign out' })
-  expect(screen.queryByText(/confirmation link/i)).toBeNull()
+  expect(screen.queryByText(/six-digit code/i)).toBeNull()
 })
 it('a signed-in account with no trial yet can start pairing, and is told the clock has not started', async () => {
   client(account(false)); render(<RemoteApp />)
@@ -149,6 +191,50 @@ it('asks before attaching a claimed station, and says where a code must have com
   fireEvent.click(screen.getByRole('button', { name: /attach this station/i }))
   await waitFor(() => expect(service.post).toHaveBeenCalledWith('pair/confirm', { id }))
 })
+// Someone who signed up once with a password and once with Google holds two Remote accounts on one
+// mailbox, and the second is refused `trialActiveElsewhere`. "Attach this station" used to swallow
+// every refusal (no message at all), and the unmapped codes read as "check the connection".
+it('names the refusals the pairing flow really meets, on both claim and attach', async () => {
+  const session = account(false), id = crypto.randomUUID()
+  session.pending = { id, name: 'Shack', expiresAt: session.serverNow + 9 * 60000, confirmed: false }
+  const service = client(session)
+  let refusal = new RemoteError(403, 'trialActiveElsewhere')
+  service.post.mockImplementation(async path => { if (path === 'pair/confirm') throw refusal; return session })
+  const view = render(<RemoteApp />)
+  fireEvent.click(await screen.findByRole('button', { name: /attach this station/i }))
+  let alert = await screen.findByRole('alert')
+  expect(alert.textContent).toMatch(/already has a Remote trial running under a different sign-in/i)
+  expect(alert.textContent).not.toMatch(/check the connection/i)
+  view.unmount()
+
+  refusal = new RemoteError(429, 'tryLater')
+  render(<RemoteApp />)
+  fireEvent.click(await screen.findByRole('button', { name: /attach this station/i }))
+  alert = await screen.findByRole('alert')
+  expect(alert.textContent).toMatch(/too many tries/i)
+  expect(alert.textContent).not.toMatch(/check the connection/i)
+  cleanup()
+
+  // The claim form reaches the same names.
+  const fresh = account(false), claiming = client(fresh)
+  claiming.post.mockImplementation(async path => { if (path === 'pair/claim') throw new RemoteError(429, 'tryLater'); return fresh })
+  render(<RemoteApp />)
+  const input = await screen.findByLabelText('Pairing code')
+  fireEvent.change(input, { target: { value: '0123456789abcdef' } })
+  fireEvent.submit(input.closest('form')!)
+  expect((await screen.findByRole('alert')).textContent).toMatch(/too many tries/i)
+  cleanup()
+
+  // Control: a code with no name still reaches the generic sentence, so the assertions above are
+  // reading the alert the refusal produced, not a banner that would say anything.
+  const unnamed = account(false)
+  unnamed.pending = { id, name: 'Shack', expiresAt: unnamed.serverNow + 9 * 60000, confirmed: false }
+  const other = client(unnamed)
+  other.post.mockImplementation(async path => { if (path === 'pair/confirm') throw new RemoteError(400, 'invalidRequest'); return unnamed })
+  render(<RemoteApp />)
+  fireEvent.click(await screen.findByRole('button', { name: /attach this station/i }))
+  expect((await screen.findByRole('alert')).textContent).toMatch(/check the connection/i)
+})
 it('browser enrollment displays the local comparison code and does not imply approval', async () => {
   const session = account(), stationId = crypto.randomUUID(), deviceId = crypto.randomUUID()
   session.stations.push({ id: stationId, name: 'Synthetic station', device: null })
@@ -166,13 +252,34 @@ it('browser enrollment displays the local comparison code and does not imply app
   expect(service.post).toHaveBeenCalledWith(`stations/${stationId}/device`, { name: 'Test browser' })
 })
 
+// Before sign-in there is no station to list, so the page is the product's front door: its name, one
+// line about what it does, one way in and one way to join. "Your stations" is for once there are some.
+it('greets a signed-out visitor as Nexus Remote with one sign-in and one create-account button', async () => {
+  client(null)
+  const view = render(<RemoteApp />)
+  expect(await screen.findByRole('heading', { level: 1, name: 'Nexus Remote' })).toBeTruthy()
+  expect(screen.getByText('Operate your station from any browser you approve, while the radio stays at the shack.')).toBeTruthy()
+  expect(screen.queryByRole('heading', { name: 'Your stations' })).toBeNull()
+  // Exactly one of each: the old "Sign in or create an account" button also offered joining.
+  expect(screen.getAllByRole('button', { name: /sign in/i })).toHaveLength(1)
+  expect(screen.getAllByRole('button', { name: /create an account/i })).toHaveLength(1)
+  expect(screen.getByRole('button', { name: 'Sign in' })).toBeTruthy()
+  // The sign-up hint stays.
+  expect(screen.getByText(/six-digit code we email you/i)).toBeTruthy()
+  view.unmount()
+
+  client(account()); render(<RemoteApp />)
+  expect(await screen.findByRole('heading', { level: 1, name: 'Your stations' })).toBeTruthy()
+  expect(screen.queryByRole('heading', { name: 'Nexus Remote' })).toBeNull()
+})
+
 // A first-time operator should not have to find a sign-up link on somebody else's login form.
 it('offers creating an account as its own route, not a link to hunt for on the login form', async () => {
   const service = client(null)
   render(<RemoteApp />)
   fireEvent.click(await screen.findByRole('button', { name: 'Create an account' }))
   await waitFor(() => expect(service.signIn).toHaveBeenCalledWith(true))
-  fireEvent.click(screen.getByRole('button', { name: 'Sign in or create an account' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
   await waitFor(() => expect(service.signIn).toHaveBeenCalledTimes(2))
   expect(service.signIn).toHaveBeenLastCalledWith()
 })
