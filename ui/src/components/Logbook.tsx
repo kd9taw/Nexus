@@ -256,9 +256,9 @@ function defaultAsc(k: SortKey): boolean {
 
 import { useStationControl } from '../stationAccess'
 import { useRemoteLog } from '../remote-web/useRemoteLog'
-import { RemoteLogCheck, useLogChange, useRemoteOperations } from '../remote-web/operations'
+import { RemoteLogCheck, sendLogChange, useLogChange, useRemoteOperations } from '../remote-web/operations'
 import { OperationFailure } from '../remote-web/operation-client'
-import { logTarget, manualRecord, type LogChange, type LogChangeOutcome, type ManualRecord } from '../remote-web/operation-protocol'
+import { logTarget, manualRecord, type LogChange, type ManualRecord } from '../remote-web/operation-protocol'
 
 export function Logbook({
   defaultBand,
@@ -720,18 +720,7 @@ export function Logbook({
   }
 
   // A remote change reports its own outcome. An unknown one is held by RemoteLogCheck until checked.
-  const remoteChange = async (change: LogChange): Promise<LogChangeOutcome | null> => {
-    if (!operations) return null
-    try {
-      const outcome = await operations.change(change)
-      if (outcome.outcome === 'rejected') pushToast(t('remote.logChangeStale'), 'error', 6000)
-      return outcome
-    } catch (e) {
-      const failure = e instanceof OperationFailure ? e : null
-      pushToast(failure?.busy ? t('remote.controlBusy') : failure && !failure.sent ? t('remote.controlNotSent') : t('remote.logChangeFailed'), 'error', 6000)
-      return null
-    }
-  }
+  const remoteChange = (change: LogChange) => (operations ? sendLogChange(operations, change) : Promise.resolve(null))
 
   const onDelete = async (q: LoggedQso, i: number) => {
     if (

@@ -32,14 +32,17 @@ export type LogChange =
   /** `via` is the ADIF QSL_SENT_VIA letter; only `null` withdraws the mark. */
   | { kind: 'qslSent'; target: LogTarget; via: 'B' | 'D' | 'E' | null }
   | { kind: 'qslCard'; target: LogTarget; received: boolean }
+  /** Station context, not a row: the station tags its next contact with `call` with this reference. */
+  | { kind: 'hunt'; call: string; program: 'POTA' | 'SOTA'; reference: string }
+  | { kind: 'clearHunt' }
 /** Station hints for log changes. They ride in `controls.capabilities`, which every hosted page
  * since operation v3 filters, so a newer station can offer them without breaking an older page. */
-export const LOG_CAPABILITIES = ['logEdit', 'qslMarks'] as const
+export const LOG_CAPABILITIES = ['logEdit', 'qslMarks', 'otaHunt'] as const
 export type LogCapability = (typeof LOG_CAPABILITIES)[number]
 export const logChangeCapability = (change: LogChange): LogCapability =>
-  ({ edit: 'logEdit', delete: 'logEdit', qslSent: 'qslMarks', qslCard: 'qslMarks' } as const)[change.kind]
-const CHANGE_EVIDENCE = ['fileSynced'] as const
-const CHANGE_REFUSALS = ['contextChanged'] as const
+  ({ edit: 'logEdit', delete: 'logEdit', qslSent: 'qslMarks', qslCard: 'qslMarks', hunt: 'otaHunt', clearHunt: 'otaHunt' } as const)[change.kind]
+const CHANGE_EVIDENCE = ['fileSynced', 'stationState'] as const
+const CHANGE_REFUSALS = ['contextChanged', 'invalidChange'] as const
 export type LogChangeOutcome = { operation: 'logChange'; operationId: string } & (
   | { outcome: 'applied'; evidence: (typeof CHANGE_EVIDENCE)[number] }
   | { outcome: 'rejected'; reason: (typeof CHANGE_REFUSALS)[number] }
@@ -201,12 +204,19 @@ export function logChange(raw: unknown): LogChange {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) invalid()
   const c = raw as Record<string, unknown>
   const shapes: Record<string, string[]> = { edit: ['kind', 'target', 'record'], delete: ['kind', 'target'],
-    qslSent: ['kind', 'target', 'via'], qslCard: ['kind', 'target', 'received'] }
+    qslSent: ['kind', 'target', 'via'], qslCard: ['kind', 'target', 'received'],
+    hunt: ['kind', 'call', 'program', 'reference'], clearHunt: ['kind'] }
   if (typeof c.kind !== 'string' || !Object.prototype.hasOwnProperty.call(shapes, c.kind)) invalid()
   object(c, shapes[c.kind as string])
-  const t = object(c.target, ['call', 'whenUnix', 'key'])
-  if (!text(t.call, 32) || !t.call || !integer(t.whenUnix) || t.whenUnix > 253402300799 ||
-    typeof t.key !== 'string' || !/^[0-9a-f]{64}$/.test(t.key))
+  // A row change names the exact row (its shape requires the target); a hunt names none.
+  if ('target' in c) {
+    const t = object(c.target, ['call', 'whenUnix', 'key'])
+    if (!text(t.call, 32) || !t.call || !integer(t.whenUnix) || t.whenUnix > 253402300799 ||
+      typeof t.key !== 'string' || !/^[0-9a-f]{64}$/.test(t.key))
+      invalid()
+  }
+  if (c.kind === 'hunt' && (typeof c.call !== 'string' || !/^[A-Z0-9/]{3,32}$/.test(c.call) ||
+    (c.program !== 'POTA' && c.program !== 'SOTA') || typeof c.reference !== 'string' || !/^[A-Za-z0-9/-]{1,32}$/.test(c.reference)))
     invalid()
   // An edit states when the contact happened; "station time" only means something for a new entry.
   if (c.kind === 'edit' && manualRecord(c.record).whenUnix === null) invalid()

@@ -2729,7 +2729,7 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       else workspace = phoneWorkspace
       break
     case 'pota':
-      workspace = remote ? <RemoteOta snap={snap} /> : (
+      workspace = remote ? <RemoteOta snap={snap} onHunt={handleHuntSpot} /> : (
         <main className="layout single">
           <PotaSotaView
             snap={snap}

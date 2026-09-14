@@ -52,6 +52,26 @@ it('marks a QSL sent only as B, D, E or a withdrawal, and a card only as receive
   expect(logChangeCapability({ kind: 'qslSent', target, via: null })).toBe('qslMarks')
 })
 
+it('hunts a POTA or SOTA activator with no row target, and reports station state', () => {
+  const hunt = { kind: 'hunt', call: 'W1AW', program: 'POTA', reference: 'US-0002' }
+  for (const change of [hunt, { ...hunt, program: 'SOTA', reference: 'W7A/MN-001' }, { kind: 'clearHunt' }])
+    expect(logChange(change)).toEqual(change)
+  for (const bad of [
+    { ...hunt, call: 'w1aw' }, { ...hunt, call: 'W1' }, { ...hunt, program: 'WWFF' }, { ...hunt, reference: 'US 0002' },
+    { ...hunt, reference: '' }, { ...hunt, target }, { kind: 'hunt', call: 'W1AW', reference: 'US-0002' },
+    { kind: 'clearHunt', target }, { kind: 'clearHunt', call: 'W1AW' }
+  ])
+    expect(() => logChange(bad)).toThrow()
+  expect(logChangeCapability({ kind: 'hunt', call: 'W1AW', program: 'POTA', reference: 'US-0002' })).toBe('otaHunt')
+  expect(logChangeCapability({ kind: 'clearHunt' })).toBe('otaHunt')
+  const operationId = id()
+  for (const value of [
+    { operation: 'logChange', operationId, outcome: 'applied', evidence: 'stationState' },
+    { operation: 'logChange', operationId, outcome: 'rejected', reason: 'invalidChange' }
+  ])
+    expect(operationValue(value)).toEqual(value)
+})
+
 it('accepts only the bounded change outcomes a station reports', () => {
   const operationId = id()
   for (const value of [

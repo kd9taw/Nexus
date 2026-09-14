@@ -170,7 +170,7 @@ impl Work {
 
 /// Station hints for log changes. Offered with the logging grant at operation v4, inside
 /// `controls.capabilities`, which older hosted pages filter; `actions` never changes.
-pub(super) const CAPABILITIES: [&str; 2] = ["logEdit", "qslMarks"];
+pub(super) const CAPABILITIES: [&str; 3] = ["logEdit", "qslMarks", "otaHunt"];
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -203,32 +203,57 @@ pub enum Change {
         target: Target,
         received: bool,
     },
+    /// Station context, not a row: the engine's own funnel tags the next contact logged with
+    /// `call` with this reference, then clears the hunt.
+    Hunt {
+        call: String,
+        program: String,
+        reference: String,
+    },
+    ClearHunt {},
 }
 
 impl Change {
-    fn target(&self) -> &Target {
+    fn target(&self) -> Option<&Target> {
         match self {
             Self::Edit { target, .. }
             | Self::Delete { target }
             | Self::QslSent { target, .. }
-            | Self::QslCard { target, .. } => target,
+            | Self::QslCard { target, .. } => Some(target),
+            Self::Hunt { .. } | Self::ClearHunt {} => None,
         }
     }
     /// An edit states when the contact happened; "station time" only means something for a new entry.
     pub(super) fn valid(&self, now_unix: u64) -> bool {
-        let t = self.target();
-        !t.call.is_empty()
-            && t.call.len() <= 32
-            && t.when_unix <= 253_402_300_799
-            && key(&t.key, 64)
-            && match self {
-                Self::Edit { record, .. } => record.when_unix.is_some() && record.valid(now_unix),
-                // Exactly the menu's letters. The empty placeholder is a non-choice, never a clear.
-                Self::QslSent { via, .. } => {
-                    via.as_deref().is_none_or(|v| ["B", "D", "E"].contains(&v))
-                }
-                Self::Delete { .. } | Self::QslCard { .. } => true,
+        self.target().is_none_or(|t| {
+            !t.call.is_empty()
+                && t.call.len() <= 32
+                && t.when_unix <= 253_402_300_799
+                && key(&t.key, 64)
+        }) && match self {
+            Self::Edit { record, .. } => record.when_unix.is_some() && record.valid(now_unix),
+            // Exactly the menu's letters. The empty placeholder is a non-choice, never a clear.
+            Self::QslSent { via, .. } => {
+                via.as_deref().is_none_or(|v| ["B", "D", "E"].contains(&v))
             }
+            // The wire grammar only; the engine normalizes the reference for its program.
+            Self::Hunt {
+                call,
+                program,
+                reference,
+            } => {
+                (3..=32).contains(&call.len())
+                    && call
+                        .bytes()
+                        .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'/')
+                    && ["POTA", "SOTA"].contains(&program.as_str())
+                    && (1..=32).contains(&reference.len())
+                    && reference
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'/' || b == b'-')
+            }
+            Self::Delete { .. } | Self::QslCard { .. } | Self::ClearHunt {} => true,
+        }
     }
 }
 
@@ -236,12 +261,14 @@ impl Change {
 #[serde(rename_all = "camelCase")]
 pub(super) enum ChangeEvidence {
     FileSynced,
+    StationState,
 }
 
 #[derive(Clone, Copy, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) enum ChangeReason {
     ContextChanged,
+    InvalidChange,
     PersistenceUnconfirmed,
 }
 
@@ -319,11 +346,15 @@ pub(super) fn row_key(record: &QsoRecord) -> String {
         .unwrap_or_default()
 }
 
-/// A proven rewrite: the file must hold exactly `count` copies of `expected` afterwards.
-pub(super) struct ChangeWork {
-    path: Option<PathBuf>,
-    expected: String,
-    count: usize,
+pub(super) enum ChangeWork {
+    /// A proven rewrite: the file must hold exactly `count` copies of `expected` afterwards.
+    Rewrite {
+        path: Option<PathBuf>,
+        expected: String,
+        count: usize,
+    },
+    /// In-memory station context (a hunt), applied under the Engine lock. Nothing to sync.
+    State,
 }
 
 /// Apply under the Engine lock. Only the fields a remote edit carries change; everything else
@@ -333,9 +364,27 @@ pub(super) fn prepare_change(
     engine: &mut Engine,
     change: &Change,
 ) -> Result<ChangeWork, ChangeReason> {
+    match change {
+        // The engine validates and normalizes the reference for its program; a refusal changes nothing.
+        Change::Hunt {
+            call,
+            program,
+            reference,
+        } => {
+            return engine
+                .set_hunt_target(call, program, reference)
+                .map(|()| ChangeWork::State)
+                .map_err(|_| ChangeReason::InvalidChange)
+        }
+        Change::ClearHunt {} => {
+            engine.clear_hunt_target();
+            return Ok(ChangeWork::State);
+        }
+        _ => {}
+    }
     // Fold in another instance's appends first, so the index found below cannot shift under it.
     engine.sync_shared_log_if_changed();
-    let t = change.target();
+    let t = change.target().ok_or(ChangeReason::ContextChanged)?;
     let index = engine
         .log_records()
         .iter()
@@ -364,7 +413,7 @@ pub(super) fn prepare_change(
                 engine.mark_qsl_sent(index, via.as_deref().and_then(QslVia::from_code))
             }
             Change::QslCard { received, .. } => engine.mark_qsl_card(index, *received),
-            Change::Delete { .. } => false,
+            Change::Delete { .. } | Change::Hunt { .. } | Change::ClearHunt {} => false,
         };
         if !applied {
             return Err(ChangeReason::ContextChanged);
@@ -378,7 +427,7 @@ pub(super) fn prepare_change(
         let count = copies(engine.log_records(), &written, &text);
         (text, count)
     };
-    Ok(ChangeWork {
+    Ok(ChangeWork::Rewrite {
         path: engine.log_path().map(Path::to_path_buf),
         expected,
         count,
@@ -413,10 +462,19 @@ fn edited(record: &super::ManualRecord, stored: &QsoRecord) -> QsoRecord {
 impl ChangeWork {
     /// Runs with Engine unlocked. Never retries and never writes the log itself.
     pub(super) fn finish(self) -> ChangeOutcome {
-        let proved = self
-            .path
+        let Self::Rewrite {
+            path,
+            expected,
+            count,
+        } = self
+        else {
+            return ChangeOutcome::Applied {
+                evidence: ChangeEvidence::StationState,
+            };
+        };
+        let proved = path
             .as_deref()
-            .is_some_and(|path| on_disk(path, &self.expected, self.count).unwrap_or(false));
+            .is_some_and(|path| on_disk(path, &expected, count).unwrap_or(false));
         if proved {
             ChangeOutcome::Applied {
                 evidence: ChangeEvidence::FileSynced,
