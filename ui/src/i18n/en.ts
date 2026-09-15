@@ -7857,6 +7857,14 @@ export const EN = {
   'sstv.arm.off.title':
     'Arm — auto-decode any VIS header heard on the receive audio (RX only, never transmits)',
   'sstv.arm.failed': 'Could not switch the SSTV receiver',
+  'sstv.manualRx.label': 'Start in',
+  'sstv.manualRx.title':
+    'Pick the mode, then press Start to decode a picture already on the air — for a transmission you tuned into late, or one whose header was lost. Nothing guesses the mode; this is your answer.',
+  'sstv.manualRx.mode.aria': 'Mode for a manual receive start',
+  'sstv.manualRx.start.label': 'Start',
+  'sstv.manualRx.start.title':
+    'Start decoding now in the mode chosen beside this, without waiting for a header. Arms the receiver if it is off. Receive only — this never transmits.',
+  'sstv.manualRx.failed': 'Could not start the receiver in that mode',
   // A CONFIGURATION control on the transmit path is not a transmit control (the batch-13
   // ruling): the drive slider moved, Stop did not.
   'sstv.header.power.label': 'Power',

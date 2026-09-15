@@ -61,6 +61,7 @@ import {
   setTune,
   revealSstvGallery,
   sstvArm,
+  sstvManualRx,
   sstvAutoArm,
   sstvDeleteImage,
   sstvSend,
@@ -73,7 +74,7 @@ import { t } from '../i18n'
 // The 15 transmittable modes, their rasters and their exact key-down seconds. A pure
 // module because Settings ▸ Digital ▸ SSTV picks the DEFAULT mode from the same rows —
 // see its header for why that is not a second hand-written table.
-import { MODE_BY_SLUG, SSTV_TX_MODES, TX_MODE_GROUPS } from '../sstvModes'
+import { MODE_BY_SLUG, SSTV_RX_MODES, SSTV_TX_MODES, TX_MODE_GROUPS } from '../sstvModes'
 
 /** What the file picker offers. The magic-number sniff is what actually decides — an
  *  iPhone HEIC renamed `.jpg` has to be caught by its bytes — but the picker should
@@ -638,6 +639,21 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
     void sstvArm(!armed)
       .then(setSstv)
       .catch(() => pushToast(t('sstv.arm.failed'), 'error'))
+  }
+
+  // #202 — start a receive by hand, for a picture already in progress or one whose VIS
+  // header was lost. The mode is the operator's answer and nothing infers it: a decode
+  // with no header has no way to know, and guessing is what was reverted in 2026-08.
+  // Seeded from the Settings default transmit mode purely because it is the mode this
+  // station works in; the operator changes it here without touching Settings.
+  const [manualMode, setManualMode] = useState<string>(() =>
+    txModeDefault && MODE_BY_SLUG[txModeDefault] ? txModeDefault : 'scottie1',
+  )
+  const manualStart = () => {
+    if (!receiverControl) return
+    void sstvManualRx(manualMode)
+      .then(setSstv)
+      .catch(() => pushToast(t('sstv.manualRx.failed'), 'error'))
   }
 
   // Licensed SSTV calling frequencies (built-in band plan — 14.230, the 20 m
@@ -1642,6 +1658,42 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
             title={armed ? t('sstv.arm.on.title') : t('sstv.arm.off.title')}
           >
             {armed ? t('sstv.arm.on.label') : t('sstv.arm.off.label')}
+          </button>
+          {/* #202 — MANUAL RECEIVE START. A receiver control, beside Arm, because that is
+              what it is: it starts a decode rather than a transmission, so THE STOP LINE
+              does not reach it and it carries no ⊞ id (this header has none at all).
+              Both halves are one act — pick the mode, press the button — and nothing in
+              the audio can press it, which is the whole of "zero false starts". */}
+          <label className="cw-wpm" title={t('sstv.manualRx.title')}>
+            <span>{t('sstv.manualRx.label')}</span>
+            <select
+              value={manualMode}
+              disabled={!receiverControl}
+              aria-label={t('sstv.manualRx.mode.aria')}
+              onChange={(e) => setManualMode(e.target.value)}
+            >
+              {TX_MODE_GROUPS.map((g) => {
+                const rows = SSTV_RX_MODES.filter((m) => m.group === g)
+                return rows.length === 0 ? null : (
+                  <optgroup key={g} label={g}>
+                    {rows.map((m) => (
+                      <option key={m.slug} value={m.slug}>
+                        {m.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                )
+              })}
+            </select>
+          </label>
+          <button
+            type="button"
+            className="cw-macro sstv-manual-rx"
+            disabled={!receiverControl}
+            onClick={manualStart}
+            title={t('sstv.manualRx.start.title')}
+          >
+            {t('sstv.manualRx.start.label')}
           </button>
         </CockpitHeader>
       )}

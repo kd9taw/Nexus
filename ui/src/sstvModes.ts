@@ -63,6 +63,18 @@ export const SSTV_TX_MODES: TxMode[] = [
   { slug: 'p5', name: 'Pasokon P5', group: 'Pasokon', width: 640, height: 496, seconds: 305 },
 ]
 
+/** Modes Nexus can DECODE but will not transmit — the other half of the table above.
+ *  Only the length keeps them out of the transmit picker (see the warning there), and
+ *  nothing about receiving one is different, so a manual receive start (#202) offers
+ *  them like any other. `sstv-modes.test.ts` requires `SSTV_RX_MODES` below to be
+ *  exactly the crate's mode table, so a mode cannot go missing from both lists. */
+export const SSTV_RX_ONLY_MODES: TxMode[] = [
+  { slug: 'p7', name: 'Pasokon P7', group: 'Pasokon', width: 640, height: 496, seconds: 407 },
+]
+
+/** Every mode the decoder handles — what a manual receive start may be asked for. */
+export const SSTV_RX_MODES: TxMode[] = [...SSTV_TX_MODES, ...SSTV_RX_ONLY_MODES]
+
 /** Family order for the grouped pickers — both of them render `<optgroup>`s in this
  *  order, so the cockpit and Settings read the same way. */
 export const TX_MODE_GROUPS: TxMode['group'][] = ['Scottie', 'Martin', 'Robot', 'PD', 'Wraase', 'Pasokon']

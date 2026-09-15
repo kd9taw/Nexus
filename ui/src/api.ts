@@ -2459,6 +2459,14 @@ export async function sstvArm(on: boolean): Promise<SstvState> {
   return invoke<SstvState>('sstv_arm', { on })
 }
 
+/** Start decoding an SSTV picture NOW in the named mode, without waiting for a VIS
+ *  header (#202) — for tuning into a transmission already in progress, or one whose
+ *  header was lost. Arms the receiver if it was off. RX only: this cannot key anything.
+ *  `mode` is a `short_name` slug from `SSTV_RX_MODES`. */
+export async function sstvManualRx(mode: string): Promise<SstvState> {
+  return invoke<SstvState>('sstv_manual_rx', { mode })
+}
+
 /** Start the SSTV receiver because the operator OPENED the SSTV view.
  *
  * ⭐ Without this, the ordinary way to use SSTV — open the view, tune 14.230, wait

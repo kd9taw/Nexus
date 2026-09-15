@@ -27,6 +27,8 @@ vi.mock('../api', () => ({
   setRfPower: vi.fn(async () => {}),
   // #130: the gallery's Reveal-in-folder.
   revealSstvGallery: vi.fn(async () => {}),
+  // #202: the manual receive start.
+  sstvManualRx: vi.fn(),
 }))
 // withErrorToast passes through to its action so the Send path exercises the real
 // setOperatingMode → sstvSend sequence (returns null on reject, like the real one).
@@ -634,3 +636,44 @@ describe('#130 SSTV gallery Reveal in folder', () => {
   })
 })
 
+
+// #202 — MANUAL RECEIVE START. Tuning into a picture already in progress, or one whose
+// VIS header was lost to a burst of noise, used to leave the operator watching a
+// waterfall while a picture went by. They can now name the mode and start the decode.
+//
+// The point of testing the WIRING and not just the presence: the mode the operator
+// picked has to be the mode that reaches the backend. Nothing infers it — a decode with
+// no header has no way to know, and inferring it is precisely what was reverted in
+// August — so a control that always sent the default would be silently useless.
+describe('#202 manual SSTV receive start', () => {
+  it('sends the mode the operator picked, and offers every mode the decoder handles', async () => {
+    const manual = api.sstvManualRx as unknown as ReturnType<typeof vi.fn>
+    manual.mockReset().mockResolvedValue({ ...IDLE, armed: true })
+    render(<SstvView snap={snap} />)
+
+    const picker = (await screen.findByLabelText(
+      EN['sstv.manualRx.mode.aria'],
+    )) as HTMLSelectElement
+    // Receive-only modes are offered here and nowhere else: Pasokon P7 is too long an
+    // over for Nexus to key, but there is nothing odd about RECEIVING one.
+    const slugs = Array.from(picker.querySelectorAll('option')).map((o) => o.value)
+    expect(slugs).toContain('p7')
+    expect(slugs).toContain('w2180')
+    expect(slugs).toContain('scottie1')
+
+    fireEvent.change(picker, { target: { value: 'martin1' } })
+    fireEvent.click(screen.getByRole('button', { name: EN['sstv.manualRx.start.label'] }))
+    await waitFor(() => expect(manual).toHaveBeenCalledWith('martin1'))
+  })
+
+  it('sits in the header, outside every removable pane, and is not a transmit control', async () => {
+    render(<SstvView snap={snap} />)
+    const start = await screen.findByRole('button', { name: EN['sstv.manualRx.start.label'] })
+    // In the header beside Arm — a receiver control, like Arm. THE STOP LINE does not
+    // reach it (it starts a decode, never a transmission), and the header carries no ⊞
+    // id at all, so no pane tick can take it away.
+    expect(start.closest('.cockpit-header')).not.toBeNull()
+    expect(start.closest('.cockpit-panes')).toBeNull()
+    expect(start.closest('.sstv-tx-bar')).toBeNull()
+  })
+})

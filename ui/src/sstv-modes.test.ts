@@ -125,10 +125,10 @@ function txSeconds(s: RustSpec): number {
   return header + frames * Math.max(content, s.line)
 }
 
-/** Every row of `SSTV_TX_MODES` in sstvModes.ts. */
-function tsModes() {
-  const decl = /const SSTV_TX_MODES: TxMode\[\] = \[/.exec(SSTV_MODES_TS)
-  expect(decl, 'sstvModes.ts declares SSTV_TX_MODES').not.toBeNull()
+/** Every row of a `TxMode[]` table in sstvModes.ts, by declaration name. */
+function tsRows(name: string) {
+  const decl = new RegExp(`const ${name}: TxMode\\[\\] = \\[`).exec(SSTV_MODES_TS)
+  expect(decl, `sstvModes.ts declares ${name}`).not.toBeNull()
   const start = decl!.index
   const end = SSTV_MODES_TS.indexOf('\n]', start)
   const body = SSTV_MODES_TS.slice(start, end)
@@ -138,6 +138,9 @@ function tsModes() {
     ),
   ].map((m) => ({ slug: m[1], w: Number(m[2]), h: Number(m[3]), seconds: Number(m[4]) }))
 }
+
+/** Every row of `SSTV_TX_MODES` — what the composer offers to SEND. */
+const tsModes = () => tsRows('SSTV_TX_MODES')
 
 describe('the SSTV transmit-mode table mirrors modespec.rs', () => {
   const rust = rustSpecs()
@@ -159,6 +162,20 @@ describe('the SSTV transmit-mode table mirrors modespec.rs', () => {
     expect(ts.map((m) => m.slug).sort()).toEqual(sendable.sort())
     expect(sendable, 'the cap must actually exclude something, or this test is vacuous')
       .not.toEqual(rust.map((s) => s.slug))
+  })
+
+  it('⭐ the RECEIVE list is exactly the crate\'s mode table — a manual start (#202) can name any of them', () => {
+    // The transmit list is allowed to be smaller (the cap, above). The receive list is
+    // not allowed to be smaller by ANY amount: everything the decoder understands can be
+    // started by hand, and a mode missing from both lists would be one Nexus decodes and
+    // never lets the operator ask for.
+    const rx = [...tsRows('SSTV_TX_MODES'), ...tsRows('SSTV_RX_ONLY_MODES')]
+    expect(rx.map((m) => m.slug).sort()).toEqual(rust.map((s) => s.slug).sort())
+    for (const row of rx) {
+      const spec = rust.find((s) => s.slug === row.slug)!
+      expect([row.w, row.h], `${row.slug} raster`).toEqual([spec.w, spec.h])
+      expect(row.seconds, `${row.slug} airtime`).toBe(Math.round(txSeconds(spec)))
+    }
   })
 
   it('every mode the crate decodes is either offered for transmit or over the cap', () => {

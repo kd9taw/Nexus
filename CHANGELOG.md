@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Start an SSTV receive by hand, without waiting for a header** (#202). Tune into a picture
+  that is already halfway through, or one whose header was lost to a burst of noise, pick the
+  mode beside the Arm button and press Start: the decode begins from the next line. The picture
+  comes out straight — the line timing is recovered from the sync pulses the same way it always
+  was, so joining mid-line is fine. Two things a header would have told Nexus are yours to
+  supply: the mode (nothing guesses it, and you will get the mode you name), and the assumption
+  that the radio is tuned correctly. Nothing in the audio can start a receive on its own; only
+  this button can. Receive only — it never transmits.
+
 - **SSTV receives two more mode families: Wraase SC-2 180 and Pasokon P5 and P7** (#264). Nexus
   recognises their VIS headers and decodes them like any other mode — the picture paints line by
   line and lands in the gallery with its mode name. Wraase SC-2 180 and Pasokon P5 can also be

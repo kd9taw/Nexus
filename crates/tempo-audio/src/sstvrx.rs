@@ -174,6 +174,33 @@ fn run(engine: Arc<Mutex<Engine>>, gallery_dir: PathBuf) {
                 }
             }
         }
+        // #202 — a manual receive start. The operator named the mode, so there is no VIS to
+        // wait for and nothing to infer: hand it straight to the decoder and set up the
+        // in-flight picture the same way a `VisDetected` would. Collected here rather than in
+        // `rx_step` so it happens before this tick's audio is drained, and so a request that
+        // arrives while the decoder is being rebuilt is not lost.
+        if let Some(slug) = engine_lock(&engine).take_sstv_manual_rx() {
+            match tempo_sstv::lookup_slug(&slug) {
+                Some(mode) => {
+                    let spec = tempo_sstv::for_mode(mode);
+                    decoder.as_mut().unwrap().start_manual(mode);
+                    inflight = Some(InFlight {
+                        mode_name: spec.name,
+                        width: spec.line_pixels,
+                        height: spec.image_lines,
+                        pixels: vec![[0u8; 3]; (spec.line_pixels * spec.image_lines) as usize],
+                        lines_done: 0,
+                        // No leader tone was heard, so nothing measured the radio's
+                        // mistuning; the decoder assumes zero and so does the readout.
+                        hedr_shift_hz: 0.0,
+                    });
+                    inflight_started = Some((now_unix(), spec.airtime_seconds()));
+                }
+                // The command layer validates the slug, so this is a shape that should not
+                // arrive. Say so rather than starting a decode in some other mode.
+                None => eprintln!("sstv-rx: manual start asked for unknown mode {slug:?}"),
+            }
+        }
         // ⚠️ BEFORE the empty-events `continue` below. A decode that has lost its signal
         // produces NO events at all, so a check placed after that early-out is a check that
         // can never run for the case it exists to catch.

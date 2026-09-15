@@ -11427,6 +11427,28 @@ fn sstv_auto_disarm(state: State<'_, SharedEngine>) -> Result<SstvStateDto, Stri
     Ok(sstv_state_dto(&eng))
 }
 
+/// Start decoding an SSTV picture NOW, in the mode the operator named, without
+/// waiting for a VIS header (#202).
+///
+/// For tuning into a transmission already in progress, or one whose header was
+/// lost to a burst of noise. Arms the receiver if it was off — a manual start is
+/// as explicit an act as pressing Arm. RX ONLY: nothing on this path touches the
+/// transmit gates, and `sstv_tx` is written by `sstv_send` and nowhere else.
+///
+/// `mode` is the stable `short_name` slug. Validated against
+/// `tempo_sstv::lookup_slug`, which covers every mode this build DECODES — a
+/// wider set than [`parse_sstv_mode`], which is the transmit-side table.
+#[tauri::command(async)]
+fn sstv_manual_rx(state: State<'_, SharedEngine>, mode: String) -> Result<SstvStateDto, String> {
+    let slug = mode.trim().to_ascii_lowercase();
+    let spec = tempo_sstv::lookup_slug(&slug)
+        .map(tempo_sstv::for_mode)
+        .ok_or_else(|| format!("Unknown SSTV mode: {mode}"))?;
+    let mut eng = engine_lock(&state);
+    eng.request_sstv_manual_rx(spec.short_name.to_string());
+    Ok(sstv_state_dto(&eng))
+}
+
 /// The live SSTV RX state (poll while the SSTV view is visible).
 #[tauri::command(async)]
 fn get_sstv_state(state: State<'_, SharedEngine>) -> Result<SstvStateDto, String> {
@@ -23529,6 +23551,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             psk_type,
             psk_stop,
             sstv_arm,
+            sstv_manual_rx,
             sstv_auto_arm,
             sstv_auto_disarm,
             get_sstv_state,

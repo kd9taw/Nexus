@@ -210,6 +210,25 @@ pub fn lookup(vis_code: u8) -> Option<ModeSpec> {
     ALL_SPECS.iter().find(|s| s.vis_code == vis_code).copied()
 }
 
+/// Look up an [`SstvMode`] by its stable `short_name` slug ("pd120",
+/// "scottie1", "w2180", …), case-insensitively. `None` for a slug this build
+/// does not implement.
+///
+/// The RECEIVE-side answer to "which mode is this string?", derived from
+/// [`ALL_SPECS`], so it covers every mode the decoder can handle. The transmit
+/// path has its own, deliberately SMALLER table (`parse_sstv_mode` in
+/// `src-tauri`): a mode can be decodable and still be one the engine will not
+/// key, and the transmit table is what a saved default mode is validated
+/// against. Do not merge them.
+#[must_use]
+pub fn lookup_slug(slug: &str) -> Option<SstvMode> {
+    let slug = slug.trim();
+    ALL_SPECS
+        .iter()
+        .find(|s| s.short_name.eq_ignore_ascii_case(slug))
+        .map(|s| s.mode)
+}
+
 /// Look up the [`ModeSpec`] for an [`SstvMode`].
 ///
 /// Total over [`SstvMode`] — every implemented variant has a `const`
