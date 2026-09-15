@@ -296,6 +296,8 @@ impl Engine {
             return Err(Reason::StationBusy);
         }
         self.redecode();
+        Ok(())
+    }
 
     /// Save operating preferences a Remote browser changed, then publish exactly those fields.
     ///
