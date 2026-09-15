@@ -75,7 +75,7 @@ it('shows the bearing the station measured, in the cockpit strip and on the Need
   await settle()
   expect(screen.getByTitle(t('rotor.strip.az.title', { deg: 212 })).textContent).toContain('212')
   expect(screen.queryByTitle(t('remote.b1.rotatorNoHeading'))).toBeNull()
-  expect(strip.invoke.mock.calls[0][0]).toBe('get_remote_rotator')
+  expect(strip.invoke).toHaveBeenCalledWith('get_remote_rotator', expect.anything())
   strip.collections.dispose()
   cleanup()
 
