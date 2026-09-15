@@ -6377,6 +6377,13 @@ export const EN = {
     "Your station location number — in Wavelog or Cloudlog ▸ Station Locations, it is the number at the end of that location's Edit link (…/station/edit/3 means 3). Not your callsign.",
   'settings.confirmations.cloudlog.stationId.notNumber':
     'That looks like a callsign — Wavelog and Cloudlog want the station location number.',
+  // #226 station-location picker. The request carries the API key, so the tooltip says so.
+  'settings.confirmations.cloudlog.stations.find': 'Find my station locations',
+  'settings.confirmations.cloudlog.stations.busy': 'Asking…',
+  'settings.confirmations.cloudlog.stations.title':
+    'Ask your own Cloudlog/Wavelog which station locations it has, and fill the number in. This sends your API key to your instance, and only when you press it.',
+  'settings.confirmations.cloudlog.stations.none':
+    'That instance reports no station locations — add one in Cloudlog/Wavelog first.',
   'settings.confirmations.cloudlog.apiKey.label': 'API key',
   'settings.confirmations.cloudlog.apiKey.placeholder': 'your instance API key',
   'settings.confirmations.cloudlog.apiKey.forget.title':

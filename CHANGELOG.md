@@ -44,6 +44,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Pressing S&P clears the card, as F4 does. And when the card is about a station that is calling
   someone else, it shows "Calling" and that call: click it to see the called station's card. (#204)
 
+- **Cloudlog and Wavelog can tell Nexus your station locations.** Settings ▸ Logging & Connectors
+  ▸ Cloudlog / Wavelog has a **Find my station locations** button beside the station profile id.
+  Press it and Nexus asks your own instance which locations it has, lists them by number, name,
+  callsign and grid, and fills the number in when you pick one. It asks only when you press it —
+  never on its own — and it goes to your instance over https only. An older Cloudlog without that
+  endpoint says so and asks you to enter the number by hand. (#226)
+
 ### Fixed
 
 - **A QRZ or eQSL upload that runs out of retries now says so.** After 20 failed tries Nexus used

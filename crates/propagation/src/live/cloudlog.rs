@@ -501,6 +501,162 @@ fn classify(status: u16, text: &str, key: &str) -> Result<String, CloudlogError>
     ))
 }
 
+/// One station location as Wavelog/Cloudlog reports it (#226). Their `station_info` answer is
+/// an array of these; the operator picks one and its `station_id` is what the QSO upload sends
+/// as `station_profile_id`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CloudlogStation {
+    pub station_id: String,
+    pub profile_name: String,
+    pub callsign: String,
+    pub gridsquare: String,
+    pub active: bool,
+}
+
+/// The station_info endpoint for a base URL — Wavelog's own shape, with the API key in the
+/// PATH: `GET {base}/index.php/api/station_info/{key}`. Base handling is [`api_url`]'s.
+///
+/// ⛔ THE KEY IS IN THE URL, which is why this module never logs a station_info URL, why the
+/// errors below are built from the STATUS LINE and [`neterr::redact`] only — never from the
+/// URL or the response body, either of which can carry it back — and why a key that is not
+/// URL-path-safe is refused HERE rather than escaping into the path (a `/` would silently
+/// change which endpoint is called).
+pub fn station_info_url(base: &str, key: &str) -> Result<String, CloudlogError> {
+    let k = key.trim();
+    let safe = |b: &u8| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~');
+    if k.is_empty() || !k.bytes().all(|b| safe(&b)) {
+        // The key is NOT quoted back — the whole point of this guard.
+        return Err(CloudlogError::new(
+            CloudlogFailure::NotConfigured,
+            "the Cloudlog/Wavelog API key is empty or has characters that cannot go in a URL \
+             — check it in Settings",
+        ));
+    }
+    let qso = api_url(base);
+    let root = qso.strip_suffix("/qso").unwrap_or(qso.as_str());
+    Ok(format!("{root}/station_info/{k}"))
+}
+
+/// One field of a station row, as a trimmed string. Wavelog sends every field as a string;
+/// a number is accepted too rather than read as missing.
+fn station_field(v: &serde_json::Value, key: &str) -> String {
+    match v.get(key) {
+        Some(serde_json::Value::String(s)) => s.trim().to_string(),
+        Some(serde_json::Value::Number(n)) => n.to_string(),
+        _ => String::new(),
+    }
+}
+
+/// Is this row's `station_active` flag set? `"1"`, `1` and `true` all mean active.
+fn station_active(v: &serde_json::Value) -> bool {
+    match v.get("station_active") {
+        Some(serde_json::Value::String(s)) => {
+            let s = s.trim();
+            s == "1" || s.eq_ignore_ascii_case("true")
+        }
+        Some(serde_json::Value::Number(n)) => n.as_i64() == Some(1),
+        Some(serde_json::Value::Bool(b)) => *b,
+        _ => false,
+    }
+}
+
+/// One answered station_info response → the station list, or a class with Nexus's OWN sentence.
+///
+/// ⛔ The body is PARSED, never quoted: an error page from this endpoint can echo the request
+/// URL, and that URL carries the API key. `upload`'s `server_reason` path is deliberately not
+/// reused here for that reason.
+pub fn classify_station_info(
+    status: u16,
+    body: &str,
+) -> Result<Vec<CloudlogStation>, CloudlogError> {
+    let not_a_list = || {
+        CloudlogError::new(
+            CloudlogFailure::NotAnApi,
+            "that URL answered, but not with a Cloudlog/Wavelog station list — check the \
+             instance URL in Settings",
+        )
+    };
+    match status {
+        200..=299 => {}
+        401 | 403 => {
+            return Err(CloudlogError::new(
+                CloudlogFailure::Credentials,
+                "Cloudlog/Wavelog refused the API key for station locations — check the key, \
+                 and that it is not a read-only one",
+            ))
+        }
+        404 => {
+            return Err(CloudlogError::new(
+                CloudlogFailure::NotAnApi,
+                "this Cloudlog/Wavelog has no station_info endpoint (an older version) — \
+                 enter the station location number by hand",
+            ))
+        }
+        500..=599 => {
+            return Err(CloudlogError::new(
+                CloudlogFailure::ServerError,
+                format!("Cloudlog HTTP {status} — the instance is in trouble; try again shortly"),
+            ))
+        }
+        _ => {
+            return Err(CloudlogError::new(
+                CloudlogFailure::Refused,
+                format!("Cloudlog HTTP {status} — the station list was refused"),
+            ))
+        }
+    }
+    let parsed: serde_json::Value = serde_json::from_str(body).map_err(|_| not_a_list())?;
+    let rows = parsed.as_array().ok_or_else(not_a_list)?;
+    Ok(rows
+        .iter()
+        .map(|v| CloudlogStation {
+            station_id: station_field(v, "station_id"),
+            profile_name: station_field(v, "station_profile_name"),
+            callsign: station_field(v, "station_callsign"),
+            gridsquare: station_field(v, "station_gridsquare"),
+            active: station_active(v),
+        })
+        // A row with no id cannot fill the field this picker exists to fill.
+        .filter(|st| !st.station_id.is_empty())
+        .collect())
+}
+
+/// GET the operator's station locations (#226). HTTPS only, no redirects, the same 20 s timeout
+/// `upload` uses. Runs ONLY on an explicit button press — never on load and never on a timer —
+/// because it spends the API key on the wire.
+pub fn fetch_station_info(
+    base_url: &str,
+    key: &str,
+) -> Result<Vec<CloudlogStation>, CloudlogError> {
+    let url = station_info_url(base_url, key)?;
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .https_only(true)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|_| {
+            CloudlogError::new(CloudlogFailure::Unreachable, "couldn't build HTTP client")
+        })?;
+    let resp = client.get(&url).send().map_err(|e| {
+        if e.is_builder() {
+            // `https_only` refused an http:// URL before any I/O — a Settings problem, and the
+            // one that matters most here: this request's URL carries the key.
+            CloudlogError::new(
+                CloudlogFailure::NotConfigured,
+                "Cloudlog/Wavelog: the instance URL must be https:// — a request carrying the \
+                 API key is never sent in the clear",
+            )
+        } else {
+            // `redact` classifies by error TYPE and never stringifies it, so the URL — and the
+            // key inside it — cannot ride out in the message.
+            CloudlogError::new(CloudlogFailure::Unreachable, neterr::redact("Cloudlog", &e))
+        }
+    })?;
+    let status = resp.status().as_u16();
+    let text = resp.text().unwrap_or_default();
+    classify_station_info(status, &text)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -633,6 +789,105 @@ mod tests {
     }
 
     const KEY: &str = "cl0udl0g-4pi-k3y-abcdef0123456789";
+
+    /// #226: Wavelog's own answer shape — an array of station locations, every field a string.
+    /// The operator picks one and Nexus fills the station profile id with its `station_id`.
+    #[test]
+    fn station_info_parses_a_wavelog_shaped_answer() {
+        let body = r#"[
+          {"station_id":"3","station_profile_name":"Home","station_callsign":"DG3ET",
+           "station_gridsquare":"JO31NF","station_active":"1"},
+          {"station_id":"7","station_profile_name":"Portable","station_callsign":"DG3ET/P",
+           "station_gridsquare":"JN48","station_active":"0"}
+        ]"#;
+        let got = classify_station_info(200, body).expect("a station list");
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0].station_id, "3");
+        assert_eq!(got[0].profile_name, "Home");
+        assert_eq!(got[0].callsign, "DG3ET");
+        assert_eq!(got[0].gridsquare, "JO31NF");
+        assert!(got[0].active, "station_active 1 is active");
+        assert_eq!(got[1].station_id, "7");
+        assert!(!got[1].active, "station_active 0 is not");
+        // An instance with no locations answers with an empty array — not an error.
+        assert_eq!(
+            classify_station_info(200, "[]").expect("empty list").len(),
+            0
+        );
+    }
+
+    /// #226: the three answers an operator has to tell apart — a refused or read-only key, a
+    /// Cloudlog too old to have the endpoint (enter the number by hand), and the instance in
+    /// trouble.
+    #[test]
+    fn station_info_tells_an_old_cloudlog_from_a_refused_key() {
+        let e = classify_station_info(401, "").unwrap_err();
+        assert_eq!(e.class, CloudlogFailure::Credentials);
+        assert!(e.message.to_lowercase().contains("key"), "{}", e.message);
+        let e = classify_station_info(404, "<html><title>Not Found</title></html>").unwrap_err();
+        assert_eq!(e.class, CloudlogFailure::NotAnApi);
+        assert!(e.message.contains("by hand"), "{}", e.message);
+        assert_eq!(
+            classify_station_info(500, "").unwrap_err().class,
+            CloudlogFailure::ServerError
+        );
+    }
+
+    /// ⛔ CREDENTIAL. station_info carries the API key IN THE URL PATH, so every string this
+    /// path can produce is checked for it — and the check is proven able to trip.
+    #[test]
+    fn the_api_key_never_reaches_a_station_info_error_or_url_error() {
+        // A port nothing listens on: a transport failure, the error most likely to quote a URL.
+        let l = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = l.local_addr().expect("addr").port();
+        drop(l);
+        let e = fetch_station_info(&format!("https://127.0.0.1:{port}"), KEY).unwrap_err();
+        let runs = key_runs(KEY);
+        assert!(
+            !runs.is_empty(),
+            "control: the key has readable runs to look for"
+        );
+        for r in &runs {
+            assert!(
+                !e.message.contains(r.as_str()),
+                "API key ran into the error message ({r}): {}",
+                e.message
+            );
+        }
+        // POSITIVE CONTROL: the same check trips on a planted raw key, so a clean message above
+        // is evidence rather than a detector that can never fire.
+        let planted = format!("GET https://log.example.org/index.php/api/station_info/{KEY}");
+        assert!(
+            runs.iter().any(|r| planted.contains(r.as_str())),
+            "the leak check cannot see a raw key — it proves nothing"
+        );
+    }
+
+    /// #226: the key goes in a URL PATH, so anything that is not URL-path-safe is refused
+    /// before a request is built — a key with a slash would otherwise change the endpoint.
+    #[test]
+    fn a_key_that_cannot_go_in_a_url_is_refused_before_sending() {
+        for bad in [
+            "key/with/slash",
+            "key with space",
+            "key?q=1",
+            "key#frag",
+            "",
+        ] {
+            let e = station_info_url("https://log.example.org", bad).unwrap_err();
+            assert_eq!(e.class, CloudlogFailure::NotConfigured, "{bad:?}");
+            assert!(!e.message.contains(bad) || bad.is_empty(), "{}", e.message);
+        }
+        // A real key builds the documented path, and the base handling is api_url's.
+        let want = format!("https://log.example.org/index.php/api/station_info/{KEY}");
+        for base in [
+            "https://log.example.org",
+            "https://log.example.org/",
+            "https://log.example.org/index.php",
+        ] {
+            assert_eq!(station_info_url(base, KEY).expect(base), want, "{base}");
+        }
+    }
 
     #[test]
     fn an_auth_rejection_carries_the_servers_own_reason() {

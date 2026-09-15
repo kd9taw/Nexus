@@ -17997,6 +17997,73 @@ fn dxkeeper_push_async(host: String, base_port: u16, uploads: bool, adif: String
 /// persists (through [`cloudlog_stamp`]); the words are for the toast and the connection log.
 /// The two Settings-side refusals below classify themselves the same way rather than
 /// returning a bare string, so no caller has to guess which failure it is looking at.
+/// One station location the picker offers (#226) — the serialisable mirror of
+/// `propagation::live::cloudlog::CloudlogStation`.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CloudlogStationDto {
+    station_id: String,
+    profile_name: String,
+    callsign: String,
+    gridsquare: String,
+    active: bool,
+}
+
+/// #226: the operator's own station locations, read from their Cloudlog/Wavelog so Settings can
+/// offer them instead of asking for a number they have no way to know.
+///
+/// ⛔ CREDENTIAL. The request carries the API key IN THE URL PATH. Therefore: it runs only here,
+/// from an explicit button press (never on load, never on a timer); the URL is built and spent
+/// inside `fetch_station_info` and is never returned, logged or persisted; and what reaches the
+/// operator is Nexus's own sentence or a `neterr::redact` category — both proven key-free by
+/// `the_api_key_never_reaches_a_station_info_error_or_url_error`, which carries its own positive
+/// control. The connection-log line below names a COUNT and nothing else.
+#[tauri::command(async)]
+async fn cloudlog_station_info(
+    state: State<'_, SharedEngine>,
+) -> Result<Vec<CloudlogStationDto>, String> {
+    let url = {
+        let eng = engine_lock(&state);
+        eng.settings().cloudlog_url.trim().to_string()
+    };
+    if url.is_empty() {
+        return Err("Set your Cloudlog/Wavelog URL in Settings first.".to_string());
+    }
+    let key = cloudlog_keychain()?
+        .get_password()
+        .map_err(|_| "No Cloudlog/Wavelog API key stored — set it in Settings.".to_string())?;
+    // Blocking HTTP off the async executor (the push impls' rule). The key moves in and dies
+    // with the closure.
+    let found = tauri::async_runtime::spawn_blocking(move || {
+        propagation::live::cloudlog::fetch_station_info(&url, &key)
+    })
+    .await
+    .map_err(|e| format!("station lookup task failed: {e}"))?;
+    match found {
+        Ok(list) => {
+            conn_log(
+                "Cloudlog",
+                "ok",
+                format!("station locations offered: {}", list.len()),
+            );
+            Ok(list
+                .into_iter()
+                .map(|s| CloudlogStationDto {
+                    station_id: s.station_id,
+                    profile_name: s.profile_name,
+                    callsign: s.callsign,
+                    gridsquare: s.gridsquare,
+                    active: s.active,
+                })
+                .collect())
+        }
+        Err(e) => {
+            conn_log("Cloudlog", "error", e.message.clone());
+            Err(e.message)
+        }
+    }
+}
+
 fn cloudlog_push_qso_impl(
     dto: &LoggedQso,
     engine: &SharedEngine,
@@ -22862,6 +22929,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             get_licensed_band_plan,
             dxcc_entity_names,
             dxcc_entity_continents,
+            cloudlog_station_info,
             dxcc_entity_locations,
             set_frequency,
             sstv_tune,
