@@ -49,8 +49,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   OmniRig only fills its `Freq` property from a rig file that defines one; plenty of rig files
   report the dial only through `FreqA`/`FreqB`, and for those Nexus read zero — no dial at all —
   while other programs on the same OmniRig slot were fine. Nexus now falls back to VFO A, then VFO
-  B. If none of the three carries a frequency that is a CAT error, never a radio shown sitting at
-  0.000 MHz. On a radio parked on VFO B whose rig file reports both, VFO A is still what Nexus
+  B. If none of the three carries a frequency, that is a CAT error — never a radio shown sitting
+  at 0.000 MHz. On a radio parked on VFO B whose rig file reports both, VFO A is still what Nexus
   reads.
 
 - **A mode change that ends up on the radio's own wide filter now says so (#82).** When a radio
