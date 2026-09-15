@@ -46,7 +46,12 @@ export function BandPicker({ snap, mode, onSnap }: Props) {
       if (running) return
       running = true
       try { const next = await getLicensedBandPlan(mode); if (live) setPlan(next) }
-      catch { if (live) setPlan([]) }
+      // A read that failed is not a licence change: KEEP the last answer. Emptying the plan here
+      // disabled the trigger, and a disabled trigger closes the menu Radix is holding open — so one
+      // unavailable settings read over a WAN cancelled the dropdown under the operator's finger,
+      // swallowed the pick they were making, and reopened the menu unbidden a second later. Real
+      // loss of control is the `!control` branch above, which does clear; this is a missed poll.
+      catch { /* keep the bands already known */ }
       finally { running = false }
     }
     void refresh()

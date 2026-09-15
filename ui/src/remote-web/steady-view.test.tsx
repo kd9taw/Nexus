@@ -9,6 +9,7 @@
 import { afterEach, beforeAll, expect, it, vi } from 'vitest'
 import { act, cleanup, render } from '@testing-library/react'
 import { BandPicker } from '../components/BandPicker'
+import { getLicensedBandPlan, pickBand } from '../api'
 import { RemoteOperationsContext, StationControlContext, StationDataContext, useStationCapability } from '../stationAccess'
 import { OperationClient } from './operation-client'
 import { pendingControlStorage } from './control-storage'
@@ -109,6 +110,43 @@ it('a band dropdown stays enabled and keeps its options through every control la
   await act(async () => { await Promise.resolve() })
   observer.disconnect()
   expect({ toggles, removed }).toEqual({ toggles: 0, removed: 0 })
+})
+
+// THE OTHER WAY THE SAME MENU WAS CANCELLED. The remote picker re-reads the station's licensed
+// bands every second, out of the settings the station streams. One of those reads coming back
+// unavailable — a topic the station was briefly unable to answer, not a licence change — used to
+// empty the list, which disables the trigger, which closes the menu Radix is holding open. The
+// operator's pick then landed on nothing at all and the menu reappeared unbidden a second later:
+// measured in the compiled browser suite (the trigger went e/2 rows/open -> disabled/0 rows/closed
+// for 2.7 s from one unavailable `get_settings`). A missed read leaves the last answer standing.
+it('a band dropdown keeps the licensed bands it already has when one settings refresh fails', async () => {
+  const h = station(['bandSelection'])
+  const snap = { activeRadioId: 1, radio: { source: 'native', operatingMode: 'phone', dialMhz: 7.15, band: '40m', sideband: 'LSB', catOk: true,
+    txEnabled: false, transmitting: false, rigKeyed: false, tuning: false, txAllowed: true } } as unknown as AppSnapshot
+  const ui = render(<StationControlContext.Provider value={false}><StationDataContext.Provider value>
+    <RemoteOperationsContext.Provider value={h.client}><BandPicker snap={snap} mode="phone"/></RemoteOperationsContext.Provider>
+  </StationDataContext.Provider></StationControlContext.Provider>)
+  const trigger = () => ui.container.querySelector<HTMLButtonElement>('.band-menu-trigger')!
+  const menu = () => document.querySelector<HTMLElement>('[role="menu"]')
+  const items = () => menu()?.querySelectorAll<HTMLElement>('[role="menuitemradio"]') ?? []
+  await until(() => h.client.getSnapshot().fresh && !trigger().disabled)
+  act(() => { trigger().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })) })
+  await until(() => items().length === 2)
+  const refreshes = vi.mocked(getLicensedBandPlan).mock.calls.length
+  vi.mocked(getLicensedBandPlan).mockRejectedValueOnce(Error('applicationUnavailable'))
+  for (let elapsed = 0; elapsed < 2600; elapsed += 10) {
+    await step(10)
+    expect(trigger().disabled).toBe(false)
+    expect(items()).toHaveLength(2)
+  }
+  // Positive control: the refresh that rejected really ran inside that window.
+  expect(vi.mocked(getLicensedBandPlan).mock.calls.length).toBeGreaterThan(refreshes)
+  expect(vi.mocked(getLicensedBandPlan).mock.results.some(r => r.type === 'return' && r.value instanceof Promise)).toBe(true)
+  // …and the pick the operator makes from that still-open menu reaches the station.
+  const item = [...items()].find(e => e.textContent?.startsWith('20m'))!
+  act(() => { item.click() })
+  await until(() => vi.mocked(pickBand).mock.calls.length === 1)
+  expect(vi.mocked(pickBand)).toHaveBeenCalledWith('20m', 'phone')
 })
 
 it('stale station readings still refuse a control at once, even while control is held', async () => {
