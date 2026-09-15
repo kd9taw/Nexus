@@ -51,6 +51,7 @@ import {
 } from '../sstvOverlay'
 import { normalizeOverlayText } from '../sstvOverlayFont'
 import { SSTV_PANEL_IDS, type SstvPanelId, type PanelLayoutApi } from '../features/panelState'
+import { setViewerPicture, SSTV_VIEWER_PANEL } from './SstvViewer'
 import {
   atuTune,
   getLicensedBandPlan,
@@ -60,7 +61,9 @@ import {
   setRfPower,
   setTune,
   revealSstvGallery,
+  openPanelWindow,
   sstvArm,
+  sstvManualRx,
   sstvAutoArm,
   sstvDeleteImage,
   sstvDeleteImageRemote,
@@ -74,7 +77,7 @@ import { t } from '../i18n'
 // The 15 transmittable modes, their rasters and their exact key-down seconds. A pure
 // module because Settings ▸ Digital ▸ SSTV picks the DEFAULT mode from the same rows —
 // see its header for why that is not a second hand-written table.
-import { MODE_BY_SLUG, SSTV_TX_MODES, TX_MODE_GROUPS } from '../sstvModes'
+import { fskIdSeconds, MODE_BY_SLUG, SSTV_RX_MODES, SSTV_TX_MODES, TX_MODE_GROUPS } from '../sstvModes'
 
 /** What the file picker offers. The magic-number sniff is what actually decides — an
  *  iPhone HEIC renamed `.jpg` has to be caught by its bytes — but the picker should
@@ -178,6 +181,11 @@ interface Props {
   /** Settings ▸ Digital ▸ SSTV — default transmit mode: a `sstvModes.ts` slug, or
    *  'auto'/undefined to keep the band-aware pick. */
   txModeDefault?: string
+  /** Settings ▸ Digital ▸ SSTV: append the operator's callsign as an FSK ID burst
+   *  after each transmitted picture (default off). Read here for ONE reason — the
+   *  key-down time this screen quotes before Send must include it. The burst itself
+   *  is appended in Rust, inside `sstv_send`, where no webview path can bypass it. */
+  txFskId?: boolean
   /** Settings ▸ Digital ▸ SSTV — transmit power, percent. null/undefined = leave the
    *  rig's power alone (the shipped behaviour). */
   txPowerPct?: number | null
@@ -244,7 +252,7 @@ function overlayColorLabel(id: string): string {
  * asset-protocol URL the webview may load under the tauri.conf.json
  * assetProtocol scope (asset://localhost/… on Linux/macOS,
  * http://asset.localhost/… on Windows). Null outside the desktop shell. */
-function assetUrl(path: string): string | null {
+export function assetUrl(path: string): string | null {
   const w = window as unknown as {
     __TAURI_INTERNALS__?: { convertFileSrc?: (p: string, protocol?: string) => string }
     __TAURI__?: { core?: { convertFileSrc?: (p: string, protocol?: string) => string } }
@@ -471,7 +479,7 @@ export function sstvDecodeStatus(
 }
 
 /** "2026-07-17 15:30Z" from the gallery's ISO stamp (raw string if unexpected). */
-function fmtUtc(iso: string): string {
+export function fmtUtc(iso: string): string {
   return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(iso)
     ? `${iso.slice(0, 10)} ${iso.slice(11, 16)}Z`
     : iso
@@ -486,7 +494,7 @@ function fmtUtc(iso: string): string {
  * deleted file) would silently draw nothing — a blank box that looks exactly like the bug it
  * would be hiding. Anything not .bmp keeps the broken-image indicator, which is at least
  * honest. Outside the shell (tests) → caption-only card. */
-function GalleryThumb({ entry, remoteSrc }: { entry: SstvGalleryEntry; remoteSrc?: string | null }) {
+export function GalleryThumb({ entry, remoteSrc }: { entry: SstvGalleryEntry; remoteSrc?: string | null }) {
   const src = remoteSrc === undefined ? assetUrl(entry.path) : remoteSrc
   const isBmp = /\.bmp$/i.test(entry.path)
   const [fallback, setFallback] = useState(false)
@@ -520,14 +528,30 @@ function GalleryThumb({ entry, remoteSrc }: { entry: SstvGalleryEntry; remoteSrc
 }
 
 // A browser download name from the picture's own caption, never the station's file path.
-const sstvDownloadName = (g: SstvGalleryEntry) =>
+export const sstvDownloadName = (g: SstvGalleryEntry) =>
   `nexus-sstv-${`${g.finishedUtc}-${g.mode}`.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '')}${g.path.slice(-4).toLowerCase()}`
 
 function ReceivedThumb({entry,active}: {entry:SstvGalleryEntry;active:boolean}) {
   const source=useContext(RemoteCollectionsContext), available=useStationData()
   const ref=useRef<HTMLDivElement>(null)
   const image=useSstvImage(source,entry.path,ref,active&&available)
-  if(!source)return <GalleryThumb entry={entry}/>
+  // ⭐ CLICK THE PICTURE TO LOOK AT IT. Clicking a thumbnail did nothing at all until
+  // now: the gallery offered delete, edit-and-resend and Reveal in folder, so examining
+  // a picture that had just arrived meant leaving Nexus for a file manager. It opens in
+  // ITS OWN WINDOW (the torn-off-panel pattern) rather than a modal, so it can sit on a
+  // second monitor while the next picture comes in — the operator's decision. A button
+  // and not a click handler on the <figure>, so it is reachable from the keyboard and
+  // announces itself; the delete and edit buttons keep sitting on top of it.
+  // DESKTOP ONLY this batch: a Remote browser fetches the full-size copy lazily and needs
+  // its own loading state, which is a separate piece of work.
+  if(!source)return (
+    <button type="button" className="sstv-thumb-open"
+      aria-label={t('sstv.gallery.open.aria',{mode:entry.mode,when:fmtUtc(entry.finishedUtc)})}
+      title={t('sstv.gallery.open.title')}
+      onClick={()=>{setViewerPicture(entry.path);void openPanelWindow(SSTV_VIEWER_PANEL).catch(()=>{})}}>
+      <GalleryThumb entry={entry}/>
+    </button>
+  )
   const mode=SSTV_TX_MODES.find(m=>m.name===entry.mode)
   return <>
     <div ref={ref} className="sstv-remote-image" style={{aspectRatio:mode?`${mode.width} / ${mode.height}`:'4 / 3'}}>
@@ -556,7 +580,7 @@ function ReceivedThumb({entry,active}: {entry:SstvGalleryEntry;active:boolean}) 
  * receiver keeps listening while the operator is on another section.
  * txState=false: nothing here transmits.
  */
-export function SstvView({ snap, theme = 'default', onSnap, active = true, onSetFrequency, onSetTxEnabled, wheelSensitivity, txModeDefault, txPowerPct, panels, onOpenSettings }: Props) {
+export function SstvView({ snap, theme = 'default', onSnap, active = true, onSetFrequency, onSetTxEnabled, wheelSensitivity, txModeDefault, txFskId, txPowerPct, panels, onOpenSettings }: Props) {
   const canControl=useStationControl(), receiverControl=useStationCapability('decoder'), dataAvailable=useStationData(), source=useContext(RemoteCollectionsContext), remote=!!source
   // Deleting a received picture is permanent and it is the operator's only copy, so a browser may
   // do it only while the station advertises its gallery verb.
@@ -644,6 +668,29 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
     void sstvArm(!armed)
       .then(setSstv)
       .catch(() => pushToast(t('sstv.arm.failed'), 'error'))
+  }
+
+  // #202 — start a receive by hand, for a picture already in progress or one whose VIS
+  // header was lost. The mode is the operator's answer and nothing infers it: a decode
+  // with no header has no way to know, and guessing is what was reverted in 2026-08.
+  // Seeded from the Settings default transmit mode purely because it is the mode this
+  // station works in; the operator changes it here without touching Settings.
+  const [manualMode, setManualMode] = useState<string>(() =>
+    txModeDefault && MODE_BY_SLUG[txModeDefault] ? txModeDefault : 'scottie1',
+  )
+  // Extra key-down from the FSK callsign burst, when the operator has it on. Their own
+  // callsign decides the length; a call the burst cannot carry costs nothing because no
+  // burst is sent (the Rust encoder makes the same judgement, from the same floor).
+  const idSecs =
+    txFskId === true && (snap?.mycall ?? '').trim().length >= 3
+      ? Math.round(fskIdSeconds((snap?.mycall ?? '').trim().length))
+      : 0
+
+  const manualStart = () => {
+    if (!receiverControl) return
+    void sstvManualRx(manualMode)
+      .then(setSstv)
+      .catch(() => pushToast(t('sstv.manualRx.failed'), 'error'))
   }
 
   // Licensed SSTV calling frequencies (built-in band plan — 14.230, the 20 m
@@ -1652,6 +1699,42 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
           >
             {armed ? t('sstv.arm.on.label') : t('sstv.arm.off.label')}
           </button>
+          {/* #202 — MANUAL RECEIVE START. A receiver control, beside Arm, because that is
+              what it is: it starts a decode rather than a transmission, so THE STOP LINE
+              does not reach it and it carries no ⊞ id (this header has none at all).
+              Both halves are one act — pick the mode, press the button — and nothing in
+              the audio can press it, which is the whole of "zero false starts". */}
+          <label className="cw-wpm" title={t('sstv.manualRx.title')}>
+            <span>{t('sstv.manualRx.label')}</span>
+            <select
+              value={manualMode}
+              disabled={!receiverControl}
+              aria-label={t('sstv.manualRx.mode.aria')}
+              onChange={(e) => setManualMode(e.target.value)}
+            >
+              {TX_MODE_GROUPS.map((g) => {
+                const rows = SSTV_RX_MODES.filter((m) => m.group === g)
+                return rows.length === 0 ? null : (
+                  <optgroup key={g} label={g}>
+                    {rows.map((m) => (
+                      <option key={m.slug} value={m.slug}>
+                        {m.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                )
+              })}
+            </select>
+          </label>
+          <button
+            type="button"
+            className="cw-macro sstv-manual-rx"
+            disabled={!receiverControl}
+            onClick={manualStart}
+            title={t('sstv.manualRx.start.title')}
+          >
+            {t('sstv.manualRx.start.label')}
+          </button>
         </CockpitHeader>
       )}
 
@@ -1988,7 +2071,11 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
                   w: txMode.width,
                   h: txMode.height,
                   mode: txMode.name,
-                  clock: fmtClock(txMode.seconds),
+                  // The callsign burst is part of the over, so it is part of the
+                  // number that says how long the rig will be keyed. Quoting the
+                  // picture alone would be a second short of the truth, and this
+                  // figure is what an operator checks against their TX watchdog.
+                  clock: fmtClock(txMode.seconds + idSecs),
                 })}
               </span>
             )}

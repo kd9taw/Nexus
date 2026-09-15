@@ -77,6 +77,7 @@ import { ConnectView } from './components/ConnectView'
 import { MapView } from './components/MapView'
 import { DxpeditionsView } from './components/DxpeditionsView'
 import { SatellitesView } from './components/SatellitesView'
+import { SstvViewer } from './components/SstvViewer'
 import { Toasts } from './components/Toasts'
 import { OperateCockpit } from './components/OperateCockpit'
 import { FdClubSection, FieldDayScoreboard, FdBandOccupancy } from './components/ContestView'
@@ -611,6 +612,19 @@ function DetachedPanelBody({ panel }: { panel: string }) {
             apply(workSpot(opMode, a.freqMhz, a.band, a.call))
           }}
         />
+      </DetachedShell>
+    )
+  }
+
+  if (panel === 'sstvviewer') {
+    // The received-picture viewer. It owns everything it shows — the gallery it polls, the
+    // picture it points at (carried in localStorage from the main window) and its own
+    // keyboard — so this branch is the shell and nothing else. No snapshot gate: the
+    // pictures are files on disk and a viewer that waits for the radio to answer would sit
+    // blank on a station whose rig is off.
+    return (
+      <DetachedShell className="detached-sstvviewer">
+        <SstvViewer />
       </DetachedShell>
     )
   }

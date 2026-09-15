@@ -15,11 +15,18 @@
 //! `power(1900) > power(2100)` is unambiguous. Modelled on `vis.rs`'s
 //! tone-slicing structure at the [`WORKING_SAMPLE_RATE_HZ`] working rate.
 //!
-//! This is best-effort and RX-only: an absent or garbled burst simply
-//! yields `None` (the sanity gate rejects implausible text), so the
-//! image always stands on its own.
+//! Since 1.13.0 this module also ENCODES the burst — [`encode_fsk_id`], off
+//! by default, appended to a transmitted picture when the operator switches it
+//! on. The encoder reads the same constants as the decoder, so the two cannot
+//! describe different waveforms, and the test that matters is the round trip:
+//! encode a callsign, decode it with [`decode_fsk_id`], get the callsign back.
+//!
+//! Decoding is best-effort: an absent or garbled burst simply yields `None`
+//! (the sanity gate rejects implausible text), so the image always stands on
+//! its own.
 
 use crate::resample::WORKING_SAMPLE_RATE_HZ;
+use crate::tone::ToneWriter;
 
 /// FSK-ID symbol rate (slowrx `fsk.c`: "45.45 baud (22 ms/bit)").
 const BAUD: f64 = 45.45;
@@ -158,11 +165,104 @@ pub(crate) fn decode_fsk_id(working_audio: &[f32], hedr_shift_hz: f64) -> Option
     }
 }
 
+/// Characters the burst can carry: the 6-bit alphabet, narrowed to what a
+/// callsign is made of AND to what [`decode_fsk_id`]'s sanity gate will accept
+/// back. Encoding something the decoder would refuse is how a round trip
+/// silently stops being a round trip.
+fn is_sendable(c: char) -> bool {
+    c.is_ascii_uppercase() || c.is_ascii_digit() || c == '/'
+}
+
+/// Exact duration of the burst [`encode_fsk_id`] would produce for `call`,
+/// seconds; `0.0` when the callsign cannot be sent. The transmit path adds this
+/// to what it tells the operator the rig will be keyed for.
+#[must_use]
+#[allow(clippy::cast_precision_loss)]
+pub fn fsk_id_seconds(call: &str) -> f64 {
+    match sendable_text(call) {
+        // Two leader bytes + the text + the end marker, six bits each.
+        Some(text) => {
+            let bits = (2 + text.chars().count() + 1) * BITS_PER_CHAR;
+            bits as f64 / BAUD
+        }
+        None => 0.0,
+    }
+}
+
+/// `call` reduced to what can go on the air: upper-cased, everything outside
+/// the sendable alphabet dropped, capped at [`MAX_CHARS`] — the same ceiling
+/// the decoder stops reading at. `None` when fewer than three characters
+/// survive, which is [`decode_fsk_id`]'s own floor.
+fn sendable_text(call: &str) -> Option<String> {
+    let text: String = call
+        .trim()
+        .to_ascii_uppercase()
+        .chars()
+        .filter(|c| is_sendable(*c))
+        .take(MAX_CHARS)
+        .collect();
+    (text.chars().count() >= 3).then_some(text)
+}
+
+/// Append the FSK callsign-ID burst for `call` to `tone`, in the framing
+/// [`decode_fsk_id`] reads: the `20 2A` leader, 6-bit LSB-first characters
+/// (ASCII − `0x20`), the `01` end marker, 1900 Hz for a one and 2100 Hz for a
+/// zero at [`BAUD`]. Returns whether anything was written.
+///
+/// Writing into the caller's [`ToneWriter`] rather than returning its own
+/// buffer keeps the phase continuous with the picture that precedes it — the
+/// same discipline the scanline emitters follow, and the reason a station
+/// hears one transmission rather than a picture with a click on the end.
+///
+/// ## Safety, since this is the transmit path
+///
+/// This function only lengthens a buffer. It cannot key a radio, cannot
+/// lengthen a transmission that is already on the air, and cannot outlive one
+/// the operator stopped: the samples it appends go into the very `Vec` the
+/// engine measures to set the PTT deadline and to check the TX watchdog
+/// budget, and the audio loop's abort flushes the output ring whatever is left
+/// in it. Everything that governs the picture governs the burst, because they
+/// are the same buffer.
+pub(crate) fn emit_fsk_id(tone: &mut ToneWriter, call: &str) -> bool {
+    let Some(text) = sendable_text(call) else {
+        return false;
+    };
+    let mut bytes = vec![0x20_u8, 0x2a]; // leader
+    bytes.extend(text.chars().map(|c| (c as u8) - ASCII_OFFSET));
+    bytes.push(0x01); // end marker
+
+    let bit_secs = 1.0 / BAUD;
+    for b in bytes {
+        for k in 0..BITS_PER_CHAR {
+            // LSB first, exactly as the decoder reads them back.
+            let hz = if (b >> k) & 1 == 1 { ONE_HZ } else { ZERO_HZ };
+            tone.fill_secs(hz, bit_secs);
+        }
+    }
+    true
+}
+
+/// Standalone FSK-ID burst for `call` at `sample_rate_hz` — [`emit_fsk_id`]
+/// into a fresh [`ToneWriter`]. `None` when the callsign cannot be sent.
+///
+/// The transmit path uses [`emit_fsk_id`] so the burst shares the picture's
+/// phase; this is the standalone form the round-trip tests drive, and it is
+/// compiled only for them — a second production entry point into the transmit
+/// path is a second thing to audit.
+#[cfg(test)]
+#[must_use]
+pub(crate) fn encode_fsk_id(call: &str, sample_rate_hz: u32) -> Option<Vec<f32>> {
+    let mut tone = ToneWriter::with_pre_silence_samples_at(0, sample_rate_hz);
+    emit_fsk_id(&mut tone, call).then(|| tone.into_vec())
+}
+
 #[cfg(test)]
 #[allow(
     clippy::cast_precision_loss,
     clippy::cast_possible_truncation,
-    clippy::cast_sign_loss
+    clippy::cast_sign_loss,
+    clippy::expect_used,
+    clippy::float_cmp
 )]
 mod tests {
     use super::*;
@@ -217,6 +317,129 @@ mod tests {
     fn rejects_short_buffer() {
         // Far too short to hold a `20 2A` leader — no lock, no output.
         assert!(decode_fsk_id(&[0.0_f32; 64], 0.0).is_none());
+    }
+
+    // -----------------------------------------------------------------
+    // #FSK-ID TX — the round trip, and the control that says it can fail.
+    // -----------------------------------------------------------------
+
+    /// ⭐ THE TEST THAT MATTERS. The production encoder's burst, read back by
+    /// the production decoder, is the callsign that went in. Not "a burst was
+    /// produced" and not "the framing looks right" — the same string out.
+    ///
+    /// Several callsigns, because the ones that break a 6-bit framing are the
+    /// ones with digits in odd places and a portable suffix, not `W1AW`.
+    #[test]
+    fn encoded_ids_decode_back_to_the_same_callsign() {
+        for call in ["KD9TAW", "W1AW", "G0ABC", "VK2XYZ/P", "9A1CRA", "DL8ZZ/QRP"] {
+            let audio = encode_fsk_id(call, WORKING_SAMPLE_RATE_HZ).expect("encodable");
+            assert_eq!(
+                decode_fsk_id(&audio, 0.0).as_deref(),
+                Some(call),
+                "{call} did not survive its own encoder",
+            );
+        }
+    }
+
+    /// ⭐ THE CONTROL. Without it the round trip above proves nothing about the
+    /// WIRE: a decoder and an encoder that agreed on the wrong tone pair, the
+    /// wrong bit order or the wrong baud would agree with each other perfectly.
+    /// Swap the two tones and the same round trip must FAIL — so the test is
+    /// reading the signal and not just its own arithmetic.
+    #[test]
+    fn the_control_a_burst_with_the_tones_swapped_does_not_decode() {
+        // Hand-built with 1900 and 2100 exchanged; everything else identical to
+        // what `emit_fsk_id` does.
+        let call = "KD9TAW";
+        let mut bytes = vec![0x20_u8, 0x2a];
+        bytes.extend(call.bytes().map(|c| c - ASCII_OFFSET));
+        bytes.push(0x01);
+        let mut tone = ToneWriter::with_pre_silence_samples_at(0, WORKING_SAMPLE_RATE_HZ);
+        for b in bytes {
+            for k in 0..BITS_PER_CHAR {
+                // Inverted on purpose: 1 → 2100, 0 → 1900.
+                let hz = if (b >> k) & 1 == 1 { ZERO_HZ } else { ONE_HZ };
+                tone.fill_secs(hz, 1.0 / BAUD);
+            }
+        }
+        let audio = tone.into_vec();
+        assert_ne!(
+            decode_fsk_id(&audio, 0.0).as_deref(),
+            Some(call),
+            "a tone-swapped burst decoded to the right callsign — the round trip \
+             above is measuring arithmetic, not a waveform",
+        );
+    }
+
+    /// The burst is about a second. Stated as a number because it is what the
+    /// transmit path adds to the operator's key-down time and to the watchdog
+    /// budget, and "about a second" is not a number an engine can check.
+    #[test]
+    fn a_callsign_burst_is_about_one_second() {
+        // 2 leader + 6 characters + 1 end marker, six bits each at 45.45 baud.
+        let want = 9.0 * 6.0 / BAUD;
+        let got = fsk_id_seconds("KD9TAW");
+        assert!((got - want).abs() < 1e-9, "{got} vs {want}");
+        assert!(
+            (1.0..1.5).contains(&got),
+            "a six-character ID should be ≈1.2 s, got {got}"
+        );
+        // And the length really does follow the callsign.
+        assert!(fsk_id_seconds("W1AW") < got);
+    }
+
+    /// A callsign the burst cannot carry produces NO burst at all — never a
+    /// mangled one. The decoder's own sanity gate is the floor (three
+    /// characters, `[A-Z0-9/]`), so anything the encoder emits is something the
+    /// decoder will accept back.
+    #[test]
+    fn an_unsendable_callsign_produces_no_burst() {
+        for call in ["", "  ", "K9", "!!", "-"] {
+            assert!(
+                encode_fsk_id(call, WORKING_SAMPLE_RATE_HZ).is_none(),
+                "{call:?} should not produce a burst",
+            );
+            assert_eq!(fsk_id_seconds(call), 0.0, "{call:?} should cost no airtime");
+        }
+    }
+
+    /// Lower case and punctuation are normalised rather than refused, and the
+    /// text is capped where the decoder stops reading — so the callsign that
+    /// goes on the air is the one that comes back, not a prefix of it.
+    #[test]
+    fn callsigns_are_normalised_to_what_the_decoder_will_read_back() {
+        let audio = encode_fsk_id("kd9taw/p", WORKING_SAMPLE_RATE_HZ).expect("encodable");
+        assert_eq!(decode_fsk_id(&audio, 0.0).as_deref(), Some("KD9TAW/P"));
+
+        // MAX_CHARS is the decoder's stopping point; a longer string is cut to
+        // it on the WAY OUT, so the two halves still agree.
+        let long = "ABCDEFGHIJKLMNOP";
+        let audio = encode_fsk_id(long, WORKING_SAMPLE_RATE_HZ).expect("encodable");
+        let back = decode_fsk_id(&audio, 0.0).expect("decodes");
+        assert_eq!(back.chars().count(), MAX_CHARS);
+        assert_eq!(back, long[..MAX_CHARS]);
+    }
+
+    /// The burst still reads when the radio is off frequency, the same way the
+    /// decoder already handles a mistuned picture — the tone pair shifts with
+    /// `hedr_shift_hz` on both sides.
+    #[test]
+    fn a_mistuned_burst_still_reads() {
+        let shift = 40.0;
+        let mut tone = ToneWriter::with_pre_silence_samples_at(0, WORKING_SAMPLE_RATE_HZ);
+        // Re-emit at the shifted tones by hand; the production encoder always
+        // transmits on frequency, it is the RECEIVER that is off.
+        let mut bytes = vec![0x20_u8, 0x2a];
+        bytes.extend(b"KD9TAW".iter().map(|c| c - ASCII_OFFSET));
+        bytes.push(0x01);
+        for b in bytes {
+            for k in 0..BITS_PER_CHAR {
+                let hz = if (b >> k) & 1 == 1 { ONE_HZ } else { ZERO_HZ };
+                tone.fill_secs(hz + shift, 1.0 / BAUD);
+            }
+        }
+        let audio = tone.into_vec();
+        assert_eq!(decode_fsk_id(&audio, shift).as_deref(), Some("KD9TAW"));
     }
 
     #[test]

@@ -156,3 +156,12 @@ loopback_test!(loopback_scottie2, SstvMode::Scottie2);
 loopback_test!(loopback_scottie_dx, SstvMode::ScottieDx);
 loopback_test!(loopback_martin1, SstvMode::Martin1);
 loopback_test!(loopback_martin2, SstvMode::Martin2);
+
+// #264 — the production encoder and the production decoder must agree about the
+// two new families too, VIS header and all. P7 is a 407 s over that the engine
+// will refuse to key (`SSTV_MAX_TX_SECS`), so it never reaches a rig; the
+// loopback still runs it, because the DECODE side is what #264 asked for and
+// this is the only thing that exercises its timings end to end.
+loopback_test!(loopback_wraase_sc2_180, SstvMode::WraaseSc2180);
+loopback_test!(loopback_pasokon_p5, SstvMode::PasokonP5);
+loopback_test!(loopback_pasokon_p7, SstvMode::PasokonP7);

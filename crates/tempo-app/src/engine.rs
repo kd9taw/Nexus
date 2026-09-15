@@ -2991,6 +2991,12 @@ pub struct Engine {
     sat_mode: Option<tempo_core::doppler::DownlinkClass>,
     /// SSTV RX decoder armed (session-only runtime state, never persisted).
     sstv_armed: bool,
+    /// #202 — a manual receive start the operator asked for, waiting for the
+    /// decode thread to pick it up. The mode's `short_name` slug; resolved by
+    /// `tempo_sstv::lookup_slug` there, because this crate does not depend on
+    /// tempo-sstv. One-shot, session-only, and RX-only: nothing on this path
+    /// can key a radio.
+    sstv_manual_rx: Option<String>,
     /// The operator explicitly STOPPED the SSTV receiver this session, so opening
     /// the view must not restart it behind them. Same decision-memory as
     /// `aprs_auto_arm_declined`.
@@ -4567,6 +4573,7 @@ impl Engine {
             remote_aprs_hold: None,
             sat_mode: None,
             sstv_armed: false,
+            sstv_manual_rx: None,
             sstv_auto_arm_declined: false,
             sstv_health: SstvHealth::default(),
             sstv_audio: Vec::new(),
@@ -16117,6 +16124,10 @@ Pick the one you operate from on the Contesting tab in Settings.",
         } else {
             self.sstv_audio.clear();
             self.sstv_progress = None;
+            // A manual start the thread has not collected yet dies with the disarm —
+            // otherwise a stop followed by a re-arm would start decoding a picture the
+            // operator asked for minutes ago.
+            self.sstv_manual_rx = None;
             // An operator who stopped the receiver has made a decision. Remember it for the
             // rest of the session so re-entering the view cannot restart it behind them.
             self.sstv_auto_arm_declined = true;
@@ -16142,6 +16153,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
     pub fn sstv_auto_disarm(&mut self) {
         self.sstv_audio.clear();
         self.sstv_progress = None;
+        self.sstv_manual_rx = None;
         self.sstv_health = SstvHealth::default();
         self.sstv_armed = false;
     }
@@ -16181,6 +16193,28 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// Whether the SSTV RX decoder is armed (read by the decode thread's gate).
     pub fn sstv_armed(&self) -> bool {
         self.sstv_armed
+    }
+
+    /// #202 — start decoding `mode_slug` now, without waiting for a VIS header.
+    ///
+    /// The operator has tuned into a picture already in progress (or one whose
+    /// header was lost) and named the mode themselves. Arms the receiver if it
+    /// was off, since a manual start is as explicit an act as pressing Arm, and
+    /// leaves a one-shot request for the decode thread to collect.
+    ///
+    /// RX ONLY. Like every other path in this block it cannot key anything —
+    /// `sstv_tx` is written by [`Engine::sstv_send`] and nowhere else.
+    pub fn request_sstv_manual_rx(&mut self, mode_slug: String) {
+        if !self.sstv_armed {
+            self.set_sstv_armed(true);
+        }
+        self.sstv_manual_rx = Some(mode_slug);
+    }
+
+    /// Take the pending manual-start request, if any (the decode thread's
+    /// one-shot collect — mirrors [`Engine::take_sstv_abort`]).
+    pub fn take_sstv_manual_rx(&mut self) -> Option<String> {
+        self.sstv_manual_rx.take()
     }
 
     /// Record what the SSTV decode thread just heard: how many samples the drain
@@ -22694,6 +22728,46 @@ mod tests {
         // Startup seed replaces the session list (and caps defensively).
         e.load_sstv_gallery(vec![crate::dto::SstvGalleryEntry::default()]);
         assert_eq!(e.sstv_gallery().len(), 1);
+    }
+
+    /// #202 — a manual receive start is a one-shot request the decode thread collects,
+    /// and it arms the receiver, because asking for a decode is as explicit an act as
+    /// pressing Arm.
+    ///
+    /// ⚠️ POSITIVE CONTROL IN THE SAME TEST: the take must come back EMPTY the second
+    /// time. A "one-shot" that is really a latch would start a fresh decode on every
+    /// tick of the decode loop — twenty times a second — and the first assertion alone
+    /// cannot tell the two apart.
+    #[test]
+    fn a_manual_receive_start_arms_the_receiver_and_is_collected_once() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_sstv_armed(false);
+        assert!(!e.sstv_armed(), "precondition: the receiver is stopped");
+
+        e.request_sstv_manual_rx("martin1".to_string());
+        assert!(e.sstv_armed(), "a manual start arms the receiver");
+        assert_eq!(e.take_sstv_manual_rx().as_deref(), Some("martin1"));
+        assert_eq!(
+            e.take_sstv_manual_rx(),
+            None,
+            "the request must be one-shot, not a latch"
+        );
+    }
+
+    /// Stopping the receiver throws away a manual start nobody collected yet. Without
+    /// this, stop-then-arm would begin decoding a picture the operator asked for before
+    /// they changed their mind — in whatever mode they named minutes ago.
+    #[test]
+    fn stopping_the_receiver_drops_an_uncollected_manual_start() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.request_sstv_manual_rx("pd120".to_string());
+        e.set_sstv_armed(false);
+        assert_eq!(e.take_sstv_manual_rx(), None, "operator stop");
+
+        let mut f = Engine::new("W9XYZ", "EN61", 0);
+        f.request_sstv_manual_rx("pd120".to_string());
+        f.sstv_auto_disarm();
+        assert_eq!(f.take_sstv_manual_rx(), None, "automatic stop (ISS LOS)");
     }
 
     /// ⭐ AN AUTOMATIC STOP IS NOT AN OPERATOR'S DECISION. The ISS auto-arm disarms

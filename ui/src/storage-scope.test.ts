@@ -161,6 +161,11 @@ const SHARED = [
   // is: per-surface, a second window would find "never seeded" and star ten
   // birds on top of whatever the operator had settled on.
   'nexus.sats.seeded',
+  // Which received picture the viewer pop-out is showing. SHARED on purpose and it is the
+  // whole mechanism: the main window writes it and the viewer's `storage` listener follows,
+  // so clicking a second thumbnail re-points the window that is already open instead of
+  // opening another. Per-surface, the two documents would never see each other's writes.
+  'nexus.sstv.viewer.path',
   'nexus.waterfall.detached',
   'nexus.waterfall.gain',
   'nexus.waterfall.palette',

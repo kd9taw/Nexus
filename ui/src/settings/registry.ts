@@ -327,8 +327,13 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     id: 'sstv',
     label: 'SSTV',
     tab: 'digital',
+    // 'fsk id' and its neighbours are the words an operator types looking for the
+    // callsign burst (#FSK-ID) — it is a toggle inside this section, not a section of
+    // its own, so search has to reach it through these. 'wraase' and 'pasokon' likewise
+    // for the modes added in #264.
     keywords: ['slow scan', 'slow-scan', 'television', 'picture', 'image', 'photo', 'scottie',
-      'martin', 'robot', 'pd120', 'iss', 'ariss', '145.800', '14.230', 'gallery'],
+      'martin', 'robot', 'pd120', 'iss', 'ariss', '145.800', '14.230', 'gallery',
+      'fsk id', 'fsk', 'callsign id', 'ident', 'id burst', 'wraase', 'pasokon'],
   },
   {
     id: 'aprs',

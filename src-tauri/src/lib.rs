@@ -11450,6 +11450,28 @@ fn sstv_auto_disarm(state: State<'_, SharedEngine>) -> Result<SstvStateDto, Stri
     Ok(sstv_state_dto(&eng))
 }
 
+/// Start decoding an SSTV picture NOW, in the mode the operator named, without
+/// waiting for a VIS header (#202).
+///
+/// For tuning into a transmission already in progress, or one whose header was
+/// lost to a burst of noise. Arms the receiver if it was off — a manual start is
+/// as explicit an act as pressing Arm. RX ONLY: nothing on this path touches the
+/// transmit gates, and `sstv_tx` is written by `sstv_send` and nowhere else.
+///
+/// `mode` is the stable `short_name` slug. Validated against
+/// `tempo_sstv::lookup_slug`, which covers every mode this build DECODES — a
+/// wider set than [`parse_sstv_mode`], which is the transmit-side table.
+#[tauri::command(async)]
+fn sstv_manual_rx(state: State<'_, SharedEngine>, mode: String) -> Result<SstvStateDto, String> {
+    let slug = mode.trim().to_ascii_lowercase();
+    let spec = tempo_sstv::lookup_slug(&slug)
+        .map(tempo_sstv::for_mode)
+        .ok_or_else(|| format!("Unknown SSTV mode: {mode}"))?;
+    let mut eng = engine_lock(&state);
+    eng.request_sstv_manual_rx(spec.short_name.to_string());
+    Ok(sstv_state_dto(&eng))
+}
+
 /// The live SSTV RX state (poll while the SSTV view is visible).
 #[tauri::command(async)]
 fn get_sstv_state(state: State<'_, SharedEngine>) -> Result<SstvStateDto, String> {
@@ -11461,8 +11483,8 @@ fn get_sstv_state(state: State<'_, SharedEngine>) -> Result<SstvStateDto, String
 /// "scottiedx", "martin1", …) to its [`tempo_sstv::SstvMode`]. Case-insensitive.
 fn parse_sstv_mode(slug: &str) -> Option<tempo_sstv::SstvMode> {
     use tempo_sstv::SstvMode::{
-        Martin1, Martin2, Pd120, Pd160, Pd180, Pd240, Pd290, Pd50, Pd90, Robot24, Robot36, Robot72,
-        Scottie1, Scottie2, ScottieDx,
+        Martin1, Martin2, PasokonP5, Pd120, Pd160, Pd180, Pd240, Pd290, Pd50, Pd90, Robot24,
+        Robot36, Robot72, Scottie1, Scottie2, ScottieDx, WraaseSc2180,
     };
     Some(match slug.trim().to_ascii_lowercase().as_str() {
         "pd50" => Pd50,
@@ -11480,6 +11502,13 @@ fn parse_sstv_mode(slug: &str) -> Option<tempo_sstv::SstvMode> {
         "scottiedx" => ScottieDx,
         "martin1" => Martin1,
         "martin2" => Martin2,
+        // #264. Pasokon P7 is DECODED but deliberately absent here: one P7 picture is
+        // 407 s of key-down against the engine's 330 s `SSTV_MAX_TX_SECS`, so the send
+        // would be refused anyway — and this table is what the operator's saved default
+        // mode is validated against, so a slug that resolves here and then fails at the
+        // gate is worse than one that never resolved. Same list as `SSTV_TX_MODES`.
+        "w2180" => WraaseSc2180,
+        "p5" => PasokonP5,
         _ => return None,
     })
 }
@@ -11528,10 +11557,10 @@ fn sstv_send(
     // Pre-flight the TX gate under a SHORT lock so a refused send (wrong frequency, TX
     // off, another over in flight) fails fast BEFORE we spend CPU on the encode. The
     // operator callsign comes out of the same lock — it is a TX gate of its own.
-    let mycall = {
+    let (mycall, send_fsk_id) = {
         let eng = engine_lock(&state);
         eng.sstv_tx_gate()?;
-        eng.settings().mycall.clone()
+        (eng.settings().mycall.clone(), eng.settings().sstv_tx_fsk_id)
     };
 
     // ⭐ BURN THE STATION ID IN, HERE, WHERE IT CANNOT BE BYPASSED.
@@ -11569,8 +11598,24 @@ fn sstv_send(
         tempo_sstv::draw_id(&mut rgb, width, height, &mycall);
     }
     let img = tempo_sstv::SourceImage { width, height, rgb };
+    // THE FSK CALLSIGN BURST, off by default (`sstv_tx_fsk_id`). The 45.45-baud trailer
+    // MMSSTV and slowrx read, and that Nexus has always decoded and shown under a
+    // received thumbnail — this is the transmit half. It is a SECOND identification
+    // riding alongside the plate burned into the picture, never a replacement for it:
+    // the gate above still refuses a station with no callsign, and the plate is still
+    // drawn unless the operator affirmed the call is already in their artwork.
+    //
+    // ⚠️ It makes the buffer ~1.2 s longer and does nothing else. Everything that bounds
+    // the over is computed from THIS buffer — `Engine::sstv_send` derives the duration
+    // from `samples.len()`, and that one number sets the PTT deadline, the TX-watchdog
+    // budget check and the progress denominator — so an over with the burst on is
+    // budgeted, watched and stopped exactly like one without it. Nothing on this path
+    // keys a radio; the radio loop does that, behind every gate, and Stop TX / the latch
+    // / `sstv_abort` flush the output ring whatever is still queued.
+    let fsk_id = send_fsk_id.then_some(mycall.as_str());
     // Encode the whole 12 kHz waveform OFF the engine lock (tens of ms even for PD290).
-    let samples = tempo_sstv::encode_image(sstv_mode, &img, 12_000).map_err(|e| e.to_string())?;
+    let samples = tempo_sstv::encode_image_with_id(sstv_mode, &img, 12_000, fsk_id)
+        .map_err(|e| e.to_string())?;
     // Re-take the lock and hand it to the gated engine path (re-runs the full gate + the
     // duration-budget check; nothing keys until the radio loop takes it).
     let mut eng = engine_lock(&state);
@@ -13297,6 +13342,10 @@ fn panel_default_inner(slug: &str) -> (f64, f64) {
         // read at the keyboard), so it opens wider and shorter than the generic default.
         "fdclub" => (860.0, 620.0),
         "waterfall" => (900.0, 300.0), // a wide, short monitoring strip
+        // The received-picture viewer. Opens big enough to show the widest raster Nexus
+        // decodes (PD-290 is 800×616) at 1:1 with its details strip beside the picture,
+        // because the whole point of the window is to LOOK at the picture.
+        "sstvviewer" => (900.0, 720.0),
         _ => (760.0, 660.0),
     }
 }
@@ -13311,6 +13360,9 @@ fn panel_min_inner(slug: &str) -> (f64, f64) {
         // zoom floor that window could only ever show a 646 px box, and the board's
         // natural is 820. 560 raises the ceiling above it.
         "fdclub" => (560.0, 400.0),
+        // The picture scales to fit, so the viewer drags smaller than most pop-outs —
+        // but not below what its details strip and its three buttons need in a row.
+        "sstvviewer" => (420.0, 320.0),
         _ => (420.0, 360.0),
     }
 }
@@ -13364,6 +13416,7 @@ async fn open_panel_window(
         "pota" => "Nexus — POTA / SOTA".to_string(),
         "operatemap" => "Nexus — Map".to_string(),
         "waterfall" => "Nexus — Waterfall".to_string(),
+        "sstvviewer" => "Nexus — SSTV picture".to_string(),
         "bandmapPhone" => "Nexus — Band map (Phone)".to_string(),
         "bandmapCw" => "Nexus — Band map (CW)".to_string(),
         other => format!("Nexus — {other}"),
@@ -23589,6 +23642,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             psk_type,
             psk_stop,
             sstv_arm,
+            sstv_manual_rx,
             sstv_auto_arm,
             sstv_auto_disarm,
             get_sstv_state,
@@ -29776,6 +29830,12 @@ mod tests {
         assert!(parse_sstv_mode("pd120").is_some());
         assert!(parse_sstv_mode("martin2").is_some());
         assert!(parse_sstv_mode("robot36").is_some());
+        // #264 — the two new modes the engine can actually key.
+        assert!(parse_sstv_mode("w2180").is_some());
+        assert!(parse_sstv_mode("P5").is_some());
+        // Pasokon P7 decodes but is past the engine's per-over ceiling, so the transmit
+        // path must not accept it (`SSTV_TX_MODES` does not offer it either).
+        assert!(parse_sstv_mode("p7").is_none());
         assert!(parse_sstv_mode("nonsense").is_none());
     }
 

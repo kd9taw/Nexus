@@ -8,6 +8,12 @@
 //! Martin 2. All RGB-sequential modes (Scottie + Martin) share a
 //! single decode path; the per-line offsets branch on
 //! [`SyncPosition`].
+//!
+//! 1.13.0 adds Wraase SC-2 180 and Pasokon P5/P7 (#264). They are
+//! sequential three-channel modes like Scottie/Martin, but send the
+//! channels in **R→G→B** order rather than Scottie/Martin's G→B→R —
+//! slowrx's `ColorEnc = RGB` against their `GBR`. That is the whole
+//! difference, and it is carried by [`ChannelLayout::SequentialRgb`].
 
 /// SSTV operating mode. Implemented: [`SstvMode::Pd120`], [`SstvMode::Pd180`],
 /// [`SstvMode::Pd240`], [`SstvMode::Robot24`], [`SstvMode::Robot36`],
@@ -46,6 +52,15 @@ pub enum SstvMode {
     Martin1,
     /// Martin 2. VIS `0x28`.
     Martin2,
+    /// Wraase SC-2 180. VIS `0x37`. Nexus addition, #264.
+    WraaseSc2180,
+    /// Pasokon P5. VIS `0x72`. Nexus addition, #264.
+    PasokonP5,
+    /// Pasokon P7. VIS `0x73`. Nexus addition, #264. Decode only in
+    /// practice: one P7 picture is ≈407 s of key-down, past the engine's
+    /// `SSTV_MAX_TX_SECS` ceiling, so the transmit picker does not offer
+    /// it (`ui/src/sstv-modes.test.ts` derives that exclusion).
+    PasokonP7,
 }
 
 /// Mode timing + layout table entry.
@@ -108,9 +123,21 @@ pub enum ChannelLayout {
     /// `mode_robot::decode_line` for the per-mode dispatch.
     RobotYuv,
     /// Sequential single-line RGB layout — three channels per radio
-    /// line. Used by Scottie (G→B→R, sync mid-line) and Martin (G→B→R,
-    /// sync at line start).
+    /// line, sent **G→B→R** (slowrx `ColorEnc = GBR`). Used by Scottie
+    /// (sync mid-line) and Martin (sync at line start).
     RgbSequential,
+    /// Sequential single-line RGB layout sent in **R→G→B** order
+    /// (slowrx `ColorEnc = RGB`), sync at line start. Used by Wraase
+    /// SC-2 180 and Pasokon P5/P7 (#264).
+    ///
+    /// Same geometry as Martin — `[SYNC][porch][c0][septr][c1][septr][c2]`
+    /// — so it shares `mode_scottie`'s decoder and `encode_scottie`'s
+    /// emitter; only which colour each of the three channels carries
+    /// differs. Kept as its own variant rather than a `channel_order`
+    /// field on [`ModeSpec`] so every `match` on the layout is forced to
+    /// state what it does with an RGB-ordered mode instead of silently
+    /// falling into the GBR arm and producing a colour-swapped picture.
+    SequentialRgb,
 }
 
 /// Where the sync pulse sits within a radio line.
@@ -183,6 +210,25 @@ pub fn lookup(vis_code: u8) -> Option<ModeSpec> {
     ALL_SPECS.iter().find(|s| s.vis_code == vis_code).copied()
 }
 
+/// Look up an [`SstvMode`] by its stable `short_name` slug ("pd120",
+/// "scottie1", "w2180", …), case-insensitively. `None` for a slug this build
+/// does not implement.
+///
+/// The RECEIVE-side answer to "which mode is this string?", derived from
+/// [`ALL_SPECS`], so it covers every mode the decoder can handle. The transmit
+/// path has its own, deliberately SMALLER table (`parse_sstv_mode` in
+/// `src-tauri`): a mode can be decodable and still be one the engine will not
+/// key, and the transmit table is what a saved default mode is validated
+/// against. Do not merge them.
+#[must_use]
+pub fn lookup_slug(slug: &str) -> Option<SstvMode> {
+    let slug = slug.trim();
+    ALL_SPECS
+        .iter()
+        .find(|s| s.short_name.eq_ignore_ascii_case(slug))
+        .map(|s| s.mode)
+}
+
 /// Look up the [`ModeSpec`] for an [`SstvMode`].
 ///
 /// Total over [`SstvMode`] — every implemented variant has a `const`
@@ -207,6 +253,9 @@ pub fn for_mode(mode: SstvMode) -> ModeSpec {
         SstvMode::ScottieDx => SCOTTIE_DX,
         SstvMode::Martin1 => MARTIN1,
         SstvMode::Martin2 => MARTIN2,
+        SstvMode::WraaseSc2180 => W2180,
+        SstvMode::PasokonP5 => P5,
+        SstvMode::PasokonP7 => P7,
     }
 }
 
@@ -496,6 +545,100 @@ const MARTIN2: ModeSpec = ModeSpec {
     sync_position: SyncPosition::LineStart,
 };
 
+// ---------------------------------------------------------------------------
+// #264 — Wraase SC-2 180 and Pasokon P5/P7.
+//
+// SOURCE. Row-for-row from slowrx's `modespec.c` (windytan/slowrx, master),
+// whose own entries for all three carry the provenance comment `// N7CXI, 2000`
+// — JL Barber N7CXI, "Proposal for SSTV Mode Specifications", Dayton 2000, the
+// same paper the PD and Robot entries above are cited to. VIS codes are read off
+// the same file's `VISmap` (`W2180` at 0x37, `P3`/`P5`/`P7` at 0x71/0x72/0x73),
+// which agrees with Dave Jones KB4YZ's 1998 VIS list already cited by `lookup`.
+// The N7CXI paper itself could not be fetched directly from this machine
+// (barberdsp.com refused the connection; the SSTV-handbook mirror is a
+// subset-font PDF whose text would not extract), so the citation chain is
+// slowrx → N7CXI, exactly as for every other entry in this file.
+//
+// ⚠️ ONE DELIBERATE DEPARTURE, and it is the one that would have produced the
+// slanted picture. slowrx gives W2180 `PixelTime = 0.734532e-3` alongside
+// `LineTime = 711.0225e-3`, and those two contradict each other: SC-2 has no
+// channel separator, so a line is exactly `Sync + Porch + 3 × Width × Pixel`,
+// which with 0.734532e-3 comes to 711.1732 ms — 0.15 ms LONGER than the
+// LineTime on the next line of the same struct. Emitting that overruns the line
+// boundary and the overrun compounds: 256 lines × 0.15 ms = 38 ms of skew by the
+// bottom of the picture, i.e. a sheared image, from a table that looks right.
+// The identity solved for Pixel gives 705.0 ms / 3 / 320 = 0.734375e-3 exactly
+// (235.0 ms per channel — a round number, which is what a mode specification
+// looks like), and that is what is used here. `line_time_identity_holds_for_
+// sequential_rgb` below pins it for the whole family so the next transcription
+// cannot reintroduce the contradiction.
+//
+// Pasokon's three separators (one after EACH channel, including a trailing gap
+// after blue) are why its LineTime exceeds `Sync + Porch + 3×chan + 2×septr`;
+// the emitter writes two separators and pads the remainder at the porch tone,
+// which is the same 1500 Hz that trailing gap carries. Martin's table has the
+// identical shape, so nothing new is being assumed.
+// ---------------------------------------------------------------------------
+
+/// Wraase SC-2 180. slowrx `modespec.c` `[W2180]` (`// N7CXI, 2000`).
+const W2180: ModeSpec = ModeSpec {
+    mode: SstvMode::WraaseSc2180,
+    short_name: "w2180",
+    name: "Wraase SC-2 180",
+    vis_code: 0x37,
+    line_pixels: 320,
+    image_lines: 256,
+    // slowrx: LineTime = 711.0225e-3, SyncTime = 5.5225e-3,
+    // PorchTime = 0.5e-3, SeptrTime = 0e-3. PixelTime is the departure
+    // documented above: 0.734375e-3 (= 235.0 ms per channel), not slowrx's
+    // self-contradicting 0.734532e-3.
+    line_seconds: 0.711_022_5,
+    sync_seconds: 0.005_522_5,
+    porch_seconds: 0.000_5,
+    pixel_seconds: 0.000_734_375,
+    septr_seconds: 0.0,
+    channel_layout: ChannelLayout::SequentialRgb,
+    sync_position: SyncPosition::LineStart,
+};
+
+/// Pasokon P5. slowrx `modespec.c` `[P5]` (`// N7CXI, 2000`).
+const P5: ModeSpec = ModeSpec {
+    mode: SstvMode::PasokonP5,
+    short_name: "p5",
+    name: "Pasokon P5",
+    vis_code: 0x72,
+    line_pixels: 640,
+    image_lines: 496,
+    // slowrx: LineTime = 614.065e-3, PixelTime = 0.3125e-3,
+    // SyncTime = 7.813e-3, PorchTime = SeptrTime = 1.563e-3.
+    line_seconds: 0.614_065,
+    sync_seconds: 0.007_813,
+    porch_seconds: 0.001_563,
+    pixel_seconds: 0.000_312_5,
+    septr_seconds: 0.001_563,
+    channel_layout: ChannelLayout::SequentialRgb,
+    sync_position: SyncPosition::LineStart,
+};
+
+/// Pasokon P7. slowrx `modespec.c` `[P7]` (`// N7CXI, 2000`).
+const P7: ModeSpec = ModeSpec {
+    mode: SstvMode::PasokonP7,
+    short_name: "p7",
+    name: "Pasokon P7",
+    vis_code: 0x73,
+    line_pixels: 640,
+    image_lines: 496,
+    // slowrx: LineTime = 818.747e-3, PixelTime = 0.4167e-3,
+    // SyncTime = 10.417e-3, PorchTime = SeptrTime = 2.083e-3.
+    line_seconds: 0.818_747,
+    sync_seconds: 0.010_417,
+    porch_seconds: 0.002_083,
+    pixel_seconds: 0.000_416_7,
+    septr_seconds: 0.002_083,
+    channel_layout: ChannelLayout::SequentialRgb,
+    sync_position: SyncPosition::LineStart,
+};
+
 /// All implemented mode specs. Single source of truth — [`lookup`] is
 /// derived from this; [`for_mode`] keeps its exhaustive match so
 /// adding a `SstvMode` variant without a `const ModeSpec` (and a
@@ -504,9 +647,9 @@ const MARTIN2: ModeSpec = ModeSpec {
 /// The F8 round-trip test (`all_specs_roundtrip`) verifies every
 /// entry's `(mode, vis_code, short_name, name)` quadruple is unique
 /// and that `lookup` and `for_mode` agree with the table.
-pub(crate) const ALL_SPECS: [ModeSpec; 15] = [
+pub(crate) const ALL_SPECS: [ModeSpec; 18] = [
     PD50, PD90, PD120, PD160, PD180, PD240, PD290, ROBOT24, ROBOT36, ROBOT72, SCOTTIE1, SCOTTIE2,
-    SCOTTIE_DX, MARTIN1, MARTIN2,
+    SCOTTIE_DX, MARTIN1, MARTIN2, W2180, P5, P7,
 ];
 
 #[cfg(test)]
@@ -934,5 +1077,80 @@ mod tests {
             "Scottie 1 airtime {} s is off the known ~110 s",
             s1.airtime_seconds()
         );
+    }
+
+    /// #264 — the guard that catches the slanted picture at transcription time.
+    ///
+    /// A sequential sync-at-line-start mode sends
+    /// `[SYNC][porch][c0][septr][c1][septr][c2]` and then whatever gap the mode
+    /// defines before the next sync. So the three channels plus sync plus porch
+    /// plus two separators must FIT INSIDE `line_seconds`. When they do not, the
+    /// emitter's per-line pad goes negative, every line starts a little later
+    /// than the one before, and the error compounds down the picture into a
+    /// shear that reads on the air as a propagation problem rather than a table
+    /// typo. slowrx's own `W2180` entry fails this by 0.15 ms/line (see the
+    /// block comment above `W2180`), which is exactly why this test exists.
+    ///
+    /// The upper bound is the other half: a line whose content falls far SHORT
+    /// of `line_seconds` means a channel or a separator was dropped in
+    /// transcription. One separator's slack is the honest tolerance — Pasokon's
+    /// trailing gap is real, Martin's is too, and W2180 has none.
+    #[test]
+    fn line_time_identity_holds_for_sequential_modes() {
+        for spec in ALL_SPECS.iter().copied() {
+            if !matches!(
+                spec.channel_layout,
+                ChannelLayout::RgbSequential | ChannelLayout::SequentialRgb
+            ) || spec.sync_position != SyncPosition::LineStart
+            {
+                continue; // PD/Robot have their own shapes; Scottie's sync is mid-line.
+            }
+            let chan = f64::from(spec.line_pixels) * spec.pixel_seconds;
+            let content =
+                spec.sync_seconds + spec.porch_seconds + 3.0 * chan + 2.0 * spec.septr_seconds;
+            assert!(
+                content <= spec.line_seconds + 1e-9,
+                "{}: one line's content is {:.6} ms but line_seconds is {:.6} ms — \
+                 the emitter would overrun every line and shear the picture",
+                spec.name,
+                content * 1e3,
+                spec.line_seconds * 1e3,
+            );
+            // 10 µs of slack: the published Martin 2 figures are internally
+            // consistent only to ~0.6 µs, and a genuinely lost channel or
+            // separator is half a millisecond at the very least — fifty times
+            // this. The OVERRUN bound above stays exact, because that is the
+            // one that shears a picture.
+            assert!(
+                spec.line_seconds - content <= spec.septr_seconds + 1e-5,
+                "{}: line_seconds {:.6} ms leaves {:.6} ms unaccounted — more than the \
+                 one trailing separator a sequential mode can have; a channel looks lost",
+                spec.name,
+                spec.line_seconds * 1e3,
+                (spec.line_seconds - content) * 1e3,
+            );
+        }
+    }
+
+    /// #264 — the three new modes resolve from the VIS codes a real station sends.
+    #[test]
+    fn wraase_and_pasokon_vis_codes_resolve() {
+        assert_eq!(
+            lookup(0x37).map(|s| s.mode),
+            Some(SstvMode::WraaseSc2180),
+            "Wraase SC-2 180 is VIS 0x37"
+        );
+        assert_eq!(lookup(0x72).map(|s| s.mode), Some(SstvMode::PasokonP5));
+        assert_eq!(lookup(0x73).map(|s| s.mode), Some(SstvMode::PasokonP7));
+        // Pasokon P3 shares the family and the VIS block but is NOT implemented:
+        // it must still come back as an unknown code, not as a neighbour.
+        assert!(
+            lookup(0x71).is_none(),
+            "P3 is not implemented in this build"
+        );
+        for spec in [W2180, P5, P7] {
+            assert_eq!(spec.channel_layout, ChannelLayout::SequentialRgb);
+            assert_eq!(spec.sync_position, SyncPosition::LineStart);
+        }
     }
 }

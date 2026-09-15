@@ -69,8 +69,11 @@ fn scanline_secs(mode: SstvMode) -> f64 {
         ChannelLayout::PdYcbcr => {
             spec.sync_seconds + spec.porch_seconds + 4.0 * w * spec.pixel_seconds
         }
-        // Scottie / Martin: 2 septr + sync + porch + 3 channels (G, B, R).
-        ChannelLayout::RgbSequential => {
+        // Scottie / Martin (G,B,R) and Wraase SC-2 / Pasokon (R,G,B):
+        // 2 septr + sync + porch + 3 channels. The emitter writes two
+        // separators either way; a mode with a third (Pasokon's trailing
+        // gap) reaches `line_seconds` through the pad below.
+        ChannelLayout::RgbSequential | ChannelLayout::SequentialRgb => {
             2.0 * spec.septr_seconds
                 + spec.sync_seconds
                 + spec.porch_seconds
@@ -95,7 +98,9 @@ fn scanline_secs(mode: SstvMode) -> f64 {
     };
     let radio_frames = match spec.channel_layout {
         ChannelLayout::PdYcbcr => f64::from(spec.image_lines) / 2.0,
-        ChannelLayout::RobotYuv | ChannelLayout::RgbSequential => f64::from(spec.image_lines),
+        ChannelLayout::RobotYuv | ChannelLayout::RgbSequential | ChannelLayout::SequentialRgb => {
+            f64::from(spec.image_lines)
+        }
     };
     radio_frames * content.max(spec.line_seconds)
 }
@@ -115,6 +120,47 @@ fn scanline_secs(mode: SstvMode) -> f64 {
     clippy::cast_sign_loss
 )]
 pub fn encode_image(mode: SstvMode, img: &SourceImage, sample_rate_hz: u32) -> Result<Vec<f32>> {
+    encode_image_with_id(mode, img, sample_rate_hz, None)
+}
+
+/// [`encode_image`], plus an optional FSK callsign-ID burst after the last
+/// scanline (1.13.0).
+///
+/// `fsk_id` is the operator's callsign when the "send my callsign after each
+/// picture" setting is on, and `None` — the default, and what [`encode_image`]
+/// passes — when it is off. A callsign the burst cannot carry (fewer than three
+/// sendable characters) produces no burst rather than a mangled one.
+///
+/// The burst is emitted into the SAME tone writer as the picture, so it
+/// continues the picture's phase and the receiving station hears one
+/// transmission. It lands before the trailing pad, which is where a receiver
+/// looks for it.
+///
+/// ## What this does NOT do, and it matters because this is the transmit path
+///
+/// It makes a longer buffer. Nothing else. It does not key anything, cannot
+/// extend a transmission already on the air, and cannot outlive one the
+/// operator stopped — the engine measures THIS buffer to set the PTT deadline
+/// and to check the over against the TX watchdog, and the audio loop's abort
+/// flushes whatever is still queued. The burst is governed by every gate the
+/// picture is governed by, because it is the same buffer going through the same
+/// path. See [`crate::fsk::fsk_id_seconds`] for what it costs in airtime
+/// (≈1.2 s for a six-character call) — a caller that shows the operator a
+/// key-down time must add it.
+///
+/// # Errors
+/// As [`encode_image`].
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
+pub fn encode_image_with_id(
+    mode: SstvMode,
+    img: &SourceImage,
+    sample_rate_hz: u32,
+    fsk_id: Option<&str>,
+) -> Result<Vec<f32>> {
     if sample_rate_hz == 0 {
         return Err(Error::InvalidSampleRate { got: 0 });
     }
@@ -152,9 +198,16 @@ pub fn encode_image(mode: SstvMode, img: &SourceImage, sample_rate_hz: u32) -> R
             }
             crate::encode_robot::emit_robot_scanlines(&mut tone, mode, &ycrcb);
         }
-        ChannelLayout::RgbSequential => {
+        ChannelLayout::RgbSequential | ChannelLayout::SequentialRgb => {
             crate::encode_scottie::emit_scottie_scanlines(&mut tone, mode, &img.rgb);
         }
+    }
+
+    // The callsign burst, if the operator asked for one — after the last
+    // scanline and before the trailing pad, which is where a receiver goes
+    // looking for it.
+    if let Some(call) = fsk_id {
+        crate::fsk::emit_fsk_id(&mut tone, call);
     }
 
     let mut out = tone.into_vec();
@@ -364,6 +417,8 @@ mod tests {
     /// for every mode, at 12 kHz. Catches a missing channel / dropped line.
     #[test]
     fn encode_image_length_matches_duration_for_all_modes() {
+        /// The callsign the with-ID half of this test sends.
+        const ID_CALL: &str = "KD9TAW";
         let rate = 12_000u32;
         for spec in ALL_SPECS {
             let img = SourceImage {
@@ -382,6 +437,21 @@ mod tests {
                 "{:?}: len {} ≉ expected {expected} (diff {diff})",
                 spec.mode,
                 audio.len()
+            );
+
+            // With the callsign burst on, the over is exactly that much longer
+            // — the number `fsk_id_seconds` reports and nothing else. The
+            // engine sets the PTT deadline and checks the TX watchdog off this
+            // length, so a burst that cost more airtime than it claimed would
+            // be a transmission running past what was budgeted for it.
+            let with_id =
+                encode_image_with_id(spec.mode, &img, rate, Some(ID_CALL)).expect("encode");
+            let grew = (with_id.len() as i64) - (audio.len() as i64);
+            let want = (crate::fsk::fsk_id_seconds(ID_CALL) * f64::from(rate)).round() as i64;
+            assert!(
+                (grew - want).abs() <= 2,
+                "{:?}: the callsign burst added {grew} samples, not {want}",
+                spec.mode,
             );
         }
     }

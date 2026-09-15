@@ -5,6 +5,7 @@ import { SstvView } from './SstvView'
 import * as api from '../api'
 import { EN } from '../i18n'
 import type { AppSnapshot, SstvHealth, SstvState } from '../types'
+import { SSTV_VIEWER_PANEL, SSTV_VIEWER_PATH_KEY } from './SstvViewer'
 
 // The idle band view mounts the real Waterfall, which needs `window.matchMedia`
 // and a working canvas 2D context — jsdom provides neither. These tests are about
@@ -27,6 +28,10 @@ vi.mock('../api', () => ({
   setRfPower: vi.fn(async () => {}),
   // #130: the gallery's Reveal-in-folder.
   revealSstvGallery: vi.fn(async () => {}),
+  // #202: the manual receive start.
+  sstvManualRx: vi.fn(),
+  // The picture viewer's own window.
+  openPanelWindow: vi.fn(async () => {}),
 }))
 // withErrorToast passes through to its action so the Send path exercises the real
 // setOperatingMode → sstvSend sequence (returns null on reject, like the real one).
@@ -466,6 +471,29 @@ describe('SstvView TX panel', () => {
     expect(setRfPower).not.toHaveBeenCalled()
   })
 
+  // #FSK-ID — the key-down time this screen quotes is what an operator checks against
+  // their TX watchdog before pressing Send, so it has to include the callsign burst when
+  // the burst is switched on. Quoting the picture alone would be about a second short.
+  it('the key-down time grows when the callsign burst is switched on', async () => {
+    const clock = () =>
+      (document.querySelector('.sstv-tx-name') as HTMLElement | null)?.textContent ?? ''
+    const { unmount } = render(<SstvView snap={snap} />)
+    await loadPicture()
+    const without = clock()
+    expect(without, 'the composer should quote a key-down time').toMatch(/key-down/)
+    unmount()
+    cleanup()
+
+    render(<SstvView snap={snap} txFskId />)
+    await loadPicture()
+    const with_ = clock()
+    expect(with_).toMatch(/key-down/)
+    expect(
+      with_,
+      'with the burst on, the quoted key-down time must not be the picture alone',
+    ).not.toBe(without)
+  })
+
   it('changing the mode re-crops to the new dimensions', async () => {
     render(<SstvView snap={snap} />)
     const send = await loadPicture()
@@ -634,3 +662,84 @@ describe('#130 SSTV gallery Reveal in folder', () => {
   })
 })
 
+
+// #202 — MANUAL RECEIVE START. Tuning into a picture already in progress, or one whose
+// VIS header was lost to a burst of noise, used to leave the operator watching a
+// waterfall while a picture went by. They can now name the mode and start the decode.
+//
+// The point of testing the WIRING and not just the presence: the mode the operator
+// picked has to be the mode that reaches the backend. Nothing infers it — a decode with
+// no header has no way to know, and inferring it is precisely what was reverted in
+// August — so a control that always sent the default would be silently useless.
+describe('#202 manual SSTV receive start', () => {
+  it('sends the mode the operator picked, and offers every mode the decoder handles', async () => {
+    const manual = api.sstvManualRx as unknown as ReturnType<typeof vi.fn>
+    manual.mockReset().mockResolvedValue({ ...IDLE, armed: true })
+    render(<SstvView snap={snap} />)
+
+    const picker = (await screen.findByLabelText(
+      EN['sstv.manualRx.mode.aria'],
+    )) as HTMLSelectElement
+    // Receive-only modes are offered here and nowhere else: Pasokon P7 is too long an
+    // over for Nexus to key, but there is nothing odd about RECEIVING one.
+    const slugs = Array.from(picker.querySelectorAll('option')).map((o) => o.value)
+    expect(slugs).toContain('p7')
+    expect(slugs).toContain('w2180')
+    expect(slugs).toContain('scottie1')
+
+    fireEvent.change(picker, { target: { value: 'martin1' } })
+    fireEvent.click(screen.getByRole('button', { name: EN['sstv.manualRx.start.label'] }))
+    await waitFor(() => expect(manual).toHaveBeenCalledWith('martin1'))
+  })
+
+  it('sits in the header, outside every removable pane, and is not a transmit control', async () => {
+    render(<SstvView snap={snap} />)
+    const start = await screen.findByRole('button', { name: EN['sstv.manualRx.start.label'] })
+    // In the header beside Arm — a receiver control, like Arm. THE STOP LINE does not
+    // reach it (it starts a decode, never a transmission), and the header carries no ⊞
+    // id at all, so no pane tick can take it away.
+    expect(start.closest('.cockpit-header')).not.toBeNull()
+    expect(start.closest('.cockpit-panes')).toBeNull()
+    expect(start.closest('.sstv-tx-bar')).toBeNull()
+  })
+})
+
+// THE PICTURE VIEWER — clicking a gallery thumbnail used to do nothing at all, which is the
+// bug the operator and a user both reported: the gallery offered delete, edit-and-resend and
+// Reveal in folder, so looking at a picture that had just arrived meant leaving Nexus.
+describe('the gallery opens a received picture in its own window', () => {
+  const entry = {
+    path: '/g/img-004-martin1.png',
+    mode: 'Martin 1',
+    finishedUtc: '2026-09-15T13:00:00Z',
+    freqMhz: 14.23,
+    lines: 256,
+    fskId: 'W1AW',
+  }
+
+  it('clicking the picture points the viewer at THAT picture and opens the window', async () => {
+    const open = api.openPanelWindow as unknown as ReturnType<typeof vi.fn>
+    open.mockClear()
+    localStorage.removeItem(SSTV_VIEWER_PATH_KEY)
+    getSstvState.mockResolvedValue({ ...IDLE, gallery: [entry] })
+    render(<SstvView snap={snap} />)
+    const btn = await screen.findByRole('button', {
+      name: /Open the Martin 1 picture received 2026-09-15 13:00Z/i,
+    })
+    fireEvent.click(btn)
+    // BOTH halves matter: a window that opened on the wrong picture would still "work".
+    expect(localStorage.getItem(SSTV_VIEWER_PATH_KEY)).toBe(entry.path)
+    expect(open).toHaveBeenCalledWith(SSTV_VIEWER_PANEL)
+  })
+
+  it('the delete and edit buttons are still their own controls, not the picture', async () => {
+    getSstvState.mockResolvedValue({ ...IDLE, gallery: [entry] })
+    render(<SstvView snap={snap} />)
+    const open = await screen.findByRole('button', { name: /Open the Martin 1 picture/i })
+    const del = screen.getByRole('button', { name: /Delete the Martin 1 image/i })
+    // A <button> inside a <button> is invalid and would swallow the delete click; the two
+    // are siblings under the figure, which is why the open affordance wraps the IMAGE only.
+    expect(del.closest('button')).toBe(del)
+    expect(open.contains(del)).toBe(false)
+  })
+})

@@ -1,6 +1,7 @@
-//! RGB-sequential scanline emitter — handles both Scottie (1/2/DX) and
-//! Martin (1/2). Produces the continuous-phase FM image audio (no
-//! leader/VIS header — that is `crate::encode::emit_vis_header`).
+//! Sequential three-channel scanline emitter — Scottie (1/2/DX), Martin
+//! (1/2) and, since 1.13.0, Wraase SC-2 180 and Pasokon P5/P7 (#264).
+//! Produces the continuous-phase FM image audio (no leader/VIS header —
+//! that is `crate::encode::emit_vis_header`).
 //!
 //! Promoted from the pre-#86 `scottie_test_encoder.rs`: the per-line
 //! emission loop is now always-compiled production code driven by
@@ -16,11 +17,19 @@
 //!   [B pixels 1500-2300 Hz][SYNC 1200 Hz][porch 1500 Hz]
 //!   [R pixels 1500-2300 Hz]
 //!
-//! Martin (sync_position::LineStart):
+//! Martin (sync_position::LineStart, ChannelLayout::RgbSequential):
 //!   [SYNC 1200 Hz][porch 1500 Hz][G pixels 1500-2300 Hz]
 //!   [septr 1500 Hz][B pixels 1500-2300 Hz][septr 1500 Hz]
 //!   [R pixels 1500-2300 Hz]
+//!
+//! Wraase SC-2 / Pasokon (LineStart, ChannelLayout::SequentialRgb):
+//!   [SYNC 1200 Hz][porch 1500 Hz][R pixels][septr 1500 Hz]
+//!   [G pixels][septr 1500 Hz][B pixels]
 //! ```
+//!
+//! Pasokon's third separator (the gap after blue) and Wraase's absence of
+//! one both fall out of the defensive pad below: it fills to `LineTime` at
+//! the porch tone, which is the same 1500 Hz that trailing gap carries.
 //!
 //! Total per line = `LineTime` exactly (defensive pad fills the
 //! boundary if float arithmetic rounds short).
@@ -59,6 +68,9 @@ pub(crate) fn emit_scottie_scanlines(tone: &mut ToneWriter, mode: SstvMode, rgb:
             | SstvMode::ScottieDx
             | SstvMode::Martin1
             | SstvMode::Martin2
+            | SstvMode::WraaseSc2180
+            | SstvMode::PasokonP5
+            | SstvMode::PasokonP7
     ));
     let spec = crate::modespec::for_mode(mode);
     let w = spec.line_pixels;
@@ -108,8 +120,10 @@ pub(crate) fn emit_scottie_scanlines(tone: &mut ToneWriter, mode: SstvMode, rgb:
                 }
             }
             crate::modespec::SyncPosition::LineStart => {
-                // Martin layout: sync at line start, then porch, then
-                // G/septr/B/septr/R.
+                // Sync at line start, then porch, then three channels split by
+                // separators. Martin sends G/B/R, Wraase SC-2 and Pasokon send
+                // R/G/B (#264) — `channel_colours` is the only difference, and
+                // it is the decoder's own function, so the two cannot drift.
 
                 // Sync.
                 tone.fill_to(SYNC_HZ, advance(&mut t, spec.sync_seconds));
@@ -117,28 +131,16 @@ pub(crate) fn emit_scottie_scanlines(tone: &mut ToneWriter, mode: SstvMode, rgb:
                 // Porch.
                 tone.fill_to(PORCH_HZ, advance(&mut t, spec.porch_seconds));
 
-                // G channel.
-                for x in 0..w {
-                    let g = rgb[(y * w + x) as usize][1];
-                    tone.fill_to(lum_to_freq(g), advance(&mut t, spec.pixel_seconds));
-                }
-
-                // Septr 1.
-                tone.fill_to(SEPTR_HZ, advance(&mut t, spec.septr_seconds));
-
-                // B channel.
-                for x in 0..w {
-                    let b = rgb[(y * w + x) as usize][2];
-                    tone.fill_to(lum_to_freq(b), advance(&mut t, spec.pixel_seconds));
-                }
-
-                // Septr 2.
-                tone.fill_to(SEPTR_HZ, advance(&mut t, spec.septr_seconds));
-
-                // R channel.
-                for x in 0..w {
-                    let r = rgb[(y * w + x) as usize][0];
-                    tone.fill_to(lum_to_freq(r), advance(&mut t, spec.pixel_seconds));
+                let colours = crate::mode_scottie::channel_colours(spec.channel_layout);
+                for (slot, &colour) in colours.iter().enumerate() {
+                    if slot > 0 {
+                        // Separator before every channel but the first.
+                        tone.fill_to(SEPTR_HZ, advance(&mut t, spec.septr_seconds));
+                    }
+                    for x in 0..w {
+                        let v = rgb[(y * w + x) as usize][colour];
+                        tone.fill_to(lum_to_freq(v), advance(&mut t, spec.pixel_seconds));
+                    }
                 }
             }
         }

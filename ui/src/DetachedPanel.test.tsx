@@ -87,6 +87,11 @@ vi.mock('./api', () => ({
   getPropagation: vi.fn(() => Promise.resolve(null)),
   getNeedAlerts: vi.fn(() => Promise.resolve([])),
   getSettings: vi.fn(() => Promise.resolve(null)),
+  // The picture-viewer branch polls the gallery and closes its own window.
+  getSstvState: vi.fn(() => Promise.resolve({ gallery: [] })),
+  closePanelWindow: vi.fn(() => Promise.resolve()),
+  revealSstvGallery: vi.fn(() => Promise.resolve()),
+  savePngToDownloads: vi.fn(() => Promise.resolve('')),
   pointRotatorAtCall: vi.fn(() => Promise.resolve(null)),
   workSpot: vi.fn(() => Promise.resolve(null)),
   setFrequency: vi.fn(() => Promise.resolve(null)),
@@ -189,6 +194,20 @@ describe('DetachedPanel waterfall branch', () => {
     expect(root.className).toBe('app detached detached-waterfall')
     // Toasts sit INSIDE the zoomed tree, so they scale with the UI like every other branch.
     expect(root.querySelector('.ui-toast-viewport')).not.toBeNull()
+  })
+
+  // The received-picture viewer, torn off. Same shell contract as every other branch, and
+  // it is worth its own line because the ONE branch that was missing `app` shipped a window
+  // that ignored the operator's UI scale while its toasts measured a zoom that never
+  // applied. A new branch inherits the shell by construction (DetachedShell), and this is
+  // what says the new one actually used it.
+  it('wraps the picture viewer in the zoomed .app tree, Toasts inside the same subtree', () => {
+    const { container } = render(<DetachedPanel panel="sstvviewer" />)
+    const root = container.firstElementChild as HTMLElement
+    expect(root.className).toBe('app detached detached-sstvviewer')
+    expect(root.querySelector('.ui-toast-viewport')).not.toBeNull()
+    // And it is the viewer, not the router's "panel I do not know" fallback.
+    expect(root.querySelector('.sstv-viewer')).not.toBeNull()
   })
 })
 

@@ -12,6 +12,8 @@ import { render, screen, cleanup, fireEvent } from '@testing-library/react'
 import { SettingsPanel } from './SettingsPanel'
 import type { FeaturesApi } from '../useFeatures'
 import defaultSettings from './__fixtures__/defaultSettings.json'
+import { SSTV_TX_MODES } from '../sstvModes'
+import { EN } from '../i18n/en'
 
 const api = vi.hoisted(() => {
   const spies: Record<string, ReturnType<typeof vi.fn>> = {}
@@ -153,13 +155,36 @@ describe('the SSTV section', () => {
       .closest('label')
       ?.querySelector('select') as HTMLSelectElement
     expect(mode.value).toBe('auto')
-    // All 15 transmittable modes are offered beside it, grouped by family.
-    expect(mode.querySelectorAll('option')).toHaveLength(16) // 15 + Automatic
-    expect(mode.querySelectorAll('optgroup')).toHaveLength(4)
+    // Every transmittable mode is offered beside it, grouped by family — derived from
+    // the table rather than counted by hand, because #264 added two of them (Wraase
+    // SC-2 180 and Pasokon P5) and a hardcoded 15 would have to be edited every time
+    // the crate learns a mode. The set that MATTERS is pinned by `sstv-modes.test.ts`
+    // against modespec.rs; what this checks is that the picker renders all of it.
+    expect(mode.querySelectorAll('option')).toHaveLength(SSTV_TX_MODES.length + 1) // + Automatic
+    expect(mode.querySelectorAll('optgroup')).toHaveLength(
+      new Set(SSTV_TX_MODES.map((m) => m.group)).size,
+    )
 
     const power = (await screen.findByText('Transmit power'))
       .closest('label')
       ?.querySelector('input') as HTMLInputElement
     expect(power.value).toBe('')
+  })
+
+  // #FSK-ID — a TRANSMIT-PATH toggle, and the thing worth pinning is that it ships OFF:
+  // it adds about a second of key-down to every picture, and an operator running a long
+  // mode near their TX watchdog must not have their over grow because they updated.
+  it('the callsign burst is offered in the transmitting group and is OFF by default', async () => {
+    renderPanel()
+    await openTab('Digital')
+    const toggle = (await screen.findByText(EN['settings.sstv.fskId.label']))
+      .closest('label')
+      ?.querySelector('button[role="switch"]') as HTMLButtonElement
+    expect(toggle).toBeTruthy()
+    expect(toggle.getAttribute('aria-checked')).toBe('false')
+    // Beside the transmit mode and drive, not among the receive settings — it is
+    // something the station SENDS.
+    const group = toggle.closest('.settings-featgroup')
+    expect(group?.textContent).toContain('Transmit mode')
   })
 })

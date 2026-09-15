@@ -9,6 +9,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Click a received SSTV picture to look at it, in its own window.** Clicking a gallery
+  thumbnail used to do nothing at all — the gallery offered delete, edit-and-resend and Reveal
+  in folder, so examining a picture that had just come in meant leaving Nexus for a file
+  manager. It now opens big, in a window of its own that you can park on a second monitor and
+  leave open while the next picture arrives. The window shows the mode, the time, the frequency
+  and the sender's callsign when their software sent one, and offers Save a copy and Reveal in
+  folder. Esc closes it; ← and → step through the gallery. Clicking another thumbnail re-points
+  the window that is already open rather than opening a second one. Desktop only for now — in a
+  browser the gallery still shows thumbnails.
+
+- **SSTV can send your callsign as an FSK ID after each picture — off by default.** Nexus has
+  always *read* the callsign burst that trails a received picture and shown it under the
+  thumbnail; it could not send one. Settings ▸ Digital ▸ SSTV ▸ "Send my callsign after each
+  picture" turns the transmit half on. It is off to begin with and stays off when you update,
+  because it adds about a second and a quarter of key-down to every transmission and nobody's
+  over should grow because they installed a new version. Your callsign is still drawn into the
+  picture either way — this rides alongside that, for the stations whose software shows the
+  trailer. The key-down time on the compose bar includes the burst when it is on.
+
+- **The callsign under a received picture now appears for the long modes too.** Nexus read the
+  FSK ID after a Scottie 1 or a Martin, but never after PD-240, PD-290, Scottie DX or Pasokon P7:
+  it stopped looking before the burst arrived on any mode with a line longer than about three
+  quarters of a second. Those four now report the sender's callsign like the rest.
+
+- **Start an SSTV receive by hand, without waiting for a header** (#202). Tune into a picture
+  that is already halfway through, or one whose header was lost to a burst of noise, pick the
+  mode beside the Arm button and press Start: the decode begins from the next line. The picture
+  comes out straight — the line timing is recovered from the sync pulses the same way it always
+  was, so joining mid-line is fine. Two things a header would have told Nexus are yours to
+  supply: the mode (nothing guesses it, and you will get the mode you name), and the assumption
+  that the radio is tuned correctly. Nothing in the audio can start a receive on its own; only
+  this button can. Receive only — it never transmits.
+
+- **SSTV receives two more mode families: Wraase SC-2 180 and Pasokon P5 and P7** (#264). Nexus
+  recognises their VIS headers and decodes them like any other mode — the picture paints line by
+  line and lands in the gallery with its mode name. Wraase SC-2 180 and Pasokon P5 can also be
+  sent; Pasokon P7 cannot, because one P7 picture is nearly seven minutes of key-down and Nexus
+  will not key the rig that long for one image, so it is not in the transmit picker. A VIS code
+  Nexus still does not know — Pasokon P3, Wraase SC-2 120 — is reported as an unrecognised mode
+  exactly as before, rather than being decoded as a neighbour and coming out slanted.
 
 
 ### Changed

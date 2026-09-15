@@ -314,6 +314,7 @@
     "sstvHoldDataSubmode": false,
     "sstvRxAutoArm": true,
     "sstvTxPowerPct": null,
+    "sstvTxFskId": false,
     "stationPowerW": null,
     "swrStopEnabled": false,
     "swrStopThreshold": 2.5,

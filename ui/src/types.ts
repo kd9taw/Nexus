@@ -3440,6 +3440,12 @@ export interface Settings {
   /** SSTV drive, percent. null/undefined = never touch the rig's power (the shipped
    * behaviour); a value both seeds the screen's slider and is applied at Send. */
   sstvTxPowerPct?: number | null
+  /** Send the operator's callsign as an FSK ID burst after each transmitted picture.
+   * Default FALSE and it stays false on upgrade — this is a TRANSMIT-PATH change that
+   * lengthens the over by about a second, and nobody's transmission may grow because
+   * they updated. Rides alongside the callsign burned into the picture, never instead
+   * of it. */
+  sstvTxFskId?: boolean
   /** Whether opening the PSK view starts the receiver. Default TRUE, so an ABSENT
    * key must read as on — `!== false`, never `!!`. The gate is in the engine
    * (`Engine::psk_auto_arm`), beside the session decline memory. */
