@@ -6727,15 +6727,39 @@ impl RadioLoop {
                         {
                             let _ = rig.set_rit(hz);
                         }
-                        if let Some(hz) =
-                            Some(engine_lock(engine)).and_then(|mut e| e.take_xit_apply())
-                        {
-                            let _ = rig.set_xit(hz);
-                        }
-                        if let Some(vfo_b) =
-                            Some(engine_lock(engine)).and_then(|mut e| e.take_vfo_apply())
-                        {
-                            let _ = rig.set_vfo(if vfo_b { "VFOB" } else { "VFOA" });
+                        // ⚠️ XIT AND VFO ARE WITHHELD FROM A KEYED RIG, AND RIT ABOVE IS NOT.
+                        // The two here move the TRANSMIT frequency: a `Z` walks the carrier
+                        // that is already on the air, and a VFO change hands the transmitter
+                        // to a VFO nothing judged — the 1.10.2 stuck-TX shape arriving from
+                        // another direction. RIT moves the receiver and is free.
+                        //
+                        // The test is [`Self::operator_keyed`], never the block's own
+                        // `!rig_keyed`: that flag is a poll and is up to a second stale, which
+                        // is precisely the window a key-down lives in. The block is
+                        // deliberately not gated on the inference as a whole (the dial read
+                        // inside it is what RETIRES the inference — see the guard's comment
+                        // upstairs), so these writes take the tighter test on their own.
+                        //
+                        // WITHHELD, NOT DROPPED: the request is not drained while keyed, so it
+                        // lands on the first unkeyed tick — the same deferral the Doppler steer
+                        // uses. Dropping it would leave the snapshot, which mirrors the
+                        // commanded value optimistically, showing an offset the rig never got.
+                        //
+                        // ⚠️ THE BOUND: a rig keyed from its own mic with no PTT read-back and
+                        // no satellite pass to infer from is not visible here at all. This
+                        // closes the inference gap and the polled one; it cannot close what
+                        // nothing can observe.
+                        if !self.operator_keyed() {
+                            if let Some(hz) =
+                                Some(engine_lock(engine)).and_then(|mut e| e.take_xit_apply())
+                            {
+                                let _ = rig.set_xit(hz);
+                            }
+                            if let Some(vfo_b) =
+                                Some(engine_lock(engine)).and_then(|mut e| e.take_vfo_apply())
+                            {
+                                let _ = rig.set_vfo(if vfo_b { "VFOB" } else { "VFOA" });
+                            }
                         }
                         // DSP funcs (NB/NR/notch=ANF/COMP/VOX): one GET per still-supported func on
                         // the slow sub-cadence, mirroring the S-meter's lazy-capability + miss-
@@ -25415,6 +25439,123 @@ mod tests {
             after.iter().any(|l| l == "F 145801500"),
             "control: and the correction was WITHHELD, not lost — it reaches the rig on the \
              first unkeyed tick, which is what makes this a deferral: {after:?}"
+        );
+    }
+
+    /// ⭐ XIT AND VFO MOVE THE TRANSMIT FREQUENCY, SO THEY ARE WITHHELD FROM A KEYED RIG
+    /// (operator, 2026-09-14). The clarifier/VFO applies inherited the heavy poll's guards —
+    /// `tx_until_ms`, `tuning_keyed`, `manual_ptt_applied`, `rig_keyed` — and stopped there,
+    /// which is `rig_keyed` ALONE: exactly what [`RadioLoop::operator_keyed`]'s own header
+    /// forbids ("every guard that withholds a write because the operator is keyed asks THIS").
+    /// The block is deliberately NOT gated on the inference as a whole, because the dial read
+    /// inside it is the release path — so the WRITES take the tighter test on their own.
+    ///
+    /// A `V VFOB` mid-over is the 1.10.2 stuck-TX shape from another direction: the rig hands
+    /// the transmitter to a VFO nobody judged. A `Z` mid-over walks the transmit frequency
+    /// while the carrier is up. RIT is the control and stays free — it moves the receiver.
+    ///
+    /// Withheld, NOT dropped: the request stays pending and lands on the first unkeyed tick,
+    /// the same deferral the Doppler steer above uses. Dropping it would leave the snapshot —
+    /// which mirrors the commanded value optimistically — telling the operator a lie.
+    #[test]
+    fn xit_and_vfo_are_withheld_while_the_rig_is_keyed_and_rit_is_not() {
+        // The same scene as the blind-window test above: an FM pass with the uplink on the
+        // split TX dial, and a rig answering `f` with that uplink — which only a transmitting
+        // radio does. This stub never answers `t` at all, so `rig_keyed` is false throughout
+        // and the heavy poll (and with it the RIT/XIT/VFO applies) runs the whole time.
+        let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+        let mut backend = MockBackend::new();
+        let (addr, log, rig_dial) = mock_rigctld_switchable(145_800_000);
+        let mut rig = Rig::rigctld(&addr);
+        let mut state = loop_state();
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut tick = 0.0f64;
+        let mut run = |state: &mut RadioLoop,
+                       rig: &mut Rig,
+                       backend: &mut MockBackend,
+                       n: usize,
+                       tick: &mut f64| {
+            for _ in 0..n {
+                *tick += 400.0;
+                state
+                    .step(
+                        &engine,
+                        backend,
+                        rig,
+                        &sinks,
+                        *tick,
+                        &mut ra,
+                        &mut rr,
+                        &mut station,
+                    )
+                    .unwrap();
+            }
+        };
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_operating_mode("phone", false);
+            let mut s = e.settings().clone();
+            s.phone_mode = "fm".into();
+            e.apply_settings(s);
+            e.set_sat_transponder(Some(("ISS|FM voice V/V".into(), 0, V_V_FM)));
+            e.sat_tune_nominal(FM_BIRD, 1_000_000);
+            e.request_split(Some(145.990));
+        }
+        run(&mut state, &mut rig, &mut backend, 6, &mut tick);
+
+        // ---- KEY DOWN, as the frequency reports it.
+        rig_dial.store(145_990_000, std::sync::atomic::Ordering::SeqCst);
+        assert!(!state.rig_keyed, "scene: the PTT poll believes RX");
+        run(&mut state, &mut rig, &mut backend, 4, &mut tick);
+        assert!(
+            engine.lock().unwrap().sat_inferred_keyed(),
+            "scene: the rig is answering with the pass's transmit leg — it is keyed"
+        );
+
+        // The operator moves all three clarifier/VFO controls mid-over.
+        log.lock().unwrap().clear();
+        {
+            let mut e = engine.lock().unwrap();
+            e.request_rit(-300);
+            e.request_xit(500);
+            e.request_vfo(true);
+        }
+        run(&mut state, &mut rig, &mut backend, 4, &mut tick);
+
+        let keyed = log.lock().unwrap().clone();
+        assert!(
+            keyed.iter().any(|l| l.starts_with("J ")),
+            "scene AND control: RIT is receive-only and must still reach a keyed rig — without \
+             it this test cannot tell a guard from a loop that never ran: {keyed:?}"
+        );
+        assert!(
+            !keyed.iter().any(|l| l.starts_with("Z ") || l == "U XIT 1"),
+            "XIT moves the TRANSMIT frequency — it must not reach a rig that is keying: {keyed:?}"
+        );
+        assert!(
+            !keyed.iter().any(|l| l.starts_with("V VFO")),
+            "and neither may a VFO change: it hands the transmitter to a different VFO \
+             mid-over: {keyed:?}"
+        );
+
+        // ---- UNKEY: the receive leg comes back, the inference retires, and the two withheld
+        // writes land. Withheld, not dropped.
+        rig_dial.store(145_800_000, std::sync::atomic::Ordering::SeqCst);
+        log.lock().unwrap().clear();
+        run(&mut state, &mut rig, &mut backend, 6, &mut tick);
+        let after = log.lock().unwrap().clone();
+        assert!(
+            !engine.lock().unwrap().sat_inferred_keyed(),
+            "control: the pass's receive leg retired the inference"
+        );
+        assert!(
+            after.iter().any(|l| l.starts_with("Z ")),
+            "the XIT the operator asked for was WITHHELD, not lost: {after:?}"
+        );
+        assert!(
+            after.iter().any(|l| l.starts_with("V VFO")),
+            "…and so was the VFO change: {after:?}"
         );
     }
 

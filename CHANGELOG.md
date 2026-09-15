@@ -24,6 +24,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   privileges is now refused, and the message names the input frequency. The check is on the input
   carrier: a machine whose input sits within a few kHz of a segment edge is still your call.
 
+- **XIT and VFO changes are held back while the radio is transmitting.** Both move the transmit
+  frequency — a VFO change hands the transmitter to a different VFO mid-over — and they were only
+  being held back on the radio's own PTT read-back, which is a poll and can be up to a second
+  behind the key. They now also stand down when Nexus can tell from the frequency that the rig is
+  keying (a satellite pass reporting its uplink). Nothing is lost: the change you asked for is
+  held and goes out on the first tick after unkey. RIT is unaffected — it moves the receiver.
+
 ### Security
 
 - **Encrypted connections refuse a malformed setup from the server.** Nexus's secure-connection
