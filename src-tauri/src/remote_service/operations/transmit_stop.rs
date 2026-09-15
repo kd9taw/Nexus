@@ -19,6 +19,25 @@ pub(super) struct Owner {
     lease_epoch: u64,
 }
 
+impl Owner {
+    /// This browser's lease RAN OUT, and everything else it was issued under still stands: the same
+    /// station boot, connection, permission epoch and lease epoch, with the operator's station
+    /// control grant still given to its device. Only then does it keep the stop token.
+    ///
+    /// A lease that was RELEASED, replaced by another browser, revoked or invalidated has not run
+    /// out — `now` is still inside it, or one of the identities above has moved — so the owner is
+    /// dropped exactly as before and the refusals for those cases are unchanged.
+    fn outlived_its_lease(&self, c: &Core, now: Instant) -> bool {
+        c.lease.is_none()
+            && now >= self.until
+            && c.boot.as_deref() == Some(self.boot.as_str())
+            && c.control_grants.contains(&self.device)
+            && self.epoch == c.epoch
+            && self.connection == c.connection
+            && self.lease_epoch == c.lease_epoch
+    }
+}
+
 impl Authority {
     pub(super) fn revoke_transmit_device(&self, device: &str) -> Result<(), &'static str> {
         {
@@ -43,7 +62,15 @@ impl Authority {
         Ok(())
     }
 
-    pub(super) fn sync_stop_owner(&self, c: &Core) {
+    /// The browser that may stop right now, recomputed under Core.
+    ///
+    /// ⚠️ AN EXPIRED LEASE KEEPS ITS STOP TOKEN (operator ruling, 2026-09-15). `reconcile` drops the
+    /// lease the moment it runs out, so without this the ruling below would be inert: the owner
+    /// would be gone and the Stop refused `localPermissionRequired` instead of `leaseExpired`. The
+    /// worst this allows is an unnecessary unkey of a station that was already transmitting, and
+    /// that is a smaller harm than a keyed rig with a Stop button that reported a refusal. It
+    /// keeps nothing else alive: every arming path checks the LIVE lease and the transmit grant.
+    pub(super) fn sync_stop_owner(&self, c: &Core, now: Instant) {
         let owner = c
             .lease
             .as_ref()
@@ -63,8 +90,29 @@ impl Authority {
             });
         // No path holding this mutex waits for Core, Engine or an external resource.
         if let Ok(mut current) = self.stop_owner.lock() {
+            if owner.is_none()
+                && current
+                    .as_ref()
+                    .is_some_and(|o| o.outlived_its_lease(c, now))
+            {
+                return;
+            }
             *current = owner;
         }
+    }
+
+    /// Does this browser hold the station's stop token right now?
+    ///
+    /// `state` hands it the transmit epoch on the strength of this, a controller and an expired
+    /// controller alike. The expired one needs a CURRENT epoch: dropping its lease revoked the
+    /// generation it was last shown, so a Stop carrying that one would be refused `staleContext`
+    /// and the ruling above would never reach the rig. Replay safety is untouched — a Stop still
+    /// retires only the generation it displayed, and a delayed one is still refused.
+    pub(super) fn holds_stop_token(&self, session: &str, device: &str) -> bool {
+        self.stop_owner.lock().is_ok_and(|o| {
+            o.as_ref()
+                .is_some_and(|o| o.session == session && o.device == device)
+        })
     }
 
     pub fn stop_transmit(
@@ -73,7 +121,8 @@ impl Authority {
         session: &str,
         device: &str,
         request: &Request,
-        now: Instant,
+        // Deliberately unread: no clock gates a Stop any more (see the ruling below).
+        _now: Instant,
     ) -> Result<(), &'static str> {
         let Request::StopTransmit {
             request_id,
@@ -116,9 +165,10 @@ impl Authority {
         if owner.session != session || owner.device != device || owner.lease != *lease_id {
             return Err("notController");
         }
-        if now.max(Instant::now()) >= owner.until {
-            return Err("leaseExpired");
-        }
+        // ⛔ No lease-expiry check, and that is the point (operator ruling, 2026-09-15). A browser
+        // that held station control still stops after its lease runs out: an unnecessary unkey is a
+        // smaller harm than a keyed rig and a button that reported a refusal. It cannot start
+        // anything — every arming path needs the live lease this browser no longer has.
         if !self.transmit.revoke_generation(generation) {
             return Err("staleContext");
         }

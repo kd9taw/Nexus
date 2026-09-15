@@ -489,7 +489,7 @@ impl Authority {
         {
             c.receipts.pop_front();
         }
-        self.sync_stop_owner(c);
+        self.sync_stop_owner(c, now);
         Ok(())
     }
     fn advance(&self, c: &mut Core) -> Result<(), &'static str> {
@@ -544,7 +544,7 @@ impl Authority {
         }
         c.windows.clear();
         self.advance(&mut c)?;
-        self.sync_stop_owner(&c);
+        self.sync_stop_owner(&c, Instant::now());
         Ok(true)
     }
     pub fn permit(&self, device: &str, allow: bool) -> Result<(), &'static str> {
@@ -567,7 +567,7 @@ impl Authority {
                 self.advance(&mut c)?;
             }
         }
-        self.sync_stop_owner(&c);
+        self.sync_stop_owner(&c, Instant::now());
         Ok(())
     }
     pub fn permit_station(&self, device: &str, allow: bool) -> Result<(), &'static str> {
@@ -591,7 +591,7 @@ impl Authority {
                 self.advance(&mut c)?;
             }
         }
-        self.sync_stop_owner(&c);
+        self.sync_stop_owner(&c, Instant::now());
         Ok(())
     }
     /// Local permission, never implied by a receiver grant, and it arms nothing.
@@ -620,7 +620,7 @@ impl Authority {
                 self.transmit.revoke();
             }
         }
-        self.sync_stop_owner(&c);
+        self.sync_stop_owner(&c, Instant::now());
         Ok(())
     }
     /// May this browser listen to the station's receive audio right now?
@@ -718,7 +718,7 @@ impl Authority {
         now: Instant,
         control: Option<(u8, station::Context, bool, bool)>,
     ) -> Result<Value, &'static str> {
-        self.sync_stop_owner(c);
+        self.sync_stop_owner(c, now);
         let allowed =
             c.grants.contains(device) || (control.is_some() && c.control_grants.contains(device));
         let owned = allowed
@@ -749,9 +749,12 @@ impl Authority {
             .as_ref()
             .is_some_and(|(version, _, _, _)| *version >= 4)
         {
-            // The stop token goes to any controlling browser (stop anything, 2026-09-14). It starts
-            // nothing: every FT action also checks the transmit grant and its own capability.
-            value["transmitEpoch"] = if owned && c.control_grants.contains(device) {
+            // The stop token goes to any controlling browser (stop anything, 2026-09-14), and stays
+            // with one whose lease has since run out (expired-lease stop, 2026-09-15) — that is what
+            // `holds_stop_token` is, and for a live controller it is exactly the old
+            // `owned && control_grants.contains(device)`. It starts nothing: every FT action also
+            // checks the live lease, the transmit grant and its own capability.
+            value["transmitEpoch"] = if self.holds_stop_token(session, device) {
                 json!(format!("{:016x}", self.transmit.generation()))
             } else {
                 Value::Null

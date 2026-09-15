@@ -90,6 +90,45 @@ it('sends Stop while a heartbeat is outstanding despite unavailable receipt stor
   h.c.disconnected()
 })
 
+// Stop outlives the lease (operator ruling, 2026-09-15). The STATION decides: it keeps issuing a
+// current stop token to a browser that held station control after the lease runs out, and stops
+// issuing one when the grant goes, another browser takes over or the station reboots. The browser
+// carries the lease id the token was first issued under and sends whatever token it was last given.
+it('keeps Stop available after the lease runs out, and ends it when the station stops issuing a token', async () => {
+  const h = client()
+  const lapsed = (transmitEpoch: string | null) => ({ ...h.s, phase: 'available' as const, leaseId: null,
+    commandWindowId: null, nextSequence: null, leaseRemainingMs: null, transmitEpoch })
+  const answer = async (value: object) => {
+    await vi.advanceTimersByTimeAsync(1000)
+    const request = h.sent[h.sent.length - 1].request
+    // A heartbeat while the lease is live; a plain state read once it has lapsed.
+    expect(['heartbeat', 'state']).toContain(request.type)
+    h.c.receive({ type: 'operationResponse', requestId: request.requestId, value })
+  }
+  await answer(lapsed('000000000000002b'))
+  expect(h.c.getSnapshot().stopAvailable).toBe(true)
+  const stopped = h.c.stopTransmit()
+  const request = h.sent[h.sent.length - 1].request
+  expect(request.type).toBe('stopTransmit')
+  // Only the token moves; the lease it was first issued under is the one the station matches.
+  expect(request.leaseId).toBe(h.s.leaseId)
+  expect(request.transmitEpoch).toBe('000000000000002b')
+  h.c.receive({ type: 'operationResponse', requestId: request.requestId, value: { stop: 'accepted' } })
+  await expect(stopped).resolves.toEqual({ stop: 'accepted' })
+  // A successful Stop retires the token it used, so Stop waits for the next one the station issues
+  // — and it is issued to this browser with its lease still gone.
+  await answer(lapsed('000000000000002c'))
+  expect(h.c.getSnapshot().stopAvailable).toBe(true)
+  // POSITIVE CONTROL: the availability really can end. The station stops issuing a token — the
+  // grant revoked, or another browser in control — and the Stop is refused without leaving here.
+  await answer(lapsed(null))
+  expect(h.c.getSnapshot().stopAvailable).toBe(false)
+  const before = h.sent.length
+  await expect(h.c.stopTransmit()).rejects.toThrow('localPermissionRequired')
+  expect(h.sent).toHaveLength(before)
+  h.c.disconnected()
+})
+
 it.each(['timeout', 'disconnect', 'refused'])('does not retry or claim RF stopped after %s', async cause => {
   const h = client(), stopped = h.c.stopTransmit(), requestId = h.sent[h.sent.length - 1].request.requestId
   const rejected = expect(stopped).rejects.toThrow(cause === 'refused' ? 'staleContext' : 'operationUnknown')

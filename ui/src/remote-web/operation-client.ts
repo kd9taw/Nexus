@@ -108,6 +108,11 @@ export class OperationClient {
   private pending: Pending | null = null
   private pendingStop: Pending | null = null
   private stopTarget: { stationBootId: string; leaseId: string; transmitEpoch: string } | null = null
+  /** The lease this browser's stop token was first issued under. Remembered separately because it
+   * outlives both the lease itself (the station keeps matching a Stop against it after the lease
+   * runs out — expired-lease stop, 2026-09-15) and `stopTarget`, which a successful Stop clears,
+   * its epoch having been retired. Cleared only on disconnect. */
+  private stopLeaseId: string | null = null
   // A successful mutation invalidates command context, not the controller's
   // lease. Refresh with a heartbeat so continuous use cannot starve renewal.
   // This token permits only renewal/release; actions still require fresh state.
@@ -186,6 +191,7 @@ export class OperationClient {
     this.timer = undefined
     this.resultIntent = null
     this.stopTarget = null
+    this.stopLeaseId = null
     this.heartbeatLeaseId = null
     const stop = this.pendingStop
     this.pendingStop = null
@@ -433,8 +439,16 @@ export class OperationClient {
     if ('stop' in r.value) throw Error('invalidOperation')
     if ('phase' in r.value) {
       this.heartbeatLeaseId = r.value.phase === 'controlling' ? r.value.leaseId : null
-      this.stopTarget = this.operationVersion >= 4 && r.value.phase === 'controlling' && r.value.leaseId && r.value.transmitEpoch
-        ? { stationBootId: r.value.stationBootId, leaseId: r.value.leaseId, transmitEpoch: r.value.transmitEpoch } : null
+      // Stop OUTLIVES the lease (operator ruling, 2026-09-15): an unnecessary unkey is a smaller
+      // harm than a keyed rig and a Stop button that reported a refusal. The STATION decides — it
+      // keeps issuing a current `transmitEpoch` to a browser that held station control after its
+      // lease runs out, and stops the moment the grant goes, another browser takes over or the
+      // station reboots. So the token is the whole permission here and the lease id it was first
+      // issued under is simply carried. Nothing this keeps alive can START anything: every command
+      // still requires `phase === 'controlling'` and a live command window.
+      if (r.value.phase === 'controlling' && r.value.leaseId) this.stopLeaseId = r.value.leaseId
+      this.stopTarget = this.operationVersion >= 4 && this.stopLeaseId && r.value.transmitEpoch
+        ? { stationBootId: r.value.stationBootId, leaseId: this.stopLeaseId, transmitEpoch: r.value.transmitEpoch } : null
       this.stateUntil = p.started + Math.min(1200, r.value.leaseRemainingMs ?? 1200)
       this.leaseUntil = r.value.phase === 'controlling' && r.value.leaseRemainingMs != null ? p.started + r.value.leaseRemainingMs : 0
       this.update({

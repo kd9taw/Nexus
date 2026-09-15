@@ -408,14 +408,168 @@ fn a_browser_without_station_control_is_refused_and_stops_nothing() {
             assert!(e.manual_ptt(), "{scene}: the local key is untouched");
             assert!(e.tx_enabled(), "{scene}: the latch is untouched");
         }
-        if scene == "otherDevice" {
-            // Positive control: the same keyed station IS stopped by the controlling browser.
-            assert_eq!(
-                stop_v4(&f, DEVICE, &request, now),
-                Ok(json!({"stop":"accepted"}))
-            );
-            assert_stopped(&mut f.engine.lock().unwrap(), "ptt");
+        // Positive control, EVERY scene: the refusal belongs to the browser, not to the station.
+        // Give this device station control and a lease and the same keyed station stops at once —
+        // so a refusal above is a real refusal, never a fixture that could not have stopped.
+        f.authority.permit_station(DEVICE, true).unwrap();
+        if control_state_version(&f, now, 4)["leaseId"].is_null() {
+            acquire_controls_version(&f, now, 4);
         }
+        let live = control_state_version(&f, now, 4);
+        assert!(
+            live["transmitEpoch"].is_string(),
+            "{scene}: station control holds the stop token"
+        );
+        assert_eq!(
+            stop_v4(&f, DEVICE, &stop_request(&f, &live), now),
+            Ok(json!({"stop":"accepted"})),
+            "{scene}"
+        );
+        assert_stopped(&mut f.engine.lock().unwrap(), "ptt");
+    }
+}
+
+// ── The expired lease still stops (operator ruling, 2026-09-15) ─────────────────────────────────
+// A browser that HELD station control stops the station even after its lease has run out. The
+// failure this closes is a keyed rig and a Stop button that reported a refusal; an unnecessary
+// unkey is the smaller harm. A browser that never held control is refused exactly as before, and
+// nothing here can start, arm or re-arm anything.
+
+#[test]
+fn an_expired_lease_still_stops_and_starts_nothing() {
+    // `settled` is the ORDINARY case, not the exception: the browser polls state while it watches
+    // the station transmit, so by the time the operator presses Stop the station has already
+    // reconciled the expired lease away and taken the generation it was issued with.
+    for settled in [false, true] {
+        let (f, now, state) = controlling(false);
+        key_locally(&mut f.engine.lock().unwrap(), "ptt");
+        let expired = now + LEASE + Duration::from_secs(1);
+        let target = if settled {
+            let after = control_state_version(&f, expired, 4);
+            assert_eq!(after["phase"], "available", "the lease really did run out");
+            assert!(
+                after["leaseId"].is_null(),
+                "and it is no longer the controller"
+            );
+            // Re-issued to the browser that held control. Without a CURRENT token its Stop would be
+            // refused `staleContext` — the expiry's own revocation retired the old one — and the
+            // ruling would never reach the rig. Replay safety is untouched: see
+            // `a_replayed_stop_transmit_has_no_further_effect`.
+            assert!(
+                after["transmitEpoch"].is_string(),
+                "the stop token stays with the browser that held control"
+            );
+            json!({"stationBootId":after["stationBootId"],"leaseId":state["leaseId"]})
+        } else {
+            state.clone()
+        };
+        assert_eq!(
+            stop_v4(&f, DEVICE, &stop_request(&f, &target), expired),
+            Ok(json!({"stop":"accepted"})),
+            "settled={settled}"
+        );
+        // Nothing owns the transmitter and the TX-enable latch is off, exactly as a local Stop TX
+        // leaves it. Stopping started nothing.
+        assert_stopped(&mut f.engine.lock().unwrap(), "ptt");
+        assert!(
+            control_state_version(&f, expired, 4)["leaseId"].is_null(),
+            "settled={settled}: the Stop did not hand the lease back"
+        );
+    }
+}
+
+#[test]
+fn a_stop_token_ends_with_the_grant_and_with_any_lease_that_did_not_run_out() {
+    for scene in ["released", "revokedAfterExpiry", "takenOverAfterExpiry"] {
+        let (f, now, state) = controlling(false);
+        key_locally(&mut f.engine.lock().unwrap(), "ptt");
+        let expired = now + LEASE + Duration::from_secs(1);
+        let boot: String = state["stationBootId"].as_str().unwrap().into();
+        let run = |session: &str, device: &str, request: &Request, at: Instant| {
+            f.authority
+                .handle_version((f.connection, 4), session, device, request, &f.engine, at)
+        };
+        match scene {
+            // Given back, not run out: a browser that released control released the stop with it.
+            "released" => {
+                run(
+                    SESSION,
+                    DEVICE,
+                    &Request::Release {
+                        request_id: id(),
+                        lease_id: state["leaseId"].as_str().unwrap().into(),
+                    },
+                    now,
+                )
+                .unwrap();
+            }
+            // Ran out, then the operator revoked station control at the radio.
+            "revokedAfterExpiry" => {
+                control_state_version(&f, expired, 4);
+                f.authority.permit_station(DEVICE, false).unwrap();
+            }
+            // Ran out, then another browser took control: the token is the new controller's.
+            "takenOverAfterExpiry" => {
+                control_state_version(&f, expired, 4);
+                f.authority.permit_station(OTHER, true).unwrap();
+                run(
+                    OTHER,
+                    OTHER,
+                    &Request::Acquire {
+                        request_id: id(),
+                        station_boot_id: boot.clone(),
+                    },
+                    expired,
+                )
+                .unwrap();
+            }
+            _ => unreachable!(),
+        }
+        let at = if scene == "released" { now } else { expired };
+        let expected = if scene == "takenOverAfterExpiry" {
+            "notController"
+        } else {
+            "localPermissionRequired"
+        };
+        assert_eq!(
+            run(SESSION, DEVICE, &stop_request(&f, &state), at),
+            Err(expected),
+            "{scene}"
+        );
+        {
+            let e = f.engine.lock().unwrap();
+            assert!(e.manual_ptt(), "{scene}: the local key is untouched");
+            assert!(e.tx_enabled(), "{scene}: the latch is untouched");
+        }
+        // Positive control: the refusal is this browser's, not the station's. Whoever holds station
+        // control now stops the same keyed station at once.
+        let (session, device) = if scene == "takenOverAfterExpiry" {
+            (OTHER, OTHER)
+        } else {
+            f.authority.permit_station(DEVICE, true).unwrap();
+            run(
+                SESSION,
+                DEVICE,
+                &Request::Acquire {
+                    request_id: id(),
+                    station_boot_id: boot.clone(),
+                },
+                at,
+            )
+            .unwrap();
+            (SESSION, DEVICE)
+        };
+        let live = run(session, device, &Request::State { request_id: id() }, at).unwrap();
+        assert!(
+            live["transmitEpoch"].is_string(),
+            "{scene}: the controller holds the stop token"
+        );
+        assert_eq!(
+            run(session, device, &stop_request(&f, &live), at),
+            Ok(json!({"stop":"accepted"})),
+            "{scene}"
+        );
+        assert_stopped(&mut f.engine.lock().unwrap(), "ptt");
     }
 }
 
@@ -466,7 +620,9 @@ fn a_stop_is_accepted_at_once_while_the_engine_is_busy_and_stops_as_soon_as_it_i
 }
 
 #[test]
-fn transmit_stop_requires_the_exact_granted_live_lease_and_new_protocol() {
+// The lease's IDENTITY is still required; its CLOCK is not. Expiry left this list on 2026-09-15 —
+// see `an_expired_lease_still_stops_and_starts_nothing`.
+fn transmit_stop_requires_the_exact_granted_lease_and_new_protocol() {
     for scene in [
         "version",
         "device",
@@ -474,7 +630,6 @@ fn transmit_stop_requires_the_exact_granted_live_lease_and_new_protocol() {
         "lease",
         "boot",
         "grant",
-        "expiry",
         "connection",
     ] {
         let (f, now, state) = armed();
@@ -482,7 +637,6 @@ fn transmit_stop_requires_the_exact_granted_live_lease_and_new_protocol() {
         let mut session = SESSION;
         let mut device = DEVICE;
         let mut version = 4;
-        let mut at = now;
         let expected = match scene {
             "version" => {
                 version = 3;
@@ -517,10 +671,6 @@ fn transmit_stop_requires_the_exact_granted_live_lease_and_new_protocol() {
                 f.authority.permit_station(DEVICE, false).unwrap();
                 "localPermissionRequired"
             }
-            "expiry" => {
-                at += LEASE;
-                "leaseExpired"
-            }
             "connection" => {
                 f.authority.start_connection();
                 "staleConnection"
@@ -534,12 +684,12 @@ fn transmit_stop_requires_the_exact_granted_live_lease_and_new_protocol() {
                 device,
                 &request,
                 &f.engine,
-                at
+                now
             ),
             Err(expected),
             "{scene}"
         );
-        if !matches!(scene, "grant" | "connection" | "expiry") {
+        if !matches!(scene, "grant" | "connection") {
             assert!(
                 !f.engine.lock().unwrap().poll_remote_transmit(now),
                 "{scene}"

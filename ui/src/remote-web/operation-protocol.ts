@@ -480,7 +480,11 @@ export function operationValue(raw: unknown): OperationValue {
     invalid()
   const owned = v.phase === 'controlling'
   if (v.txArmed && (!owned || !transmitEpoch(v.transmitEpoch))) invalid()
-  if ('transmitEpoch' in v && v.transmitEpoch !== null && (!owned || !transmitEpoch(v.transmitEpoch))) invalid()
+  // A stop token WITHOUT a live lease is the expired-lease stop (operator ruling, 2026-09-15): the
+  // station keeps issuing one to a browser that held station control, so that its Stop is not
+  // refused `staleContext`. It is a stop token only — `txArmed` above still requires the lease, and
+  // every command the page can send requires `phase === 'controlling'`.
+  if ('transmitEpoch' in v && v.transmitEpoch !== null && !transmitEpoch(v.transmitEpoch)) invalid()
   if (
     owned
       ? !v.allowed ||

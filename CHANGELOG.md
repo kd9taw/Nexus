@@ -37,6 +37,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Remote's Stop TX still works after your control lease has run out.** If the lease ticked over
+  while you were watching the station transmit — a slow link, a tab left in the background — the
+  next press of Stop TX was refused and the rig stayed keyed. Stopping is the one thing that must
+  never be refused, so a browser that held station control can now always stop the station, lease
+  or no lease. An unnecessary unkey is a far smaller problem than a radio you cannot stop. A
+  browser that never had station control still gets nothing: no lease, a logging-only lease, a
+  revoked grant or a different device are refused exactly as before, and a Stop can still only
+  stop — it can never start, arm or re-arm anything.
+
 - **The callsign card names the state (#237).** A US or Canadian station's card showed the town,
   the grid and the country but never the state, so a Hawaii station read "KEKAHA (BL01dx) · United
   States" while the Needed board and Worked All States already knew it was HI. The card now reads
