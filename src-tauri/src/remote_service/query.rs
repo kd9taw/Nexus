@@ -18,6 +18,7 @@ mod ota;
 mod parks;
 mod pounce;
 mod recall;
+mod rotator;
 
 /// The settings a Remote browser may change, and under which grant (see `configuration`).
 pub(super) use configuration::{WRITABLE_CONTROL_KEYS, WRITABLE_LOGGING_KEYS};
@@ -63,6 +64,7 @@ pub enum Collection {
     Parks,
     Confirmations,
     Pounce,
+    Rotator,
 }
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -111,6 +113,7 @@ impl Request {
                     | Collection::Parks
                     | Collection::Confirmations
                     | Collection::Pounce
+                    | Collection::Rotator
             ) || self.cursor.is_none())
             && self
                 .cursor
@@ -338,6 +341,10 @@ impl Publisher {
                 // Diagnosing holds the engine for the whole log, as on the desktop.
                 // Refreshes share one capture so a browser cannot hold it repeatedly.
                 10_000
+            } else if request.collection == Collection::Rotator {
+                // The desktop's own rotor poll interval. Two browsers watching the same mast cost
+                // one rotctld exchange, not two, and neither asks faster than the strip does.
+                2000
             } else if request.collection == Collection::Decodes {
                 500
             } else if request.collection == Collection::Needs {
@@ -481,6 +488,7 @@ impl Publisher {
             Collection::Pounce => {
                 return pounce::read(&sources.ok_or("applicationUnavailable")?.pounces, engine);
             }
+            Collection::Rotator => return rotator::read(engine),
             Collection::SstvImage => {
                 return super::sstv::capture(
                     &self.sstv_images,

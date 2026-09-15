@@ -16,6 +16,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the station still refuses it while a transmission is armed. A station running an older
   Nexus simply does not offer the control, so nothing is sent to one that could not do it.
 
+- **The browser shows where the rotator is actually pointing.** Nexus Remote could already point
+  the antenna by azimuth, point it at a callsign and stop it, but the heading itself read "—".
+  The cockpit strip and the Needed board now show the station's own reading, refreshed while a
+  heading is on screen and never when it is not. The station's honesty is kept intact: no rotator
+  configured, or a rotctld that does not answer, still reads "—" rather than a made-up bearing,
+  and a station running an older Nexus keeps the "—" it has always shown.
+
 
 
 ### Changed

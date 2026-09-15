@@ -19,7 +19,7 @@ const page = (rows: unknown[], threshold: unknown = 'atno'): QueryPage => ({ typ
   rows: rows as QueryPage['rows'], meta: { capturedAgeMs: 0, source: { threshold } as QueryPage['meta'] } })
 
 it('adds exactly the rare-DX alert read to v16 while every older collection stays readable', () => {
-  expect(APPLICATION_VERSIONS[APPLICATION_VERSIONS.length - 1]).toBe(16)
+  expect(APPLICATION_VERSIONS).toContain(16)
   expect(applicationCommands(16)).toEqual([...applicationCommands(15), command])
   expect(applicationStreamVersion(16)).toBe(13)
   expect(applicationQueryVersion(16)).toBe(16)
@@ -34,14 +34,14 @@ it('adds exactly the rare-DX alert read to v16 while every older collection stay
   }
 })
 
-it('negotiates all 256 station/browser pairs and never sends the alert read to an older station', async () => {
-  for (let stationVersion = 1; stationVersion <= 16; stationVersion++) for (let browserVersion = 1; browserVersion <= 16; browserVersion++) {
+it('negotiates every station/browser pair and never sends the alert read to an older station', async () => {
+  for (let stationVersion = 1; stationVersion <= 17; stationVersion++) for (let browserVersion = 1; browserVersion <= 17; browserVersion++) {
     const station = peer(), browser = peer(), relay = new ApplicationRelay()
     relay.sync({ peer: station, version: stationVersion }, [{ sessionId: 'one', peer: browser }], 0)
     const client = new ApplicationClient(s => relay.receiveBrowser('one', JSON.parse(s), 0), vi.fn(), browserVersion)
     client.open(); client.receive(last(browser))
     expect(last(browser).version).toBe(Math.min(stationVersion, browserVersion))
-    const supported = stationVersion === 16 && browserVersion === 16
+    const supported = stationVersion >= 16 && browserVersion >= 16
     expect(client.supports(command)).toBe(supported)
     if (!supported) {
       await expect(client.invoke(command, args())).rejects.toThrow()

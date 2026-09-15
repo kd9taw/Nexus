@@ -39,7 +39,7 @@ export const JA: PartialCatalog = {
   // remote parity batch 1
   "remote.b1.outsidePrivileges": "変更していません。その送信周波数は免許の運用範囲外です。",
   "remote.b1.workUnavailable": "このスポットはブラウザーからは交信に移れません。局側では何も変わっていません。",
-  "remote.b1.rotatorNoHeading": "方位はリモートではまだ表示されません。",
+  "remote.b1.rotatorNoHeading": "局からの方位なし — 未設定、またはローター制御が応答していません。",
   "remote.b1.rotatorPointing": "ローテーターを{{call}}に向けています。",
   "remote.transmitAllow": "FT8/FT4 の送信を許可",
   "remote.transmitRevoke": "送信許可を取り消す",

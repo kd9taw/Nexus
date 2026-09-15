@@ -1,5 +1,6 @@
 import { useStationCapability, useStationControl } from '../stationAccess'
 import { controlFailureMessage } from '../remote-web/control-failure'
+import { useRotatorHeading } from '../remote-web/rotator'
 // The N1MM-style "what's needed now" board: every needed station the engine sees
 // (from the log — new DXCC/ATNO, new band-slot, new mode, new zone, needs-confirm),
 // ranked by priority and boldly colored by the shared need palette. Single-click a
@@ -50,8 +51,10 @@ function RotatorWidget({ remote = false }: { remote?: boolean }) {
   const [az, setAz] = useState<number | null>(null)
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
+  // A browser reads the heading the STATION measured, and only while this widget is mounted.
+  // An older station offers no such read and the readout stays the honest "—".
+  const heading = useRotatorHeading(remote)
   useEffect(() => {
-    // A browser has no rotator reading: the readout stays "—" rather than polling into refusals.
     if (remote) return
     let live = true
     const poll = () =>
@@ -83,9 +86,10 @@ function RotatorWidget({ remote = false }: { remote?: boolean }) {
       setBusy(false)
     }
   }
+  const shown = remote ? heading.azimuthDeg : az
   return (
     <span className="np-rotator" title={t('needed.rotator.title')}>
-      <span className="np-rotator-az mono" title={remote ? t('remote.b1.rotatorNoHeading') : undefined}>{az != null ? `${Math.round(az)}°` : '—°'}</span>
+      <span className="np-rotator-az mono" title={remote && shown == null ? t('remote.b1.rotatorNoHeading') : undefined}>{shown != null ? `${Math.round(shown)}°` : '—°'}</span>
       <input
         type="number"
         className="np-rotator-input mono"

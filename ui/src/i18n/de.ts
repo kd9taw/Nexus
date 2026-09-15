@@ -34,7 +34,7 @@ export const DE: PartialCatalog = {
   // remote parity batch 1
   "remote.b1.outsidePrivileges": "Nicht geändert. Diese Sendefrequenz liegt außerhalb Ihrer Lizenzberechtigung.",
   "remote.b1.workUnavailable": "Dieser Spot lässt sich nicht aus dem Browser arbeiten. An der Station hat sich nichts geändert.",
-  "remote.b1.rotatorNoHeading": "Die Richtung wird im Browser noch nicht angezeigt.",
+  "remote.b1.rotatorNoHeading": "Keine Richtung von der Station — nichts eingerichtet, oder die Rotorsteuerung antwortet nicht.",
   "remote.b1.rotatorPointing": "Der Rotor wird auf {{call}} gedreht.",
   "remote.transmitAllow": "FT8/FT4-Senden erlauben",
   "remote.transmitRevoke": "Sendeberechtigung entziehen",
