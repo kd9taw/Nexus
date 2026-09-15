@@ -84,6 +84,7 @@
     "scopeError": null,
     "scopeFixStartMhz": null,
     "scopeModeCode": null,
+    "scopeSpanRefused": null,
     "sideband": "USB",
     "sidebandOverride": null,
     "slot": 101,
