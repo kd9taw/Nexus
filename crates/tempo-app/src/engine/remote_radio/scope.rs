@@ -72,9 +72,12 @@ impl Engine {
                 if !icom && !ft710 {
                     return Err(Reason::HardwareUnavailable);
                 }
-                if !(icom && ICOM_SCOPE_SPANS_HZ.contains(&hz))
-                    && !(ft710 && YAESU_SCOPE_HALF_SPANS_HZ.contains(&hz))
-                {
+                // The span must be one the family that is actually present offers. Written as one
+                // "is it supported" test rather than two negations: the same condition, and the
+                // pair of negated clauses tripped clippy::nonminimal_bool.
+                let supported = icom && ICOM_SCOPE_SPANS_HZ.contains(&hz)
+                    || ft710 && YAESU_SCOPE_HALF_SPANS_HZ.contains(&hz);
+                if !supported {
                     return Err(Reason::InvalidAction);
                 }
                 self.request_scope_span(hz);
