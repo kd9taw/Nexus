@@ -14,10 +14,40 @@ use serde_json::{json, Value};
 use tempo_app::dto::LoggedActivationDto;
 use tempo_app::engine::Engine;
 
-/// Mirrors ACTIVATION_EXPORT_* in ui/src/remote-web/operation-protocol.ts.
-const MAX_BYTES: usize = 1024 * 1024;
-const CHUNK_BYTES: usize = 32 * 1024;
+/// Mirrors ACTIVATION_EXPORT_* in ui/src/remote-web/operation-protocol.ts. They bound every export
+/// that travels this way, not only an activation's: one ceiling and one chunk size means a browser
+/// checks the same two numbers whatever it asked for.
+pub(super) const MAX_BYTES: usize = 1024 * 1024;
+pub(super) const CHUNK_BYTES: usize = 32 * 1024;
 const LISTED: usize = 128;
+
+/// One chunk of a built export file, described by the WHOLE file's length and SHA-256 so a browser
+/// can tell that the thing it is stitching together stopped being one file half way down. The
+/// station keeps nothing between chunks — each call rebuilds the text — so a file that changed
+/// arrives as a different description rather than as a silent splice.
+///
+/// `operation` names the reply for the browser's own parser: an export is the one operation reply
+/// allowed past the ordinary response ceiling, and the client matches the name it asked for.
+pub(super) fn chunked(operation: &str, text: &str, index: u32) -> Result<Value, &'static str> {
+    let bytes = text.as_bytes();
+    if bytes.len() > MAX_BYTES {
+        return Ok(json!({ "operation": operation, "refused": "tooLarge" }));
+    }
+    let chunks = bytes.len().div_ceil(CHUNK_BYTES);
+    let index = index as usize;
+    if index >= chunks {
+        return Err("invalidRequest");
+    }
+    let sha256: String = digest(&SHA256, bytes)
+        .as_ref()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    let chunk = &bytes[index * CHUNK_BYTES..bytes.len().min((index + 1) * CHUNK_BYTES)];
+    Ok(json!({"operation":operation,
+        "file":{"byteLength":bytes.len(),"sha256":sha256,"chunks":chunks},
+        "index":index,"base64":crate::b64_encode(chunk)}))
+}
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -90,22 +120,5 @@ pub(super) fn respond(
         selection.day_start_unix,
         selection.callsign.as_deref(),
     );
-    let bytes = text.as_bytes();
-    if bytes.len() > MAX_BYTES {
-        return Ok(json!({"operation":"activationExport","refused":"tooLarge"}));
-    }
-    let chunks = bytes.len().div_ceil(CHUNK_BYTES);
-    let index = index as usize;
-    if index >= chunks {
-        return Err("invalidRequest");
-    }
-    let sha256: String = digest(&SHA256, bytes)
-        .as_ref()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect();
-    let chunk = &bytes[index * CHUNK_BYTES..bytes.len().min((index + 1) * CHUNK_BYTES)];
-    Ok(json!({"operation":"activationExport",
-        "file":{"byteLength":bytes.len(),"sha256":sha256,"chunks":chunks},
-        "index":index,"base64":crate::b64_encode(chunk)}))
+    chunked("activationExport", &text, index)
 }

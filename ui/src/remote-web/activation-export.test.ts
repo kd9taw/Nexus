@@ -2,8 +2,8 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { OperationClient } from './operation-client'
 import { OperationRelay } from './operation-relay'
 import {
-  ACTIVATION_EXPORT_CHUNK_BYTES,
-  ACTIVATION_EXPORT_MAX_BYTES,
+  EXPORT_CHUNK_BYTES,
+  EXPORT_MAX_BYTES,
   LOG_CAPABILITIES,
   OPERATION_EXPORT_RESPONSE_BYTES,
   activationSelection,
@@ -48,8 +48,8 @@ function open(capabilities: string[], station?: Station) {
 }
 const chunkOf = (bytes: Uint8Array, sha256: string, index: number, file: Record<string, unknown> = {}) => ({
   operation: 'activationExport', index,
-  file: { byteLength: bytes.length, sha256, chunks: Math.ceil(bytes.length / ACTIVATION_EXPORT_CHUNK_BYTES), ...file },
-  base64: Buffer.from(bytes.subarray(index * ACTIVATION_EXPORT_CHUNK_BYTES, (index + 1) * ACTIVATION_EXPORT_CHUNK_BYTES)).toString('base64')
+  file: { byteLength: bytes.length, sha256, chunks: Math.ceil(bytes.length / EXPORT_CHUNK_BYTES), ...file },
+  base64: Buffer.from(bytes.subarray(index * EXPORT_CHUNK_BYTES, (index + 1) * EXPORT_CHUNK_BYTES)).toString('base64')
 })
 
 it('names exactly one activation by park, UTC day and callsign, and nothing else from the log', () => {
@@ -87,7 +87,7 @@ it('reads the list, one bounded chunk with its digest, or a refusal, and nothing
     { operation: 'activationExport', activations: Array(129).fill(entry) },
     { operation: 'activationExport', activations: [{ ...entry, rows: [] }] },
     { operation: 'activationExport', activations: [{ ...entry, reference: 'US 1234' }] },
-    { operation: 'activationExport', file: { ...file, byteLength: ACTIVATION_EXPORT_MAX_BYTES + 1, chunks: 33 }, index: 0, base64: '' },
+    { operation: 'activationExport', file: { ...file, byteLength: EXPORT_MAX_BYTES + 1, chunks: 33 }, index: 0, base64: '' },
     { operation: 'activationExport', file: { ...file, chunks: 2 }, index: 0, base64: 'SGVsbG8=' },
     { operation: 'activationExport', file, index: 1, base64: 'SGVsbG8=' },
     { operation: 'activationExport', file, index: 0, base64: 'not base64!' },
@@ -102,7 +102,7 @@ it('reads the list, one bounded chunk with its digest, or a refusal, and nothing
 it('downloads one activation file in whole chunks, checks its digest, and yields to the heartbeat between chunks', async () => {
   const text = Array.from({ length: 2400 }, (_, i) => `<CALL:5>K${String(i).padStart(4, '0')}<MY_SIG_INFO:7>US-1234<EOR>\n`).join('')
   const bytes = new TextEncoder().encode(text), sha256 = hex(await crypto.subtle.digest('SHA-256', bytes))
-  const chunks = Math.ceil(bytes.length / ACTIVATION_EXPORT_CHUNK_BYTES)
+  const chunks = Math.ceil(bytes.length / EXPORT_CHUNK_BYTES)
   expect(chunks, 'positive control: the file spans several chunks').toBeGreaterThan(2)
   const { client, exports, clock } = open(['qsoLogging', 'activationExport'], r => chunkOf(bytes, sha256, r.index))
   const wait = vi.fn(async (ms: number) => { clock.now += ms })
@@ -205,7 +205,7 @@ it('the relay routes an export only as a versioned v4 read, and keeps an older s
   relay.receiveBrowser(sessionId, { type: 'operationRequest', operationVersion: 4, request: change }, 103)
   expect(JSON.parse(station.send.mock.lastCall![0]).request.type).toBe('logChange')
   const chunk = { operation: 'activationExport', file: { byteLength: 40000, sha256: 'a'.repeat(64), chunks: 2 }, index: 0,
-    base64: Buffer.alloc(ACTIVATION_EXPORT_CHUNK_BYTES).toString('base64') }
+    base64: Buffer.alloc(EXPORT_CHUNK_BYTES).toString('base64') }
   relay.receiveStation({ type: 'operationResponse', sessionId, requestId: request.requestId, value: chunk })
   expect(JSON.parse(browser.send.mock.lastCall![0]).value).toEqual(chunk)
   relay.sync({ peer: station, supported: true, operationVersion: 3 }, [{ sessionId, deviceId, peer: browser }], 2200)

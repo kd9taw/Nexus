@@ -21,7 +21,9 @@ import {
   type OperationOutcome,
   type OperationRequest,
   type OperationState,
-  type OperationValue
+  type OperationValue,
+  type ProgramExportFormat,
+  type ProgramExportValue
 } from './operation-protocol'
 /** A station command or manual log that failed. `sent` records whether its request actually left
  * this browser: false means nothing reached the station, so nothing there changed. `busy` records
@@ -353,8 +355,8 @@ export class OperationClient {
       }
     })
   }
-  /** `bytes` is the reply's size on the wire. Only a chunk of the activation file this browser asked
-   * for may exceed OPERATION_RESPONSE_BYTES. */
+  /** `bytes` is the reply's size on the wire. Only a chunk of the file this browser asked for —
+   * an activation ADIF or the programming CHIRP/CSV — may exceed OPERATION_RESPONSE_BYTES. */
   receive(raw: unknown, bytes = 0) {
     if (bytes > OPERATION_EXPORT_RESPONSE_BYTES) throw Error('invalidOperation')
     const r = operationResponse(raw)
@@ -376,11 +378,18 @@ export class OperationClient {
     }
     const p = this.pending
     if (!p || p.request.requestId !== r.requestId) return
-    const exported = 'value' in r && 'operation' in r.value && r.value.operation === 'activationExport'
+    // Either export answers with a chunk that may be over the ordinary ceiling, and each must come
+    // back to the request that asked for THAT one — a programming CSV arriving for an activation
+    // read is a crossed reply, not a large one.
+    const exportOperation = 'value' in r && 'operation' in r.value &&
+      (r.value.operation === 'activationExport' || r.value.operation === 'programExport')
+      ? r.value.operation : null
+    const exported = exportOperation !== null
     if (bytes > OPERATION_RESPONSE_BYTES && !exported) throw Error('invalidOperation')
     if ('value' in r) {
       if ('stop' in r.value) throw Error('invalidOperation')
-      if (exported !== (p.request.type === 'activationExport')) throw Error('invalidOperation')
+      const asked = p.request.type === 'activationExport' || p.request.type === 'programExport'
+      if (exported !== asked || (exported && exportOperation !== p.request.type)) throw Error('invalidOperation')
       const expectsOutcome = p.request.type === 'logManual' || p.request.type === 'stationControl' || p.request.type === 'logChange' || p.request.type === 'result'
       if (expectsOutcome !== 'outcome' in r.value) throw new Error('invalidOperation')
       if (
@@ -400,7 +409,7 @@ export class OperationClient {
     clearTimeout(p.timer)
     this.pending = null
     this.finishBudget(p.request.requestId)
-    if (p.request.type === 'activationExport') {
+    if (p.request.type === 'activationExport' || p.request.type === 'programExport') {
       // A read changed nothing at the station, so a refusal (busy, not the controller) costs neither
       // this browser's lease token nor its station state; the next heartbeat still decides those.
       this.update({ busy: false })
@@ -634,6 +643,26 @@ export class OperationClient {
         leaseId: this.heartbeatLeaseId, selection: selection && structuredClone(activationSelection(selection)), index },
       () => { attempt.sent = true })
       if (!('operation' in value) || value.operation !== 'activationExport') throw Error('invalidOperation')
+      return value
+    } catch (error) {
+      const code = error instanceof Error ? error.message : 'stationUnavailable'
+      throw new OperationFailure(code, attempt.sent, stationWasBusy(code, attempt.sent))
+    }
+  }
+  /** Read one chunk of the station's working channel list as a CHIRP or spreadsheet CSV, under
+   * station control and this browser's lease. A read, exactly like `activationExport`: no command
+   * sequence, nothing written, and only to a station that advertises the hint. */
+  async programExport(format: ProgramExportFormat, nameCap: number, index = 0): Promise<ProgramExportValue> {
+    const attempt = { sent: false }
+    try {
+      if (this.operationVersion < 4) throw Error('stationUnsupported')
+      const shown = this.view.state ?? this.view.retainedState
+      if (!this.view.connected || !this.heartbeatLeaseId || shown?.phase !== 'controlling' ||
+        !shown.controls?.capabilities.includes('programExport')) throw Error('notController')
+      const value = await this.request({ type: 'programExport', requestId: crypto.randomUUID(), stationBootId: shown.stationBootId,
+        leaseId: this.heartbeatLeaseId, format, nameCap, index },
+      () => { attempt.sent = true })
+      if (!('operation' in value) || value.operation !== 'programExport') throw Error('invalidOperation')
       return value
     } catch (error) {
       const code = error instanceof Error ? error.message : 'stationUnavailable'

@@ -2,6 +2,9 @@ import { useNavigation } from '../remote-web/useNavigation'
 import type { ProgrammingConfiguration } from '../remote-web/configuration'
 import { controlFailureMessage } from '../remote-web/control-failure'
 import { useStationCapability } from '../stationAccess'
+import { useLogChange, useRemoteOperations } from '../remote-web/operations'
+import { downloadProgramExport, programExportName } from '../remote-web/program-export'
+import { saveDownload } from '../remote-web/chunked-file'
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every operator-visible
 // string comes from the catalog. What does NOT, and this screen is dense with it: every repeater
 // callsign, output frequency, offset, CTCSS tone and DTCS code, the band chips, the mode badges
@@ -151,6 +154,11 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
   const remote=configuration.remote
   // A browser may Tune (never edit) while the station advertises the repeater transaction.
   const repeaterControl=useStationCapability('repeaterTuning')
+  // Exporting from a browser: the station renders the file with the desktop's own CHIRP/CSV
+  // writers and this page saves it. Locally it is always available; remotely only while the
+  // station advertises the verb, so an older Nexus leaves the buttons dead rather than refused.
+  const exportClient=useRemoteOperations(), exportOffered=useLogChange('programExport')
+  const exportControl=!remote||(!!exportClient&&exportOffered)
   if(remote)myGrid=configuration.value?.mygrid??''
   // ── query state ──
   const [originKind, setOriginKind] = useState<'station' | 'grid' | 'city'>('station')
@@ -449,18 +457,37 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
   const attribution = result?.source === 'repeaterbook' ? ATTRIB_REPEATERBOOK : ATTRIB_HEARHAM
 
   const exportList = (format: 'chirp' | 'csv') => {
-    if(remote)return
+    if(remote&&!exportClient)return
     const channels = displayRows.map((r) => ({ ...r.channel, name: r.displayName }))
     const analog = channels.filter((c) => c.mode === 'fm' || c.mode === 'nfm' || c.mode === 'am')
+    // Checked here for BOTH paths: the browser is holding the same rows the station would render,
+    // so an empty CHIRP export is refused without a round trip, in the same words.
     if (format === 'chirp' && analog.length === 0) {
       pushToast(t('program.export.noFm'), 'info')
       return
     }
+    const name = programExportName(format)
+    if (remote) {
+      // The file is built at the station — a second CHIRP writer in this browser would drift from
+      // the one the desktop uses — and lands in THIS machine's downloads.
+      void downloadProgramExport(exportClient!, format, nameCap)
+        .then((blob) => {
+          saveDownload(name, blob)
+          pushToast(format === 'chirp' ? t('program.export.browser.savedChirp', { name })
+            : t('program.export.browser.saved', { name }), 'success', 6000)
+        })
+        .catch((e) => {
+          const code = e instanceof Error ? e.message : ''
+          pushToast(code === 'notFound' ? t('program.export.browser.empty')
+            : code === 'tooLarge' ? t('program.export.browser.tooLarge')
+              : code === 'invalidProgramFile' ? t('program.export.browser.failed')
+                : controlFailureMessage(e), 'error', 6000)
+        })
+      return
+    }
     void exportChannels(channels, format, nameCap, attribution)
-      .then((text) => {
-        const stamp = new Date().toISOString().slice(0, 10)
-        const name = format === 'chirp' ? `nexus-chirp-${stamp}.csv` : `nexus-channels-${stamp}.csv`
-        return saveTextToDownloads(name, text).then((path) => {
+      .then((text) =>
+        saveTextToDownloads(name, text).then((path) => {
           pushToast(
             format === 'chirp'
               ? t('program.export.saved.chirp', { path })
@@ -468,8 +495,8 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
             'success',
             6000,
           )
-        })
-      })
+        }),
+      )
       .catch((e) => pushToast(String(e), 'error'))
   }
 
@@ -986,7 +1013,10 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
             <label className="rp-cap">
               {t('program.builder.nameCap.label')}
               {/* The option labels name RIG MODELS (`features/radioprog.ts`) — tokens. */}
-              <select disabled={remote}
+              {/* The rig's name cap is part of the EXPORT, not of the saved list: it only
+                  truncates the names CHIRP is handed, and it is browser-local state either way.
+                  So it follows the export's own control rather than staying dead in a browser. */}
+              <select disabled={!exportControl}
                 className="settings-input"
                 value={nameCap}
                 onChange={(e) => setNameCap(Number(e.target.value))}
@@ -1109,7 +1139,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
             <button
               type="button"
               className="settings-save rp-export-chirp"
-              disabled={remote || (rows.length === 0)}
+              disabled={!exportControl || rows.length === 0}
               onClick={onExportChirp}
               title={t('program.deliver.exportChirp.title')}
             >
@@ -1118,7 +1148,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
             <button
               type="button"
               className="settings-refresh"
-              disabled={remote || (rows.length === 0)}
+              disabled={!exportControl || rows.length === 0}
               onClick={() => exportList('csv')}
               title={t('program.deliver.exportCsv.title')}
             >

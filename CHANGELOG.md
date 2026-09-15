@@ -9,7 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-
+- **Export your channel list to CHIRP or a spreadsheet from a browser.** In Nexus Remote, the
+  Program section's *Export CHIRP* and *Export CSV* buttons now work: the station builds the file
+  with exactly the same writer the desktop uses, and it lands in the downloads folder of whatever
+  machine you are sitting at. The rig name-cap picker beside them works too, because it is part of
+  the export. One difference from the shack: the file carries no "data courtesy of" line, because
+  the saved channel list does not record which directory each machine came from, and naming one
+  would be a guess. Exporting still needs station control, and the buttons stay dark against a
+  Nexus at the shack that is too old to offer it.
 
 
 ### Changed

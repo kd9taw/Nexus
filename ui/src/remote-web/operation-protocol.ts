@@ -9,11 +9,14 @@ import { controlContext, controlOutcome, stationAction, CONTROL_CAPABILITIES, ty
 import { SETTINGS_SHAPES, WRITABLE_CONTROL_SETTINGS_KEYS, WRITABLE_LOGGING_SETTINGS_KEYS } from './configuration-schema'
 export const OPERATION_REQUEST_BYTES = 6144
 export const OPERATION_RESPONSE_BYTES = 4096
-/** A chunk of the one activation file this browser asked for is the only operation reply allowed
- * past OPERATION_RESPONSE_BYTES: 32 KiB of file as base64 plus its envelope. */
+/** A chunk of the one file this browser asked for is the only operation reply allowed past
+ * OPERATION_RESPONSE_BYTES: 32 KiB of file as base64 plus its envelope. */
 export const OPERATION_EXPORT_RESPONSE_BYTES = 48 * 1024
-export const ACTIVATION_EXPORT_MAX_BYTES = 1024 * 1024
-export const ACTIVATION_EXPORT_CHUNK_BYTES = 32 * 1024
+/** One ceiling and one chunk size for EVERY export that travels as base64 chunks — the activation
+ * ADIF and the programming CHIRP/CSV alike. A second pair of numbers is a second thing to keep in
+ * step with the station, and the station holds only one pair (`operations/export.rs`). */
+export const EXPORT_MAX_BYTES = 1024 * 1024
+export const EXPORT_CHUNK_BYTES = 32 * 1024
 export const ACTIVATION_EXPORT_LISTED = 128
 export type ManualRecord = {
   call: string
@@ -63,7 +66,7 @@ export type LogChange =
 /** Station hints for log changes. They ride in `controls.capabilities`, which every hosted page
  * since operation v3 filters, so a newer station can offer them without breaking an older page. */
 export const LOG_CAPABILITIES = ['logEdit', 'qslMarks', 'otaHunt', 'otaActivation', 'selfSpot', 'activationExport',
-  'settingsControl', 'settingsLogging', 'postSpot'] as const
+  'settingsControl', 'settingsLogging', 'postSpot', 'programExport'] as const
 export type LogCapability = (typeof LOG_CAPABILITIES)[number]
 const loggingPreference = (key: string) => (WRITABLE_LOGGING_SETTINGS_KEYS as readonly string[]).includes(key)
 export const logChangeCapability = (change: LogChange): LogCapability =>
@@ -135,13 +138,38 @@ export type OperationRequest =
       selection: ActivationSelection | null
       index: number
     }
+  /** A read under STATION CONTROL and this browser's lease: one chunk of the station's working
+   * channel list, rendered by the station's own CHIRP/CSV writers. It spends no command sequence
+   * and changes nothing. The channel rows are already on this page (the `programming` collection);
+   * what only the station has is the writer, and a second one in TypeScript would drift from it. */
+  | {
+      type: 'programExport'
+      requestId: string
+      stationBootId: string
+      leaseId: string
+      format: ProgramExportFormat
+      /** The per-radio name cap the operator chose; the station clamps it to 4–16 as the desktop
+       * command does. It changes the CHIRP text, so it travels with the request. */
+      nameCap: number
+      index: number
+    }
 /** One activation, named the way the desktop's per-activation export names it: your park or summit,
  * the UTC day and the callsign you signed. A range, a search or the whole log cannot be expressed. */
 export type ActivationSelection = { reference: string; dayStartUnix: number; callsign: string | null }
 export type ActivationEntry = ActivationSelection & { program: string | null; date: string; qsos: number }
+/** The description of one exported file: the whole file's size and digest, sent with EVERY chunk so
+ * a reader can tell that what it is stitching stopped being one file half way down. */
+export type ExportFile = { byteLength: number; sha256: string; chunks: number }
 export type ActivationExportValue = { operation: 'activationExport' } & (
   | { activations: ActivationEntry[] }
-  | { file: { byteLength: number; sha256: string; chunks: number }; index: number; base64: string }
+  | { file: ExportFile; index: number; base64: string }
+  | { refused: 'notFound' | 'tooLarge' })
+export const PROGRAM_EXPORT_FORMATS = ['chirp', 'csv'] as const
+export type ProgramExportFormat = (typeof PROGRAM_EXPORT_FORMATS)[number]
+/** `notFound` is the station having no working channel list at all — the same state the browser
+ * already sees as an empty builder, so its own button is disabled before it can ask. */
+export type ProgramExportValue = { operation: 'programExport' } & (
+  | { file: ExportFile; index: number; base64: string }
   | { refused: 'notFound' | 'tooLarge' })
 export type OperationState = {
   stationBootId: string
@@ -165,7 +193,7 @@ export type OperationOutcome =
       operationId: string
     }
 export type StopOutcome = { stop: 'accepted' }
-export type OperationValue = OperationState | OperationOutcome | ControlOutcome | StopOutcome | LogChangeOutcome | ActivationExportValue
+export type OperationValue = OperationState | OperationOutcome | ControlOutcome | StopOutcome | LogChangeOutcome | ActivationExportValue | ProgramExportValue
 export const transmitEpoch = (v: unknown): v is string => typeof v === 'string' && /^[0-9a-f]{16}$/.test(v)
 export type OperationResponse =
   | { type: 'operationResponse'; requestId: string; value: OperationValue }
@@ -326,6 +354,28 @@ export function activationSelection(raw: unknown): ActivationSelection {
     invalid()
   return raw as ActivationSelection
 }
+/** The chunk half of an export reply, identical for every export: the refusal words and the
+ * file/index/base64 shape. Keeping it in one place is what stops a second export growing a looser
+ * check than the first one. */
+function exportChunk(v: Record<string, unknown>): void {
+  if ('refused' in v) {
+    object(v, ['operation', 'refused'])
+    if (v.refused !== 'notFound' && v.refused !== 'tooLarge') invalid()
+    return
+  }
+  object(v, ['operation', 'file', 'index', 'base64'])
+  const f = object(v.file, ['byteLength', 'sha256', 'chunks'])
+  if (!integer(f.byteLength) || f.byteLength < 1 || f.byteLength > EXPORT_MAX_BYTES ||
+    typeof f.sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(f.sha256) ||
+    f.chunks !== Math.ceil(f.byteLength / EXPORT_CHUNK_BYTES) || !integer(v.index) || v.index >= Number(f.chunks) ||
+    typeof v.base64 !== 'string' || v.base64.length % 4 !== 0 ||
+    v.base64.length > Math.ceil(EXPORT_CHUNK_BYTES / 3) * 4 || !/^[A-Za-z0-9+/]*={0,2}$/.test(v.base64))
+    invalid()
+}
+function programExportValue(v: Record<string, unknown>): ProgramExportValue {
+  exportChunk(v)
+  return v as ProgramExportValue
+}
 function activationExportValue(v: Record<string, unknown>): ActivationExportValue {
   if ('activations' in v) {
     object(v, ['operation', 'activations'])
@@ -337,18 +387,8 @@ function activationExportValue(v: Record<string, unknown>): ActivationExportValu
         !integer(a.qsos))
         invalid()
     }
-  } else if ('refused' in v) {
-    object(v, ['operation', 'refused'])
-    if (v.refused !== 'notFound' && v.refused !== 'tooLarge') invalid()
   } else {
-    object(v, ['operation', 'file', 'index', 'base64'])
-    const f = object(v.file, ['byteLength', 'sha256', 'chunks'])
-    if (!integer(f.byteLength) || f.byteLength < 1 || f.byteLength > ACTIVATION_EXPORT_MAX_BYTES ||
-      typeof f.sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(f.sha256) ||
-      f.chunks !== Math.ceil(f.byteLength / ACTIVATION_EXPORT_CHUNK_BYTES) || !integer(v.index) || v.index >= Number(f.chunks) ||
-      typeof v.base64 !== 'string' || v.base64.length % 4 !== 0 ||
-      v.base64.length > Math.ceil(ACTIVATION_EXPORT_CHUNK_BYTES / 3) * 4 || !/^[A-Za-z0-9+/]*={0,2}$/.test(v.base64))
-      invalid()
+    exportChunk(v)
   }
   return v as ActivationExportValue
 }
@@ -379,6 +419,7 @@ export function operationRequest(raw: unknown): OperationRequest {
     stationControl: ['stationBootId', 'leaseId', 'expectedRevision', 'commandWindowId', 'clientSequence', 'context', 'action'],
     logChange: ['stationBootId', 'leaseId', 'expectedRevision', 'commandWindowId', 'clientSequence', 'change'],
     activationExport: ['stationBootId', 'leaseId', 'selection', 'index'],
+    programExport: ['stationBootId', 'leaseId', 'format', 'nameCap', 'index'],
     logManual: [
       'stationBootId',
       'leaseId',
@@ -397,8 +438,16 @@ export function operationRequest(raw: unknown): OperationRequest {
   // One activation by park, UTC day and callsign, or none for the list, which has a single chunk.
   if (r.type === 'activationExport') {
     if (r.selection !== null) activationSelection(r.selection)
-    if (!integer(r.index) || r.index >= ACTIVATION_EXPORT_MAX_BYTES / ACTIVATION_EXPORT_CHUNK_BYTES ||
+    if (!integer(r.index) || r.index >= EXPORT_MAX_BYTES / EXPORT_CHUNK_BYTES ||
       (r.selection === null && r.index !== 0))
+      invalid()
+  }
+  // One of the two formats the desktop's deliver row offers, and a cap in the range the rigs
+  // actually have. The station clamps the cap too — this refuses it, it does not quietly fix it.
+  if (r.type === 'programExport') {
+    if (!PROGRAM_EXPORT_FORMATS.includes(r.format as never) || !integer(r.nameCap) ||
+      Number(r.nameCap) < 4 || Number(r.nameCap) > 16 ||
+      !integer(r.index) || r.index >= EXPORT_MAX_BYTES / EXPORT_CHUNK_BYTES)
       invalid()
   }
   if (r.type === 'logManual' || r.type === 'stationControl' || r.type === 'logChange') {
@@ -425,7 +474,9 @@ export function operationValue(raw: unknown): OperationValue {
     return raw as StopOutcome
   }
   if ('operation' in v)
-    return v.operation === 'logChange' ? logChangeOutcome(v) : v.operation === 'activationExport' ? activationExportValue(v) : controlOutcome(v)
+    return v.operation === 'logChange' ? logChangeOutcome(v)
+      : v.operation === 'activationExport' ? activationExportValue(v)
+        : v.operation === 'programExport' ? programExportValue(v) : controlOutcome(v)
   if ('outcome' in v) {
     object(
       v,
