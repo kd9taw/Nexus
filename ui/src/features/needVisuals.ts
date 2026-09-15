@@ -39,6 +39,9 @@ export type NeedCat =
   | 'state'
   | 'dxped'
   | 'confirm'
+  /** A park/summit not yet worked in the activation running now — a real need, unlike the
+   * `pota`/`sota` activity badges. Shares their palette because it is the same programme. */
+  | 'park'
   | 'pota'
   | 'sota'
   | 'wanted'
@@ -87,6 +90,10 @@ export const NEED_VISUALS: Record<NeedCat, NeedVisual> = {
   state: badge({ cls: 'need-state', Icon: MapPin, labelKey: 'need.badge.state.label', titleKey: 'need.badge.state.title' }),
   dxped: badge({ cls: 'need-dxped', Icon: Tent, labelKey: 'need.badge.dxped.label', titleKey: 'need.badge.dxped.title', iconOnly: true }),
   confirm: badge({ cls: 'need-confirm', Icon: MailQuestion, labelKey: 'need.badge.confirm.label', titleKey: 'need.badge.confirm.title' }),
+  // Reuses the POTA palette (`--need-pota`) on purpose: a park need IS a POTA/SOTA thing, and
+  // a fifteenth colour buys nothing. NOT `iconOnly` — this one is a reason to work someone,
+  // so it may colour a row, which is the whole difference from the two badges below.
+  park: badge({ cls: 'need-pota', Icon: TreePine, labelKey: 'need.badge.park.label', titleKey: 'need.badge.park.title' }),
   // The two programme names are tokens, so these entries carry the label directly.
   pota: {
     cls: 'need-pota',
@@ -125,6 +132,7 @@ export const NEED_PRECEDENCE: NeedCat[] = [
   'band',
   'mode',
   'dxped',
+  'park',
   'confirm',
   'pota',
   'sota',
@@ -199,6 +207,12 @@ export const NEED_CHIP: Record<import('../types').NeedTag, NeedChip> = {
     labelKey: 'need.chip.newState.label',
     shortKey: 'need.chip.newState.short',
     titleKey: 'need.chip.newState.title',
+  }),
+  NewPark: chip({
+    cls: 'pota',
+    labelKey: 'need.chip.newPark.label',
+    shortKey: 'need.chip.newPark.short',
+    titleKey: 'need.chip.newPark.title',
   }),
   // The subject is the AWARD SLOT (entity/zone/grid/state on this band), never the
   // callsign in the row — CONFIRM-without-B4 is the normal case, not a bug (an operator

@@ -252,6 +252,12 @@ export function OperateRoster({
         ),
     )
     if (neededOnly) f = f.filter((x) => x.need != null)
+    // Hide worked keeps a worked station only while it still fills a need — and a park or
+    // summit you have not worked in the activation running now IS one (`NewPark`), so an
+    // activator survives here for the same reason it appears on the Needed board rather than
+    // by a rule of this pane's own. `worked` is "this callsign is anywhere in the logbook" —
+    // ever, not per band and emphatically not per park (dto.rs) — which is why it could never
+    // have answered this on its own.
     if (hideWorked) f = f.filter((x) => !x.s.worked || x.need != null)
     // Hide blocked (opt-in; default they render dimmed). The station being WORKED or
     // selected always stays — hiding your live QSO partner mid-exchange is the same

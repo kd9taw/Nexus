@@ -2128,6 +2128,9 @@ export type NeedTag =
   | 'NewMode'
   | 'NewGrid'
   | 'NewState'
+  /** A POTA/SOTA reference not yet worked in the activation running right now — a genuine
+   * need, unlike the Pota/Sota labels below. See HuntedActivations (needalert.rs). */
+  | 'NewPark'
   | 'Confirm'
   | 'Dxped'
   | 'Pota'

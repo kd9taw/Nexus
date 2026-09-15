@@ -35,6 +35,11 @@ pub enum NeedTag {
     /// A US state never worked (Worked All States) — independent of the entity (like a
     /// grid). Only set when the heard station's US state is known (a callsign lookup).
     NewState,
+    /// A POTA/SOTA reference the operator has not worked in the activation running right
+    /// now — a park or summit still worth a contact. Unlike [`NeedTag::Pota`]/[`NeedTag::Sota`],
+    /// which only LABEL what a station is doing, this is a genuine need: there is something
+    /// to gain by working it. See [`HuntedActivations`] for what "right now" means.
+    NewPark,
     /// Worked but unconfirmed — a confirmation opportunity (lowest).
     Confirm,
     /// The call is a live POTA activator right now (appended, like Dxped).
@@ -59,6 +64,7 @@ impl NeedTag {
             NeedTag::NewMode => "New mode",
             NeedTag::NewGrid => "New grid",
             NeedTag::NewState => "New state",
+            NeedTag::NewPark => "New park",
             NeedTag::Confirm => "Confirm",
             NeedTag::Dxped => "DXpedition",
             NeedTag::Pota => "POTA",
@@ -66,8 +72,10 @@ impl NeedTag {
             NeedTag::Wanted => "Wanted",
         }
     }
-    /// Ranking weight (higher = more valuable to work right now).
-    fn tier(self) -> u32 {
+    /// Ranking weight (higher = more valuable to work right now). Public because the command
+    /// layer applies the same floors when it appends a tag post-scoring, and because the UI
+    /// mirrors these numbers verbatim (`ui/src/features/needs.ts`).
+    pub fn tier(self) -> u32 {
         match self {
             // The operator asked for this call by name — it outranks even an ATNO.
             NeedTag::Wanted => 120,
@@ -81,6 +89,11 @@ impl NeedTag {
             NeedTag::NewGrid => 55,
             NeedTag::NewBand => 50,
             NeedTag::NewMode => 30,
+            // A park/summit still to be worked in the activation running now. Deliberately
+            // the SAME number as the live-activation floor below (they are one idea, so they
+            // are one number): above Confirm, below every DX award, so a park never outranks
+            // a new one but always outranks a mere confirmation.
+            NeedTag::NewPark => OTA_ACTIVATION_PRIORITY,
             NeedTag::Confirm => 10,
             // Never a primary tier — appended by the command layer onto an existing
             // award need; its priority effect is the explicit bump applied there.
@@ -429,6 +442,9 @@ pub fn score_slots(
             info.entity
         ),
         NeedTag::Confirm => format!("Confirm — {}", info.entity),
+        // NewPark is appended by [`activation_alert`], which owns the headline naming the
+        // park or summit; this arm exists only for match exhaustiveness.
+        NeedTag::NewPark => format!("New park or summit — {}", info.entity),
         // Dxped/Pota/Sota are appended post-scoring (command layer) — never the
         // headline tag; arms exist only for match exhaustiveness.
         NeedTag::Dxped => format!("Active DXpedition — {}", info.entity),
@@ -529,6 +545,83 @@ pub fn rank(spots: &[Heard], needs: &dyn OperatorNeeds, slots: &AwardSlots) -> V
 /// sorts on top. An activation that ALSO satisfies an award keeps the higher award tier.
 const OTA_ACTIVATION_PRIORITY: u32 = 20;
 
+/// Seconds in a UTC day — the unit POTA credits an activation in.
+const UTC_DAY: u64 = 86_400;
+
+/// The hunter side of the log, indexed by ACTIVATION: which POTA/SOTA reference the operator
+/// has already worked, from which activator, on which UTC day.
+///
+/// # What "this activation" means, and why
+///
+/// An activator goes back to the same park again and again, and each visit is a fresh contact
+/// for the hunter — so "have I worked this park?" is the wrong question to hang attention on.
+/// The right one is "have I worked it in the activation that is running now?".
+///
+/// The unit is **(reference, activator, UTC day)**, and none of the three is arbitrary:
+///
+/// * **The UTC day** is POTA's own unit of credit, and it is already the tree's rule. The
+///   activation export groups on `day_start(when_unix)` and slices each file to the half-open
+///   window `[day, day + 86_400)` precisely so an activation running through midnight becomes
+///   two activations rather than one (`tempo_core::logbook`, which cites
+///   docs.pota.app/docs/activator_reference/submitting_logs.html). Answering the hunter side
+///   with a different clock than the activator side would be two rules for one calendar.
+/// * **The activator** because two operators at one park on one day are two visits, each its
+///   own contact. The export keys the activator side on the callsign for the same reason (a
+///   club call and an individual's are two files), and this is its mirror.
+/// * **The reference** rather than the band or the mode: a park is hunted once per activation
+///   on whatever band you catch it (the same reason `worked_parks` is a flat set).
+///
+/// The day is taken from **now**, not from the spot's own timestamp: the contact this predicate
+/// is about would be made now, so now's UTC day is the one it would earn credit in. A spot from
+/// 23:58 read at 00:05 belongs to the new day, exactly as the export would file it.
+///
+/// ## What it cannot see
+///
+/// Only the LOG feeds this. The operator's imported POTA "Hunted Parks.CSV"
+/// (`StationCore::hunted_parks_import`) carries no dates, so it cannot say which activation a
+/// hunt belonged to and is deliberately not folded in — it still answers the all-time
+/// `park_worked` question behind the hunter panel's NEW PARK badge, which is a different one.
+///
+/// Callsigns must be handed in already reduced to their base form (`W1AW/P` → `W1AW`); this
+/// crate has no callsign parser of its own in the default build. Case and surrounding space
+/// are normalized here.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HuntedActivations {
+    seen: HashSet<(String, String, u64)>,
+}
+
+impl HuntedActivations {
+    /// Index the hunter side of the log. Each row is `(reference, activator base call,
+    /// QSO time as unix seconds)`; rows with an empty reference or call are dropped.
+    pub fn from_log(rows: impl IntoIterator<Item = (String, String, u64)>) -> Self {
+        let seen = rows
+            .into_iter()
+            .filter_map(|(reference, call, when_unix)| {
+                let r = reference.trim().to_ascii_uppercase();
+                let c = call.trim().to_ascii_uppercase();
+                (!r.is_empty() && !c.is_empty()).then_some((r, c, when_unix - when_unix % UTC_DAY))
+            })
+            .collect();
+        Self { seen }
+    }
+
+    /// Is this reference still worth working from this activator at `now`? True unless the log
+    /// already holds a contact with that reference, from that activator, on now's UTC day.
+    ///
+    /// A negative `now` (a clock before 1970 — a machine with no RTC) reads as "nothing hunted
+    /// yet", which surfaces the park rather than silently swallowing it.
+    pub fn needed(&self, reference: &str, activator: &str, now: i64) -> bool {
+        let Ok(now) = u64::try_from(now) else {
+            return true;
+        };
+        !self.seen.contains(&(
+            reference.trim().to_ascii_uppercase(),
+            activator.trim().to_ascii_uppercase(),
+            now - now % UTC_DAY,
+        ))
+    }
+}
+
 /// The operating-mode class of a POTA/SOTA activator spot. Unlike a free-text DX-cluster
 /// comment, the OTA feeds carry a STRUCTURED `mode` field, so `USB`/`LSB`/`FM`/`AM`/`DV`
 /// unambiguously mean voice here (whereas [`crate::model::classify_spot_mode`] must ignore
@@ -555,10 +648,19 @@ fn ota_mode_class(mode: &str, freq_mhz: f64) -> ModeClass {
 /// activator also satisfies, so a new-entity park outranks a domestic one. The caller
 /// dedups these against cluster-sourced alerts by `(call, band, mode)`. `None` only when
 /// the spot frequency is off the band plan.
+///
+/// `reference_needed` is [`HuntedActivations::needed`] for this spot — "the log holds no
+/// contact with this reference, from this activator, on today's UTC day". When it is true the
+/// row earns a real [`NeedTag::NewPark`] and the activation priority floor; when it is false
+/// the row keeps only its program LABEL and whatever award it independently satisfies, so a
+/// park already worked in the activation running now stops competing for attention while the
+/// same park tomorrow is a fresh opportunity. The row is never dropped outright: the activity
+/// badge and the board's own POTA/SOTA filter still have something to show.
 pub fn activation_alert(
     spot: &crate::pota::OtaSpot,
     needs: &dyn OperatorNeeds,
     slots: &AwardSlots,
+    reference_needed: bool,
 ) -> Option<NeedAlert> {
     let freq_mhz = spot.freq_khz / 1000.0;
     let band = Band::from_mhz(freq_mhz)?;
@@ -603,6 +705,11 @@ pub fn activation_alert(
             .as_deref()
             .and_then(crate::gridrarity::grid_rarity),
     });
+    // The NEED first, then the LABEL. Order matters: `tags[0]` picks the row's colour and its
+    // chip everywhere downstream, and a park still to be worked is a reason, not a decoration.
+    if reference_needed && !alert.tags.contains(&NeedTag::NewPark) {
+        alert.tags.push(NeedTag::NewPark);
+    }
     if !alert.tags.contains(&program_tag) {
         alert.tags.push(program_tag);
     }
@@ -618,7 +725,12 @@ pub fn activation_alert(
     } else {
         format!("{} {}{}", prog, spot.reference, name)
     };
-    alert.priority = alert.priority.max(OTA_ACTIVATION_PRIORITY);
+    // The floor is the NEED's, so it applies only while there is one. A park already worked in
+    // this activation keeps whatever its award earned — nothing, for a domestic repeat — and
+    // sinks below every real need instead of holding a permanent seat 20 rungs up the board.
+    if reference_needed {
+        alert.priority = alert.priority.max(OTA_ACTIVATION_PRIORITY);
+    }
     alert.freq_mhz = Some(freq_mhz);
     alert.admitted_at = spot.spot_time_unix;
     alert.evidence = Some(format!(
@@ -2516,6 +2628,7 @@ mod tests {
             &ota("POTA", "K-1234", "K1ABC", 14_250.0, "SSB"),
             &needs,
             &slots(needs.worked_zones(), needs.worked_grids(), &HashSet::new()),
+            true,
         )
         .unwrap();
         assert!(
@@ -2550,12 +2663,13 @@ mod tests {
             &ota("POTA", "K-1234", "W1ABC", 14_250.0, "SSB"),
             &n,
             &slots(n.worked_zones(), n.worked_grids(), &HashSet::new()),
+            true,
         )
         .unwrap();
         assert_eq!(
             a.tags,
-            vec![NeedTag::Pota],
-            "no DX award left → just the program chip"
+            vec![NeedTag::NewPark, NeedTag::Pota],
+            "no DX award left → the park itself is the need, plus the program chip"
         );
         assert_eq!(
             a.priority, 20,
@@ -2575,6 +2689,7 @@ mod tests {
             &ota("SOTA", "VK3/VN-012", "VK3KR", 7_033.0, "CW"),
             &needs,
             &slots(needs.worked_zones(), needs.worked_grids(), &HashSet::new()),
+            true,
         )
         .unwrap();
         assert!(s.tags.contains(&NeedTag::Sota), "SOTA chip: {:?}", s.tags);
@@ -2584,8 +2699,171 @@ mod tests {
             &ota("POTA", "K-1", "K1ABC", 2_500.0, "SSB"),
             &needs,
             &slots(needs.worked_zones(), needs.worked_grids(), &HashSet::new()),
+            true,
         )
         .is_none());
+    }
+
+    // ── Park-level worked state: which activation is still worth working ────────────────
+    //
+    // The operator's report, 2026-09-15: the roster's Hide worked threw away a call he had
+    // worked before while it was activating a DIFFERENT park. `worked` means "this callsign
+    // is in the logbook" — ever, not per band, not per park — and until now nothing anywhere
+    // asked the park-level question at all, so the board could only answer it by shouting
+    // about every activation unconditionally.
+
+    /// Noon UTC on three consecutive days, so a day boundary is never a rounding artefact.
+    const DAY1: u64 = 1_780_012_800; // 2026-06-09 12:00 UTC
+    const DAY2: u64 = DAY1 + 86_400;
+    const DAY3: u64 = DAY2 + 86_400;
+
+    fn hunted(rows: &[(&str, &str, u64)]) -> HuntedActivations {
+        HuntedActivations::from_log(
+            rows.iter()
+                .map(|(r, c, t)| (r.to_string(), c.to_string(), *t)),
+        )
+    }
+
+    #[test]
+    fn a_park_worked_yesterday_is_a_fresh_opportunity_today() {
+        let h = hunted(&[("US-0001", "K1ABC", DAY1)]);
+        // The CONTROL: on the day it was worked, that park is not needed from that activator.
+        assert!(
+            !h.needed("US-0001", "K1ABC", DAY1 as i64),
+            "same reference, same activator, same UTC day — already hunted in this activation"
+        );
+        // The claim: a later day is a new activation, so it is an opportunity again.
+        assert!(h.needed("US-0001", "K1ABC", DAY2 as i64));
+        assert!(h.needed("US-0001", "K1ABC", DAY3 as i64));
+    }
+
+    #[test]
+    fn the_same_call_at_a_different_park_today_is_needed() {
+        // Worked yesterday at park A; today they are at park B. The defect in one assertion.
+        let h = hunted(&[("US-0001", "K1ABC", DAY1)]);
+        assert!(h.needed("US-0002", "K1ABC", DAY2 as i64));
+        // …and still needed even on the SAME day, because the park is what is hunted.
+        assert!(h.needed("US-0002", "K1ABC", DAY1 as i64));
+    }
+
+    #[test]
+    fn two_activators_at_one_park_on_one_day_are_two_activations() {
+        // The mirror of `Logbook::activations`, which keys the activator side on the callsign
+        // too: one park, one day, two operators = two visits and two contacts to be had.
+        let h = hunted(&[("US-0001", "K1ABC", DAY1)]);
+        assert!(!h.needed("US-0001", "K1ABC", DAY1 as i64));
+        assert!(h.needed("US-0001", "W2XYZ", DAY1 as i64));
+    }
+
+    #[test]
+    fn the_activation_boundary_is_utc_midnight_not_a_rolling_day() {
+        // POTA credits a park on a Zulu day, and the activation EXPORT already slices on
+        // `[day, day + 86_400)` so an activation through midnight becomes two. The hunter
+        // side must use the same calendar or the two halves of the app disagree.
+        let midnight = DAY2 - DAY2 % 86_400;
+        let h = hunted(&[("US-0001", "K1ABC", midnight - 120)]); // 23:58 the day before
+        assert!(
+            !h.needed("US-0001", "K1ABC", (midnight - 1) as i64),
+            "23:59:59 is still that activation"
+        );
+        assert!(
+            h.needed("US-0001", "K1ABC", midnight as i64),
+            "00:00:00 starts a new one — the export would file it as a second activation"
+        );
+    }
+
+    #[test]
+    fn references_and_calls_normalize_and_junk_rows_are_dropped() {
+        let h = hunted(&[
+            ("  us-0001 ", " k1abc ", DAY1),
+            ("", "K9ZZZ", DAY1),   // no reference
+            ("US-0009", "", DAY1), // no activator
+        ]);
+        assert!(!h.needed("US-0001", "K1ABC", DAY1 as i64));
+        assert!(!h.needed(" us-0001", "k1abc ", DAY1 as i64));
+        // The junk rows indexed nothing, so they suppress nothing.
+        assert!(h.needed("US-0009", "K9ZZZ", DAY1 as i64));
+        // An empty index needs everything — a newcomer's board is not silent.
+        assert!(HuntedActivations::default().needed("US-0001", "K1ABC", DAY1 as i64));
+    }
+
+    #[test]
+    fn a_needed_park_is_a_real_need_and_a_worked_one_is_only_a_label() {
+        let mut n = LogNeeds::new();
+        n.add("W1AW", "20m", "SSB", None, None, true); // no DX award left on this slot
+        let no_states = HashSet::new();
+        let slots = slots(n.worked_zones(), n.worked_grids(), &no_states);
+        let spot = ota("POTA", "K-1234", "W1ABC", 14_250.0, "SSB");
+
+        let need = activation_alert(&spot, &n, &slots, true).unwrap();
+        assert_eq!(
+            need.tags,
+            vec![NeedTag::NewPark, NeedTag::Pota],
+            "the need leads, the programme label follows"
+        );
+        assert_eq!(need.priority, 20, "the activation floor still applies");
+
+        let worked = activation_alert(&spot, &n, &slots, false).unwrap();
+        assert_eq!(
+            worked.tags,
+            vec![NeedTag::Pota],
+            "already worked in this activation → a label and nothing to gain"
+        );
+        assert_eq!(
+            worked.priority, 0,
+            "no need, no floor — it stops competing with real needs"
+        );
+        // Still a row, so the POTA filter and the activity badge keep something to show.
+        assert!(worked.headline.contains("POTA K-1234"));
+    }
+
+    #[test]
+    fn a_worked_park_keeps_the_dx_award_it_independently_satisfies() {
+        // The park being worked today says nothing about the DXCC slot. A new one is a new
+        // one, and losing its tier because a park repeat rode the same row would be the old
+        // "two views, opposite answers" bug wearing the other hat.
+        let n = LogNeeds::new(); // empty log → ATNO
+        let no_states = HashSet::new();
+        let slots = slots(n.worked_zones(), n.worked_grids(), &no_states);
+        let a = activation_alert(
+            &ota("POTA", "K-1234", "K1ABC", 14_250.0, "SSB"),
+            &n,
+            &slots,
+            false,
+        )
+        .unwrap();
+        assert!(a.tags.contains(&NeedTag::NewEntity));
+        assert!(!a.tags.contains(&NeedTag::NewPark));
+        assert_eq!(a.priority, 100);
+    }
+
+    #[test]
+    fn a_summit_gets_the_same_treatment_as_a_park() {
+        // SOTA shares `Ota::their_ref` with POTA (only the programme tag differs), so the
+        // index and the need come out of the same code with no SOTA-specific branch.
+        let h = hunted(&[("W7A/MN-001", "VK3KR", DAY1)]);
+        assert!(!h.needed("W7A/MN-001", "VK3KR", DAY1 as i64));
+        assert!(h.needed("W7A/MN-001", "VK3KR", DAY2 as i64));
+
+        let n = LogNeeds::new();
+        let no_states = HashSet::new();
+        let slots = slots(n.worked_zones(), n.worked_grids(), &no_states);
+        let a = activation_alert(
+            &ota("SOTA", "VK3/VN-012", "VK3KR", 7_033.0, "CW"),
+            &n,
+            &slots,
+            true,
+        )
+        .unwrap();
+        assert!(a.tags.contains(&NeedTag::NewPark), "{:?}", a.tags);
+        assert!(a.tags.contains(&NeedTag::Sota), "{:?}", a.tags);
+    }
+
+    #[test]
+    fn a_park_need_never_outranks_a_dx_award_and_always_outranks_a_confirmation() {
+        assert_eq!(NeedTag::NewPark.tier(), OTA_ACTIVATION_PRIORITY);
+        assert!(NeedTag::NewPark.tier() > NeedTag::Confirm.tier());
+        assert!(NeedTag::NewPark.tier() < NeedTag::NewMode.tier());
     }
 
     fn wcfg(calls: &[String], cq_only: bool, min_snr: Option<i32>) -> WantedConfig<'_> {
