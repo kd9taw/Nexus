@@ -1685,30 +1685,6 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         const radio=applicationData.get_snapshot.radio,prior={operatingMode:radio.operatingMode,dialMhz:radio.dialMhz,band:radio.band}
         await click(button('FT'));await settledLayout();await sleep(1500)
         const ftIdle=await steady('ft-idle','.operate-cockpit','.operate-cockpit .freq-channel')
-        // THE OTHER CLOCK (operator decision 2026-09-14, the remainder of the steady view). Station
-        // control is not the only freshness a control used to hang off: the amplifier buttons, the
-        // decode-depth chips, the RX offset box and the RX gain slider required the station's OWN PTT
-        // reading to be under a second old, and an observation publication landing late crosses that
-        // most seconds on a real WAN. This pass publishes that reading already past its window (the
-        // shack's poll ran late; the stream itself is healthy, so the frame is not what aged) while the
-        // lease and the 5 s measurement bound both hold, and nothing in the cockpit may remount,
-        // toggle `disabled`, drop an option or fade.
-        const readingControls=`[...document.querySelectorAll('.operate-cockpit .amp-strip button, .operate-cockpit .cockpit-depth-chip')].map(e=>e.disabled)`
-        const beforeSlowReadings=await evaluate(readingControls)
-        observationReadingAgeMs=1200
-        await sleep(2500)
-        await steady('ft-idle-old-reading','.operate-cockpit','.operate-cockpit .freq-channel')
-        // Positive control for this pass: the reading the amplifier strip reads really is past its
-        // 1 s window, and the strip and the depth chips stayed live through it.
-        const readingProbe=`(()=>{let f=document.querySelector('.operate-cockpit .amp-strip');f=f?.[Object.keys(f).find(k=>k.startsWith('__reactFiber$'))]
-          for(;f;f=f.return)for(let d=f.dependencies?.firstContext;d;d=d.next){const v=d.memoizedValue;if(v?.frame&&v?.status)return {found:true,ageMs:v.frame.station.radio.readings.ptt?.ageMs??null}}
-          return {found:false,ageMs:null}})()`
-        let oldestReading=0,readingProbeFound=true
-        for(let i=0;i<40;i++){const r=await evaluate(readingProbe);if(!r.found)readingProbeFound=false;else if(typeof r.ageMs==='number')oldestReading=Math.max(oldestReading,r.ageMs);await sleep(100)}
-        const slowReadingControls=await evaluate(readingControls)
-        console.log('STEADY_PROBE ft-old-reading',JSON.stringify({oldestReading,readingProbeFound,beforeSlowReadings,slowReadingControls}))
-        observationReadingAgeMs=0
-        await sleep(1500)
         Object.assign(radio,{operatingMode:'phone',dialMhz:7.255,band:'40m'});applicationRevision++
         const phoneSelect='.phone-cockpit .band-picker-select'
         await click(button('Phone'));await settledLayout()
@@ -1736,6 +1712,32 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         const control=await evaluate(steadyRead);console.log('STEADY_PROBE positive-control',JSON.stringify(control))
         heartbeatReplyDelayMs=0;heartbeatReplyJitterMs=0
         Object.assign(radio,prior);applicationRevision++
+        // Back to FT, on a settled link, for the pass below.
+        await click(button('FT'));await settledLayout();await sleep(1500)
+        // THE OTHER CLOCK (operator decision 2026-09-14, the remainder of the steady view). Station
+        // control is not the only freshness a control used to hang off: the amplifier buttons, the
+        // decode-depth chips, the RX offset box and the RX gain slider required the station's OWN PTT
+        // reading to be under a second old, and an observation publication landing late crosses that
+        // most seconds on a real WAN. This pass publishes that reading already past its window (the
+        // shack's poll ran late; the stream itself is healthy, so the frame is not what aged) while the
+        // lease and the 5 s measurement bound both hold, and nothing in the cockpit may remount,
+        // toggle `disabled`, drop an option or fade.
+        const readingControls=`[...document.querySelectorAll('.operate-cockpit .amp-strip button, .operate-cockpit .cockpit-depth-chip')].map(e=>e.disabled)`
+        const beforeSlowReadings=await evaluate(readingControls)
+        observationReadingAgeMs=1200
+        await sleep(2500)
+        await steady('ft-idle-old-reading','.operate-cockpit','.operate-cockpit .freq-channel')
+        // Positive control for this pass: the reading the amplifier strip reads really is past its
+        // 1 s window, and the strip and the depth chips stayed live through it.
+        const readingProbe=`(()=>{let f=document.querySelector('.operate-cockpit .amp-strip');f=f?.[Object.keys(f).find(k=>k.startsWith('__reactFiber$'))]
+          for(;f;f=f.return)for(let d=f.dependencies?.firstContext;d;d=d.next){const v=d.memoizedValue;if(v?.frame&&v?.status)return {found:true,ageMs:v.frame.station.radio.readings.ptt?.ageMs??null}}
+          return {found:false,ageMs:null}})()`
+        let oldestReading=0,readingProbeFound=true
+        for(let i=0;i<40;i++){const r=await evaluate(readingProbe);if(!r.found)readingProbeFound=false;else if(typeof r.ageMs==='number')oldestReading=Math.max(oldestReading,r.ageMs);await sleep(100)}
+        const slowReadingControls=await evaluate(readingControls)
+        console.log('STEADY_PROBE ft-old-reading',JSON.stringify({oldestReading,readingProbeFound,beforeSlowReadings,slowReadingControls}))
+        observationReadingAgeMs=0
+        await sleep(1500)
         assert.ok(control.selectDisabled>=1&&control.remounts.select>=2,'positive control: the probe counts a forced disable and a forced remount')
         if(control.openSupported)assert.ok(control.openLost>=1,'positive control: a forced disable closes the held dropdown and the probe sees it')
         assert.ok(ftIdle.lapses+phoneIdle.lapses+held.lapses>0,'positive control: control really lapsed during the probes')
