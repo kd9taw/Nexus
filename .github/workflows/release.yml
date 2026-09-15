@@ -206,6 +206,12 @@ jobs:
         run: bash scripts/build-linux.sh
 
       - name: Verify artifacts
+        env:
+          # Only consulted to decide whether the AppImage's updater signature is REQUIRED
+          # below — the macOS job's shape (see "Verify the artifacts" there). A build that
+          # HAD the signing key must ship the .sig; a fork without secrets legitimately
+          # cannot.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: |
           set -euo pipefail
           deb=$(find src-tauri/target/release/bundle/deb -name '*.deb' -print -quit)
@@ -331,8 +337,32 @@ jobs:
           # is not a Debian package, so renaming it would churn the updater manifest for nothing.
           ver=$(dpkg-deb -f "$deb" Version)
           cp "$deb" "out/Nexus_${ver}_pc_amd64.deb"
-          # The AppImage's updater signature, when the signing secrets were present.
-          [ -f "$app.sig" ] && cp "$app.sig" out/ || echo "note: unsigned build (no signing secrets)"
+          # The AppImage's updater signature. THE KEY DECIDES WHETHER IT IS REQUIRED, not the
+          # note that used to stand here.
+          #
+          # This line read `[ -f "$app.sig" ] && cp ... || echo "note: unsigned build"`, which
+          # made a missing signature indistinguishable from a fork build with no secrets —
+          # the release published anyway, one `note:` deep in a 400-line log. The consequence
+          # is not cosmetic and it is silent by design at the client: latest.json's `add()`
+          # omits any platform with no .sig, so a signing regression on this platform ships a
+          # manifest with no linux-x86_64 entry, every AppImage's hourly update check then
+          # finds nothing forever, and useSelfUpdate swallows that — nobody ever reports it.
+          # That is the mac QA audit's 2026-08-17 finding, and it applied here identically.
+          #
+          # macOS has had the right shape since it shipped; this is that shape, and Windows
+          # has it too. Gated on the KEY and not on the event, so a workflow_dispatch dry-run
+          # catches a bundler regression before a tag does.
+          if [ -f "$app.sig" ]; then
+            cp "$app.sig" out/
+            echo "AppImage updater signature present and staged"
+          elif [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+            echo "signing key present but the bundler produced no $app.sig"
+            echo "Publishing this would ship a latest.json with no linux-x86_64 entry and"
+            echo "silently strand every AppImage on its current version."
+            exit 1
+          else
+            echo "note: unsigned build (no signing secrets)"
+          fi
           ( cd out && sha256sum ./* )
 
       - uses: actions/upload-artifact@v4
@@ -402,6 +432,11 @@ jobs:
         run: bash scripts/build-windows-cross.sh
 
       - name: Verify installer
+        env:
+          # Only consulted to decide whether the updater signature is REQUIRED below — the
+          # macOS job's shape. A build that HAD the key must ship the .sig; a fork without
+          # secrets legitimately cannot.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: |
           set -euo pipefail
           exe=$(find src-tauri/target/x86_64-pc-windows-gnu/release/bundle/nsis -name '*-setup.exe' -print -quit)
@@ -422,8 +457,22 @@ jobs:
             || { echo "NSIS listing has no WebView2 payload — webviewInstallMode broke"; 7z l "$exe" | tail -40; exit 1; }
           [ "$sz" -gt 190000000 ] || { echo "installer only $sz bytes — too small to contain the ~150 MB offline WebView2 runtime"; exit 1; }
           mkdir -p out && cp "$exe" out/
-          # The updater signature, when the signing secrets were present.
-          [ -f "$exe.sig" ] && cp "$exe.sig" out/ || echo "note: unsigned build (no signing secrets)"
+          # The updater signature. THE KEY DECIDES WHETHER IT IS REQUIRED — same change, same
+          # reason as the AppImage above and the same shape macOS has always had. Windows is
+          # the platform where this costs the most: it is the majority of the install base,
+          # and a latest.json missing its windows-x86_64 entry strands every one of those
+          # installs on its current version with no symptom anyone would think to report.
+          if [ -f "$exe.sig" ]; then
+            cp "$exe.sig" out/
+            echo "NSIS updater signature present and staged"
+          elif [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+            echo "signing key present but the bundler produced no $exe.sig"
+            echo "Publishing this would ship a latest.json with no windows-x86_64 entry and"
+            echo "silently strand every Windows install on its current version."
+            exit 1
+          else
+            echo "note: unsigned build (no signing secrets)"
+          fi
 
           # ---- Crash symbols -------------------------------------------------------------
           # A field crash report names a bare offset ("Nexus.exe+0x01ebcc35") and nothing can
