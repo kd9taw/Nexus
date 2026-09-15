@@ -36,6 +36,7 @@ import { hasOverridingNeed, isHiddenByCountry, useCountryExclude } from '../feat
 import { CountryHiddenChip } from './CountryExclude'
 import { RarityChip } from './RarityChip'
 import { useStationControl, useStationCapability } from '../stationAccess'
+import { useLogChange } from '../remote-web/operations'
 
 interface Props {
   stations: Station[]
@@ -149,6 +150,9 @@ export function OperateRoster({
   feedMode,
 }: Props) {
   const control = useStationControl()
+  // A public spot of another station posts from the station's own cluster login, so it rides
+  // STATION CONTROL rather than the logging grant; a browser without it sees the button dead.
+  const spotControl = control || useLogChange('postSpot')
   const callControl = useStationCapability('ftCall')
   // QTH magnetic declination (WMM) — the Brg column's tooltip shows the compass
   // heading a rotator zeroed on magnetic north needs.
@@ -420,8 +424,8 @@ export function OperateRoster({
           <button
             type="button"
             className="or-filter or-spot"
-            disabled={!control || !selectedCall}
-            onClick={() => control && selectedCall && onSpot(selectedCall)}
+            disabled={!spotControl || !selectedCall}
+            onClick={() => spotControl && selectedCall && onSpot(selectedCall)}
             title={
               selectedCall
                 ? t('operate.roster.spot.title', { call: selectedCall })

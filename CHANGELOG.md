@@ -23,6 +23,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   configured, or a rotctld that does not answer, still reads "—" rather than a made-up bearing,
   and a station running an older Nexus keeps the "—" it has always shown.
 
+- **Spot another station from a browser.** Nexus Remote could already spot your own activation;
+  spotting someone else was refused. The Spot button in Operate's roster now works from a browser
+  with station control, opening the same review popup the desktop shows and asking once more
+  before the spot goes out — it posts publicly from your station's cluster login, so it is
+  deliberately not something a logging-only browser can do. If no cluster node is connected the
+  browser is told so plainly instead of being left to guess.
+
 
 
 ### Changed

@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { OperationClient } from './operation-client'
 import { OperationRelay } from './operation-relay'
-import { logChange, logChangeCapability, logRowCanonical, logTarget, operationRequest, operationValue, type OperationState } from './operation-protocol'
+import { logChange, logChangeCapabilities, logChangeCapability, logRowCanonical, logTarget, operationRequest, operationValue, type OperationState } from './operation-protocol'
 
 const id = () => crypto.randomUUID()
 const target = { call: 'W1AW', whenUnix: 1788940800, key: 'a'.repeat(64) }
@@ -106,7 +106,34 @@ it('self-spots only with the activation reference and dial the operator confirme
     { ...posted, spot: { pota: 'maybe', cluster: 'queued' } }, { ...refused, spot: { pota: 'failed', cluster: 'sent' } },
     { ...posted, evidence: 'fileSynced' }, { ...refused, reason: 'contextChanged' },
     { operation: 'logChange', operationId, outcome: 'applied', evidence: 'spotQueued' },
-    { operation: 'logChange', operationId, outcome: 'rejected', reason: 'clusterUnavailable' }
+    // `clusterUnavailable` belongs to a spot of ANOTHER station and carries no per-target report;
+    // a self-spot's two results never ride it.
+    { operation: 'logChange', operationId, outcome: 'rejected', reason: 'clusterUnavailable', spot: { pota: 'posted', cluster: 'queued' } }
+  ])
+    expect(() => operationValue(value)).toThrow()
+})
+
+it('spots another station under station control, with nothing read from the log', () => {
+  const spot = { kind: 'spot', call: 'JA2DEF/P', freqMhz: 14.0765, comment: 'FT8 up 2' }
+  expect(logChange(spot)).toEqual(spot)
+  expect(logChange({ ...spot, comment: '' })).toBeTruthy()
+  for (const bad of [
+    { ...spot, call: 'ja2def' }, { ...spot, call: 'W1' }, { ...spot, call: 'A'.repeat(33) },
+    { ...spot, freqMhz: 0 }, { ...spot, freqMhz: -14 }, { ...spot, freqMhz: 250_001 }, { ...spot, freqMhz: '14.0765' },
+    { ...spot, comment: 'x'.repeat(31) }, { ...spot, comment: 'up\n2' },
+    { kind: 'spot', call: 'JA2DEF', freqMhz: 14.0765 }, { ...spot, target }, { ...spot, reference: 'US-0001' }
+  ])
+    expect(() => logChange(bad)).toThrow()
+  // It posts publicly from the station's cluster login, so it is station control, not logging.
+  expect(logChangeCapability(spot as never)).toBe('postSpot')
+  expect(logChangeCapabilities(spot as never)).toEqual(['postSpot'])
+  const operationId = id()
+  const queued = { operation: 'logChange', operationId, outcome: 'applied', evidence: 'clusterQueued' }
+  const noNode = { operation: 'logChange', operationId, outcome: 'rejected', reason: 'clusterUnavailable' }
+  for (const value of [queued, noNode]) expect(operationValue(value)).toEqual(value)
+  for (const value of [
+    { ...queued, spot: { pota: 'posted', cluster: 'queued' } },
+    { ...queued, evidence: 'clusterPosted' }, { ...noNode, reason: 'noCluster' }
   ])
     expect(() => operationValue(value)).toThrow()
 })

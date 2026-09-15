@@ -1097,3 +1097,132 @@ fn a_test_build_with_no_poster_refuses_a_self_spot_instead_of_posting_it() {
     assert_eq!(result["reason"], "spotNotPosted");
     assert_eq!(result["spot"], json!({"pota":"failed","cluster":"failed"}));
 }
+
+// ── A public spot of ANOTHER station ────────────────────────────────────────────────────────
+//
+// It posts from the station's own cluster login, so it rides STATION CONTROL, not the logging
+// grant, and it touches no log record at all. Every test here goes through the self-spot's own
+// poster hook: a test build has no path to a real cluster, so nothing can reach the world.
+
+/// Station control only, the grant a spot of another station needs.
+fn controlling(f: &Fixture) {
+    f.authority.permit_station(DEVICE, true).unwrap();
+    let state = control_state_version(f, Instant::now(), 4);
+    run(
+        f,
+        &Request::Acquire {
+            request_id: id(),
+            station_boot_id: state["stationBootId"].as_str().unwrap().into(),
+        },
+    )
+    .unwrap();
+}
+
+fn dx_spot(f: &Fixture, call: &str) -> Request {
+    change(
+        f,
+        json!({"kind":"spot","call":call,"freqMhz":14.0765,"comment":"FT8 up 2"}),
+    )
+}
+
+fn offers_post_spot(f: &Fixture) -> bool {
+    control_state_version(f, Instant::now(), 4)["controls"]["capabilities"]
+        .as_array()
+        .unwrap()
+        .contains(&json!("postSpot"))
+}
+
+#[test]
+fn spotting_another_station_needs_station_control_and_never_the_logging_grant_alone() {
+    let mut f = Fixture::new();
+    let posted = recorder(&mut f);
+    // A logging-only browser: the station does not offer it and refuses it if asked anyway.
+    acquire(&f);
+    assert!(!offers_post_spot(&f));
+    assert_eq!(
+        run(&f, &dx_spot(&f, "JA2DEF/P")),
+        Err("localPermissionRequired")
+    );
+    assert!(nothing_posted(&posted));
+    // Positive control: the same request under station control is offered and accepted.
+    controlling(&f);
+    assert!(offers_post_spot(&f));
+    let request = dx_spot(&f, "JA2DEF/P");
+    let result = run(&f, &request).unwrap();
+    assert_eq!(
+        result,
+        json!({"operation":"logChange","operationId":request.id(),"outcome":"applied","evidence":"clusterQueued"})
+    );
+    // A dropped reply is answered from the receipt: a public spot never posts twice.
+    assert_eq!(run(&f, &request).unwrap(), result);
+    let (pota, cluster) = posted.lock().unwrap().clone();
+    assert!(pota.is_empty(), "a spot of another station is not a self-spot");
+    assert_eq!(
+        cluster,
+        vec![(14.0765, "JA2DEF/P".to_string(), "FT8 up 2".to_string())]
+    );
+}
+
+#[test]
+fn a_station_with_no_cluster_node_says_so_and_queues_nothing() {
+    let mut f = Fixture::new();
+    let posted = posters(
+        &mut f,
+        Ok(propagation::live::pota::SpotAnswer::Posted),
+        // The station's own verb's wording when no node is connected.
+        Err("no DX cluster connected — set a cluster host in Settings".into()),
+    );
+    controlling(&f);
+    let before = f.engine.lock().unwrap().log_records().len();
+    let result = run(&f, &dx_spot(&f, "JA2DEF")).unwrap();
+    assert_eq!(result["outcome"], "rejected");
+    assert_eq!(result["reason"], "clusterUnavailable");
+    assert!(result.get("spot").is_none(), "no per-target report here");
+    assert_eq!(f.engine.lock().unwrap().log_records().len(), before);
+    // The door was reached exactly once and answered; nothing was retried.
+    assert_eq!(posted.lock().unwrap().1.len(), 1);
+}
+
+#[test]
+fn a_refused_callsign_or_frequency_never_reaches_the_cluster_door() {
+    let mut f = Fixture::new();
+    let posted = recorder(&mut f);
+    controlling(&f);
+    // Refused by the change's own rules, after it parses.
+    for bad in [
+        json!({"kind":"spot","call":"ja2def","freqMhz":14.0765,"comment":"x"}),
+        json!({"kind":"spot","call":"W1","freqMhz":14.0765,"comment":"x"}),
+        json!({"kind":"spot","call":"JA2DEF","freqMhz":0.0,"comment":"x"}),
+        json!({"kind":"spot","call":"JA2DEF","freqMhz":-14.0,"comment":"x"}),
+        json!({"kind":"spot","call":"JA2DEF","freqMhz":14.0765,"comment":"x".repeat(31)}),
+        json!({"kind":"spot","call":"JA2DEF","freqMhz":14.0765,"comment":"up\n2"}),
+    ] {
+        assert_eq!(run(&f, &change(&f, bad.clone())), Err("invalidRecord"), "{bad}");
+    }
+    // Refused by the wire grammar, before it is a change at all.
+    for bad in [
+        json!({"kind":"spot","call":"JA2DEF","freqMhz":14.0765}),
+        json!({"kind":"spot","call":"JA2DEF","freqMhz":14.0765,"comment":"x","reference":"US-0001"}),
+        json!({"kind":"spot","call":"JA2DEF","freqMhz":"14.0765","comment":"x"}),
+    ] {
+        assert!(
+            serde_json::from_value::<super::super::logging::Change>(bad.clone()).is_err(),
+            "{bad}"
+        );
+    }
+    assert!(nothing_posted(&posted));
+    // Positive control: the well-formed request from the same browser is accepted.
+    assert_eq!(run(&f, &dx_spot(&f, "JA2DEF")).unwrap()["outcome"], "applied");
+    assert_eq!(posted.lock().unwrap().1.len(), 1);
+}
+
+#[test]
+fn a_test_build_with_no_poster_refuses_a_spot_instead_of_posting_it() {
+    let f = Fixture::new();
+    controlling(&f);
+    let result = run(&f, &dx_spot(&f, "JA2DEF")).unwrap();
+    // No poster installed: the refusal does not name the cluster, so it is an invalid change
+    // rather than the `clusterUnavailable` the real door would answer with no node connected.
+    assert_eq!(result["outcome"], "rejected");
+    assert_eq!(result["reason"], "invalidChange");
+}

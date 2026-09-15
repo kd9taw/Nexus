@@ -2490,6 +2490,10 @@ export const EN = {
   'spots.post.busy': 'Spotting…',
   'spots.post.done': 'Spotted {{call}} on the cluster',
   'spots.post.failed': 'Spot failed',
+  'spots.post.confirm.title': 'Spot {{call}} to the DX cluster?',
+  'spots.post.confirm.body': '{{call}} on {{freq}} MHz, posted from the station\u2019s cluster login. Everyone on the cluster sees it.',
+  'spots.post.confirm.post': 'Post spot',
+  'remote.spotNoCluster': 'The station has no DX cluster connected, so nothing was sent.',
 
   // The colour + type key, rendered by BOTH the band strip and the band map from one
   // component — the two surfaces must explain their dots identically, so they share these
