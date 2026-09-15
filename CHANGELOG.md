@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+
+
 ### Changed
 
 - **Tune is always right next to the band picker** (#287). In Phone, CW, RTTY, PSK, SSTV and JS8,
@@ -118,6 +120,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   options. It now sits under Settings ▸ Station ▸ Operator & Radio, and typing units, miles, km,
   imperial, metric or temperature into the settings search goes straight to it. Your existing
   choice carries over. (#248)
+
+- **Nexus Remote: the rest of the controls stop greying out on a slow link.** 1.12.0 steadied the
+  band control and its neighbours when the link to the shack hiccups. The amplifier's Operate and
+  band buttons, the decode-depth chips, the RX offset box and the receive-gain slider were still
+  reading a different clock — the age of the station's own rig readings — and on a real internet
+  link that ticks past its limit most seconds, so those controls flickered between live and greyed
+  out under your hand. They now stay live for as long as this browser holds station control, the
+  same rule everything else in the workspace follows.
+
+  Nothing was loosened about when the station will actually act. A control is still dead when you
+  do not hold station control, when the station does not offer it, when the rig is keyed, and when
+  the shack has genuinely gone quiet — after five seconds without a reading the workspace still
+  dims and everything stops, exactly as before. A command made during a hiccup still waits up to a
+  second and a half for the link and then reports "Not sent" rather than arriving late, and Stop TX
+  is still always live.
 
 ### Changed (60 m)
 

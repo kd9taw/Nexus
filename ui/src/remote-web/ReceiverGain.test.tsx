@@ -158,8 +158,14 @@ it('requires its own capability and version plus current native idle radio evide
   for (const patch of [{ source: 'companion' }, { txEnabled: true }, { transmitting: true }, { rigKeyed: true }, { tuning: true }, { catOk: false }]) {
     h.rerender(h.view({ ...h.radio, ...patch } as RadioStatus)); await tick(); expect(slider().disabled).toBe(true)
   }
+  // A reading past its 1 s window is a LAPSE, not a loss (operator decision 2026-09-14): held
+  // station control keeps the slider usable, and the save still waits for current control.
   const old = structuredClone(h.frame); old.station.radio.readings.ptt!.ageMs = 2000
-  h.rerender(h.view(h.radio, old)); await tick(); expect(slider().disabled).toBe(true)
+  h.rerender(h.view(h.radio, old)); await tick(); expect(slider().disabled).toBe(false)
+  // Gone altogether: past MEASUREMENT_STALE_MS the frame drops the reading, and `rigKeyed` with it.
+  const gone = structuredClone(h.frame)
+  gone.station.radio.readings.ptt = null; gone.station.radio.rigKeyed = null
+  h.rerender(h.view(h.radio, gone)); await tick(); expect(slider().disabled).toBe(true)
   h.rerender(h.view(h.radio, h.frame, true, 99)); await tick(); expect(slider().disabled).toBe(true)
   h.rerender(h.view()); await tick(); expect(slider().disabled).toBe(false)
   drag('2'); fireEvent.pointerUp(slider()); await tick(); expect(h.writes()).toHaveLength(1)

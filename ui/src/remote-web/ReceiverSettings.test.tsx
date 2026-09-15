@@ -174,13 +174,20 @@ it.each(['FT8', 'JS8'] as const)('%s receive gestures require their capability a
     h.rerender(h.view(h.snap, frame)); await tick(); fireEvent.mouseDown(h.canvas(), { clientX: 100, button: 0 }); await tick()
     expect(h.writes()).toHaveLength(0)
   }
-  const stale = structuredClone(h.frame); stale.station.radio.readings.ptt!.ageMs = 1000
-  h.rerender(h.view(h.snap, stale)); await tick(); fireEvent.mouseDown(h.canvas(), { clientX: 100, button: 0 }); await tick()
+  // Gone altogether: past MEASUREMENT_STALE_MS the frame drops the reading, and `rigKeyed` with it,
+  // so there is no observation left to act on however firmly control is held.
+  const gone = structuredClone(h.frame)
+  gone.station.radio.readings.ptt = null; gone.station.radio.rigKeyed = null
+  h.rerender(h.view(h.snap, gone)); await tick(); fireEvent.mouseDown(h.canvas(), { clientX: 100, button: 0 }); await tick()
   expect(h.writes()).toHaveLength(0)
   h.rerender(h.view(h.snap, h.frame, false)); await tick(); fireEvent.mouseDown(h.canvas(), { clientX: 100, button: 0 }); await tick()
   expect(h.writes()).toHaveLength(0)
-  h.rerender(h.view()); await tick(); fireEvent.mouseDown(h.canvas(), { clientX: 100, button: 0 }); await tick()
+  // A reading merely past its 1 s window is a LAPSE, not a loss (operator decision 2026-09-14):
+  // held station control carries the gesture, and the command waits for current control.
+  const lapsed = structuredClone(h.frame); lapsed.station.radio.readings.ptt!.ageMs = 1000
+  h.rerender(h.view(h.snap, lapsed)); await tick(); fireEvent.mouseDown(h.canvas(), { clientX: 100, button: 0 }); await tick()
   expect(h.writes()).toHaveLength(1)
+  h.rerender(h.view()); await tick()
   act(() => h.client.disconnected()); await tick(); fireEvent.mouseDown(h.canvas(), { clientX: 200, button: 0 }); await tick()
   expect(h.writes()).toHaveLength(1)
 })
